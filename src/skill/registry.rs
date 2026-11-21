@@ -7,7 +7,14 @@ use crate::domain::skill::{SkillId, SkillManifest};
 /// In-memory skill registry that stores `SkillManifest` values keyed by `SkillId`.
 ///
 /// When two manifests share the same id, the one with the higher
-/// `SkillSource::priority` wins (workspace > plugin > global > bundled).
+/// `SkillSource::priority` wins. The order, highest first:
+///
+/// `workspace > plugin > global > bundled = compat`
+///
+/// `bundled` and `compat` tie on purpose; a same-id clash between two
+/// compat roots is decided by scan order, not by priority.
+/// `SkillSource::priority` in `src/domain/skill.rs` is the single source of
+/// truth for these numbers.
 #[derive(Debug, Default)]
 pub struct SkillRegistry {
     manifests: HashMap<SkillId, SkillManifest>,

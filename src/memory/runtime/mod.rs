@@ -47,6 +47,10 @@ pub use state::{MemoryState, MemoryStatus};
 pub struct MemoryRuntimeConfig {
     pub metadata_path: PathBuf,
     pub note_memory_dir: PathBuf,
+    /// Hybrid (vector + FTS) retrieval fusion tuning. Defaults to the
+    /// historical hardcoded behaviour, so a site that does not care about
+    /// ranking says so explicitly instead of inheriting it by accident.
+    pub retrieval_tuning: crate::memory::store::sqlite::RetrievalTuning,
 }
 
 pub struct MemoryRuntime {

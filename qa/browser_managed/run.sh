@@ -401,7 +401,6 @@ if [ "$SCENARIO" = "existing" ]; then
     "--chrome-mcp-arg=$CDP_BIN"
     "--chrome-mcp-arg=--isolated"
     "--chrome-mcp-arg=--headless"
-    "--chrome-mcp-arg=--experimentalStructuredContent"
     # Mirrors the shipped default (`default_chrome_mcp_args`). Without it the
     # server confines every filePath argument to the OS temp dir, which is what
     # made `browser_upload` fail for a file in the checkout. This run pins the

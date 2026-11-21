@@ -6,8 +6,11 @@
 //! constraints before an active capability is used.
 
 use crate::capability::constraints::{ConstraintContext, ConstraintSet, ConstraintViolation};
+#[cfg(test)]
 use crate::capability::descriptor::CapabilityDescriptor;
-use crate::capability::events::{ActivationEventHook, CapabilityEvent, CapabilityEventEmitter};
+use crate::capability::events::{ActivationEventHook, CapabilityEvent};
+#[cfg(test)]
+use crate::capability::events::CapabilityEventEmitter;
 use crate::capability::lifecycle::{CapabilityLifecycle, LifecycleError, LifecycleState};
 use crate::capability::ownership::OwnerGeneration;
 use crate::sync_primitives::Arc;
@@ -104,7 +107,8 @@ impl CapabilityActivationController {
 
     /// Create a new, observed lifecycle. Existing constructors remain unobserved.
     /// The descriptor supplies audit labels, never authorization or generation authority.
-    pub fn new_observed<C: Into<ConstraintSet>>(
+    #[cfg(test)]
+    pub(crate) fn new_observed<C: Into<ConstraintSet>>(
         ttl: Option<Duration>,
         owner_generation: OwnerGeneration,
         constraints: C,
@@ -119,19 +123,6 @@ impl CapabilityActivationController {
         }
     }
 
-    /// Wrap an existing lifecycle without changing its state or lease.
-    #[must_use]
-    pub fn from_lifecycle<C>(lifecycle: CapabilityLifecycle, constraints: C) -> Self
-    where
-        C: Into<ConstraintSet>,
-    {
-        Self {
-            lifecycle: Arc::new(Mutex::new(lifecycle)),
-            constraints: constraints.into(),
-            events: None,
-        }
-    }
-
     fn lifecycle_guard(&self) -> std::sync::MutexGuard<'_, CapabilityLifecycle> {
         self.lifecycle
             .lock()
@@ -141,11 +132,6 @@ impl CapabilityActivationController {
     #[must_use]
     pub fn state(&self) -> LifecycleState {
         self.lifecycle_guard().state()
-    }
-
-    #[must_use]
-    pub fn lifecycle(&self) -> CapabilityLifecycle {
-        self.lifecycle_guard().clone()
     }
 
     #[must_use]
@@ -272,15 +258,6 @@ impl CapabilityActivationController {
                 reason: reason.into(),
             },
         );
-    }
-
-    /// Alias for [`Self::validate_runtime`].
-    pub fn enforce_runtime(
-        &self,
-        current_generation: OwnerGeneration,
-        context: &ConstraintContext,
-    ) -> Result<(), ActivationError> {
-        self.validate_runtime(current_generation, context)
     }
 
     /// Begin detaching an active capability without evaluating constraints.

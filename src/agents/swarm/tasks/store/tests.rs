@@ -502,9 +502,10 @@ async fn create_task_broadcasts_team_task_assigned_and_updated() {
                     team_id: tid,
                     task_id,
                     status,
-                    ..
+                    previous_status,
                 } if tid == &team_id && task_id == &task.id => {
                     assert_eq!(status, "pending");
+                    assert_eq!(previous_status, &None);
                     saw_updated = true;
                 }
                 _ => {}
@@ -514,6 +515,103 @@ async fn create_task_broadcasts_team_task_assigned_and_updated() {
     }
     assert!(saw_assigned, "TeamTaskAssigned not broadcast");
     assert!(saw_updated, "TeamTaskUpdated not broadcast");
+}
+
+#[tokio::test]
+async fn update_task_broadcasts_assignment_and_status_transitions() {
+    let team_id = format!("team-transitions-{}", uuid::Uuid::new_v4());
+    let store = setup_store().await;
+    let task = store
+        .create_task(NewCoordTask {
+            team_id: Some(team_id.clone()),
+            subject: "wired transitions".into(),
+            description: "".into(),
+            owner: Some("agent-before".into()),
+            priority: Priority::Normal,
+            blocked_by: vec![],
+            metadata: json!({}),
+        })
+        .await
+        .unwrap();
+    let mut rx = crate::event::GlobalBus::global().subscribe_broadcast();
+
+    store
+        .update_task(
+            &task.id,
+            CoordTaskUpdate {
+                status: Some(CoordTaskStatus::WaitingReview),
+                owner: Some("agent-after".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
+    let mut saw_assignment = false;
+    let mut saw_update = false;
+    while std::time::Instant::now() < deadline && !(saw_assignment && saw_update) {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        match tokio::time::timeout(remaining, rx.recv()).await {
+            Ok(Ok(global_evt)) => match &global_evt.event {
+                crate::event::AlephEvent::TeamTaskAssigned {
+                    team_id: tid,
+                    task_id,
+                    assignee_id,
+                } if tid == &team_id && task_id == &task.id => {
+                    assert_eq!(assignee_id, "agent-after");
+                    saw_assignment = true;
+                }
+                crate::event::AlephEvent::TeamTaskUpdated {
+                    team_id: tid,
+                    task_id,
+                    status,
+                    previous_status,
+                } if tid == &team_id && task_id == &task.id => {
+                    assert_eq!(status, "waiting_review");
+                    assert_eq!(previous_status.as_deref(), Some("pending"));
+                    saw_update = true;
+                }
+                _ => {}
+            },
+            _ => break,
+        }
+    }
+    assert!(saw_assignment, "owner change was not broadcast");
+    assert!(saw_update, "status transition was not broadcast");
+
+    store
+        .update_task(
+            &task.id,
+            CoordTaskUpdate {
+                status: Some(CoordTaskStatus::WaitingReview),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
+    while std::time::Instant::now() < deadline {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        match tokio::time::timeout(remaining, rx.recv()).await {
+            Ok(Ok(global_evt)) => {
+                if let crate::event::AlephEvent::TeamTaskUpdated {
+                    team_id: tid,
+                    task_id,
+                    previous_status,
+                    ..
+                } = &global_evt.event
+                {
+                    if tid == &team_id && task_id == &task.id {
+                        assert_eq!(previous_status.as_deref(), Some("waiting_review"));
+                        return;
+                    }
+                }
+            }
+            _ => break,
+        }
+    }
+    panic!("repeat waiting_review update was not broadcast");
 }
 
 #[tokio::test]

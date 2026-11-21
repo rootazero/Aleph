@@ -76,7 +76,10 @@ impl DesktopTool {
             approval_policy: None,
             platform: None,
             escape_started: Arc::new(crate::sync_primitives::AtomicBool::new(false)),
-            last_run: Arc::new(crate::sync_primitives::Mutex::new((String::new(), String::new()))),
+            last_run: Arc::new(crate::sync_primitives::Mutex::new((
+                String::new(),
+                String::new(),
+            ))),
             vision_bridge: None,
             allow_global_pointer: false,
             clipboard_enabled: true,

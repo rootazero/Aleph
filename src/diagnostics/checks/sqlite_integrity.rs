@@ -170,10 +170,6 @@ impl HealthCheck for SqliteIntegrityCheck {
         ID
     }
 
-    fn title(&self) -> &'static str {
-        "SQLite integrity"
-    }
-
     // The blocking closure below propagates a `Finding` as its `Err`; see
     // `list_databases`.
     #[allow(clippy::result_large_err)]

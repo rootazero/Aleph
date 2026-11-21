@@ -18,16 +18,33 @@ use serde_json::Value;
 
 use crate::cluster::ReverseRpcChannel;
 
-/// A command declared by a node (name + schema placeholder). The `schema`
-/// field is a placeholder for the node's self-declared JSON schema; it is
-/// stored verbatim, surfaced in `environments.list` / `node_list`, and
-/// preserved across reconnect. **It is NOT validated against `args`** — the
-/// allowlist (`CommandTable`) is the only authoritative gate on the
-/// node side, and the center passes `args` straight through to the command's
-/// `run`. Every shipped node command declares `{"type":"object"}` with no
-/// `properties`, so the field is informational today.
+/// A command a node permits — the NAME only.
+///
+/// The node's self-declared JSON schema is deliberately absent: it used to be
+/// stored verbatim, deep-cloned into every `environments.list` response and
+/// shipped to every operator client, and **no consumer ever read it** (the
+/// Panel only counts the commands; the model-facing `node_list` projects the
+/// names). What the peer declares arrives as a [`CommandDeclaration`] on the
+/// wire, is measured against the 8 KiB schema bound, and is then dropped.
+///
+/// The declared schema was never a gate on `args` either — the allowlist
+/// (`CommandTable`) is the only authoritative gate on the node side, and the
+/// center passes `args` straight through to the command's `run`.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CommandDescriptor {
+    pub name: String,
+}
+
+/// What a node DECLARES on the wire (the connect frame's `commands` array).
+///
+/// The `schema` field is the node's self-declared JSON schema. It is REQUIRED
+/// on the wire: a command entry without it makes the whole catalog fail to
+/// deserialize, and the center then treats the catalog as malformed and fails
+/// closed — which is what keeps an OLD center accepting a NEW node's frame.
+/// Nothing reads the value; the center measures it and drops it (see
+/// [`CommandDescriptor`]).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CommandDeclaration {
     pub name: String,
     pub schema: Value,
 }
@@ -43,10 +60,15 @@ pub struct NodeSession {
     /// Clone of the `src/cluster/reverse_rpc.rs` channel —
     /// `src/builtin_tools/node_invoke.rs` dispatches through it.
     pub channel: ReverseRpcChannel,
-    /// The node's self-declared command catalog; the center only stores and displays it.
+    /// The node's self-declared command catalog — the permitted command
+    /// NAMES. The center stores the names and nothing else: the declared JSON
+    /// schema is measured on arrival and dropped.
     pub declared_commands: Vec<CommandDescriptor>,
-    /// Operator-assigned free-text labels (e.g. "gpu", "region=us"). Selection
-    /// only — never an authorization gate (R7). Stored verbatim; not kv-parsed.
+    /// Free-text labels the NODE declares for itself in its connect frame
+    /// (e.g. "gpu", "region=us"). Selection only — never an authorization gate
+    /// (R7). NOT operator-assigned: a peer picks its own labels, so a fan-out
+    /// over them selects whatever the peer asked to be selected. Stored
+    /// verbatim; not kv-parsed. Not persisted, so an offline row has none.
     pub tags: Vec<String>,
     /// The `aleph-server` build the node runs, as it declared in its connect
     /// frame. `None` = a node older than the version handshake. **Observation
@@ -97,7 +119,6 @@ pub struct Environment {
     pub status: EnvironmentStatus,
     pub commands: Vec<CommandDescriptor>,
     pub tags: Vec<String>,
-    pub connected_at: i64,
     /// Last-seen online timestamp (Unix seconds). Only meaningful for registered
     /// nodes with `status == EnvironmentStatus::Offline` (online nodes are
     /// always `None`); `None` + offline = never connected since registration.
@@ -132,11 +153,10 @@ pub struct NodeMatch {
 }
 
 /// A name-only projection of an online node: what the model-facing `node_list`
-/// needs, without the declared command schemas it discards.
+/// needs, without the catalog descriptors.
 ///
-/// The catalog's `schema` is read by **no** consumer in the tree (every caller
-/// compares `CommandDescriptor::name` only), so the model-facing path projects
-/// the names alone instead of deep-cloning the whole catalog per node.
+/// Every caller compares `CommandDescriptor::name` only, so the model-facing
+/// path projects the names alone instead of cloning the catalog per node.
 #[derive(Clone, Debug)]
 pub struct NodeSummary {
     pub id: String,
@@ -347,10 +367,10 @@ impl NodeRegistry {
     /// model-visible `node_list` from jittering on every refresh (tests can also
     /// assert a deterministic order).
     ///
-    /// Keeps the **full** declared catalog (command names + schemas): this is
-    /// the operator path (`environments.list`), whose consumer may read the
-    /// schemas. The model-facing path uses
-    /// [`list_node_summaries`](Self::list_node_summaries) instead.
+    /// Keeps the declared catalog — the permitted command NAMES. This is the
+    /// operator path (`environments.list`). The model-facing path uses
+    /// [`list_node_summaries`](Self::list_node_summaries) instead, which
+    /// projects the same names into a flat list.
     pub fn list_environments(&self) -> Vec<Environment> {
         let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
         let mut envs: Vec<Environment> = inner
@@ -362,7 +382,6 @@ impl NodeRegistry {
                 status: EnvironmentStatus::Online,
                 commands: n.session.declared_commands.clone(),
                 tags: n.session.tags.clone(),
-                connected_at: n.session.connected_at,
                 last_seen_at: None,
                 version: n.session.version.clone(),
             })
@@ -376,9 +395,8 @@ impl NodeRegistry {
     ///
     /// Same snapshot semantics as [`list_environments`](Self::list_environments)
     /// (same `(name, id)` sort), but it projects the declared command **names**
-    /// instead of cloning the whole catalog: every command's `schema` is
-    /// copied here only to be dropped by the caller, and a node may declare up
-    /// to 64 commands × 8 KiB of schema.
+    /// into a flat list instead of cloning the catalog descriptors: the
+    /// model-facing path only ever reads the names.
     pub fn list_node_summaries(&self) -> Vec<NodeSummary> {
         let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
         let mut summaries: Vec<NodeSummary> = inner
@@ -695,7 +713,7 @@ pub fn maybe_register_node(
     // fleet slots with malformed frames. Log and downgrade; only `commands`
     // is gating (every node ships `bash`), so an empty commands list keeps
     // the registration but is loud about it.
-    let (declared_commands, catalog_malformed) = match params_typed::<Vec<CommandDescriptor>>(
+    let (declared_commands, catalog_malformed) = match params_typed::<Vec<CommandDeclaration>>(
         params,
         "commands",
         device_id,
@@ -831,12 +849,16 @@ where
 /// Bounds on the peer-controlled metadata a node may declare in its connect
 /// frame.
 ///
-/// The registry stores this verbatim and [`NodeRegistry::list_environments`]
-/// deep-clones it on **every** call (it feeds the model-callable `node_list`),
-/// so an unbounded declaration is a memory-growth and model-budget-displacement
-/// lever for anyone who can reach the gateway. The limits are generous for a
-/// real node (one name, a handful of tags, a handful of commands) and are
-/// counted in **bytes** — the unit [`truncate_on_char_boundary`] works in.
+/// The registry stores the name, the tags and the command names, and
+/// [`NodeRegistry::list_environments`] clones them on **every** call (it feeds
+/// the model-callable `node_list`), so an unbounded declaration is a
+/// memory-growth and model-budget-displacement lever for anyone who can reach
+/// the gateway. The limits are generous for a real node (one name, a handful
+/// of tags, a handful of commands) and are counted in **bytes** — the unit
+/// [`truncate_on_char_boundary`] works in. The declared command *schema* is
+/// NOT stored at all: it is measured against the 8 KiB bound and dropped, so
+/// the bound is an operator signal rather than a bound on a copy the center
+/// keeps.
 pub(crate) const MAX_DEVICE_NAME_BYTES: usize = 128;
 const MAX_TAG_COUNT: usize = 32;
 const MAX_TAG_BYTES: usize = 64;
@@ -940,10 +962,10 @@ impl std::io::Write for LimitedSink {
 /// Bound the declared command catalog: how many commands, how long each
 /// command name may be, and how large each declared schema may be.
 ///
-/// The schema is informational today — nothing validates the caller's `args`
-/// against it (the node-side allowlist is the authoritative gate) — so an
-/// oversized one is replaced with an empty object instead of being stored.
-fn bound_commands(raw: Vec<CommandDescriptor>, device_id: &str) -> Vec<CommandDescriptor> {
+/// The schema is informational — nothing validates the caller's `args` against
+/// it (the node-side allowlist is the authoritative gate) and nothing READS
+/// it — so it is measured and then DROPPED: only the name is kept.
+fn bound_commands(raw: Vec<CommandDeclaration>, device_id: &str) -> Vec<CommandDescriptor> {
     if raw.len() > MAX_COMMAND_COUNT {
         tracing::warn!(
             device_id = %device_id,
@@ -968,7 +990,8 @@ fn bound_commands(raw: Vec<CommandDescriptor>, device_id: &str) -> Vec<CommandDe
             }
             // Measure the schema through a size-limited sink: an oversized
             // schema is refused before it is fully materialized, and an
-            // unserializable one never gets a second copy either.
+            // unserializable one never gets a second copy either. The value
+            // is dropped right after — nothing reads it.
             let mut sink = LimitedSink::new(MAX_COMMAND_SCHEMA_BYTES);
             let serialized = serde_json::to_writer(&mut sink, &command.schema);
             // Read the sink's state outside the match arms: the mutable borrow
@@ -988,21 +1011,20 @@ fn bound_commands(raw: Vec<CommandDescriptor>, device_id: &str) -> Vec<CommandDe
                         limit = MAX_COMMAND_SCHEMA_BYTES,
                         "cluster node connect frame declared an oversized command schema; dropping it"
                     );
-                    command.schema = serde_json::json!({});
                 }
                 Err(e) => {
-                    // Unserializable → fail closed and store `{}` (the value
-                    // the old `map_or(usize::MAX, …)` fallback produced).
+                    // Unserializable → fail closed: the schema is dropped.
                     tracing::warn!(
                         device_id = %device_id,
                         command = %command.name,
                         error = %e,
                         "cluster node connect frame declared an unserializable command schema; dropping it"
                     );
-                    command.schema = serde_json::json!({});
                 }
             }
-            command
+            CommandDescriptor {
+                name: command.name,
+            }
         })
         .collect()
 }
@@ -1045,7 +1067,6 @@ mod tests {
             channel: test_channel(),
             declared_commands: vec![CommandDescriptor {
                 name: "bash".to_string(),
-                schema: json!({"type": "object"}),
             }],
             tags: vec![],
             version: None,
@@ -1142,7 +1163,6 @@ mod tests {
             status: EnvironmentStatus::Offline,
             commands: Vec::new(),
             tags: Vec::new(),
-            connected_at: 0,
             last_seen_at: None,
             version: None,
         };
@@ -1791,16 +1811,12 @@ mod tests {
             "an oversized command name must be truncated"
         );
         assert_eq!(
-            env.commands[0].schema,
-            json!({}),
-            "an oversized declared schema must be dropped, not stored"
+            env.commands[0].name, "cmd-0",
+            "an oversized declared schema must not drop the command"
         );
-        assert!(
-            env.commands[1..]
-                .iter()
-                .all(|c| serde_json::to_string(&c.schema).is_ok_and(|s| s.len() <= MAX_COMMAND_SCHEMA_BYTES)),
-            "no stored schema may exceed the bound"
-        );
+        // No schema is stored at all — `CommandDescriptor` has no schema
+        // field, so the "no stored schema may exceed the bound" assertion of
+        // the old wire-carrying type is now a compile-time guarantee.
     }
 
     /// A malformed `commands` field and an absent one are different facts: the

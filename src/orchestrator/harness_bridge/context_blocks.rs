@@ -148,7 +148,7 @@ pub async fn active_strategy(session_key: &str) -> Option<crate::strategy::Strat
 /// disk — a resume gets it back, unlike deleting it — while it stops steering.
 /// No goal row at all → the tier is live (a plan welded without a goal, or one
 /// awaiting the gate, behaves exactly as before).
-fn goal_tier_live(session_key: &str) -> bool {
+pub(crate) fn goal_tier_live(session_key: &str) -> bool {
     let Some(store) = crate::goal::global() else {
         return true;
     };
@@ -179,7 +179,7 @@ fn goal_tier_live(session_key: &str) -> bool {
 /// live, the held loop's plan would keep steering every ordinary turn of a
 /// session whose watch the user explicitly put down. Registry uninitialized (host
 /// tests, early boot) → fail open, matching `goal_tier_live`.
-fn loop_tier_live(session_key: &str) -> bool {
+pub(crate) fn loop_tier_live(session_key: &str) -> bool {
     match crate::looping::global() {
         Some(reg) => reg.get(session_key).is_some_and(|l| !l.is_paused()),
         None => true,
@@ -199,42 +199,20 @@ fn resolve_active_strategy(
     goal_tier_live: bool,
     loop_tier_live: bool,
 ) -> Option<crate::strategy::Strategy> {
-    if goal_tier_live {
-        if let Some(s) = store
-            .get(&crate::strategy::goal_key(session_key))
-            .ok()
-            .flatten()
-        {
-            return Some(s);
-        }
-    }
-    if loop_tier_live {
-        if let Some(s) = store
-            .get(&crate::strategy::loop_key(session_key))
-            .ok()
-            .flatten()
-        {
-            return Some(s);
-        }
-    }
-    if let Some(crate::routing::session_key::SessionKey::Task {
-        task_type, task_id, ..
-    }) = crate::routing::session_key::SessionKey::parse(session_key)
-    {
-        if task_type == crate::teams::run_mode::TEAM_CHAT_TASK_TYPE {
-            if let Some(s) = store
-                .get(&crate::strategy::team_key(&task_id))
-                .ok()
-                .flatten()
-            {
-                return Some(s);
-            }
-        }
-    }
-    store
-        .get(&crate::strategy::session_key(session_key))
-        .ok()
-        .flatten()
+    // One ladder, one place: `crate::strategy::resolve_active_key` walks
+    // goal → loop → team → session. This function used to carry its own copy
+    // of that order (and the tool side carried another), so the two faces of
+    // one verb could drift apart.
+    let team_id = crate::strategy::team_id_for_session(session_key);
+    let key = crate::strategy::resolve_active_key(
+        store,
+        session_key,
+        goal_tier_live,
+        loop_tier_live,
+        team_id.as_deref(),
+    )
+    .ok()?;
+    store.get(key.as_deref()?).ok().flatten()
 }
 
 /// Format the active-goal summary line injected as `<standing_goal>`. Pure and

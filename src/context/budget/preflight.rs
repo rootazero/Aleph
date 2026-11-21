@@ -35,16 +35,6 @@ impl NativePreflightRegistry {
     }
 
     #[must_use]
-    pub fn len(&self) -> usize {
-        self.stages.len()
-    }
-
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.stages.is_empty()
-    }
-
-    #[must_use]
     pub fn into_pipeline(self) -> PreflightPipeline {
         PreflightPipeline::new(self.stages)
     }

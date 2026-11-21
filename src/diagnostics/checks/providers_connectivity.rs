@@ -101,10 +101,6 @@ impl HealthCheck for ProvidersConnectivityCheck {
         ID
     }
 
-    fn title(&self) -> &'static str {
-        "Provider connectivity"
-    }
-
     /// Derived from the inner bound rather than guessed: every probe is
     /// already capped at [`PROBE_TIMEOUT`] and they run concurrently, so the
     /// check's own honest ceiling is one probe plus scheduling slack. Stating

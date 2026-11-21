@@ -26,12 +26,9 @@
 //!     EventType::ProcessCompleted,
 //! ]);
 //!
-//! let sub_id = bus.subscribe_async(filter, |event| {
+//! let _subscription_id = bus.subscribe_async(filter, |event| {
 //!     println!("Received event from agent: {}", event.source_agent_id);
 //! }).await;
-//!
-//! // Later: unsubscribe
-//! bus.unsubscribe(&sub_id).await;
 //! ```
 
 use crate::event::filter::EventFilter;
@@ -112,13 +109,10 @@ impl GlobalEvent {
 
 /// Unique identifier for a subscription (newtype for type safety)
 ///
-/// The id is a HANDLE, not a guard: dropping it does not unsubscribe. The
-/// subscription stays live — and leaking — until
-/// [`GlobalBus::unsubscribe`](crate::event::GlobalBus::unsubscribe) is called
-/// with it, so an id that is dropped on the floor takes its subscription with
-/// it.
+/// The id is an opaque diagnostic identifier, not a guard. Subscriptions are
+/// process-lifetime: dropping the id does not remove the callback.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[must_use = "the SubscriptionId is the only handle to its subscription; dropping it does not unsubscribe"]
+#[must_use = "the SubscriptionId identifies the process-lifetime subscription in diagnostics"]
 pub struct SubscriptionId(String);
 
 impl SubscriptionId {
@@ -335,18 +329,6 @@ impl GlobalBus {
         id
     }
 
-    /// Unsubscribe from global events.
-    ///
-    /// # Arguments
-    ///
-    /// * `id` - The subscription ID returned from `subscribe`
-    pub async fn unsubscribe(&self, id: &SubscriptionId) {
-        let mut subscriptions = self.subscriptions.write().await;
-        if subscriptions.remove(id).is_some() {
-            debug!(subscription_id = %id, "Removed global event subscription");
-        }
-    }
-
     /// Get a broadcast receiver for async event handling.
     ///
     /// This is useful for components that want to process events
@@ -365,13 +347,6 @@ impl GlobalBus {
     ///   continuity.
     pub fn subscribe_broadcast(&self) -> broadcast::Receiver<GlobalEvent> {
         self.sender.subscribe()
-    }
-
-    /// Get the current number of active subscriptions.
-    #[cfg(test)]
-    pub async fn subscription_count(&self) -> usize {
-        let subscriptions = self.subscriptions.read().await;
-        subscriptions.len()
     }
 }
 
@@ -467,49 +442,6 @@ mod tests {
         assert_eq!(counter.load(Ordering::SeqCst), 1);
     }
 
-    #[tokio::test]
-    async fn test_subscribe_unsubscribe() {
-        let bus = GlobalBus::new();
-
-        // Count the callback invocations: the subscription bookkeeping alone
-        // would still pass if the subscription stayed live.
-        let counter = Arc::new(AtomicUsize::new(0));
-        let counter_clone = counter.clone();
-
-        // Subscribe
-        let filter = EventFilter::all();
-        let sub_id = bus
-            .subscribe_async(filter, move |_event| {
-                counter_clone.fetch_add(1, Ordering::SeqCst);
-            })
-            .await;
-
-        assert_eq!(bus.subscription_count().await, 1);
-
-        // The callback runs while the subscription is live
-        bus.broadcast("agent-1", "session-1", make_subagent_event())
-            .await;
-        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-        assert_eq!(counter.load(Ordering::SeqCst), 1);
-
-        // Unsubscribe
-        bus.unsubscribe(&sub_id).await;
-        assert_eq!(bus.subscription_count().await, 0);
-
-        // After the unsubscribe the callback must not run again
-        bus.broadcast("agent-1", "session-1", make_subagent_event())
-            .await;
-        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-        assert_eq!(
-            counter.load(Ordering::SeqCst),
-            1,
-            "an unsubscribed callback must not be invoked again"
-        );
-
-        // Unsubscribe non-existent (should not panic)
-        bus.unsubscribe(&SubscriptionId::new("non-existent")).await;
-    }
-
     /// Both dimension filters are the same contract: of two broadcasts, only
     /// the one whose field matches the filter is delivered.
     async fn count_delivered_for(filter: EventFilter, broadcasts: [(&str, &str); 2]) -> usize {
@@ -538,7 +470,7 @@ mod tests {
     async fn test_filter_by_agent() {
         // Only the event from agent-1 should have matched
         let delivered = count_delivered_for(
-            EventFilter::all().with_agent("agent-1"),
+            EventFilter::new(vec![EventType::SubAgentCompleted]).with_agent("agent-1"),
             [("agent-1", "session-1"), ("agent-2", "session-2")],
         )
         .await;
@@ -550,7 +482,7 @@ mod tests {
     async fn test_filter_by_session() {
         // Only the event from session-1 should have matched
         let delivered = count_delivered_for(
-            EventFilter::all().with_session("session-1"),
+            EventFilter::new(vec![EventType::SubAgentCompleted]).with_session("session-1"),
             [("agent-1", "session-1"), ("agent-1", "session-2")],
         )
         .await;
@@ -576,7 +508,7 @@ mod tests {
             })
             .await;
 
-        let filter2 = EventFilter::all();
+        let filter2 = EventFilter::new(vec![EventType::SubAgentCompleted]);
         let _sub2 = bus
             .subscribe_async(filter2, move |_event| {
                 counter2_clone.fetch_add(1, Ordering::SeqCst);

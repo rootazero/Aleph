@@ -99,6 +99,7 @@ impl Fixture {
             MemoryRuntimeConfig {
                 metadata_path: root.path().join("metadata.db"),
                 note_memory_dir: root.path().join("notes"),
+                retrieval_tuning: Default::default(),
             },
             tree.clone(),
         );

@@ -1,6 +1,7 @@
 /// Utility modules shared across the codebase
 pub mod atomic_io;
 pub mod atomic_write;
+pub mod duration;
 pub(crate) mod fifo_cache;
 pub(crate) mod filename;
 pub mod host;

@@ -159,6 +159,22 @@ pub struct ReloadReport {
     pub summary: LoadSummary,
 }
 
+/// What one READ-ONLY discovery pass found — the answer to "is this an
+/// installed plugin?".
+///
+/// The ids and the unreadable sources ride together because they are two
+/// halves of ONE answer: a plugin whose source could not be read is UNKNOWN
+/// this pass, not ABSENT. A caller that reads a missing id as "not
+/// installed" while `unreadable` is non-empty reports a lie.
+#[derive(Debug, Default, Clone)]
+pub struct DiscoveredPluginIds {
+    /// `(id, origin)` for every plugin root the pass found.
+    pub ids: Vec<(String, PluginOrigin)>,
+    /// The plugin sources this pass could not read (paths). Their plugins are
+    /// unknown this pass.
+    pub unreadable: Vec<PathBuf>,
+}
+
 /// What one discovery pass did — `load_all` reports the summary, `reload`
 /// reports all three.
 pub(super) struct LoadOutcome {
@@ -746,13 +762,21 @@ impl ExtensionManager {
     /// The offline CLI's answer to "is this an installed plugin?", so that
     /// `aleph-server plugin enable <id>` accepts exactly the ids a load would
     /// list — a Claude Code install included — and nothing else.
-    pub fn discovered_plugin_ids(&self) -> ExtensionResult<Vec<(String, PluginOrigin)>> {
-        Ok(self
-            .collect_plugin_dirs()?
-            .dirs
-            .iter()
-            .map(|found| (self.identify(found).id().to_string(), found.origin))
-            .collect())
+    ///
+    /// The sources the pass could NOT read come with it
+    /// ([`DiscoveredPluginIds::unreadable`]): their plugins are unknown this
+    /// pass, so a caller must not read an id missing from `ids` as "not
+    /// installed" while `unreadable` is non-empty.
+    pub fn discovered_plugin_ids(&self) -> ExtensionResult<DiscoveredPluginIds> {
+        let collected = self.collect_plugin_dirs()?;
+        Ok(DiscoveredPluginIds {
+            ids: collected
+                .dirs
+                .iter()
+                .map(|found| (self.identify(found).id().to_string(), found.origin))
+                .collect(),
+            unreadable: collected.unreadable,
+        })
     }
 
     /// The id of a directory whose manifest does not parse: the directory's
@@ -2629,6 +2653,7 @@ handler = "handler"
         assert!(manager
             .discovered_plugin_ids()
             .unwrap()
+            .ids
             .iter()
             .any(|(id, _)| id == "lazy-wasm"));
         assert!(manager

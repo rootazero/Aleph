@@ -56,6 +56,20 @@ pub fn team_key(team_id: &str) -> String {
     format!("team:{team_id}")
 }
 
+/// The team a session belongs to, when the session key is a team-chat task.
+///
+/// The team tier of the ladder fires only for such a session: a team-wide
+/// strategy is welded for the team, and every member's prompt reads it.
+#[must_use]
+pub fn team_id_for_session(session_key: &str) -> Option<String> {
+    match crate::routing::session_key::SessionKey::parse(session_key) {
+        Some(crate::routing::session_key::SessionKey::Task {
+            task_type, task_id, ..
+        }) if task_type == crate::teams::run_mode::TEAM_CHAT_TASK_TYPE => Some(task_id),
+        _ => None,
+    }
+}
+
 /// Canonical tier ladder, top-to-bottom. This is the SINGLE source of truth for
 /// the precedence `active_strategy()` walks — `context_blocks.rs` (render side)
 // and `builtin_tools/strategy_manage.rs` (tool side) historically each carried

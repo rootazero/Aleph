@@ -110,7 +110,11 @@ impl AlephTool for TaskReadArtifactTool {
         if let (Some(coord_store), Some(team_store)) =
             (self.coord_store.as_ref(), self.team_store.as_ref())
         {
-            if let Ok(Some(task)) = coord_store.get_task(&args.task_id).await {
+            // Fail closed on a store error: the gate used to live in the body
+            // of `if let Ok(Some(task)) = …`, so a locked database skipped
+            // BOTH gates and the foreign artifact body was returned anyway.
+            let task = coord_store.get_task(&args.task_id).await?;
+            if let Some(task) = task {
                 if !task_team_reachable(Some(team_store), task.team_id.as_deref()).await {
                     return Err(AlephError::invalid_input(format!(
                         "task '{}' not found",

@@ -1295,8 +1295,8 @@ impl ExecRunner<'_> {
                 // What is LEFT of the procedure's wall-clock budget, handed
                 // to the step so a wait may not outlive it (see the `Wait`
                 // arm of `run_one`).
-                let remaining_budget_ms = MAX_EXEC_BUDGET_MS
-                    .saturating_sub(self.started.elapsed().as_millis() as u64);
+                let remaining_budget_ms =
+                    MAX_EXEC_BUDGET_MS.saturating_sub(self.started.elapsed().as_millis() as u64);
                 Ok((
                     run_one(
                         self.manager,
@@ -1441,7 +1441,8 @@ async fn run_one(
                 .await
                 .map_err(|e| super::backend_error_text(manager, &e))?;
             use base64::Engine as _;
-            let png = super::bound_screenshot_png(result.png_bytes);
+            let png = super::bound_screenshot_png(result.png_bytes)
+                .map_err(|reason| format!("Screenshot could not be bounded: {reason}"))?;
             Ok(StepOutcome {
                 status: "captured",
                 output: None,
@@ -1572,10 +1573,7 @@ impl AlephTool for BrowserExecTool {
     }
 }
 
-fn input_secret_in_actions(
-    manager: &ProfileManager,
-    actions: &[PlannedAction],
-) -> Option<String> {
+fn input_secret_in_actions(manager: &ProfileManager, actions: &[PlannedAction]) -> Option<String> {
     for action in actions {
         let text = match action {
             PlannedAction::Type(_, text)
@@ -1610,7 +1608,8 @@ fn input_secret_in_actions(
             }
             _ => None,
         };
-        if let Some(message) = text.and_then(|text| super::check_input_secret_block(manager, text)) {
+        if let Some(message) = text.and_then(|text| super::check_input_secret_block(manager, text))
+        {
             return Some(message);
         }
     }
@@ -1767,7 +1766,9 @@ mod tests {
                     "fetch('/collect', {{ body: '{FAKE_KEY}' }})"
                 ))],
                 otherwise: Some(vec![PlannedAction::Fill(
-                    ActionTarget::Ref { ref_id: "e1".into() },
+                    ActionTarget::Ref {
+                        ref_id: "e1".into(),
+                    },
                     FAKE_KEY.into(),
                 )]),
             }],

@@ -109,9 +109,10 @@ pub struct ProjectPluginParent {
 ///
 /// `unreadable` is the "unknown, not none" half (ruling 5): a source listed
 /// here exists but was not understood this pass (Claude Code's
-/// `installed_plugins.json` unreadable or of an unknown shape), so the
-/// plugins it would name are absent from `found` because they are UNKNOWN —
-/// not because they were uninstalled. It is the same read that produced
+/// `installed_plugins.json` unreadable or of an unknown shape, a plugin
+/// parent or plugin directory that could not be listed), so the plugins it
+/// would name are absent from `found` because they are UNKNOWN — not
+/// because they were uninstalled. It is the same read that produced
 /// `found`, never a second look at the file.
 #[derive(Debug, Default)]
 pub struct PluginDiscovery {
@@ -141,16 +142,6 @@ impl DiscoveredPath {
             path,
             priority,
             scope: DiscoveryScope::Global(root),
-        }
-    }
-
-    /// A project discovery: the root is required.
-    #[must_use]
-    pub fn in_project(path: PathBuf, project_root: PathBuf, priority: u32) -> Self {
-        Self {
-            path,
-            priority,
-            scope: DiscoveryScope::Project { root: project_root },
         }
     }
 

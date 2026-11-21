@@ -72,7 +72,7 @@ mod screenshot;
 mod snapshot;
 mod tabs;
 
-pub(crate) use operation::{BrowserOperationKind, BrowserOperationRecord};
+pub(crate) use operation::BrowserOperationRecord;
 
 pub struct CdpBackend {
     registry: Arc<EngineRegistry>,
@@ -87,12 +87,10 @@ pub struct CdpBackend {
     req: LaunchRequest,
     ssrf_guard: Arc<BrowserSsrfGuard>,
     command_timeout: Duration,
-    /// The profile-manager-owned tab identity registry. This backend is
-    /// rebuilt per call, so the mappings it discovers (tab id ↔ CDP
-    /// targetId, last-seen URL) are recorded THERE — the record outlives the
-    /// backend, which is what lets `TabRegistry::resolve_identity` answer
-    /// "that target is gone" after a re-attach instead of guessing from a
-    /// listing's row order (附录 D.9.19).
+    /// The profile-manager-owned tab registry. This backend is rebuilt per
+    /// call, so what it discovers (the last-seen URL of each tab) is recorded
+    /// THERE — the record outlives the backend, which is what lets the
+    /// URL-drift precheck read a URL the model can still compare against.
     tab_identities: Arc<TabRegistry>,
     /// The profile-manager-owned mock-route table. Same residency argument as
     /// `tab_identities` above: this backend is rebuilt per call, so the rules
@@ -189,7 +187,7 @@ impl CdpBackend {
             .registry
             .handle(self.engine, &self.req, EngineLaunch::Refuse)
             .await?;
-        events::ensure_pump(&handle, &self.tab_identities);
+        events::ensure_pump(&handle);
         Ok(handle)
     }
 
@@ -203,7 +201,7 @@ impl CdpBackend {
             .registry
             .handle(self.engine, &self.req, EngineLaunch::Allow)
             .await?;
-        events::ensure_pump(&handle, &self.tab_identities);
+        events::ensure_pump(&handle);
         Ok(handle)
     }
 
@@ -256,7 +254,6 @@ impl CdpBackend {
         &self,
         target_id: Option<&str>,
         launching: bool,
-        kind: BrowserOperationKind,
         target: impl FnOnce(&T) -> String,
         future: impl std::future::Future<Output = Result<T, BrowserError>>,
     ) -> Result<(T, BrowserOperationRecord), BrowserError> {
@@ -288,7 +285,7 @@ impl CdpBackend {
                      no receipt issued"
                 )));
             }
-            let record = BrowserOperationRecord::capture(&recorded_owner, &pinned, acted, kind);
+            let record = BrowserOperationRecord::capture(&recorded_owner, &pinned, acted);
             Ok((value, record))
         };
         if nested {
@@ -308,14 +305,8 @@ impl CdpBackend {
         &self,
         url: &str,
     ) -> Result<(TabId, BrowserOperationRecord), BrowserError> {
-        self.mutate_recorded(
-            None,
-            true,
-            BrowserOperationKind::Open,
-            Clone::clone,
-            tabs::open_tab(self, url),
-        )
-        .await
+        self.mutate_recorded(None, true, Clone::clone, tabs::open_tab(self, url))
+            .await
     }
 
     /// `navigate` that also returns the receipt of the navigated tab.
@@ -327,7 +318,6 @@ impl CdpBackend {
         self.mutate_recorded(
             Some(tab_id),
             false,
-            BrowserOperationKind::Navigate,
             |()| tab_id.to_owned(),
             navigate::navigate(self, tab_id, url),
         )
@@ -344,7 +334,6 @@ impl CdpBackend {
         self.mutate_recorded(
             Some(tab_id),
             false,
-            BrowserOperationKind::History(nav),
             |()| tab_id.to_owned(),
             navigate::history(self, tab_id, nav),
         )
@@ -419,28 +408,21 @@ impl CdpBackend {
         &self.req.profile
     }
 
-    /// Record `tab_id`'s identity in the shared registry. On this backend a
-    /// tab id IS the CDP `targetId` (`tabs.rs`'s module doc), which is what
-    /// lets the registry answer `TabGone` structurally later: the target is
-    /// either in the next enumeration or it is not.
+    /// Record `tab_id`'s last-seen URL in the shared registry — the URL-drift
+    /// input the ref pre-dispatch check reads.
     ///
-    /// Every point below that learns "tab X has targetId Y / is at URL Z"
-    /// calls this — `open_tab`, `switch_tab`, `list_tabs`, `navigate`,
-    /// `history`. Popup adoption and the launch's first tab are covered
-    /// transitively: the next `list_tabs` records every tab in the table.
+    /// Every point below that learns "tab X is at URL Z" calls this —
+    /// `open_tab`, `switch_tab`, `list_tabs`, `navigate`, `history`. Popup
+    /// adoption and the launch's first tab are covered transitively: the next
+    /// `list_tabs` records every tab in the table.
     pub(crate) fn record_tab(&self, tab_id: &str, url: Option<&str>) {
-        self.tab_identities.record_identity(
-            &self.req.profile,
-            tab_id,
-            Some(tab_id.to_string()),
-            url.map(str::to_string),
-        );
+        self.tab_identities
+            .record_url(&self.req.profile, tab_id, url.map(str::to_string));
     }
 
     /// The deliberate-close half of [`Self::record_tab`]: a tab WE closed is
-    /// forgotten, so a later `resolve_identity` answers `TabNotFound` ("we
-    /// closed it, that id is ours no more") and `TabGone` keeps meaning
-    /// "gone WITHOUT us closing it".
+    /// forgotten, so its last-seen URL stops answering later questions about
+    /// that id.
     pub(crate) fn forget_tab(&self, tab_id: &str) {
         self.tab_identities.forget(&self.req.profile, tab_id);
     }
@@ -1537,7 +1519,7 @@ mod tests {
         ViewerBinding, ViewerPermission, ViewportCssPx,
     };
 
-    use super::{BrowserOperationKind, CdpBackend, MutationScope, MUTATION_SCOPE};
+    use super::{CdpBackend, MutationScope, MUTATION_SCOPE};
     use crate::browser::engine::{EngineHandle, TabEntry};
     use crate::browser::live::control::TargetControl;
 
@@ -1783,21 +1765,15 @@ mod tests {
         let out = backend
             .mutate(Some("A"), false, async {
                 backend
-                    .mutate_recorded(
-                        Some("A"),
-                        false,
-                        BrowserOperationKind::Navigate,
-                        |t: &String| t.clone(),
-                        async { Ok("A".to_string()) },
-                    )
+                    .mutate_recorded(Some("A"), false, |t: &String| t.clone(), async {
+                        Ok("A".to_string())
+                    })
                     .await
             })
             .await;
         let (value, record) = out.expect("nested recorded write on the same target");
         assert_eq!(value, "A");
         assert_eq!(record.target_id(), "A");
-        assert_eq!(record.kind(), BrowserOperationKind::Navigate);
-        assert_eq!(record.engine(), Engine::Chromium);
         assert!(Arc::ptr_eq(record.owner(), &handle.live_owner()));
         let binding = record.target_binding();
         assert_eq!(binding.profile, "default");
@@ -1822,13 +1798,7 @@ mod tests {
         let out = backend
             .mutate(Some("A"), false, async {
                 backend
-                    .mutate_recorded(
-                        Some("B"),
-                        false,
-                        BrowserOperationKind::Navigate,
-                        |_: &()| "B".to_string(),
-                        mark(&polled),
-                    )
+                    .mutate_recorded(Some("B"), false, |_: &()| "B".to_string(), mark(&polled))
                     .await
             })
             .await;
@@ -1848,13 +1818,9 @@ mod tests {
         let out = backend
             .mutate(Some("A"), false, async {
                 backend
-                    .mutate_recorded(
-                        Some("A"),
-                        false,
-                        BrowserOperationKind::Navigate,
-                        |t: &String| t.clone(),
-                        async { Ok("B".to_string()) },
-                    )
+                    .mutate_recorded(Some("A"), false, |t: &String| t.clone(), async {
+                        Ok("B".to_string())
+                    })
                     .await
             })
             .await;

@@ -110,19 +110,24 @@ impl AlephTool for TaskSubmitTool {
         // stays open. What must not happen is submitting into a coord task that
         // exists and belongs to someone else: it would both file an artifact
         // under their task and, below, flip their task to WaitingReview.
-        if let Some(coord_store) = &self.coord_store {
-            if let Ok(Some(task)) = coord_store.get_task(&args.task_id).await {
-                if !crate::teams::task_team_reachable(
-                    self.team_store.as_ref(),
-                    task.team_id.as_deref(),
-                )
+        //
+        // Fail closed on a store error. The gate used to live in the body of
+        // `if let Ok(Some(task)) = …`, so a locked database skipped it
+        // entirely — the foreign write the gate exists to prevent. A store
+        // error is a denial, never a pass (same rule as
+        // `crate::teams::task_team_reachable`).
+        let coord_task = match &self.coord_store {
+            Some(coord_store) => coord_store.get_task(&args.task_id).await?,
+            None => None,
+        };
+        if let Some(task) = &coord_task {
+            if !crate::teams::task_team_reachable(self.team_store.as_ref(), task.team_id.as_deref())
                 .await
-                {
-                    return Err(AlephError::invalid_input(format!(
-                        "task '{}' not found",
-                        args.task_id
-                    )));
-                }
+            {
+                return Err(AlephError::invalid_input(format!(
+                    "task '{}' not found",
+                    args.task_id
+                )));
             }
         }
 
@@ -146,24 +151,31 @@ impl AlephTool for TaskSubmitTool {
         // F2: if this submit is against a real coord_task, flip it to
         // WaitingReview for the leader's task_review. Graceful no-op when the
         // id is freeform (not a coord_task) or no CoordTaskStore is wired (P7).
-        if let Some(coord_store) = &self.coord_store {
-            if coord_store
-                .get_task(&args.task_id)
+        //
+        // A FAILED flip is not a no-op: the dispatcher only treats a
+        // WaitingReview row as reviewable, so swallowing the error made the
+        // tool report a handoff that never happened — the leader never
+        // reviewed the deliverable and the task was force-failed later.
+        // The artifact is already filed at this point, so the error names it.
+        if let (Some(coord_store), Some(_task)) = (&self.coord_store, &coord_task) {
+            coord_store
+                .update_task(
+                    &args.task_id,
+                    CoordTaskUpdate {
+                        status: Some(CoordTaskStatus::WaitingReview),
+                        ..Default::default()
+                    },
+                )
                 .await
-                .ok()
-                .flatten()
-                .is_some()
-            {
-                let _ = coord_store
-                    .update_task(
-                        &args.task_id,
-                        CoordTaskUpdate {
-                            status: Some(CoordTaskStatus::WaitingReview),
-                            ..Default::default()
-                        },
-                    )
-                    .await;
-            }
+                .map_err(|e| {
+                    AlephError::other(format!(
+                        "Artifact '{}' was filed, but task '{}' could not be flipped to \
+                         waiting_review ({e}). The review request did NOT happen: the task is \
+                         still open. Report this to the team leader instead of assuming the \
+                         handoff succeeded.",
+                        artifact.id, args.task_id
+                    ))
+                })?;
         }
 
         Ok(TaskSubmitOutput {

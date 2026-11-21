@@ -56,8 +56,8 @@ pub const MAX_RETRIES_CEILING: u32 = 20;
 /// re-arm: the scheduler skips every Pending task whose deadline is still in
 /// the future, with no exemption for operator-initiated retries. A deliberate
 /// re-arm therefore MUST clear the deadline — that is what
-/// [`with_retry_budget_reset_at`] does (and [`clear_retry_not_before`] for
-/// callers that want the deadline dropped on its own).
+/// [`with_retry_budget_reset_at`] does (it drops the deadline key in the same
+/// write that installs the budget anchor).
 pub const RETRY_NOT_BEFORE_METADATA_KEY: &str = "retry_not_before";
 
 /// Metadata key under which an **operator hard-retry** re-arms the retry
@@ -127,26 +127,6 @@ pub fn with_retry_budget_reset_at(metadata: Value, reset_at: u64) -> Value {
     value
 }
 
-/// Drop a pending backoff deadline so the task is eligible for dispatch
-/// immediately.
-///
-/// The counterpart of [`with_retry_not_before`] for the operator path: use it
-/// when a manual retry must not be deferred by a deadline a previous failure
-/// installed. ([`with_retry_budget_reset_at`] already does this as part of
-/// re-arming the budget; this helper exists for callers that only want the
-/// time gate cleared.)
-#[must_use]
-pub fn clear_retry_not_before(metadata: Value) -> Value {
-    let mut value = match metadata {
-        Value::Object(_) => metadata,
-        _ => Value::Object(serde_json::Map::new()),
-    };
-    if let Some(obj) = value.as_object_mut() {
-        obj.remove(RETRY_NOT_BEFORE_METADATA_KEY);
-    }
-    value
-}
-
 /// Count the failed/timed-out attempts that consume the current retry budget:
 /// runs whose terminal status is `Failed`/`Timeout` and which started **at or
 /// after** the manual-reset anchor (`reset_at`, absent → count all).
@@ -155,6 +135,12 @@ pub fn clear_retry_not_before(metadata: Value) -> Value {
 /// directly in tests without a live dispatcher. Orphan reclaims leave a
 /// `Running` row that never finished, so they never consume budget; only
 /// clean `Failed`/`Timeout` attempts do (unchanged from the pre-anchor rule).
+///
+/// This is the ONLY retry-budget counter: it is anchored, so a task that was
+/// manually re-armed has a FRESH budget. Anything that reports "how much of
+/// the retry budget is left" must call this with the anchor — a lifetime
+/// count (ignoring the anchor) would report an exhausted budget for a task
+/// that was just re-armed.
 #[must_use]
 pub fn budget_failures_since(runs: &[super::CoordTaskRun], reset_at: Option<u64>) -> u32 {
     let anchor = reset_at.unwrap_or(0);
@@ -378,8 +364,9 @@ pub fn read_retry_not_before(metadata: &Value) -> Option<u64> {
 /// would leave the retry budget NOT re-armed and kill the task terminally on
 /// its first new failure.
 ///
-/// Use [`merge_retry_not_before`] against the CURRENT row to avoid that
-/// window.
+/// Stamp the deadline onto the row AS READ AT WRITE TIME to avoid that
+/// window — the store replaces the whole metadata blob, so a deadline
+/// stamped onto a stale snapshot erases whatever was written in between.
 #[must_use]
 pub fn with_retry_not_before(metadata: Value, not_before: u64) -> Value {
     let mut value = match metadata {
@@ -393,37 +380,6 @@ pub fn with_retry_not_before(metadata: Value, not_before: u64) -> Value {
         );
     }
     value
-}
-
-/// Merge the backoff deadline into the CURRENT row, preserving every key
-/// written since the caller read it.
-///
-/// The safe form of [`with_retry_not_before`]: the store replaces the whole
-/// metadata blob, so a deadline stamped onto a stale snapshot erases
-/// concurrent updates (an operator's `retry_budget_reset_at` anchor above
-/// all — losing it means the retry budget is not re-armed).
-///
-/// `current` must be the row as read at write time.
-#[must_use]
-pub fn merge_retry_not_before(current: &Value, not_before: u64) -> Value {
-    with_retry_not_before(current.clone(), not_before)
-}
-
-/// Count the failed/timed-out attempts in a task's run history: clean
-/// `Failed`/`Timeout` rows only. `Abandoned` (crash orphans) and `Running`
-/// rows are deliberately excluded — an interrupted attempt is not the task's
-/// fault.
-///
-/// **Lifetime count — NOT the retry budget.** The dispatcher's budget rule
-/// ([`budget_failures_since`]) honours the manual-retry anchor, so a task
-/// that was manually re-armed has a FRESH budget even though this count keeps
-/// growing. Anything that reports "how much of the retry budget is left"
-/// must use [`budget_failures_since`] with the anchor, never this function.
-#[must_use]
-pub fn count_failed_attempts(runs: &[super::CoordTaskRun]) -> u32 {
-    // Same predicate as the budget counter, without an anchor — one rule, one
-    // implementation, so the two cannot drift.
-    budget_failures_since(runs, None)
 }
 
 /// Whether a task may be (re-)dispatched at `now_epoch` given any pending
@@ -694,7 +650,7 @@ mod tests {
     }
 
     #[test]
-    fn count_failed_attempts_excludes_interrupted_rows() {
+    fn budget_failures_since_excludes_interrupted_rows() {
         use crate::agents::swarm::tasks::{CoordTaskRun, TaskRunStatus};
         let run = |status: TaskRunStatus| CoordTaskRun {
             id: String::new(),
@@ -716,7 +672,7 @@ mod tests {
             run(TaskRunStatus::Running),
             run(TaskRunStatus::Abandoned), // crash orphan — not the task's fault
         ];
-        assert_eq!(count_failed_attempts(&runs), 2);
+        assert_eq!(budget_failures_since(&runs, None), 2);
     }
 
     #[test]
@@ -752,30 +708,21 @@ mod tests {
         assert_eq!(read_max_retries(&rearmed), Some(2));
     }
 
+    /// Stamping the deadline onto the row as read at write time preserves
+    /// every key written since the caller read it — the whole-blob
+    /// replacement would erase an operator's anchor.
     #[test]
-    fn clearing_the_deadline_drops_only_that_key() {
-        let cleared = clear_retry_not_before(json!({
-            RETRY_NOT_BEFORE_METADATA_KEY: 100,
-            MAX_RETRIES_METADATA_KEY: 3,
-        }));
-        assert_eq!(read_retry_not_before(&cleared), None);
-        assert_eq!(read_max_retries(&cleared), Some(3));
-    }
-
-    /// The merge form preserves every key written since the caller read the
-    /// row — the whole-blob replacement would erase an operator's anchor.
-    #[test]
-    fn merging_the_deadline_preserves_concurrent_keys() {
+    fn stamping_the_deadline_preserves_concurrent_keys() {
         let current = json!({
             RETRY_BUDGET_RESET_AT_METADATA_KEY: 1_700_000_000,
             MAX_RETRIES_METADATA_KEY: 2,
         });
-        let merged = merge_retry_not_before(&current, 1_700_000_500);
-        assert_eq!(read_retry_not_before(&merged), Some(1_700_000_500));
+        let stamped = with_retry_not_before(current, 1_700_000_500);
+        assert_eq!(read_retry_not_before(&stamped), Some(1_700_000_500));
         assert_eq!(
-            read_retry_budget_reset_at(&merged),
+            read_retry_budget_reset_at(&stamped),
             Some(1_700_000_000)
         );
-        assert_eq!(read_max_retries(&merged), Some(2));
+        assert_eq!(read_max_retries(&stamped), Some(2));
     }
 }

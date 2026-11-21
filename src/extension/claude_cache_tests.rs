@@ -459,8 +459,10 @@ async fn read_only_discovery_names_a_claude_cache_id_without_loading_it() {
         isolated_manager_with_claude_home(scratch.path(), claude_home.path()).await;
     let ids = manager.discovered_plugin_ids().unwrap();
     assert!(
-        ids.contains(&("cli-cc".to_string(), PluginOrigin::ClaudeCache)),
-        "{ids:?}"
+        ids.ids
+            .contains(&("cli-cc".to_string(), PluginOrigin::ClaudeCache)),
+        "{:?}",
+        ids.ids
     );
     assert!(
         manager.get_plugin_info().await.is_empty(),

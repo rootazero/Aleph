@@ -271,6 +271,7 @@ mod tests {
                 let memory = MemoryRuntime::new(MemoryRuntimeConfig {
                     metadata_path: root.path().join("memory.db"),
                     note_memory_dir: root.path().join("notes"),
+                    retrieval_tuning: Default::default(),
                 }, tree.clone());
                 let policy = crate::commands::start::capability_init::build_capability_policy(&alephcore::Config::default(), tree.clone()).unwrap();
                 let audit = Arc::new(ShutdownAudit::default());
@@ -350,6 +351,7 @@ mod tests {
                 MemoryRuntimeConfig {
                     metadata_path: root.path().join("memory.db"),
                     note_memory_dir: root.path().join("notes"),
+                    retrieval_tuning: Default::default(),
                 },
                 tree.clone(),
             );
@@ -430,6 +432,7 @@ mod tests {
                 MemoryRuntimeConfig {
                     metadata_path: root.path().join("memory.db"),
                     note_memory_dir: root.path().join("notes"),
+                    retrieval_tuning: Default::default(),
                 },
                 tree.clone(),
             );
@@ -471,6 +474,7 @@ mod tests {
             MemoryRuntimeConfig {
                 metadata_path: root.path().join("memory.db"),
                 note_memory_dir: root.path().join("notes"),
+                retrieval_tuning: Default::default(),
             },
             Arc::new(OwnershipTree::new()),
         );

@@ -227,6 +227,7 @@ async fn build_pipeline(
         alephcore::memory::runtime::MemoryRuntimeConfig {
             metadata_path: tmp.path().join("runtime.db"),
             note_memory_dir: tmp.path().join("runtime-notes"),
+            retrieval_tuning: Default::default(),
         },
         Arc::new(alephcore::capability::ownership::OwnershipTree::new()),
     );

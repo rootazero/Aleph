@@ -249,6 +249,12 @@ async fn start_server_body(
         alephcore::memory::runtime::MemoryRuntimeConfig {
             metadata_path: aleph_home.join("metadata.db"),
             note_memory_dir: aleph_home.join("memory").join("note"),
+            // The hybrid fusion knobs the operator configured reach the live
+            // store here; before this the config parsed and was never read.
+            retrieval_tuning: alephcore::memory::store::sqlite::RetrievalTuning {
+                rrf_k: loaded_app_config.memory.rrf_k,
+                bm25_bonus_weight: loaded_app_config.memory.bm25_bonus_weight,
+            },
         },
         ownership_tree.clone(),
     );
@@ -618,7 +624,11 @@ async fn start_server_body(
 
     // Security store + vault construction (early — vault needed for API key
     // resolution).
-    let auth_bundle = initialize_vault(final_port, server.node_registry.clone())?;
+    let auth_bundle = initialize_vault(
+        final_port,
+        server.node_registry.clone(),
+        server.event_bus().clone(),
+    )?;
 
     // Install the durable per-principal spend ledger on the same
     // `SecurityStore` every other durable consumer shares — see
@@ -1710,38 +1720,45 @@ async fn start_server_body(
             let notifier = Arc::new(TeamNotifier::new(team_store, coord_store, sink));
             let ctx = EventContext::new();
 
-            tokio::spawn(async move {
-                // Drive the subscription from the handler's own contract so the
-                // boot filter can never drift from what `handle` actually acts
-                // on — notably `TeamTaskUpdated`/"waiting_review", the leader
-                // nudge that keeps a review-gated DAG from stalling silently.
-                let notifier_subs = notifier.subscriptions();
-                let _notifier_sub = GlobalBus::global()
-                    .subscribe_async(
-                        EventFilter::new(notifier_subs),
-                        move |global_event| {
-                            let handler = notifier.clone();
-                            let event = global_event.event;
-                            let session_id = global_event.source_session_id;
-                            let ctx = ctx.clone();
-                            tokio::spawn(async move {
-                                match handler.handle(&event, &ctx).await {
-                                    Ok(follow_ups) => {
-                                        for follow_up in follow_ups {
-                                            GlobalBus::global()
-                                                .broadcast(handler.name(), &session_id, follow_up)
-                                                .await;
-                                        }
+            // Drive the subscription from the handler's own contract so the
+            // boot filter can never drift from what `handle` actually acts
+            // on — notably `TeamTaskUpdated`/"waiting_review", the leader
+            // nudge that keeps a review-gated DAG from stalling silently.
+            let notifier_subs = notifier.subscriptions();
+            let _notifier_sub = GlobalBus::global()
+                .subscribe_async(
+                    EventFilter::new(notifier_subs),
+                    move |global_event| {
+                        let handler = notifier.clone();
+                        let event = global_event.event;
+                        let session_id = global_event.source_session_id;
+                        let ctx = ctx.clone();
+                        tokio::spawn(async move {
+                            match handler.handle(&event, &ctx).await {
+                                Ok(follow_ups) => {
+                                    for follow_up in follow_ups {
+                                        GlobalBus::global()
+                                            .broadcast(handler.name(), &session_id, follow_up)
+                                            .await;
                                     }
-                                    Err(e) => tracing::warn!(handler = handler.name(), error = %e, "TeamNotifier handle error"),
                                 }
-                            });
-                        },
-                    )
-                    .await;
-                tracing::info!("Team notifier registered (TeamNotifier)");
-            });
+                                Err(e) => tracing::warn!(handler = handler.name(), error = %e, "TeamNotifier handle error"),
+                            }
+                        });
+                    },
+                )
+                .await;
+            tracing::info!("Team notifier registered (TeamNotifier)");
         };
+    }
+
+    // Start dispatching only after both durable logging and leader
+    // notification are listening: the lossy bus cannot replay early events.
+    if let Some(dispatcher) = agent_result.team_dispatcher.clone() {
+        dispatcher.spawn_loop();
+        if !args.daemon {
+            println!("  Team dispatcher started");
+        }
     }
 
     // Register the subagent completion announcer — background subagent
@@ -2619,7 +2636,13 @@ async fn start_server_body(
             // created first and injected into the StreamHub so every task
             // status/artifact broadcast also fans out to push-notification
             // webhooks (previously `notify_*` had no caller — dead code).
-            let notification = Arc::new(NotificationService::new());
+            // The operator's `[security.ssrf]` policy is passed in: the
+            // webhook URL is operator- or client-supplied, so it must be
+            // checked against the same host lists as every other outbound
+            // request instead of the permissive built-in default.
+            let notification = Arc::new(NotificationService::with_ssrf_policy(
+                webhook_ssrf_policy.clone(),
+            ));
             let task_store: Arc<dyn A2ATaskManager> = Arc::new(TaskStore::new());
             let stream_hub: Arc<dyn A2AStreamingHandler> =
                 Arc::new(StreamHub::with_notification(notification.clone()));

@@ -208,18 +208,6 @@ pub struct AcpResponse {
 }
 
 impl AcpResponse {
-    /// Returns true if this is a result response (has id and result/error).
-    #[must_use]
-    pub const fn is_result(&self) -> bool {
-        self.id.is_some()
-    }
-
-    /// Returns true if this is a notification (has method, no id).
-    #[must_use]
-    pub const fn is_notification(&self) -> bool {
-        self.id.is_none() && self.method.is_some()
-    }
-
     /// Returns true if this is an **agent→client request** — a JSON-RPC frame
     /// that carries both a `method` and an `id`, meaning the agent expects us
     /// to send a response back (`fs/read_text_file`, `session/request_permission`,
@@ -460,34 +448,6 @@ mod tests {
     }
 
     #[test]
-    fn test_response_is_result() {
-        let resp = AcpResponse {
-            jsonrpc: "2.0".to_string(),
-            id: Some(1),
-            result: Some(serde_json::json!({"content": "hi"})),
-            error: None,
-            method: None,
-            params: None,
-        };
-        assert!(resp.is_result());
-        assert!(!resp.is_notification());
-    }
-
-    #[test]
-    fn test_response_is_notification() {
-        let resp = AcpResponse {
-            jsonrpc: "2.0".to_string(),
-            id: None,
-            result: None,
-            error: None,
-            method: Some("session/update".to_string()),
-            params: Some(serde_json::json!({"sessionId": "s1"})),
-        };
-        assert!(!resp.is_result());
-        assert!(resp.is_notification());
-    }
-
-    #[test]
     fn test_text_content_extraction() {
         // From "content" field
         let resp = AcpResponse {
@@ -712,7 +672,6 @@ mod tests {
             params: Some(serde_json::json!({ "path": "/tmp/x" })),
         };
         assert!(req.is_incoming_request());
-        assert!(!req.is_notification());
         let (id, method, params) = req.as_incoming_request().unwrap();
         assert_eq!(id, 42);
         assert_eq!(method, "fs/read_text_file");
@@ -746,7 +705,9 @@ mod tests {
             params: Some(serde_json::json!({})),
         };
         assert!(!notif.is_incoming_request());
-        assert!(notif.is_notification());
+        // A notification is a frame with a method and no id.
+        assert_eq!(notif.id, None);
+        assert!(notif.method.is_some());
     }
 
     #[test]

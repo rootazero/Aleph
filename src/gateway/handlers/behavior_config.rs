@@ -6,14 +6,16 @@
 //! the sentence that used to name it here outlived the field.
 //!
 //! ⚠️ The Panel's DTO did NOT stop asking for it: `interfaces/webchat`'s
-//! `api::settings::BehaviorConfig` still declares a `typing_speed: u32` with no
-//! `#[serde(default)]`, so `behavior_config.get` fails to decode there on every
-//! call — the boot fetch that sets the typewriter speed silently never lands
-//! and the Behavior settings page always renders its load-error arm. Fixing it
-//! is a product decision (server-owned knob ⇒ restore the field and a
-//! `[behavior]` key; Panel-local preference ⇒ drop it from the client DTO), and
-//! adding `#[serde(default)]` is NOT the fix — that pins the slider to a
-//! default forever while still looking wired.
+//! `api::settings::BehaviorConfig` declared a `typing_speed: u32` with no
+//! `#[serde(default)]`, so `behavior_config.get` failed to decode there on
+//! every call — the boot fetch that set the typewriter speed silently never
+//! landed and the Behavior settings page always rendered its load-error arm.
+//! The wire audit of 2026-11-20 settled the open product decision: the
+//! reveal rate is a Panel-local presentation constant
+//! (`state::typewriter::DEFAULT_CPS`), so the Panel dropped the field
+//! instead of the server restoring a `[behavior]` key. Adding
+//! `#[serde(default)]` would NOT have been the fix — that pins the slider to
+//! a default forever while still looking wired.
 
 use crate::config::{BehaviorConfig, Config};
 use crate::gateway::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus};

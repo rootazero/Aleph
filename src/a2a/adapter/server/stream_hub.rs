@@ -6,7 +6,7 @@ use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
 
-use crate::a2a::domain::{A2AError, TaskStatusUpdateEvent, UpdateEvent};
+use crate::a2a::domain::{A2AError, TaskArtifactUpdateEvent, TaskStatusUpdateEvent, UpdateEvent};
 use crate::a2a::port::{A2AResult, A2AStreamingHandler};
 use crate::a2a::service::notification::NotificationService;
 use crate::sync_primitives::{Arc, AsyncRwLock};
@@ -140,29 +140,37 @@ impl A2AStreamingHandler for StreamHub {
         }
         let sender = self.get_or_create_sender(task_id).await;
         let is_terminal = update.is_final;
+        if sender.receiver_count() == 0 {
+            // No consumer is attached, so there is no `fold_stream` that could
+            // mis-evaluate the outcome and no subscriber to miss the event.
+            // The push-notification fan-out above already happened. This is
+            // the normal shape of a synchronous `message/send`: the caller
+            // gets the finished task in the response instead of a stream.
+            tracing::debug!(task_id, "broadcast_status: no live subscribers");
+            return Ok(());
+        }
         match sender.send(UpdateEvent::StatusUpdate(update)) {
             Ok(_n) => {}
             Err(tokio::sync::broadcast::error::SendError(_event)) => {
                 if is_terminal {
-                    // A terminal event with no subscribers (or all
-                    // subscribers lagged) silently turns `fold_stream`'s
-                    // `success=true` predicate into `success=false` — the
-                    // caller sees a "successful" task marked failed. Log
-                    // loudly so this is at least diagnosable, and return
-                    // Err so the bridge can choose to persist the
-                    // terminal state for late subscribers.
+                    // A terminal event that every subscriber lagged past
+                    // silently turns `fold_stream`'s `success=true` predicate
+                    // into `success=false` — the caller sees a "successful"
+                    // task marked failed. Log loudly so this is at least
+                    // diagnosable, and return Err so the bridge can choose to
+                    // persist the terminal state for late subscribers.
                     tracing::error!(
                         task_id = %task_id,
-                        "broadcast_status: terminal event dropped (no subscribers or all lagged); \
+                        "broadcast_status: terminal event dropped (all subscribers lagged); \
                          downstream SSE consumers will see the task as not-finished"
                     );
                     return Err(A2AError::InternalError(format!(
-                        "terminal event for task {task_id} dropped: no live subscribers"
+                        "terminal event for task {task_id} dropped: all subscribers lagged"
                     )));
                 } else {
                     tracing::debug!(
                         task_id = %task_id,
-                        "broadcast_status: non-terminal event dropped (no subscribers)"
+                        "broadcast_status: non-terminal event dropped (all subscribers lagged)"
                     );
                 }
             }
@@ -172,6 +180,39 @@ impl A2AStreamingHandler for StreamHub {
 
     async fn cleanup_task(&self, task_id: &str) -> A2AResult<()> {
         self.remove_channel(task_id).await;
+        Ok(())
+    }
+
+    async fn broadcast_artifact(
+        &self,
+        task_id: &str,
+        event: TaskArtifactUpdateEvent,
+    ) -> A2AResult<()> {
+        // Same shape as `broadcast_status`: the webhook fan-out happens first
+        // (fire-and-forget) and the SSE channel carries the event to whoever
+        // is attached to the task's stream.
+        if let Some(notification) = self.notification.clone() {
+            let task_id_owned = task_id.to_string();
+            let event = event.clone();
+            tokio::spawn(async move {
+                notification
+                    .notify_artifact_update(&task_id_owned, &event)
+                    .await;
+            });
+        }
+        let sender = self.get_or_create_sender(task_id).await;
+        if sender.receiver_count() == 0 {
+            tracing::debug!(task_id, "broadcast_artifact: no live subscribers");
+            return Ok(());
+        }
+        if let Err(tokio::sync::broadcast::error::SendError(_event)) =
+            sender.send(UpdateEvent::ArtifactUpdate(event))
+        {
+            tracing::debug!(
+                task_id,
+                "broadcast_artifact: artifact event dropped (all subscribers lagged)"
+            );
+        }
         Ok(())
     }
 }

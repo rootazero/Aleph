@@ -79,6 +79,56 @@ fn encode<T: serde::Serialize>(method: &str, params: &T) -> Result<Value, String
     serde_json::to_value(params).map_err(|e| format!("Failed to encode {method} params: {e}"))
 }
 
+/// A per-call idempotency key for a `canvas.*` write.
+///
+/// The server can be configured to REQUIRE an idempotency key on mutating
+/// RPCs (`require_idempotency_key`): without one those calls are rejected
+/// outright, and with one they are deduplicated per (principal, method). A
+/// key therefore has to be
+///
+/// * unique per LOGICAL operation — two different creates must not collapse
+///   into one, and
+/// * stable across the retries of ONE logical operation — a transport retry
+///   must reuse the same key, or the server executes the write twice.
+///
+/// This helper runs once per API call and the result travels inside the
+/// request params, so a retry of that call carries the same key.
+/// (2026-11-20 severed-wire audit CAN-03.)
+fn idempotency_key(method: &str) -> String {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("{method}-{seq:016x}-{}", unique_suffix())
+}
+
+/// A suffix that differs between Panel instances and between tabs.
+fn unique_suffix() -> String {
+    #[cfg(target_arch = "wasm32")]
+    {
+        // `Math::random` is the only entropy source available in a browser
+        // build; `SystemTime::now` panics on wasm32-unknown-unknown.
+        format!("{:016x}", (js_sys::Math::random() * u64::MAX as f64) as u64)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        format!("{:08x}", std::process::id())
+    }
+}
+
+/// Serialize params for a WRITE call, adding the idempotency key.
+///
+/// The server reads the key out of the params object itself, so it is added
+/// to the params rather than wrapped in a separate envelope.
+fn encode_write<T: serde::Serialize>(method: &str, params: &T) -> Result<Value, String> {
+    let mut value = encode(method, params)?;
+    if let Value::Object(map) = &mut value {
+        map.insert(
+            "idempotency_key".to_string(),
+            Value::String(idempotency_key(method)),
+        );
+    }
+    Ok(value)
+}
+
 /// Parse a [`CanvasEnvelope`] — `create` and `get` both answer in it.
 ///
 /// One helper rather than two call sites, because the failure it reports is
@@ -114,7 +164,7 @@ impl CanvasApi {
         title: Option<String>,
         project_id: Option<String>,
     ) -> Result<CanvasDoc, String> {
-        let params = encode("canvas.create", &CanvasCreateParams { title, project_id })?;
+        let params = encode_write("canvas.create", &CanvasCreateParams { title, project_id })?;
         let result = state.rpc_call("canvas.create", params).await?;
         envelope("canvas.create", result).map(|e| e.canvas)
     }
@@ -144,7 +194,7 @@ impl CanvasApi {
         base_revision: u64,
         ops: Vec<CanvasOp>,
     ) -> Result<u64, CanvasApplyError> {
-        let params = encode(
+        let params = encode_write(
             "canvas.apply",
             &CanvasApplyParams {
                 canvas_id: id.to_string(),
@@ -165,7 +215,7 @@ impl CanvasApi {
     /// Delete a canvas — the owner-only verb. The server answers `{}`;
     /// callers refetch the list.
     pub async fn delete(state: &DashboardState, id: &str) -> Result<(), String> {
-        let params = encode(
+        let params = encode_write(
             "canvas.delete",
             &CanvasRef {
                 canvas_id: id.to_string(),
@@ -182,7 +232,7 @@ impl CanvasApi {
         mime: &str,
         data_base64: String,
     ) -> Result<String, String> {
-        let params = encode(
+        let params = encode_write(
             "canvas.asset.put",
             &AssetPutParams {
                 canvas_id: id.to_string(),
@@ -228,7 +278,7 @@ impl CanvasApi {
         id: &str,
         shape_ids: Vec<String>,
     ) -> Result<(), String> {
-        let params = encode(
+        let params = encode_write(
             "canvas.selection.set",
             &SelectionSetParams {
                 canvas_id: id.to_string(),

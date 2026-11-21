@@ -21,6 +21,7 @@ async fn reembed_stop_observes_migration_and_forwarder() {
         MemoryRuntimeConfig {
             metadata_path: metadata.clone(),
             note_memory_dir: note_dir.clone(),
+            retrieval_tuning: Default::default(),
         },
         Arc::new(crate::capability::ownership::OwnershipTree::new()),
     );

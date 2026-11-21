@@ -56,15 +56,21 @@ mod tests {
 
         // Subscribe to all events on GlobalBus
         let _sub_id = global_bus
-            .subscribe_async(EventFilter::all(), move |event| {
-                total_clone.fetch_add(1, Ordering::SeqCst);
-                match event.source_agent_id.as_str() {
-                    "agent-1" => a1_clone.fetch_add(1, Ordering::SeqCst),
-                    "agent-2" => a2_clone.fetch_add(1, Ordering::SeqCst),
-                    "agent-3" => a3_clone.fetch_add(1, Ordering::SeqCst),
-                    _ => 0,
-                };
-            })
+            .subscribe_async(
+                EventFilter::new(vec![
+                    EventType::SubAgentCompleted,
+                    EventType::ProcessCompleted,
+                ]),
+                move |event| {
+                    total_clone.fetch_add(1, Ordering::SeqCst);
+                    match event.source_agent_id.as_str() {
+                        "agent-1" => a1_clone.fetch_add(1, Ordering::SeqCst),
+                        "agent-2" => a2_clone.fetch_add(1, Ordering::SeqCst),
+                        "agent-3" => a3_clone.fetch_add(1, Ordering::SeqCst),
+                        _ => 0,
+                    };
+                },
+            )
             .await;
 
         // Broadcast events from three different agents
@@ -118,7 +124,8 @@ mod tests {
         let sb_clone = session_b_events.clone();
 
         // Subscribe to session-a events only
-        let filter_a = EventFilter::all().with_session("session-a");
+        let filter_a =
+            EventFilter::new(vec![EventType::ProcessCompleted]).with_session("session-a");
         let _sub_a = global_bus
             .subscribe_async(filter_a, move |_| {
                 sa_clone.fetch_add(1, Ordering::SeqCst);
@@ -126,7 +133,8 @@ mod tests {
             .await;
 
         // Subscribe to session-b events only
-        let filter_b = EventFilter::all().with_session("session-b");
+        let filter_b =
+            EventFilter::new(vec![EventType::ProcessCompleted]).with_session("session-b");
         let _sub_b = global_bus
             .subscribe_async(filter_b, move |_| {
                 sb_clone.fetch_add(1, Ordering::SeqCst);
@@ -317,12 +325,15 @@ mod tests {
         let seq_clone = sequences.clone();
 
         let _sub = global_bus
-            .subscribe_async(EventFilter::all(), move |event| {
-                seq_clone
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .push(event.sequence);
-            })
+            .subscribe_async(
+                EventFilter::new(vec![EventType::SubAgentCompleted]),
+                move |event| {
+                    seq_clone
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .push(event.sequence);
+                },
+            )
             .await;
 
         // Publish multiple events
@@ -365,7 +376,7 @@ mod tests {
 
     #[test]
     fn test_event_filter_multiple_sessions() {
-        let filter = EventFilter::all()
+        let filter = EventFilter::new(vec![EventType::SubAgentCompleted])
             .with_session("session-1")
             .with_session("session-2");
 
@@ -375,7 +386,7 @@ mod tests {
 
     #[test]
     fn test_event_filter_multiple_agents() {
-        let filter = EventFilter::all()
+        let filter = EventFilter::new(vec![EventType::SubAgentCompleted])
             .with_agent("agent-1")
             .with_agent("agent-2");
 

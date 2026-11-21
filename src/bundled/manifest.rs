@@ -30,8 +30,23 @@ pub struct InstallRegistry {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum SkillOrigin {
-    /// Bundled with the binary, extracted on startup.
+    /// Shipped with the binary: extracted on startup from the embedded
+    /// snapshot, owned by the bundle.
+    ///
+    /// Owned by `extractor::extract_skills` alone. Only this origin is
+    /// refreshed when the binary is upgraded.
     Official,
+    /// Installed by the network sync (`bundled.sync` / the sync button) from
+    /// the official skills repository.
+    ///
+    /// Owned by `extractor::extract_skill_tree_from_dir` alone. It is a
+    /// DISTINCT origin from [`SkillOrigin::Official`] on purpose: the two
+    /// producers write into the same skills directory, and when they both
+    /// claim the same name they must not keep restoring each other's copy.
+    /// The network copy is the fresher one (the user asked for it), so it
+    /// takes ownership of the name; the bundle then leaves that name alone
+    /// instead of reverting it on the next binary upgrade.
+    Synced,
     /// Installed from a GitHub URL.
     Github,
     /// Manually placed in the skills directory.
@@ -48,6 +63,24 @@ pub struct SkillEntry {
     /// Source URL (for github-installed skills).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+}
+
+impl SkillEntry {
+    /// Shipped with the binary. Owned by `extractor::extract_skills` alone.
+    #[must_use]
+    pub fn is_official(&self) -> bool {
+        self.source == SkillOrigin::Official
+    }
+
+    /// Owned by the system — the bundle or the network sync — rather than by
+    /// the user or a third party.
+    ///
+    /// A system-owned name may be overwritten by whichever system producer
+    /// owns it; a user-owned one is never overwritten by either.
+    #[must_use]
+    pub fn is_system_owned(&self) -> bool {
+        matches!(self.source, SkillOrigin::Official | SkillOrigin::Synced)
+    }
 }
 
 impl InstallRegistry {
@@ -242,12 +275,10 @@ impl InstallRegistry {
         Ok(())
     }
 
-    /// Check if a skill is official.
+    /// Check if a skill is official (shipped with the binary).
     #[must_use]
     pub fn is_official(&self, name: &str) -> bool {
-        self.skills
-            .get(name)
-            .is_some_and(|e| e.source == SkillOrigin::Official)
+        self.skills.get(name).is_some_and(SkillEntry::is_official)
     }
 }
 

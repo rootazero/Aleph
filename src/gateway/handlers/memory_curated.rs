@@ -294,6 +294,7 @@ mod tests {
             MemoryRuntimeConfig {
                 metadata_path: root.join("runtime/metadata.db"),
                 note_memory_dir: root.join("runtime/note"),
+                retrieval_tuning: Default::default(),
             },
             Arc::new(OwnershipTree::new()),
             MemoryServicesConfig {

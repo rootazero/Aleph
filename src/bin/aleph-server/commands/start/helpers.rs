@@ -12,6 +12,12 @@ use crate::daemon::{expand_path, remove_pid_file};
 use alephcore::gateway::session_store::SessionStore;
 use alephcore::gateway::{GatewayConfig as FullGatewayConfig, SessionManager};
 
+/// How long the daemon waits for the bundled-content extraction before it
+/// gives up waiting and boots anyway. The extraction is a `spawn_blocking`
+/// task: timing out the wait does not cancel it, it only stops the BOOT from
+/// depending on a network clone that may never answer.
+const BUNDLED_EXTRACTION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
 /// Compile the operator's `[[security.mask_patterns]]` into the process-wide
 /// redaction set, before any run can produce output.
 ///
@@ -311,10 +317,10 @@ pub(super) async fn initialize_session_store(
         let dyn_store: Arc<dyn SessionStore> = Arc::new(sm.clone());
         Ok((dyn_store, Some(sm)))
     } else {
-        Err(format!(
-            "Unknown session store backend '{backend}'; expected 'file' or 'sqlite'."
+        Err(
+            format!("Unknown session store backend '{backend}'; expected 'file' or 'sqlite'.")
+                .into(),
         )
-        .into())
     }
 }
 
@@ -380,13 +386,34 @@ pub(super) async fn initialize_extension_manager(
     // authoritative resolver (ALEPH_HOME / $HOME) so bundled content is
     // extracted into the SAME ~/.aleph as the rest of the daemon's state.
     let aleph_home = alephcore::utils::paths::get_config_dir()?;
-    // Bundled extraction may perform a one-time network clone on first run;
-    // run it off the async executor so a slow clone never stalls startup.
+    // Bundled extraction may perform a one-time network clone on first run.
+    // It runs off the async executor so a slow clone never blocks the
+    // executor — but the daemon still waits for it, so the wait is bounded:
+    // a black-holed network would otherwise keep the daemon from ever
+    // starting. After the deadline the daemon boots and the extraction keeps
+    // running in the background; it writes the manifest when it finishes.
     let home_for_extract = aleph_home.clone();
-    let _ = tokio::task::spawn_blocking(move || {
+    let extraction = tokio::task::spawn_blocking(move || {
         alephcore::bundled::extract_bundled_content(&home_for_extract)
-    })
-    .await;
+    });
+    match tokio::time::timeout(BUNDLED_EXTRACTION_TIMEOUT, extraction).await {
+        Ok(Ok(Ok(()))) => {}
+        Ok(Ok(Err(e))) => {
+            tracing::error!(
+                error = %e,
+                "Bundled content extraction failed — the official skills and marketplace may be missing"
+            );
+        }
+        Ok(Err(e)) => {
+            tracing::error!(error = %e, "Bundled content extraction task failed");
+        }
+        Err(_) => {
+            tracing::warn!(
+                timeout_secs = BUNDLED_EXTRACTION_TIMEOUT.as_secs(),
+                "Bundled content extraction is still running — continuing startup without it"
+            );
+        }
+    }
 
     match alephcore::extension::ExtensionManager::with_defaults_with_ownership_tree(ownership_tree)
         .await

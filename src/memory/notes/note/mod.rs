@@ -253,11 +253,7 @@ impl KnowledgeNote {
             "source_notes: {}",
             yaml_inline_array(&self.source_notes)
         );
-        let _ = writeln!(
-            out,
-            "supersedes: {}",
-            yaml_inline_array(&self.supersedes)
-        );
+        let _ = writeln!(out, "supersedes: {}", yaml_inline_array(&self.supersedes));
         let _ = writeln!(
             out,
             "superseded_by: {}",

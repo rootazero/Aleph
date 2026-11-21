@@ -17,6 +17,7 @@ use crate::tasks::heartbeat::wake::{WakePriority, WakeRequest};
 use crate::tasks::heartbeat::SharedHeartbeatService;
 use crate::tasks::shared::clock::SystemClock;
 use crate::tasks::shared::error::TaskError;
+use crate::utils::duration::{parse_interval_ms, MIN_INTERVAL_MS};
 
 // ============================================================================
 // Helper functions
@@ -96,40 +97,6 @@ fn task_view_to_json(view: &HeartbeatTaskView) -> Value {
     })
 }
 
-/// Parse an interval string like "5m", "1h", "30s" into milliseconds.
-/// Falls back to parsing as raw milliseconds.
-fn parse_interval(s: &str) -> Result<u64, String> {
-    let s = s.trim();
-    if let Some(rest) = s.strip_suffix('s') {
-        rest.trim()
-            .parse::<u64>()
-            .map_err(|e| format!("invalid seconds value: {e}"))
-            .and_then(|v| {
-                v.checked_mul(1_000)
-                    .ok_or_else(|| "interval too large".to_string())
-            })
-    } else if let Some(rest) = s.strip_suffix('m') {
-        rest.trim()
-            .parse::<u64>()
-            .map_err(|e| format!("invalid minutes value: {e}"))
-            .and_then(|v| {
-                v.checked_mul(60_000)
-                    .ok_or_else(|| "interval too large".to_string())
-            })
-    } else if let Some(rest) = s.strip_suffix('h') {
-        rest.trim()
-            .parse::<u64>()
-            .map_err(|e| format!("invalid hours value: {e}"))
-            .and_then(|v| {
-                v.checked_mul(3_600_000)
-                    .ok_or_else(|| "interval too large".to_string())
-            })
-    } else {
-        s.parse::<u64>()
-            .map_err(|e| format!("invalid interval: {e}"))
-    }
-}
-
 // ============================================================================
 // Real handlers (backed by HeartbeatService)
 // ============================================================================
@@ -198,11 +165,22 @@ pub async fn handle_create(
         .unwrap_or("main")
         .to_string();
 
-    // Parse interval: accept interval_ms (number) or interval (string like "5m")
+    // Parse interval: accept interval_ms (number) or interval (string like "5m").
+    // The floor is the one the model-facing tool enforces: a sub-second
+    // heartbeat fires on every tick — a resource hazard, not a tuning knob.
     let interval_ms = if let Some(ms) = params.get("interval_ms").and_then(|v| v.as_u64()) {
+        if ms < MIN_INTERVAL_MS {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                format!(
+                    "Invalid interval: interval_ms={ms} is below the {MIN_INTERVAL_MS}ms minimum"
+                ),
+            );
+        }
         ms
     } else if let Some(s) = params.get("interval").and_then(|v| v.as_str()) {
-        match parse_interval(s) {
+        match parse_interval_ms(s) {
             Ok(ms) => ms,
             Err(e) => {
                 return JsonRpcResponse::error(
@@ -366,9 +344,18 @@ pub async fn handle_update(
         updates.agent_id = Some(agent_id.to_string());
     }
     if let Some(ms) = params.get("interval_ms").and_then(|v| v.as_u64()) {
+        if ms < MIN_INTERVAL_MS {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                format!(
+                    "Invalid interval: interval_ms={ms} is below the {MIN_INTERVAL_MS}ms minimum"
+                ),
+            );
+        }
         updates.interval_ms = Some(ms);
     } else if let Some(s) = params.get("interval").and_then(|v| v.as_str()) {
-        match parse_interval(s) {
+        match parse_interval_ms(s) {
             Ok(ms) => updates.interval_ms = Some(ms),
             Err(e) => {
                 return JsonRpcResponse::error(
@@ -613,18 +600,21 @@ pub async fn handle_runs(
 #[cfg(test)]
 mod tests {
     // Lost when `f338c833c` severed the dead handlers above this module; the
-    // helper itself has two live callers (`parse_interval` at lines 205/356),
+    // helper itself has two live callers (`parse_interval_ms` at lines 205/356),
     // so the test was orphaned, not obsolete.
-    use super::parse_interval;
+    use crate::utils::duration::parse_interval_ms;
     use serde_json::{json, Value};
 
     #[test]
     fn test_parse_interval() {
-        assert_eq!(parse_interval("5m").unwrap(), 300_000);
-        assert_eq!(parse_interval("1h").unwrap(), 3_600_000);
-        assert_eq!(parse_interval("30s").unwrap(), 30_000);
-        assert_eq!(parse_interval("60000").unwrap(), 60_000);
-        assert!(parse_interval("abc").is_err());
+        assert_eq!(parse_interval_ms("5m").unwrap(), 300_000);
+        assert_eq!(parse_interval_ms("1h").unwrap(), 3_600_000);
+        assert_eq!(parse_interval_ms("30s").unwrap(), 30_000);
+        assert_eq!(parse_interval_ms("60000").unwrap(), 60_000);
+        assert!(parse_interval_ms("abc").is_err());
+        // The floor the tool face enforces is the floor this face enforces.
+        assert!(parse_interval_ms("0").is_err());
+        assert!(parse_interval_ms("100ms").is_err());
     }
 
     #[tokio::test]

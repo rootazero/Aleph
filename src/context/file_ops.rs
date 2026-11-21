@@ -63,6 +63,23 @@ pub(crate) fn classify(tool_name: &str) -> Option<FileOpKind> {
     }
 }
 
+/// The path argument of a file-op call exactly as the tool spelled it.
+///
+/// `path` first (matches `file_read`), then `file_path` (matches `file_write`
+/// / `file_edit`). Returns `None` for inputs that don't resolve to a string —
+/// those calls are excluded rather than guessed at.
+///
+/// This is the single source of the `"path"` → `"file_path"` precedence: every
+/// consumer that needs to know *which argument* a call named reads it here, so
+/// a new tool alias cannot make one of them describe an argument the tool
+/// never read.
+#[must_use]
+pub(crate) fn raw_path(args: &Value) -> Option<&str> {
+    args.get("path")
+        .and_then(Value::as_str)
+        .or_else(|| args.get("file_path").and_then(Value::as_str))
+}
+
 /// The canonical path key for a file-op call's arguments.
 ///
 /// Tries `path` first (matches `file_read`), then `file_path` (matches
@@ -70,11 +87,7 @@ pub(crate) fn classify(tool_name: &str) -> Option<FileOpKind> {
 /// a string — those calls are excluded rather than guessed at.
 #[must_use]
 pub(crate) fn canonical_path(args: &Value) -> Option<String> {
-    let raw = args
-        .get("path")
-        .and_then(Value::as_str)
-        .or_else(|| args.get("file_path").and_then(Value::as_str))?;
-    Some(canonicalize_path_string(raw))
+    Some(canonicalize_path_string(raw_path(args)?))
 }
 
 /// Reduce `./` prefixes and trim whitespace so two callers addressing the same

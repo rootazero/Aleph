@@ -1002,8 +1002,23 @@ pub fn subscribe_run_events(
         // must be handled before the run_id guard below.
         if event_type == "clarification_ended" {
             if let Some(session_key) = data.get("session_key").and_then(|s| s.as_str()) {
-                dash.pending_clarifications
-                    .update(|list| list.retain(|p| p.session_key != session_key));
+                // The ended frame carries the request identity. Removing by
+                // session alone let a DELAYED ended frame of an older
+                // generation remove the card of its successor — the card was
+                // gone while the new request was still waiting.
+                // (2026-11-20 severed-wire audit SD-CLAR-01.)
+                let request_id = data
+                    .get("request_id")
+                    .and_then(|r| r.as_str())
+                    .unwrap_or_default();
+                dash.pending_clarifications.update(|list| {
+                    list.retain(|p| {
+                        if p.session_key != session_key {
+                            return true;
+                        }
+                        request_id.is_empty() || p.request_id == request_id
+                    });
+                });
             }
             return;
         }
@@ -1074,6 +1089,14 @@ pub fn subscribe_run_events(
             };
             let ask = PendingAskView {
                 session_key: session_key.to_string(),
+                // The frame carries the request identity; without it the card
+                // cannot answer "which request am I?".
+                // (2026-11-20 severed-wire audit SD-CLAR-01.)
+                request_id: data
+                    .get("request_id")
+                    .and_then(|r| r.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
                 question: data
                     .get("question")
                     .and_then(|q| q.as_str())

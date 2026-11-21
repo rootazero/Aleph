@@ -990,6 +990,12 @@ pub struct InterventionSummary {
 pub const RESOURCE_TOPIC: &str = "browser.live.resource";
 /// Gateway event topic carrying a [`BrowserLiveClosed`] (`BusEvent::Closed`).
 pub const CLOSED_TOPIC: &str = "browser.live.closed";
+/// Gateway event topic carrying an [`InterventionSummary`] (`BusEvent::Intervention`).
+///
+/// The same string the `BusEvent::Intervention` tag serializes to. The tag
+/// itself has to stay a literal for serde, so the pin test in this module is
+/// what keeps the two spellings together.
+pub const INTERVENTION_TOPIC: &str = "browser.live.intervention";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", deny_unknown_fields)]
@@ -1791,7 +1797,14 @@ mod tests {
             resource: resource(),
         });
         round_trip(&BusEvent::Closed { closed });
-        round_trip(&BusEvent::Intervention { summary });
+        round_trip(&BusEvent::Intervention {
+            summary: summary.clone(),
+        });
+        assert_eq!(
+            serde_json::to_value(&BusEvent::Intervention { summary }).unwrap()["type"],
+            INTERVENTION_TOPIC,
+            "the bus event tag and the gateway topic must be the same string"
+        );
 
         assert!(serde_json::from_value::<PreviewKind>(json!("unknown_kind")).is_err());
         assert!(serde_json::from_value::<HumanInputEvent>(json!({

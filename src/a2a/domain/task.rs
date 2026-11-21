@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Map;
 
 use super::message::{A2AMessage, Artifact};
-use crate::domain::Entity;
 
 /// A2A task state machine
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -105,13 +104,6 @@ pub struct A2ATask {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Map<String, serde_json::Value>>,
     pub kind: String,
-}
-
-impl Entity for A2ATask {
-    type Id = String;
-    fn id(&self) -> &Self::Id {
-        &self.id
-    }
 }
 
 impl A2ATask {
@@ -230,12 +222,6 @@ mod tests {
         assert!(task.history.is_empty());
         assert!(task.metadata.is_none());
         assert_eq!(task.kind, "task");
-    }
-
-    #[test]
-    fn a2a_task_entity_trait() {
-        let task = A2ATask::new("task-abc", "ctx-def");
-        assert_eq!(task.id(), "task-abc");
     }
 
     #[test]

@@ -38,6 +38,11 @@ pub struct SkillSnapshot {
 
 impl SkillSnapshot {
     /// Create an empty snapshot with version 0.
+    ///
+    /// The budget is the built-in default: an empty snapshot injects
+    /// nothing, so there is no configured budget to honour. A snapshot that
+    /// carries skills is built by [`SkillSnapshot::build`], which takes the
+    /// configured budget as an argument.
     #[must_use]
     pub fn empty() -> Self {
         Self {
@@ -66,6 +71,12 @@ impl SkillSnapshot {
     /// explicit `skill_read` still work) but are excluded from the injected
     /// prompt index so dormant skills stop consuming prompt budget.
     ///
+    /// `prompt_budget` is the user's configured `[prompt_budget]` budget. It
+    /// is carried into the snapshot as-is: the snapshot is what hands the
+    /// budget to the prompt layer, so a snapshot built with the default
+    /// budget would under-report the user's configuration to the very layer
+    /// that enforces it.
+    ///
     /// Iterates every skill, evaluates eligibility, and collects the eligible
     /// skill IDs and the manifest set used by scope-aware prompt filtering.
     /// Skills that fail evaluation (or are user-disabled) are simply skipped —
@@ -79,6 +90,7 @@ impl SkillSnapshot {
         config: &serde_json::Value,
         entries: &BTreeMap<String, SkillEntryConfig>,
         archived: &HashSet<String>,
+        prompt_budget: SkillPromptBudget,
     ) -> Self {
         let mut eligible = Vec::new();
         let mut eligible_manifests: Vec<SkillManifest> = Vec::new();
@@ -132,7 +144,7 @@ impl SkillSnapshot {
             version,
             eligible,
             eligible_manifests,
-            prompt_budget: SkillPromptBudget::default(),
+            prompt_budget,
         }
     }
 }
@@ -173,6 +185,34 @@ mod tests {
         assert!(snap.eligible_manifests.is_empty());
     }
 
+    /// The snapshot is what hands the budget to the prompt layer, so it must
+    /// carry the *configured* budget. `build` used to hardcode the default
+    /// and let the caller overwrite the field afterwards — the value the
+    /// snapshot reported was never the value the user configured.
+    #[test]
+    fn build_carries_the_configured_budget() {
+        let mut registry = SkillRegistry::new();
+        let eligibility = EligibilityService::new();
+        registry.register(make_manifest("git:commit", SkillSource::Bundled));
+
+        let configured = SkillPromptBudget {
+            max_skills: 7,
+            max_chars: 1234,
+        };
+        let snap = SkillSnapshot::build(
+            &registry,
+            &eligibility,
+            1,
+            &serde_json::json!({}),
+            &no_overrides(),
+            &no_archived(),
+            configured,
+        );
+
+        assert_eq!(snap.prompt_budget, configured);
+        assert_ne!(snap.prompt_budget, SkillPromptBudget::default());
+    }
+
     #[test]
     fn build_from_registry() {
         let mut registry = SkillRegistry::new();
@@ -197,6 +237,7 @@ mod tests {
             &serde_json::json!({}),
             &no_overrides(),
             &no_archived(),
+            SkillPromptBudget::default(),
         );
 
         assert_eq!(snap.version, 1);
@@ -217,9 +258,33 @@ mod tests {
 
         let cfg = serde_json::json!({});
         let ov = no_overrides();
-        let snap1 = SkillSnapshot::build(&registry, &eligibility, 1, &cfg, &ov, &no_archived());
-        let snap2 = SkillSnapshot::build(&registry, &eligibility, 2, &cfg, &ov, &no_archived());
-        let snap3 = SkillSnapshot::build(&registry, &eligibility, 5, &cfg, &ov, &no_archived());
+        let snap1 = SkillSnapshot::build(
+            &registry,
+            &eligibility,
+            1,
+            &cfg,
+            &ov,
+            &no_archived(),
+            SkillPromptBudget::default(),
+        );
+        let snap2 = SkillSnapshot::build(
+            &registry,
+            &eligibility,
+            2,
+            &cfg,
+            &ov,
+            &no_archived(),
+            SkillPromptBudget::default(),
+        );
+        let snap3 = SkillSnapshot::build(
+            &registry,
+            &eligibility,
+            5,
+            &cfg,
+            &ov,
+            &no_archived(),
+            SkillPromptBudget::default(),
+        );
 
         assert_eq!(snap1.version, 1);
         assert_eq!(snap2.version, 2);
@@ -255,6 +320,7 @@ mod tests {
             &serde_json::json!({}),
             &no_overrides(),
             &no_archived(),
+            SkillPromptBudget::default(),
         );
 
         // All three are eligible (no eligibility constraints), but only the
@@ -292,6 +358,7 @@ mod tests {
             &serde_json::json!({}),
             &no_overrides(),
             &no_archived(),
+            SkillPromptBudget::default(),
         );
         assert_eq!(snap.eligible.len(), 3);
         assert_eq!(snap.eligible_manifests.len(), 1);
@@ -322,6 +389,7 @@ mod tests {
             &serde_json::json!({}),
             &entries,
             &no_archived(),
+            SkillPromptBudget::default(),
         );
 
         assert!(
@@ -358,6 +426,7 @@ mod tests {
             &serde_json::json!({}),
             &entries,
             &no_archived(),
+            SkillPromptBudget::default(),
         );
 
         // Still eligible (eligibility is independent of prompt scope)...
@@ -384,6 +453,7 @@ mod tests {
             &serde_json::json!({}),
             &no_overrides(),
             &archived,
+            SkillPromptBudget::default(),
         );
 
         // Both remain eligible — archive is a prompt-budget decision, not

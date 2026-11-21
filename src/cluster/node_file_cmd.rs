@@ -14,7 +14,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use crate::builtin_tools::file_ops::{check_and_resolve_path, get_denied_paths};
-use crate::cluster::{CommandDescriptor, NodeCommand};
+use crate::cluster::{CommandDeclaration, NodeCommand};
 
 /// Per-file hard cap (raw bytes). Both sides agree; exceeding it fails fast.
 pub const MAX_FILE_BYTES: usize = 8 * 1024 * 1024;
@@ -218,8 +218,8 @@ impl NodeCommand for FileWriteCommand {
         Ok(json!({ "written": bytes.len() }))
     }
 
-    fn descriptor(&self) -> CommandDescriptor {
-        CommandDescriptor {
+    fn descriptor(&self) -> CommandDeclaration {
+        CommandDeclaration {
             name: "file.write".to_string(),
             schema: json!({"type": "object"}),
         }
@@ -305,8 +305,8 @@ impl NodeCommand for FileReadCommand {
         }))
     }
 
-    fn descriptor(&self) -> CommandDescriptor {
-        CommandDescriptor {
+    fn descriptor(&self) -> CommandDeclaration {
+        CommandDeclaration {
             name: "file.read".to_string(),
             schema: json!({"type": "object"}),
         }

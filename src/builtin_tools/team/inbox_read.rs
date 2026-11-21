@@ -65,6 +65,10 @@ pub struct InboxReadOutput {
 pub struct InboxReadTool {
     inbox: Arc<Inbox>,
     current_agent_id: String,
+    /// The team store, when one is wired. The thread arm needs it: reading a
+    /// thread is scoped by `team_id` alone, so membership is the only thing
+    /// that keeps one team's thread out of another team's reach.
+    team_store: Option<Arc<dyn crate::teams::TeamStore>>,
 }
 
 impl InboxReadTool {
@@ -79,7 +83,15 @@ impl InboxReadTool {
         Self {
             inbox,
             current_agent_id,
+            team_store: None,
         }
+    }
+
+    /// Wire the team store so the thread arm can check membership.
+    #[must_use]
+    pub fn with_team_store(mut self, team_store: Arc<dyn crate::teams::TeamStore>) -> Self {
+        self.team_store = Some(team_store);
+        self
     }
 }
 
@@ -117,6 +129,14 @@ impl AlephTool for InboxReadTool {
                 let thread_id = args.thread_id.as_deref().ok_or_else(|| {
                     AlephError::tool("inbox_read: thread_id is required when mode='thread'")
                 })?;
+                // The thread arm carries no actor into the store — a thread is
+                // scoped by `team_id` alone — so without this gate any agent
+                // that knew a team_id and a thread_id could read another
+                // team's thread. The two other arms are actor-scoped; this one
+                // was not.
+                if let Some(team_store) = self.team_store.as_ref() {
+                    super::require_team_auth(&**team_store, &args.team_id, &self.actor()).await?;
+                }
                 self.inbox.read_thread(&args.team_id, thread_id).await?
             }
             _ if args.peek => {

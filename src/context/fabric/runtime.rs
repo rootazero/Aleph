@@ -11,9 +11,7 @@ use super::{
     ContextOperation, ContextPhase, ContextScope, ContextSnapshot, ContextTransformResult,
     DegradedReason, CONTEXT_CAPABILITY_API_VERSION,
 };
-use crate::context::budget::preflight::{
-    NativePreflightRegistry, PreflightPipeline, PreflightStage,
-};
+use crate::context::budget::preflight::{NativePreflightRegistry, PreflightPipeline};
 use crate::context::budget::pressure::estimate_tokens_smart;
 use crate::context::budget::ContextPressure;
 use crate::context::compact::compactor::{CompactResult, CompactStrategy, ContextCompactor};
@@ -122,15 +120,19 @@ impl ContextFabricBuilder {
         }
     }
 
+    /// Register one native preflight stage.
+    ///
+    /// Test-only: production wires the whole pipeline through
+    /// [`Self::native_pipeline`] so the pressure floor and cache-stability
+    /// policy of [`crate::context::budget::preflight::default_pipeline`]
+    /// survive. A single-stage injection point has no production caller.
     #[must_use]
-    pub fn native_preflight_stage(mut self, stage: impl PreflightStage + 'static) -> Self {
+    #[cfg(test)]
+    pub fn native_preflight_stage(
+        mut self,
+        stage: impl crate::context::budget::preflight::PreflightStage + 'static,
+    ) -> Self {
         self.native_preflight.register(stage);
-        self
-    }
-
-    #[must_use]
-    pub fn native_preflight_registry(mut self, registry: NativePreflightRegistry) -> Self {
-        self.native_preflight = registry;
         self
     }
 

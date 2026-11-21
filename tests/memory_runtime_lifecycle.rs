@@ -40,6 +40,7 @@ async fn registered_notes_restart_while_real_raw_sessions_remain_available() {
         MemoryRuntimeConfig {
             metadata_path: root.path().join("memory/metadata.db"),
             note_memory_dir: root.path().join("notes"),
+            retrieval_tuning: Default::default(),
         },
         Arc::new(OwnershipTree::new()),
     );
@@ -144,6 +145,7 @@ async fn cancelled_stop_waiter_keeps_the_actual_blocking_effect_owned() {
         MemoryRuntimeConfig {
             metadata_path: root.path().join("metadata.db"),
             note_memory_dir: root.path().join("notes"),
+            retrieval_tuning: Default::default(),
         },
         Arc::new(OwnershipTree::new()),
     );

@@ -603,7 +603,8 @@ impl PolicyEngine {
         Ok((result, running))
     }
 
-    pub fn withdraw_attachment(&self, attachment: &PolicyAttachment) {
+    #[cfg(test)]
+    pub(crate) fn withdraw_attachment(&self, attachment: &PolicyAttachment) {
         let Some(state) = &attachment.state else {
             return;
         };

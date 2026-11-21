@@ -213,10 +213,6 @@ impl HealthCheck for IdleExtensionsCheck {
         ID
     }
 
-    fn title(&self) -> &'static str {
-        "Idle extensions"
-    }
-
     async fn run(&self, _posture: Posture) -> Vec<Finding> {
         // Read-only in every posture. Nothing here is mechanically repairable:
         // uninstalling something because it was quiet is a judgement call, and

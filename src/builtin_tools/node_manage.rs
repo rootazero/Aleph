@@ -174,7 +174,6 @@ mod tests {
             channel: ReverseRpcChannel::new(tx),
             declared_commands: vec![CommandDescriptor {
                 name: "bash".to_string(),
-                schema: json!({}),
             }],
             tags: vec![],
             version: None,

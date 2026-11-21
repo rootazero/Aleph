@@ -730,8 +730,7 @@ async fn control_loop(
                 command: "release_response",
                 status,
             };
-            write_json(&mut output, &ack)
-            .await?;
+            write_json(&mut output, &ack).await?;
             continue;
         }
         if command.command == "revoke_exact" {
@@ -793,8 +792,7 @@ async fn control_loop(
                 command: "revoke_exact",
                 status: "ok",
             };
-            write_json(&mut output, &ack)
-            .await?;
+            write_json(&mut output, &ack).await?;
             continue;
         }
         if command.command == "receipt_since" {

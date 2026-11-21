@@ -7,7 +7,9 @@
 ## Operation Rules
 1. Before modification: `cp ~/.aleph/config.toml ~/.aleph/config.toml.bak`
 2. API keys via `vault_store(action="store", key="gen:<name>", secret="<key>")`
-3. After modification: auto-reloads via fswatch
+3. After modification: call the `config.reload` RPC (or restart the daemon).
+   The file watcher swaps its own snapshot and hot-applies PII privacy only —
+   it does NOT apply the new generation values to the running runtime.
 
 ## Structure
 

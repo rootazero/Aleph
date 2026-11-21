@@ -589,7 +589,8 @@ mod tests {
             [
                 "canvas::TOPIC",
                 "browser_live::RESOURCE_TOPIC",
-                "browser_live::CLOSED_TOPIC"
+                "browser_live::CLOSED_TOPIC",
+                "browser_live::INTERVENTION_TOPIC"
             ],
             "frame.rs names a topic through a constant this test does not read"
         );
@@ -607,6 +608,7 @@ mod tests {
         names.push(aleph_protocol::canvas::TOPIC.to_string());
         names.push(aleph_protocol::browser_live::RESOURCE_TOPIC.to_string());
         names.push(aleph_protocol::browser_live::CLOSED_TOPIC.to_string());
+        names.push(aleph_protocol::browser_live::INTERVENTION_TOPIC.to_string());
         names.sort();
         names.dedup();
         assert!(

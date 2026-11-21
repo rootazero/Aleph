@@ -8,8 +8,6 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
 
-use super::Entity;
-
 // ---------------------------------------------------------------------------
 // SkillId
 // ---------------------------------------------------------------------------
@@ -75,30 +73,6 @@ impl From<String> for SkillId {
     }
 }
 
-impl std::borrow::Borrow<str> for SkillId {
-    fn borrow(&self) -> &str {
-        &self.0
-    }
-}
-
-impl AsRef<str> for SkillId {
-    fn as_ref(&self) -> &str {
-        &self.0
-    }
-}
-
-impl PartialEq<str> for SkillId {
-    fn eq(&self, other: &str) -> bool {
-        self.0 == other
-    }
-}
-
-impl PartialEq<&str> for SkillId {
-    fn eq(&self, other: &&str) -> bool {
-        self.0 == *other
-    }
-}
-
 // ---------------------------------------------------------------------------
 // PluginId
 // ---------------------------------------------------------------------------
@@ -154,30 +128,6 @@ impl From<&str> for PluginId {
 impl From<String> for PluginId {
     fn from(s: String) -> Self {
         Self(s)
-    }
-}
-
-impl std::borrow::Borrow<str> for PluginId {
-    fn borrow(&self) -> &str {
-        &self.0
-    }
-}
-
-impl AsRef<str> for PluginId {
-    fn as_ref(&self) -> &str {
-        &self.0
-    }
-}
-
-impl PartialEq<str> for PluginId {
-    fn eq(&self, other: &str) -> bool {
-        self.0 == other
-    }
-}
-
-impl PartialEq<&str> for PluginId {
-    fn eq(&self, other: &&str) -> bool {
-        self.0 == *other
     }
 }
 
@@ -353,7 +303,13 @@ impl FromStr for Os {
 // ---------------------------------------------------------------------------
 
 /// Controls how a skill's prompt content is injected.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// Deserialization accepts the same vocabulary — and the same
+/// case-insensitivity — as [`PromptScope::from_str`], so that the config
+/// path (`skills.toml` → `SkillEntryConfig::scope_override`) and the RPC
+/// path (`skills.set` → `PromptScope`) share one vocabulary and one case
+/// policy. Serialization always emits the canonical lowercase name.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PromptScope {
     /// Injected into the system prompt.
@@ -367,22 +323,18 @@ pub enum PromptScope {
     Disabled,
 }
 
-impl PromptScope {
-    /// Canonical lowercase name matching serde rename rule.
-    #[must_use]
-    pub const fn as_str(&self) -> &'static str {
-        match self {
-            Self::System => "system",
-            Self::Tool => "tool",
-            Self::Standalone => "standalone",
-            Self::Disabled => "disabled",
-        }
-    }
-}
-
-impl fmt::Display for PromptScope {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
+impl<'de> Deserialize<'de> for PromptScope {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = std::borrow::Cow::<'de, str>::deserialize(deserializer)?;
+        // Reuse the FromStr impl so serde and FromStr can never drift. A
+        // derived `rename_all = "lowercase"` is case-SENSITIVE: `scope =
+        // "System"` in skills.toml failed the whole config file, while the
+        // RPC path lowercased first and accepted it — two answers to one
+        // question. FromStr is case-insensitive.
+        s.parse().map_err(serde::de::Error::custom)
     }
 }
 
@@ -681,8 +633,10 @@ impl From<String> for SkillContent {
 ///
 /// A `SkillManifest` represents a fully resolved skill with its identity,
 /// content, eligibility, installation instructions, and invocation
-/// policy. It implements `Entity<Id=SkillId>` (formerly `AggregateRoot`, removed
-/// 2026-08-16 — see `src/domain/mod.rs`).
+/// policy. Its identity is the inherent [`SkillManifest::id`] accessor; the
+/// `Entity` marker trait it once implemented (and `AggregateRoot` before it)
+/// were removed because no generic bound ever used them — see
+/// `src/domain/mod.rs`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkillManifest {
     /// Unique skill identifier.
@@ -967,14 +921,6 @@ impl SkillManifest {
     }
 }
 
-impl Entity for SkillManifest {
-    type Id = SkillId;
-
-    fn id(&self) -> &Self::Id {
-        &self.id
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1179,7 +1125,7 @@ mod tests {
     // === Task 3 tests ===
 
     #[test]
-    fn test_skill_manifest_entity_trait() {
+    fn test_skill_manifest_id_accessor() {
         let manifest = SkillManifest::new(
             "git:commit",
             "Git Commit",
@@ -1188,7 +1134,8 @@ mod tests {
             SkillSource::Bundled,
         );
 
-        // Entity trait
+        // Inherent identity accessor (the `Entity` marker trait it used to
+        // implement was cut in 2026-11-21 — no generic bound used it).
         assert_eq!(manifest.id().as_str(), "git:commit");
         assert_eq!(format!("{}", manifest.id()), "git:commit");
 

@@ -86,6 +86,14 @@ impl PendingApprovalView {
 pub struct PendingAskView {
     /// Clarification registry key the answer is posted back on.
     pub session_key: String,
+    /// The identity of the request this card belongs to — core's per-request
+    /// id, carried back with the answer so a late answer from a superseded
+    /// request cannot land on the new one.
+    ///
+    /// Empty on a core that predates the identity field; the panel then sends
+    /// no expectation, exactly as before.
+    /// (2026-11-20 severed-wire audit SD-CLAR-01.)
+    pub request_id: String,
     /// The question at the cursor, as core rendered it. Legacy projection —
     /// still what the composer's Enter-hijack answers.
     pub question: String,
@@ -254,6 +262,7 @@ mod tests {
     fn ask(session: &str) -> PendingAskView {
         PendingAskView {
             session_key: session.to_string(),
+            request_id: String::new(),
             question: "Deploy where?".to_string(),
             options: vec!["staging".to_string()],
             questions: vec![],

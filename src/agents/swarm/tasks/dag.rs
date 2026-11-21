@@ -1,8 +1,14 @@
 //! DAG cycle detection for task dependency graphs.
 //!
-//! Uses BFS to detect cycles before inserting new dependency edges.
-//! Dependency edges are immutable after task creation, so cycle detection
-//! only needs to run at creation time.
+//! Uses BFS to detect a cycle in a candidate dependency edge set.
+//!
+//! Today no production path mutates the edges of an EXISTING task: every
+//! `coord_task_dependencies` row is inserted together with its task, and the
+//! task id is a fresh UUID, so a cycle cannot be created at insert time
+//! (the cycle check that used to run there was CUT as vacuous — see
+//! `store/crud.rs::create_task`). [`check_no_cycle_sync`] is therefore the
+//! guard to wire into the FIRST path that mutates edges on existing tasks;
+//! until then it is deliberately unreferenced.
 
 use std::collections::{HashSet, VecDeque};
 
@@ -13,8 +19,7 @@ use super::CoordTaskStore;
 
 /// Check if adding edges `new_task_id ← blocked_by[..]` would create a cycle.
 ///
-/// Async version that uses the store trait. Kept for API compatibility and
-/// unit tests; production code uses `check_no_cycle_sync`.
+/// Async twin of [`check_no_cycle_sync`], exercised by the unit tests only.
 ///
 /// Returns `Err(AlephError)` if a cycle is detected, `Ok(())` otherwise.
 #[cfg(test)]
@@ -50,9 +55,13 @@ pub async fn check_no_cycle(
 
 /// Synchronous cycle check that operates directly on a `rusqlite::Connection`.
 ///
-/// This avoids the TOCTOU race in `create_task` by running the cycle check
-/// inside the same lock scope as the INSERT, ensuring no concurrent
-/// `create_task` can interleave edges between check and insert.
+/// Runs inside the same lock scope as the INSERT it guards, so no concurrent
+/// writer can interleave edges between the check and the insert.
+///
+/// No production caller today: the only insertion path mints a fresh task
+/// id, which makes the check structurally constant-true (see
+/// `store/crud.rs::create_task`). Wire this into the first path that mutates
+/// the edges of an EXISTING task — that is where it stops being vacuous.
 pub fn check_no_cycle_sync(
     conn: &Connection,
     new_task_id: &str,

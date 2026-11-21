@@ -16,6 +16,7 @@ async fn dream_manual_and_tick_share_admission() {
             MemoryRuntimeConfig {
                 metadata_path: directory.path().join("metadata.db"),
                 note_memory_dir: directory.path().join("note"),
+                retrieval_tuning: Default::default(),
             },
             Arc::new(OwnershipTree::new()),
         );

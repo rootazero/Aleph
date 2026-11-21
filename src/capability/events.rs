@@ -182,7 +182,12 @@ pub enum EventError {
     Persistence(String),
 }
 
-pub trait EventPersistence: Send + Sync {
+/// Durable sink for capability events.
+    ///
+    /// NO PRODUCTION IMPLEMENTATION (2026-11-20 severed-wire audit): the live
+    /// stream is the in-memory one, so capability events are lost on restart.
+    /// Kept as the contract a durable sink must satisfy.
+    pub trait EventPersistence: Send + Sync {
     fn persist(&self, record: &CapabilityEventRecord) -> Result<(), String>;
 }
 
@@ -715,11 +720,13 @@ pub(crate) fn invocation_audience(
 
 /// An observational decorator; policy decisions still belong exclusively to PolicyEngine.
 /// Resource-free delegation/cross-session helpers remain on the underlying engine.
-pub struct AuditedPolicyEngine {
+#[cfg(test)]
+pub(crate) struct AuditedPolicyEngine {
     inner: crate::capability::policy::PolicyEngine,
     events: CapabilityEventEmitter,
 }
 
+#[cfg(test)]
 impl AuditedPolicyEngine {
     pub(crate) fn new(
         inner: crate::capability::policy::PolicyEngine,
@@ -773,12 +780,14 @@ impl AuditedPolicyEngine {
 /// Opt-in Zahir refusal observation, not a second registry or a new authority.
 /// Provider activation effects, Tool execution, and ownership invalidation are
 /// not reinterpreted as lifecycle events by this read-side decorator.
-pub struct AuditedZahir {
+#[cfg(test)]
+pub(crate) struct AuditedZahir {
     inner: Arc<dyn crate::capability::facade::Zahir>,
     actor: OwnerRef,
     events: CapabilityEventEmitter,
 }
 
+#[cfg(test)]
 impl AuditedZahir {
     pub fn new(
         inner: Arc<dyn crate::capability::facade::Zahir>,
@@ -803,6 +812,7 @@ impl AuditedZahir {
     }
 }
 
+#[cfg(test)]
 impl crate::capability::facade::Zahir for AuditedZahir {
     fn describe(
         &self,
@@ -916,6 +926,9 @@ pub(crate) struct ActivationEventHook {
 }
 
 impl ActivationEventHook {
+    /// Test-only constructor: the observed activation path is not mounted in
+    /// production (2026-11-20 severed-wire audit).
+    #[cfg(test)]
     pub fn new(
         descriptor: &crate::capability::descriptor::CapabilityDescriptor,
         constraints_applied: usize,

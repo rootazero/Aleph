@@ -67,6 +67,10 @@ impl AcpAdapterManager {
     // =========================================================================
 
     /// List registered harness IDs.
+    ///
+    /// Test-only: production reads the registry through
+    /// [`Self::list_configs`], which carries each harness's config as well.
+    #[cfg(test)]
     pub async fn harness_ids(&self) -> Vec<String> {
         let adapters = self.adapters.read().await;
         let mut ids: Vec<String> = adapters.keys().cloned().collect();

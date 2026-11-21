@@ -101,6 +101,7 @@ async fn flag_user_correction_files_under_the_turns_agent_not_the_boot_agent() {
         MemoryRuntimeConfig {
             metadata_path: raw_dir.path().join("metadata.db"),
             note_memory_dir: raw_dir.path().join("notes"),
+            retrieval_tuning: Default::default(),
         },
         Arc::new(crate::capability::ownership::OwnershipTree::new()),
     );

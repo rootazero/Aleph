@@ -629,7 +629,15 @@ pub async fn handle_sessions_cancel(
         .cancel_named(&params.harness, &params.cwd, params.session_name.as_deref())
         .await
     {
-        Ok(()) => JsonRpcResponse::success(request.id, json!({ "success": true })),
+        Ok(dispatch) => JsonRpcResponse::success(
+            request.id,
+            json!({
+                "success": true,
+                // `false` means the harness session had no ACP session id yet,
+                // so no cancel frame was written.
+                "cancelled": dispatch == crate::acp::session::CancelDispatch::Sent,
+            }),
+        ),
         Err(e) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, e.to_string()),
     }
 }

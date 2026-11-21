@@ -100,10 +100,15 @@ impl ChromeMcpBackend {
     /// dump raw JSON (image / binary frames) into snapshot output downstream.
     fn extract_text(result: &serde_json::Value) -> String {
         if let Some(content) = result.get("content").and_then(|v| v.as_array()) {
-            for item in content {
-                if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
-                    return text.to_string();
-                }
+            // Every text block is part of the answer. The server splits long
+            // answers (a snapshot, a console dump) across blocks, and taking
+            // only the first one silently dropped the rest.
+            let blocks: Vec<&str> = content
+                .iter()
+                .filter_map(|item| item.get("text").and_then(|v| v.as_str()))
+                .collect();
+            if !blocks.is_empty() {
+                return blocks.join("\n");
             }
         }
         if let Some(s) = result.as_str() {
@@ -502,10 +507,20 @@ impl BrowserBackend for ChromeMcpBackend {
     ) -> Result<(), BrowserError> {
         let from_uid = Self::extract_element_ref(&from)?;
         let to_uid = Self::extract_element_ref(&to)?;
+        // chrome-devtools-mcp's `drag` schema takes `from_uid`, `to_uid` and
+        // `pageId`, and marks all three required (docs/tool-reference.md). The
+        // page is also selected before the call, but the schema does not make
+        // that selection implicit — a call without `pageId` is a call the
+        // server rejects.
+        let page_id: u32 = tab_id.parse().map_err(|_| {
+            BrowserError::ActionFailed(format!(
+                "Invalid tab ID '{tab_id}': expected numeric page ID"
+            ))
+        })?;
         self.select_and_call(
             tab_id,
             "drag",
-            json!({ "from_uid": from_uid, "to_uid": to_uid }),
+            json!({ "from_uid": from_uid, "to_uid": to_uid, "pageId": page_id }),
         )
         .await?;
         Ok(())

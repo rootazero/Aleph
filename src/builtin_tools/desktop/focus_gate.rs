@@ -101,6 +101,82 @@ pub(super) fn evaluate(focused: Option<&AxElement>, force: bool) -> Gate {
     Gate::Allow
 }
 
+/// Does this key press put CHARACTERS on the screen?
+///
+/// The secure-field hard block applies to keystrokes that can write text into
+/// whatever holds focus: a printable character, or a paste combination. A
+/// named key that moves the caret or copies (Escape, the arrows, Cmd+C) writes
+/// nothing, so refusing it would block the very way OUT of a password field.
+pub(super) fn carries_text(keys: &[String]) -> bool {
+    let Some(main) = keys.last() else {
+        return false;
+    };
+    let modifiers = &keys[..keys.len() - 1];
+    let main = main.to_ascii_lowercase();
+    if main.chars().count() == 1 {
+        let ch = main.chars().next().expect("one char");
+        if ch.is_ascii_graphic() || ch == ' ' {
+            return true;
+        }
+    }
+    if main == "space" {
+        return true;
+    }
+    // Cmd/Ctrl+V is a paste: the same text-carrying capability the dedicated
+    // paste path is gated for.
+    main == "v"
+        && modifiers.iter().any(|m| {
+            matches!(
+                m.to_ascii_lowercase().as_str(),
+                "cmd" | "command" | "meta" | "super" | "ctrl" | "control"
+            )
+        })
+}
+
+/// The secure-field hard block on its own, for the key paths
+/// (`key_combo`, `key_button`).
+///
+/// The other two refusals in [`evaluate`] — "nothing holds focus" and "the
+/// focused element takes no value" — are about TYPING text and do not apply
+/// to a key combination: a combination is meant to reach whatever the app has
+/// focused. The secure field is different: a keystroke that can write text
+/// into a password box must not be delivered, exactly as `type_text` and
+/// `paste` already refuse it.
+pub(super) async fn check_secure_only(
+    platform: &Arc<dyn aleph_desktop::DesktopPlatform>,
+    pid: Option<i32>,
+) -> Option<DesktopOutput> {
+    let ax = platform.ax()?;
+    let focused = match ax.query_focused(QueryFocusedParams { pid }).await {
+        Ok(el) => el,
+        Err(e) => {
+            // AX is momentarily unreachable. Failing closed here would take the
+            // keyboard away on exactly the machines where it is the last resort.
+            tracing::warn!(
+                error = %e,
+                "key focus pre-flight: AX query failed, allowing the keystrokes"
+            );
+            return None;
+        }
+    };
+    let Some(el) = focused.as_ref() else {
+        return None;
+    };
+    if !is_secure(el) {
+        return None;
+    }
+    Some(DesktopOutput {
+        success: false,
+        data: None,
+        message: Some(super::recovery::with_hint(
+            "key press refused: keyboard focus is on a secure text field (a password box). \
+             Aleph never types into credential fields — ask the user to enter it themselves. \
+             This refusal is not overridable with force."
+                .to_string(),
+        )),
+    })
+}
+
 /// Run the gate against the live desktop. Returns `Some(refusal)` when the
 /// keystrokes must not be emitted, `None` to proceed.
 ///

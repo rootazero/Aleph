@@ -182,9 +182,13 @@ pub struct ReverseRpcChannel {
 impl ReverseRpcChannel {
     /// Construct a channel from a connection's outbound sender (creates a fresh
     /// independent pending table). No close signal: outbound wedge only returns
-    /// [`ReverseRpcError::OutboundWedged`], does not trigger connection teardown
-    /// (node-side outbound channels and unit tests use this — reconnection is
-    /// managed by each side's own run loop).
+    /// [`ReverseRpcError::OutboundWedged`], does not trigger connection teardown.
+    ///
+    /// Only unit tests and one-shot channels use this. Every LONG-LIVED
+    /// connection binds a close signal with [`with_close`](Self::with_close) —
+    /// the center's connection read loop AND the node's session read loop — so
+    /// a wedged outbound tears the connection down on both ends instead of
+    /// leaving a half-open socket that the registry still lists as online.
     #[must_use]
     pub fn new(outbound: mpsc::Sender<String>) -> Self {
         Self {
@@ -195,7 +199,8 @@ impl ReverseRpcChannel {
     }
 
     /// Like [`new`](Self::new), but binds a "close connection" signal (one per
-    /// connection on the center side). On outbound wedge,
+    /// connection, on BOTH ends: the center's connection read loop and the
+    /// node's session read loop). On outbound wedge,
     /// [`call`](Self::call) returns [`OutboundWedged`](ReverseRpcError::OutboundWedged)
     /// and also `notify_one()` on this signal, causing the connection's read
     /// loop to exit and run full cleanup — removing the half-open / slow-consumer
@@ -222,7 +227,7 @@ impl ReverseRpcChannel {
 
     /// Ask the owning connection to tear itself down, if this channel carries a
     /// close signal ([`with_close`](Self::with_close)); a no-op otherwise
-    /// (node-side channels / tests).
+    /// (one-shot channels / unit tests).
     ///
     /// Every producer fires it for the same reason — this connection must go
     /// away **now**, not at the next idle-watchdog expiry, because the registry

@@ -87,6 +87,42 @@ pub enum InstallOutcome {
     Skill { path: String },
 }
 
+/// The install-registry row for the skill installed at `path`.
+///
+/// The registry is the one place that knows where a skill came from — the
+/// bundled release, a GitHub URL, or a hand-placed directory — and until now
+/// nothing read those rows back: they were written on install and never
+/// looked at again, so a caller learned a path and nothing else.
+pub fn skill_registry_entry(
+    skills_dir: &std::path::Path,
+    path: &str,
+) -> Option<crate::bundled::manifest::SkillEntry> {
+    let name = std::path::Path::new(path).file_name()?.to_str()?;
+    let manifest = crate::bundled::manifest::InstallRegistry::load(skills_dir)?;
+    manifest.skills.get(name).cloned()
+}
+
+/// The JSON a caller gets for a skill install: what was installed, and where it came from.
+///
+/// `skills_dir` is `None` when the install root cannot be resolved; the
+/// provenance is then simply absent — a missing registry row must not make
+/// the install itself look like it failed.
+pub fn skill_outcome_json(skills_dir: Option<&std::path::Path>, path: &str) -> serde_json::Value {
+    let mut out = serde_json::json!({ "kind": "skill", "path": path });
+    if let Some(entry) = skills_dir.and_then(|dir| skill_registry_entry(dir, path)) {
+        if let Ok(source) = serde_json::to_value(&entry.source) {
+            out["source"] = source;
+        }
+        if let Some(version) = entry.version {
+            out["version"] = serde_json::Value::String(version);
+        }
+        if let Some(url) = entry.url {
+            out["url"] = serde_json::Value::String(url);
+        }
+    }
+    out
+}
+
 /// Inputs the install router needs from the handler layer.
 pub struct InstallContext<'a> {
     pub entry: &'a ExtensionEntry,
@@ -176,9 +212,28 @@ pub(crate) fn install_git_skill(
         || safe_name.chars().any(|c| c.is_control())
         || matches!(
             safe_name.to_ascii_uppercase().as_str(),
-            "CON" | "PRN" | "AUX" | "NUL" | "COM1" | "COM2" | "COM3" | "COM4" | "COM5" | "COM6"
-                | "COM7" | "COM8" | "COM9" | "LPT1" | "LPT2" | "LPT3" | "LPT4" | "LPT5"
-                | "LPT6" | "LPT7" | "LPT8" | "LPT9"
+            "CON"
+                | "PRN"
+                | "AUX"
+                | "NUL"
+                | "COM1"
+                | "COM2"
+                | "COM3"
+                | "COM4"
+                | "COM5"
+                | "COM6"
+                | "COM7"
+                | "COM8"
+                | "COM9"
+                | "LPT1"
+                | "LPT2"
+                | "LPT3"
+                | "LPT4"
+                | "LPT5"
+                | "LPT6"
+                | "LPT7"
+                | "LPT8"
+                | "LPT9"
         )
     {
         return Err(format!("unsafe skill name '{safe_name}'"));
@@ -227,7 +282,9 @@ pub(crate) fn install_git_skill(
     };
     if src_leaf.is_symlink() || !src_leaf_canon.starts_with(&checkout_canon) {
         let _ = std::fs::remove_dir_all(&checkout);
-        return Err(format!("subdir '{leaf}' escapes checkout root (symlink breakout)"));
+        return Err(format!(
+            "subdir '{leaf}' escapes checkout root (symlink breakout)"
+        ));
     }
     if !src_leaf_canon.is_dir() {
         let _ = std::fs::remove_dir_all(&checkout);
@@ -276,7 +333,9 @@ pub(crate) fn install_git_skill(
     }
     if target.is_symlink() {
         let _ = std::fs::remove_dir_all(&staging);
-        return Err(format!("destination '{safe_name}' is a symlink; refusing install"));
+        return Err(format!(
+            "destination '{safe_name}' is a symlink; refusing install"
+        ));
     }
     let had_existing = target.exists();
     let backup = skills_dir.join(".staging").join(format!(
@@ -288,7 +347,9 @@ pub(crate) fn install_git_skill(
         let _ = std::fs::remove_dir_all(&backup);
         if let Err(e) = std::fs::rename(&target, &backup) {
             let _ = std::fs::remove_dir_all(&staging);
-            return Err(format!("Failed to back up existing skill '{safe_name}': {e}"));
+            return Err(format!(
+                "Failed to back up existing skill '{safe_name}': {e}"
+            ));
         }
     }
 
@@ -523,6 +584,45 @@ pub async fn run_install(
 mod tests {
     use super::*;
     use crate::hub::types::{EnvDecl, HeaderDecl};
+
+    /// The install registry is the one place that knows where a skill came
+    /// from. Its rows used to be written and never read, so the install
+    /// outcome carried a path and nothing else.
+    #[test]
+    fn skill_outcome_carries_the_registry_provenance() {
+        let tmp = tempfile::tempdir().unwrap();
+        let skills_dir = tmp.path().join("skills");
+        std::fs::create_dir_all(skills_dir.join("my-skill")).unwrap();
+        let mut manifest = crate::bundled::manifest::InstallRegistry::new("1.0.0");
+        manifest.skills.insert(
+            "my-skill".to_string(),
+            crate::bundled::manifest::SkillEntry {
+                source: crate::bundled::manifest::SkillOrigin::Github,
+                version: Some("1.2.3".to_string()),
+                url: Some("https://github.com/example/my-skill".to_string()),
+            },
+        );
+        manifest.save(&skills_dir).unwrap();
+        let path = skills_dir.join("my-skill");
+        let out = skill_outcome_json(Some(&skills_dir), path.to_str().unwrap());
+        assert_eq!(out["kind"], "skill");
+        assert_eq!(out["source"], "github");
+        assert_eq!(out["version"], "1.2.3");
+        assert_eq!(out["url"], "https://github.com/example/my-skill");
+    }
+
+    /// A skill with no registry row is still an installed skill: the absent
+    /// provenance must not make the install look like it failed.
+    #[test]
+    fn skill_outcome_without_a_registry_row_still_reports_the_install() {
+        let tmp = tempfile::tempdir().unwrap();
+        let out = skill_outcome_json(Some(tmp.path()), "/nowhere/ghost-skill");
+        assert_eq!(out["kind"], "skill");
+        assert_eq!(out["path"], "/nowhere/ghost-skill");
+        assert!(out.get("source").is_none());
+        assert!(out.get("version").is_none());
+        assert!(out.get("url").is_none());
+    }
 
     fn remote(transport: McpTransport, headers: Vec<HeaderDecl>) -> InstallSpec {
         InstallSpec::McpRemote {

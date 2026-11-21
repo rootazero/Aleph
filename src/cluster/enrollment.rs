@@ -31,7 +31,7 @@
 use tracing::warn;
 
 use crate::cluster::normalize_node_key;
-use crate::cluster::registry::{bound_device_name, truncate_on_char_boundary};
+use crate::cluster::registry::bound_device_name;
 use crate::gateway::security::store::{DeviceRow, DeviceUpsertData, SecurityStore};
 use crate::sync_primitives::Mutex;
 
@@ -123,8 +123,7 @@ enum MintError {
 /// Mint a **fresh** `role=node` device record and return its `node_id` (UUID).
 ///
 /// `public_key` is a placeholder (LAN-trust has no hardware key, same as
-/// `connect.rs`); `fingerprint` uses the first 16 chars of the UUID to satisfy
-/// the UNIQUE constraint on the table.
+/// `connect.rs`); `fingerprint` is the device's own id (this store's lookup key).
 ///
 /// Private on purpose: every caller must go through [`admit_node`] (node
 /// self-registration) or [`enroll_node_device`] (operator pre-enrollment), both
@@ -144,13 +143,22 @@ fn mint_node_device(store: &SecurityStore, node_name: &str) -> Result<String, Mi
         return Err(MintError::Unaddressable(reason));
     }
     let device_id = uuid::Uuid::new_v4().to_string();
-    // (B2-02) `&device_id[..16]` was a tacit assumption that the id is an
-    // ASCII UUID. Today every minted id is, but the private helper could be
-    // called from elsewhere later. Use `truncate_on_char_boundary` so the
-    // mint path is consistent with `admit_node` path 4, which already uses
-    // it. (Both sites slice to 16 bytes to feed the device-table UNIQUE
-    // constraint on fingerprint.)
-    let fingerprint = truncate_on_char_boundary(&device_id, 16);
+    // The `fingerprint` column is the device's LOOKUP KEY, and the convention
+    // in this store is "the device's own id": the panel path stores the full
+    // `device_id` (src/gateway/security/device_token_manager.rs:182,
+    // src/gateway/security/store/users.rs:312). It is NOT the
+    // "first 16 hex chars of SHA256(public_key)" the `DeviceFingerprint` type
+    // computes — a node has no key pair yet (`public_key` is the placeholder
+    // `[0u8; 32]` below), so a key-derived fingerprint would be the SAME value
+    // for every node in the fleet.
+    //
+    // (B2-02) The old code truncated the id to 16 bytes "to feed the
+    // device-table UNIQUE constraint on fingerprint". The constraint is
+    // satisfied by the full id too — and the full id is UNIQUE where a
+    // 16-char truncation is only PROBABLY unique (64 bits of a UUID). The
+    // truncated value was also not a lookup key for anything, so it could
+    // never be matched back to the device.
+    let fingerprint = device_id.as_str();
     store
         .upsert_device(&DeviceUpsertData {
             device_id: &device_id,
@@ -497,7 +505,11 @@ pub fn admit_node(
                         minted: false,
                     };
                 }
-                let fingerprint = truncate_on_char_boundary(id, 16);
+                // The fingerprint is the device's own id (the store's
+                // convention — see `mint_node_device`), NOT a key-derived
+                // value: a node has no key pair, so its `public_key` is a
+                // placeholder and every node would share one fingerprint.
+                let fingerprint = id;
                 if let Err(e) = store.upsert_device(&DeviceUpsertData {
                     device_id: id,
                     device_name: &node_name,
@@ -1194,7 +1206,6 @@ mod tests {
             channel: ReverseRpcChannel::new(tx),
             declared_commands: vec![CommandDescriptor {
                 name: "bash".to_string(),
-                schema: serde_json::json!({"type": "object"}),
             }],
             tags: vec![],
             version: None,

@@ -8,7 +8,9 @@
 1. Before modification: `cp ~/.aleph/config.toml ~/.aleph/config.toml.bak`
 2. API keys via `vault_store(action="store", key="ai:<name>", secret="<key>")`
 3. Never write API keys to config.toml — the `api_key` field is runtime-only
-4. After modification: auto-reloads via fswatch, no restart needed
+4. After modification: call the `config.reload` RPC (or restart the daemon).
+   The file watcher swaps its own snapshot and hot-applies PII privacy only —
+   it does NOT apply the new provider values to the running runtime.
 
 ## Structure
 

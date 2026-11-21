@@ -71,6 +71,7 @@ async fn delegation_capture_is_cold_off_and_drains_actual_callback() {
         MemoryRuntimeConfig {
             metadata_path: path.clone(),
             note_memory_dir: root.path().join("notes"),
+            retrieval_tuning: Default::default(),
         },
         Arc::new(OwnershipTree::new()),
     );

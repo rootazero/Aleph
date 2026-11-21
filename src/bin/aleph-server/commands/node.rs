@@ -27,7 +27,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use alephcore::cluster::{
-    ApprovalSlot, CenterApprovalRequester, CommandDescriptor, CommandTable, ReverseRpcChannel,
+    ApprovalSlot, CenterApprovalRequester, CommandDeclaration, CommandTable, ReverseRpcChannel,
 };
 use alephcore::gateway::protocol::JsonRpcResponse;
 use alephcore::gateway::server::connection::parse_response_frame;
@@ -503,7 +503,7 @@ async fn run_session<F, Fut>(
     url: &str,
     node_id: Option<&str>,
     name: &str,
-    declared: &[CommandDescriptor],
+    declared: &[CommandDeclaration],
     tags: &[String],
     table: &Arc<CommandTable>,
     approval_slot: &ApprovalSlot,
@@ -574,7 +574,16 @@ where
     // read loop — dispatch runs on spawned tasks while the read loop keeps
     // pumping frames.
     let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<String>(64);
-    let channel = ReverseRpcChannel::new(out_tx.clone());
+    // The node binds the SAME close signal the center does. When the center
+    // stops draining our frames, `ReverseRpcChannel::call` reports
+    // `OutboundWedged` and asks the owning connection to tear itself down.
+    // Without it the node's own wedge was invisible to the node: the socket
+    // stayed half-open, the center kept the node in its ONLINE registry, and
+    // every command to it timed out until the center's inbound watchdog
+    // reaped it — and that watchdog watches INBOUND activity, so it cannot
+    // see a write wedge at all.
+    let close = Arc::new(tokio::sync::Notify::new());
+    let channel = ReverseRpcChannel::with_close(out_tx.clone(), Arc::clone(&close));
     let pending = channel.pending();
     *approval_slot
         .write()
@@ -598,7 +607,24 @@ where
     // approval slot + stop the writer) runs on EVERY exit path — including a WS
     // error early-return via `?`, not just the normal loop fall-through.
     let loop_result: Result<(), Box<dyn std::error::Error>> = async {
-        while let Some(msg) = read.next().await {
+        loop {
+            // The close signal is polled FIRST: a wedged outbound must tear the
+            // session down NOW, not after the next inbound frame — which may
+            // never come, because the peer is the one that stopped reading.
+            let msg = tokio::select! {
+                biased;
+                () = close.notified() => {
+                    tracing::warn!(
+                        "node: outbound reverse-RPC channel is wedged (the center stopped reading \
+                         our frames); tearing down the session so the node can reconnect"
+                    );
+                    break;
+                }
+                msg = read.next() => match msg {
+                    Some(msg) => msg,
+                    None => break,
+                },
+            };
             let Message::Text(text) = msg? else { continue };
             let text = text.to_string();
 

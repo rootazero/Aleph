@@ -1421,6 +1421,7 @@ mod trace_tests {
                     crate::memory::runtime::MemoryRuntimeConfig {
                         metadata_path: dir.path().join("unused-runtime.db"),
                         note_memory_dir: dir.path().join("unused-note"),
+                        retrieval_tuning: Default::default(),
                     },
                     Arc::new(crate::capability::ownership::OwnershipTree::new()),
                 ),

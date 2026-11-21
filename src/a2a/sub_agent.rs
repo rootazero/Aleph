@@ -60,6 +60,16 @@ impl A2ASubAgent {
         }
     }
 
+    /// Drop the cached HTTP client of an agent that is no longer registered.
+    ///
+    /// The pool is keyed by agent card id and the client bakes in the agent's
+    /// auth token. Without this, an agent removed through `a2a_agents remove`
+    /// keeps its client (and its token) in the pool for the lifetime of the
+    /// process.
+    pub async fn forget_client(&self, agent_id: &str) {
+        self.client_pool.remove(agent_id).await;
+    }
+
     /// Attach an optional raw-memory writer for delegation hooks (Spec 1 G2).
     ///
     /// When set, `execute` will write a `RawMemory(Delegation{child_agent_id})`

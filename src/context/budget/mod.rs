@@ -456,8 +456,13 @@ impl ContextBudget {
     }
 
     /// Last computed pressure snapshot from `before_turn()`.
+    ///
+    /// Test-only: production reads the current fill ratio through
+    /// [`Self::peek_pressure`]; the stored snapshot is an internal detail of
+    /// the stateful path.
     #[must_use]
-    pub const fn last_pressure(&self) -> Option<&ContextPressure> {
+    #[cfg(test)]
+    pub(crate) const fn last_pressure(&self) -> Option<&ContextPressure> {
         self.last_pressure.as_ref()
     }
 

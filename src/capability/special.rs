@@ -6,7 +6,7 @@
 //! the ABA/lifecycle boundary for special capabilities.
 
 use crate::capability::descriptor::{CapabilityDescriptor, CapabilityId, CapabilityKind};
-use crate::capability::facade::{CapabilitySnapshot, Cursor, Scope};
+use crate::capability::facade::Scope;
 use crate::capability::policy_runtime::{CapabilityCallContext, RunningCapabilityCall};
 use crate::capability::provider::ProviderHandle;
 use crate::capability::ui_surface::UiSurface;
@@ -72,7 +72,8 @@ impl CapabilityHandlerCall {
     }
 
     #[must_use]
-    pub fn running_call_count(&self) -> usize {
+    #[cfg(test)]
+    pub(crate) fn running_call_count(&self) -> usize {
         self.running_calls.len()
     }
 
@@ -330,7 +331,8 @@ impl CapturedSpecialEntry {
     }
 
     #[must_use]
-    pub fn canonical_schema(&self) -> &[u8] {
+    #[cfg(test)]
+    pub(crate) fn canonical_schema(&self) -> &[u8] {
         &self.canonical_schema
     }
 
@@ -1064,13 +1066,6 @@ impl crate::capability::backend::CapabilityBackend for CapabilityHandlerRegistry
             .into_iter()
             .map(|capture| capture.descriptor.as_ref().clone())
             .collect()
-    }
-
-    fn snapshot(&self, scope: &Scope) -> CapabilitySnapshot {
-        CapabilitySnapshot {
-            capabilities: self.enumerate(scope),
-            committed_cursor: Cursor(self.revision()),
-        }
     }
 }
 

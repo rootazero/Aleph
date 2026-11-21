@@ -87,6 +87,7 @@ async fn pending_approval_cannot_refresh_a_lease_and_admitted_work_survives_canc
         MemoryRuntimeConfig {
             metadata_path: root.path().join("metadata.db"),
             note_memory_dir: root.path().join("notes"),
+            retrieval_tuning: Default::default(),
         },
         tree.clone(),
     );

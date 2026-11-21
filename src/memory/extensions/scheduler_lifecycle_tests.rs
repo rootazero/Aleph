@@ -70,6 +70,7 @@ async fn producer_tick_drains_capture_filter_insert() {
         MemoryRuntimeConfig {
             metadata_path: directory.path().join("metadata.db"),
             note_memory_dir: directory.path().join("notes"),
+            retrieval_tuning: Default::default(),
         },
         Arc::new(OwnershipTree::new()),
     );

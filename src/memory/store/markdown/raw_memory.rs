@@ -507,6 +507,33 @@ impl RawMemoryStore for MarkdownSessionStore {
         .await
     }
 
+    /// Counts rows under the prefix across every agent partition: a
+    /// correction recorded in a project-scoped session lives in that
+    /// session's partition, and a per-agent count would not see it.
+    async fn count_raw_by_path_prefix_since_all_agents(
+        &self,
+        path_prefix: &str,
+        since_created_at: i64,
+    ) -> Result<usize, AlephError> {
+        // The closure is `'static`, so the prefix is owned by it rather than
+        // borrowed from this frame.
+        let path_prefix = path_prefix.to_string();
+        self.with_raw_db(move |db, _| {
+            let mut stmt = db
+                .prepare(
+                    "SELECT count(*) FROM raw_memory_index \
+                     WHERE substr(path, 1, length(?1)) = ?1 COLLATE NOCASE \
+                     AND created_at > ?2",
+                )
+                .map_err(storage_error)?;
+            let n: i64 = stmt
+                .query_row(params![&path_prefix, since_created_at], |row| row.get(0))
+                .map_err(storage_error)?;
+            Ok(n.max(0) as usize)
+        })
+        .await
+    }
+
     async fn search_raw_by_path_prefix(
         &self,
         path_prefix: &str,

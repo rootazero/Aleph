@@ -1,12 +1,21 @@
 //! Immutable audit projections of capability events.
 //!
+//! NOT MOUNTED IN PRODUCTION (2026-11-20 severed-wire audit): no production
+//! consumer reads this module — `AuditCollector::query_scoped` and
+//! `ProjectionHost::audit_collector` are reached only from in-crate tests.
+//! The capability event bridge (`src/gateway/capability_events.rs`) is the
+//! live path; it does not read the audit projection. Kept as the intended
+//! home for audit queries until an operator-facing reader is wired.
+//!
 //! Collection shares the event buffer: there is no lossy drain, second log, or
 //! thread-local state. Entries are read-only views, not cryptographic evidence.
 //! Compliance queries fail closed after retention loss; persistence and recovery
 //! require a separately supplied persistence sink and are not claimed here.
 
 use crate::capability::descriptor::CapabilityId;
-use crate::capability::event_audience::{EventAudience, TrustedEventScope};
+use crate::capability::event_audience::EventAudience;
+#[cfg(test)]
+use crate::capability::event_audience::TrustedEventScope;
 use crate::capability::events::{
     CapabilityEvent, CapabilityEventRecord, CapabilityEventType, EventError, EventFilter,
     HandlerResult, InMemoryEventStream,
@@ -181,7 +190,8 @@ impl AuditCollector {
     }
 
     /// Query the same retained cut, then apply CURRENT request access outside the lock.
-    pub async fn query_scoped(
+    #[cfg(test)]
+    pub(crate) async fn query_scoped(
         &self,
         scope: &TrustedEventScope,
         query: &AuditQuery,

@@ -552,6 +552,12 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
         //     is passed in so `ChainContextLayer` can tell the spawned agent it
         //     is nested and how much delegation budget remains.
         let resolved_model: Option<String> = req.model.map(str::to_string);
+        // An agent's own `token_budget` (frontmatter) caps the child's context
+        // window. The cap can only LOWER the window the model / operator
+        // config allows — never raise it past what the serving model
+        // accepts. Before this the field was parsed, validated and displayed
+        // but never reached the loop, so an author's declared budget was inert.
+        let agent_token_budget = req.agent_def.token_budget.map(u64::from);
         let token_budget = base.context_budget_config.as_ref().map_or_else(
             crate::thinker::prompt_budget::TokenBudget::default,
             |cfg| {
@@ -570,9 +576,11 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
                     ),
                     _ => cfg.clone(),
                 };
-                crate::thinker::prompt_budget::TokenBudget::from_context_window(
-                    refined.token_budget,
-                )
+                let window = match agent_token_budget {
+                    Some(cap) => refined.token_budget.min(cap),
+                    None => refined.token_budget,
+                };
+                crate::thinker::prompt_budget::TokenBudget::from_context_window(window)
             },
         );
         // Seed the prompt token gate from the cross-run calibration
@@ -802,6 +810,7 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             &child_id,
             // rust-doctor-disable-next-line excessive-clone
             req.cancel.clone(),
+            agent_token_budget,
         );
 
         // §3.2 overflow-tier parity: was `None`, so a subagent's oversized
@@ -1315,6 +1324,7 @@ fn child_context_triple(
     agent_id: &str,
     child_id: &SessionId,
     cancel: CancellationToken,
+    agent_token_budget: Option<u64>,
 ) -> ContextTriple {
     let metered_cheap: Option<Arc<dyn AiProvider>> =
         base.cheap_summary_provider.as_ref().map(|cheap| {
@@ -1325,8 +1335,17 @@ fn child_context_triple(
                 format!("compactor:{agent_id}"),
             )) as Arc<dyn AiProvider>
         });
+    // The agent's declared budget caps the child's context window (never
+    // raises it) — the same cap the prompt gate above applies.
+    let effective_budget_config = base.context_budget_config.as_ref().map(|cfg| {
+        let mut capped = cfg.clone();
+        if let Some(cap) = agent_token_budget {
+            capped.token_budget = capped.token_budget.min(cap);
+        }
+        capped
+    });
     build_context_triple(
-        base.context_budget_config.as_ref(),
+        effective_budget_config.as_ref(),
         llm,
         metered_cheap.as_ref(),
         agent_id,

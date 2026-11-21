@@ -840,18 +840,15 @@ impl SkillSystem {
             .collect();
 
         let registry = self.inner.registry.read().await;
-        let mut new_snapshot = SkillSnapshot::build(
+        let new_snapshot = SkillSnapshot::build(
             &registry,
             &self.inner.eligibility,
             current_version,
             &config_value,
             &skill_entries,
             &archived,
+            prompt_budget,
         );
-        // Carry the configured budget to consumers (the prompt layer renders
-        // the authoritative index with it; `build` only computes the
-        // default-budget preview).
-        new_snapshot.prompt_budget = prompt_budget;
         drop(registry);
 
         let mut snapshot = self.inner.snapshot.write().await;

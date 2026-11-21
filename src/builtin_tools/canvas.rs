@@ -814,10 +814,12 @@ Whole-canvas delete is Panel-only, deliberately."#;
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         match args.action {
             CanvasToolAction::List => {
-                let canvases: Vec<_> = self
+                let entries = self
                     .store
                     .list_entries()
                     .await
+                    .map_err(|error| AlephError::tool(format!("canvas list: {error}")))?;
+                let canvases: Vec<_> = entries
                     .into_iter()
                     .filter(|entry| {
                         visibility::ambient_canvas_visible(

@@ -367,6 +367,31 @@ pub trait RawMemoryStore: Send + Sync {
             .collect())
     }
 
+    /// Count raw memories under `path_prefix` created after `since_created_at`,
+    /// across EVERY agent partition.
+    ///
+    /// A user correction recorded inside a project-scoped session lands in
+    /// that session's partition (`main<SEP><namespace>`), not in the default
+    /// agent's, so a per-agent count cannot see it — the correction exists and
+    /// the global count says zero. A store that owns the whole table answers
+    /// this with one grouped query; the default answers for the default agent
+    /// only, which is what a partition-scoped store can do.
+    async fn count_raw_by_path_prefix_since_all_agents(
+        &self,
+        path_prefix: &str,
+        since_created_at: i64,
+    ) -> Result<usize, AlephError> {
+        Ok(self
+            .get_raw_by_path_prefix_since(
+                path_prefix,
+                crate::routing::DEFAULT_AGENT_ID,
+                since_created_at,
+                usize::MAX,
+            )
+            .await?
+            .len())
+    }
+
     /// Newest-first substring search over rows under a path prefix, scoped to
     /// an agent. Matching is ASCII-case-insensitive on both ends (the `SQLite`
     /// backend implements it with `LIKE`, whose default collation folds ASCII

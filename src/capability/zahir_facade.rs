@@ -338,25 +338,6 @@ impl ZahirFacade {
         Self::new_with_memory_and_policy(registry, tree, memory, policy)
     }
 
-    /// Compose Memory, startup Policy, and the one special registry.
-    #[must_use]
-    pub fn new_with_memory_and_policy_and_specials(
-        registry: ToolHandlerRegistry,
-        tree: Arc<OwnershipTree>,
-        memory: Arc<MemoryRuntime>,
-        policy: Arc<crate::capability::policy::PolicyEngine>,
-        specials: CapabilityHandlerRegistry,
-    ) -> Arc<Self> {
-        Self::new_with_memory_and_policy_and_specials_and_events(
-            registry,
-            tree,
-            memory,
-            policy,
-            specials,
-            Arc::new(crate::capability::events::InMemoryEventStream::default()),
-        )
-    }
-
     /// Compose the same bounded event source used by startup and audit.
     #[must_use]
     pub fn new_with_memory_and_policy_and_specials_and_events(
@@ -1194,6 +1175,14 @@ impl ZahirFacade {
     ) -> FacadeEntriesSnapshot {
         self.reconcile_snapshot(snap);
 
+        // KNOWN DEFECT (2026-11-20 severed-wire audit PH-01): this cursor
+        // MIXES two independent revision domains — the tool registry's
+        // revision and the special registry's — with `max`. A consumer that
+        // compares a registry-only publication cursor against this mixed
+        // value (src/capability/projection_host.rs) therefore drops
+        // publications that are not "new". Giving the two domains separate
+        // cursors changes the snapshot contract, which is larger than this
+        // audit pass; it is left open and documented rather than patched.
         let registry_cursor = Cursor(snap.revision().max(self.specials.revision()));
         let registry_closed = snap.is_closed();
 
@@ -1307,6 +1296,15 @@ impl ZahirFacade {
         };
         if !ToolBackendAdapter::in_scope(id, scope) {
             return false;
+        }
+        // An unregistration describes a capability that is ALREADY gone from
+        // the registry, so the "is the current entry in scope" lookup below
+        // can never answer for it: filtering on the lookup dropped every
+        // removal from the scoped streams, and a consumer that waits for an
+        // unregistration to drain its own entry never sees it.
+        // (2026-11-20 severed-wire audit ZF-01.)
+        if matches!(change, CapabilityChange::Unregistered { .. }) {
+            return ToolBackendAdapter::in_scope(id, scope);
         }
         let Some(descriptor) = self.adapter.lookup(id) else {
             return false;
@@ -1871,9 +1869,7 @@ impl Zahir for ZahirFacade {
         // ordinary Tool with the same name must never provide a cache revision
         // for that identity, even when the special source is not visible.
         if let Some(capture) = self.specials.capture(&reference.id) {
-            self
-                .tree
-                .generation(&reference.id, &reference.visibility)?;
+            self.tree.generation(&reference.id, &reference.visibility)?;
             return Some(capture.descriptor().revision);
         }
         // Only the Tool source currently guarantees non-reused per-descriptor
@@ -1903,9 +1899,7 @@ impl Zahir for ZahirFacade {
         // ordinary Tool or provider metadata entry with the same ID cannot
         // shadow its descriptor or mint a cacheable admission.
         if let Some(capture) = self.specials.capture(&reference.id) {
-            self
-                .tree
-                .generation(&reference.id, &reference.visibility)?;
+            self.tree.generation(&reference.id, &reference.visibility)?;
             let mut descriptor = capture.descriptor().clone();
             descriptor.visibility = reference.visibility.clone();
             return Some((descriptor, true));
@@ -2119,7 +2113,6 @@ impl Zahir for ZahirFacade {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::capability::backend::CapabilityBackend;
     use crate::capability::descriptor::{
         CapabilityDescriptor, CapabilityFacet, CapabilityFacets, CapabilityId, CapabilityKind,
         CapabilityRevision, ProjectionMetadata, SchemaRef,
@@ -2227,7 +2220,11 @@ mod tests {
     fn describe_uses_backend_snapshot_contract() {
         let (host, registry, _tree) = host_parts(&["snapshot"]);
         let scope = scope_all();
-        let source_snapshot = CapabilityBackend::snapshot(&host.adapter, &scope);
+        let (capabilities, revision) = host.adapter.snapshot_capabilities(&scope);
+        let source_snapshot = CapabilitySnapshot {
+            capabilities,
+            committed_cursor: Cursor(revision),
+        };
         let facade_snapshot = host.describe(scope);
 
         assert_eq!(facade_snapshot, source_snapshot);
@@ -2429,7 +2426,9 @@ mod tests {
             .expect("runtime bump succeeds");
 
         assert_eq!(host.validate_lease(&lease), Err(ResolveError::StaleOwner));
-        let fresh = host.resolve(ref_for(&id)).expect("fresh resolve succeeds after owner bump");
+        let fresh = host
+            .resolve(ref_for(&id))
+            .expect("fresh resolve succeeds after owner bump");
         assert_eq!(fresh.owner_generation, OwnerGeneration(1));
     }
 
@@ -3113,5 +3112,4 @@ mod tests {
         assert_eq!(snap.registry_closed, cloned.registry_closed);
         assert_eq!(snap.owner_generations, cloned.owner_generations);
     }
-
 }

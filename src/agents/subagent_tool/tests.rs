@@ -3146,7 +3146,7 @@ async fn a_cancelled_background_child_is_not_announced_and_is_stamped_on_disk() 
     // The bus is process-global too: record only the ids this test spawns.
     let seen: Arc<std::sync::Mutex<Vec<String>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
     let sink = seen.clone();
-    let subscription = GlobalBus::global()
+    let _subscription = GlobalBus::global()
         .subscribe_async(
             EventFilter::new(vec![EventType::SubAgentCompleted]),
             move |event| {
@@ -3203,11 +3203,10 @@ async fn a_cancelled_background_child_is_not_announced_and_is_stamped_on_disk() 
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
 
-    // Read everything, then put both globals back before asserting.
+    // Read everything, then disable the sidecar before asserting.
     let announced_ids = seen.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let cancelled_record = bp::lookup(&cancelled_rid, None).map(|r| r.record);
     let completed_record = bp::lookup(&completed_rid, None).map(|r| r.record);
-    GlobalBus::global().unsubscribe(&subscription).await;
     bp::disable_for_test();
 
     assert!(

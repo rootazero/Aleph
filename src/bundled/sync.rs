@@ -1,5 +1,6 @@
 //! Official-content git sync — clone the external skills/plugins repos into an
-//! isolated checkout, or hard-reset an existing checkout to `origin/main`.
+//! isolated checkout, or hard-reset an existing checkout to the remote's
+//! default branch.
 //! Uses git2 (libgit2, vendored) so no system `git` is required. Network I/O is
 //! blocking — call from `spawn_blocking`. Never panics; returns `Err` so the
 //! caller can fall back to the embedded snapshot.
@@ -21,17 +22,18 @@ use tracing::info;
 static CHECKOUT_LOCKS: OnceLock<Mutex<std::collections::HashMap<PathBuf, Arc<Mutex<()>>>>> =
     OnceLock::new();
 
-/// Clone `repo_url` (branch `main`) into `checkout_dir` if absent; otherwise
-/// fetch and hard-reset the working tree to `origin/main`. The checkout dir is
-/// official-content-only and never user-edited, so a hard reset is conflict-free.
+/// Clone `repo_url` (the remote's default branch) into `checkout_dir` if
+/// absent; otherwise fetch and hard-reset the working tree to that branch.
+/// The checkout dir is official-content-only and never user-edited, so a hard
+/// reset is conflict-free.
 pub(crate) fn clone_or_update(repo_url: &str, checkout_dir: &Path) -> Result<(), String> {
     clone_or_update_at(repo_url, checkout_dir, None)
 }
 
 /// Materialize `repo_url` in `checkout_dir` at a chosen revision.
 ///
-/// - `git_ref: None` — track the default branch: hard-reset to `origin/main` on
-///   every call (the official-content path).
+/// - `git_ref: None` — track the default branch: hard-reset to
+///   `origin/<default branch>` on every call (the official-content path).
 /// - `git_ref: Some(rev)` — check out exactly that revision (tag, `origin/<branch>`,
 ///   or a full commit SHA) with HEAD detached. A pin is *not* re-pointed by later
 ///   calls, which is the whole point of pinning: the same `rev` always yields the
@@ -109,21 +111,51 @@ fn checkout_pinned(repo: &git2::Repository, rev: &str) -> Result<(), git2::Error
 
 fn update_existing_repo(repo: &git2::Repository) -> Result<(), git2::Error> {
     let mut remote = repo.find_remote("origin")?;
+    let branch = default_branch(repo);
     // `refs/heads/main:refs/remotes/origin/main` is the canonical refspec —
     // older libgit2 versions silently accept the bare `"main"` and newer ones
     // reject it as malformed OR, worse, interpret it as a write-back to the
     // local branch. Naming both ends keeps the fetch deterministic across
     // versions and pins the destination the reset below reads from.
-    remote.fetch(&["+refs/heads/main:refs/remotes/origin/main"], None, None)?;
+    let refspec = format!("+refs/heads/{branch}:refs/remotes/origin/{branch}");
+    remote.fetch(&[&refspec], None, None)?;
     let fetch_head = repo.find_reference("FETCH_HEAD")?;
     let target = repo.reference_to_annotated_commit(&fetch_head)?.id();
     let obj = repo.find_object(target, None)?;
-    // Canonical `reset --hard` — discard any local drift, match origin/main.
+    // Canonical `reset --hard` — discard any local drift, match the remote.
     repo.reset(&obj, git2::ResetType::Hard, None)?;
-    if let Ok(mut head) = repo.find_reference("refs/heads/main") {
+    if let Ok(mut head) = repo.find_reference(&format!("refs/heads/{branch}")) {
         let _ = head.set_target(target, "sync");
     }
     Ok(())
+}
+
+/// The remote's default branch — the branch `git_ref: None` promises to track.
+///
+/// "Default branch" and the literal `main` are two different contracts. A
+/// repository whose default branch is named otherwise installs fine the first
+/// time (the clone lands on the default branch) and fails on every later
+/// update, because the fetch asks for a branch that does not exist there.
+/// The answer is read from the checkout, not from the network: the clone
+/// recorded the remote's HEAD symref as `refs/remotes/origin/HEAD` (libgit2
+/// does this on every clone), and the checkout's own HEAD is the fallback
+/// (a clone lands on the default branch). `main` is the last resort.
+fn default_branch(repo: &git2::Repository) -> String {
+    if let Ok(head) = repo.find_reference("refs/remotes/origin/HEAD") {
+        if let Ok(Some(target)) = head.symbolic_target() {
+            if let Some(branch) = target.strip_prefix("refs/remotes/origin/") {
+                return branch.to_string();
+            }
+        }
+    }
+    if let Ok(head) = repo.head() {
+        if let Ok(name) = head.name() {
+            if let Some(branch) = name.strip_prefix("refs/heads/") {
+                return branch.to_string();
+            }
+        }
+    }
+    "main".to_string()
 }
 
 #[cfg(test)]

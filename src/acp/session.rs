@@ -92,6 +92,20 @@ pub struct AcpSession {
     _stderr_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
+/// Outcome of a `session/cancel` dispatch attempt.
+///
+/// The caller-facing surfaces (the `acp_session_control` tool, the
+/// `acp.sessions.cancel` gateway RPC) must not claim a cancel was sent when
+/// nothing went out, so the two cases stay distinguishable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CancelDispatch {
+    /// The cancel frame was written to the harness's stdin.
+    Sent,
+    /// The harness session exists but has no ACP session id yet, so
+    /// `session/new` has not completed and there was nothing to cancel.
+    NoSession,
+}
+
 /// Cloneable "send cancel without locking the session" handle.
 ///
 /// The manager keeps one of these alongside each pooled session entry so
@@ -105,9 +119,11 @@ pub struct CancelHandle {
 }
 
 impl CancelHandle {
-    /// Fire-and-forget `session/cancel` notification. No-op when the session
-    /// has not yet been created via `session/new`.
-    pub async fn send_cancel(&self) -> Result<()> {
+    /// Fire-and-forget `session/cancel` notification.
+    ///
+    /// Returns [`CancelDispatch::NoSession`] (without sending anything) when
+    /// the session has not yet been created via `session/new`.
+    pub async fn send_cancel(&self) -> Result<CancelDispatch> {
         let sid = self
             .acp_session_id
             .read()
@@ -118,10 +134,11 @@ impl CancelHandle {
             .clone();
         let Some(session_id) = sid else {
             debug!(harness_id = %self.harness_id, "ACP cancel handle: no session yet, skipping");
-            return Ok(());
+            return Ok(CancelDispatch::NoSession);
         };
         let req = AcpRequest::cancel(&session_id);
-        write_request(&self.stdin, &req).await
+        write_request(&self.stdin, &req).await?;
+        Ok(CancelDispatch::Sent)
     }
 
     /// Harness ID this handle targets — used by manager-level tracing.

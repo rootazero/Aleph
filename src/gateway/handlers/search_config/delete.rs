@@ -101,6 +101,6 @@ pub async fn handle_delete_backend(
 
     JsonRpcResponse::success(
         request.id,
-        serde_json::json!({ "success": true, "reload_impact": impact }),
+        serde_json::json!({ "success": true, "reload_impact": impact.wire(impact.user_hint_zh()) }),
     )
 }

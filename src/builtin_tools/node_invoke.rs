@@ -16,7 +16,18 @@ use crate::cluster::{NodeRegistry, ResolveError};
 use crate::error::{AlephError, Result};
 use crate::tools::AlephTool;
 
-const DEFAULT_TIMEOUT_MS: u64 = 120_000;
+/// The reverse-RPC window for ONE node call.
+///
+/// It must ENCLOSE the center's own approval window. A gated command makes
+/// the node park on the operator, and the center's approval driver waits
+/// `DEFAULT_APPROVAL_TIMEOUT_MS` (120s, src/exec/manager.rs) BEFORE it
+/// answers the node. With a 120s window the two clocks ended together, so
+/// the node's explicit "approval timeout" verdict lost the race: the model
+/// was told "timed out" while the node was still parked, and the late
+/// verdict was discarded as an unknown id (src/cluster/reverse_rpc.rs).
+/// 150s leaves room for the push, the verdict and the reply; the harness
+/// budget for these tools is 270s (src/tools/budget.rs).
+const DEFAULT_TIMEOUT_MS: u64 = 150_000;
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct NodeInvokeArgs {
@@ -29,7 +40,7 @@ pub struct NodeInvokeArgs {
     /// (for "bash", e.g. {"cmd": "ls -la"}).
     #[serde(default)]
     pub args: Value,
-    /// Reverse-RPC timeout in ms (default 120000). Must exceed the node-side
+    /// Reverse-RPC timeout in ms (default 150000). Must exceed the node-side
     /// command's own runtime or the channel times out while it still runs.
     #[serde(default)]
     pub timeout_ms: Option<u64>,
@@ -57,7 +68,7 @@ the commands each declares). `command` must be one the node permits (e.g. "bash"
 {"node": "worker-1", "command": "bash", "args": {"cmd": "uname -a"}}.
 
 The node runs it in ITS OWN sandboxed workspace and returns the result. Set
-`timeout_ms` (default 120000) above the expected runtime for long commands. If the
+`timeout_ms` (default 150000) above the expected runtime for long commands. If the
 node is offline or the command isn't permitted, you get a clear error."#;
 
     type Args = NodeInvokeArgs;
@@ -137,7 +148,6 @@ mod tests {
                 .into_iter()
                 .map(|c| CommandDescriptor {
                     name: c.to_string(),
-                    schema: json!({}),
                 })
                 .collect(),
             tags: vec![],

@@ -14,6 +14,7 @@ async fn resource_is_discoverable_without_fake_tool_entry() {
         MemoryRuntimeConfig {
             metadata_path: root.path().join("metadata.db"),
             note_memory_dir: root.path().join("notes"),
+            retrieval_tuning: Default::default(),
         },
         tree.clone(),
     );

@@ -132,9 +132,10 @@ pub fn validate_schedule_kind(kind: &ScheduleKind) -> Result<(), String> {
         )
         .map(|_| ()),
         ScheduleKind::Every { every_ms, .. } => {
-            if *every_ms < 1000 {
+            if *every_ms < crate::utils::duration::MIN_INTERVAL_MS as i64 {
                 return Err(format!(
-                    "interval too short: every_ms={every_ms} is below the 1000ms minimum"
+                    "interval too short: every_ms={every_ms} is below the {}ms minimum",
+                    crate::utils::duration::MIN_INTERVAL_MS
                 ));
             }
             Ok(())

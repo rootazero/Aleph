@@ -123,14 +123,17 @@ async fn missing_file_is_unconfigured_with_ok_tag() {
     );
 }
 
-/// `id()` and `title()` are part of the `HealthCheck` contract —
-/// confirm they match the strings the engine's `--json` output and
-/// the doctor tool render verbatim.
+/// `id()` is part of the `HealthCheck` contract — confirm it matches the
+/// string the engine's `--json` output and the doctor tool render verbatim.
+///
+/// The check has no `title()` method any more (2026-11-20 wire audit): the
+/// renderer prints the *finding's* own title, so a second name for the same
+/// check could only drift away from it. The finding title is asserted in the
+/// module's own unit tests.
 #[test]
 fn check_metadata_matches_documented_strings() {
-    let check = DiscordChannelHealthCheck::default();
+    let check = DiscordChannelHealthCheck::from_default_path();
     assert_eq!(check.id(), "core/discord-channel-health");
-    assert_eq!(check.title(), "Discord channel config");
 }
 
 /// A config file that does NOT mention discord at all should produce

@@ -121,7 +121,7 @@ pub(super) async fn create_task(
         .map_err(db_err)?
         .ok_or_else(|| db_err("task disappeared after insert"))?;
     drop(conn); // release lock before emit so subscribers aren't blocked
-    store.emit_task_topic(&task, "created").await;
+    store.emit_task_topic(&task, None, "created").await;
     Ok(task)
 }
 
@@ -142,8 +142,11 @@ pub(super) async fn update_task(
     // `Vec<Box<dyn ToSql>>` scratch state (and the rusqlite connection
     // guard) cannot escape into the `.await` below — the outer trait impl
     // demands a `Send` future.
-    let task_opt: Option<CoordTask> = {
+    let (previous, task) = {
         let conn = store.conn.lock().await;
+        let previous = load_task(&conn, id)
+            .map_err(db_err)?
+            .ok_or_else(|| db_err(format!("task not found: {id}")))?;
         let now = now_epoch();
 
         // Build dynamic SET clauses
@@ -224,11 +227,8 @@ pub(super) async fn update_task(
         }
 
         if sets.is_empty() {
-            // Nothing to update — load current state, no emit, no await.
-            let t = load_task(&conn, id)
-                .map_err(db_err)?
-                .ok_or_else(|| db_err(format!("task not found: {id}")))?;
-            return Ok(t);
+            // Nothing to update — no emit, no await.
+            return Ok(previous);
         }
 
         let sql = format!(
@@ -242,10 +242,11 @@ pub(super) async fn update_task(
         if affected == 0 {
             return Err(db_err(format!("task not found: {id}")));
         }
-        load_task(&conn, id).map_err(db_err)?
+        let task = load_task(&conn, id)
+            .map_err(db_err)?
+            .ok_or_else(|| db_err(format!("task not found after update: {id}")))?;
+        (previous, task)
     };
-
-    let task = task_opt.ok_or_else(|| db_err(format!("task not found after update: {id}")))?;
     // The broadcast verb reflects the TRANSITION, not the row's resting state:
     // a metadata/owner/result-only write on an already-terminal task must not
     // re-broadcast TeamTaskCompleted/TeamTaskFailed. Downstream listeners
@@ -266,7 +267,7 @@ pub(super) async fn update_task(
     } else {
         "updated"
     };
-    store.emit_task_topic(&task, verb).await;
+    store.emit_task_topic(&task, Some(&previous), verb).await;
     Ok(task)
 }
 

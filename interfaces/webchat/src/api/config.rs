@@ -15,15 +15,6 @@ pub struct ConfigReloadResult {
 pub struct ConfigApi;
 
 impl ConfigApi {
-    /// Get configuration value
-    pub async fn get(state: &DashboardState, key: String) -> Result<Value, String> {
-        let params = serde_json::json!({
-            "key": key,
-        });
-
-        state.rpc_call("config.get", params).await
-    }
-
     /// Reload configuration from disk and refresh subsystems
     pub async fn reload(state: &DashboardState) -> Result<ConfigReloadResult, String> {
         let result = state.rpc_call("config.reload", Value::Null).await?;

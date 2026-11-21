@@ -148,9 +148,11 @@ pub async fn apply_live_sections(
                         {
                             manager
                                 .bind_capability_source(Arc::downgrade(source))
-                                .map_err(|error| crate::gateway::pty::manager::TerminalResidual {
-                                    generation: manager.lifecycle_snapshot().generation,
-                                    detail: error.to_string(),
+                                .map_err(|error| {
+                                    crate::gateway::pty::manager::TerminalResidual {
+                                        generation: manager.lifecycle_snapshot().generation,
+                                        detail: error.to_string(),
+                                    }
                                 })?;
                         }
                         return Ok(true);
@@ -309,9 +311,11 @@ mod tests {
         );
         assert!(crate::gateway::pty::try_manager().is_none());
         cfg.policies.terminal.enabled = true;
-        assert!(apply_live_sections(&cfg, &["policies.terminal"], None, None)
-            .await
-            .is_empty());
+        assert!(
+            apply_live_sections(&cfg, &["policies.terminal"], None, None)
+                .await
+                .is_empty()
+        );
         assert!(crate::gateway::pty::try_manager().is_none());
         let bus = Arc::new(GatewayEventBus::new());
         let applied = apply_live_sections(&cfg, &["policies.terminal"], Some(&bus), None).await;
@@ -362,9 +366,11 @@ mod tests {
     #[tokio::test]
     async fn non_live_sections_are_ignored() {
         let cfg = Config::default();
-        assert!(apply_live_sections(&cfg, &["providers", "memory"], None, None)
-            .await
-            .is_empty());
+        assert!(
+            apply_live_sections(&cfg, &["providers", "memory"], None, None)
+                .await
+                .is_empty()
+        );
     }
 
     #[tokio::test]
@@ -733,6 +739,24 @@ mod tests {
             files.len()
         );
 
+        // The enclosing item of a write: everything from the last top-level
+        // `fn` header before it to the next one. Bounded by the file's own
+        // syntax rather than by a line count, which drifts onto a
+        // neighbouring declaration the first time something above it grows.
+        fn enclosing_body<'a>(src: &'a str, at: usize) -> &'a str {
+            let start = ["\npub async fn ", "\npub fn ", "\nasync fn ", "\nfn "]
+                .iter()
+                .filter_map(|kw| src[..at].rfind(kw))
+                .max()
+                .unwrap_or(0);
+            let end = ["\npub async fn ", "\npub fn ", "\nasync fn ", "\nfn "]
+                .iter()
+                .filter_map(|kw| src[at..].find(kw).map(|i| at + i))
+                .min()
+                .unwrap_or(src.len());
+            &src[start..end]
+        }
+
         let mut checked = 0usize;
         let mut missing: Vec<String> = Vec::new();
         for path in &files {
@@ -750,22 +774,7 @@ mod tests {
                 let Some(at) = src.find(&save) else { continue };
                 checked += 1;
 
-                // The enclosing item: everything from the last top-level `fn`
-                // header before the write to the next one. Bounded by the
-                // file's own syntax rather than by a line count, which drifts
-                // onto a neighbouring declaration the first time something
-                // above it grows.
-                let start = ["\npub async fn ", "\npub fn ", "\nasync fn ", "\nfn "]
-                    .iter()
-                    .filter_map(|kw| src[..at].rfind(kw))
-                    .max()
-                    .unwrap_or(0);
-                let end = ["\npub async fn ", "\npub fn ", "\nasync fn ", "\nfn "]
-                    .iter()
-                    .filter_map(|kw| src[at..].find(kw).map(|i| at + i))
-                    .min()
-                    .unwrap_or(src.len());
-                let body = &src[start..end];
+                let body = enclosing_body(&src, at);
 
                 if body.contains("apply_live_sections") {
                     continue;
@@ -782,6 +791,37 @@ mod tests {
                 }
 
                 missing.push(format!("{name} saves [{section}]"));
+            }
+
+            // The same question for the SUBSECTIONS. A live subsection hangs
+            // under a top-level section that is not itself live
+            // (`policies.spend` under `policies`), so a handler that persists
+            // the top-level section can write a live field without
+            // hot-applying it — and the loop above never sees it, because
+            // `policies` is not in `LIVE_SECTIONS`.
+            //
+            // Only a handler that actually touches the live leaf owes the
+            // executor a call: a handler that writes OTHER fields under the
+            // same top-level section has nothing to hot-apply. The leaf name
+            // is a proxy for "touches that field" — coarse, but it fails
+            // toward demanding the call rather than toward hiding it.
+            for subsection in LIVE_SUBSECTIONS {
+                let Some((top, leaf)) = subsection.split_once('.') else {
+                    continue;
+                };
+                let save = format!("save_incremental(&[\"{top}\"])");
+                let Some(at) = src.find(&save) else { continue };
+                let body = enclosing_body(&src, at);
+                if !body.contains(leaf) {
+                    continue;
+                }
+                checked += 1;
+
+                if body.contains("apply_live_sections") {
+                    continue;
+                }
+
+                missing.push(format!("{name} saves [{top}] and touches {subsection}"));
             }
         }
 
@@ -860,9 +900,11 @@ mod tests {
             "the in-flight session must be gone, not merely reported gone"
         );
         cfg.policies.terminal.enabled = false;
-        assert!(apply_live_sections(&cfg, &["policies.terminal"], None, None)
-            .await
-            .contains(&"policies.terminal"));
+        assert!(
+            apply_live_sections(&cfg, &["policies.terminal"], None, None)
+                .await
+                .contains(&"policies.terminal")
+        );
         assert_eq!(crate::gateway::pty::manager::test_driver_id(mgr), None);
     }
 }

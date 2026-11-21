@@ -32,9 +32,13 @@ pub fn compute_next_due(task: &HeartbeatTask, now_ms: i64) -> Option<i64> {
     // `interval_ms as i64` saturates at i64::MAX, NOT panics — saturating_cast
     // makes an out-of-range interval behave like "fire as fast as the caller
     // allows" rather than wrap to a negative offset and fire immediately
-    // (TASKS-005). A `0` interval is also clamped to 1 ms so the timer loop
-    // never spins on a tight `task.interval_ms == 0` configuration mistake.
-    let interval_ms = task.interval_ms.min(i64::MAX as u64).max(1) as i64;
+    // (TASKS-005). A sub-second interval is clamped to the same floor every
+    // face enforces (`utils::duration::MIN_INTERVAL_MS`), so a `0` that slipped
+    // past a caller cannot make the timer loop spin on every tick.
+    let interval_ms = task
+        .interval_ms
+        .min(i64::MAX as u64)
+        .max(crate::utils::duration::MIN_INTERVAL_MS) as i64;
     let base = now_ms.saturating_add(interval_ms);
     let category = task
         .state
@@ -243,7 +247,9 @@ pub fn pause_all_owned_by(store: &mut HeartbeatStore, user_id: &str) -> Vec<Stri
     // write for a call that changed nothing.
     if !owned.is_empty() {
         for task in store.tasks_mut() {
-            if task.enabled && aleph_protocol::users::owned_by(task.owner_user_id.as_deref(), user_id) {
+            if task.enabled
+                && aleph_protocol::users::owned_by(task.owner_user_id.as_deref(), user_id)
+            {
                 disarm(task);
             }
         }

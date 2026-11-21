@@ -24,6 +24,12 @@ mod tests;
 /// `session_name` is `None` for the default unnamed session and `Some(name)`
 /// for parallel named sessions in the same `(harness, cwd)` slot — mirrors
 /// acpx's `-s backend` / `-s frontend` shape.
+///
+/// `cwd` is the *canonicalized* session-pool cwd (`SessionKey::with_name`
+/// normalizes it), not the raw string the caller passed in. The live pool
+/// keys sessions by the canonical form, so the persistence records have to
+/// use the same spelling — otherwise a `Removed` event fails to match the
+/// record its `Created` event wrote and the session survives a restart.
 #[derive(Debug, Clone)]
 pub enum AcpSessionEvent {
     Created {

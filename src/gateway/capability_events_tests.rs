@@ -69,6 +69,7 @@ fn observation_facade(
         crate::memory::runtime::MemoryRuntimeConfig {
             metadata_path: root.join("memory.db"),
             note_memory_dir: root.join("notes"),
+            retrieval_tuning: Default::default(),
         },
         tree.clone(),
     );
@@ -524,6 +525,7 @@ async fn diagnostic_dispose_uses_current_source_audience_and_deduplicates_withdr
         crate::memory::runtime::MemoryRuntimeConfig {
             metadata_path: temp.path().join("memory.db"),
             note_memory_dir: temp.path().join("notes"),
+            retrieval_tuning: Default::default(),
         },
         tree.clone(),
     );
@@ -734,6 +736,7 @@ async fn production_events_reach_zahir_ws_and_same_sequence_audit() {
         crate::memory::runtime::MemoryRuntimeConfig {
             metadata_path: temp.path().join("memory.db"),
             note_memory_dir: temp.path().join("notes"),
+            retrieval_tuning: Default::default(),
         },
         tree.clone(),
     );
@@ -1195,6 +1198,7 @@ mod ordinary_settlement {
                 crate::memory::runtime::MemoryRuntimeConfig {
                     metadata_path: root.path().join("memory.db"),
                     note_memory_dir: root.path().join("notes"),
+                    retrieval_tuning: Default::default(),
                 },
                 tree.clone(),
             );
@@ -1525,6 +1529,7 @@ async fn cancelled_memory_caller_keeps_actual_sqlite_completion_before_source_wi
         crate::memory::runtime::MemoryRuntimeConfig {
             metadata_path: temp.path().join("memory.db"),
             note_memory_dir: temp.path().join("notes"),
+            retrieval_tuning: Default::default(),
         },
         tree.clone(),
     );
