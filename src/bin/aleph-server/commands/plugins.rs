@@ -261,6 +261,11 @@ pub async fn handle_plugins_disable(name: &str) -> Result<(), Box<dyn std::error
     set_enabled_locally(name, false).await
 }
 
+/// How many unreadable plugin sources a "not found" message names before it
+/// counts the rest instead of listing them: the scan can be incomplete at
+/// many plugin dirs at once, and the message is one line.
+const MAX_REPORTED_UNREADABLE_SOURCES: usize = 5;
+
 /// Write the operator's activation preference for a locally-installed plugin.
 ///
 /// This used to create / delete a `<plugin_dir>/.disabled` marker. That marker
@@ -288,8 +293,30 @@ async fn set_enabled_locally(name: &str, enabled: bool) -> Result<(), Box<dyn st
 
     let manager = ExtensionManager::with_defaults().await?;
     let discovered = manager.discovered_plugin_ids()?;
-    if !discovered.iter().any(|(id, _)| id == name) {
-        return Err(format!("Plugin not found: {name}").into());
+    if !discovered.ids.iter().any(|(id, _)| id == name) {
+        if discovered.unreadable.is_empty() {
+            return Err(format!("Plugin not found: {name}").into());
+        }
+        // The scan could not read every plugin source, so a plugin that IS
+        // installed may be among them: "not found" would be a lie. Name the
+        // sources the scan could not read instead.
+        let total = discovered.unreadable.len();
+        let mut sources: Vec<String> = discovered
+            .unreadable
+            .iter()
+            .take(MAX_REPORTED_UNREADABLE_SOURCES)
+            .map(|p| p.display().to_string())
+            .collect();
+        if total > sources.len() {
+            sources.push(format!("and {} more", total - sources.len()));
+        }
+        return Err(format!(
+            "Plugin not found: {name} (the plugin scan could not read {} source(s): {}; \
+             the plugin may be installed but unreadable)",
+            total,
+            sources.join(", ")
+        )
+        .into());
     }
     let plugin_path = default_plugins_dir().join(name);
 

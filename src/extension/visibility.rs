@@ -470,12 +470,20 @@ mod tests {
 
     #[test]
     fn from_discovery_yields_project_only_for_project_scopes() {
-        use crate::discovery::{DiscoveredPath, DiscoverySource, GlobalRoot};
+        use crate::discovery::{DiscoveredPath, DiscoveryScope, DiscoverySource, GlobalRoot};
         let root = tempdir().unwrap();
         let plugin_dir = root.path().join(".aleph/plugins/x");
 
-        let in_project =
-            DiscoveredPath::in_project(plugin_dir.clone(), root.path().to_path_buf(), 20);
+        // `DiscoveredPath::in_project` was cut on 2026-11-21 (the discovery
+        // audit): production never called it. The project scope is still
+        // exercised here, assembled the way production assembles it.
+        let in_project = DiscoveredPath {
+            path: plugin_dir.clone(),
+            priority: 20,
+            scope: DiscoveryScope::Project {
+                root: root.path().to_path_buf(),
+            },
+        };
         assert_eq!(in_project.source(), DiscoverySource::Project);
         assert_eq!(
             ScopeKey::from_discovery(&in_project),

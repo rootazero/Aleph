@@ -72,7 +72,7 @@ pub use effects::{
     async_disposer, sync_disposer, DisposeOutcome, DisposeReport, Disposer, EffectScope, PluginId,
 };
 pub use error::*;
-pub use lifecycle::{MountError, ReloadReport, UnmountError};
+pub use lifecycle::{DiscoveredPluginIds, MountError, ReloadReport, UnmountError};
 pub use loader::PluginLoader;
 pub use manager_global::{
     decline_extension_manager, init_extension_manager, is_extension_manager_initialized,
