@@ -253,4 +253,51 @@ guards returned to green after the revert.
 
 ## 9. Verification record
 
-_(filled in below)_
+**Unified compile check** (one run at the end, as requested; memory-controlled with
+`CARGO_BUILD_JOBS=4` and `-j 4`):
+
+```
+CARGO_BUILD_JOBS=4 cargo check -p alephcore -p aleph-panel --all-targets -j 4
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 13m 47s
+```
+
+**0 errors, 0 warnings.** The check ran four times before that: each earlier run was a
+compile error introduced by an earlier step of this same round, and each was fixed rather than
+worked around.
+
+| Run | Result | Cause | Fix |
+|---|---|---|---|
+| 1 | 2 errors | `post_run_steering_rescue` took `&AgentInstance` but `execute` needs `Arc<AgentInstance>`; a stale `reg.color` assertion after the `AgentRegistration.color` cut | signature changed to `&Arc<AgentInstance>`; the assertion removed |
+| 2 | 8 errors (2 test targets) | `tests/telegram_e2e.rs` asserted on the deleted audit ring; `tests/telegram_delivery_e2e.rs` built the deleted `ErrorPolicy.template` | both tests realigned with the cuts |
+| 3 | 2 errors | `tests/line_fixture_test.rs` imported the deleted `LineUserProfile`; the deleted `ContextCapabilityDescriptor` import was needed by a `#[cfg(test)]` fn | the test dropped; the import re-added under `#[cfg(test)]` |
+| 4 | 1 error | a `#[cfg(test)]` caller still passed the deleted second argument of `InboundPolicy::new` | the call site updated |
+| 5 | **clean** | — | — |
+
+**Wiring guards** — `just check-wiring` runs 14 guards. Every guard green except the pre-existing
+`config_wiring_audit.py` report:
+
+```
+=== Policy types with zero core-side consumer (inert knob) (1) ===
+  [NEW!] TimeWindowConfig  src/config/types/policies/capability_constraints.rs:24
+```
+
+That one is a **guard false positive, not a new severance**: `TimeWindowConfig` is read at
+`src/config/types/policies/capability_constraints.rs:65` (`if let Some(time) = rule.time { … }`),
+inside the module that declares it, and the guard only greps for the type name *outside* its
+declaration file. Verified by hand in this round; left untouched because it predates this audit
+and lives outside the audited modules.
+
+**Guards added in this round** (all three re-verified green after the final merges):
+
+```
+python3 scripts/extension_wire_audit.py   → extension wire audit: PASS
+python3 scripts/fetch_wire_audit.py       → PASS: fetch wire invariants hold
+python3 scripts/gateway_wire_audit.py     → PASS: gateway wire invariants hold
+```
+
+**Mutation-tested**: each new guard was proven to fail when its invariant is broken — re-adding
+`[fetch].enabled`, removing `self.pair_loop_config_for(msg.channel_id.as_str())`, removing the
+`self.registry.cancel(` drop-guard call, and softening the plugin `mode:` rejection were each
+caught, and each mutation was reverted afterwards.
+
+**Not verified**: no test suite was executed, so the behavioural changes are compile-verified only.
