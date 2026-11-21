@@ -1,5 +1,15 @@
 # Desktop Bridge (Swift Helper Process)
 
+> **Scope note / 范围说明 (2026-11-21):** This Swift IPC bridge is not
+> `desktop/nsh-shell/src/panel_bridge.rs`. The latter is an origin/document-scoped
+> WKWebView navigation/notification bridge into the existing Panel, with one NSH
+> root and no second Gateway connection or native business projection.
+> [Phase10 closeout](../superpowers/runs/2026-11-21-phase10-closeout.md) accepts
+> only the local macOS shell slice under its approved Quit-only threshold
+> amendment; it does not migrate Swift camera/voice/screenshot capabilities.
+> / Swift 原生能力桥与 NSH Panel 文档消息桥不同；本期未迁移相机、语音或截图。
+
+
 > Long-lived `AlephBridge` Swift subprocess that proxies macOS native APIs
 > (AVFoundation, Vision, Accessibility, IOKit) over JSON-RPC 2.0 stdio.
 

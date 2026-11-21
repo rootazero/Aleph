@@ -1,3 +1,5 @@
+#[cfg(target_os = "macos")]
+mod panel_bridge;
 mod shell_host;
 
 #[cfg(all(target_os = "macos", debug_assertions))]
@@ -6,8 +8,15 @@ mod clock;
 
 #[cfg(target_os = "macos")]
 fn main() -> std::process::ExitCode {
-    use nsh_core::prelude::{IntoElement, Prop, Props, Styled, component, web_view};
-    use nsh_platform_macos::{AppOptions, AppSource, Root, quit_app, run_app};
+    use nsh_core::desktop::{MainWindowOptions, Shortcut, TrayTitleRun};
+    use nsh_core::element::desktop::{
+        main_window, quit, register_global_shortcut, set_tray, tray, MenuItem,
+    };
+    use nsh_core::prelude::{
+        component, element_ref, request_notification_permission, spawn, web_view, Element,
+        IntoElement, Prop, Props, Styled, WebNavigation,
+    };
+    use nsh_platform_macos::{quit_app, run_app, AppOptions, AppSource, Root};
     use std::io::Write;
     use std::sync::Mutex;
 
@@ -23,6 +32,8 @@ fn main() -> std::process::ExitCode {
         };
     let qa_run_id = std::env::var("ALEPH_PANEL_QA_RUN_ID").unwrap_or_default();
     let message = std::env::var("ALEPH_PANEL_QA_MESSAGE").unwrap_or_default();
+    let bridge_prefix = format!("aleph-shell-v1:{}:", uuid::Uuid::new_v4().simple());
+    let bootstrap = panel_bridge::bootstrap(&settings.url, &bridge_prefix);
     let script = settings
         .qa_nonce
         .as_ref()
@@ -34,21 +45,88 @@ fn main() -> std::process::ExitCode {
         )
         })
         .unwrap_or_default();
+    let script = format!("{bootstrap}\n{script}");
     // This single-window debug trace is not a Chat or Artifacts projection.
     static LAST_EVENT: Mutex<Option<serde_json::Value>> = Mutex::new(None);
+    const APP_ID: &str = "com.aleph.nsh-shell";
+
     #[derive(Clone, PartialEq, Props)]
     struct AppProps {
         url: Prop<String>,
         script: Prop<String>,
+        bridge_prefix: Prop<String>,
         nonce: Prop<Option<String>>,
         qa_run_id: Prop<String>,
     }
     #[component]
     fn App(props: AppProps) -> impl IntoElement {
+        let window = main_window();
+        let close_window = window.clone();
+        window.on_close_press(move |_| close_window.hide());
+        let view = element_ref();
+        let bridge = panel_bridge::Bridge::start(
+            view.clone(),
+            props.bridge_prefix.get_untracked(),
+            window.clone(),
+        );
+        let navigation = bridge.clone();
+        let terminated = bridge.clone();
+        let shortcut_window = window.clone();
+        let show = move || {
+            window.show();
+            window.focus();
+        };
+        set_tray(
+            tray()
+                .title([TrayTitleRun::new("Aleph")])
+                .tooltip("Aleph")
+                .menu([
+                    MenuItem::new("Show Aleph").on_select(show.clone()),
+                    MenuItem::new("Enable Notifications").on_select(|| {
+                        let permission = request_notification_permission();
+                        spawn(async move {
+                            eprintln!("NSH notification permission: {:?}", permission.await);
+                        });
+                    }),
+                    MenuItem::new("Quit Aleph").on_select(quit),
+                ]),
+        );
+        let hotkey = std::env::var("ALEPH_SHELL_HOTKEY").unwrap_or_else(|_| "mod+shift+a".into());
+        if hotkey == "disabled" {
+            eprintln!("NSH summon hotkey disabled");
+        } else if let Err(error) = Shortcut::parse(&hotkey, true) {
+            eprintln!("NSH summon hotkey invalid: {error}");
+        } else {
+            let registration = register_global_shortcut(&hotkey, move || {
+                if shortcut_window
+                    .state()
+                    .is_some_and(|state| state.visible && state.focused)
+                {
+                    shortcut_window.hide();
+                } else {
+                    show();
+                }
+            });
+            spawn(async move {
+                if registration.await {
+                    eprintln!("NSH summon hotkey registered");
+                } else {
+                    eprintln!("NSH summon hotkey refused");
+                }
+            });
+        }
         web_view(props.url)
             .flex_1()
+            .element_ref(&view)
             .injected_java_script_before_content(props.script.get_untracked())
+            .on_navigation_state_change(move |state: &WebNavigation| {
+                navigation.loading(state.loading)
+            })
+            .on_process_terminated(move |_: &str| terminated.loading(true))
             .on_message(move |raw: &str| {
+                if bridge.receive(raw) {
+                    return;
+                }
                 let nonce = props.nonce.get_untracked();
                 let Some(nonce) = nonce.as_deref() else {
                     return;
@@ -74,12 +152,27 @@ fn main() -> std::process::ExitCode {
                 }
             })
     }
+    let mut placement = MainWindowOptions::default();
+    // Use the public hide command so NSH reports visibility to the shortcut.
+    placement.attributes.close_on_press = Some(false);
+    let placement_data = if cfg!(debug_assertions) && settings.qa_nonce.is_some() {
+        std::env::var_os("ALEPH_NSH_QA_WINDOW_DATA_DIR")
+            .map(std::path::PathBuf::from)
+            .filter(|path| path.is_absolute() && path.is_dir())
+    } else {
+        None
+    };
+    placement.restore_bounds = settings.qa_nonce.is_none() || placement_data.is_some();
     let root = Root::new::<App>(move || AppProps {
         url: settings.url.clone().into(),
         script: script.clone().into(),
+        bridge_prefix: bridge_prefix.clone().into(),
         nonce: settings.qa_nonce.clone().into(),
         qa_run_id: qa_run_id.clone().into(),
-    });
+    })
+    .app_id(APP_ID)
+    .url_schemes(["aleph"])
+    .main_window(placement);
     #[cfg(debug_assertions)]
     clock::start();
     let exit = run_app(
@@ -87,7 +180,10 @@ fn main() -> std::process::ExitCode {
         AppOptions {
             title: "Aleph".to_string(),
             size: (1180, 800),
-            app_id: "com.aleph.nsh-shell".to_string(),
+            app_id: APP_ID.to_string(),
+            keep_alive_on_close: true,
+            notifications: true,
+            data_dir: placement_data,
             ..AppOptions::default()
         },
     );

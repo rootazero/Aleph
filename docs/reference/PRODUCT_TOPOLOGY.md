@@ -1,5 +1,15 @@
 # PRODUCT_TOPOLOGY.md — 产品形态与分发拓扑
 
+> **NSH Phase10 (2026-11-21):** `desktop/nsh-shell/` 使用官方 NSH 0.6.0
+> 托管同一 Leptos/WASM Panel，通过既有 Gateway 提供业务能力；不是第四种发布产物，
+> 不创建第二个 Core，不接管独立 Gateway 的生命周期。
+> [本机收尾](../superpowers/runs/2026-11-21-phase10-closeout.md) 按用户明确批准的
+> Quit median/p95 ≤ 1.30× 修订门槛验收，多屏物理拓扑仍延期未测。
+> Tauri 保留，默认桌面、分发形态和下述 daemon supervisor 权责未切换。
+> / Official NSH is an alternative local macOS Panel host, not a new distribution
+> topology or a Tauri-removal/default-switch approval.
+
+
 > 一套源码，三种打包。本文澄清「panel / core / shell」三个维护单元如何排列组合成
 > 三个发布产物，以及每个产物对应的真实部署场景。与 [ARCHITECTURE.md](./ARCHITECTURE.md)、
 > [GATEWAY.md](./GATEWAY.md)、[SECURITY.md](./SECURITY.md) 互补。

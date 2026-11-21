@@ -40,6 +40,7 @@ pub mod jsonrpc;
 pub mod metrics;
 pub mod native_credentials;
 pub mod panel;
+pub mod panel_shell;
 pub mod paths;
 pub mod plan;
 pub mod plugins;
