@@ -466,10 +466,21 @@ impl TerminalCapabilitySource {
         }
         let cfg = self.config.read().await;
         if !cfg.policies.terminal.enabled {
-            return Err(CapabilityDispatchError::Unavailable);
+            // Not the opaque `Unavailable`: the operator turned this off in
+            // `config.toml`, and the refusal has to name the switch back on.
+            // `gateway_response` maps this to SERVICE_UNAVAILABLE with the
+            // message intact, so the remedy survives to the caller.
+            return Err(CapabilityDispatchError::UnavailableReason(
+                crate::gateway::handlers::pty::TERMINAL_DISABLED_HINT.to_string(),
+            ));
         }
         let roots = crate::gateway::pty::workspace_roots(&cfg.agents.defaults);
-        let terminal = cfg.policies.terminal.clone();
+        // Named-type binding, not field inference: `TerminalConfig` is the
+        // handle by which the wiring audit
+        // (`scripts/config_wiring_audit.py`) can see that
+        // `[policies.terminal]` has a consumer outside src/config/.
+        let terminal: crate::config::types::policies::TerminalConfig =
+            cfg.policies.terminal.clone();
         let cwd = crate::gateway::pty::jail::resolve_spawn_cwd(params.cwd.as_deref(), &roots)
             .map_err(CapabilityDispatchError::InvalidInput)?;
         let generation = crate::gateway::pty::try_manager()

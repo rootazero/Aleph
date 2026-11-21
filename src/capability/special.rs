@@ -28,6 +28,13 @@ pub enum CapabilityDispatchError {
     Execution(String),
     #[error("special capability source is unavailable")]
     Unavailable,
+    /// Unavailable for a reason the caller can act on: the message carries the
+    /// remedy (the config key to set, the prerequisite to install). Same
+    /// class as [`Self::Unavailable`] — same "do not retry in a loop, the
+    /// surface is off" answer — but the opaque variant stays for the cases
+    /// where there is no lever to hand over.
+    #[error("capability unavailable: {0}")]
+    UnavailableReason(String),
     #[error("capability is not registered: {0:?}")]
     NotFound(CapabilityId),
     #[error("capability handler call was cancelled")]
