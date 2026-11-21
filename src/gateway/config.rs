@@ -54,21 +54,9 @@ pub struct GatewayConfig {
     #[serde(default, deserialize_with = "deserialize_agents_compat")]
     pub agents: HashMap<String, AgentConfig>,
 
-    /// Channel bindings (pattern -> `agent_id`)
-    #[serde(default)]
-    pub bindings: HashMap<String, String>,
-
     /// Channel connector configurations (parsed by app config, ignored here)
     #[serde(default)]
     pub channels: serde_json::Value,
-
-    /// Sandbox configuration
-    #[serde(default)]
-    pub sandbox: SandboxConfig,
-
-    /// Tool configurations
-    #[serde(default)]
-    pub tools: ToolsConfig,
 
     /// Privacy and PII filtering configuration
     #[serde(default)]
@@ -83,10 +71,7 @@ impl Default for GatewayConfig {
         Self {
             gateway: GatewayServerConfig::default(),
             agents,
-            bindings: HashMap::new(),
             channels: serde_json::Value::Object(serde_json::Map::new()),
-            sandbox: SandboxConfig::default(),
-            tools: ToolsConfig::default(),
             privacy: PrivacyConfig::default(),
         }
     }
@@ -365,110 +350,6 @@ impl AgentConfig {
 // a raw Value to avoid parse errors — the actual parsing happens in
 // Config::resolved_channels().
 
-/// Sandbox configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct SandboxConfig {
-    /// Enable Docker sandbox
-    pub enabled: bool,
-    /// Docker image for sandbox
-    pub docker_image: String,
-    /// Memory limit in MB
-    pub memory_limit_mb: u64,
-    /// CPU quota percentage
-    pub cpu_quota_percent: u32,
-    /// Network mode
-    pub network_mode: NetworkMode,
-}
-
-impl Default for SandboxConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            docker_image: "aleph-sandbox:latest".to_string(),
-            memory_limit_mb: 512,
-            cpu_quota_percent: 50,
-            network_mode: NetworkMode::Restricted,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum NetworkMode {
-    None,
-    #[default]
-    Restricted,
-    Full,
-}
-
-/// Tools configuration
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(default)]
-pub struct ToolsConfig {
-    /// Chrome CDP configuration
-    pub chrome: Option<ChromeConfig>,
-    /// Cron scheduler configuration
-    pub cron: Option<CronConfig>,
-    /// Webhook listener configuration
-    pub webhook: Option<WebhookConfig>,
-}
-
-/// Chrome CDP configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChromeConfig {
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-    pub executable_path: Option<String>,
-    #[serde(default = "default_false")]
-    pub headless: bool,
-}
-
-/// Cron scheduler configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct CronConfig {
-    pub enabled: bool,
-    pub max_jobs: usize,
-}
-
-impl Default for CronConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            max_jobs: 100,
-        }
-    }
-}
-
-/// Webhook listener configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct WebhookConfig {
-    pub enabled: bool,
-    pub port: u16,
-    pub max_endpoints: usize,
-}
-
-impl Default for WebhookConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            port: 18791,
-            max_endpoints: 50,
-        }
-    }
-}
-
-// Helper functions for serde defaults
-const fn default_true() -> bool {
-    true
-}
-
-const fn default_false() -> bool {
-    false
-}
-
 impl GatewayConfig {
     /// Load configuration from a TOML file
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self, ConfigError> {
@@ -527,15 +408,6 @@ impl GatewayConfig {
             return Err(ConfigError::Invalid(
                 "At least one agent must be configured".to_string(),
             ));
-        }
-
-        // Validate bindings reference existing agents
-        for (pattern, agent_id) in &self.bindings {
-            if !self.agents.contains_key(agent_id) {
-                return Err(ConfigError::Invalid(format!(
-                    "Binding '{pattern}' references unknown agent '{agent_id}'"
-                )));
-            }
         }
 
         Ok(())
@@ -668,30 +540,15 @@ max_loops = 30
 workspace = "~/aleph-work"
 model = "claude-opus-4-5"
 
-[bindings]
-"gui:window1" = "main"
-"cli:*" = "work"
-
 [channels.telegram]
 enabled = true
 token = "${TELEGRAM_BOT_TOKEN}"
-
-[sandbox]
-enabled = true
-docker_image = "aleph-sandbox:latest"
-memory_limit_mb = 1024
-
-[tools.chrome]
-enabled = true
-headless = true
 "#;
         let config = GatewayConfig::from_toml(toml).unwrap();
 
         assert_eq!(config.agents.len(), 2);
         assert!(config.agents.contains_key("work"));
-        assert_eq!(config.bindings["cli:*"], "work");
         assert!(config.channels.get("telegram").is_some());
-        assert!(config.sandbox.enabled);
     }
 
     #[test]
@@ -724,16 +581,22 @@ host = "0.0.0.0"
     }
 
     #[test]
-    fn test_invalid_binding() {
+    fn canonical_bindings_array_of_tables_loads() {
+        // The gateway config no longer owns a `bindings` table: routing is
+        // the application config's `Vec<RouteBinding>` (`[[bindings]]`), and
+        // the gateway loader parses the SAME file. A map-shaped copy here
+        // made the canonical array-of-tables fail to deserialize and took
+        // startup down with it, so the shape must stay loadable here.
         let toml = r#"
 [agents.main]
 model = "test"
 
-[bindings]
-"test" = "nonexistent"
+[[bindings]]
+pattern = "cli:*"
+agent_id = "main"
 "#;
         let result = GatewayConfig::from_toml(toml);
-        assert!(result.is_err());
+        assert!(result.is_ok(), "canonical [[bindings]] must load: {result:?}");
     }
 
     #[test]

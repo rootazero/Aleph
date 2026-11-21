@@ -17,7 +17,6 @@
 
 pub mod access;
 pub mod approval;
-pub mod audit;
 pub mod bot_instance;
 pub mod chunking;
 pub mod config;
@@ -30,7 +29,6 @@ pub mod mention;
 pub mod offset;
 mod polling;
 pub mod reaction_handler;
-pub mod sticker;
 pub mod streaming;
 pub mod token_fingerprint;
 
@@ -46,7 +44,7 @@ use crate::gateway::channel::{
     ChannelResult, ChannelState, ChannelStatus, ConversationId, InboundMessage, MessageId,
     MessageMeta, OutboundMessage, SendOperation, UserId, CB_MESSAGE_ID_PREFIX,
 };
-use crate::sync_primitives::{Arc, Ordering};
+use crate::sync_primitives::Arc;
 use access::AccessDecision;
 use async_trait::async_trait;
 use chrono::Utc;
@@ -71,25 +69,10 @@ pub struct TelegramChannel {
     /// account needs its own controller because they resolve against
     /// different parts of the `ConfigResolver`).
     access_by_account: std::collections::HashMap<String, Arc<AccessController>>,
-    /// Per-account token-fingerprint verdicts from the last `start()`,
-    /// surfaced to the doctor. The doctor reads this without touching the
-    /// vault, so an operator can spot a misroute without restarting.
-    token_fingerprint_verdicts:
-        std::collections::HashMap<String, token_fingerprint::TokenFingerprintVerdict>,
-    /// Channel-wide audit log (P2-C): one ring buffer per channel instance,
-    /// consulted by the doctor to answer "what did this channel actually
-    /// do in chat X". Restart clears it — the audit log is a debugging
-    /// artefact, not a system of record (that is the agent-identity
-    /// ledger's job).
-    audit_log: Arc<audit::AuditLog>,
     /// Per-conversation error cooldown and typing circuit breaker.
     error_cooldown: Arc<ErrorCooldown>,
     /// Persistent polling offset tracker (set via `set_offset_tracker`).
     offset_tracker: Option<Arc<offset::OffsetTracker>>,
-    /// State database for the sticker description cache (set via
-    /// `set_state_database`). Pairing persistence now lives in the router's
-    /// `pairing_store`.
-    state_db: Option<Arc<crate::resilience::StateDatabase>>,
     /// Multi-account config resolver
     config_resolver: ConfigResolver,
 }
@@ -134,11 +117,8 @@ impl TelegramChannel {
             bot_instances: Vec::new(),
             tool_registry: None,
             access_by_account,
-            token_fingerprint_verdicts: std::collections::HashMap::new(),
-            audit_log: Arc::new(audit::AuditLog::new()),
             error_cooldown: Arc::new(ErrorCooldown::new()),
             offset_tracker: None,
-            state_db: None,
             config_resolver: (*resolver).clone(),
         }
     }
@@ -152,14 +132,6 @@ impl TelegramChannel {
     /// Set the offset tracker for persistent polling offset management.
     pub fn set_offset_tracker(&mut self, tracker: Arc<offset::OffsetTracker>) {
         self.offset_tracker = Some(tracker);
-    }
-
-    /// Set the state database for pairing persistence.
-    ///
-    /// Must be called **before** `start()` so that the `AccessController`
-    /// can load and persist paired users.
-    pub fn set_state_database(&mut self, db: Arc<crate::resilience::StateDatabase>) {
-        self.state_db = Some(db);
     }
 
     /// Get Telegram-specific capabilities
@@ -246,17 +218,7 @@ impl TelegramChannel {
     }
 }
 
-impl TelegramChannel {
-    /// Channel-wide audit log accessor (P2-C). Used by the doctor to
-    /// answer "what did this Telegram channel actually do" without
-    /// needing to scrape logs. Not part of the `Channel` trait — this is
-    /// a Telegram-specific diagnostic that other channels may grow their
-    /// own equivalent for.
-    #[must_use]
-    pub fn audit_log(&self) -> &Arc<audit::AuditLog> {
-        &self.audit_log
-    }
-}
+impl TelegramChannel {}
 
 #[async_trait]
 impl Channel for TelegramChannel {
@@ -359,8 +321,6 @@ impl Channel for TelegramChannel {
                          hit the wrong account. Set/clear token_fingerprint or restore the \
                          correct bot_token."
                     );
-                    self.token_fingerprint_verdicts
-                        .insert(account.id.clone(), verdict.clone());
                 }
             }
 
@@ -526,8 +486,6 @@ impl Channel for TelegramChannel {
             let access_clone = account_access.clone();
             let access_for_cb = account_access;
 
-            let state_db_for_sticker = self.state_db.clone();
-
             // Captured by the per-update message handler for group mention gating.
             let mention_username_cap = bot_username_resolved.clone();
             let require_mention_cap = require_mention;
@@ -539,8 +497,6 @@ impl Channel for TelegramChannel {
                     let access = access_clone.clone();
                     let mention_username = mention_username_cap.clone();
                     let require_mention = require_mention_cap;
-                    let sticker_pipeline =
-                        sticker::StickerPipeline::new(state_db_for_sticker.clone());
                     async move {
                         let user_id = msg.from.as_ref().map_or(0, |u| u.id.0 as i64);
                         let is_group = msg.chat.is_group() || msg.chat.is_supergroup();
@@ -591,13 +547,8 @@ impl Channel for TelegramChannel {
 
                         match access.check_message(user_id, chat_id, thread_id_i32, is_group) {
                             AccessDecision::Allowed => {
-                                if let Some(mut inbound) = handlers::convert_message(
-                                    &msg,
-                                    &bot,
-                                    &channel_id,
-                                    &sticker_pipeline,
-                                )
-                                .await
+                                if let Some(mut inbound) =
+                                    handlers::convert_message(&msg, &bot, &channel_id).await
                                 {
                                     // Limb-validated address (real @username,
                                     // /cmd@bot, or reply-to-bot): tag so the
@@ -622,13 +573,8 @@ impl Channel for TelegramChannel {
                                 // is minted/sent. Forwarding here lets the router
                                 // run that single-source flow; the local access
                                 // controller only pre-classifies.
-                                if let Some(mut inbound) = handlers::convert_message(
-                                    &msg,
-                                    &bot,
-                                    &channel_id,
-                                    &sticker_pipeline,
-                                )
-                                .await
+                                if let Some(mut inbound) =
+                                    handlers::convert_message(&msg, &bot, &channel_id).await
                                 {
                                     Self::stamp_account(&mut inbound, &access.config().account_id);
                                     if let Err(e) = inbound_tx.send(inbound) {
@@ -822,7 +768,6 @@ impl Channel for TelegramChannel {
             {
                 let account_id = instance.account_id.clone();
                 let bot = instance.bot.clone();
-                let is_healthy = instance.is_healthy.clone();
                 let (health_shutdown_tx, mut health_shutdown_rx) = oneshot::channel();
                 // The sender belongs to the instance: dropping it here would
                 // end the health task on its first tick and the probe would
@@ -841,23 +786,19 @@ impl Channel for TelegramChannel {
                         match tokio::time::timeout(std::time::Duration::from_secs(10), bot.get_me())
                             .await
                         {
-                            Ok(Ok(_)) => {
-                                is_healthy.store(true, Ordering::Relaxed);
-                            }
+                            Ok(Ok(_)) => {}
                             Ok(Err(e)) => {
                                 tracing::warn!(
                                     account_id = %account_id,
                                     error = %e,
                                     "Telegram bot health check failed"
                                 );
-                                is_healthy.store(false, Ordering::Relaxed);
                             }
                             Err(_) => {
                                 tracing::warn!(
                                     account_id = %account_id,
                                     "Telegram bot health check timed out"
                                 );
-                                is_healthy.store(false, Ordering::Relaxed);
                             }
                         }
                     }
@@ -934,35 +875,11 @@ impl Channel for TelegramChannel {
             .resolve(&instance.account_id, chat_id_i64, thread_id)
             .expect("selected instance has an effective config")
             .clone();
-        let account_id = instance.account_id.clone();
-        let audit_log = Arc::clone(&self.audit_log);
         let error_cooldown = Arc::clone(&self.error_cooldown);
 
         Box::pin(async move {
             let result =
                 delivery::send_message(&bot, &resolved_config, &message, &error_cooldown).await;
-            // P2-C: write the audit row regardless of outcome. A failed send
-            // is the most useful kind to record (the doctor can answer "why
-            // did chat X stop responding" without scraping logs). The
-            // audit_log.push is best-effort and never panics.
-            let outcome = match &result {
-                Ok(r) => format!("succeeded: msg_id={}", r.message_id.as_str()),
-                Err(e) => format!("failed: {e}"),
-            };
-            audit_log.push(audit::entry(
-                account_id,
-                Some(chat_id_i64),
-                thread_id,
-                audit::AuditKind::SendAttempted {
-                    message_id_kind: message
-                        .text
-                        .chars()
-                        .take(64)
-                        .collect::<String>()
-                        .replace('\n', " "),
-                    outcome,
-                },
-            ));
             result
         })
     }
@@ -1149,7 +1066,6 @@ impl Channel for TelegramChannel {
                 offset_tracker: inst.offset_tracker.clone(),
                 shutdown_tx: None,
                 health_shutdown_tx: None,
-                is_healthy: inst.is_healthy.clone(),
             })
             .collect();
         let access_by_account: std::collections::HashMap<String, Arc<AccessController>> = self
@@ -1167,11 +1083,8 @@ impl Channel for TelegramChannel {
                     bot_instances: instances,
                     tool_registry: self.tool_registry.clone(),
                     access_by_account,
-                    token_fingerprint_verdicts: self.token_fingerprint_verdicts.clone(),
-                    audit_log: self.audit_log.clone(),
                     error_cooldown: self.error_cooldown.clone(),
                     offset_tracker: self.offset_tracker.clone(),
-                    state_db: self.state_db.clone(),
                     config_resolver: self.config_resolver.clone(),
                 }),
                 first_access,

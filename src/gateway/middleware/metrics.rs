@@ -170,6 +170,11 @@ where
 
         let request_id = Uuid::new_v4();
         let method = req.method.clone();
+        // JSON-RPC correlation is by `id`: answering a backpressure rejection
+        // with `id: null` leaves the client's pending promise for this request
+        // hanging until a client-side timeout. Capture the id before `req` is
+        // moved into the inner service.
+        let rpc_id = req.id.clone();
         let start = std::time::Instant::now();
 
         // Check backpressure - if processing count exceeds threshold, return 429
@@ -183,7 +188,7 @@ where
             );
             return Box::pin(async move {
                 Ok(JsonRpcResponse::error(
-                    None,
+                    rpc_id,
                     crate::gateway::protocol::RATE_LIMITED,
                     "Processing capacity exceeded, try again later",
                 ))

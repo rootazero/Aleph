@@ -51,9 +51,6 @@ pub struct DiscordConfig {
     #[serde(default)]
     pub intents: IntentsConfig,
 
-    /// Thread binding configuration
-    #[serde(default)]
-    pub threads: ThreadConfig,
 }
 
 /// Hand-written so the bot token never reaches a log line, a panic message
@@ -71,34 +68,7 @@ impl fmt::Debug for DiscordConfig {
             .field("slash_commands_enabled", &self.slash_commands_enabled)
             .field("send_typing", &self.send_typing)
             .field("intents", &self.intents)
-            .field("threads", &self.threads)
             .finish()
-    }
-}
-
-/// Thread binding configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ThreadConfig {
-    /// Enable automatic thread binding
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-
-    /// Auto-create threads for new conversations
-    #[serde(default)]
-    pub auto_create: bool,
-
-    /// Channel IDs where auto-threading is enabled (empty = all)
-    #[serde(default)]
-    pub auto_create_channels: Vec<u64>,
-}
-
-impl Default for ThreadConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            auto_create: false,
-            auto_create_channels: Vec::new(),
-        }
     }
 }
 
@@ -167,7 +137,6 @@ impl Default for DiscordConfig {
             slash_commands_enabled: true,
             send_typing: true,
             intents: IntentsConfig::default(),
-            threads: ThreadConfig::default(),
         }
     }
 }

@@ -86,20 +86,6 @@ impl ContextTokenStore {
     }
 }
 
-/// QR Login result credentials.
-#[derive(Debug, Clone)]
-pub struct QrLoginResult {
-    pub account_id: String,
-    pub token: String,
-    pub base_url: String,
-    pub user_id: String,
-}
-
-/// Perform QR login flow (requires interactive terminal).
-pub async fn qr_login(_hermes_home: &str, _bot_type: &str) -> Result<QrLoginResult, String> {
-    Err("QR login requires terminal interaction. Use CLI tool instead.".to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -28,19 +28,13 @@
 pub mod api;
 pub mod commands;
 pub mod config;
-pub mod draft;
-pub mod group_policy;
 pub mod permissions;
 pub mod reconnect;
-pub mod resolver;
 pub mod security;
-pub mod session_key;
 
 pub use commands::{ComponentId, ComponentKind};
 pub use config::{DiscordConfig, IntentsConfig};
-pub use draft::{DraftChunker, DraftStream};
 pub use reconnect::{CooldownStore, ReconnectCoordinator, ReconnectDecision};
-pub use resolver::{Candidate, ChannelResolutionError, DiscordResolver, ResolvedChannel};
 
 use crate::gateway::channel::{
     Attachment, Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
@@ -53,7 +47,6 @@ use async_trait::async_trait;
 use chrono::{TimeZone, Utc};
 use tokio::sync::{oneshot, RwLock};
 
-use std::collections::HashMap;
 
 use serenity::{
     all::{
@@ -64,44 +57,6 @@ use serenity::{
     },
     Client,
 };
-
-/// Thread binding - links a Discord thread to a conversation
-#[derive(Debug, Clone)]
-pub struct ThreadBinding {
-    /// Discord thread ID
-    pub thread_id: u64,
-    /// Bound conversation ID
-    pub conversation_id: ConversationId,
-    /// Guild ID where the thread exists
-    pub guild_id: u64,
-    /// Parent channel ID
-    pub parent_channel_id: u64,
-    /// Thread name
-    pub name: String,
-    /// When the binding was created
-    pub created_at: chrono::DateTime<Utc>,
-}
-
-impl ThreadBinding {
-    /// Create a new thread binding from thread details
-    #[must_use]
-    pub fn new(
-        thread_id: u64,
-        conversation_id: ConversationId,
-        guild_id: u64,
-        parent_channel_id: u64,
-        name: String,
-    ) -> Self {
-        Self {
-            thread_id,
-            conversation_id,
-            guild_id,
-            parent_channel_id,
-            name,
-            created_at: Utc::now(),
-        }
-    }
-}
 
 /// Discord channel implementation
 pub struct DiscordChannel {
@@ -344,7 +299,6 @@ struct Handler {
     instance_id: String,
     status: Arc<RwLock<ChannelStatus>>,
     bot_user_id: Arc<RwLock<Option<u64>>>,
-    thread_bindings: Arc<RwLock<HashMap<u64, ThreadBinding>>>,
     /// Signalled once by `ready()` so `start()` can await the actual gateway
     /// handshake instead of guessing with a fixed sleep (a slow network made
     /// the 500ms guess return while the channel still read `Connecting`, and
@@ -826,18 +780,6 @@ impl EventHandler for Handler {
             new_channel.parent_id.map_or(0, |p| p.get())
         );
 
-        let binding = ThreadBinding::new(
-            channel_id,
-            ConversationId::new(channel_id.to_string()),
-            new_channel.guild_id.get(),
-            new_channel.parent_id.map_or(0, |p| p.get()),
-            new_channel.name.clone(),
-        );
-
-        self.thread_bindings
-            .write()
-            .await
-            .insert(channel_id, binding);
     }
 
     async fn thread_update(
@@ -850,10 +792,7 @@ impl EventHandler for Handler {
             return;
         }
         let channel_id = new_channel.id.get();
-        if let Some(binding) = self.thread_bindings.write().await.get_mut(&channel_id) {
-            binding.name = new_channel.name.clone();
-            tracing::debug!("Thread updated: {} ({})", channel_id, new_channel.name);
-        }
+        tracing::debug!("Thread updated: {} ({})", channel_id, new_channel.name);
     }
 
     async fn thread_delete(
@@ -866,15 +805,7 @@ impl EventHandler for Handler {
             return;
         }
         let channel_id = channel.id.get();
-        if self
-            .thread_bindings
-            .write()
-            .await
-            .remove(&channel_id)
-            .is_some()
-        {
-            tracing::debug!("Thread deleted: {}", channel_id);
-        }
+        tracing::debug!("Thread deleted: {}", channel_id);
     }
 }
 
@@ -943,7 +874,6 @@ impl Channel for DiscordChannel {
             instance_id: self.info.id.as_str().to_string(),
             status: self.channel_state.status_handle(),
             bot_user_id: Arc::new(RwLock::new(None)),
-            thread_bindings: Arc::new(RwLock::new(HashMap::new())),
             ready_notify: ready_notify.clone(),
             stt_source: self.stt_source.clone(),
             // R2 D6: share the parent's reconnect coordinator so the

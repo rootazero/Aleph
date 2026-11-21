@@ -6,7 +6,6 @@ pub mod api;
 pub mod auth;
 pub mod config;
 pub mod inbound;
-pub mod media;
 pub mod outbound;
 pub mod runtime;
 pub mod sync_buf;

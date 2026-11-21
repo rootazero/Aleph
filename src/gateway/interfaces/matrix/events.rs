@@ -6,8 +6,11 @@ use chrono::Utc;
 
 /// Convert a Matrix timeline event JSON into an `InboundMessage`.
 ///
-/// Returns `None` for events that should be ignored (own messages, filtered rooms,
-/// unsupported types, policy violations, duplicates).
+/// Test-only shorthand for [`convert_timeline_event_in_room`]: it treats every
+/// room as a group (`is_direct = None`). Production goes through
+/// [`convert_timeline_event_in_room`], which carries the direct/group
+/// distinction the adapter resolved.
+#[cfg(test)]
 pub fn convert_timeline_event(
     event: &serde_json::Value,
     room_id: &str,

@@ -22,13 +22,11 @@
 //! ```
 
 pub mod config;
-pub mod message;
 pub mod pairing;
 
 pub mod history_buffer;
 pub mod media;
 pub mod reactions;
-pub mod types;
 pub mod wa_auth;
 pub mod wa_inbound;
 pub mod wa_outbound;

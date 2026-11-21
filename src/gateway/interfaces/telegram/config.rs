@@ -44,10 +44,6 @@ pub struct TelegramConfig {
     #[serde(default)]
     pub group_policy: GroupPolicy,
 
-    /// Polling interval in seconds (for long-polling mode)
-    #[serde(default = "default_polling_interval")]
-    pub polling_interval_secs: u64,
-
     /// Send typing indicator while processing
     #[serde(default = "default_true")]
     pub send_typing: bool,
@@ -83,7 +79,6 @@ impl std::fmt::Debug for TelegramConfig {
             .field("groups_allowed", &self.groups_allowed)
             .field("dm_policy", &self.dm_policy)
             .field("group_policy", &self.group_policy)
-            .field("polling_interval_secs", &self.polling_interval_secs)
             .field("send_typing", &self.send_typing)
             .field("max_retries", &self.max_retries)
             .field("coalescing", &self.coalescing)
@@ -95,10 +90,6 @@ impl std::fmt::Debug for TelegramConfig {
 
 const fn default_true() -> bool {
     true
-}
-
-const fn default_polling_interval() -> u64 {
-    1
 }
 
 const fn default_max_retries() -> u32 {
@@ -120,7 +111,6 @@ impl Default for TelegramConfig {
             groups_allowed: true,
             dm_policy: DmPolicy::default(),
             group_policy: GroupPolicy::default(),
-            polling_interval_secs: 1,
             send_typing: true,
             max_retries: 3,
             coalescing: default_coalescing(),
@@ -328,7 +318,6 @@ mod tests {
         assert!(config.bot_token.is_empty());
         assert!(config.dm_allowed);
         assert!(config.groups_allowed);
-        assert_eq!(config.polling_interval_secs, 1);
     }
 
     #[test]

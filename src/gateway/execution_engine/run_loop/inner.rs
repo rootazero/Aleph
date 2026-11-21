@@ -446,10 +446,17 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                             run_id = run_id,
                             "UserPromptSubmit hook requested prevent_continuation; stopping run"
                         );
-                        // `Cancelled`: the run did what the hook asked. The
-                        // receipt is the only report on this arm (the `Ok`
-                        // string below is dropped by `execute.rs`).
+                        // `Cancelled`: the run did what the hook asked. Two
+                        // reports, two audiences: the receipt is the
+                        // transcript row, and the stop text goes out as the
+                        // run's FINAL response chunk — the returned `Ok`
+                        // string is dropped by `execute.rs` and no
+                        // `RunComplete` follows (the drain never ran), so
+                        // without the chunk a chat channel gets no reply.
                         journal_hook_stop(request, RunOutcome::Cancelled, &stop_msg).await;
+                        emitter
+                            .emit_response_chunk(run_id, &stop_msg, &stop_msg, 0, true, false)
+                            .await;
                         return Ok(stop_msg);
                     }
                     // Claude-Code convention for UserPromptSubmit: PLAIN

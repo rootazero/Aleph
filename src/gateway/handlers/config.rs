@@ -18,6 +18,14 @@ use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, 
 #[cfg(test)]
 mod terminal_tests;
 
+/// Routing bindings live in the application config (`[[bindings]]`). The
+/// gateway config used to carry a map-shaped copy of them, which both
+/// duplicated the fact and broke loading of the canonical array-of-tables
+/// shape, so the count now comes from the app config.
+fn app_bindings_count() -> usize {
+    Config::load().map(|config| config.bindings.len()).unwrap_or(0)
+}
+
 /// Handle config.reload RPC request
 ///
 /// Forces a configuration reload from file.
@@ -42,7 +50,7 @@ pub async fn handle_reload(
                             "max_connections": new_config.gateway.max_connections,
                         },
                         "agents": new_config.agents.keys().collect::<Vec<_>>(),
-                        "bindings_count": new_config.bindings.len(),
+                        "bindings_count": app_bindings_count(),
                     },
                     "message": "Configuration reloaded successfully",
                 }),
@@ -148,7 +156,7 @@ pub async fn handle_reload_with_subsystems(
     let config_summary = if let Some(ref gw) = gateway_config {
         json!({
             "agents": gw.agents.keys().collect::<Vec<_>>(),
-            "bindings_count": gw.bindings.len(),
+            "bindings_count": app_config.read().await.bindings.len(),
         })
     } else {
         json!(null)
@@ -185,7 +193,7 @@ pub async fn handle_validate(
                 "config_path": watcher.config_path().display().to_string(),
                 "summary": {
                     "agents": config.agents.keys().collect::<Vec<_>>(),
-                    "bindings_count": config.bindings.len(),
+                    "bindings_count": app_bindings_count(),
                     "gateway_port": config.gateway.port,
                 },
                 "message": "Configuration is valid",
