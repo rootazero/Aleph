@@ -923,19 +923,20 @@ impl BuiltinToolRegistry {
             info!("Registered schemas for media_understand, audio_transcribe, document_extract");
         }
 
-        // Capability-runtime diagnostic control surface. Listed in
-        // BUILTIN_TOOL_DEFINITIONS for *catalog* purposes (so the
-        // BUILTIN_TOOL_DEFINITIONS tripwire sees the name) and
-        // dispatched in registry.rs, but the runtime advertisement is
-        // GATED on `diagnostics_control: Some(_)` — when the env
+        // Capability-runtime diagnostic control surface. The name is in
+        // REGISTRY_ONLY_TOOL_NAMES (NOT in BUILTIN_TOOL_DEFINITIONS — the
+        // catalog holds the unconditional tools), and it IS in the dispatch
+        // census: the census reads the `Registered schema for …` log line
+        // this block emits, so the two directions of the registry-only
+        // guard agree. What is GATED is the runtime advertisement, on
+        // `diagnostics_control: Some(_)` — when the env
         // `ALEPH_CAPABILITY_DIAGNOSTICS=1` is not set at startup,
-        // the tool is not in the runtime tool map, not in the LLM-
-        // facing tool list, and not in the dispatch census. The
-        // wire-level three-part check (operator + loopback + conn_id)
-        // lives in the tool module itself; this is the *enablement*
-        // half of the two-part guard, mirroring the media_pipeline
-        // block above. Keeping the registration block here (not
-        // unconditional) is the only reason a normal-mode build
+        // the tool is not in the runtime tool map and not in the LLM-
+        // facing tool list. The wire-level three-part check (operator +
+        // loopback + conn_id) lives in the tool module itself; this is the
+        // *enablement* half of the two-part guard, mirroring the
+        // media_pipeline block above. Keeping the registration block here
+        // (not unconditional) is the only reason a normal-mode build
         // cannot accidentally dispatch the tool.
         if let Some(ref dc) = config.diagnostics_control {
             let td = crate::builtin_tools::capability_projection_diagnostics::DiagnosticTool::new(
@@ -1201,7 +1202,6 @@ impl BuiltinToolRegistry {
             skill_manage_tool,
             note_manage_tool,
             session_complete_tool,
-            memory_reflect_tool,
         ) = Self::build_collab_session_tools(&config, &mut tools, &current_agent_id)?;
 
         Ok(Self {
@@ -1279,7 +1279,6 @@ impl BuiltinToolRegistry {
             strategy_tool: strategy_tool.with_session_key_handle(memory_session_key_handle.clone()),
             memory_search_tool,
             memory_runtime: config.memory_runtime.clone(),
-            memory_context_provider: Arc::new(tokio::sync::OnceCell::new()),
             node_registry: Arc::new(tokio::sync::OnceCell::new()),
             node_security_store: Arc::new(tokio::sync::OnceCell::new()),
             gateway_event_bus: Arc::new(tokio::sync::OnceCell::new()),
@@ -1473,7 +1472,6 @@ impl BuiltinToolRegistry {
             skill_manage_tool,
             note_manage_tool,
             session_complete_tool,
-            memory_reflect_tool,
             note_orient_tool,
             note_schema_tool,
             user_profile_tool,

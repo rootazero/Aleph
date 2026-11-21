@@ -10,7 +10,7 @@
 //! which we supply in all three pipelines).
 //!
 //! Note on tool counts: memory_timeline requires state_db (not provided here).
-//! With memory_db + embedder we get 5 of the 6 retrieval tools.
+//! With memory_db + memory_runtime we get 5 of the 6 retrieval tools.
 //! The dep-free tools (memory_reflect, recall_context) are the reliable signal
 //! for mode-gating correctness.
 
@@ -215,7 +215,7 @@ async fn build_pipeline(
     let provider = MemoryContextProvider::with_assembler(assembler, MemoryContextConfig::default())
         .with_injection_mode(mode);
 
-    // BuiltinToolRegistry with memory_db + embedder so dep-gated tools register.
+    // BuiltinToolRegistry with memory_db + memory_runtime so dep-gated tools register.
     //
     // Serialised: the goal and strategy stores are process-global and live under
     // the single `ALEPH_HOME` above, so three tests constructing registries at
@@ -241,7 +241,6 @@ async fn build_pipeline(
             memory_runtime: Some(runtime.clone()),
             memory_db: Some(backend_arc.clone() as MemoryBackend),
             raw_memory_store: Some(Arc::clone(&raw_store)),
-            embedder: Some(Arc::clone(&embedder)),
             ..Default::default()
         })
         .await
@@ -257,7 +256,7 @@ async fn build_pipeline(
 
 /// The six memory retrieval tools gated by injection_mode.
 /// Note: memory_timeline additionally needs state_db — without it, 5 of 6
-/// will be present in Tools/Hybrid mode when memory_db + embedder are supplied.
+/// will be present in Tools/Hybrid mode when memory_db + memory_runtime are supplied.
 /// The dep-free pair (memory_reflect, recall_context) is the definitive gate signal.
 const MEMORY_RETRIEVAL_TOOLS: &[&str] = &[
     "memory_search",
@@ -351,10 +350,10 @@ async fn tools_mode_skips_injection_and_registers_memory_tools() {
         registry.has_tool("recall_context"),
         "recall_context must be registered in Tools mode"
     );
-    // With memory_db + embedder, the dep-requiring tools should also be present.
+    // With memory_db + memory_runtime, the dep-requiring tools should also be present.
     assert!(
         registry.has_tool("memory_search"),
-        "memory_search must be registered in Tools mode when memory_db+embedder supplied"
+        "memory_search must be registered in Tools mode when memory_db+memory_runtime supplied"
     );
     assert!(
         registry.has_tool("memory_browse"),
@@ -362,7 +361,7 @@ async fn tools_mode_skips_injection_and_registers_memory_tools() {
     );
     assert!(
         registry.has_tool("memory_explore"),
-        "memory_explore must be registered in Tools mode when memory_db+embedder supplied"
+        "memory_explore must be registered in Tools mode when memory_db+memory_runtime supplied"
     );
     // Total should be >= 2 (dep-free); with our deps it should be >= 5.
     let count = count_memory_retrieval_tools(&registry);

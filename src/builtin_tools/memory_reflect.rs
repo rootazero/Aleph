@@ -1,8 +1,9 @@
 //! LLM-facing tool: synthesise a coherent answer from the memory store.
 //!
 //! Thin wrapper around `MemoryReflector::reflect`. The `Arc<MemoryReflector>`
-//! is injected at server startup (Task 8); until then the tool returns a clear
-//! error rather than panicking.
+//! is attached per call by the Memory runtime (`builtin_tools::runtime`),
+//! which owns the reflector; until then the tool returns a clear error rather
+//! than panicking.
 
 use crate::error::{AlephError, Result};
 use crate::memory::namespace::NamespaceScope;
@@ -43,18 +44,18 @@ pub struct MemoryReflectResult {
 /// natural-language answer plus cited note paths.
 #[derive(Clone)]
 pub struct MemoryReflectTool {
-    /// Injected by Task 8 at server startup. `None` → tool returns an error.
+    /// Attached by the Memory runtime when the tool is built for a call.
+    /// `None` → tool returns an error.
     reflector: Option<Arc<MemoryReflector>>,
     agent_id: String,
     /// Injected at agent-loop startup via `set_session_id`.
     session_id: Option<Arc<tokio::sync::RwLock<String>>>,
-    /// Optional fire-and-forget query filer hook (Task 7).
+    /// Optional fire-and-forget query filer hook, owned by the Memory runtime.
     pub query_filer: Option<Arc<dyn QueryFiler>>,
 }
 
 impl MemoryReflectTool {
-    /// Create a placeholder tool (reflector not yet wired).
-    /// Task 8 calls `with_reflector` after constructing the reflector.
+    /// Create the tool for one call (reflector attached right after).
     pub fn new(agent_id: impl Into<String>) -> Self {
         Self {
             reflector: None,
@@ -64,7 +65,7 @@ impl MemoryReflectTool {
         }
     }
 
-    /// Attach the reflector instance (called by Task 8 server builder).
+    /// Attach the reflector instance (called by the Memory runtime).
     #[must_use]
     pub fn with_reflector(mut self, reflector: Arc<MemoryReflector>) -> Self {
         self.reflector = Some(reflector);
@@ -130,7 +131,7 @@ impl MemoryReflectTool {
     ) -> Result<MemoryReflectResult> {
         let reflector = self.reflector.as_ref().ok_or_else(|| {
             AlephError::other(
-                "memory_reflect tool: MemoryReflector not wired (server builder needs to inject it)",
+                "memory_reflect tool: no MemoryReflector attached (the Memory runtime owns it)",
             )
         })?;
 

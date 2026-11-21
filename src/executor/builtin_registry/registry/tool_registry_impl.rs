@@ -1427,25 +1427,11 @@ impl ToolRegistry for BuiltinToolRegistry {
                         })
                     });
                 }
-                if let Some(ref tool) = self.memory_reflect_tool {
-                    let tool = tool.clone();
-                    Box::pin(async move {
-                        let args: crate::builtin_tools::memory_reflect::MemoryReflectArgs =
-                            serde_json::from_value(arguments).map_err(|e| {
-                                AlephError::tool(format!("memory_reflect: bad args: {e}"))
-                            })?;
-                        let out = tool.call_with_filed_partition(filed_agent_id, args).await?;
-                        serde_json::to_value(out).map_err(|e| {
-                            AlephError::tool(format!("memory_reflect: serialize: {e}"))
-                        })
-                    })
-                } else {
-                    Box::pin(async move {
-                        Err(AlephError::tool(
-                            "memory_reflect tool is not available: MemoryReflector not wired (server builder needs to inject it)",
-                        ))
-                    })
-                }
+                Box::pin(async move {
+                    Err(AlephError::tool(
+                        "memory_reflect tool is not available: no Memory runtime is configured",
+                    ))
+                })
             }
 
             // Wiki orientation tools (Spec 5)
@@ -2003,111 +1989,6 @@ mod channel_tool_dispatch_tests {
     }
 
     // -- read/write partition symmetry --------------------------------------
-
-    /// T09: driven through the ACTUAL dispatch chokepoint (`execute_tool`,
-    /// not a direct call on the tool), under an active `Personal(u-alice)`
-    /// scope — the same shape a stock loopback Panel session already has.
-    /// The query filer's fire-and-forget write must land in `main__u-alice`,
-    /// not the org partition `main` every principal's reads union in.
-    #[tokio::test]
-    async fn memory_reflect_query_filer_writes_to_the_partition_it_read_from() {
-        use crate::memory::assembler::envelope::{EnvelopeMeta, MemoryEnvelope};
-        use crate::memory::assembler::{AssemblyBudget, WorkingMemoryAssembler};
-        use crate::memory::notes::query_filer::{CheapGateReason, FileOutcome, QueryFiler};
-        use crate::memory::reflector::fs_reflector::RecallWriter;
-        use crate::memory::reflector::MemoryReflector;
-        use crate::memory::session_search_summary::FactSourceFilter;
-        use crate::providers::recording_mock::RecordingMockProvider;
-
-        /// Empty-envelope assembler: `reflect()` short-circuits on it before
-        /// any LLM call, so this test needs no synthesis machinery — only
-        /// which partition each side of `memory_reflect` used.
-        struct EmptyAssembler;
-        #[async_trait::async_trait]
-        impl WorkingMemoryAssembler for EmptyAssembler {
-            async fn assemble(
-                &self,
-                query: &str,
-                agent_id: &str,
-                _session_id: Option<&str>,
-                _budget: AssemblyBudget,
-                _filter: FactSourceFilter,
-            ) -> Result<MemoryEnvelope> {
-                Ok(MemoryEnvelope {
-                    schema_version: "1.0".into(),
-                    generated_at: 0,
-                    query: query.to_string(),
-                    agent_id: agent_id.to_string(),
-                    session_id: None,
-                    slots: vec![],
-                    meta: EnvelopeMeta {
-                        strategy: "test_empty".into(),
-                        candidates_considered: 0,
-                        used_fallback: false,
-                        fallback_reason: None,
-                        llm_rerank_latency_ms: None,
-                        total_latency_ms: 0,
-                    },
-                })
-            }
-        }
-
-        /// Records the `agent_id` handed to `maybe_file` and signals over a
-        /// channel so the test can wait for the fire-and-forget
-        /// `tokio::spawn` deterministically, instead of sleeping.
-        struct RecordingFiler {
-            tx: tokio::sync::mpsc::UnboundedSender<String>,
-        }
-        #[async_trait::async_trait]
-        impl QueryFiler for RecordingFiler {
-            async fn maybe_file(
-                &self,
-                agent_id: &str,
-                _query: &str,
-                _synthesis: &crate::memory::reflector::Synthesis,
-                _session_id: Option<&str>,
-            ) -> Result<FileOutcome> {
-                let _ = self.tx.send(agent_id.to_string());
-                Ok(FileOutcome::SkippedCheapGate {
-                    reason: CheapGateReason::TooFewSources { count: 0 },
-                })
-            }
-        }
-
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
-        let mut registry = BuiltinToolRegistry::new().await.unwrap();
-
-        let assembler: Arc<dyn WorkingMemoryAssembler> = Arc::new(EmptyAssembler);
-        let provider: Arc<dyn crate::providers::AiProvider> =
-            Arc::new(RecordingMockProvider::new("unused".into()));
-        let recall_writer: RecallWriter = Arc::new(|_row| Box::pin(async { Ok(()) }));
-        registry.set_memory_reflector(Arc::new(MemoryReflector::new(
-            assembler,
-            provider,
-            recall_writer,
-        )));
-
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        registry.set_query_filer(Arc::new(RecordingFiler { tx }));
-
-        let personal = crate::scope::ScopeAttribution::personal("u-alice");
-        crate::scope::with_scope(Some(personal), async {
-            registry
-                .execute_tool("memory_reflect", serde_json::json!({"query": "q"}))
-                .await
-        })
-        .await
-        .expect("memory_reflect call should succeed");
-
-        let filed_id = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
-            .await
-            .expect("query filer was never invoked (timed out)")
-            .expect("query filer channel closed without a value");
-        assert_eq!(
-            filed_id, "main__u-alice",
-            "the query note must land in the reader's own partition, not the org partition `main`"
-        );
-    }
 
     /// Every dispatch arm that hands a memory/note tool an agent id must hand
     /// it the COMPOSED partition, because that is what the writers wrote to.

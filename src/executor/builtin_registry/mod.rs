@@ -32,14 +32,18 @@ mod registry;
 
 pub use config::BuiltinToolConfig;
 pub use definitions::{create_tool_boxed, BUILTIN_TOOL_DEFINITIONS};
+/// The descriptions of the tools the registry registers outside the catalog.
+/// This table is the runtime source of truth for them —
+/// `crate::executor::builtin_tool_description` reads it — so it is NOT
+/// test-gated: a description the model is sent has to be reachable while the
+/// model is being served.
+pub(crate) use definitions::REGISTRY_ONLY_DESCRIPTIONS;
 /// Re-exported for `thinker::prompt_contract`, whose duplicate-sentence scan
 /// ships-text surface is the same one the byte ratchet measures. Test-only:
 /// it names no runtime behaviour, only what the guards are allowed to be
 /// blind to.
 #[cfg(test)]
-pub(crate) use definitions::{
-    BRIDGE_TOOL_DESCRIPTIONS, INJECTED_TOOL_DESCRIPTIONS, REGISTRY_ONLY_DESCRIPTIONS,
-};
+pub(crate) use definitions::{BRIDGE_TOOL_DESCRIPTIONS, INJECTED_TOOL_DESCRIPTIONS};
 pub use groups::TOOL_CATEGORIES;
 pub use registry::BuiltinToolRegistry;
 

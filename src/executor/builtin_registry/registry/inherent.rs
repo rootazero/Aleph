@@ -354,21 +354,6 @@ impl BuiltinToolRegistry {
         Arc::clone(&self.clarification_manager_cell)
     }
 
-    /// Inject a `MemoryReflector` into the `memory_reflect` tool (Task 8 wiring).
-    ///
-    /// Must be called before the registry is wrapped in `Arc` (takes `&mut self`).
-    /// After injection the tool will synthesise answers from memory; without it
-    /// the tool returns a clear error rather than panicking.
-    pub fn set_memory_reflector(
-        &mut self,
-        reflector: Arc<crate::memory::reflector::MemoryReflector>,
-    ) {
-        if let Some(ref mut tool) = self.memory_reflect_tool {
-            *tool = tool.clone().with_reflector(reflector);
-            info!("MemoryReflector injected into memory_reflect tool");
-        }
-    }
-
     /// Inject the cluster node registry, enabling cluster node tools.
     ///
     /// Takes `&self` so it works through `Arc` — the registry is wrapped in
@@ -400,30 +385,6 @@ impl BuiltinToolRegistry {
     pub fn set_gateway_event_bus(&self, bus: Arc<crate::gateway::event_bus::GatewayEventBus>) {
         if self.gateway_event_bus.set(bus).is_ok() {
             info!("GatewayEventBus injected — `project_manage` mutations now publish projects.changed");
-        }
-    }
-
-    /// Get a handle to the `MemoryContextProvider` `OnceCell` for deferred
-    /// injection from the server builder.
-    #[must_use]
-    pub fn memory_context_provider_cell(
-        &self,
-    ) -> Arc<tokio::sync::OnceCell<Arc<crate::thinker::MemoryContextProvider>>> {
-        Arc::clone(&self.memory_context_provider)
-    }
-
-    /// Inject a `QueryFiler` into the `memory_reflect` tool (Spec 8 Task 8 wiring).
-    ///
-    /// Must be called before the registry is wrapped in `Arc` (takes `&mut self`).
-    /// After injection the tool will fire-and-forget file interesting syntheses;
-    /// without it the tool still works but query filing is silently skipped.
-    pub fn set_query_filer(
-        &mut self,
-        query_filer: Arc<dyn crate::memory::notes::query_filer::QueryFiler>,
-    ) {
-        if let Some(ref mut tool) = self.memory_reflect_tool {
-            *tool = tool.clone().with_query_filer(query_filer);
-            info!("QueryFiler injected into memory_reflect tool");
         }
     }
 
