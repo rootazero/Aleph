@@ -21,11 +21,6 @@ use serde::{Deserialize, Serialize};
 /// variant here requires both halves; `AlephEvent::event_type` is the compile
 /// gate.
 ///
-/// `All` is the one exception, and it is not an event type at all: it is a
-/// wildcard pseudo-variant that no `AlephEvent::event_type()` ever returns.
-/// It exists so a filter can say "every type" (`EventFilter::all()`). It must
-/// stay the ONLY such pseudo-variant — a second one would give the filter
-/// two ways to spell "everything" and re-open the drift the audit closed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EventType {
     // Sub-agent
@@ -47,12 +42,6 @@ pub enum EventType {
     TeamTaskCompleted,
     TeamTaskFailed,
     TeamDisbanded,
-
-    /// Wildcard for components that want all events.
-    ///
-    /// A pseudo-variant, not an event type: no `AlephEvent::event_type()`
-    /// returns it. It short-circuits the type check in `EventFilter::matches`.
-    All,
 }
 
 /// Unified event enum - all events with a live producer in the system.
@@ -81,7 +70,6 @@ pub enum AlephEvent {
     TeamCreated {
         team_id: String,
         name: String,
-        member_ids: Vec<String>,
     },
     TeamMemberAdded {
         team_id: String,
@@ -101,7 +89,8 @@ pub enum AlephEvent {
         team_id: String,
         task_id: String,
         status: String,
-        progress: Option<f32>,
+        /// Status before this update; `None` identifies task creation.
+        previous_status: Option<String>,
     },
     TeamTaskCompleted {
         team_id: String,
@@ -138,24 +127,6 @@ impl AlephEvent {
             Self::TeamTaskCompleted { .. } => EventType::TeamTaskCompleted,
             Self::TeamTaskFailed { .. } => EventType::TeamTaskFailed,
             Self::TeamDisbanded { .. } => EventType::TeamDisbanded,
-        }
-    }
-
-    /// Get a human-readable name for the event
-    #[must_use]
-    pub const fn name(&self) -> &'static str {
-        match self {
-            Self::SubAgentCompleted(_) => "SubAgentCompleted",
-            Self::SubAgentTreeUpdate(_) => "SubAgentTreeUpdate",
-            Self::ProcessCompleted(_) => "ProcessCompleted",
-            Self::TeamCreated { .. } => "TeamCreated",
-            Self::TeamMemberAdded { .. } => "TeamMemberAdded",
-            Self::TeamMemberRemoved { .. } => "TeamMemberRemoved",
-            Self::TeamTaskAssigned { .. } => "TeamTaskAssigned",
-            Self::TeamTaskUpdated { .. } => "TeamTaskUpdated",
-            Self::TeamTaskCompleted { .. } => "TeamTaskCompleted",
-            Self::TeamTaskFailed { .. } => "TeamTaskFailed",
-            Self::TeamDisbanded { .. } => "TeamDisbanded",
         }
     }
 }
@@ -250,7 +221,6 @@ mod tests {
         });
 
         assert_eq!(event.event_type(), EventType::SubAgentCompleted);
-        assert_eq!(event.name(), "SubAgentCompleted");
     }
 
     /// A completion written by a daemon that predates `request_ids` — the JSON
@@ -304,8 +274,8 @@ mod tests {
     // Pre-2026-08-16 the event module held 13 `AlephEvent` and 13 `EventType`
     // variants with zero producers or zero subscribers — the exact form-1
     // severed wire that the audit removed. The remaining guard is the
-    // exhaustive `match` in `AlephEvent::name` and `AlephEvent::event_type`:
-    // adding a variant to `AlephEvent` without arming both is a compile error.
+    // exhaustive `match` in `AlephEvent::event_type`: adding a variant without
+    // its discriminant is a compile error.
     //
     // The runtime halves — `AlephEvent::ALL_VARIANT_NAMES` (hand-synced slice
     // of variant names) and `EventType::ALL` (hand-synced variant list) plus

@@ -524,7 +524,7 @@ check-phase5:
 # Wiring parity guards: catch "severed wire" drift where both ends exist but the
 # connection is missing. Each is a grep-level diff against a triaged baseline —
 # green now, fails only on a NEW severance. See the 2026-07-15 wire audit.
-check-wiring: check-rpc-wiring check-tool-wiring check-config-wiring check-seam-wiring check-capability-wiring
+check-wiring: check-rpc-wiring check-tool-wiring check-config-wiring check-event-wiring check-seam-wiring check-capability-wiring
 
 # RPC: no Panel rpc_call / rate-lane classifier may name a method with no handler
 # (→ METHOD_NOT_FOUND / phantom rate-lane guard).
@@ -540,6 +540,11 @@ check-tool-wiring:
 # knob is an inert R10 corpse).
 check-config-wiring:
     python3 scripts/config_wiring_audit.py
+
+# Events: every AlephEvent variant must have a producer and a subscriber;
+# repaired transition/boot wires must stay connected.
+check-event-wiring:
+    python3 scripts/event_wire_audit.py
 
 # Seams: every public API of the audited protocol/agent modules (src/a2a,
 # src/acp, src/agents) must have a production consumer — a `pub fn` nobody
