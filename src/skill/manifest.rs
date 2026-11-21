@@ -523,12 +523,26 @@ fn parse_skill_content_from(
 
     // Eligibility
     if let Some(ref elig) = raw.eligibility {
-        let os = elig.os.as_ref().map(|os_list| {
-            os_list
-                .iter()
-                .filter_map(|s| s.parse::<Os>().ok())
-                .collect::<Vec<_>>()
-        });
+        let os = match elig.os.as_deref() {
+            None => None,
+            Some(tokens) => {
+                let (parsed, unknown) = parse_os_list(tokens);
+                if !unknown.is_empty() {
+                    // The platform restriction is dropped (not narrowed to the
+                    // tokens we happened to understand): the author's platform
+                    // set is not what the file says, and a half-understood
+                    // restriction would silently hide the skill on a platform
+                    // the author did name. The binary / env / config
+                    // requirements still apply.
+                    tracing::warn!(
+                        skill = %raw.name,
+                        os = %unknown.join(", "),
+                        "unknown OS in eligibility spec; platform restriction ignored"
+                    );
+                }
+                parsed
+            }
+        };
         let spec = EligibilitySpec {
             os,
             required_bins: elig.required_bins.clone().unwrap_or_default(),
@@ -555,6 +569,42 @@ fn parse_skill_content_from(
     Ok(manifest)
 }
 
+/// Parse an `os:` token list through the domain parser ([`Os::from_str`]).
+///
+/// Returns the platform restriction and the tokens the domain parser did
+/// not know:
+///
+/// - `None` (no restriction) when the list carries no usable platform:
+///   it was empty, or one of its tokens is unknown. The list is atomic —
+///   a set the author wrote that we cannot fully read is not a set we can
+///   enforce.
+/// - `Some(vec![..])` when every token is known.
+///
+/// The old `filter_map(|s| s.parse::<Os>().ok())` dropped the
+/// `ParseOsError` and kept whatever survived. A list whose tokens were
+/// *all* unknown therefore became `Some(vec![])` — "this runs on no
+/// platform" — and both consumers read that as a platform verdict: the
+/// eligibility service pushes `IneligibilityReason::OsNotSupported`
+/// ("unsupported on this OS"), and the install selector matches no spec
+/// ("no matching install spec"). A misspelled platform must not be able to
+/// produce either verdict, so the parser never yields an empty list and the
+/// caller names the offending token instead of dropping it silently.
+fn parse_os_list(tokens: &[String]) -> (Option<Vec<Os>>, Vec<&str>) {
+    let mut parsed = Vec::with_capacity(tokens.len());
+    let mut unknown = Vec::new();
+    for token in tokens {
+        match token.parse::<Os>() {
+            Ok(os) => parsed.push(os),
+            Err(_) => unknown.push(token.as_str()),
+        }
+    }
+    if parsed.is_empty() || !unknown.is_empty() {
+        (None, unknown)
+    } else {
+        (Some(parsed), unknown)
+    }
+}
+
 fn parse_install_specs(installs: Vec<RawInstallSpec>) -> Vec<InstallSpec> {
     installs
         .into_iter()
@@ -579,12 +629,25 @@ fn parse_install_specs(installs: Vec<RawInstallSpec>) -> Vec<InstallSpec> {
                     return None;
                 }
             };
-            let os = raw_spec.os.map(|os_list| {
-                os_list
-                    .iter()
-                    .filter_map(|s| s.parse::<Os>().ok())
-                    .collect::<Vec<_>>()
-            });
+            let os = match raw_spec.os.as_deref() {
+                None => None,
+                Some(tokens) => {
+                    let (parsed, unknown) = parse_os_list(tokens);
+                    if !unknown.is_empty() {
+                        // Same rule as the eligibility arm: the platform
+                        // filter is the part that could not be parsed, so it
+                        // is dropped (and reported) rather than becoming an
+                        // empty list that matches no platform ("no matching
+                        // install spec"). The spec itself stays usable.
+                        tracing::warn!(
+                            install_id = %raw_spec.id,
+                            os = %unknown.join(", "),
+                            "unknown OS in install spec; platform filter ignored"
+                        );
+                    }
+                    parsed
+                }
+            };
             Some(InstallSpec {
                 id: raw_spec.id,
                 kind,
@@ -690,7 +753,7 @@ pub fn automation_notice(skill_dir: &Path) -> Option<String> {
     )
     .ok()?;
     let auto = manifest.automation()?;
-    let skill_id = crate::domain::Entity::id(&manifest).as_str();
+    let skill_id = manifest.id().as_str();
     let schedule = contain(&auto.schedule);
     let prompt = auto
         .prompt

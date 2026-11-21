@@ -524,7 +524,7 @@ check-phase5:
 # Wiring parity guards: catch "severed wire" drift where both ends exist but the
 # connection is missing. Each is a grep-level diff against a triaged baseline —
 # green now, fails only on a NEW severance. See the 2026-07-15 wire audit.
-check-wiring: check-rpc-wiring check-tool-wiring check-config-wiring check-seam-wiring check-capability-wiring
+check-wiring: check-rpc-wiring check-tool-wiring check-config-wiring check-seam-wiring check-capability-wiring check-domain-wiring
 
 # RPC: no Panel rpc_call / rate-lane classifier may name a method with no handler
 # (→ METHOD_NOT_FOUND / phantom rate-lane guard).
@@ -553,6 +553,12 @@ check-seam-wiring:
 # detector, not a judge (see scripts/capability_wiring_audit.py).
 check-capability-wiring:
     python3 scripts/capability_wiring_audit.py
+
+# Domain vocabulary: one parser per vocabulary (PromptScope / Os /
+# InstallKind), one source of truth for the source-priority order, and the
+# cuts the 2026-11-21 src/domain audit made stay cut.
+check-domain-wiring:
+    python3 scripts/domain_wire_audit.py
 
 # ─── Lint ───
 
