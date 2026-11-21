@@ -18,7 +18,7 @@ fn test_line_properties() {
     test_channel_properties(&channel);
 
     assert_eq!(channel.channel_type(), "line");
-    assert!(channel.capabilities().typing_indicator);
+    assert!(!channel.capabilities().typing_indicator);
     assert!(channel.capabilities().reactions);
     assert!(!channel.capabilities().attachments);
     assert!(channel.capabilities().rich_text);

@@ -2,6 +2,12 @@
 //!
 //! Integrates with LINE Messaging API using webhook-based inbound
 //! and HTTP API outbound.
+//!
+//! Outbound always uses the metered *push* API: the free reply API needs the
+//! `replyToken` of the message being answered and expires after ~30s, which the
+//! asynchronous reply pipeline cannot guarantee. Replies therefore consume the
+//! channel's monthly push quota, and `OutboundMessage.reply_to` is not used to
+//! thread to the triggering message.
 
 pub mod config;
 pub mod message_ops;
@@ -79,7 +85,10 @@ impl LineChannel {
             replies: true,
             editing: false,
             deletion: true,
-            typing_indicator: true,
+            // LINE exposes no typing endpoint; `send_typing` keeps the trait
+            // default, which rejects the call instead of reporting a no-op
+            // success.
+            typing_indicator: false,
             read_receipts: false,
             rich_text: true,
             polls: false,
@@ -370,10 +379,6 @@ impl Channel for LineChannel {
         })
     }
 
-    async fn send_typing(&self, _conversation_id: &ConversationId) -> ChannelResult<()> {
-        Ok(())
-    }
-
     async fn react(
         &self,
         _conversation_id: &ConversationId,
@@ -465,7 +470,7 @@ mod tests {
         assert!(caps.replies);
         assert!(!caps.editing);
         assert!(caps.deletion);
-        assert!(caps.typing_indicator);
+        assert!(!caps.typing_indicator);
         assert!(!caps.read_receipts);
         assert!(caps.rich_text);
         assert_eq!(caps.max_message_length, 5000);

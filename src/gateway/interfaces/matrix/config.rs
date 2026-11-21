@@ -27,6 +27,11 @@ pub struct MatrixRoomPolicy {
     /// Only process messages that @mention the bot
     pub require_mention: Option<bool>,
     /// Allow messages from bots
+    ///
+    /// Not implemented and read by nothing: the Matrix protocol carries no bot
+    /// flag (neither timeline events nor room member state say whether a user is
+    /// a bot), so the adapter would have to guess from MXIDs or display names
+    /// before it could honour this.
     pub allow_bots: Option<bool>,
     /// Allowed user IDs in this room (empty = allow all)
     pub users: Option<Vec<String>>,
@@ -69,7 +74,11 @@ pub struct MatrixConfig {
     #[serde(default)]
     pub dedupe_store_path: Option<String>,
 
-    /// Initial sync history message limit
+    /// Timeline event limit per sync response
+    ///
+    /// Applied as a `/sync` timeline filter, so it caps every response rather
+    /// than only the initial sync: the SDK exposes no per-request limit. `0`
+    /// means "no cap".
     #[serde(default = "default_initial_sync_limit")]
     pub initial_sync_limit: u64,
 

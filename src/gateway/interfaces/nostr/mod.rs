@@ -8,8 +8,9 @@
 //! # Protocol
 //!
 //! - **NIP-01**: Basic protocol flow. Events, subscriptions, relay messages.
-//! - **NIP-04**: Encrypted direct messages (kind 4). Currently plaintext only;
-//!   encryption is documented as a future enhancement.
+//! - **NIP-04**: Encrypted direct messages (kind 4) are *not* supported: the
+//!   channel has no AES-256-CBC layer, so kind 4 is not subscribed to and any
+//!   kind-4 event a relay pushes is dropped as ciphertext.
 //! - **Schnorr signatures (BIP-340)**: Events signed with secp256k1 Schnorr.
 //!
 //! # Usage
@@ -24,7 +25,7 @@
 //! private_key = "hex-encoded-32-byte-private-key"
 //! relays = ["wss://relay.damus.io", "wss://nos.lol"]
 //! allowed_pubkeys = []
-//! subscription_kinds = [1, 4]
+//! subscription_kinds = [1]
 //! ```
 
 pub mod config;
@@ -128,7 +129,9 @@ impl NostrChannel {
             audio: false,
             video: false,
             reactions: true, // NIP-25: reactions (kind 7)
-            replies: true,   // Via "e" tags
+            // Inbound notes carry `["e", ...]` tags and are surfaced as
+            // `reply_to`, but outbound notes are never threaded.
+            replies: false,
             editing: false,  // Nostr events are immutable
             deletion: false, // NIP-09 exists but relays may ignore
             typing_indicator: false,
@@ -246,17 +249,9 @@ impl Channel for NostrChannel {
         let private_key = self.config.private_key.clone();
         Box::pin(async move {
             if test_mode {
-                let _recipient_pubkey = if message.conversation_id.as_str() != "public" {
-                    Some(message.conversation_id.as_str().to_string())
-                } else {
-                    None
-                };
-
-                let mut event = if let Some(ref recipient) = _recipient_pubkey {
-                    message_ops::build_dm(&message.text, &own_pubkey, recipient)
-                } else {
-                    message_ops::build_text_note(&message.text, &own_pubkey)
-                };
+                // Matches the production path: direct messages are refused, so
+                // every event this channel builds is a public text note.
+                let mut event = message_ops::build_text_note(&message.text, &own_pubkey);
 
                 message_ops::sign_event(&mut event, &private_key)
                     .map_err(|e| ChannelError::SendFailed(format!("failed to sign event: {e}")))?;
@@ -271,18 +266,11 @@ impl Channel for NostrChannel {
                 ChannelError::NotConnected("Nostr channel not started".to_string())
             })?;
 
-            // Determine if this is a DM or public note based on conversation_id
-            let recipient_pubkey = if message.conversation_id.as_str() != "public" {
-                Some(message.conversation_id.as_str().to_string())
-            } else {
-                None
-            };
-
             // A Nostr direct message is private only when it is ENCRYPTED
             // (NIP-04). This channel has no encryption layer, so publishing a
             // kind-4 event would hand the plaintext to every relay that
             // indexes it. Refuse the send instead of leaking it.
-            if recipient_pubkey.is_some() {
+            if message.conversation_id.as_str() != "public" {
                 return Err(ChannelError::UnsupportedFeature(
                     "Nostr direct messages are not supported: the channel has no NIP-04 \
                      encryption, so a DM would be readable by every relay that indexes it"
@@ -291,11 +279,7 @@ impl Channel for NostrChannel {
             }
 
             // Build the event
-            let mut event = if let Some(ref recipient) = recipient_pubkey {
-                message_ops::build_dm(&message.text, &own_pubkey, recipient)
-            } else {
-                message_ops::build_text_note(&message.text, &own_pubkey)
-            };
+            let mut event = message_ops::build_text_note(&message.text, &own_pubkey);
 
             // Sign the event
             message_ops::sign_event(&mut event, &private_key)
@@ -383,7 +367,7 @@ mod tests {
         assert!(!caps.audio);
         assert!(!caps.video);
         assert!(caps.reactions);
-        assert!(caps.replies);
+        assert!(!caps.replies);
         assert!(!caps.editing);
         assert!(!caps.deletion);
         assert!(!caps.typing_indicator);

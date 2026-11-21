@@ -195,10 +195,12 @@ impl XmppMessageOps {
     /// Run the XMPP connection loop with automatic reconnection.
     ///
     /// This function:
-    /// 1. Connects TCP to server:port
-    /// 2. Upgrades to TLS if use_tls is enabled
+    /// 1. Returns immediately when `use_tls` is set: no TLS upgrade is
+    ///    implemented, and authenticating in plaintext is not an acceptable
+    ///    fallback (the channel's `start` rejects that combination up front)
+    /// 2. Connects TCP to server:port
     /// 3. Sends stream header
-    /// 4. Authenticates with SASL PLAIN
+    /// 4. Authenticates with SASL PLAIN over the unencrypted socket
     /// 5. Sends new stream header (post-auth)
     /// 6. Binds resource + starts session
     /// 7. Sends initial presence

@@ -442,26 +442,6 @@ static VOICE_CALL_FIELDS: &[FieldDef] = &[
         default_value: "",
         options: &[],
     },
-    FieldDef {
-        key: "inbound_enabled",
-        label: "Receive Calls",
-        kind: FieldKind::Toggle,
-        placeholder: "",
-        help: "Allow authenticated inbound PSTN calls to reach the Core",
-        required: false,
-        default_value: "true",
-        options: &[],
-    },
-    FieldDef {
-        key: "outbound_enabled",
-        label: "Make Calls",
-        kind: FieldKind::Toggle,
-        placeholder: "",
-        help: "Allow the Core to request outbound PSTN calls; a live Relay is still required",
-        required: false,
-        default_value: "true",
-        options: &[],
-    },
 ];
 
 static SLACK_FIELDS: &[FieldDef] = &[
@@ -1231,16 +1211,6 @@ static LINE_FIELDS: &[FieldDef] = &[
         help: "LINE group IDs allowed to interact (empty = all)",
         required: false,
         default_value: "",
-        options: &[],
-    },
-    FieldDef {
-        key: "send_typing",
-        label: "Send Typing Indicator",
-        kind: FieldKind::Toggle,
-        placeholder: "",
-        help: "Show the loading animation while a turn is running",
-        required: false,
-        default_value: "true",
         options: &[],
     },
 ];

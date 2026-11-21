@@ -28,10 +28,13 @@ async fn test_nostr_protocol_send_text_note() {
 }
 
 #[tokio::test]
-async fn test_nostr_protocol_send_dm() {
+async fn test_nostr_protocol_refuses_dm() {
     let mut channel = NostrChannel::for_test("nostr-test", test_config());
     channel.start().await.unwrap();
 
+    // A kind-4 DM is only private when it is NIP-04 encrypted, which this
+    // channel does not implement: the send must be refused, not silently
+    // published as plaintext.
     let result = channel
         .send(OutboundMessage::text(
             "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
@@ -39,7 +42,13 @@ async fn test_nostr_protocol_send_dm() {
         ))
         .await;
 
-    assert!(result.is_ok());
+    assert!(
+        matches!(
+            result,
+            Err(alephcore::gateway::channel::ChannelError::UnsupportedFeature(_))
+        ),
+        "Nostr must refuse direct messages instead of publishing plaintext"
+    );
     channel.stop().await.unwrap();
 }
 
