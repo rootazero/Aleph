@@ -258,6 +258,18 @@ impl Drop for PendingRegistration {
     }
 }
 
+/// Test-only affordance: a non-blocking peek at the registration channel so
+/// a test can assert that NO decision has been delivered yet. Production code
+/// awaits the receiver, so a public poll would be an unused API surface.
+#[cfg(test)]
+impl RegisteredApprovalReceiver {
+    pub fn try_recv(
+        &mut self,
+    ) -> Result<Option<ApprovalDecisionType>, oneshot::error::TryRecvError> {
+        self.receiver.try_recv()
+    }
+}
+
 impl Future for RegisteredApprovalReceiver {
     type Output = Result<Option<ApprovalDecisionType>, oneshot::error::RecvError>;
 
@@ -3027,12 +3039,15 @@ mod tests {
 
         // A different action in the same session is untouched — the cascade is
         // keyed on the action, never on the session alone.
-        assert!(manager
-            .get_pending(&id_c)
-            .expect("still pending")
-            .record
-            .decision
-            .is_none());
+        assert!(
+            manager
+                .get_pending(&id_c)
+                .expect("still pending")
+                .record
+                .deny_reason
+                .is_none(),
+            "a different action in the same session must not be stamped by the cascade"
+        );
     }
 
     /// The cascade also fires on the session-addressed path (`/approve
@@ -3228,14 +3243,14 @@ mod tests {
             manager.get_pending(&id_b).is_some(),
             "sibling card must still be pending — retire must not cascade"
         );
-        assert_eq!(
+        assert!(
             manager
                 .get_pending(&id_b)
                 .expect("still pending")
                 .record
-                .decision,
-            None,
-            "sibling card must not be stamped with any decision"
+                .deny_reason
+                .is_none(),
+            "sibling card must not be stamped with a denial"
         );
 
         // And b remains resolvable the normal way afterwards.

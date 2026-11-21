@@ -142,12 +142,18 @@ def check_record_originator_cut():
 
 
 def check_approval_receiver_try_recv_cut():
-    """`RegisteredApprovalReceiver::try_recv` had no caller.
+    """`RegisteredApprovalReceiver::try_recv` had no PRODUCTION caller.
 
     The receiver is awaited as a future; a non-blocking poll on it was a
-    second way to read the same channel that nothing used."""
+    second way to read the same channel that no production code used. The
+    audit's first pass deleted it outright and broke six test call sites
+    (the poll is how the approval tests assert "no decision has been
+    delivered yet"), so the poll now lives in a `#[cfg(test)]` inherent impl
+    and the production surface stays bare."""
     absent_prod("exec/cut", "src/exec/manager.rs", "impl RegisteredApprovalReceiver",
-                "the receiver's inherent impl only carried the unused try_recv poll")
+                "the receiver's inherent impl must stay test-only - the poll has no production caller")
+    present("exec/live", "src/exec/manager.rs", "#[cfg(test)]\nimpl RegisteredApprovalReceiver",
+            "the test-only poll the six approval test call sites rely on must stay")
 
 
 def check_cleanup_expired_cut():
