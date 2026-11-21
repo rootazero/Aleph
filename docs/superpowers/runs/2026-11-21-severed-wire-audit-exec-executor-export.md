@@ -292,6 +292,11 @@ scripts (a second CSP literal, a removed `allow-downloads`, a reverted
 - `python3 scripts/export_wire_audit.py` → `PASS: export wire invariants hold`
 - The three sibling guards of the previous slice (`discovery`, `domain`, `event`)
   still PASS.
+- **The same check was re-run after merging upstream `origin/main`** (the nsh
+  phase10/11 work landed while this slice was running; the two ranges touch
+  **zero** common files — `comm -12` over the two `diff --name-only` sets is
+  empty). Second run on the merged tree `c0ae19fff`:
+  `Finished dev profile in 15m 57s`, **0 errors, 0 warnings**.
 - `git diff --check` is clean; the touched files add no new rustfmt deviation
   (the tree is not rustfmt-clean at HEAD — 174 unrelated files would be
   rewritten — so only the touched files were formatted).
@@ -370,7 +375,10 @@ Candidates where Jev was confident and the review agreed: `B-01` (CUT 0.98),
   decision.
 - **`just check-wiring` still fails** on the pre-existing `config_wire_audit`
   false positive (§7). Not touched, out of scope.
-- **No `origin/main` push and no PR** — the slices are merged into local `main`
-  only; publishing is the operator's call.
-- **The four worktrees** (`wire-exec`, `wire-secrets`, `wire-executor`,
-  `wire-export`) still exist on disk.
+- **Pushed to `origin/main`, no PR.** The slice was pushed as a fast-forward after
+  upstream `origin/main` was merged in (`c0ae19fff`); the remote now holds every
+  commit of this slice.
+- **The upstream merge was not re-reviewed.** `origin/main` had moved on by 6
+  commits (the nsh phase10/11 work) since this slice's base. The two ranges
+  touch **no common file**, so no conflict was possible — but the nsh work
+  itself was not audited here.
