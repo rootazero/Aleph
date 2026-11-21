@@ -1,0 +1,77 @@
+{
+  "status": "PASS_SCOPED_CLOSEOUT_VERIFICATION",
+  "date": "2026-11-21",
+  "head": "0e4e1d4ebaa6e6dee8d6af9928f969d2e90f42b7",
+  "acceptance": "ACCEPTED_UNDER_AMENDED_CONTRACT",
+  "original_matrix_verdict": "NOT_ACCEPTED",
+  "amendment_receipt": {
+    "path": "docs/superpowers/runs/2026-11-21-phase10-acceptance-amendment.json",
+    "sha256": "fc5802624cdb46364d3a53d4b508e7ae2260719a96adc3a5abafd1811a030e21"
+  },
+  "candidate_index": {
+    "path": "docs/superpowers/runs/2026-11-20-phase10-official-candidate-integrity.json",
+    "sha256": "7305eaa69b07c3fa279939a9d72c5a98bdb31678792f7306b453f1c18047bd1a"
+  },
+  "source_files_verified": 21,
+  "binary_files_verified": 3,
+  "evidence_hash_pairs_verified": 57,
+  "canonical_asset_files_verified": 18,
+  "matrix_audit": {
+    "matrix_sha256": "fbf5f1272be769ae554ba53df065ef171badb6bbe942bb90e254168664e5f7c2",
+    "binary_manifest_sha256": "e39f6010a09541f90100cfea39bfd64b8e6b9e7b14386a8f3978c272fc5622f1",
+    "source_manifest_sha256": "fe231f7a1d8dc82c63af3a0983b6b749ee4f3d7380e4743cf890a477dcd6c700",
+    "unchanged_source_files": 23,
+    "distinct_passed_runs": 80,
+    "natural_shell_exit_and_settlement": 80,
+    "unforced_gateway_fixture_cleanups": 80,
+    "actual_http_asset_files_verified": 320,
+    "tracked_dist_restored": true
+  },
+  "markdown_links": {
+    "valid": 277,
+    "external_or_protocol": 11
+  },
+  "documents_sha256": {
+    "docs/superpowers/runs/2026-11-21-phase10-closeout.md": "6cbaaed9890439dc6e9c1ea1988b54a95def4d9dc01cd2388b26798512592207",
+    "docs/superpowers/runs/2026-11-21-phase10-acceptance-amendment.md": "ae54c8fe823dfcfbdbfd9c33c3e922934a4e1251fabd3b89f14662171d6a993d",
+    "docs/superpowers/specs/2026-11-20-phase10-official-nsh.md": "21e81e79774ba1b5ac8502eab631240b96d66d044b2703d2688261c5f69945ff",
+    "docs/superpowers/plans/2026-11-18-phase10-nsh-shell-integration.md": "e6d93eb2d83f6ae21d72b4faea343822a715d082b9f85eb2ec5054af1a77d63f",
+    "docs/superpowers/runs/2026-11-20-phase10-official-nsh-checkpoint.md": "a066c4a85f7cd2cf75d6e76d276eb0de05a846c91817a1e6b5beeade49eba1ff",
+    "docs/reference/DESKTOP_SHELL.md": "c4f7b27f64acd24d22610cb07dbf55b44992d196265a1d01d21bacd8ad9cfe32",
+    "docs/reference/DESKTOP_BRIDGE.md": "39520265f702ecd2b9f8acd6123232d2f3507b69a4b0eb2356215f1b2d4e2d95",
+    "docs/reference/PRODUCT_TOPOLOGY.md": "c6112155e411b6d8f0bfa7a39841166cd40b5d4ae855bff00600c021fa98c645",
+    "docs/reference/SUBSYSTEM_ROUTING.md": "192da31a525632243b1478efc48ed6a9cf56162833533a80c5b5a7d78a9cdef7",
+    "docs/reference/FEATURE_LOCATOR.md": "8201d8ab3d8f1ed5dbd6c8eb88c7bab203e3feae7e28be2aa3c611eea6843eb0"
+  },
+  "review_artifacts_sha256": {
+    ".phase10-evidence/closeout-20261121/review-SPEC-summary.md": "73e77299db82258112a7fea1dfdd8d1813c1064638f497471eccb2fc36e07b3c",
+    ".phase10-evidence/closeout-20261121/review-QUALITY.md": "d5d095a9b8f0d2faa89f14f46d571856c323a3f56f110e924d633d55fef2f750",
+    ".phase10-evidence/closeout-20261121/review-QUALITY-retry.md": "676b59437e8d82c7813986c6449303bc7d391c4ac3b6d43144e73ca694dca43a",
+    ".phase10-evidence/closeout-20261121/independent-matrix-audit.md": "c9dcc732f6d790a1e5972990ef8fcc903e399561fb40f5e290290a2cd3060c39",
+    ".phase10-evidence/closeout-20261121/shell-source-audit.md": "731c471c3c3f2df8691d6d0eb54ae97a15adcf9abf3c93e9a8f156cbd68017ad"
+  },
+  "checks": [
+    "exact_original_reducer_replay",
+    "amendment_boundary_checks",
+    "git_diff_check",
+    "collector_reducer_schema_driver_default_dist_unchanged",
+    "only_user_deferred_plan_item_remains_unchecked"
+  ],
+  "historical_test_footers_rechecked": {
+    "official_shell_unit": 4,
+    "official_shell_compatibility": 2,
+    "focused_protocol": 1,
+    "Panel_library": 1568,
+    "Gateway_off_loop": 9
+  },
+  "not_rerun": [
+    "Cargo",
+    "native_OS_interaction",
+    "timing_matrix",
+    "external_links"
+  ],
+  "deferred": [
+    "G6 physical display topology is user-deferred and NOT TESTED / 用户暂缓多屏物理拓扑验收，仍未测试"
+  ],
+  "blocked_validation": "Whole-doc-tree link scanner raises IndexError on an unrelated empty target; scoped ten-document verification passes with existing classifier."
+}

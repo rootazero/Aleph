@@ -1,4 +1,4 @@
-//! Off-loop dispatch for audited cold read-only RPCs.
+//! Off-loop dispatch for audited slow read-only RPCs.
 //!
 //! `handle_connection` runs ONE `tokio::select!` loop per socket that both
 //! answers inbound RPCs and forwards subscribed events. An RPC awaited inline
@@ -64,14 +64,16 @@ pub const MAX_QUEUED_OFF_LOOP_RPCS: usize = 32;
 /// tasks to finish before running the connection cleanup anyway.
 pub const OFF_LOOP_SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
 
-/// Audited cold read methods that may leave the select loop. Each was read in
-/// source and verified to mutate neither connection nor server state; each is
-/// slow only on the first call per process (shared skill-system init):
+/// Audited slow read methods that may leave the select loop. Each was checked
+/// to read, not mutate, server state or connection state. The extension/skill
+/// reads can initialize the shared skill system; `system.info` samples CPU
+/// and disks on every call:
 ///
 /// * `extensions.catalog`   — `extensions::catalog::handle_catalog`
 /// * `extensions.installed` — `extensions::catalog::handle_installed`
 ///   (`collect_installed` → skill init; Query lane via `Lane::override_for`)
 /// * `skills.status`        — `skills::handle_status` (`full_status` snapshot)
+/// * `system.info`          — `system_info::handle` (CPU sampling gap and disk refresh)
 ///
 /// Adding a method here requires the same source audit; do not widen this to
 /// a lane or a suffix.
@@ -79,6 +81,7 @@ pub const OFF_LOOP_METHODS: &[&str] = &[
     "extensions.catalog",
     "extensions.installed",
     "skills.status",
+    "system.info",
 ];
 
 /// Whether `method` may run outside the connection's select loop.
@@ -235,6 +238,7 @@ mod tests {
         assert!(dispatches_off_loop("extensions.catalog"));
         assert!(dispatches_off_loop("extensions.installed"));
         assert!(dispatches_off_loop("skills.status"));
+        assert!(dispatches_off_loop("system.info"));
         // Other Query methods are NOT offloaded (no suffix/lane heuristic).
         assert!(!dispatches_off_loop("config.get"));
         assert!(!dispatches_off_loop("health"));

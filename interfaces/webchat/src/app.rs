@@ -8,6 +8,9 @@ use leptos::task::spawn_local;
 use leptos_router::components::Router;
 use leptos_router::hooks::{use_location, use_navigate};
 
+#[cfg(target_arch = "wasm32")]
+mod shell_bridge;
+
 // Views
 use crate::views::agent_trace::AgentTrace;
 use crate::views::browser::{
@@ -505,6 +508,7 @@ fn AppContent() -> impl IntoView {
                 </button>
             </Show>
             <Router>
+                {#[cfg(target_arch = "wasm32")] { view! { <shell_bridge::ShellBridge /> } }}
                 // Left column — context-aware sidebar, full window height.
                 // Phone has its own tab bar; see `not_phone` above.
                 <Show when=legacy_chrome>

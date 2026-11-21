@@ -3,26 +3,26 @@
 
 > **For agentic workers:** Use `superpowers:subagent-driven-development` only when delegation is authorized, or `superpowers:executing-plans` for direct execution. Track the checkboxes below. Read the restart prompt before implementation.
 
-**Status / 状态:** Proposed next implementation scope, prepared at the user's request after Phase9 acceptance. This document does not claim Phase10 has been implemented or independently accepted. / Phase9 完整验收后的下一阶段提案；本文不是 Phase10 完成证明。
+**Status / 状态:** Completed for the approved local macOS slice under the [2026-11-21 Quit-only amendment](../runs/2026-11-21-phase10-acceptance-amendment.md); see the [closeout](../runs/2026-11-21-phase10-closeout.md). Physical multi-display topology remains explicitly user-deferred and NOT TESTED, not PASS. / 已按修订合同完成本机范围，多屏延期未测。 Rebased on the installed official NSH `0.6.0 (5541637)` and the matching crates.io release. The [0.5 fork checkpoint](../runs/2026-11-19-phase10-local-integration-checkpoint.md) is historical only; its implementation and evidence do not carry forward. Follow the [current native QA ledger](../runs/2026-11-20-phase10-official-nsh-checkpoint.md) for outstanding gates. Run desktop QA on this Mac, with temporary fixture data and no VM. / 以本机官方 NSH `0.6.0 (5541637)` 和对应发布 crate 为基准；旧补丁与回执仅作历史记录。验收状态见当前本机回执清单；使用临时测试数据，不构建虚拟机。
 
-**Goal / 目标:** Make the existing NSH 0.5 macOS Panel host usable as a resident desktop shell: real window close/reopen/quit, tray and single-instance delivery, summon hotkey, deep-link delivery, notifications and window-state restoration, with explicit resource ownership and native evidence. / 在现有 Panel 宿主上补齐可验证的常驻桌面壳能力。
+**Goal / 目标:** Make the NSH macOS Panel host usable as a resident desktop shell: real window close/reopen/quit, tray and single-instance delivery, summon hotkey, deep-link delivery, notifications and window-state restoration, with explicit resource ownership and native evidence. / 在现有 Panel 宿主上补齐可验证的常驻桌面壳能力。
 
-**Architecture / 架构:** Keep Leptos/WASM Panel as the sole business UI, Chat/session state and Gateway transport owner. NSH owns only OS integration and the lifetime of its window/WebView, callbacks and registrations. Use documented pinned NSH APIs and existing Aleph contracts; keep Core platform independent. / 业务仍在 Panel；NSH 只拥有 OS I/O 与自身资源生命周期。
+**Architecture / 架构:** Keep Leptos/WASM Panel as the sole business UI, Chat/session state and Gateway transport owner. NSH owns only OS integration and the lifetime of its window/WebView, callbacks and registrations. Use documented release APIs and existing Aleph contracts; keep Core platform independent. / 业务仍在 Panel；NSH 只拥有 OS I/O 与自身资源生命周期。
 
-**Tech Stack / 技术栈:** Rust, pinned NSH 0.5, public macOS APIs exposed through the approved host/Bridge boundary, existing Leptos/WASM Panel, deterministic isolated Gateway QA, Python native evidence tools. No new heavy runtime dependency by default.
+**Tech Stack / 技术栈:** Rust, official NSH 0.6.0 from crates.io, public host/Bridge APIs, existing Leptos/WASM Panel, deterministic isolated Gateway QA, Python native evidence tools. No new heavy runtime dependency by default.
 
-**Spec / 规格依据:** [NSH master](../specs/2026-11-05-nsh-desktop-refactor-design.md), [R2 choice A](../runs/2026-11-16-phase9-nsh-r2-boundary.md), [Phase9 accepted contract](../specs/2026-11-15-phase9-runtime-proof-and-dependency-closure.md), [Panel parity contract](../specs/2026-11-15-nsh-panel-parity-slice.md), [Phase10 entry brief](../runs/2026-11-18-phase10-entry-brief.md). Task 1 produces the concrete Phase10 spec before production edits.
+**Spec / 规格依据:** [Official NSH 0.6.0 boundary](../specs/2026-11-20-phase10-official-nsh.md), [NSH master](../specs/2026-11-05-nsh-desktop-refactor-design.md), [R2 choice A](../runs/2026-11-16-phase9-nsh-r2-boundary.md), [Phase9 accepted contract](../specs/2026-11-15-phase9-runtime-proof-and-dependency-closure.md), [Panel parity contract](../specs/2026-11-15-nsh-panel-parity-slice.md), [Phase10 entry brief](../runs/2026-11-18-phase10-entry-brief.md). Task 1 defines the official boundary; the other references retain their original scope. / 任务 1 定义官方接口边界；其他参考仍保留原有适用范围。
 
 **Restart prompt / 重启提示词:** [2026-11-18-phase10-nsh-shell-restart.md](../prompts/2026-11-18-phase10-nsh-shell-restart.md).
 
 ## 1. Authority, numbering and design trade-offs / 权威、编号与取舍
 
 1. The NSH master is a historical **DRAFT for v0.4**, with Phases **0–6**, not a Phase10 specification. Read all 393 lines, especially §§2–3, 5, 6 and 8. Phase10 here names the continuation after accepted Phase9; it is not master Phase5 Plugin Runtime, nor a new Capability Core roadmap claim. / 两套阶段编号不能互相充当完成证明。
-2. The explicit R2 decision is already made: **choice A, NSH 0.5 WKWebView hosts the existing Panel**. Do not reopen it or silently replace it with native Chat. The master's native business UI and proposed `interfaces/nsh-desktop` are not this phase's implementation instructions.
+2. The explicit R2 decision is already made: **choice A, NSH WKWebView hosts the existing Panel**. Do not reopen it or silently replace it with native Chat. The master's native business UI and proposed `interfaces/nsh-desktop` are not this phase's implementation instructions.
 3. Phase9 final acceptance and final integrity supersede old `D OPEN/BLOCKED` checkpoints. Preserve those checkpoints and the rejected blocks as history; do not rewrite their verdicts.
 4. The proposed Phase10 scope below fills concrete gaps in the master's **Phase2 OS integration**. It does not declare the master's entire Phase2/3/4 done. Phase5 requires its ADR prerequisites; Phase6 requires Phase4 plus the stated two-week dual run. Neither is authorized here.
-5. Thin native integration preserves R2 but requires an explicit Panel navigation/intent boundary and real OS tests. Resident behavior makes close different from quit and requires owned registration teardown. Those costs must be visible in the spec, not hidden inside a generic supervisor or second transport.
-6. This plan is a proposal requested for the next session. Using the companion prompt starts work on this bounded proposal. A public API gap, constitution change, new daemon ownership model or release trust change still needs a concrete decision before dependent implementation. Routine review fixes inside the agreed scope do not need repeated permission.
+5. Thin native integration preserves R2 but requires an explicit Panel navigation/intent boundary and real OS tests. Resident behavior makes close different from quit and requires owned registration teardown. Use NSH's documented 0.6.0 contracts and prove their behavior. Any gaps must be reported explicitly; the superseded 0.5 fork is not a fallback. / 使用官方发布版契约，原生行为以实测为准；不回退到旧补丁。
+6. This plan is a proposal requested for the next session. Using the companion prompt starts work on this bounded proposal. A constitution change, new daemon ownership model or release trust change still needs a concrete decision before dependent implementation. Routine review fixes inside the agreed scope do not need repeated permission.
 
 ## 2. Accepted baseline / 已验收基线
 
@@ -76,7 +76,7 @@ Current source facts to recheck / 当前落点（重启后复核）：
 | --- | --- |
 | `desktop/nsh-shell/src/main.rs` | Only `shell_host` plus debug QA clock is mounted; one existing Panel WebView, 1180×800, `com.aleph.nsh-shell`; QA nonce/run-bound quit |
 | `desktop/nsh-shell/src/shell_host.rs` | `HostSettings::from_inputs(url, nonce)`; default `http://127.0.0.1:18790/`; confined debug loopback+nonce validation |
-| `desktop/nsh-shell/tests/nsh_v05_window_compat.rs` | Pinned public window API compile coverage; not proof of user-close semantics |
+| `desktop/nsh-shell/tests/nsh_window_compat.rs` | Published NSH window and WebView API compile coverage; not proof of user-close semantics |
 | `desktop/nsh-shell/src/{connection,session,runtime,supervisor}.rs` | Old unmounted paths; do not mount duplicate Gateway/session state or detached `ensure_ready` by convenience |
 | `desktop/nsh-shell/src/components/` | Old unmounted native business UI; keep unmounted |
 | `desktop/shell/src/{main,tray,hotkey,deeplink,notify}.rs` | Tauri behavior reference; its `Supervisor` is in `main.rs`, not a separate `supervisor.rs`; platform wrappers are not Core policy |
@@ -113,7 +113,7 @@ The spec created in Task 1 must resolve these observable cases without adding a 
 | G3 Hotkey | Summon hides/shows/focuses the existing window; conflict/registration errors are visible; disabled mode has no registration/worker | Native hotkey delivery, conflict case, teardown/re-registration |
 | G4 Deep link | Existing supported URI grammar is validated, then delivered once to the existing Panel navigation owner; business state stays in Panel | Cold/warm delivery, second-instance delivery, invalid/unsupported input rejection and unchanged projection |
 | G5 Notification | Existing notification intent is shown through the host boundary; click focuses the current Panel and routes through its existing owner | Real native notification + callback where OS permission permits; denied permission is reported, never bypassed |
-| G6 Window state | Restore supported normal-frame/visibility state; reject invalid/off-screen state safely; presentation state does not become session authority | Relaunch/restore and changed-display checks using actual public host events |
+| G6 Window state | Restore supported normal-frame/visibility state; reject invalid/off-screen state safely; presentation state does not become session authority | Relaunch/restore and invalid/off-screen checks using actual public host events. Physical multi-display topology is user-deferred for this Phase10 run and remains NOT TESTED. |
 | G7 Lifecycle & regression | Quit joins/releases every new shell-owned worker/receiver/registration; external managed Gateway is untouched; existing Chat/Artifacts/reconnect guards survive | Native exit + observed-member settlement, registrations gone, controlled managed Gateway still healthy, scoped tests/default asset check and fresh comparable runtime proof |
 
 If G1's public API feasibility fails, produce a concrete supported alternative and obtain the needed decision; do not advertise a tray app with unproved close semantics. Missing OS permission is a scoped validation blocker, not evidence that G5 passed.
@@ -128,45 +128,49 @@ Out of scope / 不在本期：release installer/notarization/auto-update install
 
 **Interfaces:** Integrated main tree + accepted manifests → explicit G1–G7 cases, real source owners, public pinned API list and a master Phase0–6 DONE/PARTIAL/NOT_PROVEN/DEFERRED table.
 
-- [ ] Record root/branch/HEAD/status/worktrees and the merged Phase9 commit as an ancestor. Hash-check accepted source/default files; classify later changes rather than resetting to historical HEAD.
-- [ ] Read the entire NSH master and current R2 boundary. Map every master Phase2 item to current mounted code. Record updater as deferred, not silently complete.
-- [ ] Graphify, then inspect pinned NSH 0.5 public window, menu/tray, instance, hotkey, URL, notification and state APIs. Validate only APIs actually needed; build small executable spikes where compile coverage is insufficient. Do not infer behavior from the v0.4 spike.
-- [ ] Define window CloseRequested/Closed/Hidden/Reopened/Quit and ownership in the spec, plus the managed-server boundary and intent validation. Decide the minimal host module shape from actual APIs.
-- [ ] State what the chosen design makes harder: cross-platform host reuse, callback cleanup, intent handoff and OS QA. Complete SPEC review of this concrete spec before production edits; significant new architecture outside this proposal needs a user decision.
-- [ ] Self-review: no master Phase10 invented, no R2 override, no dormant native business path mounted, no missing feature marked DONE.
+- [x] Reconcile local `main` with the accepted Phase9 baseline. The [baseline](../runs/2026-11-18-phase10-baseline.md) distinguishes the original `runtime-proof` ref from the rebased Phase9 ancestor of `main`; the [official checkpoint](../runs/2026-11-20-phase10-official-nsh-checkpoint.md) identifies the current candidate. / 原 Phase9 证据与主分支上 rebase 后的提交分开核对，不以历史 HEAD 覆盖当前内容。
+- [x] Map the master Phase2 items to the documented shell and Panel owners; updater and full daemon-supervisor parity remain deferred. See the [master handback](../runs/2026-11-20-phase10-official-nsh-checkpoint.md#master-phase-2-handback--总设计-phase-2-回看). / 明确原总设计已实现与未交付的项目，不将 updater 或服务监管标记为完成。
+- [x] Query Graphify and inspect official NSH 0.6.0 public APIs. The [official spec](../specs/2026-11-20-phase10-official-nsh.md) and current gate receipts record the selected APIs, native behavior and limitations. / 先查 Graphify，再核对官方版本的公开 API 与原生行为。
+- [x] Define native close/hide/reopen/Quit and ownership in the [official spec](../specs/2026-11-20-phase10-official-nsh.md); the managed Gateway is external and the native intent is validated before Panel delivery. / 区分关闭、隐藏、重开和退出；不把独立 Gateway 归给桌面壳。
+- [x] Compile Aleph's shell with the official crates.io `0.6.0` lock. Verify the installed `nsh 0.6.0` macOS host can send and receive through a real WKWebView. This is a standalone probe, not a production Panel receipt. / 官方锁定编译和 WKWebView 原生往返已验证，不计作生产 Panel 验收。
+- [x] Specify validation, bounded admission, ordering, document identity, observed delivery and teardown using public APIs only. The revised proposal passed independent SPEC (`de87c050-f32c-4382-ab48-3f0b58b998de`); Task 8 still requires final implementation SPEC and QUALITY. / 官方版方案已通过独立 SPEC；最终实现仍须按任务 8 复审。
 
 ### Task 2 — Implement real window lifecycle / 实现真实窗口生命周期
 
-**Files:** Modify `desktop/nsh-shell/src/main.rs`, `desktop/nsh-shell/src/shell_host.rs`; add `desktop/nsh-shell/src/lifecycle.rs` only if it names a coherent reusable lifecycle owner; extend `desktop/nsh-shell/tests/nsh_v05_window_compat.rs` and add focused lifecycle/native QA fixtures as needed.
+**Files:** Modify `desktop/nsh-shell/src/main.rs`, `desktop/nsh-shell/src/shell_host.rs`; add `desktop/nsh-shell/src/lifecycle.rs` only if it names a coherent reusable lifecycle owner; extend `desktop/nsh-shell/tests/nsh_window_compat.rs` and add focused lifecycle/native QA fixtures as needed.
 
-**Interfaces:** Public NSH window events and explicit Quit → one owned host lifecycle. `HostSettings` continues to validate launch input; no session/Gateway transport moves into it.
+**Interfaces:** Official NSH 0.6.0 window and WebView APIs → one owned host lifecycle. `HostSettings` continues to validate launch input; no session/Gateway transport moves into it.
 
-- [ ] First demonstrate the missing user-close/reopen behavior using the real pinned host. Keep Phase9 application-quit proof separate.
-- [ ] Implement resident close/reopen/focus and explicit quit through one owner. Preserve QA nonce/run checks and the real shutdown path; avoid a fake QA-only close state.
-- [ ] Cover repeated close/reopen, quit while hidden, init failure and callback teardown. Check window/WebView and owned workers, not only `run_app` return.
-- [ ] Self-review: user close evidence is actual, application quit still reaches documented terminal state, external server remains alive, no duplicate Panel state.
+- [x] Verify the 0.6.0 host can hide the real Panel on close and refocus the same window. The [current local receipt](../../../.phase10-evidence/g1-official-current-e3w84dqy/receipt.json) records two targeted LaunchServices cycles, real `/chat`, hidden Quit exit 0, observed coalition settlement and the same isolated Gateway. The earlier `/usr/bin/open` attempt remains a rejected approach. / 当前版真实 Panel 定向重开两次均回到原窗口，隐藏后退出为 0，观测进程均结算，隔离 Gateway 不变。保留此前普通 `open` 的失败记录。
+- [x] Consume only the [reviewed official callback and ingress contract](../specs/2026-11-20-phase10-official-nsh.md). The [targeted route receipt](../../../.phase10-evidence/g4-official-panel-iorxe2bl/receipt.json) exercises the real external Panel. / 仅依赖已审阅的官方公开 API，已有真实 Panel 回执。
+- [x] Implement resident close/reopen/focus and explicit quit through one owner. Preserve QA nonce/run checks and the real shutdown path. / 关窗常驻与显式退出由同一原生窗口负责，QA 使用真实退出路径。
+- [x] Cover repeated native close/reopen, hidden Quit, invalid configuration and observed callback-owner settlement. The current local receipt above verifies real host and WebKit departures; the [startup receipt](../../../.phase10-evidence/official-invalid-startup.json) verifies that invalid configuration is rejected before a native window is started. / 覆盖实际关窗重开、隐藏退出与启动参数拒绝，结算核对原生进程，不只检查 `run_app` 返回。
+- [x] Review the observed lifecycle: the same window and Panel are retained; explicit Quit exits normally while the Gateway stays healthy. / 原窗口与 Panel 保留；显式退出正常，独立 Gateway 不受影响。
 
 ### Task 3 — Tray and single-instance intent delivery / 托盘与单实例意图投递
 
 **Files:** Modify `desktop/nsh-shell/src/main.rs`; proposed `desktop/nsh-shell/src/tray.rs` and `desktop/nsh-shell/src/instance.rs`; add focused actual-process tests/native QA.
 
-**Interfaces:** Tray Show/Quit and validated secondary launch intent → Task 2 lifecycle owner and existing Panel route owner. An OS instance endpoint is transport only, not a second business registry.
+**Interfaces:** Official NSH tray and LaunchServices delivery → Task 2 lifecycle owner and existing Panel route owner. On macOS, `next_second_instance` does not deliver events; check native reactivation and claimed URL delivery before adding any instance transport. / 先验证系统原生重开和已声明 URL 的投递；macOS 不发 `next_second_instance` 事件。
 
-- [ ] Connect tray Show/Quit to the real Task 2 behavior. Own menu callbacks and release them on quit.
-- [ ] Start two real instances; verify one primary, secondary intent delivery, secondary terminal exit and no second resident WebView. Recheck process identity before any cleanup signal.
-- [ ] Test hidden primary, primary quit/relaunch and delivery failure. Keep OS routing errors visible; do not spawn a detached fallback daemon.
-- [ ] Self-review: no stale socket/lock/registration after owner exit, no broad process-name cleanup, no duplicate intent effects.
+- [x] Connect tray Show/Quit to the real Task 2 behavior with root-owned NSH callbacks. [Native tray receipt](../../../.phase10-evidence/g2-tray-d6pwnub_/receipt.json). / 托盘用 NSH 根组件回调显示原窗口并真实退出。
+- [x] Verify two normal packaged launch requests preserve one resident owner, as macOS LaunchServices reactivates the original process rather than starting a forwarding child. The [resident launch receipt](../../../.phase10-evidence/g1-official-current-e3w84dqy/receipt.json) verifies original PID/window identity; the [default URL receipt](../../../.phase10-evidence/g4-default-dispatch-lmd3unzg/receipt.json) verifies the warm intent reaches that owner. A forced second process is not equivalent and was not tested. / 普通打包启动请求由系统交给同一进程窗口，没有需要退出的转发子进程；不外推到强制新实例。
+- [x] Verify hidden-owner activation, normal exits followed by fresh launches, and rejection without route effects. The [default URL receipt](../../../.phase10-evidence/g4-default-dispatch-lmd3unzg/receipt.json) records distinct cold and next launch processes, same-window warm activation, and invalid URL rejection. / 核对隐藏唤回、退出后重新启动及非法意图不导航。
+- [x] Review ownership: no Aleph singleton socket, lock, or detached fallback is added. Hotkey conflict and release are rechecked through real registrations. / 不新增单例 socket、锁或 fallback daemon；以真实注册验证冲突与释放。
 
 ### Task 4 — Hotkey and deep-link host boundary / 热键与 deeplink 边界
 
 **Files:** Proposed `desktop/nsh-shell/src/hotkey.rs`, `desktop/nsh-shell/src/deeplink.rs`; read `desktop/shell/src/hotkey.rs`, `desktop/shell/src/deeplink.rs`, `shared/protocol/src/paths.rs` and existing Panel route handling before selecting exact modified paths. Add Panel intent handling only if a canonical boundary is missing.
 
-**Interfaces:** Public OS callback → validated host action or existing Panel navigation. Reuse canonical URI grammar; do not create an independent native session/tool dispatcher.
+**Interfaces:** Reviewed public NSH OS callback → validated host action or existing Panel navigation through the bounded ingress. Reuse canonical URI grammar; do not create an independent native session/tool dispatcher.
 
-- [ ] Assert summon/focus behavior with real registration and actual native events; cover conflict and disabled mode.
-- [ ] Cover warm, cold and secondary-instance URL delivery; reject malformed, unsupported or foreign-origin inputs before navigation.
-- [ ] If a new configurable action is required, reconcile it with the existing canonical Capability/tool owner first. Do not invent RPC names or a registry in this plan's name.
-- [ ] Self-review: callbacks are generation/lifetime bound where applicable; repeated delivery cannot revive disposed state; no hidden native Gateway client.
+- [x] Verify real summon/focus/toggle, disabled mode, and refuse/release/re-register on the current build. The [current conflict receipt](../../../.phase10-evidence/g3-official-conflict-6dkacdqz/receipt.json) records three clean exits and unchanged Gateway identity and health. / 当前构建验证唤回、聚焦后隐藏、禁用、冲突及退出后重新注册。
+- [x] Exercise targeted warm, cold, and repeat LaunchServices URL delivery on the signed candidate. The [native route receipt](../../../.phase10-evidence/g4-official-panel-iorxe2bl/receipt.json) shows warm delivery to the existing PID and rejection of unsupported query arguments. The [reload receipt](../../../.phase10-evidence/g4-official-reload.T89qTsUR/receipt.json) shows delivery to the new document only. / 定向冷启动、同进程热交付、非法参数拒绝与跨重载交接有真机回执。
+- [x] Verify unqualified LaunchServices dispatch to NSH. The [native receipt](../../../.phase10-evidence/g4-default-dispatch-lmd3unzg/receipt.json) covers authorized temporary selection of the signed candidate, cold launch, invalid input, warm focus on the original window, and restoration of `/Applications/Aleph Panel.app`. / 签名候选包通过真实默认调度；测试后已恢复原默认处理器。
+- [x] Record the public NSH callback, lifetime, and acknowledgement contract in the [official spec](../specs/2026-11-20-phase10-official-nsh.md). / 公开回调、生命周期与回执边界已记录。
+- [x] Verify the bridge is installed only in the trusted top-level document. The [real WKWebView origin probe](../../../.phase10-evidence/g4-origin-usqgd91o/receipt.json) observes no Aleph bridge in a same-origin iframe or a top-level document on a different loopback origin. This is a bridge installation witness, not an additional Panel Router run. / 真实 WKWebView 观测到同源子帧与异源顶层均无 Aleph 桥；这不是额外的 Router 路由用例。
+- [x] Reuse the canonical Panel Router and Core notification intent; no configurable host action, RPC, or registry was added. / 复用 Router 与 Core 通知意图，不新增可配置动作、RPC 或注册表。
+- [x] Review document and lifecycle boundaries. The [reload receipt](../../../.phase10-evidence/g4-official-reload.T89qTsUR/receipt.json) records zero actions in the old document and one in the new document; the source reviews confirm one native root and no second Gateway client. / 重载时旧文档无动作、新文档恰一次；无额外 Gateway 客户端。
 
 ### Task 5 — Notifications and window state / 通知与窗口状态
 
@@ -174,10 +178,11 @@ Out of scope / 不在本期：release installer/notarization/auto-update install
 
 **Interfaces:** Existing notification intent and OS presentation state → owned native adapter and current Panel route owner. Persist only host presentation settings in the canonical allowed settings location.
 
-- [ ] Implement notification display/click and explicit permission-denied outcome; do not request OS policy changes or silently fall back to another channel.
-- [ ] Restore supported window state through real native lifecycle events. Check invalid geometry, changed display bounds and hidden/visible semantics.
-- [ ] Verify disable/quit removes handlers and consumes no optional worker/connection/cache. Keep localized business notification content in its existing owner.
-- [ ] Self-review: no native business state store, no config writes to the protected root files, no claim of permission-granted QA when delivery did not occur.
+- [x] Verify native notification permission, presentation and click. The signed QA bundle received and displayed a real Core notification, and the macOS Notification Center card action focused the same window and reached `/chat`. Earlier denied and muted runs are retained in the [evidence ledger](../runs/2026-11-20-phase10-official-nsh-checkpoint.md). / 专用签名包通过实际系统授权、展示和通知中心点击；原窗口重新聚焦并进入 `/chat`。此前权限拒绝和静默结果仍保留。
+- [x] Exercise normal geometry restore, off-screen clamping and corrupt-state fallback with the [current native placement receipt](../../../.phase10-evidence/g6-actual-ikue8zka/receipt.json). / 已在当前壳的原生窗口验证正常恢复、离屏纠正与损坏回退。
+- [ ] Verify placement across a physical display topology change (user-deferred for this Phase10 run; NOT TESTED). / 验证跨物理显示器拓扑恢复（用户暂缓，本轮未测试）。
+- [x] Verify the existing disabled summon-hotkey branch makes no shortcut registration, and real Quit settles observed host/WebKit members and releases registrations. Root-owned URL/notification listeners are not detached Aleph workers. Notifications have OS permission checks, not a product disable toggle; no zero-resource notification-disable claim is made. See the [closeout](../runs/2026-11-21-phase10-closeout.md). / 仅热键有禁用模式；通知未定义功能开关，不以拒绝权限冒充零资源禁用。
+- [x] Self-review: the host stores no business/session projection and writes placement only through NSH-owned storage. No protected root configuration was changed. G5 requires the joined native action receipt, not permission or admission alone. / 已按源码和实际通知点击回执校对，未用授权代替交付证明。
 
 ### Task 6 — Owned resource and managed-server closure / 资源与外部服务边界闭合
 
@@ -185,11 +190,11 @@ Out of scope / 不在本期：release installer/notarization/auto-update install
 
 **Interfaces:** Host registrations/workers/window + externally managed loopback Gateway → independently observable terminal facts.
 
-- [ ] Enumerate resource ownership and stop order. Exercise startup failure, second-instance failure, user close/reopen and quit while hidden/busy. Native callbacks and registrations must settle even if a helper has already exited.
-- [ ] Verify actual native exit status and all observed host/WebKit member settlement. Use public per-instance ownership; preserve raw source and monotonic timings. Do not claim coverage of unobserved subinterval processes.
-- [ ] Prove the pre-existing managed Gateway remains healthy after shell quit. Keep the isolated QA Gateway's own fixture cleanup separate; no production daemon ownership is inferred.
-- [ ] Record raw command/argv, source/build/asset/lock identities, process identity and terminal checks. Add meaningful failure regressions, not assertions that a cleanup function was called.
-- [ ] Self-review: no late signal to a changed PID identity, no newly discovered unvalidated member becomes signal authority, no forced cleanup is reported as natural success.
+- [x] Exercise invalid startup, normal packaged reactivation, user close/reopen and Quit while hidden with an active model request. The [invalid startup receipt](../../../.phase10-evidence/official-invalid-startup.json) rejects configuration before starting the native window. The [resized lifecycle receipt](../../../.phase10-evidence/g1-official-resized-6_7rpfra/receipt.json) verifies two same-PID reopens after the LaunchServices client has returned. The [busy Quit receipt](../../../.phase10-evidence/g7-official-busy-oswcl4oj/receipt.json) gives kernel exit `0` and observed-member settlement while the Provider is still blocked. Under supported normal macOS launches no forwarding child or secondary owner exists; forced new processes are outside the contract. / 配置拒绝发生在原生窗口启动前；LaunchServices 定向请求返回后，原进程仍可重开同一缩小窗口；模型请求未结束时隐藏退出，核验真实退出和进程结算。受支持的打包启动没有转发子进程，不覆盖强制新启动。
+- [x] Verify native kernel exit and settlement of the observed host/WebKit members in the [current managed-Gateway witness](../../../.phase10-evidence/g7-official-managed-9mt2xujl/receipt.json) and both full debug matrices. This does not cover processes that never appeared in an ownership observation. / 当前托管 Gateway 用例与两组矩阵均验证了真实退出码和已观测进程终态；不外推到未观察到的进程。
+- [x] Prove a pre-existing, independently managed Gateway remains healthy after shell quit. The [temporary launchd witness](../../../.phase10-evidence/g7-official-managed-9mt2xujl/receipt.json) verifies the same listener, PID and start time, matching assets and HTTP 200 after owned-member settlement. No installed service is touched. / 临时 `launchd` 用例证明同一监听进程在壳退出并结算后继续服务；不触碰已安装服务。
+- [x] Record raw command/argv, source/build/asset/lock identities, process identity and terminal checks in retained receipts and the [candidate integrity index](../runs/2026-11-20-phase10-official-candidate-integrity.json). The [collector checks](../runs/2026-11-20-phase10-official-nsh-checkpoint.md#candidate-integrity-and-collector-checks--候选完整性与采集器验证) exercise rejection and failure paths. / 记录命令、构建和进程身份、资产校验与终态证据；运行退出判据的失败路径回归。
+- [x] Check that the collector validates final attribution, rechecks PID/start before failure-cleanup signals and rejects forced cleanup as success. Identity rechecks are not an atomic signal primitive. / 复核终态归属、失败清理前的 PID/启动身份及强制清理拒绝判据；不声称校对与发信号是原子操作。
 
 ### Task 7 — Regression, performance and release-safe default / 回归、性能与默认资产
 
@@ -197,12 +202,15 @@ Out of scope / 不在本期：release installer/notarization/auto-update install
 
 **Interfaces:** Current implementation → scoped checks and fresh native acceptance. Historical Phase9 PASS is a baseline, not a new build result.
 
-- [ ] Run the appropriate memory-gated offline/locked/jobs1 checks: NSH package tests/build; Panel full lib tests if Panel changes; shared tests if shared code changes; Tauri QA tests/build if its baseline or QA integration changes. Read `DEVELOPMENT.md` for the seven broader verification classes; record unrun classes honestly.
-- [ ] If WASM changes, build both QA and canonical default variants serially; retain actual HTTP-served asset identities. Verify default assets exclude QA ingress, reconnect and history witnesses.
-- [ ] Run actual G1–G7 native scenarios at normal and changed window sizes. A browser-only story or compile-only API probe cannot replace native callbacks.
-- [ ] Run a fresh complete comparable Phase9-style debug block for the changed shell: exact Tauri 40 then NSH 40, fresh Gateway/provider/session every round, same 10 warmups + 30 measured, 100ms real owned-resource sampling and original unchanged reducer. First ensure G1 resident behavior and explicit application-quit metric are distinct in the QA contract. OS-feature scenarios have additional evidence; do not insert extra events into the old schema ad hoc.
-- [ ] Preserve every invalid/rejected block; retry entire affected blocks, never splice. Keep latency median ≤1.10×, p95 ≤1.20×, RSS median ≤1.10×, threads median delta ≤2 and p95 rank29. Do not carry old 185504 numbers forward as new measurements.
-- [ ] Self-review: no competing Cargo/native tests during timed runs, all fixture roots cleaned, defaults restored exactly, process ownership and metrics reconstruct from retained evidence.
+- [x] Run relevant memory-gated, offline/locked/jobs1 checks. The [checkpoint](../runs/2026-11-20-phase10-official-nsh-checkpoint.md) records NSH 4+2, Panel 1,568, focused protocol, WASM and debug build. This is not a workspace-wide test claim. / 已完成相关包和 WASM 的重点验证，未声称全工作区通过。
+- [x] Build both QA and canonical default WASM serially. Local build manifest: `.phase10-evidence/official-canonical.mYMCixUf/sha256.json`; observed HTTP assets are recorded separately in the targeted route and matrix receipts. The default variant excludes the QA ingress, reconnect and history witnesses. / 已串行构建并校验两种资产，实际 HTTP 内容另在回执中校对。
+- [x] Verify shared Chat streaming and reasoning disclosure at normal and smaller native window sizes. The [evidence ledger](../runs/2026-11-20-phase10-official-nsh-checkpoint.md) records both surfaces at their initial size and after native resize to `720 × 620` points. / 两端正常尺寸和缩至 `720 × 620` 点后的流输出、结果与折叠可用性均有回执；不证明缩放时的流延迟。
+- [x] Recheck resident close, same-window focus and hidden Quit after a native resize to `720 × 620` points. The [resized lifecycle receipt](../../../.phase10-evidence/g1-official-resized-6_7rpfra/receipt.json) covers G1/G2 at the smaller size. This does not exercise changing physical displays. / 缩至 `720 × 620` 点后实测关窗、唤回原窗口及隐藏退出；不代替实际显示器变化验证。
+- [x] Execute three complete Phase9-style debug comparison blocks on the official candidate: Tauri 40 then NSH 40, fresh Gateway/provider/session every round, 10 warmups + 30 measured, 100ms real owned-resource sampling and the unchanged reducer. All three are retained in the [evidence ledger](../runs/2026-11-20-phase10-official-nsh-checkpoint.md); completion does not imply acceptance. A separate `opt-level=3` 40+40 diagnostic is also retained as a distinct profile and returned `NOT_ACCEPTED`. / 官方候选版三组原始 debug 矩阵均各 40+40 轮；另有一组独立 `opt-level=3` 诊断，均保留且未验收。
+- [x] Verify the Gateway input fix in a fourth full debug comparison. The shared Gateway no longer blocks fast RPCs on `system.info`; the focused dispatcher suite passed 9/9, and the original input gate passed in the [fourth block](../runs/2026-11-20-phase10-official-nsh-checkpoint.md#formal-g7-with-the-gateway-input-fix--带-gateway-输入修复的正式-g7). Native Quit median and p95 still failed. / 第四组正式矩阵验证了 Gateway 输入修复，定向测试 9/9 通过，原输入判据通过；原生退出中位数和 p95 仍超限。
+- [x] Test early tray release in a complete fifth debug comparison, after starting over from an invalid sampler block. The [complete block](../runs/2026-11-20-phase10-official-nsh-checkpoint.md#quit-controls-and-embedding-comparison--退出入口与嵌入模式对照) was valid but rejected on Quit median alone (`1.252×`). Revert the candidate and retain both records. / 第五组正式矩阵从首轮重跑，只有退出中位数超限；撤回托盘候选并保留两份记录。
+- [x] Re-evaluate the unchanged final candidate's complete retained comparison under the explicitly approved [Quit-only amendment](../runs/2026-11-21-phase10-acceptance-amendment.md): only `close_ms` median and p95 limits are ≤1.30×. All other latency limits stay median ≤1.10× and p95 ≤1.20×, RSS ≤1.10×, thread median delta ≤2; p95 rank remains 29. The [separate assessment](../runs/2026-11-21-phase10-acceptance-amendment.json) passes; the original matrix remains VALID / NOT_ACCEPTED. Preserve every block; no new run, sample splicing, best-of selection or altered collector/reducer. Future invalid blocks restart from zero; rejected valid blocks are not rerun unchanged for a favorable result. / 本次只按两次明确授权重评完整既有数据，不改原失败回执，不声称提速。
+- [x] Self-review: existing source/asset/terminal audit reconstructs all 80 natural exits, settlements and unforced Gateway cleanups and 320 exact HTTP asset files. Tracked defaults are restored; no Cargo/native run was started for this amendment. / 本次只读核验，不引入并行编译或新的计时干扰。
 
 ### Task 8 — Independent review and Phase10 handback / 独立审查与交付
 
@@ -210,11 +218,12 @@ Out of scope / 不在本期：release installer/notarization/auto-update install
 
 **Interfaces:** G1–G7 evidence and accepted manifests → explicit per-gate verdict, ordered review reports and a reviewable diff.
 
-- [ ] Perform independent SPEC then distinct-model QUALITY review of the current implementation and concrete evidence. Address real findings with actual validation; preserve retractions/corrections without rewriting original reports.
-- [ ] Verify all linked files, identity hashes, source/default manifests, teardown evidence, original reducer result and final scope. Read actual test footers; do not sum nested logs or inflate test counts.
-- [ ] Report each master phase separately. Phase10 complete means its approved G1–G7 gates passed, not full native UI parity, Plugin Runtime, release readiness or Tauri-removal readiness.
-- [ ] Include changes, reasons, trade-offs, tested commands, remaining limitations and skipped checks. Keep all evidence and existing branches/worktrees. New remote push/release/default-switch requires its own authorization.
-- [ ] Self-review: no PASS backed only by a reviewer assertion; no unresolved required gate; no historical QA verdict silently promoted to this tree's acceptance.
+- [x] Obtain independent implementation SPEC then distinct-model QUALITY. The [review ledger](../runs/2026-11-20-phase10-official-nsh-checkpoint.md#independent-implementation-review--独立实现审查) records both source verdicts and the signed-bundle publication regression for the QUALITY follow-up. / 独立实现审查按 SPEC→不同模型 QUALITY 顺序完成；打包跟进有实际签名包回归。
+- [x] Close the approved native scope on the retained final candidate through the [gate table](../runs/2026-11-21-phase10-closeout.md); G7 uses the explicit amendment, while G6 physical topology remains user-deferred NOT TESTED. Source reviews do not replace native evidence. / 不把延期、源码审查或授权提示当作实测通过。
+- [x] Verify linked evidence, current source/binary identities, served/default assets, terminal facts and exact original-reducer replay. Read retained test footers without adding historical counts as new tests. / 哈希、分位数和实际资产均已核验。
+- [x] Report each master phase separately in the [handback](../runs/2026-11-21-phase10-closeout.md#5-master-roadmap-handback--原总方案逐期回看). Completion covers only this approved amended macOS slice, not native UI parity, Plugin Runtime, release readiness or Tauri removal. / 原总方案后续阶段未完成。
+- [x] Record reasons, trade-offs, executed verification and skipped work in the closeout and preserve all evidence and existing branches/worktrees. No remote push/release/default switch is implied. / 保留原始失败记录与本机数据，未发布或切默认。
+- [x] Self-review: original rejected verdicts remain intact; amended acceptance is separately machine-checked and independently reviewed, with deferred/untested scope explicitly retained. / 未把历史失败改成通过，也未用审查断言替代可复现核验。
 
 ## 7. Evidence continuity and pitfalls / 证据续接与已知陷阱
 
@@ -252,4 +261,4 @@ Past mechanisms to retain / 需要记住的机制：
 - Queue wire capture needs `stream.**`; production default busy input steers. The dedicated queue fixture disables existing `mid_turn_steering` only in its isolated root. The performance matrix retains the production default.
 - The installed-service simulated execution transcript issue remains deferred. Inspect the known owners `src/gateway/execution_engine/simple.rs` and `src/bin/aleph-server/commands/start/builder/agent_init/mod.rs` only if that separate scope is authorized.
 
-**Not done by this planning document / 本文未做:** Phase10 implementation or API feasibility proof, OS permission changes, release/cross-platform/full-bundle acceptance, default client replacement, ADR/constitution changes, Plugin Runtime, Tauri removal or remote publication.
+**Not done by this planning document / 本文未做:** Phase10 implementation or API feasibility proof, including the approved public-boundary implementation and delivery spike; OS permission changes, release/cross-platform/full-bundle acceptance, default client replacement, ADR/constitution changes, Plugin Runtime, Tauri removal or remote publication.

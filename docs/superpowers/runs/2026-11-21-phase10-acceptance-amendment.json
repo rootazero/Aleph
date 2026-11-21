@@ -1,0 +1,343 @@
+{
+  "status": "ACCEPTED_UNDER_AMENDED_CONTRACT",
+  "scope": "Phase10 local macOS official NSH 0.6.0; retained data re-evaluation, not a new run or performance improvement",
+  "approval": {
+    "date": "2026-11-21",
+    "quit_median_ratio": 1.3,
+    "quit_p95_ratio": 1.3,
+    "authority": "Operator selected median 1.30, then separately explicitly selected p95 1.30 in the session questionnaires.",
+    "other_limits_unchanged": {
+      "latency_median_ratio": 1.1,
+      "latency_p95_ratio": 1.2,
+      "rss_median_ratio": 1.1,
+      "threads_median_delta": 2.0
+    }
+  },
+  "matrix": {
+    "path": ".phase10-evidence/g7-official-matrix.Ji0duOcq/matrix.json",
+    "sha256": "fbf5f1272be769ae554ba53df065ef171badb6bbe942bb90e254168664e5f7c2"
+  },
+  "verifier": {
+    "path": ".phase10-evidence/phase10-amended-acceptance.py",
+    "sha256": "7c36a9f2b816992d8323423e51e6e52d7d0032ef0d68bbd730c85f8180faffcc"
+  },
+  "original_reducer": {
+    "path": "qa/nsh_panel_parity.py",
+    "sha256": "906d4b85d0de7dc1356e937389e50d668de086bdfb69965448001f7070ca60e0"
+  },
+  "historical_threshold_status": "NOT_ACCEPTED",
+  "historical_failure_metrics": [
+    "close_ms:median",
+    "close_ms:p95"
+  ],
+  "protocol": {
+    "measured": 30,
+    "order": "tauri_then_nsh",
+    "p95_rank_one_based": 29,
+    "warmups": 10
+  },
+  "identity_audit": {
+    "matrix_sha256": "fbf5f1272be769ae554ba53df065ef171badb6bbe942bb90e254168664e5f7c2",
+    "binary_manifest_sha256": "e39f6010a09541f90100cfea39bfd64b8e6b9e7b14386a8f3978c272fc5622f1",
+    "source_manifest_sha256": "fe231f7a1d8dc82c63af3a0983b6b749ee4f3d7380e4743cf890a477dcd6c700",
+    "unchanged_source_files": 23,
+    "distinct_passed_runs": 80,
+    "natural_shell_exit_and_settlement": 80,
+    "unforced_gateway_fixture_cleanups": 80,
+    "actual_http_asset_files_verified": 320,
+    "tracked_dist_restored": true,
+    "original_reducer": {
+      "acceptance_reason": null,
+      "baseline": {
+        "close_ms": {
+          "median": 41.297999999999774,
+          "p95": 57.84900000000016,
+          "sample_count": 30.0,
+          "warmup_count": 10.0
+        },
+        "first_frame_ms": {
+          "median": 5601.0025000000005,
+          "p95": 5679.235,
+          "sample_count": 30.0,
+          "warmup_count": 10.0
+        },
+        "input_ms": {
+          "median": 29.0,
+          "p95": 30.0,
+          "sample_count": 30.0,
+          "warmup_count": 10.0
+        },
+        "reconnect_ms": {
+          "median": 1036.5,
+          "p95": 1081.0,
+          "sample_count": 30.0,
+          "warmup_count": 10.0
+        },
+        "route_ms": {
+          "median": 33.0,
+          "p95": 34.0,
+          "sample_count": 30.0,
+          "warmup_count": 10.0
+        },
+        "rss_mb": {
+          "median": 663.7421875,
+          "p95": 681.8125,
+          "sample_count": 30.0,
+          "warmup_count": 10.0
+        },
+        "threads": {
+          "median": 70.0,
+          "p95": 72.0,
+          "sample_count": 30.0,
+          "warmup_count": 10.0
+        }
+      },
+      "candidate": {
+        "close_ms": {
+          "median": 51.79399999999987,
+          "p95": 72.01399999999921,
+          "sample_count": 30.0,
+          "warmup_count": 10.0
+        },
+        "first_frame_ms": {
+          "median": 5208.437,
+          "p95": 5342.383,
+          "sample_count": 30.0,
+          "warmup_count": 10.0
+        },
+        "input_ms": {
+          "median": 30.0,
+          "p95": 32.0,
+          "sample_count": 30.0,
+          "warmup_count": 10.0
+        },
+        "reconnect_ms": {
+          "median": 1037.5,
+          "p95": 1081.0,
+          "sample_count": 30.0,
+          "warmup_count": 10.0
+        },
+        "route_ms": {
+          "median": 33.0,
+          "p95": 35.0,
+          "sample_count": 30.0,
+          "warmup_count": 10.0
+        },
+        "rss_mb": {
+          "median": 624.984375,
+          "p95": 661.921875,
+          "sample_count": 30.0,
+          "warmup_count": 10.0
+        },
+        "threads": {
+          "median": 66.0,
+          "p95": 68.0,
+          "sample_count": 30.0,
+          "warmup_count": 10.0
+        }
+      },
+      "comparisons": {
+        "close_ms": {
+          "median_accepted": false,
+          "median_ratio": 1.2541527434742639,
+          "p95_accepted": false,
+          "p95_ratio": 1.2448616224999398
+        },
+        "first_frame_ms": {
+          "median_accepted": true,
+          "median_ratio": 0.929911564938598,
+          "p95_accepted": true,
+          "p95_ratio": 0.9406870819749491
+        },
+        "input_ms": {
+          "median_accepted": true,
+          "median_ratio": 1.0344827586206897,
+          "p95_accepted": true,
+          "p95_ratio": 1.0666666666666667
+        },
+        "reconnect_ms": {
+          "median_accepted": true,
+          "median_ratio": 1.000964785335263,
+          "p95_accepted": true,
+          "p95_ratio": 1.0
+        },
+        "route_ms": {
+          "median_accepted": true,
+          "median_ratio": 1.0,
+          "p95_accepted": true,
+          "p95_ratio": 1.0294117647058822
+        },
+        "rss_mb": {
+          "median_accepted": true,
+          "median_ratio": 0.9416071281441637
+        },
+        "threads": {
+          "median_accepted": true,
+          "median_delta": -4.0
+        }
+      },
+      "failure_metrics": [
+        "close_ms:median",
+        "close_ms:p95"
+      ],
+      "invalid_reason": null,
+      "protocol": {
+        "measured": 30,
+        "order": "tauri_then_nsh",
+        "p95_rank_one_based": 29,
+        "warmups": 10
+      },
+      "run_id": "matrix",
+      "status": "VALID",
+      "threshold_status": "NOT_ACCEPTED",
+      "thresholds": {
+        "latency_median_ratio": 1.1,
+        "latency_p95_ratio": 1.2,
+        "rss_median_ratio": 1.1,
+        "threads_median_delta": 2.0
+      },
+      "version": 1
+    }
+  },
+  "baseline": {
+    "first_frame_ms": {
+      "median": 5601.0025000000005,
+      "p95": 5679.235,
+      "sample_count": 30.0,
+      "warmup_count": 10.0
+    },
+    "route_ms": {
+      "median": 33.0,
+      "p95": 34.0,
+      "sample_count": 30.0,
+      "warmup_count": 10.0
+    },
+    "input_ms": {
+      "median": 29.0,
+      "p95": 30.0,
+      "sample_count": 30.0,
+      "warmup_count": 10.0
+    },
+    "reconnect_ms": {
+      "median": 1036.5,
+      "p95": 1081.0,
+      "sample_count": 30.0,
+      "warmup_count": 10.0
+    },
+    "close_ms": {
+      "median": 41.297999999999774,
+      "p95": 57.84900000000016,
+      "sample_count": 30.0,
+      "warmup_count": 10.0
+    },
+    "rss_mb": {
+      "median": 663.7421875,
+      "p95": 681.8125,
+      "sample_count": 30.0,
+      "warmup_count": 10.0
+    },
+    "threads": {
+      "median": 70.0,
+      "p95": 72.0,
+      "sample_count": 30.0,
+      "warmup_count": 10.0
+    }
+  },
+  "candidate": {
+    "first_frame_ms": {
+      "median": 5208.437,
+      "p95": 5342.383,
+      "sample_count": 30.0,
+      "warmup_count": 10.0
+    },
+    "route_ms": {
+      "median": 33.0,
+      "p95": 35.0,
+      "sample_count": 30.0,
+      "warmup_count": 10.0
+    },
+    "input_ms": {
+      "median": 30.0,
+      "p95": 32.0,
+      "sample_count": 30.0,
+      "warmup_count": 10.0
+    },
+    "reconnect_ms": {
+      "median": 1037.5,
+      "p95": 1081.0,
+      "sample_count": 30.0,
+      "warmup_count": 10.0
+    },
+    "close_ms": {
+      "median": 51.79399999999987,
+      "p95": 72.01399999999921,
+      "sample_count": 30.0,
+      "warmup_count": 10.0
+    },
+    "rss_mb": {
+      "median": 624.984375,
+      "p95": 661.921875,
+      "sample_count": 30.0,
+      "warmup_count": 10.0
+    },
+    "threads": {
+      "median": 66.0,
+      "p95": 68.0,
+      "sample_count": 30.0,
+      "warmup_count": 10.0
+    }
+  },
+  "comparisons_from_original_reducer": {
+    "first_frame_ms": {
+      "median_ratio": 0.929911564938598,
+      "p95_ratio": 0.9406870819749491,
+      "median_accepted": true,
+      "p95_accepted": true
+    },
+    "route_ms": {
+      "median_ratio": 1.0,
+      "p95_ratio": 1.0294117647058822,
+      "median_accepted": true,
+      "p95_accepted": true
+    },
+    "input_ms": {
+      "median_ratio": 1.0344827586206897,
+      "p95_ratio": 1.0666666666666667,
+      "median_accepted": true,
+      "p95_accepted": true
+    },
+    "reconnect_ms": {
+      "median_ratio": 1.000964785335263,
+      "p95_ratio": 1.0,
+      "median_accepted": true,
+      "p95_accepted": true
+    },
+    "close_ms": {
+      "median_ratio": 1.2541527434742639,
+      "p95_ratio": 1.2448616224999398,
+      "median_accepted": false,
+      "p95_accepted": false
+    },
+    "rss_mb": {
+      "median_ratio": 0.9416071281441637,
+      "median_accepted": true
+    },
+    "threads": {
+      "median_delta": -4.0,
+      "median_accepted": true
+    }
+  },
+  "amended_failure_metrics": [],
+  "boundary_checks": [
+    "non_Quit_failure_retained",
+    "Quit_p95_above_1.30_rejected",
+    "Quit_p95_equal_1.30_accepted",
+    "Quit_median_above_1.30_rejected"
+  ],
+  "not_tested": [
+    "physical_multi_display_topology_user_deferred",
+    "Windows_Linux",
+    "release_distribution",
+    "causal_JS_cleanup_hypothesis"
+  ]
+}

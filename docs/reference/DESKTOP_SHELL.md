@@ -1,5 +1,25 @@
 # DESKTOP_SHELL.md
 
+## NSH macOS Phase10 scope / NSH macOS Phase10 范围
+
+`desktop/nsh-shell/` is the official NSH 0.6.0 alternative host for the same
+Leptos/WASM Panel, not a second business UI. Its resident window, tray, summon
+hotkey, validated `aleph://open`, notifications and placement have local macOS
+evidence. [Phase10 closeout](../superpowers/runs/2026-11-21-phase10-closeout.md)
+uses the explicitly approved Quit-only median/p95 ≤ 1.30× amendment; it does
+**not** claim faster Quit or a pass under the original limits. Physical display
+topology remains user-deferred and NOT TESTED. / NSH 只托管同一 Panel；按用户批准的
+退出门槛修订收尾，不声称提速，多屏拓扑仍未测试。
+
+The Tauri host described below remains available and was the G7 comparator.
+No default desktop switch, daemon-supervisor migration, release distribution,
+Windows/Linux NSH acceptance or Tauri removal follows. NSH uses an existing
+Gateway; its root owns native callbacks and tasks, not that Gateway's lifetime.
+`ALEPH_SHELL_HOTKEY=disabled` avoids shortcut registration. Notification OS
+permission is not a product feature-disable switch; no such switch is supplied.
+/ 保留下述 Tauri；NSH 不接管独立 Gateway，热键可禁用，通知权限不等于功能开关。
+
+
 The **desktop shell** (`desktop/shell/`, crate `aleph-desktop-shell`) is the
 "last-mile native shell" — a thin Tauri v2 app that turns the existing Leptos
 Panel into a real desktop application. It is **not** the Panel and **not** the
