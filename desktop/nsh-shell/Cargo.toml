@@ -3,6 +3,9 @@ name = "aleph-nsh-shell"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+qa-service = ["aleph-client/qa-service"]
+
 [dependencies]
 nsh-core = "=0.6.0"
 nsh-base = { version = "=0.6.0", default-features = false }
@@ -12,12 +15,18 @@ aleph-protocol = { path = "../../shared/protocol" }
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["std"] }
+uuid = { workspace = true }
+url = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 nsh-platform-macos = { version = "=0.6.0", default-features = false }
-uuid = { workspace = true }
-
 log = "0.4"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+nsh-platform-linux = { version = "=0.6.0", default-features = false, features = ["webview"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+nsh-platform-windows = { version = "=0.6.0", default-features = false }
 
 [dev-dependencies]
 futures-util = "0.3"

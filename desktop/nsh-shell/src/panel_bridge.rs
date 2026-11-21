@@ -1,4 +1,7 @@
-use aleph_protocol::panel_shell::{valid_document, valid_notification, PanelReply, ShellRequest};
+use crate::credentials::CredentialService;
+use aleph_protocol::panel_shell::{
+    valid_document, valid_notification, CredentialCall, CredentialReply, PanelReply, ShellRequest,
+};
 use nsh_core::element::desktop::WindowRef;
 use nsh_core::notifications::{Notification, NotificationPermission};
 use nsh_core::prelude::{
@@ -23,6 +26,7 @@ struct Inner {
     work: Notify,
     reply: Notify,
     notifications: mpsc::Sender<(String, String)>,
+    credentials: CredentialService,
 }
 
 #[derive(Default)]
@@ -52,7 +56,12 @@ pub(crate) fn bootstrap(url: &str, prefix: &str) -> String {
 }
 
 impl Bridge {
-    pub(crate) fn start(view: ElementRef, prefix: String, window: WindowRef) -> Self {
+    pub(crate) fn start(
+        view: ElementRef,
+        prefix: String,
+        window: WindowRef,
+        credentials: CredentialService,
+    ) -> Self {
         let (notifications, mut pending) = mpsc::channel::<(String, String)>(1);
         let bridge = Self(Rc::new(Inner {
             view,
@@ -61,6 +70,7 @@ impl Bridge {
             work: Notify::new(),
             reply: Notify::new(),
             notifications,
+            credentials,
         }));
         let worker = bridge.clone();
         spawn(async move { worker.navigate().await });
@@ -118,6 +128,7 @@ impl Bridge {
         if state.loading == loading && (loading || state.generation != 0) {
             return;
         }
+        self.0.credentials.invalidate();
         state.loading = loading;
         state.generation = state.generation.wrapping_add(1);
         state.document = None;
@@ -141,6 +152,21 @@ impl Bridge {
         if state.loading {
             return true;
         }
+        if let PanelReply::CredentialRequest {
+            request,
+            document,
+            call,
+        } = message
+        {
+            let generation = state.generation;
+            let accepted =
+                state.document.as_deref() == Some(document.as_str()) && valid_document(&document);
+            drop(state);
+            if accepted {
+                self.invoke_credential(generation, request, document, call);
+            }
+            return true;
+        }
         let (request, document, opened) = match message {
             PanelReply::Ready { request, document } => (request, document, false),
             PanelReply::ChatOpened { request, document } => (request, document, true),
@@ -160,6 +186,7 @@ impl Bridge {
                 }
                 return true;
             }
+            PanelReply::CredentialRequest { .. } => unreachable!(),
         };
         if let Some(exchange) = &mut state.exchange {
             if exchange.request == request
@@ -175,6 +202,46 @@ impl Bridge {
             }
         }
         true
+    }
+
+    fn invoke_credential(
+        &self,
+        generation: u64,
+        request: u32,
+        document: String,
+        call: CredentialCall,
+    ) {
+        let service = self.0.credentials.clone();
+        let credential_generation = service.generation();
+        let bridge = self.clone();
+        spawn(async move {
+            let reply = service.invoke(credential_generation, call).await;
+            bridge.respond_credential(generation, request, document, reply);
+        });
+    }
+
+    fn respond_credential(
+        &self,
+        generation: u64,
+        request: u32,
+        document: String,
+        reply: CredentialReply,
+    ) {
+        let state = self.0.state.borrow();
+        if state.loading
+            || state.generation != generation
+            || state.document.as_deref() != Some(document.as_str())
+        {
+            return;
+        }
+        let message = ShellRequest::CredentialReply {
+            request,
+            document,
+            reply,
+        };
+        self.0
+            .view
+            .post_message(serde_json::to_string(&message).expect("fixed credential reply"));
     }
 
     fn open_chat(&self) {
@@ -201,7 +268,16 @@ impl Bridge {
                     {
                         let result = self.exchange(None, Duration::from_millis(350)).await;
                         if let Some(document) = result {
-                            self.0.state.borrow_mut().document = Some(document);
+                            let mut state = self.0.state.borrow_mut();
+                            if state.generation != generation || state.loading {
+                                break;
+                            }
+                            state.document = Some(document.clone());
+                            drop(state);
+                            self.0.view.post_message(
+                                serde_json::to_string(&ShellRequest::CredentialsReady { document })
+                                    .expect("fixed document readiness"),
+                            );
                             break;
                         }
                     }

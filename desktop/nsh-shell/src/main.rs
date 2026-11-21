@@ -1,13 +1,16 @@
-#[cfg(target_os = "macos")]
+mod credentials;
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 mod panel_bridge;
+mod platform;
 mod shell_host;
 
 #[cfg(all(target_os = "macos", debug_assertions))]
 #[path = "../../../qa/phase9_clock.rs"]
 mod clock;
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 fn main() -> std::process::ExitCode {
+    use crate::platform::{run_app, AppOptions, AppSource, Root};
     use nsh_core::desktop::{MainWindowOptions, Shortcut, TrayTitleRun};
     use nsh_core::element::desktop::{
         main_window, quit, register_global_shortcut, set_tray, tray, MenuItem,
@@ -16,7 +19,6 @@ fn main() -> std::process::ExitCode {
         component, element_ref, request_notification_permission, spawn, web_view, Element,
         IntoElement, Prop, Props, Styled, WebNavigation,
     };
-    use nsh_platform_macos::{quit_app, run_app, AppOptions, AppSource, Root};
     use std::io::Write;
     use std::sync::Mutex;
 
@@ -64,10 +66,15 @@ fn main() -> std::process::ExitCode {
         let close_window = window.clone();
         window.on_close_press(move |_| close_window.hide());
         let view = element_ref();
+        let credentials = credentials::CredentialService::new(
+            &props.url.get_untracked(),
+            props.nonce.get_untracked().as_deref(),
+        );
         let bridge = panel_bridge::Bridge::start(
-            view.clone(),
+            view,
             props.bridge_prefix.get_untracked(),
             window.clone(),
+            credentials,
         );
         let navigation = bridge.clone();
         let terminated = bridge.clone();
@@ -139,7 +146,7 @@ fn main() -> std::process::ExitCode {
                 {
                     return;
                 }
-                #[cfg(debug_assertions)]
+                #[cfg(all(target_os = "macos", debug_assertions))]
                 clock::annotate(&mut event);
                 println!("ALEPH_PANEL_QA {event}");
                 let _ = std::io::stdout().flush();
@@ -148,7 +155,7 @@ fn main() -> std::process::ExitCode {
                     .lock()
                     .unwrap_or_else(|poison| poison.into_inner()) = Some(event);
                 if close {
-                    quit_app();
+                    quit();
                 }
             })
     }
@@ -173,7 +180,7 @@ fn main() -> std::process::ExitCode {
     .app_id(APP_ID)
     .url_schemes(["aleph"])
     .main_window(placement);
-    #[cfg(debug_assertions)]
+    #[cfg(all(target_os = "macos", debug_assertions))]
     clock::start();
     let exit = run_app(
         AppSource::Rust(root),
@@ -181,6 +188,7 @@ fn main() -> std::process::ExitCode {
             title: "Aleph".to_string(),
             size: (1180, 800),
             app_id: APP_ID.to_string(),
+            #[cfg(target_os = "macos")]
             keep_alive_on_close: true,
             notifications: true,
             data_dir: placement_data,
@@ -196,7 +204,7 @@ fn main() -> std::process::ExitCode {
         event["kind"] = "closed".into();
         event["payload"] =
             serde_json::json!({"owned_drained": exit == std::process::ExitCode::SUCCESS});
-        #[cfg(debug_assertions)]
+        #[cfg(all(target_os = "macos", debug_assertions))]
         clock::annotate(&mut event);
         println!("ALEPH_PANEL_QA {event}");
         let _ = std::io::stdout().flush();
@@ -204,8 +212,8 @@ fn main() -> std::process::ExitCode {
     exit
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 fn main() -> std::process::ExitCode {
-    eprintln!("The NSH host is currently supported on macOS only");
+    eprintln!("The NSH host is unsupported on this target");
     std::process::ExitCode::FAILURE
 }

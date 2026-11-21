@@ -1,0 +1,471 @@
+{
+  "artifact": "phase11-nsh-inventory",
+  "version": "2026-11-21.2",
+  "status": "FOUNDATION_IMPLEMENTED / P11-A-H_NOT_ACCEPTED",
+  "authority": [
+    "docs/superpowers/plans/2026-11-21-phase11-nsh-cutover.md",
+    "docs/superpowers/runs/2026-11-16-phase9-nsh-r2-boundary.md",
+    "docs/superpowers/specs/2026-11-21-phase11-nsh-cutover.md"
+  ],
+  "baseline": {
+    "branch": "main",
+    "start_head": "b5eb67d81",
+    "phase10_commit": "576c723591e40c139728f7198d9dd1630e7706e6",
+    "nsh_version": "=0.6.0",
+    "tauri_retirement": "blocked until P11-A-F, real three-platform replacements and common >=14 calendar days with activity"
+  },
+  "platform_api": {
+    "official_checkout": {
+      "path": "../nsh-phase10",
+      "remote": "https://github.com/longbridge/nsh.git",
+      "head": "644a31f0cd1cc35855b6241aedec90a2eda9f222",
+      "uncommitted": [
+        "crates/nsh-platform-macos/src/mount.rs",
+        "crates/nsh-platform-macos/tests/native/host_boundary.rs"
+      ],
+      "use": "read-only research; never production-linked"
+    },
+    "backends": [
+      {
+        "target": "macos",
+        "crate": "nsh-platform-macos",
+        "version": "0.6.0",
+        "current_manifest": true,
+        "native_acceptance": "historical Phase10 scoped acceptance only; Phase11 WebView regression open"
+      },
+      {
+        "target": "linux",
+        "crate": "nsh-platform-linux",
+        "version": "0.6.0",
+        "current_manifest": true,
+        "required_feature": "webview",
+        "native_acceptance": "NOT TESTED; offline target check blocked by uncached cairo-rs 0.22.11"
+      },
+      {
+        "target": "windows",
+        "crate": "nsh-platform-windows",
+        "version": "0.6.0",
+        "current_manifest": true,
+        "native_acceptance": "NOT TESTED; Windows target/runner unavailable"
+      }
+    ],
+    "common_api": [
+      "AppOptions",
+      "AppSource",
+      "Root",
+      "run_app",
+      "nsh_core::element::desktop::{main_window,quit,register_global_shortcut,set_tray,tray}",
+      "nsh_core::prelude::web_view"
+    ],
+    "platform_differences": [
+      "keep_alive_on_close field remains macOS-only",
+      "phase9 clock start/annotate remain debug macOS-only",
+      "Linux GTK4/WebKitGTK6 prerequisites",
+      "Windows WebView2 prerequisites"
+    ]
+  },
+  "registered_command_scope": {
+    "full": "desktop/shell/src/main.rs:668-679",
+    "lite": "desktop/shell/src/main.rs:681-694",
+    "debug_qa": "desktop/shell/src/main.rs:695-704; qa-owned-root + debug only",
+    "coverage": "12 application command definitions plus 3 directly consumed autostart plugin operations; not a claim of complete non-IPC lifecycle coverage"
+  },
+  "commands": [
+    {
+      "command": "get_connection_target",
+      "owner": "desktop/shell/src/connection.rs:668",
+      "callers": [
+        "desktop/shell/splash/connect.html:102"
+      ],
+      "authority": "connection target owner",
+      "status": "not migrated"
+    },
+    {
+      "command": "set_connection_target",
+      "owner": "desktop/shell/src/connection.rs:736",
+      "callers": [
+        "desktop/shell/splash/connect.html:86"
+      ],
+      "authority": "serialized target switch + credential revocation",
+      "status": "not migrated"
+    },
+    {
+      "command": "clear_connection_target",
+      "owner": "desktop/shell/src/connection.rs:802",
+      "callers": [
+        "desktop/shell/splash/connect.html:97"
+      ],
+      "authority": "existing local/remote target + keyring gate",
+      "status": "not migrated"
+    },
+    {
+      "command": "is_lite_shell",
+      "owner": "desktop/shell/src/connection.rs:812",
+      "callers": [
+        "desktop/shell/splash/connect.html:75"
+      ],
+      "authority": "full/lite product identity",
+      "status": "not migrated"
+    },
+    {
+      "command": "discover_servers",
+      "owner": "desktop/shell/src/connect_setup.rs:134",
+      "callers": [
+        "desktop/shell/splash/connect.html:149"
+      ],
+      "authority": "existing lite discovery",
+      "status": "not migrated; lite registration only"
+    },
+    {
+      "command": "connect_to",
+      "owner": "desktop/shell/src/connect_setup.rs:148",
+      "callers": [
+        "desktop/shell/splash/connect.html:86"
+      ],
+      "authority": "existing lite connection and target gate",
+      "status": "not migrated; lite registration only"
+    },
+    {
+      "command": "get_pending_cert",
+      "owner": "desktop/shell/src/cert_trust/pending.rs:49",
+      "callers": [
+        "desktop/shell/splash/cert-trust.html:29"
+      ],
+      "authority": "certificate trust pending state",
+      "status": "not migrated"
+    },
+    {
+      "command": "approve_cert",
+      "owner": "desktop/shell/src/cert_trust/pending.rs:72",
+      "callers": [
+        "desktop/shell/splash/cert-trust.html:47"
+      ],
+      "authority": "existing certificate pin approval",
+      "status": "not migrated; no new trust authorized"
+    },
+    {
+      "command": "reject_cert",
+      "owner": "desktop/shell/src/cert_trust/pending.rs:173",
+      "callers": [
+        "desktop/shell/splash/cert-trust.html:50"
+      ],
+      "authority": "existing certificate trust denial",
+      "status": "not migrated"
+    },
+    {
+      "command": "panel_credential_load",
+      "owner": "desktop/shell/src/keyring_bridge.rs:638",
+      "callers": [
+        "interfaces/webchat/src/api/native_credentials.rs:67",
+        "interfaces/webchat/src/context.rs:2006"
+      ],
+      "authority": "DeviceCredentialStore + strict lease DTO",
+      "status": "typed NSH adapter implemented; native WebView delivery open"
+    },
+    {
+      "command": "panel_credential_save",
+      "owner": "desktop/shell/src/keyring_bridge.rs:671",
+      "callers": [
+        "interfaces/webchat/src/api/native_credentials.rs:75"
+      ],
+      "authority": "DeviceCredentialStore + lease/attempt fence",
+      "status": "typed NSH adapter implemented; full pairing open"
+    },
+    {
+      "command": "panel_credential_delete",
+      "owner": "desktop/shell/src/keyring_bridge.rs:702",
+      "callers": [
+        "interfaces/webchat/src/api/native_credentials.rs:266"
+      ],
+      "authority": "DeviceCredentialStore + lease fence",
+      "status": "typed NSH adapter exposed; active product delete caller not established"
+    },
+    {
+      "command": "plugin:autostart|is_enabled",
+      "owner": "desktop/shell/src/main.rs:635",
+      "callers": [
+        "interfaces/webchat/src/platform/wide/views/settings/desktop_autostart.rs:54"
+      ],
+      "authority": "Tauri autostart plugin",
+      "status": "not migrated"
+    },
+    {
+      "command": "plugin:autostart|enable",
+      "owner": "desktop/shell/src/main.rs:635",
+      "callers": [
+        "interfaces/webchat/src/platform/wide/views/settings/desktop_autostart.rs:64"
+      ],
+      "authority": "Tauri autostart plugin",
+      "status": "not migrated"
+    },
+    {
+      "command": "plugin:autostart|disable",
+      "owner": "desktop/shell/src/main.rs:635",
+      "callers": [
+        "interfaces/webchat/src/platform/wide/views/settings/desktop_autostart.rs:66"
+      ],
+      "authority": "Tauri autostart plugin",
+      "status": "not migrated"
+    }
+  ],
+  "lifecycle_sites": [
+    {
+      "owner": "desktop/shell/src/main.rs:622",
+      "surface": "single instance",
+      "status": "not migrated"
+    },
+    {
+      "owner": "desktop/shell/src/main.rs:726-727",
+      "surface": "menu actions",
+      "status": "not migrated"
+    },
+    {
+      "owner": "desktop/shell/src/main.rs:735",
+      "surface": "keyring bridge installation",
+      "status": "Tauri unchanged; NSH adapter mounted in desktop/nsh-shell/src/main.rs"
+    },
+    {
+      "owner": "desktop/shell/src/main.rs:754-774",
+      "surface": "tray/hotkey/deeplink/permission monitor",
+      "status": "Phase10 NSH local equivalents only; full platform parity open"
+    },
+    {
+      "owner": "desktop/shell/src/main.rs:869-873",
+      "surface": "updater control and external-link navigation",
+      "status": "not migrated; never create arbitrary invoke tunnel"
+    },
+    {
+      "owner": "desktop/shell/src/main.rs:945-950",
+      "surface": "microphone permission and certificate handlers",
+      "status": "not migrated"
+    },
+    {
+      "owner": "desktop/shell/src/main.rs:963",
+      "surface": "spawn_background; notification/update/daemon supervision",
+      "status": "not migrated"
+    },
+    {
+      "owner": "desktop/shell/src/main.rs:1094-1095",
+      "surface": "full local boot reconcile and readiness",
+      "status": "not migrated"
+    },
+    {
+      "owner": "desktop/shell/src/main.rs:1291",
+      "surface": "target-change reconnect",
+      "status": "not migrated; future mutable target must revoke NSH leases at same authority boundary"
+    },
+    {
+      "owner": "desktop/shell/src/main.rs:1585",
+      "surface": "daemon lifetime supervision",
+      "status": "not migrated"
+    }
+  ],
+  "panel_consumers": [
+    {
+      "path": "interfaces/webchat/src/app.rs:512",
+      "role": "mounts shared ShellBridge",
+      "status": "retained"
+    },
+    {
+      "path": "interfaces/webchat/src/context.rs:2006",
+      "role": "load credential via NativeIpc",
+      "status": "implemented; attempt fence retained"
+    },
+    {
+      "path": "interfaces/webchat/src/context.rs:2144",
+      "role": "native handshake via NativeIpc",
+      "status": "implemented; Gateway remains identity authority"
+    },
+    {
+      "path": "interfaces/webchat/src/platform/wide/views/voice/audio.rs:191",
+      "role": "native shell audio marker",
+      "status": "still Tauri-only; native NSH microphone behavior open"
+    },
+    {
+      "path": "interfaces/webchat/src/platform_host.rs",
+      "role": "platform marker and Tauri-specific CSS guard",
+      "status": "not silently widened; NSH marker/platform styling parity open"
+    },
+    {
+      "path": "interfaces/webchat/styles/tailwind.css",
+      "role": "native layout selectors",
+      "status": "NSH parity open"
+    },
+    {
+      "path": "interfaces/webchat/webview-baseline.json",
+      "role": "WebView compatibility baseline",
+      "status": "unchanged; native platform validation open"
+    },
+    {
+      "path": "interfaces/webchat/src/api/fs.rs",
+      "role": "Gateway filesystem API, not Tauri IPC",
+      "status": "preserve authority; no host migration"
+    },
+    {
+      "paths": [
+        "interfaces/webchat/src/components/boot_check_gate.rs",
+        "interfaces/webchat/src/components/command_palette.rs",
+        "interfaces/webchat/src/components/directory_browser.rs",
+        "interfaces/webchat/src/components/layout_toggle.rs",
+        "interfaces/webchat/src/components/mode_sidebar.rs",
+        "interfaces/webchat/src/components/notification_center.rs",
+        "interfaces/webchat/src/components/team_task_strip.rs",
+        "interfaces/webchat/src/platform/wide/views/chat/project_menu.rs"
+      ],
+      "role": "shared business UI consumers; no direct native invoke found in targeted inspection",
+      "status": "retained; whole-product parity not inferred"
+    }
+  ],
+  "build_release": [
+    {
+      "path": "justfile:12",
+      "surface": "shell_dir remains desktop/shell"
+    },
+    {
+      "path": "justfile:83",
+      "surface": "Tauri binary staging"
+    },
+    {
+      "path": "justfile:104",
+      "surface": "shell-dev"
+    },
+    {
+      "path": "justfile:120",
+      "surface": "shell-build"
+    },
+    {
+      "path": "justfile:149",
+      "surface": "shell-build-lite"
+    },
+    {
+      "path": "justfile:159",
+      "surface": "shell-dev-lite"
+    },
+    {
+      "path": ".github/workflows/aleph-app-release.yml:148",
+      "surface": "full cargo tauri build"
+    },
+    {
+      "path": ".github/workflows/aleph-app-release.yml:189",
+      "surface": "lite cargo tauri build"
+    },
+    {
+      "paths": [
+        "desktop/shell/tauri.conf.json",
+        "desktop/shell/tauri.lite.conf.json",
+        "desktop/shell/tauri.macos.conf.json"
+      ],
+      "surface": "active Tauri bundles/permissions/updater configuration remain"
+    }
+  ],
+  "security": {
+    "wire": "closed typed Load/Save/Delete, strict DTO, redacted Debug, fixed errors",
+    "namespace": "production only without QA nonce; QA nonce unavailable unless debug qa-service feature selects canonical isolated namespace",
+    "revocation": "lock-free generation invalidation + worker admission/result check + document/loading check",
+    "blocking_limit": "one actual OS worker, no Tokio runtime assumption, no queue",
+    "cancellation_limit": "already admitted synchronous OS effects cannot be rolled back; late reply/lease rejected",
+    "pending": "one JS call, readiness, 15 second timeout, pagehide rejection"
+  },
+  "review": {
+    "ordering_deviation": "initial inventory was module-level; exploratory credential code preceded complete per-call review; no retroactive SPEC approval",
+    "spec_self_review": {
+      "scope": "implemented entry/credential slice only",
+      "findings_resolved": [
+        "replaced String+Value Rust invoke tunnel",
+        "strict empty-struct variants reject unknown keys",
+        "closed typed reply preserves save-null ACK",
+        "document generation admission and late-result fences",
+        "QA endpoints cannot touch production credential namespace",
+        "fixed platform-specific AppOptions and native clock cfgs"
+      ],
+      "remaining": [
+        "per-caller/non-IPC migration dispositions beyond this census",
+        "ordered full-scope SPEC/QUALITY review",
+        "native WebView credential effect proof",
+        "three-platform production ownership transfer"
+      ]
+    },
+    "quality_self_review": {
+      "scope": "same implemented slice after SPEC findings",
+      "findings_resolved": [
+        "readiness before initial credential invocation",
+        "no entered Tokio runtime assumption",
+        "worker overlap gate retained during blocking body",
+        "bootstrap without documentElement",
+        "bounded pending/timeouts and pagehide",
+        "clippy Copy clone removed",
+        "COMMAND_DELETE import WASM-gated"
+      ],
+      "evidence": "checks below",
+      "independent_review": "NOT PERFORMED; no child agent dispatched"
+    }
+  },
+  "quality": {
+    "completed_now": [
+      "official platform dependencies and cfg entry implementation",
+      "fixed credential transport + canonical-store adapter",
+      "targeted Rust/JS regressions",
+      "real macOS isolated OS-store roundtrip"
+    ],
+    "open": [
+      "P11-A complete per-caller review",
+      "native WebView credential E2E",
+      "production full/lite/remote target and daemon supervision migration",
+      "three-platform OS integration",
+      "autostart/updater/packaging",
+      "new platform performance contract before timing",
+      "default switch + rollback rehearsal",
+      "real common >=14 calendar-day three-platform dual operation",
+      "Tauri deletion and post-removal regression"
+    ],
+    "checks": {
+      "node": "node --test desktop/nsh-shell/tests/panel_bridge.test.mjs: 8 passed",
+      "protocol": "cargo test -p aleph-protocol --offline --locked --jobs 1: 415 unit + 11 integration passed; 2 doctests ignored",
+      "shell_default": "cargo test -p aleph-nsh-shell --offline --locked --jobs 1: 11 unit + 2 integration passed",
+      "shell_qa": "cargo test -p aleph-nsh-shell --features qa-service --offline --locked --jobs 1: 11 unit + 2 integration passed; 1 real-store test ignored by default",
+      "os_store": "cargo test -p aleph-nsh-shell --features qa-service --offline --locked --jobs 1 isolated_os_store_roundtrip_and_revoked_lease -- --ignored --test-threads=1: 1 passed; unique namespace, save/load/stale-delete-denial/delete/absence, cleanup; not native WebView delivery",
+      "panel_native": "cargo test -p aleph-panel --lib native_credentials --offline --locked --jobs 1: 24 passed",
+      "panel_wasm": "cargo check -p aleph-panel --target wasm32-unknown-unknown --offline --locked --jobs 1: passed; existing dead_code warnings",
+      "clippy": "cargo clippy -p aleph-nsh-shell --all-targets --features qa-service --offline --locked --jobs 1 -- -D warnings: passed",
+      "linux_target": "BLOCKED: offline cache missing cairo-rs 0.22.11",
+      "windows_target": "NOT RUN: target and runner unavailable",
+      "workspace_fmt": "pre-existing unrelated workspace formatting drift; not rewritten",
+      "tauri_full_lite": "NOT RERUN",
+      "native_qa": "NOT RUN for changed host; no new timing/performance acceptance"
+    }
+  },
+  "updater_trust": {
+    "old_verifier": "tauri-plugin-updater-2.14.0/src/updater.rs:1893-1916; minisign artifact verification, signed-version policy after signature check",
+    "existing_owner": "desktop/shell/src/update.rs:323-378",
+    "existing_config": "desktop/shell/tauri.conf.json public key and existing full/lite endpoints; requireSignedVersion not explicitly configured",
+    "official_nsh_verifier": "nsh-updater-0.6.0/src/lib.rs:522-545; base64 raw 32-byte Ed25519 public key, context-framed manifest signature",
+    "finding": "not a drop-in compatible trust/feed contract",
+    "recommendation": "preserve existing minisign trust/feed in a focused host adapter; native installer and lifecycle proofs still required",
+    "alternative": "official NSH signed-manifest feed requires explicit trust/feed migration approval and receipts",
+    "implemented": false,
+    "new_trust_authorized": false
+  },
+  "gates": {
+    "P11-A": "OPEN",
+    "P11-B": "OPEN",
+    "P11-C": "OPEN",
+    "P11-D": "OPEN",
+    "P11-E": "OPEN",
+    "P11-F": "OPEN",
+    "P11-G": "OPEN",
+    "P11-H": "OPEN"
+  },
+  "dual_track": {
+    "started": false,
+    "qualified_common_days": 0,
+    "reason": "no three-platform production acceptance or default/rollback qualification"
+  },
+  "operations": {
+    "commit": "local conventional commit intended; final Git identity is external to avoid a self-hash cycle",
+    "push": false,
+    "tag": false,
+    "release": false,
+    "default_switch": false,
+    "tauri_removed": false
+  }
+}
