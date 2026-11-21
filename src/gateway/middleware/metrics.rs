@@ -210,11 +210,31 @@ where
 
         requests_in_flight.fetch_add(1, Ordering::SeqCst);
 
+        let mut guard = RequestGuard {
+            registry: state_registry.clone(),
+            request_id,
+            requests_in_flight: requests_in_flight.clone(),
+            latency: latency.clone(),
+            start,
+            settled: false,
+        };
+
         Box::pin(async move {
             let result = inner_mut.call(req).await;
             let elapsed_ms = start.elapsed().as_millis() as u64;
-            requests_in_flight.fetch_sub(1, Ordering::SeqCst);
-            latency.observe(elapsed_ms);
+
+            // The handler produced its response; the response now waits for the
+            // transport to write it. The middleware cannot observe that write,
+            // so this is the last live state the request reaches here.
+            if let Some(Err(e)) =
+                state_registry.transition(request_id, RequestState::AwaitingResponse)
+            {
+                tracing::debug!(
+                    request_id = %request_id,
+                    error = ?e,
+                    "failed to transition to AwaitingResponse"
+                );
+            }
 
             match &result {
                 Ok(resp) => {
@@ -248,8 +268,46 @@ where
             }
 
             requests_total.fetch_add(1, Ordering::SeqCst);
+            guard.settle();
             result
         })
+    }
+}
+
+/// Owns the in-flight slot of one RPC request until the response is settled.
+///
+/// The response future can be dropped before it completes (client disconnect,
+/// task abort, server shutdown). Without this guard the in-flight counter and
+/// the request-state row would leak, and the backpressure threshold would
+/// eventually trip permanently on leaked capacity.
+struct RequestGuard {
+    registry: Arc<RequestStateRegistry>,
+    request_id: Uuid,
+    requests_in_flight: Arc<AtomicU64>,
+    latency: Arc<LatencyHistogram>,
+    start: std::time::Instant,
+    settled: bool,
+}
+
+impl RequestGuard {
+    /// Release the in-flight slot after the response was produced.
+    fn settle(&mut self) {
+        self.settled = true;
+        self.requests_in_flight.fetch_sub(1, Ordering::SeqCst);
+        self.latency.observe(self.start.elapsed().as_millis() as u64);
+    }
+}
+
+impl Drop for RequestGuard {
+    fn drop(&mut self) {
+        if self.settled {
+            return;
+        }
+        // The request was dropped mid-flight: it can no longer reach a terminal
+        // state on its own, so mark it cancelled and free the capacity.
+        let _ = self.registry.cancel(self.request_id);
+        self.requests_in_flight.fetch_sub(1, Ordering::SeqCst);
+        self.latency.observe(self.start.elapsed().as_millis() as u64);
     }
 }
 
