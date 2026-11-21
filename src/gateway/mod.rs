@@ -23,7 +23,6 @@
 //! ```
 
 // Social Connectivity: Link data models (always compiled)
-pub mod link;
 
 pub mod admin_api;
 pub mod announce_delivery;
@@ -93,7 +92,6 @@ pub mod continuation_lifecycle;
 pub mod delivery_queue;
 pub mod goal_budget;
 pub mod hot_reload;
-pub mod http_server;
 pub mod inbound_context;
 pub mod inbound_router;
 pub mod interfaces;

@@ -10,7 +10,6 @@
 //! - Channel registration
 //! - Inbound message routing
 
-use std::path::PathBuf;
 
 #[cfg(test)]
 use alephcore::memory::notes::watcher::NoteVaultWatcher;
@@ -286,8 +285,7 @@ pub(in crate::commands::start) fn load_app_config(
 
 // ── initialize_channels ──────────────────────────────────────────────────────
 
-/// Register all messaging channels (iMessage, Telegram, Discord, `WhatsApp`)
-/// and the `LinkManager` for external bridge plugins.
+/// Register all messaging channels (iMessage, Telegram, Discord, `WhatsApp`).
 /// Returns the populated `ChannelRegistry`.
 pub(in crate::commands::start) async fn initialize_channels(
     server: &mut GatewayServer,
@@ -576,8 +574,6 @@ pub(in crate::commands::start) async fn initialize_channels(
                             // Wire offset tracker for persistent polling resume
                             let tracker = OffsetTracker::new(db.clone(), inst.id.clone()).await;
                             tg_channel.set_offset_tracker(Arc::new(tracker));
-                            // Wire state database for pairing persistence
-                            tg_channel.set_state_database(db.clone());
                         }
                         channel = Box::new(tg_channel);
                     }
@@ -706,21 +702,6 @@ pub(in crate::commands::start) async fn initialize_channels(
         println!("  - channel.create  : Create a new channel");
         println!("  - channel.delete  : Delete a channel");
         println!();
-    }
-
-    // Start external bridge plugins via LinkManager
-    {
-        use alephcore::gateway::link::LinkManager;
-        let base_dir =
-            alephcore::utils::paths::get_config_dir().unwrap_or_else(|_| PathBuf::from(".aleph"));
-        let link_manager = LinkManager::new(base_dir);
-        if let Err(e) = link_manager.start().await {
-            tracing::warn!("LinkManager startup encountered errors: {}", e);
-        }
-        if !daemon {
-            println!("LinkManager started (external bridge plugins)");
-            println!();
-        }
     }
 
     // Hand the registry's live webhook mount table to the HTTP surface.
@@ -1055,6 +1036,36 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
         }
     }
 
+    // Wire the per-channel pair-loop-guard override.
+    //
+    // The operator key is `bot_loop_protection` inside the channel's `access`
+    // block (or flat at the channel root). It is registered under the same
+    // runtime channel id the executor looks the channel policy up by, so the
+    // guard applies the override of the message's OWN channel and every other
+    // channel keeps the router-wide default. Before this wiring the key was
+    // parsed and never read, so an operator could not widen or disable the
+    // hard-coded 20-per-60s budget for a single noisy channel.
+    if let Some(ref cfg_arc) = app_config {
+        let instances = cfg_arc.read().await.resolved_channels();
+        for inst in instances {
+            let Some(override_config) =
+                alephcore::gateway::pair_loop_guard::PairLoopGuardConfig::from_channel_config(
+                    &inst.config,
+                )
+            else {
+                continue;
+            };
+            let runtime_id =
+                runtime_channel_id(&channel_registry, &inst.id, &inst.channel_type).await;
+            inbound_router.register_pair_loop_override(&runtime_id, override_config);
+            if !daemon {
+                println!(
+                    "  Inbound router: pair-loop override registered for '{}'",
+                    runtime_id
+                );
+            }
+        }
+    }
     // Wire slash-command access tiering for every *other* channel type.
     //
     // The `slash_command_gate` infrastructure (admin / per-command allowlists,

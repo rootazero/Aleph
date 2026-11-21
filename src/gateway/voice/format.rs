@@ -29,8 +29,9 @@ const MAX_FORMAT_TOKENS: u32 = 2048;
 const FORMAT_TEMPERATURE: f32 = 0.2;
 
 /// Single source of truth for the system head: custom prompt when set, else the
-/// built-in default. Shared by [`build_format_prompt`] and [`format_text`] so
-/// the prompt the test asserts and the prompt actually sent never drift.
+/// built-in default. Shared by the test-only `build_format_prompt` and by
+/// `format_text` so the prompt the test asserts and the prompt actually sent
+/// never drift.
 #[must_use]
 fn format_head(custom: &str) -> &str {
     if custom.trim().is_empty() {
@@ -45,6 +46,9 @@ fn format_head(custom: &str) -> &str {
 /// Pure and allocation-only so the prompt selection is unit-testable without a
 /// provider. `format_text` sends the same head as a `with_system` system prompt
 /// and the raw as the user message; this concatenated form mirrors that split.
+/// Test-only: production sends the head and the raw as two messages, so this
+/// helper is not a production entry point.
+#[cfg(test)]
 #[must_use]
 pub fn build_format_prompt(custom: &str, raw: &str) -> String {
     let head = format_head(custom);
