@@ -128,6 +128,14 @@ pub async fn handle_terminal_invoke(request: JsonRpcRequest) -> JsonRpcResponse 
             INVALID_PARAMS,
             "terminal session was not found",
         ),
+        // A refusal the caller can act on (today: `[policies.terminal] enabled =
+        // false`, whose message names the config key). Same class as the opaque
+        // `Unavailable` above, but the remedy has to survive to the caller — and
+        // it must not become an INTERNAL_ERROR on this face while the identical
+        // refusal is SERVICE_UNAVAILABLE on `pty.spawn`.
+        Err(crate::capability::special_dispatch::CapabilityInvocationError::Handler(
+            crate::capability::special::CapabilityDispatchError::UnavailableReason(message),
+        )) => JsonRpcResponse::error(request.id, SERVICE_UNAVAILABLE, message),
         Err(crate::capability::special_dispatch::CapabilityInvocationError::Handler(error)) => {
             JsonRpcResponse::error(request.id, INTERNAL_ERROR, error.to_string())
         }

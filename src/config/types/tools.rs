@@ -746,7 +746,9 @@ pub struct McpServerConfig {
     #[serde(default)]
     pub env: HashMap<String, String>,
 
-    /// Working directory
+    /// Working directory the spawned stdio server process starts in. `None`
+    /// inherits the daemon's own cwd; a path that is not an existing directory
+    /// is refused when the server starts rather than silently ignored.
     #[serde(default)]
     pub cwd: Option<String>,
 

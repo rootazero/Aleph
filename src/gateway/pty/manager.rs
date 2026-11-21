@@ -28,11 +28,11 @@ use crate::sync_primitives::{Arc, AtomicUsize, Ordering};
 
 /// Concurrent PTY session ceiling before any `[policies.terminal]
 /// max_sessions` config has been read. Not a hard cap — deliberately not a
-/// `const` used directly by `spawn`: `handle_spawn` reads the live config
-/// fresh on every `pty.spawn` and stores the configured ceiling via
-/// `PtyManager::set_max_sessions`, so a patched value takes effect on the
-/// very next spawn instead of needing a restart. This is only the value a
-/// freshly constructed `PtyManager` starts with.
+/// `const` used directly by `spawn`: `TerminalCapabilitySource::invoke_spawn`
+/// reads the live config fresh on every `pty.spawn` and stores the configured
+/// ceiling via `PtyManager::set_max_sessions`, so a patched value takes effect
+/// on the very next spawn instead of needing a restart. This is only the value
+/// a freshly constructed `PtyManager` starts with.
 const DEFAULT_MAX_SESSIONS: usize = 64;
 
 /// How many `session_id -> created_by` stamps are kept for the ownership
@@ -202,7 +202,7 @@ impl SessionOwner {
 ///
 /// `created_by: None` with a scoped actor is REFUSED: a session nobody is
 /// recorded as owning is not one a particular user may claim. In production
-/// this cannot arise — `handle_spawn` stamps `visibility::ambient_actor()`,
+/// this cannot arise — the spawn path stamps `visibility::ambient_actor()`,
 /// which resolves through `CALLER_USER` for every gateway dispatch, loopback
 /// included (it resolves to `OWNER_USER_ID`).
 #[must_use]
@@ -671,7 +671,7 @@ impl PtyManager {
         }
     }
 
-    /// Set the concurrent session ceiling. Called by `handle_spawn` on every
+    /// Set the concurrent session ceiling. Called by the spawn path on every
     /// `pty.spawn` with `[policies.terminal] max_sessions` read fresh from
     /// the live config — deliberately not cached at boot, so a live patch
     /// takes effect on the very next spawn rather than needing a restart.

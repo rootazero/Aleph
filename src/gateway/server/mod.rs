@@ -883,6 +883,21 @@ impl GatewayServer {
             let bus = Arc::clone(&event_bus);
             async move { crate::gateway::capability_ui::handle_attach(request, store, bus).await }
         });
+        // `capabilities.ui.invoke` is the effect half of the capability-UI
+        // surface: after `capabilities.ui.attach` delivered a surface, the
+        // client that holds it calls back here to actuate an affordance. The
+        // expected first-party caller is the UI client bound to that
+        // connection (the Panel's capability-UI host / an ACP client) — the
+        // Rust core never invokes its own gateway RPC. No first-party client
+        // sends this method yet, so the arm below is the contract, not a live
+        // path: authorization is already wired on the server side
+        // (`method_census` Class::Open, `method_visibility` KeyChecked, and the
+        // per-connection lane/idempotency handling in
+        // `server/connection/dispatch.rs` + `acknowledged_effects.rs`), and
+        // the handler fails closed (SERVICE_UNAVAILABLE) when no projection
+        // host is mounted. Keep the registration until that client lands —
+        // deleting it would turn every such call into a bare Method-not-found
+        // and silently drop the capability-UI effect path.
         self.handlers_mut().register(
             "capabilities.ui.invoke",
             crate::gateway::capability_ui::handle_invoke,

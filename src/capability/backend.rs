@@ -214,6 +214,11 @@ impl LegacyCapabilityHandlerRegistry {
                 special_backend::CapabilityDispatchError::Unavailable => {
                     LegacyCapabilityDispatchError::Execution("capability unavailable".into())
                 }
+                // The legacy enum has no "unavailable, with a remedy" class, so
+                // the message (the part the caller can act on) is what survives.
+                special_backend::CapabilityDispatchError::UnavailableReason(message) => {
+                    LegacyCapabilityDispatchError::Execution(message)
+                }
                 special_backend::CapabilityDispatchError::Cancelled => {
                     LegacyCapabilityDispatchError::Execution("capability cancelled".into())
                 }
