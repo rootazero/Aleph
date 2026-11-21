@@ -29,7 +29,7 @@ fn window_contract_is_available() {
 #[cfg(target_os = "macos")]
 #[test]
 fn web_view_ref_contract_is_available() {
-    use nsh_core::prelude::{Element, IntoElement, Prop, Props, component, element_ref, web_view};
+    use nsh_core::prelude::{component, element_ref, web_view, Element, IntoElement, Prop, Props};
     use nsh_platform_macos::Root;
 
     #[derive(Clone, PartialEq, Props)]

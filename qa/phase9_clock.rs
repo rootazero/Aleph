@@ -33,8 +33,11 @@ pub fn start() {
         let nonce = std::env::var("ALEPH_PANEL_QA_GATE_NONCE").expect("QA gate nonce");
         let pid_path = std::env::var("ALEPH_PANEL_QA_PID").expect("QA PID capture");
         let temporary = format!("{pid_path}.pending");
-        std::fs::write(&temporary, serde_json::json!({"pid": std::process::id(), "nonce": nonce}).to_string())
-            .expect("QA PID rendezvous");
+        std::fs::write(
+            &temporary,
+            serde_json::json!({"pid": std::process::id(), "nonce": nonce}).to_string(),
+        )
+        .expect("QA PID rendezvous");
         std::fs::rename(temporary, pid_path).expect("QA PID atomic publication");
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while std::fs::read_to_string(&gate).ok().as_deref() != Some(nonce.as_str()) {
