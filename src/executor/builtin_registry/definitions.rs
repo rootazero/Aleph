@@ -1266,7 +1266,10 @@ pub fn create_tool_boxed(
 /// Brings the trait consts named by [`REGISTRY_ONLY_DESCRIPTIONS`] into scope
 /// exactly the way `builder/core_tools.rs` has them, so the bytes measured
 /// resolve to the same const the registration passes.
-#[cfg(test)]
+///
+/// Not test-gated: the table below is read at runtime now (the Panel's tool
+/// schema resolves every description through it), so the trait consts it
+/// names have to resolve in a production build too.
 use crate::tools::AlephTool as _;
 
 /// Tools the registry constructor registers that this catalog does NOT
@@ -1290,13 +1293,18 @@ use crate::tools::AlephTool as _;
 /// here that no longer corresponds to a registration fails too (a stale
 /// const inflates the ceiling with bytes nobody sends).
 ///
-/// `pub(crate)` because the byte ratchet is not the only guard that was
-/// blind to this surface: `thinker::prompt_contract::no_sentence_is_stated_twice`
-/// scans the same shipped text for duplication and ingested only
-/// `BUILTIN_TOOL_DEFINITIONS`. It reads this table rather than keeping its
-/// own list — a second list is the exact failure this table exists to
-/// prevent, one layer up.
-#[cfg(test)]
+/// `pub(crate)`, and NOT test-gated: `crate::executor::builtin_tool_description`
+/// reads this table at runtime. It was test-only until the Panel's tool
+/// schema asked the catalog for a description and got "" back for every tool
+/// listed here — a blank description for a tool the registry really
+/// registers, because the catalog is not the only place a description
+/// lives.
+///
+/// The byte ratchet is not the only guard that was blind to this surface:
+/// `thinker::prompt_contract::no_sentence_is_stated_twice` scans the same
+/// shipped text for duplication and ingested only `BUILTIN_TOOL_DEFINITIONS`.
+/// It reads this table rather than keeping its own list — a second list is
+/// the exact failure this table exists to prevent, one layer up.
 pub(crate) const REGISTRY_ONLY_DESCRIPTIONS: &[(&str, &str)] = &[
     ("pim", crate::builtin_tools::PimTool::DESCRIPTION),
     ("system", crate::builtin_tools::SystemTool::DESCRIPTION),
@@ -1368,6 +1376,28 @@ pub(crate) const REGISTRY_ONLY_DESCRIPTIONS: &[(&str, &str)] = &[
     (
         "acp_session_control",
         crate::builtin_tools::acp_tools::AcpSessionControlTool::DESCRIPTION,
+    ),
+    // The two team tools below are registered by a constructor-direct
+    // `tools.insert("name".to_string(), …)` in
+    // `builder/constructor/coord_team_tools.rs` — the third registration
+    // shape, which the `reg(`-scanner misses for the same reason the
+    // constructor-direct census above exists. Their descriptions ship on
+    // every request that lists them, so this table has to name them.
+    (
+        "team_task_control",
+        <crate::builtin_tools::team::TeamTaskControlTool as crate::tools::AlephTool>::DESCRIPTION,
+    ),
+    (
+        "task_exit_journal",
+        <crate::builtin_tools::team::TaskExitJournalTool as crate::tools::AlephTool>::DESCRIPTION,
+    ),
+    // The capability runtime's diagnostic surface, registered by the
+    // constructor under the name its own definition dictates. It was
+    // missing from the catalog AND from this table, so its description
+    // reached nobody — and the Panel could not list it at all.
+    (
+        "capability_projection_diagnostics",
+        crate::builtin_tools::capability_projection_diagnostics::DiagnosticTool::DESCRIPTION,
     ),
 ];
 
@@ -1466,16 +1496,24 @@ pub(crate) const BRIDGE_TOOL_DESCRIPTIONS: &[(&str, &str, fn() -> serde_json::Va
     ),
 ];
 
-/// Names the constructor-direct `tools.insert("name".to_string(), ut)` calls
-/// pass to the runtime map — the third registration shape, used when the
-/// tool's own `AlephTool::definition()` would otherwise dictate the wire
-/// name. Pinning them here keeps the completeness ratchet above honest in
-/// both directions (an omitted constructor-direct insert fails as
-/// unaccounted; a name here that no longer appears in any constructor file
-/// fails as stale, the same shape `every_registered_core_tool_is_accounted`
-/// runs against the `reg(` sites).
+/// Names the constructor-direct inserts that pass a wire name to the
+/// runtime map — the third registration shape, used when the tool's own
+/// `AlephTool::definition()` would otherwise dictate the wire name. Two
+/// forms qualify: the literal `tools.insert("name".to_string(), ut)` and
+/// the `tools.insert(td.name.clone(), ut)` that inserts the name the
+/// definition dictates (the census cannot read either form out of the
+/// source, which is why the list is explicit). Pinning them here keeps the
+/// completeness ratchet above honest in both directions (an omitted
+/// constructor-direct insert fails as unaccounted; a name here that no longer
+/// appears in any constructor file fails as stale, the same shape
+/// `every_registered_core_tool_is_accounted` runs against the `reg(` sites).
 #[cfg(test)]
-const REG_INSERTED_NAMES: &[&str] = &["acp_session_control"];
+const REG_INSERTED_NAMES: &[&str] = &[
+    "acp_session_control",
+    "capability_projection_diagnostics",
+    "task_exit_journal",
+    "team_task_control",
+];
 
 #[cfg(test)]
 mod tests {
@@ -3056,10 +3094,25 @@ mod tests {
     /// per-field detail (argv/cwd/timeout bounds, the handshake, owner-only
     /// status/stop) lives in the JsonSchema doc comments; (3) no other tool
     /// names the managed-companion surface.
+    ///
+    /// 2026-11-21 (severed-wire audit, executor slice): 118_577 -> 120_318 B
+    /// (+1_741), the whole of three descriptions that were already shipping on
+    /// every request and that nothing measured: `team_task_control` (366 B),
+    /// `task_exit_journal` (368 B) and `capability_projection_diagnostics`
+    /// (1_007 B). No existing description was edited, so the delta is those
+    /// three constants and nothing else. Three questions: (1) the verbs
+    /// (pause/resume/hard-retry/skip/cancel a coordinated task; write the
+    /// exit journal a reviewer reads; drive the capability runtime's
+    /// diagnostic surface) are runtime facts the model cannot infer from the
+    /// tool names, and a refusal names the door only AFTER a wasted call;
+    /// (2) every per-field detail (the `filter` keyword, the `tool_name` /
+    /// `plane` / `duration_ms` arguments, the journal's list fields) lives in
+    /// the JsonSchema doc comments, not here; (3) no other tool names these
+    /// three surfaces.
     // The ledger above names runtime identifiers (`JsonSchema` and friends)
     // as prose; `doc_markdown` would flag every one of them.
     #[allow(clippy::doc_markdown)]
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 118_577;
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 120_318;
     #[test]
     fn catalog_description_bytes_ratchet() {
         let catalog: usize = BUILTIN_TOOL_DEFINITIONS
@@ -3590,7 +3643,15 @@ mod tests {
     /// against the measurement, not above it: headroom is not bookkeeping,
     /// it is a pre-authorised allowance the next author spends without an
     /// edit here.
-    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 103_437;
+    ///
+    /// 2026-11-21 (severed-wire audit, executor slice): 103_437 -> 103_671 B
+    /// (+234) for `skill_list`, whose schema declared no arguments at all
+    /// (47 B) while its handler reads a `filter` keyword (281 B). The new
+    /// schema is `schemars`-derived from `ListSkillsArgs`, the same shape the
+    /// sibling `skill_read` registration uses, so the model can express the
+    /// filter the handler has always honoured. Only that one row moved: every
+    /// other row in the table below is the measurement it was.
+    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 103_671;
 
     /// That same measurement, decomposed per tool.
     ///
@@ -3672,7 +3733,7 @@ mod tests {
         ("session_decompress", 996),
         ("session_list", 931),
         ("session_send", 827),
-        ("skill_list", 47),
+        ("skill_list", 281),
         ("skill_read", 563),
         ("strategy", 2322),
         ("system", 1256),
@@ -3942,6 +4003,15 @@ mod tests {
     /// real schemas, dispatch, and absence of Memory admission dependencies;
     /// `flag_user_correction_and_governance_metrics_require_the_runtime`
     /// verifies that legacy storage alone cannot register them.
+    ///
+    /// 2026-11-21: 138 -> 141 for `team_task_control`, `task_exit_journal`
+    /// and `capability_projection_diagnostics` — class (b), same shape as the
+    /// tools above: the registry constructor registers all three (the first
+    /// two through a constructor-direct insert, the third through the
+    /// enablement-gated diagnostics path), so the unconditionally-built
+    /// registry map cannot reach them. Their production wiring is pinned by
+    /// the `dispatchable.rs` census and by
+    /// `every_accounted_tool_appears_in_some_group`.
     #[test]
     fn tools_without_an_unconditional_schema_are_pinned() {
         let map = unconditional_registry_map();
@@ -3958,8 +4028,8 @@ mod tests {
         missing.dedup();
 
         assert!(
-            missing.len() <= 138,
-            "{} tools have no schema in the unconditionally-built registry map, up from the 138 \
+            missing.len() <= 141,
+            "{} tools have no schema in the unconditionally-built registry map, up from the 141 \
              recorded here, so `registry_schema_bytes_ratchet` does not bound them. Three ways in, \
              and they are not equally fine. (a) The tool ships with no parameters at all — free, \
              and fine. (b) It registers only once a dependency is live, so its schema is unmeasured \

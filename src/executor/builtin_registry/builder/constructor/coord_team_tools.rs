@@ -455,7 +455,17 @@ impl BuiltinToolRegistry {
                 ut = ut
                     .with_parameters_schema(td.parameters.clone())
                     .with_services(td.services.clone());
-                tools.insert(td.name.clone(), ut);
+                // The literal name is REQUIRED here: the source census that
+                // checks "every advertised tool is dispatchable" can only see
+                // a `tools.insert("name", …)` literal — a `td.name.clone()`
+                // insert is invisible to it, and a tool the census cannot see
+                // is a tool the registry's own guards do not know about. The
+                // assertion below ties the literal to the tool's own NAME
+                // const, so the two cannot drift apart.
+                const _: () = assert!(
+                    <TeamTaskControlTool as crate::tools::AlephTool>::NAME == "team_task_control"
+                );
+                tools.insert("team_task_control".to_string(), ut);
             }
             info!("Registered team_task_control tool");
             Some(tool)
@@ -482,7 +492,16 @@ impl BuiltinToolRegistry {
                 ut = ut
                     .with_parameters_schema(td.parameters.clone())
                     .with_services(td.services.clone());
-                tools.insert(td.name.clone(), ut);
+                // The literal name is REQUIRED here: the source census that
+                // checks "every advertised tool is dispatchable" can only see
+                // a `tools.insert("name", …)` literal — a `td.name.clone()`
+                // insert is invisible to it, and a tool the census cannot see
+                // is a tool the registry's own guards do not know about. The
+                // assertion below ties the literal to the tool's own NAME
+                // const, so the two cannot drift apart.
+                const _: () =
+                    assert!(<TaskExitJournalTool as crate::tools::AlephTool>::NAME == "task_exit_journal");
+                tools.insert("task_exit_journal".to_string(), ut);
             }
             info!("Registered task_exit_journal tool");
             Some(tool)
