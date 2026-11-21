@@ -1,11 +1,9 @@
 use crate::gateway::channel::{ChannelId, ConversationId, InboundMessage, MessageId, UserId};
-use crate::gateway::interfaces::whatsapp::history_buffer::GroupHistoryBuffer;
 use tracing::debug;
 
 pub async fn map_event_to_inbound(
     event: &whatsapp_rust::types::events::Event,
     channel_id: &ChannelId,
-    _buffer: &GroupHistoryBuffer,
 ) -> Vec<InboundMessage> {
     use whatsapp_rust::types::events::Event;
 
@@ -152,10 +150,9 @@ mod tests {
             },
         ];
         let channel = ChannelId::new("wa-test");
-        let buffer = GroupHistoryBuffer::new(Default::default());
         for body in bodies {
             let event = event_for(body, false);
-            let messages = map_event_to_inbound(&event, &channel, &buffer).await;
+            let messages = map_event_to_inbound(&event, &channel).await;
             assert_eq!(messages.len(), 1);
             let message = &messages[0];
             assert!(message.text.contains("unsupported"));
@@ -179,25 +176,6 @@ mod tests {
             },
             true,
         );
-        assert!(map_event_to_inbound(&event, &channel, &buffer)
-            .await
-            .is_empty());
-    }
-
-    #[tokio::test]
-    async fn mapping_group_messages_does_not_fill_unconsumed_history() {
-        let fake = FakeWaRuntime::new();
-        let mut events = fake.take_event_receiver().unwrap();
-        let buffer = GroupHistoryBuffer::new(Default::default());
-        for group in ["111@g.us", "222@g.us"] {
-            fake.emit_text_message(group, "456", "hello").await.unwrap();
-            let event = events.recv().await.unwrap();
-            let messages = map_event_to_inbound(&event, &ChannelId::new("wa-test"), &buffer).await;
-            assert_eq!(messages.len(), 1);
-            assert!(buffer
-                .get_context(&messages[0].conversation_id)
-                .await
-                .is_none());
-        }
+        assert!(map_event_to_inbound(&event, &channel).await.is_empty());
     }
 }

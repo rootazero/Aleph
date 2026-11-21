@@ -91,14 +91,6 @@ impl ReactionHandler {
             )
             .await
     }
-
-    #[must_use]
-    pub const fn should_agent_react(&self, _msg: &InboundMessage) -> bool {
-        matches!(
-            self.level,
-            ReactionLevel::Minimal | ReactionLevel::Extensive
-        )
-    }
 }
 
 #[cfg(test)]

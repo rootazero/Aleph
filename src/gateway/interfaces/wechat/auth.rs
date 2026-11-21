@@ -1,6 +1,8 @@
 //! `WeChat` Authentication & Token Management
 //!
-//! QR login flow, context token storage, and session persistence.
+//! Context token storage and session persistence. There is no QR login flow:
+//! the bot token comes from configuration, and the only per-user credential
+//! Aleph keeps is the `context_token` of each conversation.
 
 use std::collections::HashMap;
 use std::path::Path;

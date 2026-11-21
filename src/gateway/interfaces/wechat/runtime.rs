@@ -168,9 +168,12 @@ impl WeChatRuntime {
                 continue;
             }
 
-            if let Some(inbound) =
-                map_message_to_inbound(msg, &self.channel_id, &self.config.account_id)
-            {
+            if let Some(inbound) = map_message_to_inbound(
+                msg,
+                &self.channel_id,
+                &self.config.account_id,
+                &self.config.cdn_base_url,
+            ) {
                 if let Some(context_token) = msg.context_token.clone() {
                     self.token_store
                         .set(
@@ -208,6 +211,17 @@ impl WeChatRuntime {
     }
 
     pub async fn send_typing(&self, token: &str, user_id: &str) -> ApiResult<()> {
+        self.set_typing(token, user_id, super::types::TYPING_START)
+            .await
+    }
+
+    /// Clear the typing indicator for a conversation.
+    pub async fn stop_typing(&self, token: &str, user_id: &str) -> ApiResult<()> {
+        self.set_typing(token, user_id, super::types::TYPING_STOP)
+            .await
+    }
+
+    async fn set_typing(&self, token: &str, user_id: &str, status: u32) -> ApiResult<()> {
         let resp = self.api.get_config(token, user_id, None).await?;
 
         let ticket = resp.typing_ticket.ok_or_else(|| {
@@ -217,7 +231,7 @@ impl WeChatRuntime {
         let payload = super::types::SendTypingPayload {
             ilink_user_id: user_id.to_string(),
             typing_ticket: ticket,
-            status: super::types::TYPING_START,
+            status,
         };
 
         self.api.send_typing(token, payload).await
