@@ -513,4 +513,3 @@ mod agent_refresh_tests {
         assert_eq!(registry.agents["other:reviewer"].content, "other content");
     }
 }
-

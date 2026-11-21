@@ -37,4 +37,3 @@ pub enum PermissionAction {
 /// This is now a type alias for `AgentRegistration`, which contains all fields
 /// needed for both plugin-registered and filesystem-discovered agents.
 pub type ExtensionAgent = crate::extension::AgentRegistration;
-
