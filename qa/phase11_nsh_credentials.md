@@ -34,7 +34,7 @@ The runner admits only a random `127.0.0.1` port, a random nonce-derived QA keyr
 7. Exactly two distinct document identities and ten ordered successful effect checks are observed.
 8. The host receives close-requested, returns from the native engine, emits owned-drained and exits successfully. Timeout/kill is never a successful exit observation.
 
-The six evaluator unit tests reject incomplete, duplicate, reordered, non-boolean, one-document, failed-cleanup and missing-shutdown observations. Tests never substitute for a real host invocation.
+The evaluator unit tests reject incomplete, duplicate, reordered, non-boolean, one-document, failed-cleanup and missing-shutdown observations. Tests never substitute for a real host invocation. The opt-in macOS `--observe-autostart` extension additionally requires actual status replies on both documents; its [read-only status QA guide](phase11_nsh_autostart.md) documents scope and refusal controls. The original credential-only evaluator and default acceptance remain unchanged. / 可选状态扩展不改变原凭据评估器或历史回执。
 
 ## Limits and failure / 限界与失败
 

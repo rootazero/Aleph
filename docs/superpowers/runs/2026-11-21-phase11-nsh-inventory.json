@@ -1,6 +1,6 @@
 {
   "artifact": "phase11-nsh-inventory",
-  "version": "2026-11-22.4",
+  "version": "2026-11-22.5",
   "status": "FOUNDATION_IMPLEMENTED / P11-A-H_NOT_ACCEPTED",
   "authority": [
     "docs/superpowers/plans/2026-11-21-phase11-nsh-cutover.md",
@@ -184,7 +184,7 @@
       "command": "plugin:autostart|is_enabled",
       "owner": "desktop/shell/src/main.rs:635",
       "callers": [
-        "interfaces/webchat/src/platform/wide/views/settings/desktop_autostart.rs:54"
+        "interfaces/webchat/src/platform/wide/views/settings/desktop_autostart.rs:44"
       ],
       "authority": "Tauri autostart plugin",
       "status": "not migrated"
@@ -193,7 +193,7 @@
       "command": "plugin:autostart|enable",
       "owner": "desktop/shell/src/main.rs:635",
       "callers": [
-        "interfaces/webchat/src/platform/wide/views/settings/desktop_autostart.rs:64"
+        "interfaces/webchat/src/platform/wide/views/settings/desktop_autostart.rs:54"
       ],
       "authority": "Tauri autostart plugin",
       "status": "not migrated"
@@ -202,7 +202,7 @@
       "command": "plugin:autostart|disable",
       "owner": "desktop/shell/src/main.rs:635",
       "callers": [
-        "interfaces/webchat/src/platform/wide/views/settings/desktop_autostart.rs:66"
+        "interfaces/webchat/src/platform/wide/views/settings/desktop_autostart.rs:56"
       ],
       "authority": "Tauri autostart plugin",
       "status": "not migrated"
@@ -420,10 +420,10 @@
       "Tauri deletion and post-removal regression"
     ],
     "checks": {
-      "node": "node --test desktop/nsh-shell/tests/panel_bridge.test.mjs: 8 passed",
-      "protocol": "cargo test -p aleph-protocol --offline --locked --jobs 1: 415 unit + 11 integration passed; 2 doctests ignored",
-      "shell_default": "cargo test -p aleph-nsh-shell --offline --locked --jobs 1: 13 unit + 5 real-process launch + 2 integration passed",
-      "shell_qa": "cargo test -p aleph-nsh-shell --features qa-service --offline --locked --jobs 1: 13 unit + 5 real-process launch + 2 integration passed; 1 real-store test ignored by default",
+      "node": "node --test desktop/nsh-shell/tests/panel_bridge.test.mjs: 11 passed",
+      "protocol": "cargo test -p aleph-protocol --offline --locked --jobs 1: 416 unit + 11 integration passed; 2 doctests ignored",
+      "shell_default": "cargo test -p aleph-nsh-shell --offline --locked --jobs 1: 19 unit + 7 real-process launch + 2 integration passed",
+      "shell_qa": "cargo test -p aleph-nsh-shell --features qa-service --offline --locked --jobs 1: 19 unit + 7 real-process launch + 2 integration passed; 1 real-store test ignored by default",
       "os_store": "cargo test -p aleph-nsh-shell --features qa-service --offline --locked --jobs 1 isolated_os_store_roundtrip_and_revoked_lease -- --ignored --test-threads=1: 1 passed; unique namespace, save/load/stale-delete-denial/delete/absence, cleanup; not native WebView delivery",
       "panel_native": "cargo test -p aleph-panel --lib native_credentials --offline --locked --jobs 1: 24 passed",
       "panel_wasm": "cargo check -p aleph-panel --target wasm32-unknown-unknown --offline --locked --jobs 1: passed; existing dead_code warnings",
@@ -433,8 +433,8 @@
       "workspace_fmt": "pre-existing unrelated workspace formatting drift; not rewritten",
       "tauri_full_lite": "full default: 167 passed; lite qa-owned-root: 190 passed; unit suites, not installed-app/service/native lifecycle acceptance",
       "native_qa": "PASS_SCOPED_NATIVE_CREDENTIAL_EFFECTS: .phase10-evidence/phase11-launch-credentials.EU3xi4/receipt.json; ten effects, two documents, natural exit after endpoint ownership change; prior .phase10-evidence/phase11-native-credentials.Kje8rAAJ/receipt.json retained; not Panel WASM/desktop parity/performance",
-      "native_receipt_tests": "cd qa && python3 -m unittest test_phase11_nsh_credentials -v: 6 passed; complete effects RED before evaluator implementation, then GREEN",
-      "qa_python_suite": "uv run --offline --no-project --no-python-downloads --python python3 --with jsonschema python -m unittest discover -s qa -p 'test_*.py' -v: 82 passed; plain python3 first blocked four module imports by missing jsonschema, resolved in isolated cached uv environment"
+      "native_receipt_tests": "cd qa && python3 -m unittest test_phase11_nsh_credentials -v: 7 passed; legacy credential evaluator unchanged; optional status extension rejects missing/wrong-document/collapsed status",
+      "qa_python_suite": "uv run --offline --no-project --no-python-downloads --python python3 --with jsonschema python -m unittest discover -s qa -p 'test_*.py' -v: 88 passed; plain python3 first blocked four module imports by missing jsonschema, resolved in isolated cached uv environment"
     }
   },
   "updater_trust": {
@@ -448,6 +448,18 @@
     "decision": "user selected preserving existing minisign trust/feed; no key replacement or official NSH manifest-feed switch",
     "implemented": false,
     "new_trust_authorized": false
+  },
+  "read_only_autostart_slice": {
+    "status": "IMPLEMENTED_READ_ONLY / NOT_AUTOSTART_PARITY",
+    "decision": "approved same-identity OS adapter; official NSH 0.6.0 retained; no production login-item or server-service mutation",
+    "owner": "desktop/nsh-shell/src/autostart.rs: macOS SMAppService.mainAppService.status after exact NSBundle identity and canonical executable admission",
+    "callers": ["--autostart-status", "interfaces/webchat/src/platform/wide/views/settings/desktop_autostart.rs:64"],
+    "wire": "shared/protocol/src/panel_shell.rs: closed autostart-request/autostart-reply; request/document bound; no setter or target parameter",
+    "lifecycle": "CLI synchronous; Panel independent bounded worker permit and JS slot; 15s timeout, pagehide and late-navigation reply fencing",
+    "ui": "localized read-only NSH states; original Tauri plugin still owns writable toggle",
+    "receipt": "docs/superpowers/runs/2026-11-22-phase11-autostart-receipt.json",
+    "not_tested": ["production Panel WASM rendering", "real OS enabled/disabled/approval transitions", "setters", "Windows/Linux native implementation", "installer/updater", "default/rollback", "performance", "real 14-day dual operation"],
+    "review": "author SPEC then distinct QUALITY, not independent; P11-A-H remain OPEN"
   },
   "gates": {
     "P11-A": "OPEN",

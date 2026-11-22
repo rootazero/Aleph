@@ -46,7 +46,21 @@ def evaluate(events, returncode):
             else "effect_document_cleanup_or_native_exit_failed"}
 
 
-def run(exe, receipt, timeout):
+def evaluate_autostart(events, returncode):
+    base = evaluate(events, returncode)
+    if not base["accepted"]:
+        return base
+    fixture = next(event for event in events if event.get("kind") == "credential-fixture")
+    expected = [{"document": document, "value": {"status": "unavailable", "reason": "not_app_bundle"}}
+                for document in fixture["documents"]]
+    accepted = fixture.get("autostart") == expected
+    return {"accepted": accepted, "reason": "native_status_on_two_documents" if accepted
+            else "missing_wrong_or_collapsed_native_status"}
+
+
+def run(exe, receipt, timeout, observe_autostart=False):
+    if observe_autostart and (not hasattr(os, "uname") or os.uname().sysname != "Darwin"):
+        raise RuntimeError("status extension requires the macOS native runner")
     receipt.parent.mkdir(parents=True, exist_ok=True)
     # Do not overwrite evidence or reuse another invocation's native profile.
     receipt.touch(exist_ok=False)
@@ -54,7 +68,7 @@ def run(exe, receipt, timeout):
     profile.mkdir(exist_ok=False)
     nonce, run_id = os.urandom(32).hex(), uuid.uuid4().hex
     page = Path(__file__).with_name("phase11_nsh_credentials.html").read_text()
-    settings = json.dumps({"nonce": nonce, "run_id": run_id})
+    settings = json.dumps({"nonce": nonce, "run_id": run_id, "observe_autostart": observe_autostart})
     requests = []
 
     class Handler(BaseHTTPRequestHandler):
@@ -106,9 +120,9 @@ def run(exe, receipt, timeout):
             # The fixture emits only names/booleans/document IDs, never credentials.
             result["events"].append(event)
         result["returncode"] = process.returncode
-        result["evaluation"] = evaluate(result["events"], process.returncode)
+        result["evaluation"] = (evaluate_autostart if observe_autostart else evaluate)(result["events"], process.returncode)
         if result["evaluation"]["accepted"] and requests == ["/", "/after-navigation"]:
-            result["status"] = "PASS_SCOPED_NATIVE_CREDENTIAL_EFFECTS"
+            result["status"] = "PASS_SCOPED_NATIVE_CREDENTIAL_AND_STATUS_EFFECTS" if observe_autostart else "PASS_SCOPED_NATIVE_CREDENTIAL_EFFECTS"
     except subprocess.TimeoutExpired:
         result["evaluation"] = {"accepted": False, "reason": "owned_host_timeout_not_natural_exit"}
     finally:
@@ -118,18 +132,20 @@ def run(exe, receipt, timeout):
         result["documents_served"] = requests
         receipt.write_text(json.dumps(result, indent=2) + "\n")
     print(json.dumps({"status": result["status"], "receipt": str(receipt)}))
-    return result["status"] == "PASS_SCOPED_NATIVE_CREDENTIAL_EFFECTS"
+    return result["status"] in ["PASS_SCOPED_NATIVE_CREDENTIAL_EFFECTS", "PASS_SCOPED_NATIVE_CREDENTIAL_AND_STATUS_EFFECTS"]
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--exe", required=True, type=Path)
     parser.add_argument("--receipt", required=True, type=Path)
+    parser.add_argument("--observe-autostart", action="store_true",
+                        help="also require real read-only status replies on both macOS documents")
     parser.add_argument("--timeout-seconds", type=float, default=45)
     args = parser.parse_args()
     if not args.exe.is_file() or args.timeout_seconds <= 0:
         parser.error("an existing debug qa-service binary and positive timeout are required")
-    return 0 if run(args.exe, args.receipt, args.timeout_seconds) else 1
+    return 0 if run(args.exe, args.receipt, args.timeout_seconds, args.observe_autostart) else 1
 
 
 if __name__ == "__main__":

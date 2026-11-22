@@ -33,6 +33,26 @@ pub enum CredentialReply {
     Failed { error: CredentialError },
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AutostartStatus {
+    Enabled {},
+    Disabled {},
+    RequiresApproval {},
+    Unavailable { reason: AutostartUnavailableReason },
+    Failed {},
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutostartUnavailableReason {
+    UnsupportedPlatform,
+    NotAppBundle,
+    IdentityMismatch,
+    ApiUnavailable,
+    NotFound,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum ShellRequest {
@@ -45,6 +65,11 @@ pub enum ShellRequest {
     },
     CredentialsReady {
         document: String,
+    },
+    AutostartReply {
+        request: u32,
+        document: String,
+        status: AutostartStatus,
     },
     CredentialReply {
         request: u32,
@@ -69,6 +94,10 @@ pub enum PanelReply {
         title: String,
         body: String,
     },
+    AutostartRequest {
+        request: u32,
+        document: String,
+    },
     CredentialRequest {
         request: u32,
         document: String,
@@ -90,6 +119,35 @@ pub fn valid_notification(title: &str, body: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn autostart_is_a_document_bound_read_not_a_setter_or_target_query() {
+        let document = "a".repeat(32);
+        let request =
+            serde_json::json!({"kind":"autostart-request", "request": 1, "document":document});
+        assert!(serde_json::from_value::<PanelReply>(request.clone()).is_ok());
+        for (key, value) in [
+            ("enabled", serde_json::json!(true)),
+            ("application", serde_json::json!("other")),
+        ] {
+            let mut bad = request.clone();
+            bad[key] = value;
+            assert!(serde_json::from_value::<PanelReply>(bad).is_err());
+        }
+        for status in [
+            serde_json::json!({"status":"enabled"}),
+            serde_json::json!({"status":"disabled"}),
+            serde_json::json!({"status":"requires_approval"}),
+            serde_json::json!({"status":"unavailable", "reason":"not_found"}),
+            serde_json::json!({"status":"failed"}),
+        ] {
+            let reply = serde_json::json!({"kind":"autostart-reply", "request": 1, "document":document, "status": status});
+            assert!(serde_json::from_value::<ShellRequest>(reply.clone()).is_ok());
+            let mut bad = reply;
+            bad["status"]["extra"] = serde_json::json!(true);
+            assert!(serde_json::from_value::<ShellRequest>(bad).is_err());
+        }
+    }
 
     #[test]
     fn bridge_cannot_encode_an_arbitrary_destination() {

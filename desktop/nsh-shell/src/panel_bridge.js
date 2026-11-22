@@ -4,6 +4,7 @@ function installAlephShellBridge(origin, prefix) {
   const documentId = Array.from(crypto.getRandomValues(new Uint8Array(16)),
     byte => byte.toString(16).padStart(2, "0")).join("");
   let pending = null;
+  let statusPending = null;
   let ready = false;
   let closed = false;
   let nextRequest = 0;
@@ -44,6 +45,25 @@ function installAlephShellBridge(origin, prefix) {
     try { window.nsh.postMessage(prefix + payload); }
     catch (_) { finish(true); }
   };
+  const finishStatus = (error, value) => {
+    if (!statusPending) return;
+    const entry = statusPending;
+    statusPending = null;
+    clearTimeout(entry.timer);
+    if (error) entry.reject(new Error("native autostart status rejected or unavailable"));
+    else entry.resolve(value);
+  };
+  const sendStatus = () => {
+    if (!ready || !statusPending || statusPending.sent || closed) return;
+    statusPending.sent = true;
+    try { window.nsh.postMessage(prefix + JSON.stringify({ kind: "autostart-request",
+      request: statusPending.request, document: documentId })); }
+    catch (_) { finishStatus(true); }
+  };
+  const validStatus = value => (
+    keys(value, ["status"]) && ["enabled", "disabled", "requires_approval", "failed"].includes(value.status)
+  ) || (keys(value, ["status", "reason"]) && value.status === "unavailable"
+    && ["unsupported_platform", "not_app_bundle", "identity_mismatch", "api_unavailable", "not_found"].includes(value.reason));
   window.addEventListener("message", event => {
     if (closed || event.source !== null || event.origin !== "") return;
     if (typeof event.data !== "string" || event.data.length > 16384) return;
@@ -53,6 +73,12 @@ function installAlephShellBridge(origin, prefix) {
     if (message.kind === "credentials-ready") {
       ready = true;
       sendPending();
+      sendStatus();
+      return;
+    }
+    if (message.kind === "autostart-reply") {
+      if (!statusPending || message.request !== statusPending.request) return;
+      finishStatus(!keys(message, ["kind", "request", "document", "status"]) || !validStatus(message.status), message.status);
       return;
     }
     if (message.kind !== "credential-reply" || !pending || message.request !== pending.request) return;
@@ -72,7 +98,7 @@ function installAlephShellBridge(origin, prefix) {
     }
     finish(true);
   });
-  window.addEventListener("pagehide", () => { closed = true; finish(true); });
+  window.addEventListener("pagehide", () => { closed = true; finish(true); finishStatus(true); });
   Object.defineProperty(window, "__ALEPH_PANEL_KEYRING__", { value: true });
   const mark = () => document.documentElement?.setAttribute("data-shell", "aleph-nsh");
   if (document.documentElement) mark();
@@ -84,6 +110,16 @@ function installAlephShellBridge(origin, prefix) {
         if (!closed && typeof payload === "string" && payload.length <= 16384) {
           window.nsh.postMessage(prefix + payload);
         }
+      },
+      autostartStatus(...args) {
+        return new Promise((resolve, reject) => {
+          if (closed || statusPending || args.length !== 0) {
+            reject(new Error("native autostart status rejected or unavailable")); return;
+          }
+          statusPending = { request: (nextRequest = (nextRequest + 1) >>> 0), resolve, reject,
+            sent: false, timer: setTimeout(() => finishStatus(true), 15000) };
+          sendStatus();
+        });
       },
       invoke(command, args) {
         return new Promise((resolve, reject) => {

@@ -242,7 +242,7 @@ impl BridgeIpc for NativeIpc {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn nsh_shell_present() -> bool {
+pub(crate) fn nsh_shell_present() -> bool {
     let Some(window) = web_sys::window() else {
         return false;
     };
@@ -259,6 +259,11 @@ fn nsh_shell_present() -> bool {
             .and_then(|element| element.get_attribute("data-shell"))
             .as_deref()
             == Some("aleph-nsh")
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn nsh_shell_present() -> bool {
+    false
 }
 
 #[cfg(target_arch = "wasm32")]

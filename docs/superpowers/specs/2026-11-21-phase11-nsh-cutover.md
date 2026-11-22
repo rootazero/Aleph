@@ -1,7 +1,7 @@
 # Phase11 NSH Cutover Contract / Phase11 NSH 切换契约
 
 **Status / 状态:** implemented foundation slices, NOT P11-A–H acceptance / 基础切片已实施，不是全期验收
-**Version / 版本:** `2026-11-22.4`
+**Version / 版本:** `2026-11-22.5`
 **Scope / 范围:** official platform entry selection, fixed credential transport and immutable launch targets / 官方平台入口选择、固定凭据传输与不可变启动目标
 
 ## 1. Authority and non-goals / 权威与不做事项
@@ -148,5 +148,30 @@ The exact 0.6.0 source, not current website HEAD, defines these limits. / 以下
 
 - `nsh-core-0.6.0/src/element/desktop.rs:1082` exposes `launch_at_login() -> impl Future<Output = bool> + 'static`; it returns false for disabled, approval pending, unsupported contexts and read errors. `src/element/desktop.rs:1101` exposes fallible writes, but no public detailed status getter was located. `src/desktop/login_item.rs` has richer backend statuses; importing a type is not access to the installed backend. Do not expose false as a confirmed Disabled status. / 布尔读取丢失状态，不能据此宣称已禁用。
 - `nsh-core-0.6.0/src/single_instance.rs` assigns platform uniqueness/forwarding to release runners. A Rust-hosted `run_app` plus an event listener does not prove duplicate-process exclusion or intent forwarding. / Rust 宿主的单实例仍需真实证明。
-- Safe alternatives for the autostart gap are (A) a narrow platform-side OS adapter bound to the same application identity, preserving official 0.6.0 and never changing server-service autostart, or (B) waiting for a versioned official public status API and validating an explicitly approved dependency upgrade. Neither is silently selected here; no toolkit patch, fork, global service change or production login-item mutation was made. / 可选窄原生适配器或经批准的官方 API 升级；未静默选择。
+- The user approved alternative (A), a narrow same-identity OS status adapter retaining official 0.6.0; section 11 implements its read-only macOS path. An official API upgrade remains unselected. No toolkit patch, fork, global service change or production login-item mutation was made. / 用户已批准同身份窄只读适配器，不升级、不修改生产登录项。
 - Windows/Linux native runners and Linux's cached GTK dependencies remain absent. No cross-compilation/source review result counts as their native acceptance. / 平台机器与离线依赖缺口不冒充验收。
+
+## 11. Read-only login-item adapter / 只读登录项适配器
+
+The user approved a narrow OS adapter, retaining official NSH 0.6.0. / 用户批准窄 OS 适配器路线，不改官方版本。
+
+- **First caller:** `aleph-nsh-shell --autostart-status`, returning one closed JSON status without opening a WebView. This diagnostic is not the Panel toggle migration. The fixed command rejects extra arguments and QA URL mixing. / 首个真实调用方为只读诊断命令，不冒充 Panel 开关完成。
+- **Authority:** on macOS read `SMAppService.mainAppService.status`, the same source as the pinned NSH backend. First verify the current executable belongs to an `.app` bundle with the expected application identifier. Share `APP_ID` with window startup. An unbundled binary or identity mismatch is Unavailable, never Disabled. / 与官方写端使用相同 OS 所有者，先核对宿主身份。
+- **Status contract:** preserve Enabled, Disabled and RequiresApproval; represent unsupported contexts, missing API and NotFound as explicit Unavailable reasons. Unknown future OS values/read failures are Failed, never an enabled/disabled answer. / 未知与失败不降级成布尔值。
+- **QA identity:** only debug `qa-service` builds may read a random nonce-derived `com.aleph.nsh-shell.qa.<nonce>` bundle through the existing QA nonce environment. No arbitrary bundle query or production namespace fallback. / 隔离 QA 身份不允许任意查询或生产回退。
+- **Lifecycle/effects:** synchronous bounded local status read before native startup; no worker, persistent registry, setter, launchd/systemd/registry/task-scheduler mutation or server-service command. No registration/unregistration is called. / 只读，不修改系统登录项或服务器服务。
+- **Platform limits:** current exact research sources did not locate a Linux/Windows login-item backend. Return UnsupportedPlatform until a concrete same-identity OS adapter and native effects are validated; do not invent NSH registration paths. / 其他平台显式不可用，不能编造注册位置。
+- **Verification:** RED/GREEN for all status mappings, identity and QA admission; real process CLI tests; real nonce-isolated ad-hoc signed macOS bundle read; wrong-identity/unbundled no-effect controls. No production login-item writes. / 验证映射、身份、真实隔离包及拒绝方向。
+
+**Panel read path / Panel 只读接入:** fixed `autostart-request {request, document}` and `autostart-reply {request, document, status}`; no app id, enabled flag, server target or arbitrary invoke in the call. Reuse launch prefix, probe-ready, document/generation fences and 15-second JS timeout. A separate one-slot status request avoids interfering with credential admission. One host-owned worker permit bounds OS reads across navigation. The Panel displays the exact status, never an unchecked checkbox for unknown/failed state; NSH writes remain unavailable. Existing Tauri toggle remains on its original path. / 固定只读类型，状态读取不抢凭据槽；未知态不画成关闭，写端不冒充完成。
+
+**SPEC author pass:** verified the current OS owner, same application identity and fixed document-bound read; no setter or arbitrary target is admitted. **QUALITY author pass after SPEC:** checked unknown/not-found/pending, invalid QA, early readiness, separate bounded requests and late-navigation replies. Neither pass is independent review. Production Panel rendering, setters and Windows/Linux native acceptance remain OPEN. / 两次有序自审不等于独立审阅或全期闸门通过。
+
+### Verified read-only checkpoint / 已验证只读切片
+
+The [machine receipt](../runs/2026-11-22-phase11-autostart-receipt.json) binds current source and native identities. / 机器回执绑定当前源码与原生身份。
+
+- Real macOS WebView status reads passed on two actual document identities, alongside all ten isolated credential effects, final store absence, native return and process exit 0. Both unbundled reads explicitly returned Unavailable/NotAppBundle, not Disabled. / 两个真实文档均收到宿主不可用原因，不冒充关闭。
+- An independently invoked nonce-isolated ad-hoc signed `.app` read the actual OS status twice as Unavailable/NotFound. Wrong-identity and unbundled refusal controls passed. No login-item registration/unregistration, production identity read, service operation or default change was performed. / 隔离包真实查询及身份拒绝验证通过，未改生产系统状态。
+- Protocol 416 unit + 11 integration; NSH default and QA each 19 unit + seven real-process launch + two window tests; Node bridge 11; top-level Python QA 88 passed. Strict NSH clippy and Panel WASM check passed; WASM keeps its three existing dead-code warnings. / 定向回归通过，不等于三平台验收。
+- RequiresApproval, Enabled, Disabled and unknown-state preservation are mapping/contract tests, not changed real OS login-item states. Production Panel rendering, NSH setters, Windows/Linux, installer/updater, performance/default/rollback and 14-day dual operation are NOT TESTED by this checkpoint. / 未改变真实登录项来制造状态，也未越过后续闸门。

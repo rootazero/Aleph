@@ -105,6 +105,56 @@ test("pagehide revokes pending and future calls", async () => {
   assert.equal(h.timers.size, 0);
 });
 
+test("status read waits for probe and preserves requires approval, without credential contention", async () => {
+  const h = host();
+  const credential = h.bridge.invoke("panel_credential_load", null);
+  const status = h.bridge.autostartStatus();
+  await tick(); assert.equal(h.sent.length, 0);
+  h.ready(); await tick();
+  assert.equal(h.sent.length, 2);
+  const request = h.sent.find(message => message.kind === "autostart-request");
+  assert.deepEqual(Object.keys(request).sort(), ["document", "kind", "request"]);
+  h.receive({ kind: "autostart-reply", document: h.bridge.document, request: request.request, status: { status: "requires_approval" } });
+  assert.deepEqual(JSON.parse(JSON.stringify(await status)), { status: "requires_approval" });
+  const load = h.sent.find(message => message.kind === "credential-request");
+  h.receive({ kind: "credential-reply", document: h.bridge.document, request: load.request, reply: { outcome: "loaded", lease: { credential: null } } });
+  await credential;
+  assert.equal(h.timers.size, 0);
+});
+
+test("status has bounded admission, timeout and pagehide revocation", async () => {
+  for (const stop of ["timeout", "pagehide"]) {
+    const h = host(); h.ready();
+    const pending = h.bridge.autostartStatus();
+    const rejected = assert.rejects(pending, /status/);
+    await assert.rejects(h.bridge.autostartStatus(), /status/);
+    assert.equal(h.sent.length, 1);
+    if (stop === "timeout") for (const fn of [...h.timers.values()]) fn();
+    else h.emit("pagehide", {});
+    await rejected; assert.equal(h.timers.size, 0);
+    if (stop === "pagehide") await assert.rejects(h.bridge.autostartStatus(), /status/);
+  }
+});
+
+test("status replies require matching native document, request and a closed status shape", async () => {
+  const h = host(); h.ready();
+  const pending = h.bridge.autostartStatus();
+  let settled = false;
+  pending.then(() => settled = true, () => settled = true);
+  const message = { kind: "autostart-reply", document: h.bridge.document, request: h.sent[0].request, status: { status: "unavailable", reason: "not_found" } };
+  h.receive({ ...message, document: "0".repeat(32) });
+  h.receive({ ...message, request: message.request + 1 });
+  h.receive(message, { source: h.window });
+  h.receive(message, { origin: "https://other" });
+  await tick(); assert.equal(settled, false);
+  h.receive(message); assert.deepEqual(JSON.parse(JSON.stringify(await pending)), message.status);
+  for (const status of [false, { status: "unknown" }, { status: "disabled", extra: true }, { status: "unavailable", reason: "unknown" }]) {
+    const p = h.bridge.autostartStatus(); const rejected = assert.rejects(p, /status/);
+    h.receive({ ...message, request: h.sent.at(-1).request, status });
+    await rejected;
+  }
+});
+
 test("untrusted origin and iframe have no bridge", () => {
   assert.equal(host({ origin: "https://other" }).bridge, undefined);
   assert.equal(host({ subframe: true }).bridge, undefined);

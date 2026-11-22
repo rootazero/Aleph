@@ -2,7 +2,7 @@
 import copy
 import unittest
 
-from phase11_nsh_credentials import STEPS, evaluate
+from phase11_nsh_credentials import STEPS, evaluate, evaluate_autostart
 
 
 class ReceiptTests(unittest.TestCase):
@@ -13,6 +13,21 @@ class ReceiptTests(unittest.TestCase):
             {"kind": "close-requested"},
             {"kind": "closed", "payload": {"owned_drained": True}},
         ]
+
+    def test_status_extension_requires_both_document_bound_native_results(self):
+        events = self.candidate()
+        values = [{"document": document, "value": {"status": "unavailable", "reason": "not_app_bundle"}}
+                  for document in events[0]["documents"]]
+        events[0]["autostart"] = values
+        self.assertTrue(evaluate_autostart(events, 0)["accepted"])
+        for bad in [values[:1], values[::-1], [], None, [None, None],
+                    [{"document": value["document"], "value": {"status": "disabled"}} for value in values]]:
+            events[0]["autostart"] = bad
+            self.assertFalse(evaluate_autostart(events, 0)["accepted"])
+        events[0]["autostart"] = values
+        self.assertFalse(evaluate_autostart(events, 1)["accepted"])
+        events[0]["cleanup"] = False
+        self.assertFalse(evaluate_autostart(events, 0)["accepted"])
 
     def test_complete_effects_and_natural_exit_pass(self):
         self.assertTrue(evaluate(self.candidate(), 0)["accepted"])

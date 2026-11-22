@@ -11,6 +11,44 @@ fn launch(args: &[&str]) -> Output {
 }
 
 #[test]
+fn status_is_read_only_and_unbundled_context_is_not_disabled() {
+    let output = launch(&["--autostart-status"]);
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap(),
+        serde_json::json!({"status":"unavailable", "reason":if cfg!(target_os = "macos") {"not_app_bundle"} else {"unsupported_platform"}})
+    );
+}
+
+#[test]
+fn status_rejects_qa_url_and_malformed_identity_without_echoing_input() {
+    for (url, nonce) in [
+        (Some("http://synthetic-secret.invalid"), "a1".repeat(32)),
+        (None, "synthetic-secret".into()),
+    ] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_aleph-nsh-shell"));
+        command
+            .arg("--autostart-status")
+            .env("ALEPH_NSH_QA_NONCE", nonce)
+            .env_remove("ALEPH_NSH_QA_URL");
+        if let Some(url) = url {
+            command.env("ALEPH_NSH_QA_URL", url);
+        }
+        let output = command.output().unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stdout.is_empty());
+        assert!(!String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("synthetic-secret"));
+    }
+    assert_eq!(
+        launch(&["--autostart-status", "extra"]).status.code(),
+        Some(1)
+    );
+}
+
+#[test]
 fn help_returns_before_the_native_event_loop() {
     let output = launch(&["--help"]);
     assert!(output.status.success());

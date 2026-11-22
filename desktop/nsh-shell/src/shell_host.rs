@@ -1,4 +1,12 @@
 //! The native shell hosts the canonical Panel; it owns no chat projection.
+pub(crate) const APP_ID: &str = "com.aleph.nsh-shell";
+
+pub(crate) fn valid_qa_nonce(nonce: &str) -> bool {
+    nonce.len() == 64
+        && nonce
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
 
 #[derive(Clone, Debug)]
 pub(crate) struct HostSettings {
@@ -76,11 +84,7 @@ impl HostSettings {
                 "QA endpoint must be a loopback HTTP origin with an explicit nonzero port".into(),
             );
         }
-        if nonce.len() != 64
-            || !nonce
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        {
+        if !valid_qa_nonce(nonce) {
             return Err("QA nonce must be 32 bytes of lowercase hex".into());
         }
         Self::for_target(

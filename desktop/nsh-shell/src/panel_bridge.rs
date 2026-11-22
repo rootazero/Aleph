@@ -27,6 +27,7 @@ struct Inner {
     reply: Notify,
     notifications: mpsc::Sender<(String, String)>,
     credentials: CredentialService,
+    autostart: crate::autostart::Reader,
 }
 
 #[derive(Default)]
@@ -61,6 +62,7 @@ impl Bridge {
         prefix: String,
         window: WindowRef,
         credentials: CredentialService,
+        autostart: crate::autostart::Reader,
     ) -> Self {
         let (notifications, mut pending) = mpsc::channel::<(String, String)>(1);
         let bridge = Self(Rc::new(Inner {
@@ -71,6 +73,7 @@ impl Bridge {
             reply: Notify::new(),
             notifications,
             credentials,
+            autostart,
         }));
         let worker = bridge.clone();
         spawn(async move { worker.navigate().await });
@@ -152,6 +155,33 @@ impl Bridge {
         if state.loading {
             return true;
         }
+        if let PanelReply::AutostartRequest { request, document } = message {
+            let generation = state.generation;
+            let accepted =
+                state.document.as_deref() == Some(document.as_str()) && valid_document(&document);
+            drop(state);
+            if accepted {
+                let bridge = self.clone();
+                spawn(async move {
+                    let status = bridge.0.autostart.query().await;
+                    let page = bridge.0.state.borrow();
+                    if !page.loading
+                        && page.generation == generation
+                        && page.document.as_deref() == Some(document.as_str())
+                    {
+                        let message = ShellRequest::AutostartReply {
+                            request,
+                            document,
+                            status,
+                        };
+                        bridge.0.view.post_message(
+                            serde_json::to_string(&message).expect("fixed status reply"),
+                        );
+                    }
+                });
+            }
+            return true;
+        }
         if let PanelReply::CredentialRequest {
             request,
             document,
@@ -186,7 +216,9 @@ impl Bridge {
                 }
                 return true;
             }
-            PanelReply::CredentialRequest { .. } => unreachable!(),
+            PanelReply::CredentialRequest { .. } | PanelReply::AutostartRequest { .. } => {
+                unreachable!()
+            }
         };
         if let Some(exchange) = &mut state.exchange {
             if exchange.request == request

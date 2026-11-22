@@ -768,7 +768,14 @@
       },
       "autostart": {
         "title": "This device",
-        "description": "Launch Aleph automatically when you log in to this computer."
+        "description": "Launch Aleph automatically when you log in to this computer.",
+        "status_loading": "Reading login-item status…",
+        "status_enabled": "Enabled",
+        "status_disabled": "Disabled",
+        "status_approval": "Requires approval in system settings",
+        "status_unavailable": "Status unavailable — not confirmed disabled",
+        "status_failed": "Could not read login-item status",
+        "read_only": "Read only: changing this setting in NSH is not available yet."
       }
     },
     "behavior": {

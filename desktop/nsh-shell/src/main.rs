@@ -1,3 +1,4 @@
+mod autostart;
 mod credentials;
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 mod panel_bridge;
@@ -31,7 +32,7 @@ fn main() -> std::process::ExitCode {
         return std::process::ExitCode::FAILURE;
     };
     if args.as_slice() == ["--help"] {
-        println!("Usage: aleph-nsh-shell [--connect <origin>]\n\nConnects to an existing Gateway; does not start, stop or reconfigure a service.\nUse HTTPS for a remote origin. No target or credential URL is persisted.");
+        println!("Usage: aleph-nsh-shell [--connect <origin> | --autostart-status]\n\nConnects to an existing Gateway; does not start, stop or reconfigure a service.\nUse HTTPS for a remote origin. No target or credential URL is persisted.\n--autostart-status reads the current app login item without changing it.");
         return std::process::ExitCode::SUCCESS;
     }
     let qa = ["ALEPH_NSH_QA_URL", "ALEPH_NSH_QA_NONCE"].map(|name| {
@@ -43,6 +44,24 @@ fn main() -> std::process::ExitCode {
         eprintln!("NSH host refused non-Unicode QA configuration");
         return std::process::ExitCode::FAILURE;
     };
+    if args.as_slice() == ["--autostart-status"] {
+        if endpoint.is_some() {
+            eprintln!("NSH host refused status query combined with QA endpoint");
+            return std::process::ExitCode::FAILURE;
+        }
+        let identity = match autostart::expected_identity(nonce.as_deref()) {
+            Ok(identity) => identity,
+            Err(error) => {
+                eprintln!("NSH host refused status query: {error}");
+                return std::process::ExitCode::FAILURE;
+            }
+        };
+        println!(
+            "{}",
+            serde_json::to_string(&autostart::read(&identity)).expect("closed status JSON")
+        );
+        return std::process::ExitCode::SUCCESS;
+    }
     let settings =
         match shell_host::HostSettings::from_launch(&args, endpoint.as_deref(), nonce.as_deref()) {
             Ok(settings) => settings,
@@ -69,7 +88,7 @@ fn main() -> std::process::ExitCode {
     let script = format!("{bootstrap}\n{script}");
     // This single-window debug trace is not a Chat or Artifacts projection.
     static LAST_EVENT: Mutex<Option<serde_json::Value>> = Mutex::new(None);
-    const APP_ID: &str = "com.aleph.nsh-shell";
+    use shell_host::APP_ID;
 
     #[derive(Clone, PartialEq, Props)]
     struct AppProps {
@@ -95,6 +114,7 @@ fn main() -> std::process::ExitCode {
             props.bridge_prefix.get_untracked(),
             window.clone(),
             credentials,
+            autostart::Reader::new(props.nonce.get_untracked().as_deref()),
         );
         let navigation = bridge.clone();
         let terminated = bridge.clone();
