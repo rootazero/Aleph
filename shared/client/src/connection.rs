@@ -11,7 +11,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
 use tokio::net::TcpStream;
-use tokio::sync::{mpsc, Mutex, Notify};
+use tokio::sync::{mpsc, watch, Mutex};
 use tokio_tungstenite::{
     connect_async_tls_with_config, tungstenite::Message, MaybeTlsStream, WebSocketStream,
 };
@@ -32,7 +32,7 @@ type WsReader = futures_util::stream::SplitStream<WsStream>;
 struct Socket {
     write: Mutex<Option<futures_util::stream::SplitSink<WsStream, Message>>>,
     requests: Arc<RequestState>,
-    stop_reader: Notify,
+    stop_io: watch::Sender<bool>,
 }
 
 impl Socket {
@@ -42,7 +42,7 @@ impl Socket {
             Arc::new(Self {
                 write: Mutex::new(Some(write)),
                 requests: Arc::new(RequestState::new()),
-                stop_reader: Notify::new(),
+                stop_io: watch::channel(false).0,
             }),
             read,
         )
@@ -50,7 +50,12 @@ impl Socket {
 
     fn stop(&self) {
         self.requests.close();
-        self.stop_reader.notify_one();
+        self.stop_io.send_replace(true);
+    }
+
+    async fn stopped(&self) {
+        let mut stop = self.stop_io.subscribe();
+        let _ = stop.wait_for(|stopped| *stopped).await;
     }
 
     async fn send_text(&self, json: String) -> CliResult<()> {
@@ -61,7 +66,12 @@ impl Socket {
         let Some(writer) = write.as_mut() else {
             return Err(CliError::Disconnected("Connection closed by peer".into()));
         };
-        if let Err(error) = writer.send(Message::Text(json.into())).await {
+        let sent = tokio::select! {
+            biased;
+            () = self.stopped() => return Err(CliError::Disconnected("Connection closed by peer".into())),
+            result = writer.send(Message::Text(json.into())) => result,
+        };
+        if let Err(error) = sent {
             self.stop();
             write.take();
             return Err(error.into());
@@ -70,7 +80,10 @@ impl Socket {
     }
 
     async fn close(&self) -> CliResult<()> {
-        self.stop();
+        // Prefer a Close frame, but retire the socket even if this future is
+        // dropped before it can acquire the writer.
+        let _stop_on_drop = StopSocketOnDrop(Some(self));
+        self.requests.close();
         let writer = self.write.lock().await.take();
         if let Some(mut writer) = writer {
             writer.send(Message::Close(None)).await?;
@@ -112,14 +125,12 @@ impl EventDelivery {
     }
 }
 
-// A cancelled reconnect must close its candidate, not leave a reader
-// and a Handshaking state waiting for an exchange nobody will finish.
-struct HandshakeAttempt<'a>(&'a Socket);
+struct StopSocketOnDrop<'a>(Option<&'a Socket>);
 
-impl Drop for HandshakeAttempt<'_> {
+impl Drop for StopSocketOnDrop<'_> {
     fn drop(&mut self) {
-        if !self.0.requests.is_ready() {
-            self.0.stop();
+        if let Some(socket) = self.0 {
+            socket.stop();
         }
     }
 }
@@ -562,12 +573,13 @@ impl AlephClient {
         tokio::spawn(async move {
             tokio::select! {
                 biased;
-                () = socket.stop_reader.notified() => {}
-                () = Self::read_loop(read, &socket, &delivery) => {
-                    socket.requests.close();
-                    socket.write.lock().await.take();
-                }
+                () = socket.stopped() => {}
+                () = Self::read_loop(read, &socket, &delivery) => {}
             }
+            // EOF and local retirement both release the writer. Signal first
+            // so a send holding the writer can stop even if its peer is stalled.
+            socket.stop();
+            socket.write.lock().await.take();
         });
     }
 
@@ -762,13 +774,14 @@ impl AlephClient {
     }
 
     async fn finish_handshake(&self, socket: &Socket, config: &CliConfig) -> CliResult<()> {
-        let _attempt = HandshakeAttempt(socket);
+        let mut stop_on_drop = StopSocketOnDrop(Some(socket));
         self.set_role(self.handshake(socket, config).await?);
         if !socket.requests.mark_ready() {
             return Err(CliError::Disconnected(
                 "Connection closed during handshake".into(),
             ));
         }
+        stop_on_drop.0 = None;
         Ok(())
     }
 
@@ -1273,6 +1286,76 @@ mod tests {
              read loop ended",
             started.elapsed()
         );
+    }
+
+    #[tokio::test]
+    async fn cancellation_releases_the_current_socket_during_reconnect() {
+        assert_cancelled_socket_is_released(true).await;
+    }
+
+    #[tokio::test]
+    async fn cancellation_releases_the_current_socket_during_close() {
+        assert_cancelled_socket_is_released(false).await;
+    }
+
+    async fn assert_cancelled_socket_is_released(cancel_reconnect: bool) {
+        use tokio_tungstenite::tungstenite::error::ProtocolError;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (seen_connect, waiting_for_reply) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            serve_handshake(&mut ws, "operator").await;
+            if cancel_reconnect {
+                let (stream, _) = listener.accept().await.unwrap();
+                ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+                let frame = ws.next().await.unwrap().unwrap();
+                let request: Value = serde_json::from_str(frame.to_text().unwrap()).unwrap();
+                assert_eq!(request["method"], "connect");
+                seen_connect.send(()).unwrap();
+            }
+            let termination = ws.next().await;
+            assert!(
+                matches!(
+                    termination,
+                    None | Some(Ok(Message::Close(_)))
+                        | Some(Err(tokio_tungstenite::tungstenite::Error::Protocol(
+                            ProtocolError::ResetWithoutClosingHandshake
+                        )))
+                ),
+                "expected close or EOF, got {termination:?}"
+            );
+        });
+        tokio::time::timeout(Duration::from_secs(3), async {
+            let config = CliConfig::default();
+            let (client, _events) = AlephClient::connect(&format!("ws://{addr}"), &config)
+                .await
+                .unwrap();
+            if cancel_reconnect {
+                // Reconnect requires a disconnected current socket. Leave the
+                // client alive while the candidate's peer sees termination.
+                client.close().await.unwrap();
+                let mut reconnect = Box::pin(client.reconnect(&config));
+                tokio::select! {
+                    result = &mut reconnect => panic!("unanswered handshake returned: {result:?}"),
+                    seen = waiting_for_reply => seen.unwrap(),
+                }
+                drop(reconnect);
+            } else {
+                let socket = client.socket();
+                let writer = socket.write.lock().await;
+                let mut close = Box::pin(client.close());
+                assert!(futures_util::poll!(&mut close).is_pending());
+                drop(close);
+                drop(writer);
+            }
+            server.await.unwrap();
+            assert!(!client.is_connected());
+        })
+        .await
+        .unwrap_or_else(|_| panic!("live client kept socket open (reconnect: {cancel_reconnect})"));
     }
 
     #[tokio::test]
