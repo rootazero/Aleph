@@ -30,7 +30,7 @@ log = "0.4"
 nsh-platform-linux = { version = "=0.6.0", default-features = false, features = ["webview"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-nsh-platform-windows = { version = "=0.6.0", default-features = false }
+nsh-platform-windows = { version = "=0.6.0", default-features = false, features = ["webview"] }
 
 [dev-dependencies]
 futures-util = "0.3"

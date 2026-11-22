@@ -9180,6 +9180,7 @@ dependencies = [
  "serde_json",
  "ttf-parser",
  "url",
+ "webview2-com",
  "windows 0.62.2",
  "windows-core 0.62.2",
  "windows-numerics 0.3.1",
