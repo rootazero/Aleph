@@ -1,6 +1,6 @@
 {
   "artifact": "phase11-nsh-inventory",
-  "version": "2026-11-22.6",
+  "version": "2026-11-22.7",
   "status": "FOUNDATION_IMPLEMENTED / P11-A-H_NOT_ACCEPTED",
   "authority": [
     "docs/superpowers/plans/2026-11-21-phase11-nsh-cutover.md",
@@ -431,7 +431,8 @@
       "linux_target": "BLOCKED: offline cache missing cairo-rs 0.22.11",
       "windows_target": "NOT RUN: target and runner unavailable",
       "workspace_fmt": "pre-existing unrelated workspace formatting drift; not rewritten",
-      "tauri_full_lite": "full default: 167 passed; lite qa-owned-root: 190 passed; unit suites, not installed-app/service/native lifecycle acceptance",
+      "tauri_full_lite": "full default: 165 passed; lite qa-owned-root: 190 passed; two classifier tests live in shared-host after extraction; unit suites, not installed-app/service/native lifecycle acceptance",
+      "shared_host": "cargo test -p aleph-desktop-host -p aleph-desktop-shell --offline --locked --jobs 1: shared-host 10 + retained full shell 165 passed; cargo clippy -p aleph-desktop-host --all-targets --offline --locked --jobs 1 -- -D warnings: passed",
       "native_qa": "PASS_SCOPED_NATIVE_CREDENTIAL_EFFECTS: .phase10-evidence/phase11-launch-credentials.EU3xi4/receipt.json; ten effects, two documents, natural exit after endpoint ownership change; prior .phase10-evidence/phase11-native-credentials.Kje8rAAJ/receipt.json retained; not Panel WASM/desktop parity/performance",
       "native_receipt_tests": "cd qa && python3 -m unittest test_phase11_nsh_credentials -v: 7 passed; legacy credential evaluator unchanged; optional status extension rejects missing/wrong-document/collapsed status",
       "qa_python_suite": "uv run --offline --no-project --no-python-downloads --python python3 --with jsonschema python -m unittest discover -s qa -p 'test_*.py' -v: 88 passed; plain python3 first blocked four module imports by missing jsonschema, resolved in isolated cached uv environment"
@@ -470,8 +471,15 @@
     "retained_old_shell": ["explicit stop", "version marker", "reconcile_for_version", "legacy autostart removal"],
     "behavior_fix": "read a bounded CRLF-terminated HTTP/1.0 or HTTP/1.1 status line across TCP fragments; reject malformed/incomplete/oversized lines",
     "observed_red": ["fragmented 200 parsed as Some(2)", "non-HTTP 200 accepted as Some(200)"],
-    "verification": "five shared-host tests including real owned ephemeral TCP listeners; retained full/lite shell regressions; strict shared-host clippy",
-    "limits": ["readiness is not binary identity", "inherited synchronous launcher wait remains unbounded", "preliminary port_open connect has no per-operation deadline", "no actual service launch/stop/recovery run", "no NSH supervisor/runtime mount", "no installed default endpoint used by tests", "no Windows/Linux native acceptance"]
+    "verification": "ten shared-host tests: real fragmented TCP input, owned listening/non-listening sockets and independent std TCP observation, typed error mapping, actual owned Unix launcher success/nonzero/timeout kill-and-reap; retained full/lite regressions; strict clippy",
+    "bounded_follow_up": {
+      "unix_launcher": "async owned wait; 40s per-launcher timeout; nonzero refused; timeout awaits Tokio kill/reap",
+      "windows": "existing detached start flags and no-wait policy preserved; not a Unix short-lived launcher",
+      "connect": "2s per preliminary connect; only ConnectionRefused maps to Some(false); unknown remains None and cannot grant launch or close acknowledgement",
+      "fixture_correction": "drop(listener) did not guarantee immediate refusal during concurrent process creation; a bound/non-listening socket is retained and its OS observation is independently classified through std TCP; no kernel/Tokio/FD-inheritance cause claimed",
+      "limits": "per-operation bounds, not a global startup deadline or external-cancellation drain receipt"
+    },
+    "limits": ["readiness is not binary identity or a bind reservation", "externally dropped future kill-on-drop is not awaited drain", "wait-error and cleanup-error paths do not claim successful child drain", "legacy port-close unit return is not a stop acknowledgement", "no actual service launch/stop/recovery run", "no NSH supervisor/runtime mount", "no installed default endpoint used by tests", "no Windows/Linux native acceptance"]
   },
   "gates": {
     "P11-A": "OPEN",

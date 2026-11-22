@@ -20,13 +20,13 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 /// What is currently answering on the daemon's port.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PortOccupant {
-    /// Nothing is listening — the port is free to use.
+    /// TCP connection was refused; this is not proof a future bind will succeed.
     Free,
-    /// `aleph-server` is up and `/ready` reports 200.
+    /// A listener returned 200 on `/ready`, without binary identity proof.
     DaemonReady,
-    /// `aleph-server` holds the port but is still booting (`/ready` → 503).
+    /// A listener returned 503 on `/ready`, without binary identity proof.
     DaemonBooting,
-    /// Some other process holds the port — not `aleph-server`.
+    /// Unrecognized readiness or an unknown connection outcome.
     Foreign,
 }
 
@@ -38,14 +38,13 @@ pub async fn ensure_ready() -> Result<(), String> {
         // flock and exit 64) — wait rather than relaunch.
         PortOccupant::DaemonBooting => wait_until_ready().await,
         PortOccupant::Free => {
-            launch_detached()?;
+            launch_detached().await?;
             wait_until_ready().await
         }
-        // A non-daemon process holds the port. Waiting on `/ready` would
-        // only burn the timeout, so fail fast with an actionable message.
+        // Unrecognized or unknown readiness never authorizes another launch.
         PortOccupant::Foreign => Err(format!(
-            "port {DAEMON_PORT} is held by another process, not aleph-server; \
-             free the port and relaunch Aleph"
+            "cannot establish aleph-server readiness on port {DAEMON_PORT}; \
+             no new daemon was launched"
         )),
     }
 }
@@ -57,24 +56,23 @@ pub async fn ensure_ready() -> Result<(), String> {
 pub async fn relaunch_if_down() {
     match probe_port().await {
         PortOccupant::Free => {
-            if let Err(e) = launch_detached() {
+            if let Err(e) = launch_detached().await {
                 tracing::error!("failed to relaunch daemon: {e}");
             }
         }
         PortOccupant::Foreign => tracing::warn!(
-            "daemon port {DAEMON_PORT} held by a foreign process; \
-             cannot relaunch aleph-server"
+            "local server readiness is unknown on port {DAEMON_PORT}; \
+             leaving the listener and installed services untouched"
         ),
         PortOccupant::DaemonReady | PortOccupant::DaemonBooting => {}
     }
 }
 
-/// Poll until the daemon port is free, bounded so a stuck shutdown cannot
-/// hang startup. A still-open port afterwards is harmless — `ensure_ready`
-/// then treats it as a daemon mid-boot and waits on `/ready`.
+/// Legacy close waiting; a timeout is logged but its unit return is not a
+/// stop acknowledgement. A new NSH lifecycle owner must not treat it as one.
 pub async fn wait_until_port_closed() {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(6);
-    while port_open().await {
+    while port_open(DAEMON_PORT).await != Some(false) {
         if tokio::time::Instant::now() >= deadline {
             tracing::warn!("daemon port still open after stop; continuing anyway");
             return;
@@ -106,17 +104,15 @@ pub async fn is_ready() -> bool {
     matches!(http_get_status("/ready").await, Some(200))
 }
 
-/// Inspect the daemon port: free, ours, or taken by a stranger?
-///
-/// `aleph-server` serves `/ready` the moment it binds the port (200 when
-/// ready, 503 while booting). Any other reply — a different status, or no
-/// usable HTTP at all — means a foreign process holds the port, and the
-/// shell must not wait on it as if it were a daemon mid-boot.
+/// Classify listener readiness, not executable identity or service ownership.
+/// `aleph-server` uses 200/503 on `/ready`; other replies and unknown connect
+/// outcomes fail closed and do not authorize a launch.
 async fn probe_port() -> PortOccupant {
-    if !port_open().await {
-        return PortOccupant::Free;
+    match port_open(DAEMON_PORT).await {
+        Some(true) => classify_ready_status(http_get_status("/ready").await),
+        Some(false) => PortOccupant::Free,
+        None => PortOccupant::Foreign,
     }
-    classify_ready_status(http_get_status("/ready").await)
 }
 
 /// Map a `/ready` probe result to the kind of process holding the port.
@@ -128,9 +124,20 @@ const fn classify_ready_status(status: Option<u16>) -> PortOccupant {
     }
 }
 
-/// True if something is listening on the daemon's port.
-async fn port_open() -> bool {
-    TcpStream::connect((DAEMON_HOST, DAEMON_PORT)).await.is_ok()
+// Some(false) proves refusal; None is unknown and must not grant a launch.
+fn classify_connect(result: Result<(), std::io::ErrorKind>) -> Option<bool> {
+    match result {
+        Ok(()) => Some(true),
+        Err(std::io::ErrorKind::ConnectionRefused) => Some(false),
+        Err(_) => None,
+    }
+}
+
+async fn port_open(port: u16) -> Option<bool> {
+    let result = tokio::time::timeout(PROBE_TIMEOUT, TcpStream::connect((DAEMON_HOST, port)))
+        .await
+        .ok()?;
+    classify_connect(result.map(|_| ()).map_err(|error| error.kind()))
 }
 
 // `tcp_reachable` (bare TCP connect for a remote Gateway) lived here and is
@@ -191,11 +198,11 @@ async fn http_get_status_inner(port: u16, path: &str) -> Option<u16> {
 }
 
 /// Launch `aleph-server` fully detached from the shell process.
-fn launch_detached() -> Result<(), String> {
+async fn launch_detached() -> Result<(), String> {
     let bin = resolve_daemon_binary()
         .ok_or_else(|| "could not locate the aleph-server binary".to_string())?;
     tracing::info!("launching daemon: {}", bin.display());
-    spawn_detached(&bin)
+    spawn_detached(&bin).await
 }
 
 /// Platform-specific daemon binary file name.
@@ -228,34 +235,50 @@ pub fn resolve_daemon_binary() -> Option<PathBuf> {
         .find(|p| p.is_file())
 }
 
+#[cfg(unix)]
+async fn settle_launcher(
+    launcher: &mut tokio::process::Child,
+    deadline: Duration,
+) -> Result<(), String> {
+    match tokio::time::timeout(deadline, launcher.wait()).await {
+        Ok(Ok(status)) if status.success() => Ok(()),
+        Ok(Ok(_)) => Err("daemon launcher exited unsuccessfully".to_string()),
+        Ok(Err(_)) => Err("could not wait for daemon launcher".to_string()),
+        Err(_) => {
+            // Tokio kill awaits wait/reap, unlike std::process::Child::kill.
+            launcher
+                .kill()
+                .await
+                .map_err(|_| "daemon launcher timed out and cleanup failed".to_string())?;
+            Err("daemon launcher timed out".to_string())
+        }
+    }
+}
+
 /// Spawn the daemon detached on Unix. `--daemon` makes `aleph-server`
 /// double-fork and `setsid` itself, so the real daemon detaches; the
-/// short-lived launcher we spawn is waited on only to reap it.
+/// short-lived launcher is bounded and reaped without blocking the executor.
 #[cfg(unix)]
-fn spawn_detached(bin: &Path) -> Result<(), String> {
-    use std::process::{Command, Stdio};
+async fn spawn_detached(bin: &Path) -> Result<(), String> {
+    use std::process::Stdio;
 
-    let mut launcher = Command::new(bin)
+    let mut launcher = tokio::process::Command::new(bin)
         .arg("--daemon")
         .arg("start")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
+        .kill_on_drop(true)
         .spawn()
         .map_err(|e| format!("failed to spawn {}: {e}", bin.display()))?;
-    match launcher.wait() {
-        Ok(status) if status.success() => {}
-        Ok(status) => tracing::warn!("aleph-server launcher exited with {status}"),
-        Err(e) => tracing::warn!("failed to wait for aleph-server launcher: {e}"),
-    }
-    Ok(())
+    settle_launcher(&mut launcher, READY_TIMEOUT).await
 }
 
 /// Spawn the daemon detached on Windows. There is no fork-based
 /// daemonization, so we detach the process and a new process group and
 /// never wait on it, letting it outlive the shell.
 #[cfg(windows)]
-fn spawn_detached(bin: &Path) -> Result<(), String> {
+async fn spawn_detached(bin: &Path) -> Result<(), String> {
     use std::os::windows::process::CommandExt;
     use std::process::{Command, Stdio};
 
@@ -361,5 +384,116 @@ mod tests {
             let line = format!("HTTP/1.1 {status} fixture\r\n").into_bytes();
             assert_eq!(scripted_status(vec![line]).await, Some(status));
         }
+    }
+
+    #[test]
+    fn connect_errors_are_not_free_port_evidence() {
+        use std::io::ErrorKind;
+
+        for error in [
+            ErrorKind::TimedOut,
+            ErrorKind::PermissionDenied,
+            ErrorKind::ConnectionReset,
+            ErrorKind::Interrupted,
+            ErrorKind::Other,
+        ] {
+            assert_eq!(classify_connect(Err(error)), None);
+        }
+        assert_eq!(classify_connect(Ok(())), Some(true));
+        assert_eq!(
+            classify_connect(Err(ErrorKind::ConnectionRefused)),
+            Some(false)
+        );
+    }
+
+    #[tokio::test]
+    async fn port_presence_observes_owned_listener_and_non_listener() {
+        let listener = tokio::net::TcpListener::bind((DAEMON_HOST, 0))
+            .await
+            .unwrap();
+        assert_eq!(
+            port_open(listener.local_addr().unwrap().port()).await,
+            Some(true)
+        );
+
+        // Keep the endpoint bound but not listening, so no other fixture can
+        // acquire it. The OS may refuse or time out; derive that observation
+        // independently instead of assuming drop means immediate refusal.
+        let closed = tokio::net::TcpSocket::new_v4().unwrap();
+        closed
+            .bind((std::net::Ipv4Addr::LOCALHOST, 0).into())
+            .unwrap();
+        let address = closed.local_addr().unwrap();
+        let observed = std::net::TcpStream::connect_timeout(&address, Duration::from_millis(20));
+        assert!(
+            observed.is_err(),
+            "a non-listening fixture accepted a connection"
+        );
+        assert_eq!(
+            port_open(address.port()).await,
+            classify_connect(observed.map(|_| ()).map_err(|error| error.kind()))
+        );
+    }
+
+    #[cfg(unix)]
+    fn owned_launcher(script: &str) -> tokio::process::Child {
+        use std::process::Stdio;
+
+        tokio::process::Command::new("/bin/sh")
+            .args(["-c", script])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap()
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn launcher_success_requires_actual_exit() {
+        let mut launcher = owned_launcher("exit 0");
+        let result = settle_launcher(&mut launcher, Duration::from_secs(5)).await;
+        let exited = launcher.try_wait().unwrap().is_some();
+        if !exited {
+            launcher.kill().await.unwrap();
+        }
+        assert!(result.is_ok(), "{result:?}");
+        assert!(exited, "success cannot precede real child exit");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn launcher_failure_is_reaped_not_reported_as_ready() {
+        let mut launcher = owned_launcher("exit 7");
+        let result = settle_launcher(&mut launcher, Duration::from_secs(5)).await;
+        let exited = launcher.try_wait().unwrap().is_some();
+        if !exited {
+            launcher.kill().await.unwrap();
+        }
+        assert!(result.is_err());
+        assert!(exited, "failure must also settle its owned child");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn launcher_timeout_kills_and_reaps_before_returning() {
+        let mut launcher = owned_launcher("exec /bin/sleep 30");
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            settle_launcher(&mut launcher, Duration::from_millis(20)),
+        )
+        .await;
+        let exited = launcher.try_wait().unwrap().is_some();
+        // This owner also cleans up when the implementation is RED or cancelled.
+        if !exited {
+            launcher.kill().await.unwrap();
+        }
+        assert!(
+            result.is_ok(),
+            "launcher settlement exceeded the test bound"
+        );
+        assert!(result.unwrap().unwrap_err().contains("timed out"));
+        assert!(exited, "timeout returned before the real child was reaped");
     }
 }

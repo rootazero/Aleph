@@ -1,7 +1,7 @@
 # Phase11 NSH Cutover Contract / Phase11 NSH 切换契约
 
 **Status / 状态:** implemented foundation slices, NOT P11-A–H acceptance / 基础切片已实施，不是全期验收
-**Version / 版本:** `2026-11-22.6`
+**Version / 版本:** `2026-11-22.7`
 **Scope / 范围:** official platform entry selection, fixed credential transport and immutable launch targets / 官方平台入口选择、固定凭据传输与不可变启动目标
 
 ## 1. Authority and non-goals / 权威与不做事项
@@ -183,8 +183,26 @@ Before NSH acquires any service ownership, extract the existing Tauri-independen
 - **Owner and actual caller:** `desktop/shell/src/daemon.rs` reexports the same ensure/readiness/relaunch/wait operations from `aleph-desktop-host::local_server`. Its existing callers and product selection stay unchanged. Only one implementation resolves/spawns a local daemon or probes its readiness. / 旧壳真实调用方不变，启动与探测实现只有一份。
 - **Retained old-shell effects:** keep `stop_daemon`, version marker and `reconcile_for_version` plus legacy autostart removal inside the Tauri shell. The new library cannot remove launchd/systemd/Task Scheduler registrations or reconcile installed versions. NSH does not yet call this library. / 破坏性旧版本接管不随通用启动代码迁移，NSH 暂不挂载。
 - **Boundary and dependency:** the new internal, unpublished crate depends on Tokio/tracing only, not Core/Server/Tauri/NSH or native capture backends; the retained shell enables it only with `embedded-core`. It creates no runtime, worker or process until an existing caller invokes an operation. Cost: one additional workspace member and build dependency; benefit: later NSH lifecycle wiring cannot silently diverge from the retained baseline. / 增加一项 full 专用内部构建依赖，避免两套生命周期语义。
-- **Inherited blocking gaps:** the Unix launcher's synchronous `wait()` and the preliminary `port_open()` connect have no per-operation deadline. The existing readiness loop deadline is not a hard bound around those operations. They are retained here, not declared safe for a new NSH UI/runtime owner; bound/cancel/drain must be addressed before that mount. / 明示保留的阻塞边界，不能把旧循环时限当作完整启动时限。
+- **Extraction-time blocking gaps:** checkpoint `2026-11-22.6` retained the synchronous Unix launcher wait and an unbounded preliminary connect. Sections 12.1/12.2 now bound those operations, but external cancellation is still not an awaited drain and no NSH supervisor/runtime owner is mounted. These local bounds are not a whole-startup deadline. / 抽取时遗留的两项单操作边界现已补齐，仍不冒充取消排空、NSH 接管或全启动时限。
 - **Readiness meaning:** the inherited `/ready` 200/503 classification is an HTTP readiness observation, not proof of binary identity or version and not permission to stop an existing service. Connection/read/parser bounds and fragmented replies need actual loopback-socket tests, not only status-enum tests. No installed default endpoint is used by those tests. / 就绪不等于进程身份；用自有临时端口检验真实网络边界。
 - **Verification and limits:** preserve old-shell tests, add real isolated TCP regression cases and run strict lint. No production daemon/service command, default change or installed-product takeover is permitted by this refactor. Full/lite NSH startup, supervisor runtime ownership, explicit stop and process-level recovery remain separate pending implementation. / 保留旧回归，禁止用抽取或 socket 测试冒充产品生命周期验收。
 
 **SPEC author pass:** checked old call sites, neutral I/O dependencies and the forbidden reconcile transfer. **QUALITY author pass after SPEC:** checked that a 200 reply cannot establish identity, extraction cannot authorize stopping, and tests must exercise actual fragmented network input without using port 18790. These are author passes, not independent approval. / 先明确意义与拒绝方向，再实施；不关闭全期闸门。
+
+### 12.1 Bounded Unix launcher follow-up / Unix 启动器有界等待
+
+The next source change replaces the inherited synchronous Unix launcher wait with Tokio's owned child wait. Reuse the existing `READY_TIMEOUT` (40 seconds) for the launcher operation; this is **not** a claim that the whole startup takes at most 40 seconds. On timeout, await kill/reap before returning a timeout error; nonzero launcher exit must fail rather than look like successful startup. Windows' detached server is not a short-lived Unix launcher and must not use this wait/kill policy. / 复用既有时限，只约束短命 Unix launcher；Windows 分离服务进程不套用该策略。
+
+Tests use only owned `/bin/sh` exit/sleep children, with explicit cleanup even in RED, and assert actual child settlement rather than whether kill was called. They do not execute `aleph-server`, prove a detached server's recovery, or authorize changing an installed service. If the surrounding future is externally dropped, kill-on-drop is only a fallback, not an awaited drain receipt; the future NSH runtime owner must still join its operations. The preliminary port connect gap also remains open for a separate fail-closed change. / 子进程测试不冒充真实服务验收，外部取消和探测边界仍须由后续 owner 接线闭合。
+
+**SPEC author follow-up:** checked Unix/Windows lifetime differences and exact old caller signatures. **QUALITY author follow-up after SPEC:** checked real child exit assertions, RED cleanup, nonzero refusal and the distinction between timeout cleanup and external future cancellation. / 作者按顺序自审，不冒充独立审核。
+
+### 12.2 Fail-closed preliminary connect / 连接前探测失败闭合
+
+Bound the preliminary loopback TCP connect by the existing two-second `PROBE_TIMEOUT`. Only an actual `ConnectionRefused` is a refused-listener observation; it is not a reservation or proof that a subsequent bind will succeed. Timeout, permission/network error and other unknown outcomes remain Foreign/unknown and never authorize a launch. `Some(false)` means positively refused, `Some(true)` connected, and `None` unknown; both consumers preserve this distinction and the unknown error message does not claim a confirmed foreign process. / 明确拒绝只是未监听观察，不保证随后 bind 成功；未知不得许可启动，也不能伪称已识别外来进程。
+
+Verification uses pure I/O-error mapping plus an actual owned listener and a separately reserved, bound/non-listening TCP socket. On this machine the latter can time out rather than refuse, so a standard-library TCP probe supplies the independent OS observation and the async probe must preserve its classification. The fixture keeps the socket bound and does not assume that dropping a listener immediately produces `ConnectionRefused`. Diagnostic controls reproduced that old assumption failing during concurrent child creation; socket-only and isolated controls did not reproduce it. This does not establish a kernel, Tokio or inherited-FD cause. No permission-error injection or Windows/Linux native fault handling is claimed. The legacy unit-return port-close wait remains not a new NSH stop receipt. / 用真实 TCP 及独立标准库观察校验，明确拒绝与未知分开；修正测量夹具而非放宽生产判据，不把未证实的底层归因写成事实。
+
+**SPEC author pass:** checked both callers (`probe_port` and legacy port-close waiting). **QUALITY author pass after SPEC:** checked unknown in both directions: neither launch permission nor proof of close. / 两个方向都保持拒绝，作者自审不等于独立审核。
+
+The [bounded-host checkpoint](../runs/2026-11-22-phase11-bounded-host-receipt.json) records the final-source checks and the rejected fixture assumptions. The earlier source-extraction receipt remains historical and unchanged. Neither receipt is NSH full/lite startup, native cross-platform acceptance, service recovery or Phase11 completion. / 新回执单列有界操作验证，旧回执不改写；仍不关闭产品与跨平台闸门。
