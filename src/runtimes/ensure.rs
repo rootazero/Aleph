@@ -120,7 +120,7 @@ async fn ensure_capability_recursive(
         }
     }
 
-    let mut probe_result = probe::probe(capability);
+    let mut probe_result = probe::probe(capability).await;
 
     if probe_result.found {
         let Some(bin_path) = probe_result.bin_path.take() else {

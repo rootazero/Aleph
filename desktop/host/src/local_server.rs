@@ -59,7 +59,7 @@ pub async fn ensure_compatible_ready() -> Result<(), String> {
     admission::ensure(DAEMON_PORT, async || {
         let bin = bundled_daemon_binary()
             .ok_or_else(|| "could not locate the bundled aleph-server binary".to_string())?;
-        spawn_detached(&bin).await
+        spawn_detached(&bin, &["--bundled-content-only"]).await
     })
     .await
 }
@@ -217,7 +217,7 @@ async fn launch_detached() -> Result<(), String> {
     let bin = resolve_daemon_binary()
         .ok_or_else(|| "could not locate the aleph-server binary".to_string())?;
     tracing::info!("launching daemon: {}", bin.display());
-    spawn_detached(&bin).await
+    spawn_detached(&bin, &[]).await
 }
 
 /// Platform-specific daemon binary file name.
@@ -275,11 +275,12 @@ async fn settle_launcher(
 /// double-fork and `setsid` itself, so the real daemon detaches; the
 /// short-lived launcher is bounded and reaped without blocking the executor.
 #[cfg(unix)]
-async fn spawn_detached(bin: &Path) -> Result<(), String> {
+async fn spawn_detached(bin: &Path, startup_options: &[&str]) -> Result<(), String> {
     use std::process::Stdio;
 
     let mut launcher = tokio::process::Command::new(bin)
         .arg("--daemon")
+        .args(startup_options)
         .arg("start")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -294,7 +295,7 @@ async fn spawn_detached(bin: &Path) -> Result<(), String> {
 /// daemonization, so we detach the process and a new process group and
 /// never wait on it, letting it outlive the shell.
 #[cfg(windows)]
-async fn spawn_detached(bin: &Path) -> Result<(), String> {
+async fn spawn_detached(bin: &Path, startup_options: &[&str]) -> Result<(), String> {
     use std::os::windows::process::CommandExt;
     use std::process::{Command, Stdio};
 
@@ -303,6 +304,7 @@ async fn spawn_detached(bin: &Path) -> Result<(), String> {
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
     Command::new(bin)
+        .args(startup_options)
         .arg("start")
         .stdin(Stdio::null())
         .stdout(Stdio::null())

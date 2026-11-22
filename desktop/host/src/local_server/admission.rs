@@ -224,6 +224,18 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires the locally assembled macOS aleph-server sibling; starts only a private foreground process"]
     async fn cold_start_admits_and_reaps_owned_bundled_gateway() {
+        owned_foreground_cold_start(false).await;
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    #[ignore = "requires a newly assembled macOS server with the startup policy"]
+    async fn bundled_only_cold_start_without_network_denial() {
+        owned_foreground_cold_start(true).await;
+    }
+
+    #[cfg(target_os = "macos")]
+    async fn owned_foreground_cold_start(bundled_only: bool) {
         use std::process::Stdio;
         use std::time::Duration;
         use tokio::process::Command;
@@ -256,11 +268,20 @@ mod tests {
         let mut child = None;
         drop(listener);
         let admission = ensure(port, async || {
-            child = Some(
+            let mut command = if bundled_only {
+                let mut command = Command::new(&server);
+                command.arg("--bundled-content-only");
+                command
+            } else {
                 // Disable external content fetches; exercise the real embedded fallback.
-                Command::new("/usr/bin/sandbox-exec")
+                let mut command = Command::new("/usr/bin/sandbox-exec");
+                command
                     .args(["-p", "(version 1) (allow default) (deny network-outbound)"])
-                    .arg(&server)
+                    .arg(&server);
+                command
+            };
+            child = Some(
+                command
                     .arg("--config")
                     .arg(&config)
                     .args(["--bind", "127.0.0.1", "--port", &port.to_string(), "start"])
@@ -296,17 +317,16 @@ mod tests {
                 .status()
                 .await
                 .is_ok_and(|status| status.success());
-        let natural = match tokio::time::timeout(Duration::from_secs(30), child.wait()).await {
-            Ok(Ok(status)) => status.success(),
-            _ => {
-                child.kill().await.unwrap();
-                false
-            }
-        };
+        let exit = tokio::time::timeout(Duration::from_secs(30), child.wait()).await;
+        let natural = matches!(&exit, Ok(Ok(status)) if status.success());
+        if !matches!(&exit, Ok(Ok(_))) {
+            child.kill().await.unwrap();
+        }
         let port_closed = super::port_open(port).await == Some(false);
-        if admission.is_err() {
+        if admission.is_err() || !natural || !signaled {
             eprintln!(
-                "owned Child before shutdown: {before_shutdown:?}; owns listener: {owns_listener}"
+                "owned Child before shutdown: {before_shutdown:?}; owns listener: {owns_listener}; \
+                 TERM sent: {signaled}; exit: {exit:?}; port closed: {port_closed}"
             );
             let logs = root.path().join("logs");
             if let Ok(entries) = std::fs::read_dir(logs) {
@@ -325,6 +345,11 @@ mod tests {
             }
         }
         let path = root.path().to_owned();
+        let embedded_skill_manifest = path.join("skills/manifest.json").is_file();
+        let embedded_plugin_cache = path.join("plugins/cache/aleph-official").is_dir();
+        let official_checkout_created = ["aleph-skills-checkout", "aleph-plugins-checkout"]
+            .iter()
+            .any(|name| path.join("cache").join(name).exists());
         root.close().unwrap();
         assert!(!path.exists());
         admission.unwrap();
@@ -334,6 +359,10 @@ mod tests {
         );
         assert!(signaled && natural, "owned process did not exit cleanly");
         assert!(port_closed, "owned listener did not close");
+        if bundled_only {
+            assert!(embedded_skill_manifest && embedded_plugin_cache);
+            assert!(!official_checkout_created);
+        }
     }
 
     #[tokio::test]

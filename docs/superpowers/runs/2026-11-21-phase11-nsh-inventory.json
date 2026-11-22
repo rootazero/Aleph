@@ -1,6 +1,6 @@
 {
   "artifact": "phase11-nsh-inventory",
-  "version": "2026-11-22.15",
+  "version": "2026-11-22.16",
   "status": "FOUNDATION_IMPLEMENTED / P11-A-H_NOT_ACCEPTED",
   "authority": [
     "docs/superpowers/plans/2026-11-21-phase11-nsh-cutover.md",
@@ -693,6 +693,13 @@
     "receipt": "docs/superpowers/runs/2026-11-22-phase11-default-backend-receipt.json",
     "effect": "Missing or empty general table now resolves the same file backend as the field default. A newly built and signed production sibling passed the private foreground cold test without that table.",
     "limits": "No persisted configuration migrated; no unrestricted network boot, NSH detached-launch or three-platform parity evidence. The preceding explicit-backend receipt remains historical."
+  },
+  "macos_bundled_only_cold_start": {
+    "status": "PASS_SCOPED_FOREGROUND_COLD_ADMISSION_AND_EXIT / NOT_PACKAGED_HOST_COLD_START",
+    "receipt": "docs/superpowers/runs/2026-11-22-phase11-bundled-only-receipt.json",
+    "effect": "Only a newly started NSH full sibling receives --bundled-content-only; embedded content stays available without automatically fetching official repositories on first boot. Already-running services and ordinary Tauri/standalone starts keep their existing behavior.",
+    "settlement": "Real signed foreground sibling starts on isolated loopback with no outbound denial, uses embedded content, and exits naturally after TERM. The sampled blocking runtime probe was replaced with bounded cancellable direct-child I/O.",
+    "limits": "No production detached launch, GUI, installed endpoint, descendant-tree drain, Windows/Linux native proof or Phase11 acceptance."
   },
   "active_reference_audit": {
     "census": "docs/superpowers/runs/2026-11-22-phase11-active-references.json",

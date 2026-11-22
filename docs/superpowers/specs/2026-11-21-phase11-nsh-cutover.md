@@ -1,7 +1,7 @@
 # Phase11 NSH Cutover Contract / Phase11 NSH 切换契约
 
 **Status / 状态:** implemented foundation slices, NOT P11-A–H acceptance / 基础切片已实施，不是全期验收
-**Version / 版本:** `2026-11-22.15`
+**Version / 版本:** `2026-11-22.16`
 **Scope / 范围:** official platform entry selection, fixed credential transport and immutable launch targets / 官方平台入口选择、固定凭据传输与不可变启动目标
 
 ## 1. Authority and non-goals / 权威与不做事项
@@ -296,3 +296,17 @@ The unrestricted empty-root probe did not acquire readiness within the existing 
 ## 20. Session backend default / 会话后端默认值
 
 `GeneralConfig::default()` and Serde's field default now use the same `file` value. Omitted `[general]`, an empty `[general]`, and programmatic defaults agree; explicit `sqlite` and empty strings remain explicit values rather than being silently rewritten. No persisted configuration is migrated. The [default-backend receipt](../runs/2026-11-22-phase11-default-backend-receipt.json) verifies a newly built and locally signed server with the same isolated foreground harness, now with the whole `[general]` table omitted. Network-denied fallback only; it is not evidence of unrestricted cold startup or the production detached host path. / 统一默认值，不改用户配置；重新签名的真实服务在省略该节后通过隔离启动与回收，联网和后台路径仍未验证。
+
+## 21. Embedded content on NSH-owned startup / NSH 自建服务使用内置快照
+
+When strict local admission actually launches the bundled sibling, it passes `--bundled-content-only`. The existing Core extractor skips only its first-run automatic remote sync and follows its existing embedded extraction and manifest rules. Explicit official updates still use the existing sync path. A reused service, lite or remote launch, legacy Tauri and standalone startup without the option are not changed. / 只改变 NSH full 自己新启动的随包服务；保留默认和显式更新语义。
+
+**SPEC:** scope at the launcher, no persisted policy or new owner. **QUALITY:** cover omitted and explicit CLI values, exercise the packaged server against private state, and distinguish foreground evidence from the actual detached NSH/GUI path. The 40-second desktop readiness limit is unchanged. / 不扩大等待上限，也不把前台实测当成后台 GUI 验收。
+
+## 22. Runtime probe shutdown ownership / 运行时探测退出所有权
+
+An owned macOS Gateway accepted TERM and closed its listener, but a process sample found Tokio runtime shutdown waiting for a blocking warmup worker in `runtimes::probe::get_version → std::process::Command::output`. An outer async timeout does not cancel that worker. / 端口已关闭不等于进程已结算；采样定位到同步版本探测。
+
+**SPEC:** keep one shared runtime lookup and version parser. Replace its synchronous locator and version subprocess waits with cancellable Tokio child I/O; preserve PATH, no-window behavior and status/version interpretation. Keep the warmup's existing overall per-probe 30-second deadline. Bound each command and cap captured streams; timeout explicitly terminates and waits for the direct child, while cancellation relies on Tokio kill-on-drop (not arbitrary descendants or an awaited reap on drop). No timeout change for the desktop or shutdown fixture. / 不新增守护器，不保证任意进程树回收。
+
+**QUALITY preflight:** test stdout/stderr preservation and a real owned subprocess that exceeds the deadline. Then rerun unchanged native shutdown acceptance against the rebuilt sibling. / 测真实子进程和原样退出验收，不放宽判据。

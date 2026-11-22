@@ -38,7 +38,7 @@ use crate::browser::chromium_resolve::{resolve_binary, ResolvedChromium};
 use crate::browser::engine::Engine;
 use crate::browser::profile::BrowserType;
 use crate::browser::BrowserError;
-use crate::diagnostics::check::{settle_probe, unknown_finding, HealthCheck, Posture};
+use crate::diagnostics::check::{unknown_finding, HealthCheck, Posture};
 use crate::diagnostics::finding::Finding;
 // No `TargetOs` here, deliberately: the platform question is
 // `specs::supported_on_current_os`'s, and importing the enum would be the
@@ -381,15 +381,14 @@ impl EngineMissingCheck {
             }];
         }
 
-        // No pin: ask the prober, off the async worker (a `which` PATH walk
-        // plus a `--version` subprocess), under the same deadline.
+        // No pin: run cancellable PATH and version probes under the same deadline.
         let probe = tokio::time::timeout(
             RESOLVE_TIMEOUT,
-            tokio::task::spawn_blocking(|| crate::runtimes::probe::probe(OBSCURA_RUNTIME)),
+            crate::runtimes::probe::probe(OBSCURA_RUNTIME),
         )
         .await;
-        let joined = match probe {
-            Ok(j) => j,
+        let result = match probe {
+            Ok(result) => result,
             Err(e) => {
                 return vec![unknown_finding(
                     OBSCURA_ID,
@@ -401,10 +400,6 @@ impl EngineMissingCheck {
                     ),
                 )]
             }
-        };
-        let result = match settle_probe(OBSCURA_ID, subject_for(Engine::Obscura), joined) {
-            Ok(v) => v,
-            Err(finding) => return vec![finding],
         };
         vec![match (result.found, result.bin_path) {
             (true, Some(path)) => {
@@ -436,6 +431,7 @@ impl EngineMissingCheck {
 mod tests {
     use super::*;
     use crate::browser::chromium_resolve::ChromiumSource;
+    use crate::diagnostics::check::settle_probe;
 
     /// The fail-closed contract: when there is no browser, the finding must name
     /// the command that fixes it. A gate that closes without saying how to open

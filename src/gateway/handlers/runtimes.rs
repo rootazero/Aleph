@@ -70,7 +70,7 @@ pub async fn handle_refresh(
     ledger: Arc<RwLock<CapabilityLedger>>,
 ) -> JsonRpcResponse {
     for spec in SPECS {
-        let probe_result = crate::runtimes::probe::probe(spec.name);
+        let probe_result = crate::runtimes::probe::probe(spec.name).await;
         let mut guard = ledger.write().await;
         if probe_result.found {
             let now = std::time::SystemTime::now()
