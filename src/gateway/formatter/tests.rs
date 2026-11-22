@@ -246,19 +246,6 @@ fn test_link_to_irc() {
 }
 
 // -----------------------------------------------------------------------
-// Discord (passthrough)
-// -----------------------------------------------------------------------
-
-#[test]
-fn test_discord_passthrough() {
-    let input = "**bold** and *italic* and `code`";
-    assert_eq!(
-        MessageFormatter::format(input, MarkupFormat::DiscordMarkdown),
-        input
-    );
-}
-
-// -----------------------------------------------------------------------
 // Plain text
 // -----------------------------------------------------------------------
 

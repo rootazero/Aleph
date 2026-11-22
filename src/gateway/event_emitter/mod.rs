@@ -31,7 +31,6 @@ pub use redacting::RedactingEmitter;
 pub use team_fanout::team_event_bus as gateway_event_bus;
 
 use async_trait::async_trait;
-use serde_json::Value;
 
 pub use types::EventEmitError;
 
@@ -43,78 +42,6 @@ pub use types::EventEmitError;
 pub trait EventEmitter: Send + Sync {
     /// Emit a raw stream event
     async fn emit(&self, event: StreamEvent) -> Result<(), EventEmitError>;
-
-    /// Emit a reasoning/thinking update
-    async fn emit_reasoning(&self, run_id: &str, content: &str, complete: bool) {
-        let seq = self.next_seq();
-        if let Err(e) = self
-            .emit(StreamEvent::Reasoning {
-                run_id: run_id.to_string(),
-                seq,
-                content: content.to_string(),
-                is_complete: complete,
-            })
-            .await
-        {
-            tracing::debug!(run_id, error = %e, "failed to emit Reasoning stream event");
-        }
-    }
-
-    /// Emit tool execution start
-    async fn emit_tool_start(&self, run_id: &str, tool_name: &str, tool_id: &str, params: Value) {
-        let seq = self.next_seq();
-        if let Err(e) = self
-            .emit(StreamEvent::ToolStart {
-                run_id: run_id.to_string(),
-                seq,
-                tool_name: tool_name.to_string(),
-                tool_id: tool_id.to_string(),
-                params,
-            })
-            .await
-        {
-            tracing::debug!(run_id, error = %e, "failed to emit ToolStart stream event");
-        }
-    }
-
-    /// Emit tool execution progress
-    async fn emit_tool_update(&self, run_id: &str, tool_id: &str, progress: &str) {
-        let seq = self.next_seq();
-        if let Err(e) = self
-            .emit(StreamEvent::ToolUpdate {
-                run_id: run_id.to_string(),
-                seq,
-                tool_id: tool_id.to_string(),
-                progress: progress.to_string(),
-            })
-            .await
-        {
-            tracing::debug!(run_id, error = %e, "failed to emit ToolUpdate stream event");
-        }
-    }
-
-    /// Emit tool execution completion
-    async fn emit_tool_end(
-        &self,
-        run_id: &str,
-        tool_id: &str,
-        result: ToolResult,
-        duration_ms: u64,
-    ) {
-        let seq = self.next_seq();
-        if let Err(e) = self
-            .emit(StreamEvent::ToolEnd {
-                run_id: run_id.to_string(),
-                seq,
-                tool_id: tool_id.to_string(),
-                result,
-                duration_ms,
-            })
-            .await
-        {
-            tracing::debug!(run_id, error = %e, "failed to emit ToolEnd stream event");
-        }
-    }
 
     /// Emit response text chunk
     async fn emit_response_chunk(
@@ -140,22 +67,6 @@ pub trait EventEmitter: Send + Sync {
             .await
         {
             tracing::debug!(run_id, error = %e, "failed to emit ResponseChunk stream event");
-        }
-    }
-
-    /// Emit run completion
-    async fn emit_run_complete(&self, run_id: &str, summary: RunSummary, duration_ms: u64) {
-        let seq = self.next_seq();
-        if let Err(e) = self
-            .emit(StreamEvent::RunComplete {
-                run_id: run_id.to_string(),
-                seq,
-                summary,
-                total_duration_ms: duration_ms,
-            })
-            .await
-        {
-            tracing::warn!(run_id, error = %e, "failed to emit RunComplete stream event");
         }
     }
 
