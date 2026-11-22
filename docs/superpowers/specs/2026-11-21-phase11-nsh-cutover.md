@@ -1,7 +1,7 @@
 # Phase11 NSH Cutover Contract / Phase11 NSH 切换契约
 
 **Status / 状态:** implemented foundation slices, NOT P11-A–H acceptance / 基础切片已实施，不是全期验收
-**Version / 版本:** `2026-11-22.11`
+**Version / 版本:** `2026-11-22.12`
 **Scope / 范围:** official platform entry selection, fixed credential transport and immutable launch targets / 官方平台入口选择、固定凭据传输与不可变启动目标
 
 ## 1. Authority and non-goals / 权威与不做事项
@@ -266,3 +266,17 @@ A fixed additional case of the existing debug+qa-service status observer receive
 Only after those observations may the fixture call the existing fixed load/delete/load bridge for isolated-store cleanup. That explicit QA cleanup is not claimed as a Panel deletion UI. Cleanup, helper confirmation, actual listener shutdown, process exits and unchanged served assets all gate acceptance; timeout or missing observations fail closed. Native HOME remains the real login HOME, while service namespace/data_dir/ALEPH_HOME and helper root are isolated. No production account, credential namespace or service may change. / 清理是单列的 QA 动作，失败不得冒称删除成功。
 
 **SPEC author pass before code:** fixed scope/secret lifetime, real user identity and independent post-reload proof. **QUALITY author pass after SPEC:** inspect canonical helper admission and result/cleanup negative directions, then require actual native effects. No independent review or platform/default/dual-track acceptance is implied. / 仍非三平台、默认切换或双轨验收。
+
+## 17. Compatible local Gateway admission / 本地 Gateway 兼容准入
+
+**Decision / 决定:** user explicitly chose canonical health/readiness documents over status-only admission for NSH full startup. Existing Tauri behavior remains unchanged. Unsupported/unknown listeners are refused without stop, takeover, service registration or version reconciliation. / 用户已确认保守准入；不兼容只拒绝，不接管。
+
+| Boundary / 边界 | Owner and effect / 权威与效果 |
+| --- | --- |
+| HTTP wire | New pure `shared/protocol/src/gateway_probe.rs` types replace the existing inline JSON shapes in `src/gateway/server/probe.rs`; response fields/values remain compatible. Readiness phase derives from the same boolean in one constructor. / 形状只有一处，现有 wire 值不改。 |
+| Legacy shell | `desktop/host/src/local_server.rs::ensure_ready` and existing status-only helpers keep their old semantics; no automatic tightening of Tauri compatibility. / 老路径语义不暗改。 |
+| NSH read admission | Bounded health + readiness HTTP documents must be internally consistent, have nonempty metadata and matching versions. Unknown body/framing/status/error never permits launch. This proves only API compatibility, not authenticated binary/PID identity or an atomic snapshot across two requests. / 不是进程认证或 bind 预留。 |
+| Startup ownership | Opt-in `embedded-core` NSH builds acquire only canonical `ConnectionTarget::Local`; lite, explicit remote targets and nonce QA endpoints acquire no local service. Only TCP refusal permits startup of the sibling binary (no PATH fallback); no other decision permits launch. One lazily-created current-thread Tokio runtime completes the shared startup operation before the native loop; no persistent supervisor is implied. / 默认构建不变，禁用分支零运行时初始化。 |
+| UI and lifecycle | First-window creation waits for startup; this trades early UI/splash feedback for a single owned startup boundary. Existing 40s launcher/readiness bounds are per operation, not one global 40s guarantee. Ordinary Quit owns no server stop. Mutable targets/recovery/explicit Quit-and-stop remain separate open work. / 接入成本与未完成项明确。 |
+
+**SPEC author pass before code:** source `/health` and `/ready` fields read from the actual producer; no shared DTO exists yet. Reuse canonical source and preserve existing statuses/values. **QUALITY after SPEC:** tested contradictory status/phase/version, generic 200, incomplete/oversized and chunked replies, a booting listener becoming ready without a launch, and the real production server running in an owned fixture on a non-default loopback port. The bounded HTTP client disables proxies, redirects and retries; it retains at most 4 KiB of JSON per response. The [receipt](../runs/2026-11-22-phase11-gateway-admission-receipt.json) distinguishes shared startup validation from untested bundled cold start and full lifecycle. No independent review or full Task3/P11 acceptance. / 已通过隔离生产服务文档实测；没有验证打包冷启动与完整生命周期。

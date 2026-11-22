@@ -13,6 +13,8 @@ pub(crate) struct HostSettings {
     pub(crate) url: String,
     pub(crate) gateway: String,
     pub(crate) qa_nonce: Option<String>,
+    #[cfg(feature = "embedded-core")]
+    pub(crate) acquires_local_server: bool,
 }
 
 impl HostSettings {
@@ -62,6 +64,9 @@ impl HostSettings {
         Ok(Self {
             url: target.panel_url(),
             gateway,
+            #[cfg(feature = "embedded-core")]
+            acquires_local_server: qa_nonce.is_none()
+                && matches!(target, aleph_client::ConnectionTarget::Local),
             qa_nonce,
         })
     }
@@ -117,6 +122,37 @@ mod tests {
             HostSettings::from_launch(&[], None, None).unwrap().url,
             "http://127.0.0.1:18790/"
         );
+    }
+
+    #[cfg(feature = "embedded-core")]
+    #[test]
+    fn only_canonical_local_target_acquires_bundled_service() {
+        assert!(
+            HostSettings::from_inputs(None, None)
+                .unwrap()
+                .acquires_local_server
+        );
+        for (name, acquires) in [
+            ("local", true),
+            ("http://127.0.0.1:18790/", false),
+            ("https://box.lan", false),
+        ] {
+            let args = ["--connect".into(), name.into()];
+            assert_eq!(
+                HostSettings::from_launch(&args, None, None)
+                    .unwrap()
+                    .acquires_local_server,
+                acquires
+            );
+        }
+        if cfg!(debug_assertions) {
+            let nonce = "a".repeat(64);
+            assert!(
+                !HostSettings::from_inputs(Some("http://127.0.0.1:18790/"), Some(&nonce))
+                    .unwrap()
+                    .acquires_local_server
+            );
+        }
     }
 
     #[test]

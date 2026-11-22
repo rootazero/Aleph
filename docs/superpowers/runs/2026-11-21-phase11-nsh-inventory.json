@@ -1,6 +1,6 @@
 {
   "artifact": "phase11-nsh-inventory",
-  "version": "2026-11-22.11",
+  "version": "2026-11-22.12",
   "status": "FOUNDATION_IMPLEMENTED / P11-A-H_NOT_ACCEPTED",
   "authority": [
     "docs/superpowers/plans/2026-11-21-phase11-nsh-cutover.md",
@@ -652,10 +652,16 @@
     "review": "author SPEC then distinct QUALITY, not independent; P11-A-H remain OPEN"
   },
   "shared_local_server_source": {
-    "status": "SOURCE_EXTRACTED / NOT_NSH_SERVICE_MOUNT",
+    "status": "SOURCE_SHARED / NSH_OPT_IN_STARTUP_ONLY / NOT_LIFECYCLE_ACCEPTANCE",
     "owner": "desktop/host/src/local_server.rs",
-    "consumer": "desktop/shell/src/daemon.rs reexports, embedded-core only",
+    "consumer": "desktop/shell/src/daemon.rs retains status-only reexports; opt-in NSH embedded-core uses ensure_compatible_ready only for ConnectionTarget::Local",
     "dependencies": ["tokio", "tracing"],
+    "gateway_admission": {
+      "receipt": "docs/superpowers/runs/2026-11-22-phase11-gateway-admission-receipt.json",
+      "wire": "shared/protocol/src/gateway_probe.rs and src/gateway/server/probe.rs preserve pre-existing HTTP JSON fields and status codes",
+      "behavior": "matching consistent bounded documents allow admission; only a refused TCP connection permits bundled sibling launch; incompatible listeners are never stopped or replaced; no PATH fallback in NSH",
+      "verification": "real QA-owned production Gateway at non-default loopback port accepted without launch; ephemeral listener negatives and booting-to-ready positive; no native bundled cold-start or installed service mutation"
+    },
     "crate_dependency_scope": "local_server uses Tokio/tracing; desktop/host also exports a pure updater verifier using already-locked base64 0.22.1, minisign-verify 0.3.0, semver and thiserror; importing either module initializes no resources",
     "initialization": "no runtime/thread/connection/process until an operation is called",
     "retained_old_shell": ["explicit stop", "version marker", "reconcile_for_version", "legacy autostart removal"],
@@ -669,7 +675,7 @@
       "fixture_correction": "drop(listener) did not guarantee immediate refusal during concurrent process creation; a bound/non-listening socket is retained and its OS observation is independently classified through std TCP; no kernel/Tokio/FD-inheritance cause claimed",
       "limits": "per-operation bounds, not a global startup deadline or external-cancellation drain receipt"
     },
-    "limits": ["readiness is not binary identity or a bind reservation", "externally dropped future kill-on-drop is not awaited drain", "wait-error and cleanup-error paths do not claim successful child drain", "legacy port-close unit return is not a stop acknowledgement", "no actual service launch/stop/recovery run", "no NSH supervisor/runtime mount", "no installed default endpoint used by tests", "no Windows/Linux native acceptance"]
+    "limits": ["readiness is not binary identity or a bind reservation", "externally dropped future kill-on-drop is not awaited drain", "wait-error and cleanup-error paths do not claim successful child drain", "legacy port-close unit return is not a stop acknowledgement", "no packaged NSH cold start, explicit stop or recovery run", "no persistent NSH supervisor", "no installed default endpoint used by tests", "no Windows/Linux native acceptance"]
   },
   "active_reference_audit": {
     "census": "docs/superpowers/runs/2026-11-22-phase11-active-references.json",

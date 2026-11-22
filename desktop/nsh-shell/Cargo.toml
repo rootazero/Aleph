@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
+embedded-core = ["dep:aleph-desktop-host"]
 qa-service = ["aleph-client/qa-service"]
 
 [dependencies]
@@ -11,6 +12,7 @@ nsh-core = "=0.6.0"
 nsh-base = { version = "=0.6.0", default-features = false }
 nsh-engine = { version = "=0.6.0", default-features = false }
 aleph-client = { path = "../../shared/client" }
+aleph-desktop-host = { path = "../host", features = ["gateway-admission"], optional = true }
 aleph-protocol = { path = "../../shared/protocol" }
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
 serde = { version = "1", features = ["derive"] }

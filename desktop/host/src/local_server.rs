@@ -17,6 +17,9 @@ const POLL_INTERVAL: Duration = Duration::from_millis(400);
 /// A process that accepts the connection but never replies cannot hang it.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 
+#[cfg(feature = "gateway-admission")]
+mod admission;
+
 /// What is currently answering on the daemon's port.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PortOccupant {
@@ -47,6 +50,18 @@ pub async fn ensure_ready() -> Result<(), String> {
              no new daemon was launched"
         )),
     }
+}
+
+/// Strict NSH startup. A listener must serve compatible Gateway documents;
+/// only a refused connection can authorize a launch, and only of the sibling binary.
+#[cfg(feature = "gateway-admission")]
+pub async fn ensure_compatible_ready() -> Result<(), String> {
+    admission::ensure(DAEMON_PORT, async || {
+        let bin = bundled_daemon_binary()
+            .ok_or_else(|| "could not locate the bundled aleph-server binary".to_string())?;
+        spawn_detached(&bin).await
+    })
+    .await
 }
 
 /// Bring the daemon back if it has gone away: when the port is free,
@@ -220,19 +235,20 @@ const fn daemon_bin_name() -> &'static str {
 pub fn resolve_daemon_binary() -> Option<PathBuf> {
     let name = daemon_bin_name();
 
-    // 1. Bundled inside the app, or a sibling of the dev build.
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(candidate) = exe.parent().map(|d| d.join(name)) {
-            if candidate.is_file() {
-                return Some(candidate);
-            }
-        }
+    if let Some(candidate) = bundled_daemon_binary() {
+        return Some(candidate);
     }
     // 2. Anything on `PATH` (covers unusual dev setups).
     let path = std::env::var_os("PATH")?;
     std::env::split_paths(&path)
         .map(|dir| dir.join(name))
         .find(|p| p.is_file())
+}
+
+fn bundled_daemon_binary() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let candidate = exe.parent()?.join(daemon_bin_name());
+    candidate.is_file().then_some(candidate)
 }
 
 #[cfg(unix)]

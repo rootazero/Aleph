@@ -160,7 +160,7 @@ stop the local daemon.
 
 ### Daemon health supervision
 
-The full Tauri shell delegates startup, readiness probes and relaunch I/O to the unpublished `aleph-desktop-host` library in `desktop/host/src/local_server.rs`; it is enabled only by the shell's `embedded-core` feature. Importing that library creates no runtime or process. The version takeover, legacy autostart removal and explicit stop remain in `desktop/shell/src/daemon.rs`, not in this shared owner. NSH does **not** yet mount a service supervisor; extracting the source is not lifecycle migration or three-platform acceptance. / 旧壳 full 才依赖共享启动实现；破坏性旧版本接管仍留在旧壳，NSH 暂未挂载监督器，抽取不等于迁移验收。
+The full Tauri shell delegates startup, status-only readiness probes and relaunch I/O to the unpublished `aleph-desktop-host` library in `desktop/host/src/local_server.rs`. Opt-in NSH `embedded-core` uses the same launcher but checks canonical `/health` and `/ready` documents for the local target before mounting the Panel. Only connection refusal permits launching the bundled sibling; incompatible listeners are left untouched. That compatibility check does not authenticate a process. NSH has no persistent supervisor or stop action yet; version takeover, legacy autostart removal and explicit stop remain in `desktop/shell/src/daemon.rs`. See the [scoped admission receipt](../superpowers/runs/2026-11-22-phase11-gateway-admission-receipt.json). / NSH 仅显式启用的本地 full 路径执行严格启动准入；不接管现有进程，尚未完成监督、停服与三平台验收。
 
 The daemon can crash, be killed, or be stopped out from under the shell. A
 supervisor task probes `GET /ready` every few seconds for the shell's whole

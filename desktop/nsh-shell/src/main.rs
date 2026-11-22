@@ -85,6 +85,20 @@ fn main() -> std::process::ExitCode {
                 return std::process::ExitCode::FAILURE;
             }
         };
+    #[cfg(feature = "embedded-core")]
+    if settings.acquires_local_server {
+        let readiness = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|_| "could not initialize local service runtime".to_owned())
+            .and_then(|runtime| {
+                runtime.block_on(aleph_desktop_host::local_server::ensure_compatible_ready())
+            });
+        if let Err(error) = readiness {
+            eprintln!("NSH local service startup refused: {error}");
+            return std::process::ExitCode::FAILURE;
+        }
+    }
     let qa_run_id = std::env::var("ALEPH_PANEL_QA_RUN_ID").unwrap_or_default();
     let message = std::env::var("ALEPH_PANEL_QA_MESSAGE").unwrap_or_default();
     let bridge_prefix = format!("aleph-shell-v1:{}:", uuid::Uuid::new_v4().simple());
