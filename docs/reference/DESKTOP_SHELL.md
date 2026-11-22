@@ -226,6 +226,14 @@ versions (`YY.M.D`) are valid semver, so the updater's version comparison
 works unchanged; see *Build & release* for how CI signs and publishes the
 update manifest.
 
+`desktop/host/src/updater.rs::verify_artifact` is the pure, source-compatible
+minisign adapter for the NSH migration; it has no default trust key or I/O and
+is not yet mounted as an NSH updater. It verifies the global signature before
+using the signed version. Existing configs leave `requireSignedVersion` at the
+pinned plugin's false default, so authenticated old artifacts without a signed
+version still do not bind the announced version. This is not complete rollback
+protection. / NSH 迁移现阶段只有纯验签器；未接下载或安装，不改变现有信任和兼容策略，也不冒称完整防回滚。
+
 ### `aleph://` deep links
 
 The shell registers the `aleph://` URL scheme. Opening an `aleph://…` link

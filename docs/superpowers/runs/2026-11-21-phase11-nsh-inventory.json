@@ -1,6 +1,6 @@
 {
   "artifact": "phase11-nsh-inventory",
-  "version": "2026-11-22.8",
+  "version": "2026-11-22.9",
   "status": "FOUNDATION_IMPLEMENTED / P11-A-H_NOT_ACCEPTED",
   "authority": [
     "docs/superpowers/plans/2026-11-21-phase11-nsh-cutover.md",
@@ -620,6 +620,19 @@
     "recommendation": "preserve existing minisign trust/feed in a focused host adapter; native installer and lifecycle proofs still required",
     "alternative": "official NSH signed-manifest feed requires explicit trust/feed migration approval and receipts",
     "decision": "user selected preserving existing minisign trust/feed; no key replacement or official NSH manifest-feed switch",
+    "artifact_verifier_slice": {
+      "status": "VERIFIED_PURE_ADAPTER / NOT_NSH_UPDATER_MOUNT",
+      "owner": "desktop/host/src/updater.rs::verify_artifact",
+      "actual_runtime_consumer": null,
+      "admission": "caller explicitly supplies the existing base64 key, artifact bytes, signature, announced version and signed-version policy; no default key or feed",
+      "behavior": "same locked minisign verifier; authenticate artifact and global comment before first tab-separated signed-version field; preserve semver and literal fallback rules",
+      "inherited_limit": "existing full/lite config omits requireSignedVersion and plugin default is false; an authenticated unversioned artifact does not bind its announced version, so this is not complete anti-rollback protection",
+      "failure": "closed input-free VerifyError; malformed envelopes, signature rejection, missing required version and version mismatch remain distinguishable without including inputs",
+      "effects": "none: no files, network, service stop, install, restart or trust mutation",
+      "verification": "12 shared-host unit tests and 8 integration tests; actual public upstream signed vectors plus tampered bytes/key/comment, both missing-version policies, legacy algorithm, non-semver policy-only fallback, malformed envelopes; strict clippy and retained full165/lite190",
+      "receipt": "docs/superpowers/runs/2026-11-22-phase11-updater-verifier-receipt.json",
+      "not_done": ["NSH feed/check/download mount", "single apply ownership", "staging and install/rollback", "restart and service settlement", "native three-platform packaging"]
+    },
     "implemented": false,
     "new_trust_authorized": false
   },
@@ -640,6 +653,7 @@
     "owner": "desktop/host/src/local_server.rs",
     "consumer": "desktop/shell/src/daemon.rs reexports, embedded-core only",
     "dependencies": ["tokio", "tracing"],
+    "crate_dependency_scope": "local_server uses Tokio/tracing; desktop/host also exports a pure updater verifier using already-locked base64 0.22.1, minisign-verify 0.3.0, semver and thiserror; importing either module initializes no resources",
     "initialization": "no runtime/thread/connection/process until an operation is called",
     "retained_old_shell": ["explicit stop", "version marker", "reconcile_for_version", "legacy autostart removal"],
     "behavior_fix": "read a bounded CRLF-terminated HTTP/1.0 or HTTP/1.1 status line across TCP fragments; reject malformed/incomplete/oversized lines",

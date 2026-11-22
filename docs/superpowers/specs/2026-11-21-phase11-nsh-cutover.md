@@ -1,7 +1,7 @@
 # Phase11 NSH Cutover Contract / Phase11 NSH 切换契约
 
 **Status / 状态:** implemented foundation slices, NOT P11-A–H acceptance / 基础切片已实施，不是全期验收
-**Version / 版本:** `2026-11-22.8`
+**Version / 版本:** `2026-11-22.9`
 **Scope / 范围:** official platform entry selection, fixed credential transport and immutable launch targets / 官方平台入口选择、固定凭据传输与不可变启动目标
 
 ## 1. Authority and non-goals / 权威与不做事项
@@ -225,3 +225,18 @@ The source review distinguishes these roles:
 **SPEC author pass:** checked registered operations against current owner/caller anchors and separated implemented fixed handlers from future mutations. **QUALITY author pass after SPEC:** checked the non-literal ownership blind spot, permission/chrome separation, retained native identities and live Core compatibility. These are author passes, not independent approval or native-platform evidence. / 先规格后质量的作者审查，不冒称独立审核。
 
 The shared-host socket test expectation is now derived directly from its independent standard-library OS observation rather than the production classifier helper. The production predicate is unchanged. The earlier bounded-host receipt remains historical and unchanged. P11-A–H all remain OPEN; Windows/Linux native API/runner evidence, full/lite/service ownership, setters/updater/packaging, default/rollback and the real common 14-day interval remain outstanding. / 修正量具的独立性，不重写旧证据，也不伪造全期完成。
+
+## 14. Preserved updater artifact verifier / 保留现有更新制品验证
+
+This independently testable slice uses the approved existing-minisign route, not the NSH framed-manifest feed. Its source authority is pinned `tauri-plugin-updater 2.14.0/src/updater.rs:1893-1976`, `src/config.rs:119-135`, and the real Aleph apply sequence in `desktop/shell/src/update.rs:323-378`. / 只抽离已存在的制品验证语义，不新增信任根或安装通道。
+
+Before implementation, the narrow desktop-only API is frozen as `updater::verify_artifact(data: &[u8], release_signature: &str, public_key: &str, announced_version: &str, require_signed_version: bool) -> Result<(), VerifyError>` in `desktop/host`. The caller supplies its existing configured key and version policy explicitly; the module has no default key, feed, filesystem, network, service or install effect. It is not mounted in NSH in this slice. / 显式传入旧配置；纯校验、不自动启用。
+
+- Decode the same outer standard-base64 UTF-8 public-key and signature envelopes. Parse with the same locked `minisign-verify 0.3.0`; call `PublicKey::verify(data, &signature, true)` before reading its trusted comment. Algorithm compatibility and missing-version compatibility are separate facts. / 先验证制品及全局签名，再消费可信注释。
+- Preserve the first tab-separated `version:` field; compare semver after `trim_start_matches('v')`, falling back to literal equality exactly as the existing source does. A present mismatched signed version fails regardless of policy. A missing version fails only when the explicit policy requires one.
+- Existing full/lite configs omit `requireSignedVersion`; the pinned plugin documents its default as false. Therefore unversioned old signatures can still authenticate an artifact while failing to bind its announced version. This is an inherited limitation, not complete anti-rollback protection. Do not silently harden the flag, re-sign releases or change trust/feed. / 保留既有兼容性，不把它冒称完整防回滚，也不擅改生产策略。
+- Return closed, input-free errors for malformed key/signature envelopes, rejected signatures, missing signed version and version mismatch. Never include data, key text, signature or endpoint in an error. The module does not replace the feed's current/newer-version admission step.
+- Use public, already-signed upstream test vectors: a versioned 2.0.0 payload from the pinned updater offline tests, its unversioned prehashed vector, and the un-hashed legacy algorithm vector from the pinned minisign verifier. No test signing key is generated or added to production trust. / 用真实签名测试向量，而非 mock 验签成功。
+- TDD must demonstrate real acceptance, tampered payload/key/comment rejection, present-version mismatch under both policies, explicit missing-version behavior, old-algorithm compatibility and malformed envelopes. All dependencies are already in the current lock; normal offline lock regeneration may add direct edges but must add/remove no package identity.
+
+**SPEC author pass:** traced the actual Aleph check/download/install sequence and pinned policy default; signature verification precedes the existing service-stop/apply stage. **QUALITY author pass after SPEC:** checked verification-before-comment, both policy directions, no implicit trust defaults and real cryptographic fixtures. These author passes do not accept download, staging, single-apply ownership, package-manager behavior, installation/rollback, restart or any platform gate. / 作者顺序审查；后续安装生命周期仍须独立接通与实测。
