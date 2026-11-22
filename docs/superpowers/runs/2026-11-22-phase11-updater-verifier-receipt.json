@@ -1,0 +1,149 @@
+{
+  "artifact": "phase11-preserved-updater-artifact-verifier",
+  "version": "2026-11-22.9",
+  "status": "PASS_TARGETED_PURE_VERIFIER_CHECKS / NOT_PHASE11_ACCEPTANCE",
+  "candidate_parent": "4381e22cb9eac483ddd97b28370b9942a38d2229",
+  "authority": {
+    "plan": "docs/superpowers/plans/2026-11-21-phase11-nsh-cutover.md",
+    "spec": "docs/superpowers/specs/2026-11-21-phase11-nsh-cutover.md",
+    "inventory": "docs/superpowers/runs/2026-11-21-phase11-nsh-inventory.json",
+    "approved_route": "preserve existing minisign trust/feed; no key replacement or NSH framed-manifest feed switch",
+    "existing_apply": "desktop/shell/src/update.rs:323-378",
+    "pinned_verifier": "tauri-plugin-updater-2.14.0/src/updater.rs:1893-1976",
+    "pinned_policy_default": "tauri-plugin-updater-2.14.0/src/config.rs:119-135",
+    "pinned_authority_sha256": {
+      "tauri-plugin-updater-2.14.0/src/updater.rs": "79ed11ecdb3d22410f71d7adb9f7bcbcab00f888cd8892e2268639085df044ce",
+      "tauri-plugin-updater-2.14.0/src/config.rs": "feaefc318cd2b2fe3953c26185d162f31bee2e06bc4e27277d1695b6bd78a882",
+      "minisign-verify-0.3.0/src/lib.rs": "8c62254ceed9fb769209124c0c134b38effe522a88c8cb76ec89ea8b38a772d2"
+    }
+  },
+  "source_sha256": {
+    "Cargo.lock": "1546896d95408075b2a81610b60d4c888a19f6e6947232d86f13b38ec0cc3e7e",
+    "desktop/host/Cargo.toml": "c9485d04280f35893007488bdee89a8267663980951356c429eede4ba09e64a8",
+    "desktop/host/src/lib.rs": "90155972426af49e9c8380007b57f79e556321400cbfe67cd896c900456a0eab",
+    "desktop/host/src/updater.rs": "31e34612e99e6a6c85df80a18131d6e4032d3db805f1c84a2db746f9188d66e2",
+    "desktop/host/tests/updater_verification.rs": "32066391babf403b6c038b936abd5b8392b58a6121ad2d1c5d69904d3191a782",
+    "docs/superpowers/specs/2026-11-21-phase11-nsh-cutover.md": "95488fc4a338ffa2df9de33461510d41858c00ab635c6e88d60884a5ee2f3949",
+    "docs/superpowers/runs/2026-11-21-phase11-nsh-inventory.json": "8ea0d88972ac26ce332ae8f552b5101ed82faa2f43a2e726cdadf99c5aba3f57",
+    "docs/reference/DESKTOP_SHELL.md": "5829308fcb0f0e41d9f6bab8f08ac0b7ef3f713951484d9a0618effef1f5ee4f",
+    "desktop/shell/src/update.rs": "1fcd97cbb39c542bd3b73df145c945e9696397ecf52cae8d69a170de5998ced6",
+    "Cargo.toml": "5971138dca770696c0d81981c13627aecf9f270fcf0afeeb7f1d98e826abb7ee",
+    "desktop/shell/Cargo.toml": "a731c6db62851d5a83e7776ae7286927144db4d4b0b69417df0357c626e8d945",
+    "desktop/shell/tauri.conf.json": "5e36a3193fb9e282a87b608dc4605ec194e06ae47a531ac9e5c9e2da99cb7c73",
+    "desktop/shell/tauri.lite.conf.json": "38ede075f387894096a582103a0e53071d6d3f45eba7a9ce45a9ba60e5ec2fee"
+  },
+  "raw_log_sha256": {
+    ".phase10-evidence/phase11-updater-verifier.vV2BHy/clippy.log": "3f51fb27b7d69aeab44c6d3a60c90c9ae26b582819e7aa6516a2726742d6b820",
+    ".phase10-evidence/phase11-updater-verifier.vV2BHy/host-test.log": "053069b726123e669107203e981cf188e96984a4c9ee0091258ee2d206f6b333",
+    ".phase10-evidence/phase11-updater-verifier.vV2BHy/red.log": "b9f8d535e45790e2837b3a46cf769f606d9744bbc6b8fcc9aedb5498afe7fefa",
+    ".phase10-evidence/phase11-updater-verifier.vV2BHy/tauri-full.log": "f85ba7223e258fba42be174ff0bfb2b4a2963abd60e9bfceda29eca029d3e0ae",
+    ".phase10-evidence/phase11-updater-verifier.vV2BHy/tauri-lite.log": "69061b80961703090f1a1fe82f4c4d8949f2d4b981b3cb8f93918c5643ca68a2"
+  },
+  "scope": {
+    "api": "desktop/host/src/updater.rs::verify_artifact",
+    "actual_runtime_consumer": null,
+    "trust": "caller supplies existing configured key and signed-version policy; no embedded default or generated test signing key",
+    "effects": "none: no filesystem, feed request, download, service stop, staging, install, restart or trust mutation",
+    "error_boundary": "closed VerifyError variants carry no input text",
+    "fixture_provenance": [
+      "tauri-plugin-updater 2.14.0 offline_tests: real signed 2.0.0 payload and unversioned prehashed payload",
+      "minisign-verify 0.3.0 tests::verify: real legacy un-hashed algorithm payload"
+    ],
+    "preserved_behavior": [
+      "standard-base64 UTF-8 envelopes and existing minisign-verify 0.3.0 implementation",
+      "artifact and global trusted-comment signature checked before version consumption",
+      "legacy algorithm support kept independently of missing-version policy",
+      "first tab-separated version field; semver equality after leading-v trimming, literal fallback",
+      "present signed-version mismatch rejected with either policy; missing version rejected only if explicitly required"
+    ]
+  },
+  "observed_red": {
+    "exit_code": 101,
+    "unit": "10 existing host tests passed; two new policy tests failed against stubs",
+    "integration": "all seven initial real-signature integration tests failed against the unavailable verifier stub",
+    "lock_exception": "first offline test regenerated direct edges to already-locked dependencies; following commands used --locked"
+  },
+  "verification": [
+    {
+      "cwd": "desktop/host",
+      "command": "cargo test --offline --locked --jobs 1",
+      "result": "12 unit + 8 integration PASS; 0 doctests",
+      "log": ".phase10-evidence/phase11-updater-verifier.vV2BHy/host-test.log"
+    },
+    {
+      "cwd": "desktop/host",
+      "command": "cargo clippy --all-targets --offline --locked --jobs 1 -- -D warnings",
+      "result": "PASS",
+      "log": ".phase10-evidence/phase11-updater-verifier.vV2BHy/clippy.log"
+    },
+    {
+      "cwd": "desktop/shell",
+      "command": "cargo test --offline --locked --jobs 1",
+      "result": "retained full165 PASS",
+      "log": ".phase10-evidence/phase11-updater-verifier.vV2BHy/tauri-full.log"
+    },
+    {
+      "cwd": "desktop/shell",
+      "command": "cargo test --no-default-features --features qa-owned-root --offline --locked --jobs 1",
+      "result": "retained lite190 PASS",
+      "log": ".phase10-evidence/phase11-updater-verifier.vV2BHy/tauri-lite.log"
+    },
+    {
+      "command": "python3 qa/browser_live/check_memory.py --required-bytes 4294967296 before every Cargo invocation",
+      "result": "all observed ALLOW; serial offline jobs1"
+    },
+    {
+      "command": "locked package identity comparison",
+      "result": "zero added, zero removed; only desktop-host direct dependency edges changed"
+    },
+    {
+      "command": "scoped existing Markdown classifier on spec and desktop reference",
+      "result": "10 valid links, zero invalid"
+    }
+  ],
+  "known_limitations": [
+    "Existing full/lite configs omit requireSignedVersion; pinned default false intentionally accepts authenticated unversioned artifacts without binding their announced version. Not complete anti-rollback protection.",
+    "The API is not a feed parser, newer-version admission step, downloader, installer or rollback authority.",
+    "Cryptographic fixture tests and source review are not exhaustive differential equivalence testing against all plugin inputs.",
+    "Prior source-census and native receipts remain historical snapshots; they are not rewritten to claim current runtime acceptance."
+  ],
+  "not_tested": [
+    "NSH production updater mount or network feed",
+    "download/staging and single-apply ownership",
+    "installation/rollback/restart or service settlement",
+    "native macOS/Windows/Linux updater/package effects",
+    "production Panel render, fresh native fixture or performance run",
+    "default switch/rollback rehearsal, actual common fourteen-day dual operation or Tauri removal",
+    "full repository regression/release profile and external URL availability"
+  ],
+  "review": {
+    "sequence": [
+      "author SPEC source-contract pass before implementation",
+      "distinct author QUALITY pass after SPEC and fresh checks"
+    ],
+    "independent_reviewer": false
+  },
+  "gates": {
+    "P11-A": "OPEN",
+    "P11-B": "OPEN",
+    "P11-C": "OPEN",
+    "P11-D": "OPEN",
+    "P11-E": "OPEN",
+    "P11-F": "OPEN",
+    "P11-G": "OPEN",
+    "P11-H": "OPEN"
+  },
+  "original_phase10_matrix": {
+    "path": ".phase10-evidence/g7-official-matrix.Ji0duOcq/matrix.json",
+    "sha256": "fbf5f1272be769ae554ba53df065ef171badb6bbe942bb90e254168664e5f7c2",
+    "unchanged": true
+  },
+  "prohibited_effects": {
+    "push": false,
+    "tag": false,
+    "release": false,
+    "default_switch": false,
+    "tauri_deletion": false,
+    "production_credential_or_login_item_or_service_mutation": false
+  }
+}

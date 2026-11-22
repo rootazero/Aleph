@@ -1,7 +1,8 @@
 use crate::api::ExecApprovalApi;
 use crate::api::TelecomApprovalApi;
 use crate::api::native_credentials::{
-    AttemptReceipt, ConnectSendError, HandshakeRequest, NativeAuthState, NativeOutcome, TauriIpc,
+    AttemptReceipt, ConnectSendError, HandshakeRequest, NativeAuthState, NativeIpc,
+    NativeOutcome,
     attempt_current, native_expected, native_handshake, new_device_id, ticket_from_search,
 };
 use crate::components::sidebar::SystemAlert;
@@ -2002,7 +2003,7 @@ impl DashboardState {
             return Err(());
         }
         let token = if native_expected() {
-            let lease = crate::api::native_credentials::load_lease(&TauriIpc)
+            let lease = crate::api::native_credentials::load_lease(&NativeIpc)
                 .await
                 .map_err(|_| ())?;
             if self.protected_user.try_get_untracked().flatten().is_none()
@@ -2140,7 +2141,7 @@ impl DashboardState {
         };
         let send_receipt = receipt.clone();
         let outcome = native_handshake(
-            &TauriIpc,
+            &NativeIpc,
             HandshakeRequest {
                 dialed_url: &dialed,
                 device_name: &device_name,

@@ -7,10 +7,10 @@
 
 use crate::sync_primitives::{Arc, Ordering};
 
+use aleph_protocol::gateway_probe::{Health, HealthStatus, Readiness};
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json};
-use serde_json::json;
 
 use super::GatewaySharedState;
 
@@ -21,13 +21,13 @@ pub async fn handle_health(State(state): State<Arc<GatewaySharedState>>) -> impl
     let uptime_secs = (chrono::Utc::now().timestamp() - state.started_at_unix).max(0);
     (
         StatusCode::OK,
-        Json(json!({
-            "status": "ok",
-            "version": env!("ALEPH_VERSION"),
-            "instance_id": state.instance_id,
-            "started_at_unix": state.started_at_unix,
-            "uptime_secs": uptime_secs,
-        })),
+        Json(Health {
+            status: HealthStatus::Ok,
+            version: env!("ALEPH_VERSION").to_owned(),
+            instance_id: state.instance_id.clone(),
+            started_at_unix: state.started_at_unix,
+            uptime_secs,
+        }),
     )
 }
 
@@ -36,19 +36,12 @@ pub async fn handle_health(State(state): State<Arc<GatewaySharedState>>) -> impl
 /// always includes the current phase for diagnostic visibility.
 pub async fn handle_ready(State(state): State<Arc<GatewaySharedState>>) -> impl IntoResponse {
     let ready = state.ready.load(Ordering::Acquire);
-    let (status, phase) = if ready {
-        (StatusCode::OK, "complete")
+    let status = if ready {
+        StatusCode::OK
     } else {
-        (StatusCode::SERVICE_UNAVAILABLE, "booting")
+        StatusCode::SERVICE_UNAVAILABLE
     };
-    (
-        status,
-        Json(json!({
-            "ready": ready,
-            "phase": phase,
-            "version": env!("ALEPH_VERSION"),
-        })),
-    )
+    (status, Json(Readiness::new(ready, env!("ALEPH_VERSION"))))
 }
 
 #[cfg(test)]

@@ -1,13 +1,17 @@
-#[cfg(target_os = "macos")]
+mod autostart;
+mod credentials;
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 mod panel_bridge;
+mod platform;
 mod shell_host;
 
 #[cfg(all(target_os = "macos", debug_assertions))]
 #[path = "../../../qa/phase9_clock.rs"]
 mod clock;
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 fn main() -> std::process::ExitCode {
+    use crate::platform::{run_app, AppOptions, AppSource, Root};
     use nsh_core::desktop::{MainWindowOptions, Shortcut, TrayTitleRun};
     use nsh_core::element::desktop::{
         main_window, quit, register_global_shortcut, set_tray, tray, MenuItem,
@@ -16,20 +20,85 @@ fn main() -> std::process::ExitCode {
         component, element_ref, request_notification_permission, spawn, web_view, Element,
         IntoElement, Prop, Props, Styled, WebNavigation,
     };
-    use nsh_platform_macos::{quit_app, run_app, AppOptions, AppSource, Root};
     use std::io::Write;
     use std::sync::Mutex;
 
-    let endpoint = std::env::var("ALEPH_NSH_QA_URL").ok();
-    let nonce = std::env::var("ALEPH_NSH_QA_NONCE").ok();
+    let Ok(args) = std::env::args_os()
+        .skip(1)
+        .map(|arg| arg.into_string())
+        .collect::<Result<Vec<_>, _>>()
+    else {
+        eprintln!("NSH host refused non-Unicode launch arguments");
+        return std::process::ExitCode::FAILURE;
+    };
+    if args.as_slice() == ["--help"] {
+        println!("Usage: aleph-nsh-shell [--connect <origin> | --autostart-status]\n\nConnects to an existing Gateway; does not start, stop or reconfigure a service.\nUse HTTPS for a remote origin. No target or credential URL is persisted.\n--autostart-status reads the current app login item without changing it.");
+        return std::process::ExitCode::SUCCESS;
+    }
+    let qa = ["ALEPH_NSH_QA_URL", "ALEPH_NSH_QA_NONCE"].map(|name| {
+        std::env::var_os(name)
+            .map(|value| value.into_string())
+            .transpose()
+    });
+    let [Ok(endpoint), Ok(nonce)] = qa else {
+        eprintln!("NSH host refused non-Unicode QA configuration");
+        return std::process::ExitCode::FAILURE;
+    };
+    if args.as_slice() == ["--autostart-status"] {
+        if endpoint.is_some() {
+            eprintln!("NSH host refused status query combined with QA endpoint");
+            return std::process::ExitCode::FAILURE;
+        }
+        let identity = match autostart::expected_identity(nonce.as_deref()) {
+            Ok(identity) => identity,
+            Err(error) => {
+                eprintln!("NSH host refused status query: {error}");
+                return std::process::ExitCode::FAILURE;
+            }
+        };
+        println!(
+            "{}",
+            serde_json::to_string(&autostart::read(&identity)).expect("closed status JSON")
+        );
+        return std::process::ExitCode::SUCCESS;
+    }
+    let status_qa = match std::env::var_os("ALEPH_PANEL_QA_STATUS") {
+        None => false,
+        Some(value)
+            if value == "1"
+                && cfg!(all(debug_assertions, feature = "qa-service"))
+                && endpoint.is_some()
+                && nonce.is_some() =>
+        {
+            true
+        }
+        Some(_) => {
+            eprintln!("NSH host refused Panel status QA without its isolated debug context");
+            return std::process::ExitCode::FAILURE;
+        }
+    };
     let settings =
-        match shell_host::HostSettings::from_inputs(endpoint.as_deref(), nonce.as_deref()) {
+        match shell_host::HostSettings::from_launch(&args, endpoint.as_deref(), nonce.as_deref()) {
             Ok(settings) => settings,
             Err(error) => {
                 eprintln!("NSH host refused configuration: {error}");
                 return std::process::ExitCode::FAILURE;
             }
         };
+    #[cfg(feature = "embedded-core")]
+    if settings.acquires_local_server {
+        let readiness = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|_| "could not initialize local service runtime".to_owned())
+            .and_then(|runtime| {
+                runtime.block_on(aleph_desktop_host::local_server::ensure_compatible_ready())
+            });
+        if let Err(error) = readiness {
+            eprintln!("NSH local service startup refused: {error}");
+            return std::process::ExitCode::FAILURE;
+        }
+    }
     let qa_run_id = std::env::var("ALEPH_PANEL_QA_RUN_ID").unwrap_or_default();
     let message = std::env::var("ALEPH_PANEL_QA_MESSAGE").unwrap_or_default();
     let bridge_prefix = format!("aleph-shell-v1:{}:", uuid::Uuid::new_v4().simple());
@@ -40,19 +109,29 @@ fn main() -> std::process::ExitCode {
         .map(|nonce| {
             format!(
             "{}\ninstallAlephPanelQa({}, event => window.nsh.postMessage(JSON.stringify(event)));",
-            include_str!("../../../qa/nsh_panel_driver.js"),
-            serde_json::json!({"nonce": nonce, "qa_run_id": qa_run_id, "message": message})
+            if status_qa {
+                concat!(
+                    include_str!("../../../qa/phase11_nsh_panel_status.js"),
+                    "\n",
+                    include_str!("../../../qa/phase11_nsh_pairing.js")
+                )
+            } else {
+                include_str!("../../../qa/nsh_panel_driver.js")
+            },
+            serde_json::json!({"nonce": nonce, "qa_run_id": qa_run_id, "message": message,
+                "status_labels": std::env::var("ALEPH_PANEL_QA_STATUS_LABELS").unwrap_or_default()})
         )
         })
         .unwrap_or_default();
     let script = format!("{bootstrap}\n{script}");
     // This single-window debug trace is not a Chat or Artifacts projection.
     static LAST_EVENT: Mutex<Option<serde_json::Value>> = Mutex::new(None);
-    const APP_ID: &str = "com.aleph.nsh-shell";
+    use shell_host::APP_ID;
 
     #[derive(Clone, PartialEq, Props)]
     struct AppProps {
         url: Prop<String>,
+        gateway: Prop<String>,
         script: Prop<String>,
         bridge_prefix: Prop<String>,
         nonce: Prop<Option<String>>,
@@ -64,10 +143,16 @@ fn main() -> std::process::ExitCode {
         let close_window = window.clone();
         window.on_close_press(move |_| close_window.hide());
         let view = element_ref();
+        let credentials = credentials::CredentialService::new(
+            &props.gateway.get_untracked(),
+            props.nonce.get_untracked().as_deref(),
+        );
         let bridge = panel_bridge::Bridge::start(
-            view.clone(),
+            view,
             props.bridge_prefix.get_untracked(),
             window.clone(),
+            credentials,
+            autostart::Reader::new(props.nonce.get_untracked().as_deref()),
         );
         let navigation = bridge.clone();
         let terminated = bridge.clone();
@@ -139,7 +224,7 @@ fn main() -> std::process::ExitCode {
                 {
                     return;
                 }
-                #[cfg(debug_assertions)]
+                #[cfg(all(target_os = "macos", debug_assertions))]
                 clock::annotate(&mut event);
                 println!("ALEPH_PANEL_QA {event}");
                 let _ = std::io::stdout().flush();
@@ -148,7 +233,7 @@ fn main() -> std::process::ExitCode {
                     .lock()
                     .unwrap_or_else(|poison| poison.into_inner()) = Some(event);
                 if close {
-                    quit_app();
+                    quit();
                 }
             })
     }
@@ -165,6 +250,7 @@ fn main() -> std::process::ExitCode {
     placement.restore_bounds = settings.qa_nonce.is_none() || placement_data.is_some();
     let root = Root::new::<App>(move || AppProps {
         url: settings.url.clone().into(),
+        gateway: settings.gateway.clone().into(),
         script: script.clone().into(),
         bridge_prefix: bridge_prefix.clone().into(),
         nonce: settings.qa_nonce.clone().into(),
@@ -173,7 +259,7 @@ fn main() -> std::process::ExitCode {
     .app_id(APP_ID)
     .url_schemes(["aleph"])
     .main_window(placement);
-    #[cfg(debug_assertions)]
+    #[cfg(all(target_os = "macos", debug_assertions))]
     clock::start();
     let exit = run_app(
         AppSource::Rust(root),
@@ -181,6 +267,7 @@ fn main() -> std::process::ExitCode {
             title: "Aleph".to_string(),
             size: (1180, 800),
             app_id: APP_ID.to_string(),
+            #[cfg(target_os = "macos")]
             keep_alive_on_close: true,
             notifications: true,
             data_dir: placement_data,
@@ -196,7 +283,7 @@ fn main() -> std::process::ExitCode {
         event["kind"] = "closed".into();
         event["payload"] =
             serde_json::json!({"owned_drained": exit == std::process::ExitCode::SUCCESS});
-        #[cfg(debug_assertions)]
+        #[cfg(all(target_os = "macos", debug_assertions))]
         clock::annotate(&mut event);
         println!("ALEPH_PANEL_QA {event}");
         let _ = std::io::stdout().flush();
@@ -204,8 +291,8 @@ fn main() -> std::process::ExitCode {
     exit
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 fn main() -> std::process::ExitCode {
-    eprintln!("The NSH host is currently supported on macOS only");
+    eprintln!("The NSH host is unsupported on this target");
     std::process::ExitCode::FAILURE
 }

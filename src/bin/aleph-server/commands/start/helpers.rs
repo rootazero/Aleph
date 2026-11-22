@@ -380,6 +380,7 @@ pub(super) fn build_sqlite_session_service(
 /// Initialize the `ExtensionManager` for the plugin system.
 pub(super) async fn initialize_extension_manager(
     daemon: bool,
+    bundled_content_only: bool,
     ownership_tree: Arc<alephcore::capability::ownership::OwnershipTree>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Migrate old single-dir layout and update official skills. Resolve via the
@@ -394,7 +395,7 @@ pub(super) async fn initialize_extension_manager(
     // running in the background; it writes the manifest when it finishes.
     let home_for_extract = aleph_home.clone();
     let extraction = tokio::task::spawn_blocking(move || {
-        alephcore::bundled::extract_bundled_content(&home_for_extract)
+        alephcore::bundled::extract_bundled_content(&home_for_extract, bundled_content_only)
     });
     match tokio::time::timeout(BUNDLED_EXTRACTION_TIMEOUT, extraction).await {
         Ok(Ok(Ok(()))) => {}

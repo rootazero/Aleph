@@ -1,0 +1,94 @@
+{
+  "artifact": "phase11-bounded-shared-host-checkpoint",
+  "version": "2026-11-22.7",
+  "status": "PASS_TARGETED_BOUNDED_HOST_CHECKS / NOT_PHASE11_ACCEPTANCE",
+  "baseline": {
+    "branch": "main",
+    "commit": "bb25a900ed93ec2dfdb044c25f755384286ea0bc",
+    "previous_receipt": "docs/superpowers/runs/2026-11-22-phase11-local-server-source-receipt.json"
+  },
+  "source_sha256": {
+    "desktop/host/src/local_server.rs": "c024673b2052344031d4104ab7467db716e14d9ccbbe5f2bbf0a2a4f9ba10394",
+    "desktop/host/src/lib.rs": "93169adca63930de03a38878e7d7e87290e68404df9670f2b3962dc8f7256255",
+    "desktop/host/Cargo.toml": "bb00d11c96f14ab7f2c86953d0a82c27b0ffd85c5a7e57013dc8fc8d31839bc6",
+    "desktop/shell/src/daemon.rs": "ea14ecec5564d6334c6345dbaf2824f0ca1e8b9cba8f7f5e514dcd3679a845a2",
+    "desktop/shell/Cargo.toml": "a731c6db62851d5a83e7776ae7286927144db4d4b0b69417df0357c626e8d945",
+    "Cargo.toml": "5971138dca770696c0d81981c13627aecf9f270fcf0afeeb7f1d98e826abb7ee",
+    "Cargo.lock": "15c3079c0883beaba6f1fb401d608156414570af5aba94626022a2c3f67f9d00",
+    "desktop/nsh-shell/src/main.rs": "2727feb26283d1bbf4e66ad88ed06fb5a7bd4ae4e9d255361e3e890e3dfe53be",
+    "docs/superpowers/specs/2026-11-21-phase11-nsh-cutover.md": "965209f8236e6b417af0c016fb8112238923e2741f7e74dd436127c2b0deed87",
+    "docs/superpowers/runs/2026-11-21-phase11-nsh-inventory.json": "72e7ef05be4c8b12a1f8e7a8c3ad539a7844f6db9d44cefee4a5c9b113e681ea"
+  },
+  "contract": {
+    "unix_launcher": "Owned Tokio child; 40-second per-launcher wait; nonzero exit rejected; timeout awaits kill/reap. This is not a whole-startup bound.",
+    "windows": "Detached actual-server start policy preserved; no Unix short-lived-launcher wait/kill policy applied.",
+    "connect": "Existing 2-second bound; only ConnectionRefused becomes Some(false); timeout and unknown errors remain None. Both launch and close-wait consumers preserve unknown.",
+    "readiness": "HTTP 200/503 is not binary identity, service ownership, a bind reservation or authority to stop a listener.",
+    "scope": "Shared source consumed by retained Tauri full shell only. No NSH service/runtime mount."
+  },
+  "checks": [
+    {
+      "command": "cargo test -p aleph-desktop-host -p aleph-desktop-shell --message-format=json --offline --locked --jobs 1",
+      "result": "PASS",
+      "shared_host": 10,
+      "retained_full_shell": 165
+    },
+    {
+      "command": "cargo test -p aleph-desktop-shell --no-default-features --features qa-owned-root --offline --locked --jobs 1",
+      "result": "PASS",
+      "retained_lite_shell": 190
+    },
+    {
+      "command": "cargo clippy -p aleph-desktop-host --all-targets --offline --locked --jobs 1 -- -D warnings",
+      "result": "PASS"
+    },
+    {
+      "command": "final-source shared-host test executable; three additional parallel runs; stop on any failure",
+      "result": "PASS",
+      "runs": 3,
+      "tests_each": 10,
+      "performance_acceptance": false
+    }
+  ],
+  "discipline": {
+    "cargo_memory_gate": "ALLOW before every Cargo invocation",
+    "cargo": "serial --offline --locked --jobs 1; no manifest/lock regeneration in this slice",
+    "timed_native_qa": false,
+    "independent_review": "NOT PERFORMED; ordered author SPEC then QUALITY only"
+  },
+  "red_and_diagnostic_evidence": {
+    "new_tests": "Child success/nonzero/timeout tests rejected initial unavailable stub. Error mapping rejected Some(false) for unknown errors; actual listener rejected a false stub.",
+    "rejected_assumption": "A test expected drop(listener) to guarantee immediate ConnectionRefused. Under concurrent child creation the probe instead returned Some(true), and in another diagnostic None. Socket-only parallel and isolated controls did not reproduce the failure.",
+    "second_rejected_assumption": "A bound/non-listening socket on this machine can time out rather than immediately refuse.",
+    "final_fixture": "Keep a non-listening socket bound. Observe its actual outcome independently with std::net::TcpStream::connect_timeout and require the async probe to preserve the same classification. A separate real listener must report connected.",
+    "causality_limit": "No kernel, Tokio, inherited-FD, port-reuse or daemon-identity attribution established. Diagnostic repetitions are not acceptance sampling."
+  },
+  "unvalidated": [
+    "Actual aleph-server launch/stop/recovery, installed service takeover and NSH full/lite lifecycle",
+    "Externally dropped future drain: kill-on-drop is fallback, not an awaited-drain receipt",
+    "Wait-error and cleanup-error branches do not claim successful child settlement",
+    "Legacy port-close unit return is not a stop acknowledgement",
+    "Permission-error injection and Windows/Linux native fault behavior",
+    "Production Panel WASM credential/status rendering and full pairing",
+    "Updater/install/rollback, default switch and physical platform integration",
+    "Common real >=14 calendar-day three-platform dual operation and Tauri deletion"
+  ],
+  "gates": {
+    "P11-A": "OPEN",
+    "P11-B": "OPEN",
+    "P11-C": "OPEN",
+    "P11-D": "OPEN",
+    "P11-E": "OPEN",
+    "P11-F": "OPEN",
+    "P11-G": "OPEN",
+    "P11-H": "OPEN"
+  },
+  "operations": {
+    "push": false,
+    "tag": false,
+    "release": false,
+    "default_switch": false,
+    "tauri_removed": false,
+    "production_credential_or_login_service_mutation": false
+  }
+}

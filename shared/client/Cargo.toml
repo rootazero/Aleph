@@ -28,6 +28,7 @@ serde_json = "1.0"
 toml = "1.1.8"
 thiserror = "2.0"
 tracing = "0.1"
+url = { workspace = true }
 dirs = "7"
 
 # OS-protected storage for the paired-device credential (see

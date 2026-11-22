@@ -1,0 +1,63 @@
+{
+  "artifact": "phase11_macos_local_full_bundle_checkpoint",
+  "version": "2026-11-22.13",
+  "status": "PASS_LOCAL_AD_HOC_ASSEMBLY / NOT_PHASE11_ACCEPTANCE",
+  "parent": "b59861aaca0195b61c2134d9d43303e85d5b761a",
+  "contract": {
+    "path": "docs/superpowers/specs/2026-11-21-phase11-nsh-cutover.md",
+    "section": 18
+  },
+  "checks": {
+    "python": "3 passed; signed executable sibling executed, missing input unpublished, exclusive host-only publication",
+    "actual": "assembled real embedded-core host and aleph-server debug inputs, recursive bundle and explicit server signature verified, input hashes unchanged, bundle host --help exited 0",
+    "build": "4 GiB memory gate allowed; serial offline locked jobs 1; no native service run"
+  },
+  "red_history": [
+    "old script rejected the explicit server argument",
+    "a pre-signed host failed outer ad-hoc signing, including in the host-only control; force only on the private staged copy"
+  ],
+  "limits": [
+    "local ad-hoc developer bundle only, not an installer, notarized artifact, release trust or update feed",
+    "only --help exercised for the real bundle; no native cold start, helper integration, service change, default change or other-platform proof",
+    "14-day common dual operation and Tauri deletion remain gated"
+  ],
+  "gates": {
+    "P11-A": "OPEN",
+    "P11-B": "OPEN",
+    "P11-C": "OPEN",
+    "P11-D": "OPEN",
+    "P11-E": "OPEN",
+    "P11-F": "OPEN",
+    "P11-G": "OPEN",
+    "P11-H": "OPEN"
+  },
+  "source_sha256": {
+    "desktop/nsh-shell/macos/bundle-local.sh": "5b953ddf9485866df9b1d6fc1d08a7d8b334783ce641260d6fbd3b9441e7359d",
+    "desktop/nsh-shell/macos/test_bundle_local.py": "97b2847e7d1ea03e9a2a6aa7669e57ad9f806b1c19115aaadc17fb4d818b803c",
+    "desktop/nsh-shell/macos/Info.plist": "7206f796111a079348f150e1050c5fbf3697eaa88ff3d72f901f9f30e1cabd95",
+    "desktop/host/src/local_server.rs": "9e7aecb0ebfef7cbe30295d540f8fbc961582693b08426bfb62aff6eb03adf3b",
+    "docs/superpowers/specs/2026-11-21-phase11-nsh-cutover.md": "a5a2fba7333d830a008eb230cd4f13b362ced62afbc660fb2a2c69fcf0f6eeb3",
+    "docs/superpowers/runs/2026-11-21-phase11-nsh-inventory.json": "8ba1f6e710dd471aa0aff2f07b9cf186f4b24c76d21cbae7c374f6577beca1da"
+  },
+  "raw_sha256": {
+    ".phase10-evidence/phase11-macos-full-bundle.O5Xu3P/red.log": "70d964505159c144bcb53973a506c664132347b797854fc125bfc4df52d4eaea",
+    ".phase10-evidence/phase11-macos-full-bundle.O5Xu3P/green.log": "82df94da383a5ee1c77c15fa5a8ffa8d61a91d80cec7f76963d02cb58278e4c3",
+    ".phase10-evidence/phase11-macos-full-bundle.O5Xu3P/final-tests.log": "7aff8cc041b54c71eece551d5c48fdd87482b464be9e9085ff8aca9c42350df0",
+    ".phase10-evidence/phase11-macos-full-bundle.O5Xu3P/full-host-build.log": "9948c9b5f7b1946587fe7ea43cf72ade6e9a30b91ce7d7f7c705597b25a7e59a",
+    ".phase10-evidence/phase11-macos-full-bundle.O5Xu3P/input.sha256": "b778704efcc2ca41031a37bfb2a4f9551001bfc0a97f1f8120d5c26cfe1e3079",
+    ".phase10-evidence/phase11-macos-full-bundle.O5Xu3P/assemble.log": "2d1dfbd0830db0a4d477d33ace992a15d1c95e7cefc9b637862b4ec9090e9220",
+    ".phase10-evidence/phase11-macos-full-bundle.O5Xu3P/verify.log": "ed688f6a5a8a2775134addaf46e7cd6b0fa70e27ef3e5bfab1aac847717e9fdb",
+    ".phase10-evidence/phase11-macos-full-bundle.O5Xu3P/host-help.log": "543d1a0198005130b8b08117e30aab7ad5231a811e05928b6e655b2481291952",
+    ".phase10-evidence/phase11-macos-full-bundle.O5Xu3P/payload.sha256": "3033e5adf37890106658884f764f8f71ee50e5f6e0e7e0d45d3f54d28101f246",
+    ".phase10-evidence/phase11-macos-full-bundle.O5Xu3P/signing-control.rn6oh5/diagnostic.log": "a02b55c14e9d54a99597d3ccad2d963fd3e99dd9a50cfd37029aa144a6546807"
+  },
+  "bundle_sha256": {
+    ".phase10-evidence/phase11-macos-full-bundle.O5Xu3P/Aleph-NSH-Full.app/Contents/Info.plist": "7206f796111a079348f150e1050c5fbf3697eaa88ff3d72f901f9f30e1cabd95",
+    ".phase10-evidence/phase11-macos-full-bundle.O5Xu3P/Aleph-NSH-Full.app/Contents/MacOS/aleph-nsh-shell": "e857825c2b87afcf895ddcf2f298c463d3e56760c9dd25e6353ea77eac66caf6",
+    ".phase10-evidence/phase11-macos-full-bundle.O5Xu3P/Aleph-NSH-Full.app/Contents/MacOS/aleph-server": "8cffc4e11c96e3eb06bbca9e2940284ebd45d99e01f22d58c622830f4bb15764",
+    ".phase10-evidence/phase11-macos-full-bundle.O5Xu3P/Aleph-NSH-Full.app/Contents/_CodeSignature/CodeResources": "c931369578085470832c0eef7d2793a56d5ad35eaf9ebfb7a4ee0e160b588949"
+  },
+  "phase10_original_matrix_sha256": {
+    ".phase10-evidence/g7-official-matrix.Ji0duOcq/matrix.json": "fbf5f1272be769ae554ba53df065ef171badb6bbe942bb90e254168664e5f7c2"
+  }
+}

@@ -259,7 +259,12 @@ async fn start_server_body(
         ownership_tree.clone(),
     );
     startup_resources.install_memory(memory_runtime.clone());
-    initialize_extension_manager(args.daemon, Arc::clone(&ownership_tree)).await?;
+    initialize_extension_manager(
+        args.daemon,
+        args.bundled_content_only,
+        Arc::clone(&ownership_tree),
+    )
+    .await?;
 
     // Shared MCP-target ToolHandlerRegistry. The Phase 2 facade chain
     // (`build_tool_service`, `PermissionLayer`, `TimeoutLayer`, etc.) was

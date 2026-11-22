@@ -9,6 +9,41 @@ import unittest
 
 class BundlePublicationTest(unittest.TestCase):
     @unittest.skipUnless(os.uname().sysname == 'Darwin', 'requires macOS signing tools')
+    def test_full_bundle_publishes_executable_signed_server_sibling(self):
+        publisher = Path(__file__).with_name('bundle-local.sh').resolve()
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            server = root / 'server'
+            subprocess.run(
+                ['/usr/bin/clang', '-x', 'c', '-o', server, '-'],
+                input='int main(void) { return 17; }\n', text=True, check=True,
+            )
+            destination = root / 'Full.app'
+            bundled = subprocess.run(
+                ['/bin/bash', publisher, '--server', server, '/usr/bin/true', destination],
+                capture_output=True, text=True,
+            )
+            self.assertEqual(bundled.returncode, 0, bundled.stderr)
+            sibling = destination / 'Contents/MacOS/aleph-server'
+            self.assertEqual(subprocess.run([sibling]).returncode, 17)
+            subprocess.run(['/usr/bin/codesign', '--verify', '--strict', sibling], check=True)
+            subprocess.run(['/usr/bin/codesign', '--verify', '--deep', '--strict', destination], check=True)
+
+    @unittest.skipUnless(os.uname().sysname == 'Darwin', 'requires macOS signing tools')
+    def test_missing_full_server_does_not_publish_bundle(self):
+        publisher = Path(__file__).with_name('bundle-local.sh').resolve()
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            destination = root / 'Full.app'
+            result = subprocess.run(
+                ['/bin/bash', publisher, '--server', root / 'absent', '/usr/bin/true', destination],
+                capture_output=True, text=True,
+            )
+            self.assertEqual(result.returncode, 2)
+            self.assertFalse(destination.exists())
+            self.assertIn('executable server', result.stderr)
+
+    @unittest.skipUnless(os.uname().sysname == 'Darwin', 'requires macOS signing tools')
     def test_concurrent_publication_does_not_nest_or_replace(self):
         publisher = Path(__file__).with_name('bundle-local.sh').resolve()
         with tempfile.TemporaryDirectory() as work:
@@ -55,6 +90,7 @@ fi
             executable = destination / 'Contents/MacOS/aleph-nsh-shell'
             self.assertEqual(subprocess.run([executable]).returncode, winner)
             self.assertFalse((destination / 'Aleph.app').exists())
+            self.assertFalse((executable.parent / 'aleph-server').exists())
             subprocess.run(['/usr/bin/codesign', '--verify', '--strict', destination], check=True)
 
 

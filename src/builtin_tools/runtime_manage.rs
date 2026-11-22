@@ -688,26 +688,19 @@ async fn obscura_row() -> RuntimeRow {
             None,
         ),
         None => {
-            let probe =
-                tokio::task::spawn_blocking(|| crate::runtimes::probe::probe(OBSCURA_RUNTIME))
-                    .await;
-            match probe {
-                Ok(r) if r.found => (
+            let probe = crate::runtimes::probe::probe(OBSCURA_RUNTIME).await;
+            if probe.found {
+                (
                     format!("Ready (ledger {OBSCURA_TAG})"),
-                    r.bin_path.map(|p| p.display().to_string()),
-                    r.version,
-                ),
-                Ok(_) => (
+                    probe.bin_path.map(|p| p.display().to_string()),
+                    probe.version,
+                )
+            } else {
+                (
                     "Missing (no obscura on PATH or in the ledger)".to_string(),
                     None,
                     None,
-                ),
-                // A probe that did not run is not an absent binary.
-                Err(e) => (
-                    format!("Unknown (the probe did not complete: {e})"),
-                    None,
-                    None,
-                ),
+                )
             }
         }
     };

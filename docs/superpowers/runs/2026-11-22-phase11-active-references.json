@@ -1,0 +1,2425 @@
+{
+  "artifact": "phase11-active-reference-census",
+  "version": "2026-11-22.8",
+  "status": "SOURCE_DISCOVERY_ONLY / NOT_DEPENDENCY_CLOSURE / NOT_PHASE11_ACCEPTANCE",
+  "parent_commit": "090fce3b745448bc09d5d9c9cff50bda3975a681",
+  "identity": "Exact per-file hashes bind the inspected candidate; the local-server source differs from the parent only in an independent test expectation. This is a historical snapshot, not a claim that future HEAD matches.",
+  "scope": {
+    "expanded_pattern": "tauri|aleph-desktop-shell|desktop/shell|\\.\\./shell/",
+    "inputs": [
+      "tracked text references",
+      "every tracked desktop/shell file, including non-literal modules, ACLs and binary assets",
+      "explicit Panel context and shell bridge consumers"
+    ],
+    "excluded": [
+      "docs/**",
+      "**/dist/**",
+      ".claude/**",
+      "config.lock",
+      "config.toml"
+    ],
+    "no_matched_content_recorded": true
+  },
+  "counts": {
+    "files": 186,
+    "expanded_reference_files": 147,
+    "expanded_reference_lines": 883,
+    "legacy_owned_files": 74,
+    "legacy_owned_without_literal_or_path_references": 37,
+    "explicit_nonliteral_panel_consumers": [
+      "interfaces/webchat/src/app/shell_bridge.rs",
+      "interfaces/webchat/src/context.rs"
+    ]
+  },
+  "findings": [
+    {
+      "source": "desktop/shell",
+      "finding": "37 of 74 owned files have no expanded lexical/path match. Whole-crate ownership, generated command ACLs, certificate helpers and assets must be accounted for separately."
+    },
+    {
+      "source": "interfaces/webchat",
+      "finding": "Native IPC, Tauri drag hit regions, overlay titlebar geometry, microphone permission policy and Gateway filesystem access are distinct roles. Do not widen them using one blanket marker replacement."
+    },
+    {
+      "source": "src/gateway/origin_policy.rs:129",
+      "finding": "The tauri scheme branch is live Gateway compatibility behavior, not a historical string. Core remains its authority; no trust-policy change is made in this slice."
+    },
+    {
+      "source": "desktop/windows/src/system.rs:256-273",
+      "finding": "The retained native notification route chooses registered ai.aleph.desktop / ai.aleph.panel AUMIDs, then Aleph fallback. NSH packaging must validate this identity relationship; deleting the Windows capability is not a valid migration."
+    },
+    {
+      "source": "mobile/ios/AlephPaneliOS/Services/CertTrustStore.swift:7-22",
+      "finding": "A reference to the old desktop certificate store describes a shared trust representation; it is not evidence that the iOS implementation is Tauri-owned."
+    },
+    {
+      "source": "official nsh-core-0.6.0/src/element/builder.rs:2204",
+      "finding": "A native window_drag view property exists. Equivalent behavior for Panel DOM data-tauri-drag-region attributes has not been demonstrated; no no-op attribute substitution is accepted."
+    }
+  ],
+  "limitations": [
+    "Lexical/path discovery does not prove transitive dependency or feature closure. Dynamic path construction and indirect consumers still need build/graph checks at P11-G.",
+    "Source hashes and line anchors do not prove rendered UI, actual native effects, restart/rollback, cross-platform parity or a 14-day run.",
+    "Commands and lifecycle migration dispositions remain in the canonical phase11-nsh-inventory.json; this census is evidence, not a second command authority."
+  ],
+  "verification": {
+    "source_identity_check": "186 current source/asset hashes matched",
+    "operation_contracts": 15,
+    "individual_panel_consumers": 19,
+    "owner_caller_anchors": "all retained command anchors exist within current files",
+    "shared_host_suite": {
+      "command": "cd desktop/host && cargo test --offline --locked --jobs 1",
+      "passed": 10,
+      "failed": 0
+    },
+    "strict_clippy": {
+      "command": "cd desktop/host && cargo clippy --all-targets --offline --locked --jobs 1 -- -D warnings",
+      "status": "PASS"
+    },
+    "cargo_memory_gate": "ALLOW before each Cargo invocation",
+    "rustfmt": "changed Rust file passed",
+    "scoped_markdown_links": 8,
+    "diff_check": "PASS after removing a trailing blank line",
+    "original_phase10_matrix_sha256": "fbf5f1272be769ae554ba53df065ef171badb6bbe942bb90e254168664e5f7c2",
+    "all_phase11_gates": "OPEN",
+    "no_new_native_or_timed_run": true,
+    "contract_sha256": {
+      "docs/superpowers/runs/2026-11-21-phase11-nsh-inventory.json": "48d9ba43c1154d62e96ea1241915ae6bb8eb1448153e866eb6b7df3256ea7a91",
+      "docs/superpowers/specs/2026-11-21-phase11-nsh-cutover.md": "22b07851b47b02298489f2e540d5abcd0fb6dd5ad9c1fa24718f59cd92437bff"
+    }
+  },
+  "files": [
+    {
+      "path": ".github/workflows/aleph-app-release.yml",
+      "sha256": "1bce15832d040054de6e2251e75bcc62dcd965e1c77683b0b1674db16d6c120a",
+      "reference_lines": [
+        11,
+        69,
+        86,
+        108,
+        109,
+        111,
+        112,
+        115,
+        121,
+        122,
+        125,
+        127,
+        129,
+        133,
+        138,
+        142,
+        148,
+        151,
+        173,
+        174,
+        181,
+        182,
+        186,
+        189,
+        190,
+        243,
+        249,
+        288
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": ".github/workflows/aleph-core-ci.yml",
+      "sha256": "fc4c7e021e454c7248c771712255d3072e7f3c8e4dbccbdedaccd51604788353",
+      "reference_lines": [
+        19,
+        20,
+        41,
+        42,
+        65,
+        570,
+        577,
+        586,
+        588,
+        597,
+        599
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": ".github/workflows/rust-doctor.yml",
+      "sha256": "f41f0abdf9d748b8df656b72f13e5bff0491fddd481db86ee52bc91bb29e0c1f",
+      "reference_lines": [
+        56,
+        59,
+        101,
+        102
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": ".gstack/qa-reports/run-20261117T231302Z/functional-report.md",
+      "sha256": "a6924b890138222d2025bbe0d8ad5e6bd743c8a7ef0ea26534f82846f6770b79",
+      "reference_lines": [
+        7,
+        10,
+        22,
+        24,
+        38,
+        42,
+        43,
+        44,
+        45,
+        49,
+        57,
+        63,
+        67
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-20-plugin-scope-and-cc-compat/progress.md",
+      "sha256": "eaae9e06dbceb98a74d482ffb034dc2660e376836a326b742b54f91ef22c7e05",
+      "reference_lines": [
+        346
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "AGENTS.md",
+      "sha256": "6d6bf09b2d4d4833d38dae1da7fb1bb88b6d90802f80caf7a95374de8f4651de",
+      "reference_lines": [
+        53
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "CHANGELOG.md",
+      "sha256": "64669f6248f09ad8b707e9fdf77336ca591c5136710b8626a2f913824c604fce",
+      "reference_lines": [
+        1063,
+        1470,
+        1471,
+        1473,
+        2007,
+        2416,
+        2443,
+        3231,
+        3261,
+        3396,
+        3397,
+        3764,
+        3829,
+        3830,
+        3875,
+        3876,
+        3902,
+        4026,
+        4267,
+        4311,
+        4312,
+        4313,
+        4376,
+        4568,
+        4569,
+        4571
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "CLAUDE.md",
+      "sha256": "3f582f6724dbd413052a6dfa34bf14f351b5f36700df80a2222d31f7921f9c83",
+      "reference_lines": [
+        53
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "CONTRIBUTING.md",
+      "sha256": "bcac8ea9a5694d343202f22678147c9d8272e6d7eee93f048229929a22968d7b",
+      "reference_lines": [
+        39
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "Cargo.lock",
+      "sha256": "15c3079c0883beaba6f1fb401d608156414570af5aba94626022a2c3f67f9d00",
+      "reference_lines": [
+        237,
+        259,
+        260,
+        261,
+        262,
+        263,
+        264,
+        265,
+        266,
+        267,
+        8986,
+        13982,
+        14018,
+        14019,
+        14020,
+        14021,
+        14022,
+        14034,
+        14051,
+        14052,
+        14057,
+        14075,
+        14084,
+        14093,
+        14094,
+        14098,
+        14109,
+        14114,
+        14122,
+        14123,
+        14128,
+        14138,
+        14139,
+        14140,
+        14149,
+        14158,
+        14159,
+        14164,
+        14175,
+        14176,
+        14184,
+        14191,
+        14192,
+        14201,
+        14223,
+        14224,
+        14235,
+        14244,
+        14245,
+        14250,
+        14266,
+        14275,
+        14291,
+        14292,
+        14301,
+        14339,
+        14350
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "Cargo.toml",
+      "sha256": "5971138dca770696c0d81981c13627aecf9f270fcf0afeeb7f1d98e826abb7ee",
+      "reference_lines": [
+        13,
+        122
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "README.md",
+      "sha256": "b6a0ffcd8cbd9d392418cbcc19fb63ad9a732987cc6d965d2d4ae2d8bfe7904d",
+      "reference_lines": [
+        100,
+        249
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "README_CN.md",
+      "sha256": "a103be1be7548a898b5640f5e31e18b2b4b05e1af39ffce0e779d793c4daeb32",
+      "reference_lines": [
+        100,
+        210
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "archive/mobile-reflow-20260625/interfaces/webchat/src/app.rs",
+      "sha256": "51f180a41f15209fa78393f683d95821a182f2d4414b507af3a7fea5f0ffb597",
+      "reference_lines": [
+        171,
+        185,
+        187,
+        190,
+        195,
+        252,
+        321,
+        354,
+        372,
+        385
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "archive/mobile-reflow-20260625/interfaces/webchat/src/components/mode_sidebar.rs",
+      "sha256": "27b09818657b4b7661f60cf375c03bf7e1437c3acdceee05b1766b3060e9c5b2",
+      "reference_lines": [
+        114,
+        120,
+        127,
+        131,
+        141,
+        144,
+        150
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "archive/mobile-reflow-20260625/interfaces/webchat/src/components/notification_bell.rs",
+      "sha256": "1964c88c1d573c0d2a745b9deaa34009dbe57bea034c8aa79f899bb6d45d25e6",
+      "reference_lines": [
+        42
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "archive/mobile-reflow-20260625/interfaces/webchat/src/components/notification_center.rs",
+      "sha256": "9a07b48ca71a32b20ed2bc65db4888a2e300463d65c9670db9eb6fc938b7c704",
+      "reference_lines": [
+        62,
+        72
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "archive/mobile-reflow-20260625/interfaces/webchat/styles/tailwind.css",
+      "sha256": "b7e92c580c070f3f0fdbf453308c3b7b8b3baf838d46c74bbd4ede6ea695a709",
+      "reference_lines": [
+        155,
+        167,
+        1505,
+        1920,
+        2014,
+        2059,
+        2062,
+        2103,
+        2107,
+        2117,
+        2150
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "archive/removed-model-routing-moa/MANIFEST.json",
+      "sha256": "ebe747c7e10213aab8ff6faa2ed7c4caee01bd806d7ccad26dce1d66f0842048",
+      "reference_lines": [
+        2109,
+        2112,
+        2119,
+        2122,
+        3319,
+        3322,
+        3639,
+        3642,
+        3649,
+        3652,
+        10568,
+        10569,
+        10689,
+        10721,
+        10722
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "build.rs",
+      "sha256": "906c9643b92a74e923d6eea1abaae3d87194ef668a81aac8d9f1e7b3a844ff52",
+      "reference_lines": [
+        67
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/host/src/local_server.rs",
+      "sha256": "e0a4733eeff146035125227780b76492e5cc50ff37968489242632c8e5558709",
+      "reference_lines": [
+        218
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/linux/Cargo.toml",
+      "sha256": "8a2ac14c49bc421708f4c58a960490a51f81c85ab14cde016e6069029e6b2e9b",
+      "reference_lines": [
+        33
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/nsh-shell/tests/panel_bridge.test.mjs",
+      "sha256": "a5b8177efc3ecd46823a34af76cf500edd839ef9464f869298747c94f9e9c5a4",
+      "reference_lines": [
+        36
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/nsh-spike/FINDINGS.md",
+      "sha256": "ee295bb5380eb7ef0c9b3918711d27c4997dc14f96b8b44b993d5d6a6cbfae32",
+      "reference_lines": [
+        32
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/.gitignore",
+      "sha256": "746023013a35a3ba728dad367f3ce0b61f445b38296080350cc9e4d42a7bad0a",
+      "reference_lines": [
+        1,
+        4,
+        9
+      ],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/Cargo.toml",
+      "sha256": "a731c6db62851d5a83e7776ae7286927144db4d4b0b69417df0357c626e8d945",
+      "reference_lines": [
+        2,
+        3,
+        10,
+        14,
+        31,
+        41,
+        42,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48
+      ],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/Entitlements.plist",
+      "sha256": "3c52ba9e213eb19075a57e81001e18fb809c164a2b513dc85917f65318f7ebfc",
+      "reference_lines": [],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/Info.plist",
+      "sha256": "b0871a17da10e5a0a119cd611fb497dff6a8ed680b3e0a74aae28770ff064f9b",
+      "reference_lines": [
+        31,
+        34,
+        41,
+        45,
+        62
+      ],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/README.md",
+      "sha256": "ca6421b763154088611731039f569887cee3256040960344d874fa25d1b52c97",
+      "reference_lines": [
+        1,
+        3,
+        45,
+        75
+      ],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/build.rs",
+      "sha256": "351072bfba7f2cd364ad13fef24fc3b4980e1b7ce6dcd144be435e59b2dc1aba",
+      "reference_lines": [
+        1,
+        2,
+        41,
+        42,
+        44
+      ],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/capabilities/default.json",
+      "sha256": "513d3836c25c3775b46d49808c7fd7100496819f75a012bef748bbb93e070cbf",
+      "reference_lines": [
+        4
+      ],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/capabilities/legacy-local-ipc.json",
+      "sha256": "89a0c42a8bec65ef648b0c85f48aa9e45797315fc2f2f206c0eba489be9b26c2",
+      "reference_lines": [
+        4
+      ],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/clippy.toml",
+      "sha256": "4a9ec8088523ae478bd9aa57387f0d6a17f81525456bc2f8f0b873c7235acd88",
+      "reference_lines": [],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/icons/128x128.png",
+      "sha256": "6d37e9e4a9e555e1f10fab1aaffc33e3db8c12d2b8226f5bc89ac6b5a485e0d0",
+      "reference_lines": [],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/icons/128x128@2x.png",
+      "sha256": "e208530db9a721d2272efc5f90259a24a07686e6938f21f08385814bc7340ca2",
+      "reference_lines": [],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/icons/32x32.png",
+      "sha256": "8546078d88ef0e406205c88095da54c20a7dc7c81cbba809d5d447e646516ceb",
+      "reference_lines": [],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/icons/64x64.png",
+      "sha256": "6f0a3602fb729be1e70836e6e45ae3fc7d254334719263d4f44f74c27a23f8c6",
+      "reference_lines": [],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/icons/README.md",
+      "sha256": "8824e7c4b60f8d60ad3dd4542f53c9c0c68e418b4f478f2517d631e2a837ae15",
+      "reference_lines": [
+        23,
+        27,
+        44,
+        51,
+        57,
+        67
+      ],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/icons/icon.icns",
+      "sha256": "e5e94e79c1d4970d4dc7bf89c5e31923dbb3a67804893249189ca01e33740149",
+      "reference_lines": [],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/icons/icon.ico",
+      "sha256": "935dac9581608edb24f12944fd6581b321af35a1fb466e3a79a99e6dcc5b9c13",
+      "reference_lines": [],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/icons/icon.png",
+      "sha256": "56bfdaab5c6cb7a5f040eae0b276f27c77a3b4bb4a2addc209f85489a7bc3a44",
+      "reference_lines": [],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/icons/make_panel_icons.swift",
+      "sha256": "82a9ff4bc8e8c37d6b6af56ddebb4d5569c68c48704ec5e6651bd3befb1c5d48",
+      "reference_lines": [
+        14,
+        17,
+        121
+      ],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/icons/panel/128x128.png",
+      "sha256": "7c4136e7eb8434791d88a1c7ad179d4cdfa9b16e53ce663f472641a791044f78",
+      "reference_lines": [],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/icons/panel/128x128@2x.png",
+      "sha256": "9bb8c6764855012ff4d9e73a22e16525ffb762cce20eb69534ad23bac2c4ce6d",
+      "reference_lines": [],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/icons/panel/32x32.png",
+      "sha256": "c52acc83af712d186406a46c49e0b88b3afd1750f68ccef4546de96b7fed8f34",
+      "reference_lines": [],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/icons/panel/icon.icns",
+      "sha256": "7867d827213c15926a444d823c3c3c8d9a142c0dd755c070748cdea7644fda6e",
+      "reference_lines": [],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/icons/panel/icon.ico",
+      "sha256": "7b6421909a39c25ba3ab76543fe740aac6eb6f6b98951249e520f3106e0d6299",
+      "reference_lines": [],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/icons/panel/panel-source.png",
+      "sha256": "085fc653d3de4e22b93827a7ae65348a6c0202867afd700504f9f88e82202767",
+      "reference_lines": [],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/icons/source.png",
+      "sha256": "84e613fa102b81cf312563c81de468cd1f2aad235b986d31bf130068fed16696",
+      "reference_lines": [],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/icons/svg/aleph-glyph.svg",
+      "sha256": "d47d9fb85868da21e00422991e4f10bf62ed9866ab74e24a6189415b6789cf93",
+      "reference_lines": [],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/icons/svg/aleph-pyramid.svg",
+      "sha256": "005b4282217328a328a51b9ae07e5033d3bb0be6c739d99d52465cc1435c1e9c",
+      "reference_lines": [],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/permissions/autogenerated/approve_cert.toml",
+      "sha256": "640d9b0db58f860985df6ec104f3b7a4c56a8ad0ac400e6bdf126848f00cc94c",
+      "reference_lines": [],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/permissions/autogenerated/clear_connection_target.toml",
+      "sha256": "fcd536a7855b364e0fa16abb50bbc228f62a83754585a9e7412487822eb6cd10",
+      "reference_lines": [],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/permissions/autogenerated/connect_to.toml",
+      "sha256": "e3a900fd866993a53784bf520c1fa4d62aeb7829edd4d4c941229ba002ab605a",
+      "reference_lines": [],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/permissions/autogenerated/discover_servers.toml",
+      "sha256": "cec5b3944619a57f538f512badac4f256b8ccfdb11d7dd1b058cca454e82d42c",
+      "reference_lines": [],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/permissions/autogenerated/get_connection_target.toml",
+      "sha256": "c34340494acefedb0b759c2dd1efeafdadf5ab0dcd234119ed1a6b0d7e5fecfa",
+      "reference_lines": [],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/permissions/autogenerated/get_pending_cert.toml",
+      "sha256": "79ea64d37479c7746a349996e958e8f8c4c38ae612f889ea7aa4c166ab4f2032",
+      "reference_lines": [],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/permissions/autogenerated/is_lite_shell.toml",
+      "sha256": "e402ba02f7bea62a660d60afb1142b0184bee5fe2d238a3dda5b239d27d37f1f",
+      "reference_lines": [],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/permissions/autogenerated/panel_credential_delete.toml",
+      "sha256": "5e10af2e989959d0da4abafe088a245e97b60c3c99ca06f3e09ff42ae88307bb",
+      "reference_lines": [],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/permissions/autogenerated/panel_credential_load.toml",
+      "sha256": "4f91603d3baa2cf1a5b49c8ce77ad84b249d77714024f5397922a264803186c3",
+      "reference_lines": [],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/permissions/autogenerated/panel_credential_save.toml",
+      "sha256": "d52ae4556b64eef17c33f42c5b5b99125ded6a2cc54f3c18cdfd4e52618ad9a5",
+      "reference_lines": [],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/permissions/autogenerated/phase9_observation.toml",
+      "sha256": "b17ceb3ce50413b38863898eb3d8c492211f081a89cce7dbfa3b243e69d437b9",
+      "reference_lines": [],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/permissions/autogenerated/reject_cert.toml",
+      "sha256": "2f32c8cd9bb2dddc24f9216bddcd68c3d4be0e84df7230353ebd6ca7d1ddefb5",
+      "reference_lines": [],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/permissions/autogenerated/set_connection_target.toml",
+      "sha256": "eb2ffd55871026a8bd19b29ffae1fee009e98c42f6a5e61fc04dbac8f349b379",
+      "reference_lines": [],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/permissions/keyring.toml",
+      "sha256": "73771d50e5af4cd611b717ccc4f43080877fac37a2f2406468899594e44e340f",
+      "reference_lines": [],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/splash/cert-trust.html",
+      "sha256": "670ff739d4cee29724f39a31b91e85628713cf2efb8340a70a2a2332033dc12c",
+      "reference_lines": [
+        26
+      ],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/splash/connect.html",
+      "sha256": "45aab07a4c1032feb446176f9dc6c19935fea9524c93a9645b84b507119b62a6",
+      "reference_lines": [
+        41,
+        62
+      ],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/splash/index.html",
+      "sha256": "40a52387b94d62a13253ede09577ec6b719dd5364b55766fdbf96d7eb0a064fb",
+      "reference_lines": [
+        144
+      ],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/src/cert_trust/adapter_linux.rs",
+      "sha256": "639f0c88a57bc1490f520ff4959c324071bb670fa044a15aaa6a3fd574eb1194",
+      "reference_lines": [
+        19,
+        34
+      ],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/src/cert_trust/adapter_macos.rs",
+      "sha256": "9c83dae3b37affefdff5c0d2f364fc3483f00d9458a0910ab9da9b2bb0b3de8d",
+      "reference_lines": [
+        49,
+        64
+      ],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/src/cert_trust/adapter_windows.rs",
+      "sha256": "8a2e45399b4efc0fce9925f18150c2516d9fea45b18883df63cdeb532fe3be59",
+      "reference_lines": [
+        17,
+        32,
+        44
+      ],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/src/cert_trust/fingerprint.rs",
+      "sha256": "5f84e407466c549cd20aa037eb9c95f8929110898d3e9c0429d68494dd7d0511",
+      "reference_lines": [],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/src/cert_trust/install.rs",
+      "sha256": "149e49f9540c24de0cac69e8947700ed6ff02ec53f7aaba3b777e7ea95e10e2c",
+      "reference_lines": [
+        5,
+        9,
+        12
+      ],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/src/cert_trust/mod.rs",
+      "sha256": "3de3c9c0441e7a874ce2029a1a8064113a2eadddee9c1cc69fa1ba1224f0c3df",
+      "reference_lines": [],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/src/cert_trust/pending.rs",
+      "sha256": "b99cd6a2d63d658107276e6a12b547f4a29f7ed43327937474a4d3011c53ff00",
+      "reference_lines": [
+        48,
+        49,
+        71,
+        73,
+        74,
+        97,
+        151,
+        172,
+        173
+      ],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/src/cert_trust/store.rs",
+      "sha256": "9569f3ba6f514cdac9412da604ae4a71c90bf0d8300c6acdbbf72f1947684130",
+      "reference_lines": [],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/src/connect_setup.rs",
+      "sha256": "b5a0953bd22be6cde1b88e8e2af0789fccf0e9ab4a6b9b080e960b8ba85c7223",
+      "reference_lines": [
+        12,
+        17,
+        58,
+        95,
+        105,
+        106,
+        111,
+        123,
+        131,
+        133,
+        135,
+        147,
+        148
+      ],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/src/connection.rs",
+      "sha256": "94854cef044416b2bb23ff0af45618b77ca2369c865bae1311264503cca82b6b",
+      "reference_lines": [
+        423,
+        424,
+        425,
+        430,
+        435,
+        439,
+        476,
+        480,
+        485,
+        491,
+        536,
+        559,
+        560,
+        570,
+        625,
+        626,
+        635,
+        821,
+        884,
+        885,
+        887,
+        889,
+        897,
+        899,
+        1083
+      ],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/src/daemon.rs",
+      "sha256": "ea14ecec5564d6334c6345dbaf2824f0ca1e8b9cba8f7f5e514dcd3679a845a2",
+      "reference_lines": [],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/src/deeplink.rs",
+      "sha256": "c71a050166c7f6c91172f4884153c99027989c07273fc063ad492e21f826da12",
+      "reference_lines": [
+        8,
+        9,
+        13
+      ],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/src/external_link.rs",
+      "sha256": "8f87fbcd10e6492e281e00773b2c4f8ad53cf9de0a7b24f170c922195f3abd9a",
+      "reference_lines": [
+        28,
+        85,
+        86,
+        99,
+        102,
+        108,
+        197,
+        198,
+        226
+      ],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/src/gateway_probe.rs",
+      "sha256": "e7f5a715814eb8df24fb96ac26c4513b5e95581d92519c7d1bdbca168b335783",
+      "reference_lines": [
+        13
+      ],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/src/hotkey.rs",
+      "sha256": "a09ee39f0f2d1d8d65190e1c824864f390e284bc7f15794978924025f55d227c",
+      "reference_lines": [
+        11,
+        12
+      ],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/src/keyring_bridge.rs",
+      "sha256": "708fe4358386ef518ae654d39956b3c44abbdb73c387a079cb10e36fb5f175ad",
+      "reference_lines": [
+        4,
+        12,
+        19,
+        21,
+        27,
+        92,
+        93,
+        208,
+        209,
+        392,
+        599,
+        605,
+        636,
+        639,
+        641,
+        645,
+        649,
+        668,
+        669,
+        672,
+        674,
+        680,
+        683,
+        700,
+        703,
+        705,
+        710,
+        713,
+        739,
+        743,
+        774,
+        900,
+        949,
+        1476,
+        1478
+      ],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/src/main.rs",
+      "sha256": "b52de5e6f42804e3284b7ddba3381cf43c37c4d347359e382afaa2337d36f9ac",
+      "reference_lines": [
+        1,
+        68,
+        70,
+        128,
+        130,
+        143,
+        144,
+        148,
+        152,
+        156,
+        179,
+        185,
+        186,
+        187,
+        491,
+        581,
+        597,
+        615,
+        617,
+        622,
+        634,
+        635,
+        636,
+        641,
+        648,
+        649,
+        650,
+        668,
+        681,
+        696,
+        697,
+        699,
+        779,
+        791,
+        800,
+        831,
+        891,
+        912,
+        963,
+        1007,
+        1064,
+        1136,
+        1172,
+        1187,
+        1199,
+        1200,
+        1209,
+        1214,
+        1233,
+        1260,
+        1290,
+        1350,
+        1352,
+        1359,
+        1367,
+        1395,
+        1591,
+        1707,
+        1716,
+        1738,
+        1783,
+        1801,
+        2078
+      ],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/src/menu.rs",
+      "sha256": "14d98c1c0b593c12000f3f420f9b2f0ccdee094e211be741fd0cc9a101ffb944",
+      "reference_lines": [
+        9,
+        10,
+        33,
+        62,
+        101,
+        122,
+        142,
+        158,
+        191,
+        200,
+        250
+      ],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/src/notify.rs",
+      "sha256": "16aedac7a0c9bb047a5b0fc1b16153b68dee4041f73918192d0af20bf22a0341",
+      "reference_lines": [
+        23,
+        24,
+        225
+      ],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/src/perm_monitor.rs",
+      "sha256": "d7a96d1bb2fef5daba59c4a984365522bb93fa136fddc8e083bd9bd031245c91",
+      "reference_lines": [
+        17,
+        28,
+        74,
+        78
+      ],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/src/phase9_qa.rs",
+      "sha256": "703bef9ee63077a67d3083e254645285a52328e24528063cdbb556a7f09aff23",
+      "reference_lines": [
+        4,
+        58,
+        63,
+        76,
+        102,
+        104
+      ],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/src/qa_root.rs",
+      "sha256": "ff3af8cf87ec79322097603949cfa4867b3fccbd34347c2442db86c718f1af36",
+      "reference_lines": [],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/src/qa_trace.rs",
+      "sha256": "d66217b74ffb774bb3d4f0bb7ad000b9aaf1492ab74c087b040c7573a5d45e92",
+      "reference_lines": [
+        6,
+        7,
+        128
+      ],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/src/tray.rs",
+      "sha256": "20359694adecb4167911f59cbeebc84b6b4a71c8af32a7cac327f74d4f976418",
+      "reference_lines": [
+        6,
+        13,
+        16,
+        50,
+        109,
+        119,
+        134
+      ],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/src/update.rs",
+      "sha256": "1fcd97cbb39c542bd3b73df145c945e9696397ecf52cae8d69a170de5998ced6",
+      "reference_lines": [
+        15,
+        16,
+        17,
+        18,
+        36,
+        191,
+        248,
+        250,
+        291,
+        311,
+        325,
+        598
+      ],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/src/webview_perms.rs",
+      "sha256": "7eaa4748f56778b5c0af789cb3b678b2349a8b9bf71244e3702ce24a7df69ee7",
+      "reference_lines": [
+        20,
+        44,
+        66,
+        69,
+        88,
+        95,
+        116,
+        130
+      ],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/tauri.conf.json",
+      "sha256": "5e36a3193fb9e282a87b608dc4605ec194e06ae47a531ac9e5c9e2da99cb7c73",
+      "reference_lines": [
+        2,
+        11
+      ],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/tauri.lite.conf.json",
+      "sha256": "38ede075f387894096a582103a0e53071d6d3f45eba7a9ce45a9ba60e5ec2fee",
+      "reference_lines": [
+        2
+      ],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/tauri.macos.conf.json",
+      "sha256": "1f811e1a76f00f814b0fa9a757971d84b947d8859a50378caac8d3a2aec7e118",
+      "reference_lines": [
+        2
+      ],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/shell/tauri.qa.conf.json",
+      "sha256": "86112c4cccd245ed79d42a8d250f1985d0e4fbaf72208237bbfad82053f97124",
+      "reference_lines": [
+        2
+      ],
+      "legacy_shell_owned": true,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "desktop/windows/src/system.rs",
+      "sha256": "924723d3b73ee289a55ba20bed3ddd6e44215e5be65f6280277d8dffe69e1c6b",
+      "reference_lines": [
+        257
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "interfaces/webchat/src/api/fs.rs",
+      "sha256": "1243bac002c1abf36d155f433e1ffab38e4672339f227fdf9da971bd5e7a7f18",
+      "reference_lines": [
+        5
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "interfaces/webchat/src/api/native_credentials.rs",
+      "sha256": "6ddb2122fb7c1c82271f6347da6fdf553214f2eec2bab9d7ad62447a6e57c9a9",
+      "reference_lines": [
+        101,
+        107,
+        109,
+        134,
+        135,
+        144,
+        147,
+        150,
+        161,
+        178,
+        211,
+        212,
+        250,
+        1340
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "interfaces/webchat/src/app.rs",
+      "sha256": "6229956a05507abd84700e1812b7655665961b396bb0767edfc6327cac5a6f99",
+      "reference_lines": [
+        464,
+        481,
+        484,
+        490,
+        541,
+        616,
+        642,
+        655
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "interfaces/webchat/src/app/shell_bridge.rs",
+      "sha256": "32fbcde692e081ac468c9a77ba26f2c67154da77e43e63b7de50242f5ed473dc",
+      "reference_lines": [],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": true
+    },
+    {
+      "path": "interfaces/webchat/src/components/boot_check_gate.rs",
+      "sha256": "ba1187291ed916ea4b9046f93dde6e0c08a7461b91b9887e02149244a705fb93",
+      "reference_lines": [
+        4
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "interfaces/webchat/src/components/command_palette.rs",
+      "sha256": "e3431209f6b691f77f1133fe0cd1c4589149e0c57e05a8acbd529195c46fde3c",
+      "reference_lines": [
+        360,
+        367
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "interfaces/webchat/src/components/directory_browser.rs",
+      "sha256": "46fc6b828626742634c523164d2913a9d8a7e21e41e9731cb161901f21d8fcb5",
+      "reference_lines": [
+        3,
+        5,
+        360,
+        368
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "interfaces/webchat/src/components/layout_toggle.rs",
+      "sha256": "45871afc2ef24ce350a9b7586e621c236a57a23fb606e31066d4ad332666197d",
+      "reference_lines": [
+        55
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "interfaces/webchat/src/components/mode_sidebar.rs",
+      "sha256": "8ab0b19c30bbd5790ffcd603781171862064d7717b96b7abaec333704721045e",
+      "reference_lines": [
+        180,
+        187,
+        194,
+        198,
+        208,
+        212,
+        218
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "interfaces/webchat/src/components/notification_center.rs",
+      "sha256": "07a9a8e1dddf912f6727ecaba61dbe6d3bd89bc95433bafa954b4b5b2e2d4d50",
+      "reference_lines": [
+        103,
+        130,
+        137
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "interfaces/webchat/src/components/team_task_strip.rs",
+      "sha256": "a88c664f7727f2e09adc685cdc9aa8149d80f238a8febaeb8040d36516db7d49",
+      "reference_lines": [
+        110
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "interfaces/webchat/src/context.rs",
+      "sha256": "feb42ca4c55a40d3d16f255a29ad06e5aa33f3a45d63002cb369e390c8175a57",
+      "reference_lines": [],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": true
+    },
+    {
+      "path": "interfaces/webchat/src/platform/wide/views/chat/project_menu.rs",
+      "sha256": "40189f38b39998ade761aee3ff6adaedce26320a83afaa099c5aed484717f8fe",
+      "reference_lines": [
+        90
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "interfaces/webchat/src/platform/wide/views/settings/desktop_autostart.rs",
+      "sha256": "d46af117d34ff919378cfad77ebd45165a8f8d3b828ad8a8e80e7fd867bfdd6a",
+      "reference_lines": [
+        2,
+        16,
+        17,
+        21,
+        22,
+        23,
+        24,
+        27,
+        82
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "interfaces/webchat/src/platform/wide/views/voice/audio.rs",
+      "sha256": "44f34f61ebf65ebdd04895d32817898959119fc18bf6004c6b56e76bb83846d9",
+      "reference_lines": [
+        172,
+        177,
+        179,
+        180,
+        181,
+        197
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "interfaces/webchat/src/platform_host.rs",
+      "sha256": "d0414bc599cd219899ed2644175207b1f2b098ab00c9a02569eca0c8c4095900",
+      "reference_lines": [
+        91,
+        97,
+        106,
+        117,
+        118,
+        158,
+        172,
+        182
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "interfaces/webchat/src/state/hotkey.rs",
+      "sha256": "daaf10a3f21e923a5da159eb78c6cb4e83d48a6eb38b9999eb7b29064e59db0a",
+      "reference_lines": [
+        9
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "interfaces/webchat/styles/tailwind.css",
+      "sha256": "e2e9d42a404dc1cdf5d1e4462543525ad78389b3ab1573389eda57af59568178",
+      "reference_lines": [
+        154,
+        166,
+        1504,
+        1523,
+        1524,
+        1592,
+        2037,
+        2072,
+        2108,
+        2121,
+        2162,
+        2166,
+        2170,
+        2176,
+        2219,
+        2224,
+        2235,
+        2329,
+        2348
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "interfaces/webchat/webview-baseline.json",
+      "sha256": "dabf1fd81c12c066842d6c2b8530370439efed9d276a9946a373a1997d8831bf",
+      "reference_lines": [
+        2
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "justfile",
+      "sha256": "41d100f370d7207cfb8f0e79a33f6d0c5a8bbe73eb928c9bcc093983f696cd07",
+      "reference_lines": [
+        12,
+        72,
+        74,
+        80,
+        95,
+        110,
+        114,
+        126,
+        127,
+        146,
+        153,
+        154,
+        163,
+        164,
+        435,
+        591
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "mobile/ios/AlephPaneliOS/Services/CertTrustStore.swift",
+      "sha256": "6d25d776347a6e7693db69bfc0a36f2d1862d79152adcbdbac9e12111630bd08",
+      "reference_lines": [
+        7,
+        22
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "qa/README.md",
+      "sha256": "ef4afaa81fba03ed2908197c97e54fdd8d74079be520da873025f0b05eccfa60",
+      "reference_lines": [
+        722,
+        1907
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "qa/native_ipc/README.md",
+      "sha256": "393e3dfa173aad2ed0a431554284bbdd0ea87d718cfc68454465bd986dbe048d",
+      "reference_lines": [
+        1,
+        3,
+        10,
+        25,
+        26,
+        29,
+        37,
+        47,
+        51,
+        53,
+        54,
+        57,
+        58,
+        61,
+        66,
+        79
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "qa/native_ipc/monitor_contract.mjs",
+      "sha256": "e5115977e163d2936b99ddafb06e3e165e893bb15484d9bbf4f0171abff4ed06",
+      "reference_lines": [
+        5,
+        7,
+        16,
+        80,
+        112,
+        379
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "qa/native_ipc/native_project_driver_test.mjs",
+      "sha256": "e96a4ad6663c7283e0e495a61bdfdbaf5ababb07d5d7454c9a3bf4cc4bba4344",
+      "reference_lines": [
+        8
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "qa/native_ipc/native_project_evidence.mjs",
+      "sha256": "1ee78bc852ddc969c200478335631dc1c9b4bc3b3677dc67fc58141d34351bc5",
+      "reference_lines": [
+        51
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "qa/native_ipc/native_project_native_io.mjs",
+      "sha256": "6c3236406b818ea6f2b9eb66e4d6a4acdf6be6b510697f684328f9f6dd7b9418",
+      "reference_lines": [
+        211,
+        546,
+        552
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "qa/native_ipc/native_project_provenance.mjs",
+      "sha256": "27e0e3e8081cd0d566a4528cbd1399e7d92b23a5dc874328b0ec5ad9a362f5d6",
+      "reference_lines": [
+        11,
+        21,
+        32,
+        80,
+        108
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "qa/native_ipc/native_project_provenance_test.mjs",
+      "sha256": "a8b0f64d002769c488ca7429ed4ed6a318e70a1bc7860c7a2e343fc0976bc2e3",
+      "reference_lines": [
+        20,
+        35
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "qa/native_ipc/panel_driver.mjs",
+      "sha256": "f249aa175903a1a7e7c4f5c163d65612925bf5f95f3f445661c93e71c6c640e3",
+      "reference_lines": [
+        2,
+        14,
+        17,
+        157,
+        171,
+        173,
+        175,
+        841,
+        842,
+        847,
+        881
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "qa/native_ipc/provenance.json",
+      "sha256": "122539be3095b8ed39db2dc21da4127c8eb9a8fdc0e847875f09f698877ee76c",
+      "reference_lines": [
+        6,
+        25,
+        26
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "qa/native_ipc/real_qa_prep.mjs",
+      "sha256": "196c3f4fdb410d65fbaa02c786764415f656c7a588498c1487dc493eb8fac540",
+      "reference_lines": [
+        32,
+        586
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "qa/native_ipc/real_run_io.mjs",
+      "sha256": "a823fd09b4a71cae88254b3c207dd5716849d58839c83e4b0fb56842676bfdb6",
+      "reference_lines": [
+        17,
+        81,
+        83,
+        86,
+        484,
+        792,
+        810,
+        1012,
+        1013,
+        1014,
+        1015,
+        1057,
+        1693
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "qa/native_ipc/run-real.mjs",
+      "sha256": "5dc96a9e94112ed8c60916c0523847b711eb8d97cb6dbbbbe4c7e4f5af7e547c",
+      "reference_lines": [
+        402,
+        405,
+        425,
+        428
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "qa/native_ipc/run.mjs",
+      "sha256": "fbf59f5a72e9d429b23766c72cc1761bfe367525db5edc5ae72b918616562af7",
+      "reference_lines": [
+        5,
+        9,
+        28,
+        150,
+        153,
+        154,
+        157,
+        179,
+        180,
+        240
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "qa/nsh_panel_launcher.py",
+      "sha256": "85dda49c544795886c6180ccd9864d5625b1b0eb7c6b6b2c30dc7661bdc8deea",
+      "reference_lines": [
+        628,
+        630,
+        635,
+        638,
+        671,
+        1124,
+        1127,
+        1128,
+        1138,
+        1154,
+        1168,
+        1174,
+        1207
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "qa/nsh_panel_matrix.py",
+      "sha256": "d3cb6d9d24b68abc26b384ba351716adfaa50cca13342767bf49712206940280",
+      "reference_lines": [
+        2,
+        20
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "qa/nsh_panel_parity.md",
+      "sha256": "cfb97c34ecf37861be37d6c4512d653f3f210432adb2180b6a7cc0108e2c065c",
+      "reference_lines": [
+        3,
+        5,
+        25,
+        27,
+        45,
+        55,
+        57
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "qa/nsh_panel_parity.py",
+      "sha256": "906d4b85d0de7dc1356e937389e50d668de086bdfb69965448001f7070ca60e0",
+      "reference_lines": [
+        152
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "qa/nsh_panel_parity.schema.json",
+      "sha256": "d744be77f1eaddda0bdbbc9140f8834d3eaedcaf2972cdb549e00f80eb6fff7d",
+      "reference_lines": [
+        64
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "qa/nsh_panel_runtime.schema.json",
+      "sha256": "9c068b4ef647ef8fc206513dfb43bcccbd1b5d8dcf751e4f44ff9a863b83eb47",
+      "reference_lines": [
+        23
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "qa/phase11_nsh_autostart.md",
+      "sha256": "25e36ba77920e1553d9a5a14d20948b54ae8233503c09f85c60d0a2b59ecf1b4",
+      "reference_lines": [
+        45
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "qa/phase9_runtime.md",
+      "sha256": "99106bddc30a50b9275a41256a72365232706c722ba1a5b9b25d60866ac69316",
+      "reference_lines": [
+        7,
+        24,
+        42
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "qa/webview_compat/foreign_origin_gateway.py",
+      "sha256": "ec4b7d81fc3ff978b58d014858891c433d940a67178628659edee3d678666236",
+      "reference_lines": [
+        11,
+        20,
+        38,
+        39,
+        53
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "qa/webview_compat/run.sh",
+      "sha256": "7fb2a697db551e38d69e2ac6cdffa0ee6f8743b27277151be97e83a12e80452b",
+      "reference_lines": [
+        17,
+        166,
+        170,
+        213,
+        215
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "review-results/2026-11-03-desktop-interfaces-review.md",
+      "sha256": "a7ff4f22460c3b1eaa22322be41173f4681064004fa8dab517c58b3ea91c8c1e",
+      "reference_lines": [
+        3,
+        21,
+        29,
+        69,
+        119
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "review-results/4module-static-review.md",
+      "sha256": "4ac09c4bc342d36c57d924d6a20c51fbd9481c948255303203739e4242ccec3a",
+      "reference_lines": [
+        70
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "review-results/_summary.md",
+      "sha256": "de88f32542017186e8a6dba59d4b24ddc11f9438cd5573cf372402fbec0c9e35",
+      "reference_lines": [
+        23,
+        33,
+        34,
+        35,
+        36,
+        37,
+        38,
+        39,
+        40,
+        41,
+        42,
+        43
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "review-results/agents-batch-4/REPORT.md",
+      "sha256": "a81b7391cf0db1ff771814f3246b5f32fa59c9c52c5d7f41cb829f02a55e4dd2",
+      "reference_lines": [
+        76
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "review-results/batch5-desktop-shell.md",
+      "sha256": "22fa58f0ef42b647e5d918b4e473432efa6f0c9d6340c6bd6ab1196c68421d1a",
+      "reference_lines": [
+        1,
+        6,
+        8,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        57,
+        79,
+        85
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "review-results/batch6-desktop.md",
+      "sha256": "0644993062d422195a22734a9ba9ad66bf4d4129073da2469d4a9c4fa4b5b2a7",
+      "reference_lines": [
+        14,
+        34,
+        55
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "review-results/batch6-interfaces.md",
+      "sha256": "abdaedd4050581bcdf14288c6e2b2b27cf31a257d6d9f262e54f04fac658a2eb",
+      "reference_lines": [
+        128
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "review-results/batch7-desktop.md",
+      "sha256": "565397e76d3d7b8e29d3303c176545c3c59fdcb2e285c37b5e5d0fe59a30148e",
+      "reference_lines": [
+        16,
+        126
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "review-results/desktop-platforms-2026-08-29.md",
+      "sha256": "36783d366506a863105739cc361726b5626a96f24f17d20f31e8ad0d7b66b5fa",
+      "reference_lines": [
+        130
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "review-results/desktop-shared-2026-08-29.md",
+      "sha256": "eda015d6380937debbf87c37caf5123709e7d262aded50b6973257cbd98eeffa",
+      "reference_lines": [
+        64
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "review-results/desktop-shell-2026-08-29.md",
+      "sha256": "e4a8fd6ed7a17567ef6bb0abf3df975d911847042e3bf5dcb43d43316b7104b6",
+      "reference_lines": [
+        3,
+        26,
+        34,
+        42,
+        50,
+        90
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "review-results/desktop.md",
+      "sha256": "d075b84208e7314dd2e8635d9a7aee08bbf2c066b8c71060d0b310f51ee7f987",
+      "reference_lines": [
+        28,
+        29,
+        30,
+        31,
+        32,
+        33,
+        34,
+        35,
+        52,
+        53,
+        54,
+        55,
+        56,
+        57,
+        58,
+        59
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "review-results/occams-r10-synthesis.md",
+      "sha256": "06d7356fe6195fe6b9deccab7e05ba83ff818585538939749a5d5b8c01bb3584",
+      "reference_lines": [
+        20,
+        34,
+        35,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48,
+        69,
+        70,
+        71,
+        76,
+        77,
+        92,
+        100,
+        173,
+        175,
+        177,
+        298,
+        300
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "review-results/occams-r10/desktop.md",
+      "sha256": "cae8e70d0aefd74f6286b2c39a1b830020f0e0515ebbb58965702464647f56c6",
+      "reference_lines": [
+        15,
+        69,
+        72,
+        125,
+        135,
+        138,
+        141,
+        144,
+        147,
+        150,
+        153,
+        156,
+        159,
+        162,
+        165,
+        168,
+        171,
+        174,
+        177,
+        179,
+        180,
+        189,
+        192,
+        195,
+        198,
+        201,
+        204,
+        207,
+        210,
+        279,
+        282,
+        285,
+        288,
+        291,
+        294,
+        304,
+        305,
+        366,
+        393,
+        394,
+        398,
+        402
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "scripts/check_webview_baseline.mjs",
+      "sha256": "ea3155fc4fefaed5bb8b822474953fe39b8f94f877df25cd5596a6697aea4e49",
+      "reference_lines": [
+        5,
+        6,
+        8,
+        19,
+        20,
+        29,
+        63,
+        64,
+        68,
+        70,
+        75,
+        76,
+        78,
+        93,
+        135
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "scripts/install.ps1",
+      "sha256": "fc3ff8bc80c9dd4a8d253ed1e5089e8ad75ea41f643f5c351c68bb03bc923169",
+      "reference_lines": [
+        15
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "scripts/install.sh",
+      "sha256": "1daebe9e598ce6c654af032c9c096f3face8b16844f4ce3985497ed7986d8961",
+      "reference_lines": [
+        10
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "scripts/stage_shell_placeholders.sh",
+      "sha256": "aafa04de585453d4f370dcf3dfecac38d2ef4782a73f8972608556c0965ee823",
+      "reference_lines": [
+        2,
+        4,
+        6,
+        21
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "scripts/validate-harness/fixtures/long-text-01.md",
+      "sha256": "c8a845635ecc8ffc514b84301d43589d78ee2e488b6cfb77e84360ef104cdf58",
+      "reference_lines": [
+        21
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "shared/client/src/connection_target.rs",
+      "sha256": "f1db897d506deaab69ca7e2a59f182610898739e8ade8c47189849f75949c5b1",
+      "reference_lines": [
+        343
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "src/agents/subagent_spawner/mod.rs",
+      "sha256": "8c2dde4ec4db6852218e9a8abc8724b4d1ecb782f3a74d246676408d9ae36f52",
+      "reference_lines": [
+        397
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "src/bin/aleph-panel-native-qa-gateway/main.rs",
+      "sha256": "4b15bf8a3be9301c26c30258efa09188ed4906c6dbb8481b3caab1ec98279b67",
+      "reference_lines": [
+        30
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "src/bin/aleph-server/Info.plist",
+      "sha256": "315286829f78156525ba6c29ac8b9c50ecfd7a6f8d29f7e2ec237ed2bea5b5d1",
+      "reference_lines": [
+        19
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "src/bin/aleph-server/cli.rs",
+      "sha256": "c7186bfd27aa9012d85b98990a8692441cc4449ed4829042209626f6e8497775",
+      "reference_lines": [
+        225
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "src/bin/aleph-server/commands/start/mod.rs",
+      "sha256": "2d658d33e37d90c521deef66eee95cea1488209add349cb7267446787eac676f",
+      "reference_lines": [
+        2434
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "src/bin/aleph-server/commands/update.rs",
+      "sha256": "5e06c29a44982b10f388c8b499d3f8edabd32d705e97ab8c171b089d84d3d5bb",
+      "reference_lines": [
+        5
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "src/bin/aleph-server/server_init.rs",
+      "sha256": "336ddd2e684cfc3ca2b672e62bf2d81fc2a6ef19b8b80934a62df0b463edd369",
+      "reference_lines": [
+        47
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "src/gateway/config.rs",
+      "sha256": "4dba3f98347dfba27d85dc03aaf37cdcf2b65773fde72bed4c430a740fe4a078",
+      "reference_lines": [
+        152
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "src/gateway/handlers/fs.rs",
+      "sha256": "f4446a317e42bcf0e67a3cf9e9b773e84ab5bbe8bef150d9bc309115ff4b2265",
+      "reference_lines": [
+        8,
+        9
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "src/gateway/lane.rs",
+      "sha256": "4fbf8f86df411e887a5130aad9265d3fdec0474a70490a9cc8502e7a7bfbf83c",
+      "reference_lines": [
+        238
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "src/gateway/origin_policy.rs",
+      "sha256": "194070b1566418c71f95f9dc5fb61827bd5b6e0190fb33bb7ffd87762270f37e",
+      "reference_lines": [
+        25,
+        53,
+        71,
+        94,
+        129,
+        246,
+        248
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "src/gateway/server/connection/upgrade.rs",
+      "sha256": "64e069be3642158621407f0269e017d9acce25bce5278397f903c0e5d0193e74",
+      "reference_lines": [
+        181
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "src/gateway/server/mod.rs",
+      "sha256": "24a64534085649b29da340a08218ca88f15e19062d496e8d29bd00e630dd3c5e",
+      "reference_lines": [
+        270,
+        327
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "src/gateway/surface/mod.rs",
+      "sha256": "3dc7525ef2f27f525cb042557a1a755da3569d797eff0d97c7c764dbdb89ed14",
+      "reference_lines": [
+        15
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "src/gateway/surface/r5_router.rs",
+      "sha256": "726d593736328983515ac939c45ece497bb6334014596974eed39086bf3f75e0",
+      "reference_lines": [
+        81
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "task56-auth-monitor.md",
+      "sha256": "fcea8a52f178784695b06580c51fff4edf3d56fbc5c3cd98ab8c9465399abc21",
+      "reference_lines": [
+        52,
+        53,
+        71,
+        93,
+        97,
+        101
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "tests/bridge_acceptance/README.md",
+      "sha256": "249e7d0020181488bff07943aac521a02968d1d75f1dc2a2be8a4da2981b1d68",
+      "reference_lines": [
+        3,
+        4
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "tests/bridge_acceptance/lib.sh",
+      "sha256": "67bca12190345cc088f0bcad052e3a0283f470a0610a00537791fe0d897a636b",
+      "reference_lines": [
+        70
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "tests/bridge_acceptance/manual_checklist.md",
+      "sha256": "7b32ec7555dfa23b6a48f3a0d417c29d8299986c61358618adc7578ee18ae165",
+      "reference_lines": [
+        8
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "tests/bridge_acceptance/test_functional_parity.sh",
+      "sha256": "22c1d02abb508aea9473aa7a9e9b0da87d7e96ada618d7477d304cea352739b1",
+      "reference_lines": [
+        23
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "tests/bridge_acceptance/test_performance.sh",
+      "sha256": "f3007616822cece80def496383c574f625e2bee1bb9bb4d55029c6b46b43fba0",
+      "reference_lines": [
+        135
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    },
+    {
+      "path": "tests/bridge_acceptance/test_stability.sh",
+      "sha256": "7bb6d69fa4adbdef75527fe559976c41f456f3e715ea2f9769129c7e5b640f1c",
+      "reference_lines": [
+        52,
+        137
+      ],
+      "legacy_shell_owned": false,
+      "explicit_panel_consumer": false
+    }
+  ]
+}

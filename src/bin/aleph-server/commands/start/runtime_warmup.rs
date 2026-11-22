@@ -28,8 +28,8 @@ pub(super) async fn runtime_startup_warmup() {
     }
     let ledger_path = runtimes_dir.join("ledger.json");
     let migration_dir = runtimes_dir.clone();
-    let ledger = match tokio::task::spawn_blocking(move || {
-        match migrate_from_legacy(&migration_dir) {
+    let ledger =
+        match tokio::task::spawn_blocking(move || match migrate_from_legacy(&migration_dir) {
             Ok(ledger) => ledger,
             Err(e) => {
                 tracing::warn!(
@@ -37,16 +37,15 @@ pub(super) async fn runtime_startup_warmup() {
                 );
                 CapabilityLedger::load_or_create(&ledger_path)
             }
-        }
-    })
-    .await
-    {
-        Ok(ledger) => Arc::new(RwLock::new(ledger)),
-        Err(e) => {
-            tracing::warn!("runtime warmup skipped: ledger migration task failed: {e}");
-            return;
-        }
-    };
+        })
+        .await
+        {
+            Ok(ledger) => Arc::new(RwLock::new(ledger)),
+            Err(e) => {
+                tracing::warn!("runtime warmup skipped: ledger migration task failed: {e}");
+                return;
+            }
+        };
 
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -56,28 +55,20 @@ pub(super) async fn runtime_startup_warmup() {
     let mut missing = Vec::new();
     for spec in SPECS {
         let probe_name = spec.name;
-        let result = match tokio::time::timeout(
-            RUNTIME_PROBE_TIMEOUT,
-            tokio::task::spawn_blocking(move || runtimes::probe::probe(probe_name)),
-        )
-        .await
-        {
-            Ok(Ok(result)) => result,
-            Ok(Err(e)) => {
-                tracing::warn!("runtime warmup: probe task for {probe_name} failed: {e}");
-                continue;
-            }
-            Err(_) => {
-                // The probe API owns its child handle, so timing out detaches
-                // this best-effort blocking task instead of killing the child.
-                // Warmup and the async worker are no longer blocked by it.
-                tracing::warn!(
-                    "runtime warmup: probe for {probe_name} exceeded {}s; continuing",
-                    RUNTIME_PROBE_TIMEOUT.as_secs()
-                );
-                continue;
-            }
-        };
+        let result =
+            match tokio::time::timeout(RUNTIME_PROBE_TIMEOUT, runtimes::probe::probe(probe_name))
+                .await
+            {
+                Ok(result) => result,
+                Err(_) => {
+                    // Dropping the probe future cancels its owned direct child.
+                    tracing::warn!(
+                        "runtime warmup: probe for {probe_name} exceeded {}s; continuing",
+                        RUNTIME_PROBE_TIMEOUT.as_secs()
+                    );
+                    continue;
+                }
+            };
         let mut g = ledger.write().await;
         if result.found {
             g.update(CapabilityEntry {

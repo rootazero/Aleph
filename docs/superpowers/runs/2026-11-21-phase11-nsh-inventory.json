@@ -1,0 +1,782 @@
+{
+  "artifact": "phase11-nsh-inventory",
+  "version": "2026-11-22.17",
+  "status": "FOUNDATION_IMPLEMENTED / P11-A-H_NOT_ACCEPTED",
+  "authority": [
+    "docs/superpowers/plans/2026-11-21-phase11-nsh-cutover.md",
+    "docs/superpowers/runs/2026-11-16-phase9-nsh-r2-boundary.md",
+    "docs/superpowers/specs/2026-11-21-phase11-nsh-cutover.md"
+  ],
+  "baseline": {
+    "branch": "main",
+    "start_head": "b5eb67d81",
+    "phase10_commit": "576c723591e40c139728f7198d9dd1630e7706e6",
+    "nsh_version": "=0.6.0",
+    "tauri_retirement": "blocked until P11-A-F, real three-platform replacements and common >=14 calendar days with activity"
+  },
+  "platform_api": {
+    "official_checkout": {
+      "path": "../nsh-phase10",
+      "remote": "https://github.com/longbridge/nsh.git",
+      "head": "644a31f0cd1cc35855b6241aedec90a2eda9f222",
+      "uncommitted": [
+        "crates/nsh-platform-macos/src/mount.rs",
+        "crates/nsh-platform-macos/tests/native/host_boundary.rs"
+      ],
+      "use": "read-only research; never production-linked"
+    },
+    "backends": [
+      {
+        "target": "macos",
+        "crate": "nsh-platform-macos",
+        "version": "0.6.0",
+        "current_manifest": true,
+        "native_acceptance": "historical Phase10 scoped acceptance; Phase11 isolated native credential IPC effects passed, not full desktop/Panel acceptance"
+      },
+      {
+        "target": "linux",
+        "crate": "nsh-platform-linux",
+        "version": "0.6.0",
+        "current_manifest": true,
+        "required_feature": "webview",
+        "native_acceptance": "NOT TESTED; offline target check blocked by uncached cairo-rs 0.22.11"
+      },
+      {
+        "target": "windows",
+        "crate": "nsh-platform-windows",
+        "version": "0.6.0",
+        "current_manifest": true,
+        "native_acceptance": "NOT TESTED; Windows target/runner unavailable"
+      }
+    ],
+    "common_api": [
+      "AppOptions",
+      "AppSource",
+      "Root",
+      "run_app",
+      "nsh_core::element::desktop::{main_window,quit,register_global_shortcut,set_tray,tray}",
+      "nsh_core::prelude::web_view"
+    ],
+    "platform_differences": [
+      "keep_alive_on_close field remains macOS-only",
+      "phase9 clock start/annotate remain debug macOS-only",
+      "Linux GTK4/WebKitGTK6 prerequisites",
+      "Windows WebView2 prerequisites"
+    ]
+  },
+  "registered_command_scope": {
+    "full": "desktop/shell/src/main.rs:668-679",
+    "lite": "desktop/shell/src/main.rs:681-694",
+    "debug_qa": "desktop/shell/src/main.rs:695-704; qa-owned-root + debug only",
+    "coverage": "12 application command definitions plus 3 directly consumed autostart plugin operations; not a claim of complete non-IPC lifecycle coverage"
+  },
+  "commands": [
+    {
+      "command": "get_connection_target",
+      "new_boundary": "Fixed document-bound target read; mutable target UI is not implemented. Immutable --connect admission is not a replacement for this command.",
+      "actual_new_handler": null,
+      "failure_behavior": "Unknown or unavailable state must not be presented as the local default.",
+      "lifecycle": "Read the one admitted target owner; no credential access or process acquisition.",
+      "verification": ["Retained Tauri connection tests; NSH get/set/clear native fixture still required."],
+      "owner": "desktop/shell/src/connection.rs:492",
+      "callers": [
+        "desktop/shell/splash/connect.html:102"
+      ],
+      "authority": "connection target owner",
+      "status": "not migrated"
+    },
+    {
+      "command": "set_connection_target",
+      "new_boundary": "Fixed target mutation using canonical ConnectionTarget and existing credential/target transaction semantics; not implemented.",
+      "actual_new_handler": null,
+      "failure_behavior": "Validation, TLS/trust or persistence failure must preserve the prior target and an operable page; do not echo raw input.",
+      "lifecycle": "Serialize target changes with credential invalidation; commit once, then notify and navigate; stale documents cannot affect the new target.",
+      "verification": ["Real isolated target switch, failed commit, stale lease and healthy managed-service preservation remain required."],
+      "owner": "desktop/shell/src/connection.rs:560",
+      "callers": [
+        "desktop/shell/splash/connect.html:86"
+      ],
+      "authority": "serialized target switch + credential revocation",
+      "status": "not migrated"
+    },
+    {
+      "command": "clear_connection_target",
+      "new_boundary": "Fixed clear operation through the same target mutation authority; not implemented.",
+      "actual_new_handler": null,
+      "failure_behavior": "A failed clear must preserve the existing target and must not report successful navigation.",
+      "lifecycle": "Same credential/target boundary as set; no independent clearing or service takeover path.",
+      "verification": ["Isolated persisted-state/clear failure and target-generation tests remain required."],
+      "owner": "desktop/shell/src/connection.rs:626",
+      "callers": [
+        "desktop/shell/splash/connect.html:97"
+      ],
+      "authority": "existing local/remote target + keyring gate",
+      "status": "not migrated"
+    },
+    {
+      "command": "is_lite_shell",
+      "new_boundary": "Read immutable build/product identity; NSH full/lite product contract is not yet mounted.",
+      "actual_new_handler": null,
+      "failure_behavior": "Do not infer full capability merely from an available external daemon or missing configuration.",
+      "lifecycle": "Lite never acquires or stops a bundled daemon; remote never acquires local ownership.",
+      "verification": ["Full/lite staged package and actual process-identity tests remain required."],
+      "owner": "desktop/shell/src/connection.rs:636",
+      "callers": [
+        "desktop/shell/splash/connect.html:75"
+      ],
+      "authority": "full/lite product identity",
+      "status": "not migrated"
+    },
+    {
+      "command": "discover_servers",
+      "new_boundary": "Fixed bounded discovery operation reusing connect_setup discovery semantics; not implemented.",
+      "actual_new_handler": null,
+      "failure_behavior": "Distinguish unavailable discovery from a proven successful empty scan in the new UI; no raw target or credential logging.",
+      "lifecycle": "Discovery work must be owned and joined/cancelled on host shutdown; no unbounded background scan.",
+      "verification": ["Actual isolated discovery/timeout and lifecycle checks remain required."],
+      "owner": "desktop/shell/src/connect_setup.rs:134",
+      "callers": [
+        "desktop/shell/splash/connect.html:149"
+      ],
+      "authority": "existing lite discovery",
+      "status": "not migrated; lite registration only"
+    },
+    {
+      "command": "connect_to",
+      "new_boundary": "Validate and probe before committing through the same target mutation operation; not implemented.",
+      "actual_new_handler": null,
+      "failure_behavior": "Unreachable or untrusted target leaves the old configuration and usable connection surface intact.",
+      "lifecycle": "No second target store or navigation path; successful admission uses the same credential generation boundary.",
+      "verification": ["Real reachable/unreachable, TLS, persistence and navigation effect tests remain required."],
+      "owner": "desktop/shell/src/connect_setup.rs:148",
+      "callers": [
+        "desktop/shell/splash/connect.html:86"
+      ],
+      "authority": "existing lite connection and target gate",
+      "status": "not migrated; lite registration only"
+    },
+    {
+      "command": "get_pending_cert",
+      "new_boundary": "Fixed native-target-bound pending certificate read; NSH TOFU surface is not implemented.",
+      "actual_new_handler": null,
+      "failure_behavior": "No pending challenge or a stale document is not approval and cannot create a trusted pin.",
+      "lifecycle": "Native TLS challenge is authoritative; page-supplied certificate data is not trusted.",
+      "verification": ["Native self-signed challenge, mismatched target and stale challenge tests remain required."],
+      "owner": "desktop/shell/src/cert_trust/pending.rs:49",
+      "callers": [
+        "desktop/shell/splash/cert-trust.html:29"
+      ],
+      "authority": "certificate trust pending state",
+      "status": "not migrated"
+    },
+    {
+      "command": "approve_cert",
+      "new_boundary": "Explicit approval of the exact pending native certificate/target challenge; not implemented.",
+      "actual_new_handler": null,
+      "failure_behavior": "Mismatch, stale challenge or persistence failure must refuse without trusting or navigating.",
+      "lifecycle": "One pending challenge owner; approval is not inferred from readiness or a Panel-provided fingerprint.",
+      "verification": ["Native challenge approval/refusal and pin persistence tests require an isolated trust store."],
+      "owner": "desktop/shell/src/cert_trust/pending.rs:72",
+      "callers": [
+        "desktop/shell/splash/cert-trust.html:47"
+      ],
+      "authority": "existing certificate pin approval",
+      "status": "not migrated; no new trust authorized"
+    },
+    {
+      "command": "reject_cert",
+      "new_boundary": "Fixed rejection of the current pending challenge; not implemented.",
+      "actual_new_handler": null,
+      "failure_behavior": "Rejection must never create trust or silently connect to the challenged endpoint.",
+      "lifecycle": "Clear only the matching pending challenge; leave a usable connection surface.",
+      "verification": ["Native challenge refusal, no-trust-write and stale rejection tests remain required."],
+      "owner": "desktop/shell/src/cert_trust/pending.rs:173",
+      "callers": [
+        "desktop/shell/splash/cert-trust.html:50"
+      ],
+      "authority": "existing certificate trust denial",
+      "status": "not migrated"
+    },
+    {
+      "command": "panel_credential_load",
+      "new_boundary": "Implemented fixed CredentialCall::Load through NativeIpc; no arbitrary invoke wire. Immutable admitted target only.",
+      "actual_new_handler": "desktop/nsh-shell/src/credentials.rs::CredentialService::invoke",
+      "failure_behavior": "Closed CredentialError values; malformed, stale, overlapping or unavailable operations refuse without logging payloads.",
+      "lifecycle": "Document/generation/lease fences and the real OS worker permit survive navigation; admitted synchronous OS effects are not falsely claimed rolled back.",
+      "verification": ["qa/phase11_nsh_credentials.py (ten real isolated effects, two documents, final absence and natural exit).","Mutable target transaction and production remote TLS/handshake remain unverified."],
+      "owner": "desktop/shell/src/keyring_bridge.rs:638",
+      "callers": [
+        "interfaces/webchat/src/api/native_credentials.rs:67",
+        "interfaces/webchat/src/context.rs:2006"
+      ],
+      "authority": "DeviceCredentialStore + strict lease DTO",
+      "status": "typed NSH adapter implemented; isolated macOS WebView/OS-store fixture passed; production Panel WASM/pairing open"
+    },
+    {
+      "command": "panel_credential_save",
+      "new_boundary": "Implemented fixed CredentialCall::Save through NativeIpc; no arbitrary invoke wire. Immutable admitted target only.",
+      "actual_new_handler": "desktop/nsh-shell/src/credentials.rs::CredentialService::invoke",
+      "failure_behavior": "Closed CredentialError values; malformed, stale, overlapping or unavailable operations refuse without logging payloads.",
+      "lifecycle": "Document/generation/lease fences and the real OS worker permit survive navigation; admitted synchronous OS effects are not falsely claimed rolled back.",
+      "verification": ["qa/phase11_nsh_credentials.py (ten real isolated effects, two documents, final absence and natural exit).","Mutable target transaction and production remote TLS/handshake remain unverified."],
+      "owner": "desktop/shell/src/keyring_bridge.rs:671",
+      "callers": [
+        "interfaces/webchat/src/api/native_credentials.rs:75"
+      ],
+      "authority": "DeviceCredentialStore + lease/attempt fence",
+      "status": "typed NSH adapter implemented; full pairing open"
+    },
+    {
+      "command": "panel_credential_delete",
+      "new_boundary": "Implemented fixed CredentialCall::Delete through NativeIpc; no arbitrary invoke wire. Immutable admitted target only.",
+      "actual_new_handler": "desktop/nsh-shell/src/credentials.rs::CredentialService::invoke",
+      "failure_behavior": "Closed CredentialError values; malformed, stale, overlapping or unavailable operations refuse without logging payloads.",
+      "lifecycle": "Document/generation/lease fences and the real OS worker permit survive navigation; admitted synchronous OS effects are not falsely claimed rolled back.",
+      "verification": ["qa/phase11_nsh_credentials.py (ten real isolated effects, two documents, final absence and natural exit).","Mutable target transaction and production remote TLS/handshake remain unverified."],
+      "owner": "desktop/shell/src/keyring_bridge.rs:702",
+      "callers": [
+        "interfaces/webchat/src/api/native_credentials.rs:266"
+      ],
+      "authority": "DeviceCredentialStore + lease fence",
+      "status": "typed NSH adapter exposed; isolated native fixture proves deletion/absence and rejected stale/wrong-document requests leave data unchanged; active product delete caller not established"
+    },
+    {
+      "command": "plugin:autostart|is_enabled",
+      "new_boundary": "Implemented fixed AutostartRequest/AutostartReply detailed status query; not a bool-only replacement.",
+      "actual_new_handler": "desktop/nsh-shell/src/autostart.rs::Reader::query",
+      "failure_behavior": "Unavailable, Failed and RequiresApproval are not Disabled; NSH renders a read-only status.",
+      "lifecycle": "One bounded read worker, exact bundle identity and document-generation reply fencing; no login-item mutation.",
+      "verification": ["qa/phase11_nsh_autostart.py; qa/phase11_nsh_credentials.py --observe-autostart.","Production Panel rendering and Windows/Linux effects remain unverified."],
+      "owner": "desktop/shell/src/main.rs:635",
+      "callers": [
+        "interfaces/webchat/src/platform/wide/views/settings/desktop_autostart.rs:44"
+      ],
+      "authority": "Tauri autostart plugin",
+      "status": "not migrated"
+    },
+    {
+      "command": "plugin:autostart|enable",
+      "new_boundary": "NSH write operation is not implemented; retain the original Tauri-only toggle path.",
+      "actual_new_handler": null,
+      "failure_behavior": "Never substitute server service enable/disable or return a fake success.",
+      "lifecycle": "Host login-item ownership is distinct from server service management; no production mutation authorized by read-only QA.",
+      "verification": ["Isolated native write authorization/effects and approval-required state still need a separate verified slice."],
+      "owner": "desktop/shell/src/main.rs:635",
+      "callers": [
+        "interfaces/webchat/src/platform/wide/views/settings/desktop_autostart.rs:54"
+      ],
+      "authority": "Tauri autostart plugin",
+      "status": "not migrated"
+    },
+    {
+      "command": "plugin:autostart|disable",
+      "new_boundary": "NSH write operation is not implemented; retain the original Tauri-only toggle path.",
+      "actual_new_handler": null,
+      "failure_behavior": "Never substitute server service enable/disable or return a fake success.",
+      "lifecycle": "Host login-item ownership is distinct from server service management; no production mutation authorized by read-only QA.",
+      "verification": ["Isolated native write authorization/effects and approval-required state still need a separate verified slice."],
+      "owner": "desktop/shell/src/main.rs:635",
+      "callers": [
+        "interfaces/webchat/src/platform/wide/views/settings/desktop_autostart.rs:56"
+      ],
+      "authority": "Tauri autostart plugin",
+      "status": "not migrated"
+    }
+  ],
+  "lifecycle_sites": [
+    {
+      "owner": "desktop/shell/src/main.rs:622",
+      "surface": "single instance",
+      "status": "not migrated"
+    },
+    {
+      "owner": "desktop/shell/src/main.rs:726-727",
+      "surface": "menu actions",
+      "status": "not migrated"
+    },
+    {
+      "owner": "desktop/shell/src/main.rs:735",
+      "surface": "keyring bridge installation",
+      "status": "Tauri unchanged; NSH adapter mounted in desktop/nsh-shell/src/main.rs"
+    },
+    {
+      "owner": "desktop/shell/src/main.rs:754-774",
+      "surface": "tray/hotkey/deeplink/permission monitor",
+      "status": "Phase10 NSH local equivalents only; full platform parity open"
+    },
+    {
+      "owner": "desktop/shell/src/main.rs:869-873",
+      "surface": "updater control and external-link navigation",
+      "status": "not migrated; never create arbitrary invoke tunnel"
+    },
+    {
+      "owner": "desktop/shell/src/main.rs:945-950",
+      "surface": "microphone permission and certificate handlers",
+      "status": "not migrated"
+    },
+    {
+      "owner": "desktop/shell/src/main.rs:963",
+      "surface": "spawn_background; notification/update/daemon supervision",
+      "status": "not migrated"
+    },
+    {
+      "owner": "desktop/shell/src/main.rs:1094-1095",
+      "surface": "full local boot reconcile and readiness",
+      "status": "not migrated"
+    },
+    {
+      "owner": "desktop/shell/src/main.rs:1291",
+      "surface": "target-change reconnect",
+      "status": "not migrated; future mutable target must revoke NSH leases at same authority boundary"
+    },
+    {
+      "owner": "desktop/shell/src/main.rs:1585",
+      "surface": "daemon lifetime supervision",
+      "status": "not migrated"
+    }
+  ],
+  "panel_consumers": [
+    {
+      "path": "interfaces/webchat/src/app.rs:464-541",
+      "current_handler_or_ui": "Shared App mounts ShellBridge and renders positive/negative drag regions.",
+      "new_boundary": "Retain the production Panel; old DOM drag markers are not a demonstrated NSH window-drag implementation.",
+      "failure_behavior": "Interactive controls must not become draggable or disappear when the host changes.",
+      "lifecycle": "Panel owns layout; native host owns only actual window I/O.",
+      "verification": "Render narrow/wide Panel and perform real native drag/click checks on each platform."
+    },
+    {
+      "path": "interfaces/webchat/src/context.rs:2006-2144",
+      "current_handler_or_ui": "NativeIpc credential load and handshake attempt fences.",
+      "new_boundary": "Implemented fixed NSH credential path; Gateway remains identity authority.",
+      "failure_behavior": "Stale attempts or malformed native replies do not adopt credentials or fall back to localStorage.",
+      "lifecycle": "AttemptClock and native lease fencing persist across reconnect; mutable target work remains open.",
+      "verification": "Existing native credential tests and isolated WebView effects; actual production handshake/target switching still required."
+    },
+    {
+      "path": "interfaces/webchat/src/api/native_credentials.rs",
+      "current_handler_or_ui": "NativeIpc and TauriIpc credential consumers.",
+      "new_boundary": "NSH selection is fail-closed; original Tauri route retained during overlap.",
+      "failure_behavior": "Malformed NSH presence does not silently fall through to a different bridge.",
+      "lifecycle": "Fixed three commands only; shared DTO and attempt/lease authority retained.",
+      "verification": "Node bridge tests, protocol tests and native isolated credential fixture."
+    },
+    {
+      "path": "interfaces/webchat/src/app/shell_bridge.rs",
+      "current_handler_or_ui": "Production Panel route and notification bridge.",
+      "new_boundary": "Retain Panel routing and subscriptions; no second Gateway or native Chat UI.",
+      "failure_behavior": "Wrong document, stale request or malformed notification must not alter routing or create an OS effect.",
+      "lifecycle": "One mounted bridge/subscription owner; host forwards bounded intents.",
+      "verification": "Actual production Panel route/notification effects remain separate from the fixture handshake."
+    },
+    {
+      "path": "interfaces/webchat/src/platform/wide/views/settings/desktop_autostart.rs",
+      "current_handler_or_ui": "NSH read-only status branch and original Tauri-only checkbox.",
+      "new_boundary": "Implemented fixed detailed NSH status query; no NSH setter.",
+      "failure_behavior": "Unavailable, failure and approval-required remain distinct from Disabled.",
+      "lifecycle": "Bounded document-scoped read only; server service settings remain a different authority.",
+      "verification": "Native CLI and WebView status fixtures passed; production WASM rendering and writes remain unverified."
+    },
+    {
+      "path": "interfaces/webchat/src/platform/wide/views/voice/audio.rs:172-197",
+      "current_handler_or_ui": "Measured Tauri-specific media permission marker.",
+      "new_boundary": "Do not turn a general NSH marker into permission to skip microphone guidance.",
+      "failure_behavior": "An unknown permission path must not claim an OS grant.",
+      "lifecycle": "Keep permission behavior host-specific until actual NSH native media effects are measured.",
+      "verification": "Real getUserMedia permission/denial and voice lifecycle tests on all three platforms remain required."
+    },
+    {
+      "path": "interfaces/webchat/src/platform_host.rs",
+      "current_handler_or_ui": "HostPlatform reader and CSS chrome guard.",
+      "new_boundary": "OS engine identity is not overlay-titlebar geometry; NSH chrome role remains to be proven.",
+      "failure_behavior": "Browser or standard-titlebar windows must not reserve nonexistent traffic-light space.",
+      "lifecycle": "Host declares facts once; Panel retains layout ownership.",
+      "verification": "Existing stylesheet guard plus narrow/wide browser and native geometry checks."
+    },
+    {
+      "path": "interfaces/webchat/styles/tailwind.css",
+      "current_handler_or_ui": "Tauri-specific drag/titlebar and interactive exclusion selectors.",
+      "new_boundary": "Do not blindly widen selectors to every native host.",
+      "failure_behavior": "Preserve clickable controls and correct native/non-overlay spacing.",
+      "lifecycle": "CSS is the sole business layout source; no host-side copied sidebar geometry.",
+      "verification": "Actual rendered geometry and native drag exclusion checks, not a source-string-only assertion."
+    },
+    {
+      "path": "interfaces/webchat/webview-baseline.json",
+      "current_handler_or_ui": "Declared cross-platform engine baseline.",
+      "new_boundary": "Preserve the baseline; a new manifest is not platform acceptance.",
+      "failure_behavior": "Missing native platform observations remain NOT TESTED.",
+      "lifecycle": "Freeze candidate/platform contract before timed validation.",
+      "verification": "Existing baseline checker plus real platform observations."
+    },
+    {
+      "path": "interfaces/webchat/src/api/fs.rs",
+      "current_handler_or_ui": "Gateway filesystem RPC owner.",
+      "new_boundary": "Retain server-scoped fs operations; no native filesystem invoke migration.",
+      "failure_behavior": "Remote folder operations must not accidentally act on the client machine.",
+      "lifecycle": "Gateway owns paths and authorization; Panel owns request/UI state.",
+      "verification": "Real remote Gateway filesystem and directory-picker effects."
+    },
+    {
+      "path": "interfaces/webchat/src/state/hotkey.rs",
+      "current_handler_or_ui": "In-Panel command palette and voice shortcut listeners.",
+      "new_boundary": "Retain Panel listeners; global window summon remains host I/O.",
+      "failure_behavior": "Do not create a second global shortcut or treat in-Panel handlers as OS registration.",
+      "lifecycle": "Existing App listener lifetime; no extra host business state.",
+      "verification": "Focused/typing/escape behavior plus separate native global-hotkey validation."
+    },
+    {
+      "path": "interfaces/webchat/src/components/boot_check_gate.rs",
+      "current_handler_or_ui": "Connection overlay; the Tauri reference is explanatory, not an invoke.",
+      "new_boundary": "Retain the shared connection gate and its Gateway-derived state.",
+      "failure_behavior": "Native drag must not consume interactive actions; Gateway errors remain visible in the shared UI.",
+      "lifecycle": "Existing Panel component/state lifetime; no native business projection.",
+      "verification": "Render the real component and exercise actual native click/drag behavior; whole-product parity is not inferred."
+    },
+    {
+      "path": "interfaces/webchat/src/components/command_palette.rs:358-369",
+      "current_handler_or_ui": "Palette/modal interactive drag exclusions.",
+      "new_boundary": "Retain shared palette UI; verify native clicks do not begin window drag.",
+      "failure_behavior": "Native drag must not consume interactive actions; Gateway errors remain visible in the shared UI.",
+      "lifecycle": "Existing Panel component/state lifetime; no native business projection.",
+      "verification": "Render the real component and exercise actual native click/drag behavior; whole-product parity is not inferred."
+    },
+    {
+      "path": "interfaces/webchat/src/components/directory_browser.rs:1-8",
+      "current_handler_or_ui": "Server filesystem picker plus modal drag exclusions.",
+      "new_boundary": "Retain fs RPC ownership; do not introduce a client-only native directory dialog.",
+      "failure_behavior": "Native drag must not consume interactive actions; Gateway errors remain visible in the shared UI.",
+      "lifecycle": "Existing Panel component/state lifetime; no native business projection.",
+      "verification": "Render the real component and exercise actual native click/drag behavior; whole-product parity is not inferred."
+    },
+    {
+      "path": "interfaces/webchat/src/components/layout_toggle.rs:53-58",
+      "current_handler_or_ui": "Interactive layout toggle excluded from native dragging.",
+      "new_boundary": "Retain Panel layout state and native click exclusion.",
+      "failure_behavior": "Native drag must not consume interactive actions; Gateway errors remain visible in the shared UI.",
+      "lifecycle": "Existing Panel component/state lifetime; no native business projection.",
+      "verification": "Render the real component and exercise actual native click/drag behavior; whole-product parity is not inferred."
+    },
+    {
+      "path": "interfaces/webchat/src/components/mode_sidebar.rs:178-218",
+      "current_handler_or_ui": "Sidebar brand drag region and interactive exclusions.",
+      "new_boundary": "Keep Panel layout; actual NSH native drag/titlebar behavior is not yet established.",
+      "failure_behavior": "Native drag must not consume interactive actions; Gateway errors remain visible in the shared UI.",
+      "lifecycle": "Existing Panel component/state lifetime; no native business projection.",
+      "verification": "Render the real component and exercise actual native click/drag behavior; whole-product parity is not inferred."
+    },
+    {
+      "path": "interfaces/webchat/src/components/notification_center.rs:101-139",
+      "current_handler_or_ui": "Notification UI and modal drag exclusions.",
+      "new_boundary": "Retain Gateway/Panel notification state; host only forwards bounded OS delivery.",
+      "failure_behavior": "Native drag must not consume interactive actions; Gateway errors remain visible in the shared UI.",
+      "lifecycle": "Existing Panel component/state lifetime; no native business projection.",
+      "verification": "Render the real component and exercise actual native click/drag behavior; whole-product parity is not inferred."
+    },
+    {
+      "path": "interfaces/webchat/src/components/team_task_strip.rs:108-111",
+      "current_handler_or_ui": "Task strip interactive drag exclusion.",
+      "new_boundary": "Retain shared business UI and clickable task controls.",
+      "failure_behavior": "Native drag must not consume interactive actions; Gateway errors remain visible in the shared UI.",
+      "lifecycle": "Existing Panel component/state lifetime; no native business projection.",
+      "verification": "Render the real component and exercise actual native click/drag behavior; whole-product parity is not inferred."
+    },
+    {
+      "path": "interfaces/webchat/src/platform/wide/views/chat/project_menu.rs:88-93",
+      "current_handler_or_ui": "Server project creation/picking; existing no-window.prompt constraint.",
+      "new_boundary": "Retain Panel-owned form and server filesystem semantics, not a native Chat/project copy.",
+      "failure_behavior": "Native drag must not consume interactive actions; Gateway errors remain visible in the shared UI.",
+      "lifecycle": "Existing Panel component/state lifetime; no native business projection.",
+      "verification": "Render the real component and exercise actual native click/drag behavior; whole-product parity is not inferred."
+    }
+  ],
+  "build_release": [
+    {
+      "path": "justfile:12",
+      "surface": "shell_dir remains desktop/shell"
+    },
+    {
+      "path": "justfile:83",
+      "surface": "Tauri binary staging"
+    },
+    {
+      "path": "justfile:104",
+      "surface": "shell-dev"
+    },
+    {
+      "path": "justfile:120",
+      "surface": "shell-build"
+    },
+    {
+      "path": "justfile:149",
+      "surface": "shell-build-lite"
+    },
+    {
+      "path": "justfile:159",
+      "surface": "shell-dev-lite"
+    },
+    {
+      "path": ".github/workflows/aleph-app-release.yml:148",
+      "surface": "full cargo tauri build"
+    },
+    {
+      "path": ".github/workflows/aleph-app-release.yml:189",
+      "surface": "lite cargo tauri build"
+    },
+    {
+      "paths": [
+        "desktop/shell/tauri.conf.json",
+        "desktop/shell/tauri.lite.conf.json",
+        "desktop/shell/tauri.macos.conf.json"
+      ],
+      "surface": "active Tauri bundles/permissions/updater configuration remain"
+    }
+  ],
+  "security": {
+    "wire": "closed typed Load/Save/Delete, strict DTO, redacted Debug, fixed errors",
+    "namespace": "production only without QA nonce; QA nonce unavailable unless debug qa-service feature selects canonical isolated namespace",
+    "revocation": "lock-free generation invalidation + worker admission/result check + document/loading check",
+    "blocking_limit": "one actual OS worker, no Tokio runtime assumption, no queue",
+    "cancellation_limit": "already admitted synchronous OS effects cannot be rolled back; late reply/lease rejected",
+    "pending": "one JS call, readiness, 15 second timeout, pagehide rejection"
+  },
+  "review": {
+    "ordering_deviation": "initial inventory was module-level; exploratory credential code preceded complete per-call review; no retroactive SPEC approval",
+    "spec_self_review": {
+      "scope": "implemented entry/credential slice only",
+      "findings_resolved": [
+        "replaced String+Value Rust invoke tunnel",
+        "strict empty-struct variants reject unknown keys",
+        "closed typed reply preserves save-null ACK",
+        "document generation admission and late-result fences",
+        "QA endpoints cannot touch production credential namespace",
+        "fixed platform-specific AppOptions and native clock cfgs"
+      ],
+      "remaining": [
+        "per-caller/non-IPC migration dispositions beyond this census",
+        "ordered full-scope SPEC/QUALITY review",
+        "native WebView credential effects and production Panel credentialless/read-only status resolved; protected-user pairing/persistence remains open",
+        "three-platform production ownership transfer"
+      ]
+    },
+    "quality_self_review": {
+      "scope": "same implemented slice after SPEC findings",
+      "findings_resolved": [
+        "readiness before initial credential invocation",
+        "no entered Tokio runtime assumption",
+        "worker overlap gate retained during blocking body",
+        "bootstrap without documentElement",
+        "bounded pending/timeouts and pagehide",
+        "clippy Copy clone removed",
+        "COMMAND_DELETE import WASM-gated"
+      ],
+      "evidence": "checks below",
+      "independent_review": "NOT PERFORMED; no child agent dispatched"
+    }
+  },
+  "quality": {
+    "completed_now": [
+      "official platform dependencies and cfg entry implementation",
+      "fixed credential transport + canonical-store adapter",
+      "targeted Rust/JS regressions",
+      "production Panel WASM empty-store/native status rendering and natural host return against a real owned Gateway",
+    "real Panel protected pairing/save/reload and isolated deletion against the canonical protected-auth helper; independently confirmed user binding and helper shutdown",
+      "real macOS isolated OS-store roundtrip",
+      "real macOS WebView typed IPC, two-document lease revocation, no-effect controls, store deletion/absence and natural return"
+    ],
+    "open": [
+      "P11-A complete per-caller review",
+      "protected pairing/reload against the full production server and production TLS/remote native E2E; canonical protected-auth helper pairing/reload is now proven separately",
+      "production full/lite/remote target and daemon supervision migration",
+      "three-platform OS integration",
+      "autostart/updater/packaging",
+      "new platform performance contract before timing",
+      "default switch + rollback rehearsal",
+      "real common >=14 calendar-day three-platform dual operation",
+      "Tauri deletion and post-removal regression"
+    ],
+    "checks": {
+      "node": "node --test desktop/nsh-shell/tests/panel_bridge.test.mjs: 11 passed",
+      "protocol": "cargo test -p aleph-protocol --offline --locked --jobs 1: 416 unit + 11 integration passed; 2 doctests ignored",
+      "shell_default": "cargo test -p aleph-nsh-shell --offline --locked --jobs 1: 19 unit + 8 real-process launch + 2 integration passed",
+      "shell_qa": "cargo test -p aleph-nsh-shell --features qa-service --offline --locked --jobs 1: 19 unit + 8 real-process launch + 2 integration passed; 1 real-store test ignored by default",
+      "os_store": "cargo test -p aleph-nsh-shell --features qa-service --offline --locked --jobs 1 isolated_os_store_roundtrip_and_revoked_lease -- --ignored --test-threads=1: 1 passed; unique namespace, save/load/stale-delete-denial/delete/absence, cleanup; not native WebView delivery",
+      "panel_native": "cargo test -p aleph-panel --lib native_credentials --offline --locked --jobs 1: 24 passed",
+      "panel_wasm": "cargo check -p aleph-panel --target wasm32-unknown-unknown --offline --locked --jobs 1: passed; existing dead_code warnings",
+      "clippy": "cargo clippy -p aleph-client -p aleph-nsh-shell --all-targets --features qa-service --offline --locked --jobs 1 -- -D warnings: passed",
+      "linux_target": "BLOCKED: offline cache missing cairo-rs 0.22.11",
+      "windows_target": "NOT RUN: target and runner unavailable",
+      "workspace_fmt": "pre-existing unrelated workspace formatting drift; not rewritten",
+      "tauri_full_lite": "full default: 165 passed; lite qa-owned-root: 190 passed; two classifier tests live in shared-host after extraction; unit suites, not installed-app/service/native lifecycle acceptance",
+      "shared_host": "cargo test -p aleph-desktop-host -p aleph-desktop-shell --offline --locked --jobs 1: shared-host 10 + retained full shell 165 passed; cargo clippy -p aleph-desktop-host --all-targets --offline --locked --jobs 1 -- -D warnings: passed",
+      "native_qa": "PASS_SCOPED_NATIVE_CREDENTIAL_EFFECTS: .phase10-evidence/phase11-launch-credentials.EU3xi4/receipt.json; ten effects, two documents, natural exit after endpoint ownership change; prior .phase10-evidence/phase11-native-credentials.Kje8rAAJ/receipt.json retained; not Panel WASM/desktop parity/performance",
+      "native_receipt_tests": "cd qa && python3 -m unittest test_phase11_nsh_credentials -v: 7 passed; legacy credential evaluator unchanged; optional status extension rejects missing/wrong-document/collapsed status",
+      "qa_python_suite": "uv run --offline --no-project --no-python-downloads --python python3 --with jsonschema==4.25.1 python -m unittest discover -s qa -p 'test_*.py' -v: 94 passed; cached isolated uv environment",
+      "production_panel_native": "PASS_SCOPED_PRODUCTION_PANEL_STATUS; actual current Panel/native component and RPC, not pairing/protected identity or performance; docs/superpowers/runs/2026-11-22-phase11-production-panel-receipt.json"
+    }
+  },
+  "updater_trust": {
+    "old_verifier": "tauri-plugin-updater-2.14.0/src/updater.rs:1893-1916; minisign artifact verification, signed-version policy after signature check",
+    "existing_owner": "desktop/shell/src/update.rs:323-378",
+    "existing_config": "desktop/shell/tauri.conf.json public key and existing full/lite endpoints; requireSignedVersion not explicitly configured",
+    "official_nsh_verifier": "nsh-updater-0.6.0/src/lib.rs:522-545; base64 raw 32-byte Ed25519 public key, context-framed manifest signature",
+    "finding": "not a drop-in compatible trust/feed contract",
+    "recommendation": "preserve existing minisign trust/feed in a focused host adapter; native installer and lifecycle proofs still required",
+    "alternative": "official NSH signed-manifest feed requires explicit trust/feed migration approval and receipts",
+    "decision": "user selected preserving existing minisign trust/feed; no key replacement or official NSH manifest-feed switch",
+    "artifact_verifier_slice": {
+      "status": "VERIFIED_PURE_ADAPTER / NOT_NSH_UPDATER_MOUNT",
+      "owner": "desktop/host/src/updater.rs::verify_artifact",
+      "actual_runtime_consumer": null,
+      "admission": "caller explicitly supplies the existing base64 key, artifact bytes, signature, announced version and signed-version policy; no default key or feed",
+      "behavior": "same locked minisign verifier; authenticate artifact and global comment before first tab-separated signed-version field; preserve semver and literal fallback rules",
+      "inherited_limit": "existing full/lite config omits requireSignedVersion and plugin default is false; an authenticated unversioned artifact does not bind its announced version, so this is not complete anti-rollback protection",
+      "failure": "closed input-free VerifyError; malformed envelopes, signature rejection, missing required version and version mismatch remain distinguishable without including inputs",
+      "effects": "none: no files, network, service stop, install, restart or trust mutation",
+      "verification": "12 shared-host unit tests and 8 integration tests; actual public upstream signed vectors plus tampered bytes/key/comment, both missing-version policies, legacy algorithm, non-semver policy-only fallback, malformed envelopes; strict clippy and retained full165/lite190",
+      "receipt": "docs/superpowers/runs/2026-11-22-phase11-updater-verifier-receipt.json",
+      "not_done": ["NSH feed/check/download mount", "single apply ownership", "staging and install/rollback", "restart and service settlement", "native three-platform packaging"]
+    },
+    "implemented": false,
+    "new_trust_authorized": false
+  },
+  "read_only_autostart_slice": {
+    "status": "IMPLEMENTED_READ_ONLY / NOT_AUTOSTART_PARITY",
+    "decision": "approved same-identity OS adapter; official NSH 0.6.0 retained; no production login-item or server-service mutation",
+    "owner": "desktop/nsh-shell/src/autostart.rs: macOS SMAppService.mainAppService.status after exact NSBundle identity and canonical executable admission",
+    "callers": ["--autostart-status", "interfaces/webchat/src/platform/wide/views/settings/desktop_autostart.rs:64"],
+    "wire": "shared/protocol/src/panel_shell.rs: closed autostart-request/autostart-reply; request/document bound; no setter or target parameter",
+    "lifecycle": "CLI synchronous; Panel independent bounded worker permit and JS slot; 15s timeout, pagehide and late-navigation reply fencing",
+    "ui": "localized read-only NSH states; original Tauri plugin still owns writable toggle",
+    "receipt": "docs/superpowers/runs/2026-11-22-phase11-autostart-receipt.json",
+    "not_tested": ["real OS enabled/disabled/approval transitions", "setters", "Windows/Linux native implementation", "installer/updater", "default/rollback", "performance", "real 14-day dual operation"],
+    "review": "author SPEC then distinct QUALITY, not independent; P11-A-H remain OPEN"
+  },
+  "shared_local_server_source": {
+    "status": "SOURCE_SHARED / NSH_OPT_IN_STARTUP_ONLY / NOT_LIFECYCLE_ACCEPTANCE",
+    "owner": "desktop/host/src/local_server.rs",
+    "consumer": "desktop/shell/src/daemon.rs retains status-only reexports; opt-in NSH embedded-core uses ensure_compatible_ready only for ConnectionTarget::Local",
+    "dependencies": ["tokio", "tracing"],
+    "gateway_admission": {
+      "receipt": "docs/superpowers/runs/2026-11-22-phase11-gateway-admission-receipt.json",
+      "wire": "shared/protocol/src/gateway_probe.rs and src/gateway/server/probe.rs preserve pre-existing HTTP JSON fields and status codes",
+      "behavior": "matching consistent bounded documents allow admission; only a refused TCP connection permits bundled sibling launch; incompatible listeners are never stopped or replaced; no PATH fallback in NSH",
+      "verification": "real QA-owned production Gateway at non-default loopback port accepted without launch; ephemeral listener negatives and booting-to-ready positive; no native bundled cold-start or installed service mutation"
+    },
+    "crate_dependency_scope": "local_server uses Tokio/tracing; desktop/host also exports a pure updater verifier using already-locked base64 0.22.1, minisign-verify 0.3.0, semver and thiserror; importing either module initializes no resources",
+    "initialization": "no runtime/thread/connection/process until an operation is called",
+    "retained_old_shell": ["explicit stop", "version marker", "reconcile_for_version", "legacy autostart removal"],
+    "behavior_fix": "read a bounded CRLF-terminated HTTP/1.0 or HTTP/1.1 status line across TCP fragments; reject malformed/incomplete/oversized lines",
+    "observed_red": ["fragmented 200 parsed as Some(2)", "non-HTTP 200 accepted as Some(200)"],
+    "verification": "ten shared-host tests: real fragmented TCP input, owned listening/non-listening sockets and independent std TCP observation, typed error mapping, actual owned Unix launcher success/nonzero/timeout kill-and-reap; retained full/lite regressions; strict clippy",
+    "bounded_follow_up": {
+      "unix_launcher": "async owned wait; 40s per-launcher timeout; nonzero refused; timeout awaits Tokio kill/reap",
+      "windows": "existing detached start flags and no-wait policy preserved; not a Unix short-lived launcher",
+      "connect": "2s per preliminary connect; only ConnectionRefused maps to Some(false); unknown remains None and cannot grant launch or close acknowledgement",
+      "fixture_correction": "drop(listener) did not guarantee immediate refusal during concurrent process creation; a bound/non-listening socket is retained and its OS observation is independently classified through std TCP; no kernel/Tokio/FD-inheritance cause claimed",
+      "limits": "per-operation bounds, not a global startup deadline or external-cancellation drain receipt"
+    },
+    "limits": ["readiness is not binary identity or a bind reservation", "externally dropped future kill-on-drop is not awaited drain", "wait-error and cleanup-error paths do not claim successful child drain", "legacy port-close unit return is not a stop acknowledgement", "no packaged NSH cold start, explicit stop or recovery run", "no persistent NSH supervisor", "no installed default endpoint used by tests", "no Windows/Linux native acceptance"]
+  },
+  "macos_local_full_bundle": {
+    "status": "AD_HOC_LOCAL_ASSEMBLY / NOT_PACKAGED_COLD_START_OR_RELEASE_ACCEPTANCE",
+    "owner": "desktop/nsh-shell/macos/bundle-local.sh --server stages the exact Contents/MacOS/aleph-server sibling, signs the staged copies and publishes without replacement; two-argument mode remains host-only",
+    "receipt": "docs/superpowers/runs/2026-11-22-phase11-macos-full-bundle-receipt.json",
+    "limits": "caller supplies the embedded-core build; no feature validation, native helper migration, installer, release identity, update, cold start, stop or other-platform package acceptance"
+  },
+  "macos_owned_foreground_cold_start": {
+    "status": "PASS_SCOPED_FOREGROUND_COLD_ADMISSION / NOT_PACKAGED_HOST_COLD_START",
+    "receipt": "docs/superpowers/runs/2026-11-22-phase11-macos-owned-cold-receipt.json",
+    "effects": "Actual signed sibling built from production server code starts from a private empty state on non-default loopback with outbound networking denied and session backend explicitly configured; shared strict admission passes; original child owns the listener, exits 0 after TERM without forced cleanup, port refuses connections and root is removed",
+    "limits": "No NSH GUI/production detached-launch path, unrestricted fresh-home boot, default-config fix, installed service, Windows/Linux or Phase11 acceptance"
+  },
+  "session_backend_default_fix": {
+    "receipt": "docs/superpowers/runs/2026-11-22-phase11-default-backend-receipt.json",
+    "effect": "Missing or empty general table now resolves the same file backend as the field default. A newly built and signed production sibling passed the private foreground cold test without that table.",
+    "limits": "No persisted configuration migrated; no unrestricted network boot, NSH detached-launch or three-platform parity evidence. The preceding explicit-backend receipt remains historical."
+  },
+  "macos_bundled_only_cold_start": {
+    "status": "PASS_SCOPED_FOREGROUND_COLD_ADMISSION_AND_EXIT / NOT_PACKAGED_HOST_COLD_START",
+    "receipt": "docs/superpowers/runs/2026-11-22-phase11-bundled-only-receipt.json",
+    "effect": "Only a newly started NSH full sibling receives --bundled-content-only; embedded content stays available without automatically fetching official repositories on first boot. Already-running services and ordinary Tauri/standalone starts keep their existing behavior.",
+    "settlement": "Real signed foreground sibling starts on isolated loopback with no outbound denial, uses embedded content, and exits naturally after TERM. The sampled blocking runtime probe was replaced with bounded cancellable direct-child I/O.",
+    "limits": "No production detached launch, GUI, installed endpoint, descendant-tree drain, Windows/Linux native proof or Phase11 acceptance."
+  },
+  "active_reference_audit": {
+    "census": "docs/superpowers/runs/2026-11-22-phase11-active-references.json",
+    "expanded_reference_files": 147,
+    "expanded_reference_lines": 883,
+    "legacy_owned_files": 74,
+    "legacy_owned_without_expanded_match": 37,
+    "source_bound_files": 186,
+    "acceptance": "Discovery and per-consumer disposition only; no dependency-closure or P11-A-H acceptance",
+    "review": "Ordered author SPEC then QUALITY; no independent reviewer or delegation"
+  },
+  "gates": {
+    "P11-A": "OPEN",
+    "P11-B": "OPEN",
+    "P11-C": "OPEN",
+    "P11-D": "OPEN",
+    "P11-E": "OPEN",
+    "P11-F": "OPEN",
+    "P11-G": "OPEN",
+    "P11-H": "OPEN"
+  },
+  "dual_track": {
+    "started": false,
+    "qualified_common_days": 0,
+    "reason": "no three-platform production acceptance or default/rollback qualification"
+  },
+  "immutable_launch_slice": {
+    "status": "IMPLEMENTED_TARGETED_CHECKS_NOT_PRODUCT_ACCEPTANCE",
+    "source_owner": "shared/client/src/connection_target.rs",
+    "old_owner_disposition": "desktop/shell/src/connection.rs reexports canonical target type; existing persistence/credential gate, bootstrap tickets, TLS trust and supervision remain in that module",
+    "handler": "desktop/nsh-shell/src/main.rs admits HostSettings::from_launch before mounting window/credential adapter",
+    "boundary": "--connect <root origin>; one immutable target per process; default unchanged; no marker/service/autostart writes",
+    "transport": "Panel root and WS/WSS credential URL derived once from same target; canonical ensure_credential_transport reused; no plaintext remote, userinfo, ticket/query/fragment or non-root path",
+    "qa_separation": "launch args cannot combine with QA endpoint/nonce; malformed Unicode args/environment fail closed without input echo",
+    "shared_client_tests": "57 passed",
+    "native_regression": ".phase10-evidence/phase11-launch-credentials.EU3xi4/receipt.json",
+    "native_regression_sha256": "902acfb9fe0f90672bafd0cf4c724a8b1f81ef3d4e48e7c544b17c8f4119d251",
+    "limitations": ["HTTPS remote TLS/pairing not exercised", "not mutable target, setup UI, discovery, TOFU or full/lite/service migration", "no Windows/Linux native acceptance"]
+  },
+  "pinned_api_gaps": {
+    "login_item": "nsh-core 0.6.0 src/element/desktop.rs:1082 launch_at_login collapses Disabled/RequiresApproval/Unavailable/read errors to false; set_launch_at_login returns Result but no public detailed status getter was located",
+    "single_instance": "nsh-core 0.6.0 src/single_instance.rs assigns uniqueness to release runners; Rust-hosted run_app uniqueness/forwarding not yet proven",
+    "policy": "do not report unavailable as disabled; do not infer single-instance from a SecondInstance event consumer; no toolkit patch or dependency fork"
+  },
+  "production_panel_native_slice": {
+    "status": "PASS_SCOPED_PRODUCTION_PANEL_STATUS / NOT_PHASE11_ACCEPTANCE",
+    "receipt": "docs/superpowers/runs/2026-11-22-phase11-production-panel-receipt.json",
+    "guide": "qa/phase11_nsh_panel_status.md",
+    "ownership": "real Leptos DesktopAutostartSection + fixed native IPC + canonical nonce-isolated OS store + owned production Gateway; no supplied RPC results",
+    "effects": "empty credential load, real credentialless connect authorization, real settings route/status query, correct translated unavailable/read-only text, no toggle, document binding and natural native return",
+    "lifecycle_fix": "credential and status workers complete OS I/O, release admission, then publish the value; UI cancellation never releases an in-progress OS operation; not an OS-thread join",
+    "fixture_fix": "preserve native HOME after controlled real-store failure; isolate credential service, native data_dir and ALEPH_HOME instead; Gateway keeps its private HOME",
+    "assets": "canonical normal just wasm rebuilt and committed; previous nine dist files and both failed native runs retained locally; actual HTTP identities stable during final run",
+    "not_proven": ["protected-user pairing against the full production server (canonical helper proof is recorded separately)", "TLS/remote", "all-helper census", "performance", "three-platform parity", "service/default/rollback", "14-day dual operation", "Tauri removal"]
+  },
+  "protected_panel_native_slice": {
+    "status": "PASS_SCOPED_PROTECTED_PANEL / NOT_PHASE11_ACCEPTANCE",
+    "receipt": "docs/superpowers/runs/2026-11-22-phase11-protected-panel-receipt.json",
+    "guide": "qa/phase11_nsh_pairing.md",
+    "authority": "existing aleph-panel-native-qa-gateway with canonical SecurityStore/DeviceTokenManager/handle_connect in an admitted owned root; not the full production server",
+    "effects": "real Panel ticket submission; Gateway-derived Alice identity; native save ACK; distinct-document reload with stored credential and no new ticket; native cleanup delete and final absence; independent helper pairing confirmation and listener/fixture shutdown",
+    "limits": "no production account/store/service mutation, TLS/remote, cross-platform parity, performance/default/rollback/dual-track/removal claim",
+    "failures_retained": "old binary RED; malformed cleanup load args and helper snake_case wire assumptions corrected in QA only; two orphaned QA items removed with exact nonce+account metadata-only OS cleanup and independently verified absent; not retroactive native cleanup proof"
+  },
+  "macos_external_gateway_quit_survival": {
+    "status": "PASS_SCOPED_EXTERNAL_GATEWAY_SURVIVES_QUIT / NOT_PHASE11_ACCEPTANCE",
+    "receipt": "docs/superpowers/runs/2026-11-22-phase11-nsh-quit-survival-receipt.json",
+    "effect": "An independently started real fixture Gateway keeps the same sole listener PID, instance ID, start time and version and remains ready across a natural native NSH return; only the fixture then shuts down its own Gateway.",
+    "limits": "QA external-target route on private loopback; not a tray click, production local admission or detached launch, explicit stop, recovery, target switching or native Windows/Linux proof."
+  },
+  "operations": {
+    "foundation_commit": "9e48df355236585c4fa7d94e5098c12e445d9dab",
+    "commit": "local conventional commit intended; final Git identity is external to avoid a self-hash cycle",
+    "push": false,
+    "tag": false,
+    "release": false,
+    "default_switch": false,
+    "tauri_removed": false
+  }
+}

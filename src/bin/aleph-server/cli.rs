@@ -27,6 +27,10 @@ pub struct Args {
     #[arg(long, short = 'd')]
     pub daemon: bool,
 
+    /// Use embedded content instead of fetching official content during first startup
+    #[arg(long)]
+    pub bundled_content_only: bool,
+
     /// PID file path (for daemon mode)
     #[arg(long, default_value = DEFAULT_PID_FILE)]
     pub pid_file: String,
@@ -593,6 +597,18 @@ mod tests {
     /// actually assert (the command / action shape), not on clap plumbing.
     fn parse(args: &[&str]) -> Args {
         Args::try_parse_from(args).expect("parses")
+    }
+
+    #[test]
+    fn embedded_content_policy_is_explicitly_opt_in() {
+        for (argv, expected) in [
+            (&["aleph-server", "start"][..], false),
+            (&["aleph-server", "--daemon", "start"][..], false),
+            (&["aleph-server", "--bundled-content-only", "start"][..], true),
+            (&["aleph-server", "--daemon", "--bundled-content-only", "start"][..], true),
+        ] {
+            assert_eq!(parse(argv).bundled_content_only, expected);
+        }
     }
 
     #[test]

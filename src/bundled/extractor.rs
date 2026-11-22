@@ -162,7 +162,10 @@ pub(crate) fn sync_official_with_urls(
 /// and the daemon booted "healthy" with an empty `~/.aleph/skills/`. The
 /// caller decides what a failure means, but the function has to be able to
 /// say one first.
-pub fn extract_bundled_content(aleph_home: &Path) -> Result<(), String> {
+pub fn extract_bundled_content(
+    aleph_home: &Path,
+    bundled_content_only: bool,
+) -> Result<(), String> {
     let skills_dir = aleph_home.join("skills");
     let plugins_cache = aleph_home
         .join("plugins")
@@ -201,7 +204,7 @@ pub fn extract_bundled_content(aleph_home: &Path) -> Result<(), String> {
     // First-run bootstrap: try to pull the latest official content from the
     // external repos; on any failure fall back to the embedded snapshot below.
     let first_run = manifest.skills.is_empty() && manifest.bundled_version.is_empty();
-    if first_run {
+    if first_run && !bundled_content_only {
         match sync_official_now(aleph_home, SyncKind::All) {
             Ok(r) => {
                 info!(

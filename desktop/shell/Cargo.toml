@@ -18,7 +18,7 @@ path = "src/main.rs"
 default = ["embedded-core"]
 # Bundles + supervises the local aleph-server daemon (full app variant).
 # Build the panel-only shell with --no-default-features.
-embedded-core = []
+embedded-core = ["dep:aleph-desktop-host"]
 # QA-only (debug builds, lite shell only): confines every shell file write and the
 # WebView2 profile to an owned temp root passed via --qa-root/--qa-nonce, uses an
 # isolated OS-keyring service namespace, and disables host-global side-effect
@@ -31,6 +31,7 @@ qa-owned-root = ["aleph-client/qa-service"]
 tauri-build = { version = "2.7.3", features = [] }
 
 [dependencies]
+aleph-desktop-host = { path = "../host", optional = true }
 aleph-client = { path = "../../shared/client" }
 aleph-protocol = { path = "../../shared/protocol" }
 sha2 = { workspace = true }

@@ -1,0 +1,91 @@
+{
+  "artifact": "phase11-read-only-host-autostart-checkpoint",
+  "version": "2026-11-22.5",
+  "status": "PASS_SCOPED_READ_ONLY_STATUS / NOT_PHASE11_ACCEPTANCE",
+  "baseline_commit": "ca76fa2f3977e8d9b61618f15800e7173902935c",
+  "native": {
+    "webview": {
+      "path": ".phase10-evidence/phase11-native-status-bridge.gw7h_x92/receipt.json",
+      "sha256": "1f4352d0518edd80adfd94f19e425288dccc6f88a3e742024700ba48f1bffb6f",
+      "binary_path": ".phase10-evidence/phase11-native-status-bridge.gw7h_x92/aleph-nsh-shell",
+      "binary_sha256": "2e5bb5a341d0676ef7e6fc584e89c7f3c319c93ac16b8c8721980d41e815cdb1",
+      "status": "PASS_SCOPED_NATIVE_CREDENTIAL_AND_STATUS_EFFECTS",
+      "returncode": 0
+    },
+    "signed_app": {
+      "path": ".phase10-evidence/phase11-current-autostart-status.eb9_n1hr/receipt.json",
+      "sha256": "86c0f56c3814f6f68e9124b14dd4db7b98fc18252b486c1eee96d399e4c47f10",
+      "source_binary_sha256": "2e5bb5a341d0676ef7e6fc584e89c7f3c319c93ac16b8c8721980d41e815cdb1",
+      "signed_binary_sha256": "63bd72c4bb1489d8194c2f93c85fada3994e14034b59bda2403fc8b10266b509",
+      "status": "PASS_SCOPED_READ_ONLY_STATUS",
+      "binary_unchanged": true
+    }
+  },
+  "phase10_original_matrix_sha256": "fbf5f1272be769ae554ba53df065ef171badb6bbe942bb90e254168664e5f7c2",
+  "source_sha256": {
+    "Cargo.lock": "28101623cfa9144a7861913bf627308e0be7c709b64229b046c96eada49c97a6",
+    "desktop/nsh-shell/Cargo.toml": "3ea31b0ce8e3eb12195ee2f778cc04835c89e48f6b53dbbc3deb18fc84f2ca65",
+    "desktop/nsh-shell/src/autostart.rs": "d1bc8ceeb8c8433023a1610fff08c454f0e636f2e5e36be8d139539cb3f7b6b4",
+    "desktop/nsh-shell/src/main.rs": "2727feb26283d1bbf4e66ad88ed06fb5a7bd4ae4e9d255361e3e890e3dfe53be",
+    "desktop/nsh-shell/src/shell_host.rs": "ec3d8f90973a324d1dc0a60bf82aa8f20ae0766e737be0cdfdc03818697a515a",
+    "desktop/nsh-shell/src/panel_bridge.rs": "5c24f162dd662b667bcf8f3640065fe67ce01931c527f9a13d23a90492f3a1de",
+    "desktop/nsh-shell/src/panel_bridge.js": "2dbd70d86a51637b105e8f819eda712f0ca7489dcc0bdcca27b8489cd367e780",
+    "desktop/nsh-shell/tests/launch_arguments.rs": "8aac486375860da7debdce6246e11a3d7e864746ddf924442d85690b96dd1fc5",
+    "desktop/nsh-shell/tests/panel_bridge.test.mjs": "a5b8177efc3ecd46823a34af76cf500edd839ef9464f869298747c94f9e9c5a4",
+    "shared/protocol/src/panel_shell.rs": "f15c34fb6a99a0d57ed67b10e0d273ea252566eb0a12dc907dd390f4f63eb2d4",
+    "interfaces/webchat/src/api/native_credentials.rs": "6ddb2122fb7c1c82271f6347da6fdf553214f2eec2bab9d7ad62447a6e57c9a9",
+    "interfaces/webchat/src/platform/wide/views/settings/desktop_autostart.rs": "d46af117d34ff919378cfad77ebd45165a8f8d3b828ad8a8e80e7fd867bfdd6a",
+    "interfaces/webchat/locales/en.json": "45aa0c1ca400ab04f77b908cf8a5d20e55143cea7107e3e9e86136dc13965024",
+    "interfaces/webchat/locales/zh.json": "6b1813aca8ec309dccb97eb8daae9ef74a6c88df0d99c14d6f9dfd38acddfc56",
+    "qa/phase11_nsh_autostart.py": "c9c2604bd4aa205df65784b1f400893579f847781d7abdc523c9feb41b5f9b18",
+    "qa/test_phase11_nsh_autostart.py": "8e92de234842930360bd4c662be245c15049af8b2678fb35c18ae73e4d1f5581",
+    "qa/phase11_nsh_autostart.md": "25e36ba77920e1553d9a5a14d20948b54ae8233503c09f85c60d0a2b59ecf1b4",
+    "qa/phase11_nsh_credentials.py": "edf5f79071d28d86ab31d670d2dc32369ac3af8d1877e05b5e07335b069cd39f",
+    "qa/phase11_nsh_credentials.html": "072323e78ed583b4037f160fec7ed0949f47cfc0e31e1fc29c2c32f9d07b26a6",
+    "qa/test_phase11_nsh_credentials.py": "25453636d47f971caaeead7802d9ab63120acfd74fe1d4df10aeece84def086f",
+    "qa/phase11_nsh_credentials.md": "ea51814e2db1ed474742ba0ef573648322586305a2b79c4d36d4bfd6a35235a7",
+    "docs/superpowers/specs/2026-11-21-phase11-nsh-cutover.md": "35b16961f7b325514ba55a0e75001942577dd80aa7fb636ae798b56a54dfe45a",
+    "docs/superpowers/runs/2026-11-21-phase11-nsh-inventory.json": "759588b3546ac4c6663226f614663c83abb8703b025a1f788cdff13dd5aa36ba"
+  },
+  "observations": {
+    "webview": "two actual document identities each received explicit Unavailable/NotAppBundle; all ten credential effects, final isolated absence, native return and process exit 0",
+    "signed_app": "two actual OS Unavailable/NotFound reads for nonce-isolated ad-hoc signed app; unbundled NotAppBundle and wrong-identity IdentityMismatch controls; all process exits 0 with empty stderr; signed binary unchanged"
+  },
+  "checks": {
+    "protocol": "416 unit + 11 integration PASS; 2 doctests ignored",
+    "nsh_default": "19 unit + 7 real-process launch + 2 window tests PASS",
+    "nsh_qa_service": "19 unit + 7 real-process launch + 2 window tests PASS; 1 OS credential test ignored by default",
+    "node_bridge": "11 PASS",
+    "qa_python": "88 PASS via isolated cached uv environment with jsonschema",
+    "clippy": "cargo clippy -p aleph-nsh-shell --all-targets --features qa-service --offline --locked --jobs 1 -- -D warnings: PASS",
+    "panel_wasm": "PASS; three existing dead_code warnings (epoch, Acquire, acquire_pty_topic methods)",
+    "format": "changed Rust modules rustfmt --check PASS",
+    "lock": "0 added / 0 removed package identities; direct dependencies use already locked versions",
+    "execution": "Cargo memory gates ALLOW; serial offline locked jobs 1, except one documented offline lock refresh after manifest change"
+  },
+  "review": {
+    "spec": "author pass before boundary: same OS owner/identity, no arbitrary target/setter, fixed document-bound read",
+    "quality": "distinct author pass after SPEC: strict states and identity, bounded OS worker/independent JS slot, late document and timeout/pagehide refusal",
+    "independent": "NOT PERFORMED; no delegation authorized"
+  },
+  "not_done": [
+    "no production login-item or service mutation",
+    "no real enabled/disabled/approval transitions",
+    "no production Panel WASM rendered E2E",
+    "no Windows/Linux native acceptance; Linux cache missing cairo-rs 0.22.11 and Windows target/runner absent",
+    "no setters, signed installer/updater install/rollback",
+    "no full Tauri rebuild, release profile, new performance matrix or physical multi-display",
+    "no default switch, common 14-day dual operation or Tauri removal",
+    "no push/tag/release or toolkit patch/upgrade"
+  ],
+  "gates": {
+    "P11-A": "OPEN",
+    "P11-B": "OPEN",
+    "P11-C": "OPEN",
+    "P11-D": "OPEN",
+    "P11-E": "OPEN",
+    "P11-F": "OPEN",
+    "P11-G": "OPEN",
+    "P11-H": "OPEN"
+  }
+}
