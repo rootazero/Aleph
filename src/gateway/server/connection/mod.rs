@@ -33,11 +33,8 @@ use crate::gateway::handlers::events::{
 use crate::gateway::lane::{ChannelClass, LaneManager};
 use crate::gateway::middleware::MiddlewareChain;
 use crate::gateway::presence::{PresenceEntry, PresenceTracker};
-use crate::gateway::protocol::{
-    JsonRpcRequest, JsonRpcResponse, AUTH_REQUIRED, IDEMPOTENCY_KEY_REQUIRED, INTERNAL_ERROR,
-    PARSE_ERROR, RATE_LIMITED,
-};
-use crate::gateway::rate_limiter::{scope_for_method, RateLimitError, RateLimitKey, RateLimiter};
+use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, AUTH_REQUIRED, PARSE_ERROR};
+use crate::gateway::rate_limiter::RateLimiter;
 use crate::gateway::state_version::StateVersionTracker;
 
 use super::per_client_buffer::PerClientBuffer;
@@ -92,6 +89,7 @@ pub mod cleanup;
 pub mod dispatch;
 pub mod forward;
 pub mod off_loop;
+mod rpc;
 pub mod upgrade;
 
 // Bring every helper used by the orchestrator into this module's scope.
@@ -186,7 +184,7 @@ pub struct ConnectionContext {
     idle_timeout_secs: u64,
     /// When true, every mutating RPC (Execute / Mutate / System lane)
     /// MUST carry an `idempotency_key` or it is rejected before lane
-    /// dispatch with [`IDEMPOTENCY_KEY_REQUIRED`].
+    /// dispatch with [`IDEMPOTENCY_KEY_REQUIRED`](crate::gateway::protocol::IDEMPOTENCY_KEY_REQUIRED).
     require_idempotency_key: bool,
     /// Security store handle. Used by the cluster node connect/disconnect
     /// paths to stamp the enrolled device's `last_seen_at` so the offline
@@ -317,6 +315,17 @@ pub async fn handle_connection(
     // work, aborts active tasks and waits at most `OFF_LOOP_SHUTDOWN_GRACE` for
     // them before the connection cleanup runs (see the end of this function).
     let mut off_loop_rpcs = off_loop::OffLoopRpcs::new();
+    let rpc_executor = rpc::RpcExecutor {
+        middleware: ctx.middleware_chain.clone(),
+        lanes: ctx.lane_manager.clone(),
+        idempotency: ctx.idempotency_guard.clone(),
+        class: ctx.channel_class,
+    };
+    let rpc_peer = rpc::DispatchPeer {
+        connections: ctx.connections.clone(),
+        conn_id: conn_id.clone(),
+        client_is_local: ctx.client_is_local,
+    };
     let mut ui_effects = acknowledged_effects::AcknowledgedEffects::new();
     let ui_dispatch = acknowledged_effects::EffectDispatch {
         middleware: ctx.middleware_chain.clone(),
@@ -479,56 +488,17 @@ pub async fn handle_connection(
                                     // Dispatch path. LAN-trust treats every
                                     // connection as an implicit operator.
 
-                                    // --- Rate limit check ---
-                                    // Loopback exemption is based on network origin
-                                    // (the resolved client IP, so a reverse proxy
-                                    // running on loopback never exempts the remote
-                                    // clients behind it), not identity (device_id).
-                                    //
-                                    // This layer keys on the CLIENT IP — it is the
-                                    // network-origin isolator (the principal-axis
-                                    // check lives in middleware/rate_limit.rs).
-                                    // `connect` maps to the strict Auth scope
-                                    // (10/min + 5-min lockout) and that window
-                                    // belongs HERE: the bucket is one network
-                                    // origin, so a token-guessing client
-                                    // throttles its own origin and nothing else.
-                                    // The shared-bucket layer keeps the
-                                    // Auth→RpcDefault remap (it pools every
-                                    // remote caller into one identity, where a
-                                    // lockout would be a cross-client DoS) —
-                                    // see middleware/rate_limit.rs.
-                                    if !ctx.client_is_local {
-                                    let rl_identity = ctx.client_ip.to_string();
-                                    let rl_scope = scope_for_method(&req.method);
-                                    let rl_key = RateLimitKey::new(&rl_identity, rl_scope);
-                                    if let Err(e) = ctx.rate_limiter.check_and_record(&rl_key) {
-                                        let rl_response = match e {
-                                            RateLimitError::Exceeded { retry_after_ms, .. } => {
-                                                JsonRpcResponse::error_with_data(
-                                                    req.id.clone(),
-                                                    RATE_LIMITED,
-                                                    "Rate limit exceeded",
-                                                    serde_json::json!({"retry_after_ms": retry_after_ms}),
-                                                )
-                                            }
-                                            RateLimitError::LockedOut { lockout_remaining_ms, .. } => {
-                                                JsonRpcResponse::error_with_data(
-                                                    req.id.clone(),
-                                                    RATE_LIMITED,
-                                                    "Rate limit lockout",
-                                                    serde_json::json!({"lockout_remaining_ms": lockout_remaining_ms}),
-                                                )
-                                            }
-                                        };
-                                        let rl_resp_str = serde_json::to_string(&rl_response).unwrap_or_default();
-                                        if let Err(e) = write.send(WsMessage::Text(rl_resp_str.into())).await {
-                                            error!("Failed to send rate limit response to {}: {}", conn_id, e);
+                                    // Use the resolved origin, not the TCP peer behind a proxy or
+                                    // an identity from request params. Middleware limits principals separately.
+                                    let origin = (!ctx.client_is_local).then_some(ctx.client_ip);
+                                    if let Err(response) = rpc::check_origin_rate(&ctx.rate_limiter, origin, req) {
+                                        let response = serde_json::to_string(&response).unwrap_or_default();
+                                        if let Err(error) = write.send(WsMessage::Text(response.into())).await {
+                                            error!(%error, %conn_id, "failed origin rate limit response");
                                             break;
                                         }
                                         continue;
                                     }
-                                    } // end loopback exemption
 
                                     // Originating-connection role for the login
                                     // wall. Resolved at the `connect` handshake
@@ -628,104 +598,24 @@ pub async fn handle_connection(
                                         let resp = handle_events_list(req.clone(), &conn_id, ctx.subscription_manager.clone()).await;
                                         serde_json::to_string(&resp).unwrap_or_default()
                                     } else {
-                                        // --- Idempotency + Lane concurrency control ---
-                                        debug!("RPC dispatch: method={}", req.method);
-
-                                        // Extract idempotency_key from params (optional).
-                                        //
-                                        // **Namespaced slot**: the raw caller-supplied string is
-                                        // NEVER the cache key by itself. The slot is scoped to
-                                        // (principal, method, key) — without the first two
-                                        // components a replay crosses identities and methods:
-                                        //   * cross-method: a `config.patch` result cached under
-                                        //     bare "1" would be served to any later
-                                        //     `tools.invoke` reusing "1" within the TTL;
-                                        //   * cross-principal / gate bypass: `method_requires_admin`
-                                        //     and `method_visibility` run INSIDE `process_request`,
-                                        //     but the Cached/Waiting arms return before it — a
-                                        //     response computed for an operator would be replayed
-                                        //     to a member unfiltered.
-                                        // `caller_user` / `caller_role` are resolved ABOVE this
-                                        // block (login-wall section), so they are already in
-                                        // scope here.
-                                        const IDEM_NS_SEP: char = '\u{1f}';
-                                        let raw_idem_key = req.params
-                                            .as_ref()
-                                            .and_then(|p| p.get("idempotency_key"))
-                                            .and_then(|v| v.as_str());
-
-                                        // A caller-supplied key containing the namespace
-                                        // separator could forge the (principal, method)
-                                        // prefix of another slot — reject it outright.
-                                        if let Some(k) = raw_idem_key {
-                                            if k.contains(IDEM_NS_SEP) {
-                                                let resp = JsonRpcResponse::error(
-                                                    req.id.clone(),
-                                                    -32602, // JSON-RPC invalid params
-                                                    "idempotency_key contains a reserved separator character",
-                                                );
-                                                let resp_str = serde_json::to_string(&resp).unwrap_or_default();
-                                                if let Err(e) = write.send(WsMessage::Text(resp_str.into())).await {
-                                                    error!("Failed to send idempotency-key error to {}: {}", conn_id, e);
+                                        debug!(method = %req.method, "RPC dispatch");
+                                        let plan = match rpc::prepare(req, &caller_snapshot, ctx.require_idempotency_key) {
+                                            Ok(plan) => plan,
+                                            Err(response) => {
+                                                let response = serde_json::to_string(&response).unwrap_or_default();
+                                                if let Err(error) = write.send(WsMessage::Text(response.into())).await {
+                                                    error!(%error, %conn_id, "failed idempotency-key response");
                                                     break;
                                                 }
                                                 continue;
                                             }
-                                        }
-
-                                        let idempotency_key = raw_idem_key.map(|k| {
-                                            let composed = format!(
-                                                "{}{}{}{}{}",
-                                                dispatch::idempotency_principal(&req.method, &caller_snapshot),
-                                                IDEM_NS_SEP,
-                                                req.method,
-                                                IDEM_NS_SEP,
-                                                k
-                                            );
-                                            debug_assert!(
-                                                composed.matches(IDEM_NS_SEP).count() == 2,
-                                                "namespaced idempotency key must carry exactly two separators"
-                                            );
-                                            composed
-                                        });
-
-                                        let lane = crate::gateway::lane::Lane::for_method(&req.method);
-
-                                        // Hard-require idempotency_key when the operator opted in
-                                        // (require_idempotency_key=true). Read-only Query-lane RPCs
-                                        // are exempt — they can never double-execute mutations.
-                                        if ctx.require_idempotency_key
-                                            && lane.needs_idempotency()
-                                            && idempotency_key.is_none()
-                                        {
-                                            warn!(
-                                                method = %req.method,
-                                                lane = %lane,
-                                                "Rejecting mutating RPC without idempotency_key (require_idempotency_key=true)"
-                                            );
-                                            let resp = JsonRpcResponse::error_with_data(
-                                                req.id.clone(),
-                                                IDEMPOTENCY_KEY_REQUIRED,
-                                                "idempotency_key required for mutating RPCs",
-                                                serde_json::json!({
-                                                    "method": req.method,
-                                                    "lane": lane.to_string(),
-                                                    "hint": "include a stable per-attempt idempotency_key (UUID v4) in params",
-                                                }),
-                                            );
-                                            let resp_str = serde_json::to_string(&resp).unwrap_or_default();
-                                            if let Err(e) = write.send(WsMessage::Text(resp_str.into())).await {
-                                                error!("Failed to send idempotency-required response to {}: {}", conn_id, e);
-                                                break;
-                                            }
-                                            continue;
-                                        }
+                                        };
 
                                         // Acknowledged UI effects must not wait inline for their
                                         // own event/ack, Execute permit, or duplicate producer.
                                         // Ack/input/detach stay in their unchanged Mutate lane.
                                         if req.method == "capabilities.ui.invoke" {
-                                            match ui_dispatch.submit(&mut ui_effects, text.to_string(), req.id.clone(), caller_snapshot.clone(), idempotency_key.clone()).await {
+                                            match ui_dispatch.submit(&mut ui_effects, text.to_string(), req.id.clone(), caller_snapshot.clone(), plan.key.clone()).await {
                                                 Ok(()) => continue,
                                                 Err(response) => {
                                                     if let Err(error) = write.send(WsMessage::Text(response.into())).await {
@@ -737,132 +627,24 @@ pub async fn handle_connection(
                                             }
                                         }
 
-                                        // Helper closure: standard lane dispatch (no idempotency)
-                                        let do_lane_dispatch = |text: String, lm: Arc<LaneManager>, mc: MiddlewareChain, method: String, req_id: Option<serde_json::Value>, class: ChannelClass, connections: Arc<RwLock<HashMap<String, ConnectionState>>>, conn_id: String, client_is_local: bool, start: dispatch::CallerSnapshot| async move {
-                                            let lane_result = lm.acquire(&method, class).await;
-                                            match lane_result {
-                                                // Identity is re-read AFTER the permit is granted
-                                                // (viewer methods revalidate against live state).
-                                                Ok(_permit) => dispatch::dispatch_for_connection(&text, &mc, &connections, &conn_id, client_is_local, &method, req_id, &start).await,
-                                                Err(_) => serde_json::to_string(&JsonRpcResponse::error(
-                                                    req_id,
-                                                    INTERNAL_ERROR,
-                                                    "Service congested, try again later",
-                                                )).unwrap_or_default()
-                                            }
-                                        };
-
-                                        // Read-only RPCs leave the select loop so a slow one
-                                        // (e.g. a cold `extensions.catalog`) cannot freeze event
-                                        // forwarding or later requests on this connection; the
-                                        // `off_loop_rpcs` arm below writes the response. Only an
-                                        // audited allowlist leaves the loop, and the per-connection
-                                        // set is bounded (running + queue).
-                                        // See `off_loop` module docs (Task #56).
-                                        let off_loop_response = if off_loop::dispatches_off_loop(&req.method) {
-                                            let dispatch = do_lane_dispatch(text.to_string(), ctx.lane_manager.clone(), ctx.middleware_chain.clone(), req.method.clone(), req.id.clone(), ctx.channel_class, ctx.connections.clone(), conn_id.clone(), ctx.client_is_local, caller_snapshot.clone());
-                                            match off_loop_rpcs.submit(req.id.clone(), dispatch) {
+                                        // Only audited reads leave the loop. The bounded scheduler owns
+                                        // queueing, cancellation and writes of those responses.
+                                        let mut response = if off_loop::dispatches_off_loop(&req.method) {
+                                            let rpc = rpc_executor.clone();
+                                            let peer = rpc_peer.clone();
+                                            let request = req.clone();
+                                            let text = text.to_string();
+                                            let start = caller_snapshot.clone();
+                                            let work = async move {
+                                                rpc.execute(&text, &request, plan.without_cache(), &peer, &start).await
+                                            };
+                                            match off_loop_rpcs.submit(req.id.clone(), work) {
                                                 Ok(()) => continue,
-                                                // Saturated (running + queue full): an immediate
-                                                // JSON-RPC error for this id, never an inline await.
-                                                Err(busy_response) => Some(busy_response),
+                                                Err(busy_response) => busy_response,
                                             }
                                         } else {
-                                            None
+                                            rpc_executor.execute(&text, req, plan, &rpc_peer, &caller_snapshot).await
                                         };
-
-                                        // Check idempotency guard (only for non-Query lanes with a key)
-                                        let mut response = if let Some(r) = off_loop_response {
-                                            r
-                                        } else if req.method == aleph_protocol::panel::PANEL_PROJECT_SELECT_METHOD {
-                                            // Selection is a process-local assignment. Cached success
-                                            // after an intervening switch would not apply this claim.
-                                            do_lane_dispatch(text.to_string(), ctx.lane_manager.clone(), ctx.middleware_chain.clone(), req.method.clone(), req.id.clone(), ctx.channel_class, ctx.connections.clone(), conn_id.clone(), ctx.client_is_local, caller_snapshot.clone()).await
-                                        } else if let Some(ref key) = idempotency_key {
-                                            if lane.needs_idempotency() {
-                                                use crate::gateway::idempotency::AcquireResult;
-                                                match ctx.idempotency_guard.try_acquire(key) {
-                                                    AcquireResult::Cached(cached) => {
-                                                        debug!("Idempotency hit: key={}", key);
-                                                        // Reapply live login/admin authority and identity
-                                                        // before returning a cached payload.
-                                                        if dispatch::revalidate_for_dispatch(&ctx.connections, &conn_id, ctx.client_is_local, &req.method, &caller_snapshot).await.is_some() {
-                                                            let resp = JsonRpcResponse::success(req.id.clone(), cached);
-                                                            serde_json::to_string(&resp).unwrap_or_default()
-                                                        } else {
-                                                            dispatch::viewer_denied_response(req.id.clone())
-                                                        }
-                                                    }
-                                                    AcquireResult::Waiting(mut rx) => {
-                                                        debug!("Idempotency: awaiting in-flight key={}", key);
-                                                        let result = tokio::time::timeout(
-                                                            std::time::Duration::from_secs(30),
-                                                            async {
-                                                                let _ = rx.changed().await;
-                                                                rx.borrow().clone()
-                                                            }
-                                                        ).await;
-                                                        match result {
-                                                            Ok(Some(val)) => {
-                                                                // Re-check after the wait: the connection may have
-                                                                // been invalidated or switched user meanwhile.
-                                                                if dispatch::revalidate_for_dispatch(&ctx.connections, &conn_id, ctx.client_is_local, &req.method, &caller_snapshot).await.is_some() {
-                                                                    let resp = JsonRpcResponse::success(req.id.clone(), val);
-                                                                    serde_json::to_string(&resp).unwrap_or_default()
-                                                                } else {
-                                                                    dispatch::viewer_denied_response(req.id.clone())
-                                                                }
-                                                            }
-                                                            _ => {
-                                                                serde_json::to_string(&JsonRpcResponse::error(
-                                                                    req.id.clone(),
-                                                                    INTERNAL_ERROR,
-                                                                    "Request timed out waiting for in-flight duplicate",
-                                                                )).unwrap_or_default()
-                                                            }
-                                                        }
-                                                    }
-                                                    AcquireResult::Proceed(slot) => {
-                                                        // First request — slot auto-discards on panic (RAII)
-                                                        let lane_result = ctx.lane_manager.acquire(&req.method, ctx.channel_class).await;
-                                                        match lane_result {
-                                                            Ok(_permit) => {
-                                                                let resp = dispatch::dispatch_for_connection(&text, &ctx.middleware_chain, &ctx.connections, &conn_id, ctx.client_is_local, &req.method, req.id.clone(), &caller_snapshot).await;
-                                                                if let Ok(parsed) = serde_json::from_str::<JsonRpcResponse>(&resp) {
-                                                                    if parsed.is_success() {
-                                                                        if let Some(result) = parsed.result {
-                                                                            slot.complete(result);
-                                                                        } else {
-                                                                            slot.discard();
-                                                                        }
-                                                                    } else {
-                                                                        slot.discard(); // Error — let next request retry
-                                                                    }
-                                                                } else {
-                                                                    slot.discard();
-                                                                }
-                                                                resp
-                                                            }
-                                                            Err(_) => {
-                                                                slot.discard();
-                                                                serde_json::to_string(&JsonRpcResponse::error(
-                                                                    req.id.clone(),
-                                                                    INTERNAL_ERROR,
-                                                                    "Service congested, try again later",
-                                                                )).unwrap_or_default()
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            } else {
-                                                // Query lane — skip idempotency
-                                                do_lane_dispatch(text.to_string(), ctx.lane_manager.clone(), ctx.middleware_chain.clone(), req.method.clone(), req.id.clone(), ctx.channel_class, ctx.connections.clone(), conn_id.clone(), ctx.client_is_local, caller_snapshot.clone()).await
-                                            }
-                                        } else {
-                                            // No idempotency key — standard lane dispatch
-                                            do_lane_dispatch(text.to_string(), ctx.lane_manager.clone(), ctx.middleware_chain.clone(), req.method.clone(), req.id.clone(), ctx.channel_class, ctx.connections.clone(), conn_id.clone(), ctx.client_is_local, caller_snapshot.clone()).await
-                                        };
-                                        // --- End idempotency + lane block ---
 
                                         // Establish session state from a successful connect
                                         // handshake. LAN-trust: no auth, but the handshake

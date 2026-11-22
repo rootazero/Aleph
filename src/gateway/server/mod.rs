@@ -1695,6 +1695,103 @@ mod tests {
     use super::*;
     use axum::http::StatusCode;
 
+    #[tokio::test]
+    async fn test_legacy_ws_first_frame_and_rpc_dispatch() {
+        use futures_util::{SinkExt, StreamExt};
+        use serde_json::{json, Value};
+        use tokio_tungstenite::connect_async;
+        use tokio_tungstenite::tungstenite::error::ProtocolError;
+        use tokio_tungstenite::tungstenite::{Error, Message};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let mut gateway = GatewayServer::with_config(addr, GatewayConfig::default());
+        let context = Arc::new(crate::gateway::handlers::connect::ConnectContext {
+            state_versions: Arc::new(crate::gateway::state_version::StateVersionTracker::new()),
+            transport_policy: crate::gateway::handlers::auth::TransportPolicy::defaults(),
+        });
+        gateway.handlers_mut().register("connect", move |request| {
+            Box::pin(crate::gateway::handlers::connect::handle_connect(
+                request,
+                context.clone(),
+            ))
+        });
+        let app = gateway.build_router();
+        let (stop, stopped) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .with_graceful_shutdown(async {
+                let _ = stopped.await;
+            })
+            .await
+            .unwrap();
+        });
+
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let url = format!("ws://{addr}/ws");
+            let (mut unbound, _) = connect_async(&url).await.unwrap();
+            unbound
+                .send(Message::Text(
+                    r#"{"jsonrpc":"2.0","id":1,"method":"health"}"#.into(),
+                ))
+                .await
+                .unwrap();
+            let frame = unbound.next().await.unwrap().unwrap();
+            let denied: Value = serde_json::from_str(frame.to_text().unwrap()).unwrap();
+            assert_eq!(denied["id"], 1);
+            assert_eq!(
+                denied["error"]["code"],
+                crate::gateway::protocol::AUTH_REQUIRED
+            );
+            assert!(matches!(
+                unbound.next().await,
+                None | Some(Ok(Message::Close(_)))
+                    | Some(Err(Error::Protocol(
+                        ProtocolError::ResetWithoutClosingHandshake
+                    )))
+            ));
+            drop(unbound);
+
+            let (mut bound, _) = connect_async(&url).await.unwrap();
+            for (id, method, params) in [
+                (1, "connect", json!({"channel_kind":"desktop"})),
+                (2, "health", json!({})),
+            ] {
+                let request = json!({"jsonrpc":"2.0","id":id,"method":method,"params":params});
+                bound
+                    .send(Message::Text(request.to_string().into()))
+                    .await
+                    .unwrap();
+                loop {
+                    match bound.next().await.unwrap().unwrap() {
+                        Message::Ping(data) => bound.send(Message::Pong(data)).await.unwrap(),
+                        Message::Text(text) => {
+                            let response: Value = serde_json::from_str(&text).unwrap();
+                            if response["id"] != id {
+                                continue;
+                            }
+                            assert!(response.get("result").is_some(), "{response}");
+                            if method == "health" {
+                                assert_eq!(response["result"]["status"], "healthy");
+                            }
+                            break;
+                        }
+                        other => panic!("unexpected frame: {other:?}"),
+                    }
+                }
+            }
+            bound.close(None).await.unwrap();
+            assert!(connect_async(format!("ws://{addr}/v1/ws")).await.is_err());
+            stop.send(()).unwrap();
+            server.await.unwrap();
+        })
+        .await
+        .expect("legacy ingress fixture must complete");
+    }
+
     /// Every unbounded per-request map the middleware chain writes into needs
     /// a pruner here, or it grows for the whole process lifetime.
     ///
