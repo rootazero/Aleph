@@ -1,7 +1,7 @@
 # Phase11 NSH Cutover Contract / Phase11 NSH 切换契约
 
 **Status / 状态:** implemented foundation slices, NOT P11-A–H acceptance / 基础切片已实施，不是全期验收
-**Version / 版本:** `2026-11-22.7`
+**Version / 版本:** `2026-11-22.8`
 **Scope / 范围:** official platform entry selection, fixed credential transport and immutable launch targets / 官方平台入口选择、固定凭据传输与不可变启动目标
 
 ## 1. Authority and non-goals / 权威与不做事项
@@ -206,3 +206,22 @@ Verification uses pure I/O-error mapping plus an actual owned listener and a sep
 **SPEC author pass:** checked both callers (`probe_port` and legacy port-close waiting). **QUALITY author pass after SPEC:** checked unknown in both directions: neither launch permission nor proof of close. / 两个方向都保持拒绝，作者自审不等于独立审核。
 
 The [bounded-host checkpoint](../runs/2026-11-22-phase11-bounded-host-receipt.json) records the final-source checks and the rejected fixture assumptions. The earlier source-extraction receipt remains historical and unchanged. Neither receipt is NSH full/lite startup, native cross-platform acceptance, service recovery or Phase11 completion. / 新回执单列有界操作验证，旧回执不改写；仍不关闭产品与跨平台闸门。
+
+## 13. Active-reference and per-consumer audit / 活动引用与逐消费者审查
+
+The [source-bound discovery census](../runs/2026-11-22-phase11-active-references.json) extends literal Tauri discovery with old-crate/path references, every tracked `desktop/shell` file and explicit non-literal Panel consumers. It records 147 expanded-reference files / 883 matching lines, 74 old-shell-owned files (37 without an expanded match), and 186 distinct source/asset identities. Protected settings, root `config.lock` / `config.toml`, generated `dist` trees and historical `docs` are excluded. Matched source content, credentials and URLs are not copied into the census. / 以源码哈希与行锚记录范围，不复制敏感内容；不是依赖闭合证明。
+
+The canonical [inventory](../runs/2026-11-21-phase11-nsh-inventory.json) now records new-boundary scope, actual new handler (explicitly null when absent), failure behavior, lifecycle and verification for each of the 15 application/autostart operations. The previous grouped Panel list is split into 19 individually described consumers. An absent handler remains absent; no proposed endpoint is described as implemented. / 每个调用点明确现有实现与未实现部分，不用拟议接口冒充已接通。
+
+The source review distinguishes these roles:
+
+- Panel credential IPC and detailed autostart **read** have actual fixed NSH handlers. Connection mutation, discovery, TOFU and autostart **writes** do not.
+- `data-tauri-drag-region` includes real drag regions and interactive exclusions. OS identity, overlay titlebar geometry and microphone permission are different facts. The pinned core's native `.window_drag(...)` view property is not proof of DOM attribute equivalence. / 拖拽、窗口几何与麦克风权限不能整体改名。
+- Gateway filesystem/project operations remain server-scoped; no client-native folder dialog is introduced. Panel components, in-Panel shortcuts and notification state remain shared UI, not native copies.
+- `src/gateway/origin_policy.rs` has a live `tauri` scheme compatibility branch, not just historical prose. Core remains its authority; this slice does not alter trust policy. / 兼容分支仍是活动行为，不以删字符串替代安全审查。
+- `desktop/windows/src/system.rs` retains the native toast AUMID selection (`ai.aleph.desktop`, `ai.aleph.panel`, then fallback). The NSH package/registration relationship needs actual Windows validation. `mobile/ios/AlephPaneliOS/Services/CertTrustStore.swift` describes shared trust representation; neither native capability is Tauri-owned merely because it references the old shell. / 保留平台能力并核对身份，不误删 Windows/iOS。
+- Tauri crate ownership includes generated ACL files, certificate helpers and assets with no lexical Tauri reference. CI/build/installer and historical QA references require their own dispositions at P11-G; a zero-string result cannot close that gate.
+
+**SPEC author pass:** checked registered operations against current owner/caller anchors and separated implemented fixed handlers from future mutations. **QUALITY author pass after SPEC:** checked the non-literal ownership blind spot, permission/chrome separation, retained native identities and live Core compatibility. These are author passes, not independent approval or native-platform evidence. / 先规格后质量的作者审查，不冒称独立审核。
+
+The shared-host socket test expectation is now derived directly from its independent standard-library OS observation rather than the production classifier helper. The production predicate is unchanged. The earlier bounded-host receipt remains historical and unchanged. P11-A–H all remain OPEN; Windows/Linux native API/runner evidence, full/lite/service ownership, setters/updater/packaging, default/rollback and the real common 14-day interval remain outstanding. / 修正量具的独立性，不重写旧证据，也不伪造全期完成。

@@ -431,7 +431,10 @@ mod tests {
         );
         assert_eq!(
             port_open(address.port()).await,
-            classify_connect(observed.map(|_| ()).map_err(|error| error.kind()))
+            match observed.unwrap_err().kind() {
+                std::io::ErrorKind::ConnectionRefused => Some(false),
+                _ => None,
+            }
         );
     }
 
