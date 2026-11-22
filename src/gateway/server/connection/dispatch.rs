@@ -1,17 +1,10 @@
 //! Dispatch phase — JSON-RPC request parsing + middleware invocation.
 //!
-//! Two functions live here, called by both dispatch stations inside the
-//! `handle_connection` `tokio::select!` loop:
-//!
-//! - `dispatch_with_caller_context`: scopes the four caller-identity task-
-//!   locals (role / user / is-loopback / conn-id) plus a P1 personal-scope
-//!   attribution around `process_request`. Single source of truth so the two
-//!   stations cannot drift apart.
-//! - `process_request`: parses the JSON-RPC envelope, applies the
-//!   per-method admin gate, runs the W3C `traceparent` instrumentation, then
-//!   delegates to the `MiddlewareChain`.
+//! The ordinary executor revalidates a live peer here before using a handler
+//! or returning a cached result. `dispatch_snapshot` then installs caller
+//! scope and delegates through the existing middleware chain.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use tokio::sync::RwLock;
 
@@ -25,11 +18,9 @@ use crate::gateway::server::ConnectionState;
 
 /// Scope `process_request` with the caller-identity task-locals + P1 scope
 /// attribution that must surround every dispatched request. Single source of
-/// truth shared by both dispatch stations (`do_lane_dispatch`'s closure and
-/// the idempotency `Proceed` arm) so the two call sites cannot drift apart —
-/// see `src/gateway/CLAUDE.md`'s note that `CALLER_ROLE`/`CALLER_USER`/
-/// `CALLER_IS_LOOPBACK`/`CALLER_CONN_ID` must be scoped around
-/// `process_request` at both sites. `scope::with_scope` is the outermost
+/// truth shared by ordinary dispatch and compatibility callers. See
+/// `src/gateway/CLAUDE.md` for the required caller scope around
+/// `process_request`. `scope::with_scope` is the outermost
 /// (4th) layer: a `caller_user` seeds a personal-scope attribution,
 /// observable via `scope::current_scope` for the lifetime of this dispatch
 /// (spec P1 §5).
@@ -93,6 +84,15 @@ pub struct CallerSnapshot {
 }
 
 impl CallerSnapshot {
+    fn from_state(state: &ConnectionState) -> Self {
+        Self {
+            role: Some(state.caller_role.clone()),
+            user: state.caller_user.clone(),
+            verified_user: state.verified_user.clone(),
+            device_id: state.device_id.clone(),
+        }
+    }
+
     /// Read the live connection state. A missing entry (pre-handshake, probe
     /// or already torn down) defaults by network position exactly as the old
     /// per-field reads did -- loopback operator/owner, remote guest -- and
@@ -104,12 +104,7 @@ impl CallerSnapshot {
     ) -> Self {
         let conns = connections.read().await;
         match conns.get(conn_id) {
-            Some(s) => Self {
-                role: Some(s.caller_role.clone()),
-                user: s.caller_user.clone(),
-                verified_user: s.verified_user.clone(),
-                device_id: s.device_id.clone(),
-            },
+            Some(state) => Self::from_state(state),
             None => Self {
                 role: Some(if client_is_local { "operator" } else { "guest" }.to_string()),
                 user: client_is_local
@@ -118,6 +113,104 @@ impl CallerSnapshot {
                 device_id: None,
             },
         }
+    }
+}
+
+type ConnectionTable = RwLock<HashMap<String, ConnectionState>>;
+
+#[derive(Clone)]
+pub(super) struct DispatchPeer {
+    pub(super) connections: Arc<ConnectionTable>,
+    pub(super) conn_id: String,
+    legacy_loopback: bool,
+    #[cfg(test)]
+    bound: Option<CallerSnapshot>,
+}
+
+impl DispatchPeer {
+    pub(super) fn legacy(
+        connections: Arc<ConnectionTable>,
+        conn_id: String,
+        legacy_loopback: bool,
+    ) -> Self {
+        Self {
+            connections,
+            conn_id,
+            legacy_loopback,
+            #[cfg(test)]
+            bound: None,
+        }
+    }
+
+    // No production listener creates a pre-bound peer in S1-A.
+    #[cfg(test)]
+    pub(super) fn bound(
+        connections: Arc<ConnectionTable>,
+        conn_id: String,
+        expected: CallerSnapshot,
+    ) -> Self {
+        Self {
+            bound: Some(expected),
+            ..Self::legacy(connections, conn_id, false)
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) async fn snapshot(&self) -> Option<CallerSnapshot> {
+        self.view().snapshot().await
+    }
+
+    fn view(&self) -> PeerView<'_> {
+        PeerView {
+            connections: &self.connections,
+            conn_id: &self.conn_id,
+            legacy_loopback: self.legacy_loopback,
+            #[cfg(test)]
+            bound: self.bound.as_ref(),
+        }
+    }
+}
+
+struct PeerView<'a> {
+    connections: &'a ConnectionTable,
+    conn_id: &'a str,
+    legacy_loopback: bool,
+    #[cfg(test)]
+    bound: Option<&'a CallerSnapshot>,
+}
+
+impl<'a> PeerView<'a> {
+    fn legacy(connections: &'a ConnectionTable, conn_id: &'a str, legacy_loopback: bool) -> Self {
+        Self {
+            connections,
+            conn_id,
+            legacy_loopback,
+            #[cfg(test)]
+            bound: None,
+        }
+    }
+
+    async fn snapshot(&self) -> Option<CallerSnapshot> {
+        #[cfg(test)]
+        if let Some(expected) = self.bound {
+            let table = self.connections.read().await;
+            let state = table.get(self.conn_id)?;
+            if state.first_message || !matches!(state.caller_role.as_str(), "member" | "operator") {
+                return None;
+            }
+            let live = CallerSnapshot::from_state(state);
+            // Role remains live for the existing admin gate. The bound user,
+            // verified user and device cannot drift within a connection.
+            return (live
+                .user
+                .as_deref()
+                .is_some_and(|user| !user.trim().is_empty())
+                && live.user == expected.user
+                && live.verified_user == expected.verified_user
+                && live.device_id == expected.device_id)
+                .then_some(live);
+        }
+        Some(CallerSnapshot::read(self.connections, self.conn_id, self.legacy_loopback).await)
     }
 }
 
@@ -183,31 +276,65 @@ pub async fn revalidate_for_dispatch(
     method: &str,
     start: &CallerSnapshot,
 ) -> Option<CallerSnapshot> {
-    let live = CallerSnapshot::read(connections, conn_id, client_is_local).await;
-    let admitted = crate::gateway::caller_identity::with_caller_identity(
+    validate_live(
+        &PeerView::legacy(connections, conn_id, client_is_local),
+        method,
+        start,
+        None,
+    )
+    .await
+    .ok()
+}
+
+pub(super) async fn revalidate_peer(
+    peer: &DispatchPeer,
+    method: &str,
+    start: &CallerSnapshot,
+) -> bool {
+    validate_live(&peer.view(), method, start, None)
+        .await
+        .is_ok()
+}
+
+async fn validate_live(
+    peer: &PeerView<'_>,
+    method: &str,
+    start: &CallerSnapshot,
+    id: Option<serde_json::Value>,
+) -> Result<CallerSnapshot, String> {
+    let Some(live) = peer.snapshot().await else {
+        return Err(viewer_denied_response(id));
+    };
+    let viewer_method = is_browser_viewer_method(method);
+    let denial = crate::gateway::caller_identity::with_caller_identity(
         live.role.clone(),
         live.user.clone(),
-        client_is_local,
-        Some(conn_id.to_string()),
-        async { authorization_error(method, None).is_none() },
+        peer.legacy_loopback,
+        Some(peer.conn_id.to_owned()),
+        async { authorization_error(method, id.clone()) },
     )
     .await;
-    if !admitted || live.user != start.user {
-        return None;
+    if let Some(denial) = denial {
+        // Viewer denials deliberately do not reveal wall or admin details.
+        return Err(if viewer_method {
+            viewer_denied_response(id)
+        } else {
+            denial
+        });
     }
-    if crate::gateway::handlers::panel_capabilities::is_context_method(method) {
-        return (viewer_principal(&live) == viewer_principal(start)
-            && live.device_id == start.device_id)
-            .then_some(live);
+    let same_authority = if crate::gateway::handlers::panel_capabilities::is_context_method(method)
+    {
+        viewer_principal(&live) == viewer_principal(start) && live.device_id == start.device_id
+    } else if viewer_method {
+        viewer_principal(start)
+            .is_some_and(|expected| viewer_principal(&live).as_deref() == Some(expected.as_str()))
+    } else {
+        true
+    };
+    if live.user != start.user || !same_authority {
+        return Err(viewer_denied_response(id));
     }
-    if !super::auth::wall_admits(live.role.as_deref(), method) {
-        return None;
-    }
-    if !is_browser_viewer_method(method) {
-        return Some(live);
-    }
-    let expected = viewer_principal(start)?;
-    (viewer_principal(&live).as_deref() == Some(expected.as_str())).then_some(live)
+    Ok(live)
 }
 
 /// UI effects may wait outside the connection loop. Never use the loopback
@@ -220,22 +347,16 @@ pub(super) async fn live_ui_caller(
 ) -> Option<CallerSnapshot> {
     let connections = connections.read().await;
     let state = connections.get(conn_id)?;
-    if state.first_message || !super::auth::wall_admits(Some(&state.caller_role), "capabilities.ui.invoke") {
+    if state.first_message
+        || !super::auth::wall_admits(Some(&state.caller_role), "capabilities.ui.invoke")
+    {
         return None;
     }
-    let live = CallerSnapshot {
-        role: Some(state.caller_role.clone()),
-        user: state.caller_user.clone(),
-        verified_user: state.verified_user.clone(),
-        device_id: state.device_id.clone(),
-    };
+    let live = CallerSnapshot::from_state(state);
     (live.user.as_deref().is_some_and(|user| !user.is_empty()) && &live == start).then_some(live)
 }
 
-/// Dispatch one request for a connection: revalidate live authority, then
-/// run `dispatch_with_caller_context` with the resulting snapshot. Single
-/// helper shared by `do_lane_dispatch` and the idempotency `Proceed` arm so
-/// both real dispatch paths gate and scope identically.
+/// Legacy entry point, including the separately scheduled UI effect path.
 #[allow(clippy::too_many_arguments)]
 pub async fn dispatch_for_connection(
     text: &str,
@@ -249,40 +370,54 @@ pub async fn dispatch_for_connection(
 ) -> String {
     if method == "capabilities.ui.invoke" {
         return match live_ui_caller(connections, conn_id, start).await {
-            Some(live) => dispatch_snapshot(text, mc, live, client_is_local, Some(conn_id.to_owned())).await,
+            Some(live) => {
+                dispatch_snapshot(text, mc, live, client_is_local, Some(conn_id.to_owned())).await
+            }
             None => viewer_denied_response(req_id),
         };
     }
-    // Preserve the login/admin error contract before the stricter cache/identity gate.
-    // The authority is the LIVE one at dispatch, not the arrival snapshot: a
-    // connection that was demoted (or re-logged-in) while the request waited
-    // behind a queue and a lane permit must be refused here, so the admin
-    // gate in `process_request` sees the demotion too.
-    //
-    // Browser viewer methods keep their own contract: a denial there must not
-    // echo the reason (no credential, user or wall message), so they fall
-    // through to `revalidate_for_dispatch` and answer with the generic
-    // `denied`. The gate below still applies -- it only decides WHICH refusal
-    // the caller sees, never whether the call is admitted.
-    if !is_browser_viewer_method(method) {
-        let live = CallerSnapshot::read(connections, conn_id, client_is_local).await;
-        let denial = crate::gateway::caller_identity::with_caller_identity(
-            live.role.clone(),
-            live.user.clone(),
-            client_is_local,
-            Some(conn_id.to_string()),
-            async { authorization_error(method, req_id.clone()) },
-        )
-        .await;
-        if let Some(denial) = denial {
-            return denial;
+    dispatch_ordinary(
+        text,
+        mc,
+        &PeerView::legacy(connections, conn_id, client_is_local),
+        method,
+        req_id,
+        start,
+    )
+    .await
+}
+
+pub(super) async fn dispatch_for_peer(
+    text: &str,
+    mc: &MiddlewareChain,
+    peer: &DispatchPeer,
+    method: &str,
+    req_id: Option<serde_json::Value>,
+    start: &CallerSnapshot,
+) -> String {
+    dispatch_ordinary(text, mc, &peer.view(), method, req_id, start).await
+}
+
+async fn dispatch_ordinary(
+    text: &str,
+    mc: &MiddlewareChain,
+    peer: &PeerView<'_>,
+    method: &str,
+    id: Option<serde_json::Value>,
+    start: &CallerSnapshot,
+) -> String {
+    match validate_live(peer, method, start, id).await {
+        Ok(live) => {
+            dispatch_snapshot(
+                text,
+                mc,
+                live,
+                peer.legacy_loopback,
+                Some(peer.conn_id.to_owned()),
+            )
+            .await
         }
-    }
-    match revalidate_for_dispatch(connections, conn_id, client_is_local, method, start).await {
-        Some(snap) => {
-            dispatch_snapshot(text, mc, snap, client_is_local, Some(conn_id.to_string())).await
-        }
-        None => viewer_denied_response(req_id),
+        Err(denial) => denial,
     }
 }
 

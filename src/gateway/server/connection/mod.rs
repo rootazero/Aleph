@@ -321,11 +321,11 @@ pub async fn handle_connection(
         idempotency: ctx.idempotency_guard.clone(),
         class: ctx.channel_class,
     };
-    let rpc_peer = rpc::DispatchPeer {
-        connections: ctx.connections.clone(),
-        conn_id: conn_id.clone(),
-        client_is_local: ctx.client_is_local,
-    };
+    let rpc_peer = dispatch::DispatchPeer::legacy(
+        ctx.connections.clone(),
+        conn_id.clone(),
+        ctx.client_is_local,
+    );
     let mut ui_effects = acknowledged_effects::AcknowledgedEffects::new();
     let ui_dispatch = acknowledged_effects::EffectDispatch {
         middleware: ctx.middleware_chain.clone(),

@@ -1,8 +1,9 @@
+use std::collections::HashMap;
 use std::task::Poll;
 use std::time::Duration;
 
 use serde_json::{json, Value};
-use tokio::sync::Notify;
+use tokio::sync::{Notify, RwLock};
 
 use super::*;
 use crate::gateway::handlers::{self, HandlerRegistry};
@@ -10,20 +11,30 @@ use crate::gateway::panel_project_context::{PanelCallerContext, PanelProjectSele
 use crate::gateway::protocol::{INVALID_PARAMS, RATE_LIMITED};
 use crate::gateway::rate_limiter::RateLimitConfig;
 use crate::gateway::security::store::{DeviceUpsertData, SecurityStore, UserRole};
+use crate::gateway::server::ConnectionState;
 use crate::projects::ProjectStore;
 
-fn peer(user: &str) -> DispatchPeer {
+mod bound_tests;
+
+fn fixture_state(user: &str) -> ConnectionState {
     let mut state = ConnectionState::new("127.0.0.1".parse().unwrap(), false);
     state.first_message = false;
     state.caller_role = "member".into();
     state.caller_user = Some(user.into());
     state.verified_user = Some(user.into());
     state.device_id = Some(format!("device-{user}"));
-    DispatchPeer {
-        connections: Arc::new(RwLock::new(HashMap::from([(user.to_owned(), state)]))),
-        conn_id: user.to_owned(),
-        client_is_local: false,
-    }
+    state
+}
+
+fn peer(user: &str) -> DispatchPeer {
+    DispatchPeer::legacy(
+        Arc::new(RwLock::new(HashMap::from([(
+            user.to_owned(),
+            fixture_state(user),
+        )]))),
+        user.to_owned(),
+        false,
+    )
 }
 
 fn executor(handlers: HandlerRegistry, limiter: Arc<RateLimiter>) -> RpcExecutor {
@@ -36,13 +47,22 @@ fn executor(handlers: HandlerRegistry, limiter: Arc<RateLimiter>) -> RpcExecutor
 }
 
 async fn invoke(executor: &RpcExecutor, peer: &DispatchPeer, req: JsonRpcRequest) -> Value {
-    let start = CallerSnapshot::read(&peer.connections, &peer.conn_id, peer.client_is_local).await;
-    let plan = match prepare(&req, &start, true) {
+    let start = peer.snapshot().await.unwrap();
+    execute(executor, peer, req, &start).await
+}
+
+async fn execute(
+    executor: &RpcExecutor,
+    peer: &DispatchPeer,
+    req: JsonRpcRequest,
+    start: &CallerSnapshot,
+) -> Value {
+    let plan = match prepare(&req, start, true) {
         Ok(plan) => plan,
         Err(response) => return serde_json::to_value(response).unwrap(),
     };
     let text = serde_json::to_string(&req).unwrap();
-    serde_json::from_str(&executor.execute(&text, &req, plan, peer, &start).await).unwrap()
+    serde_json::from_str(&executor.execute(&text, &req, plan, peer, start).await).unwrap()
 }
 
 #[tokio::test]
@@ -205,17 +225,22 @@ async fn project_select_executes_again_after_intervening_selection() {
     let peer = peer("alice");
     let caller =
         PanelCallerContext::authenticated(Some("alice".into()), Some("device-alice".into()));
-    for (id, target, key) in [
-        (1, &a, "attempt"),
-        (2, &b, "intervening"),
-        (3, &a, "attempt"),
+    let bound = bound_tests::bind(&peer).await;
+    for (id, target, key, connection) in [
+        (1, &a, "attempt", &peer),
+        (2, &b, "intervening", &bound),
+        (3, &a, "attempt", &peer),
     ] {
         let request = JsonRpcRequest::with_id(
             method,
             Some(json!({"project_id":target.id,"idempotency_key":key})),
             json!(id),
         );
-        let response = invoke(&executor, &peer, request).await;
+        let response = if id == 2 {
+            bound_tests::invoke_bound(&executor, connection, request, None).await
+        } else {
+            invoke(&executor, connection, request).await
+        };
         assert_eq!(response["id"], id);
         assert_eq!(response["result"]["project_id"], target.id);
         assert_eq!(
@@ -228,4 +253,31 @@ async fn project_select_executes_again_after_intervening_selection() {
             Some(target.id.as_str())
         );
     }
+    peer.connections
+        .write()
+        .await
+        .get_mut(&peer.conn_id)
+        .unwrap()
+        .device_id = None;
+    let response = bound_tests::invoke_bound(
+        &executor,
+        &bound,
+        JsonRpcRequest::with_id(
+            method,
+            Some(json!({"project_id": b.id,"idempotency_key":"stale"})),
+            json!(4),
+        ),
+        None,
+    )
+    .await;
+    bound_tests::expect_denied(&response, 4, crate::gateway::protocol::PERMISSION_DENIED);
+    assert_eq!(
+        selector
+            .resolve(&caller)
+            .unwrap()
+            .selection
+            .project_id
+            .as_deref(),
+        Some(a.id.as_str())
+    );
 }

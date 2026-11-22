@@ -1,11 +1,9 @@
 //! Shared ordinary JSON-RPC execution; transport control stays with the adapter.
 
-use std::{collections::HashMap, net::IpAddr, sync::Arc, time::Duration};
-
-use tokio::sync::RwLock;
+use std::{net::IpAddr, sync::Arc, time::Duration};
 use tracing::{debug, warn};
 
-use super::dispatch::{self, CallerSnapshot};
+use super::dispatch::{self, CallerSnapshot, DispatchPeer};
 use crate::gateway::idempotency::{AcquireResult, IdempotencyGuard};
 use crate::gateway::lane::{ChannelClass, Lane, LaneManager};
 use crate::gateway::middleware::MiddlewareChain;
@@ -14,7 +12,6 @@ use crate::gateway::protocol::{
     RATE_LIMITED,
 };
 use crate::gateway::rate_limiter::{scope_for_method, RateLimitError, RateLimitKey, RateLimiter};
-use crate::gateway::server::ConnectionState;
 
 pub(super) struct RpcPlan {
     lane: Lane,
@@ -26,13 +23,6 @@ impl RpcPlan {
         self.key = None;
         self
     }
-}
-
-#[derive(Clone)]
-pub(super) struct DispatchPeer {
-    pub(super) connections: Arc<RwLock<HashMap<String, ConnectionState>>>,
-    pub(super) conn_id: String,
-    pub(super) client_is_local: bool,
 }
 
 #[derive(Clone)]
@@ -126,12 +116,10 @@ impl RpcExecutor {
             match self.lanes.acquire(&req.method, self.class).await {
                 // Identity is read again after the permit, not inferred from the request.
                 Ok(_permit) => {
-                    dispatch::dispatch_for_connection(
+                    dispatch::dispatch_for_peer(
                         text,
                         &self.middleware,
-                        &peer.connections,
-                        &peer.conn_id,
-                        peer.client_is_local,
+                        peer,
                         &req.method,
                         req.id.clone(),
                         start,
@@ -193,16 +181,7 @@ impl RpcExecutor {
         };
         // Both cache hits and joined results bypass middleware; the live gate
         // must succeed after obtaining either result, before returning it.
-        if dispatch::revalidate_for_dispatch(
-            &peer.connections,
-            &peer.conn_id,
-            peer.client_is_local,
-            &req.method,
-            start,
-        )
-        .await
-        .is_none()
-        {
+        if !dispatch::revalidate_peer(peer, &req.method, start).await {
             return dispatch::viewer_denied_response(req.id.clone());
         }
         serde_json::to_string(&JsonRpcResponse::success(req.id.clone(), value)).unwrap_or_default()
