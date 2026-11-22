@@ -3,8 +3,7 @@
 //! This module provides a JSON-RPC 2.0 client over WebSocket,
 //! using only types from `aleph-protocol`.
 
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use aleph_protocol::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, StreamEvent};
@@ -12,7 +11,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
 use tokio::net::TcpStream;
-use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
+use tokio::sync::{mpsc, Mutex, Notify};
 use tokio_tungstenite::{
     connect_async_tls_with_config, tungstenite::Message, MaybeTlsStream, WebSocketStream,
 };
@@ -23,15 +22,107 @@ use crate::credential::{ensure_credential_transport, DeviceCredential, VerifiedI
 use crate::error::{CliError, CliResult};
 use crate::tls;
 
-/// Pending RPC request
-struct PendingRequest {
-    tx: oneshot::Sender<Result<Value, JsonRpcError>>,
+mod requests;
+use requests::RequestState;
+
+type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
+type WsReader = futures_util::stream::SplitStream<WsStream>;
+
+/// The writer and request table are never repointed to a different socket.
+struct Socket {
+    write: Mutex<Option<futures_util::stream::SplitSink<WsStream, Message>>>,
+    requests: Arc<RequestState>,
+    stop_reader: Notify,
 }
 
-/// Type alias for WebSocket write half
-type WsWriter = Arc<
-    Mutex<futures_util::stream::SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>>,
->;
+impl Socket {
+    fn split(stream: WsStream) -> (Arc<Self>, WsReader) {
+        let (write, read) = stream.split();
+        (
+            Arc::new(Self {
+                write: Mutex::new(Some(write)),
+                requests: Arc::new(RequestState::new()),
+                stop_reader: Notify::new(),
+            }),
+            read,
+        )
+    }
+
+    fn stop(&self) {
+        self.requests.close();
+        self.stop_reader.notify_one();
+    }
+
+    async fn send_text(&self, json: String) -> CliResult<()> {
+        let mut write = self.write.lock().await;
+        if self.requests.is_closed() {
+            return Err(CliError::Disconnected("Connection closed by peer".into()));
+        }
+        let Some(writer) = write.as_mut() else {
+            return Err(CliError::Disconnected("Connection closed by peer".into()));
+        };
+        if let Err(error) = writer.send(Message::Text(json.into())).await {
+            self.stop();
+            write.take();
+            return Err(error.into());
+        }
+        Ok(())
+    }
+
+    async fn close(&self) -> CliResult<()> {
+        self.stop();
+        let writer = self.write.lock().await.take();
+        if let Some(mut writer) = writer {
+            writer.send(Message::Close(None)).await?;
+        }
+        Ok(())
+    }
+}
+
+struct CurrentSocket {
+    socket: Arc<Socket>,
+    continuity: StreamContinuity,
+}
+
+/// Queues survive reconnect, but enqueue and epoch replacement are ordered
+/// under the same short lock. A reader never awaits a consumer.
+struct EventDelivery {
+    current: std::sync::Mutex<CurrentSocket>,
+    stream: mpsc::Sender<StreamEvent>,
+    topic: mpsc::Sender<TopicEvent>,
+}
+
+impl EventDelivery {
+    fn current(&self) -> std::sync::MutexGuard<'_, CurrentSocket> {
+        self.current
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+    }
+
+    fn with_current<T>(
+        &self,
+        socket: &Arc<Socket>,
+        publish: impl FnOnce(&mut StreamContinuity) -> T,
+    ) -> Option<T> {
+        let mut current = self.current();
+        if !Arc::ptr_eq(&current.socket, socket) || socket.requests.is_closed() {
+            return None;
+        }
+        Some(publish(&mut current.continuity))
+    }
+}
+
+// A cancelled reconnect must close its candidate, not leave a reader
+// and a Handshaking state waiting for an exchange nobody will finish.
+struct HandshakeAttempt<'a>(&'a Socket);
+
+impl Drop for HandshakeAttempt<'_> {
+    fn drop(&mut self) {
+        if !self.0.requests.is_ready() {
+            self.0.stop();
+        }
+    }
+}
 
 /// Deadline on one [`AlephClient::reconnect`] attempt's TCP+TLS handshake.
 ///
@@ -43,11 +134,8 @@ const RECONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// What one inbound WebSocket text frame turned out to be.
 ///
-/// Split out of [`AlephClient::handle_message`] because that function's `write`
-/// argument is an `Arc<Mutex<SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, _>>>`
-/// — a value nothing can construct without a live socket — so the *parse*, the
-/// half that carried the defect below, was unreachable from any test in this
-/// repo for as long as it lived inside it.
+/// Kept separate from [`AlephClient::handle_message`] so the wire classifier
+/// can be tested without a live socket.
 #[derive(Debug)]
 enum Inbound {
     /// A reply to a request this client sent.
@@ -240,49 +328,13 @@ pub struct StreamContinuity {
 
 /// WebSocket client for Aleph Gateway
 pub struct AlephClient {
-    /// WebSocket write half
-    write: WsWriter,
-    /// Pending requests waiting for response
-    pending: Arc<RwLock<HashMap<String, PendingRequest>>>,
-    /// Request ID counter
-    id_counter: Arc<std::sync::atomic::AtomicU64>,
-    /// Stream event channel.
-    ///
-    /// Two jobs, and the second is what makes [`AlephClient::reconnect`]
-    /// possible at all. It is the ownership anchor that keeps the caller's
-    /// `Receiver` alive after a read loop ends — and it is the sender a
-    /// REPLACEMENT read loop is handed, so frames off a new socket arrive on
-    /// the same receiver the caller has been selecting on since launch.
-    /// Nothing downstream is re-plumbed, and no caller has to learn that the
-    /// socket underneath changed.
-    event_tx: mpsc::Sender<StreamEvent>,
-    dropped_events: Arc<std::sync::atomic::AtomicU64>,
-    /// Topic-notification sender — same ownership-anchor role as `event_tx`,
-    /// for the `{"method":"event"}` plane. Every read loop (initial and each
-    /// reconnect replacement) is handed a clone, so a claimed receiver
-    /// survives socket swaps exactly like the stream receiver does.
-    topic_tx: mpsc::Sender<TopicEvent>,
+    delivery: Arc<EventDelivery>,
+    id_counter: std::sync::atomic::AtomicU64,
     /// The unclaimed topic receiver, parked until a caller takes it via
     /// [`AlephClient::take_topic_events`]. Kept alive here on purpose: an
     /// unclaimed plane should cost dropped frames (buffer fills, `try_send`
     /// fails), not a closed-channel error path in the read loop.
-    topic_events: Arc<std::sync::Mutex<Option<mpsc::Receiver<TopicEvent>>>>,
-    /// Whether this client is usable — the socket is up AND handshaken.
-    ///
-    /// Cleared by the read loop when the socket drops, and held low across the
-    /// whole of [`AlephClient::reconnect`], where it doubles as the mutual
-    /// exclusion keeping other callers off a connection the gateway has not
-    /// accepted yet.
-    connected: Arc<std::sync::atomic::AtomicBool>,
-    /// Which socket generation owns [`Self::connected`].
-    ///
-    /// A read loop clears that flag on its way out, and after a reconnect two
-    /// loops can be alive at once: the superseded one is parked on a socket
-    /// nobody writes to any more, and when it finally notices — when the server
-    /// times that socket out — it must not report the live connection as dead.
-    /// Each loop carries the generation it was spawned for and touches shared
-    /// state only while it is still the current one.
-    generation: Arc<std::sync::atomic::AtomicU64>,
+    topic_events: std::sync::Mutex<Option<mpsc::Receiver<TopicEvent>>>,
     /// The gateway URL this client was opened against.
     ///
     /// Kept so `reconnect` needs nothing from the caller but credentials: a
@@ -304,16 +356,8 @@ pub struct AlephClient {
     /// handshake. Cleared on every handshake first, set only when the response
     /// proves the credential path (see [`AlephClient::verified_identity`]).
     identity: Arc<std::sync::Mutex<Option<VerifiedIdentity>>>,
-    /// Serialises the entire [`AlephClient::reconnect`] critical section.
-    ///
-    /// The earlier `is_connected()` early-return and the actual socket swap
-    /// were separate steps with a wide window between them: two concurrent
-    /// reconnect attempts could each pass the early-return, open a fresh
-    /// socket, and install a read loop, leaving the client with two live
-    /// generations and the pending map being cleared against the wrong one.
-    /// Holding this Tokio mutex from the early-return through the handshake
-    /// closes that TOCTOU window.
-    reconnect_lock: Arc<Mutex<()>>,
+    /// Keep concurrent reconnect attempts from each installing a candidate.
+    reconnect_lock: Mutex<()>,
 }
 
 impl AlephClient {
@@ -332,7 +376,8 @@ impl AlephClient {
         config: &CliConfig,
     ) -> CliResult<(Self, mpsc::Receiver<StreamEvent>)> {
         let (client, events) = Self::open(url, config).await?;
-        client.set_role(client.handshake(config).await?);
+        let socket = client.socket();
+        client.finish_handshake(&socket, config).await?;
         Ok((client, events))
     }
 
@@ -353,22 +398,9 @@ impl AlephClient {
         ensure_credential_transport(url)?;
         let (client, events) = Self::open(url, config).await?;
         *client.credential.lock().unwrap_or_else(|e| e.into_inner()) = Some(credential);
-        match client.handshake(config).await {
-            Ok(role) => {
-                client.set_role(role);
-                Ok((client, events))
-            }
-            Err(e) => {
-                // Do not leave a socket (or a retained secret) behind on refusal.
-                let _ = client.close().await;
-                client
-                    .credential
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .take();
-                Err(e)
-            }
-        }
+        let socket = client.socket();
+        client.finish_handshake(&socket, config).await?;
+        Ok((client, events))
     }
 
     /// The identity the Gateway reported for this connection's credential, as
@@ -469,62 +501,20 @@ impl AlephClient {
         })?
         .map_err(|e| CliError::Connection(e.to_string()))?;
 
-        let (write, read) = ws_stream.split();
-
-        // Claimed before the loop is spawned, so the loop it supersedes can
-        // never win a race to clear `connected` after this one sets it.
-        let my_generation = self
-            .generation
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
-            + 1;
-
-        let (read_pending, read_write) = {
-            let mut sink = self.write.lock().await;
-            *sink = write;
-            (self.pending.clone(), self.write.clone())
-        };
-
-        // Anything still registered belongs to the socket that died. Normally
-        // its own read loop already cleared the map on its way out; this covers
-        // the other route to `connected == false`, where a send failed and that
-        // loop has not noticed yet. Those callers can never be answered, and
-        // dropping their senders tells them so now.
-        read_pending.write().await.clear();
-
-        let read_handle = tokio::spawn(Self::read_loop(
-            read,
-            read_pending,
-            self.event_tx.clone(),
-            self.topic_tx.clone(),
-            self.dropped_events.clone(),
-            self.connected.clone(),
-            read_write,
-            self.generation.clone(),
-            my_generation,
-        ));
-
-        match self.handshake(config).await {
-            Ok(role) => {
-                self.set_role(role);
-                self.connected
-                    .store(true, std::sync::atomic::Ordering::SeqCst);
-                info!("Reconnected to {}", self.url);
-                Ok(())
-            }
-            Err(e) => {
-                // The handshake failed (auth refused, timeout, malformed
-                // response). The socket is not usable and `connected` stays
-                // false, but the read loop we spawned is still parked on the
-                // read half. Without aborting it, every failed reconnect leaves
-                // a task behind that may outlive the client and accumulate
-                // under repeated attempts. Send a close frame as a courtesy so
-                // the gateway can tear its side down promptly.
-                read_handle.abort();
-                let mut write = self.write.lock().await;
-                let _ = write.send(Message::Close(None)).await;
-                Err(e)
-            }
+        let (socket, read) = Socket::split(ws_stream);
+        {
+            let mut current = self.delivery.current();
+            current.socket.stop();
+            current.socket = socket.clone();
+            current.continuity.generation += 1;
         }
+        self.spawn_reader(read, socket.clone());
+        if let Err(error) = self.finish_handshake(&socket, config).await {
+            let _ = socket.close().await;
+            return Err(error);
+        }
+        info!("Reconnected to {}", self.url);
+        Ok(())
     }
 
     /// Open the socket and spawn the read loop, without handshaking.
@@ -536,192 +526,99 @@ impl AlephClient {
             .await
             .map_err(|e| CliError::Connection(e.to_string()))?;
 
-        let (write, read) = ws_stream.split();
-
+        let (socket, read) = Socket::split(ws_stream);
         let (event_tx, event_rx) = mpsc::channel(100);
         let (topic_tx, topic_rx) = mpsc::channel(TOPIC_EVENT_BUFFER);
-        let pending = Arc::new(RwLock::new(HashMap::new()));
-        let connected = Arc::new(std::sync::atomic::AtomicBool::new(true));
-        let write = Arc::new(Mutex::new(write));
-        let generation = Arc::new(std::sync::atomic::AtomicU64::new(0));
-        let dropped_events = Arc::new(std::sync::atomic::AtomicU64::new(0));
-
         let client = Self {
-            write: write.clone(),
-            pending: pending.clone(),
-            id_counter: Arc::new(std::sync::atomic::AtomicU64::new(1)),
-            event_tx: event_tx.clone(),
-            dropped_events: dropped_events.clone(),
-            topic_tx: topic_tx.clone(),
-            topic_events: Arc::new(std::sync::Mutex::new(Some(topic_rx))),
-            connected: connected.clone(),
+            delivery: Arc::new(EventDelivery {
+                current: std::sync::Mutex::new(CurrentSocket {
+                    socket: socket.clone(),
+                    continuity: StreamContinuity {
+                        generation: 0,
+                        dropped_events: 0,
+                    },
+                }),
+                stream: event_tx,
+                topic: topic_tx,
+            }),
+            id_counter: std::sync::atomic::AtomicU64::new(1),
+            topic_events: std::sync::Mutex::new(Some(topic_rx)),
             url: url.to_string(),
-            generation: generation.clone(),
             role: Arc::new(std::sync::Mutex::new(String::new())),
             credential: Arc::new(std::sync::Mutex::new(None)),
             identity: Arc::new(std::sync::Mutex::new(None)),
-            reconnect_lock: Arc::new(Mutex::new(())),
+            reconnect_lock: Mutex::new(()),
         };
-
-        // Spawn read task with write access for responding to Server requests.
-        // Generation 0: the first socket, and the one every later reconnect
-        // supersedes.
-        tokio::spawn(Self::read_loop(
-            read,
-            pending,
-            event_tx,
-            topic_tx,
-            dropped_events,
-            connected,
-            write,
-            generation,
-            0,
-        ));
-
-        info!("Connected to Gateway");
+        client.spawn_reader(read, socket);
         Ok((client, event_rx))
     }
 
-    /// Read loop for incoming messages.
-    ///
-    /// `my_generation` is which socket this loop was spawned for; it clears
-    /// `connected` on the way out only while `generation` still names it. See
-    /// the field's doc — after a reconnect two loops can be alive, and the
-    /// abandoned one must not report the live connection as dead.
-    // These arguments are the loop's full capability set, listed where the two
-    // spawn sites can be diffed against it; folding two senders into a struct
-    // would trade this lint for a one-consumer type (R10 YAGNI).
-    #[allow(clippy::too_many_arguments)]
-    async fn read_loop(
-        mut read: futures_util::stream::SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
-        pending: Arc<RwLock<HashMap<String, PendingRequest>>>,
-        event_tx: mpsc::Sender<StreamEvent>,
-        topic_tx: mpsc::Sender<TopicEvent>,
-        dropped_events: Arc<std::sync::atomic::AtomicU64>,
-        connected: Arc<std::sync::atomic::AtomicBool>,
-        write: WsWriter,
-        generation: Arc<std::sync::atomic::AtomicU64>,
-        my_generation: u64,
-    ) {
-        while let Some(msg) = read.next().await {
-            if generation.load(std::sync::atomic::Ordering::SeqCst) != my_generation {
-                return;
+    fn socket(&self) -> Arc<Socket> {
+        self.delivery.current().socket.clone()
+    }
+
+    fn spawn_reader(&self, read: WsReader, socket: Arc<Socket>) {
+        let delivery = Arc::downgrade(&self.delivery);
+        tokio::spawn(async move {
+            tokio::select! {
+                biased;
+                () = socket.stop_reader.notified() => {}
+                () = Self::read_loop(read, &socket, &delivery) => {
+                    socket.requests.close();
+                    socket.write.lock().await.take();
+                }
             }
+        });
+    }
+
+    async fn read_loop(mut read: WsReader, socket: &Arc<Socket>, delivery: &Weak<EventDelivery>) {
+        while let Some(msg) = read.next().await {
             match msg {
                 Ok(Message::Text(text)) => {
-                    Self::handle_message(
-                        &text,
-                        &pending,
-                        &event_tx,
-                        &topic_tx,
-                        &dropped_events,
-                        &write,
-                    )
-                    .await;
+                    let Some(delivery) = delivery.upgrade() else {
+                        break;
+                    };
+                    Self::handle_message(&text, socket, &delivery).await;
                 }
                 Ok(Message::Close(_)) => {
                     info!("Server closed connection");
                     break;
                 }
-                Ok(Message::Ping(data)) => {
-                    debug!("Received ping");
-                    // Pong is handled automatically by tungstenite
-                    let _ = data;
-                }
-                Err(e) => {
-                    error!("WebSocket error: {}", e);
+                Err(error) => {
+                    error!("WebSocket error: {error}");
                     break;
                 }
+                // Tungstenite handles ping/pong.
                 _ => {}
             }
-        }
-
-        // Only the loop that still owns this client may report it dead.
-        //
-        // After a reconnect there can be two loops alive: the old one is parked
-        // on a socket nobody writes to any more, and when it finally notices —
-        // seconds or minutes later, when the server times that socket out — it
-        // must not clear the flag on the LIVE connection or clear the pending
-        // map belonging to it. That would take down a working client with no
-        // error anywhere, and the trigger would be an event on a socket that
-        // was abandoned on purpose.
-        if generation.load(std::sync::atomic::Ordering::SeqCst) != my_generation {
-            debug!("Superseded read loop ended (generation {my_generation})");
-            return;
-        }
-
-        connected.store(false, std::sync::atomic::Ordering::SeqCst);
-
-        // Fail every request still waiting on this socket instead of leaving it
-        // to time out. Nothing can answer them — the reader that would route
-        // the response is this task, and it is finishing. Clearing the map
-        // drops each caller's oneshot sender, which resolves their `await` as
-        // `Disconnected` now rather than in thirty seconds' time.
-        //
-        // Load-bearing for `reconnect`: a socket that dies DURING the new
-        // handshake would otherwise park that exchange for the full timeout,
-        // and the client would sit there believing it was still connecting.
-        let abandoned = {
-            let mut map = pending.write().await;
-            let n = map.len();
-            map.clear();
-            n
-        };
-        if abandoned > 0 {
-            warn!("Read loop ended; {abandoned} in-flight request(s) abandoned");
-        } else {
-            info!("Read loop ended");
         }
     }
 
     /// Handle incoming message
-    async fn handle_message(
-        text: &str,
-        pending: &Arc<RwLock<HashMap<String, PendingRequest>>>,
-        event_tx: &mpsc::Sender<StreamEvent>,
-        topic_tx: &mpsc::Sender<TopicEvent>,
-        dropped_events: &std::sync::atomic::AtomicU64,
-        write: &WsWriter,
-    ) {
-        // Never log the raw frame: the response to `connect` carries the
-        // issued `device_token`, and other frames may carry secrets. Size
-        // only; the classified arms below log method names.
+    async fn handle_message(text: &str, socket: &Arc<Socket>, delivery: &EventDelivery) {
+        // Never log raw frames: connect responses can carry a device token.
         debug!(bytes = text.len(), "Received message");
 
         match classify_frame(text) {
-            Inbound::Response { id, result } => {
-                let mut pending_guard = pending.write().await;
-                let maybe_req = pending_guard.remove(&id);
-                drop(pending_guard);
-                if let Some(req) = maybe_req {
-                    let _ = req.tx.send(result);
-                }
-            }
+            Inbound::Response { id, result } => socket.requests.resolve(&id, result),
             Inbound::ServerRequest { method, id } => {
-                debug!(method = %method, "Received request from Server");
-                Self::handle_server_request(&method, id, write).await;
+                Self::handle_server_request(&method, id, socket).await;
             }
             Inbound::Event(event) => {
-                debug!("Parsed stream event");
-                // Lossy on backpressure, mirroring the topic channel below:
-                // the read loop is the ONLY router of RPC responses on this
-                // socket, so it must never `.await` on a downstream consumer
-                // that stopped draining — that would wedge every pending
-                // request behind a single stalled handler. If the consumer
-                // is behind, the event is sacrificed (with a warn) so the
-                // connection stays alive; the trade-off is logged loudly
-                // enough for a misbehaving consumer to surface in metrics.
-                if let Err(e) = event_tx.try_send(*event) {
-                    dropped_events.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    warn!(error = %e, "dropping stream event: consumer fell behind, connection stays live");
+                // Backpressure on a UI must not block RPC responses.
+                let dropped = delivery.with_current(socket, |continuity| {
+                    let dropped = delivery.stream.try_send(*event).is_err();
+                    continuity.dropped_events += u64::from(dropped);
+                    dropped
+                });
+                if dropped == Some(true) {
+                    warn!("dropping stream event: consumer fell behind, connection stays live");
                 }
             }
             Inbound::Topic(event) => {
-                // Lossy by design (`try_send`, never `.await`): the topic
-                // plane is live decoration over snapshot RPCs, and the read
-                // loop must not park behind a consumer that stopped draining
-                // — that would stall responses and stream frames too.
-                let _ = topic_tx.try_send(event);
+                delivery.with_current(socket, |_| {
+                    let _ = delivery.topic.try_send(event);
+                });
             }
             Inbound::UnhandledNotification {
                 method,
@@ -729,44 +626,32 @@ impl AlephClient {
                 reason,
             } => {
                 if loud {
-                    dropped_events.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    // A `stream.*` method that does not decode is a broken
-                    // cross-crate contract, not a frame family this client
-                    // declines to consume — see `classify_frame`'s note on why
-                    // that distinction is the whole point of this arm.
-                    warn!(
-                        method = %method,
-                        error = %reason,
-                        "dropped a stream frame this client could not decode"
-                    );
+                    // Stream decoding failure is loss; unknown topic families are not.
+                    if delivery
+                        .with_current(socket, |continuity| continuity.dropped_events += 1)
+                        .is_some()
+                    {
+                        warn!(%method, error = %reason, "dropped a stream frame this client could not decode");
+                    }
                 } else {
-                    debug!(method = %method, error = %reason, "ignoring notification");
+                    debug!(%method, error = %reason, "ignoring notification");
                 }
             }
-            Inbound::Unrecognized => {
-                debug!("Message is not a JSON-RPC frame, ignoring");
-            }
+            Inbound::Unrecognized => debug!("Message is not a JSON-RPC frame, ignoring"),
         }
     }
 
-    /// Handle a request from Server
-    async fn handle_server_request(method: &str, id: Value, write: &WsWriter) {
-        warn!(method = %method, "Unknown method from Server");
+    /// Reverse RPC replies use the socket that received the server request.
+    async fn handle_server_request(method: &str, id: Value, socket: &Socket) {
+        warn!(%method, "Unknown method from Server");
         let rpc_response = JsonRpcResponse::error(id, JsonRpcError::method_not_found(method));
-
-        // Send response
-        let json = match serde_json::to_string(&rpc_response) {
-            Ok(j) => j,
-            Err(e) => {
-                error!("Failed to serialize response: {}", e);
-                return;
+        match serde_json::to_string(&rpc_response) {
+            Ok(json) => {
+                if let Err(error) = socket.send_text(json).await {
+                    error!("Failed to send response: {error}");
+                }
             }
-        };
-
-        debug!(method = %method, "Sending method-not-found response to Server");
-        let mut write_guard = write.lock().await;
-        if let Err(e) = write_guard.send(Message::Text(json.into())).await {
-            error!("Failed to send response: {}", e);
+            Err(error) => error!("Failed to serialize response: {error}"),
         }
     }
 
@@ -790,12 +675,7 @@ impl AlephClient {
     /// Snapshot transport continuity without waiting on the event queue.
     #[must_use]
     pub fn stream_continuity(&self) -> StreamContinuity {
-        StreamContinuity {
-            generation: self.generation.load(std::sync::atomic::Ordering::SeqCst),
-            dropped_events: self
-                .dropped_events
-                .load(std::sync::atomic::Ordering::SeqCst),
-        }
+        self.delivery.current().continuity
     }
 
     /// Generate next request ID
@@ -822,36 +702,28 @@ impl AlephClient {
     /// an immediate `Disconnected` instead of waiting out `timeout` for a
     /// response that can never arrive.
     ///
-    /// That same flag is what keeps callers off a half-built connection during
-    /// [`Self::reconnect`]: it stays false across the socket swap and the new
-    /// handshake, so a concurrent call fails fast rather than queueing a frame
-    /// onto a socket the gateway has not accepted yet — which the gateway
-    /// answers by closing it, taking the reconnect down with it.
+    /// The request takes one socket before it serializes or waits for the
+    /// writer. Reconnect cannot move an in-flight request to another socket.
     pub async fn call_with_timeout<P: Serialize, R: DeserializeOwned>(
         &self,
         method: &str,
         params: Option<P>,
         timeout: Duration,
     ) -> CliResult<R> {
-        if !self.connected.load(std::sync::atomic::Ordering::SeqCst) {
-            return Err(CliError::Disconnected(
-                "Connection closed by peer".to_string(),
-            ));
+        let socket = self.socket();
+        if !socket.requests.is_ready() {
+            return Err(CliError::Disconnected("Connection closed by peer".into()));
         }
-        self.request(method, params, timeout).await
+        self.request(&socket, method, params, timeout, false).await
     }
 
-    /// One request/response exchange, without asking whether this client is
-    /// usable.
-    ///
-    /// Split out for exactly one caller — [`Self::handshake`], which has to go
-    /// out while `connected` is false. Everything else goes through
-    /// [`Self::call_with_timeout`], which asks first.
     async fn request<P: Serialize, R: DeserializeOwned>(
         &self,
+        socket: &Socket,
         method: &str,
         params: Option<P>,
         timeout: Duration,
+        during_handshake: bool,
     ) -> CliResult<R> {
         let id = self.next_id();
         let params_value = params.map(|p| serde_json::to_value(p)).transpose()?;
@@ -872,42 +744,10 @@ impl AlephClient {
         // `device_token` / `bootstrap_ticket`. Method + id + size suffice.
         debug!(method = %method, id = %id, bytes = json.len(), "Sending request");
 
-        let (tx, rx) = oneshot::channel();
-
-        // Register pending request (only after serialise has succeeded).
-        {
-            let mut pending = self.pending.write().await;
-            pending.insert(id.clone(), PendingRequest { tx });
-        }
-
-        // Send request. Hold the write lock only for the send, then release it
-        // before touching `pending` so we never nest `write` -> `pending` and
-        // invert the lock order used by `handle_message` (`pending` -> `write`).
-        let send_result = {
-            let mut write = self.write.lock().await;
-            write.send(Message::Text(json.into())).await
-        };
-        if let Err(e) = send_result {
-            // Send failed after the pending entry was registered: drop it so
-            // the pending map doesn't leak across repeated failures, and mark
-            // the connection dead so subsequent calls fail fast.
-            self.pending.write().await.remove(&id);
-            self.connected
-                .store(false, std::sync::atomic::Ordering::SeqCst);
-            return Err(e.into());
-        }
-
-        // Wait for response with timeout
-        let result = match tokio::time::timeout(timeout, rx).await {
-            Ok(result) => result,
-            Err(e) => {
-                // Remove pending request on timeout so the map doesn't leak
-                // across repeated failures.
-                self.pending.write().await.remove(&id);
-                return Err(CliError::Timeout(e.to_string()));
-            }
-        }
-        .map_err(|e| CliError::Disconnected(e.to_string()))?;
+        let pending = socket.requests.reserve(id, during_handshake)?;
+        socket.send_text(json).await?;
+        // Disconnect after sending has unknown business outcome. Do not resend.
+        let result = pending.wait(timeout).await?;
 
         match result {
             Ok(value) => {
@@ -919,6 +759,17 @@ impl AlephClient {
                 message: error.message,
             }),
         }
+    }
+
+    async fn finish_handshake(&self, socket: &Socket, config: &CliConfig) -> CliResult<()> {
+        let _attempt = HandshakeAttempt(socket);
+        self.set_role(self.handshake(socket, config).await?);
+        if !socket.requests.mark_ready() {
+            return Err(CliError::Disconnected(
+                "Connection closed during handshake".into(),
+            ));
+        }
+        Ok(())
     }
 
     /// Perform the `connect` handshake with the server.
@@ -939,7 +790,7 @@ impl AlephClient {
     /// connection reports what it actually got rather than assuming operator.
     ///
     /// Private on purpose — see [`Self::connect`].
-    async fn handshake(&self, config: &CliConfig) -> CliResult<String> {
+    async fn handshake(&self, socket: &Socket, config: &CliConfig) -> CliResult<String> {
         #[derive(serde::Deserialize)]
         struct ConnectResult {
             #[serde(default)]
@@ -967,18 +818,14 @@ impl AlephClient {
 
         let params = build_connect_params(&config.device_name, credential.as_ref());
 
-        // `request`, not `call`: the guard `call` applies is "is this client
-        // usable", and during a reconnect handshake it deliberately is not —
-        // `connected` stays false until this very exchange succeeds, so that
-        // any concurrent caller fails fast instead of queueing a frame onto a
-        // socket the gateway has not accepted yet. The handshake is the one
-        // exchange that must go out anyway, and the socket under it is live by
-        // construction: it was opened three lines ago.
+        // Only the handshake can send before the socket is Ready.
         let result: ConnectResult = self
             .request(
+                socket,
                 "connect",
                 Some(Value::Object(params)),
                 Duration::from_secs(30),
+                true,
             )
             .await?;
 
@@ -1032,23 +879,21 @@ impl AlephClient {
         *self.role.lock().unwrap_or_else(|e| e.into_inner()) = role;
     }
 
-    /// Whether the WebSocket connection is still live.
-    ///
-    /// Reads the atomic the read loop clears when the socket drops (and that
-    /// `call()` checks before sending). A pure read of existing state — no I/O,
-    /// no server round-trip. Lets a UI reflect a disconnect even while idle.
+    /// Whether the current socket is live and has completed its handshake.
     pub fn is_connected(&self) -> bool {
-        self.connected.load(std::sync::atomic::Ordering::SeqCst)
+        self.socket().requests.is_ready()
     }
 
-    /// Close the connection
+    /// Close the captured socket, not any replacement installed while waiting
+    /// for the writer. Fail its pending calls before sending a courtesy frame.
     pub async fn close(&self) -> CliResult<()> {
-        let mut write = self.write.lock().await;
-        write.send(Message::Close(None)).await?;
-        drop(write);
-        self.connected
-            .store(false, std::sync::atomic::Ordering::SeqCst);
-        Ok(())
+        self.socket().close().await
+    }
+}
+
+impl Drop for AlephClient {
+    fn drop(&mut self) {
+        self.socket().stop();
     }
 }
 
@@ -1104,7 +949,7 @@ fn verify_credential_response(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::net::TcpListener;
+    use tokio::{net::TcpListener, sync::oneshot};
 
     /// The gateway rejects and *closes* any connection whose first frame is
     /// not `connect`, so a client that hands back a live handle before
@@ -1135,6 +980,12 @@ mod tests {
             ws.send(Message::Text(reply.to_string().into()))
                 .await
                 .unwrap();
+            assert!(matches!(
+                tokio::time::timeout(Duration::from_secs(5), ws.next())
+                    .await
+                    .unwrap(),
+                Some(Ok(Message::Close(_)))
+            ));
             req
         });
 
@@ -1146,6 +997,8 @@ mod tests {
             .await
             .unwrap();
 
+        assert!(client.is_connected());
+        client.close().await.unwrap();
         let first = server.await.unwrap();
         assert_eq!(
             first["method"], "connect",
@@ -1160,6 +1013,41 @@ mod tests {
             "operator",
             "the server-assigned role must be latched for callers to read"
         );
+    }
+
+    #[tokio::test]
+    async fn a_handshake_reply_does_not_reopen_a_socket_already_closed() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            assert_eq!(
+                serve_handshake(&mut ws, "operator").await["method"],
+                "connect"
+            );
+            ws.send(Message::Close(None)).await.unwrap();
+        });
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let config = CliConfig::default();
+            let (client, _) = AlephClient::open(&format!("ws://{addr}"), &config)
+                .await
+                .unwrap();
+            let socket = client.socket();
+            let handshake = client.finish_handshake(&socket, &config);
+            tokio::pin!(handshake);
+            // Put the request on the wire, then let the reader consume both
+            // the reply and Close before polling the handshake continuation.
+            assert!(futures_util::poll!(&mut handshake).is_pending());
+            server.await.unwrap();
+            while !socket.requests.is_closed() {
+                tokio::task::yield_now().await;
+            }
+            assert!(matches!(handshake.await, Err(CliError::Disconnected(_))));
+            assert!(!client.is_connected());
+        })
+        .await
+        .unwrap();
     }
 
     /// A full stream queue must report a continuity gap without parking the
@@ -1262,12 +1150,13 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
 
+        let (drop_first, first_ready) = oneshot::channel();
         let server = tokio::spawn(async move {
-            // First socket: handshake, then vanish the way a restarted gateway
-            // does.
+            // Vanish after the handshake actually made the client ready.
             let (stream, _) = listener.accept().await.unwrap();
             let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
             serve_handshake(&mut ws, "operator").await;
+            first_ready.await.unwrap();
             drop(ws);
 
             // Second socket: handshake again, then push a frame.
@@ -1291,8 +1180,12 @@ mod tests {
             ws.send(Message::Text(frame.to_string().into()))
                 .await
                 .unwrap();
-            // Hold the socket open past the client's read.
-            tokio::time::sleep(Duration::from_secs(3)).await;
+            assert!(matches!(
+                tokio::time::timeout(Duration::from_secs(5), ws.next())
+                    .await
+                    .unwrap(),
+                Some(Ok(Message::Close(_)))
+            ));
         });
 
         let config = CliConfig {
@@ -1303,6 +1196,8 @@ mod tests {
             .await
             .unwrap();
 
+        assert!(client.is_connected());
+        drop_first.send(()).unwrap();
         // The drop is observed by the read loop, not by the caller, so wait for
         // it rather than assuming a scheduling order.
         for _ in 0..200 {
@@ -1329,8 +1224,8 @@ mod tests {
             .expect("the receiver held since launch must still deliver")
             .expect("the event channel must not close across a reconnect");
         assert_eq!(event.run_id(), "run-after-reconnect");
-
-        server.abort();
+        client.close().await.unwrap();
+        server.await.unwrap();
     }
 
     /// A request in flight when the socket dies fails NOW, not at its timeout.
@@ -1380,17 +1275,127 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn reconnect_does_not_resend_or_route_old_writes_to_new_socket() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (old_seen_tx, old_seen_rx) = oneshot::channel();
+        let stream_frame = |run_id: &str| {
+            serde_json::json!({"jsonrpc":"2.0", "method":"stream.run_accepted", "params": {
+            "type":"run_accepted", "run_id": run_id, "session_key":"agent:main:main:s1", "accepted_at":"2026-08-23T10:00:00Z"
+        }}).to_string()
+        };
+        let topic_frame = |topic: &str| {
+            serde_json::json!({"jsonrpc":"2.0", "method":"event", "params": {"topic":topic, "data":{}}}).to_string()
+        };
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut old = tokio_tungstenite::accept_async(stream).await.unwrap();
+            serve_handshake(&mut old, "operator").await;
+            let msg = old.next().await.unwrap().unwrap();
+            let request: Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
+            assert_eq!(request["method"], "old-request");
+            old_seen_tx.send(()).unwrap();
+
+            // The old request may have taken effect. Do not answer it or the
+            // close frame, even after a replacement has been installed.
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut replacement = tokio_tungstenite::accept_async(stream).await.unwrap();
+            assert_eq!(
+                serve_handshake(&mut replacement, "operator").await["method"],
+                "connect"
+            );
+            let msg = replacement.next().await.unwrap().unwrap();
+            let request: Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
+            assert_eq!(request["method"], "new-request");
+            let result = serde_json::json!({"jsonrpc":"2.0", "id":request["id"], "result":"new"});
+            replacement
+                .send(Message::Text(stream_frame("new").into()))
+                .await
+                .unwrap();
+            replacement
+                .send(Message::Text(topic_frame("new").into()))
+                .await
+                .unwrap();
+            replacement
+                .send(Message::Text(result.to_string().into()))
+                .await
+                .unwrap();
+            assert!(matches!(
+                replacement.next().await,
+                Some(Ok(Message::Close(_)))
+            ));
+        });
+
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let config = CliConfig::default();
+            let (client, mut events) = AlephClient::connect(&format!("ws://{addr}"), &config)
+                .await
+                .unwrap();
+            let mut topics = client.take_topic_events().unwrap();
+            let retired = client.socket();
+            let before = client.stream_continuity();
+            let old = client.call::<_, Value>("old-request", None::<()>);
+            tokio::pin!(old);
+            tokio::select! {
+                result = &mut old => panic!("unanswered call finished before close: {result:?}"),
+                seen = old_seen_rx => seen.unwrap(),
+            }
+            let writer = retired.write.lock().await;
+            let queued = client.call::<_, Value>("queued-old-write", None::<()>);
+            tokio::pin!(queued);
+            assert!(futures_util::poll!(&mut queued).is_pending());
+            let closing = client.close();
+            tokio::pin!(closing);
+            assert!(futures_util::poll!(&mut closing).is_pending());
+            assert!(matches!(
+                futures_util::poll!(&mut old),
+                std::task::Poll::Ready(Err(CliError::Disconnected(_)))
+            ));
+            // Installing and handshaking a second writer cannot wait on the first.
+            client.reconnect(&config).await.unwrap();
+            drop(writer);
+            assert!(matches!(queued.await, Err(CliError::Disconnected(_))));
+            closing.await.unwrap();
+            assert!(retired.write.lock().await.is_none());
+            // Model a retired reader already holding a frame as the install won.
+            AlephClient::handle_message(&stream_frame("old"), &retired, &client.delivery).await;
+            AlephClient::handle_message(&topic_frame("old"), &retired, &client.delivery).await;
+            AlephClient::handle_message(
+                r#"{"method":"stream.bad","params":{}}"#,
+                &retired,
+                &client.delivery,
+            )
+            .await;
+            assert_eq!(
+                client
+                    .call::<_, Value>("new-request", None::<()>)
+                    .await
+                    .unwrap(),
+                "new"
+            );
+            assert_eq!(events.recv().await.unwrap().run_id(), "new");
+            assert_eq!(topics.recv().await.unwrap().topic, "new");
+            assert!(events.try_recv().is_err());
+            assert!(topics.try_recv().is_err());
+            assert_eq!(
+                client.stream_continuity(),
+                StreamContinuity {
+                    generation: before.generation + 1,
+                    dropped_events: before.dropped_events
+                }
+            );
+            client.close().await.unwrap();
+            server.await.unwrap();
+        })
+        .await
+        .unwrap();
+    }
+
     /// A superseded read loop must not report the LIVE connection as dead.
     ///
-    /// After a reconnect two loops can be alive: the old one is parked on a
-    /// socket nobody writes to any more, and it ends whenever the server
-    /// eventually tears that socket down — seconds or minutes later. Without a
-    /// generation check it clears `connected` and empties the pending map on
-    /// its way out, killing a working client with no error anywhere, triggered
-    /// by an event on a socket that was abandoned on purpose.
-    ///
-    /// Reachable without contrivance: `close()` marks the client disconnected
-    /// while its read loop is still parked, which is exactly this shape.
+    /// The old server leaves the first connection unanswered until after
+    /// reconnect. The replacement must deliver events and still serve RPCs.
     #[tokio::test]
     async fn a_superseded_read_loop_does_not_kill_the_live_connection() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1401,15 +1406,12 @@ mod tests {
             let mut ws1 = tokio_tungstenite::accept_async(s1).await.unwrap();
             serve_handshake(&mut ws1, "operator").await;
 
-            // Deliberately NOT read again: the client's `close()` frame goes
-            // unanswered, so its first read loop stays parked and is still
-            // alive when the reconnect below supersedes it.
+            // Deliberately do not read or answer the client's `close()` frame.
             let (s2, _) = listener.accept().await.unwrap();
             let mut ws2 = tokio_tungstenite::accept_async(s2).await.unwrap();
             serve_handshake(&mut ws2, "operator").await;
 
-            // Now tear down the FIRST socket. Its read loop ends here, after
-            // the replacement is already live.
+            // Tear down the first server peer only after the replacement handshake.
             drop(ws1);
 
             let frame = serde_json::json!({
@@ -1466,9 +1468,6 @@ mod tests {
             .expect("the live socket must deliver")
             .expect("channel closed");
         assert_eq!(event.run_id(), "run-on-the-live-socket");
-
-        // Give the superseded loop room to finish observing its dead socket.
-        tokio::time::sleep(Duration::from_millis(200)).await;
 
         let answered: Value = client
             .call_with_timeout("noop", None::<()>, Duration::from_secs(5))
