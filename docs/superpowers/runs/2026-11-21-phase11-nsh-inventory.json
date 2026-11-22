@@ -1,6 +1,6 @@
 {
   "artifact": "phase11-nsh-inventory",
-  "version": "2026-11-22.12",
+  "version": "2026-11-22.13",
   "status": "FOUNDATION_IMPLEMENTED / P11-A-H_NOT_ACCEPTED",
   "authority": [
     "docs/superpowers/plans/2026-11-21-phase11-nsh-cutover.md",
@@ -676,6 +676,12 @@
       "limits": "per-operation bounds, not a global startup deadline or external-cancellation drain receipt"
     },
     "limits": ["readiness is not binary identity or a bind reservation", "externally dropped future kill-on-drop is not awaited drain", "wait-error and cleanup-error paths do not claim successful child drain", "legacy port-close unit return is not a stop acknowledgement", "no packaged NSH cold start, explicit stop or recovery run", "no persistent NSH supervisor", "no installed default endpoint used by tests", "no Windows/Linux native acceptance"]
+  },
+  "macos_local_full_bundle": {
+    "status": "AD_HOC_LOCAL_ASSEMBLY / NOT_PACKAGED_COLD_START_OR_RELEASE_ACCEPTANCE",
+    "owner": "desktop/nsh-shell/macos/bundle-local.sh --server stages the exact Contents/MacOS/aleph-server sibling, signs the staged copies and publishes without replacement; two-argument mode remains host-only",
+    "receipt": "docs/superpowers/runs/2026-11-22-phase11-macos-full-bundle-receipt.json",
+    "limits": "caller supplies the embedded-core build; no feature validation, native helper migration, installer, release identity, update, cold start, stop or other-platform package acceptance"
   },
   "active_reference_audit": {
     "census": "docs/superpowers/runs/2026-11-22-phase11-active-references.json",

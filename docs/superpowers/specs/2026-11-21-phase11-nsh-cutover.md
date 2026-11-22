@@ -1,7 +1,7 @@
 # Phase11 NSH Cutover Contract / Phase11 NSH 切换契约
 
 **Status / 状态:** implemented foundation slices, NOT P11-A–H acceptance / 基础切片已实施，不是全期验收
-**Version / 版本:** `2026-11-22.12`
+**Version / 版本:** `2026-11-22.13`
 **Scope / 范围:** official platform entry selection, fixed credential transport and immutable launch targets / 官方平台入口选择、固定凭据传输与不可变启动目标
 
 ## 1. Authority and non-goals / 权威与不做事项
@@ -280,3 +280,9 @@ Only after those observations may the fixture call the existing fixed load/delet
 | UI and lifecycle | First-window creation waits for startup; this trades early UI/splash feedback for a single owned startup boundary. Existing 40s launcher/readiness bounds are per operation, not one global 40s guarantee. Ordinary Quit owns no server stop. Mutable targets/recovery/explicit Quit-and-stop remain separate open work. / 接入成本与未完成项明确。 |
 
 **SPEC author pass before code:** source `/health` and `/ready` fields read from the actual producer; no shared DTO exists yet. Reuse canonical source and preserve existing statuses/values. **QUALITY after SPEC:** tested contradictory status/phase/version, generic 200, incomplete/oversized and chunked replies, a booting listener becoming ready without a launch, and the real production server running in an owned fixture on a non-default loopback port. The bounded HTTP client disables proxies, redirects and retries; it retains at most 4 KiB of JSON per response. The [receipt](../runs/2026-11-22-phase11-gateway-admission-receipt.json) distinguishes shared startup validation from untested bundled cold start and full lifecycle. No independent review or full Task3/P11 acceptance. / 已通过隔离生产服务文档实测；没有验证打包冷启动与完整生命周期。
+
+## 18. Local macOS full payload / 本地 macOS full 制品
+
+The existing local bundle assembler keeps its two-argument host-only invocation. Explicit `--server <binary>` adds an executable at `Contents/MacOS/aleph-server`, the exact sibling that strict local startup resolves. The caller supplies a compatible `embedded-core` host and server; the assembler does not infer Cargo features or accept compatibility by file name. It ad-hoc signs the child before the outer bundle, verifies the bundle recursively and publishes with the same exclusive rename. Invalid input or failed signing must leave the destination unpublished. / 保留现有仅宿主入口；显式加装服务、内外签名与独占发布，不扫描 PATH、不改已安装包。
+
+**SPEC / 规格:** preserve the existing local application identity and no-replacement rule; this is local assembly, not installer/product identity, notarization, update feed, helper migration or feature verification. **QUALITY / 质量:** verify actual staged executables and signatures, host-only absence, invalid input with no published bundle, and the existing competing-publisher regression. The [local assembly receipt](../runs/2026-11-22-phase11-macos-full-bundle-receipt.json) binds the real debug payload signatures, untouched inputs and CLI help execution. Packaging is not cold-start evidence. / 使用真实本机签名工具，分别验证 full、仅宿主及拒绝路径，不冒称已经启动服务。

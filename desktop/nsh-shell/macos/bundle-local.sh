@@ -1,8 +1,17 @@
 #!/bin/bash
 set -euo pipefail
 
+server=
+if [[ $# == 4 && "$1" == --server ]]; then
+    server=$2
+    if [[ ! -f "$server" || ! -x "$server" ]]; then
+        printf 'Expected an executable server binary.\n' >&2
+        exit 2
+    fi
+    shift 2
+fi
 if [[ $# != 2 || "$2" != *.app ]]; then
-    printf 'Usage: %s <aleph-nsh-shell binary> <new bundle.app>\n' "$0" >&2
+    printf 'Usage: %s [--server <aleph-server binary>] <aleph-nsh-shell binary> <new bundle.app>\n' "$0" >&2
     exit 2
 fi
 script_dir=$(cd "$(dirname "$0")" && pwd)
@@ -20,8 +29,15 @@ mkdir -p "$bundle/Contents/MacOS"
 install -m 644 "$script_dir/Info.plist" "$bundle/Contents/Info.plist"
 install -m 755 "$binary" "$bundle/Contents/MacOS/aleph-nsh-shell"
 plutil -lint "$bundle/Contents/Info.plist"
-codesign --sign - "$bundle"
-codesign --verify --strict "$bundle"
+if [[ -n "$server" ]]; then
+    sibling="$bundle/Contents/MacOS/aleph-server"
+    install -m 755 "$server" "$sibling"
+    codesign --force --sign - "$sibling"
+    codesign --verify --strict "$sibling"
+fi
+# The supplied executable may already be signed; only the staged copy changes.
+codesign --force --sign - "$bundle"
+codesign --verify --deep --strict "$bundle"
 # Unlike mv, this renames to the exact path even if a directory wins the race.
 python3 - "$bundle" "$destination" <<'PY'
 import ctypes
