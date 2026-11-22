@@ -36,7 +36,7 @@
 | # | 红线 | 一句话 |
 |---|------|--------|
 | **R1** | 大脑与四肢绝对分离 | Core 不调平台 API；走 Bridge IPC |
-| **R2** | UI 逻辑唯一源 | 复杂业务 UI 在 Leptos/WASM；Bridge 只做 API 桥接 |
+| **R2** | UI 逻辑唯一源 | 复杂业务 UI 使用唯一共享呈现源；宿主/Bridge 仅做平台与协议适配，Core 是唯一业务事实与授权权威 |
 | **R3** | 核心轻量化 | 不为非核心功能引入重三方库；优先 Skill/MCP |
 | **R4** | Interface 层禁止业务逻辑 | Channel/Bot/CLI/Panel 纯 I/O |
 | **R5** | AI 主动到达 | 通过用户已有工作通道主动送达 |
@@ -50,7 +50,7 @@
 
 ## 🛠 Tech Stack & Do NOT introduce
 
-**核心栈**: Rust Core (tokio + serde) · 记忆 SQLite + sqlite-vec · 接口 JSON Schema (schemars) · Panel Leptos/WASM · 桌面壳 Tauri。
+**核心栈 / Core stack**: Rust Core (tokio + serde) · SQLite + sqlite-vec · JSON Schema (schemars)。当前 Panel / Current Panel: Leptos/WASM，由 NSH WebView 或 Tauri 宿主承载。NSH 迁移目标 / Target: Desktop/Web 共享 TSX、Native Components 及 Web fallback；未切默认，保留 Tauri 回退。→ [DESKTOP_SHELL.md](docs/reference/DESKTOP_SHELL.md#nsh-panel-migration--panel-迁移)
 
 **Do NOT introduce**（基于 R1/R3/R7 推导，违者不得合入）→ [REDLINES.md](docs/reference/REDLINES.md)
 

@@ -11,7 +11,7 @@
 | # | 红线 | 禁令 / 原则 |
 |---|------|------------|
 | **R1** | 大脑与四肢绝对分离 | 严禁在 `src` 中直接调用平台系统 API（AppKit / Vision / CoreGraphics / windows-rs）；核心只定义能力契约 (Trait)，物理实现由原生 Bridge (Swift / 其他) 经 IPC 提供。**例外·进程隔离内核**：restricted-token / job-object / AppContainer / 完整性级别 / SID·ACL 与本地 PID 探测**必须由 spawn 子进程的父进程就地发起**，无法经 IPC 桥委托 ⇒ `src/sandbox/*` 与 `builtin_tools/desktop/session_lock.rs` 的平台 FFI（`cfg(windows)` 门控）是**立意之外的合法开口**，非违规——R1 针对的是桌面 UI / 屏幕 / Vision **四肢** → [SANDBOX.md](SANDBOX.md) |
-| **R2** | UI 逻辑唯一源 | 严禁在原生 Bridge 中实现有业务逻辑的设置页 / 表单 / 列表；复杂业务 UI 一律在 Leptos (WASM) Panel，Bridge 只做系统 API 调用与桥接 |
+| **R2** | UI 逻辑唯一源 | 复杂业务 UI 只允许一个共享呈现源；禁止宿主/Bridge 另写含业务逻辑的设置页、表单或列表。宿主/Bridge 仅做平台与协议适配；Core 保持唯一业务事实与授权权威。 / One shared UI source; hosts adapt platforms and protocols, and Core owns business state and authorization. |
 | **R3** | 核心轻量化 | 严禁为单一非核心功能往 core 引入沉重三方库；优先实现为 Skill (Python/Bash) 或 MCP Server。**内核只调度，不搬砖**。**例外·运行时定位（2026-09-01 用户裁定）**：「跑别人 agent 的运行时」是 Aleph 的**核心定位**——为它引入的重量不属"单一非核心功能"，此条不挡路；但仍须逐项答出**为什么这一块不能是 Skill / MCP**，且不得据此绕开下方禁用清单 |
 | **R4** | Interface 层禁止业务逻辑 | Channel / Bot / CLI / Panel 不做数据持久化、记忆检索或任务规划——纯 I/O：输入转 JSON-RPC 发给 Server，响应渲染给用户 |
 | **R5** | AI 主动到达 | 通过用户**已有的**工作通道主动送达（多端推送 / 内联建议 / 订阅式 Daemon 触发）；不抢焦点、不弹模态，但不因此砍掉必要的交互入口 |
@@ -27,7 +27,7 @@
 
 ## 🛠 Tech Stack & Do NOT introduce
 
-**核心栈**: Rust Core (tokio + serde) · 记忆层 SQLite + sqlite-vec · 接口 JSON Schema (schemars) · Panel Leptos/WASM · 桌面壳 Tauri。
+**核心栈 / Core stack**: Rust Core (tokio + serde) · SQLite + sqlite-vec · JSON Schema (schemars)。当前 Panel 是 Leptos/WASM（NSH WebView/Tauri）；NSH 目标为共享 TSX + Native Components/Web fallback，未切默认。 / See [current and target mounts](DESKTOP_SHELL.md#nsh-panel-migration--panel-迁移).
 
 **Do NOT introduce unless explicitly requested**（基于 R1/R3/R7 推导，违者不得合入）:
 

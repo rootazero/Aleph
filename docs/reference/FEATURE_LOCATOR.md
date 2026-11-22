@@ -4712,6 +4712,13 @@ The single `--execute` under the explicit 120-second authorization ran as `dd6f8
 > 多屏物理拓扑仍 NOT TESTED；未切默认桌面、未移除 Tauri、未迁移 Swift Bridge。
 > / Shared Panel, official NSH 0.6.0, scoped amended acceptance only.
 
+> **NSH Panel 迁移 / Migration (S0):** [当前挂载与目标](DESKTOP_SHELL.md#nsh-panel-migration--panel-迁移)。
+> [生产 WebView](../../desktop/nsh-shell/src/main.rs) 仍渲染 Leptos/WASM；非默认的
+> [`panel-modular` feature](../../interfaces/webchat/Cargo.toml) 在 [`app.rs`](../../interfaces/webchat/src/app.rs) 渲染 `PanelShell`。
+> [Gateway hello](../../src/gateway/handlers/system_hello.rs) 已诚实协商，legacy limits 仍只是提示；
+> [共享帧库](../../shared/protocol/src/framing.rs) 尚未接线。v1 传输、共享 TSX 和 S4 恢复尚未交付。
+> / The current renderer is unchanged; see the [retention gates](../superpowers/plans/2026-11-22-nsh-panel-migration-roadmap.md) before any legacy retirement.
+
 
 > 桌面端是 **R1「大脑-四肢绝对分离」** 的物理落地：`src` 内只持有**能力契约 (Trait)**，真实平台 API（AppKit / Vision / windows-rs …）全在 `desktop/*` 原生 Bridge 子 crate，二者经 **JSON-RPC IPC** 跨界。本章按"契约 → 四肢 → 工具 → 壳 → 连线"组织。改桌面功能前先认清：**`src` 严禁直接调平台 API**（违 R1 不得合入）。
 >

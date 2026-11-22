@@ -24,6 +24,12 @@ Phase11 now has a [scoped real Panel/native status proof](../superpowers/runs/20
 A separate [protected Panel checkpoint](../superpowers/runs/2026-11-22-phase11-protected-panel-receipt.json) proves actual ticket submission, native save, distinct-document stored-credential reload, isolated deletion and canonical helper-confirmed Alice binding plus shutdown. Its [guide](../../qa/phase11_nsh_pairing.md) states that the protected-auth helper is not the full production server; TLS/remote, other platforms, service/default/dual-track and removal remain open. / 受保护配对证据独立，不扩张完整生产服务或三平台结论。
 
 
+## NSH Panel migration / Panel 迁移
+
+- **当前挂载 / Current mount:** [NSH main](../../desktop/nsh-shell/src/main.rs) hosts the existing Leptos/WASM Panel in a WebView; Tauri remains available. [`panel-modular`](../../interfaces/webchat/Cargo.toml) is opt-in, not a default feature. Its actual `PanelShell` render sites are in [`app.rs`](../../interfaces/webchat/src/app.rs). / NSH 仍托管现有 Panel；模块化面板经 feature 启用，不是另一个生产 UI 权威。
+- **S0 基础 / Foundation:** [Gateway `system.hello`](../../src/gateway/handlers/system_hello.rs) is a probe after legacy `connect`; it selects a compatible minor and does not advertise unimplemented features. Its legacy limits are compatibility hints, not enforced bounds. [Shared framing](../../shared/protocol/src/framing.rs) is a tested library, not mounted in a transport. / 旧入口未改；协商值不等于准入，也不代表帧上限已部署。
+- **目标与退场 / Target and retirement:** [Approved design](../superpowers/specs/2026-11-22-nsh-panel-modular-refactor-design.md) targets one shared TSX source, Native Components with Web fallbacks, and Core-owned capability and authorization. v1 IPC/Web, shared TSX rendering, and S4 snapshot/replay are not shipped by S0. The [migration roadmap](../superpowers/plans/2026-11-22-nsh-panel-migration-roadmap.md) retains per-surface replacement proof, three native platforms, and a real common 14-day dual track before Tauri removal. / 未完成对应验证，不切默认、不删旧入口。
+
 The **desktop shell** (`desktop/shell/`, crate `aleph-desktop-shell`) is the
 "last-mile native shell" — a thin Tauri v2 app that turns the existing Leptos
 Panel into a real desktop application. It is **not** the Panel and **not** the
