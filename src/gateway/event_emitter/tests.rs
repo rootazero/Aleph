@@ -7,8 +7,27 @@ use crate::sync_primitives::Arc;
 async fn test_collecting_emitter() {
     let emitter = CollectingEventEmitter::new();
 
-    emitter.emit_reasoning("run-1", "Thinking...", false).await;
-    emitter.emit_reasoning("run-1", "Done thinking", true).await;
+    let seq = emitter.next_seq();
+    emitter
+        .emit(StreamEvent::Reasoning {
+            run_id: "run-1".to_string(),
+            seq,
+            content: "Thinking...".to_string(),
+            is_complete: false,
+        })
+        .await
+        .unwrap();
+
+    let seq = emitter.next_seq();
+    emitter
+        .emit(StreamEvent::Reasoning {
+            run_id: "run-1".to_string(),
+            seq,
+            content: "Done thinking".to_string(),
+            is_complete: true,
+        })
+        .await
+        .unwrap();
 
     let events = emitter.events().await;
     assert_eq!(events.len(), 2);
@@ -30,9 +49,22 @@ async fn test_collecting_emitter() {
 async fn test_sequence_numbers() {
     let emitter = CollectingEventEmitter::new();
 
-    emitter.emit_reasoning("run-1", "First", false).await;
-    emitter.emit_reasoning("run-1", "Second", false).await;
-    emitter.emit_reasoning("run-1", "Third", true).await;
+    let first = emitter.next_seq();
+    let second = emitter.next_seq();
+    let third = emitter.next_seq();
+    assert_eq!((first, second, third), (0, 1, 2));
+
+    for (index, seq) in [first, second, third].iter().enumerate() {
+        emitter
+            .emit(StreamEvent::Reasoning {
+                run_id: "run-1".to_string(),
+                seq: *seq,
+                content: format!("chunk-{index}"),
+                is_complete: false,
+            })
+            .await
+            .unwrap();
+    }
 
     let events = emitter.events().await;
     let seqs: Vec<u64> = events
@@ -50,20 +82,40 @@ async fn test_sequence_numbers() {
 async fn test_tool_lifecycle() {
     let emitter = CollectingEventEmitter::new();
 
+    let seq = emitter.next_seq();
     emitter
-        .emit_tool_start(
-            "run-1",
-            "read_file",
-            "tool-1",
-            serde_json::json!({"path": "/tmp/test"}),
-        )
-        .await;
+        .emit(StreamEvent::ToolStart {
+            run_id: "run-1".to_string(),
+            seq,
+            tool_name: "read_file".to_string(),
+            tool_id: "tool-1".to_string(),
+            params: serde_json::json!({"path": "/tmp/test"}),
+        })
+        .await
+        .unwrap();
+
+    let seq = emitter.next_seq();
     emitter
-        .emit_tool_update("run-1", "tool-1", "Reading file...")
-        .await;
+        .emit(StreamEvent::ToolUpdate {
+            run_id: "run-1".to_string(),
+            seq,
+            tool_id: "tool-1".to_string(),
+            progress: "Reading file...".to_string(),
+        })
+        .await
+        .unwrap();
+
+    let seq = emitter.next_seq();
     emitter
-        .emit_tool_end("run-1", "tool-1", ToolResult::success("file contents"), 100)
-        .await;
+        .emit(StreamEvent::ToolEnd {
+            run_id: "run-1".to_string(),
+            seq,
+            tool_id: "tool-1".to_string(),
+            result: ToolResult::success("file contents"),
+            duration_ms: 100,
+        })
+        .await
+        .unwrap();
 
     let events = emitter.events().await;
     assert_eq!(events.len(), 3);
