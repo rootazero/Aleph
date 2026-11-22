@@ -1,7 +1,7 @@
 # Phase11 NSH Cutover Contract / Phase11 NSH 切换契约
 
 **Status / 状态:** implemented foundation slices, NOT P11-A–H acceptance / 基础切片已实施，不是全期验收
-**Version / 版本:** `2026-11-22.5`
+**Version / 版本:** `2026-11-22.6`
 **Scope / 范围:** official platform entry selection, fixed credential transport and immutable launch targets / 官方平台入口选择、固定凭据传输与不可变启动目标
 
 ## 1. Authority and non-goals / 权威与不做事项
@@ -175,3 +175,16 @@ The [machine receipt](../runs/2026-11-22-phase11-autostart-receipt.json) binds c
 - An independently invoked nonce-isolated ad-hoc signed `.app` read the actual OS status twice as Unavailable/NotFound. Wrong-identity and unbundled refusal controls passed. No login-item registration/unregistration, production identity read, service operation or default change was performed. / 隔离包真实查询及身份拒绝验证通过，未改生产系统状态。
 - Protocol 416 unit + 11 integration; NSH default and QA each 19 unit + seven real-process launch + two window tests; Node bridge 11; top-level Python QA 88 passed. Strict NSH clippy and Panel WASM check passed; WASM keeps its three existing dead-code warnings. / 定向回归通过，不等于三平台验收。
 - RequiresApproval, Enabled, Disabled and unknown-state preservation are mapping/contract tests, not changed real OS login-item states. Production Panel rendering, NSH setters, Windows/Linux, installer/updater, performance/default/rollback and 14-day dual operation are NOT TESTED by this checkpoint. / 未改变真实登录项来制造状态，也未越过后续闸门。
+
+## 12. Shared local-server source extraction / 本地服务源代码抽取
+
+Before NSH acquires any service ownership, extract the existing Tauri-independent local-server I/O into a lightweight internal `desktop/host` library. This is a source-owner refactor, not a second controller or NSH startup acceptance. / NSH 接管前先抽取唯一来源；此切片不冒充新宿主服务迁移完成。
+
+- **Owner and actual caller:** `desktop/shell/src/daemon.rs` reexports the same ensure/readiness/relaunch/wait operations from `aleph-desktop-host::local_server`. Its existing callers and product selection stay unchanged. Only one implementation resolves/spawns a local daemon or probes its readiness. / 旧壳真实调用方不变，启动与探测实现只有一份。
+- **Retained old-shell effects:** keep `stop_daemon`, version marker and `reconcile_for_version` plus legacy autostart removal inside the Tauri shell. The new library cannot remove launchd/systemd/Task Scheduler registrations or reconcile installed versions. NSH does not yet call this library. / 破坏性旧版本接管不随通用启动代码迁移，NSH 暂不挂载。
+- **Boundary and dependency:** the new internal, unpublished crate depends on Tokio/tracing only, not Core/Server/Tauri/NSH or native capture backends; the retained shell enables it only with `embedded-core`. It creates no runtime, worker or process until an existing caller invokes an operation. Cost: one additional workspace member and build dependency; benefit: later NSH lifecycle wiring cannot silently diverge from the retained baseline. / 增加一项 full 专用内部构建依赖，避免两套生命周期语义。
+- **Inherited blocking gaps:** the Unix launcher's synchronous `wait()` and the preliminary `port_open()` connect have no per-operation deadline. The existing readiness loop deadline is not a hard bound around those operations. They are retained here, not declared safe for a new NSH UI/runtime owner; bound/cancel/drain must be addressed before that mount. / 明示保留的阻塞边界，不能把旧循环时限当作完整启动时限。
+- **Readiness meaning:** the inherited `/ready` 200/503 classification is an HTTP readiness observation, not proof of binary identity or version and not permission to stop an existing service. Connection/read/parser bounds and fragmented replies need actual loopback-socket tests, not only status-enum tests. No installed default endpoint is used by those tests. / 就绪不等于进程身份；用自有临时端口检验真实网络边界。
+- **Verification and limits:** preserve old-shell tests, add real isolated TCP regression cases and run strict lint. No production daemon/service command, default change or installed-product takeover is permitted by this refactor. Full/lite NSH startup, supervisor runtime ownership, explicit stop and process-level recovery remain separate pending implementation. / 保留旧回归，禁止用抽取或 socket 测试冒充产品生命周期验收。
+
+**SPEC author pass:** checked old call sites, neutral I/O dependencies and the forbidden reconcile transfer. **QUALITY author pass after SPEC:** checked that a 200 reply cannot establish identity, extraction cannot authorize stopping, and tests must exercise actual fragmented network input without using port 18790. These are author passes, not independent approval. / 先明确意义与拒绝方向，再实施；不关闭全期闸门。

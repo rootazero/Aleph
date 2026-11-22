@@ -4,6 +4,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "desktop/host",
     "desktop/shared",
     "desktop/macos",
     "desktop/linux",

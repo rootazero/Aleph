@@ -50,7 +50,7 @@ lifecycle, OS notifications, and launch-at-login.
 ```
 ┌──────────────────── aleph-desktop-shell (Tauri v2) ────────────────────┐
 │  main.rs     builder, window, plugins, run-loop, daemon supervisor      │
-│  daemon.rs   locate / launch / probe aleph-server; relaunch if it dies  │
+│  daemon.rs   legacy reconcile / explicit stop; shared startup reexports │
 │  tray.rs     system tray icon + menu                                    │
 │  notify.rs   ws://…/ws  → subscribe → OS notifications  (best-effort)    │
 │  update.rs   background GitHub-Releases auto-update    (best-effort)     │
@@ -155,6 +155,8 @@ dialog says as much; **Quit & Stop Aleph** remains the one deliberate way to
 stop the local daemon.
 
 ### Daemon health supervision
+
+The full Tauri shell delegates startup, readiness probes and relaunch I/O to the unpublished `aleph-desktop-host` library in `desktop/host/src/local_server.rs`; it is enabled only by the shell's `embedded-core` feature. Importing that library creates no runtime or process. The version takeover, legacy autostart removal and explicit stop remain in `desktop/shell/src/daemon.rs`, not in this shared owner. NSH does **not** yet mount a service supervisor; extracting the source is not lifecycle migration or three-platform acceptance. / 旧壳 full 才依赖共享启动实现；破坏性旧版本接管仍留在旧壳，NSH 暂未挂载监督器，抽取不等于迁移验收。
 
 The daemon can crash, be killed, or be stopped out from under the shell. A
 supervisor task probes `GET /ready` every few seconds for the shell's whole

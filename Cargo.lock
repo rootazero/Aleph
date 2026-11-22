@@ -184,6 +184,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "aleph-desktop-host"
+version = "0.1.0"
+dependencies = [
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "aleph-desktop-linux"
 version = "26.9.1"
 dependencies = [
@@ -230,6 +238,7 @@ name = "aleph-desktop-shell"
 version = "26.9.1"
 dependencies = [
  "aleph-client",
+ "aleph-desktop-host",
  "aleph-protocol",
  "block2",
  "core-foundation 0.10.1",

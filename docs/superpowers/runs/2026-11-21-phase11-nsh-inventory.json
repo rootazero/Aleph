@@ -1,6 +1,6 @@
 {
   "artifact": "phase11-nsh-inventory",
-  "version": "2026-11-22.5",
+  "version": "2026-11-22.6",
   "status": "FOUNDATION_IMPLEMENTED / P11-A-H_NOT_ACCEPTED",
   "authority": [
     "docs/superpowers/plans/2026-11-21-phase11-nsh-cutover.md",
@@ -460,6 +460,18 @@
     "receipt": "docs/superpowers/runs/2026-11-22-phase11-autostart-receipt.json",
     "not_tested": ["production Panel WASM rendering", "real OS enabled/disabled/approval transitions", "setters", "Windows/Linux native implementation", "installer/updater", "default/rollback", "performance", "real 14-day dual operation"],
     "review": "author SPEC then distinct QUALITY, not independent; P11-A-H remain OPEN"
+  },
+  "shared_local_server_source": {
+    "status": "SOURCE_EXTRACTED / NOT_NSH_SERVICE_MOUNT",
+    "owner": "desktop/host/src/local_server.rs",
+    "consumer": "desktop/shell/src/daemon.rs reexports, embedded-core only",
+    "dependencies": ["tokio", "tracing"],
+    "initialization": "no runtime/thread/connection/process until an operation is called",
+    "retained_old_shell": ["explicit stop", "version marker", "reconcile_for_version", "legacy autostart removal"],
+    "behavior_fix": "read a bounded CRLF-terminated HTTP/1.0 or HTTP/1.1 status line across TCP fragments; reject malformed/incomplete/oversized lines",
+    "observed_red": ["fragmented 200 parsed as Some(2)", "non-HTTP 200 accepted as Some(200)"],
+    "verification": "five shared-host tests including real owned ephemeral TCP listeners; retained full/lite shell regressions; strict shared-host clippy",
+    "limits": ["readiness is not binary identity", "inherited synchronous launcher wait remains unbounded", "preliminary port_open connect has no per-operation deadline", "no actual service launch/stop/recovery run", "no NSH supervisor/runtime mount", "no installed default endpoint used by tests", "no Windows/Linux native acceptance"]
   },
   "gates": {
     "P11-A": "OPEN",
