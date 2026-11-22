@@ -458,7 +458,10 @@ impl DeadLetterReason {
     /// invariant something can violate.
     #[must_use]
     pub const fn redrivable(self) -> bool {
-        matches!(self, Self::Exhausted | Self::Permanent | Self::QueueOverflow)
+        matches!(
+            self,
+            Self::Exhausted | Self::Permanent | Self::QueueOverflow
+        )
     }
 
     /// Stable wire/database token.
@@ -1151,7 +1154,15 @@ impl DeliveryStore {
     /// that is the correct trade, and `evicted` reports how many were retired
     /// so a shortfall against `count` is visible.
     fn evict_overflow(&self, conn: &Connection, count: i64) -> rusqlite::Result<u64> {
-        let victims: Vec<(i64, String, Option<String>, String, i64, i64, Option<String>)> = {
+        let victims: Vec<(
+            i64,
+            String,
+            Option<String>,
+            String,
+            i64,
+            i64,
+            Option<String>,
+        )> = {
             let mut stmt = conn.prepare(
                 "SELECT id, channel_id, conversation_id, payload, created_at, attempts, last_error
                  FROM outbound_deliveries
@@ -1174,8 +1185,7 @@ impl DeliveryStore {
         };
 
         let mut evicted = 0u64;
-        for (id, channel_id, conversation_id, payload, created_at, attempts, last_error) in
-            &victims
+        for (id, channel_id, conversation_id, payload, created_at, attempts, last_error) in &victims
         {
             let note = format!(
                 "queue overflow: evicted to make room for a newer delivery (queue at {} records); last transport error: {}",
@@ -1196,10 +1206,7 @@ impl DeliveryStore {
                     died_at: now_secs(),
                 },
             )?;
-            conn.execute(
-                "DELETE FROM outbound_deliveries WHERE id = ?1",
-                params![id],
-            )?;
+            conn.execute("DELETE FROM outbound_deliveries WHERE id = ?1", params![id])?;
             evicted += 1;
         }
         Ok(evicted)

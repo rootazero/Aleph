@@ -1,4 +1,4 @@
-use super::{GatewayServer, memory_handlers};
+use super::{memory_handlers, GatewayServer};
 use alephcore::gateway::handlers::memory_curated;
 
 pub(in crate::commands::start) fn register_memory_handlers(

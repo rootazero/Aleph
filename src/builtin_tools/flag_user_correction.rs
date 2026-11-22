@@ -336,7 +336,11 @@ impl FlagUserCorrectionTool {
         let Some(operation) = crate::memory::runtime::MemoryOperation::current() else {
             return;
         };
-        let Some(compression) = operation.services().ok().and_then(|services| services.compression.clone()) else {
+        let Some(compression) = operation
+            .services()
+            .ok()
+            .and_then(|services| services.compression.clone())
+        else {
             return;
         };
         let agent = agent_id.to_string();

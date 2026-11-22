@@ -298,16 +298,13 @@ impl OpenAiCompatProvider {
                     "Async task completed"
                 );
 
-                let output_url = task
-                    .data
-                    .and_then(|d| d.into_output_url())
-                    .ok_or_else(|| {
-                        GenerationError::provider(
-                            "Task completed but no output URL in response",
-                            None,
-                            &self.name,
-                        )
-                    })?;
+                let output_url = task.data.and_then(|d| d.into_output_url()).ok_or_else(|| {
+                    GenerationError::provider(
+                        "Task completed but no output URL in response",
+                        None,
+                        &self.name,
+                    )
+                })?;
 
                 return Ok(GenerationData::url(output_url));
             } else if status_str.eq_ignore_ascii_case("failure")

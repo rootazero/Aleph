@@ -729,7 +729,9 @@ mod tests {
                     let line = line.trim();
                     if let Some(rest) = line.strip_prefix("pub mod ") {
                         let name = rest.trim_end_matches(';').trim();
-                        if !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                        if !name.is_empty()
+                            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                        {
                             declared.push(name.to_string());
                         }
                     }
@@ -772,7 +774,7 @@ mod tests {
                     })
                     .collect();
                 let expected = format!("{camel}Check");
-                !constructed.iter().any(|name| *name == expected)
+                !constructed.contains(&expected)
             })
             .cloned()
             .collect();

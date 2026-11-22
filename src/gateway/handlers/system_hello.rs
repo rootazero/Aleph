@@ -100,8 +100,14 @@ mod tests {
         let result = resp.result.unwrap();
         assert_eq!(result["protocol"]["major"], 1);
         assert_eq!(result["server"]["name"], "aleph-server");
-        assert!(result["connection_id"].as_str().unwrap().starts_with("conn-"));
-        assert!(result["features"].as_array().unwrap().contains(&json!("event_replay")));
+        assert!(result["connection_id"]
+            .as_str()
+            .unwrap()
+            .starts_with("conn-"));
+        assert!(result["features"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("event_replay")));
     }
 
     #[tokio::test]

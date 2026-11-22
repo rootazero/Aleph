@@ -454,9 +454,7 @@ mod tests {
         let registry = ProviderRegistry::new();
         let provider = Arc::new(MockProvider::new("test response").with_name("testprov"));
 
-        registry
-            .register("testprov".to_string(), provider)
-            .unwrap();
+        registry.register("testprov".to_string(), provider).unwrap();
 
         let removed = registry.unregister("testprov").unwrap();
         assert!(removed.is_some());

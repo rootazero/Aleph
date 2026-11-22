@@ -570,7 +570,11 @@ impl SessionKey {
         let s = s.trim();
         let parts: Vec<&str> = s.split(':').collect();
 
-        if parts.len() < 3 || !parts.first().is_some_and(|p| p.eq_ignore_ascii_case("agent")) {
+        if parts.len() < 3
+            || !parts
+                .first()
+                .is_some_and(|p| p.eq_ignore_ascii_case("agent"))
+        {
             return None;
         }
 
@@ -758,7 +762,11 @@ impl SessionKey {
         }
         let parts: Vec<&str> = s.split(':').collect();
 
-        if parts.len() < 3 || !parts.first().is_some_and(|p| p.eq_ignore_ascii_case("agent")) {
+        if parts.len() < 3
+            || !parts
+                .first()
+                .is_some_and(|p| p.eq_ignore_ascii_case("agent"))
+        {
             return None;
         }
 
@@ -804,9 +812,7 @@ pub fn normalize_agent_id(id: &str) -> String {
         }
     }
 
-    let result = normalized
-        .trim_start_matches('-')
-        .trim_end_matches('-');
+    let result = normalized.trim_start_matches('-').trim_end_matches('-');
 
     if result.is_empty() {
         DEFAULT_AGENT_ID.to_string()

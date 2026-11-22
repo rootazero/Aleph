@@ -360,7 +360,8 @@ impl GroupChatExecutor {
         let mut prior_discussion = String::new();
         // Deduplicate persona respondents and clamp count to total participants
         let mut seen = std::collections::HashSet::new();
-        plan.respondents.retain(|r| seen.insert(r.persona_id.to_ascii_lowercase()));
+        plan.respondents
+            .retain(|r| seen.insert(r.persona_id.to_ascii_lowercase()));
         plan.respondents.sort_by_key(|r| r.order);
         if plan.respondents.len() > session.participants.len() {
             plan.respondents.truncate(session.participants.len());

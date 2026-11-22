@@ -344,7 +344,10 @@ fn interpret(
             String::from_utf8_lossy(&partial_stdout).to_string(),
             String::from_utf8_lossy(&partial_stderr).to_string(),
             None,
-            Some(format!("Check timed out after {:.1}s", elapsed_ms as f64 / 1000.0)),
+            Some(format!(
+                "Check timed out after {:.1}s",
+                elapsed_ms as f64 / 1000.0
+            )),
         ),
         Err(SandboxError::CapabilityDenied { reason }) => {
             return error_output("(denied)", format!("Capability denied: {reason}"))

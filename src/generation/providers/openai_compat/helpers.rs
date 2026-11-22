@@ -203,9 +203,15 @@ impl OpenAiCompatProvider {
 /// is wrapped as a JPEG `data:` URL (Ark rejects unprefixed base64).
 pub(crate) fn normalize_image_ref(reference: &str) -> String {
     let trimmed = reference.trim_start();
-    let is_url_or_data = trimmed.get(..7).is_some_and(|s| s.eq_ignore_ascii_case("http://"))
-        || trimmed.get(..8).is_some_and(|s| s.eq_ignore_ascii_case("https://"))
-        || trimmed.get(..5).is_some_and(|s| s.eq_ignore_ascii_case("data:"));
+    let is_url_or_data = trimmed
+        .get(..7)
+        .is_some_and(|s| s.eq_ignore_ascii_case("http://"))
+        || trimmed
+            .get(..8)
+            .is_some_and(|s| s.eq_ignore_ascii_case("https://"))
+        || trimmed
+            .get(..5)
+            .is_some_and(|s| s.eq_ignore_ascii_case("data:"));
     if is_url_or_data {
         reference.to_string()
     } else {

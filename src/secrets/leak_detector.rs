@@ -66,10 +66,7 @@ pub const SECRET_PATTERN_SOURCES: &[(&str, &str)] = &[
     ("aws_akia", r"AKIA[0-9A-Z]{16}"),
     ("github_pat", r"ghp_[A-Za-z0-9]{20,}"),
     ("github_token", r"gh[pousr]_[a-zA-Z0-9]{36,}"),
-    (
-        "github_fine_grained_pat",
-        r"github_pat_[A-Za-z0-9_]{50,}",
-    ),
+    ("github_fine_grained_pat", r"github_pat_[A-Za-z0-9_]{50,}"),
     ("gitlab_pat", r"glpat-[A-Za-z0-9_\-]{20,}"),
     (
         "discord_bot_token",

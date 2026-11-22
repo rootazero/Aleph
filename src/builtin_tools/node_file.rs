@@ -467,7 +467,9 @@ mod tests {
     async fn pull_refuses_overwrite_when_false() {
         let dir = tempfile::tempdir().unwrap();
         let local = dir.path().join("existing.bin");
-        tokio::fs::write(&local, b"pre-existing-content").await.unwrap();
+        tokio::fs::write(&local, b"pre-existing-content")
+            .await
+            .unwrap();
         let payload = b"new-payload".to_vec();
         let (reg, rx, ch) = registry_with_node(vec!["file.read"]);
         spawn_file_responder(rx, ch, Some(payload));

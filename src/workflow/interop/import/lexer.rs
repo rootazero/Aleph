@@ -120,7 +120,9 @@ pub(super) fn read_literal_at(chars: &[char], start: usize) -> Option<(String, u
     let mut i = start + 1;
     let mut out = String::new();
     while i < chars.len() {
-        let Some(&c) = chars.get(i) else { break; };
+        let Some(&c) = chars.get(i) else {
+            break;
+        };
         if c == '\\' {
             let esc = *chars.get(i + 1)?;
             out.push(match esc {
@@ -178,7 +180,12 @@ fn read_joined_array(chars: &[char], start: usize) -> Option<(String, usize)> {
     let mut i = start + 1; // past '['
     let mut parts: Vec<String> = Vec::new();
     loop {
-        while i < n && chars.get(i).copied().is_some_and(|c| c.is_whitespace() || c == ',') {
+        while i < n
+            && chars
+                .get(i)
+                .copied()
+                .is_some_and(|c| c.is_whitespace() || c == ',')
+        {
             i += 1;
         }
         match *chars.get(i)? {
@@ -253,7 +260,12 @@ pub(super) fn read_clarify_choices(chars: &[char], start: usize) -> Vec<String> 
     let mut j = i + 1; // past '['
     let mut out: Vec<String> = Vec::new();
     loop {
-        while j < n && chars.get(j).copied().is_some_and(|c| c.is_whitespace() || c == ',') {
+        while j < n
+            && chars
+                .get(j)
+                .copied()
+                .is_some_and(|c| c.is_whitespace() || c == ',')
+        {
             j += 1;
         }
         match chars.get(j) {
@@ -281,12 +293,16 @@ pub(super) fn skip_value(chars: &[char], start: usize) -> usize {
     let mut i = start;
     let mut depth: i32 = 0;
     while i < n {
-        let Some(&c) = chars.get(i) else { break; };
+        let Some(&c) = chars.get(i) else {
+            break;
+        };
         match c {
             '\'' | '"' | '`' => {
                 i += 1;
                 while i < n {
-                    let Some(&d) = chars.get(i) else { break; };
+                    let Some(&d) = chars.get(i) else {
+                        break;
+                    };
                     if d == '\\' {
                         i += 2;
                         continue;

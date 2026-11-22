@@ -720,7 +720,9 @@ async fn disable_closes_owned_surface_and_rejects_old_lease() {
             UiSubmitInput {
                 surface_id: "disable-surface".into(),
                 mount_generation: 1,
-                event: UiInputEvent::KeyDown { key: "queued".into() },
+                event: UiInputEvent::KeyDown {
+                    key: "queued".into(),
+                },
             },
         )
         .unwrap();

@@ -180,8 +180,7 @@ pub struct ConfigPatcher {
     /// Existing Gateway bus; wiring this context does not initialize Terminal.
     event_bus: Option<Arc<GatewayEventBus>>,
     /// Existing terminal source; wiring this context does not initialize it.
-    terminal_source:
-        Option<Arc<crate::capability::tool_adapters::TerminalCapabilitySource>>,
+    terminal_source: Option<Arc<crate::capability::tool_adapters::TerminalCapabilitySource>>,
 }
 
 impl ConfigPatcher {

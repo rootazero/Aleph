@@ -178,7 +178,8 @@ pub async fn run_startup_catchup<C: Clock>(
         let jobs = guard.jobs_mut();
         for (deferred_rank, &(idx, _)) in missed_indices.iter().skip(max_missed).enumerate() {
             if let Some(job) = jobs.get_mut(idx) {
-                let offset = ((deferred_rank as i64).saturating_add(1)).saturating_mul(stagger_interval);
+                let offset =
+                    ((deferred_rank as i64).saturating_add(1)).saturating_mul(stagger_interval);
                 job.state.next_run_at_ms = Some(now.saturating_add(offset));
                 changed = true;
             }

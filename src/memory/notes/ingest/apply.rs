@@ -597,7 +597,11 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
         }
 
         for (old_path, new_path) in &self.pending_supersedes {
-            if self.mark_superseded(old_path, new_path).await.unwrap_or(false) {
+            if self
+                .mark_superseded(old_path, new_path)
+                .await
+                .unwrap_or(false)
+            {
                 report.superseded += 1;
                 // rust-doctor-disable-next-line excessive-clone
                 report.touched_paths.push(old_path.clone());

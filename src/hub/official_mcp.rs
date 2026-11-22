@@ -48,9 +48,7 @@ fn is_projectable(t: &PresetTransport) -> bool {
             // install would silently drop the placeholder. (review/hub-statics)
             t.command.as_deref().is_some_and(clean) && t.args.iter().all(|a| clean(a))
         }
-        McpTransportType::Http | McpTransportType::Sse => {
-            t.url.as_deref().is_some_and(clean)
-        }
+        McpTransportType::Http | McpTransportType::Sse => t.url.as_deref().is_some_and(clean),
     }
 }
 

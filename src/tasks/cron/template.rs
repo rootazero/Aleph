@@ -10,12 +10,11 @@ use std::sync::LazyLock;
 use crate::tasks::cron::config::CronJob;
 use crate::tasks::shared::clock::Clock;
 
-static ENV_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
-    match regex::Regex::new(r"\{\{env:(\w+)\}\}") {
+static ENV_RE: LazyLock<regex::Regex> =
+    LazyLock::new(|| match regex::Regex::new(r"\{\{env:(\w+)\}\}") {
         Ok(re) => re,
         Err(_) => regex::Regex::new("").unwrap_or_else(|_| unreachable!()),
-    }
-});
+    });
 
 /// Render a prompt template with variable substitution.
 ///
@@ -46,8 +45,9 @@ pub fn render_template(
     // `{{env:AWS_SECRET_ACCESS_KEY}}` into the prompt.
     result = ENV_RE
         .replace_all(&result, |caps: &regex::Captures| {
-            caps.get(1)
-                .map_or_else(String::new, |m| std::env::var(m.as_str()).unwrap_or_default())
+            caps.get(1).map_or_else(String::new, |m| {
+                std::env::var(m.as_str()).unwrap_or_default()
+            })
         })
         .to_string();
 

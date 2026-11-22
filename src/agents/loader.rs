@@ -228,12 +228,12 @@ pub(crate) fn parse_file(path: &Path, source: AgentSource) -> Result<AgentDef, L
         }
     }
 
-    let stem = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .ok_or_else(|| LoaderError::NonUtf8Stem {
-            path: path.to_path_buf(),
-        })?;
+    let stem =
+        path.file_stem()
+            .and_then(|s| s.to_str())
+            .ok_or_else(|| LoaderError::NonUtf8Stem {
+                path: path.to_path_buf(),
+            })?;
     if stem != fm.id {
         return Err(LoaderError::IdMismatch {
             path: path.to_path_buf(),

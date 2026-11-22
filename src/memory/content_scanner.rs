@@ -103,7 +103,9 @@ pub fn scan_content(content: &str) -> ScanVerdict {
     let canonical = if content.is_ascii() {
         std::borrow::Cow::Borrowed(content)
     } else {
-        std::borrow::Cow::Owned(crate::security::content_sanitizer::normalize_homoglyphs(content))
+        std::borrow::Cow::Owned(crate::security::content_sanitizer::normalize_homoglyphs(
+            content,
+        ))
     };
     let content = canonical.as_ref();
 

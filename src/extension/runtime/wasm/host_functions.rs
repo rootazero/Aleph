@@ -344,9 +344,8 @@ fn read_workspace_file(state: &HostState, relative_path: &str) -> Result<String,
         )
     })?;
     let full_path = state.workspace_root.join(relative_path);
-    let canonical = std::fs::canonicalize(&full_path).map_err(|e| {
-        format!("workspace path {relative_path} is not accessible: {e}")
-    })?;
+    let canonical = std::fs::canonicalize(&full_path)
+        .map_err(|e| format!("workspace path {relative_path} is not accessible: {e}"))?;
     if !canonical.starts_with(&root) {
         return Err(format!("path {relative_path} escapes the workspace"));
     }
@@ -433,7 +432,10 @@ mod tests {
         assert!(read_workspace_file(&state, "docs/link/key.pem").is_err());
         assert!(read_workspace_file(&state, "docs/outside").is_err());
         assert!(read_workspace_file(&state, "docs/../secrets/key.pem").is_err());
-        assert_eq!(read_workspace_file(&state, "docs/alias").unwrap(), "allowed");
+        assert_eq!(
+            read_workspace_file(&state, "docs/alias").unwrap(),
+            "allowed"
+        );
     }
 
     #[test]

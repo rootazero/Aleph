@@ -50,9 +50,7 @@ impl CacheHealthCheck {
     ///
     /// Blocking (rusqlite is synchronous) — callers must keep it off the
     /// async executor (`spawn_blocking`).
-    fn recent_alarms(
-        db_path: &Path,
-    ) -> Result<(Vec<(String, u32, u64, u64, i64)>, usize), String> {
+    fn recent_alarms(db_path: &Path) -> Result<(Vec<(String, u32, u64, u64, i64)>, usize), String> {
         let conn = open_sqlite_readonly(db_path).map_err(|e| format!("{e}"))?;
         let table_exists: bool = conn
             .query_row(

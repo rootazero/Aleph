@@ -465,5 +465,4 @@ mod tests {
         let result = auto_discover_manifest(tmp.path());
         assert!(result.is_err());
     }
-
 }

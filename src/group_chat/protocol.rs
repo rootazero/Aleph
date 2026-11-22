@@ -89,7 +89,10 @@ impl Persona {
             ));
         }
         let id_lower = id_trimmed.to_ascii_lowercase();
-        if matches!(id_lower.as_str(), "coordinator" | "system" | "user" | "admin") {
+        if matches!(
+            id_lower.as_str(),
+            "coordinator" | "system" | "user" | "admin"
+        ) {
             return Err(GroupChatError::InvalidPersona(format!(
                 "persona id '{}' uses a reserved identifier",
                 self.id
@@ -102,7 +105,10 @@ impl Persona {
             ));
         }
         let name_lower = name_trimmed.to_ascii_lowercase();
-        if matches!(name_lower.as_str(), "coordinator" | "system" | "user" | "admin") {
+        if matches!(
+            name_lower.as_str(),
+            "coordinator" | "system" | "user" | "admin"
+        ) {
             return Err(GroupChatError::InvalidPersona(format!(
                 "persona name '{}' uses a reserved identifier",
                 self.name

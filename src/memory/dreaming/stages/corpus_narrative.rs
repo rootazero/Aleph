@@ -77,7 +77,11 @@ If a current purpose is given, refine it minimally rather than rewriting wholesa
                 tracing::warn!(error = %e, "corpus_narrative: provider exhausted — aborting dream cycle");
                 return Err(e);
             }
-            Err(e) => return Err(AlephError::other(format!("corpus narrative LLM call failed: {e}"))),
+            Err(e) => {
+                return Err(AlephError::other(format!(
+                    "corpus narrative LLM call failed: {e}"
+                )))
+            }
         };
         let text = response.text_content();
 

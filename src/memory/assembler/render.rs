@@ -186,11 +186,7 @@ fn render_xml(env: &MemoryEnvelope) -> String {
         "  <schema_version>{}</schema_version>",
         env.schema_version
     );
-    let _ = writeln!(
-        out,
-        "  <query>{}</query>",
-        escape_xml_attr(&env.query)
-    );
+    let _ = writeln!(out, "  <query>{}</query>", escape_xml_attr(&env.query));
     for slot in env.slots.iter().filter(|s| !s.items.is_empty()) {
         let _ = writeln!(out, "  <slot kind=\"{}\">", slot_tag(slot.kind));
         if let Some(directive) = slot_directive(slot.kind) {

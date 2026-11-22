@@ -57,7 +57,12 @@ pub(in crate::commands::start) async fn setup_config_watcher(
                 config_handlers::handle_validate,
                 watcher.clone()
             );
-            register_handler!(server, "config.path", config_handlers::handle_path, watcher.clone());
+            register_handler!(
+                server,
+                "config.path",
+                config_handlers::handle_path,
+                watcher.clone()
+            );
 
             if !daemon_mode {
                 println!("Config methods:");
@@ -83,63 +88,69 @@ pub(in crate::commands::start) async fn setup_config_watcher(
                 loop {
                     match config_rx.recv().await {
                         Ok(event) => match event {
-                        ConfigEvent::Reloaded(new_config) => {
-                            if !daemon_mode {
-                                println!(
-                                    "Configuration reloaded: {} agents",
-                                    new_config.agents.len()
-                                );
-                            }
-
-                            // Hot-reload PII filtering config if privacy settings changed
-                            if new_config.privacy != last_privacy {
-                                alephcore::pii::PiiEngine::reload(new_config.privacy.clone());
+                            ConfigEvent::Reloaded(new_config) => {
                                 if !daemon_mode {
                                     println!(
-                                        "PII filtering config reloaded (enabled: {})",
-                                        new_config.privacy.pii_filtering
+                                        "Configuration reloaded: {} agents",
+                                        new_config.agents.len()
                                     );
                                 }
-                                last_privacy = new_config.privacy.clone();
-                            }
 
-                            // Emit event to connected clients
-                            use alephcore::gateway::TopicEvent;
-                            let event = TopicEvent::new(
-                                "config.reloaded",
-                                serde_json::json!({
-                                    "agents": new_config.agents.keys().collect::<Vec<_>>(),
-                                    "timestamp": chrono::Utc::now().to_rfc3339(),
-                                }),
-                            );
-                            if let Err(e) = event_bus_for_config.publish_json(&event) {
-                                tracing::warn!("Failed to publish config reloaded event: {}", e);
+                                // Hot-reload PII filtering config if privacy settings changed
+                                if new_config.privacy != last_privacy {
+                                    alephcore::pii::PiiEngine::reload(new_config.privacy.clone());
+                                    if !daemon_mode {
+                                        println!(
+                                            "PII filtering config reloaded (enabled: {})",
+                                            new_config.privacy.pii_filtering
+                                        );
+                                    }
+                                    last_privacy = new_config.privacy.clone();
+                                }
+
+                                // Emit event to connected clients
+                                use alephcore::gateway::TopicEvent;
+                                let event = TopicEvent::new(
+                                    "config.reloaded",
+                                    serde_json::json!({
+                                        "agents": new_config.agents.keys().collect::<Vec<_>>(),
+                                        "timestamp": chrono::Utc::now().to_rfc3339(),
+                                    }),
+                                );
+                                if let Err(e) = event_bus_for_config.publish_json(&event) {
+                                    tracing::warn!(
+                                        "Failed to publish config reloaded event: {}",
+                                        e
+                                    );
+                                }
                             }
-                        }
-                        ConfigEvent::ValidationFailed(err) => {
-                            if !daemon_mode {
-                                eprintln!("Config validation failed: {err}");
+                            ConfigEvent::ValidationFailed(err) => {
+                                if !daemon_mode {
+                                    eprintln!("Config validation failed: {err}");
+                                }
+                                use alephcore::gateway::TopicEvent;
+                                let event = TopicEvent::new(
+                                    "config.error",
+                                    serde_json::json!({
+                                        "error": err,
+                                        "timestamp": chrono::Utc::now().to_rfc3339(),
+                                    }),
+                                );
+                                if let Err(e) = event_bus_for_config.publish_json(&event) {
+                                    tracing::warn!("Failed to publish config error event: {}", e);
+                                }
                             }
-                            use alephcore::gateway::TopicEvent;
-                            let event = TopicEvent::new(
-                                "config.error",
-                                serde_json::json!({
-                                    "error": err,
-                                    "timestamp": chrono::Utc::now().to_rfc3339(),
-                                }),
-                            );
-                            if let Err(e) = event_bus_for_config.publish_json(&event) {
-                                tracing::warn!("Failed to publish config error event: {}", e);
+                            ConfigEvent::FileError(err) => {
+                                if !daemon_mode {
+                                    eprintln!("Config file error: {err}");
+                                }
                             }
-                        }
-                        ConfigEvent::FileError(err) => {
-                            if !daemon_mode {
-                                eprintln!("Config file error: {err}");
-                            }
-                        }
                         },
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                            tracing::warn!(skipped = n, "config hot-reload lagged, resuming from oldest retained event");
+                            tracing::warn!(
+                                skipped = n,
+                                "config hot-reload lagged, resuming from oldest retained event"
+                            );
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     }

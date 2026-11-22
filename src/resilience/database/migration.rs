@@ -23,7 +23,9 @@ where
     match f() {
         Ok(val) => {
             conn.execute_batch(&format!("RELEASE {name}"))
-                .map_err(|e| AlephError::config(format!("Failed to commit savepoint {name}: {e}")))?;
+                .map_err(|e| {
+                    AlephError::config(format!("Failed to commit savepoint {name}: {e}"))
+                })?;
             Ok(val)
         }
         Err(err) => {
@@ -306,7 +308,9 @@ pub fn migrate_task_traces_unique_step_index(conn: &Connection) -> Result<(), Al
             ))
         })?;
 
-        tracing::info!("Added UNIQUE(task_id, step_index) and CHECK(step_index >= 0) to task_traces");
+        tracing::info!(
+            "Added UNIQUE(task_id, step_index) and CHECK(step_index >= 0) to task_traces"
+        );
         Ok(())
     })
 }
@@ -327,7 +331,9 @@ pub fn migrate_add_channel_offsets(conn: &Connection) -> Result<(), AlephError> 
                 [],
                 |row| row.get(0),
             )
-            .map_err(|e| AlephError::config(format!("Failed to check channel_offsets table: {e}")))?;
+            .map_err(|e| {
+                AlephError::config(format!("Failed to check channel_offsets table: {e}"))
+            })?;
 
         if table_exists == 0 {
             conn.execute_batch(
@@ -340,7 +346,9 @@ pub fn migrate_add_channel_offsets(conn: &Connection) -> Result<(), AlephError> 
                 )
                 "#,
             )
-            .map_err(|e| AlephError::config(format!("Failed to create channel_offsets table: {e}")))?;
+            .map_err(|e| {
+                AlephError::config(format!("Failed to create channel_offsets table: {e}"))
+            })?;
 
             tracing::info!("Created channel_offsets table");
         } else {
@@ -379,7 +387,9 @@ pub fn migrate_add_sticker_descriptions(conn: &Connection) -> Result<(), AlephEr
                 )
                 "#,
             )
-            .map_err(|e| AlephError::config(format!("Failed to create sticker_descriptions table: {e}")))?;
+            .map_err(|e| {
+                AlephError::config(format!("Failed to create sticker_descriptions table: {e}"))
+            })?;
 
             tracing::info!("Created sticker_descriptions table");
         } else {
@@ -453,14 +463,12 @@ pub fn migrate_add_group_chat_owner(conn: &Connection) -> Result<(), AlephError>
             })?;
 
         if column_exists == 0 {
-            conn.execute_batch(
-                "ALTER TABLE group_chat_sessions ADD COLUMN owner_user_id TEXT",
-            )
-            .map_err(|e| {
-                AlephError::config(format!(
-                    "Failed to add owner_user_id column to group_chat_sessions: {e}"
-                ))
-            })?;
+            conn.execute_batch("ALTER TABLE group_chat_sessions ADD COLUMN owner_user_id TEXT")
+                .map_err(|e| {
+                    AlephError::config(format!(
+                        "Failed to add owner_user_id column to group_chat_sessions: {e}"
+                    ))
+                })?;
 
             tracing::info!("Added owner_user_id column to group_chat_sessions");
         } else {
@@ -616,9 +624,7 @@ pub fn migrate_add_memory_events_partition(conn: &Connection) -> Result<(), Alep
         conn.execute_batch(
             "CREATE INDEX IF NOT EXISTS idx_me_partition_fact ON memory_events(partition, fact_id)",
         )
-        .map_err(|e| {
-            AlephError::config(format!("Failed to create idx_me_partition_fact: {e}"))
-        })?;
+        .map_err(|e| AlephError::config(format!("Failed to create idx_me_partition_fact: {e}")))?;
 
         Ok(())
     })

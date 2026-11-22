@@ -991,10 +991,18 @@ pub(in crate::commands::start) fn register_config_handlers(
             server.handlers_mut().register("acp.update", unavailable);
             server.handlers_mut().register("acp.delete", unavailable);
             server.handlers_mut().register("acp.test", unavailable);
-            server.handlers_mut().register("acp.set_enabled", unavailable);
-            server.handlers_mut().register("acp.sessions.list", unavailable);
-            server.handlers_mut().register("acp.sessions.cancel", unavailable);
-            server.handlers_mut().register("acp.sessions.shutdown", unavailable);
+            server
+                .handlers_mut()
+                .register("acp.set_enabled", unavailable);
+            server
+                .handlers_mut()
+                .register("acp.sessions.list", unavailable);
+            server
+                .handlers_mut()
+                .register("acp.sessions.cancel", unavailable);
+            server
+                .handlers_mut()
+                .register("acp.sessions.shutdown", unavailable);
         }
     }
 

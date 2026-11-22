@@ -257,7 +257,10 @@ impl AgentLedger {
         agent_id: Option<&str>,
         limit: i64,
     ) -> Result<Vec<LedgerRecord>, KeyError> {
-        self.keys.store().ledger_recent(agent_id, limit).map_err(Into::into)
+        self.keys
+            .store()
+            .ledger_recent(agent_id, limit)
+            .map_err(Into::into)
     }
 
     pub fn verify(&self, agent_id: &str) -> Result<ChainReport, KeyError> {

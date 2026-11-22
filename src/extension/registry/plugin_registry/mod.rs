@@ -484,7 +484,6 @@ impl PluginRegistry {
         self.diagnostics
             .retain(|d| d.plugin_id.as_deref() != Some(plugin_id));
     }
-
 }
 
 #[cfg(test)]

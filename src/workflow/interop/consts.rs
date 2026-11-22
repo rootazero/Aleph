@@ -41,7 +41,9 @@ pub(crate) fn collect_consts(src: &str) -> ConstTable {
     let mut table = ConstTable::new();
     let mut i = 0;
     while i < n {
-        let Some(&c) = chars.get(i) else { break; };
+        let Some(&c) = chars.get(i) else {
+            break;
+        };
         // Skip string-literal bodies so a `const` mentioned inside a prompt does
         // not register as a declaration.
         if c == '\'' || c == '"' || c == '`' {
@@ -78,7 +80,10 @@ fn read_const_decl(chars: &[char], after_const: usize) -> Option<(String, Value)
     if i == name_start {
         return None;
     }
-    let name: String = chars.get(name_start..i).map(|s| s.iter().collect()).unwrap_or_default();
+    let name: String = chars
+        .get(name_start..i)
+        .map(|s| s.iter().collect())
+        .unwrap_or_default();
     i = first_non_ws(chars, i);
     // Require a single `=`; `==` / `=>` are not a const initialiser.
     if chars.get(i) != Some(&'=') || matches!(chars.get(i + 1), Some('=' | '>')) {
@@ -145,7 +150,10 @@ fn parse_object(chars: &[char], start: usize, depth: u32) -> Option<(Value, usiz
                 while i < n && chars.get(i).copied().is_some_and(is_ident_char) {
                     i += 1;
                 }
-                chars.get(ks..i).map(|s| s.iter().collect()).unwrap_or_default()
+                chars
+                    .get(ks..i)
+                    .map(|s| s.iter().collect())
+                    .unwrap_or_default()
             }
             _ => return None,
         };
@@ -203,7 +211,9 @@ fn read_string(chars: &[char], start: usize) -> Option<(String, usize)> {
     let mut i = start + 1;
     let mut out = String::new();
     while i < chars.len() {
-        let Some(&c) = chars.get(i) else { break; };
+        let Some(&c) = chars.get(i) else {
+            break;
+        };
         if c == '\\' {
             let esc = *chars.get(i + 1)?;
             out.push(match esc {
@@ -265,13 +275,21 @@ fn parse_number(chars: &[char], start: usize) -> Option<(Value, usize)> {
         i += 1;
     }
     let digits_start = i;
-    while i < n && chars.get(i).copied().is_some_and(|c| c.is_ascii_digit() || matches!(c, '.' | 'e' | 'E' | '+' | '-')) {
+    while i < n
+        && chars
+            .get(i)
+            .copied()
+            .is_some_and(|c| c.is_ascii_digit() || matches!(c, '.' | 'e' | 'E' | '+' | '-'))
+    {
         i += 1;
     }
     if i == digits_start {
         return None;
     }
-    let raw: String = chars.get(start..i).map(|s| s.iter().collect()).unwrap_or_default();
+    let raw: String = chars
+        .get(start..i)
+        .map(|s| s.iter().collect())
+        .unwrap_or_default();
     // Prefer exact integer representations (i64 then u64) so a large unsigned
     // schema value keeps full precision, matching `serde_json`'s number model;
     // fall back to f64 only for fractional / exponent forms.
@@ -287,11 +305,15 @@ fn parse_number(chars: &[char], start: usize) -> Option<(Value, usize)> {
 /// Advance past a string literal beginning at `chars[start]` (a quote of any
 /// JS kind). Returns the index just past the close; unterminated → end of input.
 fn skip_string(chars: &[char], start: usize) -> usize {
-    let Some(&quote) = chars.get(start) else { return start; };
+    let Some(&quote) = chars.get(start) else {
+        return start;
+    };
     let n = chars.len();
     let mut i = start + 1;
     while i < n {
-        let Some(&c) = chars.get(i) else { break; };
+        let Some(&c) = chars.get(i) else {
+            break;
+        };
         if c == '\\' {
             i += 2;
             continue;

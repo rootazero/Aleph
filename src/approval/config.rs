@@ -697,7 +697,10 @@ impl ApprovalPolicy for ConfigApprovalPolicy {
                 // which rule fired — but the LOG must not carry it: a pattern
                 // is operator-authored and may embed a secret.
                 let redacted = self.redact_patterns_in(reason);
-                format!("Deny {{ reason: {} }}", capped_audit_field(&masker.mask(&redacted)))
+                format!(
+                    "Deny {{ reason: {} }}",
+                    capped_audit_field(&masker.mask(&redacted))
+                )
             }
             ApprovalDecision::Ask { prompt } => {
                 let masked = capped_audit_field(&masker.mask(prompt));
@@ -769,7 +772,10 @@ fn capped_audit_field(value: &str) -> String {
 /// the rule and the target stay folded alike (see `applicable_rules`).
 #[must_use]
 fn target_is_url(action: &ActionType) -> bool {
-    if matches!(action, ActionType::BrowserNavigate | ActionType::BrowserOpen) {
+    if matches!(
+        action,
+        ActionType::BrowserNavigate | ActionType::BrowserOpen
+    ) {
         return true;
     }
     action
@@ -1613,7 +1619,10 @@ mod tests {
 
         drop(_guard);
         let captured = sink.lock().unwrap();
-        assert!(!captured.is_empty(), "expected log events from check()/record()");
+        assert!(
+            !captured.is_empty(),
+            "expected log events from check()/record()"
+        );
         for fields in captured.iter() {
             let values = all_field_values(fields);
             assert!(

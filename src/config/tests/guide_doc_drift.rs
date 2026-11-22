@@ -255,7 +255,10 @@ fn resolve<'a>(
                 }
                 // A map-valued section: the segment is a map key and the map's
                 // value type is the schema of what follows.
-                if let Some(value) = variant.get("additionalProperties").filter(|v| v.is_object()) {
+                if let Some(value) = variant
+                    .get("additionalProperties")
+                    .filter(|v| v.is_object())
+                {
                     next.extend(variants(value, defs, 8));
                 }
                 // An array-valued section: the segment addresses a field of the
@@ -367,7 +370,8 @@ fn audit() -> (Vec<Finding>, usize, usize, usize) {
                         guide: (*name).to_string(),
                         section: header.path.clone(),
                         detail: if header.is_array {
-                            "array-of-tables header, but the schema holds a single table".to_string()
+                            "array-of-tables header, but the schema holds a single table"
+                                .to_string()
                         } else {
                             "table header, but the schema holds a list of rows".to_string()
                         },
@@ -467,4 +471,3 @@ fn every_deployed_guide_section_and_key_exists_in_the_config_schema() {
             .join("\n")
     );
 }
-

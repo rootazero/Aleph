@@ -873,8 +873,22 @@ mod tests {
         let new_session = test_session(99);
 
         // Create grants with old session as grantor and grantee
-        let grant1 = test_grant("grant-1", "cap-1", old_session.clone(), test_session(2), None, 0);
-        let grant2 = test_grant("grant-2", "cap-2", test_session(3), old_session.clone(), None, 0);
+        let grant1 = test_grant(
+            "grant-1",
+            "cap-1",
+            old_session.clone(),
+            test_session(2),
+            None,
+            0,
+        );
+        let grant2 = test_grant(
+            "grant-2",
+            "cap-2",
+            test_session(3),
+            old_session.clone(),
+            None,
+            0,
+        );
 
         assert!(registry.create_grant(grant1.clone()).is_ok());
         assert!(registry.create_grant(grant2.clone()).is_ok());

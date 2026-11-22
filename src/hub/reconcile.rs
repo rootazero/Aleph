@@ -123,8 +123,7 @@ pub fn mark_installed_state(
     // an O(installed) linear scan per catalog entry, turning this loop into
     // O(catalog × installed). The façade id is unique per install, so a
     // single HashMap lookup suffices.
-    let mut by_mcp_facade: HashMap<&str, &ExtensionEntry> =
-        HashMap::with_capacity(installed.len());
+    let mut by_mcp_facade: HashMap<&str, &ExtensionEntry> = HashMap::with_capacity(installed.len());
     for e in installed {
         by_name
             .entry((e.kind.as_str(), e.name.trim().to_lowercase()))

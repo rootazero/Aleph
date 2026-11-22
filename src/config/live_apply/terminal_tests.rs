@@ -34,9 +34,7 @@ impl Fixture {
         let dir = tempfile::tempdir().unwrap();
         let mut config = Config::default();
         config.policies.terminal.enabled = false;
-        config
-            .save_to_file(dir.path().join("config.toml"))
-            .unwrap();
+        config.save_to_file(dir.path().join("config.toml")).unwrap();
         let config = Arc::new(RwLock::new(config));
         let bus = Arc::new(GatewayEventBus::new());
         let patcher = ConfigPatcher::new(
@@ -265,9 +263,11 @@ async fn a_failed_join_and_missing_or_wrong_bus_never_earn_terminal_live() {
     let bus = Arc::new(GatewayEventBus::new());
     let first = pty::attach_event_bus(bus.clone()).unwrap();
     let cfg = Config::default();
-    assert!(apply_live_sections(&cfg, &["policies.terminal"], None, None)
-        .await
-        .is_empty());
+    assert!(
+        apply_live_sections(&cfg, &["policies.terminal"], None, None)
+            .await
+            .is_empty()
+    );
     let wrong = Arc::new(GatewayEventBus::new());
     assert!(
         apply_live_sections(&cfg, &["policies.terminal"], Some(&wrong), None)

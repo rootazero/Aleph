@@ -27,10 +27,9 @@ pub fn is_path_within(base: &Path, target: &Path) -> bool {
     if base.as_os_str().is_empty() {
         return false;
     }
-    let (Some(norm_base), Some(norm_target)) = (
-        lexically_normalize(base),
-        lexically_normalize(target),
-    ) else {
+    let (Some(norm_base), Some(norm_target)) =
+        (lexically_normalize(base), lexically_normalize(target))
+    else {
         return false;
     };
 

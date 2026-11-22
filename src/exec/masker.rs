@@ -314,10 +314,7 @@ mod tests {
                 "sk-ant-api03-abcdefgh_ijkl-mnopqrstuv",
                 "sk-ant-***REDACTED***",
             ),
-            (
-                "sk-abcde-fghij_klmnopqrstuvwxyz",
-                "sk-***REDACTED***",
-            ),
+            ("sk-abcde-fghij_klmnopqrstuvwxyz", "sk-***REDACTED***"),
         ] {
             let output = masker.mask(key);
             assert!(output.contains(prefix), "got: {output}");

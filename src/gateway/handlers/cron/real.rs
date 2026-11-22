@@ -308,11 +308,7 @@ pub async fn handle_create(request: JsonRpcRequest, cron: SharedCronService) -> 
         None | Some(Value::Null) => {} // absent or explicit null == default
         Some(Value::Bool(flag)) => job.enabled = *flag,
         Some(_) => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "enabled must be a boolean",
-            );
+            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "enabled must be a boolean");
         }
     }
     match parse_failure_alert(params) {
@@ -420,11 +416,7 @@ pub async fn handle_update(request: JsonRpcRequest, cron: SharedCronService) -> 
         None | Some(Value::Null) => {}
         Some(Value::Bool(flag)) => updates.enabled = Some(*flag),
         Some(_) => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "enabled must be a boolean",
-            );
+            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "enabled must be a boolean");
         }
     }
     // Explicit null = no-op (back-compat); a present-but-malformed value is
@@ -702,11 +694,7 @@ pub async fn handle_toggle(request: JsonRpcRequest, cron: SharedCronService) -> 
         None => None,
         Some(Value::Bool(flag)) => Some(*flag),
         Some(_) => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "enabled must be a boolean",
-            );
+            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "enabled must be a boolean");
         }
     };
 

@@ -585,9 +585,8 @@ pub async fn materialize(
                 // Stamp the flag through the acceptance helper so the
                 // dispatcher reads exactly the key shape that helper writes
                 // (one writer, one shape — not a hand-rolled duplicate).
-                meta = crate::agents::swarm::tasks::acceptance::with_lead_review_required(
-                    meta, true,
-                );
+                meta =
+                    crate::agents::swarm::tasks::acceptance::with_lead_review_required(meta, true);
                 if let Some(obj) = meta.as_object_mut() {
                     // The anchor demand rides the SAME metadata channel
                     // `task_create(require_grounding=…)` writes, so the review
@@ -1146,7 +1145,9 @@ mod tests {
 
     #[tokio::test]
     async fn materialize_review_step_stamps_lead_review_flag() {
-        use crate::agents::swarm::tasks::acceptance::{lead_review_required, LEAD_REVIEW_METADATA_KEY};
+        use crate::agents::swarm::tasks::acceptance::{
+            lead_review_required, LEAD_REVIEW_METADATA_KEY,
+        };
         let store = setup_store().await;
         let mut def = linear_def();
         def.steps[1].review = true;

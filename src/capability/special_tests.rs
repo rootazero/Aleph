@@ -10,8 +10,8 @@ use super::special::{
 };
 use super::special_dispatch::CapabilityInvocationOrigin;
 use super::tool_adapters::{
-    TERMINAL_ADAPTER_ID, UI_ADAPTER_ID, register_canonical_adapters,
-    register_canonical_adapters_with_tools,
+    register_canonical_adapters, register_canonical_adapters_with_tools, TERMINAL_ADAPTER_ID,
+    UI_ADAPTER_ID,
 };
 use crate::capability::descriptor::{
     CapabilityDescriptor, CapabilityFacets, CapabilityId, CapabilityKind, CapabilityRevision,
@@ -20,11 +20,11 @@ use crate::capability::descriptor::{
 use crate::capability::policy_runtime::{CapabilityCallContext, ResourceUse};
 use crate::sync_primitives::Arc;
 use aleph_protocol::capability::{
-    MAX_PTY_INPUT_BYTES, PtyInvokeParams, PtyOperation, UiInvokeParams, UiOperation,
+    PtyInvokeParams, PtyOperation, UiInvokeParams, UiOperation, MAX_PTY_INPUT_BYTES,
 };
 use async_trait::async_trait;
 use schemars::schema_for;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use sha2::Digest;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio_util::sync::CancellationToken;
@@ -457,13 +457,11 @@ async fn canonical_adapters_are_discoverable_without_executor_dispatch() {
             .iter()
             .find(|entry| entry.id().namespace == namespace && entry.id().name == name)
             .expect("adapter is discoverable");
-        assert!(
-            !capture
-                .schema()
-                .as_object()
-                .expect("object schema")
-                .is_empty()
-        );
+        assert!(!capture
+            .schema()
+            .as_object()
+            .expect("object schema")
+            .is_empty());
         assert!(capture.schema().get("additionalProperties").is_some());
     }
     let terminal = registry
@@ -632,15 +630,14 @@ fn rollback_tokens_fail_closed_across_claim_rotate_and_replacement() {
         )
         .expect("token registration")
         .expect("new binding token");
-    assert!(
-        tree.claim(
+    assert!(tree
+        .claim(
             &claimed,
             &visibility,
             OwnerRef::Runtime,
             "claim-race".into()
         )
-        .is_some()
-    );
+        .is_some());
     assert!(!tree.rollback_if_matches(&token));
     assert_eq!(
         tree.owner_of(&claimed, &visibility),
@@ -711,41 +708,33 @@ fn canonical_schemas_state_utf8_byte_bounds_and_reject_unknown_fields() {
     }
 
     let exact = "é".repeat(MAX_PTY_INPUT_BYTES / 2);
-    assert!(
-        serde_json::from_value::<PtyInvokeParams>(json!({
-            "session_id": "session",
-            "operation": {"operation": "input", "data": exact}
-        }))
-        .expect("wire decode reaches owning validator")
-        .validate()
-        .is_ok()
-    );
+    assert!(serde_json::from_value::<PtyInvokeParams>(json!({
+        "session_id": "session",
+        "operation": {"operation": "input", "data": exact}
+    }))
+    .expect("wire decode reaches owning validator")
+    .validate()
+    .is_ok());
     let oversized = "é".repeat((MAX_PTY_INPUT_BYTES / 2) + 1);
-    assert!(
-        serde_json::from_value::<PtyInvokeParams>(json!({
-            "session_id": "session",
-            "operation": {"operation": "input", "data": oversized}
-        }))
-        .expect("wire decode reaches owning validator")
-        .validate()
-        .is_err()
-    );
-    assert!(
-        serde_json::from_value::<PtyInvokeParams>(json!({
-            "session_id": "session",
-            "unknown": true,
-            "operation": {"operation": "attach"}
-        }))
-        .is_err()
-    );
-    assert!(
-        serde_json::from_value::<UiInvokeParams>(json!({
-            "surface_id": "surface",
-            "mount_generation": 1,
-            "operation": {"operation": "display", "text": "ok", "unknown": true}
-        }))
-        .is_err()
-    );
+    assert!(serde_json::from_value::<PtyInvokeParams>(json!({
+        "session_id": "session",
+        "operation": {"operation": "input", "data": oversized}
+    }))
+    .expect("wire decode reaches owning validator")
+    .validate()
+    .is_err());
+    assert!(serde_json::from_value::<PtyInvokeParams>(json!({
+        "session_id": "session",
+        "unknown": true,
+        "operation": {"operation": "attach"}
+    }))
+    .is_err());
+    assert!(serde_json::from_value::<UiInvokeParams>(json!({
+        "surface_id": "surface",
+        "mount_generation": 1,
+        "operation": {"operation": "display", "text": "ok", "unknown": true}
+    }))
+    .is_err());
     assert!(matches!(PtyOperation::Attach.validate(), Ok(())));
     assert!(matches!(UiOperation::Input {}.validate(), Ok(())));
 }

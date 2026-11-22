@@ -641,7 +641,9 @@ mod tests {
         // The overall verdict is the strongest of the per-field ones, and the
         // wire shape is the same `{kind, hint}` every other config RPC sends.
         assert_eq!(v["reload_impact"]["kind"], "restart");
-        assert!(v["reload_impact"]["hint"].as_str().is_some_and(|h| !h.is_empty()));
+        assert!(v["reload_impact"]["hint"]
+            .as_str()
+            .is_some_and(|h| !h.is_empty()));
     }
 
     /// The positive arm, asserted by the *effect* rather than by the call: the

@@ -281,10 +281,7 @@ impl IncomingHandler {
         let chosen = if allow {
             pick_option(options, &["allow_once", "allow_always", "allow"])
         } else {
-            pick_option(
-                options,
-                &["reject_once", "reject_always", "reject", "deny"],
-            )
+            pick_option(options, &["reject_once", "reject_always", "reject", "deny"])
         };
 
         match chosen {

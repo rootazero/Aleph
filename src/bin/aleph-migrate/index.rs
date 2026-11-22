@@ -1,7 +1,7 @@
 //! Index module: Build metadata.db from Markdown sessions
 
-use alephcore::utils::sqlite_open::open_sqlite_safe;
 use crate::export::session_dir_name;
+use alephcore::utils::sqlite_open::open_sqlite_safe;
 use anyhow::{Context, Result};
 use rusqlite::Connection;
 use sha2::{Digest, Sha256};

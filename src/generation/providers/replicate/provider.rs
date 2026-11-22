@@ -163,11 +163,11 @@ impl GenerationProvider for ReplicateProvider {
             // Handle different output formats
             let output_url: &str = match &output_value {
                 // Array of URLs (common for image generation)
-                serde_json::Value::Array(arr) if !arr.is_empty() => arr[0]
-                    .as_str()
-                    .ok_or_else(|| {
+                serde_json::Value::Array(arr) if !arr.is_empty() => {
+                    arr[0].as_str().ok_or_else(|| {
                         GenerationError::serialization("Expected URL string in output array")
-                    })?,
+                    })?
+                }
                 // Single URL string
                 serde_json::Value::String(url) => url.as_str(),
                 // Object with URL field

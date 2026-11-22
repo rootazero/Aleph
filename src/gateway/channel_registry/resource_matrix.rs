@@ -1170,7 +1170,9 @@ async fn source_owned_validation_fences_revision_and_owner_transfer() {
             .registry
             .resolve_bound_channel(capture, &VisibilityScope::default())
             .await,
-        Err(ChannelBindingError::Owner(BindingValidationError::BindingMismatch))
+        Err(ChannelBindingError::Owner(
+            BindingValidationError::BindingMismatch
+        ))
     ));
 }
 

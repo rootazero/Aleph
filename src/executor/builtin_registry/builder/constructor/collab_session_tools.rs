@@ -534,7 +534,9 @@ impl BuiltinToolRegistry {
         if expose_retrieval_tools {
             use crate::builtin_tools::RecallContextTool;
             use crate::executor::builtin_registry::builder::core_tools::tool_schema;
-            let schema = tool_schema::<crate::builtin_tools::recall_context::RecallContextArgs>("recall_context");
+            let schema = tool_schema::<crate::builtin_tools::recall_context::RecallContextArgs>(
+                "recall_context",
+            );
             let mut ut = UnifiedTool::new(
                 format!("builtin:{}", RecallContextTool::NAME),
                 RecallContextTool::NAME,
@@ -550,7 +552,8 @@ impl BuiltinToolRegistry {
         if expose_retrieval_tools {
             use crate::builtin_tools::memory_trace::MemoryTraceTool;
             use crate::executor::builtin_registry::builder::core_tools::tool_schema;
-            let schema = tool_schema::<crate::builtin_tools::memory_trace::MemoryTraceArgs>("memory_trace");
+            let schema =
+                tool_schema::<crate::builtin_tools::memory_trace::MemoryTraceArgs>("memory_trace");
             let mut ut = UnifiedTool::new(
                 format!("builtin:{}", MemoryTraceTool::NAME),
                 MemoryTraceTool::NAME,
@@ -567,7 +570,9 @@ impl BuiltinToolRegistry {
         if expose_retrieval_tools {
             use crate::builtin_tools::note_graph_query::NoteGraphQueryTool;
             use crate::executor::builtin_registry::builder::core_tools::tool_schema;
-            let schema = tool_schema::<crate::builtin_tools::note_graph_query::NoteGraphQueryArgs>("note_graph_query");
+            let schema = tool_schema::<crate::builtin_tools::note_graph_query::NoteGraphQueryArgs>(
+                "note_graph_query",
+            );
             let mut ut = UnifiedTool::new(
                 format!("builtin:{}", NoteGraphQueryTool::NAME),
                 NoteGraphQueryTool::NAME,

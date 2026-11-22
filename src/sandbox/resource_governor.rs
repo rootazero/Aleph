@@ -84,10 +84,16 @@ impl GovernorThresholds {
     /// `true` when the sample is within every configured threshold.
     #[must_use]
     pub fn within(&self, s: &LoadSample) -> bool {
-        if self.min_available_memory_mb.is_some_and(|min| s.available_memory_mb < min) {
+        if self
+            .min_available_memory_mb
+            .is_some_and(|min| s.available_memory_mb < min)
+        {
             return false;
         }
-        if self.max_cpu_percent.is_some_and(|max| s.cpu_usage_percent > max) {
+        if self
+            .max_cpu_percent
+            .is_some_and(|max| s.cpu_usage_percent > max)
+        {
             return false;
         }
         true

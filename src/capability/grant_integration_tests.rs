@@ -11,9 +11,7 @@
 mod tests {
     use crate::acp::manager::SessionKey;
     use crate::capability::descriptor::CapabilityId;
-    use crate::capability::grant::{
-        Grant, GrantError, GrantId, GrantMetadata, GrantRegistry,
-    };
+    use crate::capability::grant::{Grant, GrantError, GrantId, GrantMetadata, GrantRegistry};
     use crate::capability::ownership::{
         LifetimeScope, OwnerGeneration, OwnerRef, OwnershipTree, VisibilityScope,
     };
@@ -93,9 +91,7 @@ mod tests {
         assert!(registry.validate_grant_chain(&grant.id, generation).is_ok());
 
         // Session 1 bumps its ownership (invalidates grant)
-        assert!(ownership
-            .bump(LifetimeScope::Session)
-            .is_ok());
+        assert!(ownership.bump(LifetimeScope::Session).is_ok());
 
         let new_generation = ownership
             .generation(&cap_id, &VisibilityScope::default())

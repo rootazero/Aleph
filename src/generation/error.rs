@@ -750,9 +750,7 @@ impl From<GenerationError> for AlephError {
                 // AlephError downstream retains the diagnostic info the
                 // typed GenerationError had. AlephError::network() would
                 // discard it.
-                let url_hint = url
-                    .map(|u| format!(" (url: {u})"))
-                    .unwrap_or_default();
+                let url_hint = url.map(|u| format!(" (url: {u})")).unwrap_or_default();
                 let status_hint = status_code
                     .map(|c| format!(" (HTTP {c})"))
                     .unwrap_or_default();

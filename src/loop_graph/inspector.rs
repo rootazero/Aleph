@@ -314,12 +314,10 @@ impl<'a> LoopGraphInspector<'a> {
                 e.to_id == target
                     && e.from_id != target
                     && matches!(e.kind, EdgeKind::Watches | EdgeKind::Audits)
-                    && pre_by_id
-                        .get(e.from_id.as_str())
-                        .is_some_and(|s| {
-                            (!filter_removed || s.id != node_id)
-                                && crate::loop_graph::store::can_cover(s.kind)
-                        })
+                    && pre_by_id.get(e.from_id.as_str()).is_some_and(|s| {
+                        (!filter_removed || s.id != node_id)
+                            && crate::loop_graph::store::can_cover(s.kind)
+                    })
             })
         };
 
@@ -423,20 +421,16 @@ impl<'a> LoopGraphInspector<'a> {
         for n in &nodes {
             *node_counts.entry((n.kind.as_str(), n.kind)).or_insert(0) += 1;
         }
-        let node_counts_by_kind: Vec<(NodeKind, usize)> = node_counts
-            .into_iter()
-            .map(|((_, k), c)| (k, c))
-            .collect();
+        let node_counts_by_kind: Vec<(NodeKind, usize)> =
+            node_counts.into_iter().map(|((_, k), c)| (k, c)).collect();
 
         let mut edge_counts: std::collections::BTreeMap<(&'static str, EdgeKind), usize> =
             std::collections::BTreeMap::new();
         for e in &edges {
             *edge_counts.entry((e.kind.as_str(), e.kind)).or_insert(0) += 1;
         }
-        let edge_counts_by_kind: Vec<(EdgeKind, usize)> = edge_counts
-            .into_iter()
-            .map(|((_, k), c)| (k, c))
-            .collect();
+        let edge_counts_by_kind: Vec<(EdgeKind, usize)> =
+            edge_counts.into_iter().map(|((_, k), c)| (k, c)).collect();
 
         let naked_loop_count = findings.iter().filter(|f| f.contains("裸奔优化环")).count();
         let unanchored_chain_count = findings

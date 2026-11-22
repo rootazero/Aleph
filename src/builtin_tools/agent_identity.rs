@@ -472,9 +472,8 @@ Arguments are never stored; each record carries a fingerprint of them, plus a se
                 tokio::task::spawn_blocking(move || -> std::result::Result<(), String> {
                     let body = serde_json::to_string_pretty(&envelope)
                         .map_err(|e| format!("cannot serialize the envelope: {e}"))?;
-                    std::fs::write(&write_path, body).map_err(|e| {
-                        format!("cannot write {}: {e}", write_path.display())
-                    })?;
+                    std::fs::write(&write_path, body)
+                        .map_err(|e| format!("cannot write {}: {e}", write_path.display()))?;
                     // Same 0600 discipline as the chain export. The envelope sits
                     // next to the artifact (not under the data dir), but it names
                     // the agent and its key fingerprint — metadata the local

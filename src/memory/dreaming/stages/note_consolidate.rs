@@ -286,7 +286,8 @@ fn title_heuristic_candidates(ctx: &DreamContext, indices: &[usize]) -> Vec<(usi
 
     for i in 0..titles.len() {
         for j in (i + 1)..titles.len() {
-            if let (Some((idx_a, title_a)), Some((idx_b, title_b))) = (titles.get(i), titles.get(j)) {
+            if let (Some((idx_a, title_a)), Some((idx_b, title_b))) = (titles.get(i), titles.get(j))
+            {
                 if is_title_similar(title_a, title_b) {
                     pairs.push((*idx_a, *idx_b));
                 }

@@ -83,10 +83,7 @@ pub async fn spawn(allowlist: AllowList) -> Result<ProxyHandle, ProxyStartError>
 
     tokio::spawn(accept_loop(listener, allowlist, shutdown_rx));
 
-    Ok(ProxyHandle {
-        addr,
-        shutdown_tx,
-    })
+    Ok(ProxyHandle { addr, shutdown_tx })
 }
 
 async fn accept_loop(

@@ -530,9 +530,7 @@ where
             self.emit_pre_admission_run_error(
                 emitter.as_ref(),
                 &run_id,
-                btw_main_session
-                    .as_ref()
-                    .unwrap_or(&request.session_key),
+                btw_main_session.as_ref().unwrap_or(&request.session_key),
                 &request,
                 &error,
             )
@@ -1281,7 +1279,8 @@ where
         emitter: &Arc<E>,
     ) {
         let Some(rescue) =
-            super::steering::build_steering_rescue_request(self.orchestrator.as_ref(), request).await
+            super::steering::build_steering_rescue_request(self.orchestrator.as_ref(), request)
+                .await
         else {
             return;
         };

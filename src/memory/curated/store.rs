@@ -223,7 +223,10 @@ impl CuratedMemoryStore {
             // Replacing legacy entry de-legacys the file if the user shrinks/curates.
             if st.legacy
                 && st.entries.len() == 1
-                && st.entries.first().is_some_and(|e| !e.contains(super::format::ENTRY_DELIMITER))
+                && st
+                    .entries
+                    .first()
+                    .is_some_and(|e| !e.contains(super::format::ENTRY_DELIMITER))
             {
                 // Still single-entry → effectively still curated form, drop legacy flag
                 st.legacy = false;
@@ -520,7 +523,10 @@ fn apply_one(st: &mut StoreState, op: &BatchOp) -> Result<(), CuratedError> {
             // Replacing legacy entry de-legacys the file if the user shrinks/curates.
             if st.legacy
                 && st.entries.len() == 1
-                && st.entries.first().is_some_and(|e| !e.contains(super::format::ENTRY_DELIMITER))
+                && st
+                    .entries
+                    .first()
+                    .is_some_and(|e| !e.contains(super::format::ENTRY_DELIMITER))
             {
                 st.legacy = false;
             }
