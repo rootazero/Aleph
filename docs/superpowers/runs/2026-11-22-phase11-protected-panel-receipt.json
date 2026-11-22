@@ -1,0 +1,155 @@
+{
+  "artifact": "phase11_protected_panel_checkpoint",
+  "version": "2026-11-22.11",
+  "status": "PASS_SCOPED_PROTECTED_PANEL / NOT_PHASE11_ACCEPTANCE",
+  "authority": {
+    "plan": "docs/superpowers/plans/2026-11-21-phase11-nsh-cutover.md",
+    "contract": "docs/superpowers/specs/2026-11-21-phase11-nsh-cutover.md",
+    "contract_section": 16
+  },
+  "baseline": "facb58e7293433db9a340bc4ca63116b4c3bcefb",
+  "native": {
+    "status": "PASS_SCOPED_PROTECTED_PANEL",
+    "returncode": 0,
+    "fixture": {
+      "cleanup_error": null,
+      "cleanup_stage": "complete",
+      "documents": [
+        "7c280bec7483b3318526ba6b4fe8887e",
+        "3f88a7bd801c05732b8c787a66fb6000"
+      ],
+      "effects": {
+        "cleanup_deleted": true,
+        "cleanup_empty": true,
+        "initial_empty": true,
+        "no_reload_ticket": true,
+        "pair_authorized": true,
+        "reload_protected": true,
+        "reload_stored": true,
+        "save_ack": true,
+        "ticket_submitted": true
+      },
+      "user": "alice"
+    },
+    "helper": {
+      "confirmed": true,
+      "listener_closed": true,
+      "forced": false,
+      "returncode": 0,
+      "root_removed": true,
+      "assets_unchanged": true
+    },
+    "panel_assets": {
+      "index.html": {
+        "sha256": "01ba38ba50b53babbd3a48d42cf51d47f9102b729deb36c64e2a7be60c6b8d43",
+        "bytes": 7425
+      },
+      "aleph_panel.js": {
+        "sha256": "53be3d5177e308f419c34cfa0e2950df347bdd7a262547229e72863e8a4eea9c",
+        "bytes": 121199
+      },
+      "aleph_panel_bg.wasm": {
+        "sha256": "72953ab0e1b76226d44cae5e3ad8c3afd451320fa0fe6a6bfcbdf925cf05437e",
+        "bytes": 70967315
+      },
+      "tailwind.css": {
+        "sha256": "3ede8d53cbb11d0707f68c53653103749ca33026a82e497b389db328e4cde9e7",
+        "bytes": 146900
+      }
+    }
+  },
+  "binary_sha256": {
+    ".phase10-evidence/phase11-protected-panel.omkIYW/aleph-nsh-shell-final": "9f7555fe19232aa93b6659025500f11384736fd7f41b7eed4ed3ae8f77d229ce",
+    ".phase10-evidence/phase11-protected-panel.omkIYW/aleph-panel-native-qa-gateway": "a65e359d33973e5b948fdfa0f2be7f757efd7d67ac714bfab4d56ab1610ea373"
+  },
+  "status_regression": "PASS_SCOPED_PRODUCTION_PANEL_STATUS",
+  "phase10_matrix_sha256": "fbf5f1272be769ae554ba53df065ef171badb6bbe942bb90e254168664e5f7c2",
+  "source_sha256": {
+    "desktop/nsh-shell/src/main.rs": "e2f051d2565fce30943300a356cbb0fa989e526397d5bfe9878401a2b2c834b3",
+    "qa/phase11_nsh_pairing.py": "d281031a572c306ad7e95940f6fdf913490889df4e056bf3b01f218ff1027919",
+    "qa/phase11_nsh_pairing.js": "0386cb3ec289684c3e5cf34dc6eed894d28420150f29e1d6362b68d917ab651d",
+    "qa/test_phase11_nsh_pairing.py": "62894a2ec93f900cf572bf94bde47b4027ba6dcd5929bd443de9392bb189ac76",
+    "qa/phase11_nsh_pairing.md": "98c2851a9afd0fa70301c49fb6732cfe20f6ffc301cb4eff8ebd5b83fac45952",
+    "qa/phase11_nsh_panel_status.js": "04ca0694c2058a2d6e3c4ce219c18b0f0815a231426c67890e2615617149eb42",
+    "qa/phase11_nsh_panel_status.py": "e3bf63484987bed86af814f1f6de0c6b04655268fc612ece5d605bc46ad0cfb0",
+    "src/bin/aleph-panel-native-qa-gateway/main.rs": "4b15bf8a3be9301c26c30258efa09188ed4906c6dbb8481b3caab1ec98279b67",
+    "desktop/shell/src/qa_root.rs": "ff3af8cf87ec79322097603949cfa4867b3fccbd34347c2442db86c718f1af36",
+    "shared/client/src/credential_store.rs": "09c8c18acb99fa89489da3e9d479f759a65fdf46bb8aeb3804c5af1b9020d86c",
+    "shared/protocol/src/panel_shell.rs": "f15c34fb6a99a0d57ed67b10e0d273ea252566eb0a12dc907dd390f4f63eb2d4",
+    "interfaces/webchat/src/api/native_credentials.rs": "6ddb2122fb7c1c82271f6347da6fdf553214f2eec2bab9d7ad62447a6e57c9a9",
+    "interfaces/webchat/src/components/token_wall.rs": "721cd38db5cc46eaa0edee32a249cd8809fb6e99be71e795c84980f4b70f56be",
+    "docs/superpowers/specs/2026-11-21-phase11-nsh-cutover.md": "dcbd66eb51f8096ce8771e405d9865e6363ab759aa083aaae7edd0a58d70fd6d",
+    "docs/superpowers/runs/2026-11-21-phase11-nsh-inventory.json": "047567b83f3e3facdd02123c1a46fc1982e6a1494330ddd8f9353402d733f744",
+    "docs/reference/DESKTOP_SHELL.md": "46211f63124b545d0ee0b86ad3d1f4b4dd8d94922c2d125835f4586369c36ae1"
+  },
+  "raw_sha256": {
+    ".phase10-evidence/phase11-protected-panel.omkIYW/helper-build.log": "eaeaf9ca3a0582015c1f7ccdb4fc54e25a451ac2436e2d4327cd3ce4cfb12293",
+    ".phase10-evidence/phase11-protected-panel.omkIYW/evaluator-red.log": "daec8aa52a4cbb8a5467321a45346dda0b40a775be0de7b7412849c3ce89bc92",
+    ".phase10-evidence/phase11-protected-panel.omkIYW/evaluator-green.log": "98df641000c649acbf35328ce3e09cc6b6ab50e9f2def1027dda5b4f501a6f85",
+    ".phase10-evidence/phase11-protected-panel.omkIYW/shutdown-wire-red.log": "3c94aba7e6884b93c41f6653c7a0390b35d8214751d2bc461b1cc66fa56bc74c",
+    ".phase10-evidence/phase11-protected-panel.omkIYW/native-red.json": "94368b078718f972335b45007fe35f813446648850e93c32a9c1d5e70b2857b3",
+    ".phase10-evidence/phase11-protected-panel.omkIYW/native-candidate.json": "b9555772a20bad6865cc57a76f4ace66edf53a4af6dbe22e9697cb86826e12ea",
+    ".phase10-evidence/phase11-protected-panel.omkIYW/native-diagnostic.json": "3ae33707b3136f977f587290e7d087923b8217feba40890bd3a118e68effc1fd",
+    ".phase10-evidence/phase11-protected-panel.omkIYW/native-final.json": "43255e20236d093f44a4b88e3cc7f6664659ed6e8bf3fa77e1ef6e32d916bc76",
+    ".phase10-evidence/phase11-protected-panel.omkIYW/accepted-candidate.json": "13faffa8d7f93776d6d9173b9cbbe075b77bb93cd4e3d19daff16d253af0eabd",
+    ".phase10-evidence/phase11-protected-panel.omkIYW/status-regression.json": "03f14e8997c745e9038e7b7ea3295d7d54e00431cc7cebae600d1ae95eb27f44",
+    ".phase10-evidence/phase11-protected-panel.omkIYW/failed-candidate-store-cleanup.json": "bc603550968e125b475c28a4d3d1a6c201b0ae09441111f2e545383bb615a3a4",
+    ".phase10-evidence/phase11-protected-panel.omkIYW/failed-diagnostic-store-cleanup.json": "47db4e92b465decbc1c36ef4f6b49c27478d98590f58e54d008d04d8c22a3fce",
+    ".phase10-evidence/phase11-protected-panel.omkIYW/python-suite.log": "29293417138aca9716cab1027aea92f7a62fc11d0dfe189b068d6c14176d5142",
+    ".phase10-evidence/phase11-protected-panel.omkIYW/node-suite.log": "89fbc472c9eb2fec00bb9d9437f2dff68cdb76fab3fbf825b87b50a58661d782",
+    ".phase10-evidence/phase11-protected-panel.omkIYW/host-suite.log": "e489c131091d44e57593d70df476fc8865e3d7e4e4ad5546f6abd03d1f4fac45",
+    ".phase10-evidence/phase11-protected-panel.omkIYW/host-default.log": "24742cb5f185098e101d35a573e7456e5922ab19c062c160a1dcef06a0d74c61",
+    ".phase10-evidence/phase11-protected-panel.omkIYW/clippy.log": "e184225909716d8e00ee9f4f4929492fdb5dc5c54f4aef07c29b6510c09b982d",
+    ".phase10-evidence/phase11-protected-panel.omkIYW/native-final-build.log": "5fefcd7153fc482e54f23a273407dadc0608dc3fc32a1527ba07fc804948ab08"
+  },
+  "checks": {
+    "python_qa": "100 passed (entire top-level qa test_*.py suite)",
+    "node_bridge": "11 passed",
+    "nsh_default": "19 unit + 8 process launch + 2 window integration passed",
+    "nsh_qa_service": "19 unit + 8 process launch + 2 window integration passed; 1 isolated OS test ignored by default",
+    "clippy": "NSH all-targets qa-service -D warnings passed",
+    "native": "actual real Panel pairing/save/reload/delete + helper confirmation/listener/fixture shutdown; both processes zero; no force; owned root removed; unchanged 4 HTTP assets",
+    "status_regression": "PASS_SCOPED_PRODUCTION_PANEL_STATUS against the saved actual production server",
+    "cargo": "each invocation gated ALLOW >=4294967296 bytes; serial --offline --locked --jobs 1; no native/build overlap",
+    "scoped_links": "16 repository links valid in changed spec/reference/guide",
+    "changed_source": "Rust format, both QA JS syntax checks and git diff checks passed"
+  },
+  "review": {
+    "spec": "section16 author pass before implementation",
+    "quality": "distinct author pass after SPEC; real evaluator and native RED preserved; no substitute RPC/native results; actual serialized helper wire tested; no independent reviewer authorized or dispatched"
+  },
+  "failure_history": [
+    "old binary emitted wrong observer case; preserved native RED",
+    "initial runner import failed without jsonschema; cached isolated uv environment used without project/global dependency change",
+    "first two protected runs passed pairing/reload but QA cleanup load used {} instead of existing fixed null argument; two exact nonce-owned QA items removed using metadata-only OS lookup and exact service/account deletion, verified absent; no token read; not retroactive native cleanup proof",
+    "helper wire is listenerClosed/fixtureClosed, not snake_case; corrected parser via separate RED/GREEN test; first runner also needed stdin EOF before waiting for helper exit",
+    "all failed receipts preserved, no performance sampling or unchanged-candidate timing retry"
+  ],
+  "limitations": [
+    "canonical protected-auth Gateway helper is not full production-server protected pairing",
+    "TLS/remote, target mutation, discovery, TOFU, full/lite service ownership remain incomplete",
+    "explicit QA bridge cleanup is not a Panel credential deletion UI",
+    "no Windows/Linux native parity, OS writable autostart/updater install/recovery acceptance",
+    "not full-helper census, performance, default/rollback, real 14-day common dual operation or Tauri removal"
+  ],
+  "gates": {
+    "P11-A": "OPEN",
+    "P11-B": "OPEN",
+    "P11-C": "OPEN",
+    "P11-D": "OPEN",
+    "P11-E": "OPEN",
+    "P11-F": "OPEN",
+    "P11-G": "OPEN",
+    "P11-H": "OPEN"
+  },
+  "negative": {
+    "push": false,
+    "tag": false,
+    "release": false,
+    "default_switch": false,
+    "tauri_deleted": false,
+    "production_credential_or_service_mutation": false,
+    "new_key_or_feed": false,
+    "protected_config_access": false
+  }
+}

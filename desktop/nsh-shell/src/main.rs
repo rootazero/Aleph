@@ -96,7 +96,11 @@ fn main() -> std::process::ExitCode {
             format!(
             "{}\ninstallAlephPanelQa({}, event => window.nsh.postMessage(JSON.stringify(event)));",
             if status_qa {
-                include_str!("../../../qa/phase11_nsh_panel_status.js")
+                concat!(
+                    include_str!("../../../qa/phase11_nsh_panel_status.js"),
+                    "\n",
+                    include_str!("../../../qa/phase11_nsh_pairing.js")
+                )
             } else {
                 include_str!("../../../qa/nsh_panel_driver.js")
             },

@@ -21,6 +21,8 @@ permission is not a product feature-disable switch; no such switch is supplied.
 
 Phase11 now has a [scoped real Panel/native status proof](../superpowers/runs/2026-11-22-phase11-production-panel-receipt.json): the regenerated canonical WASM performs an empty nonce-isolated credential load, obtains real credentialless Gateway authorization and renders its actual read-only native login-status component. The [QA guide](../../qa/phase11_nsh_panel_status.md) separates this from protected pairing, OS writes, performance and platform/default/dual-track acceptance. / 已验证真实 Panel 的有限功能链路，不是全期或跨平台验收。
 
+A separate [protected Panel checkpoint](../superpowers/runs/2026-11-22-phase11-protected-panel-receipt.json) proves actual ticket submission, native save, distinct-document stored-credential reload, isolated deletion and canonical helper-confirmed Alice binding plus shutdown. Its [guide](../../qa/phase11_nsh_pairing.md) states that the protected-auth helper is not the full production server; TLS/remote, other platforms, service/default/dual-track and removal remain open. / 受保护配对证据独立，不扩张完整生产服务或三平台结论。
+
 
 The **desktop shell** (`desktop/shell/`, crate `aleph-desktop-shell`) is the
 "last-mile native shell" — a thin Tauri v2 app that turns the existing Leptos

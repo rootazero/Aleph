@@ -1,7 +1,7 @@
 # Phase11 NSH Cutover Contract / Phase11 NSH 切换契约
 
 **Status / 状态:** implemented foundation slices, NOT P11-A–H acceptance / 基础切片已实施，不是全期验收
-**Version / 版本:** `2026-11-22.10`
+**Version / 版本:** `2026-11-22.11`
 **Scope / 范围:** official platform entry selection, fixed credential transport and immutable launch targets / 官方平台入口选择、固定凭据传输与不可变启动目标
 
 ## 1. Authority and non-goals / 权威与不做事项
@@ -256,3 +256,13 @@ The committed WASM lacks the newly added NSH bridge identifiers. Source checks a
 - An OS worker releases its permit after its synchronous OS body returns and before waking the result receiver. This preserves ownership if the UI future disappears while avoiding a spurious busy failure on the receiver's next sequential request. Apply the same order to credential and login-status workers. Completion of the OS body is not an OS-thread join or an all-helper shutdown claim. / 先完成 OS 操作、释放准入，再发布结果；不冒称线程 join。
 
 **SPEC author pass:** separated actual component/RPC effects from a direct bridge fixture, and confined the observer to the existing nonce-owned debug path. **QUALITY author pass after SPEC:** checked stale-asset identity, no synthetic RPC success, unavailable-state rendering, isolated cleanup and all negative acceptance directions. No independent reviewer was dispatched. / 先规格后质量的作者审查，不冒称独立审核。
+
+## 16. Protected native pairing proof / 受保护的原生配对验证
+
+The existing `aleph-panel-native-qa-gateway` owns the real canonical SecurityStore/DeviceTokenManager and `handle_connect` in an admitted nonce-owned temporary root. Reuse it, including its `issue_pairing`, `confirm_pairing` and graceful `shutdown` controls; it is a protected-auth fixture, not the full production server. / 复用现有真实鉴权夹具，不另造身份权威，也不称完整生产服务。
+
+A fixed additional case of the existing debug+qa-service status observer receives a one-time QA ticket transiently through the existing QA message closure. No arbitrary script or invoke path is introduced. The observer enters it in the real Panel token wall, observes the Panel's real native save ACK and Gateway-derived Alice identity, then reloads the real document and requires a stored-credential load and protected connect without a new ticket. Tickets/tokens never enter receipts, logs or sessionStorage; only document IDs and booleans survive reload. / 票据只在内存闭包中；实际 UI 配对、实际 OS 保存、实际重载认证。
+
+Only after those observations may the fixture call the existing fixed load/delete/load bridge for isolated-store cleanup. That explicit QA cleanup is not claimed as a Panel deletion UI. Cleanup, helper confirmation, actual listener shutdown, process exits and unchanged served assets all gate acceptance; timeout or missing observations fail closed. Native HOME remains the real login HOME, while service namespace/data_dir/ALEPH_HOME and helper root are isolated. No production account, credential namespace or service may change. / 清理是单列的 QA 动作，失败不得冒称删除成功。
+
+**SPEC author pass before code:** fixed scope/secret lifetime, real user identity and independent post-reload proof. **QUALITY author pass after SPEC:** inspect canonical helper admission and result/cleanup negative directions, then require actual native effects. No independent review or platform/default/dual-track acceptance is implied. / 仍非三平台、默认切换或双轨验收。

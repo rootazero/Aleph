@@ -2,6 +2,10 @@
 function installAlephPanelQa(settings, deliver) {
   "use strict";
   if (window.top !== window || location.protocol !== "http:" || location.hostname !== "127.0.0.1") return;
+  if (settings.message.startsWith("phase11-pairing:")) {
+    installAlephPanelPairingQa(settings, deliver);
+    return;
+  }
   const labels = JSON.parse(settings.status_labels);
   const NativeSocket = window.WebSocket;
   const pending = new Set();

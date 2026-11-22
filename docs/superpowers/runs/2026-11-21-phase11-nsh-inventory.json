@@ -1,6 +1,6 @@
 {
   "artifact": "phase11-nsh-inventory",
-  "version": "2026-11-22.10",
+  "version": "2026-11-22.11",
   "status": "FOUNDATION_IMPLEMENTED / P11-A-H_NOT_ACCEPTED",
   "authority": [
     "docs/superpowers/plans/2026-11-21-phase11-nsh-cutover.md",
@@ -579,12 +579,13 @@
       "fixed credential transport + canonical-store adapter",
       "targeted Rust/JS regressions",
       "production Panel WASM empty-store/native status rendering and natural host return against a real owned Gateway",
+    "real Panel protected pairing/save/reload and isolated deletion against the canonical protected-auth helper; independently confirmed user binding and helper shutdown",
       "real macOS isolated OS-store roundtrip",
       "real macOS WebView typed IPC, two-document lease revocation, no-effect controls, store deletion/absence and natural return"
     ],
     "open": [
       "P11-A complete per-caller review",
-      "protected-user pairing/persistence and production TLS/remote native E2E",
+      "protected pairing/reload against the full production server and production TLS/remote native E2E; canonical protected-auth helper pairing/reload is now proven separately",
       "production full/lite/remote target and daemon supervision migration",
       "three-platform OS integration",
       "autostart/updater/packaging",
@@ -722,7 +723,16 @@
     "lifecycle_fix": "credential and status workers complete OS I/O, release admission, then publish the value; UI cancellation never releases an in-progress OS operation; not an OS-thread join",
     "fixture_fix": "preserve native HOME after controlled real-store failure; isolate credential service, native data_dir and ALEPH_HOME instead; Gateway keeps its private HOME",
     "assets": "canonical normal just wasm rebuilt and committed; previous nine dist files and both failed native runs retained locally; actual HTTP identities stable during final run",
-    "not_proven": ["protected-user pairing", "TLS/remote", "all-helper census", "performance", "three-platform parity", "service/default/rollback", "14-day dual operation", "Tauri removal"]
+    "not_proven": ["protected-user pairing against the full production server (canonical helper proof is recorded separately)", "TLS/remote", "all-helper census", "performance", "three-platform parity", "service/default/rollback", "14-day dual operation", "Tauri removal"]
+  },
+  "protected_panel_native_slice": {
+    "status": "PASS_SCOPED_PROTECTED_PANEL / NOT_PHASE11_ACCEPTANCE",
+    "receipt": "docs/superpowers/runs/2026-11-22-phase11-protected-panel-receipt.json",
+    "guide": "qa/phase11_nsh_pairing.md",
+    "authority": "existing aleph-panel-native-qa-gateway with canonical SecurityStore/DeviceTokenManager/handle_connect in an admitted owned root; not the full production server",
+    "effects": "real Panel ticket submission; Gateway-derived Alice identity; native save ACK; distinct-document reload with stored credential and no new ticket; native cleanup delete and final absence; independent helper pairing confirmation and listener/fixture shutdown",
+    "limits": "no production account/store/service mutation, TLS/remote, cross-platform parity, performance/default/rollback/dual-track/removal claim",
+    "failures_retained": "old binary RED; malformed cleanup load args and helper snake_case wire assumptions corrected in QA only; two orphaned QA items removed with exact nonce+account metadata-only OS cleanup and independently verified absent; not retroactive native cleanup proof"
   },
   "operations": {
     "foundation_commit": "9e48df355236585c4fa7d94e5098c12e445d9dab",
