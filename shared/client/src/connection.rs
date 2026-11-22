@@ -28,24 +28,74 @@ use requests::RequestState;
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 type WsReader = futures_util::stream::SplitStream<WsStream>;
 
+#[cfg(unix)]
+use crate::local_ipc;
+
+enum SocketReader {
+    WebSocket(WsReader),
+    #[cfg(unix)]
+    Local(tokio::net::unix::OwnedReadHalf),
+}
+
+enum SocketWriter {
+    WebSocket(futures_util::stream::SplitSink<WsStream, Message>),
+    #[cfg(unix)]
+    Local(tokio::net::unix::OwnedWriteHalf),
+}
+
+impl SocketWriter {
+    async fn send(&mut self, json: String, socket: &Socket) -> CliResult<()> {
+        #[cfg(not(unix))]
+        let _ = socket;
+        match self {
+            Self::WebSocket(write) => Ok(write.send(Message::Text(json.into())).await?),
+            #[cfg(unix)]
+            Self::Local(write) => {
+                // Dropping a partially written frame must retire the stream.
+                let mut stop_on_drop = StopSocketOnDrop(Some(socket));
+                tokio::time::timeout(
+                    local_ipc::HELLO_TIMEOUT,
+                    local_ipc::write_frame(write, &json),
+                )
+                .await
+                .map_err(|_| CliError::Timeout("IPC frame write timed out".into()))??;
+                stop_on_drop.0 = None;
+                Ok(())
+            }
+        }
+    }
+
+    async fn close(self) -> CliResult<()> {
+        match self {
+            Self::WebSocket(mut write) => Ok(write.send(Message::Close(None)).await?),
+            #[cfg(unix)]
+            Self::Local(_) => Ok(()),
+        }
+    }
+}
+
 /// The writer and request table are never repointed to a different socket.
 struct Socket {
-    write: Mutex<Option<futures_util::stream::SplitSink<WsStream, Message>>>,
+    write: Mutex<Option<SocketWriter>>,
     requests: Arc<RequestState>,
     stop_io: watch::Sender<bool>,
 }
 
 impl Socket {
-    fn split(stream: WsStream) -> (Arc<Self>, WsReader) {
+    fn split(stream: WsStream) -> (Arc<Self>, SocketReader) {
         let (write, read) = stream.split();
         (
-            Arc::new(Self {
-                write: Mutex::new(Some(write)),
-                requests: Arc::new(RequestState::new()),
-                stop_io: watch::channel(false).0,
-            }),
-            read,
+            Self::new(SocketWriter::WebSocket(write)),
+            SocketReader::WebSocket(read),
         )
+    }
+
+    fn new(write: SocketWriter) -> Arc<Self> {
+        Arc::new(Self {
+            write: Mutex::new(Some(write)),
+            requests: Arc::new(RequestState::new()),
+            stop_io: watch::channel(false).0,
+        })
     }
 
     fn stop(&self) {
@@ -69,12 +119,12 @@ impl Socket {
         let sent = tokio::select! {
             biased;
             () = self.stopped() => return Err(CliError::Disconnected("Connection closed by peer".into())),
-            result = writer.send(Message::Text(json.into())) => result,
+            result = writer.send(json, self) => result,
         };
         if let Err(error) = sent {
             self.stop();
             write.take();
-            return Err(error.into());
+            return Err(error);
         }
         Ok(())
     }
@@ -85,8 +135,8 @@ impl Socket {
         let _stop_on_drop = StopSocketOnDrop(Some(self));
         self.requests.close();
         let writer = self.write.lock().await.take();
-        if let Some(mut writer) = writer {
-            writer.send(Message::Close(None)).await?;
+        if let Some(writer) = writer {
+            writer.close().await?;
         }
         Ok(())
     }
@@ -231,6 +281,10 @@ fn classify_frame(text: &str) -> Inbound {
     let Ok(value) = serde_json::from_str::<Value>(text) else {
         return Inbound::Unrecognized;
     };
+    classify_value(value)
+}
+
+fn classify_value(value: Value) -> Inbound {
     // A JSON-RPC notification carries no id, and a response to a request this
     // client never sent is indistinguishable from one it did — so `null` is
     // "absent", not "an id whose value is null".
@@ -346,12 +400,8 @@ pub struct AlephClient {
     /// unclaimed plane should cost dropped frames (buffer fills, `try_send`
     /// fails), not a closed-channel error path in the read loop.
     topic_events: std::sync::Mutex<Option<mpsc::Receiver<TopicEvent>>>,
-    /// The gateway URL this client was opened against.
-    ///
-    /// Kept so `reconnect` needs nothing from the caller but credentials: a
-    /// caller that had to re-supply the URL is a caller that could supply a
-    /// different one, and this client's identity is the endpoint it opened.
-    url: String,
+    /// Original WebSocket endpoint, never set for a local IPC client.
+    url: Option<String>,
     /// Server-assigned role from the most recent `connect` handshake.
     ///
     /// Behind a lock because there can be more than one handshake — see
@@ -411,6 +461,66 @@ impl AlephClient {
         *client.credential.lock().unwrap_or_else(|e| e.into_inner()) = Some(credential);
         let socket = client.socket();
         client.finish_handshake(&socket, config).await?;
+        Ok((client, events))
+    }
+
+    /// Open an OS-authenticated Unix IPC connection. No network fallback or
+    /// device credential is used. A retired IPC connection must be reopened explicitly.
+    pub async fn connect_local(
+        endpoint: &std::path::Path,
+        hello: &aleph_protocol::system_hello::HelloParams,
+    ) -> CliResult<(Self, mpsc::Receiver<StreamEvent>)> {
+        #[cfg(unix)]
+        {
+            tokio::time::timeout(local_ipc::HELLO_TIMEOUT, Self::open_local(endpoint, hello))
+                .await
+                .map_err(|_| CliError::Timeout("IPC handshake timed out".into()))?
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (endpoint, hello);
+            Err(CliError::Connection(
+                "Desktop IPC is unavailable on this platform".into(),
+            ))
+        }
+    }
+
+    #[cfg(unix)]
+    async fn open_local(
+        endpoint: &std::path::Path,
+        hello: &aleph_protocol::system_hello::HelloParams,
+    ) -> CliResult<(Self, mpsc::Receiver<StreamEvent>)> {
+        use aleph_protocol::system_hello::HelloResult;
+
+        let (read, write) = local_ipc::unix::connect(endpoint).await?.into_split();
+        let socket = Socket::new(SocketWriter::Local(write));
+        let (client, events) = Self::with_socket(None, socket.clone(), SocketReader::Local(read));
+        let result: HelloResult = client
+            .request(
+                &socket,
+                "system.hello",
+                Some(hello),
+                local_ipc::HELLO_TIMEOUT,
+                true,
+            )
+            .await?;
+        if result.protocol.major != hello.protocol.major
+            || result.protocol.minor > hello.protocol.minor
+            || result.connection_id.is_empty()
+            || !result.features.is_empty()
+            || result.limits.max_message_bytes != u64::from(local_ipc::MAX_FRAME_BYTES)
+            || !(1..=local_ipc::MAX_INFLIGHT).contains(&result.limits.max_inflight_requests)
+        {
+            return Err(CliError::Connection(
+                "Invalid Desktop IPC hello result".into(),
+            ));
+        }
+        if !socket
+            .requests
+            .mark_ready_with_limit(result.limits.max_inflight_requests as usize)
+        {
+            return Err(CliError::Disconnected("IPC closed during handshake".into()));
+        }
         Ok((client, events))
     }
 
@@ -487,6 +597,9 @@ impl AlephClient {
         // and install a fresh read loop. Holding the lock through the whole
         // sequence keeps `is_connected()` and the socket swap atomic with
         // respect to other reconnect callers.
+        let url = self.url.as_deref().ok_or_else(|| {
+            CliError::Connection("Reopen a Desktop IPC connection explicitly".into())
+        })?;
         let _guard = self.reconnect_lock.lock().await;
         if self.is_connected() {
             return Ok(());
@@ -497,17 +610,17 @@ impl AlephClient {
         // than half-swapped, and a black-holed TCP connect that never returns
         // would strand the caller's one attempt forever — it is waiting on this
         // future to decide whether to try again.
-        let connector = tls::connector_for(&self.url, config.ca_cert.as_deref())?;
+        let connector = tls::connector_for(url, config.ca_cert.as_deref())?;
         let (ws_stream, _) = tokio::time::timeout(
             RECONNECT_TIMEOUT,
-            connect_async_tls_with_config(self.url.as_str(), None, false, connector),
+            connect_async_tls_with_config(url, None, false, connector),
         )
         .await
         .map_err(|_| {
             CliError::Connection(format!(
                 "timed out after {}s reconnecting to {}",
                 RECONNECT_TIMEOUT.as_secs(),
-                self.url
+                url
             ))
         })?
         .map_err(|e| CliError::Connection(e.to_string()))?;
@@ -524,7 +637,7 @@ impl AlephClient {
             let _ = socket.close().await;
             return Err(error);
         }
-        info!("Reconnected to {}", self.url);
+        info!("Reconnected to {}", url);
         Ok(())
     }
 
@@ -538,6 +651,14 @@ impl AlephClient {
             .map_err(|e| CliError::Connection(e.to_string()))?;
 
         let (socket, read) = Socket::split(ws_stream);
+        Ok(Self::with_socket(Some(url.to_string()), socket, read))
+    }
+
+    fn with_socket(
+        url: Option<String>,
+        socket: Arc<Socket>,
+        read: SocketReader,
+    ) -> (Self, mpsc::Receiver<StreamEvent>) {
         let (event_tx, event_rx) = mpsc::channel(100);
         let (topic_tx, topic_rx) = mpsc::channel(TOPIC_EVENT_BUFFER);
         let client = Self {
@@ -554,21 +675,21 @@ impl AlephClient {
             }),
             id_counter: std::sync::atomic::AtomicU64::new(1),
             topic_events: std::sync::Mutex::new(Some(topic_rx)),
-            url: url.to_string(),
+            url,
             role: Arc::new(std::sync::Mutex::new(String::new())),
             credential: Arc::new(std::sync::Mutex::new(None)),
             identity: Arc::new(std::sync::Mutex::new(None)),
             reconnect_lock: Mutex::new(()),
         };
         client.spawn_reader(read, socket);
-        Ok((client, event_rx))
+        (client, event_rx)
     }
 
     fn socket(&self) -> Arc<Socket> {
         self.delivery.current().socket.clone()
     }
 
-    fn spawn_reader(&self, read: WsReader, socket: Arc<Socket>) {
+    fn spawn_reader(&self, read: SocketReader, socket: Arc<Socket>) {
         let delivery = Arc::downgrade(&self.delivery);
         tokio::spawn(async move {
             tokio::select! {
@@ -583,7 +704,30 @@ impl AlephClient {
         });
     }
 
-    async fn read_loop(mut read: WsReader, socket: &Arc<Socket>, delivery: &Weak<EventDelivery>) {
+    async fn read_loop(read: SocketReader, socket: &Arc<Socket>, delivery: &Weak<EventDelivery>) {
+        let mut read = match read {
+            SocketReader::WebSocket(read) => read,
+            #[cfg(unix)]
+            SocketReader::Local(mut read) => {
+                while let Ok(Some(text)) = local_ipc::read_frame(&mut read).await {
+                    let Ok(value) = local_ipc::parse_payload(&text) else {
+                        break;
+                    };
+                    // S1-B admits only responses, not notifications or reverse RPCs.
+                    if value.get("jsonrpc").and_then(Value::as_str) != Some("2.0")
+                        || value.get("method").is_some()
+                        || value.get("result").is_some() == value.get("error").is_some()
+                    {
+                        break;
+                    }
+                    let Inbound::Response { id, result } = classify_value(value) else {
+                        break;
+                    };
+                    socket.requests.resolve(&id, result);
+                }
+                return;
+            }
+        };
         while let Some(msg) = read.next().await {
             match msg {
                 Ok(Message::Text(text)) => {

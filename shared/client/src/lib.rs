@@ -10,6 +10,7 @@ mod credential;
 mod credential_store;
 mod error;
 mod gateway_client;
+pub mod local_ipc;
 mod session_resolve;
 mod tls;
 

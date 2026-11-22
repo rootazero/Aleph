@@ -23,6 +23,7 @@ enum Phase {
 
 struct Requests {
     phase: Phase,
+    limit: usize,
     // The reservation survives resolution until PendingCall drops. This also
     // prevents a late drop from deleting a different reservation for the ID.
     pending: HashMap<String, Option<oneshot::Sender<Reply>>>,
@@ -34,6 +35,7 @@ impl RequestState {
     pub(super) fn new() -> Self {
         Self(Mutex::new(Requests {
             phase: Phase::Handshaking,
+            limit: 1,
             pending: HashMap::new(),
         }))
     }
@@ -58,6 +60,9 @@ impl RequestState {
                 "Connection not ready for request".into(),
             ));
         }
+        if requests.pending.len() >= requests.limit {
+            return Err(CliError::Other("In-flight request limit reached".into()));
+        }
         let Entry::Vacant(entry) = requests.pending.entry(id.clone()) else {
             return Err(CliError::Other("Duplicate in-flight request ID".into()));
         };
@@ -78,11 +83,16 @@ impl RequestState {
     }
 
     pub(super) fn mark_ready(&self) -> bool {
+        self.mark_ready_with_limit(usize::MAX)
+    }
+
+    pub(super) fn mark_ready_with_limit(&self, limit: usize) -> bool {
         let mut requests = self.lock();
         if requests.phase != Phase::Handshaking {
             return false;
         }
         requests.phase = Phase::Ready;
+        requests.limit = limit;
         true
     }
 
