@@ -33,6 +33,7 @@ pub mod dreaming;
 pub mod events;
 pub mod extension_usage;
 pub mod file_change;
+pub mod framing;
 pub mod gateway_probe;
 pub mod hook;
 mod ids;
