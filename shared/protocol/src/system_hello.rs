@@ -103,9 +103,66 @@ pub struct HelloResult {
     pub limits: HelloLimits,
 }
 
+/// Select the latest version both peers support within the same major.
+pub fn negotiate_version(
+    client: &ProtocolVersion,
+    server: &ProtocolVersion,
+) -> Option<ProtocolVersion> {
+    (client.major == server.major).then(|| ProtocolVersion {
+        major: server.major,
+        minor: client.minor.min(server.minor),
+    })
+}
+
+/// Select distinct implemented features in the client's preference order.
+pub fn negotiate_features(requested: &[Feature], implemented: &[Feature]) -> Vec<Feature> {
+    let mut negotiated = Vec::new();
+    for feature in requested {
+        if feature.is_known() && implemented.contains(feature) && !negotiated.contains(feature) {
+            negotiated.push(feature.clone());
+        }
+    }
+    negotiated
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn version_uses_lower_minor_and_rejects_major_mismatch() {
+        let v1_0 = ProtocolVersion { major: 1, minor: 0 };
+        let v1_3 = ProtocolVersion { major: 1, minor: 3 };
+        let v1_max = ProtocolVersion {
+            major: 1,
+            minor: u32::MAX,
+        };
+        let v2_0 = ProtocolVersion { major: 2, minor: 0 };
+        assert_eq!(negotiate_version(&v1_0, &v1_3), Some(v1_0.clone()));
+        assert_eq!(negotiate_version(&v1_max, &v1_0), Some(v1_0.clone()));
+        assert_eq!(negotiate_version(&v2_0, &v1_0), None);
+    }
+
+    #[test]
+    fn features_are_an_ordered_unique_intersection() {
+        let requested = [
+            Feature::Unknown("future".to_string()),
+            Feature::BinaryChannel,
+            Feature::Snapshot,
+            Feature::BinaryChannel,
+            Feature::EventReplay,
+        ];
+        let implemented = [
+            Feature::Snapshot,
+            Feature::BinaryChannel,
+            Feature::Unknown("future".to_string()),
+        ];
+        assert_eq!(
+            negotiate_features(&requested, &implemented),
+            [Feature::BinaryChannel, Feature::Snapshot]
+        );
+        assert!(negotiate_features(&requested, &[]).is_empty());
+    }
 
     #[test]
     fn hello_params_round_trip() {
@@ -117,13 +174,21 @@ mod tests {
                 platform: "macos".to_string(),
                 ui_runtime: "nsh".to_string(),
             },
-            features: vec![Feature::EventReplay, Feature::Snapshot],
+            features: vec![
+                Feature::EventReplay,
+                Feature::Snapshot,
+                Feature::Unknown("future".to_string()),
+            ],
         };
         let json = serde_json::to_value(&params).unwrap();
+        assert_eq!(
+            json["features"],
+            serde_json::json!(["event_replay", "snapshot", "future"])
+        );
         let back: HelloParams = serde_json::from_value(json).unwrap();
         assert_eq!(back.protocol.major, 1);
         assert_eq!(back.client.name, "aleph-nsh-desktop");
-        assert_eq!(back.features.len(), 2);
+        assert_eq!(back.features, params.features);
     }
 
     #[test]
@@ -136,7 +201,10 @@ mod tests {
             },
             connection_id: "conn-001".to_string(),
             features: vec![Feature::EventReplay],
-            limits: HelloLimits { max_message_bytes: 8_388_608, max_inflight_requests: 128 },
+            limits: HelloLimits {
+                max_message_bytes: 8_388_608,
+                max_inflight_requests: 128,
+            },
         };
         let json = serde_json::to_value(&result).unwrap();
         let back: HelloResult = serde_json::from_value(json).unwrap();

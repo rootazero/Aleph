@@ -1,11 +1,13 @@
 //! system.hello Protocol Handshake Handler
 //!
-//! Negotiates the protocol version with the NSH desktop client and returns
-//! a connection id plus the intersection of supported features. This is a
-//! protocol-layer addition only: no auth, no gate, no business logic. It
-//! coexists with the existing `connect` WebSocket device-auth handshake.
+//! Legacy protocol probe after the WebSocket `connect` handshake.
+//!
+//! This handler neither admits a connection nor sets its identity.
 
-use aleph_protocol::system_hello::{HelloParams, HelloResult};
+use aleph_protocol::system_hello::{
+    negotiate_features, negotiate_version, HelloLimits, HelloParams, HelloResult, ProtocolVersion,
+    ServerHello,
+};
 use uuid::Uuid;
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS};
@@ -14,8 +16,8 @@ use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS};
 ///
 /// Parses `request.params` as `HelloParams`. Returns `INVALID_PARAMS` when the
 /// client's protocol major version does not match the server's (currently 1).
-/// On success, echoes the negotiated protocol, returns the server identity,
-/// a fresh connection id, and the intersection of requested and known features.
+/// On success, returns a compatible version and the intersection of
+/// requested and implemented features.
 pub async fn handle(request: JsonRpcRequest) -> JsonRpcResponse {
     let params: HelloParams = match request.params.clone() {
         Some(p) => match serde_json::from_value(p) {
@@ -33,33 +35,26 @@ pub async fn handle(request: JsonRpcRequest) -> JsonRpcResponse {
         }
     };
 
-    if params.protocol.major != 1 {
+    let Some(protocol) =
+        negotiate_version(&params.protocol, &ProtocolVersion { major: 1, minor: 0 })
+    else {
         return JsonRpcResponse::error(
             request.id,
             INVALID_PARAMS,
             "incompatible protocol major version",
         );
-    }
-
-    // Narrow requested features to the known set. Unknown strings from
-    // future clients are dropped, not rejected, so older servers stay
-    // forward-compatible.
-    let features: Vec<aleph_protocol::system_hello::Feature> = params
-        .features
-        .iter()
-        .filter(|f| f.is_known())
-        .cloned()
-        .collect();
+    };
 
     let result = HelloResult {
-        protocol: params.protocol,
-        server: aleph_protocol::system_hello::ServerHello {
+        protocol,
+        server: ServerHello {
             name: "aleph-server".to_string(),
             version: env!("ALEPH_VERSION").to_string(),
         },
         connection_id: format!("conn-{}", Uuid::new_v4()),
-        features,
-        limits: aleph_protocol::system_hello::HelloLimits {
+        features: negotiate_features(&params.features, &[]),
+        // Retained for legacy wire compatibility, not enforced transport limits.
+        limits: HelloLimits {
             max_message_bytes: 8_388_608,
             max_inflight_requests: 128,
         },
@@ -89,19 +84,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn happy_path_returns_server_version_and_echoed_protocol() {
+    async fn hello_reports_implemented_features_and_negotiated_minor() {
         let params = json!({
-            "protocol": {"major": 1, "minor": 0},
+            "protocol": {"major": 1, "minor": u32::MAX},
             "client": {"name": "aleph-nsh-desktop", "version": "0.1.0", "platform": "macos", "ui_runtime": "nsh"},
-            "features": ["event_replay", "snapshot"]
+            "features": ["event_replay", "snapshot", "binary_channel", "future"]
         });
         let resp = handle(req(params)).await;
+        assert_eq!(resp.id, Some(json!(1)));
         assert!(resp.error.is_none());
         let result = resp.result.unwrap();
-        assert_eq!(result["protocol"]["major"], 1);
+        assert_eq!(
+            (&result["protocol"], &result["features"]),
+            (&json!({"major": 1, "minor": 0}), &json!([]))
+        );
         assert_eq!(result["server"]["name"], "aleph-server");
-        assert!(result["connection_id"].as_str().unwrap().starts_with("conn-"));
-        assert!(result["features"].as_array().unwrap().contains(&json!("event_replay")));
+        assert!(!result["connection_id"].as_str().unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -112,22 +110,26 @@ mod tests {
             "features": []
         });
         let resp = handle(req(params)).await;
+        assert_eq!(resp.id, Some(json!(1)));
         assert!(resp.result.is_none());
-        assert!(resp.error.is_some());
+        assert_eq!(resp.error.unwrap().code, -32602);
     }
 
     #[tokio::test]
-    async fn unknown_feature_is_narrowed_not_rejected() {
-        let params = json!({
-            "protocol": {"major": 1, "minor": 0},
-            "client": {"name": "aleph-nsh-desktop", "version": "0.1.0", "platform": "macos", "ui_runtime": "nsh"},
-            "features": ["event_replay", "nonexistent_feature"]
-        });
-        let resp = handle(req(params)).await;
-        assert!(resp.error.is_none());
-        let result = resp.result.unwrap();
-        let features = result["features"].as_array().unwrap();
-        assert!(features.contains(&json!("event_replay")));
-        assert!(!features.contains(&json!("nonexistent_feature")));
+    async fn invalid_hello_params_keep_request_id() {
+        for params in [
+            None,
+            Some(json!({"protocol": {"major": 1, "minor": 0}, "features": []})),
+            Some(json!({
+                "protocol": {"major": 1, "minor": "0"},
+                "client": {"name": "test", "version": "0.1.0", "platform": "macos", "ui_runtime": "nsh"},
+                "features": []
+            })),
+        ] {
+            let resp = handle(JsonRpcRequest::with_id("system.hello", params, json!(1))).await;
+            assert_eq!(resp.id, Some(json!(1)));
+            assert!(resp.result.is_none());
+            assert_eq!(resp.error.unwrap().code, -32602);
+        }
     }
 }
