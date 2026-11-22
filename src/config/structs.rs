@@ -527,6 +527,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn session_store_default_does_not_depend_on_general_table() {
+        assert_eq!(Config::default().general.session_store_backend, "file");
+        for source in ["", "[general]\n"] {
+            let cfg: Config = toml::from_str(source).unwrap();
+            assert_eq!(cfg.general.session_store_backend, "file", "{source:?}");
+        }
+    }
+
+    #[test]
+    fn explicit_session_store_backend_is_retained() {
+        for backend in ["sqlite", ""] {
+            let cfg: Config =
+                toml::from_str(&format!("[general]\nsession_store_backend = {backend:?}")).unwrap();
+            assert_eq!(cfg.general.session_store_backend, backend);
+        }
+    }
+
+    #[test]
     fn legacy_crawl4ai_migrates_into_fetch_section() {
         let mut cfg = Config::default();
         cfg.policies.web_fetch.crawl4ai.enabled = true;

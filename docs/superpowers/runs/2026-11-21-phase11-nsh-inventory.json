@@ -1,6 +1,6 @@
 {
   "artifact": "phase11-nsh-inventory",
-  "version": "2026-11-22.14",
+  "version": "2026-11-22.15",
   "status": "FOUNDATION_IMPLEMENTED / P11-A-H_NOT_ACCEPTED",
   "authority": [
     "docs/superpowers/plans/2026-11-21-phase11-nsh-cutover.md",
@@ -688,6 +688,11 @@
     "receipt": "docs/superpowers/runs/2026-11-22-phase11-macos-owned-cold-receipt.json",
     "effects": "Actual signed sibling built from production server code starts from a private empty state on non-default loopback with outbound networking denied and session backend explicitly configured; shared strict admission passes; original child owns the listener, exits 0 after TERM without forced cleanup, port refuses connections and root is removed",
     "limits": "No NSH GUI/production detached-launch path, unrestricted fresh-home boot, default-config fix, installed service, Windows/Linux or Phase11 acceptance"
+  },
+  "session_backend_default_fix": {
+    "receipt": "docs/superpowers/runs/2026-11-22-phase11-default-backend-receipt.json",
+    "effect": "Missing or empty general table now resolves the same file backend as the field default. A newly built and signed production sibling passed the private foreground cold test without that table.",
+    "limits": "No persisted configuration migrated; no unrestricted network boot, NSH detached-launch or three-platform parity evidence. The preceding explicit-backend receipt remains historical."
   },
   "active_reference_audit": {
     "census": "docs/superpowers/runs/2026-11-22-phase11-active-references.json",

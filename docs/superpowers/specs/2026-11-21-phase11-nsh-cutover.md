@@ -1,7 +1,7 @@
 # Phase11 NSH Cutover Contract / Phase11 NSH 切换契约
 
 **Status / 状态:** implemented foundation slices, NOT P11-A–H acceptance / 基础切片已实施，不是全期验收
-**Version / 版本:** `2026-11-22.14`
+**Version / 版本:** `2026-11-22.15`
 **Scope / 范围:** official platform entry selection, fixed credential transport and immutable launch targets / 官方平台入口选择、固定凭据传输与不可变启动目标
 
 ## 1. Authority and non-goals / 权威与不做事项
@@ -291,4 +291,8 @@ The existing local bundle assembler keeps its two-argument host-only invocation.
 
 The shared admission test starts the actual signed sibling from section 18 in a fresh private root on a non-default loopback port. Only the test process supplies the launcher; the server runs in the foreground with outbound connections denied using the local macOS sandbox, exercising the embedded-content fallback. `lsof` verifies that the original child owns the admitted listener; the test sends TERM only to that unreaped child and requires successful exit without forced cleanup, connection refusal, and root removal. / 真实服务、真实监听归属与回收；不经过 NSH 的生产后台启动器，也不注册服务。
 
-The unrestricted empty-root probe did not acquire readiness within the existing 40-second bound while startup was trying external content clones. An outbound-denied diagnostic exposed a separate missing `[general]` default (`Unknown session store backend ''; expected 'file' or 'sqlite'.`). The accepted fixture explicitly declares `file`; that declaration is not a production fix. Neither the admission timeout nor policy changed. See the [isolated cold-start receipt](../runs/2026-11-22-phase11-macos-owned-cold-receipt.json). / 保留失败证据，不放宽门槛；联网首次启动及默认配置仍需另证。
+The unrestricted empty-root probe did not acquire readiness within the existing 40-second bound while startup was trying external content clones. An outbound-denied diagnostic exposed a separate missing `[general]` default (`Unknown session store backend ''; expected 'file' or 'sqlite'.`). The accepted fixture explicitly declares `file`; that declaration is not a production fix. Neither the admission timeout nor policy changed. See the [isolated cold-start receipt](../runs/2026-11-22-phase11-macos-owned-cold-receipt.json). / 保留失败证据，不放宽门槛；该历史回执未修复默认配置。
+
+## 20. Session backend default / 会话后端默认值
+
+`GeneralConfig::default()` and Serde's field default now use the same `file` value. Omitted `[general]`, an empty `[general]`, and programmatic defaults agree; explicit `sqlite` and empty strings remain explicit values rather than being silently rewritten. No persisted configuration is migrated. The [default-backend receipt](../runs/2026-11-22-phase11-default-backend-receipt.json) verifies a newly built and locally signed server with the same isolated foreground harness, now with the whole `[general]` table omitted. Network-denied fallback only; it is not evidence of unrestricted cold startup or the production detached host path. / 统一默认值，不改用户配置；重新签名的真实服务在省略该节后通过隔离启动与回收，联网和后台路径仍未验证。

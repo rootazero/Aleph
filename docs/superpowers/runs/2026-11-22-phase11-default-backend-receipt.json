@@ -1,0 +1,39 @@
+{
+  "version": "2026-11-22.15",
+  "status": "PASS_CONFIG_DEFAULT_AND_SCOPED_MACOS_FOREGROUND_COLD_ADMISSION",
+  "baseline": "82e170acd38129216aa3b0ba98b5a9e70292eb2b",
+  "source_sha256": {
+    "src/config/types/general.rs": "561ff309afe02c820cac8b11c67f6e11fa317bb92ec80b440506efe0a363a0e5",
+    "src/config/structs.rs": "119705c44d1b369ce777baf71b8a2c10f09e10aaa82881fadc919025f1300b32",
+    "desktop/host/src/local_server/admission.rs": "5a4c3f9e17cfde475db1b6cdf2cc9a352db851e705832229635c487e90ea419b",
+    "docs/superpowers/specs/2026-11-21-phase11-nsh-cutover.md": "4c9f1f550084a246b550bb4b387c7534629adcfa278e619d083d40903f05fa45",
+    "docs/superpowers/runs/2026-11-21-phase11-nsh-inventory.json": "9d5e6e2d799c7abcfe52b7584ef660515ffe79e8af792ff0b79e6885bf65796c"
+  },
+  "raw_sha256": {
+    ".phase10-evidence/phase11-macos-owned-cold.yQD2j5/config-red.log": "344097601d3eff5061128a1e80e20b6d5d6e6f693629eed0bf835869ace5729e",
+    ".phase10-evidence/phase11-macos-owned-cold.yQD2j5/config-suite.log": "cd39ecee52327de40070f92b296a8dc155b49cea4b6cc9bec64d0ae8d120f869",
+    ".phase10-evidence/phase11-default-backend.UIjZ3i/server-build.log": "f986c98323c9af0314baa2e1680a4e5f2b6b33fe21c22f773b877756c52c1a20",
+    ".phase10-evidence/phase11-default-backend.UIjZ3i/bundle.log": "14f8c8078e149d9d973a3489d7b2ffebed7a37285a4bdf604cc261ed4310abb4",
+    ".phase10-evidence/phase11-default-backend.UIjZ3i/gateway.log": "735beeb8297039fbecd04ee3acf225e2c5d4bc2146a022bb2391e725bf89511f",
+    ".phase10-evidence/phase11-default-backend.UIjZ3i/cold.log": "2b57d5873249c808e171817379de72d996a04f26b30c9552e4211176ab93434d"
+  },
+  "binary_sha256": {
+    ".phase10-evidence/phase11-default-backend.UIjZ3i/Aleph-NSH-Full.app/Contents/MacOS/aleph-server": "c0637eca821bf279b62167246a1d1f4989172aa9f263934d5795ce2b53a431bf"
+  },
+  "historical_sha256": {
+    ".phase10-evidence/g7-official-matrix.Ji0duOcq/matrix.json": "fbf5f1272be769ae554ba53df065ef171badb6bbe942bb90e254168664e5f7c2"
+  },
+  "verification": {
+    "red": "derived default returned empty string rather than file",
+    "config_suite": "1061 passed, 0 failed",
+    "live": "rebuilt production server, signed local bundle, one foreground cold-admission test passed without a general section; original child owns listener and exits successfully after TERM, port refused and root removed",
+    "cargo": "every invocation followed 4 GiB gate, --offline --locked --jobs 1; native test followed builds"
+  },
+  "not_proven": [
+    "unrestricted network first boot",
+    "NSH production detached launch or GUI end-to-end",
+    "installed service controls",
+    "Windows/Linux native parity",
+    "default switch, 14-day dual run, Tauri retirement"
+  ]
+}

@@ -241,8 +241,7 @@ mod tests {
         std::fs::write(
             &config,
             format!(
-                "[general]\nsession_store_backend = \"file\"\n\
-                 [gateway]\nhost = \"127.0.0.1\"\nport = {port}\n\
+                "[gateway]\nhost = \"127.0.0.1\"\nport = {port}\n\
                  [agents]\n[[agents.list]]\nid = \"main\"\ndefault = true\nname = \"Cold-start QA\"\n\
                  [memory]\nenabled = false\n[memory.dreaming]\nenabled = false\n\
                  [cron]\nenabled = false\n[heartbeat]\nenabled = false\n\
