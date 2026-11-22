@@ -121,7 +121,13 @@ pub async fn run_node_approval(
     // ahead of registration (mirrors operator_requester).
     let (approval_id, rx, timeout) = manager.register_pending(record);
 
-    if let Err(e) = event_bus.publish_frame(&GatewayEventFrame::ApprovalRequested {
+    // `publish_frame` reports how many subscribers received the frame:
+    // `Ok(0)` means the operator surface was not listening (or every
+    // subscriber lagged behind the broadcast ring), so the card never
+    // appears and nobody will ever answer. Mirrors operator_requester
+    // (APPROVAL-R4-01): an undeliverable request is fatal for THIS
+    // approval instead of parking the node for the full timeout.
+    match event_bus.publish_frame(&GatewayEventFrame::ApprovalRequested {
         approval_id: approval_id.clone(),
         session_key: String::new(),
         channel_id: String::new(),
@@ -130,24 +136,24 @@ pub async fn run_node_approval(
         // reverse RPC, outside any tool dispatch.
         tool_call_id: None,
     }) {
-        // Mirrors operator_requester::request_approval (APPROVAL-R3-003):
-        // publish failure is fatal — the center operator was never notified,
-        // so a "waiting" card never appeared on their surface. Deny the
-        // approval and remove the pending entry so the node's await does
-        // NOT spin for the full DEFAULT_APPROVAL_TIMEOUT_MS against a
-        // notification nobody will ever act on.
-        tracing::warn!(error = %e, "failed to publish ApprovalRequested for node approval");
-        manager.resolve(
-            &approval_id,
-            ApprovalDecisionType::Deny,
-            Some("unavailable".to_string()),
-        );
-        return (
-            "unavailable",
-            Some(
-                "approval notification could not be delivered to the operator surface".to_string(),
-            ),
-        );
+        Ok(0) => {
+            tracing::warn!(
+                id = %approval_id,
+                "ApprovalRequested had no subscribers (Ok(0)); denying so the node is not stranded"
+            );
+            return deny_unavailable(manager, &approval_id);
+        }
+        Ok(_) => {}
+        Err(e) => {
+            // Mirrors operator_requester::request_approval (APPROVAL-R3-003):
+            // publish failure is fatal — the center operator was never notified,
+            // so a "waiting" card never appeared on their surface. Deny the
+            // approval and remove the pending entry so the node's await does
+            // NOT spin for the full DEFAULT_APPROVAL_TIMEOUT_MS against a
+            // notification nobody will ever act on.
+            tracing::warn!(error = %e, "failed to publish ApprovalRequested for node approval");
+            return deny_unavailable(manager, &approval_id);
+        }
     }
 
     let resolved = manager
@@ -179,6 +185,27 @@ pub async fn run_node_approval(
         d.to_outcome_within(&crate::exec::allowed_decisions::once_only())
     });
     (outcome_to_wire(outcome), resolved.deny_reason)
+}
+
+/// Fail a node approval closed because the operator surface could not be
+/// notified.
+///
+/// Denies the pending record (which also removes it from the manager) and
+/// renders the shared "unavailable" wire outcome, so the node learns right
+/// away that nobody was asked instead of waiting out the approval timeout.
+fn deny_unavailable(
+    manager: &ExecApprovalManager,
+    approval_id: &str,
+) -> (&'static str, Option<String>) {
+    manager.resolve(
+        approval_id,
+        ApprovalDecisionType::Deny,
+        Some("unavailable".to_string()),
+    );
+    (
+        "unavailable",
+        Some("approval notification could not be delivered to the operator surface".to_string()),
+    )
 }
 
 /// Sanitize a remote-RPC string before it is embedded in the operator-facing
@@ -221,7 +248,7 @@ fn skip_escape_sequence(chars: &mut std::str::Chars<'_>) {
     match chars.next() {
         // CSI — parameters and intermediates, then a final byte in 0x40..=0x7E.
         Some('[') => {
-            while let Some(c) = chars.next() {
+            for c in chars.by_ref() {
                 if ('\u{40}'..='\u{7e}').contains(&c) {
                     break;
                 }
@@ -230,7 +257,7 @@ fn skip_escape_sequence(chars: &mut std::str::Chars<'_>) {
         // OSC / DCS / SOS / PM / APC — a string, terminated by BEL or ST
         // (ESC \).
         Some(']' | 'P' | 'X' | '^' | '_') => {
-            while let Some(c) = chars.next() {
+            for c in chars.by_ref() {
                 if c == '\u{7}' {
                     break;
                 }
@@ -243,11 +270,10 @@ fn skip_escape_sequence(chars: &mut std::str::Chars<'_>) {
         }
         // A two-byte escape, optionally with an intermediate byte
         // (ESC ( B — a charset designator).
-        Some(c) => {
-            if ('\u{20}'..='\u{2f}').contains(&c) {
-                let _ = chars.next();
-            }
+        Some(c) if ('\u{20}'..='\u{2f}').contains(&c) => {
+            let _ = chars.next();
         }
+        Some(_) => {}
         None => {}
     }
 }

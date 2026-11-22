@@ -197,7 +197,7 @@ fn to_local<Tz: TimeZone>(now_ms: i64, tz: &Tz) -> DateTime<Tz> {
                  falling back to the Unix epoch — period boundaries for this \
                  call will be computed for 1970",
             );
-            DateTime::from_timestamp(0, 0).unwrap_or_else(Utc::now)
+            DateTime::from_timestamp(0, 0).unwrap_or_default()
         })
         .with_timezone(tz)
 }

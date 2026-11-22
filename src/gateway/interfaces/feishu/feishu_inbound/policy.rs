@@ -18,7 +18,7 @@ pub struct InboundPolicy {
 
 impl InboundPolicy {
     #[must_use]
-    pub fn new(config: FeishuConfig, _bot_open_id: String) -> Self {
+    pub fn new(config: FeishuConfig) -> Self {
         Self {
             dm: DmPolicyEngine::new(config.clone()),
             group: GroupPolicyEngine::new(config.clone()),
@@ -88,7 +88,6 @@ mod tests {
             streaming: true,
             render_mode: "auto".into(),
             typing_indicator: true,
-            reaction_notifications: true,
             group_session_scope: GroupSessionScope::default(),
             connection_mode: "websocket".into(),
             webhook_port: 3000,
@@ -103,7 +102,7 @@ mod tests {
 
     #[test]
     fn test_dm_blocked() {
-        let policy = InboundPolicy::new(feishu_config(false, true, false), "bot".into());
+        let policy = InboundPolicy::new(feishu_config(false, true, false));
         assert!(matches!(
             policy.evaluate(&make_msg(false)),
             InboundPolicyResult::Block(_)
@@ -112,7 +111,7 @@ mod tests {
 
     #[test]
     fn test_group_allowed() {
-        let policy = InboundPolicy::new(feishu_config(true, true, false), "bot".into());
+        let policy = InboundPolicy::new(feishu_config(true, true, false));
         assert_eq!(
             policy.evaluate(&make_msg(true)),
             InboundPolicyResult::Accept
@@ -121,7 +120,7 @@ mod tests {
 
     #[test]
     fn test_mention_required() {
-        let policy = InboundPolicy::new(feishu_config(true, true, true), "bot".into());
+        let policy = InboundPolicy::new(feishu_config(true, true, true));
         assert!(matches!(
             policy.evaluate(&make_msg(true)),
             InboundPolicyResult::Block(_)

@@ -61,10 +61,17 @@ impl Config {
     /// Validate configuration
     ///
     /// Checks:
-    /// - Provider references in rules exist in providers map
     /// - Default provider exists (if specified)
-    /// - API keys are present for cloud providers
     /// - Regex patterns are valid
+    ///
+    /// Deliberately NOT checked, and the older wording claiming otherwise was
+    /// wrong:
+    /// - A rule's `provider` reference. The field is retired and not
+    ///   persisted, so a save/load round trip would make every rule look
+    ///   invalid (see [`Self::validate_rules`]).
+    /// - Cloud-provider API keys. `api_key` is a runtime-only field populated
+    ///   from the encrypted vault at startup, so credentials cannot be
+    ///   validated at config-load time.
     pub fn validate(&self) -> Result<()> {
         debug!(
             providers_count = self.providers.len(),
@@ -173,8 +180,7 @@ impl Config {
             .collect()
     }
 
-    /// Validate routing rules: provider references, retired keyword rules, and
-    /// regex patterns.
+    /// Validate routing rules: retired keyword rules and regex patterns.
     fn validate_rules(&self) -> Result<()> {
         // Retired keyword rules are reported, never rejected: `Config` has no
         // `deny_unknown_fields` and these keys still parse, so an operator
@@ -537,6 +543,10 @@ impl Config {
 
     /// Refuse `exec_tier = "plan"` as an install-wide default.
     fn validate_policies(&self) -> Result<()> {
+        crate::config::types::policies::capability_constraints::compile_constraints(
+            &self.policies.capability_constraints,
+        )
+        .map_err(AlephError::invalid_config)?;
         // `plan` deserializes here — it is a real `ExecTier`, just not an
         // INSTALL one: it is a per-conversation posture that ENDS when a human
         // approves a plan, and ending it means falling back to this very

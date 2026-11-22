@@ -51,10 +51,9 @@
 //! `provider` is the one that reads like it works, so state it exactly:
 //! `Config::validate` *requires* a command rule to carry a `provider` naming a
 //! configured provider, and the file fails to load without one — but nothing
-//! downstream consumes it. `CommandContext::Custom` carries only
-//! `system_prompt` and `pattern`, and there is no routing pass that turns a
-//! rule's `provider` into a model choice. The gate is real; the effect it
-//! implies is not. A future patch that wires these fields must (a) update the
+//! downstream consumes it. There is no routing pass that turns a rule's
+//! `provider` into a model choice. The gate is real; the effect it implies is
+//! not. A future patch that wires these fields must (a) update the
 //! registration path to honor them and (b) keep these doc-comments in sync.
 
 use schemars::JsonSchema;
@@ -69,7 +68,11 @@ use serde::{Deserialize, Serialize};
 /// One kind of rule is live: a **custom slash command**, whose `regex` starts
 /// with `^/` (see [`is_registered_command`](Self::is_registered_command)).
 /// `register_custom_commands` turns it into a tool named after the command,
-/// using `system_prompt` as both the tool description and the routing prompt.
+/// using `system_prompt` as the tool's **description** — the only channel
+/// through which the prompt reaches the model. The same text is also kept
+/// whole on the tool as `routing_system_prompt`; no `alephcore` reader
+/// consumes it (the slash envelope used to carry a copy of it, and read that
+/// copy no more than it reads this one).
 ///
 /// - `provider` is required by `Config::validate` and read by nothing. The
 ///   module doc explains that split; do not restate it as "specifies which AI

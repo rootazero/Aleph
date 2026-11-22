@@ -1305,7 +1305,6 @@ async fn a_damaged_row_fails_the_listing_instead_of_vanishing_from_it() {
     let damaged = SessionKey::main("damaged");
     manager.get_or_create(&healthy).await.unwrap();
     manager.get_or_create(&damaged).await.unwrap();
-    let state = manager.get_state(&damaged).await.unwrap();
     damage_session_row(&manager, &damaged);
 
     assert!(
@@ -1321,13 +1320,6 @@ async fn a_damaged_row_fails_the_listing_instead_of_vanishing_from_it() {
             Err(SessionManagerError::DatabaseError(_))
         ),
         "the agent-filtered arm is the same contract"
-    );
-    assert!(
-        matches!(
-            manager.list_by_state(state).await,
-            Err(SessionManagerError::DatabaseError(_))
-        ),
-        "list_by_state is the same contract"
     );
 }
 

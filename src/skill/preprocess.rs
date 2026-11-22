@@ -205,6 +205,9 @@ pub fn expand_template_vars<'a>(content: &'a str, skill_dir: &Path) -> Cow<'a, s
 /// YAML) is treated as "not allowed".
 #[must_use]
 pub fn frontmatter_allows_inline_shell(content: &str) -> bool {
+    if !content.contains("allow-inline-shell") {
+        return false;
+    }
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "kebab-case")]
     struct Probe {

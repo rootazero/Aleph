@@ -67,6 +67,12 @@ const GUARDIAN_BREAKER_THRESHOLD: u32 = 3;
 /// How long the breaker stays open before allowing one probe (HalfOpen).
 const GUARDIAN_BREAKER_COOLDOWN: Duration = Duration::from_secs(300);
 
+/// How long a reserved half-open probe may stay in flight before another
+/// probe is allowed through. The judge call's own hard deadline plus a
+/// margin: long enough for a slow probe, short enough that a probe whose
+/// task died mid-flight cannot wedge the breaker shut forever.
+const GUARDIAN_PROBE_LEASE: Duration = Duration::from_secs(GUARDIAN_TIMEOUT_SECS + 15);
+
 /// Guardian provider-health circuit state. Local (not the failover breaker) to
 /// keep `approval` decoupled from the providers internals — same three-state
 /// shape, threshold, and cooldown.
@@ -81,6 +87,10 @@ struct GuardianBreaker {
     state: BreakerState,
     consecutive_failures: u32,
     opened_at: Option<Instant>,
+    /// When the half-open probe currently in flight was reserved. `Some`
+    /// means a probe is out and nobody else may spend a judge call until it
+    /// reports back (or its lease expires).
+    probe_started_at: Option<Instant>,
 }
 
 impl Default for GuardianBreaker {
@@ -89,24 +99,45 @@ impl Default for GuardianBreaker {
             state: BreakerState::Closed,
             consecutive_failures: 0,
             opened_at: None,
+            probe_started_at: None,
         }
     }
 }
 
 impl GuardianBreaker {
-    /// Whether a judge call is allowed now. `Open` flips to `HalfOpen` (letting
-    /// one probe through) once the cooldown elapses; otherwise it stays shut.
+    /// Whether a judge call is allowed now. `Open` flips to `HalfOpen` once
+    /// the cooldown elapses — and that flip RESERVES the single probe: the
+    /// caller that performs the transition IS the probe, and every other
+    /// caller is refused until the probe reports back (or its lease expires).
+    ///
+    /// Without the reservation the half-open window admitted EVERY concurrent
+    /// approval at once — the provider stampede the breaker exists to prevent,
+    /// arriving exactly when the provider is least able to serve it.
     fn allows(&mut self) -> bool {
         match self.state {
-            BreakerState::Closed | BreakerState::HalfOpen => true,
+            BreakerState::Closed => true,
             BreakerState::Open => {
                 let cooled = self
                     .opened_at
                     .is_none_or(|t| t.elapsed() >= GUARDIAN_BREAKER_COOLDOWN);
-                if cooled {
-                    self.state = BreakerState::HalfOpen;
+                if !cooled {
+                    return false;
                 }
-                cooled
+                self.state = BreakerState::HalfOpen;
+                self.probe_started_at = Some(Instant::now());
+                true
+            }
+            BreakerState::HalfOpen => {
+                // A probe is in flight. Only a probe that never reported back
+                // (dropped task, panic) frees the slot — after its lease.
+                let expired = self
+                    .probe_started_at
+                    .is_none_or(|t| t.elapsed() >= GUARDIAN_PROBE_LEASE);
+                if !expired {
+                    return false;
+                }
+                self.probe_started_at = Some(Instant::now());
+                true
             }
         }
     }
@@ -117,6 +148,7 @@ impl GuardianBreaker {
         self.state = BreakerState::Closed;
         self.consecutive_failures = 0;
         self.opened_at = None;
+        self.probe_started_at = None;
     }
 
     /// A judge call that failed to reach a verdict due to provider error/timeout.
@@ -128,6 +160,7 @@ impl GuardianBreaker {
             self.state = BreakerState::Open;
             self.opened_at = Some(Instant::now());
         }
+        self.probe_started_at = None;
     }
 }
 
@@ -591,6 +624,58 @@ mod tests {
         // A failed probe immediately reopens (no threshold on half-open).
         b.record_failure();
         assert_eq!(b.state, BreakerState::Open);
+    }
+
+    /// The half-open window admits EXACTLY ONE probe.
+    ///
+    /// Without the reservation every approval that arrived during the
+    /// cooldown window was let through at once — the provider stampede the
+    /// breaker exists to prevent, arriving exactly when the provider is
+    /// least able to serve it.
+    #[test]
+    fn the_half_open_window_admits_only_one_probe() {
+        let mut b = GuardianBreaker::default();
+        for _ in 0..GUARDIAN_BREAKER_THRESHOLD {
+            b.record_failure();
+        }
+        assert_eq!(b.state, BreakerState::Open);
+        // Force the cooldown to have elapsed by back-dating `opened_at`.
+        b.opened_at =
+            Instant::now().checked_sub(GUARDIAN_BREAKER_COOLDOWN + Duration::from_secs(1));
+
+        assert!(b.allows(), "the first caller after the cooldown is the probe");
+        assert_eq!(b.state, BreakerState::HalfOpen);
+        assert!(
+            !b.allows(),
+            "a second caller must not take a probe slot while the first is in flight"
+        );
+
+        // The probe reports back: the provider is healthy again.
+        b.record_success();
+        assert_eq!(b.state, BreakerState::Closed);
+        assert!(b.allows());
+    }
+
+    /// A probe that never reports back (its task died) must not wedge the
+    /// breaker shut: the lease frees the slot.
+    #[test]
+    fn a_dropped_probe_releases_its_slot_after_the_lease() {
+        let mut b = GuardianBreaker::default();
+        for _ in 0..GUARDIAN_BREAKER_THRESHOLD {
+            b.record_failure();
+        }
+        b.opened_at =
+            Instant::now().checked_sub(GUARDIAN_BREAKER_COOLDOWN + Duration::from_secs(1));
+        assert!(b.allows(), "the probe is admitted");
+        assert!(!b.allows(), "the slot is taken while the probe is in flight");
+
+        // The probe never came back: back-date the lease.
+        b.probe_started_at =
+            Instant::now().checked_sub(GUARDIAN_PROBE_LEASE + Duration::from_secs(1));
+        assert!(
+            b.allows(),
+            "a probe that never reported back must free its slot"
+        );
     }
 
     /// A provider that always errors, counting how many times it was called —

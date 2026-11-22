@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "timestamp": "20261116T070344.976620Z",
+  "memory_gate": {
+    "argv": [
+      "python3",
+      "qa/browser_live/check_memory.py",
+      "--required-bytes",
+      "4294967296"
+    ],
+    "cwd": "/Volumes/TBU4/Workspace/Aleph",
+    "env_overrides": {},
+    "exit_code": 0,
+    "timed_out": false,
+    "pid": 92412,
+    "cleanup_error": null,
+    "unjoined_descendants": false,
+    "elapsed_seconds": 0.028257208003196865,
+    "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T070344.976620Z-memory.stdout.log",
+    "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T070344.976620Z-memory.stderr.log"
+  },
+  "test_filter": "utils::paths::tests::discovery_fixture_isolates_agents_home_even_when_claude_scanning_is_disabled",
+  "status": "PASS",
+  "command": {
+    "argv": [
+      "cargo",
+      "test",
+      "-p",
+      "alephcore",
+      "--lib",
+      "--offline",
+      "--locked",
+      "--jobs",
+      "1",
+      "utils::paths::tests::discovery_fixture_isolates_agents_home_even_when_claude_scanning_is_disabled",
+      "--",
+      "--test-threads=1"
+    ],
+    "cwd": "/Volumes/TBU4/Workspace/Aleph",
+    "env_overrides": {
+      "HOME": "/Users/zouguojun/.p9-home-d7mu_dk4",
+      "ALEPH_HOME": "/tmp/p9-dhy1uuik/aleph",
+      "CARGO_HOME": "/Users/zouguojun/.cargo",
+      "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+      "TMPDIR": "/tmp/p9-dhy1uuik",
+      "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+      "RUST_BACKTRACE": "1"
+    },
+    "exit_code": 0,
+    "timed_out": false,
+    "pid": 92414,
+    "cleanup_error": null,
+    "unjoined_descendants": false,
+    "elapsed_seconds": 0.5553549590404145,
+    "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T070344.976620Z.stdout.log",
+    "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T070344.976620Z.stderr.log"
+  },
+  "fixture": {
+    "path": "/tmp/p9-dhy1uuik",
+    "home": "/Users/zouguojun/.p9-home-d7mu_dk4",
+    "cleanup": "removed"
+  }
+}

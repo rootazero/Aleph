@@ -34,7 +34,7 @@ pub enum DiscoveryError {
     UserHome(#[source] crate::error::AlephError),
 }
 
-pub type DiscoveryResult<T> = Result<T, DiscoveryError>;
+pub(crate) type DiscoveryResult<T> = Result<T, DiscoveryError>;
 
 /// Discovery configuration
 #[derive(Debug, Clone)]
@@ -89,21 +89,6 @@ impl DiscoveryManager {
     pub fn new(config: DiscoveryConfig) -> DiscoveryResult<Self> {
         let scanner = DirectoryScanner::new(&config)?;
         Ok(Self { scanner })
-    }
-
-    /// Get the Aleph home directory (~/.aleph/)
-    ///
-    /// Returns the path resolved at construction (honouring the `ALEPH_HOME`
-    /// override), so it cannot disagree with the scanner's own view.
-    ///
-    /// Infallible: the scanner caches the path at construction (resolving
-    /// `ALEPH_HOME` or defaulting to `~/.aleph`), and any failure that
-    /// could occur here would already have prevented the scanner from
-    /// being built. Returning `DiscoveryResult` here just pushed `?` onto
-    /// callers for an error that cannot happen.
-    #[must_use]
-    pub fn aleph_home(&self) -> PathBuf {
-        self.scanner.aleph_home().to_path_buf()
     }
 
     /// Discover all skill directories

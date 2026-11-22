@@ -1,0 +1,73 @@
+
+running 1 test
+test extension::claude_cache_tests::two_broken_claude_code_plugins_at_one_version_are_two_error_rows ... FAILED
+
+failures:
+
+---- extension::claude_cache_tests::two_broken_claude_code_plugins_at_one_version_are_two_error_rows stdout ----
+
+thread 'tokio-rt-worker' (13825753) panicked at src/config/save.rs:43:5:
+save_to_file targeted the developer's real config file (/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-em4c3ike/.tmp5mhRdV/.aleph/config.toml). Isolate the test with crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(tempdir).
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+             at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:679:5
+   1: core::panicking::panic_fmt
+             at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/panicking.rs:80:14
+   2: alephcore::config::save::reject_real_home_config
+             at ./src/config/save.rs:43:5
+   3: <alephcore::config::structs::Config>::save_to_file_unlocked
+             at ./src/config/save.rs:322:9
+   4: <alephcore::config::structs::Config>::save_to_file::<std::path::PathBuf>::{closure#1}
+             at ./src/config/save.rs:314:18
+   5: alephcore::utils::atomic_io::with_file_lock::<(), <alephcore::config::structs::Config>::save_to_file<std::path::PathBuf>::{closure#1}>
+             at ./src/utils/atomic_io.rs:164:5
+   6: <alephcore::config::structs::Config>::save_to_file::<std::path::PathBuf>
+             at ./src/config/save.rs:313:9
+   7: <alephcore::config::structs::Config>::save
+             at ./src/config/save.rs:415:14
+   8: <alephcore::config::structs::Config>::load
+             at ./src/config/load.rs:366:36
+   9: <alephcore::skill::SkillSystem>::load_or_cached_config_value::{closure#0}::{closure#0}
+             at ./src/skill/mod.rs:377:19
+  10: <tokio::runtime::blocking::task::BlockingTask<<alephcore::skill::SkillSystem>::load_or_cached_config_value::{closure#0}::{closure#0}> as core::future::future::Future>::poll
+             at /Users/zouguojun/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.54.1/src/runtime/blocking/task.rs:42:21
+  11: <tokio::runtime::task::core::Core<tokio::runtime::blocking::task::BlockingTask<<alephcore::skill::SkillSystem>::load_or_cached_config_value::{closure#0}::{closure#0}>, tokio::runtime::blocking::schedule::BlockingSchedule>>::poll::{closure#0}
+             at /Users/zouguojun/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.54.1/src/runtime/task/core.rs:380:24
+  12: <tokio::loom::std::unsafe_cell::UnsafeCell<tokio::runtime::task::core::Stage<tokio::runtime::blocking::task::BlockingTask<<alephcore::skill::SkillSystem>::load_or_cached_config_value::{closure#0}::{closure#0}>>>>::with_mut::<core::task::poll::Poll<core::result::Result<serde_json::value::Value, alloc::string::String>>, <tokio::runtime::task::core::Core<tokio::runtime::blocking::task::BlockingTask<<alephcore::skill::SkillSystem>::load_or_cached_config_value::{closure#0}::{closure#0}>, tokio::runtime::blocking::schedule::BlockingSchedule>>::poll::{closure#0}>
+             at /Users/zouguojun/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.54.1/src/loom/std/unsafe_cell.rs:16:9
+  13: <tokio::runtime::task::core::Core<tokio::runtime::blocking::task::BlockingTask<<alephcore::skill::SkillSystem>::load_or_cached_config_value::{closure#0}::{closure#0}>, tokio::runtime::blocking::schedule::BlockingSchedule>>::poll
+             at /Users/zouguojun/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.54.1/src/runtime/task/core.rs:369:30
+  14: tokio::runtime::task::harness::poll_future::<tokio::runtime::blocking::task::BlockingTask<<alephcore::skill::SkillSystem>::load_or_cached_config_value::{closure#0}::{closure#0}>, tokio::runtime::blocking::schedule::BlockingSchedule>::{closure#0}
+             at /Users/zouguojun/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.54.1/src/runtime/task/harness.rs:537:30
+  15: <core::panic::unwind_safe::AssertUnwindSafe<tokio::runtime::task::harness::poll_future<tokio::runtime::blocking::task::BlockingTask<<alephcore::skill::SkillSystem>::load_or_cached_config_value::{closure#0}::{closure#0}>, tokio::runtime::blocking::schedule::BlockingSchedule>::{closure#0}> as core::ops::function::FnOnce<()>>::call_once
+             at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/panic/unwind_safe.rs:275:9
+  16: std::panicking::catch_unwind::do_call::<core::panic::unwind_safe::AssertUnwindSafe<tokio::runtime::task::harness::poll_future<tokio::runtime::blocking::task::BlockingTask<<alephcore::skill::SkillSystem>::load_or_cached_config_value::{closure#0}::{closure#0}>, tokio::runtime::blocking::schedule::BlockingSchedule>::{closure#0}>, core::task::poll::Poll<core::result::Result<serde_json::value::Value, alloc::string::String>>>
+             at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:576:43
+  17: ___rust_try
+  18: std::panicking::catch_unwind::<core::task::poll::Poll<core::result::Result<serde_json::value::Value, alloc::string::String>>, core::panic::unwind_safe::AssertUnwindSafe<tokio::runtime::task::harness::poll_future<tokio::runtime::blocking::task::BlockingTask<<alephcore::skill::SkillSystem>::load_or_cached_config_value::{closure#0}::{closure#0}>, tokio::runtime::blocking::schedule::BlockingSchedule>::{closure#0}>>
+             at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:544:19
+  19: std::panic::catch_unwind::<core::panic::unwind_safe::AssertUnwindSafe<tokio::runtime::task::harness::poll_future<tokio::runtime::blocking::task::BlockingTask<<alephcore::skill::SkillSystem>::load_or_cached_config_value::{closure#0}::{closure#0}>, tokio::runtime::blocking::schedule::BlockingSchedule>::{closure#0}>, core::task::poll::Poll<core::result::Result<serde_json::value::Value, alloc::string::String>>>
+             at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panic.rs:359:14
+  20: tokio::runtime::task::harness::poll_future::<tokio::runtime::blocking::task::BlockingTask<<alephcore::skill::SkillSystem>::load_or_cached_config_value::{closure#0}::{closure#0}>, tokio::runtime::blocking::schedule::BlockingSchedule>
+             at /Users/zouguojun/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.54.1/src/runtime/task/harness.rs:525:18
+  21: <tokio::runtime::task::harness::Harness<tokio::runtime::blocking::task::BlockingTask<<alephcore::skill::SkillSystem>::load_or_cached_config_value::{closure#0}::{closure#0}>, tokio::runtime::blocking::schedule::BlockingSchedule>>::poll_inner
+             at /Users/zouguojun/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.54.1/src/runtime/task/harness.rs:210:27
+  22: <tokio::runtime::task::harness::Harness<tokio::runtime::blocking::task::BlockingTask<<alephcore::skill::SkillSystem>::load_or_cached_config_value::{closure#0}::{closure#0}>, tokio::runtime::blocking::schedule::BlockingSchedule>>::poll
+             at /Users/zouguojun/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.54.1/src/runtime/task/harness.rs:155:20
+  23: tokio::runtime::task::raw::poll::<tokio::runtime::blocking::task::BlockingTask<<alephcore::skill::SkillSystem>::load_or_cached_config_value::{closure#0}::{closure#0}>, tokio::runtime::blocking::schedule::BlockingSchedule>
+             at /Users/zouguojun/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.54.1/src/runtime/task/raw.rs:337:13
+  24: <tokio::runtime::task::raw::RawTask>::poll
+  25: <tokio::runtime::task::UnownedTask<tokio::runtime::blocking::schedule::BlockingSchedule>>::run
+  26: <tokio::runtime::blocking::pool::Task>::run
+  27: <tokio::runtime::blocking::pool::LockedImpl>::run_worker
+  28: <tokio::runtime::blocking::pool::InnerImpl>::run_worker
+  29: <tokio::runtime::blocking::pool::Inner>::run
+  30: <tokio::runtime::blocking::pool::Spawner>::spawn_thread::{closure#0}
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+
+failures:
+    extension::claude_cache_tests::two_broken_claude_code_plugins_at_one_version_are_two_error_rows
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 22421 filtered out; finished in 1.06s
+

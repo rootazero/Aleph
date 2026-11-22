@@ -136,12 +136,17 @@ pub struct AsyncTaskData {
 }
 
 impl AsyncTaskData {
-    /// Get the output URL from whichever field is present
+    #[cfg(test)]
     pub fn output_url(&self) -> Option<&str> {
         self.output
             .as_deref()
             .or(self.url.as_deref())
             .or(self.video_url.as_deref())
+    }
+
+    /// Take the output URL by value from whichever field is present
+    pub fn into_output_url(self) -> Option<String> {
+        self.output.or(self.url).or(self.video_url)
     }
 }
 

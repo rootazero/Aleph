@@ -505,8 +505,21 @@ impl FeishuApi {
             .await
             .map_err(|e| format!("Update streaming card failed: {e}"))?;
 
-        if !resp.status().is_success() {
-            return Err(format!("Update streaming card HTTP {}", resp.status()));
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(format!("Update streaming card HTTP {}", status));
+        }
+        let envelope: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| format!("Update streaming card parse failed: {e}"))?;
+        let code = envelope.get("code").and_then(|v| v.as_i64()).unwrap_or(0);
+        if code != 0 {
+            let msg = envelope
+                .get("msg")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown error");
+            return Err(format!("Update streaming card error code={code}: {msg}"));
         }
         Ok(())
     }

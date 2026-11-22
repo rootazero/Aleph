@@ -17,10 +17,12 @@ fn test_signal_properties() {
     test_channel_properties(&channel);
 
     assert_eq!(channel.channel_type(), "signal");
-    assert!(channel.capabilities().attachments);
-    assert!(channel.capabilities().reactions);
-    assert!(channel.capabilities().typing_indicator);
+    assert!(!channel.capabilities().attachments);
+    assert!(!channel.capabilities().reactions);
+    // No typing endpoint on signal-cli's REST API.
+    assert!(!channel.capabilities().typing_indicator);
     assert_eq!(channel.capabilities().max_message_length, 65535);
+    assert_eq!(channel.capabilities().max_attachment_size, 0);
 }
 
 #[tokio::test]

@@ -1,0 +1,33 @@
+
+running 1 test
+test utils::paths::tests::discovery_fixture_isolates_agents_home_even_when_claude_scanning_is_disabled ... FAILED
+
+failures:
+
+---- utils::paths::tests::discovery_fixture_isolates_agents_home_even_when_claude_scanning_is_disabled stdout ----
+
+thread 'utils::paths::tests::discovery_fixture_isolates_agents_home_even_when_claude_scanning_is_disabled' (13798890) panicked at src/utils/paths.rs:1325:9:
+assertion failed: skills.iter().all(|skill| skill.path.starts_with(&home))
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+             at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:679:5
+   1: core::panicking::panic_fmt
+             at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/panicking.rs:80:14
+   2: core::panicking::panic
+             at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/panicking.rs:150:5
+   3: alephcore::utils::paths::tests::discovery_fixture_isolates_agents_home_even_when_claude_scanning_is_disabled
+             at ./src/utils/paths.rs:1325:9
+   4: alephcore::utils::paths::tests::discovery_fixture_isolates_agents_home_even_when_claude_scanning_is_disabled::{closure#0}
+             at ./src/utils/paths.rs:1306:86
+   5: <alephcore::utils::paths::tests::discovery_fixture_isolates_agents_home_even_when_claude_scanning_is_disabled::{closure#0} as core::ops::function::FnOnce<()>>::call_once
+             at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/ops/function.rs:250:5
+   6: <fn() -> core::result::Result<(), alloc::string::String> as core::ops::function::FnOnce<()>>::call_once
+             at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/ops/function.rs:250:5
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+
+failures:
+    utils::paths::tests::discovery_fixture_isolates_agents_home_even_when_claude_scanning_is_disabled
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 22421 filtered out; finished in 0.60s
+

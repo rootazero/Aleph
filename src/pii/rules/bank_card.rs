@@ -30,29 +30,27 @@ impl BankCardRule {
 
     /// Luhn algorithm checksum validation
     fn luhn_check(number: &str) -> bool {
-        let digits: Vec<u32> = number.chars().filter_map(|c| c.to_digit(10)).collect();
-
-        if digits.len() < 13 {
-            return false;
-        }
-
-        let sum: u32 = digits
-            .iter()
+        let mut count = 0;
+        let mut sum = 0;
+        for (i, b) in number
+            .bytes()
+            .filter(|b| b.is_ascii_digit())
             .rev()
             .enumerate()
-            .map(|(i, &d)| {
-                if i % 2 == 1 {
-                    let doubled = d * 2;
-                    if doubled > 9 {
-                        doubled - 9
-                    } else {
-                        doubled
-                    }
-                } else {
-                    d
-                }
-            })
-            .sum();
+        {
+            count += 1;
+            let d = u32::from(b - b'0');
+            if i % 2 == 1 {
+                let doubled = d * 2;
+                sum += if doubled > 9 { doubled - 9 } else { doubled };
+            } else {
+                sum += d;
+            }
+        }
+
+        if count < 13 {
+            return false;
+        }
 
         sum.is_multiple_of(10)
     }

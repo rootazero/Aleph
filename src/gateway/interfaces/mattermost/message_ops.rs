@@ -361,9 +361,16 @@ impl MattermostMessageOps {
             return None;
         }
 
-        if message.is_empty() {
+        // Posts with files but no text still reach the model: the file count is
+        // carried into the text instead of being dropped silently.
+        let attachment_count = post["file_ids"].as_array().map_or(0, Vec::len);
+
+        if message.is_empty() && attachment_count == 0 {
             return None;
         }
+
+        let text =
+            crate::gateway::interfaces::with_attachment_note(message.to_string(), attachment_count);
 
         // Determine if group conversation from channel_type
         // "D" = direct message, "O" = open channel, "G" = group message, "P" = private channel
@@ -395,8 +402,9 @@ impl MattermostMessageOps {
             conversation_id: ConversationId::new(mm_channel_id.to_string()),
             sender_id: UserId::new(user_id.to_string()),
             sender_name: Some(sender_name.to_string()),
-            text: message.to_string(),
-            attachments: Vec::new(), // TODO: extract Mattermost file attachments
+            text,
+            // inbound attachments are reported in `text`
+            attachments: Vec::new(),
             timestamp,
             reply_to,
             is_group,
@@ -747,6 +755,54 @@ mod tests {
         let msg =
             MattermostMessageOps::convert_posted_event(&event, &channel_id, "bot-123", &config);
         assert!(msg.is_none());
+    }
+
+    #[test]
+    fn test_convert_reports_attachments_in_text() {
+        let post = serde_json::json!({
+            "id": "post-1",
+            "user_id": "user-456",
+            "channel_id": "ch-789",
+            "message": "look here",
+            "file_ids": ["file-1", "file-2"],
+            "root_id": "",
+            "create_at": 1700000000000_i64
+        });
+
+        let event = make_posted_event(&post, "O", "alice");
+        let channel_id = ChannelId::new("mattermost");
+        let config = MattermostConfig::default();
+
+        let msg =
+            MattermostMessageOps::convert_posted_event(&event, &channel_id, "bot-123", &config)
+                .unwrap();
+        assert_eq!(
+            msg.text,
+            "look here\n\n[2 attachment(s) not supported on this channel]"
+        );
+        assert!(msg.attachments.is_empty());
+    }
+
+    #[test]
+    fn test_convert_attachment_only_post_is_not_dropped() {
+        let post = serde_json::json!({
+            "id": "post-1",
+            "user_id": "user-456",
+            "channel_id": "ch-789",
+            "message": "",
+            "file_ids": ["file-1"],
+            "root_id": "",
+            "create_at": 1700000000000_i64
+        });
+
+        let event = make_posted_event(&post, "O", "alice");
+        let channel_id = ChannelId::new("mattermost");
+        let config = MattermostConfig::default();
+
+        let msg =
+            MattermostMessageOps::convert_posted_event(&event, &channel_id, "bot-123", &config)
+                .unwrap();
+        assert_eq!(msg.text, "[1 attachment(s) not supported on this channel]");
     }
 
     #[test]

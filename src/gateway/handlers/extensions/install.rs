@@ -258,7 +258,10 @@ fn outcome_json(o: &InstallOutcome) -> Value {
     match o {
         InstallOutcome::Mcp { id } => json!({ "kind": "mcp", "id": id }),
         InstallOutcome::Plugin { path } => json!({ "kind": "plugin", "path": path }),
-        InstallOutcome::Skill { path } => json!({ "kind": "skill", "path": path }),
+        InstallOutcome::Skill { path } => crate::hub::install::skill_outcome_json(
+            crate::utils::paths::get_skills_dir().ok().as_deref(),
+            path,
+        ),
     }
 }
 

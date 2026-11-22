@@ -35,8 +35,6 @@ async fn healthy_config_yields_discord_ok_tag() {
         r#"[channels.discord]
 type = "discord"
 bot_token = "{}"
-application_id = 999
-slash_commands_enabled = true
 max_message_length = 2000
 
 [channels.discord.intents]
@@ -65,17 +63,15 @@ direct_messages = true
     assert!(!findings[0].is_problem());
 }
 
-/// A config that has both an `intents_misaligned` violation and an
-/// `application_id_missing` violation must surface BOTH in the
-/// single `Misconfigured` finding, not just the first one.
+/// An `intents_misaligned` violation is reported with the operator-facing
+/// explanation in the finding detail.
 #[tokio::test]
-async fn misaligned_intents_and_missing_application_id_both_surfaced() {
+async fn misaligned_intents_are_reported() {
     let mut tmp = tempfile::NamedTempFile::new().unwrap();
     let payload = format!(
         r#"[channels.discord]
 type = "discord"
 bot_token = "{}"
-slash_commands_enabled = true
 
 [channels.discord.intents]
 guild_messages = true
@@ -95,47 +91,40 @@ message_content = false
         "{:?}",
         findings[0]
     );
-    assert!(
-        findings[0].detail.contains("application_id"),
-        "{:?}",
-        findings[0]
-    );
 }
 
-/// A config file that doesn't exist surfaces as a single
-/// `Unknown`-tagged finding — never as `Ok`. This is the third state
-/// the check maintains; severity alone (`Info`) cannot distinguish
-/// "config is fine" from "config could not be read".
+/// Missing configuration means no Discord channel is configured.
+/// Existing but malformed or unreadable configuration still reports Unknown.
 #[tokio::test]
-async fn missing_file_yields_unknown_tag() {
+async fn missing_file_is_unconfigured_with_ok_tag() {
     let check = DiscordChannelHealthCheck::new(std::path::PathBuf::from(
         "/nonexistent/path/discord-config.toml",
     ));
     let findings = check.run(Posture::Inspect).await;
     assert_eq!(findings.len(), 1);
-    assert!(findings[0].detail.contains("Could not load"));
-    // The tag must be `discord-unknown`, NOT `discord-ok`, otherwise a
-    // future CI consumer would misread "I don't know" as "it's fine".
     assert!(
-        findings[0].has_tag("discord-unknown"),
-        "tag absent: {:?}",
+        findings[0].has_tag("discord-ok"),
+        "unconfigured: {:?}",
         findings[0]
     );
     assert!(
-        !findings[0].has_tag("discord-ok"),
-        "tag false-positive: {:?}",
+        !findings[0].has_tag("discord-unknown"),
+        "not an I/O failure: {:?}",
         findings[0]
     );
 }
 
-/// `id()` and `title()` are part of the `HealthCheck` contract —
-/// confirm they match the strings the engine's `--json` output and
-/// the doctor tool render verbatim.
+/// `id()` is part of the `HealthCheck` contract — confirm it matches the
+/// string the engine's `--json` output and the doctor tool render verbatim.
+///
+/// The check has no `title()` method any more (2026-11-20 wire audit): the
+/// renderer prints the *finding's* own title, so a second name for the same
+/// check could only drift away from it. The finding title is asserted in the
+/// module's own unit tests.
 #[test]
 fn check_metadata_matches_documented_strings() {
-    let check = DiscordChannelHealthCheck::default();
+    let check = DiscordChannelHealthCheck::from_default_path();
     assert_eq!(check.id(), "core/discord-channel-health");
-    assert_eq!(check.title(), "Discord channel config");
 }
 
 /// A config file that does NOT mention discord at all should produce

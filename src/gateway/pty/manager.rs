@@ -12,7 +12,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::future::{poll_fn, Future};
 use std::pin::Pin;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock, Weak};
 use std::task::{Context, Poll, Waker};
 
 use serde::Serialize;
@@ -28,11 +28,11 @@ use crate::sync_primitives::{Arc, AtomicUsize, Ordering};
 
 /// Concurrent PTY session ceiling before any `[policies.terminal]
 /// max_sessions` config has been read. Not a hard cap — deliberately not a
-/// `const` used directly by `spawn`: `handle_spawn` reads the live config
-/// fresh on every `pty.spawn` and stores the configured ceiling via
-/// `PtyManager::set_max_sessions`, so a patched value takes effect on the
-/// very next spawn instead of needing a restart. This is only the value a
-/// freshly constructed `PtyManager` starts with.
+/// `const` used directly by `spawn`: `TerminalCapabilitySource::invoke_spawn`
+/// reads the live config fresh on every `pty.spawn` and stores the configured
+/// ceiling via `PtyManager::set_max_sessions`, so a patched value takes effect
+/// on the very next spawn instead of needing a restart. This is only the value
+/// a freshly constructed `PtyManager` starts with.
 const DEFAULT_MAX_SESSIONS: usize = 64;
 
 /// How many `session_id -> created_by` stamps are kept for the ownership
@@ -123,6 +123,8 @@ struct Inner {
     owners: HashMap<String, Option<String>>,
     /// Insertion order for [`OWNER_RETENTION`] eviction.
     owner_order: VecDeque<String>,
+    /// Post-lock mechanical observation receipts, drained by the operation owner.
+    source_receipts: Vec<crate::capability::events::SourceObservationReceipt>,
 }
 
 impl Inner {
@@ -138,7 +140,14 @@ impl Inner {
             self.owner_order.push_back(session_id.to_string());
         }
         while self.owner_order.len() > OWNER_RETENTION {
-            if let Some(old) = self.owner_order.pop_front() {
+            let Some(index) = self
+                .owner_order
+                .iter()
+                .position(|id| !self.sessions.contains_key(id))
+            else {
+                break; // Live stamps remain in both the map and the FIFO.
+            };
+            if let Some(old) = self.owner_order.remove(index) {
                 self.owners.remove(&old);
             }
         }
@@ -193,7 +202,7 @@ impl SessionOwner {
 ///
 /// `created_by: None` with a scoped actor is REFUSED: a session nobody is
 /// recorded as owning is not one a particular user may claim. In production
-/// this cannot arise — `handle_spawn` stamps `visibility::ambient_actor()`,
+/// this cannot arise — the spawn path stamps `visibility::ambient_actor()`,
 /// which resolves through `CALLER_USER` for every gateway dispatch, loopback
 /// included (it resolves to `OWNER_USER_ID`).
 #[must_use]
@@ -239,6 +248,18 @@ pub struct PtyManager {
     /// The current concurrent session ceiling — see [`DEFAULT_MAX_SESSIONS`]
     /// and [`Self::set_max_sessions`].
     max_sessions: AtomicUsize,
+    /// Late-bound source assembly handle; it is not a second session authority.
+    capability_source:
+        Mutex<Option<Weak<crate::capability::tool_adapters::TerminalCapabilitySource>>>,
+    /// Serializes source registration with manager publication so exit cannot
+    /// observe a half-published session.
+    publication: Mutex<()>,
+    #[cfg(test)]
+    registration_killer: Mutex<Option<Box<dyn portable_pty::ChildKiller + Send + Sync>>>,
+    #[cfg(test)]
+    registration_original: Mutex<Option<Box<dyn portable_pty::ChildKiller + Send + Sync>>>,
+    #[cfg(test)]
+    registration_session: Mutex<Option<Arc<PtySession>>>,
 }
 
 /// Take the next incremental frame from a session.
@@ -301,7 +322,41 @@ pub(crate) fn no_such_session(session_id: &str) -> String {
 
 impl PtyManager {
     #[cfg(test)]
-    fn new() -> TestManager {
+    pub(crate) fn cold_for_test() -> Self {
+        Self::cold()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_next_registration_cleanup_for_test(
+        &self,
+        killer: Box<dyn portable_pty::ChildKiller + Send + Sync>,
+    ) {
+        *self
+            .registration_killer
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = Some(killer);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn take_registration_failure_session(&self) -> Option<Arc<PtySession>> {
+        self.registration_session
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn take_registration_original_killer(
+        &self,
+    ) -> Option<Box<dyn portable_pty::ChildKiller + Send + Sync>> {
+        self.registration_original
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+    }
+
+    #[cfg(test)]
+    fn cold_fixture() -> TestManager {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(1)
             .enable_all()
@@ -331,6 +386,14 @@ impl PtyManager {
             stop_wait: tokio::sync::Mutex::new(()),
             failure: Mutex::new(None),
             max_sessions: AtomicUsize::new(DEFAULT_MAX_SESSIONS),
+            capability_source: Mutex::new(None),
+            publication: Mutex::new(()),
+            #[cfg(test)]
+            registration_killer: Mutex::new(None),
+            #[cfg(test)]
+            registration_original: Mutex::new(None),
+            #[cfg(test)]
+            registration_session: Mutex::new(None),
         }
     }
 
@@ -354,6 +417,47 @@ impl PtyManager {
         let generation = self.lifecycle.generation();
         self.admit_generation(generation)?;
         Ok(generation)
+    }
+
+    /// Clone the manager's real provider handle without creating another source.
+    #[must_use]
+    pub fn provider_handle(&self) -> ProviderHandle {
+        self.lifecycle.clone()
+    }
+
+    /// Bind the existing manager to the source-owned terminal capability.
+    pub fn bind_capability_source(
+        &self,
+        source: Weak<crate::capability::tool_adapters::TerminalCapabilitySource>,
+    ) -> Result<(), crate::gateway::handlers::pty::PtyCapabilityError> {
+        let strong = source
+            .upgrade()
+            .ok_or(crate::gateway::handlers::pty::PtyCapabilityError::Unavailable)?;
+        let provider = self.provider_handle();
+        let mut bound = self
+            .capability_source
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some(existing) = bound.as_ref() {
+            if !Weak::ptr_eq(existing, &source) {
+                return Err(crate::gateway::handlers::pty::PtyCapabilityError::Unavailable);
+            }
+            drop(bound);
+            return strong.bind_manager_handle(provider);
+        }
+        strong.bind_manager_handle(provider)?;
+        *bound = Some(source);
+        Ok(())
+    }
+
+    pub(crate) fn capability_source(
+        &self,
+    ) -> Option<Arc<crate::capability::tool_adapters::TerminalCapabilitySource>> {
+        self.capability_source
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+            .and_then(Weak::upgrade)
     }
 
     /// Check a captured generation; effects use the guarded form below.
@@ -495,6 +599,9 @@ impl PtyManager {
             .expect("driver is present")
             .stop
             .notify_one();
+        drop(_admission);
+        drop(driver);
+        self.flush_source_receipts();
         cleanup?;
         Ok(generation)
     }
@@ -564,7 +671,7 @@ impl PtyManager {
         }
     }
 
-    /// Set the concurrent session ceiling. Called by `handle_spawn` on every
+    /// Set the concurrent session ceiling. Called by the spawn path on every
     /// `pty.spawn` with `[policies.terminal] max_sessions` read fresh from
     /// the live config — deliberately not cached at boot, so a live patch
     /// takes effect on the very next spawn rather than needing a restart.
@@ -597,10 +704,30 @@ impl PtyManager {
     }
 
     pub fn spawn_at(&self, generation: u64, opts: &SpawnOptions) -> Result<SpawnResult, String> {
-        self.with_generation(generation, || self.spawn_admitted(generation, opts))
+        self.with_generation(generation, |admission| {
+            self.spawn_admitted(generation, opts, admission)
+        })
     }
 
-    fn spawn_admitted(&self, generation: u64, opts: &SpawnOptions) -> Result<SpawnResult, String> {
+    fn spawn_admitted(
+        &self,
+        generation: u64,
+        opts: &SpawnOptions,
+        admission: &crate::sync_primitives::MutexGuard<'_, ()>,
+    ) -> Result<SpawnResult, String> {
+        // Reclaim capacity before starting a child we would otherwise have to roll back.
+        let cap = self.max_sessions.load(Ordering::SeqCst);
+        loop {
+            let oldest = {
+                let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+                if inner.sessions.len() < cap {
+                    break;
+                }
+                inner.order.front().cloned()
+            };
+            let Some(oldest) = oldest else { break };
+            self.close_admitted(&oldest, admission)?;
+        }
         let id = uuid::Uuid::new_v4().to_string();
         process_journal::record_pty_spawn(
             &id,
@@ -612,9 +739,16 @@ impl PtyManager {
         let lifecycle = self.lifecycle.clone();
         let inner = self.inner.clone();
         let admission = self.admission.clone();
+        let capability_source = self.capability_source();
         let sink = Arc::new(move |session: &PtySession, exit_code: Option<u32>| {
-            // The journal settles before this generation-fenced publication/removal.
+            // Serialize verdicts with close, but never hold the registry lock over I/O.
             let _admission = admission.lock().unwrap_or_else(|e| e.into_inner());
+            process_journal::record_pty_settled(
+                &session.id,
+                Verdict::Exited,
+                exit_code.map(|code| code as i32),
+                &session.with_screen(super::screen::Screen::visible_text),
+            );
             if lifecycle.acquire_call(generation).is_err() {
                 return;
             }
@@ -638,12 +772,20 @@ impl PtyManager {
                 inner.order.retain(|id| id != &session.id);
                 inner.viewports.remove(&session.id);
                 inner.sessions.remove(&session.id);
+                drop(inner);
+                let receipt = capability_source
+                    .as_ref()
+                    .map(|source| source.withdraw_session_deferred(&session.id));
+                drop(_admission);
+                if let Some(receipt) = receipt {
+                    receipt.flush();
+                }
             }
         });
         let session = match PtySession::spawn_with_sink(id.clone(), opts, sink) {
             Ok(session) => session,
             Err(e) => {
-                // Nothing ran. Settle the intent row now rather than leave
+                // No session was admitted. Settle the intent rather than leave
                 // it `Running` for the next boot to read as a shell the
                 // restart interrupted — with the error as the screen, so the
                 // row says what the spawn said.
@@ -651,6 +793,23 @@ impl PtyManager {
                 return Err(e);
             }
         };
+        #[cfg(test)]
+        if let Some(replacement) = self
+            .registration_killer
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+        {
+            let original = session.replace_killer_for_test(replacement);
+            *self
+                .registration_original
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()) = Some(original);
+            *self
+                .registration_session
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()) = Some(Arc::clone(&session));
+        }
         if let Some(pid) = session.shell_pid() {
             process_journal::record_pty_child(&id, pid);
         }
@@ -659,40 +818,69 @@ impl PtyManager {
             shell: session.shell.clone(),
         };
 
-        // Evict-then-insert under the lock so the map never exceeds the cap.
-        let cap = self.max_sessions.load(Ordering::SeqCst);
-        let evicted = {
-            let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-            // Stamp the owner under the SAME lock acquisition that inserts the
-            // session, so no face can observe a live session with no ownership
-            // record and fall through to whatever its "unknown" arm does.
-            inner.remember_owner(&id, opts.created_by.clone());
-            let mut evicted: Option<Arc<PtySession>> = None;
-            if inner.sessions.len() >= cap {
-                if let Some(old_id) = inner.order.pop_front() {
-                    evicted = inner.sessions.remove(&old_id);
+        // Serialize source registration with publication. The reader may exit
+        // immediately, but its sink blocks on this guard until publication is
+        // complete and then withdraws the exact same session once.
+        let _publication = self
+            .publication
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some(source) = self.capability_source() {
+            if let Err(error) =
+                source.register_session(&result.session_id, opts.created_by.as_deref())
+            {
+                match session.try_kill() {
+                    Ok(()) => {
+                        let detail = error.to_string();
+                        // The child existed and was deliberately killed; the
+                        // reader may still publish its natural exit later, but
+                        // the first verdict must describe this owner action.
+                        Self::record_killed(&session);
+                        return Err(detail);
+                    }
+                    Err(cleanup) => {
+                        // Leave the intent row Running. The reader remains the
+                        // sole authority allowed to record Exited after it
+                        // observes the child settlement; returning the cleanup
+                        // error keeps the failure visible to the caller.
+                        return Err(format!("{error}; cleanup failed: {cleanup}"));
+                    }
                 }
             }
+        }
+        // Capacity was already reclaimed before the child started, so the
+        // registry never exceeds the cap here.
+        let insert = || {
+            let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
             inner.order.push_back(id.clone());
-            inner.sessions.insert(id, session);
-            evicted
+            inner.sessions.insert(id.clone(), session.clone());
+            // Insert first so retention recognizes even a new stamp as live.
+            inner.remember_owner(&id, opts.created_by.clone());
         };
-        if let Some(old) = evicted {
-            // The operator's capacity policy ending a shell, not orphan
-            // handling: recorded as `killed` before the kill, like `close`.
-            Self::record_killed(&old);
-            old.kill();
+        if let Some(source) = self.capability_source() {
+            match source.commit_session(&id, insert) {
+                Ok((_, receipt)) => {
+                    self.queue_source_receipt(receipt);
+                }
+                Err(error) => {
+                    self.queue_source_receipt(source.withdraw_session_deferred(&id));
+                    Self::record_killed(&session);
+                    return match session.try_kill() {
+                        Ok(()) => Err(error),
+                        Err(cleanup) => Err(format!("{error}; cleanup failed: {cleanup}")),
+                    };
+                }
+            }
+        } else {
+            insert();
         }
         Ok(result)
     }
 
-    /// The journal's `killed` verdict for a session this manager is about to
-    /// `kill()`, with the screen as it stands — after the kill nothing more
-    /// arrives, so the screen at this moment IS the final screen, exactly what
-    /// `settle_exit` would have written had it won. One body for the three
-    /// kill sites (`close`, `close_all`, capacity eviction) so none of them
-    /// can pass an empty screen and leave a killed terminal's row with no
-    /// trail (the bash twin keeps its last window in `partial.txt`).
+    /// Record a successful manager kill after registry removal, with the current
+    /// screen. Admission serializes this verdict with the waiter's settlement.
+    /// Shared by close, shutdown and capacity eviction; failed kills never get
+    /// a successful `killed` verdict.
     fn record_killed(session: &PtySession) {
         let screen = session.with_screen(super::screen::Screen::visible_text);
         process_journal::record_pty_settled(&session.id, Verdict::Killed, None, &screen);
@@ -773,20 +961,39 @@ impl PtyManager {
     }
 
     pub fn close_at(&self, generation: u64, session_id: &str) -> Result<(), String> {
-        self.with_generation(generation, || self.close_admitted(session_id))
+        self.with_generation(generation, |admission| {
+            self.close_admitted(session_id, admission)
+        })
     }
 
-    fn close_admitted(&self, session_id: &str) -> Result<(), String> {
+    fn close_admitted(
+        &self,
+        session_id: &str,
+        _admission: &crate::sync_primitives::MutexGuard<'_, ()>,
+    ) -> Result<(), String> {
         let session = {
-            let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-            inner.order.retain(|i| i != session_id);
-            inner.viewports.remove(session_id);
-            inner.sessions.remove(session_id)
+            let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+            inner.sessions.get(session_id).cloned()
         };
         match session {
             Some(s) => {
-                Self::record_killed(&s);
-                s.kill();
+                // Kill first: a failed kill keeps the session in the registry
+                // so the shell stays reachable and the failure stays visible.
+                if let Err(e) = s.try_kill() {
+                    return Err(format!("failed to kill session {session_id}: {e}"));
+                }
+                let removed = {
+                    let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+                    inner.order.retain(|i| i != session_id);
+                    inner.viewports.remove(session_id);
+                    inner.sessions.remove(session_id).is_some()
+                };
+                if removed {
+                    if let Some(source) = self.capability_source() {
+                        self.queue_source_receipt(source.withdraw_session_deferred(&s.id));
+                    }
+                    Self::record_killed(&s);
+                }
                 Ok(())
             }
             None => Err(format!("no such session: {session_id}")),
@@ -804,7 +1011,7 @@ impl PtyManager {
     /// `running` on disk for the next boot to tombstone as a shell the
     /// restart *interrupted*.
     pub fn close_all(&self) -> usize {
-        self.with_generation(self.lifecycle.generation(), || {
+        self.with_generation(self.lifecycle.generation(), |_| {
             self.close_all_checked().map_err(|error| error.to_string())
         })
         .unwrap_or(0)
@@ -821,8 +1028,18 @@ impl PtyManager {
         let failures = sessions
             .into_iter()
             .filter_map(|session| {
-                Self::record_killed(&session);
-                let error = session.try_kill().err()?;
+                let error = match session.try_kill() {
+                    Ok(()) => {
+                        if let Some(source) = self.capability_source() {
+                            self.queue_source_receipt(
+                                source.withdraw_session_deferred(&session.id),
+                            );
+                        }
+                        Self::record_killed(&session);
+                        return None;
+                    }
+                    Err(error) => error,
+                };
                 let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
                 inner.order.push_back(session.id.clone());
                 inner.sessions.insert(session.id.clone(), session);
@@ -841,7 +1058,13 @@ impl PtyManager {
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         inner.order.retain(|i| i != session_id);
         inner.viewports.remove(session_id);
-        inner.sessions.remove(session_id);
+        let removed = inner.sessions.remove(session_id).is_some();
+        drop(inner);
+        if removed {
+            if let Some(source) = self.capability_source() {
+                source.withdraw_session(session_id);
+            }
+        }
     }
 
     /// Who created a session — the ownership input for every `pty.*` face.
@@ -869,8 +1092,19 @@ impl PtyManager {
     /// only face that knows who is asking, and `close_all`/`live_apply` need
     /// the whole set.
     pub fn list(&self) -> Vec<SessionInfo> {
-        self.with_generation(self.lifecycle.generation(), || Ok(self.list_admitted()))
+        self.with_generation(self.lifecycle.generation(), |_| Ok(self.list_admitted()))
             .unwrap_or_default()
+    }
+
+    /// Committed global PTY occupancy. A prospective spawn is not published yet.
+    pub(crate) fn occupied_sessions_at(&self, generation: u64) -> Result<usize, String> {
+        self.with_generation(generation, |_| {
+            let inner = self
+                .inner
+                .lock()
+                .map_err(|_| "PTY manager state is poisoned".to_owned())?;
+            Ok(inner.sessions.len())
+        })
     }
 
     fn list_admitted(&self) -> Vec<SessionInfo> {
@@ -916,7 +1150,7 @@ impl PtyManager {
         rows: u16,
         cols: u16,
     ) -> Result<(), String> {
-        self.with_generation(generation, || {
+        self.with_generation(generation, |_| {
             {
                 let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
                 if !inner.sessions.contains_key(session_id) {
@@ -948,7 +1182,7 @@ impl PtyManager {
         let Ok(generation) = self.ready_generation() else {
             return;
         };
-        let _ = self.with_generation(generation, || {
+        let _ = self.with_generation(generation, |_| {
             let touched = {
                 let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
                 let touched = inner
@@ -997,20 +1231,44 @@ impl PtyManager {
         session_id: &str,
         f: impl FnOnce(&Arc<PtySession>) -> Result<R, String>,
     ) -> Result<R, String> {
-        self.with_generation(generation, || self.with_session_admitted(session_id, f))
+        self.with_generation(generation, |_| self.with_session_admitted(session_id, f))
+    }
+
+    fn queue_source_receipt(&self, receipt: crate::capability::events::SourceObservationReceipt) {
+        self.inner
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .source_receipts
+            .push(receipt);
+    }
+
+    fn flush_source_receipts(&self) {
+        let receipts = std::mem::take(
+            &mut self
+                .inner
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .source_receipts,
+        );
+        for receipt in receipts {
+            receipt.flush();
+        }
     }
 
     fn with_generation<R>(
         &self,
         generation: u64,
-        effect: impl FnOnce() -> Result<R, String>,
+        effect: impl FnOnce(&crate::sync_primitives::MutexGuard<'_, ()>) -> Result<R, String>,
     ) -> Result<R, String> {
         self.admit_generation(generation)?;
         let _admission = self.admission.lock().unwrap_or_else(|e| e.into_inner());
         self.lifecycle
             .acquire_call(generation)
             .map_err(|error| error.to_string())?;
-        effect()
+        let result = effect(&_admission);
+        drop(_admission);
+        self.flush_source_receipts();
+        result
     }
 
     fn with_session_admitted<R>(
@@ -1178,10 +1436,274 @@ impl Drop for TestManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::capability::ownership::{LifetimeScope, OwnerRef, OwnershipTree, VisibilityScope};
+    use crate::capability::special::CapabilityHandlerRegistry;
+    use crate::tools::registry::ToolHandlerRegistry;
+
+    fn terminal_test_source(
+        specials: CapabilityHandlerRegistry,
+        facade: Option<&Arc<crate::capability::zahir_facade::ZahirFacade>>,
+    ) -> Arc<crate::capability::tool_adapters::TerminalCapabilitySource> {
+        Arc::new(
+            crate::capability::tool_adapters::TerminalCapabilitySource::new(
+                specials,
+                Arc::new(crate::capability::policy::PolicyEngine::new(
+                    OwnershipTree::new(),
+                )),
+                facade.map_or_else(Weak::new, Arc::downgrade),
+                Arc::new(tokio::sync::RwLock::new(crate::Config::default())),
+            ),
+        )
+    }
+
+    #[test]
+    fn registration_failure_never_publishes_an_untracked_session() {
+        let specials = CapabilityHandlerRegistry::new();
+        let tree = Arc::new(OwnershipTree::new());
+        let facade = crate::capability::zahir_facade::ZahirFacade::new_with_specials(
+            ToolHandlerRegistry::new(),
+            Arc::clone(&tree),
+            specials.clone(),
+        );
+        let source = terminal_test_source(specials.clone(), Some(&facade));
+        let mgr = PtyManager::cold_fixture();
+        mgr.bind_capability_source(Arc::downgrade(&source))
+            .expect("source binding");
+        source.fail_next_registration_after_binding();
+
+        let result = mgr.spawn(&SpawnOptions {
+            command: Some(if cfg!(windows) { "cmd.exe" } else { "cat" }.into()),
+            ..Default::default()
+        });
+        assert!(
+            result.is_err(),
+            "a source registration failure must fail spawn"
+        );
+        assert!(
+            mgr.list().is_empty(),
+            "failed publication must not enter manager"
+        );
+        assert!(specials
+            .describe(&crate::capability::facade::Scope::default())
+            .is_empty());
+        assert_eq!(specials.revision(), 2, "partial publication withdraws once");
+        let failed_id = source
+            .last_registration_id()
+            .expect("post-publication failure records exact session");
+        let failed_capability = crate::capability::descriptor::CapabilityId {
+            namespace: "aleph/terminal".into(),
+            name: format!("session-{failed_id}"),
+        };
+        assert!(
+            !tree.is_revoked(&failed_capability),
+            "failed publication must not tombstone"
+        );
+        source.withdraw_session(&failed_id);
+        assert_eq!(specials.revision(), 2, "repeated withdrawal is a no-op");
+        tree.register(
+            failed_capability,
+            OwnerRef::Runtime,
+            LifetimeScope::Runtime,
+            VisibilityScope::default(),
+        )
+        .expect("real facade tree remains available for later registration");
+    }
+
+    #[tokio::test]
+    async fn registration_cleanup_failure_waits_for_reader_settlement() {
+        use crate::builtin_tools::process_journal as journal;
+
+        #[derive(Debug)]
+        struct RefuseKill;
+        impl portable_pty::ChildKiller for RefuseKill {
+            fn kill(&mut self) -> std::io::Result<()> {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "registration cleanup refused",
+                ))
+            }
+
+            fn clone_killer(&self) -> Box<dyn portable_pty::ChildKiller + Send + Sync> {
+                Box::new(Self)
+            }
+        }
+
+        let _journal_gate = journal::test_gate();
+        let temp = tempfile::tempdir().expect("journal temp dir");
+        journal::enable_for_test(temp.path().to_path_buf());
+        let specials = CapabilityHandlerRegistry::new();
+        let tree = Arc::new(OwnershipTree::new());
+        let facade = crate::capability::zahir_facade::ZahirFacade::new_with_specials(
+            ToolHandlerRegistry::new(),
+            Arc::clone(&tree),
+            specials.clone(),
+        );
+        let source = terminal_test_source(specials, Some(&facade));
+        let manager = PtyManager::cold();
+        let bus = Arc::new(GatewayEventBus::new());
+        let generation = manager
+            .activate(Arc::clone(&bus))
+            .expect("activate manager");
+        manager
+            .bind_capability_source(Arc::downgrade(&source))
+            .expect("bind source");
+        manager.fail_next_registration_cleanup_for_test(Box::new(RefuseKill));
+        source.fail_next_registration_after_binding();
+        let mut exit_events = bus.subscribe();
+        let result = manager.spawn_at(
+            generation,
+            &SpawnOptions {
+                command: Some(if cfg!(windows) { "cmd.exe" } else { "cat" }.into()),
+                created_by: Some("u-fix4-cleanup".into()),
+                ..Default::default()
+            },
+        );
+        assert!(
+            result
+                .as_ref()
+                .is_err_and(|error| error.contains("cleanup failed")),
+            "registration cleanup failure must reach the caller: {result:?}"
+        );
+        let session_id = source
+            .last_registration_id()
+            .expect("exact failed registration id");
+        let running = journal::lookup_pty(&session_id).expect("running intent row");
+        assert_eq!(running.record.phase, journal::JobPhase::Running);
+        assert_eq!(running.record.outcome, None);
+        let session = manager
+            .take_registration_failure_session()
+            .expect("retained failure session");
+        let original = manager
+            .take_registration_original_killer()
+            .expect("retained original killer");
+        session.replace_killer_for_test(original);
+        session
+            .try_kill()
+            .expect("release child after state assertion");
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let event = exit_events.recv().await.expect("pty exit event");
+                if event.contains(&session_id) {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("reader settlement event");
+        let settled = journal::lookup_pty(&session_id).expect("settled row");
+        assert_eq!(settled.record.phase, journal::JobPhase::Settled);
+        let outcome = settled
+            .record
+            .outcome
+            .clone()
+            .expect("one terminal verdict");
+        journal::record_pty_settled(&session_id, journal::Verdict::Killed, None, "loser");
+        assert_eq!(
+            journal::lookup_pty(&session_id)
+                .expect("row remains")
+                .record
+                .outcome
+                .as_deref(),
+            Some(outcome.as_str()),
+            "first terminal verdict must remain authoritative"
+        );
+        manager.deactivate().await.expect("deactivate manager");
+    }
+
+    #[test]
+    fn close_and_exit_withdraw_the_same_session_exactly_once() {
+        let specials = CapabilityHandlerRegistry::new();
+        let tree = Arc::new(OwnershipTree::new());
+        let facade = crate::capability::zahir_facade::ZahirFacade::new_with_specials(
+            ToolHandlerRegistry::new(),
+            tree,
+            specials.clone(),
+        );
+        let source = terminal_test_source(specials.clone(), Some(&facade));
+        let mgr = PtyManager::cold_fixture();
+        mgr.bind_capability_source(Arc::downgrade(&source))
+            .expect("source binding");
+        let sid = mgr
+            .spawn(&SpawnOptions {
+                command: Some(if cfg!(windows) { "cmd.exe" } else { "cat" }.into()),
+                ..Default::default()
+            })
+            .expect("real source-backed spawn")
+            .session_id;
+        assert_eq!(
+            specials.revision(),
+            1,
+            "publication registers one descriptor"
+        );
+
+        mgr.close(&sid).expect("close at capacity");
+        for _ in 0..100 {
+            if specials
+                .describe(&crate::capability::facade::Scope::default())
+                .is_empty()
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(specials
+            .describe(&crate::capability::facade::Scope::default())
+            .is_empty());
+        assert_eq!(
+            specials.revision(),
+            2,
+            "close and exit share one withdrawal"
+        );
+        source.withdraw_session(&sid);
+        assert_eq!(specials.revision(), 2, "repeated withdrawal is a no-op");
+    }
+
+    #[test]
+    fn immediate_child_exit_cannot_leave_a_stale_descriptor() {
+        let specials = CapabilityHandlerRegistry::new();
+        let tree = Arc::new(OwnershipTree::new());
+        let facade = crate::capability::zahir_facade::ZahirFacade::new_with_specials(
+            ToolHandlerRegistry::new(),
+            tree,
+            specials.clone(),
+        );
+        let source = terminal_test_source(specials.clone(), Some(&facade));
+        let mgr = PtyManager::cold_fixture();
+        mgr.bind_capability_source(Arc::downgrade(&source))
+            .expect("source binding");
+        mgr.spawn(&SpawnOptions {
+            command: Some(if cfg!(windows) { "cmd.exe" } else { "sh" }.into()),
+            args: if cfg!(windows) {
+                vec!["/C".into(), "exit 0".into()]
+            } else {
+                vec!["-c".into(), "exit 0".into()]
+            },
+            ..Default::default()
+        })
+        .expect("immediate child publication");
+        for _ in 0..100 {
+            if mgr.list().is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(
+            mgr.list().is_empty(),
+            "child exit must remove published session"
+        );
+        assert!(specials
+            .describe(&crate::capability::facade::Scope::default())
+            .is_empty());
+        assert_eq!(
+            specials.revision(),
+            2,
+            "registration and one withdrawal only"
+        );
+    }
 
     #[test]
     fn spawn_write_list_close_roundtrip() {
-        let mgr = PtyManager::new();
+        let mgr = PtyManager::cold_fixture();
         // The local fixture owns a real driver; no subscriber is required.
         let res = mgr
             .spawn(&SpawnOptions {
@@ -1210,7 +1732,7 @@ mod tests {
 
     #[test]
     fn unknown_session_is_error() {
-        let mgr = PtyManager::new();
+        let mgr = PtyManager::cold_fixture();
         assert!(mgr.resize("ghost", 24, 80).is_err());
         assert!(mgr.list().is_empty());
     }
@@ -1237,7 +1759,7 @@ mod tests {
         } else {
             ("sh", vec!["-c".into(), "read -r _; exit 3".into()])
         };
-        let mgr = PtyManager::new();
+        let mgr = PtyManager::cold_fixture();
         let sid = mgr
             .spawn(&SpawnOptions {
                 command: Some(cmd.into()),
@@ -1294,7 +1816,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         j::enable_for_test(tmp.path().to_path_buf());
         const PROGRAM: &str = "aleph-no-such-program-xyz";
-        let err = PtyManager::new()
+        let err = PtyManager::cold_fixture()
             .spawn(&SpawnOptions {
                 command: Some(PROGRAM.into()),
                 created_by: Some("u-alice".into()),
@@ -1339,7 +1861,7 @@ mod tests {
         let _g = j::test_gate();
         let tmp = tempfile::tempdir().unwrap();
         j::enable_for_test(tmp.path().to_path_buf());
-        let mgr = PtyManager::new();
+        let mgr = PtyManager::cold_fixture();
         let res = mgr
             .spawn(&SpawnOptions {
                 created_by: Some("u-alice".into()),
@@ -1386,7 +1908,7 @@ mod tests {
     /// deterministic, and it never thrashes between two live clients.
     #[test]
     fn the_smallest_attached_viewport_wins() {
-        let mgr = PtyManager::new();
+        let mgr = PtyManager::cold_fixture();
         let res = mgr
             .spawn(&SpawnOptions {
                 rows: 40,
@@ -1415,7 +1937,7 @@ mod tests {
     /// shell's death.
     #[test]
     fn the_owner_stamp_outlives_the_session_it_names() {
-        let mgr = PtyManager::new();
+        let mgr = PtyManager::cold_fixture();
         let sid = mgr
             .spawn(&SpawnOptions {
                 created_by: Some("u-alice".to_string()),
@@ -1452,7 +1974,7 @@ mod tests {
     /// stamp per shell it ever opened.
     #[test]
     fn owner_stamps_are_evicted_by_capacity() {
-        let mgr = PtyManager::new();
+        let mgr = PtyManager::cold_fixture();
         {
             let mut inner = mgr.inner.lock().expect("lock");
             for i in 0..(OWNER_RETENTION + 2) {
@@ -1468,6 +1990,90 @@ mod tests {
         let inner = mgr.inner.lock().expect("lock");
         assert_eq!(inner.owners.len(), OWNER_RETENTION);
         assert_eq!(inner.owner_order.len(), OWNER_RETENTION);
+    }
+
+    #[test]
+    fn close_and_eviction_retain_failed_kills_and_serialize_success() {
+        #[derive(Debug)]
+        struct RefuseKill;
+        impl portable_pty::ChildKiller for RefuseKill {
+            fn kill(&mut self) -> std::io::Result<()> {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "kill refused",
+                ))
+            }
+            fn clone_killer(&self) -> Box<dyn portable_pty::ChildKiller + Send + Sync> {
+                Box::new(Self)
+            }
+        }
+        #[derive(Debug)]
+        struct CountKill {
+            inner: Box<dyn portable_pty::ChildKiller + Send + Sync>,
+            calls: Arc<AtomicUsize>,
+        }
+        impl portable_pty::ChildKiller for CountKill {
+            fn kill(&mut self) -> std::io::Result<()> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                self.inner.kill()
+            }
+            fn clone_killer(&self) -> Box<dyn portable_pty::ChildKiller + Send + Sync> {
+                Box::new(Self {
+                    inner: self.inner.clone_killer(),
+                    calls: self.calls.clone(),
+                })
+            }
+        }
+        let mgr = PtyManager::cold_fixture();
+        mgr.set_max_sessions(1);
+        let opts = SpawnOptions {
+            created_by: Some("owner".into()),
+            ..Default::default()
+        };
+        let sid = mgr.spawn(&opts).unwrap().session_id;
+        let session = mgr.inner.lock().unwrap().sessions[&sid].clone();
+        let killer = session.replace_killer_for_test(Box::new(RefuseKill));
+        assert!(mgr.close(&sid).unwrap_err().contains("kill refused"));
+        assert!(mgr.spawn(&opts).unwrap_err().contains("kill refused"));
+        assert_eq!(mgr.list().len(), 1);
+        assert!(mgr.owner_of(&sid).admits(Some("owner")));
+        let calls = Arc::new(AtomicUsize::new(0));
+        session.replace_killer_for_test(Box::new(CountKill {
+            inner: killer,
+            calls: calls.clone(),
+        }));
+        let results = std::thread::scope(|scope| {
+            let first = scope.spawn(|| mgr.close(&sid));
+            let second = scope.spawn(|| mgr.close(&sid));
+            [first.join().unwrap(), second.join().unwrap()]
+        });
+        assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 1);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(mgr.list().is_empty());
+    }
+
+    #[test]
+    fn live_owner_stamps_keep_their_fifo_position_during_churn() {
+        let mgr = PtyManager::cold_fixture();
+        let sid = mgr
+            .spawn(&SpawnOptions {
+                created_by: Some("long-lived-owner".into()),
+                ..Default::default()
+            })
+            .unwrap()
+            .session_id;
+        {
+            let mut inner = mgr.inner.lock().unwrap();
+            for i in 0..OWNER_RETENTION + 2 {
+                inner.remember_owner(&format!("ended-{i}"), None);
+            }
+            assert_eq!(inner.owner_order.front(), Some(&sid));
+            assert_eq!(inner.owner_order.len(), inner.owners.len());
+            assert_eq!(inner.owners.len(), OWNER_RETENTION);
+        }
+        assert!(mgr.owner_of(&sid).admits(Some("long-lived-owner")));
+        mgr.close(&sid).unwrap();
+        assert!(mgr.owner_of(&sid).admits(Some("long-lived-owner")));
     }
 
     /// The one predicate, exhaustively — every other face delegates here, so
@@ -1499,7 +2105,7 @@ mod tests {
     /// record creates an orphaned `viewports` entry for a dead session_id.
     #[test]
     fn note_viewport_on_unknown_session_is_an_error() {
-        let mgr = PtyManager::new();
+        let mgr = PtyManager::cold_fixture();
         assert!(mgr.note_viewport("ghost", "conn-a", 24, 80).is_err());
         // And it must not have recorded anything under that dead id.
         assert_eq!(mgr.effective_size("ghost"), None);
@@ -1510,7 +2116,7 @@ mod tests {
     /// must reach the grid that actually bounds the ring.
     #[test]
     fn the_configured_scrollback_reaches_the_session_grid() {
-        let mgr = PtyManager::new();
+        let mgr = PtyManager::cold_fixture();
         let sid = mgr
             .spawn(&SpawnOptions {
                 rows: 3,
@@ -1534,7 +2140,7 @@ mod tests {
     fn a_spawn_records_who_asked_for_it() {
         // A LOCAL PtyManager, so `list()` really is this test's own sessions.
         // Never index the process-global one -- see the handler test below.
-        let mgr = PtyManager::new();
+        let mgr = PtyManager::cold_fixture();
         let sid = mgr
             .spawn(&SpawnOptions {
                 created_by: Some("u-alice".to_string()),
@@ -1551,7 +2157,7 @@ mod tests {
     /// already open still open.
     #[test]
     fn close_all_terminates_every_live_session() {
-        let mgr = PtyManager::new();
+        let mgr = PtyManager::cold_fixture();
         let a = mgr.spawn(&SpawnOptions::default()).expect("a").session_id;
         let b = mgr.spawn(&SpawnOptions::default()).expect("b").session_id;
         assert_eq!(mgr.list().len(), 2);
@@ -1633,6 +2239,7 @@ mod tests {
                         },
                         ..Default::default()
                     },
+                    &_admission,
                 )
                 .unwrap();
             let session = mgr.inner.lock().unwrap().sessions[&spawned.session_id].clone();

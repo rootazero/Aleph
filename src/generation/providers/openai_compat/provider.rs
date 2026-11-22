@@ -6,7 +6,6 @@ use crate::generation::GenerationType;
 use reqwest::Client;
 
 use super::builder::OpenAiCompatProviderBuilder;
-use super::types::DEFAULT_MODEL;
 use crate::generation::GenerationResult;
 
 /// Generic OpenAI-Compatible Image Generation Provider
@@ -108,9 +107,11 @@ impl OpenAiCompatProvider {
         S2: Into<String>,
         S3: Into<String>,
     {
-        OpenAiCompatProviderBuilder::new(name, api_key, base_url)
-            .model(model.unwrap_or_else(|| DEFAULT_MODEL.to_string()))
-            .build()
+        let mut builder = OpenAiCompatProviderBuilder::new(name, api_key, base_url);
+        if let Some(m) = model {
+            builder = builder.model(m);
+        }
+        builder.build()
     }
 
     /// Create a builder for `OpenAiCompatProvider`

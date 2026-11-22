@@ -14,7 +14,7 @@ mod parser;
 
 pub use parser::{CommandContext, CommandParser, ParsedCommand};
 
-/// Deferred handle to the process's one [`CommandParser`].
+/// Deferred handle to the process's [`CommandParser`].
 ///
 /// The parser cannot exist when the gateway is assembled — it is built from
 /// the `ToolCatalog`, which is only populated once plugins, MCP servers and
@@ -25,6 +25,10 @@ pub use parser::{CommandContext, CommandParser, ParsedCommand};
 /// the execution engine's own fallback all resolve slash input through the
 /// same parser, which is what stops the surfaces from growing slightly
 /// different ideas of what `/foo` means.
+///
+/// The gateway's `InboundRouter` builds a second `CommandParser` over the
+/// same `ToolCatalog` — two parsers, one catalog. What keeps the surfaces in
+/// lockstep is the shared catalog, not the parser instance.
 pub type CommandParserCell = crate::sync_primitives::Arc<
     tokio::sync::RwLock<Option<crate::sync_primitives::Arc<CommandParser>>>,
 >;

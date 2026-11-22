@@ -11,7 +11,6 @@
 //! Key Telegram-specific metadata (`thread_id`, `sender_id`) is also passed via
 //! `InboundMessage.metadata` so the router can access it if needed.
 
-use super::sticker::StickerPipeline;
 use crate::gateway::channel::{
     Attachment, ChannelId, ConversationId, InboundMessage, MessageId, MessageMeta, UserId,
 };
@@ -29,7 +28,6 @@ pub(crate) async fn convert_message(
     msg: &teloxide::types::Message,
     bot: &Bot,
     channel_id: &ChannelId,
-    sticker_pipeline: &StickerPipeline,
 ) -> Option<InboundMessage> {
     // Get sender info
     let (sender_id, sender_name) = if let Some(from) = &msg.from {
@@ -61,14 +59,7 @@ pub(crate) async fn convert_message(
             MediaKind::Voice(voice) => voice.caption.clone().unwrap_or_default(),
             MediaKind::Sticker(s) => {
                 let emoji = s.sticker.emoji.as_deref().unwrap_or("?");
-                let file_unique_id = &s.sticker.file.unique_id.0;
-                let desc = sticker_pipeline
-                    .resolve_description(file_unique_id, "")
-                    .await;
-                match desc {
-                    Some(d) => format!("[Sticker: {emoji} | {d}]"),
-                    None => format!("[Sticker: {emoji}]"),
-                }
+                format!("[Sticker: {emoji}]")
             }
             _ => String::new(),
         },
@@ -158,7 +149,7 @@ pub(crate) async fn convert_message(
     }
 
     Some(InboundMessage {
-        id: MessageId::new(msg.id.0.to_string()),
+        id: MessageId::new(format!("{}_{}", msg.chat.id.0, msg.id.0)),
         channel_id: channel_id.clone(),
         conversation_id,
         sender_id,

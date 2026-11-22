@@ -4,7 +4,7 @@
 //! in dedicated `SQLite` tables so state survives restarts.
 
 use async_trait::async_trait;
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 
 use crate::error::AlephError;
 use crate::memory::dreaming::{DailyInsight, DreamStatus};
@@ -28,7 +28,7 @@ impl DreamStore for SqliteMemoryBackend {
                 AlephError::config(format!("Failed to prepare dream_status query: {e}"))
             })?;
 
-            let result = stmt.query_row(params![], |row| {
+            stmt.query_row(params![], |row| {
                 let last_run_at: Option<i64> = row.get(0)?;
                 let last_status: Option<String> = row.get(1)?;
                 let last_duration_ms: Option<i64> = row.get(2)?;
@@ -37,15 +37,10 @@ impl DreamStore for SqliteMemoryBackend {
                     last_status,
                     last_duration_ms: last_duration_ms.map(|v| v as u64),
                 })
-            });
-
-            match result {
-                Ok(status) => Ok(status),
-                Err(rusqlite::Error::QueryReturnedNoRows) => Ok(DreamStatus::default()),
-                Err(e) => Err(AlephError::config(format!(
-                    "Failed to get dream status: {e}"
-                ))),
-            }
+            })
+            .optional()
+            .map(|opt| opt.unwrap_or_default())
+            .map_err(|e| AlephError::config(format!("Failed to get dream status: {e}")))
         })
     }
 
@@ -96,22 +91,16 @@ impl DreamStore for SqliteMemoryBackend {
             .prepare("SELECT date, content, source_memory_count, created_at FROM daily_insights WHERE date = ?1")
             .map_err(|e| AlephError::config(format!("Failed to prepare daily_insights query: {e}")))?;
 
-        let result = stmt.query_row(params![date], |row| {
+        stmt.query_row(params![date], |row| {
             Ok(DailyInsight {
                 date: row.get(0)?,
                 content: row.get(1)?,
                 source_memory_count: row.get(2)?,
                 created_at: row.get(3)?,
             })
-        });
-
-        match result {
-            Ok(insight) => Ok(Some(insight)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(AlephError::config(format!(
-                "Failed to get daily insight: {e}"
-            ))),
-        }
+        })
+        .optional()
+        .map_err(|e| AlephError::config(format!("Failed to get daily insight: {e}")))
         })
     }
 

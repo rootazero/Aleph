@@ -1671,6 +1671,18 @@ manager's persistent registry consulted at re-attach time, one layer above
 asserting it — asserting it today would be a standing red, which trains
 readers to scroll past red.
 
+**Status update (2026-11-19, severed-wire audit):** the identity half of
+`TabRegistry` was CUT. `resolve_identity` had no production caller — only
+tests — and its private state (`record_death` / `dead_targets`) was read by
+nothing else; the liveness answer the verbs actually consult is the engine's
+own `TabTable.dead` (`EngineHandle::ensure_tab` answers `TabGone` from
+there). The registry keeps the URL half (`record_url` / `last_url`), which the
+ref precheck reads for the URL-drift verdict. **What is still NOT done, and
+stays a registered gap rather than a claim:** the cross-re-attach tab
+identity — "is the tab I mean still the tab I mean" — is still open, and on
+the playwright-cli path an identity can never be ruled `TabGone` at all
+(FL §3.12 第四轮 ③). The status update below records the round-1 B3 state
+that the audit removed.
 **Status update (2026-09-24, round-1 B3):** the registry this section said was
 needed now exists — `TabRegistry`'s identity half (`record_identity` /
 `resolve_identity`, targetId-first, structured `TabGone`), recorded at every

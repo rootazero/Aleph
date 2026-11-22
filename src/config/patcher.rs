@@ -179,6 +179,9 @@ pub struct ConfigPatcher {
     vault: Option<Arc<crate::gateway::security::SharedTokenManager>>,
     /// Existing Gateway bus; wiring this context does not initialize Terminal.
     event_bus: Option<Arc<GatewayEventBus>>,
+    /// Existing terminal source; wiring this context does not initialize it.
+    terminal_source:
+        Option<Arc<crate::capability::tool_adapters::TerminalCapabilitySource>>,
 }
 
 impl ConfigPatcher {
@@ -191,6 +194,7 @@ impl ConfigPatcher {
             last_known_mtime: Mutex::new(None),
             vault: None,
             event_bus: None,
+            terminal_source: None,
         }
     }
 
@@ -208,6 +212,16 @@ impl ConfigPatcher {
     #[must_use]
     pub fn with_event_bus(mut self, event_bus: Arc<GatewayEventBus>) -> Self {
         self.event_bus = Some(event_bus);
+        self
+    }
+
+    /// Supply the existing terminal capability source for live enable/disable.
+    #[must_use]
+    pub fn with_terminal_capability_source(
+        mut self,
+        source: Arc<crate::capability::tool_adapters::TerminalCapabilitySource>,
+    ) -> Self {
+        self.terminal_source = Some(source);
         self
     }
 
@@ -381,11 +395,12 @@ impl ConfigPatcher {
         // present and future consumer of the patcher now gets the behaviour
         // its own response already promises.
         let live_applied = {
-            let cfg = self.config.read().await;
+            let cfg = self.config.read().await.clone();
             crate::config::live_apply::apply_live_sections(
                 &cfg,
                 &[top_section.as_str()],
                 self.event_bus.as_ref(),
+                self.terminal_source.as_ref(),
             )
             .await
         };
@@ -680,12 +695,13 @@ impl ConfigPatcher {
         // `live_targets()`, which also carries `LIVE_SUBSECTIONS`) would
         // reintroduce the same gap for `policies.spend` today.
         let live_applied = {
-            let cfg = self.config.read().await;
+            let cfg = self.config.read().await.clone();
             let live_targets = crate::config::reload_impact::live_targets();
             let live_applied = crate::config::live_apply::apply_live_sections(
                 &cfg,
                 &live_targets,
                 self.event_bus.as_ref(),
+                self.terminal_source.as_ref(),
             )
             .await;
             let complete = live_targets
@@ -842,10 +858,12 @@ pub(crate) fn deep_merge(target: &mut serde_json::Value, source: &serde_json::Va
                 }
                 if let Some(target_val) = target_obj.get_mut(key) {
                     deep_merge(target_val, source_val);
-                } else {
-                    let mut new_val = serde_json::Value::Null;
+                } else if source_val.is_object() {
+                    let mut new_val = serde_json::Value::Object(serde_json::Map::new());
                     deep_merge(&mut new_val, source_val);
                     target_obj.insert(key.clone(), new_val);
+                } else {
+                    target_obj.insert(key.clone(), source_val.clone());
                 }
             }
         }

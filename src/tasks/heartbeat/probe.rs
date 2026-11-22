@@ -89,13 +89,10 @@ pub fn evaluate_trigger(
     match condition {
         TriggerCondition::NonEmpty => !is_empty_value(value),
         TriggerCondition::GreaterThan(threshold) => value.as_f64().is_some_and(|v| v > *threshold),
-        TriggerCondition::Contains(s) => {
-            let text = match value {
-                Value::String(str_val) => str_val.clone(),
-                other => other.to_string(),
-            };
-            text.contains(s.as_str())
-        }
+        TriggerCondition::Contains(s) => match value {
+            Value::String(str_val) => str_val.contains(s.as_str()),
+            other => other.to_string().contains(s.as_str()),
+        },
         TriggerCondition::Changed => {
             let current = value.to_string();
             last_result.is_none_or(|prev| prev != current)

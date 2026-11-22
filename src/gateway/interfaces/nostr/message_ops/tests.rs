@@ -100,22 +100,6 @@ fn test_build_text_note() {
 }
 
 #[test]
-fn test_build_dm() {
-    let pubkey = "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd";
-    let recipient =
-        "11223344112233441122334411223344112233441122334411223344112233441122334411223344";
-    let event = build_dm("Secret message", pubkey, recipient);
-
-    assert_eq!(event.kind, 4);
-    assert_eq!(event.content, "Secret message");
-    assert_eq!(event.pubkey, pubkey);
-    assert_eq!(event.tags.len(), 1);
-    assert_eq!(event.tags[0][0], "p");
-    assert_eq!(event.tags[0][1], recipient);
-    assert!(event.sig.is_empty());
-}
-
-#[test]
 fn test_build_reaction() {
     let pubkey = "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd";
     let event_id = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
@@ -405,9 +389,11 @@ fn test_convert_text_note() {
 }
 
 #[test]
-fn test_convert_dm() {
+fn test_convert_drops_kind4_ciphertext() {
     use crate::gateway::channel::ChannelId;
 
+    // Kind 4 is a NIP-04 *encrypted* DM: without decryption the content is
+    // ciphertext, so it must never reach the agent as message text.
     let event = NostrEvent {
         id: "event-2".to_string(),
         pubkey: "sender-pubkey".to_string(),
@@ -419,10 +405,7 @@ fn test_convert_dm() {
     };
 
     let channel_id = ChannelId::new("nostr");
-    let msg = convert_event_to_inbound(&event, &channel_id, "my-pubkey").unwrap();
-
-    assert!(!msg.is_group);
-    assert_eq!(msg.conversation_id.as_str(), "sender-pubkey");
+    assert!(convert_event_to_inbound(&event, &channel_id, "my-pubkey").is_none());
 }
 
 #[test]
@@ -569,18 +552,6 @@ fn test_sign_event_invalid_key() {
 
     let result = sign_event(&mut event, "invalid");
     assert!(result.is_err());
-}
-
-#[test]
-fn test_sign_dm_event() {
-    let pubkey = derive_pubkey(TEST_PRIVKEY).unwrap();
-    let recipient = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
-    let mut event = build_dm("Secret DM", &pubkey, recipient);
-
-    sign_event(&mut event, TEST_PRIVKEY).unwrap();
-
-    assert_eq!(event.sig.len(), 128);
-    assert_eq!(event.kind, 4);
 }
 
 // ==================== Serde Tests ====================

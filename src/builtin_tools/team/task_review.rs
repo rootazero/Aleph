@@ -213,13 +213,14 @@ impl AlephTool for TaskReviewTool {
             });
         }
         let leader = match task.team_id.as_deref() {
-            Some(team_id) => self
-                .team_store
-                .get_team(team_id)
-                .await
-                .ok()
-                .flatten()
-                .map(|t| t.leader_id),
+            Some(team_id) => match self.team_store.get_team(team_id).await {
+                Ok(Some(t)) => Some(t.leader_id),
+                Ok(None) => None,
+                Err(e) => {
+                    warn!(error = %e, team_id = %team_id, "failed to get team for authorization");
+                    return Err(AlephError::tool(format!("team store error: {e}")));
+                }
+            },
             None => None,
         };
         if !is_authorized(&self.actor(), leader.as_deref()) {

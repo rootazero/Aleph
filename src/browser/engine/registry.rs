@@ -196,6 +196,13 @@ impl EngineRegistry {
 
     /// The handle for `profile`, without launching one. A sensor must not
     /// create what it measures.
+    ///
+    /// The live engine handle registered for `profile`, if any.
+    ///
+    /// Production reads it from the engine-switch path (a switch needs the
+    /// handle it replaces), so this is not a second way to ask "is there an
+    /// engine for this profile" — it answers "which one", and the switch
+    /// needs exactly that.
     pub async fn get(&self, profile: &str) -> Option<Arc<EngineHandle>> {
         self.handles.lock().await.get(profile).cloned()
     }
@@ -254,16 +261,26 @@ impl EngineRegistry {
             .is_ok_and(|m| m.get(profile).is_some_and(|h| h.alive()))
     }
 
-    /// Take the handle out of the map. The caller owns stopping it — used by
-    /// `switch_engine` (Task 19), which must not have the old engine restarted
-    /// under it while the new one comes up.
-    pub async fn remove(&self, profile: &str) -> Option<Arc<EngineHandle>> {
-        self.handles.lock().await.remove(profile)
-    }
-
     /// Every live handle, for callers that sweep rather than address one.
+    ///
+    /// **Test-only reader.** The production sweep is [`Self::shutdown_all`],
+    /// which stops what it finds; a reader that hands out handles nobody
+    /// asked for is a way to keep an engine alive after its profile is gone
+    /// (判据 §11).
+    #[cfg(test)]
     pub async fn all(&self) -> Vec<Arc<EngineHandle>> {
         self.handles.lock().await.values().cloned().collect()
+    }
+
+    /// Take a handle back out of the registry.
+    ///
+    /// **Test-only reader.** Production retires a profile through the
+    /// lifecycle, which stops the engine and then forgets it; a door that
+    /// removes a handle without stopping it would leave a browser running
+    /// with nothing holding it (判据 §11).
+    #[cfg(test)]
+    pub async fn remove(&self, profile: &str) -> Option<Arc<EngineHandle>> {
+        self.handles.lock().await.remove(profile)
     }
 
     /// Park a pre-built handle under `profile`, so a test can exercise a

@@ -104,7 +104,12 @@ fn outcome_json(o: &InstallOutcome) -> Value {
         InstallOutcome::Mcp { id } => serde_json::json!({ "kind": "mcp", "id": id }),
         InstallOutcome::Plugin { path } => serde_json::json!({ "kind": "plugin", "path": path }),
         InstallOutcome::Skill { path } => {
-            let mut out = serde_json::json!({ "kind": "skill", "path": path });
+            // The provenance (source, version, url) comes from the install
+            // registry — the one place that knows where the skill came from.
+            let mut out = crate::hub::install::skill_outcome_json(
+                crate::utils::paths::get_skills_dir().ok().as_deref(),
+                path,
+            );
             // Declared automation (never auto-scheduled): the model reads
             // this notice, asks the user, and creates the cron job via
             // cron_manage on consent.

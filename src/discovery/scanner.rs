@@ -5,7 +5,7 @@
 use super::paths::{
     agents_home_dir, aleph_home_dir, claude_home_dir, find_dir_upward, find_git_root,
     AGENTS_HOME_DIR, AGENT_FILE, ALEPH_HOME_DIR, CLAUDE_HOME_DIR, MCP_CONFIG_FILE, PLUGINS_DIR,
-    PLUGIN_MANIFEST_DIR, PLUGIN_MANIFEST_FILE, SKILL_FILE,
+    SKILL_FILE,
 };
 use super::types::{
     DiscoveredPath, DiscoveryScope, GlobalRoot, PluginDiscovery, ProjectPluginParent, ScanDirectory,
@@ -53,8 +53,12 @@ impl DirectoryScanner {
                 crate::utils::paths::assert_not_real_claude_home(p, "DirectoryScanner::new");
             }
             match resolved {
-                Ok(p) if p.exists() => Some(p),
-                Ok(_) => None,
+                // The root is kept as a PATH even when it does not exist
+                // yet: its existence is re-checked on every scan (see
+                // `claude_root`), so a `~/.claude` created after this
+                // scanner was built is found by the next scan instead of
+                // staying invisible for the whole process lifetime.
+                Ok(p) => Some(p),
                 Err(e) => {
                     // An unresolvable home must not abort discovery, but a
                     // silent skip makes "why weren't my ~/.claude skills
@@ -67,12 +71,12 @@ impl DirectoryScanner {
             None
         };
 
-        // Shared agents home (~/.agents) is optional: scan only if it
-        // exists. Independent of the Claude knob — it is its own root, not
-        // part of the Claude compatibility surface.
+        // Shared agents home (~/.agents): same rule as the Claude root — a
+        // path now, existence re-checked per scan. Independent of the Claude
+        // knob — it is its own root, not part of the Claude compatibility
+        // surface.
         let agents_home = match agents_home_dir() {
-            Ok(p) if p.exists() => Some(p),
-            Ok(_) => None,
+            Ok(p) => Some(p),
             Err(e) => {
                 debug!("agents home unavailable, skipping .agents scan: {e}");
                 None
@@ -105,11 +109,20 @@ impl DirectoryScanner {
         })
     }
 
-    /// Cached Aleph home directory resolved at construction (honours the
-    /// `ALEPH_HOME` override), so callers cannot drift from the scanner's
-    /// view by re-resolving env at call time.
-    pub(crate) fn aleph_home(&self) -> &Path {
-        &self.aleph_home
+    /// The Claude root for THIS scan, when the knob is on and the root
+    /// exists NOW.
+    ///
+    /// The path is resolved once (at construction) but its existence is
+    /// re-checked on every scan: a `~/.claude` that appears after boot must
+    /// be discoverable by the next scan, not only by the next process.
+    fn claude_root(&self) -> Option<&Path> {
+        self.claude_home.as_deref().filter(|p| p.exists())
+    }
+
+    /// The shared agents root for THIS scan — same rule as
+    /// [`DirectoryScanner::claude_root`].
+    fn agents_root(&self) -> Option<&Path> {
+        self.agents_home.as_deref().filter(|p| p.exists())
     }
 
     /// Get all directories to scan, in scan order.
@@ -153,18 +166,18 @@ impl DirectoryScanner {
 
         // 1. Agents global (shared cross-tool root; scanned first so its
         //    copy wins a Bundled-vs-Bundled id tie against the Claude one)
-        if let Some(ref agents_home) = self.agents_home {
+        if let Some(agents_home) = self.agents_root() {
             dirs.push(ScanDirectory::new(
-                agents_home.clone(),
+                agents_home.to_path_buf(),
                 DiscoveryScope::Global(GlobalRoot::Agents),
                 0,
             ));
         }
 
         // 2. Claude global (compat, read-only)
-        if let Some(ref claude_home) = self.claude_home {
+        if let Some(claude_home) = self.claude_root() {
             dirs.push(ScanDirectory::new(
-                claude_home.clone(),
+                claude_home.to_path_buf(),
                 DiscoveryScope::Global(GlobalRoot::Claude),
                 1,
             ));
@@ -192,8 +205,8 @@ impl DirectoryScanner {
         //   install location of the shared-skills convention).
         // - native Aleph project dirs outrank the `.claude/` compat dirs.
         if self.config.scan_project_dirs {
-            self.collect_project_dirs(&mut dirs, AGENTS_HOME_DIR, 20, self.agents_home.as_deref())?;
-            self.collect_project_dirs(&mut dirs, CLAUDE_HOME_DIR, 30, self.claude_home.as_deref())?;
+            self.collect_project_dirs(&mut dirs, AGENTS_HOME_DIR, 20, self.agents_root())?;
+            self.collect_project_dirs(&mut dirs, CLAUDE_HOME_DIR, 30, self.claude_root())?;
             self.collect_project_dirs(&mut dirs, ALEPH_HOME_DIR, 40, Some(&self.aleph_home))?;
         }
 
@@ -202,15 +215,14 @@ impl DirectoryScanner {
         // root reached both as global and via the upward walk) must scan
         // once. Canonical spelling is the identity; a root that fails to
         // canonicalize (does not exist yet) keeps its literal spelling.
-        let mut seen: Vec<PathBuf> = Vec::with_capacity(dirs.len());
+        let mut seen = std::collections::HashSet::with_capacity(dirs.len());
         dirs.retain(|d| {
             let key = std::fs::canonicalize(&d.path).unwrap_or_else(|_| d.path.clone());
-            if seen.contains(&key) {
+            if seen.insert(key) {
+                true
+            } else {
                 debug!("scan root {:?} deduped against an earlier spelling", d.path);
                 false
-            } else {
-                seen.push(key);
-                true
             }
         });
 
@@ -339,6 +351,7 @@ impl DirectoryScanner {
         self.scan_plugin_parent(
             &self.aleph_home.join(PLUGINS_DIR),
             &mut discovered,
+            &mut unreadable,
             &DiscoveryScope::Global(GlobalRoot::Aleph),
             10,
         );
@@ -346,6 +359,7 @@ impl DirectoryScanner {
             self.scan_plugin_parent(
                 &parent.dir,
                 &mut discovered,
+                &mut unreadable,
                 &DiscoveryScope::Project {
                     root: parent.project_root.clone(),
                 },
@@ -355,7 +369,7 @@ impl DirectoryScanner {
         // Claude Code's own installs, read-only. Gated by the same knob as
         // `~/.claude/{skills,commands,agents}` (`scan_claude_dirs` is what
         // leaves `claude_home` unset).
-        if let Some(claude_home) = self.claude_home.as_deref() {
+        if let Some(claude_home) = self.claude_root() {
             match super::claude_cache::discover_claude_cache(claude_home) {
                 Ok(found) => discovered.extend(found),
                 Err(index) => unreadable.push(index),
@@ -388,12 +402,14 @@ impl DirectoryScanner {
 
     /// Scan a single plugin-parent directory, pushing each plugin root (direct
     /// manifest or one-level monorepo subdir) into `discovered`, every one
-    /// stamped with the `scope` this parent was handed. A missing or
-    /// unreadable parent is a silent no-op.
+    /// stamped with the `scope` this parent was handed. A missing parent is
+    /// a silent no-op; an UNREADABLE parent (or plugin entry) is named in
+    /// `unreadable` — its plugins are unknown this pass, not absent.
     fn scan_plugin_parent(
         &self,
         plugins_dir: &Path,
         discovered: &mut Vec<DiscoveredPath>,
+        unreadable: &mut Vec<PathBuf>,
         scope: &DiscoveryScope,
         priority: u32,
     ) {
@@ -411,7 +427,12 @@ impl DirectoryScanner {
         let entries = match std::fs::read_dir(plugins_dir) {
             Ok(e) => e,
             Err(e) => {
+                // A plugin parent that exists but cannot be listed means
+                // "unknown", not "empty": name it, so the load that follows
+                // can say "the scan was incomplete" instead of "no plugins
+                // installed" (ruling 5).
                 debug!("Failed to read plugins directory {:?}: {}", plugins_dir, e);
+                unreadable.push(plugins_dir.to_path_buf());
                 return;
             }
         };
@@ -419,6 +440,10 @@ impl DirectoryScanner {
             let path = match entry {
                 Ok(e) => e.path(),
                 Err(e) => {
+                    // allow: a directory entry that cannot be read carries NO
+                    // path, so it cannot be named in `unreadable`; the parent
+                    // itself was listed successfully, so the pass is not
+                    // incomplete at parent level.
                     debug!("Failed to read entry in {:?}: {}", plugins_dir, e);
                     continue;
                 }
@@ -430,7 +455,7 @@ impl DirectoryScanner {
                 continue;
             }
 
-            for candidate in plugin_candidates(&path) {
+            for candidate in plugin_candidates(&path, unreadable) {
                 discovered.push(DiscoveredPath {
                     path: candidate,
                     priority,
@@ -447,7 +472,10 @@ impl DirectoryScanner {
 /// directory), otherwise the entries one level deeper that do (the monorepo
 /// layout: one level deeper). The direct case wins: an entry that has its own
 /// manifest is not also scanned for sub-plugins.
-fn plugin_candidates(path: &Path) -> Vec<PathBuf> {
+///
+/// An entry that exists but cannot be listed is named in `unreadable`: its
+/// plugins are unknown this pass, not absent.
+fn plugin_candidates(path: &Path, unreadable: &mut Vec<PathBuf>) -> Vec<PathBuf> {
     if has_plugin_manifest(path) {
         return vec![path.to_path_buf()];
     }
@@ -455,6 +483,7 @@ fn plugin_candidates(path: &Path) -> Vec<PathBuf> {
         Ok(entries) => entries,
         Err(e) => {
             debug!("Failed to read directory {:?}: {}", path, e);
+            unreadable.push(path.to_path_buf());
             return Vec::new();
         }
     };
@@ -462,6 +491,9 @@ fn plugin_candidates(path: &Path) -> Vec<PathBuf> {
         .filter_map(|entry| match entry {
             Ok(e) => Some(e.path()),
             Err(e) => {
+                // allow: an unreadable entry carries NO path, so it cannot be
+                // named in `unreadable`; the directory itself was listed
+                // successfully, so the pass is not incomplete at that level.
                 debug!("Failed to read entry in {:?}: {}", path, e);
                 None
             }
@@ -499,6 +531,13 @@ fn scan_component_dir(
     let entries = match std::fs::read_dir(&component_dir) {
         Ok(entries) => entries,
         Err(e) => {
+            // allow: a COMPONENT scan (skills/commands/agents) has no
+            // plugin-level channel: `PluginDiscovery::unreadable` names
+            // PLUGIN parents whose contents are unknown, and this scan
+            // returns a bare list of components. A component directory that
+            // cannot be listed therefore stays "no components here" — the
+            // projection cannot tell "scan missed it" from "source has
+            // none" (audit finding D2-06).
             debug!("Failed to read directory {:?}: {}", component_dir, e);
             return;
         }
@@ -507,11 +546,13 @@ fn scan_component_dir(
         let entry = match entry {
             Ok(e) => e,
             Err(e) => {
+                // allow: an unreadable entry carries NO path, so there is
+                // nothing to report beyond the log line.
                 debug!("Failed to read entry in {:?}: {}", component_dir, e);
                 continue;
             }
         };
-        classify_entry(&entry.path(), scan_dir, component_name, out);
+        classify_entry(entry.path(), scan_dir, component_name, out);
     }
 }
 
@@ -519,7 +560,7 @@ fn scan_component_dir(
 /// subdirectory or direct `.md` file) and push it into `out` when it
 /// qualifies.
 fn classify_entry(
-    path: &Path,
+    path: PathBuf,
     scan_dir: &ScanDirectory,
     component_name: &str,
     out: &mut Vec<DiscoveredPath>,
@@ -527,14 +568,14 @@ fn classify_entry(
     // `symlink_metadata` reports the link's own type, so a symlinked
     // skill/command/agent pointing outside the expected tree is rejected
     // instead of being enumerated as a discovered component.
-    let meta = match std::fs::symlink_metadata(path) {
+    let meta = match std::fs::symlink_metadata(&path) {
         Ok(m) => m,
         Err(e) => {
             trace!("stat {:?} failed, skipping entry: {}", path, e);
             return;
         }
     };
-    if is_hidden(path) {
+    if is_hidden(&path) {
         return;
     }
     // Layer-1 dedup observability: a symlinked component is skipped by
@@ -556,7 +597,7 @@ fn classify_entry(
         // system, not an extension agent.
         match component_marker_file(component_name) {
             Some(marker) => {
-                let present = has_marker_file(path, marker);
+                let present = has_marker_file(&path, marker);
                 if !present {
                     trace!("Skipping {:?}: missing marker file '{}'", path, marker);
                 }
@@ -575,7 +616,7 @@ fn classify_entry(
     };
     if is_component {
         out.push(DiscoveredPath {
-            path: path.to_path_buf(),
+            path,
             priority: scan_dir.priority,
             scope: scan_dir.scope.clone(),
         });
@@ -594,7 +635,7 @@ fn classify_entry(
 ///   name, so a directory holding `AGENT.md` is not an agent and must not
 ///   be discovered as one.
 fn has_marker_file(dir: &Path, marker: &str) -> bool {
-    if dir.join(marker).exists() {
+    if dir.join(marker).is_file() {
         return true;
     }
     if marker != SKILL_FILE {
@@ -603,6 +644,10 @@ fn has_marker_file(dir: &Path, marker: &str) -> bool {
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(e) => {
+            // allow: the marker check is a CONTENT check on one directory
+            // (a skill dir that cannot be listed simply carries no marker);
+            // it is not a plugin-parent scan, so it has no `unreadable`
+            // channel — the skill is skipped, not half-loaded.
             debug!("Failed to read directory {:?}: {}", dir, e);
             return false;
         }
@@ -611,15 +656,18 @@ fn has_marker_file(dir: &Path, marker: &str) -> bool {
         .filter_map(|entry| match entry {
             Ok(e) => Some(e),
             Err(e) => {
+                // allow: an unreadable entry carries NO path, so there is
+                // nothing to report beyond the log line.
                 debug!("Failed to read entry in {:?}: {}", dir, e);
                 None
             }
         })
         .any(|entry| {
-            entry
-                .file_name()
-                .to_str()
-                .is_some_and(|name| name.eq_ignore_ascii_case(marker))
+            entry.file_type().is_ok_and(|ft| ft.is_file())
+                && entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| name.eq_ignore_ascii_case(marker))
         })
 }
 
@@ -660,7 +708,8 @@ fn component_marker_file(component_name: &str) -> Option<&'static str> {
 /// - Codex CLI: `.codex-plugin/plugin.json`
 /// - Cursor IDE: `.cursor-plugin/plugin.json`, `.cursorrules`, `.cursor/rules/`
 /// - Legacy: `aleph.plugin.toml`, `aleph.plugin.json`
-/// - Auto-discover: `skills/`, `commands/`, `agents/`, `hooks/`, `.mcp.json`
+/// - Auto-discover: `skills/`, `commands/`, `agents/`, `hooks/`, `hooks.json`,
+///   `.mcp.json`
 ///
 /// One policy, stated in one place: a capability DIRECTORY may not be a
 /// symlink, a manifest FILE may.
@@ -674,19 +723,25 @@ fn component_marker_file(component_name: &str) -> Option<&'static str> {
 /// Screening it as well would silently drop such a plugin, which is a
 /// behaviour change this module has no reason to make.
 fn has_plugin_manifest(path: &Path) -> bool {
-    let cc_dir = path.join(PLUGIN_MANIFEST_DIR);
-    [
-        cc_dir.join("plugin.toml"),
-        cc_dir.join(PLUGIN_MANIFEST_FILE),
-        path.join(".codex-plugin/plugin.json"),
-        path.join(".cursor-plugin/plugin.json"),
-        path.join(".cursorrules"),
-        path.join("aleph.plugin.toml"),
-        path.join("aleph.plugin.json"),
-        path.join(MCP_CONFIG_FILE),
-    ]
-    .iter()
-    .any(|p| p.exists())
+    const MANIFEST_REL_PATHS: &[&str] = &[
+        ".claude-plugin/plugin.toml",
+        ".claude-plugin/plugin.json",
+        ".codex-plugin/plugin.json",
+        ".cursor-plugin/plugin.json",
+        ".cursorrules",
+        "aleph.plugin.toml",
+        "aleph.plugin.json",
+        MCP_CONFIG_FILE,
+        // Root-level `hooks.json`: the auto-discover adapter detects it
+        // (`AutoDiscoverAdapter::detect`) and parses it
+        // (`AutoDiscoverAdapter::parse`), so a plugin shipping ONLY
+        // `hooks.json` was invisible here — it was never a plugin candidate,
+        // so the adapter never got the chance to claim it.
+        "hooks.json",
+    ];
+    MANIFEST_REL_PATHS
+        .iter()
+        .any(|rel| path.join(rel).is_file())
         || is_existing_dir_no_follow(&path.join(".cursor/rules"))
         || is_existing_dir_no_follow(&path.join("skills"))
         || is_existing_dir_no_follow(&path.join("commands"))

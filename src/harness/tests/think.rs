@@ -241,16 +241,12 @@ fn turn_started_event() -> SessionEvent {
     }
 }
 
-// -- Tests -------------------------------------------------------------------
-
-#[tokio::test]
-async fn think_with_no_tool_use_returns_done() {
-    let session = MockSession::new(vec![turn_started_event(), user_message_event("hello")]);
-    let deps = HarnessDeps {
+fn default_deps(session: Arc<MockSession>, llm: Arc<dyn AiProvider>) -> HarnessDeps {
+    HarnessDeps {
         tool_descriptor_lookup: None,
-        session: session.clone(),
+        session,
         tools: Arc::new(EmptyTools),
-        llm: FixedProvider::text_only("hi"),
+        llm,
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: None,
         context_budget: None,
@@ -272,7 +268,15 @@ async fn think_with_no_tool_use_returns_done() {
         tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
         in_flight_tool_calls: None,
         parallel_tool_concurrency: None,
-    };
+    }
+}
+
+// -- Tests -------------------------------------------------------------------
+
+#[tokio::test]
+async fn think_with_no_tool_use_returns_done() {
+    let session = MockSession::new(vec![turn_started_event(), user_message_event("hello")]);
+    let deps = default_deps(session.clone(), FixedProvider::text_only("hi"));
     let harness = AgentHarness::new(deps);
 
     let state = harness
@@ -319,31 +323,8 @@ async fn a_think_turn_with_thinking_emits_one_reasoning_record() {
         },
     });
     let deps = HarnessDeps {
-        tool_descriptor_lookup: None,
-        session: session.clone(),
-        tools: Arc::new(EmptyTools),
-        llm: provider,
-        robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
-        verifier_chain: None,
-        context_budget: None,
-        context_compactor: None,
-        context_fabric: None,
         trace_sink: Some(sink as Arc<dyn crate::harness::TraceSink>),
-        system_prompt: None,
-        system_prompt_parts: None,
-        recall_context: None,
-        guardrails: None,
-        max_iterations: None,
-        power: None,
-        stall_config: None,
-        consecutive_failure_cap: None,
-        turn_timeout: None,
-        turn_budget: None,
-        result_store: None,
-        session_epoch_registrar: None,
-        tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
-        in_flight_tool_calls: None,
-        parallel_tool_concurrency: None,
+        ..default_deps(session.clone(), provider)
     };
     let harness = AgentHarness::new(deps);
     let state = harness
@@ -393,31 +374,8 @@ async fn an_empty_thinking_block_emits_no_reasoning_event() {
         },
     });
     let deps = HarnessDeps {
-        tool_descriptor_lookup: None,
-        session: session.clone(),
-        tools: Arc::new(EmptyTools),
-        llm: provider,
-        robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
-        verifier_chain: None,
-        context_budget: None,
-        context_compactor: None,
-        context_fabric: None,
         trace_sink: Some(sink as Arc<dyn crate::harness::TraceSink>),
-        system_prompt: None,
-        system_prompt_parts: None,
-        recall_context: None,
-        guardrails: None,
-        max_iterations: None,
-        power: None,
-        stall_config: None,
-        consecutive_failure_cap: None,
-        turn_timeout: None,
-        turn_budget: None,
-        result_store: None,
-        session_epoch_registrar: None,
-        tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
-        in_flight_tool_calls: None,
-        parallel_tool_concurrency: None,
+        ..default_deps(session.clone(), provider)
     };
     let harness = AgentHarness::new(deps);
     let state = harness
@@ -456,31 +414,8 @@ async fn a_tool_only_turn_with_thinking_still_records_its_reasoning() {
         },
     });
     let deps = HarnessDeps {
-        tool_descriptor_lookup: None,
-        session: session.clone(),
-        tools: Arc::new(EmptyTools),
-        llm: provider,
-        robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
-        verifier_chain: None,
-        context_budget: None,
-        context_compactor: None,
-        context_fabric: None,
         trace_sink: Some(sink as Arc<dyn crate::harness::TraceSink>),
-        system_prompt: None,
-        system_prompt_parts: None,
-        recall_context: None,
-        guardrails: None,
-        max_iterations: None,
-        power: None,
-        stall_config: None,
-        consecutive_failure_cap: None,
-        turn_timeout: None,
-        turn_budget: None,
-        result_store: None,
-        session_epoch_registrar: None,
-        tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
-        in_flight_tool_calls: None,
-        parallel_tool_concurrency: None,
+        ..default_deps(session.clone(), provider)
     };
     let harness = AgentHarness::new(deps);
     let _state = harness
@@ -515,33 +450,7 @@ async fn a_tool_only_turn_with_thinking_still_records_its_reasoning() {
 #[tokio::test]
 async fn think_llm_error_maps_to_harness_llm() {
     let session = MockSession::new(vec![turn_started_event(), user_message_event("hello")]);
-    let deps = HarnessDeps {
-        tool_descriptor_lookup: None,
-        session: session.clone(),
-        tools: Arc::new(EmptyTools),
-        llm: Arc::new(ErrProvider),
-        robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
-        verifier_chain: None,
-        context_budget: None,
-        context_compactor: None,
-        context_fabric: None,
-        trace_sink: None,
-        system_prompt: None,
-        system_prompt_parts: None,
-        recall_context: None,
-        guardrails: None,
-        max_iterations: None,
-        power: None,
-        stall_config: None,
-        consecutive_failure_cap: None,
-        turn_timeout: None,
-        turn_budget: None,
-        result_store: None,
-        session_epoch_registrar: None,
-        tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
-        in_flight_tool_calls: None,
-        parallel_tool_concurrency: None,
-    };
+    let deps = default_deps(session.clone(), Arc::new(ErrProvider));
     let harness = AgentHarness::new(deps);
 
     let err = harness
@@ -559,33 +468,7 @@ async fn think_llm_error_maps_to_harness_llm() {
 #[tokio::test]
 async fn primary_transient_error_without_fallback_still_propagates() {
     let session = MockSession::new(vec![turn_started_event(), user_message_event("hello")]);
-    let deps = HarnessDeps {
-        tool_descriptor_lookup: None,
-        session: session.clone(),
-        tools: Arc::new(EmptyTools),
-        llm: Arc::new(ErrProvider),
-        robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
-        verifier_chain: None,
-        context_budget: None,
-        context_compactor: None,
-        context_fabric: None,
-        trace_sink: None,
-        system_prompt: None,
-        system_prompt_parts: None,
-        recall_context: None,
-        guardrails: None,
-        max_iterations: None,
-        power: None,
-        stall_config: None,
-        consecutive_failure_cap: None,
-        turn_timeout: None,
-        turn_budget: None,
-        result_store: None,
-        session_epoch_registrar: None,
-        tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
-        in_flight_tool_calls: None,
-        parallel_tool_concurrency: None,
-    };
+    let deps = default_deps(session.clone(), Arc::new(ErrProvider));
     let harness = AgentHarness::new(deps);
     let err = harness
         .run_turn(&sample_session_id(), &mut NoopHarnessCallback)
@@ -648,31 +531,8 @@ async fn callback_fires_on_delta_and_tool_call() {
     // Turn with one tool_call: expect one on_delta("calling…") + on_tool_call_start("echo").
     let session = MockSession::new(vec![turn_started_event(), user_message_event("do it")]);
     let deps = HarnessDeps {
-        tool_descriptor_lookup: None,
-        session: session.clone(),
         tools: Arc::new(OkTool),
-        llm: FixedProvider::with_tool_call("calling…", "echo"),
-        robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
-        verifier_chain: None,
-        context_budget: None,
-        context_compactor: None,
-        context_fabric: None,
-        trace_sink: None,
-        system_prompt: None,
-        system_prompt_parts: None,
-        recall_context: None,
-        guardrails: None,
-        max_iterations: None,
-        power: None,
-        stall_config: None,
-        consecutive_failure_cap: None,
-        turn_timeout: None,
-        turn_budget: None,
-        result_store: None,
-        session_epoch_registrar: None,
-        tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
-        in_flight_tool_calls: None,
-        parallel_tool_concurrency: None,
+        ..default_deps(session.clone(), FixedProvider::with_tool_call("calling…", "echo"))
     };
     let harness = AgentHarness::new(deps);
     let mut cb = CapturingCallback::default();
@@ -717,33 +577,7 @@ async fn run_returns_cancelled_when_token_is_pre_cancelled() {
     }
 
     let session = MockSession::new(vec![turn_started_event(), user_message_event("hi")]);
-    let deps = HarnessDeps {
-        tool_descriptor_lookup: None,
-        session: session.clone(),
-        tools: Arc::new(EmptyTools),
-        llm: Arc::new(PanicProvider),
-        robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
-        verifier_chain: None,
-        context_budget: None,
-        context_compactor: None,
-        context_fabric: None,
-        trace_sink: None,
-        system_prompt: None,
-        system_prompt_parts: None,
-        recall_context: None,
-        guardrails: None,
-        max_iterations: None,
-        power: None,
-        stall_config: None,
-        consecutive_failure_cap: None,
-        turn_timeout: None,
-        turn_budget: None,
-        result_store: None,
-        session_epoch_registrar: None,
-        tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
-        in_flight_tool_calls: None,
-        parallel_tool_concurrency: None,
-    };
+    let deps = default_deps(session.clone(), Arc::new(PanicProvider));
     let harness = AgentHarness::new(deps);
 
     let cancel = CancellationToken::new();
@@ -791,31 +625,8 @@ async fn think_tool_use_after_act_returns_continue() {
 
     let session = MockSession::new(vec![turn_started_event(), user_message_event("do it")]);
     let deps = HarnessDeps {
-        tool_descriptor_lookup: None,
-        session: session.clone(),
         tools: Arc::new(OkOnceTool),
-        llm: FixedProvider::with_tool_call("calling…", "echo"),
-        robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
-        verifier_chain: None,
-        context_budget: None,
-        context_compactor: None,
-        context_fabric: None,
-        trace_sink: None,
-        system_prompt: None,
-        system_prompt_parts: None,
-        recall_context: None,
-        guardrails: None,
-        max_iterations: None,
-        power: None,
-        stall_config: None,
-        consecutive_failure_cap: None,
-        turn_timeout: None,
-        turn_budget: None,
-        result_store: None,
-        session_epoch_registrar: None,
-        tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
-        in_flight_tool_calls: None,
-        parallel_tool_concurrency: None,
+        ..default_deps(session.clone(), FixedProvider::with_tool_call("calling…", "echo"))
     };
     let harness = AgentHarness::new(deps);
 

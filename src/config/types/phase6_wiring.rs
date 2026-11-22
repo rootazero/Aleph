@@ -209,13 +209,13 @@ impl Default for ContextBudgetToml {
 }
 
 /// One `[[context_budget.model_thresholds]]` entry: a per-model override of the
-/// compaction trigger fractions, selected by a case-insensitive substring match
-/// against the resolved model id or provider key.
+/// compaction trigger fractions, selected by a case-insensitive model-id
+/// substring or an exact provider-key match.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub struct ModelThresholdToml {
-    /// Case-insensitive substring matched against the resolved model id and the
-    /// provider key (e.g. `"kimi"`, `"claude"`, `"moonshot"`). The first
-    /// matching entry in declaration order wins.
+    /// Case-insensitive substring matched against the resolved model id, or
+    /// exactly against the provider key (e.g. `"kimi"`, `"claude"`, `"moonshot"`).
+    /// The first matching entry in declaration order wins.
     pub model: String,
     /// Fraction of `token_budget` at which compaction begins for this model.
     /// Unset → inherit the top-level `warning_threshold` (then `0.70`).
@@ -228,8 +228,8 @@ pub struct ModelThresholdToml {
 }
 
 impl ModelThresholdToml {
-    /// First entry in `entries` matching the resolved `model` id or `provider`
-    /// key (case-insensitive substring). Returns `None` when the list is empty
+    /// First entry matching a `model` id substring or the exact `provider`
+    /// key (case-insensitive). Returns `None` when the list is empty
     /// or nothing matches — callers then use the global thresholds, so
     /// behaviour is byte-identical without any override.
     ///
@@ -250,14 +250,14 @@ impl ModelThresholdToml {
                 return false;
             }
             model_lc.as_deref().is_some_and(|m| m.contains(&needle))
-                || provider_lc.contains(&needle)
+                || provider_lc == needle
         })
     }
 }
 
 impl ContextBudgetToml {
-    /// First per-model threshold override matching the resolved `model` id or
-    /// `provider` key (case-insensitive substring). Returns `None` when the
+    /// First per-model override matching a `model` id substring or the exact
+    /// `provider` key (case-insensitive). Returns `None` when the
     /// list is empty or nothing matches — callers then use the global
     /// thresholds, so behaviour is byte-identical without any override.
     #[must_use]
@@ -619,15 +619,16 @@ model = "claude"
     #[test]
     fn threshold_override_matches_provider_key() {
         let cb = cb_with_overrides(vec![ModelThresholdToml {
-            model: "kimi".to_string(),
+            model: "kimi-cn".to_string(),
             warning_threshold: Some(0.60),
             ..ModelThresholdToml::default()
         }]);
-        // No model id, but the provider key carries the family name.
+        // No model id: the provider key must match exactly, ignoring case.
         let hit = cb
-            .threshold_override_for(None, "kimi-cn")
+            .threshold_override_for(None, "KIMI-CN")
             .expect("provider key matches");
         assert_eq!(hit.warning_threshold, Some(0.60));
+        assert!(cb.threshold_override_for(None, "kimi-cn-extra").is_none());
     }
 
     #[test]

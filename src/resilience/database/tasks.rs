@@ -20,9 +20,9 @@ fn agent_task_from_row(row: &rusqlite::Row) -> rusqlite::Result<AgentTask> {
         parent_session_id: row.get(1)?,
         agent_id: row.get(2)?,
         task_prompt: row.get(3)?,
-        status: TaskStatus::from_str_or_default(&row.get::<_, String>(4)?),
-        risk_level: RiskLevel::from_str_or_default(&row.get::<_, String>(5)?),
-        lane: Lane::from_str_or_default(&row.get::<_, String>(6)?),
+        status: TaskStatus::from_str_or_default(row.get_ref(4)?.as_str()?),
+        risk_level: RiskLevel::from_str_or_default(row.get_ref(5)?.as_str()?),
+        lane: Lane::from_str_or_default(row.get_ref(6)?.as_str()?),
         checkpoint_snapshot_path: row.get(7)?,
         last_tool_call_id: row.get(8)?,
         recursion_depth: row.get(9)?,
@@ -58,9 +58,9 @@ impl StateDatabase {
                     task.parent_session_id,
                     task.agent_id,
                     task.task_prompt,
-                    task.status.to_string(),
-                    task.risk_level.to_string(),
-                    task.lane.to_string(),
+                    task.status.as_str(),
+                    task.risk_level.as_str(),
+                    task.lane.as_str(),
                     task.checkpoint_snapshot_path,
                     task.last_tool_call_id,
                     task.recursion_depth,
@@ -104,9 +104,9 @@ impl StateDatabase {
                         task.parent_session_id,
                         task.agent_id,
                         task.task_prompt,
-                        task.status.to_string(),
-                        task.risk_level.to_string(),
-                        task.lane.to_string(),
+                        task.status.as_str(),
+                        task.risk_level.as_str(),
+                        task.lane.as_str(),
                         task.checkpoint_snapshot_path,
                         task.last_tool_call_id,
                         task.recursion_depth,
@@ -170,7 +170,7 @@ impl StateDatabase {
         status: TaskStatus,
     ) -> Result<(), AlephError> {
         let task_id = task_id.to_string();
-        let status_str = status.to_string();
+        let status_str = status.as_str();
         let now = chrono::Utc::now().timestamp();
         self.with_conn(move |conn| {
             let updated = conn

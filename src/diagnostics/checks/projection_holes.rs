@@ -80,10 +80,6 @@ impl HealthCheck for ProjectionHolesCheck {
         ID
     }
 
-    fn title(&self) -> &'static str {
-        "Transcript projection"
-    }
-
     async fn run(&self, posture: Posture) -> Vec<Finding> {
         let (Some(projector), Some(events)) = (self.projector.as_ref(), self.event_store.as_ref())
         else {

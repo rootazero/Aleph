@@ -67,10 +67,6 @@ impl HealthCheck for DataDirCheck {
         ID
     }
 
-    fn title(&self) -> &'static str {
-        "Data directory"
-    }
-
     async fn run(&self, posture: Posture) -> Vec<Finding> {
         let display = self.data_dir.display().to_string();
 

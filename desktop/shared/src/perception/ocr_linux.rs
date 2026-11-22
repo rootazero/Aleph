@@ -96,7 +96,7 @@ fn parse_tesseract_tsv(tsv: &str) -> OcrResult {
         }
         let cols: Vec<&str> = row.split('\t').collect();
         // Word-level rows only.
-        if cols.get(0).map(|c| c.trim()) != Some("5") {
+        if cols.first().map(|c| c.trim()) != Some("5") {
             continue;
         }
         let Some(text) = cols.get(11).map(|c| c.trim()).filter(|t| !t.is_empty()) else {

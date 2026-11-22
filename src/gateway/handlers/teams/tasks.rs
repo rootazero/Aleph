@@ -2,7 +2,7 @@
 
 use serde::Deserialize;
 use serde_json::json;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use super::crud::TeamIdParams;
 use crate::agents::swarm::tasks::{CoordTaskFilter, CoordTaskStore};
@@ -72,7 +72,16 @@ pub async fn handle_list_tasks(
     };
 
     match coord_store.list_tasks(filter).await {
-        Ok(tasks) => JsonRpcResponse::success(request.id, json!({ "tasks": tasks })),
+        Ok(tasks) => {
+            let tasks = match params.owner.as_deref() {
+                Some(owner) => tasks
+                    .into_iter()
+                    .filter(|t| t.owner.as_deref() == Some(owner))
+                    .collect(),
+                None => tasks,
+            };
+            JsonRpcResponse::success(request.id, json!({ "tasks": tasks }))
+        }
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
@@ -213,7 +222,6 @@ pub async fn handle_create_task(
     if let Err(resp) = gate_team(request.id.clone(), &store, &params.team_id).await {
         return resp;
     }
-
     let subject = params.subject.trim();
     if subject.is_empty() {
         return JsonRpcResponse::error(
@@ -255,6 +263,12 @@ pub async fn handle_create_task(
         if let Some(obj) = metadata.as_object_mut() {
             obj.entry("managed_by".to_string())
                 .or_insert_with(|| serde_json::Value::String("dispatcher".to_string()));
+        } else {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                "metadata must be an object when owner is present".to_string(),
+            );
         }
     }
 
@@ -825,23 +839,49 @@ pub async fn handle_chat_history(
 
     // 200 chat bubbles is ample for the Panel's initial hydrate. The store
     // query is a raw tail over `team_messages`, which also carries directed
-    // inbox traffic that `map_history` drops — so over-fetch and trim AFTER
-    // filtering, or a team whose leader got a burst of notifier digests would
-    // hydrate with a near-empty conversation.
+    // inbox traffic that `map_history` drops — so widen the raw window until
+    // enough visible bubbles are collected or the source is exhausted.
+    //
+    // A fixed raw window is not enough (H5-13): the raw tail is dominated by
+    // notification traffic, so a fixed window can hide the ENTIRE visible
+    // history behind it (600 notifications → 0 bubbles returned even though
+    // the chat is full). The window grows until the visible bubbles are
+    // there or the source runs out; the cap is announced, never silent.
     const CHAT_BUBBLE_LIMIT: usize = 200;
-    const RAW_FETCH_LIMIT: usize = CHAT_BUBBLE_LIMIT * 3;
-    let msgs = msg_store
-        .list_team_messages(&params.team_id, RAW_FETCH_LIMIT)
-        .await
-        .unwrap_or_default();
+    const RAW_FETCH_LIMIT: usize = 1000;
+    const MAX_RAW_FETCH_LIMIT: usize = 64_000;
+    let mut raw_limit = RAW_FETCH_LIMIT;
+    let mut items = loop {
+        let msgs = msg_store
+            .list_team_messages(&params.team_id, raw_limit)
+            .await
+            .unwrap_or_default();
+        let raw_len = msgs.len();
 
-    // Ruling P2: resolve every distinct human author's display name through
-    // the single derivation in `speaker.rs` (batched once here, not per row
-    // and not via a fresh `SecurityStore::get_user` loop) — same injection
-    // point `teams.chat.send` uses for the live event.
-    let labels =
-        crate::teams::broadcast::speaker::resolve_labels_for_messages(Some(&security_store), &msgs);
-    let mut items = map_history(msgs, &labels);
+        // Ruling P2: resolve every distinct human author's display name through
+        // the single derivation in `speaker.rs` (batched once here, not per row
+        // and not via a fresh `SecurityStore::get_user` loop) — same injection
+        // point `teams.chat.send` uses for the live event.
+        let labels = crate::teams::broadcast::speaker::resolve_labels_for_messages(
+            Some(&security_store),
+            &msgs,
+        );
+        let items = map_history(msgs, &labels);
+
+        if items.len() >= CHAT_BUBBLE_LIMIT || raw_len < raw_limit {
+            break items;
+        }
+        if raw_limit >= MAX_RAW_FETCH_LIMIT {
+            warn!(
+                team_id = %params.team_id,
+                raw_rows = raw_len,
+                bubbles = items.len(),
+                "team chat history: raw window cap reached — older visible bubbles may be missing"
+            );
+            break items;
+        }
+        raw_limit = (raw_limit * 4).min(MAX_RAW_FETCH_LIMIT);
+    };
     // Keep the newest window; `map_history` returns oldest-first.
     if items.len() > CHAT_BUBBLE_LIMIT {
         items.drain(..items.len() - CHAT_BUBBLE_LIMIT);

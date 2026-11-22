@@ -105,7 +105,9 @@ pub fn update_plugin_from_cache(
     let staging = stage_plugin_copy(source_path, install_dir, plugin_name)?;
 
     // Move the current install aside so we can roll back on failure.
-    let backup = install_dir.join(format!(".bak-{plugin_name}"));
+    // `..` is forbidden in plugin names, so a stable backup can be cleaned
+    // on the next attempt without ever removing a live plugin.
+    let backup = install_dir.join(format!(".bak..-{plugin_name}"));
     if backup.exists() {
         let _ = std::fs::remove_dir_all(&backup);
     }
@@ -139,6 +141,23 @@ pub fn update_plugin_from_cache(
     Ok(dest)
 }
 
+/// A suffix that keeps staging paths distinct across calls, including
+/// two calls in the same process.
+fn unique_suffix() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!(
+        "{:x}-{:x}-{:x}",
+        std::process::id(),
+        nanos,
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
 /// Copy `source_path` into a staging directory under `install_dir`, returning
 /// the staging path. Shared by [`install_plugin_from_cache`] and
 /// [`update_plugin_from_cache`] so the staging/cleanup logic lives in one place.
@@ -154,7 +173,10 @@ fn stage_plugin_copy(
         )
     })?;
 
-    let staging = install_dir.join(format!(".tmp-install-{plugin_name}"));
+    // The staging directory must not be reachable as a plugin name: a plugin
+    // may legitimately be called `.tmp-install-x`, and removing that path
+    // would delete a live install.
+    let staging = install_dir.join(format!(".tmp-install-{plugin_name}-{}", unique_suffix()));
     if let Ok(metadata) = std::fs::symlink_metadata(&staging) {
         if metadata.file_type().is_symlink() {
             return Err(format!(
@@ -236,9 +258,15 @@ pub fn directory_digest(source_path: &Path) -> Result<String, String> {
             )
         })?;
         let portable = relative.to_string_lossy().replace('\\', "/");
-        hasher.update(portable.as_bytes());
         let content = std::fs::read(entry.path())
             .map_err(|e| format!("Failed to read {}: {}", entry.path().display(), e))?;
+        // One file is one length-prefixed record. Concatenating the path and
+        // the bytes without a delimiter lets two different trees hash the
+        // same (`a` + `bc` == `ab` + `c`), so a changed payload could pass
+        // the previous digest.
+        hasher.update((portable.len() as u64).to_be_bytes());
+        hasher.update(portable.as_bytes());
+        hasher.update((content.len() as u64).to_be_bytes());
         hasher.update(&content);
     }
 
@@ -387,6 +415,70 @@ mod tests {
     }
 
     #[test]
+    fn install_and_update_preserve_plugins_named_like_old_transaction_paths() {
+        let cache = TempDir::new().unwrap();
+        let install_root = TempDir::new().unwrap();
+        let source = make_plugin_dir(cache.path());
+        for name in [".tmp-install-victim", ".bak-victim"] {
+            let installed = install_plugin_from_cache(&source, install_root.path(), name).unwrap();
+            fs::write(installed.join("keep.txt"), name).unwrap();
+        }
+
+        install_plugin_from_cache(&source, install_root.path(), "victim").unwrap();
+        update_plugin_from_cache(&source, install_root.path(), "victim").unwrap();
+
+        for name in [".tmp-install-victim", ".bak-victim"] {
+            assert_eq!(
+                fs::read_to_string(install_root.path().join(name).join("keep.txt")).unwrap(),
+                name
+            );
+        }
+        assert_eq!(fs::read_dir(install_root.path()).unwrap().count(), 3);
+    }
+
+    #[test]
+    fn update_cleans_stale_backup_outside_plugin_namespace() {
+        let cache = TempDir::new().unwrap();
+        let install_root = TempDir::new().unwrap();
+        let source = make_plugin_dir(cache.path());
+        install_plugin_from_cache(&source, install_root.path(), "my-plugin").unwrap();
+        let backup_name = ".bak..-my-plugin";
+        assert!(super::super::names::reject_unsafe_segment("plugin name", backup_name).is_err());
+        let backup = install_root.path().join(backup_name);
+        fs::create_dir(&backup).unwrap();
+        fs::write(backup.join("stale.txt"), "previous attempt").unwrap();
+        fs::write(source.join("new.txt"), "updated").unwrap();
+
+        let dest = update_plugin_from_cache(&source, install_root.path(), "my-plugin").unwrap();
+
+        assert_eq!(fs::read_to_string(dest.join("new.txt")).unwrap(), "updated");
+        assert!(!backup.exists());
+        assert_eq!(fs::read_dir(install_root.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn directory_digest_separates_file_records_and_rejects_legacy_pins() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("main.py"), "#").unwrap();
+        fs::write(tmp.path().join("payload.txt"), "\nprint(\"injected\")\n").unwrap();
+        let original = directory_digest(tmp.path()).unwrap();
+
+        use sha2::{Digest, Sha256};
+        let legacy = hex::encode(Sha256::digest(
+            b"main.py#payload.txt\nprint(\"injected\")\n",
+        ));
+        assert!(verify_plugin_integrity(tmp.path(), Some(&legacy)).is_err());
+        fs::remove_file(tmp.path().join("payload.txt")).unwrap();
+        fs::write(
+            tmp.path().join("main.py"),
+            "#payload.txt\nprint(\"injected\")\n",
+        )
+        .unwrap();
+        assert_ne!(directory_digest(tmp.path()).unwrap(), original);
+        assert!(verify_plugin_integrity(tmp.path(), Some(&original)).is_err());
+    }
+
+    #[test]
     fn test_verify_plugin_integrity_no_hash() {
         let tmp = TempDir::new().unwrap();
         // No expected hash → always passes
@@ -400,9 +492,13 @@ mod tests {
 
         // Compute the expected hash by running the same logic
         use sha2::{Digest, Sha256};
+        let path = b"hello.txt";
+        let content = b"world";
         let mut hasher = Sha256::new();
-        hasher.update(b"hello.txt");
-        hasher.update(b"world");
+        hasher.update((path.len() as u64).to_be_bytes());
+        hasher.update(path);
+        hasher.update((content.len() as u64).to_be_bytes());
+        hasher.update(content);
         let expected = hex::encode(hasher.finalize());
 
         assert!(verify_plugin_integrity(tmp.path(), Some(&expected)).is_ok());
@@ -417,9 +513,13 @@ mod tests {
         fs::write(tmp.path().join("sub").join("f.txt"), "x").unwrap();
 
         use sha2::{Digest, Sha256};
+        let path = b"sub/f.txt";
+        let content = b"x";
         let mut hasher = Sha256::new();
-        hasher.update(b"sub/f.txt");
-        hasher.update(b"x");
+        hasher.update((path.len() as u64).to_be_bytes());
+        hasher.update(path);
+        hasher.update((content.len() as u64).to_be_bytes());
+        hasher.update(content);
         let expected = hex::encode(hasher.finalize());
 
         assert_eq!(directory_digest(tmp.path()).unwrap(), expected);
@@ -462,9 +562,8 @@ mod tests {
             !dest.join("src/main.py").exists(),
             "stale file should be removed"
         );
-        // No backup or staging residue.
-        assert!(!install_root.path().join(".bak-my-plugin").exists());
-        assert!(!install_root.path().join(".tmp-install-my-plugin").exists());
+        // No backup or staging residue, regardless of transaction path format.
+        assert_eq!(fs::read_dir(install_root.path()).unwrap().count(), 1);
     }
 
     #[test]

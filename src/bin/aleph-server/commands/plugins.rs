@@ -1,12 +1,14 @@
+//! lock-policy: run-no-lock
+//!
 //! Plugin management command handlers
 //!
-//! Spec C policy: **`NoLock`**. All plugin operations target
+//! All plugin operations target
 //! `~/.aleph/plugins/` (extension dir) or read `~/.aleph/config.toml`
 //! for marketplace metadata; `enable` / `disable` also READ Claude Code's
 //! `~/.claude/plugins` index (never writing there) and write only
 //! `plugins.toml`, atomically (see `set_enabled_locally`).
-//! Each handler enters via a marker `run_no_lock` call to satisfy
-//! the reverse-regression check (Task 25).
+//! Each handler enters via a `run_no_lock` marker call, which keeps the
+//! declared policy and the code in agreement.
 
 use crate::cli::MarketplaceAction;
 use alephcore::extension::marketplace::types::MarketplaceConfig;
@@ -100,21 +102,20 @@ pub async fn handle_plugins_install(url: &str) -> Result<(), Box<dyn std::error:
         || repo_name.contains('/')
         || repo_name.contains('\\')
     {
-        eprintln!("Error: cannot derive a safe plugin directory name from URL: {url}");
-        std::process::exit(1);
+        return Err(
+            format!("cannot derive a safe plugin directory name from URL: {url}").into(),
+        );
     }
     let dest_path = plugins_dir.join(repo_name);
 
     if let Err(reason) =
         alephcore::extension::ensure_plugin_destination_is_safe(&plugins_dir, &dest_path)
     {
-        eprintln!("Error: {reason}");
-        std::process::exit(1);
+        return Err(reason.to_string().into());
     }
 
     if tokio::fs::try_exists(&dest_path).await.unwrap_or(false) {
-        eprintln!("Error: Plugin already exists at: {}", dest_path.display());
-        std::process::exit(1);
+        return Err(format!("Plugin already exists at: {}", dest_path.display()).into());
     }
 
     // Clone the repository off the async executor; git2 is synchronous.
@@ -130,9 +131,8 @@ pub async fn handle_plugins_install(url: &str) -> Result<(), Box<dyn std::error:
                 &plugins_dir,
                 &dest_path,
             ) {
-                eprintln!("Error: {reason}");
                 let _ = std::fs::remove_dir_all(&dest_path);
-                std::process::exit(1);
+                return Err(reason.to_string().into());
             }
             println!("Repository cloned successfully.");
 
@@ -164,8 +164,7 @@ pub async fn handle_plugins_install(url: &str) -> Result<(), Box<dyn std::error:
             }
         }
         Err(e) => {
-            eprintln!("Error: Failed to clone repository: {e}");
-            std::process::exit(1);
+            return Err(format!("Failed to clone repository: {e}").into());
         }
     }
 
@@ -197,37 +196,41 @@ pub async fn handle_plugins_uninstall(name: &str) -> Result<(), Box<dyn std::err
     // removed recursively — refuse anything that is not a plain directory
     // name before the join, so no `..`/separator can escape the root.
     if !is_safe_plugin_dir_name(name) {
-        eprintln!("Error: invalid plugin name: {name}");
-        eprintln!("A plugin name must be a single directory name without path separators.");
-        std::process::exit(1);
+        return Err(format!(
+            "invalid plugin name: {name}\n\
+             A plugin name must be a single directory name without path separators."
+        )
+        .into());
     }
 
     let plugins_dir = default_plugins_dir();
     let plugin_path = plugins_dir.join(name);
 
     if !tokio::fs::try_exists(&plugin_path).await.unwrap_or(false) {
-        eprintln!("Error: Plugin not found: {name}");
-        eprintln!("Plugin directory: {}", plugin_path.display());
-        std::process::exit(1);
+        return Err(format!(
+            "Plugin not found: {name}\nPlugin directory: {}",
+            plugin_path.display()
+        )
+        .into());
     }
 
     // Refuse to remove through a symlink: the recursive delete would follow
     // the link out of the plugins root.
     match std::fs::symlink_metadata(&plugin_path) {
         Ok(meta) if meta.file_type().is_symlink() => {
-            eprintln!(
-                "Error: refusing to uninstall through a symlink: {}",
+            return Err(format!(
+                "refusing to uninstall through a symlink: {}",
                 plugin_path.display()
-            );
-            std::process::exit(1);
+            )
+            .into());
         }
         Ok(_) => {}
         Err(e) => {
-            eprintln!(
-                "Error: Failed to inspect plugin directory {}: {e}",
+            return Err(format!(
+                "Failed to inspect plugin directory {}: {e}",
                 plugin_path.display()
-            );
-            std::process::exit(1);
+            )
+            .into());
         }
     }
 
@@ -241,8 +244,7 @@ pub async fn handle_plugins_uninstall(name: &str) -> Result<(), Box<dyn std::err
             println!("Plugin uninstalled successfully.");
         }
         Err(e) => {
-            eprintln!("Error: Failed to remove plugin: {e}");
-            std::process::exit(1);
+            return Err(format!("Failed to remove plugin: {e}").into());
         }
     }
 
@@ -258,6 +260,11 @@ pub async fn handle_plugins_enable(name: &str) -> Result<(), Box<dyn std::error:
 pub async fn handle_plugins_disable(name: &str) -> Result<(), Box<dyn std::error::Error>> {
     set_enabled_locally(name, false).await
 }
+
+/// How many unreadable plugin sources a "not found" message names before it
+/// counts the rest instead of listing them: the scan can be incomplete at
+/// many plugin dirs at once, and the message is one line.
+const MAX_REPORTED_UNREADABLE_SOURCES: usize = 5;
 
 /// Write the operator's activation preference for a locally-installed plugin.
 ///
@@ -286,9 +293,30 @@ async fn set_enabled_locally(name: &str, enabled: bool) -> Result<(), Box<dyn st
 
     let manager = ExtensionManager::with_defaults().await?;
     let discovered = manager.discovered_plugin_ids()?;
-    if !discovered.iter().any(|(id, _)| id == name) {
-        eprintln!("Error: Plugin not found: {name}");
-        std::process::exit(1);
+    if !discovered.ids.iter().any(|(id, _)| id == name) {
+        if discovered.unreadable.is_empty() {
+            return Err(format!("Plugin not found: {name}").into());
+        }
+        // The scan could not read every plugin source, so a plugin that IS
+        // installed may be among them: "not found" would be a lie. Name the
+        // sources the scan could not read instead.
+        let total = discovered.unreadable.len();
+        let mut sources: Vec<String> = discovered
+            .unreadable
+            .iter()
+            .take(MAX_REPORTED_UNREADABLE_SOURCES)
+            .map(|p| p.display().to_string())
+            .collect();
+        if total > sources.len() {
+            sources.push(format!("and {} more", total - sources.len()));
+        }
+        return Err(format!(
+            "Plugin not found: {name} (the plugin scan could not read {} source(s): {}; \
+             the plugin may be installed but unreadable)",
+            total,
+            sources.join(", ")
+        )
+        .into());
     }
     let plugin_path = default_plugins_dir().join(name);
 
@@ -342,12 +370,17 @@ pub async fn handle_plugin_install(
 
         println!("Searching for plugin '{source}'...");
         match manager.install_to_scope(source, None, plugin_scope, None) {
-            Ok(path) => {
-                println!("Plugin '{source}' installed to {path:?}");
+            Ok(installed) => {
+                println!(
+                    "Plugin '{source}' installed to {:?}",
+                    installed.path
+                );
+                for warning in &installed.warnings {
+                    println!("Warning: {warning}");
+                }
             }
             Err(e) => {
-                eprintln!("Error: {e}");
-                std::process::exit(1);
+                return Err(e.to_string().into());
             }
         }
     } else {
@@ -414,10 +447,13 @@ pub async fn handle_plugin_update(
     let mut failed = 0usize;
     for plugin_name in &names {
         match manager.update_to_scope(plugin_name, None, plugin_scope, None, force) {
-            Ok(UpdateOutcome::Updated { from, to }) => {
+            Ok(UpdateOutcome::Updated { from, to, warnings }) => {
                 let from = from.unwrap_or_else(|| "-".to_string());
                 let to = to.unwrap_or_else(|| "-".to_string());
                 println!("Updated '{plugin_name}': {from} → {to}");
+                for warning in &warnings {
+                    println!("Warning: {warning}");
+                }
                 updated += 1;
             }
             Ok(UpdateOutcome::AlreadyLatest { version }) => {
@@ -434,7 +470,7 @@ pub async fn handle_plugin_update(
 
     println!("\nDone: {updated} updated, {unchanged} unchanged, {failed} failed.");
     if failed > 0 {
-        std::process::exit(1);
+        return Err(format!("{failed} plugin update(s) failed.").into());
     }
     Ok(())
 }

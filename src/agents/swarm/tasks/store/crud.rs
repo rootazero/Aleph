@@ -82,55 +82,46 @@ pub(super) async fn create_task(
     // `Transaction` borrows the `Connection` via `RefCell` (rusqlite's
     // own safety net) and so is `!Send`, but `CoordTaskStore` requires
     // `dyn Future + Send`. `Transaction::commit` consumes `self`, so
-    // either path through the block drops the guard before we return.
-    let inserted: Result<(), crate::error::AlephError> =
-        (|| -> Result<(), crate::error::AlephError> {
-            let tx = conn.unchecked_transaction().map_err(db_err)?;
+    // Scoped block ensures `tx` is committed and dropped before subsequent operations.
+    {
+        let tx = conn.unchecked_transaction().map_err(db_err)?;
 
-            let result: std::result::Result<(), rusqlite::Error> = (|| {
-                // Always store as 'pending' — Blocked is derived
-                tx.execute(
-                r#"
+        // Always store as 'pending' — Blocked is derived
+        tx.execute(
+            r#"
             INSERT INTO coord_tasks (id, team_id, subject, description, status, owner, priority, metadata, created_at)
             VALUES (?1, ?2, ?3, ?4, 'pending', ?5, ?6, ?7, ?8)
             "#,
-                params![
-                    id,
-                    input.team_id,
-                    input.subject,
-                    input.description,
-                    input.owner,
-                    input.priority.as_str(),
-                    metadata_json,
-                    now,
-                ],
-            )?;
+            params![
+                id,
+                input.team_id,
+                input.subject,
+                input.description,
+                input.owner,
+                input.priority.as_str(),
+                metadata_json,
+                now,
+            ],
+        )
+        .map_err(db_err)?;
 
-                // Insert dependency edges
-                for dep_id in &input.blocked_by {
-                    tx.execute(
-                        "INSERT INTO coord_task_dependencies (task_id, depends_on) VALUES (?1, ?2)",
-                        params![id, dep_id],
-                    )?;
-                }
-                Ok(())
-            })();
-
-            match result {
-                Ok(()) => tx.commit().map_err(db_err),
-                Err(e) => Err(db_err(e)),
-            }
-        })();
-    // `tx` is gone here; the block's return is the commit outcome (or the
-    // original error, which left the transaction rolled back via Drop).
-    inserted?;
+        // Insert dependency edges
+        for dep_id in &input.blocked_by {
+            tx.execute(
+                "INSERT INTO coord_task_dependencies (task_id, depends_on) VALUES (?1, ?2)",
+                params![id, dep_id],
+            )
+            .map_err(db_err)?;
+        }
+        tx.commit().map_err(db_err)?;
+    }
 
     // Return the fully loaded task (with derived status)
     let task = load_task(&conn, &id)
         .map_err(db_err)?
         .ok_or_else(|| db_err("task disappeared after insert"))?;
     drop(conn); // release lock before emit so subscribers aren't blocked
-    store.emit_task_topic(&task, "created").await;
+    store.emit_task_topic(&task, None, "created").await;
     Ok(task)
 }
 
@@ -151,8 +142,11 @@ pub(super) async fn update_task(
     // `Vec<Box<dyn ToSql>>` scratch state (and the rusqlite connection
     // guard) cannot escape into the `.await` below — the outer trait impl
     // demands a `Send` future.
-    let task_opt: Option<CoordTask> = {
+    let (previous, task) = {
         let conn = store.conn.lock().await;
+        let previous = load_task(&conn, id)
+            .map_err(db_err)?
+            .ok_or_else(|| db_err(format!("task not found: {id}")))?;
         let now = now_epoch();
 
         // Build dynamic SET clauses
@@ -233,11 +227,8 @@ pub(super) async fn update_task(
         }
 
         if sets.is_empty() {
-            // Nothing to update — load current state, no emit, no await.
-            let t = load_task(&conn, id)
-                .map_err(db_err)?
-                .ok_or_else(|| db_err(format!("task not found: {id}")))?;
-            return Ok(t);
+            // Nothing to update — no emit, no await.
+            return Ok(previous);
         }
 
         let sql = format!(
@@ -251,10 +242,11 @@ pub(super) async fn update_task(
         if affected == 0 {
             return Err(db_err(format!("task not found: {id}")));
         }
-        load_task(&conn, id).map_err(db_err)?
+        let task = load_task(&conn, id)
+            .map_err(db_err)?
+            .ok_or_else(|| db_err(format!("task not found after update: {id}")))?;
+        (previous, task)
     };
-
-    let task = task_opt.ok_or_else(|| db_err(format!("task not found after update: {id}")))?;
     // The broadcast verb reflects the TRANSITION, not the row's resting state:
     // a metadata/owner/result-only write on an already-terminal task must not
     // re-broadcast TeamTaskCompleted/TeamTaskFailed. Downstream listeners
@@ -275,7 +267,7 @@ pub(super) async fn update_task(
     } else {
         "updated"
     };
-    store.emit_task_topic(&task, verb).await;
+    store.emit_task_topic(&task, Some(&previous), verb).await;
     Ok(task)
 }
 

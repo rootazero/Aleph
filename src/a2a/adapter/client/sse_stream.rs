@@ -106,7 +106,7 @@ where
 
             while let Some(newline_pos) = line_buf.find('\n') {
                 let line = line_buf[..newline_pos].trim_end_matches('\r').to_string();
-                line_buf = line_buf[newline_pos + 1..].to_string();
+                line_buf.drain(..=newline_pos);
 
                 if line.len() > MAX_LINE_BYTES {
                     yield Err(A2AError::ParseError(format!(

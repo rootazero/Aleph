@@ -1,3 +1,5 @@
+//! lock-policy: none
+//!
 //! `aleph-server hooks` — shell-hook consent management.
 //!
 //! Shell-command hooks shipped by plugins execute arbitrary code. The server
@@ -14,6 +16,7 @@
 //! to run while the server is up — no instance lock is needed.
 
 use std::io::{self, Write};
+use std::time::Duration;
 
 use alephcore::diagnostics::checks::HooksConsentCheck;
 use alephcore::extension::hooks::{
@@ -225,18 +228,142 @@ fn refuse_shell_metachars(line: &str) -> CmdResult {
     Ok(())
 }
 
-/// Print a review run's exit status and output.
-fn print_output(output: &std::process::Output) {
+struct ReviewOutput {
+    status: std::process::ExitStatus,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    stdout_truncated: bool,
+    stderr_truncated: bool,
+}
+
+// Mirror the production hook output cap and the inline/hook deadlines. The
+// core constants are crate-private, so the CLI keeps their values together.
+const MAX_REVIEW_OUTPUT_BYTES: u64 = 64 * 1024;
+const INLINE_REVIEW_TIMEOUT: Duration = Duration::from_secs(30);
+const HOOK_REVIEW_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// Print a review run's exit status and bounded output.
+fn print_output(output: &ReviewOutput) {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     println!("--- exit: {} ---", output.status);
-    if !stdout.trim().is_empty() {
+    if !stdout.trim().is_empty() || output.stdout_truncated {
         println!("stdout:\n{}", stdout.trim_end());
+        if output.stdout_truncated {
+            println!(
+                "...[truncated: output exceeds {} KiB]",
+                MAX_REVIEW_OUTPUT_BYTES / 1024
+            );
+        }
     }
-    if !stderr.trim().is_empty() {
+    if !stderr.trim().is_empty() || output.stderr_truncated {
         println!("stderr:\n{}", stderr.trim_end());
+        if output.stderr_truncated {
+            println!(
+                "...[truncated: output exceeds {} KiB]",
+                MAX_REVIEW_OUTPUT_BYTES / 1024
+            );
+        }
     }
     println!("----------------");
+}
+
+/// Read at most the production cap, then drain the rest so a verbose child
+/// cannot block on a full pipe. The boolean reports discarded or unread data.
+async fn read_review_capped<R: tokio::io::AsyncRead + Unpin>(
+    mut reader: R,
+) -> (Vec<u8>, bool) {
+    use tokio::io::AsyncReadExt;
+
+    let mut buf = Vec::new();
+    let mut truncated = (&mut reader)
+        .take(MAX_REVIEW_OUTPUT_BYTES)
+        .read_to_end(&mut buf)
+        .await
+        .is_err();
+    let mut sink = [0u8; 8192];
+    loop {
+        match reader.read(&mut sink).await {
+            Ok(0) => break,
+            Ok(_) => truncated = true,
+            Err(_) => {
+                truncated = true;
+                break;
+            }
+        }
+    }
+    (buf, truncated)
+}
+
+/// Run one review child with concurrent stdin/stdout/stderr IO, bounded
+/// captures and a deadline. `hooks` is dispatched before the server's Tokio
+/// runtime exists, so the review owns a small current-thread runtime. Dropping
+/// the timed-out future kills the child through `kill_on_drop`.
+fn run_bounded(
+    mut command: tokio::process::Command,
+    stdin: Option<String>,
+    timeout: Duration,
+) -> Result<ReviewOutput, Box<dyn std::error::Error>> {
+    use tokio::io::AsyncWriteExt;
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(async move {
+        command
+            .stdin(if stdin.is_some() {
+                std::process::Stdio::piped()
+            } else {
+                std::process::Stdio::null()
+            })
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true);
+        let run = async {
+            let mut child = command.no_window().spawn()?;
+            let stdin_handle = child.stdin.take();
+            let stdout_handle = child.stdout.take();
+            let stderr_handle = child.stderr.take();
+            let (_, (stdout, stdout_truncated), (stderr, stderr_truncated)) = tokio::join!(
+                async {
+                    if let (Some(mut handle), Some(payload)) = (stdin_handle, stdin) {
+                        // Best-effort: a hook that never reads stdin may close
+                        // the pipe early.
+                        let _ = handle.write_all(payload.as_bytes()).await;
+                        let _ = handle.shutdown().await;
+                    }
+                },
+                async {
+                    match stdout_handle {
+                        Some(handle) => read_review_capped(handle).await,
+                        None => (Vec::new(), false),
+                    }
+                },
+                async {
+                    match stderr_handle {
+                        Some(handle) => read_review_capped(handle).await,
+                        None => (Vec::new(), false),
+                    }
+                }
+            );
+            let status = child.wait().await?;
+            Ok::<ReviewOutput, Box<dyn std::error::Error>>(ReviewOutput {
+                status,
+                stdout,
+                stderr,
+                stdout_truncated,
+                stderr_truncated,
+            })
+        };
+        match tokio::time::timeout(timeout, run).await {
+            Ok(result) => result,
+            Err(_) => Err(format!(
+                "hook review command timed out after {}s",
+                timeout.as_secs()
+            )
+            .into()),
+        }
+    })
 }
 
 /// The review run of `entry`: a plugin command's `` !`cmd` `` the way the
@@ -260,7 +387,7 @@ fn run_for_review(entry: &ConsentEntry, cwd: &std::path::Path) -> CmdResult {
 /// `CLAUDE_PROJECT_DIR` is `cwd` (production: the run's directory). A plugin
 /// skill's path variables are NOT set here: the entry records the skill's
 /// directory, not its plugin's root (production sets them). Not production's
-/// timeout, output cap or daemon environment either.
+/// daemon environment either.
 fn run_skill_inline_command(entry: &ConsentEntry, cwd: &std::path::Path) -> CmdResult {
     use alephcore::extension::{inline_shell_command, InlineArgs, InlineSite};
 
@@ -309,7 +436,7 @@ fn run_skill_inline_command(entry: &ConsentEntry, cwd: &std::path::Path) -> CmdR
         plugin: None,
         skill_dir: Some(skill_dir),
     };
-    let mut command = inline_shell_command(
+    let command = inline_shell_command(
         &entry.command,
         &InlineArgs {
             raw: "",
@@ -317,11 +444,7 @@ fn run_skill_inline_command(entry: &ConsentEntry, cwd: &std::path::Path) -> CmdR
         },
         &site,
     );
-    let output = command
-        .as_std_mut()
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .output()?;
+    let output = run_bounded(command, None, INLINE_REVIEW_TIMEOUT)?;
     print_output(&output);
     Ok(())
 }
@@ -332,8 +455,8 @@ fn run_skill_inline_command(entry: &ConsentEntry, cwd: &std::path::Path) -> CmdR
 /// runner spawns for `/command` sent with NO arguments, in `cwd` (this
 /// shell's directory; production runs it in the session's working directory,
 /// with the sender's arguments). Not a hook run: no stdin payload, no
-/// `TOOL_NAME`, no synthetic `ARGUMENTS`. Not production's timeout, output
-/// cap, plugin settings or daemon environment either.
+/// `TOOL_NAME`, no synthetic `ARGUMENTS`. Not production's plugin settings or
+/// daemon environment either.
 fn run_inline_command(entry: &ConsentEntry, cwd: &std::path::Path) -> CmdResult {
     use alephcore::extension::{inline_shell_command, InlineArgs, InlineSite};
 
@@ -366,7 +489,7 @@ fn run_inline_command(entry: &ConsentEntry, cwd: &std::path::Path) -> CmdResult 
             .map(|root| (entry.plugin_name.as_str(), root)),
         skill_dir: None,
     };
-    let mut command = inline_shell_command(
+    let command = inline_shell_command(
         &entry.command,
         &InlineArgs {
             raw: "",
@@ -374,11 +497,7 @@ fn run_inline_command(entry: &ConsentEntry, cwd: &std::path::Path) -> CmdResult 
         },
         &site,
     );
-    let output = command
-        .as_std_mut()
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .output()?;
+    let output = run_bounded(command, None, INLINE_REVIEW_TIMEOUT)?;
     print_output(&output);
     Ok(())
 }
@@ -391,7 +510,7 @@ fn run_inline_command(entry: &ConsentEntry, cwd: &std::path::Path) -> CmdResult 
 /// environment, the event JSON — under the spelling the hook is dispatched
 /// with — is on its stdin, and it runs in its plugin root. A script reviewed
 /// here sees the variables, directory and payload production gives it from
-/// that root — not production's timeout, output cap or daemon environment.
+/// that root — not production's daemon environment.
 fn run_command_with_payload(entry: &ConsentEntry) -> CmdResult {
     let invocation = test_invocation(entry);
     if entry.plugin_root.is_none() {
@@ -403,7 +522,7 @@ fn run_command_with_payload(entry: &ConsentEntry) -> CmdResult {
     refuse_shell_metachars(&invocation.line)?;
     println!("(stdin payload: {})", invocation.stdin);
 
-    let mut cmd = std::process::Command::new(invocation.program);
+    let mut cmd = tokio::process::Command::new(invocation.program);
     cmd.arg(invocation.flag).arg(&invocation.line);
     if let Some(dir) = &invocation.current_dir {
         cmd.current_dir(dir);
@@ -418,17 +537,7 @@ fn run_command_with_payload(entry: &ConsentEntry) -> CmdResult {
             }
         }
     }
-    let mut child = cmd
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .no_window()
-        .spawn()?;
-    if let Some(mut stdin) = child.stdin.take() {
-        // Best-effort: a hook that never reads stdin may close the pipe early.
-        let _ = stdin.write_all(invocation.stdin.as_bytes());
-    }
-    let output = child.wait_with_output()?;
+    let output = run_bounded(cmd, Some(invocation.stdin), HOOK_REVIEW_TIMEOUT)?;
     print_output(&output);
     Ok(())
 }

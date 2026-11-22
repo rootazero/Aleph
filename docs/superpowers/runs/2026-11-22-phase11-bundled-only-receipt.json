@@ -1,0 +1,87 @@
+{
+  "artifact": "phase11_macos_bundled_only_cold_foreground_and_probe_shutdown",
+  "version": "2026-11-22.16",
+  "status": "PASS_SCOPED_FOREGROUND_COLD_ADMISSION_AND_EXIT / NOT_PACKAGED_HOST_COLD_START",
+  "parent": "9bb533b6130d6e2f3b9f879127ccfb28def6efc5",
+  "source_sha256": {
+    "desktop/host/src/local_server.rs": "1876199111acebe1757c998ac48444297f30ac29db3e06cbbfd37c299b32989f",
+    "desktop/host/src/local_server/admission.rs": "a3fff123d700ba6b1aaae3c5f68f5b0e3f0ddd8b4c5c3a6de2986126c525fbc4",
+    "docs/superpowers/runs/2026-11-21-phase11-nsh-inventory.json": "4318ec69fb433a22bfd686667e9369e8d8847d87220fa60aa0464228adc955de",
+    "docs/superpowers/specs/2026-11-21-phase11-nsh-cutover.md": "e355809dfcba7a892caadc6f11fb7a600f9ff9dcd2f69fd62b86082918c99b1e",
+    "src/bin/aleph-server/cli.rs": "3fc1cf704620c7c7d1a5abaef0f3b96ba804bfa18dd943c79c13aa7e2ca88abe",
+    "src/bin/aleph-server/commands/start/helpers.rs": "d3365efb7bb779d07a34added8ec9c720be232785a3576b45102684944e4f9cd",
+    "src/bin/aleph-server/commands/start/mod.rs": "9c22184f620b183d8c0bd5d17df877f8770b405eb21955e6df808de746b3c30f",
+    "src/bin/aleph-server/commands/start/runtime_warmup.rs": "60ddd8b5ff34d105d652016e8b1ab4d35e515de06f734d4a31ac890dfdb95004",
+    "src/builtin_tools/runtime_manage.rs": "3c63acb9170a407392f24586db5f3fbc2c3128d4aa82b176f921bf8b7c84db00",
+    "src/bundled/extractor.rs": "793eb10704973a30651e98b51d010e49b3947a2942ba11aa3b94addd5fe245da",
+    "src/diagnostics/checks/engine_missing.rs": "9924c6e96128bdd72f0aec345fd25234889ad6dd1cf448ef550dd4634fbd824d",
+    "src/gateway/handlers/runtimes.rs": "49ce5e1e84686c7c65b6ff8aeca76485e89ab8eff9f77afd4cf9a672381b8ada",
+    "src/runtimes/bootstrap.rs": "057b5a9e8c2d948a1baff63593cce2603abe51b7f5accaa4226a1c14b896dd53",
+    "src/runtimes/ensure.rs": "9a791cacbce772e69377a8ca7af6eff9a90eaadf0ecc958e0430a5d46a316330",
+    "src/runtimes/probe.rs": "5e868deffd5386989560ae140c749070166b443cf2756ac268d3a8e666721ce2"
+  },
+  "raw_sha256": {
+    ".phase10-evidence/phase11-bundled-only/cli-red.log": "e602a170c5373665f43113c7784e7bb38dff5310805eecb409cea23f99fd54f3",
+    ".phase10-evidence/phase11-bundled-only/live.log": "dd9145c8d14a647c1a2fe2aed2f28ddd22f549dc5e77bab5bafeeee5f561e92d",
+    ".phase10-evidence/phase11-bundled-only/shutdown-diagnostic.log": "cae8514f0e329648657efeab5e5239f43e0738916ff55b6f296566cbe88c9bf3",
+    ".phase10-evidence/phase11-bundled-only/gateway-shutdown-diagnostic.trace": "30183b4b31de24834231d77313cfd4f33ecb9d5d6df6f663b9dc7fd015b58afb",
+    ".phase10-evidence/phase11-bundled-only/shutdown-wait-stack.log": "48c389ee38e3a8d4a476c72047b3de594f42283c2930dbbb1dc5478c31525fff",
+    ".phase10-evidence/phase11-bundled-only/gateway-wait-stack.sample": "c71938d2e08517f69b89cbf4a672d5420e645a3edfbdaf87dfcb543cc56b0117",
+    ".phase10-evidence/phase11-bundled-only/probe-timeout-red.log": "c4ca0536e7f763ac307223ec7699462b1be4d376ae762885e041def233098aea",
+    ".phase10-evidence/phase11-bundled-only/runtimes-final.log": "5a859e2b79e3da094b34da5457f5c76dd099e0442168d8381e391e5a366aef9c",
+    ".phase10-evidence/phase11-bundled-only/engine-final.log": "7a29dfb3c6e20fe38d3a2a6b75a87e8a3461999db8b7102f4552420764db77f1",
+    ".phase10-evidence/phase11-bundled-only/runtime-manage-final.log": "a63f921001c3c7d70bb0b554694586176313372c3d541971017b3dacae3e9fb6",
+    ".phase10-evidence/phase11-bundled-only/server-final.log": "060529df2bcb8558ced21fbc1db3a5dbb05129ac4b85e48cc8fd39f162f07f84",
+    ".phase10-evidence/phase11-bundled-only/host-final.log": "1d008e138d170616fd63eebc7be4dd9d16c4fceb79dd69c6b110f0b03476f388",
+    ".phase10-evidence/phase11-bundled-only/host-clippy-final.log": "26c0988634d6de79247c98eb421369288498e64194db3134065458d6e046d189",
+    ".phase10-evidence/phase11-bundled-only/server-cancellable-probe-build.log": "cc109ad17e274e4855fb3c94533069c6359e5e8d299798014bec65404908e75f",
+    ".phase10-evidence/phase11-bundled-only/cancellable-bundle.log": "04450200ddf16fce3e055f0dff4fcb83f017ab006844fe6d1bc8a2d59bd45d1d",
+    ".phase10-evidence/phase11-bundled-only/cancellable-probe-live.log": "095094e7a1ad297885b263f959a4a3c9dc4a6715aee962960e77cc28ea06ce90",
+    ".phase10-evidence/phase11-bundled-only/gateway-cancellable-probe.log": "d182697a7279bfbea720f83d257014d995bce10206a2cfc358431505992de7ec",
+    ".phase10-evidence/phase11-bundled-only/server-interrupted.log": "d5a520422d6385a71d9ee8a5f4c93b66f258fb4211fb3256c4854b10a1fd5639"
+  },
+  "payload_sha256": {
+    ".phase10-evidence/phase11-bundled-only/Aleph-NSH-Cancellable-Probe.app/Contents/Info.plist": "7206f796111a079348f150e1050c5fbf3697eaa88ff3d72f901f9f30e1cabd95",
+    ".phase10-evidence/phase11-bundled-only/Aleph-NSH-Cancellable-Probe.app/Contents/MacOS/aleph-server": "b22b84e93b55b5a5c72e7470d6bf8aebf511f8fcfa7166933b6c49992c6c4d23",
+    ".phase10-evidence/phase11-bundled-only/Aleph-NSH-Cancellable-Probe.app/Contents/MacOS/aleph-nsh-shell": "76c9b1346a4ad0df0d0505e91e9371927a7117fbd064cceda1fca37bd4ba066f",
+    ".phase10-evidence/phase11-bundled-only/Aleph-NSH-Cancellable-Probe.app/Contents/_CodeSignature/CodeResources": "249da94d25a6de9fe8543b49e4d1d02edd967484c917edee4fc4ea071996f44e"
+  },
+  "phase10_original_matrix": {
+    ".phase10-evidence/g7-official-matrix.Ji0duOcq/matrix.json": "fbf5f1272be769ae554ba53df065ef171badb6bbe942bb90e254168664e5f7c2"
+  },
+  "observed": {
+    "red": "The first policy-enabled cold case admitted the real listener and closed its port after TERM, but the owned child did not exit within 30s. A process sample locates the wait in Tokio blocking shutdown, on runtime version subprocess output. The owned child was force-cleaned only in the failed fixture.",
+    "green": "The rebuilt locally signed real sibling passed the same private, non-default loopback foreground fixture with no outbound denial: strict admission, owned listener PID, embedded skills and plugin cache, no official checkout, TERM then natural exit 0 without force, port refusal and removed fixture root.",
+    "case": "desktop/host/src/local_server/admission.rs::tests::bundled_only_cold_start_without_network_denial",
+    "live_case_seconds_including_harness": 8.5,
+    "binary_note": "Native build preceded a test-module-only move/reordering of the settle_probe import; executable behavior unchanged. The recorded payload hash names the actual exercised signed binary."
+  },
+  "verification": {
+    "runtimes": 112,
+    "engine_missing": 10,
+    "runtime_manage": 18,
+    "server_cli": 147,
+    "host_gateway_admission": "17 unit + 8 integration; 3 opt-in native tests not run in the default suite",
+    "host_strict_clippy": "passed -D warnings",
+    "native": "1 explicit actual signed foreground case; strict codesign verification passed",
+    "known_limits": "Aggregate command timed out after three completed suites; server test rerun completed. Existing linker compact-unwind warning and server test unused import remain; no whole-workspace test claim."
+  },
+  "policy": "Only the newly launched NSH full sibling receives the fixed --bundled-content-only option; standalone and legacy startup retain defaults. Existing services are not changed.",
+  "untested": [
+    "actual production detached launch and NSH GUI",
+    "explicit production stop, recovery or target switching",
+    "arbitrary descendant cleanup or awaited cleanup on dropped future",
+    "native Windows and Linux",
+    "installed service mutations, default switching, release, common dual operation and Tauri retirement"
+  ],
+  "gates": {
+    "P11-A": "OPEN",
+    "P11-B": "OPEN",
+    "P11-C": "OPEN",
+    "P11-D": "OPEN",
+    "P11-E": "OPEN",
+    "P11-F": "OPEN",
+    "P11-G": "OPEN",
+    "P11-H": "OPEN"
+  }
+}

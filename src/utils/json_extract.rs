@@ -111,13 +111,9 @@ fn extract_from_json_code_block(response: &str) -> Option<String> {
         // advances past `\n`. Without this, ` ```jsonc\n{...}``` was
         // returning `c\n{...}` — a wasted parse attempt and a misleading
         // near-match in debug logs.
-        let Some(content) = response.get(json_start..) else {
-            return None;
-        };
+        let content = response.get(json_start..)?;
         let after_lang = content.find('\n').map_or(content.len(), |i| i + 1);
-        let Some(body) = content.get(after_lang..) else {
-            return None;
-        };
+        let body = content.get(after_lang..)?;
         let content_start = body.find(|c: char| !c.is_whitespace()).unwrap_or(0);
 
         // Find closing ``` that stands on its own line (preceded only by whitespace)
@@ -193,9 +189,7 @@ fn find_matching_brace(s: &str, start: usize) -> Option<usize> {
     let mut in_string = false;
     let mut escape_next = false;
 
-    let Some(search_slice) = s.get(start..) else {
-        return None;
-    };
+    let search_slice = s.get(start..)?;
     for (i, ch) in search_slice.char_indices() {
         if escape_next {
             escape_next = false;
@@ -213,9 +207,7 @@ fn find_matching_brace(s: &str, start: usize) -> Option<usize> {
                 depth += 1;
             }
             '}' if !in_string => {
-                let Some(new_depth) = depth.checked_sub(1) else {
-                    return None;
-                };
+                let new_depth = depth.checked_sub(1)?;
                 depth = new_depth;
                 if depth == 0 {
                     return Some(start + i);

@@ -245,7 +245,7 @@ async function runHappyPath(base) {
   requestLog.length = 0;
   const page = await browser.newPage({ viewport: { width: 1024, height: 720 } });
   const prefix = base === '/' ? '' : '/panel';
-  page.addInitScript(() => {
+  await page.addInitScript(() => {
     const Canvas = globalThis.CanvasRenderingContext2D;
     if (!Canvas) return;
     const fillText = Canvas.prototype.fillText;
@@ -258,6 +258,14 @@ async function runHappyPath(base) {
     };
   });
   await page.goto(`${origin}${prefix}/index.html`, { waitUntil: 'networkidle' });
+  const recorder = await page.evaluate(() => ({
+    count: globalThis.__fillTextCount,
+    hasTexts: Array.isArray(globalThis.__fillTexts),
+  }));
+  assert.ok(
+    Number.isFinite(recorder.count) && recorder.count >= 0 && recorder.hasTexts,
+    'Native Canvas recorder initialization is a fixture precondition before Terminal mount',
+  );
   assert.equal(await page.evaluate(() => __fixture.state.terminalLoadCount), 0, 'Chat startup must not load terminal');
   assert.equal(requestLog.some((path) => path.includes('/tabs/terminal/')), false, 'Chat startup must not request terminal assets');
 
@@ -275,6 +283,7 @@ async function runHappyPath(base) {
   assert.equal(initialMethods[1], 'pty.list');
   assert.equal(initialMethods.filter((method) => method === 'pty.attach').length, 1);
   assert.equal(initialMethods.filter((method) => method === 'pty.list').length, 1);
+  await waitFor(page, () => globalThis.__fillTextCount > 0);
   assert.ok(await page.evaluate(() => globalThis.__fillTextCount > 0), 'Canvas renderer must use native fillText');
 
   const initialResize = await page.evaluate(() => __fixture.state.calls.filter((call) => call.kind === 'invoke' && call.value.method === 'pty.resize').at(-1)?.value?.params);
@@ -356,7 +365,7 @@ async function runHappyPath(base) {
 
 async function runSpawnPath() {
   const page = await browser.newPage({ viewport: { width: 1024, height: 720 } });
-  page.addInitScript(() => {
+  await page.addInitScript(() => {
     const Canvas = globalThis.CanvasRenderingContext2D;
     if (!Canvas) return;
     const fillText = Canvas.prototype.fillText;
@@ -367,11 +376,99 @@ async function runSpawnPath() {
     };
   });
   await page.goto(`${origin}/index.html?empty=1`, { waitUntil: 'networkidle' });
+  const fillTextCount = await page.evaluate(() => globalThis.__fillTextCount);
+  assert.ok(Number.isFinite(fillTextCount) && fillTextCount >= 0,
+    'Native Canvas counter initialization is a fixture precondition before Terminal mount');
   await page.getByRole('button', { name: 'Terminal' }).click();
   await waitFor(page, () => __fixture.state.spawnCount >= 1 && document.querySelector('canvas') !== null);
   assert.equal(await page.evaluate(() => __fixture.state.spawnCount), 1, 'empty list must spawn exactly one PTY');
   assert.ok((await callValues(page, 'pty.attach')).length >= 1, 'spawned PTY must be attached');
-  assert.ok(await page.evaluate(() => globalThis.__fillTextCount > 0), 'spawned PTY must render through Canvas fillText');
+  try {
+    await waitFor(page, () => globalThis.__fillTextCount > 0);
+    assert.ok(await page.evaluate(() => globalThis.__fillTextCount > 0), 'spawned PTY must render through Canvas fillText');
+  } catch (originalFailure) {
+    const failedAt = Date.now();
+    let diagnosticDeadline;
+    try {
+      // A Node-only deadline bounds passive collection, never waits for a paint.
+      const [snapshot, pageErrors] = await Promise.race([
+        Promise.all([page.evaluate(() => {
+          const count = globalThis.__fillTextCount;
+          const texts = globalThis.__fillTexts;
+          const rectangle = (element) => {
+            const rect = element.getBoundingClientRect();
+            const css = getComputedStyle(element);
+            return {
+              tag: element.tagName,
+              connected: element.isConnected,
+              rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+              client: { width: element.clientWidth, height: element.clientHeight },
+              css: { display: css.display, visibility: css.visibility, opacity: css.opacity, width: css.width, height: css.height },
+            };
+          };
+          const roots = Array.from(document.querySelectorAll('#content'));
+          const views = roots.flatMap((root) => Array.from(root.querySelectorAll('[data-terminal-view]')));
+          const canvases = views.flatMap((view) => Array.from(view.querySelectorAll('canvas')));
+          const state = globalThis.__fixture?.state;
+          return {
+            observed_wall_ms: Date.now(),
+            observed_performance_ms: performance.now(),
+            recorder: {
+              count_own_property: Object.prototype.hasOwnProperty.call(globalThis, '__fillTextCount'),
+              count_type: typeof count,
+              count_value: ['number', 'string', 'boolean'].includes(typeof count) && (typeof count !== 'number' || Number.isFinite(count)) ? count : null,
+              count_representation: count === null ? 'null' : ['undefined', 'number', 'bigint'].includes(typeof count) ? (Object.is(count, -0) ? '-0' : String(count)) : 'see type/value; nonprimitive value unavailable',
+              count_finite: Number.isFinite(count),
+              count_nonnegative_number: typeof count === 'number' && count >= 0,
+              collector_own_property: Object.prototype.hasOwnProperty.call(globalThis, '__fillTexts'),
+              collector_type: typeof texts,
+              collector_is_null: texts === null,
+              collector_is_array: Array.isArray(texts),
+              collector_array_length: Array.isArray(texts) ? texts.length : null,
+            },
+            terminal_root_selector: '#content (fixture mount target)',
+            connected_terminal_roots: roots.filter((root) => root.isConnected).length,
+            connected_terminal_views: views.filter((view) => view.isConnected).length,
+            connected_owned_canvases: canvases.filter((canvas) => canvas.isConnected).length,
+            document_canvas_count: document.querySelectorAll('canvas').length,
+            roots: roots.slice(0, 4).map(rectangle),
+            views: views.slice(0, 4).map(rectangle),
+            owned_canvases: canvases.slice(0, 4).map((canvas) => {
+              const ancestors = [];
+              for (let ancestor = canvas.parentElement; ancestor && ancestors.length < 16; ancestor = ancestor.parentElement) ancestors.push(rectangle(ancestor));
+              return { ...rectangle(canvas), backing: { width: canvas.width, height: canvas.height }, ancestors };
+            }),
+            fixture: state ? {
+              spawn_count: state.spawnCount,
+              attach_count: state.attachCount,
+              terminal_load_count: state.terminalLoadCount,
+              mounted_handle_present: state.mounted != null,
+              subscriptions: state.subscriptions.map(({ topic, disposed, queue }) => ({ topic, disposed, queued_frames: queue.length })),
+              attach_response: 'UNAVAILABLE: existing fixture records calls, not response values; no provider instrumentation',
+            } : { status: 'UNAVAILABLE' },
+            unavailable: ['private Rust screen adoption/content, callback/Owner validity and rAF execution', 'unhandled rejection history: no existing collector; no listener or global wrapper added'],
+          };
+        }), page.pageErrors()]),
+        new Promise((_, reject) => {
+          diagnosticDeadline = setTimeout(() => reject(new Error('Passive spawn diagnostic exceeded 2000ms')), 2_000);
+        }),
+      ]);
+      console.error(JSON.stringify({
+        kind: 'SPAWN_NATIVE_PAINT_FAILURE_DIAGNOSTIC',
+        timing: 'post-original-assertion failure, before rethrow; not an assertion-time private-state snapshot',
+        original_failure: { name: originalFailure.name, message: originalFailure.message, stack: originalFailure.stack },
+        failure_wall_ms: failedAt,
+        collection_elapsed_ms: Date.now() - failedAt,
+        snapshot,
+        page_error_names: pageErrors.map((error) => error.name),
+      }));
+    } catch (diagnosticFailure) {
+      console.error(JSON.stringify({ kind: 'SPAWN_DIAGNOSTIC_UNAVAILABLE', diagnostic_error_name: diagnosticFailure.name, diagnostic_error: diagnosticFailure.message }));
+    } finally {
+      clearTimeout(diagnosticDeadline);
+    }
+    throw originalFailure;
+  }
   await page.close();
 }
 

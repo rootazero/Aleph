@@ -24,6 +24,7 @@ async fn session_close_preserves_raw_off_and_drains_derived_when_running() {
         MemoryRuntimeConfig {
             metadata_path: root.path().join("memory/metadata.db"),
             note_memory_dir: root.path().join("notes"),
+            retrieval_tuning: Default::default(),
         },
         Arc::new(OwnershipTree::new()),
     );

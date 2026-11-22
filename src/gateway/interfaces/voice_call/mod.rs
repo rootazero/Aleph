@@ -13,9 +13,10 @@ pub mod transport;
 pub use channel::{VoiceCallChannel, VoiceCallChannelFactory};
 pub use config::VoiceCallConfig;
 pub use coordinator::{
-    run_public_voice_call, run_public_voice_call_controlled, PublicVoiceWiring, VoiceCallReport,
-    VoiceCallTermination,
+    run_public_voice_call_controlled, PublicVoiceWiring, VoiceCallReport, VoiceCallTermination,
 };
+#[cfg(test)]
+pub use coordinator::run_public_voice_call;
 pub use relay::{
     AdmittedVoiceCall, AuthenticatedVoiceFacts, AuthenticatedVoiceHangup, VoiceBindingPolicy,
     VoiceCallLease, VoicePeerEvent, VoiceRelayError, VoiceRelayPeer, VoiceRelayTransport,

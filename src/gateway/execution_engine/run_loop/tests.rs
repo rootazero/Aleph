@@ -116,7 +116,9 @@ async fn ensure_session_stamps_the_row_without_an_ambient_scope() {
         crate::scope::current_scope().is_none(),
         "the fixture must reproduce the unscoped post-spawn condition"
     );
-    ensure_session_under_request_scope(&agent, &request).await;
+    prepare_session_for_run(&agent, &request)
+        .await
+        .expect("session metadata preparation must succeed");
 
     let meta = sessions
         .get_metadata(&request.session_key)
@@ -1665,7 +1667,9 @@ async fn a_room_claimed_key_stamps_the_room_even_when_the_metadata_says_personal
     let mut request = minimal_request(metadata);
     request.session_key = key.clone();
 
-    ensure_session_under_request_scope(&agent, &request).await;
+    prepare_session_for_run(&agent, &request)
+        .await
+        .expect("session metadata preparation must succeed");
 
     let meta = sessions
         .get_metadata(&key)
@@ -2459,6 +2463,8 @@ fn canonical_test_entry(name: &str, server: &'static str) -> crate::tools::regis
         max_result_tokens: None,
         ready: None,
         cold: None,
+        observation: None,
+        domain_policy: None,
     }
 }
 
@@ -2513,6 +2519,8 @@ fn invoking_canonical_test_entry(
         max_result_tokens: None,
         ready: None,
         cold: None,
+        observation: None,
+        domain_policy: None,
     }
 }
 

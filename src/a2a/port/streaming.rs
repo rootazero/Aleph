@@ -2,7 +2,7 @@ use std::pin::Pin;
 
 use futures::Stream;
 
-use crate::a2a::domain::{TaskStatusUpdateEvent, UpdateEvent};
+use crate::a2a::domain::{TaskArtifactUpdateEvent, TaskStatusUpdateEvent, UpdateEvent};
 
 use super::task_manager::A2AResult;
 
@@ -21,6 +21,18 @@ pub trait A2AStreamingHandler: Send + Sync {
     /// Broadcast a status update to all subscribers of a task
     async fn broadcast_status(&self, task_id: &str, update: TaskStatusUpdateEvent)
         -> A2AResult<()>;
+
+    /// Broadcast an artifact update to all subscribers of a task.
+    ///
+    /// Default implementation is a no-op — a handler that carries status
+    /// events only does not have to answer this one.
+    async fn broadcast_artifact(
+        &self,
+        _task_id: &str,
+        _event: TaskArtifactUpdateEvent,
+    ) -> A2AResult<()> {
+        Ok(())
+    }
 
     /// Clean up resources for a completed task (e.g. remove broadcast channels).
     /// Default implementation is a no-op.

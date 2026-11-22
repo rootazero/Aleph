@@ -81,6 +81,15 @@ pub(crate) fn snap_out_of_open_run(events: &[SessionEventRecord], cut: usize) ->
             _ => {}
         }
     }
+    // Any opener still unclosed (e.g. open run currently executing) whose
+    // opener is before the cut must also pull the cut back to keep RunStarted in the tail
+    for stack in openers.values() {
+        for &opener in stack {
+            if opener < cut {
+                crossing = Some(crossing.map_or(opener, |c| c.min(opener)));
+            }
+        }
+    }
     crossing.unwrap_or(cut)
 }
 
@@ -180,8 +189,9 @@ mod tests {
         assert_eq!(snap_out_of_open_run(&events, 3), 1);
         // A cut before the run starts is untouched.
         assert_eq!(snap_out_of_open_run(&events, 1), 1);
-        // No RunFinished in the kept tail → nothing to protect.
-        assert_eq!(snap_out_of_open_run(&events[..4], 3), 3);
+        // An unfinished run also keeps its opener, so a later finish cannot
+        // outlive the RunStarted retired by this compaction.
+        assert_eq!(snap_out_of_open_run(&events[..4], 3), 1);
     }
 
     /// One engine run can leave several brackets under ONE id (the fallback

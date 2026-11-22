@@ -47,7 +47,7 @@ impl BuiltinHandler {
     }
 
     /// Builder knob for [`BuiltinHandler::fences_output`]. The default `false`
-    /// covers every native builtin; the MCP bridge turns it on for the five
+    /// covers every native builtin; the MCP bridge turns it on for the
     /// capability builtins whose output passes through a server the harness
     /// does not control.
     pub fn with_fences_output(mut self, value: bool) -> Self {
@@ -276,18 +276,6 @@ impl ToolHandler for BuiltinRegistryRouter {
         }
     }
 }
-
-/// Names of the MCP-bridge capability builtins that are registered with the
-/// `ToolHandlerRegistry` through the [`BuiltinRegistryRouter`] adapter rather
-/// than the direct `BuiltinHandler` path. They go through
-/// `ToolRegistry::execute_tool` so they pick up the same descriptor /
-/// revision accounting as every other tool the agent loop sees.
-///
-/// Re-exported from `crate::mcp::tool_bridge` rather than re-typed: the
-/// bridge owns these names as its single source of truth, and a second list
-/// here is the exact "two copies of the same fact" drift this project's
-/// redlines forbid. The bridge's `pub(crate)` constants are visible here
-/// (same crate) despite the module cycle — Rust resolves items crate-wide.
 
 /// Register a batch of [`BuiltinRegistryRouter`] adapters against the given
 /// `ToolHandlerRegistry`, one per `name` in `names`. The function owns the

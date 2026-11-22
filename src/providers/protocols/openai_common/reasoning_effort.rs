@@ -74,8 +74,8 @@ fn strip_date_suffix(s: &str) -> Option<&str> {
 /// Parse the minor version `n` from `gpt-5.<n>` ids (`None` for plain `gpt-5`).
 fn minor_of(id: &str) -> Option<u32> {
     let rest = id.strip_prefix("gpt-5.")?;
-    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-    digits.parse().ok()
+    let end = rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len());
+    rest.get(..end)?.parse().ok()
 }
 
 /// Drop an aggregator's routing prefix (`moonshotai/kimi-k3` → `kimi-k3`).

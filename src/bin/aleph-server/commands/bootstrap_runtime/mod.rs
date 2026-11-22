@@ -1,11 +1,12 @@
+//! lock-policy: run-no-lock
+//!
 //! `aleph-server bootstrap-runtime` — install managed runtimes via `ensure_capability`.
 //!
-//! Spec C policy: **`NoLock`**. Bootstrap-runtime is invoked as a child
+//! Bootstrap-runtime is invoked as a child
 //! process by `start` while the parent already holds the singleton
 //! lock; touching `~/.aleph/data/` is the parent's responsibility, so
-//! this child does not contend. The marker `run_no_lock` call at
-//! `run` entry preserves classification for the reverse-regression
-//! check (Task 25).
+//! this child does not contend. The `run_no_lock` marker at `run`
+//! entry keeps the declared policy and the code in agreement.
 
 use std::io::Write;
 

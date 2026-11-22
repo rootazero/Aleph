@@ -2,8 +2,9 @@
 //!
 //! Tracks "which connected WS connections are registered nodes" and projects
 //! them into a read-only "environment" view for `environments.list` rendering.
-//! Consumes Phase 0a's [`ReverseRpcChannel`] — each `NodeSession` holds a channel
-//! clone, and 0c's `node_invoke` dispatches down to the node through it.
+//! Consumes [`ReverseRpcChannel`] (`src/cluster/reverse_rpc.rs`) — each
+//! `NodeSession` holds a channel clone, and `node_invoke`
+//! (`src/builtin_tools/node_invoke.rs`) dispatches down to the node through it.
 //!
 //! Redline: pure data structure, no LLM reasoning (R7), does not enter `src/harness/` (R10).
 
@@ -17,16 +18,33 @@ use serde_json::Value;
 
 use crate::cluster::ReverseRpcChannel;
 
-/// A command declared by a node (name + schema placeholder). The `schema`
-/// field is a placeholder for the node's self-declared JSON schema; it is
-/// stored verbatim, surfaced in `environments.list` / `node_list`, and
-/// preserved across reconnect. **It is NOT validated against `args`** — the
-/// allowlist (`CommandTable`) is the only authoritative gate on the
-/// node side, and the center passes `args` straight through to the command's
-/// `run`. Every shipped node command declares `{"type":"object"}` with no
-/// `properties`, so the field is informational today.
+/// A command a node permits — the NAME only.
+///
+/// The node's self-declared JSON schema is deliberately absent: it used to be
+/// stored verbatim, deep-cloned into every `environments.list` response and
+/// shipped to every operator client, and **no consumer ever read it** (the
+/// Panel only counts the commands; the model-facing `node_list` projects the
+/// names). What the peer declares arrives as a [`CommandDeclaration`] on the
+/// wire, is measured against the 8 KiB schema bound, and is then dropped.
+///
+/// The declared schema was never a gate on `args` either — the allowlist
+/// (`CommandTable`) is the only authoritative gate on the node side, and the
+/// center passes `args` straight through to the command's `run`.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CommandDescriptor {
+    pub name: String,
+}
+
+/// What a node DECLARES on the wire (the connect frame's `commands` array).
+///
+/// The `schema` field is the node's self-declared JSON schema. It is REQUIRED
+/// on the wire: a command entry without it makes the whole catalog fail to
+/// deserialize, and the center then treats the catalog as malformed and fails
+/// closed — which is what keeps an OLD center accepting a NEW node's frame.
+/// Nothing reads the value; the center measures it and drops it (see
+/// [`CommandDescriptor`]).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CommandDeclaration {
     pub name: String,
     pub schema: Value,
 }
@@ -35,16 +53,22 @@ pub struct CommandDescriptor {
 pub struct NodeSession {
     /// = `device_id`, used directly as the environment id.
     pub node_id: String,
-    /// Matches the key in 0a's `reverse_rpc` table; used for disconnect reconciliation.
+    /// Matches the key in the `src/cluster/reverse_rpc.rs` table; used for disconnect reconciliation.
     pub conn_id: String,
     /// Human-readable name (from the connect frame).
     pub device_name: String,
-    /// Clone of the 0a channel — 0c's `node_invoke` dispatches through it.
+    /// Clone of the `src/cluster/reverse_rpc.rs` channel —
+    /// `src/builtin_tools/node_invoke.rs` dispatches through it.
     pub channel: ReverseRpcChannel,
-    /// The node's self-declared command catalog; 0b only stores and displays it.
+    /// The node's self-declared command catalog — the permitted command
+    /// NAMES. The center stores the names and nothing else: the declared JSON
+    /// schema is measured on arrival and dropped.
     pub declared_commands: Vec<CommandDescriptor>,
-    /// Operator-assigned free-text labels (e.g. "gpu", "region=us"). Selection
-    /// only — never an authorization gate (R7). Stored verbatim; not kv-parsed.
+    /// Free-text labels the NODE declares for itself in its connect frame
+    /// (e.g. "gpu", "region=us"). Selection only — never an authorization gate
+    /// (R7). NOT operator-assigned: a peer picks its own labels, so a fan-out
+    /// over them selects whatever the peer asked to be selected. Stored
+    /// verbatim; not kv-parsed. Not persisted, so an offline row has none.
     pub tags: Vec<String>,
     /// The `aleph-server` build the node runs, as it declared in its connect
     /// frame. `None` = a node older than the version handshake. **Observation
@@ -67,24 +91,37 @@ pub enum ResolveError {
     /// (`name (short-id)`) for LLM disambiguation.
     #[error("ambiguous — matches: {}", .0.join(", "))]
     Ambiguous(Vec<String>),
-    /// Internal state inconsistency: the id returned by match_id is missing from nodes_by_id.
-    #[error("internal node lookup failed for '{name_or_id}'")]
-    NodeNotFound { name_or_id: String },
+}
+
+/// A node's presence in the fleet view. One type, one spelling: the JSON wire
+/// values are exactly `"online"` / `"offline"` (the Panel's hand-written mirror
+/// compares them as plain strings, so the two spellings must not drift).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EnvironmentStatus {
+    Online,
+    Offline,
 }
 
 /// Serialized external view for `environments.list` (thin rendering contract,
 /// R4). Never contains credentials.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+///
+/// **Not `Deserialize`**: nothing in Rust deserializes an `Environment` (it is
+/// a projection the center *emits*), and a derive here would only look like a
+/// round-trip capability. Add it back when an owner picks up fleet-list
+/// persistence — with `EnvironmentStatus` in place it would then be a real
+/// `DeserializeOwned`, not the `Deserialize<'static>` landmine the old
+/// `&'static str` field produced.
+#[derive(Clone, Debug, Serialize)]
 pub struct Environment {
     pub id: String,
     pub name: String,
-    pub status: &'static str,
+    pub status: EnvironmentStatus,
     pub commands: Vec<CommandDescriptor>,
     pub tags: Vec<String>,
-    pub connected_at: i64,
     /// Last-seen online timestamp (Unix seconds). Only meaningful for registered
-    /// nodes with `status == "offline"` (online nodes are always `None`);
-    /// `None` + offline = never connected since registration.
+    /// nodes with `status == EnvironmentStatus::Offline` (online nodes are
+    /// always `None`); `None` + offline = never connected since registration.
     #[serde(default)]
     pub last_seen_at: Option<i64>,
     /// The node's `aleph-server` build, from its connect frame. Always `None`
@@ -106,17 +143,51 @@ pub struct NodeMatch {
     pub channel: ReverseRpcChannel,
     pub declared_commands: Vec<CommandDescriptor>,
     pub tags: Vec<String>,
+    /// The node's `commands` field was **present but malformed** — the center
+    /// could not read what the node permits. NOT the same as "declared no
+    /// commands": an empty catalog means "the node is authoritative", while a
+    /// malformed one means the caller has to fail closed instead of skipping
+    /// its declaration check. Carried here so the tag fan-out
+    /// (`node_invoke_many`) can honor the same rule `node_invoke` does.
+    pub catalog_malformed: bool,
+}
+
+/// A name-only projection of an online node: what the model-facing `node_list`
+/// needs, without the catalog descriptors.
+///
+/// Every caller compares `CommandDescriptor::name` only, so the model-facing
+/// path projects the names alone instead of cloning the catalog per node.
+#[derive(Clone, Debug)]
+pub struct NodeSummary {
+    pub id: String,
+    pub name: String,
+    pub status: EnvironmentStatus,
+    /// The declared command **names** (no schemas).
+    pub command_names: Vec<String>,
+    pub tags: Vec<String>,
+    pub connected_at: i64,
+    pub version: Option<String>,
 }
 
 /// Byte-bounded prefix of `value` that never splits a UTF-8 scalar.
 ///
-/// `&s[..n]` **panics** when byte `n` lands mid-character, and both call sites
-/// slice a *node id* — which is not always a center-minted ASCII UUID. The
-/// "unknown id" branch of [`crate::cluster::admit_node`] adopts whatever
-/// `device_id` the peer presented in its connect frame, so a node dialling in
-/// with a non-ASCII identity file would otherwise panic the connection task
-/// (P7 UTF-8 safety). Truncating short is always safe here: these are display
-/// affordances (ambiguity labels, device fingerprints), not identities.
+/// `&s[..n]` **panics** when byte `n` lands mid-character, and the sliced
+/// values are peer-controlled — a node id is not always a center-minted ASCII
+/// UUID. The "unknown id" branch of [`crate::cluster::admit_node`] adopts
+/// whatever `device_id` the peer presented in its connect frame, so a node
+/// dialling in with a non-ASCII identity file would otherwise panic the
+/// connection task (P7 UTF-8 safety).
+///
+/// There are **six** call sites: the node id in an ambiguity label, the device
+/// name, the tag and the **command name** (all in this file), plus the device
+/// id / node id in `src/cluster/enrollment.rs` (both sliced to a 16-byte
+/// device-table fingerprint). Truncating short is always safe: five of the
+/// six are display affordances or a fingerprint, not identities. The command
+/// name is the one identity in the set, and it is still safe: the center
+/// dispatches the **requested** name verbatim
+/// (`src/builtin_tools/node_invoke.rs`), and the node's own `CommandTable` is
+/// keyed by the node's exact declared name — so a truncated stored name can
+/// only cause a **false refusal** at the center, never a mis-dispatch.
 pub(crate) fn truncate_on_char_boundary(value: &str, max_bytes: usize) -> &str {
     crate::utils::text_format::truncate_bytes(value, max_bytes)
 }
@@ -162,6 +233,15 @@ impl NodeRegistry {
     /// Register a node session whose declared command catalog is readable (or
     /// absent). See [`register_session`](Self::register_session) for the
     /// variant that records a malformed catalog.
+    ///
+    /// **Test-only.** It forwards to `register_session(session, false)` — it
+    /// hard-codes "this node's catalog is readable" and would silently discard
+    /// the malformed/absent distinction that `register_session` exists to
+    /// preserve. Production registration flows through
+    /// [`maybe_register_node`] → `register_session(session, catalog_malformed)`,
+    /// so the distinction survives there. Marked `#[cfg(test)]` so the
+    /// obvious-looking entry point is not part of the production public API.
+    #[cfg(test)]
     pub fn register(&self, session: NodeSession) {
         self.register_session(session, false);
     }
@@ -257,24 +337,28 @@ impl NodeRegistry {
 
     /// Deregister a connected node session. Only removes if the current session
     /// for this `node_id` actually belongs to this `conn_id` (reconnect-safe:
-    /// old connection cleanup won't accidentally evict the new session). Returns
-    /// whether a session was removed.
-    pub fn deregister(&self, conn_id: &str) -> bool {
+    /// old connection cleanup won't accidentally evict the new session).
+    ///
+    /// Returns the removed session, or `None` if nothing was removed — so the
+    /// caller learns the removed identity from the SAME critical section that
+    /// removed it, instead of making a second (racy) lookup. Between two
+    /// lookups the same connection can re-announce, and the second one would
+    /// read the *pre*-re-announce identity while the first removed the
+    /// *post*-re-announce session. Mirrors [`forget`](Self::forget), which
+    /// already returns the evicted session.
+    pub fn deregister(&self, conn_id: &str) -> Option<NodeSession> {
         let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
-        let Some(node_id) = inner.nodes_by_conn.remove(conn_id) else {
-            return false;
-        };
+        let node_id = inner.nodes_by_conn.remove(conn_id)?;
         if let std::collections::hash_map::Entry::Occupied(entry) =
             inner.nodes_by_id.entry(node_id.clone())
         {
             if entry.get().session.conn_id == conn_id {
-                let removed_name = entry.get().session.device_name.clone();
-                entry.remove();
-                tracing::debug!(node_id = %node_id, conn_id = %conn_id, name = %removed_name, "cluster node session deregistered");
-                return true;
+                let removed = entry.remove().session;
+                tracing::debug!(node_id = %node_id, conn_id = %conn_id, name = %removed.device_name, "cluster node session deregistered");
+                return Some(removed);
             }
         }
-        false
+        None
     }
 
     /// Read-only projection snapshot of online nodes. Results are stably sorted
@@ -282,6 +366,11 @@ impl NodeRegistry {
     /// iteration order; sorting prevents the Panel fleet list and the
     /// model-visible `node_list` from jittering on every refresh (tests can also
     /// assert a deterministic order).
+    ///
+    /// Keeps the declared catalog — the permitted command NAMES. This is the
+    /// operator path (`environments.list`). The model-facing path uses
+    /// [`list_node_summaries`](Self::list_node_summaries) instead, which
+    /// projects the same names into a flat list.
     pub fn list_environments(&self) -> Vec<Environment> {
         let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
         let mut envs: Vec<Environment> = inner
@@ -290,16 +379,46 @@ impl NodeRegistry {
             .map(|n| Environment {
                 id: n.session.node_id.clone(),
                 name: n.session.device_name.clone(),
-                status: "online",
+                status: EnvironmentStatus::Online,
                 commands: n.session.declared_commands.clone(),
                 tags: n.session.tags.clone(),
-                connected_at: n.session.connected_at,
                 last_seen_at: None,
                 version: n.session.version.clone(),
             })
             .collect();
         envs.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.id.cmp(&b.id)));
         envs
+    }
+
+    /// Name-only projection of the online nodes — the model-facing
+    /// (`node_list`) view.
+    ///
+    /// Same snapshot semantics as [`list_environments`](Self::list_environments)
+    /// (same `(name, id)` sort), but it projects the declared command **names**
+    /// into a flat list instead of cloning the catalog descriptors: the
+    /// model-facing path only ever reads the names.
+    pub fn list_node_summaries(&self) -> Vec<NodeSummary> {
+        let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
+        let mut summaries: Vec<NodeSummary> = inner
+            .nodes_by_id
+            .values()
+            .map(|n| NodeSummary {
+                id: n.session.node_id.clone(),
+                name: n.session.device_name.clone(),
+                status: EnvironmentStatus::Online,
+                command_names: n
+                    .session
+                    .declared_commands
+                    .iter()
+                    .map(|c| c.name.clone())
+                    .collect(),
+                tags: n.session.tags.clone(),
+                connected_at: n.session.connected_at,
+                version: n.session.version.clone(),
+            })
+            .collect();
+        summaries.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.id.cmp(&b.id)));
+        summaries
     }
 
     /// Resolve `(node_id, device_name)` for a connection that is a registered
@@ -364,41 +483,42 @@ impl NodeRegistry {
         }
     }
 
-    /// Resolve an online node by name or id, returning its reverse RPC channel
-    /// and declared command catalog.
+    /// Resolve an online node by name or id, returning its reverse RPC channel,
+    /// its declared command catalog, and the parse state of that catalog.
     ///
-    /// `node_invoke` / `node_file` use this to address and fail-fast validate.
-    /// Ambiguity or miss is returned as a structured [`ResolveError`],
-    /// letting callers give precise hints to the LLM.
-    pub fn resolve(
-        &self,
-        name_or_id: &str,
-    ) -> std::result::Result<(ReverseRpcChannel, Vec<CommandDescriptor>), ResolveError> {
-        let (channel, declared, _) = self.resolve_with_catalog(name_or_id)?;
-        Ok((channel, declared))
-    }
-
-    /// Same multi-level match as [`resolve`](Self::resolve), plus the parse
-    /// state of the declared catalog: the third element is `true` when the
-    /// node's `commands` field was **present but malformed**.
+    /// `node_invoke` / `node_file` / `node_invoke_many` use this to address and
+    /// fail-fast validate. Ambiguity or miss is returned as a structured
+    /// [`ResolveError`], letting callers give precise hints to the LLM.
+    ///
+    /// Same multi-level match as every other resolver here (exact id →
+    /// normalized name → fuzzy), plus the parse state of the declared catalog:
+    /// the third element is `true` when the node's `commands` field was
+    /// **present but malformed**.
     ///
     /// A malformed catalog is NOT an empty catalog: an empty one means "the
     /// node declares no commands" (the node stays authoritative and the center
     /// skips its declaration check), while a malformed one means the center
     /// could not read what the node permits — so the caller has to fail closed
     /// instead of skipping the check.
+    ///
+    /// **This is the ONLY resolver.** A `resolve` that returned only the
+    /// channel and the catalog silently dropped the malformed flag, and a
+    /// caller using it could not honor the rule above.
     pub fn resolve_with_catalog(
         &self,
         name_or_id: &str,
     ) -> std::result::Result<(ReverseRpcChannel, Vec<CommandDescriptor>, bool), ResolveError> {
         let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
         let id = Self::match_id(&inner, name_or_id)?;
+        // `match_id` returns either the queried key or `n.session.node_id` for
+        // an entry taken from `nodes_by_id`, and `nodes_by_id` is keyed by
+        // `session.node_id` — under the SAME read guard, so the lookup cannot
+        // miss. It is mapped to `NotFound` (not a panic) so the type stays
+        // total.
         let n = inner
             .nodes_by_id
             .get(&id)
-            .ok_or_else(|| ResolveError::NodeNotFound {
-                name_or_id: name_or_id.to_string(),
-            })?;
+            .ok_or(ResolveError::NotFound)?;
         Ok((
             n.session.channel.clone(),
             n.session.declared_commands.clone(),
@@ -406,13 +526,11 @@ impl NodeRegistry {
         ))
     }
 
-    /// Same multi-level match as [`resolve`], but returns only the `node_id` —
-    /// `cluster.deregister` uses this to map an operator-supplied name/id to a
-    /// unique node identity before evicting + revoking the token. `pub(crate)`
-    /// because every current caller lives inside this crate
-    /// (`enrollment::deregister_node` and its tests); a single test outside
-    /// the crate (`src/gateway/handlers/cluster.rs:269`) references this
-    /// function by doc comment only and does not call it.
+    /// Same multi-level match as [`resolve_with_catalog`](Self::resolve_with_catalog),
+    /// but returns only the `node_id` — `cluster.deregister` uses this to map
+    /// an operator-supplied name/id to a unique node identity before evicting +
+    /// revoking the token. `pub(crate)` because every current caller lives
+    /// inside this crate (`enrollment::resolve_deregister_target`).
     pub(crate) fn resolve_id(&self, name_or_id: &str) -> std::result::Result<String, ResolveError> {
         let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
         Self::match_id(&inner, name_or_id)
@@ -440,6 +558,7 @@ impl NodeRegistry {
                 channel: n.session.channel.clone(),
                 declared_commands: n.session.declared_commands.clone(),
                 tags: n.session.tags.clone(),
+                catalog_malformed: n.catalog_malformed,
             })
             .collect();
         out.sort_by(|a, b| a.node_id.cmp(&b.node_id).then_with(|| a.name.cmp(&b.name)));
@@ -594,7 +713,7 @@ pub fn maybe_register_node(
     // fleet slots with malformed frames. Log and downgrade; only `commands`
     // is gating (every node ships `bash`), so an empty commands list keeps
     // the registration but is loud about it.
-    let (declared_commands, catalog_malformed) = match params_typed::<Vec<CommandDescriptor>>(
+    let (declared_commands, catalog_malformed) = match params_typed::<Vec<CommandDeclaration>>(
         params,
         "commands",
         device_id,
@@ -730,13 +849,17 @@ where
 /// Bounds on the peer-controlled metadata a node may declare in its connect
 /// frame.
 ///
-/// The registry stores this verbatim and [`NodeRegistry::list_environments`]
-/// deep-clones it on **every** call (it feeds the model-callable `node_list`),
-/// so an unbounded declaration is a memory-growth and model-budget-displacement
-/// lever for anyone who can reach the gateway. The limits are generous for a
-/// real node (one name, a handful of tags, a handful of commands) and are
-/// counted in **bytes** — the unit [`truncate_on_char_boundary`] works in.
-const MAX_DEVICE_NAME_BYTES: usize = 128;
+/// The registry stores the name, the tags and the command names, and
+/// [`NodeRegistry::list_environments`] clones them on **every** call (it feeds
+/// the model-callable `node_list`), so an unbounded declaration is a
+/// memory-growth and model-budget-displacement lever for anyone who can reach
+/// the gateway. The limits are generous for a real node (one name, a handful
+/// of tags, a handful of commands) and are counted in **bytes** — the unit
+/// [`truncate_on_char_boundary`] works in. The declared command *schema* is
+/// NOT stored at all: it is measured against the 8 KiB bound and dropped, so
+/// the bound is an operator signal rather than a bound on a copy the center
+/// keeps.
+pub(crate) const MAX_DEVICE_NAME_BYTES: usize = 128;
 const MAX_TAG_COUNT: usize = 32;
 const MAX_TAG_BYTES: usize = 64;
 const MAX_COMMAND_COUNT: usize = 64;
@@ -745,7 +868,13 @@ const MAX_COMMAND_SCHEMA_BYTES: usize = 8 * 1024;
 
 /// Bound the declared device name. It is a display affordance, so truncating
 /// is always safe (and never splits a UTF-8 scalar).
-fn bound_device_name(raw: String, device_id: &str) -> String {
+///
+/// `pub(crate)` because the **offline** half of the fleet (the enrolled-device
+/// store in `cluster::enrollment`) has to bound the same peer-declared name
+/// the same way — otherwise a long name is stored under one spelling and
+/// matched under another, and online addressing and offline addressing
+/// disagree about the same machine.
+pub(crate) fn bound_device_name(raw: String, device_id: &str) -> String {
     if raw.len() <= MAX_DEVICE_NAME_BYTES {
         return raw;
     }
@@ -785,13 +914,58 @@ fn bound_tags(raw: Vec<String>, device_id: &str) -> Vec<String> {
         .collect()
 }
 
+/// A byte-limited serialization sink: it counts the bytes the serializer
+/// offers and **refuses** (returns an error) once the total would pass
+/// `limit`.
+///
+/// Used to measure a peer-declared command schema without materializing it:
+/// `serde_json::to_string` built a second full copy of an attacker-controlled
+/// schema just to learn its length.
+struct LimitedSink {
+    limit: usize,
+    /// Bytes the serializer offered, including the chunk that crossed the
+    /// limit (the serializer stops at the first error, so this is a lower
+    /// bound on the true size — never an over-report).
+    offered: usize,
+    /// Whether the sink refused a write because the limit was passed.
+    exceeded: bool,
+}
+
+impl LimitedSink {
+    fn new(limit: usize) -> Self {
+        Self {
+            limit,
+            offered: 0,
+            exceeded: false,
+        }
+    }
+}
+
+impl std::io::Write for LimitedSink {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.offered = self.offered.saturating_add(buf.len());
+        if self.offered > self.limit {
+            self.exceeded = true;
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "command schema exceeds the byte limit",
+            ));
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 /// Bound the declared command catalog: how many commands, how long each
 /// command name may be, and how large each declared schema may be.
 ///
-/// The schema is informational today — nothing validates the caller's `args`
-/// against it (the node-side allowlist is the authoritative gate) — so an
-/// oversized one is replaced with an empty object instead of being stored.
-fn bound_commands(raw: Vec<CommandDescriptor>, device_id: &str) -> Vec<CommandDescriptor> {
+/// The schema is informational — nothing validates the caller's `args` against
+/// it (the node-side allowlist is the authoritative gate) and nothing READS
+/// it — so it is measured and then DROPPED: only the name is kept.
+fn bound_commands(raw: Vec<CommandDeclaration>, device_id: &str) -> Vec<CommandDescriptor> {
     if raw.len() > MAX_COMMAND_COUNT {
         tracing::warn!(
             device_id = %device_id,
@@ -814,18 +988,43 @@ fn bound_commands(raw: Vec<CommandDescriptor>, device_id: &str) -> Vec<CommandDe
                     .to_string();
                 command.name = bounded;
             }
-            let schema_bytes = serde_json::to_string(&command.schema).map_or(usize::MAX, |s| s.len());
-            if schema_bytes > MAX_COMMAND_SCHEMA_BYTES {
-                tracing::warn!(
-                    device_id = %device_id,
-                    command = %command.name,
-                    bytes = schema_bytes,
-                    limit = MAX_COMMAND_SCHEMA_BYTES,
-                    "cluster node connect frame declared an oversized command schema; dropping it"
-                );
-                command.schema = serde_json::json!({});
+            // Measure the schema through a size-limited sink: an oversized
+            // schema is refused before it is fully materialized, and an
+            // unserializable one never gets a second copy either. The value
+            // is dropped right after — nothing reads it.
+            let mut sink = LimitedSink::new(MAX_COMMAND_SCHEMA_BYTES);
+            let serialized = serde_json::to_writer(&mut sink, &command.schema);
+            // Read the sink's state outside the match arms: the mutable borrow
+            // the writer held ends with the call above.
+            let exceeded = sink.exceeded;
+            let offered = sink.offered;
+            match serialized {
+                Ok(()) => {}
+                Err(_) if exceeded => {
+                    // Oversized → the existing oversized-schema rejection path.
+                    // `bytes` is what the sink saw before refusing — a lower
+                    // bound on the true size, since the serializer stops there.
+                    tracing::warn!(
+                        device_id = %device_id,
+                        command = %command.name,
+                        bytes = offered,
+                        limit = MAX_COMMAND_SCHEMA_BYTES,
+                        "cluster node connect frame declared an oversized command schema; dropping it"
+                    );
+                }
+                Err(e) => {
+                    // Unserializable → fail closed: the schema is dropped.
+                    tracing::warn!(
+                        device_id = %device_id,
+                        command = %command.name,
+                        error = %e,
+                        "cluster node connect frame declared an unserializable command schema; dropping it"
+                    );
+                }
             }
-            command
+            CommandDescriptor {
+                name: command.name,
+            }
         })
         .collect()
 }
@@ -868,7 +1067,6 @@ mod tests {
             channel: test_channel(),
             declared_commands: vec![CommandDescriptor {
                 name: "bash".to_string(),
-                schema: json!({"type": "object"}),
             }],
             tags: vec![],
             version: None,
@@ -943,20 +1141,46 @@ mod tests {
         assert_eq!(envs.len(), 1);
         assert_eq!(envs[0].id, "node-a");
         assert_eq!(envs[0].name, "dev-node-a");
-        assert_eq!(envs[0].status, "online");
+        assert_eq!(envs[0].status, EnvironmentStatus::Online);
         assert_eq!(envs[0].commands.len(), 1);
         assert_eq!(envs[0].commands[0].name, "bash");
         assert!(envs[0].tags.is_empty());
+    }
+
+    /// The Panel's hand-written mirror compares `status` against the plain
+    /// strings `"online"` / `"offline"` — the enum must keep emitting exactly
+    /// those two spellings on the wire.
+    #[test]
+    fn environment_status_serializes_to_the_wire_spellings() {
+        let reg = NodeRegistry::new();
+        reg.register(session("node-a", "conn-1"));
+        let online = serde_json::to_value(&reg.list_environments()[0]).expect("serializes");
+        assert_eq!(online["status"], serde_json::json!("online"));
+
+        let offline = Environment {
+            id: "node-b".to_string(),
+            name: "dev-node-b".to_string(),
+            status: EnvironmentStatus::Offline,
+            commands: Vec::new(),
+            tags: Vec::new(),
+            last_seen_at: None,
+            version: None,
+        };
+        let offline = serde_json::to_value(offline).expect("serializes");
+        assert_eq!(offline["status"], serde_json::json!("offline"));
     }
 
     #[test]
     fn deregister_removes_from_both_maps() {
         let reg = NodeRegistry::new();
         reg.register(session("node-a", "conn-1"));
-        assert!(reg.deregister("conn-1"));
+        let removed = reg.deregister("conn-1").expect("the session was removed");
+        assert_eq!(removed.node_id, "node-a");
+        assert_eq!(removed.conn_id, "conn-1");
+        assert_eq!(removed.device_name, "dev-node-a");
         assert!(reg.list_environments().is_empty());
-        assert!(reg.resolve("node-a").is_err());
-        assert!(!reg.deregister("conn-x"));
+        assert!(reg.resolve_with_catalog("node-a").is_err());
+        assert!(reg.deregister("conn-x").is_none());
     }
 
     #[test]
@@ -965,9 +1189,9 @@ mod tests {
         reg.register(session("node-a", "conn-1"));
         reg.register(session("node-a", "conn-2"));
         assert_eq!(reg.list_environments().len(), 1);
-        assert!(!reg.deregister("conn-1"));
+        assert!(reg.deregister("conn-1").is_none());
         assert_eq!(reg.list_environments().len(), 1);
-        assert!(reg.deregister("conn-2"));
+        assert!(reg.deregister("conn-2").is_some());
         assert!(reg.list_environments().is_empty());
     }
 
@@ -991,10 +1215,13 @@ mod tests {
     fn resolve_by_id_then_by_name() {
         let reg = NodeRegistry::new();
         reg.register(session("node-a", "conn-1")); // device_name = "dev-node-a"
-        assert!(reg.resolve("node-a").is_ok(), "by id");
-        let (_, cmds) = reg.resolve("dev-node-a").expect("by name");
+        assert!(reg.resolve_with_catalog("node-a").is_ok(), "by id");
+        let (_, cmds, _) = reg.resolve_with_catalog("dev-node-a").expect("by name");
         assert_eq!(cmds[0].name, "bash");
-        assert!(matches!(reg.resolve("nope"), Err(ResolveError::NotFound)));
+        assert!(matches!(
+            reg.resolve_with_catalog("nope"),
+            Err(ResolveError::NotFound)
+        ));
     }
 
     #[test]
@@ -1255,9 +1482,9 @@ mod tests {
         reg.register(session("node-a", "conn-1"));
         assert!(reg.forget("node-a").is_some());
         assert!(reg.list_environments().is_empty());
-        assert!(reg.resolve("node-a").is_err());
+        assert!(reg.resolve_with_catalog("node-a").is_err());
         // A stale conn cleanup after forget is a harmless no-op.
-        assert!(!reg.deregister("conn-1"));
+        assert!(reg.deregister("conn-1").is_none());
         // Forgetting an unknown id reports nothing removed.
         assert!(reg.forget("ghost").is_none());
     }
@@ -1372,13 +1599,6 @@ mod tests {
         assert_eq!(
             ResolveError::Ambiguous(vec!["a (aaa)".into(), "b (bbb)".into()]).to_string(),
             "ambiguous — matches: a (aaa), b (bbb)"
-        );
-        assert_eq!(
-            ResolveError::NodeNotFound {
-                name_or_id: "x".into()
-            }
-            .to_string(),
-            "internal node lookup failed for 'x'"
         );
     }
 
@@ -1591,16 +1811,12 @@ mod tests {
             "an oversized command name must be truncated"
         );
         assert_eq!(
-            env.commands[0].schema,
-            json!({}),
-            "an oversized declared schema must be dropped, not stored"
+            env.commands[0].name, "cmd-0",
+            "an oversized declared schema must not drop the command"
         );
-        assert!(
-            env.commands[1..]
-                .iter()
-                .all(|c| serde_json::to_string(&c.schema).is_ok_and(|s| s.len() <= MAX_COMMAND_SCHEMA_BYTES)),
-            "no stored schema may exceed the bound"
-        );
+        // No schema is stored at all — `CommandDescriptor` has no schema
+        // field, so the "no stored schema may exceed the bound" assertion of
+        // the old wire-carrying type is now a compile-time guarantee.
     }
 
     /// A malformed `commands` field and an absent one are different facts: the

@@ -18,6 +18,14 @@ use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, 
 #[cfg(test)]
 mod terminal_tests;
 
+/// Routing bindings live in the application config (`[[bindings]]`). The
+/// gateway config used to carry a map-shaped copy of them, which both
+/// duplicated the fact and broke loading of the canonical array-of-tables
+/// shape, so the count now comes from the app config.
+fn app_bindings_count() -> usize {
+    Config::load().map(|config| config.bindings.len()).unwrap_or(0)
+}
+
 /// Handle config.reload RPC request
 ///
 /// Forces a configuration reload from file.
@@ -42,7 +50,7 @@ pub async fn handle_reload(
                             "max_connections": new_config.gateway.max_connections,
                         },
                         "agents": new_config.agents.keys().collect::<Vec<_>>(),
-                        "bindings_count": new_config.bindings.len(),
+                        "bindings_count": app_bindings_count(),
                     },
                     "message": "Configuration reloaded successfully",
                 }),
@@ -111,10 +119,13 @@ pub async fn handle_reload_with_subsystems(
                 // `policies.spend` captured handles at boot and would
                 // otherwise keep serving the pre-reload values while this
                 // response says "reloaded".
+                let terminal_source = crate::capability::projection_host::projection_host()
+                    .and_then(|host| host.facade().terminal_source());
                 crate::config::live_apply::apply_live_sections(
                     &config_guard,
                     &crate::config::reload_impact::live_targets(),
                     Some(&event_bus),
+                    terminal_source.as_ref(),
                 )
                 .await
             };
@@ -145,7 +156,7 @@ pub async fn handle_reload_with_subsystems(
     let config_summary = if let Some(ref gw) = gateway_config {
         json!({
             "agents": gw.agents.keys().collect::<Vec<_>>(),
-            "bindings_count": gw.bindings.len(),
+            "bindings_count": app_config.read().await.bindings.len(),
         })
     } else {
         json!(null)
@@ -165,95 +176,6 @@ pub async fn handle_reload_with_subsystems(
     )
 }
 
-/// Handle config.get RPC request
-///
-/// Returns the current configuration.
-pub async fn handle_get(request: JsonRpcRequest, watcher: Arc<ConfigWatcher>) -> JsonRpcResponse {
-    debug!("Handling config.get");
-
-    // Check for specific section request
-    let section = request
-        .params
-        .as_ref()
-        .and_then(|p| p.get("section"))
-        .and_then(|v| v.as_str());
-
-    let config = watcher.current_config().await;
-
-    let result = match section {
-        Some("gateway") => json!({
-            "host": config.gateway.host,
-            "port": config.gateway.port,
-            "max_connections": config.gateway.max_connections,
-            "protocol_version": config.gateway.protocol_version,
-        }),
-        Some("agents") => {
-            let agents: serde_json::Map<String, Value> = config
-                .agents
-                .iter()
-                .map(|(id, agent)| {
-                    (
-                        id.clone(),
-                        json!({
-                            "workspace": agent.workspace,
-                            "model": agent.model,
-                            "max_loops": agent.max_loops,
-                            "max_tokens": agent.max_tokens,
-                        }),
-                    )
-                })
-                .collect();
-            json!(agents)
-        }
-        Some("bindings") => json!(config.bindings),
-        Some("channels") => config.channels.clone(),
-        Some("sandbox") => json!({
-            "enabled": config.sandbox.enabled,
-            "docker_image": config.sandbox.docker_image,
-            "memory_limit_mb": config.sandbox.memory_limit_mb,
-            "cpu_quota_percent": config.sandbox.cpu_quota_percent,
-        }),
-        Some("tools") => json!({
-            "chrome": config.tools.chrome.as_ref().map(|c| json!({
-                "enabled": c.enabled,
-                "headless": c.headless,
-            })),
-            "cron": config.tools.cron.as_ref().map(|c| json!({
-                "enabled": c.enabled,
-                "max_jobs": c.max_jobs,
-            })),
-            "webhook": config.tools.webhook.as_ref().map(|w| json!({
-                "enabled": w.enabled,
-                "port": w.port,
-            })),
-        }),
-        Some(unknown) => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                format!("Unknown section: {unknown}. Valid sections: gateway, agents, bindings, channels, sandbox, tools"),
-            );
-        }
-        None => {
-            // Return full config overview (without sensitive data)
-            json!({
-                "config_path": watcher.config_path().display().to_string(),
-                "gateway": {
-                    "host": config.gateway.host,
-                    "port": config.gateway.port,
-                    "max_connections": config.gateway.max_connections,
-                },
-                "agents": config.agents.keys().collect::<Vec<_>>(),
-                "bindings_count": config.bindings.len(),
-                "channels": config.channels.clone(),
-                "sandbox_enabled": config.sandbox.enabled,
-            })
-        }
-    };
-
-    JsonRpcResponse::success(request.id, result)
-}
-
 /// Handle config.validate RPC request
 ///
 /// Validates the configuration file without applying changes.
@@ -271,7 +193,7 @@ pub async fn handle_validate(
                 "config_path": watcher.config_path().display().to_string(),
                 "summary": {
                     "agents": config.agents.keys().collect::<Vec<_>>(),
-                    "bindings_count": config.bindings.len(),
+                    "bindings_count": app_bindings_count(),
                     "gateway_port": config.gateway.port,
                 },
                 "message": "Configuration is valid",
@@ -564,10 +486,8 @@ pub async fn handle_patch_config(
     let mut pending_secrets: Vec<super::channel::ChannelSecret> = Vec::new();
     if let Some(channel_id) = path.strip_prefix("channels.") {
         if patch_request.patch.is_object() {
-            pending_secrets = super::channel::extract_channel_secrets(
-                channel_id,
-                &mut patch_request.patch,
-            );
+            pending_secrets =
+                super::channel::extract_channel_secrets(channel_id, &mut patch_request.patch);
             if !pending_secrets.is_empty() {
                 tracing::info!(
                     channel = %channel_id,
@@ -670,10 +590,7 @@ pub async fn handle_patch_config(
                 if let Some(obj) = v.as_object_mut() {
                     obj.insert(
                         "reload_impact".to_string(),
-                        json!({
-                            "kind": impact,
-                            "hint": impact.user_hint_zh(),
-                        }),
+                        impact.wire(impact.user_hint_zh()),
                     );
                 }
             }
@@ -1185,43 +1102,6 @@ model = "claude-opus-4-5"
 
         let watcher = Arc::new(ConfigWatcher::new(config).unwrap());
         (watcher, temp_file)
-    }
-
-    #[tokio::test]
-    async fn test_handle_get_full() {
-        let (watcher, _temp_file) = create_test_watcher().await;
-
-        let request = JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
-            id: Some(serde_json::json!(1)),
-            method: "config.get".to_string(),
-            params: None,
-        };
-
-        let response = handle_get(request, watcher).await;
-        assert!(response.result.is_some());
-
-        let result = response.result.unwrap();
-        assert!(result.get("gateway").is_some());
-        assert!(result.get("agents").is_some());
-    }
-
-    #[tokio::test]
-    async fn test_handle_get_section() {
-        let (watcher, _temp_file) = create_test_watcher().await;
-
-        let request = JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
-            id: Some(serde_json::json!(1)),
-            method: "config.get".to_string(),
-            params: Some(json!({"section": "gateway"})),
-        };
-
-        let response = handle_get(request, watcher).await;
-        assert!(response.result.is_some());
-
-        let result = response.result.unwrap();
-        assert_eq!(result["port"], 18790);
     }
 
     #[tokio::test]

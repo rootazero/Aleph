@@ -8,7 +8,11 @@ use crate::tool_metadata::{ToolCatalog, ToolSource, ToolSourceType, UnifiedTool}
 /// Parsed command result
 #[derive(Debug, Clone)]
 pub struct ParsedCommand {
-    /// Command source type
+    /// Command source type — the source's provenance label (`Builtin` /
+    /// `Native` / `Plugin` / `Custom` / `Mcp` / `Skill`).
+    ///
+    /// The execution engine dispatches on [`CommandContext`]; this records
+    /// which arm of the catalog the row came from.
     pub source_type: ToolSourceType,
     /// Canonical [`UnifiedTool::name`] of the resolved tool — **not** the
     /// literal word the user typed. Aliases (`/new` → `session_new`) and the
@@ -71,17 +75,42 @@ pub enum CommandContext {
         /// plugin command's is its tool RESTRICTION: `None` = declared nothing
         /// (allow-all); `Some(vec![])` = explicit deny-all. Do not flatten: an
         /// empty allow-set means allow-all downstream. A skill's pre-grants
-        /// rather than restricts, and is read from the skill file
-        /// (`gateway::execution_engine::slash_skill_pregrant`).
+        /// rather than restricts.
+        ///
+        /// Which of the two a row carries is decided at RUN time, not here:
+        /// `execution_engine::slash_skill_pregrant::registered_skill` resolves
+        /// the mode's `skill_id` against the `SkillSystem` manifest store and
+        /// checks the owner — `Some` ⇒ pre-grant, `None` ⇒ restriction. The
+        /// list itself travels in the mode JSON's `allowed_tools` key, which
+        /// is where the pre-grant path reads it back out of; it does NOT come
+        /// from the skill file.
+        ///
+        /// The two readings are kept apart by the id namespaces, which are
+        /// disjoint by construction: a plugin COMMAND's id is plugin-qualified
+        /// — `extension::registry::types::namespaced_component_key` drops the
+        /// `<plugin_id>:` prefix only for an empty plugin id, and the plugin
+        /// registry refuses such a registration outright
+        /// (`extension::registry::plugin_registry`) — while a skill
+        /// manifest's id comes from its `name:` through a strict charset
+        /// transform that maps every character outside `[a-z0-9._]` to `-`
+        /// (`skill::manifest`), so it can never contain the `:` that
+        /// qualifies a command. A command's id therefore never resolves to a
+        /// manifest, and its list is always read as a restriction. Were that
+        /// ever to change, a command's restriction would be stamped as a
+        /// pre-grant — the approval bypass
+        /// `execution_engine::slash_skill_scope` warns about.
         allowed_tools: Option<Vec<String>>,
     },
-    /// Custom command context
-    Custom {
-        /// System prompt to inject
-        system_prompt: Option<String>,
-        /// Rule regex pattern
-        pattern: String,
-    },
+    /// Custom command context — an operator-declared `[[rules]]` command.
+    ///
+    /// A marker, not a payload: the rule's `system_prompt` and `regex`
+    /// reach the model as the tool's **description** (truncated to 100
+    /// chars) and stay on the tool itself as `routing_system_prompt` /
+    /// `routing_regex`. Copying them into the mode JSON gave the slash
+    /// envelope two keys that nothing ever read — the envelope's `"custom"`
+    /// arm falls through to the agent loop without looking at them — so the
+    /// copies are gone and the tool keeps the originals.
+    Custom,
 }
 
 /// Unified command parser — delegates to `ToolCatalog`
@@ -136,11 +165,14 @@ impl CommandParser {
     /// Returns `&ToolCatalog` (auto-deref from the inner `Arc`) — all current
     /// callers treat it as a borrowed catalog.
     ///
-    /// This borrowed accessor is the ONLY way to reach the catalog. The parser
-    /// is shared process-wide through `crate::command::CommandParserCell`, so
-    /// every slash surface resolves against ONE catalog; handing out a clone
-    /// of the `Arc` would create a second owner, and two owners of the
-    /// catalog are how the slash surfaces drift apart on what `/foo` means.
+    /// This borrowed accessor is the ONLY way to reach the catalog. Every
+    /// slash surface resolves against ONE catalog — the `ToolCatalog` is what
+    /// is shared, and the parsers wrapping it (the one behind
+    /// `crate::command::CommandParserCell`, and the one the gateway's
+    /// `InboundRouter` builds) are two views of that one catalog. Handing out
+    /// a clone of the `Arc` would create a second owner, and two owners of
+    /// the catalog are how the slash surfaces drift apart on what `/foo`
+    /// means.
     #[must_use]
     pub fn tool_registry(&self) -> &ToolCatalog {
         &self.tool_registry
@@ -174,17 +206,20 @@ fn tool_to_command_context(tool: UnifiedTool) -> Option<CommandContext> {
             display_name: tool.display_name,
             allowed_tools: tool.routing_capabilities,
         },
-        ToolSource::Custom { .. } => CommandContext::Custom {
-            system_prompt: tool.routing_system_prompt,
-            // No `provider`: `RoutingRuleConfig::provider` is required by
-            // config validation and read by nothing. There is no agent-loop
-            // routing pass that resolves it — an earlier version of this
-            // comment claimed there was, sourced from a struct doc that
-            // contradicted its own module doc. `register_custom_commands`
-            // settles it: it copies `regex` and `system_prompt` onto the tool
-            // and never touches `provider`.
-            pattern: tool.routing_regex.unwrap_or(tool.name),
-        },
+        // No `system_prompt` / `pattern` copy: the rule's prompt and regex
+        // live on the tool itself (`routing_system_prompt` /
+        // `routing_regex`) and the prompt reaches the model as the tool's
+        // description. Carrying them here produced two mode-JSON keys that
+        // no reader ever read.
+        //
+        // No `provider`: `RoutingRuleConfig::provider` is required by
+        // config validation and read by nothing. There is no agent-loop
+        // routing pass that resolves it — an earlier version of this
+        // comment claimed there was, sourced from a struct doc that
+        // contradicted its own module doc. `register_custom_commands`
+        // settles it: it copies `regex` and `system_prompt` onto the tool
+        // and never touches `provider`.
+        ToolSource::Custom { .. } => CommandContext::Custom,
         ToolSource::Plugin { .. } => CommandContext::Builtin {
             // Plugin tools live in the tool registry under their namespaced id
             // (`plugin:<plugin_id>:<name>`) and are invoked through the
@@ -196,11 +231,11 @@ fn tool_to_command_context(tool: UnifiedTool) -> Option<CommandContext> {
         // `ToolSource` is `#[non_exhaustive]` and lives in another crate:
         // refuse to guess a context for a variant added after this match.
         //
-        // The refusal is fail-closed but NOT visible: `parse_async` turns the
-        // `None` into "this input is not a command", so the slash command
-        // silently degrades into a plain chat turn. Log the degradation —
-        // without it, a new `ToolSource` variant looks exactly like a command
-        // that was never registered.
+        // The refusal is fail-closed and does not fail the parse: `parse_async`
+        // turns the `None` into "this input is not a command", so the slash
+        // command degrades into a plain chat turn. The `warn!` below is what
+        // records that degradation — without it, a new `ToolSource` variant
+        // looks exactly like a command that was never registered.
         unknown => {
             tracing::warn!(
                 tool_id = %tool.id,

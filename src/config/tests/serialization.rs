@@ -22,7 +22,6 @@ fn test_memory_config_serialization() {
     let mem_config = MemoryConfig::default();
     let json = serde_json::to_string(&mem_config).unwrap();
     // No pre-filled providers — embedding list is empty by default
-    assert!(json.contains("sqlite-vec"));
     assert!(json.contains("dreaming"));
 }
 
@@ -30,7 +29,6 @@ fn test_memory_config_serialization() {
 fn test_memory_config_deserialization() {
     let json = r#"{
         "enabled": false,
-        "vector_db": "sqlite-vec",
         "embedding": {
             "active_provider_id": "openai"
         },
@@ -49,7 +47,6 @@ fn test_memory_config_deserialization() {
     let config: MemoryConfig = serde_json::from_str(json).unwrap();
     assert!(!config.enabled);
     assert_eq!(config.embedding.active_provider_id, "openai");
-    assert_eq!(config.vector_db, "sqlite-vec");
     assert!(!config.dreaming.enabled);
     assert_eq!(config.dreaming.window_start_local, "01:00");
     assert_eq!(config.memory_decay.protected_types.len(), 2);
@@ -447,7 +444,16 @@ fn test_embedding_survives_save_incremental() {
     // Now modify memory config (like memory_config.update would) but keep embedding
     config.memory.bm25_bonus_weight = 0.5;
 
-    // Simulate save_incremental: serialize to toml::Value and extract memory section
+    // Test save_incremental_to_file on disk
+    config.save_incremental_to_file(path, &["memory"]).unwrap();
+
+    let after_content = std::fs::read_to_string(path).unwrap();
+    assert!(
+        after_content.contains("[[memory.embedding.providers]]"),
+        "Saved file must preserve embedding providers after incremental save"
+    );
+
+    // Also verify in-memory toml::Value representation
     let current: toml::Value = toml::Value::try_from(&config).unwrap();
     let memory_val = current.as_table().unwrap().get("memory").unwrap();
 

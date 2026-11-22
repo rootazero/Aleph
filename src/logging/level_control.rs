@@ -16,12 +16,12 @@ use crate::logging::LoggingError;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 #[repr(u8)]
 pub enum LogLevel {
-    Error,
-    Warn,
+    Error = 0,
+    Warn = 1,
     #[default]
-    Info,
-    Debug,
-    Trace,
+    Info = 2,
+    Debug = 3,
+    Trace = 4,
 }
 
 impl LogLevel {
@@ -48,7 +48,7 @@ impl LogLevel {
     /// match `tracing-subscriber::EnvFilter`'s accepted form.
     #[must_use]
     pub fn parse(s: &str) -> Option<Self> {
-        let s = s.trim().trim_matches('\"');
+        let s = s.trim().trim_matches('\"').trim();
         if let Ok(n) = s.parse::<u8>() {
             // 0..=4 are the five known variants; anything else is out of
             // range (e.g. `"9"`) and parses as `None` rather than silently
@@ -194,7 +194,9 @@ fn init_log_level() {
 fn is_alephcore_target(target: &str) -> bool {
     matches!(target, "alephcore" | "aleph")
         || target.starts_with("alephcore::")
+        || target.starts_with("aleph::")
         || target.starts_with("aleph_server")
+        || target.starts_with("aleph_")
         || target.starts_with("aleph-")
 }
 
@@ -207,8 +209,11 @@ pub fn get_log_level() -> LogLevel {
         init_log_level();
     }
     let raw = CURRENT_LOG_LEVEL.load(Ordering::Acquire);
+    if let Some(level) = LogLevel::from_u8_opt(raw) {
+        return level;
+    }
     try_self_heal(raw);
-    LogLevel::from_u8(raw)
+    LogLevel::Info
 }
 
 /// Self-heal a corrupt atomic: if the stored byte is out of range (memory
@@ -216,9 +221,6 @@ pub fn get_log_level() -> LogLevel {
 /// `Info` via CAS so concurrent setters cannot have their freshly-installed
 /// value clobbered back to `Info`. Warns once via [`warn_invalid_level_once`].
 fn try_self_heal(raw: u8) {
-    if raw <= 4 {
-        return;
-    }
     let info_u8 = LogLevel::Info.to_u8();
     if CURRENT_LOG_LEVEL
         .compare_exchange(raw, info_u8, Ordering::AcqRel, Ordering::Acquire)
@@ -255,7 +257,7 @@ pub fn set_log_level(level: LogLevel) -> Result<(), LoggingError> {
     let old_u8 = CURRENT_LOG_LEVEL.swap(level.to_u8(), Ordering::AcqRel);
     if old_u8 == level.to_u8() {
         tracing::trace!(
-            old_level = ?LogLevel::from_u8(old_u8),
+            old_level = ?level,
             new_level = ?level,
             "log level set was a no-op"
         );
@@ -282,7 +284,6 @@ pub fn set_log_level(level: LogLevel) -> Result<(), LoggingError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sync_primitives::Mutex;
 
     /// Serializes tests that mutate the global log-level atomic. Without this
     /// guard, `cargo test`'s parallel test runner would let one test's
@@ -359,6 +360,7 @@ mod tests {
     fn test_get_set_log_level() {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let prev = get_log_level();
+        let _restore = RestoreOnDrop(&CURRENT_LOG_LEVEL, prev.to_u8());
         // The atomic is updated unconditionally; the live filter update is
         // best-effort and may report `FilterUnavailable` when the shared
         // backend was never installed (the test environment). Both outcomes
@@ -368,10 +370,6 @@ mod tests {
             let _ = set_log_level(target);
             assert_eq!(get_log_level(), target);
         }
-
-        // Restore to whatever was set before this test ran, so we don't
-        // pollute parallel tests' assumptions about the default level.
-        let _ = set_log_level(prev);
     }
 
     #[test]
@@ -385,9 +383,9 @@ mod tests {
         // `gateway/handlers/logs.rs::tests`).
         let _guard = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let prev = get_log_level();
+        let _restore = RestoreOnDrop(&CURRENT_LOG_LEVEL, prev.to_u8());
         let _ = set_log_level(LogLevel::Warn);
         assert_eq!(get_log_level(), LogLevel::Warn, "atomic updated regardless");
-        let _ = set_log_level(prev);
     }
 
     #[test]

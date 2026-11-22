@@ -102,12 +102,12 @@ impl MediaProcessor {
         session_id: &str,
         run_id: &str,
     ) -> ContentBlock {
-        let mime = attachment.mime_type.to_ascii_lowercase();
+        let mime = &attachment.mime_type;
 
-        if mime.starts_with("image/") {
+        if mime.get(..6).is_some_and(|p| p.eq_ignore_ascii_case("image/")) {
             self.process_image(attachment, supports_vision, session_id, run_id)
                 .await
-        } else if mime.starts_with("audio/") {
+        } else if mime.get(..6).is_some_and(|p| p.eq_ignore_ascii_case("audio/")) {
             self.process_audio(attachment, session_id, run_id).await
         } else {
             tracing::info!(
@@ -395,10 +395,9 @@ fn fallback_text(attachment: &Attachment, error: &str) -> ContentBlock {
 
 /// Display label for a MIME type.
 fn media_kind(mime: &str) -> &'static str {
-    let mime_lower = mime.to_ascii_lowercase();
-    if mime_lower.starts_with("image/") {
+    if mime.get(..6).is_some_and(|p| p.eq_ignore_ascii_case("image/")) {
         "Image"
-    } else if mime_lower.starts_with("audio/") {
+    } else if mime.get(..6).is_some_and(|p| p.eq_ignore_ascii_case("audio/")) {
         "Audio"
     } else {
         "Attachment"
@@ -426,13 +425,27 @@ fn media_summary(
     let size = size
         .or(attachment.size)
         .or_else(|| attachment.data.as_ref().map(|d| d.len() as u64));
-    let details = match size {
-        Some(size) => format!("{}, {}", attachment.mime_type, human_size(size)),
-        None => attachment.mime_type.clone(),
-    };
-    match note {
-        Some(note) => format!("[{kind}: {name} ({details}) — {note}]"),
-        None => format!("[{kind}: {name} ({details})]"),
+    match (size, note) {
+        (Some(sz), Some(note)) => {
+            format!(
+                "[{kind}: {name} ({}, {}) — {note}]",
+                attachment.mime_type,
+                human_size(sz)
+            )
+        }
+        (Some(sz), None) => {
+            format!(
+                "[{kind}: {name} ({}, {})]",
+                attachment.mime_type,
+                human_size(sz)
+            )
+        }
+        (None, Some(note)) => {
+            format!("[{kind}: {name} ({}) — {note}]", attachment.mime_type)
+        }
+        (None, None) => {
+            format!("[{kind}: {name} ({})]", attachment.mime_type)
+        }
     }
 }
 
@@ -459,19 +472,14 @@ fn human_size(bytes: u64) -> String {
 /// Returns `None` for formats that cannot be reliably converted to a
 /// vision-api-compatible format (e.g. SVG, HEIC).
 fn image_format_from_mime(mime: &str) -> Option<ImageFormat> {
-    let mime_lower = mime.to_ascii_lowercase();
-    match mime_lower.as_str() {
-        "image/png" => Some(ImageFormat::Png),
-        "image/webp" => Some(ImageFormat::WebP),
-        // JPEG variants
-        "image/jpeg" | "image/jpg" => Some(ImageFormat::Jpeg),
-        // SVG and HEIC are not raster formats — vision APIs typically cannot
-        // process them directly. Return None so callers can fail gracefully.
-        "image/svg+xml" | "image/heic" | "image/heif" => None,
-        _ => {
-            // Unknown format — don't guess, let caller decide fallback
-            None
-        }
+    if mime.eq_ignore_ascii_case("image/png") {
+        Some(ImageFormat::Png)
+    } else if mime.eq_ignore_ascii_case("image/webp") {
+        Some(ImageFormat::WebP)
+    } else if mime.eq_ignore_ascii_case("image/jpeg") || mime.eq_ignore_ascii_case("image/jpg") {
+        Some(ImageFormat::Jpeg)
+    } else {
+        None
     }
 }
 

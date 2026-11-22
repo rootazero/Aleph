@@ -279,7 +279,14 @@ impl PluginManageTool {
                     .collect();
                 Ok(PluginManageOutput {
                     summary: format!("{} mounted context capability declaration(s)", states.len()),
-                    data: serde_json::json!({"capabilities": states, "stats": registry.context_stats()}),
+                    data: serde_json::json!({
+                        "capabilities": states,
+                        "stats": registry.context_stats(),
+                        // The grant decisions themselves (allowed and refused),
+                        // not just their counts: the ring is bounded, so this is
+                        // the retained tail, not the full history.
+                        "audit": registry.context_audit(),
+                    }),
                 })
             }
             PluginAction::Enable | PluginAction::Disable => {

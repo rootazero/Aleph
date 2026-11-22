@@ -165,15 +165,15 @@ impl AgentKeystore {
     }
 
     pub fn identity(&self, agent_id: &str) -> Result<Option<AgentIdentityRow>, KeyError> {
-        Ok(self.store.get_agent_identity(agent_id)?)
+        self.store.get_agent_identity(agent_id).map_err(Into::into)
     }
 
     pub fn list(&self) -> Result<Vec<AgentIdentityRow>, KeyError> {
-        Ok(self.store.list_agent_identities()?)
+        self.store.list_agent_identities().map_err(Into::into)
     }
 
     pub fn keys_of(&self, agent_id: &str) -> Result<Vec<AgentKeyRow>, KeyError> {
-        Ok(self.store.list_agent_keys(agent_id)?)
+        self.store.list_agent_keys(agent_id).map_err(Into::into)
     }
 
     #[must_use]
@@ -265,15 +265,9 @@ impl AgentKeystore {
             .map_err(|e| KeyError::Vault(e.to_string()))?
             .ok_or_else(|| KeyError::MissingKey(fingerprint.to_string()))?;
 
-        let bytes = Zeroizing::new(
-            hex::decode(secret.expose())
-                .map_err(|_| KeyError::MalformedKey(fingerprint.to_string()))?,
-        );
-        let seed: [u8; 32] = bytes
-            .as_slice()
-            .try_into()
+        let mut seed = Zeroizing::new([0u8; 32]);
+        hex::decode_to_slice(secret.expose(), seed.as_mut())
             .map_err(|_| KeyError::MalformedKey(fingerprint.to_string()))?;
-        let seed = Zeroizing::new(seed);
 
         self.cache
             .lock()

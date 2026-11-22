@@ -684,3 +684,137 @@ fn an_unreadable_claude_cache_index_is_named_not_emptied() {
     );
     assert_eq!(discovery.unreadable, vec![index]);
 }
+
+/// A plugin that ships ONLY a root-level `hooks.json` is a plugin candidate.
+///
+/// The auto-discover adapter detects that file (`AutoDiscoverAdapter::detect`)
+/// and parses it (`AutoDiscoverAdapter::parse`), but discovery did not look
+/// for it: the directory was never offered to the adapter, so such a plugin
+/// was invisible to the whole plugin pipeline.
+#[test]
+fn a_root_level_hooks_json_makes_a_plugin_candidate() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    let aleph_home = root.join(".aleph");
+    let plugin = aleph_home.join("plugins/hook-only");
+    std::fs::create_dir_all(&plugin).unwrap();
+    std::fs::write(plugin.join("hooks.json"), "{\"hooks\": {}}\n").unwrap();
+
+    let scanner = DirectoryScanner {
+        aleph_home: aleph_home.clone(),
+        claude_home: None,
+        agents_home: None,
+        git_root: None,
+        working_dir: root.to_path_buf(),
+        config: DiscoveryConfig {
+            working_dir: root.to_path_buf(),
+            scan_claude_dirs: false,
+            scan_project_dirs: false,
+            max_upward_depth: 0,
+            claude_home_override: None,
+        },
+    };
+
+    let discovery = scanner.discover_plugins_with_extra(&[]).unwrap();
+    assert!(
+        discovery.found.iter().any(|d| d.path == plugin),
+        "a plugin carrying only hooks.json must be a plugin candidate: {:?}",
+        discovery.found
+    );
+}
+
+/// A root that appears AFTER the scanner was built is found by the NEXT
+/// scan.
+///
+/// The root's existence is re-checked per scan instead of being snapshotted
+/// at construction: with a construction-time snapshot a `~/.claude` (or
+/// `~/.agents`) created after boot stayed invisible for the whole process
+/// lifetime, because the one `DiscoveryManager` the extension manager keeps
+/// was built once.
+#[test]
+fn a_root_created_after_the_scanner_is_discovered_by_the_next_scan() {
+    let _home = crate::utils::paths::IsolatedAlephHome::new();
+    let temp = TempDir::new().unwrap();
+    let claude = temp.path().join("claude");
+    let scanner = DirectoryScanner::new(&DiscoveryConfig {
+        working_dir: temp.path().to_path_buf(),
+        scan_claude_dirs: true,
+        scan_project_dirs: false,
+        max_upward_depth: 0,
+        claude_home_override: Some(claude.clone()),
+    })
+    .unwrap();
+
+    assert!(
+        !scanner
+            .discover_component("skills")
+            .unwrap()
+            .iter()
+            .any(|s| s.path.starts_with(&claude)),
+        "the root does not exist yet, so it is not scanned"
+    );
+
+    std::fs::create_dir_all(claude.join("skills/late-skill")).unwrap();
+    std::fs::write(
+        claude.join("skills/late-skill/SKILL.md"),
+        "---\nname: late-skill\n---\n",
+    )
+    .unwrap();
+
+    let skills = scanner.discover_component("skills").unwrap();
+    assert!(
+        skills.iter().any(|s| s.path.ends_with("late-skill")),
+        "a root created after the scanner must be discovered by the next scan: {skills:?}"
+    );
+}
+
+#[test]
+fn marker_file_must_be_regular_file_not_dir() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    std::fs::create_dir(root.join(".git")).unwrap();
+
+    // Create a directory named SKILL.md inside a skill folder — should not qualify
+    let fake_skill = root.join("project/.aleph/skills/fake-skill");
+    std::fs::create_dir_all(fake_skill.join("SKILL.md")).unwrap();
+
+    let empty_home = TempDir::new().unwrap();
+    let scanner = DirectoryScanner {
+        aleph_home: empty_home.path().to_path_buf(),
+        claude_home: None,
+        agents_home: None,
+        git_root: Some(root.to_path_buf()),
+        working_dir: root.join("project"),
+        config: DiscoveryConfig {
+            working_dir: root.join("project"),
+            scan_claude_dirs: false,
+            scan_project_dirs: true,
+            max_upward_depth: 10,
+            claude_home_override: None,
+        },
+    };
+
+    let skills = scanner.discover_component("skills").unwrap();
+    assert!(
+        skills.is_empty(),
+        "directory named SKILL.md must not qualify as a valid skill marker: {skills:?}"
+    );
+}
+
+#[test]
+fn discover_component_rejects_invalid_path_component() {
+    let empty_home = TempDir::new().unwrap();
+    let scanner = DirectoryScanner {
+        aleph_home: empty_home.path().to_path_buf(),
+        claude_home: None,
+        agents_home: None,
+        git_root: None,
+        working_dir: empty_home.path().to_path_buf(),
+        config: DiscoveryConfig::default(),
+    };
+
+    assert!(scanner.discover_component("").is_err());
+    assert!(scanner.discover_component("..").is_err());
+    assert!(scanner.discover_component("foo/bar").is_err());
+    assert!(scanner.discover_component("foo\0bar").is_err());
+}

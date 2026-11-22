@@ -1,9 +1,13 @@
+//! lock-policy: with-policy, run-no-lock
+//!
 //! Secret management command handlers.
 //!
 //! All secret operations go through `SharedTokenManager`, which uses the
 //! auth token as master key for AES-256-GCM encryption.
 //!
-//! Spec C policy:
+//! Per-subcommand policy — the module-level declaration above is the coarse
+//! summary: this module calls both policy APIs, because the split below
+//! depends on the subcommand:
 //! - `secret init` / `secret list` / `secret set`: **`LockOrIpc`** — when
 //!   the server holds the singleton lock, forward to
 //!   `/v1/admin/secrets` (handlers shipped in Task 16). When no server

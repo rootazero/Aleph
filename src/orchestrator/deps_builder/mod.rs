@@ -5,6 +5,7 @@
 //! `HarnessDeps` fields consistently. Subagents inherit identical config; no
 //! override params are accepted (per P1 zero-override decision).
 
+#[cfg(test)]
 mod common;
 pub mod context_budget;
 pub mod provider_chain;

@@ -184,10 +184,11 @@ impl AlephTool for HeartbeatCreateTool {
         // Floor the interval (consistent with cron's Every guard). A sub-second
         // interval makes the probe — and any L2 agent run it triggers — fire on
         // every tick, a resource hazard.
-        if args.interval_ms < 1000 {
+        if args.interval_ms < crate::utils::duration::MIN_INTERVAL_MS {
             return Err(crate::error::AlephError::tool(format!(
-                "Interval too short: interval_ms={} is below the 1000ms minimum.",
-                args.interval_ms
+                "Interval too short: interval_ms={} is below the {}ms minimum.",
+                args.interval_ms,
+                crate::utils::duration::MIN_INTERVAL_MS
             )));
         }
 
@@ -366,9 +367,10 @@ impl AlephTool for HeartbeatUpdateTool {
         // Mirror the create-path floor: a sub-second interval makes the probe
         // (and any L2 agent run it triggers) fire on every tick.
         if let Some(interval_ms) = args.interval_ms {
-            if interval_ms < 1000 {
+            if interval_ms < crate::utils::duration::MIN_INTERVAL_MS {
                 return Err(crate::error::AlephError::tool(format!(
-                    "Interval too short: interval_ms={interval_ms} is below the 1000ms minimum."
+                    "Interval too short: interval_ms={interval_ms} is below the {}ms minimum.",
+                    crate::utils::duration::MIN_INTERVAL_MS
                 )));
             }
         }

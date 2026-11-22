@@ -10,6 +10,9 @@
 //! - **Outbound**: POSTs JSON to a configured `callback_url` with the same
 //!   `X-Webhook-Signature` header.
 //!
+//! The outbound payload has no `attachments` or `inline_keyboard` field, so an
+//! outbound request carrying either is rejected instead of silently losing it.
+//!
 //! # Usage
 //!
 //! `Config.channels` is a MAP keyed by instance id, so the table header carries
@@ -275,6 +278,19 @@ impl Channel for WebhookChannel {
         let callback_url = self.config.callback_url.clone();
         let secret = self.config.secret.clone();
         Box::pin(async move {
+            // Fail closed: the outbound payload has no field for these, so
+            // rejecting is the only way to keep the request honest.
+            if !message.attachments.is_empty() {
+                return Err(ChannelError::UnsupportedFeature(
+                    "Webhook does not support attachments".to_string(),
+                ));
+            }
+            if message.inline_keyboard.is_some() {
+                return Err(ChannelError::UnsupportedFeature(
+                    "Webhook does not support buttons".to_string(),
+                ));
+            }
+
             let client = client.ok_or_else(|| {
                 ChannelError::NotConnected("Webhook channel has not been activated".into())
             })?;
@@ -353,12 +369,7 @@ impl ChannelFactory for WebhookChannelFactory {
     }
 
     async fn create(&self, config: serde_json::Value) -> ChannelResult<Box<dyn Channel>> {
-        let config: WebhookChannelConfig = serde_json::from_value(config)
-            .map_err(|e| ChannelError::ConfigError(format!("Invalid Webhook config: {e}")))?;
-
-        config.validate().map_err(ChannelError::ConfigError)?;
-
-        Ok(Box::new(WebhookChannel::new("webhook", config)))
+        self.create_with_id("webhook", config).await
     }
 
     /// The webhook channel's runtime id IS the configured instance id —

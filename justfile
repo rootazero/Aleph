@@ -186,7 +186,11 @@ wasm:
     # 2. Compile Rust → WASM (lib only: the cdylib is the shipped artifact and
     #    the vestigial src/main.rs bin breaks under fat LTO)
     python {{memory_gate}}
-    cargo build -p aleph-panel --lib --target wasm32-unknown-unknown --profile wasm-release
+    extra_features=()
+    if [[ "${ALEPH_PANEL_RUNTIME_QA:-0}" == "1" ]]; then
+        extra_features=(--features runtime-qa)
+    fi
+    cargo build -p aleph-panel --lib --target wasm32-unknown-unknown --profile wasm-release "${extra_features[@]}"
     # Resolve cargo's real target dir instead of hardcoding `target/`. A literal
     # relative path breaks in git worktrees: .cargo/config.toml pins an absolute
     # shared target-dir, so `cargo build` writes there while a cwd-relative
@@ -520,7 +524,7 @@ check-phase5:
 # Wiring parity guards: catch "severed wire" drift where both ends exist but the
 # connection is missing. Each is a grep-level diff against a triaged baseline —
 # green now, fails only on a NEW severance. See the 2026-07-15 wire audit.
-check-wiring: check-rpc-wiring check-tool-wiring check-config-wiring
+check-wiring: check-rpc-wiring check-tool-wiring check-config-wiring check-discovery-wiring check-event-wiring check-domain-wiring check-exec-wiring check-executor-wiring check-export-wiring check-seam-wiring check-capability-wiring check-extension-wiring check-fetch-wiring check-gateway-wiring
 
 # RPC: no Panel rpc_call / rate-lane classifier may name a method with no handler
 # (→ METHOD_NOT_FOUND / phantom rate-lane guard).
@@ -536,6 +540,74 @@ check-tool-wiring:
 # knob is an inert R10 corpse).
 check-config-wiring:
     python3 scripts/config_wiring_audit.py
+
+# Discovery: the manifest names DISCOVERY advertises, the names the manifest
+# ADAPTERS detect and the names the LOADER advertises must describe the same
+# world; a plugin scan must not swallow a read failure silently.
+check-discovery-wiring:
+    python3 scripts/discovery_wire_audit.py
+
+# Events: every AlephEvent variant must have a producer and a subscriber;
+# repaired transition/boot wires must stay connected.
+check-event-wiring:
+    python3 scripts/event_wire_audit.py
+
+
+# Seams: every public API of the audited protocol/agent modules (src/a2a,
+# src/acp, src/agents) must have a production consumer — a `pub fn` nobody
+# calls is a severed wire the compiler cannot see. Shrink-only baseline.
+check-seam-wiring:
+    python3 scripts/wiring_seams.py
+
+# Capability/canvas/clarification seams: every public item of these modules
+# must have a production consumer — a `pub` declaration nobody reads is a
+# severed wire the compiler cannot see. Shrink-only baseline; the guard is a
+# detector, not a judge (see scripts/capability_wiring_audit.py).
+check-capability-wiring:
+    python3 scripts/capability_wiring_audit.py
+
+# Domain vocabulary: one parser per vocabulary (PromptScope / Os /
+# InstallKind), one source of truth for the source-priority order, and the
+# cuts the 2026-11-21 src/domain audit made stay cut.
+check-domain-wiring:
+    python3 scripts/domain_wire_audit.py
+
+# Exec: the approval record carries no write-only field, the operator's
+# custom-pattern reason reaches the denial and the audit trail, the grants
+# registry never publishes a failed write, and the secret catalogs stay one
+# catalog. Cuts the 2026-11-21 src/exec audit made stay cut.
+check-exec-wiring:
+    python3 scripts/exec_wire_audit.py
+
+# Executor: every registry-only tool has a description in the ONE table, the
+# team tools register under a literal name the census can see, the tool
+# categories stay complete, and the dead registry knobs stay cut.
+check-executor-wiring:
+    python3 scripts/executor_wire_audit.py
+
+# Export: one CSP literal with one owner, the served policy allows
+# downloads, a zero timestamp renders as absent, a budget-dropped figure is
+# reported to the model, and the Panel's export call carries an idempotency
+# key.
+check-export-wiring:
+    python3 scripts/export_wire_audit.py
+
+# Extension: the severed manifest/registry wires stay cut, the plugin agent
+# `mode:` key still fails loudly, and the config-schema budget keeps exactly
+# one owner.
+check-extension-wiring:
+    python3 scripts/extension_wire_audit.py
+
+# Fetch: the section-level routing knobs stay cut (nothing read them) and the
+# boot warn keeps its producer.
+check-fetch-wiring:
+    python3 scripts/fetch_wire_audit.py
+
+# Gateway: the severed config/link/adapter wires stay cut, the pair-loop
+# override stays connected per channel, and the deliberately dark wires stay
+# dark.
+check-gateway-wiring:
+    python3 scripts/gateway_wire_audit.py
 
 # ─── Lint ───
 

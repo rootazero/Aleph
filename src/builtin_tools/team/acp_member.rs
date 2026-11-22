@@ -28,7 +28,7 @@ pub enum TeamAcpMemberArgs {
     Add {
         team_id: String,
         /// Adapter id registered in `[acp.adapters]` — e.g. `claude-code`,
-        /// `codex`, `gemini_cli`.
+        /// `codex`, `gemini`.
         harness_id: String,
         /// Working directory the external CLI process should run in. Use an
         /// absolute path. The team dispatcher passes this through to

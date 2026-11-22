@@ -137,6 +137,15 @@ impl MetaGuard {
         self.meta.as_mut()
     }
 
+    /// Read-only access to the existing document.
+    ///
+    /// The guard read the document *after* taking the lock, so `None` here is
+    /// an authoritative "this session does not exist" — the check a
+    /// create-if-absent path needs to be race-free.
+    pub(crate) const fn existing(&self) -> Option<&SessionMetadata> {
+        self.meta.as_ref()
+    }
+
     /// Install a document, replacing whatever the guard read.
     ///
     /// Used by the two creation paths (a brand-new session, and the new key a

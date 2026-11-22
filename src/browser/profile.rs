@@ -502,12 +502,20 @@ fn default_chrome_mcp_command() -> String {
 /// Servers older than 1.6.0 ignore the unknown switch (yargs is not strict
 /// here — verified against 1.5.0), so the default stays safe for a pinned
 /// older version.
+///
+/// `--experimentalStructuredContent` is NOT passed. The server adds a
+/// `structuredContent` field alongside the text content when it is set
+/// (verified against chrome-devtools-mcp 1.13.0, whose `ToolHandler` builds
+/// `result = { content }` and then adds `structuredContent` beside it), and
+/// the driver reads the text blocks only — it has no field to carry the
+/// structured payload. Asking a server for a capability the client drops is
+/// how the two drift apart; the flag comes back when something reads the
+/// structured content.
 fn default_chrome_mcp_args() -> Vec<String> {
     vec![
         "-y".to_string(),
         "chrome-devtools-mcp@latest".to_string(),
         "--autoConnect".to_string(),
-        "--experimentalStructuredContent".to_string(),
         "--allow-unrestricted-paths".to_string(),
     ]
 }
@@ -615,9 +623,14 @@ impl BrowserSystemConfig {
         std::time::Duration::from_secs(self.cdp_command_timeout_secs)
     }
 
-    /// Every profile setting its engine cannot honour, as
+    /// Every profile setting of this kind its engine cannot honour, as
     /// `(profile, key, explanation)` — for the doctor to REPORT, never to
     /// refuse on.
+    ///
+    /// Today that is one key: `browser`. (A profile's `headless` is also
+    /// inert under obscura, but obscura's launch already warns about it, so
+    /// it has a report of its own; this list stays the keys that would
+    /// otherwise be silent.)
     ///
     /// Spec §6.3: under obscura, `browser = <Chromium family>` 「被忽略并在
     /// doctor 记一条」. `browser` steers
@@ -633,7 +646,8 @@ impl BrowserSystemConfig {
     /// it, and reporting the default would name a setting nobody made.
     ///
     /// Returned rather than logged so the doctor check that renders it
-    /// (Task 16) and this function are not two authors of one list.
+    /// (`diagnostics::checks::browser_ignored_fields::BrowserIgnoredFieldsCheck`)
+    /// and this function are not two authors of one list.
     #[must_use]
     pub fn ignored_fields(&self) -> Vec<(String, &'static str, String)> {
         let mut names: Vec<&String> = self.profiles.keys().collect();

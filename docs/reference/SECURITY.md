@@ -1884,7 +1884,7 @@ All outbound HTTP requests go through the SSRF engine:
 | MCP SSE transport | `mcp/transport/sse.rs` | `validate_url_with_pinned()` |
 | MCP preflight probe | `mcp/preflight.rs` | `validate_url_async()` + pinned `resolve()` |
 | A2A push webhook | `a2a/service/notification.rs` | `validate_url_async()` at register, `safe_fetch()` at send |
-| ~~Fetch providers (crawl4ai/firecrawl)~~ | **removed from runtime** (BT-D-R4-22) | The `[fetch]` provider chain was excised: a provider re-resolves DNS and follows redirects from **its own** network position, so the Aleph-side DNS pin cannot cross the process boundary — validate-then-delegate was exactly the audited High-severity gap. Config surface kept (`[fetch]` section, `fetch_config.get/update/test` RPC); boot logs a one-time warn via `inert_fetch_backend_names` when `[fetch]` is enabled. `web_fetch` uses the built-in `safe_fetch()` path only |
+| ~~Fetch providers (crawl4ai/firecrawl)~~ | **removed from runtime** (BT-D-R4-22) | The `[fetch]` provider chain was excised: a provider re-resolves DNS and follows redirects from **its own** network position, so the Aleph-side DNS pin cannot cross the process boundary — validate-then-delegate was exactly the audited High-severity gap. Config surface kept (`[fetch]` section, `fetch_config.get/update/test` RPC); boot logs a one-time warn via `inert_fetch_backend_names` for every backend configured in `[fetch]` (the section has no routing knob: `enabled`/`default_provider`/`fallback_providers` were cut because nothing read them). `web_fetch` uses the built-in `safe_fetch()` path only |
 | Media pipeline URLs | `media/pipeline.rs` | `validate_url_async()` |
 | Browser navigation | `browser/network_policy.rs` | `validate_url_async()` via `BrowserSsrfGuard` |
 
@@ -3413,8 +3413,8 @@ attribution, and a bound workspace as the room's default cwd.
      while the file backend still can, and so can any snapshot:
      - **SQLite (opt-in: `[general] session_store_backend = "sqlite"`; the
        shipped default is `"file"`)** — **closed in round-11 (D1)**.
-       `session_manager::ops::query::collect_rows` fails `list_sessions` /
-       `list_by_state` on any undecodable row (each one `warn!`ed by index),
+       `session_manager::ops::query::collect_rows` fails `list_sessions`
+       on any undecodable row (each one `warn!`ed by index),
        so the receipt reads `Unknown`, not `NothingToMove`. Display-only reads
        (`search_messages`, `get_session_preview`) use the lossy
        `collect_rows_lossy`, which drops and counts, loudly. Pinned by
@@ -4192,12 +4192,19 @@ Spec C closes that gap with four layered protections:
   forward to `/v1/admin/*` IPC endpoints (token rotation
   self-heals via a single 401 retry). When no server is running,
   the CLI takes the lock locally and operates directly.
+  Each subcommand module also carries a machine-readable
+  `//! lock-policy: none | with-policy | run-no-lock` line, which the
+  regression gate checks against the code in that module.
 
-Reverse-regression: `scripts/spec_c_regression.sh` enforces the four
-invariants (no direct rusqlite open, no direct fs ops on vault/acp
-files, every CLI subcommand annotated, no leftover
-`acquire_instance_lock` callers). Run before any commit that touches
-`src/utils/`, `src/cli/`, `src/gateway/admin_api/`, or
+Reverse-regression: `tests/spec_c_invariants.rs` enforces the four
+invariants against the parsed source — no direct rusqlite open, no
+direct fs write on vault/acp files, every CLI subcommand's
+`//! lock-policy:` declaration matching its code, and one owner for
+the singleton lock. `scripts/spec_c_regression.sh` is a thin wrapper
+around that test; CI runs the test itself. The gate reads the AST, so
+`#[cfg(test)]` code is not counted as a violation. It scans all of
+`src/`, so run it before any commit that touches `src/` — in
+particular `src/utils/`, `src/cli/`, `src/gateway/admin_api/`, or
 `src/bin/aleph-server/commands/`.
 
 ## See Also

@@ -27,13 +27,18 @@ pub struct MatrixRoomPolicy {
     /// Only process messages that @mention the bot
     pub require_mention: Option<bool>,
     /// Allow messages from bots
+    ///
+    /// Not implemented and read by nothing: the Matrix protocol carries no bot
+    /// flag (neither timeline events nor room member state say whether a user is
+    /// a bot), so the adapter would have to guess from MXIDs or display names
+    /// before it could honour this.
     pub allow_bots: Option<bool>,
     /// Allowed user IDs in this room (empty = allow all)
     pub users: Option<Vec<String>>,
 }
 
 /// Matrix channel configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct MatrixConfig {
     /// Matrix homeserver URL (e.g., "<https://matrix.org>")
     pub homeserver_url: String,
@@ -69,7 +74,11 @@ pub struct MatrixConfig {
     #[serde(default)]
     pub dedupe_store_path: Option<String>,
 
-    /// Initial sync history message limit
+    /// Timeline event limit per sync response
+    ///
+    /// Applied as a `/sync` timeline filter, so it caps every response rather
+    /// than only the initial sync: the SDK exposes no per-request limit. `0`
+    /// means "no cap".
     #[serde(default = "default_initial_sync_limit")]
     pub initial_sync_limit: u64,
 
@@ -92,6 +101,29 @@ pub struct MatrixConfig {
     /// Room-level policy overrides
     #[serde(default)]
     pub rooms: HashMap<String, MatrixRoomPolicy>,
+}
+
+/// Hand-written so the credentials never reach a log line, a panic message
+/// or a `tracing` field. Every other field is printed as-is.
+impl std::fmt::Debug for MatrixConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MatrixConfig")
+            .field("homeserver_url", &self.homeserver_url)
+            .field("access_token", &"<redacted>")
+            .field("allowed_rooms", &self.allowed_rooms)
+            .field("sync_timeout_ms", &self.sync_timeout_ms)
+            .field("send_typing", &self.send_typing)
+            .field("mention_gating", &self.mention_gating)
+            .field("allowed_users", &self.allowed_users)
+            .field("state_store_path", &self.state_store_path)
+            .field("dedupe_store_path", &self.dedupe_store_path)
+            .field("initial_sync_limit", &self.initial_sync_limit)
+            .field("auto_join_invites", &self.auto_join_invites)
+            .field("download_media", &self.download_media)
+            .field("media_max_mb", &self.media_max_mb)
+            .field("rooms", &self.rooms)
+            .finish()
+    }
 }
 
 impl Default for MatrixConfig {
@@ -245,6 +277,24 @@ impl MatrixConfig {
                 || word.starts_with(&format!("@{stripped}:"))
                 || word.starts_with(&format!("{mention_pattern}:"))
         })
+    }
+}
+
+impl From<&MatrixConfig> for crate::gateway::inbound_router::ChannelConfig {
+    fn from(config: &MatrixConfig) -> Self {
+        Self {
+            require_mention: config.mention_gating,
+            room_require_mention: config
+                .rooms
+                .iter()
+                .filter_map(|(room, policy)| {
+                    policy
+                        .require_mention
+                        .map(|required| (room.clone(), required))
+                })
+                .collect(),
+            ..Self::default()
+        }
     }
 }
 

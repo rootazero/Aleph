@@ -238,9 +238,9 @@ impl McpPersistentConfig {
             }
 
             // Expand in command
-            if let Some(ref cmd) = config.command {
+            if let Some(cmd) = &mut config.command {
                 if let Some(expanded) = expand_env_var(cmd) {
-                    config.command = Some(expanded);
+                    *cmd = expanded;
                 }
             }
 
@@ -253,9 +253,9 @@ impl McpPersistentConfig {
             }
 
             // Expand in URL
-            if let Some(ref url) = config.url {
+            if let Some(url) = &mut config.url {
                 if let Some(expanded) = expand_env_var(url) {
-                    config.url = Some(expanded);
+                    *url = expanded;
                 }
             }
         }
@@ -269,6 +269,10 @@ impl McpPersistentConfig {
 ///
 /// Unknown variables are left as-is.
 fn expand_env_var(s: &str) -> Option<String> {
+    if !s.contains("${") {
+        return None;
+    }
+
     // Static regex compiled once, reused on every call
     static ENV_VAR_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
     let re = ENV_VAR_RE.get_or_init(|| match Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}") {

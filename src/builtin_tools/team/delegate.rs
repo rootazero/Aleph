@@ -103,6 +103,7 @@ pub struct TeamDelegateTool {
     coord_store: Arc<dyn CoordTaskStore>,
     artifact_store: Option<Arc<dyn ArtifactStore>>,
     context: Option<GatewayContext>,
+    current_agent_id: String,
 }
 
 impl TeamDelegateTool {
@@ -110,13 +111,21 @@ impl TeamDelegateTool {
         store: Arc<dyn TeamStore>,
         coord_store: Arc<dyn CoordTaskStore>,
         artifact_store: Option<Arc<dyn ArtifactStore>>,
+        current_agent_id: String,
     ) -> Self {
         Self {
             store,
             coord_store,
             artifact_store,
             context: None,
+            current_agent_id,
         }
+    }
+
+    /// The agent acting in THIS call — the identity of the running turn, not
+    /// the one this tool was constructed with. See [`acting_agent_id`].
+    fn actor(&self) -> String {
+        crate::builtin_tools::acting_agent::acting_agent_id(&self.current_agent_id)
     }
 
     /// Create with a gateway context for execution.
@@ -125,12 +134,14 @@ impl TeamDelegateTool {
         coord_store: Arc<dyn CoordTaskStore>,
         artifact_store: Option<Arc<dyn ArtifactStore>>,
         context: GatewayContext,
+        current_agent_id: String,
     ) -> Self {
         Self {
             store,
             coord_store,
             artifact_store,
             context: Some(context),
+            current_agent_id,
         }
     }
 
@@ -273,6 +284,14 @@ impl AlephTool for TeamDelegateTool {
         let context = self.context.as_ref().ok_or_else(|| {
             AlephError::other("GatewayContext not configured for team_delegate tool")
         })?;
+
+        // 0. The CALLER must be in the team. Fifteen sibling team tools gate
+        // on `require_team_auth` (leader-or-member, fail closed); this one
+        // checked only the TARGET's membership, so any agent that knew a
+        // team_id could spend a member's budget on a task the team never
+        // asked for, and the row landed on that team's board as if the team
+        // had asked for it.
+        super::require_team_auth(&*self.store, &args.team_id, &self.actor()).await?;
 
         // 1. Verify the agent is a member of the team.
         let members = self.store.get_members(&args.team_id).await?;

@@ -541,6 +541,11 @@ impl SlackMessageOps {
         Ok(())
     }
 
+    /// Edit a previously posted message via `chat.update`.
+    ///
+    /// Delegates to [`Self::update_message_with_base`] with the production
+    /// base; callers that hold a configured base (the channel's `api_base`)
+    /// should call that directly.
     pub async fn update_message(
         client: &reqwest::Client,
         bot_token: &str,
@@ -548,6 +553,27 @@ impl SlackMessageOps {
         timestamp: &str,
         new_text: &str,
     ) -> ChannelResult<()> {
+        Self::update_message_with_base(client, bot_token, channel, timestamp, new_text, None).await
+    }
+
+    /// `update_message` against an explicit API base.
+    ///
+    /// Mirrors [`Self::send_message_with_base`] in two ways the edit path used
+    /// to miss: the base is honoured (so a mock/harness server can be used for
+    /// streaming edits too), and a `429`/`ratelimited` answer is classified as
+    /// [`ChannelError::RateLimited`] instead of a raw `SendFailed`, which is the
+    /// signal the streaming lane backs off on.
+    pub async fn update_message_with_base(
+        client: &reqwest::Client,
+        bot_token: &str,
+        channel: &str,
+        timestamp: &str,
+        new_text: &str,
+        api_base: Option<&str>,
+    ) -> ChannelResult<()> {
+        use super::super::errors::{classify_slack_error, retry_after_secs, SlackFallback};
+
+        let base = api_base.unwrap_or(SLACK_API_BASE);
         let formatted = MessageFormatter::format(new_text, MarkupFormat::SlackMrkdwn);
 
         let body = serde_json::json!({
@@ -556,61 +582,175 @@ impl SlackMessageOps {
             "text": formatted,
         });
 
-        let resp: serde_json::Value = client
-            .post(format!("{SLACK_API_BASE}/chat.update"))
+        let raw = client
+            .post(format!("{base}/chat.update"))
             .header("Authorization", format!("Bearer {bot_token}"))
             .json(&body)
             .send()
             .await
-            .map_err(|e| ChannelError::SendFailed(format!("chat.update request failed: {e}")))?
-            .json()
-            .await
-            .map_err(|e| {
-                ChannelError::SendFailed(format!("chat.update response parse failed: {e}"))
-            })?;
+            .map_err(|e| ChannelError::SendFailed(format!("chat.update request failed: {e}")))?;
+        let status = raw.status();
+        let retry_after = retry_after_secs(raw.headers());
+        let resp: serde_json::Value = raw.json().await.map_err(|e| {
+            ChannelError::SendFailed(format!("chat.update response parse failed: {e}"))
+        })?;
 
         if resp["ok"].as_bool() != Some(true) {
             let err = resp["error"].as_str().unwrap_or("unknown");
-            return Err(ChannelError::SendFailed(format!(
-                "Slack chat.update failed: {err}"
-            )));
+            return Err(classify_slack_error(
+                "chat.update",
+                Some(status),
+                err,
+                retry_after,
+                SlackFallback::Send,
+            ));
         }
 
         Ok(())
     }
 
+    /// Delete a posted message via `chat.delete`.
+    ///
+    /// Delegates to [`Self::delete_message_with_base`] with the production
+    /// base; callers that hold a configured base should call that directly.
     pub async fn delete_message(
         client: &reqwest::Client,
         bot_token: &str,
         channel: &str,
         timestamp: &str,
     ) -> ChannelResult<()> {
+        Self::delete_message_with_base(client, bot_token, channel, timestamp, None).await
+    }
+
+    /// `delete_message` against an explicit API base, with the same
+    /// base + rate-limit classification contract as
+    /// [`Self::update_message_with_base`].
+    pub async fn delete_message_with_base(
+        client: &reqwest::Client,
+        bot_token: &str,
+        channel: &str,
+        timestamp: &str,
+        api_base: Option<&str>,
+    ) -> ChannelResult<()> {
+        use super::super::errors::{classify_slack_error, retry_after_secs, SlackFallback};
+
+        let base = api_base.unwrap_or(SLACK_API_BASE);
+
         let body = serde_json::json!({
             "channel": channel,
             "ts": timestamp,
         });
 
-        let resp: serde_json::Value = client
-            .post(format!("{SLACK_API_BASE}/chat.delete"))
+        let raw = client
+            .post(format!("{base}/chat.delete"))
             .header("Authorization", format!("Bearer {bot_token}"))
             .json(&body)
             .send()
             .await
-            .map_err(|e| ChannelError::SendFailed(format!("chat.delete request failed: {e}")))?
-            .json()
-            .await
-            .map_err(|e| {
-                ChannelError::SendFailed(format!("chat.delete response parse failed: {e}"))
-            })?;
+            .map_err(|e| ChannelError::SendFailed(format!("chat.delete request failed: {e}")))?;
+        let status = raw.status();
+        let retry_after = retry_after_secs(raw.headers());
+        let resp: serde_json::Value = raw.json().await.map_err(|e| {
+            ChannelError::SendFailed(format!("chat.delete response parse failed: {e}"))
+        })?;
 
         if resp["ok"].as_bool() != Some(true) {
             let err = resp["error"].as_str().unwrap_or("unknown");
-            return Err(ChannelError::SendFailed(format!(
-                "Slack chat.delete failed: {err}"
-            )));
+            return Err(classify_slack_error(
+                "chat.delete",
+                Some(status),
+                err,
+                retry_after,
+                SlackFallback::Send,
+            ));
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod edit_delete_base_tests {
+    use super::*;
+    use crate::gateway::delivery_queue::should_enqueue;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    /// `update_message`/`delete_message` used to hard-code `slack.com`, so a
+    /// configured base reached sends, reactions and uploads but not streaming
+    /// edits or deletions. Hitting a local mock is the only way to prove the
+    /// base is threaded through.
+    #[tokio::test]
+    async fn edit_and_delete_honour_the_configured_base() {
+        let server = MockServer::start().await;
+        for endpoint in ["/chat.update", "/chat.delete"] {
+            Mock::given(method("POST"))
+                .and(path(endpoint))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true})),
+                )
+                .mount(&server)
+                .await;
+        }
+
+        SlackMessageOps::update_message_with_base(
+            &reqwest::Client::new(),
+            "xoxb-test",
+            "C1",
+            "1.0",
+            "edited",
+            Some(&server.uri()),
+        )
+        .await
+        .expect("chat.update must reach the configured base");
+
+        SlackMessageOps::delete_message_with_base(
+            &reqwest::Client::new(),
+            "xoxb-test",
+            "C1",
+            "1.0",
+            Some(&server.uri()),
+        )
+        .await
+        .expect("chat.delete must reach the configured base");
+    }
+
+    /// Same defect as the send path had: a 429 on an edit came back as
+    /// `SendFailed`, so the streaming lane backed off on the wrong signal.
+    #[tokio::test]
+    async fn a_rate_limited_edit_is_rate_limited_not_send_failed() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat.update"))
+            .respond_with(
+                ResponseTemplate::new(429)
+                    .insert_header("retry-after", "7")
+                    .set_body_json(serde_json::json!({"ok": false, "error": "ratelimited"})),
+            )
+            .mount(&server)
+            .await;
+
+        let err = SlackMessageOps::update_message_with_base(
+            &reqwest::Client::new(),
+            "xoxb-test",
+            "C1",
+            "1.0",
+            "edited",
+            Some(&server.uri()),
+        )
+        .await
+        .expect_err("a 429 edit must not be reported as success");
+
+        assert!(
+            matches!(
+                err,
+                ChannelError::RateLimited {
+                    retry_after_secs: 7
+                }
+            ),
+            "got {err:?}"
+        );
+        assert!(should_enqueue(&err));
     }
 }
 

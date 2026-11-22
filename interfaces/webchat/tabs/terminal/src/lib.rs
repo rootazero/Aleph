@@ -55,6 +55,7 @@ pub struct MountHandle {
 }
 
 impl MountHandle {
+    #[cfg(any(test, target_arch = "wasm32"))]
     fn new(cleanup: impl FnOnce() + 'static) -> Self {
         Self {
             cleanup: RefCell::new(Some(Box::new(cleanup))),
@@ -215,10 +216,8 @@ mod tests {
         let adapter_active = Rc::new(Cell::new(true));
         let root = Rc::clone(&first_root);
         let active = Rc::clone(&adapter_active);
-        let mounted: Result<MountHandle, &str> = (|| {
-            // The second root fails validation before a handle is returned.
-            Err("content root is invalid")
-        })();
+        // The second root fails validation before a handle is returned.
+        let mounted: Result<MountHandle, &str> = Err("content root is invalid");
         assert!(mounted.is_err());
 
         // The same transaction cleanup used by mount is exercised explicitly:

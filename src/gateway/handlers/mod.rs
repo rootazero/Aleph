@@ -51,6 +51,7 @@ pub mod browser_viewer;
 pub mod bundled_sync;
 pub mod canvas;
 pub mod canvas_error;
+pub mod capabilities;
 pub mod channel;
 pub mod chat;
 pub mod clarification;
@@ -124,6 +125,7 @@ pub mod security_audit;
 pub mod skills;
 pub mod spend;
 pub mod subagent;
+pub mod system_hello;
 pub mod system_info;
 pub mod task_error;
 pub mod teams;
@@ -321,10 +323,16 @@ impl HandlerRegistry {
         registry.register("echo", echo::handle);
         registry.register("version", version::handle);
         registry.register("system.info", system_info::handle);
+        registry.register("system.hello", system_hello::handle);
         registry.register("request.state", request_state::handle);
 
         // Config handlers (schema is stateless)
         registry.register("config.schema", config::handle_schema);
+        registry.register("capabilities.describe", capabilities::handle);
+        registry.register(
+            "capabilities.terminal.invoke",
+            capabilities::handle_terminal_invoke,
+        );
 
         // Logs handlers
         registry.register("logs.getLevel", logs::handle_get_level);
@@ -405,14 +413,14 @@ impl HandlerRegistry {
         // `pty::manager()` accessor; the event bus is attached once in
         // `GatewayServer::build_router`, so no boot-time wiring is required here.
         //
-        // `pty.spawn` is NOT registered here — it needs the live
-        // `Arc<RwLock<Config>>` to read `[policies.terminal]` (the session
-        // gate, and the scrollback/session-cap values), which this
-        // stateless registry has no handle to. It is registered instead by
-        // `register_pty_handlers` in
+        // `pty.spawn` is NOT registered here — it needs the
+        // `TerminalCapabilitySource` (the owner of the live `Config` behind
+        // `[policies.terminal]`: the session gate, and the
+        // scrollback/session-cap values), which this stateless registry has no
+        // handle to. It is registered instead by `register_pty_handlers` in
         // `src/bin/aleph-server/commands/start/builder/handlers/system.rs`,
         // via `register_handler!`, alongside the rest of the server's
-        // config-carrying handlers.
+        // source-carrying handlers.
         registry.register("pty.input", pty::handle_input);
         registry.register("pty.resize", pty::handle_resize);
         registry.register("pty.close", pty::handle_close);

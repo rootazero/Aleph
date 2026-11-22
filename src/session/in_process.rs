@@ -191,7 +191,7 @@ impl InProcessActorSessionService {
                     };
                     crate::session::actor::notify_appended(
                         id,
-                        &record,
+                        record,
                         self.observer.as_ref(),
                         &bcast_tx,
                     );

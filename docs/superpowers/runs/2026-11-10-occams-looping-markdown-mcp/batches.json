@@ -1,0 +1,110 @@
+[
+  {
+    "id": "LOOP1",
+    "subsystem": "looping",
+    "description": "Looping core orchestration, pursuit tick calculation & loop state types",
+    "files": [
+      "src/looping/mod.rs",
+      "src/looping/pursuit.rs",
+      "src/looping/types.rs"
+    ]
+  },
+  {
+    "id": "MARK1",
+    "subsystem": "markdown",
+    "description": "Markdown fences parsing & code block extraction",
+    "files": [
+      "src/markdown/fences.rs",
+      "src/markdown/mod.rs"
+    ]
+  },
+  {
+    "id": "MCP_AUTH",
+    "subsystem": "mcp/auth",
+    "description": "MCP auth callback, provider, storage and auth module definitions",
+    "files": [
+      "src/mcp/auth/callback.rs",
+      "src/mcp/auth/mod.rs",
+      "src/mcp/auth/provider.rs",
+      "src/mcp/auth/storage.rs"
+    ]
+  },
+  {
+    "id": "MCP_MODERN",
+    "subsystem": "mcp/modern",
+    "description": "MCP modern cache, endpoint discovery, header handling and MRTR transport",
+    "files": [
+      "src/mcp/modern/cache.rs",
+      "src/mcp/modern/discover.rs",
+      "src/mcp/modern/headers.rs",
+      "src/mcp/modern/mod.rs",
+      "src/mcp/modern/mrtr.rs"
+    ]
+  },
+  {
+    "id": "MCP_TRANSPORT",
+    "subsystem": "mcp/transport",
+    "description": "MCP transport implementations: HTTP, SSE, SSE events, stdio and transport traits",
+    "files": [
+      "src/mcp/transport/http.rs",
+      "src/mcp/transport/mod.rs",
+      "src/mcp/transport/sse.rs",
+      "src/mcp/transport/sse_events.rs",
+      "src/mcp/transport/stdio.rs",
+      "src/mcp/transport/traits.rs"
+    ]
+  },
+  {
+    "id": "MCP_MGR",
+    "subsystem": "mcp/manager",
+    "description": "MCP manager actor lifecycle, config, handle, secret resolver and types",
+    "files": [
+      "src/mcp/manager/actor.rs",
+      "src/mcp/manager/config.rs",
+      "src/mcp/manager/handle.rs",
+      "src/mcp/manager/mod.rs",
+      "src/mcp/manager/secret_resolver.rs",
+      "src/mcp/manager/types.rs"
+    ]
+  },
+  {
+    "id": "MCP_EXT",
+    "subsystem": "mcp/external",
+    "description": "MCP external process connection management, runtime and module root",
+    "files": [
+      "src/mcp/external/connection.rs",
+      "src/mcp/external/mod.rs",
+      "src/mcp/external/runtime.rs"
+    ]
+  },
+  {
+    "id": "MCP_CORE",
+    "subsystem": "mcp/core",
+    "description": "MCP protocol JSON-RPC client, error classes, prompts, preflight, presets and redact",
+    "files": [
+      "src/mcp/client.rs",
+      "src/mcp/error_class.rs",
+      "src/mcp/jsonrpc.rs",
+      "src/mcp/preflight.rs",
+      "src/mcp/presets/mod.rs",
+      "src/mcp/prompts.rs",
+      "src/mcp/protocol.rs",
+      "src/mcp/redact.rs",
+      "src/mcp/resources.rs",
+      "src/mcp/types.rs"
+    ]
+  },
+  {
+    "id": "MCP_TOOLS",
+    "subsystem": "mcp/tools",
+    "description": "MCP tool bridge, sanitization, sampling protocol, sampling bridge and context injection",
+    "files": [
+      "src/mcp/context_injector.rs",
+      "src/mcp/mod.rs",
+      "src/mcp/sampling.rs",
+      "src/mcp/sampling_bridge.rs",
+      "src/mcp/tool_bridge.rs",
+      "src/mcp/tool_sanitize.rs"
+    ]
+  }
+]

@@ -63,10 +63,16 @@ impl StatusReactionController {
         // Only transition states that actually change the visible reaction
         // — a `ResponseChunk` while we're already in `Thinking` is a no-op
         // for the reaction but still a legal state-machine event.
+        //
+        // The comparison must include the EMOJI: two events can reduce to the
+        // same state with different reactions (Thinking with the `thinking`
+        // emoji vs. Thinking with `processing`), and returning early on the
+        // state alone would leave the old reaction on the message.
+        let emoji_changed = current.as_ref() != target_emoji.as_ref();
         if *state != target_state {
             *state = target_state;
-        } else {
-            // Same state — nothing to render.
+        } else if !emoji_changed {
+            // Same state and same reaction — nothing to render.
             return Ok(());
         }
 

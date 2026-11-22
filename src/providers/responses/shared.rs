@@ -320,6 +320,8 @@ pub fn extract_text(response: &ResponseResource) -> Option<String> {
     }
     if texts.is_empty() {
         None
+    } else if texts.len() == 1 {
+        Some(texts[0].to_string())
     } else {
         Some(texts.join(""))
     }

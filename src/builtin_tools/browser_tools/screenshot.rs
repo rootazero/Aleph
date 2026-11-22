@@ -141,8 +141,23 @@ impl AlephTool for BrowserScreenshotTool {
                         // Bound the pixel budget before it reaches the model —
                         // the screenshot twin of the text-read char cap. Stays
                         // PNG, so the base64 output and vision-bridge contract
-                        // below are unchanged.
-                        let png_bytes = super::bound_screenshot_png(result.png_bytes);
+                        // below are unchanged. A capture that cannot be
+                        // bounded is a failure, not a stand-in picture: a
+                        // 1x1 PNG reported as a successful screenshot is a
+                        // capture that never happened.
+                        let png_bytes = match super::bound_screenshot_png(result.png_bytes) {
+                            Ok(bytes) => bytes,
+                            Err(reason) => {
+                                return Ok(BrowserScreenshotOutput {
+                                    success: false,
+                                    image_base64: None,
+                                    format: None,
+                                    message: Some(format!("Screenshot failed: {reason}")),
+                                    ocr_text: None,
+                                    description: None,
+                                })
+                            }
+                        };
                         let image_base64 =
                             base64::engine::general_purpose::STANDARD.encode(&png_bytes);
 

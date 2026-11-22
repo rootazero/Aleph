@@ -1,8 +1,7 @@
-#[cfg(test)]
-use super::config_v2::ErrorPolicyMode;
 use super::config_v2::{
-    DmPolicy, ErrorPolicy, GroupPolicy, LinkPreviewMode, StreamingOptions, TelegramAccountConfig,
-    TelegramConfigV2, TelegramGroupConfig, TelegramTopicConfig,
+    DmPolicy, ErrorPolicy, ErrorPolicyMode, GroupPolicy, LinkPreviewMode, StreamingMode,
+    StreamingOptions, TelegramAccountConfig, TelegramConfigV2, TelegramGroupConfig,
+    TelegramTopicConfig,
 };
 use std::collections::HashMap;
 
@@ -35,23 +34,71 @@ impl ConfigResolver {
         let mut lookup = HashMap::new();
         for account in &config.accounts {
             let account_default = Self::resolve_account_defaults(account);
-            lookup.insert((account.id.clone(), 0, None), account_default.clone());
+            let account_key = (account.id.clone(), 0, None);
+            assert!(
+                lookup
+                    .insert(account_key, account_default.clone())
+                    .is_none(),
+                "duplicate account id: {}",
+                account.id
+            );
             for group in &account.groups {
                 let group_resolved = Self::merge_group(&account_default, group);
-                lookup.insert(
-                    (account.id.clone(), group.chat_id, None),
-                    group_resolved.clone(),
+                let group_key = (account.id.clone(), group.chat_id, None);
+                assert!(
+                    lookup.insert(group_key, group_resolved.clone()).is_none(),
+                    "duplicate group chat_id {} for account {}",
+                    group.chat_id,
+                    account.id
                 );
                 for topic in &group.topics {
-                    let topic_resolved = Self::merge_topic(&group_resolved, topic);
-                    lookup.insert(
-                        (account.id.clone(), group.chat_id, Some(topic.thread_id)),
-                        topic_resolved,
+                    // A topic inherits the group's resolved streaming.
+                    // `block_streaming: true` blocks it, `false` explicitly
+                    // unblocks it back to the ACCOUNT setting, and `None`
+                    // keeps the group's decision.
+                    let mut topic_resolved = Self::merge_topic(&group_resolved, topic);
+                    match topic.block_streaming {
+                        Some(true) => topic_resolved.streaming.enabled = false,
+                        Some(false) => topic_resolved.streaming = account_default.streaming.clone(),
+                        None => {}
+                    }
+                    let topic_key = (account.id.clone(), group.chat_id, Some(topic.thread_id));
+                    assert!(
+                        lookup.insert(topic_key, topic_resolved.clone()).is_none(),
+                        "duplicate topic thread_id {} for group {} account {}",
+                        topic.thread_id,
+                        group.chat_id,
+                        account.id
                     );
                 }
             }
         }
-        Self { lookup }
+        let resolver = Self { lookup };
+        resolver.warn_on_unsupported_modes();
+        resolver
+    }
+
+    /// `AdminOnly` cannot be enforced at delivery time: nothing carries an
+    /// actor identity into `ErrorCooldown::should_send_error`, so the mode
+    /// degrades to `Once`. Say so once at load time instead of letting the
+    /// config read as if it filtered errors to admins.
+    fn warn_on_unsupported_modes(&self) {
+        let mut accounts: Vec<&str> = self
+            .lookup
+            .values()
+            .filter(|cfg| matches!(cfg.error_policy.mode, ErrorPolicyMode::AdminOnly))
+            .map(|cfg| cfg.account_id.as_str())
+            .collect();
+        accounts.sort_unstable();
+        accounts.dedup();
+        if !accounts.is_empty() {
+            tracing::warn!(
+                accounts = ?accounts,
+                "telegram error_policy.mode = \"admin_only\" behaves like \"once\": \
+                 delivery has no actor identity, so the error is shown to the chat \
+                 whoever is in it"
+            );
+        }
     }
 
     #[must_use]
@@ -67,8 +114,34 @@ impl ConfigResolver {
             .or_else(|| self.lookup.get(&(account_id.to_string(), 0, None)))
     }
 
+    /// Resolve only when `chat_id` is *explicitly* mapped for `account_id`
+    /// (a group, or a group+topic entry), ignoring the account-level
+    /// `chat_id == 0` catch-all every account registers.
+    ///
+    /// Multi-account outbound routing uses this to distinguish "this account
+    /// owns this chat" from "this account would accept anything", which
+    /// [`Self::resolve`] alone cannot express.
+    #[must_use]
+    pub fn resolve_explicit(
+        &self,
+        account_id: &str,
+        chat_id: i64,
+        thread_id: Option<i32>,
+    ) -> Option<&ResolvedConfig> {
+        if chat_id == 0 {
+            return None;
+        }
+        self.lookup
+            .get(&(account_id.to_string(), chat_id, thread_id))
+            .or_else(|| self.lookup.get(&(account_id.to_string(), chat_id, None)))
+    }
+
     fn resolve_account_defaults(account: &TelegramAccountConfig) -> ResolvedConfig {
         let error_policy = account.error_policy.clone().unwrap_or_default();
+        let mut streaming = account.streaming.clone().unwrap_or_default();
+        if matches!(streaming.mode, StreamingMode::Disabled) {
+            streaming.enabled = false;
+        }
         ResolvedConfig {
             account_id: account.id.clone(),
             bot_token: account.bot_token.clone(),
@@ -79,7 +152,7 @@ impl ConfigResolver {
             send_typing: account.send_typing.unwrap_or(true),
             allowed_users: account.allowed_users.clone().unwrap_or_default(),
             allowed_groups: account.allowed_groups.clone().unwrap_or_default(),
-            streaming: account.streaming.clone().unwrap_or_default(),
+            streaming,
             // Send-retry budget follows the configured error policy (default 3)
             // instead of a hardcoded constant.
             max_retries: error_policy.max_retries,
@@ -94,6 +167,12 @@ impl ConfigResolver {
             .error_policy
             .clone()
             .unwrap_or_else(|| base.error_policy.clone());
+        // A group has no streaming block of its own: it inherits the account
+        // configuration and may only turn streaming OFF (block_streaming).
+        let mut streaming = base.streaming.clone();
+        if group.block_streaming.unwrap_or(false) {
+            streaming.enabled = false;
+        }
         ResolvedConfig {
             account_id: base.account_id.clone(),
             bot_token: base.bot_token.clone(),
@@ -110,7 +189,7 @@ impl ConfigResolver {
                 .clone()
                 .unwrap_or_else(|| base.allowed_users.clone()),
             allowed_groups: base.allowed_groups.clone(),
-            streaming: base.streaming.clone(),
+            streaming,
             max_retries: error_policy.max_retries,
             error_policy,
             html_fallback: base.html_fallback,
@@ -173,7 +252,6 @@ mod tests {
                 streaming: None,
                 error_policy: Some(ErrorPolicy {
                     mode: ErrorPolicyMode::Silent,
-                    template: None,
                     max_retries: 3,
                 }),
                 html_fallback: None,
@@ -188,6 +266,33 @@ mod tests {
         assert_eq!(resolved.default_agent, Some("default".to_string()));
         assert_eq!(resolved.error_policy.mode, ErrorPolicyMode::Silent);
         assert!(!resolved.send_typing);
+    }
+
+    #[test]
+    fn block_streaming_inherits_and_topic_can_explicitly_unblock() {
+        let config: TelegramConfigV2 = serde_json::from_value(serde_json::json!({
+            "accounts": [{"id": "a", "bot_token": "123:abc", "groups": [{
+                "id": "group", "chat_id": -100, "block_streaming": true,
+                "topics": [{"id": "five", "thread_id": 5}, {"id": "six", "thread_id": 6, "block_streaming": false}]
+            }]}]
+        })).unwrap();
+        let resolver = ConfigResolver::from_v2(&config);
+        assert!(!resolver.resolve("a", -100, None).unwrap().streaming.enabled);
+        assert!(
+            !resolver
+                .resolve("a", -100, Some(5))
+                .unwrap()
+                .streaming
+                .enabled
+        );
+        assert!(
+            resolver
+                .resolve("a", -100, Some(6))
+                .unwrap()
+                .streaming
+                .enabled
+        );
+        assert!(resolver.resolve("a", -200, None).unwrap().streaming.enabled);
     }
 
     #[test]
@@ -208,7 +313,6 @@ mod tests {
                 streaming: None,
                 error_policy: Some(ErrorPolicy {
                     mode: ErrorPolicyMode::Reply,
-                    template: None,
                     max_retries: 3,
                 }),
                 html_fallback: None,
@@ -221,7 +325,6 @@ mod tests {
                     block_streaming: None,
                     error_policy: Some(ErrorPolicy {
                         mode: ErrorPolicyMode::Once,
-                        template: None,
                         max_retries: 3,
                     }),
                     group_policy: None,
@@ -234,7 +337,6 @@ mod tests {
                         block_streaming: None,
                         error_policy: Some(ErrorPolicy {
                             mode: ErrorPolicyMode::Silent,
-                            template: None,
                             max_retries: 3,
                         }),
                         dm_policy: None,

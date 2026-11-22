@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "timestamp": "20261116T060337.821944Z",
+  "memory_gate": {
+    "argv": [
+      "python3",
+      "qa/browser_live/check_memory.py",
+      "--required-bytes",
+      "4294967296"
+    ],
+    "cwd": "/Volumes/TBU4/Workspace/Aleph",
+    "env_overrides": {},
+    "exit_code": 0,
+    "timed_out": false,
+    "unjoined_descendants": false,
+    "elapsed_seconds": 0.02789983298862353,
+    "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060337.821944Z-memory.stdout.log",
+    "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060337.821944Z-memory.stderr.log"
+  },
+  "test_filter": "extension::claude_cache_tests::an_unreadable_index_keeps_the_usage_history",
+  "status": "FAIL",
+  "command": {
+    "argv": [
+      "cargo",
+      "test",
+      "-p",
+      "alephcore",
+      "--lib",
+      "--offline",
+      "--locked",
+      "--jobs",
+      "1",
+      "extension::claude_cache_tests::an_unreadable_index_keeps_the_usage_history",
+      "--",
+      "--test-threads=1"
+    ],
+    "cwd": "/Volumes/TBU4/Workspace/Aleph",
+    "env_overrides": {
+      "HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-mdxhz0h8/home",
+      "USERPROFILE": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-mdxhz0h8/home",
+      "ALEPH_HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-mdxhz0h8/home/.aleph",
+      "CARGO_HOME": "/Users/zouguojun/.cargo",
+      "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+      "TMPDIR": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-mdxhz0h8",
+      "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+      "RUST_BACKTRACE": "1"
+    },
+    "exit_code": 101,
+    "timed_out": false,
+    "unjoined_descendants": false,
+    "elapsed_seconds": 1.4539123749709688,
+    "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060337.821944Z.stdout.log",
+    "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060337.821944Z.stderr.log"
+  },
+  "fixture": {
+    "path": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-mdxhz0h8",
+    "cleanup": "removed"
+  }
+}

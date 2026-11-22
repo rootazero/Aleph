@@ -40,6 +40,7 @@ impl PiiRule for CustomRegexRule {
 
     fn detect(&self, text: &str) -> Vec<PiiMatch> {
         let mut results = Vec::new();
+        let severity = self.config.severity.into();
 
         for m in self.regex.find_iter(text) {
             results.push(PiiMatch {
@@ -47,7 +48,7 @@ impl PiiRule for CustomRegexRule {
                 start: m.start(),
                 end: m.end(),
                 matched_text: m.as_str().to_string(),
-                severity: self.config.severity.into(),
+                severity,
                 placeholder: self.config.placeholder.clone(),
             });
         }

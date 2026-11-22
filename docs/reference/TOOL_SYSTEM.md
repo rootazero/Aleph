@@ -47,6 +47,77 @@ overrode it. This is not a claim that all RPC dispatch is scoped. See
 
 ---
 
+## Startup capability restrictions / 启动期 Capability 限制
+
+`policies.capability_constraints` is a typed, startup-applied map keyed by a
+fully qualified capability ID. The final `/` separates namespace and name;
+segments must be nonempty and contain no whitespace/control characters. A
+well-formed target may arrive after startup. Empty defaults are omitted from
+serialized config. Both the parent section and every child need **Restart**;
+editing the file does not modify an already compiled Policy runtime.
+
+`policies.capability_constraints` 为按完整 Capability ID 索引的类型化启动配置。
+末尾 `/` 分隔 namespace 与 name，各段非空且不含空白/控制字符；合法但尚未出现
+的目标保留为 pending。空默认值不写入配置。父节与叶字段均需 **Restart**，写盘
+不会改变已经编译的运行时规则。
+
+```toml
+[policies.capability_constraints."aleph/tools/example".time]
+start_hour = 9
+end_hour = 17
+
+[policies.capability_constraints."aleph/tools/example".resource]
+unit = "active_calls"
+max_active = 2
+
+[policies.capability_constraints."aleph/tools/example".required_conditions]
+provider_ready = true
+```
+
+- Time uses the existing **UTC**, inclusive-start/exclusive-end evaluator:
+  `9..17` admits 09:00 but not 17:00; `22..6` crosses midnight. Hours must satisfy
+  `start_hour < 24`, `end_hour <= 24`, and differ. No local timezone conversion.
+- `max_active` must be positive. `active_calls` counts other operations on the
+  same source attachment, excluding the candidate. The non-Clone RAII guard
+  stays with the actual operation until completion, not just the waiting caller.
+  The strict-below check is **not a process-wide atomic semaphore**.
+- `pty_sessions` reads the real source-owned session count: spawn allocates;
+  input/attach/resize use existing resources; close releases. Existing/Release
+  skip only the resource predicate, never time, required facts, lease, or lifecycle.
+  Provider stop/revoke remains an unconditional cleanup path.
+- Required facts are read live after approval, outside ownership/registry locks.
+  Unknown readers/units are rejected at attachment; missing/false facts, reader
+  failure, stale captures, and configured targets without attachments deny.
+  Independent live surfaces behind one Tool ingress do not replace each other's
+  readers or reset their in-flight counts.
+
+时间使用既有 **UTC** 半开窗口，支持跨午夜，不转换成本地时区。资源上限必须为正；
+`active_calls` 只统计同一 source attachment 的其他实际操作，不含候选操作，且不是
+全局原子信号量。guard 必须随实际操作存活。`pty_sessions` 使用真实 session 数，
+spawn 分配，input/attach/resize 复用，close 回收；复用/回收仅跳过资源谓词，其他
+限制仍有效。stop/revoke 的清理不走分配闸。facts 由真实 owner 在审批后提供，缺失、
+失败、旧 capture、无 attachment 或不支持的 reader/unit 均拒绝；同入口多个 surface
+不互相覆盖 reader 或计数。
+
+The trusted ingress supplies the real caller actor and separate authenticated
+principal. Runtime admission does not equate that actor with the captured
+capability owner: a legal Session/Run may call a Runtime-owned Tool. Existing
+`Policy::resolve` owner checks and owning-ingress authorization remain unchanged;
+never rewrite the caller as the owner to satisfy a gate. Task 2 must separately
+prove unauthorized callers have zero effect at the actual ingress.
+可信入口提供真实 actor，用户 principal 独立保存。合法 Session/Run 可以调用
+Runtime-owned Tool，附加 runtime 限制不比较 actor 与 captured owner 是否相同。
+原 `Policy::resolve` 和入口授权完全保留，不得把调用者改写成 owner 来过闸；Task 2
+仍须在真实入口证明未授权调用零 effect，不能用「不同 actor 被拒」代替。
+
+These APIs add restrictions to existing permission, visibility, provider and
+lease gates; they do not grant authority. This Task 1 foundation does **not**
+claim the production dispatch/PTY/Panel ingress wiring is complete. / 这些 API
+只增加限制，不替代或授予既有权限；Task 1 基础设施不表示生产派发、PTY 或 Panel
+入口已经接线完成。
+
+---
+
 ## `tools.invoke` compatibility boundary / 兼容调用边界
 
 Ordinary `tools.invoke` calls still dispatch through raw `ToolRegistry`, even

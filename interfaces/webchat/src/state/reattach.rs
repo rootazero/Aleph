@@ -91,6 +91,7 @@ pub async fn reattach_after_connect(
     workspace: Option<WorkspaceState>,
     locale: Locale,
 ) {
+    let epoch = dash.connection_epoch.get_untracked();
     // MUST precede the seed: `seed_server_running` is a no-op while a sequence
     // baseline survives, and the baseline from the previous connection is
     // exactly what has to go.
@@ -108,12 +109,18 @@ pub async fn reattach_after_connect(
     // gives the rest of the function the answer it needs.
     let live = match probe_with_backoff(&dash).await {
         Ok(set) => {
+            if dash.connection_epoch.try_get_untracked() != Some(epoch) {
+                return;
+            }
             // Clear any prior failed-retry latch — we landed, and the next
             // epoch bump should NOT treat us as still-pending.
             chat.pending_reattach.set(false);
             set
         }
         Err(e) => {
+            if dash.connection_epoch.try_get_untracked() != Some(epoch) {
+                return;
+            }
             // Latch the flag so the app-root Effect re-fires this function on
             // the next `connection_epoch` bump. `connection_epoch` ticks once
             // per successful handshake, so it does not retried on a still-dead

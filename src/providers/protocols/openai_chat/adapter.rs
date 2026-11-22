@@ -122,8 +122,9 @@ impl ProtocolAdapter for OpenAiProtocol {
         if let Some(raw) = config.stop_sequences.as_ref() {
             let sequences: Vec<String> = raw
                 .split(',')
-                .map(|s| s.trim().to_string())
+                .map(str::trim)
                 .filter(|s| !s.is_empty())
+                .map(str::to_string)
                 .collect();
             if !sequences.is_empty() {
                 body_obj.insert("stop".to_string(), json!(sequences));

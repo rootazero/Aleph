@@ -449,12 +449,6 @@ impl Default for Config {
 // =============================================================================
 
 impl Config {
-    /// Create a new config with default values
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Convenience accessor for the local voice (BYO endpoint) config.
     #[must_use]
     pub fn local_voice(&self) -> &VoiceLocalConfig {
@@ -487,9 +481,6 @@ impl Config {
             },
         );
         self.fetch = Some(crate::config::types::FetchConfigInternal {
-            enabled: c4.enabled,
-            default_provider: "crawl4ai".into(),
-            fallback_providers: None,
             backends,
             verified_shared: std::collections::HashMap::new(),
         });
@@ -533,6 +524,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn session_store_default_does_not_depend_on_general_table() {
+        assert_eq!(Config::default().general.session_store_backend, "file");
+        for source in ["", "[general]\n"] {
+            let cfg: Config = toml::from_str(source).unwrap();
+            assert_eq!(cfg.general.session_store_backend, "file", "{source:?}");
+        }
+    }
+
+    #[test]
+    fn explicit_session_store_backend_is_retained() {
+        for backend in ["sqlite", ""] {
+            let cfg: Config =
+                toml::from_str(&format!("[general]\nsession_store_backend = {backend:?}")).unwrap();
+            assert_eq!(cfg.general.session_store_backend, backend);
+        }
+    }
+
+    #[test]
     fn legacy_crawl4ai_migrates_into_fetch_section() {
         let mut cfg = Config::default();
         cfg.policies.web_fetch.crawl4ai.enabled = true;
@@ -543,8 +552,6 @@ mod tests {
         cfg.migrate_fetch();
 
         let f = cfg.fetch.expect("fetch populated");
-        assert!(f.enabled);
-        assert_eq!(f.default_provider, "crawl4ai");
         let b = &f.backends["crawl4ai"];
         assert_eq!(b.provider_type, "crawl4ai");
         assert_eq!(b.base_url.as_deref(), Some("http://10.10.10.3:11235"));

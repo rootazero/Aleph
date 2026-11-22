@@ -46,4 +46,10 @@ pub use tokio::sync::RwLock as AsyncRwLock;
 
 #[allow(unused_imports)] // AtomicUsize used by test code only
 pub use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, AtomicUsize, Ordering};
-pub use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError, RwLock, RwLockWriteGuard};
+pub use std::sync::{
+    Barrier, Mutex, MutexGuard, OnceLock, PoisonError, RwLock, RwLockWriteGuard, Weak,
+};
+
+/// Channel module, re-exported so that modules which observe a producer and
+/// a consumer across threads do not reach into `std::sync` directly.
+pub use std::sync::mpsc;

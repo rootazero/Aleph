@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "timestamp": "20261116T064056.458837Z",
+  "memory_gate": {
+    "argv": [
+      "python3",
+      "qa/browser_live/check_memory.py",
+      "--required-bytes",
+      "4294967296"
+    ],
+    "cwd": "/Volumes/TBU4/Workspace/Aleph",
+    "env_overrides": {},
+    "exit_code": 0,
+    "timed_out": false,
+    "pid": 73368,
+    "cleanup_error": null,
+    "unjoined_descendants": false,
+    "elapsed_seconds": 0.03067816700786352,
+    "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064056.458837Z-memory.stdout.log",
+    "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064056.458837Z-memory.stderr.log"
+  },
+  "test_filter": "extension::tests::plugin_skills_are_owned_by_the_registry_id_not_the_directory_name",
+  "status": "PASS",
+  "command": {
+    "argv": [
+      "cargo",
+      "test",
+      "-p",
+      "alephcore",
+      "--lib",
+      "--offline",
+      "--locked",
+      "--jobs",
+      "1",
+      "extension::tests::plugin_skills_are_owned_by_the_registry_id_not_the_directory_name",
+      "--",
+      "--test-threads=1"
+    ],
+    "cwd": "/Volumes/TBU4/Workspace/Aleph",
+    "env_overrides": {
+      "HOME": "/Users/zouguojun/.p9-home-up5y2uza",
+      "ALEPH_HOME": "/tmp/p9-sg83qxqo/aleph",
+      "CARGO_HOME": "/Users/zouguojun/.cargo",
+      "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+      "TMPDIR": "/tmp/p9-sg83qxqo",
+      "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+      "RUST_BACKTRACE": "1"
+    },
+    "exit_code": 0,
+    "timed_out": false,
+    "pid": 73370,
+    "cleanup_error": null,
+    "unjoined_descendants": false,
+    "elapsed_seconds": 0.5762583749601617,
+    "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064056.458837Z.stdout.log",
+    "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064056.458837Z.stderr.log"
+  },
+  "fixture": {
+    "path": "/tmp/p9-sg83qxqo",
+    "home": "/Users/zouguojun/.p9-home-up5y2uza",
+    "cleanup": "removed"
+  }
+}

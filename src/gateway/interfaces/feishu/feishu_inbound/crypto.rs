@@ -60,8 +60,7 @@ pub fn verify_signature(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{decrypt_event, verify_signature};
+pub(crate) mod test_support {
     use aes_cbc::Aes256;
     use cbc::cipher::{block_padding::Pkcs7, BlockModeEncrypt, KeyIvInit};
     use sha2::{Digest, Sha256};
@@ -69,7 +68,7 @@ mod tests {
     type Aes256CbcEnc = cbc::Encryptor<Aes256>;
 
     /// Mirror Feishu's encryption so the decrypt path can be round-tripped.
-    fn encrypt_event(encrypt_key: &str, plaintext: &str, iv: &[u8; 16]) -> String {
+    pub(crate) fn encrypt_event(encrypt_key: &str, plaintext: &str, iv: &[u8; 16]) -> String {
         use base64::Engine;
         let key = Sha256::digest(encrypt_key.as_bytes());
         let encryptor = Aes256CbcEnc::new_from_slices(key.as_slice(), iv).unwrap();
@@ -78,6 +77,33 @@ mod tests {
         blob.extend_from_slice(&ct);
         base64::engine::general_purpose::STANDARD.encode(blob)
     }
+
+    /// A fresh signed callback for transport tests; the fixed IV is test-only.
+    pub(crate) fn signed_event(
+        encrypt_key: &str,
+        plaintext: &str,
+    ) -> (axum::http::HeaderMap, String) {
+        let body = serde_json::json!({
+            "encrypt": encrypt_event(encrypt_key, plaintext, &[7u8; 16])
+        })
+        .to_string();
+        let timestamp = chrono::Utc::now().timestamp().to_string();
+        let nonce = "phase7-fixture";
+        let signature = hex::encode(Sha256::digest(
+            format!("{timestamp}{nonce}{encrypt_key}{body}").as_bytes(),
+        ));
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert("content-type", "application/json".parse().unwrap());
+        headers.insert("x-lark-request-timestamp", timestamp.parse().unwrap());
+        headers.insert("x-lark-request-nonce", nonce.parse().unwrap());
+        headers.insert("x-lark-signature", signature.parse().unwrap());
+        (headers, body)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{decrypt_event, test_support::encrypt_event, verify_signature};
 
     #[test]
     fn decrypt_round_trip() {

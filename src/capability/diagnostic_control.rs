@@ -22,13 +22,13 @@
 //! presents the publisher's initial snapshot as delivered.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::Duration;
 
 use crate::capability::descriptor::CapabilityId;
 use crate::capability::facade::Cursor;
 use crate::capability::ownership::{BoundRevoke, OwnerGeneration, OwnershipError, OwnershipTree};
 use crate::capability::projection_host::{ProjectionHost, ProjectionShutdownOutcome};
+use crate::sync_primitives::Arc;
 
 /// Which production-path block to hold. Re-exported from [`ProjectionHost`]
 /// so the type lives at the host it gates and downstream callers can refer to
@@ -214,7 +214,7 @@ impl DiagnosticControl {
             namespace: crate::capability::backend::TOOL_NAMESPACE.to_string(),
             name: tool_name.to_string(),
         };
-        let revoked = match self.tree.revoke_bound(&id) {
+        let revoked = match self.host.facade().revoke_observed_bound(&id) {
             BoundRevoke::Revoked => true,
             BoundRevoke::AlreadyRevoked => false,
             BoundRevoke::NotBound => {
@@ -255,9 +255,9 @@ impl DiagnosticControl {
         // `dispose` returns true only when a binding was released. The
         // tree ALSO inserts the scope into its `disposed` set on every call,
         // so we ignore the bool and always succeed when the host is open.
-        let _ = self
-            .tree
-            .dispose(crate::capability::ownership::LifetimeScope::Runtime);
+        self.host
+            .facade()
+            .dispose_observed_scope(crate::capability::ownership::LifetimeScope::Runtime);
         // The dispose and the completion-boundary check are not performed
         // under one lock, so a close that landed in the gap would be
         // reported as a successful dispose on a dead surface. Re-check

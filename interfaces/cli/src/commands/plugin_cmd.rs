@@ -489,12 +489,59 @@ fn validate_plugin_dir(plugin_dir: &Path) -> CliResult<PluginValidation> {
             .push("Runtime: static (not declared)".to_string()),
     }
 
-    // Entry file, when one is declared.
-    if let Some(entry) = section.get("entry").and_then(|v| v.as_str()) {
+    // Entry file — same rule and the same VERDICT as
+    // `extension::validation::validate_plugin`: the declared `entry`, or the
+    // default the loader would pick for the runtime (`plugin.wasm` for wasm,
+    // `.mcp.json` for mcp, the directory itself for static). The server only
+    // warns for a missing entry (the install still succeeds; the plugin just
+    // never starts), so this stays a warning — the CLI must not refuse what
+    // the server accepts.
+    let runtime = section
+        .get(runtime_key)
+        .and_then(|v| v.as_str())
+        .unwrap_or("static");
+    let default_entry = match runtime {
+        "wasm" => Some("plugin.wasm"),
+        "mcp" => Some(".mcp.json"),
+        // Static plugins have no entry file; the server resolves `.` for them.
+        _ => None,
+    };
+    if let Some(entry) = section
+        .get("entry")
+        .and_then(|v| v.as_str())
+        .or(default_entry)
+    {
         if !plugin_dir.join(entry).exists() {
-            result
-                .warnings
-                .push(format!("Entry file not found: {entry} (run build first?)"));
+            result.warnings.push(format!(
+                "Entry file not found: {entry} (run build first?) — the plugin cannot LOAD \
+                 without its entry file"
+            ));
+        }
+    }
+
+    // `config_schema` — the server compiles this declaration
+    // (`extension::manifest::validate_config_schema_declaration`) and refuses a
+    // plugin whose settings schema does not compile, but only at install time.
+    // Compiling it here turns that into a pre-flight failure the author can act
+    // on. The depth/property budget that lives alongside that check is
+    // deliberately NOT repeated here: the budget has exactly one owner.
+    if let Some(schema) = section.get("config_schema") {
+        match serde_json::to_value(schema) {
+            Ok(schema) if schema_has_external_ref(&schema) => result.info.push(
+                "config_schema references external schemas — not compiled locally \
+                 (the server resolves them at install time)"
+                    .to_string(),
+            ),
+            Ok(schema) => match jsonschema::validator_for(&schema) {
+                Ok(_) => result.info.push("config_schema compiles".to_string()),
+                Err(e) => result.errors.push(format!(
+                    "invalid JSON Schema in config_schema: {e} — the server refuses to \
+                     install a plugin whose settings schema does not compile"
+                )),
+            },
+            Err(e) => result
+                .errors
+                .push(format!("config_schema is not representable as JSON: {e}")),
         }
     }
 
@@ -521,6 +568,24 @@ fn validate_plugin_dir(plugin_dir: &Path) -> CliResult<PluginValidation> {
     }
 
     Ok(result)
+}
+
+/// Does this schema reference a document it would have to fetch?
+///
+/// `jsonschema` is compiled into this crate without the `resolve-*` features
+/// (see `Cargo.toml`): a local compile resolves nothing over the network, so an
+/// external `$ref` fails here while the server — which does ship the resolvers
+/// — accepts it. Detecting it up front keeps the CLI from reporting a verdict
+/// the server disagrees with.
+fn schema_has_external_ref(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Object(map) => map.iter().any(|(key, value)| {
+            (key == "$ref" && value.as_str().is_some_and(|r| !r.starts_with('#')))
+                || schema_has_external_ref(value)
+        }),
+        serde_json::Value::Array(items) => items.iter().any(schema_has_external_ref),
+        _ => false,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1018,6 +1083,88 @@ mod tests {
             result.errors.iter().any(|e| e.contains("nodejs")),
             "expected an unknown-runtime error, got {:?}",
             result.errors
+        );
+    }
+
+    /// A `config_schema` the server cannot compile is an error here: the
+    /// install path refuses such a plugin, so a green `validate` would only
+    /// postpone the failure to the first install attempt.
+    #[test]
+    fn validate_rejects_a_config_schema_that_does_not_compile() {
+        let dir = tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".claude-plugin")).unwrap();
+        std::fs::write(
+            dir.path().join(".claude-plugin/plugin.toml"),
+            "name = \"p\"\n\n[aleph]\nruntime = \"static\"\nconfig_schema = { type = 123 }\n",
+        )
+        .unwrap();
+        let result = validate_plugin_dir(dir.path()).unwrap();
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.contains("invalid JSON Schema in config_schema")),
+            "expected a schema-compile error, got {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn validate_accepts_a_config_schema_that_compiles() {
+        let dir = tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".claude-plugin")).unwrap();
+        std::fs::write(
+            dir.path().join(".claude-plugin/plugin.toml"),
+            "name = \"p\"\n\n[aleph]\nruntime = \"static\"\n\
+             config_schema = { type = \"object\", properties = { model = { type = \"string\" } } }\n",
+        )
+        .unwrap();
+        let result = validate_plugin_dir(dir.path()).unwrap();
+        assert!(result.errors.is_empty(), "Errors: {:?}", result.errors);
+        assert!(result
+            .info
+            .iter()
+            .any(|i| i.contains("config_schema compiles")));
+    }
+
+    /// An external `$ref` cannot be resolved by this crate (it ships no
+    /// resolver); the server can, so the CLI must not call such a schema
+    /// invalid.
+    #[test]
+    fn validate_does_not_judge_a_schema_with_external_refs() {
+        let dir = tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".claude-plugin")).unwrap();
+        std::fs::write(
+            dir.path().join(".claude-plugin/plugin.toml"),
+            "name = \"p\"\n\n[aleph]\nruntime = \"static\"\n\
+             config_schema = { properties = { a = { \"$ref\" = \"https://example.com/s.json\" } } }\n",
+        )
+        .unwrap();
+        let result = validate_plugin_dir(dir.path()).unwrap();
+        assert!(result.errors.is_empty(), "Errors: {:?}", result.errors);
+        assert!(result.info.iter().any(|i| i.contains("external schemas")));
+    }
+
+    /// The server warns (and still installs) when the entry file is missing;
+    /// the CLI must agree rather than refusing what the server accepts.
+    #[test]
+    fn validate_warns_when_the_entry_file_is_missing() {
+        let dir = tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".claude-plugin")).unwrap();
+        std::fs::write(
+            dir.path().join(".claude-plugin/plugin.toml"),
+            "name = \"p\"\n\n[aleph]\nruntime = \"wasm\"\n",
+        )
+        .unwrap();
+        let result = validate_plugin_dir(dir.path()).unwrap();
+        assert!(result.errors.is_empty(), "Errors: {:?}", result.errors);
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| w.contains("Entry file not found: plugin.wasm")),
+            "expected an entry-file warning, got {:?}",
+            result.warnings
         );
     }
 

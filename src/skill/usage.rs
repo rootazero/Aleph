@@ -166,7 +166,10 @@ impl UsageStore {
             // this process could not read would replace every other skill's
             // counts with this one increment.
             let mut map = decode_sidecar(std::fs::read(&self.path), &self.path)?;
-            let entry = map.entry(skill.to_string()).or_default();
+            let entry = match map.get_mut(skill) {
+                Some(entry) => entry,
+                None => map.entry(skill.to_string()).or_default(),
+            };
             if entry.created_at.is_none() {
                 entry.created_at = Some(now_iso());
             }

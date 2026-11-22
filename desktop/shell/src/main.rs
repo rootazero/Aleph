@@ -52,6 +52,8 @@ mod notify;
 #[cfg(feature = "embedded-core")]
 mod perm_monitor;
 // QA-only owned-root resolver; absent from every non-QA build.
+#[cfg(all(feature = "qa-owned-root", debug_assertions))]
+mod phase9_qa;
 #[cfg(feature = "qa-owned-root")]
 mod qa_root;
 // QA-only native credential execution trace (stdout pipe to the harness).
@@ -663,7 +665,7 @@ fn main() {
     // The two arms are mutually exclusive `generate_handler!` invocations —
     // only one is ever registered.
     #[cfg(feature = "embedded-core")]
-    let builder = builder.invoke_handler(tauri::generate_handler![
+    let handler: fn(tauri::ipc::Invoke) -> bool = tauri::generate_handler![
         connection::get_connection_target,
         connection::set_connection_target,
         connection::clear_connection_target,
@@ -674,9 +676,9 @@ fn main() {
         keyring_bridge::panel_credential_load,
         keyring_bridge::panel_credential_save,
         keyring_bridge::panel_credential_delete,
-    ]);
+    ];
     #[cfg(not(feature = "embedded-core"))]
-    let builder = builder.invoke_handler(tauri::generate_handler![
+    let handler: fn(tauri::ipc::Invoke) -> bool = tauri::generate_handler![
         connection::get_connection_target,
         connection::set_connection_target,
         connection::clear_connection_target,
@@ -689,7 +691,18 @@ fn main() {
         keyring_bridge::panel_credential_load,
         keyring_bridge::panel_credential_save,
         keyring_bridge::panel_credential_delete,
-    ]);
+    ];
+    #[cfg(all(feature = "qa-owned-root", debug_assertions))]
+    let qa_handler: fn(tauri::ipc::Invoke) -> bool =
+        tauri::generate_handler![phase9_qa::phase9_observation];
+    #[cfg(all(feature = "qa-owned-root", debug_assertions))]
+    let handler = move |invoke: tauri::ipc::Invoke| {
+        if invoke.message.command() == "phase9_observation" {
+            return qa_handler(invoke);
+        }
+        handler(invoke)
+    };
+    let builder = builder.invoke_handler(handler);
 
     // Shared update state: the background checker, the tray, and the macOS
     // menu all read it.
@@ -713,6 +726,8 @@ fn main() {
         .menu(menu::build)
         .on_menu_event(|app, event| menu::on_event(app, event.id().as_ref()));
 
+    #[cfg(all(feature = "qa-owned-root", debug_assertions))]
+    phase9_qa::start_clock();
     let app = match builder
         .setup(|app| {
             let handle = app.handle().clone();
@@ -782,7 +797,7 @@ fn main() {
         }
     };
 
-    app.run(|_app_handle, event| match event {
+    let on_event = |_app_handle: &tauri::AppHandle, event| match event {
         // A window-close-driven exit is vetoed (stay in the tray); an
         // explicit "Quit" calls `app.exit(code)` and is allowed.
         RunEvent::ExitRequested {
@@ -801,7 +816,15 @@ fn main() {
             focus_window(_app_handle);
         }
         _ => {}
-    });
+    };
+    #[cfg(all(feature = "qa-owned-root", debug_assertions))]
+    {
+        let exit_code = app.run_return(on_event);
+        phase9_qa::exited();
+        std::process::exit(exit_code);
+    }
+    #[cfg(not(all(feature = "qa-owned-root", debug_assertions)))]
+    app.run(on_event);
 }
 
 /// Create the single main window, hosting the splash until the daemon is up.
@@ -839,6 +862,7 @@ fn build_main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
         // `update::control_action`) — a foreign page forging the path is
         // refused. Everything else falls through to the normal
         // internal/external routing.
+
         .on_navigation({
             let handle = app.clone();
             move |url| {
@@ -908,6 +932,11 @@ fn build_main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
                 ),
             }
         }
+    }
+    #[cfg(all(feature = "qa-owned-root", debug_assertions))]
+    if let Some(script) = phase9_qa::script() {
+        phase9_qa::install(app)?;
+        builder = builder.initialization_script(&script);
     }
     let window = builder.build()?;
 
@@ -983,6 +1012,12 @@ fn spawn_background(handle: tauri::AppHandle) {
                 }
             });
         });
+    #[cfg(all(feature = "qa-owned-root", debug_assertions))]
+    match spawned {
+        Ok(worker) => phase9_qa::own_background(worker),
+        Err(e) => tracing::error!("failed to spawn background thread: {e}"),
+    }
+    #[cfg(not(all(feature = "qa-owned-root", debug_assertions)))]
     if let Err(e) = spawned {
         tracing::error!("failed to spawn background thread: {e}");
     }
@@ -1764,7 +1799,7 @@ async fn supervise_remote_lite(handle: tauri::AppHandle) {
 /// Panel's translucent theme (Phase 2) has a real material to sit on.
 #[cfg(target_os = "macos")]
 fn apply_macos_vibrancy(handle: &tauri::AppHandle) {
-    use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState};
+    use window_vibrancy::{NSVisualEffectMaterial, NSVisualEffectState, apply_vibrancy};
 
     let Some(window) = handle.get_webview_window("main") else {
         return;

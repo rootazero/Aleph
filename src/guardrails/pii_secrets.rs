@@ -155,23 +155,30 @@ impl PiiSecretsGuardrail {
     ) -> Result<String, GuardrailDecision> {
         let ctx = SecurityContext::default();
         let r = self.guard.process_outbound(leaf, resolver_ref, ctx).await;
-        if let Ok(GuardResult::Clean { text }) = &r {
-            if text != leaf {
-                sources.push("pii_secrets (placeholder substitution)".to_string());
-                return Ok(text.clone());
+        match r {
+            Ok(GuardResult::Clean { text }) if text != leaf => {
+                let source = "pii_secrets (placeholder substitution)".to_string();
+                if !sources.contains(&source) {
+                    sources.push(source);
+                }
+                Ok(text)
             }
-        }
-        match Self::map_outbound(leaf, r) {
-            GuardrailDecision::Allow => Ok(leaf.to_string()),
-            GuardrailDecision::Warn { reason } => {
-                warnings.push(reason);
-                Ok(leaf.to_string())
-            }
-            GuardrailDecision::Sanitize(rep) => {
-                sources.push(rep.source);
-                Ok(rep.text)
-            }
-            block => Err(block),
+            other => match Self::map_outbound(leaf, other) {
+                GuardrailDecision::Allow => Ok(leaf.to_string()),
+                GuardrailDecision::Warn { reason } => {
+                    if !warnings.contains(&reason) {
+                        warnings.push(reason);
+                    }
+                    Ok(leaf.to_string())
+                }
+                GuardrailDecision::Sanitize(rep) => {
+                    if !sources.contains(&rep.source) {
+                        sources.push(rep.source);
+                    }
+                    Ok(rep.text)
+                }
+                block => Err(block),
+            },
         }
     }
 
@@ -388,10 +395,7 @@ impl ToolCallGuardrail for PiiSecretsGuardrail {
         // in place (the orchestrator substitutes after its own scan), so
         // injected secrets are registered and leak detection behaves exactly
         // as the single-shot path did.
-        let resolver_ref = self
-            .resolver
-            .as_ref()
-            .map(|a| a.as_ref() as &dyn AsyncSecretResolver);
+        let resolver_ref = self.resolver.as_deref();
         let mut warnings = Vec::new();
         let mut sources = Vec::new();
         // The node counter lives in caller-owned storage because the

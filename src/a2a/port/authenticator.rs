@@ -9,20 +9,11 @@ use super::task_manager::A2AResult;
 
 /// Context extracted from an incoming A2A request.
 /// Uses plain `HashMap` for headers to avoid coupling port traits to axum/http.
+#[derive(Clone)]
 pub struct A2AAuthContext {
     pub remote_addr: SocketAddr,
     pub headers: HashMap<String, String>,
     pub credentials: Credentials,
-}
-
-impl Clone for A2AAuthContext {
-    fn clone(&self) -> Self {
-        Self {
-            remote_addr: self.remote_addr,
-            headers: self.headers.clone(),
-            credentials: self.credentials.clone(),
-        }
-    }
 }
 
 impl std::fmt::Debug for A2AAuthContext {

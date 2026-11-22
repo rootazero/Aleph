@@ -2,9 +2,7 @@
 
 use super::*;
 
-#[cfg(unix)]
 use crate::extension::hooks::HookExecutor;
-#[cfg(unix)]
 use crate::extension::{HookEvent, HookKind};
 use crate::sandbox::exec_approval::gate::{ApprovalOutcome, ApprovalRequester, ApprovalResponse};
 use crate::sandbox::exec_approval::ApprovalAction;
@@ -113,7 +111,6 @@ impl ApprovalRequester for RecordingRequester {
     }
 }
 
-#[cfg(unix)]
 fn rewrite_hook(final_input: Value) -> Arc<HookExecutor> {
     let encoded = serde_json::to_string(&final_input).unwrap();
     Arc::new(HookExecutor::new(vec![make_command_hook(
@@ -124,7 +121,6 @@ fn rewrite_hook(final_input: Value) -> Arc<HookExecutor> {
 }
 
 #[tokio::test]
-#[cfg(unix)]
 async fn task11_file_ops_rewrite_rechecks_final_claim_before_handler() {
     let (registry, calls, inputs) = counted_registry("file_ops", false);
     let original = json!({"operation": "list", "path": "/tmp/task11"});
@@ -175,7 +171,6 @@ async fn task11_file_ops_rewrite_rechecks_final_claim_before_handler() {
 }
 
 #[tokio::test]
-#[cfg(unix)]
 async fn task11_config_rewrite_records_original_and_final_approval_actions() {
     let (registry, calls, _inputs) = counted_registry("cron_manage", false);
     let requester = RecordingRequester::new([ApprovalOutcome::Approved, ApprovalOutcome::Denied]);
@@ -238,7 +233,6 @@ async fn task11_config_rewrite_records_original_and_final_approval_actions() {
 }
 
 #[tokio::test]
-#[cfg(unix)]
 async fn task11_confirmation_rewrite_requires_final_bytes_and_approval() {
     let (registry, calls, _inputs) = counted_registry("file_ops", true);
     let svc = ScopedToolService::new(registry, BTreeSet::new())
@@ -290,7 +284,6 @@ async fn task11_confirmation_rewrite_requires_final_bytes_and_approval() {
 }
 
 #[tokio::test]
-#[cfg(unix)]
 async fn task11_hook_ask_without_transport_is_nobody_asked() {
     let (registry, calls, _inputs) = counted_registry("plain", false);
     let hook = Arc::new(HookExecutor::new(vec![make_command_hook(

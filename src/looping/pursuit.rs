@@ -11,21 +11,10 @@ use crate::looping::types::{fmt_duration_ms, Cadence, LoopState};
 /// iteration/deadline caps apply).
 #[must_use]
 pub fn exhausted(state: &LoopState, tokens_now: u64, now_ms: u64) -> bool {
-    if let Some(max) = state.max_iterations {
-        if state.iterations_used >= max {
-            return true;
-        }
-    }
-    if state.over_budget(tokens_now) {
-        return true; // soft token budget becomes a hard stop for the loop.
-    }
-    if let Some(deadline) = state.deadline_ms {
+    state.max_iterations.is_some_and(|max| state.iterations_used >= max)
+        || state.over_budget(tokens_now) // soft token budget becomes a hard stop for the loop.
         // now_ms == 0 means clock unavailable — never trip on it.
-        if now_ms != 0 && now_ms > deadline {
-            return true;
-        }
-    }
-    false
+        || state.deadline_ms.is_some_and(|deadline| now_ms != 0 && now_ms > deadline)
 }
 
 /// Should this loop fire another tick now? Active and no cap reached.

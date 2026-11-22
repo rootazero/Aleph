@@ -60,6 +60,16 @@ impl A2ASubAgent {
         }
     }
 
+    /// Drop the cached HTTP client of an agent that is no longer registered.
+    ///
+    /// The pool is keyed by agent card id and the client bakes in the agent's
+    /// auth token. Without this, an agent removed through `a2a_agents remove`
+    /// keeps its client (and its token) in the pool for the lifetime of the
+    /// process.
+    pub async fn forget_client(&self, agent_id: &str) {
+        self.client_pool.remove(agent_id).await;
+    }
+
     /// Attach an optional raw-memory writer for delegation hooks (Spec 1 G2).
     ///
     /// When set, `execute` will write a `RawMemory(Delegation{child_agent_id})`
@@ -85,6 +95,25 @@ impl A2ASubAgent {
     ) -> Self {
         self.memory_runtime = Some(runtime);
         self
+    }
+
+    async fn record_delegation_memory(
+        &self,
+        request: &SubAgentRequest,
+        result: &SubAgentResult,
+        child_agent_id: &str,
+    ) {
+        if let Some(w) = self.raw_memory_writer.clone() {
+            emit_delegation_raw_with_registry(
+                w,
+                request,
+                result,
+                child_agent_id,
+                self.capture_registry.clone(),
+                self.memory_runtime.clone(),
+            )
+            .await;
+        }
     }
 
     /// Send a delegation request to an already-resolved remote agent.
@@ -126,17 +155,8 @@ impl A2ASubAgent {
                 // Spec 1 G2: record delegation outcome for parent-agent memory.
                 // Record unconditionally (matching sync path behaviour) so the
                 // parent sees failed attempts and can learn / retry.
-                if let Some(w) = self.raw_memory_writer.clone() {
-                    emit_delegation_raw_with_registry(
-                        w,
-                        request,
-                        &result,
-                        &agent.card.id,
-                        self.capture_registry.clone(),
-                        self.memory_runtime.clone(),
-                    )
+                self.record_delegation_memory(request, &result, &agent.card.id)
                     .await;
-                }
                 Ok(result)
             }
             Err(e) => {
@@ -200,17 +220,8 @@ impl A2ASubAgent {
                 };
 
                 // Spec 1 G2: record delegation outcome for parent-agent memory.
-                if let Some(w) = self.raw_memory_writer.clone() {
-                    emit_delegation_raw_with_registry(
-                        w,
-                        request,
-                        &result,
-                        &agent.card.id,
-                        self.capture_registry.clone(),
-                        self.memory_runtime.clone(),
-                    )
+                self.record_delegation_memory(request, &result, &agent.card.id)
                     .await;
-                }
 
                 Ok(result)
             }

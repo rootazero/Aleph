@@ -74,6 +74,10 @@ pub struct ExecutionEngine<P: ThinkerProviderRegistry + 'static, R: ToolRegistry
     /// effect on the very next tool call without a restart. `None` in tests /
     /// non-gateway contexts → the global permission layer is all-default.
     pub(super) app_config: Option<Arc<RwLock<crate::Config>>>,
+    /// Startup-compiled capability policy used only to decide whether the raw
+    /// slash shortcut must fall through to the guarded full loop. The full loop
+    /// remains the sole evaluator; `None` preserves compatibility constructors.
+    pub(super) capability_policy: Option<Arc<crate::capability::policy::PolicyEngine>>,
     /// Session compactor for hierarchical session summarization
     pub(super) session_compactor: Option<Arc<crate::memory::session_compactor::SessionCompactor>>,
     /// Session manager for auto-topic generation
@@ -168,6 +172,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             raw_memory_writer: None,
             memory_runtime: None,
             app_config: None,
+            capability_policy: None,
             session_compactor: None,
             session_manager: None,
             event_bus: None,
@@ -305,6 +310,18 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
     #[must_use]
     pub fn with_app_config(mut self, config: Arc<RwLock<crate::Config>>) -> Self {
         self.app_config = Some(config);
+        self
+    }
+
+    /// Share the startup-compiled capability policy with the slash fast path.
+    /// The fast path only uses its configured-ID presence check and falls
+    /// through; admission and facts remain in the guarded full loop.
+    #[must_use]
+    pub fn with_capability_policy(
+        mut self,
+        policy: Arc<crate::capability::policy::PolicyEngine>,
+    ) -> Self {
+        self.capability_policy = Some(policy);
         self
     }
 
@@ -518,18 +535,27 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
     /// Cancel a run
     pub async fn cancel(&self, run_id: &str) -> Result<(), ExecutionError> {
-        let cancel_tx = {
+        let (cancel_tx, cancel_token) = {
             let runs = self.active_runs.read().await;
             match runs.get(run_id) {
                 Some(run) => match run.cancel_tx {
-                    Some(ref tx) => tx.clone(),
+                    Some(ref tx) => (tx.clone(), Some(run.cancel_token.clone())),
                     None => return Err(ExecutionError::RunNotActive(run_id.to_string())),
                 },
                 None => return Err(ExecutionError::RunNotFound(run_id.to_string())),
             }
         };
         // Lock released before await
-        let _ = cancel_tx.send(()).await;
+        // `try_send`, not `send`: the channel holds one token, and a stop
+        // that arrives while the previous token is still queued would block
+        // inside the stop path itself. A failed `try_send` means the channel
+        // already carries a pending cancel, so the run still observes it.
+        let _ = cancel_tx.try_send(());
+        // The coarse token wakes the run loop's select. The run's own token is
+        // what a fast-path dispatch — which never runs that select — watches.
+        if let Some(token) = cancel_token {
+            token.cancel();
+        }
         info!("Sent cancellation signal for run {}", run_id);
         Ok(())
     }

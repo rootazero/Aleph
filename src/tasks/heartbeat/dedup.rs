@@ -27,21 +27,18 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     if a.len() != b.len() {
         return 0.0;
     }
-    let dot: f64 = a
-        .iter()
-        .zip(b)
-        .map(|(x, y)| f64::from(*x) * f64::from(*y))
-        .sum();
-    let norm_a: f64 = a
-        .iter()
-        .map(|x| f64::from(*x) * f64::from(*x))
-        .sum::<f64>()
-        .sqrt();
-    let norm_b: f64 = b
-        .iter()
-        .map(|x| f64::from(*x) * f64::from(*x))
-        .sum::<f64>()
-        .sqrt();
+    let mut dot = 0.0_f64;
+    let mut norm_a = 0.0_f64;
+    let mut norm_b = 0.0_f64;
+    for (&x, &y) in a.iter().zip(b) {
+        let x = f64::from(x);
+        let y = f64::from(y);
+        dot += x * y;
+        norm_a += x * x;
+        norm_b += y * y;
+    }
+    let norm_a = norm_a.sqrt();
+    let norm_b = norm_b.sqrt();
     if norm_a == 0.0 || norm_b == 0.0 || !norm_a.is_finite() || !norm_b.is_finite() {
         return 0.0;
     }
@@ -353,7 +350,11 @@ fn cleanup_dedup_records(conn: &Connection, cutoff_ms: i64) -> Result<usize, Str
 
 /// Serialize a `f32` slice to a little-endian byte vector.
 fn f32_vec_to_bytes(v: &[f32]) -> Vec<u8> {
-    v.iter().flat_map(|f| f.to_le_bytes()).collect()
+    let mut bytes = Vec::with_capacity(v.len() * 4);
+    for &f in v {
+        bytes.extend_from_slice(&f.to_le_bytes());
+    }
+    bytes
 }
 
 /// Deserialize a little-endian byte slice to a `Vec<f32>`.
@@ -364,7 +365,7 @@ fn bytes_to_f32_vec(bytes: &[u8]) -> Vec<f32> {
         .as_chunks::<4>()
         .0
         .iter()
-        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+        .map(|chunk| f32::from_le_bytes(*chunk))
         .collect()
 }
 

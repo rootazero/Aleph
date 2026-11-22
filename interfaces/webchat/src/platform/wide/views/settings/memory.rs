@@ -1,7 +1,7 @@
 //! Memory Configuration View
 //!
 //! Provides UI for managing memory/RAG configuration:
-//! - Basic settings (enabled, embedding model, vector DB)
+//! - Basic settings (enabled) and the retrieval / compression knobs
 //! - AI retrieval settings
 //! - Compression settings
 //! - Real-time updates via config events
@@ -161,11 +161,11 @@ fn BasicSettings(config: RwSignal<Option<MemoryConfig>>) -> impl IntoView {
                 </div>
 
                 <div>
-                    <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.vector_db)}</label>
+                    <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.backend)}</label>
                     <div class="w-full px-3 py-2 border border-border rounded bg-surface-sunken text-text-secondary">
-                        {move || config.get().map(|c| c.vector_db).unwrap_or_else(|| "sqlite-vec".to_string())}
+                        sqlite-vec
                     </div>
-                    <p class="text-xs text-text-tertiary mt-1">{t!(i18n, settings.memory.vector_db_hint)}</p>
+                    <p class="text-xs text-text-tertiary mt-1">{t!(i18n, settings.memory.backend_hint)}</p>
                 </div>
             </div>
         </div>

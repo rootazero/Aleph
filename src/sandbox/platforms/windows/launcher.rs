@@ -149,7 +149,9 @@ fn environment_block(env: &HashMap<String, String>) -> Result<Vec<u16>, String> 
         if k.is_empty() || k.contains('=') || k.contains('\0') || v.contains('\0') {
             return Err(format!("invalid environment entry {k:?}"));
         }
-        block.extend(format!("{k}={v}").encode_utf16());
+        block.extend(k.encode_utf16());
+        block.push('=' as u16);
+        block.extend(v.encode_utf16());
         block.push(0);
     }
     if block.is_empty() {

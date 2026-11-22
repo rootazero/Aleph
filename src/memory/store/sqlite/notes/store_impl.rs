@@ -50,7 +50,7 @@ impl NoteStore for SqliteMemoryBackend {
 
         use crate::memory::notes::links::{self, LinkStatus};
 
-        let resolve_ctx = super::helpers::build_resolve_context(&conn, agent_id)
+        let resolve_ctx = super::helpers::build_resolve_context(conn, agent_id)
             .map_err(|e| AlephError::config(format!("index_note resolve ctx: {e}")))?;
 
         // Body labels: raw target → display label from `[[target|label]]`.
@@ -882,7 +882,7 @@ impl NoteStore for SqliteMemoryBackend {
         }
 
         // Edges between visible nodes
-        let edges = collect_edges_between(&conn, &visible, agent_id)?;
+        let edges = collect_edges_between(conn, &visible, agent_id)?;
 
         Ok((entries, edges))
         })
@@ -978,7 +978,7 @@ impl NoteStore for SqliteMemoryBackend {
 
         // Edges between visited nodes (kind discarded — neighbors keeps its
         // untyped `(from, to)` shape; only graph.query surfaces edge kind).
-        let edges = collect_edges_between(&conn, &visited, agent_id)?
+        let edges = collect_edges_between(conn, &visited, agent_id)?
             .into_iter()
             .map(|e| (e.from, e.to))
             .collect();
@@ -1636,7 +1636,7 @@ impl NoteStore for SqliteMemoryBackend {
 
             // One prefetched context for every dangling row (was per-row double
             // query in the old resolve_target-mirroring code — this fixes the N+1).
-            let resolve_ctx = super::helpers::build_resolve_context(&conn, agent_id)
+            let resolve_ctx = super::helpers::build_resolve_context(conn, agent_id)
                 .map_err(|e| AlephError::config(format!("relink resolve ctx: {e}")))?;
 
             let mut updated = 0usize;
@@ -1725,7 +1725,7 @@ impl NoteStore for SqliteMemoryBackend {
             if rows.is_empty() {
                 return Ok(0);
             }
-            let ctx = super::helpers::build_resolve_context(&conn, agent_id)
+            let ctx = super::helpers::build_resolve_context(conn, agent_id)
                 .map_err(|e| AlephError::config(format!("backfill ctx: {e}")))?;
             let mut revived = 0usize;
             let tx = conn
@@ -2491,8 +2491,8 @@ impl NoteStore for SqliteMemoryBackend {
                     .query(rusqlite::params_from_iter(
                         chunk
                             .iter()
-                            .cloned()
-                            .chain(std::iter::once(agent_id.to_string())),
+                            .map(|s| s.as_str())
+                            .chain(std::iter::once(agent_id)),
                     ))
                     .map_err(|e| AlephError::config(format!("recall_hit_counts query: {e}")))?;
                 while let Some(row) = rows

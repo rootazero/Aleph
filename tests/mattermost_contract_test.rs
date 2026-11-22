@@ -21,15 +21,13 @@ fn test_mattermost_properties() {
     assert_eq!(channel.channel_type(), "mattermost");
     assert!(channel.capabilities().typing_indicator);
     assert!(channel.capabilities().reactions);
-    assert!(channel.capabilities().attachments);
+    assert!(!channel.capabilities().attachments);
     assert!(channel.capabilities().rich_text);
     assert!(channel.capabilities().editing);
     assert!(channel.capabilities().deletion);
     assert_eq!(channel.capabilities().max_message_length, 16383);
-    assert_eq!(
-        channel.capabilities().max_attachment_size,
-        100 * 1024 * 1024
-    );
+    // The adapter sends no attachments at all.
+    assert_eq!(channel.capabilities().max_attachment_size, 0);
 }
 
 #[test]

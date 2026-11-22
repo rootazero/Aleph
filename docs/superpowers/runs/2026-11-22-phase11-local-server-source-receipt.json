@@ -1,0 +1,120 @@
+{
+  "artifact": "phase11-local-server-source-receipt",
+  "version": "2026-11-22.6",
+  "status": "PASS_TARGETED_SOURCE_EXTRACTION / NOT_PHASE11_ACCEPTANCE",
+  "baseline": {
+    "branch": "main",
+    "commit": "79303cc6bc7c0e99b06fdda05f89777bbb2ba233"
+  },
+  "source_sha256": {
+    "Cargo.toml": "5971138dca770696c0d81981c13627aecf9f270fcf0afeeb7f1d98e826abb7ee",
+    "Cargo.lock": "15c3079c0883beaba6f1fb401d608156414570af5aba94626022a2c3f67f9d00",
+    "desktop/host/Cargo.toml": "bb00d11c96f14ab7f2c86953d0a82c27b0ffd85c5a7e57013dc8fc8d31839bc6",
+    "desktop/host/src/lib.rs": "93169adca63930de03a38878e7d7e87290e68404df9670f2b3962dc8f7256255",
+    "desktop/host/src/local_server.rs": "3c1a8e33a8120840b02025fc22e4726c6bcd6db292e017b76e32a81298e6212e",
+    "desktop/shell/Cargo.toml": "a731c6db62851d5a83e7776ae7286927144db4d4b0b69417df0357c626e8d945",
+    "desktop/shell/src/daemon.rs": "ea14ecec5564d6334c6345dbaf2824f0ca1e8b9cba8f7f5e514dcd3679a845a2",
+    "docs/reference/DESKTOP_SHELL.md": "eafe265cfb7f0de4106b14665be4b74bb0dce0f33da4aabbf858638392b1643a",
+    "docs/superpowers/specs/2026-11-21-phase11-nsh-cutover.md": "9c275c7361cbe82ab9e20f65f7eac80e23fbd4eb647d6318be3ed6de17ef3ff6",
+    "docs/superpowers/runs/2026-11-21-phase11-nsh-inventory.json": "43f90437ff9d63332bd5500b6e2a590760e1e5741f9615a74bbb437ccac48a9b"
+  },
+  "scope": {
+    "owner": "desktop/host/src/local_server.rs",
+    "real_consumer": "desktop/shell/src/daemon.rs reexports; embedded-core only",
+    "new_runtime_or_process_at_import": false,
+    "nsh_service_mount": false,
+    "retained_old_shell": [
+      "stop_daemon",
+      "reconcile_for_version",
+      "version_marker",
+      "remove_legacy_autostart"
+    ],
+    "inherited_body_comparisons": "startup/relaunch/waits/probe/resolve/platform spawn bodies preserved; explicit stop and destructive legacy bodies unchanged; intentional HTTP parser correction only"
+  },
+  "red_observed": [
+    {
+      "test": "readiness_status_line_can_cross_tcp_reads",
+      "actual": "Some(2)",
+      "expected": "Some(200)"
+    },
+    {
+      "test": "malformed_incomplete_or_oversized_status_lines_are_not_ready",
+      "actual": "Some(200)",
+      "expected": "None"
+    }
+  ],
+  "checks": [
+    {
+      "command": "cargo test -p aleph-desktop-host -p aleph-desktop-shell --offline --locked --jobs 1",
+      "exit_code": 0,
+      "host_tests": 5,
+      "full_shell_tests": 165,
+      "note": "Two original readiness classification tests moved from the full shell into the host library; three real ephemeral TCP tests added."
+    },
+    {
+      "command": "cargo test -p aleph-desktop-shell --no-default-features --features qa-owned-root --offline --locked --jobs 1",
+      "exit_code": 0,
+      "lite_qa_tests": 190
+    },
+    {
+      "command": "cargo clippy -p aleph-desktop-host --all-targets --offline --locked --jobs 1 -- -D warnings",
+      "exit_code": 0
+    }
+  ],
+  "cargo_discipline": {
+    "memory_gate": "ALLOW before every Cargo invocation",
+    "serial": true,
+    "offline": true,
+    "locked": true,
+    "exception": "Normal lock refresh after adding an internal workspace package used cargo check -p aleph-desktop-host --offline --jobs 1 without --locked."
+  },
+  "lockfile": {
+    "added_package_identities": [
+      [
+        "aleph-desktop-host",
+        "0.1.0"
+      ]
+    ],
+    "removed_package_identities": [],
+    "new_external_package_identities": [],
+    "runtime_dependencies": [
+      "tokio",
+      "tracing"
+    ]
+  },
+  "prior_nsh_panel_checkpoint": {
+    "commit": "79303cc6bc7c0e99b06fdda05f89777bbb2ba233",
+    "production_source_changes_in_this_slice": false,
+    "native_rerun": false
+  },
+  "phase10_original_matrix_sha256": "fbf5f1272be769ae554ba53df065ef171badb6bbe942bb90e254168664e5f7c2",
+  "review": {
+    "spec_then_quality": "author passes documented in specification section 12",
+    "independent_review": false
+  },
+  "limits": [
+    "HTTP readiness is not proof of executable identity or version.",
+    "Inherited synchronous Unix launcher wait and preliminary port_open connect are not per-operation bounded; resolve lifecycle ownership before NSH mount.",
+    "No actual service launch/stop/supervisor recovery or installed-default-endpoint test.",
+    "No NSH full/lite service lifecycle, certificate/pairing, updater installer, default/rollback, Windows/Linux native acceptance or 14-day dual-operation proof.",
+    "No saved separate raw service/native test run: this slice is source-bound unit and real socket validation."
+  ],
+  "gates": {
+    "P11-A": "OPEN",
+    "P11-B": "OPEN",
+    "P11-C": "OPEN",
+    "P11-D": "OPEN",
+    "P11-E": "OPEN",
+    "P11-F": "OPEN",
+    "P11-G": "OPEN",
+    "P11-H": "OPEN"
+  },
+  "prohibited_effects": {
+    "installed_service_change": false,
+    "production_login_item_write": false,
+    "production_credential_migration": false,
+    "default_switch": false,
+    "tauri_removal": false,
+    "push_tag_release": false
+  }
+}

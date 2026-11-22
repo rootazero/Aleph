@@ -17,6 +17,13 @@
     "select": "Select a tab",
     "failed": "Tab failed"
   },
+  "capability_surface": {
+    "title": "Capability surface",
+    "session_key": "Session key",
+    "attach": "Attach",
+    "attached": "Attached",
+    "disconnected": "Disconnected"
+  },
   "session": {
     "healthy": "Healthy",
     "degraded": "Degraded",
@@ -761,7 +768,14 @@
       },
       "autostart": {
         "title": "This device",
-        "description": "Launch Aleph automatically when you log in to this computer."
+        "description": "Launch Aleph automatically when you log in to this computer.",
+        "status_loading": "Reading login-item status…",
+        "status_enabled": "Enabled",
+        "status_disabled": "Disabled",
+        "status_approval": "Requires approval in system settings",
+        "status_unavailable": "Status unavailable — not confirmed disabled",
+        "status_failed": "Could not read login-item status",
+        "read_only": "Read only: changing this setting in NSH is not available yet."
       }
     },
     "behavior": {
@@ -773,12 +787,6 @@
       "typewriter_desc": "Display responses character by character",
       "instant": "Instant",
       "instant_desc": "Display complete responses immediately",
-      "typing_speed": "Typing Speed",
-      "typing_speed_desc": "Characters per second in typewriter mode (50-400)",
-      "speed_label": "Speed",
-      "chars_sec": "chars/sec",
-      "slow": "Slow (50)",
-      "fast": "Fast (400)",
       "saved": "Saved successfully",
       "gateway_unavailable": "Gateway not available — showing default settings"
     },
@@ -1042,8 +1050,8 @@
       "no_config": "No configuration loaded",
       "basic_settings": "Basic Settings",
       "enable_memory": "Enable Memory Module",
-      "vector_db": "Vector Database",
-      "vector_db_hint": "sqlite-vec is the current vector database backend",
+      "backend": "Vector Database",
+      "backend_hint": "sqlite-vec is the current vector database backend",
       "compression": "Memory Compression",
       "compression_hint": "Scheduling for background memory compression (policies.memory.compression).",
       "turn_threshold": "Turn Threshold",

@@ -20,7 +20,11 @@ const CURRENT_ENDPOINT_VERSION: u32 = 1;
 /// - `0.0.0.0` is a wildcard for IPv4 — map to `127.0.0.1` so a client
 ///   that is also on the box can reach the loopback listener.
 /// - `::` is the IPv6 wildcard — map to `::1`.
-/// - Concrete addresses are preserved verbatim.
+/// - Concrete addresses are preserved verbatim — but the CLI's admin channel
+///   (`ipc_client::forward_to_server`) refuses a non-loopback host, so a server
+///   bound to a concrete LAN address has NO working local admin channel (the
+///   bearer token would cross the wire in cleartext). Bind a wildcard (or
+///   `127.0.0.1`) when the CLI's admin commands are needed.
 pub fn build_endpoint_url(addr: SocketAddr, tls: bool) -> String {
     let scheme = if tls { "https" } else { "http" };
     let host = match addr.ip() {
@@ -41,16 +45,66 @@ pub struct IpcEndpoint {
     pub url: String,
     pub pid: u32,
     pub started_at: String,
+    /// Wall-clock start time of the process that wrote this record, in seconds
+    /// since the Unix epoch. `None` when the platform cannot report it.
+    ///
+    /// A PID alone is not an identity: once the server exits (crash, reboot)
+    /// the OS may hand the recorded PID to an unrelated process, and a reader
+    /// that trusts the PID would act on that unrelated process. Pairing the
+    /// PID with the writer's start time lets a reader prove that the live
+    /// process behind the PID is still the server that wrote the record —
+    /// the same anti-PID-reuse signal the singleton lock uses.
+    ///
+    /// Optional on purpose: a record written by an older build simply has no
+    /// start time, and readers must treat that as "identity unproven" rather
+    /// than as "trusted".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_time: Option<u64>,
 }
 
 impl IpcEndpoint {
     pub fn current(url: impl Into<String>) -> Self {
+        let pid = std::process::id();
         Self {
             version: CURRENT_ENDPOINT_VERSION,
             url: url.into(),
-            pid: std::process::id(),
+            pid,
             started_at: chrono::Utc::now().to_rfc3339(),
+            // The writer binds its own PID to its own start time, so the record
+            // identifies the process that owns the endpoint rather than merely
+            // naming a number that may later be recycled.
+            start_time: i32::try_from(pid)
+                .ok()
+                .and_then(crate::utils::process_alive::process_start_time),
         }
+    }
+
+    /// The start time of the process that wrote this record, if it can serve
+    /// as an identity proof.
+    ///
+    /// `None` means "identity unproven": the record was written by a build
+    /// that did not record a start time, or the platform reported an
+    /// unusable value. A reader must treat that as unproven — never as
+    /// trusted.
+    pub fn recorded_start_time(&self) -> Option<u64> {
+        self.start_time.filter(|start| *start != 0)
+    }
+
+    /// True when the process that wrote this record is still the SAME
+    /// process: the recorded PID is alive AND its start time still matches
+    /// the recorded one, so a recycled PID cannot pass.
+    ///
+    /// Fails closed. A record with no usable start time is not "live",
+    /// because "unproven" is not "confirmed" — the same stance the daemon's
+    /// stop path takes before it signals a PID.
+    pub fn writer_is_live(&self) -> bool {
+        let Some(start) = self.recorded_start_time() else {
+            return false;
+        };
+        let Ok(pid) = i32::try_from(self.pid) else {
+            return false;
+        };
+        crate::utils::process_alive::process_matches(pid, Some(start))
     }
 }
 
@@ -66,29 +120,26 @@ pub fn write_endpoint(data_dir: &Path, endpoint: &IpcEndpoint) -> std::io::Resul
     let path = endpoint_path(data_dir);
     let bytes = serde_json::to_vec_pretty(endpoint)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    // `write_atomic` creates the replacement file with mode 0600 on Unix and
+    // renames it over the target, so the published endpoint is owner-only
+    // without a second chmod. The chmod below is kept as an explicit
+    // re-assertion of that mode, but a failure must NOT delete the file:
+    // the write already succeeded and the file on disk is already 0600, so
+    // deleting it would leave a running server with NO IPC endpoint (the
+    // startup caller only logs a warning on error) — a missing endpoint is
+    // strictly worse than a redundant chmod that failed.
     crate::utils::atomic_io::write_atomic(&path, &bytes)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let perm = std::fs::Permissions::from_mode(0o600);
         if let Err(e) = std::fs::set_permissions(&path, perm) {
-            // Don't leave a possibly world-readable file on disk if the
-            // chmod step fails — the endpoint URL and PID are sensitive and
-            // a half-secured file is worse than a missing one. Surface the
-            // cleanup outcome so a residual file is observable instead of
-            // being silently dropped on an error path the operator is
-            // already looking at.
-            if let Err(cleanup) = std::fs::remove_file(&path) {
-                warn!(
-                    path = %path.display(),
-                    error = %cleanup,
-                    "failed to remove endpoint file after chmod failure",
-                );
-            }
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::PermissionDenied,
-                format!("failed to restrict endpoint file permissions: {e}"),
-            ));
+            warn!(
+                path = %path.display(),
+                error = %e,
+                "failed to re-assert endpoint file permissions; the atomic write is already 0600, \
+                 keeping the endpoint file",
+            );
         }
     }
     Ok(())

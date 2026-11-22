@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "timestamp": "20261116T064048.306106Z",
+  "memory_gate": {
+    "argv": [
+      "python3",
+      "qa/browser_live/check_memory.py",
+      "--required-bytes",
+      "4294967296"
+    ],
+    "cwd": "/Volumes/TBU4/Workspace/Aleph",
+    "env_overrides": {},
+    "exit_code": 0,
+    "timed_out": false,
+    "pid": 73166,
+    "cleanup_error": null,
+    "unjoined_descendants": false,
+    "elapsed_seconds": 0.027816833986435086,
+    "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064048.306106Z-memory.stdout.log",
+    "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064048.306106Z-memory.stderr.log"
+  },
+  "test_filter": "diagnostics::checks::browser_runtime::tests::prerequisite_findings_are_advisory_never_gating",
+  "status": "PASS",
+  "command": {
+    "argv": [
+      "cargo",
+      "test",
+      "-p",
+      "alephcore",
+      "--lib",
+      "--offline",
+      "--locked",
+      "--jobs",
+      "1",
+      "diagnostics::checks::browser_runtime::tests::prerequisite_findings_are_advisory_never_gating",
+      "--",
+      "--test-threads=1"
+    ],
+    "cwd": "/Volumes/TBU4/Workspace/Aleph",
+    "env_overrides": {
+      "HOME": "/Users/zouguojun/.p9-home-e4yeopy0",
+      "ALEPH_HOME": "/tmp/p9-4lrxcgtt/aleph",
+      "CARGO_HOME": "/Users/zouguojun/.cargo",
+      "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+      "TMPDIR": "/tmp/p9-4lrxcgtt",
+      "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+      "RUST_BACKTRACE": "1"
+    },
+    "exit_code": 0,
+    "timed_out": false,
+    "pid": 73168,
+    "cleanup_error": null,
+    "unjoined_descendants": false,
+    "elapsed_seconds": 0.5569780829828233,
+    "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064048.306106Z.stdout.log",
+    "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064048.306106Z.stderr.log"
+  },
+  "fixture": {
+    "path": "/tmp/p9-4lrxcgtt",
+    "home": "/Users/zouguojun/.p9-home-e4yeopy0",
+    "cleanup": "removed"
+  }
+}

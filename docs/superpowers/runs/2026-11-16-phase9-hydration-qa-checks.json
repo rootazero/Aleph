@@ -1,0 +1,12 @@
+[
+  {
+    "suite": "python",
+    "exit_code": 0,
+    "log": "docs/superpowers/runs/2026-11-16-phase9-hydration-python-checks.log"
+  },
+  {
+    "suite": "node",
+    "exit_code": 0,
+    "log": "docs/superpowers/runs/2026-11-16-phase9-hydration-node-checks.log"
+  }
+]

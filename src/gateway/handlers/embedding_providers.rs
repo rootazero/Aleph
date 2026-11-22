@@ -264,6 +264,18 @@ pub async fn handle_update(
         Err(e) => return e,
     };
 
+    // Reject any attempt to change the provider's identity — update is not rename.
+    if params.config.id != params.id {
+        return JsonRpcResponse::error(
+            request.id,
+            INVALID_PARAMS,
+            format!(
+                "Config id '{}' does not match provider id '{}'; updating the id is not allowed",
+                params.config.id, params.id
+            ),
+        );
+    }
+
     {
         let mut cfg = config.write().await;
 
@@ -346,6 +358,10 @@ pub async fn handle_remove(
         Err(e) => return e,
     };
 
+    // Set when the provider is gone from the config but its credential is
+    // still in the vault — the delete succeeded, the cleanup did not.
+    let mut credential_cleanup_error: Option<String> = None;
+
     {
         let mut cfg = config.write().await;
 
@@ -379,12 +395,10 @@ pub async fn handle_remove(
         // Remove provider
         cfg.memory.embedding.providers.retain(|p| p.id != params.id);
 
-        // Delete API key from vault
-        if let Err(e) = vault.delete_secret(&vault_key(&params.id)) {
-            warn!(provider = %params.id, error = %e, "Failed to delete embedding API key from vault");
-        }
-
-        // Save to file
+        // Save to file BEFORE the credential goes away. The other order leaves
+        // a configured provider whose key has been deleted — a broken provider
+        // the operator never asked for. This order can only leave an orphan
+        // credential, which is inert.
         if let Err(e) = cfg.save_incremental(&["memory"]) {
             return JsonRpcResponse::error(
                 request.id,
@@ -392,6 +406,19 @@ pub async fn handle_remove(
                 format!("Failed to save config: {e}"),
             );
         }
+
+        // The credential is now an orphan: it can no longer be loaded, but it
+        // is still a live secret until it is deleted. A vault failure here
+        // has to reach the caller instead of being logged and forgotten.
+        if let Err(e) = vault.delete_secret(&vault_key(&params.id)) {
+            warn!(provider = %params.id, error = %e, "Failed to delete embedding API key from vault");
+            credential_cleanup_error = Some(e.to_string());
+        }
+    }
+
+    let mut payload = serde_json::json!({ "success": true });
+    if let Some(err) = credential_cleanup_error {
+        payload["credential_cleanup"] = serde_json::json!(format!("failed: {err}"));
     }
 
     // Broadcast event
@@ -403,7 +430,7 @@ pub async fn handle_remove(
         }),
     ));
 
-    JsonRpcResponse::success(request.id, serde_json::json!({ "success": true }))
+    JsonRpcResponse::success(request.id, payload)
 }
 
 /// Set a provider as active.
@@ -551,16 +578,18 @@ pub async fn handle_test(
 
     match provider.test_connection().await {
         Ok(()) => {
-            // Persist verified=true for the provider
+            // Persist verified=true only if the stored config still matches
+            // the config that was actually tested (same endpoint, model, and
+            // credentials).  An inline draft that differs from the persisted
+            // record must not mark the persisted record as verified.
             {
                 let mut cfg = config.write().await;
-                if let Some(p) = cfg
-                    .memory
-                    .embedding
-                    .providers
-                    .iter_mut()
-                    .find(|p| p.id == provider_config.id)
-                {
+                if let Some(p) = cfg.memory.embedding.providers.iter_mut().find(|p| {
+                    p.id == provider_config.id
+                        && p.api_base == provider_config.api_base
+                        && p.models == provider_config.models
+                        && p.api_key == provider_config.api_key
+                }) {
                     p.verified = true;
                     if let Err(e) = cfg.save_incremental(&["memory"]) {
                         tracing::error!(error = %e, "Failed to save config after embedding test");

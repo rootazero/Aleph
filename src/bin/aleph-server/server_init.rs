@@ -3,7 +3,6 @@
 //! This module contains helper functions for server initialization,
 //! including `WebChat` serving and agent run handling.
 
-use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use alephcore::sync_primitives::Arc;
@@ -13,26 +12,39 @@ use alephcore::gateway::event_bus::GatewayEventBus;
 use alephcore::gateway::router::AgentRouter;
 use alephcore::gateway::{AgentRegistry, ExecutionEngine, GatewayEventEmitter};
 
-/// Serve `WebChat` static files
-pub async fn serve_webchat(
-    addr: SocketAddr,
+/// Serve `WebChat` static files on a listener owned by the caller.
+///
+/// This module is also included by run-handler integration fixtures that do not
+/// exercise the WebChat listener; production startup calls it from config handlers.
+///
+/// Keeping the listener with the startup task lets the gateway preflight the
+/// bind and later stop the same task as part of gateway shutdown.
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) async fn serve_webchat_on_listener(
+    listener: tokio::net::TcpListener,
     static_dir: PathBuf,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     use axum::Router;
     use tower_http::services::{ServeDir, ServeFile};
 
-    tracing::info!("Starting WebChat server on http://{}", addr);
+    tracing::info!("Starting WebChat server on {}", listener.local_addr()?);
 
     // Create fallback for SPA routing
     let index_path = static_dir.join("index.html");
     let serve_dir = ServeDir::new(&static_dir)
         .append_index_html_on_directories(true)
-        .fallback(ServeFile::new(&index_path));
+        .precompressed_br()
+        .precompressed_gzip()
+        .fallback(
+            ServeFile::new(&index_path)
+                .precompressed_br()
+                .precompressed_gzip(),
+        );
 
     // Loopback-only origin rule, shared with the `/ws` upgrade guard so the
-    // same-machine parsing lives in one place (`OriginPolicy`) instead of being
-    // duplicated inline. The static-asset server has no same-origin notion, so
-    // `host` is `None`: only loopback / `tauri:` origins pass.
+    // same-machine parsing lives in one place (`OriginPolicy`) instead of
+    // being duplicated inline. The static-asset server has no same-origin
+    // notion, so `host` is `None`: only loopback / `tauri:` origins pass.
     let policy = alephcore::gateway::origin_policy::OriginPolicy::loopback_only();
     let allowed_origins = tower_http::cors::AllowOrigin::predicate(move |origin, _| {
         policy.is_allowed(origin.to_str().ok(), None)
@@ -52,12 +64,7 @@ pub async fn serve_webchat(
             ]),
     );
 
-    // Create listener
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-
-    // Serve
     axum::serve(listener, app).await?;
-
     Ok(())
 }
 
@@ -94,6 +101,16 @@ fn build_run_error_response(
             e.to_string(),
         ),
     }
+}
+
+fn session_preparation_error_response(
+    id: Option<serde_json::Value>,
+) -> alephcore::gateway::JsonRpcResponse {
+    alephcore::gateway::JsonRpcResponse::error(
+        id,
+        alephcore::gateway::protocol::INTERNAL_ERROR,
+        "Session unavailable",
+    )
 }
 
 /// Handle agent.run with real `ExecutionEngine`
@@ -270,11 +287,23 @@ where
     // fallback, which ran *after* the busy lane and could only ever produce
     // `direct_tool`. Two things were broken by that and both are fixed here —
     // `/my-skill` never loaded its instructions or recorded a use, and any
-    // slash command sent while a run was already in flight was folded into
-    // that run as plain steering text and silently never executed.
     engine
         .stamp_slash_mode(&slash_input, &mut run_request.metadata)
         .await;
+
+    // Publish the addressed session before acknowledging success. The request
+    // scope is derived from the same metadata used by the queued engine, so
+    // the returned incumbent is the canonical ownership record rather than a
+    // second readiness flag.
+    let metadata =
+        match alephcore::gateway::execution_engine::prepare_session_for_run(&agent, &run_request)
+            .await
+        {
+            Ok(metadata) if alephcore::gateway::visibility::session_visible(&metadata) => metadata,
+            Ok(_) => return alephcore::gateway::visibility::not_found_response(request.id),
+            Err(_) => return session_preparation_error_response(request.id),
+        };
+    let _ = metadata;
 
     // Spawn onto the shared per-session busy wait lane (same queue the inbound
     // router uses for channel messages).
@@ -457,13 +486,23 @@ where
         Err(e) => return build_run_error_response(request.id, e),
     };
 
-    // Slash command detection. Delegates to the engine's shared resolver
-    // rather than re-deriving the mode JSON here — this handler used to hold
-    // its own copy of "parse, then serialize", which is one more place for
-    // the four surfaces to disagree about what `/foo` means.
     engine
         .stamp_slash_mode(&slash_input, &mut run_request.metadata)
         .await;
+
+    // Publish the addressed session before acknowledging success. The request
+    // scope is derived from the same metadata used by the queued engine, so
+    // the returned incumbent is the canonical ownership record rather than a
+    // second readiness flag.
+    let metadata =
+        match alephcore::gateway::execution_engine::prepare_session_for_run(&agent, &run_request)
+            .await
+        {
+            Ok(metadata) if alephcore::gateway::visibility::session_visible(&metadata) => metadata,
+            Ok(_) => return alephcore::gateway::visibility::not_found_response(request.id),
+            Err(_) => return session_preparation_error_response(request.id),
+        };
+    let _ = metadata;
 
     // Spawn onto the shared per-session busy wait lane (same queue the inbound
     // router uses for channel messages).

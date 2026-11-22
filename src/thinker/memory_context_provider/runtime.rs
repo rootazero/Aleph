@@ -196,14 +196,17 @@ mod tests {
         std::fs::create_dir_all(curated.join("main")).unwrap();
         let memory_file = curated.join("main/MEMORY.md");
         std::fs::write(&memory_file, "first bundle fact\n§\n").unwrap();
-        let mut memory = MemoryConfig::default();
-        memory.injection_mode = MemoryInjectionMode::Context;
-        memory.project_scoped = false;
+        let mut memory = MemoryConfig {
+            injection_mode: MemoryInjectionMode::Context,
+            project_scoped: false,
+            ..MemoryConfig::default()
+        };
         memory.embedding.providers.clear();
         let runtime = MemoryRuntime::new_with_services(
             MemoryRuntimeConfig {
                 metadata_path: root.path().join("metadata.db"),
                 note_memory_dir: root.path().join("note"),
+                retrieval_tuning: Default::default(),
             },
             Arc::new(OwnershipTree::new()),
             MemoryServicesConfig {
@@ -269,6 +272,7 @@ mod tests {
             MemoryRuntimeConfig {
                 metadata_path: root.path().join("metadata.db"),
                 note_memory_dir: root.path().join("note"),
+                retrieval_tuning: Default::default(),
             },
             Arc::new(OwnershipTree::new()),
         );

@@ -195,13 +195,11 @@ impl RetireOnAbandon {
 
     /// The receiver to park on — borrowed, never moved out, so [`Drop`] still
     /// owns it (see the field docs).
-    fn receiver(&mut self) -> &mut oneshot::Receiver<ClarificationResult> {
-        // Internal invariant: `rx` is `Some` until [`Drop`] takes it. The
-        // panic here is the defense-in-depth guard against any future
-        // caller that hands the receiver out twice.
-        self.rx
-            .as_mut()
-            .expect("invariant: RetireOnAbandon rx is owned by Drop until disarm")
+    ///
+    /// `None` once [`Drop`] has taken the receiver: the guard is on its way
+    /// out, so there is nothing left to park on.
+    fn receiver(&mut self) -> Option<&mut oneshot::Receiver<ClarificationResult>> {
+        self.rx.as_mut()
     }
 
     /// Every path that returns has already retired the entry — answered or
@@ -357,14 +355,8 @@ pub async fn ask(
     let delivered = if wants_secret {
         // Bus only — see the module doc.
         publish_to_event_bus(&turn, &request_id, &request)
-    } else {
-        let RenderedQuestion { text, keyboard } = super::render::render(
-            request
-                .first()
-                .expect("a ClarificationRequest built by a constructor is never empty"),
-            0,
-            request.len(),
-        );
+    } else if let Some(first) = request.first() {
+        let RenderedQuestion { text, keyboard } = super::render::render(first, 0, request.len());
         let mut message = OutboundMessage::text(turn.conversation_id.clone(), text);
         message.inline_keyboard = keyboard;
         match deps.channels.send(&channel, message).await {
@@ -379,6 +371,14 @@ pub async fn ask(
                 publish_to_event_bus(&turn, &request_id, &request)
             }
         }
+    } else {
+        // No question to render. The "never empty" invariant is NOT enforced
+        // by the type: `questions` is `pub(crate)`, so an in-crate caller can
+        // build an empty request. There is nothing to deliver and nothing that
+        // can be answered, so this takes the same undeliverable path as a
+        // failed channel send.
+        warn!("ask: cannot deliver an empty clarification request");
+        false
     };
 
     if !delivered {
@@ -425,23 +425,34 @@ pub async fn ask(
     // whole future (run-level `tokio::select!` in `execution_engine::execute`),
     // and `parked`'s guard is then the one that retires the entry and tells
     // every open client the question is over.
-    let result = match tokio::time::timeout(DEFAULT_CLARIFY_TIMEOUT, parked.receiver()).await {
-        Ok(Ok(result)) => result,
-        // Sender dropped without sending — treat as cancelled.
-        Ok(Err(_)) => ClarificationResult::cancelled(),
-        // Timed out — reap the stale registry entry. `cleanup_expired` rather
-        // than `cancel` so the terminal frame clients receive says `expired`,
-        // matching the status returned here.
-        //
-        // SIDE EFFECT: this is a registry-wide sweep, not a per-session reap,
-        // so other sessions' expired entries are reaped along with this one.
-        // Each reap publishes its own `ClarificationEnded` frame, so the
-        // affected clients see the right outcome for *their* request, not
-        // this `ask`'s timeout. The current entry is past its deadline by
-        // construction (same duration, registered first); any other reaped
-        // entries are unrelated stale runs that would have reaped on the
-        // next `register` anyway.
-        Err(_) => {
+    let result = match parked.receiver() {
+        Some(receiver) => match tokio::time::timeout(DEFAULT_CLARIFY_TIMEOUT, receiver).await {
+            Ok(Ok(result)) => result,
+            // Sender dropped without sending — treat as cancelled.
+            Ok(Err(_)) => ClarificationResult::cancelled(),
+            // Timed out — reap the stale registry entry. `cleanup_expired` rather
+            // than `cancel` so the terminal frame clients receive says `expired`,
+            // matching the status returned here.
+            //
+            // SIDE EFFECT: this is a registry-wide sweep, not a per-session reap,
+            // so other sessions' expired entries are reaped along with this one.
+            // Each reap publishes its own `ClarificationEnded` frame, so the
+            // affected clients see the right outcome for *their* request, not
+            // this `ask`'s timeout. The current entry is past its deadline by
+            // construction (same duration, registered first); any other reaped
+            // entries are unrelated stale runs that would have reaped on the
+            // next `register` anyway.
+            Err(_) => {
+                deps.clarification.cleanup_expired().await;
+                ClarificationResult::timeout()
+            }
+        },
+        // The waiter is already gone: the guard's `Drop` took the receiver,
+        // which only happens while the guard itself is being dropped — so
+        // unreachable while this future runs. Reported like the deadline
+        // instead of panicking, because a panic here would take the whole
+        // turn down over a bookkeeping detail.
+        None => {
             deps.clarification.cleanup_expired().await;
             ClarificationResult::timeout()
         }

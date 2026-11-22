@@ -7,6 +7,9 @@
 //! `with_file_lock` acquires an exclusive `fs2` advisory lock on a
 //! sidecar `<path>.lock` file for the duration of a closure. Lock
 //! release is RAII-driven (Drop on the guard).
+//!
+//! The async [`crate::utils::atomic_write`] module is a separate primitive
+//! with intentionally different permission and durability guarantees.
 
 use std::fs::File;
 use std::io::Write;

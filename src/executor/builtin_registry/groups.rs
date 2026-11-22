@@ -117,6 +117,11 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
             // doc), so its authorization lives in
             // `method_authz::OPERATOR_TOOLS`, not here.
             "runtime_manage",
+            // The capability runtime's own diagnostic surface — a sibling of
+            // `runtime_manage` and `doctor` (it inspects and controls the
+            // runtime the registry built), enablement-gated on
+            // `ALEPH_CAPABILITY_DIAGNOSTICS=1` and operator-only.
+            "capability_projection_diagnostics",
             "select_model",
             "list_models",
             "vault_store",
@@ -332,14 +337,14 @@ mod tests {
 
     #[test]
     fn test_all_builtin_tools_have_a_group() {
-        let grouped: Vec<&str> = TOOL_CATEGORIES
+        let grouped: std::collections::HashSet<&str> = TOOL_CATEGORIES
             .iter()
             .flat_map(|g| g.tools.iter().copied())
             .collect();
 
         for def in BUILTIN_TOOL_DEFINITIONS.iter() {
             assert!(
-                grouped.contains(&def.name),
+                grouped.contains(def.name),
                 "Builtin tool '{}' is not in any group",
                 def.name
             );
@@ -419,11 +424,11 @@ mod tests {
             }
         }
         for (name, _) in super::super::REGISTRY_ONLY_DESCRIPTIONS.iter().copied() {
-            // REGISTRY_ONLY_DESCRIPTIONS is gated `#[cfg(test)]` so it
-            // is not exported under the production binary — this test
-            // needs the dev profile to compile, which is fine for a
-            // test-only constant. Reached via the `#[cfg(test)]`
-            // re-export at `builtin_registry/mod.rs`.
+            // REGISTRY_ONLY_DESCRIPTIONS is not test-gated any more: it is
+            // the runtime source of truth for the descriptions of the tools
+            // the registry registers outside the catalog, and the Panel's
+            // tool schema reads it. Reached via the re-export at
+            // `builtin_registry/mod.rs`.
             if !grouped.contains(name) {
                 orphans.push(name.to_string());
             }

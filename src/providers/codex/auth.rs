@@ -256,8 +256,7 @@ impl CodexAuth {
                             }
                         }
                         return axum::response::Html(
-                            "<html><body><h1>Authentication Failed</h1><p>You can close this window.</p></body></html>"
-                                .to_string(),
+                            "<html><body><h1>Authentication Failed</h1><p>You can close this window.</p></body></html>",
                         );
                     }
 
@@ -270,8 +269,7 @@ impl CodexAuth {
                             }
                         }
                             return axum::response::Html(
-                                "<html><body><h1>Authentication Failed</h1><p>Missing state parameter. You can close this window.</p></body></html>"
-                                    .to_string(),
+                                "<html><body><h1>Authentication Failed</h1><p>Missing state parameter. You can close this window.</p></body></html>",
                             );
                         }
                         Some(received_state) if received_state != &expected_state => {
@@ -282,8 +280,7 @@ impl CodexAuth {
                             }
                         }
                             return axum::response::Html(
-                                "<html><body><h1>Authentication Failed</h1><p>State mismatch. You can close this window.</p></body></html>"
-                                    .to_string(),
+                                "<html><body><h1>Authentication Failed</h1><p>State mismatch. You can close this window.</p></body></html>",
                             );
                         }
                         _ => {} // State matches, proceed
@@ -298,8 +295,7 @@ impl CodexAuth {
                             }
                         }
                             axum::response::Html(
-                                "<html><body><h1>Authentication Successful</h1><p>You can close this window and return to Aleph.</p></body></html>"
-                                    .to_string(),
+                                "<html><body><h1>Authentication Successful</h1><p>You can close this window and return to Aleph.</p></body></html>",
                             )
                         }
                         None => {
@@ -310,8 +306,7 @@ impl CodexAuth {
                             }
                         }
                             axum::response::Html(
-                                "<html><body><h1>Authentication Failed</h1><p>No code received. You can close this window.</p></body></html>"
-                                    .to_string(),
+                                "<html><body><h1>Authentication Failed</h1><p>No code received. You can close this window.</p></body></html>",
                             )
                         }
                     }

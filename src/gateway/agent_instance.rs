@@ -10,6 +10,8 @@ use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
 use super::router::SessionKey;
+use super::session_store::error::SessionStoreError;
+use super::session_store::types::SessionMetadata;
 use super::session_store::SessionStore;
 
 #[cfg(test)]
@@ -421,11 +423,12 @@ impl AgentInstance {
         }
     }
 
-    /// Ensure a session exists.
-    pub async fn ensure_session(&self, key: &SessionKey) {
-        if let Err(e) = self.session_store.get_or_create(key).await {
-            warn!("Failed to ensure session in store: {}", e);
-        }
+    /// Ensure a session exists and return the canonical persisted metadata.
+    pub async fn ensure_session(
+        &self,
+        key: &SessionKey,
+    ) -> Result<SessionMetadata, SessionStoreError> {
+        self.session_store.get_or_create(key).await
     }
 
     /// Record the session's originating channel (and, for inbound channels, its
@@ -711,14 +714,13 @@ impl AgentRegistry {
             Some(AgentEntry::Config { .. }) => {}
         }
 
-        // Take the Config entry out to consume it
-        let entry = agents.remove(agent_id)?;
-        let (config, session_store) = match entry {
-            AgentEntry::Config {
+        // Clone the config and session_store without removing the entry
+        let (config, session_store) = match agents.get(agent_id) {
+            Some(AgentEntry::Config {
                 config,
                 session_store,
-            } => (config, session_store),
-            AgentEntry::Instance(_) => unreachable!("checked above"),
+            }) => (config.clone(), session_store.clone()),
+            _ => unreachable!("checked above"),
         };
 
         let id = config.agent_id.clone();
@@ -742,7 +744,6 @@ impl AgentRegistry {
     pub async fn get_default(&self) -> Option<Arc<AgentInstance>> {
         self.get(&self.default_agent).await
     }
-
     /// List all registered agent IDs (both lazy and instantiated)
     pub async fn list(&self) -> Vec<String> {
         let agents = self.agents.read().await;
@@ -933,7 +934,10 @@ mod tests {
         let instance = AgentInstance::new(config, sm).unwrap();
         let key = SessionKey::main("test");
 
-        instance.ensure_session(&key).await;
+        instance
+            .ensure_session(&key)
+            .await
+            .expect("session creation must succeed");
         assert!(instance.get_history(&key, None).await.is_empty());
     }
 

@@ -16,10 +16,10 @@
 
 use tauri::webview::PlatformWebview;
 use webview2_com::Microsoft::Web::WebView2::Win32::*;
-use webview2_com::{take_pwstr, ServerCertificateErrorDetectedEventHandler};
+use webview2_com::{ServerCertificateErrorDetectedEventHandler, take_pwstr};
 use windows_core::{Interface, PWSTR};
 
-use crate::cert_trust::install::{resolve, HookAction, CERT_TRUST_APP};
+use crate::cert_trust::install::{CERT_TRUST_APP, HookAction, resolve};
 
 /// Default Panel listen port — the store keys on `host:port` (Task 4). Used only
 /// as a defensive fallback; http/https URIs always carry a known default port.

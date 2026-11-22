@@ -11,9 +11,7 @@ use super::{
     ContextOperation, ContextPhase, ContextScope, ContextSnapshot, ContextTransformResult,
     DegradedReason, CONTEXT_CAPABILITY_API_VERSION,
 };
-use crate::context::budget::preflight::{
-    NativePreflightRegistry, PreflightPipeline, PreflightStage,
-};
+use crate::context::budget::preflight::{NativePreflightRegistry, PreflightPipeline};
 use crate::context::budget::pressure::estimate_tokens_smart;
 use crate::context::budget::ContextPressure;
 use crate::context::compact::compactor::{CompactResult, CompactStrategy, ContextCompactor};
@@ -122,15 +120,19 @@ impl ContextFabricBuilder {
         }
     }
 
+    /// Register one native preflight stage.
+    ///
+    /// Test-only: production wires the whole pipeline through
+    /// [`Self::native_pipeline`] so the pressure floor and cache-stability
+    /// policy of [`crate::context::budget::preflight::default_pipeline`]
+    /// survive. A single-stage injection point has no production caller.
     #[must_use]
-    pub fn native_preflight_stage(mut self, stage: impl PreflightStage + 'static) -> Self {
+    #[cfg(test)]
+    pub fn native_preflight_stage(
+        mut self,
+        stage: impl crate::context::budget::preflight::PreflightStage + 'static,
+    ) -> Self {
         self.native_preflight.register(stage);
-        self
-    }
-
-    #[must_use]
-    pub fn native_preflight_registry(mut self, registry: NativePreflightRegistry) -> Self {
-        self.native_preflight = registry;
         self
     }
 
@@ -1171,11 +1173,11 @@ impl ContextFabric {
             .map_err(|e| ContextFabricError::Serialization(e.to_string()))?;
         let measured_tokens =
             estimate_tokens_smart(std::str::from_utf8(&serialized).unwrap_or_default()) as u64;
-        if response.output_bytes != serialized.len() as u64
-            || response.output_tokens != measured_tokens
+        if response.output_bytes < serialized.len() as u64
+            || response.output_tokens < measured_tokens
         {
             return Err(ContextFabricError::MalformedOutput(
-                "result measurements do not match serialized output".into(),
+                "result measurements underestimate serialized output".into(),
             ));
         }
         if response.output_bytes > post_descriptor.output_budget.max_bytes

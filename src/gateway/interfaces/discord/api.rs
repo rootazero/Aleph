@@ -6,6 +6,7 @@
 
 use crate::sync_primitives::Arc;
 use serde::{Deserialize, Serialize};
+use serenity::http::GuildPagination;
 
 use super::permissions::{self, PermissionAudit};
 
@@ -116,14 +117,31 @@ pub async fn validate_token(token: &str) -> Result<BotIdentity, String> {
 /// entry with the bot's permission bitfield from the `GuildInfo` response.
 pub async fn list_guilds(http: &Http) -> Result<Vec<GuildSummary>, String> {
     // Fetch guilds using pagination. GuildInfo already includes permissions.
-    let guild_infos = http
-        .get_guilds(None, Some(200))
-        .await
-        .map_err(|e| format!("Failed to fetch guilds: {e}"))?;
+    let mut all_guild_infos = Vec::new();
+    // The cursor is kept as the guild id: `GuildPagination` is neither `Copy`
+    // nor `Clone`, so it cannot be carried across the request.
+    let mut after: Option<GuildId> = None;
 
-    let mut summaries = Vec::with_capacity(guild_infos.len());
+    loop {
+        let guild_infos = http
+            .get_guilds(after.map(GuildPagination::After), Some(200))
+            .await
+            .map_err(|e| format!("Failed to fetch guilds: {e}"))?;
 
-    for info in &guild_infos {
+        let page_size = guild_infos.len();
+        if page_size > 0 {
+            after = Some(guild_infos.last().unwrap().id);
+            all_guild_infos.extend(guild_infos);
+        }
+
+        if page_size < 200 {
+            break;
+        }
+    }
+
+    let mut summaries = Vec::with_capacity(all_guild_infos.len());
+
+    for info in &all_guild_infos {
         // GuildInfo has: id, name, icon (Option<ImageHash>), owner, permissions
         let icon_url = info
             .icon
@@ -180,6 +198,9 @@ pub async fn audit_guild_permissions(
     http: &Http,
     guild_id: u64,
 ) -> Result<PermissionAudit, String> {
+    if guild_id == 0 {
+        return Err("guild_id must be non-zero".to_string());
+    }
     let gid = GuildId::new(guild_id);
 
     // Fetch guild info for name and roles
@@ -229,6 +250,14 @@ pub async fn audit_guild_permissions(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn test_audit_guild_permissions_rejects_zero_before_http() {
+        let http = Http::new("test-token");
+        let result = audit_guild_permissions(&http, 0).await;
+
+        assert_eq!(result.unwrap_err(), "guild_id must be non-zero");
+    }
 
     #[test]
     fn test_bot_identity_serde_roundtrip() {

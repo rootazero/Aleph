@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "timestamp": "20261116T070314.773636Z",
+  "memory_gate": {
+    "argv": [
+      "python3",
+      "qa/browser_live/check_memory.py",
+      "--required-bytes",
+      "4294967296"
+    ],
+    "cwd": "/Volumes/TBU4/Workspace/Aleph",
+    "env_overrides": {},
+    "exit_code": 0,
+    "timed_out": false,
+    "pid": 91873,
+    "cleanup_error": null,
+    "unjoined_descendants": false,
+    "elapsed_seconds": 0.027854999992996454,
+    "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T070314.773636Z-memory.stdout.log",
+    "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T070314.773636Z-memory.stderr.log"
+  },
+  "test_filter": "extension::mcp_plugin_tests::an_absolute_command_outside_the_root_is_counted_and_spawned",
+  "status": "PASS",
+  "command": {
+    "argv": [
+      "cargo",
+      "test",
+      "-p",
+      "alephcore",
+      "--lib",
+      "--offline",
+      "--locked",
+      "--jobs",
+      "1",
+      "extension::mcp_plugin_tests::an_absolute_command_outside_the_root_is_counted_and_spawned",
+      "--",
+      "--test-threads=1"
+    ],
+    "cwd": "/Volumes/TBU4/Workspace/Aleph",
+    "env_overrides": {
+      "HOME": "/Users/zouguojun/.p9-home-ed10m0ki",
+      "ALEPH_HOME": "/tmp/p9-zdcociwm/aleph",
+      "CARGO_HOME": "/Users/zouguojun/.cargo",
+      "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+      "TMPDIR": "/tmp/p9-zdcociwm",
+      "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+      "RUST_BACKTRACE": "1"
+    },
+    "exit_code": 0,
+    "timed_out": false,
+    "pid": 91875,
+    "cleanup_error": null,
+    "unjoined_descendants": false,
+    "elapsed_seconds": 0.6166208340437151,
+    "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T070314.773636Z.stdout.log",
+    "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T070314.773636Z.stderr.log"
+  },
+  "fixture": {
+    "path": "/tmp/p9-zdcociwm",
+    "home": "/Users/zouguojun/.p9-home-ed10m0ki",
+    "cleanup": "removed"
+  }
+}

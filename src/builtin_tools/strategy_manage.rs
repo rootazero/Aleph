@@ -15,7 +15,7 @@ use tokio::sync::RwLock;
 use tracing::info;
 
 use crate::error::{AlephError, Result};
-use crate::strategy::{goal_key, loop_key, session_key, Strategy, StrategyStore};
+use crate::strategy::{goal_key, Strategy, StrategyStore};
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
@@ -96,26 +96,35 @@ impl StrategyTool {
     }
 
     /// Resolve which composite key holds the in-force Strategy for this session.
-    /// Goal precedence (mirrors `active_strategy`): a goal-keyed Strategy wins
-    /// over a co-existing loop-keyed one. Returns the key to read/overwrite, or
-    /// `None` if neither exists.
-    fn resolve_key(&self, session: &str) -> std::result::Result<Option<String>, String> {
-        let gk = goal_key(session);
-        if self.store.get(&gk).map_err(|e| e.to_string())?.is_some() {
-            return Ok(Some(gk));
-        }
-        let lk = loop_key(session);
-        if self.store.get(&lk).map_err(|e| e.to_string())?.is_some() {
-            return Ok(Some(lk));
-        }
-        // Naked-loop (plain interactive chat) strategy — lowest precedence so a
-        // /goal or /loop strategy in a reused session always wins. Lets
-        // `strategy show`/`revise` operate in a naked-loop session.
-        let sk = session_key(session);
-        if self.store.get(&sk).map_err(|e| e.to_string())?.is_some() {
-            return Ok(Some(sk));
-        }
-        Ok(None)
+    ///
+    /// One ladder for every face of this verb: `crate::strategy::resolve_active_key`
+    /// walks goal → loop → team → session — the order the prompt renders. The
+    /// tool used to carry its own copy of the order and omitted the team tier,
+    /// so `strategy show` in a team chat named the member's session row while
+    /// the prompt carried the team's welded plan.
+    ///
+    /// The goal/loop tiers are gated on the same liveness the prompt uses, so
+    /// the tool and the welded prompt never name different rows.
+    ///
+    /// `include_team` is false for the write path: a member revising their own
+    /// strategy must not overwrite the team-wide welded plan every member
+    /// reads.
+    fn resolve_key(
+        &self,
+        session: &str,
+        include_team: bool,
+    ) -> std::result::Result<Option<String>, String> {
+        let team_id = include_team
+            .then(|| crate::strategy::team_id_for_session(session))
+            .flatten();
+        crate::strategy::resolve_active_key(
+            &self.store,
+            session,
+            crate::orchestrator::harness_bridge::goal_tier_live(session),
+            crate::orchestrator::harness_bridge::loop_tier_live(session),
+            team_id.as_deref(),
+        )
+        .map_err(|e| e.to_string())
     }
 
     /// Core dispatch — public so tests call it directly without the trait.
@@ -149,7 +158,7 @@ impl StrategyTool {
         // Overwrite the in-force Strategy. If none exists yet (a revise before
         // the planner ran), default to the goal key — the dominant flow.
         let key = self
-            .resolve_key(session)?
+            .resolve_key(session, false)?
             .unwrap_or_else(|| goal_key(session));
         self.store
             .put(&key, &new_strategy)
@@ -164,7 +173,7 @@ impl StrategyTool {
     }
 
     fn show(&self, session: &str) -> std::result::Result<StrategyOutput, String> {
-        let Some(key) = self.resolve_key(session)? else {
+        let Some(key) = self.resolve_key(session, true)? else {
             return Ok(StrategyOutput {
                 success: false,
                 message: "No strategy set for this task.".to_string(),
@@ -398,7 +407,7 @@ mod tests {
         };
         store.put(&session_key("sess-1"), &strat).unwrap();
         let tool = StrategyTool::new(store).with_session_for_test("sess-1");
-        let key = tool.resolve_key("sess-1").unwrap();
+        let key = tool.resolve_key("sess-1", true).unwrap();
         assert_eq!(key.as_deref(), Some("session:sess-1"));
     }
 
@@ -417,7 +426,7 @@ mod tests {
         store.put(&session_key("sess-1"), &strat).unwrap();
         store.put(&goal_key("sess-1"), &strat).unwrap();
         let tool = StrategyTool::new(store).with_session_for_test("sess-1");
-        let key = tool.resolve_key("sess-1").unwrap();
+        let key = tool.resolve_key("sess-1", true).unwrap();
         assert_eq!(key.as_deref(), Some("goal:sess-1"));
     }
 }

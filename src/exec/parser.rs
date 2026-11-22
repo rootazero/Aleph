@@ -79,19 +79,16 @@ fn contains_unquoted_redirect(command: &str) -> bool {
     let mut in_single = false;
     let mut in_double = false;
     let mut escaped = false;
-    let mut prev = '\0';
 
     for ch in command.chars() {
         if escaped {
             escaped = false;
-            prev = ch;
             continue;
         }
 
         match ch {
             '\\' if !in_single => {
                 escaped = true;
-                prev = ch;
                 continue;
             }
             '\'' if !in_double => {
@@ -103,23 +100,8 @@ fn contains_unquoted_redirect(command: &str) -> bool {
             '>' | '<' if !in_single && !in_double => {
                 return true;
             }
-            '&' if !in_single && !in_double
-                // Only flag & when it directly follows a redirection char.
-                //
-                // An unquoted `>` or `<` already returned `true` at the arm
-                // above, so a plain `2>&1` never reaches this arm — it is
-                // caught as a redirect. The only way `prev` is `>` or `<`
-                // here is an *escaped* one (`\>`), which the escape branch
-                // folds into `prev` without being a redirect.
-                // Do NOT flag && (chain operator) or bare & (background
-                // operator)
-                && (prev == '>' || prev == '<') =>
-            {
-                return true;
-            }
             _ => {}
         }
-        prev = ch;
     }
     false
 }
@@ -137,15 +119,11 @@ pub fn analyze_shell_command(
     // user-typed commands are well under 64 KiB; anything longer is almost
     // certainly a DoS attempt or a tooling mistake.
     //
-    // Both bytes AND chars are bounded: a 64 KiB-of-4-byte-UTF-8 string is
-    // only 16k chars but allocates ~256 KiB in `split_command_chain` (which
-    // builds `current: String` chunk-by-chunk via `chars().next()` +
-    // `push(ch)`), so a byte cap alone does not bound the worst-case
-    // allocation when the input is mostly multi-byte. The chars cap closes
-    // the other end (pure ASCII at 64 KiB-of-chars is the same cost).
+    // Bound input size to protect against DoS. In UTF-8, characters are at least
+    // 1 byte, so bounding bytes to 64 KiB simultaneously bounds chars <= 64 KiB
+    // without requiring an O(N) UTF-8 character decode upfront.
     const MAX_COMMAND_BYTES: usize = 64 * 1024;
-    const MAX_COMMAND_CHARS: usize = 64 * 1024;
-    if command.len() > MAX_COMMAND_BYTES || command.chars().count() > MAX_COMMAND_CHARS {
+    if command.len() > MAX_COMMAND_BYTES {
         return CommandAnalysis::error("command exceeds maximum analyzable length");
     }
 
@@ -170,12 +148,8 @@ pub fn analyze_shell_command(
     };
 
     let mut all_segments = Vec::new();
-    let mut chains = Vec::new();
-    let mut chain_segments = Vec::new();
 
     for part in chain_parts {
-        chain_segments.clear();
-
         // Split by pipe |
         let pipeline_parts = match split_pipeline(&part) {
             Ok(parts) => parts,
@@ -190,22 +164,16 @@ pub fn analyze_shell_command(
             };
 
             let resolution = resolve_executable(&argv[0], cwd, env);
-            let segment = CommandSegment::new(raw, argv).with_resolution(resolution);
-            chain_segments.push(segment);
+            let segment = CommandSegment::new(raw).with_resolution(resolution);
+            all_segments.push(segment);
         }
-
-        if !chain_segments.is_empty() {
-            chains.push(chain_segments.clone());
-            all_segments.extend(chain_segments.iter().cloned());
-        }
-        chain_segments.clear();
     }
 
     if all_segments.is_empty() {
         return CommandAnalysis::error("no valid command segments found");
     }
 
-    CommandAnalysis::success(all_segments, chains)
+    CommandAnalysis::success(all_segments)
 }
 
 /// Split command by chain operators (&&, ||, ;)
@@ -520,7 +488,7 @@ mod tests {
         let analysis = analyze_shell_command("ls -la", None, None);
         assert!(analysis.ok);
         assert_eq!(analysis.segments.len(), 1);
-        assert_eq!(analysis.segments[0].argv, vec!["ls", "-la"]);
+        assert_eq!(analysis.segments[0].raw, "ls -la");
     }
 
     #[test]
@@ -540,7 +508,7 @@ mod tests {
     fn test_analyze_complex() {
         let analysis = analyze_shell_command("cd /tmp && ls | grep foo; echo done", None, None);
         assert!(analysis.ok);
-        assert_eq!(analysis.chains.as_ref().unwrap().len(), 3);
+        assert_eq!(analysis.segments.len(), 4);
     }
 
     #[test]

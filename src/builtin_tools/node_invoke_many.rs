@@ -20,7 +20,10 @@ use crate::cluster::{NodeMatch, NodeRegistry};
 use crate::error::{AlephError, Result};
 use crate::tools::AlephTool;
 
-const DEFAULT_TIMEOUT_MS: u64 = 120_000;
+/// The reverse-RPC window for ONE node call — see `node_invoke`'s
+/// `DEFAULT_TIMEOUT_MS` for why it must enclose the center's approval window
+/// (120s) rather than match it.
+const DEFAULT_TIMEOUT_MS: u64 = 150_000;
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct NodeInvokeManyArgs {
@@ -35,7 +38,7 @@ pub struct NodeInvokeManyArgs {
     /// JSON arguments for the command, passed through to each node verbatim.
     #[serde(default)]
     pub args: Value,
-    /// Per-node reverse-RPC timeout in ms (default 120000). Applied to every
+    /// Per-node reverse-RPC timeout in ms (default 150000). Applied to every
     /// node independently; one slow node does not extend the others.
     #[serde(default)]
     pub timeout_ms: Option<u64>,
@@ -55,6 +58,16 @@ impl NodeInvokeManyTool {
 /// Invoke `command` on one matched node; never returns Err — every outcome is
 /// encoded as a per-node result object so a failure does not abort the fan-out.
 async fn invoke_one(m: NodeMatch, command: String, args: Value, timeout_ms: u64) -> Value {
+    // A node whose declared catalog could not be parsed must NOT be read as
+    // "this node declares no commands": that reading would silently switch the
+    // center-side fail-fast layer off for this node. Fail closed instead — the
+    // same rule `node_invoke` applies, in the same per-node error shape.
+    if m.catalog_malformed {
+        return json!({
+            "node": m.name, "node_id": m.node_id, "ok": false,
+            "error": format!("node '{}' declared a malformed command catalog; refusing to invoke", m.name)
+        });
+    }
     // Per-node fail-fast, mirroring node_invoke: reject only when the node
     // declared a non-empty catalog that excludes this command.
     if !m.declared_commands.is_empty() && !m.declared_commands.iter().any(|c| c.name == command) {
@@ -87,7 +100,7 @@ impl AlephTool for NodeInvokeManyTool {
 
 Select nodes by `tags` (AND match) — e.g. {"tags": ["gpu"], "command": "bash", "args": {"cmd": "nvidia-smi -L"}}. An empty/omitted `tags` targets every online node. Call `node_list` (with the same tags) to preview which nodes will be hit. `command` must be one each node declares (a node that doesn't declare it returns a per-node error; others still run).
 
-Each node runs in its own sandbox with an independent `timeout_ms` (default 120000). Partial failure is tolerated: you always get back {"invoked", "succeeded", "failed", "results":[{"node","node_id","ok",("result"|"error")}]}. If no online node matches the tags you get a clear error listing the available tags."#;
+Each node runs in its own sandbox with an independent `timeout_ms` (default 150000). Partial failure is tolerated: you always get back {"invoked", "succeeded", "failed", "results":[{"node","node_id","ok",("result"|"error")}]}. If no online node matches the tags you get a clear error listing the available tags."#;
 
     type Args = NodeInvokeManyArgs;
     type Output = Value;
@@ -186,7 +199,6 @@ mod tests {
                 .iter()
                 .map(|c| CommandDescriptor {
                     name: c.to_string(),
-                    schema: json!({}),
                 })
                 .collect(),
             tags: tags.iter().map(|t| t.to_string()).collect(),

@@ -1,0 +1,211 @@
+{
+  "schema_version": 1,
+  "title_en": "Phase10 NSH fork API receipt",
+  "title_zh": "Phase10 NSH fork API receipt / Phase10 NSH fork API 凭证",
+  "status": "FORK_NATIVE_SPIKE_PASS_SPEC_BLOCKED",
+  "status_zh": "fork 定向原生回归通过，独立 SPEC 阻塞尚未关闭",
+  "fork": {
+    "worktree": "/Volumes/TBU4/Workspace/nsh-phase10",
+    "branch": "phase10-nsh",
+    "base_commit": "f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1",
+    "implementation_commit": "6bbf9c96",
+    "follow_up": "SPEC reviewed the preceding patch and returned BLOCK. Follow-up commit 644a31f0 adds observable overflow and a host-origin fixture that passed after the review; the exact commit has not been re-reviewed.",
+    "follow_up_commit": "644a31f0cd1cc35855b6241aedec90a2eda9f222",
+    "follow_up_tree": "4e0fe6912e446c3d45f9375d104b82db713109eb",
+    "portable_source": {
+      "upstream": "https://github.com/longbridge/nsh.git",
+      "artifact": ".phase10-evidence/nsh-phase10-644a31f0.bundle",
+      "sha256": "f60b3bc98b3379f8f99f593a609dbbf1b976df9821fdffc879a5bff73fde58ea",
+      "verification": "Exact tree restored in a new repository seeded only from the fixed public upstream base and this local bundle. The detached integration bootstrap resolved all seven NSH crates from the Git URL at 644a31f0 with no Cargo path overlay. This is not a remotely readable fork pin."
+    },
+    "commit_message": "feat(macos): expose native events and checked web messages",
+    "aleph_dependency_switched": "detached integration worktree only",
+    "cargo_lock_changed": "detached integration worktree only",
+    "main_dependency_switched": false
+  },
+  "contracts": {
+    "typed_native_events": {
+      "status": "COMPILED_LAUNCH_DELEGATE_REGRESSION_PASS",
+      "api": "nsh_platform_macos::{AppEvent, AppEventSink, AppOptions::event_sink}",
+      "events": [
+        "WindowCloseRequested",
+        "WindowHidden",
+        "WindowReopened",
+        "QuitRequested",
+        "OpenUrls",
+        "TrayAction",
+        "GlobalShortcutPressed",
+        "GlobalShortcutRegistration",
+        "NotificationPressed",
+        "NotificationRegistration",
+        "WindowStateChanged",
+        "LaunchEventsDropped"
+      ],
+      "ownership": "Existing NSH AppKit, tray, Carbon shortcut, window-state, URL, and notification owners emit owned values; Aleph does not copy private platform modules.",
+      "ownership_zh": "由 NSH 现有 AppKit、tray、Carbon shortcut、window-state、URL、notification owner 发出 owned value；Aleph 不复制私有平台模块。",
+      "lifecycle": "The standalone surface opens a bounded queue before the AppKit event loop and drains it after successful engine start. JS replays its own notification backlog without redispatching to the host. Registration checks the actual system delegate; it is not an authorization or presentation result.",
+      "lifecycle_zh": "独立窗口在 AppKit 事件循环前开启有上限的队列，待引擎启动成功后交付。JS 只回放自身的通知积压，不再次通知宿主。注册核对实际系统 delegate，不代表系统授权或通知展示。"
+    },
+    "checked_webview_ingress": {
+      "status": "COMPILED_QUEUE_AND_NATIVE_DELIVERY_PASS",
+      "api": "ElementRef::post_message_json(&JsonValue) -> Result<(), WebViewMessageError>",
+      "limits": {
+        "max_serialized_bytes": 65536,
+        "max_pending_checked_messages": 256
+      },
+      "errors": ["NotMounted", "TooLarge", "QueueFull", "Serialization"],
+      "transport": "The checked core command reuses each platform's existing PostMessage dispatch. The native fixture exercises macOS WebKit only; legacy post_message remains unchanged.",
+      "transport_zh": "checked core command 复用各平台的 PostMessage 路径；原生夹具只验证 macOS WebKit，legacy post_message 保持不变。"
+    }
+  },
+  "verification": {
+    "memory_gate": {
+      "command": "python3 /Volumes/TBU4/Workspace/Aleph/qa/browser_live/check_memory.py --required-bytes 4294967296",
+      "result": "ALLOW",
+      "available_bytes": 8119418880,
+      "required_bytes": 4294967296
+    },
+    "rustfmt_check": "PASS",
+    "git_diff_check": "PASS",
+    "cargo_metadata_offline_locked": "PASS_ON_ORIGINAL_CANDIDATE",
+    "locked_dependency_fetch": {
+      "command": "cargo fetch --locked --target aarch64-apple-darwin",
+      "result": "PASS_USER_AUTHORIZED",
+      "crate": "quickjs-jit-stdlib 0.14.2",
+      "sha256_verified_against_lock": "a3ad9800d6824112e3d1032078c8e8bcabc47870bbedc858ef6b6fae12de3070"
+    },
+    "cargo_check": {
+      "status": "PASS",
+      "command": "cargo check --offline --locked --jobs 1 -p nsh-platform-macos --no-default-features",
+      "scope": "Rust-only macOS backend; the fork lockfile itself was unchanged. The detached Aleph integration candidate has a separate lockfile revision update to 644a31f0."
+    },
+    "detached_git_bootstrap": {
+      "status": "PASS",
+      "source": "https://github.com/longbridge/nsh.git rev 644a31f0cd1cc35855b6241aedec90a2eda9f222",
+      "command": "cargo test --offline --locked --jobs 1 --bin aleph-nsh-shell --test nsh_v05_window_compat",
+      "evidence": "Independent Cargo home and a bare Git mirror restored from the local bundle; all seven NSH crates resolved from the Git source with no path overlay; 4 compatibility tests and 1 contract test passed."
+    },
+    "detached_aleph_build": {
+      "status": "PASS",
+      "command": "cargo build --offline --locked --jobs 1 --bin aleph-nsh-shell",
+      "evidence": "The current detached integration candidate compiled the shell and logged nsh-core, nsh-engine, nsh-base, nsh-platform-apple and nsh-platform-macos at rev 644a31f0."
+    },
+    "core_queue_regression": {
+      "status": "PASS",
+      "test": "element::element_ref::tests::checked_posts_enforce_limits_until_actions_are_drained",
+      "evidence": "1 passed; 0 failed; verifies size, quota, quota release, legacy coexistence and disposal."
+    },
+    "native_host_boundary": {
+      "status": "PASS",
+      "command": "NSH_HOST_BOUNDARY_CHECK_ONLY=1 cargo test --offline --locked --jobs 1 -p nsh-platform-macos --no-default-features --test native -- --ignored",
+      "evidence": "Injected AppKit launch callbacks retained the first 64 events including registration, in order. The host observed a single overflow report counting three rejected callbacks. An URL from the host callback crossed a bounded test channel and was echoed back by the real WKWebView after readiness.",
+      "limitations": "Not LaunchServices delivery, notification callback or delivery to the production Aleph Panel."
+    },
+    "independent_review": {
+      "status": "ORIGINAL_CANDIDATE_NOT_READY",
+      "reviewed_commit": "6bbf9c96",
+      "findings": [
+        "P1: Cold-launch URLs reached the engine backlog but not the host sink.",
+        "P1: Cold notification presses could be missed by the host, and engine Listen could redeliver a press to the host.",
+        "P2: Local sink registration could report success while no NSH system delegate was installed."
+      ],
+      "follow_up_status": "SPEC_BLOCKED_QUALITY_NOT_STARTED",
+      "spec_retry": {
+        "run_id": "e9071248-03c5-41e5-bf64-261acb42a74a",
+        "model": "88api/gpt-6.2-astra",
+        "verdict": "BLOCK",
+        "report": ".phase10-evidence/reviews/nsh-fork-spec-e9071248.md",
+        "report_sha256": "88a47f8978b306c8ca1c0b4b5360b39b2ad11a1a4ef43f851a173adbd2a47430",
+        "findings": [
+          "P1: No Aleph shell-owned validated envelope or production Panel consumer; the previous fixture was page-originated.",
+          "P1: Startup overflow only logged and was not observable by the host.",
+          "P2: LaunchServices, notification ownership/presses, overflow and stop behavior were not exercised by the reviewed fixture."
+        ],
+        "subsequent_state": "Observable overflow and host-origin native fixture now pass; production integration and independent re-review remain open."
+      },
+      "spec_attempt": {
+        "run_id": "e24e55c7-0862-426a-a8e7-c8c7c25aeecd",
+        "model": "88api/claude-opus-5-5",
+        "timeout_ms": 300000,
+        "verdict": null
+      },
+      "current_spec": {
+        "verdict": "BLOCK",
+        "report": ".phase10-evidence/reviews/phase10-spec-current-644a31f0.md",
+        "findings": [
+          "The local bundle is reproducible but the fork commit is not publicly cloneable from the declared Git URL.",
+          "Aleph consumes OpenUrls and LaunchEventsDropped but does not consume the other typed native event variants.",
+          "Rendered OS notification, real click, managed Gateway survival, and current-source passing G7 remain unproven."
+        ],
+        "correction": "The reviewer treated the old pinned-upstream QA-only receipt as describing the current candidate. The detached candidate does mount ShellIntentListener under the existing Router and has separate G4/shared Panel evidence; those findings were corrected in the current report."
+      }
+    }
+  },
+  "latest_fix_verification": {
+    "binary_sha256": "b9449b81720f3bd96dcf2068d02a1864b2815211921eeff325b9456cec75e4cc",
+    "compatibility_tests": "PASS_4_PLUS_1",
+    "smoke": ".phase10-evidence/g7-smoke.c8Qtevds",
+    "g2": ".phase10-evidence/g2-instance-z2h3bwjk",
+    "g4": ".phase10-evidence/g4-routes-ym69e62w",
+    "g6": ".phase10-evidence/g6-actual-x12ms_kv",
+    "g7_matrices": {
+      "first": ".phase10-evidence/g7-matrix.A3YE1RvH/matrix.json",
+      "first_status": "VALID_NOT_ACCEPTED_CLOSE_MEDIAN_RATIO_1.1102437211",
+      "second": ".phase10-evidence/g7-matrix.SoTpwvnC/matrix.json",
+      "second_status": "VALID_NOT_ACCEPTED_CLOSE_MEDIAN_RATIO_1.1879548926_CLOSE_P95_RATIO_1.4144814030",
+      "combined": false
+    },
+    "event_semantics": "OpenChat uses a watch counter and coalesces the idempotent navigation intent; secondary ACK uses watch Sender::send(...).is_ok() and therefore rejects a closed receiver; LaunchEventsDropped uses a monotonic watch total and an event-driven async observer, so delayed replay is not limited to a fixed timer window.",
+    "status": "FOCUSED_REGRESSION_PASS_G7_STILL_PENDING"
+  },
+  "final_spec": {
+    "verdict": "BLOCK",
+    "review": ".phase10-evidence/reviews/phase10-spec-final-2026-11-20.md",
+    "sha256": "52aebdac5d25cbf47abcd2cb7e93ededaee4750e9655e0c0f38ac36714e12fe5",
+    "model": "88api/gpt-6.2-astra",
+    "findings": [
+      "G7 current matrices A3YE1RvH and SoTpwvnC are both VALID/NOT_ACCEPTED under unchanged thresholds.",
+      "G5 receipt proves permission default only; no rendered system notification or click-to-Panel evidence.",
+      "NSH 644a31f0 is locally bundle-reproducible but not remotely cloneable from the declared Git URL."
+    ],
+    "quality_started": false
+  },
+  "integration": {
+    "aleph_source_changes":"The detached integration worktree now pins the seven NSH dependencies to 644a31f0 and its Cargo.lock records the same Git revision. The main worktree remains on the original upstream pin; no main manifest or lock change was made.",
+    "source_status": "LOCAL_BUNDLE_REPRODUCIBLE_INTEGRATION_CANDIDATE",
+    "production_ingress": "PANEL_DOCUMENT_BOUND_NAVIGATION_AND_NOTIFICATION_INTENT_IMPLEMENTED_IN_DETACHED_WORKTREE",
+    "native_delivery_spike": "FORK_FIXTURE_PASS_ALEPH_PANEL_SHARED_ASSET_RUN_PASS; LOCAL_G5_PERMISSION_DEFAULT_ONLY",
+    "g7_current_matrix": {
+      "first": ".phase10-evidence/g7-matrix.0a84ZXEp/matrix.json",
+      "first_sha256": "e72f48904000419465cda691ad1072323c6e0aefa3a07afdc754b9ef3642d33d",
+      "first_failure": "close_ms:p95",
+      "second": ".phase10-evidence/g7-matrix.pGXgcTSX/matrix.json",
+      "second_sha256": "9640b18f266ba0b86741c2da862bbc1923c001ecee19886513df35fd08dd200e",
+      "second_failure": "close_ms:median,input_ms:p95",
+      "combined": false
+    },
+    "g1_g7": "SCOPED_G1_G3_G4_G5_G6_AND_PANEL_REGRESSION_EVIDENCE; G5_PERMISSION_DEFAULT_ONLY; G7_NOT_ACCEPTED"
+  },
+  "negative_scope": [
+    "Detached integration Cargo.lock updated only in /Volumes/TBU4/Workspace/aleph-phase10-local",
+    "No absolute-path dependency",
+    "No whole-tree vendoring",
+    "No private NSH module copied into Aleph",
+    "No Phase9 schema or immutable evidence edit",
+    "No production default WASM ingress",
+    "No G1-G7 acceptance claim",
+    "No destructive deletion of historical evidence; stale generated target executables were removed and rebuilt",
+    "No reset, pull, origin/dev operation, or default-handler or notification-permission change"
+  ],
+  "negative_scope_zh": [
+    "仅分离集成工作区 /Volumes/TBU4/Workspace/aleph-phase10-local 更新 Cargo.lock",
+    "未使用绝对路径依赖",
+    "未整树 vendoring",
+    "未把 NSH 私有模块复制进 Aleph",
+    "未修改 Phase9 schema 或 immutable evidence",
+    "未加入生产默认 WASM ingress",
+    "未声称 G1-G7 验收通过",
+    "未删除历史证据；仅删除并重建了会影响当前验证的旧 target 可执行文件",
+    "未执行 reset、pull、origin/dev 操作，也未改变默认处理器或通知权限"
+  ]
+}

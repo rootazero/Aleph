@@ -6,6 +6,8 @@
 //! - Private keys (PEM format)
 //! - Bearer tokens
 
+use std::borrow::Cow;
+
 use regex::Regex;
 
 /// Action to take when a leak is detected.
@@ -18,6 +20,7 @@ pub enum LeakAction {
 }
 
 /// A pattern to detect potential leaked secrets.
+#[derive(Clone)]
 pub(crate) struct LeakPattern {
     /// Human-readable name for this pattern.
     pub name: &'static str,
@@ -73,16 +76,9 @@ impl LeakDetector {
     #[must_use]
     pub fn default_patterns() -> Self {
         let assets = crate::exec::secret_patterns::leak_detector_assets();
-        let patterns = assets
-            .patterns
-            .into_iter()
-            .map(|p| LeakPattern {
-                name: p.name,
-                regex: p.regex,
-                action: p.action,
-            })
-            .collect();
-        Self { patterns }
+        Self {
+            patterns: assets.patterns,
+        }
     }
 
     /// Scan content for leaks (internal implementation).
@@ -124,16 +120,15 @@ impl LeakDetector {
     /// `LeakAction::Redact`, which otherwise has no honoring consumer.
     #[must_use]
     pub fn redact(&self, content: &str) -> String {
-        let mut current = content.to_string();
+        let mut current = Cow::Borrowed(content);
         for pattern in &self.patterns {
             if pattern.action == LeakAction::Redact {
-                current = pattern
-                    .regex
-                    .replace_all(&current, "***REDACTED***")
-                    .into_owned();
+                if let Cow::Owned(redacted) = pattern.regex.replace_all(&current, "***REDACTED***") {
+                    current = Cow::Owned(redacted);
+                }
             }
         }
-        current
+        current.into_owned()
     }
 }
 

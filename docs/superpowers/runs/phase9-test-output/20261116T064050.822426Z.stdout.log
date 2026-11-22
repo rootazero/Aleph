@@ -1,0 +1,6 @@
+
+running 1 test
+test extension::mcp_plugin_tests::a_bare_command_is_counted_and_spawned_from_path ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 22421 filtered out; finished in 0.07s
+

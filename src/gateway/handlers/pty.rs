@@ -8,11 +8,13 @@
 //! `pty.screen` / `pty.exit` topics (subscribe via `events.subscribe` with
 //! pattern `pty.*`).
 //!
-//! [`handle_spawn`] is the one exception: it needs the live `Config` to read
+//! [`handle_spawn_with_source`] is the one exception: its refusal and
+//! configuration decisions live in
+//! [`TerminalCapabilitySource`](crate::capability::tool_adapters::TerminalCapabilitySource),
+//! which owns the live `Config` it was built with and reads
 //! `[policies.terminal]` (the session gate, and the scrollback/session-cap
-//! values), so it takes an `Arc<RwLock<Config>>` and is registered
-//! separately from its siblings — see its own doc, and
-//! `register_pty_handlers` in
+//! values) there; the handler is registered with that source rather than
+//! stateless — see `register_pty_handlers` in
 //! `src/bin/aleph-server/commands/start/builder/handlers/system.rs`.
 //!
 //! ## Operator-only, on BOTH faces
@@ -34,12 +36,197 @@
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use serde::Deserialize;
 use serde_json::json;
+use thiserror::Error;
+use tokio_util::sync::CancellationToken;
+
+use super::super::protocol::{
+    JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS, PERMISSION_DENIED,
+    SERVICE_UNAVAILABLE,
+};
+// Only the handler tests hand this module a config handle; the handlers
+// themselves read the one their `TerminalCapabilitySource` was built with.
+#[cfg(test)]
+use crate::config::Config;
+use crate::gateway::pty;
+use crate::sync_primitives::Arc;
+pub use aleph_protocol::capability::{PtySpawnParams, SpawnParams};
+#[cfg(test)]
 use tokio::sync::RwLock;
 
-use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS};
-use crate::config::Config;
-use crate::gateway::pty::{self, SpawnOptions};
-use crate::sync_primitives::Arc;
+#[cfg(test)]
+type HandlerHandoffHook = (
+    Arc<tokio::sync::Notify>,
+    Arc<tokio::sync::Notify>,
+    Arc<tokio::sync::Notify>,
+);
+
+#[cfg(test)]
+fn handler_handoff_hook() -> &'static std::sync::Mutex<Option<HandlerHandoffHook>> {
+    static HOOK: std::sync::OnceLock<std::sync::Mutex<Option<HandlerHandoffHook>>> =
+        std::sync::OnceLock::new();
+    HOOK.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+#[cfg(test)]
+pub(crate) struct HandlerHandoffGuard;
+
+#[cfg(test)]
+impl Drop for HandlerHandoffGuard {
+    fn drop(&mut self) {
+        *handler_handoff_hook()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = None;
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn install_handler_handoff_hook() -> (
+    HandlerHandoffGuard,
+    Arc<tokio::sync::Notify>,
+    Arc<tokio::sync::Notify>,
+    Arc<tokio::sync::Notify>,
+) {
+    let hook = (
+        Arc::new(tokio::sync::Notify::new()),
+        Arc::new(tokio::sync::Notify::new()),
+        Arc::new(tokio::sync::Notify::new()),
+    );
+    *handler_handoff_hook()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = Some(hook.clone());
+    (HandlerHandoffGuard, hook.0, hook.1, hook.2)
+}
+
+#[cfg(test)]
+async fn wait_for_handler_handoff() {
+    let hook = handler_handoff_hook()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .clone();
+    if let Some((captured, release, _)) = hook {
+        captured.notify_one();
+        release.notified().await;
+    }
+}
+
+#[cfg(test)]
+fn observe_stale_provider(
+    result: &Result<
+        serde_json::Value,
+        crate::capability::special_dispatch::CapabilityInvocationError,
+    >,
+) {
+    if matches!(
+        result,
+        Err(
+            crate::capability::special_dispatch::CapabilityInvocationError::Resolve(
+                crate::capability::facade::ResolveError::StaleProvider,
+            )
+        )
+    ) {
+        if let Some((_, _, stale)) = handler_handoff_hook()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+        {
+            stale.notify_one();
+        }
+    }
+}
+
+/// Typed domain failures for all owned terminal operations.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum PtyCapabilityError {
+    #[error("terminal session was not found")]
+    NotFound,
+    #[error("terminal provider is unavailable")]
+    Unavailable,
+    #[error("invalid terminal input: {0}")]
+    InvalidInput(String),
+    #[error("terminal I/O failed: {0}")]
+    Io(String),
+}
+
+/// The only capture a terminal operation may carry across an async boundary.
+/// The session id and provider generation are private so callers cannot mint a
+/// lease from wire data or reuse a prior provider incarnation.
+#[derive(Clone)]
+pub(crate) struct OwnedPtySession {
+    session_id: String,
+    provider_generation: u64,
+    provider: crate::capability::provider::ProviderHandle,
+    source: Option<Arc<crate::capability::tool_adapters::TerminalCapabilitySource>>,
+}
+
+impl OwnedPtySession {
+    pub(crate) fn generation(&self) -> u64 {
+        self.provider_generation
+    }
+
+    pub(crate) fn session_id(&self) -> &str {
+        &self.session_id
+    }
+
+    pub(crate) fn provider_matches(
+        &self,
+        provider: &crate::capability::provider::ProviderHandle,
+        generation: u64,
+    ) -> bool {
+        self.provider.same_instance(provider) && self.provider_generation == generation
+    }
+
+    pub(crate) fn source(
+        &self,
+    ) -> Option<Arc<crate::capability::tool_adapters::TerminalCapabilitySource>> {
+        self.source.clone()
+    }
+
+    pub(crate) fn with_source(
+        mut self,
+        source: Arc<crate::capability::tool_adapters::TerminalCapabilitySource>,
+    ) -> Self {
+        self.source = Some(source);
+        self
+    }
+}
+
+/// Test-only explicit source injection; production authorization resolves the
+/// active manager source through `require_owned_session`.
+#[cfg(test)]
+pub(crate) fn require_owned_session_with_source(
+    session_id: &str,
+    source: &Arc<crate::capability::tool_adapters::TerminalCapabilitySource>,
+) -> Result<OwnedPtySession, PtyCapabilityError> {
+    let mut owned = require_owned_session(session_id)?;
+    owned.source = Some(Arc::clone(source));
+    Ok(owned)
+}
+
+pub(crate) fn require_owned_session(
+    session_id: &str,
+) -> Result<OwnedPtySession, PtyCapabilityError> {
+    if session_id.trim().is_empty() {
+        return Err(PtyCapabilityError::InvalidInput(
+            "session_id must not be empty".into(),
+        ));
+    }
+    let actor = crate::capability::special_dispatch::DOMAIN_TOOL_CALL
+        .try_with(|call| call.owner_actor.clone())
+        .unwrap_or_else(|_| crate::gateway::visibility::ambient_actor());
+    let manager = pty::try_manager().ok_or(PtyCapabilityError::Unavailable)?;
+    if !manager.owner_of(session_id).admits(actor.as_deref()) {
+        return Err(PtyCapabilityError::NotFound);
+    }
+    let provider_generation = manager
+        .ready_generation()
+        .map_err(|_| PtyCapabilityError::Unavailable)?;
+    Ok(OwnedPtySession {
+        session_id: session_id.to_owned(),
+        provider_generation,
+        provider: manager.provider_handle(),
+        source: manager.capability_source(),
+    })
+}
 
 /// The largest terminal geometry `pty.spawn` / `pty.resize` will accept, per
 /// axis.
@@ -79,7 +266,7 @@ pub const MAX_TERMINAL_DIMENSION: u16 = 1000;
 /// admitted on purpose — it is the wire's "unset", which `PtySession::spawn`
 /// substitutes 24/80 for and `note_viewport` raises with `.max(1)`; refusing
 /// it here would break every client that omits the fields.
-fn check_dimensions(rows: u16, cols: u16) -> Result<(), String> {
+pub(crate) fn check_dimensions(rows: u16, cols: u16) -> Result<(), String> {
     if rows > MAX_TERMINAL_DIMENSION || cols > MAX_TERMINAL_DIMENSION {
         return Err(format!(
             "terminal geometry {rows}x{cols} exceeds the maximum of \
@@ -89,22 +276,17 @@ fn check_dimensions(rows: u16, cols: u16) -> Result<(), String> {
     Ok(())
 }
 
-#[derive(Debug, Default, Deserialize)]
-pub struct SpawnParams {
-    #[serde(default)]
-    pub command: Option<String>,
-    #[serde(default)]
-    pub args: Vec<String>,
-    #[serde(default)]
-    pub cwd: Option<String>,
-    /// Extra env vars layered on the inherited environment.
-    #[serde(default)]
-    pub env: std::collections::HashMap<String, String>,
-    #[serde(default)]
-    pub rows: u16,
-    #[serde(default)]
-    pub cols: u16,
-}
+/// What a caller sees when `[policies.terminal] enabled = false`.
+///
+/// The gate itself is enforced in `TerminalCapabilitySource::invoke_spawn`
+/// (`crate::capability::tool_adapters`), and this text travels with the refusal
+/// from there: a refusal that only says "unavailable" leaves the operator with
+/// no lever, while the setting that turns the feature back on is one line away
+/// in `config.toml`. Kept here next to the other `pty` wire texts so the gate
+/// and its explanation have one owner.
+pub(crate) const TERMINAL_DISABLED_HINT: &str =
+    "the embedded terminal is disabled: set `[policies.terminal] enabled = true` \
+     in config.toml to turn it on";
 
 #[derive(Debug, Deserialize)]
 pub struct InputParams {
@@ -136,121 +318,268 @@ pub struct AttachParams {
 
 /// `pty.spawn` — open a new terminal session, returning its id.
 ///
-/// `config` is read exactly once, into `cfg` below, and every downstream
-/// decision in this call — the `[policies.terminal] enabled` gate, the
-/// workspace-root jail, and the `scrollback_lines`/`max_sessions` values
-/// handed to the manager — comes from that one snapshot. Two `Config`
-/// answers three lines apart (one live, one re-read from disk) is exactly
-/// how a live-patched `enabled = false` and a stale on-disk workspace root
-/// could disagree within a single spawn; see `jail.rs`'s module doc on why a
+/// Every decision behind this call — the `[policies.terminal] enabled` gate,
+/// the workspace-root jail, and the `scrollback_lines`/`max_sessions` values
+/// handed to the manager — is made in `TerminalCapabilitySource::invoke_spawn`,
+/// against the single live `Config` the `source` was built with. This handler
+/// is the transport edge only: it parses, binds the manager to the same
+/// source, and maps the typed refusal onto JSON-RPC. Two `Config` answers
+/// three lines apart (one live, one re-read from disk) would be exactly how a
+/// live-patched `enabled = false` and a stale on-disk workspace root could
+/// disagree within a single spawn; see `jail.rs`'s module doc on why a
 /// fallback that answers a different question than the one asked is a lie,
 /// not a default.
-pub async fn handle_spawn(request: JsonRpcRequest, config: Arc<RwLock<Config>>) -> JsonRpcResponse {
+pub async fn handle_spawn_with_source(
+    request: JsonRpcRequest,
+    source: Arc<crate::capability::tool_adapters::TerminalCapabilitySource>,
+) -> JsonRpcResponse {
     let id = request.id.clone();
     let params: SpawnParams = match &request.params {
-        Some(p) => match serde_json::from_value(p.clone()) {
-            Ok(v) => v,
-            Err(e) => {
-                return JsonRpcResponse::error(id, INVALID_PARAMS, format!("invalid params: {e}"))
+        Some(params) => match serde_json::from_value(params.clone()) {
+            Ok(value) => value,
+            Err(error) => {
+                return JsonRpcResponse::error(
+                    id,
+                    INVALID_PARAMS,
+                    format!("invalid params: {error}"),
+                );
             }
         },
-        // Empty params → default shell.
         None => SpawnParams::default(),
     };
-
-    // Before the config read and before any allocation: a geometry this large
-    // is refused on the cheapest possible path, and the refusal does not
-    // depend on any policy being loaded.
-    if let Err(e) = check_dimensions(params.rows, params.cols) {
-        return JsonRpcResponse::error(id, INVALID_PARAMS, e);
-    }
-
-    // Read fresh on every spawn (not cached at boot) so a `[policies.terminal]`
-    // patch — the gate below, or a workspace root registered after
-    // start-up — is usable on the very next call.
-    let cfg = config.read().await;
-    if !cfg.policies.terminal.enabled {
-        return JsonRpcResponse::error(
-            id,
-            INVALID_PARAMS,
-            "the embedded terminal is disabled: set `[policies.terminal] enabled = true` \
-             in config.toml to turn it on"
-                .to_string(),
-        );
-    }
-    let roots = pty::workspace_roots(&cfg.agents.defaults);
-    // Named-type binding, not field inference: `TerminalConfig` is the handle
-    // by which the wiring audit (`scripts/config_wiring_audit.py`) can see
-    // that `[policies.terminal]` has a consumer outside src/config/.
-    let terminal: crate::config::types::policies::TerminalConfig = cfg.policies.terminal.clone();
-    let generation = match pty::try_manager().and_then(|manager| manager.ready_generation().ok()) {
-        Some(generation) => generation,
-        None => {
-            return JsonRpcResponse::error(id, INVALID_PARAMS, "terminal provider is not ready")
+    if let Some(manager) = pty::try_manager() {
+        if let Err(error) = manager.bind_capability_source(Arc::downgrade(&source)) {
+            return JsonRpcResponse::error(id, INVALID_PARAMS, error.to_string());
         }
-    };
-    drop(cfg); // The captured generation is checked again at the effect boundary.
-
-    // The client's cwd is a request, not an authorisation: resolve it
-    // against the operator-registered workspace roots before it ever reaches
-    // the child process.
-    let cwd = match pty::jail::resolve_spawn_cwd(params.cwd.as_deref(), &roots) {
-        Ok(p) => p,
-        Err(e) => return JsonRpcResponse::error(id, INVALID_PARAMS, e),
-    };
-
-    let actor = crate::gateway::visibility::ambient_actor();
-    let opts = SpawnOptions {
-        command: params.command,
-        args: params.args,
-        // Converted only now, at the boundary where the canonical path
-        // leaves our own comparison logic and is handed to `portable_pty`'s
-        // `CommandBuilder` for the OS to consume directly — never inside the
-        // jail's `starts_with` check itself (`jail::canonical`'s doc). On
-        // Windows this strips the `\\?\` extended-length prefix that
-        // `std::fs::canonicalize` returns, which legacy shells (`cmd.exe`)
-        // are known to mishandle as a working directory.
-        cwd: Some(crate::utils::paths::display_string(&cwd)),
-        env: params.env.into_iter().collect(),
-        rows: params.rows,
-        cols: params.cols,
-        // Carried in the options rather than applied afterwards — see
-        // `SpawnOptions::scrollback_lines` for the race a post-hoc setter opens.
-        scrollback_lines: Some(terminal.scrollback_lines as usize),
-        created_by: actor.clone(),
-    };
-
-    pty::manager().set_max_sessions(terminal.max_sessions);
-    match pty::manager().spawn_at(generation, &opts) {
-        Ok(res) => {
-            // The session is already registered by the time `spawn` returns
-            // (manager.rs inserts under the same lock it builds the result
-            // from), so this snapshot is real, not a guess — but fall back to
-            // the requested dimensions if it somehow can't be found, rather
-            // than failing a spawn that already succeeded.
-            let snapshot = pty::manager()
-                .attach_snapshot_at(generation, &res.session_id)
-                .unwrap_or_else(|_| aleph_protocol::pty::PtyAttachResponse {
-                    seq: 0,
-                    rows: if params.rows == 0 { 24 } else { params.rows },
-                    cols: if params.cols == 0 { 80 } else { params.cols },
-                    patch: aleph_protocol::pty::PtyScreenPatch::default(),
-                    scrollback_len: 0,
-                });
-            let body = aleph_protocol::pty::PtySpawnResponse {
-                session_id: res.session_id,
-                shell: res.shell,
-                seq: snapshot.seq,
-                rows: snapshot.rows,
-                cols: snapshot.cols,
-            };
-            match serde_json::to_value(&body) {
-                Ok(v) => JsonRpcResponse::success(id, v),
-                Err(e) => JsonRpcResponse::error(id, INVALID_PARAMS, format!("encode failed: {e}")),
-            }
-        }
-        Err(e) => JsonRpcResponse::error(id, INVALID_PARAMS, e),
     }
+    gateway_response(
+        id.clone(),
+        source
+            .invoke_legacy_gateway(
+                aleph_protocol::capability::PtyToolParams::Spawn { params },
+                format!(
+                    "pty.spawn:{}",
+                    id.as_ref()
+                        .map(ToString::to_string)
+                        .unwrap_or_else(|| "notification".into())
+                ),
+                CancellationToken::new(),
+                None,
+            )
+            .await,
+    )
+}
+
+fn gateway_response(
+    id: Option<serde_json::Value>,
+    result: Result<
+        serde_json::Value,
+        crate::capability::special_dispatch::CapabilityInvocationError,
+    >,
+) -> JsonRpcResponse {
+    use crate::capability::special::CapabilityDispatchError;
+    use crate::capability::special_dispatch::CapabilityInvocationError;
+    match result {
+        Ok(value) => JsonRpcResponse::success(id, value),
+        Err(CapabilityInvocationError::Policy(error)) => {
+            JsonRpcResponse::error(id, PERMISSION_DENIED, error.to_string())
+        }
+        // Unavailability that names its own remedy ("the embedded terminal is
+        // disabled: set `[policies.terminal] enabled = true` …") keeps the
+        // service-unavailable class — the client's retry/disable handling is
+        // still right — but not the opaque literal: a refusal the operator can
+        // act on has to say what to act on.
+        Err(CapabilityInvocationError::Handler(CapabilityDispatchError::UnavailableReason(
+            message,
+        ))) => JsonRpcResponse::error(id, SERVICE_UNAVAILABLE, message),
+        Err(CapabilityInvocationError::Unavailable)
+        | Err(CapabilityInvocationError::Resolve(_))
+        | Err(CapabilityInvocationError::Cancelled) => {
+            JsonRpcResponse::error(id, SERVICE_UNAVAILABLE, "terminal capability unavailable")
+        }
+        // A request this call refuses on its own terms — an out-of-jail cwd, a
+        // geometry past the allocation ceiling — is the caller's to correct,
+        // and the reason is the useful part: collapse it into INTERNAL_ERROR
+        // and the client learns only that the server broke.
+        Err(CapabilityInvocationError::Handler(CapabilityDispatchError::InvalidInput(message))) => {
+            JsonRpcResponse::error(id, INVALID_PARAMS, message)
+        }
+        Err(CapabilityInvocationError::Handler(CapabilityDispatchError::NotFound(_))) => {
+            JsonRpcResponse::error(id, INVALID_PARAMS, "terminal session was not found")
+        }
+        Err(CapabilityInvocationError::Handler(error)) => {
+            JsonRpcResponse::error(id, INTERNAL_ERROR, error.to_string())
+        }
+    }
+}
+
+pub async fn handle_input_with_source(
+    request: JsonRpcRequest,
+    source: Arc<crate::capability::tool_adapters::TerminalCapabilitySource>,
+) -> JsonRpcResponse {
+    let id = request.id.clone();
+    let params: InputParams = match parse(&request) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let owned = match require_owned_session(&params.session_id)
+        .map(|owned| owned.with_source(Arc::clone(&source)))
+    {
+        Ok(owned) => owned,
+        Err(error) => return JsonRpcResponse::error(id, INVALID_PARAMS, error.to_string()),
+    };
+    gateway_response(
+        id.clone(),
+        source
+            .invoke_legacy_gateway(
+                aleph_protocol::capability::PtyToolParams::Input {
+                    session_id: params.session_id,
+                    data: params.data,
+                    base64: params.base64,
+                },
+                format!(
+                    "pty.input:{}",
+                    id.as_ref()
+                        .map(ToString::to_string)
+                        .unwrap_or_else(|| "notification".into())
+                ),
+                CancellationToken::new(),
+                Some(owned),
+            )
+            .await,
+    )
+}
+
+pub async fn handle_attach_with_source(
+    request: JsonRpcRequest,
+    source: Arc<crate::capability::tool_adapters::TerminalCapabilitySource>,
+) -> JsonRpcResponse {
+    let id = request.id.clone();
+    let params: AttachParams = match parse(&request) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let owned = match require_owned_session(&params.session_id)
+        .map(|owned| owned.with_source(Arc::clone(&source)))
+    {
+        Ok(owned) => owned,
+        Err(error) => return JsonRpcResponse::error(id, INVALID_PARAMS, error.to_string()),
+    };
+    #[cfg(test)]
+    wait_for_handler_handoff().await;
+    let result = source
+        .invoke_legacy_gateway(
+            aleph_protocol::capability::PtyToolParams::Attach {
+                session_id: params.session_id,
+            },
+            format!(
+                "pty.attach:{}",
+                id.as_ref()
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| "notification".into())
+            ),
+            CancellationToken::new(),
+            Some(owned),
+        )
+        .await;
+    #[cfg(test)]
+    observe_stale_provider(&result);
+    gateway_response(id, result)
+}
+
+pub async fn handle_resize_with_source(
+    request: JsonRpcRequest,
+    source: Arc<crate::capability::tool_adapters::TerminalCapabilitySource>,
+) -> JsonRpcResponse {
+    let id = request.id.clone();
+    let params: ResizeParams = match parse(&request) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let owned = match require_owned_session(&params.session_id)
+        .map(|owned| owned.with_source(Arc::clone(&source)))
+    {
+        Ok(owned) => owned,
+        Err(error) => return JsonRpcResponse::error(id, INVALID_PARAMS, error.to_string()),
+    };
+    gateway_response(
+        id.clone(),
+        source
+            .invoke_legacy_gateway(
+                aleph_protocol::capability::PtyToolParams::Resize {
+                    session_id: params.session_id,
+                    rows: params.rows,
+                    cols: params.cols,
+                },
+                format!(
+                    "pty.resize:{}",
+                    id.as_ref()
+                        .map(ToString::to_string)
+                        .unwrap_or_else(|| "notification".into())
+                ),
+                CancellationToken::new(),
+                Some(owned),
+            )
+            .await,
+    )
+}
+
+pub async fn handle_close_with_source(
+    request: JsonRpcRequest,
+    source: Arc<crate::capability::tool_adapters::TerminalCapabilitySource>,
+) -> JsonRpcResponse {
+    let id = request.id.clone();
+    let params: CloseParams = match parse(&request) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let owned = match require_owned_session(&params.session_id)
+        .map(|owned| owned.with_source(Arc::clone(&source)))
+    {
+        Ok(owned) => owned,
+        Err(error) => return JsonRpcResponse::error(id, INVALID_PARAMS, error.to_string()),
+    };
+    gateway_response(
+        id.clone(),
+        source
+            .invoke_legacy_gateway(
+                aleph_protocol::capability::PtyToolParams::Close {
+                    session_id: params.session_id,
+                },
+                format!(
+                    "pty.close:{}",
+                    id.as_ref()
+                        .map(ToString::to_string)
+                        .unwrap_or_else(|| "notification".into())
+                ),
+                CancellationToken::new(),
+                Some(owned),
+            )
+            .await,
+    )
+}
+
+pub async fn handle_list_with_source(
+    request: JsonRpcRequest,
+    source: Arc<crate::capability::tool_adapters::TerminalCapabilitySource>,
+) -> JsonRpcResponse {
+    let id = request.id;
+    gateway_response(
+        id.clone(),
+        source
+            .invoke_legacy_gateway(
+                aleph_protocol::capability::PtyToolParams::List {},
+                format!(
+                    "pty.list:{}",
+                    id.as_ref()
+                        .map(ToString::to_string)
+                        .unwrap_or_else(|| "notification".into())
+                ),
+                CancellationToken::new(),
+                None,
+            )
+            .await,
+    )
 }
 
 /// `pty.attach` — one snapshot of a session's screen plus the seq it was
@@ -406,8 +735,8 @@ pub async fn handle_list(request: JsonRpcRequest) -> JsonRpcResponse {
             .map(aleph_protocol::pty::PtySessionInfo::from)
             .collect(),
     };
-    // Same encode-or-report shape as `handle_spawn` and `handle_attach`: a
-    // handler must return a response, not panic (P7).
+    // Same encode-or-report shape as `handle_spawn_with_source` and
+    // `handle_attach`: a handler must return a response, not panic (P7).
     match serde_json::to_value(&body) {
         Ok(v) => JsonRpcResponse::success(id, v),
         Err(e) => JsonRpcResponse::error(id, INVALID_PARAMS, format!("encode failed: {e}")),
@@ -454,24 +783,21 @@ pub async fn handle_list(request: JsonRpcRequest) -> JsonRpcResponse {
 #[allow(clippy::result_large_err)]
 fn require_owned(request: &JsonRpcRequest, session_id: &str) -> Result<u64, JsonRpcResponse> {
     let actor = crate::gateway::visibility::ambient_actor();
+    if let Ok(owned) = require_owned_session(session_id) {
+        return Ok(owned.generation());
+    }
+
+    // Preserve the historical tombstone response for a session that belonged
+    // to this caller but was lost with a previous daemon. Foreign/unknown and
+    // provider-unavailable cases intentionally share the normal no-such oracle.
     let owner = pty::try_manager()
         .map(|manager| manager.owner_of(session_id))
         .unwrap_or(pty::SessionOwner::Unknown);
-    if owner.admits(actor.as_deref()) {
-        if let Some(generation) =
-            pty::try_manager().and_then(|manager| manager.ready_generation().ok())
-        {
-            return Ok(generation);
-        }
-    }
     if matches!(owner, pty::SessionOwner::Unknown) {
         if let Some(job) = crate::builtin_tools::process_journal::lookup_pty(session_id) {
             if pty::owner_admits(Some(job.record.owner.as_str()), actor.as_deref()) {
                 if let Some(report) = crate::builtin_tools::process_journal::tombstone_report(&job)
                 {
-                    // `text_with_output`: an error message has no slot for
-                    // the recorded output, so the clause rides the prose —
-                    // the same composition the terminal tool renders.
                     return Err(JsonRpcResponse::error(
                         request.id.clone(),
                         INVALID_PARAMS,
@@ -533,7 +859,7 @@ mod tests {
     /// sibling happened to be swapping that variable at the same instant.
     /// Measured: `cargo test -p alephcore --lib` intermittently failed two
     /// of this file's own tests on that exact symptom (two different
-    /// resolved roots, one per test) before `handle_spawn` took its config
+    /// resolved roots, one per test) before the spawn path took its config
     /// as a parameter instead of loading it itself (Task 12).
     ///
     /// The caller must keep the returned `TempDir` alive for as long as the
@@ -544,6 +870,60 @@ mod tests {
         let mut cfg = Config::default();
         cfg.agents.defaults.workspace_root = Some(dir.path().to_path_buf());
         (Arc::new(RwLock::new(cfg)), dir)
+    }
+
+    /// Drive `pty.spawn` through the live capability path, without a mounted
+    /// facade.
+    ///
+    /// Production reaches
+    /// [`TerminalCapabilitySource::invoke_tool_params`] through `ZahirFacade`,
+    /// which admits the call first; admission is covered end to end in
+    /// `gateway::capability_terminal_tests`. What the tests here need is the
+    /// body behind that admission — the `[policies.terminal] enabled` gate, the
+    /// workspace-root jail, and the `SpawnOptions` stamping — which is that one
+    /// function, driven with the same `Config` the boot wiring hands the
+    /// source.
+    ///
+    /// The source is deliberately NOT bound to the process-global manager:
+    /// binding is process-global and one-shot (`bind_capability_source` refuses
+    /// a second owner), so a per-test source would fence its siblings. An
+    /// unbound source still spawns — it only skips the capability-session
+    /// registration that `capability_terminal_tests` asserts on.
+    async fn spawn_via_capability(
+        request: JsonRpcRequest,
+        config: Arc<RwLock<Config>>,
+    ) -> JsonRpcResponse {
+        let params: SpawnParams = match &request.params {
+            Some(params) => match serde_json::from_value(params.clone()) {
+                Ok(value) => value,
+                Err(error) => {
+                    return JsonRpcResponse::error(
+                        request.id.clone(),
+                        INVALID_PARAMS,
+                        format!("invalid params: {error}"),
+                    )
+                }
+            },
+            None => SpawnParams::default(),
+        };
+        let source = crate::capability::tool_adapters::TerminalCapabilitySource::new(
+            crate::capability::special::CapabilityHandlerRegistry::new(),
+            Arc::new(crate::capability::policy::PolicyEngine::new(
+                crate::capability::ownership::OwnershipTree::new(),
+            )),
+            std::sync::Weak::new(),
+            config,
+        );
+        gateway_response(
+            request.id,
+            source
+                .invoke_tool_params(
+                    aleph_protocol::capability::PtyToolParams::Spawn { params },
+                    CancellationToken::new(),
+                )
+                .await
+                .map_err(crate::capability::special_dispatch::CapabilityInvocationError::Handler),
+        )
     }
 
     /// The geometry ceiling, on the face that reaches the allocation without
@@ -584,7 +964,7 @@ mod tests {
     async fn spawn_refuses_a_geometry_that_would_allocate_the_host() {
         pty::manager::activate_test_provider();
         let (config, _dir) = isolated_config();
-        let resp = handle_spawn(
+        let resp = spawn_via_capability(
             req("pty.spawn", json!({ "rows": 65535, "cols": 65535 })),
             config,
         )
@@ -597,6 +977,40 @@ mod tests {
         assert!(
             resp.result.is_none(),
             "a refused spawn must not return a session"
+        );
+    }
+
+    /// A refused spawn has to say what to fix.
+    ///
+    /// `[policies.terminal] enabled = false` is the one refusal an operator can
+    /// clear from `config.toml` in a single line, so it must not arrive as the
+    /// opaque "terminal capability unavailable" literal: that leaves the
+    /// caller with a switch that looks broken and no lever. Checked on the live
+    /// path (the same `invoke_spawn` the facade dispatches into) and with the
+    /// HTTP/JSON-RPC error class the client already treats as "this surface is
+    /// off" rather than "retry".
+    #[tokio::test]
+    #[serial_test::parallel(pty_global_manager)]
+    async fn a_disabled_terminal_spawn_names_the_config_key() {
+        pty::manager::activate_test_provider();
+        let (config, _dir) = isolated_config();
+        config.write().await.policies.terminal.enabled = false;
+        let resp = spawn_via_capability(req("pty.spawn", json!({})), config).await;
+        let err = resp
+            .error
+            .expect("a disabled terminal must refuse the spawn");
+        assert_eq!(
+            err.code, SERVICE_UNAVAILABLE,
+            "a disabled surface is unavailable, not a malformed request"
+        );
+        assert!(
+            err.message.contains("[policies.terminal]") && err.message.contains("enabled = true"),
+            "the refusal must name the setting that turns the feature back on: {}",
+            err.message
+        );
+        assert!(
+            resp.result.is_none(),
+            "a refused spawn must not report success"
         );
     }
 
@@ -696,7 +1110,8 @@ mod tests {
     async fn list_response_is_built_from_the_protocol_type() {
         pty::manager::activate_test_provider();
         let (config, _tmp) = isolated_config();
-        let spawn = handle_spawn(req("pty.spawn", json!({ "rows": 6, "cols": 20 })), config).await;
+        let spawn =
+            spawn_via_capability(req("pty.spawn", json!({ "rows": 6, "cols": 20 })), config).await;
         let sid = spawn.result.as_ref().expect("spawned")["session_id"]
             .as_str()
             .expect("session_id")
@@ -751,7 +1166,8 @@ mod tests {
     async fn attach_returns_a_snapshot_with_its_seq() {
         pty::manager::activate_test_provider();
         let (config, _tmp) = isolated_config();
-        let spawn = handle_spawn(req("pty.spawn", json!({ "rows": 8, "cols": 30 })), config).await;
+        let spawn =
+            spawn_via_capability(req("pty.spawn", json!({ "rows": 8, "cols": 30 })), config).await;
         let sid = spawn.result.as_ref().expect("spawned")["session_id"]
             .as_str()
             .expect("session_id")
@@ -805,7 +1221,8 @@ mod tests {
     async fn resize_without_conn_id_is_refused_not_applied() {
         pty::manager::activate_test_provider();
         let (config, _tmp) = isolated_config();
-        let spawn = handle_spawn(req("pty.spawn", json!({ "rows": 24, "cols": 80 })), config).await;
+        let spawn =
+            spawn_via_capability(req("pty.spawn", json!({ "rows": 24, "cols": 80 })), config).await;
         let sid = spawn.result.as_ref().expect("spawned")["session_id"]
             .as_str()
             .expect("session_id")
@@ -835,7 +1252,8 @@ mod tests {
         pty::manager::activate_test_provider();
         let (config, _tmp) = isolated_config();
         let spawn =
-            handle_spawn(req("pty.spawn", json!({ "rows": 40, "cols": 120 })), config).await;
+            spawn_via_capability(req("pty.spawn", json!({ "rows": 40, "cols": 120 })), config)
+                .await;
         let sid = spawn.result.as_ref().expect("spawned")["session_id"]
             .as_str()
             .expect("session_id")
@@ -868,7 +1286,8 @@ mod tests {
         pty::manager::activate_test_provider();
         let (config, _tmp) = isolated_config();
         let spawn =
-            handle_spawn(req("pty.spawn", json!({ "rows": 40, "cols": 120 })), config).await;
+            spawn_via_capability(req("pty.spawn", json!({ "rows": 40, "cols": 120 })), config)
+                .await;
         let sid = spawn.result.as_ref().expect("spawned")["session_id"]
             .as_str()
             .expect("session_id")
@@ -920,7 +1339,8 @@ mod tests {
     async fn spawn_response_matches_the_contract_key_for_key() {
         pty::manager::activate_test_provider();
         let (config, _tmp) = isolated_config();
-        let resp = handle_spawn(req("pty.spawn", json!({ "rows": 4, "cols": 12 })), config).await;
+        let resp =
+            spawn_via_capability(req("pty.spawn", json!({ "rows": 4, "cols": 12 })), config).await;
         let value = resp.result.expect("spawned");
         let keys: std::collections::BTreeSet<&str> = value
             .as_object()
@@ -1043,7 +1463,7 @@ mod tests {
         // not two"), and no configured or defaulted workspace root is the
         // filesystem root itself.
         let (config, _tmp) = isolated_config();
-        let resp = handle_spawn(
+        let resp = spawn_via_capability(
             req(
                 "pty.spawn",
                 json!({
@@ -1088,7 +1508,7 @@ mod tests {
     /// The security-relevant claim is not "the handler returns a session
     /// id" — it is "the process the OS actually execs inherits the
     /// *jailed* cwd, not whatever the client asked for verbatim". A
-    /// response-only assertion would pass unchanged if `handle_spawn`
+    /// response-only assertion would pass unchanged if the spawn path
     /// resolved the jail and then spawned with `params.cwd` anyway. So
     /// this asks the real child process what its own cwd is, over the real
     /// PTY screen — the same idiom
@@ -1132,10 +1552,11 @@ mod tests {
     /// and this test would go green with the jail bypassed. The guard
     /// below turns that into a loud failure instead of a silent pass.
     ///
-    /// Task 12 gave `handle_spawn` a real config-injection point: an
-    /// `Arc<RwLock<Config>>` parameter, read once inside the handler. This
-    /// test uses it via `isolated_config()`, deriving `expected` from the
-    /// exact same config handle passed to `handle_spawn` — not from
+    /// Task 12 gave the spawn path a real config-injection point: the
+    /// `Arc<RwLock<Config>>` the `TerminalCapabilitySource` is built with,
+    /// read once inside `invoke_spawn`. This test uses it via
+    /// `isolated_config()`, deriving `expected` from the exact same config
+    /// handle passed to `spawn_via_capability` — not from
     /// `Config::load()`/`ALEPH_HOME`, which is process-global and was
     /// racing every sibling test in this binary that isolates its own
     /// `ALEPH_HOME` (see `isolated_config`'s doc; that race was the "two
@@ -1143,7 +1564,7 @@ mod tests {
     /// injecting config instead of loading it inside the handler). The
     /// only workspace root this test relies on is whatever
     /// `workspace_roots()` resolves against that one owned config — the
-    /// exact function, and the exact config, `handle_spawn` itself
+    /// exact function, and the exact config, the live spawn path
     /// resolves against — with the guard below covering the one case (an
     /// owned tempdir root that happens to be a substring of `$HOME`) that
     /// would make this an insufficient discriminator on its own.
@@ -1239,7 +1660,7 @@ mod tests {
         };
         // Deliberately no `cwd` field at all — the omitted-cwd request the
         // jail must resolve to the first registered root.
-        let spawn = handle_spawn(
+        let spawn = spawn_via_capability(
             req(
                 "pty.spawn",
                 json!({ "command": command, "args": args, "rows": 24, "cols": 240 }),
@@ -1291,15 +1712,15 @@ mod tests {
         );
     }
 
-    /// The handler is the only place both fields have to be filled in, and it
-    /// is the one place neither task's own test looks: Task 12's constructs
+    /// The spawn path is the only place both fields have to be filled in, and
+    /// it is the one place neither task's own test looks: Task 12's constructs
     /// `SpawnOptions` by hand and asserts the scrollback field reaches the
     /// grid; a `created_by` test of the same shape would assert the same
-    /// thing about the other field. A `handle_spawn` that filled exactly one
+    /// thing about the other field. A spawn path that filled exactly one
     /// of them passes both.
     #[tokio::test]
     #[serial_test::parallel(pty_global_manager)]
-    async fn a_spawn_through_the_handler_carries_both_the_actor_and_the_scrollback() {
+    async fn a_spawn_carries_both_the_actor_and_the_scrollback() {
         pty::manager::activate_test_provider();
         let (config, _tmp) = isolated_config();
         config.write().await.policies.terminal.scrollback_lines = 7;
@@ -1307,7 +1728,7 @@ mod tests {
         let resp = crate::gateway::caller_identity::CALLER_USER
             .scope(
                 Some("u-alice".to_string()),
-                handle_spawn(req("pty.spawn", json!({})), config),
+                spawn_via_capability(req("pty.spawn", json!({})), config),
             )
             .await;
         let sid = resp.result.as_ref().expect("spawn should succeed")["session_id"]
@@ -1353,7 +1774,7 @@ mod tests {
         let spawn = crate::gateway::caller_identity::CALLER_USER
             .scope(
                 Some("u-alice".to_string()),
-                handle_spawn(req("pty.spawn", json!({})), config),
+                spawn_via_capability(req("pty.spawn", json!({})), config),
             )
             .await;
         let sid = spawn.result.as_ref().expect("spawned")["session_id"]
@@ -1530,7 +1951,7 @@ mod tests {
     /// by someone who read the four and copied the shape without the check.
     /// So the question asked is "does this handler body reach for
     /// `params.session_id`", which is exactly what makes a handler addressed;
-    /// `handle_spawn` mints an id rather than accepting one and is excluded
+    /// `pty.spawn` mints an id rather than accepting one and is excluded
     /// by the same rule that includes the others, not by an exemption.
     ///
     /// [`code_text`](crate::utils::source_scan::code_text) over the
@@ -1541,7 +1962,7 @@ mod tests {
     fn every_addressed_pty_handler_checks_ownership() {
         use crate::utils::source_scan::{code_text, production_prefix};
 
-        const GATE: &str = "require_owned(";
+        const GATES: &[&str] = &["require_owned(", "require_owned_session("];
         const ADDRESSED: &str = "params.session_id";
 
         let src = std::fs::read_to_string(
@@ -1573,7 +1994,7 @@ mod tests {
             let body = lines[i..=end].join("\n");
             if body.contains(ADDRESSED) {
                 addressed.push(name.clone());
-                if !body.contains(GATE) {
+                if !GATES.iter().any(|gate| body.contains(gate)) {
                     ungated.push(name);
                 }
             }
@@ -1583,7 +2004,7 @@ mod tests {
         assert!(
             ungated.is_empty(),
             "these `pty.*` handlers address a caller-supplied session id without \
-             passing `{GATE}`. Every face of the ownership rule has to carry it: \
+             passing a typed ownership gate (`require_owned` or `require_owned_session`). Every face of the ownership rule has to carry it: \
              a session hidden from `pty.list` is still reachable by id.\n  {}",
             ungated.join("\n  ")
         );
@@ -1609,7 +2030,8 @@ mod tests {
     async fn terminal_capability_pty_attach_rpc_calls_terminal_runtime_attach() {
         pty::manager::activate_test_provider();
         let (config, _tmp) = isolated_config();
-        let spawn = handle_spawn(req("pty.spawn", json!({ "rows": 6, "cols": 40 })), config).await;
+        let spawn =
+            spawn_via_capability(req("pty.spawn", json!({ "rows": 6, "cols": 40 })), config).await;
         let spawned = spawn.result.as_ref().expect("spawned");
         let sid = spawned["session_id"]
             .as_str()

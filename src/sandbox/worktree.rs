@@ -384,13 +384,7 @@ impl crate::sandbox::Sandbox for WorktreeSandbox {
         )
         .await;
 
-        let exec = match result {
-            Ok(out) => out,
-            Err(crate::sandbox::SandboxError::Timeout { .. }) => return result,
-            Err(e) => return Err(e),
-        };
-
-        let mut out = exec;
+        let mut out = result?;
 
         // Same output content floor as WorkspaceSandbox (single source of truth):
         // redact secrets, strip invisible/bidi controls, and fail closed on

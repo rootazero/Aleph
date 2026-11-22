@@ -609,6 +609,35 @@ impl ShellHookConsent {
             .is_some()
     }
 
+    /// Whether the script `command` invokes is named by a path relative to
+    /// the hook's root, and `cwd` is not that root — so the bytes that run
+    /// are not the ones the approval was given for.
+    ///
+    /// An absolute path, a `~/` path and a path written through a known
+    /// variable (`${CLAUDE_PLUGIN_ROOT}`) name the same file wherever the
+    /// command runs; a relative word names a different file under a
+    /// different working directory. The binding is decided by the same
+    /// candidates, in the same order, that [`script_path_from_command`]
+    /// resolves — not by a second shell parser.
+    #[must_use]
+    pub fn binds_relative_script_outside_root(
+        &self,
+        plugin_name: &str,
+        scope: &ScopeKey,
+        plugin_root: &Path,
+        cwd: &Path,
+        command: &str,
+    ) -> bool {
+        if same_dir(cwd, plugin_root) {
+            return false;
+        }
+        let context = ScriptContext::new(plugin_name, bound_project(scope), Some(plugin_root));
+        let Some((word, _)) = bound_script_word(command, &context) else {
+            return false;
+        };
+        !word.starts_with("~/") && !Path::new(&word).is_absolute()
+    }
+
     /// [`Self::is_approved`], answered with the entry that approves — from
     /// ONE read of the registry. A caller that must also judge what the
     /// approval was given to (its [`event`](ConsentEntry::event)) judges the
@@ -1195,6 +1224,18 @@ fn script_path_from_command(command: &str, context: &ScriptContext<'_>) -> Optio
         .iter()
         .filter_map(|token| candidate_path(token, context))
         .find(|path| path.is_file())
+}
+
+/// The word of `command` the script binding resolves, and the file it names.
+/// Mirrors [`script_path_from_command`] — the same candidates in the same
+/// order, the first that is an existing file — but keeps the word, so a
+/// caller can tell whether the binding depends on the directory the command
+/// runs in.
+fn bound_script_word(command: &str, context: &ScriptContext<'_>) -> Option<(String, PathBuf)> {
+    script_candidates(command, context)
+        .iter()
+        .filter_map(|token| candidate_path(token, context).map(|path| (token.clone(), path)))
+        .find(|(_, path)| path.is_file())
 }
 
 /// The words a command's script is looked for among, in consent's order

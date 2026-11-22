@@ -45,6 +45,7 @@ pub fn scrub_secrets_bytes<'a>(bytes: &'a [u8], injected: &[InjectedSecret]) -> 
             .find_iter(working)
             .map(|m| (m.start(), m.end()))
             .collect();
+        let replacement = format!("[REDACTED:{name}]").into_bytes();
         for (start, end) in local_matches.into_iter().rev() {
             if working
                 .get(start..end)
@@ -52,8 +53,7 @@ pub fn scrub_secrets_bytes<'a>(bytes: &'a [u8], injected: &[InjectedSecret]) -> 
             {
                 continue;
             }
-            let replacement = format!("[REDACTED:{name}]").into_bytes();
-            working.splice(start..end, replacement);
+            working.splice(start..end, replacement.iter().copied());
             hits.push(*name);
         }
     }
@@ -164,8 +164,12 @@ pub fn scrub_and_gate_output(out: &mut crate::sandbox::SandboxOutput) -> Vec<&'s
     let mut blocked: Vec<&'static str> = Vec::new();
     blocked.extend(stdout_scrub.blocked);
     blocked.extend(stderr_scrub.blocked);
-    out.stdout = stdout_scrub.bytes.into_owned();
-    out.stderr = stderr_scrub.bytes.into_owned();
+    if let Cow::Owned(bytes) = stdout_scrub.bytes {
+        out.stdout = bytes;
+    }
+    if let Cow::Owned(bytes) = stderr_scrub.bytes {
+        out.stderr = bytes;
+    }
 
     // Neutralize invisible / bidirectional Unicode control characters
     // (zero-width injection, RLO/isolate overrides) before the output reaches
@@ -179,8 +183,12 @@ pub fn scrub_and_gate_output(out: &mut crate::sandbox::SandboxOutput) -> Vec<&'s
             "sandbox neutralized invisible/bidi control chars in command output"
         );
     }
-    out.stdout = stdout_clean.into_owned();
-    out.stderr = stderr_clean.into_owned();
+    if let Cow::Owned(bytes) = stdout_clean {
+        out.stdout = bytes;
+    }
+    if let Cow::Owned(bytes) = stderr_clean {
+        out.stderr = bytes;
+    }
 
     blocked.sort_unstable();
     blocked.dedup();
@@ -244,6 +252,27 @@ mod tests {
         let out = scrub_secrets_bytes(&input, &[]);
         let s = String::from_utf8_lossy(out.bytes.as_ref());
         assert!(s.contains("[REDACTED:openai_sk]"), "got `{s}`");
+    }
+
+    #[test]
+    fn scrub_redacts_github_and_discord_token_families() {
+        for prefix in ["gho_", "ghu_", "ghs_", "ghr_"] {
+            let token = format!("{prefix}{}", "A".repeat(36));
+            let out = scrub_secrets_bytes(token.as_bytes(), &[]);
+            assert!(out.hits.contains(&"github_token"), "prefix: {prefix}");
+            assert!(!String::from_utf8_lossy(&out.bytes).contains(&token));
+        }
+
+        let fine_grained = format!("github_pat_{}", "A".repeat(50));
+        let out = scrub_secrets_bytes(fine_grained.as_bytes(), &[]);
+        assert!(out.hits.contains(&"github_fine_grained_pat"));
+        assert!(!String::from_utf8_lossy(&out.bytes).contains(&fine_grained));
+
+        let discord = format!("M{}.{}.{} ", "A".repeat(23), "B".repeat(6), "C".repeat(27));
+        let discord = discord.trim_end();
+        let out = scrub_secrets_bytes(discord.as_bytes(), &[]);
+        assert!(out.hits.contains(&"discord_bot_token"));
+        assert!(!String::from_utf8_lossy(&out.bytes).contains(discord));
     }
 
     #[test]

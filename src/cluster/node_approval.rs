@@ -44,6 +44,10 @@ pub type ApprovalSlot = Arc<RwLock<Option<ReverseRpcChannel>>>;
 /// center's `DEFAULT_APPROVAL_TIMEOUT_MS` (120s) so the center decides first and
 /// returns an explicit `"timeout"` outcome; this is only a transport-death
 /// backstop.
+///
+/// The center's OUTER window (the `node_invoke` reverse-RPC call, 150s) must in
+/// turn enclose that approval window, or the verdict and the node's reply lose
+/// the race against it. See `node_invoke`'s `DEFAULT_TIMEOUT_MS`.
 pub(crate) const NODE_APPROVAL_TIMEOUT_MS: u64 = 130_000;
 
 /// Map the center's outcome string back to an `ApprovalOutcome`.
@@ -57,6 +61,12 @@ pub(crate) const NODE_APPROVAL_TIMEOUT_MS: u64 = 130_000;
 pub(crate) fn outcome_from_str(s: &str) -> ApprovalOutcome {
     match s {
         "approved" => ApprovalOutcome::Approved,
+        // The center renders a WIDER grant as this string even though its own
+        // one-shot set clamps every such decision to `AllowOnce` (see
+        // src/approval/node_requester.rs) — an approval must never be turned
+        // into a refusal by a rendering table. The arm is therefore KEPT on
+        // purpose: a center that DOES send it must not fall into the drift
+        // arm below (which would refuse the command the operator approved).
         "approved_session" => ApprovalOutcome::ApprovedForSession,
         "timeout" => ApprovalOutcome::Timeout,
         "unavailable" => ApprovalOutcome::Unavailable,

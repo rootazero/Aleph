@@ -83,16 +83,16 @@ If a current purpose is given, refine it minimally rather than rewriting wholesa
 
         // Split on the sentinel; fall back to overview-only if absent.
         let (overview_body, purpose_body) = match text.split_once("===PURPOSE===") {
-            Some((o, p)) => (o.trim().to_string(), p.trim().to_string()),
-            None => (text.trim().to_string(), String::new()),
+            Some((o, p)) => (o.trim(), p.trim()),
+            None => (text.trim(), ""),
         };
         if !overview_body.is_empty() {
-            overview_gen.write(&overview_body).await?;
+            overview_gen.write(overview_body).await?;
         }
         // Idempotent purpose: only rewrite when the model produced a non-empty,
         // materially different body (avoid churn on every synthesize cycle).
         if !purpose_body.is_empty() && purpose_body != cur_purpose.trim() {
-            purpose_gen.write(&purpose_body).await?;
+            purpose_gen.write(purpose_body).await?;
         }
         tracing::info!(notes = ctx.notes.len(), "corpus narrative regenerated");
         Ok(ctx)

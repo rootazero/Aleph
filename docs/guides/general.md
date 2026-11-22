@@ -5,7 +5,15 @@
 
 ## Operation Rules
 1. Before modification: `cp ~/.aleph/config.toml ~/.aleph/config.toml.bak`
-2. After modification: auto-reloads via fswatch, no restart needed
+2. After modification: call the `config.reload` RPC (or restart the daemon).
+   The file watcher does **not** apply the new values: on a file event it
+   swaps its own snapshot and hot-applies PII privacy only. A `config.reload`
+   re-reads the file into the running config and additionally pushes the
+   live-apply targets (`[behavior]`, `[execution]`, `[search]`,
+   `[policies.spend]`, `[policies.terminal]`) into the running runtime.
+3. Unknown keys are reported, not ignored: the loader's dead-key scan names
+   every key that reaches no code. If the loader calls a key dead, it is dead
+   — do not write it.
 
 ## [general]
 
@@ -13,8 +21,8 @@
 [general]
 default_provider = "openai"    # Fallback provider when no routing rule matches
 language = "zh-Hans"           # UI/response language (null = system language)
-queue_mode = "followup"        # "followup" | "steer" | "collect"
-collect_window_ms = 3000       # Batch window for collect mode
+fallback_providers = []        # Tried in order when the default provider fails transiently
+session_store_backend = "file" # "file" (default) | "sqlite"
 ```
 
 ## [memory]
@@ -22,66 +30,48 @@ collect_window_ms = 3000       # Batch window for collect mode
 ```toml
 [memory]
 enabled = true
-max_context_items = 10         # Past interactions to retrieve
-retention_days = 0             # 0 = never delete
-vector_db = "sqlite-vec"       # "sqlite-vec"
-similarity_threshold = 0.5     # 0.0-1.0
-compression_enabled = true
-compression_turn_threshold = 20
-max_facts_in_context = 5
-backup_enabled = true
+rrf_k = 60                     # Reciprocal-rank-fusion constant for retrieval
+bm25_bonus_weight = 0.5        # Bonus added to the BM25 score
 ```
+
+Most memory knobs live in subsections (`[memory.embedding]`,
+`[memory.dreaming]`, `[memory.memory_decay]`, `[memory.rerank]`,
+`[memory.retrieval_scoring]`, `[memory.expansion]`, …). Read
+`config.schema` for the full list — the top-level scalars above are the ones
+that are safe to set by hand.
 
 ## [behavior]
 
 ```toml
 [behavior]
 output_mode = "typewriter"     # "typewriter" | "instant"
-typing_speed = 200             # Characters per second (50-400)
 ```
 
 ## [policies]
 
 ```toml
 [policies]
-# Top-level policy toggles live in the subsections below.
+# Execution permission tier: "plan" | "ask" | "auto" | "full"
+exec_tier = "ask"
+# Default session usage mode: "chat" | "work" | "code"
+mode = "work"
+# LLM risk triage in front of human approval prompts (off by default)
+guardian_review = false
 
 # Per-tool permission gate
 [policies.tool_permissions]
 default = "allow"              # "allow" | "deny" | "ask"
 # overrides = { vault_store = "ask", agent_delete = "ask" }
 
-[policies.retry]
-max_retries = 3
-initial_backoff_ms = 1000      # field is initial_backoff_ms (not backoff_ms)
-backoff_multiplier = 2.0
-max_backoff_ms = 30000
-
 [policies.web_fetch]
 timeout_seconds = 30
-max_content_length = 10000     # max chars of fetched body (there is no `enabled`/`max_body_bytes` field)
+max_content_length = 10000     # max chars of fetched body
 
-# [policies.memory] has no scalar fields — it is composed of subsections:
 [policies.memory.compression]
 turn_threshold = 40
-[policies.memory.ai_retrieval]
-timeout_ms = 5000
-```
 
-## [dispatcher]
-
-> ⚠️ **Legacy / inert.** The dispatcher was dissolved in the Dispatcher-dissolution
-> refactor (CLAUDE.md R7). This section still parses for backward compatibility but
-> has no runtime consumer — tool routing is now handled by the LLM in the main loop.
-> Setting these fields has no effect.
-
-```toml
-[dispatcher]
-enabled = true                 # Master switch for the dispatcher (tool routing)
-l3_enabled = true              # L3 = AI-powered tool inference
-l3_timeout_ms = 5000
-confirmation_threshold = 0.7   # Below this confidence → ask the user before running
-confirmation_timeout_ms = 30000
+# [policies.memory] has no scalar fields — it is composed of subsections:
+# [policies.memory.compression] and [policies.memory.session_compactor]
 ```
 
 ## Common Operations
@@ -89,13 +79,14 @@ confirmation_timeout_ms = 30000
 ### Change default language
 Set `general.language = "en"` or `"zh-Hans"`.
 
-### Adjust memory retrieval
-Change `memory.max_context_items` and `memory.similarity_threshold`.
-
 ### Switch to instant output
-Set `behavior.output_mode = "instant"`.
+Set `behavior.output_mode = "instant"`, then call `config.reload`.
+
+### Make one tool ask first
+Add an entry to `[policies.tool_permissions].overrides`, e.g.
+`overrides = { bash = "ask" }`.
 
 ## Caveats
-- `queue_mode = "collect"` batches rapid messages — useful for chat platforms
-- `retention_days = 0` means memories are kept forever
 - Memory settings affect all agents globally
+- `[policies]` other than `spend` / `terminal` is not hot-applied into the
+  running runtime; `config.reload` or a restart is required

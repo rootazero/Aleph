@@ -38,7 +38,7 @@ use crate::browser::chromium_resolve::{resolve_binary, ResolvedChromium};
 use crate::browser::engine::Engine;
 use crate::browser::profile::BrowserType;
 use crate::browser::BrowserError;
-use crate::diagnostics::check::{settle_probe, unknown_finding, HealthCheck, Posture};
+use crate::diagnostics::check::{unknown_finding, HealthCheck, Posture};
 use crate::diagnostics::finding::Finding;
 // No `TargetOs` here, deliberately: the platform question is
 // `specs::supported_on_current_os`'s, and importing the enum would be the
@@ -65,13 +65,6 @@ const fn subject_for(engine: Engine) -> &'static str {
     match engine {
         Engine::Chromium => "Managed browser",
         Engine::Obscura => "Obscura engine",
-    }
-}
-
-const fn title_for(engine: Engine) -> &'static str {
-    match engine {
-        Engine::Chromium => "Managed browser (Chromium)",
-        Engine::Obscura => "Browser engine (obscura)",
     }
 }
 
@@ -157,10 +150,10 @@ fn pinned_binary_is_usable(path: &std::path::Path) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        return std::fs::metadata(path).is_ok_and(|metadata| {
+        std::fs::metadata(path).is_ok_and(|metadata| {
             let mode = metadata.permissions().mode();
             mode & 0o111 != 0 && mode & 0o444 != 0
-        });
+        })
     }
     #[cfg(not(unix))]
     {
@@ -238,10 +231,6 @@ impl EngineMissingCheck {
 impl HealthCheck for EngineMissingCheck {
     fn id(&self) -> &'static str {
         id_for(self.engine)
-    }
-
-    fn title(&self) -> &'static str {
-        title_for(self.engine)
     }
 
     async fn run(&self, _posture: Posture) -> Vec<Finding> {
@@ -392,15 +381,14 @@ impl EngineMissingCheck {
             }];
         }
 
-        // No pin: ask the prober, off the async worker (a `which` PATH walk
-        // plus a `--version` subprocess), under the same deadline.
+        // No pin: run cancellable PATH and version probes under the same deadline.
         let probe = tokio::time::timeout(
             RESOLVE_TIMEOUT,
-            tokio::task::spawn_blocking(|| crate::runtimes::probe::probe(OBSCURA_RUNTIME)),
+            crate::runtimes::probe::probe(OBSCURA_RUNTIME),
         )
         .await;
-        let joined = match probe {
-            Ok(j) => j,
+        let result = match probe {
+            Ok(result) => result,
             Err(e) => {
                 return vec![unknown_finding(
                     OBSCURA_ID,
@@ -412,10 +400,6 @@ impl EngineMissingCheck {
                     ),
                 )]
             }
-        };
-        let result = match settle_probe(OBSCURA_ID, subject_for(Engine::Obscura), joined) {
-            Ok(v) => v,
-            Err(finding) => return vec![finding],
         };
         vec![match (result.found, result.bin_path) {
             (true, Some(path)) => {
@@ -447,6 +431,7 @@ impl EngineMissingCheck {
 mod tests {
     use super::*;
     use crate::browser::chromium_resolve::ChromiumSource;
+    use crate::diagnostics::check::settle_probe;
 
     /// The fail-closed contract: when there is no browser, the finding must name
     /// the command that fixes it. A gate that closes without saying how to open
@@ -592,7 +577,10 @@ mod tests {
         let obscura = EngineMissingCheck::for_engine(Engine::Obscura);
         assert_eq!(chromium.id(), "browser/chromium-missing");
         assert_eq!(obscura.id(), "browser/obscura-missing");
-        assert_ne!(chromium.title(), obscura.title());
+        assert_ne!(
+            missing_finding(Engine::Chromium, "no system browser").title,
+            missing_finding(Engine::Obscura, "no binary at the pinned path").title
+        );
 
         let c = missing_finding(Engine::Chromium, "no system browser");
         let o = missing_finding(Engine::Obscura, "no binary at the pinned path");

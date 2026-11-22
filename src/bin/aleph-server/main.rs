@@ -378,7 +378,27 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
             let code = commands::bootstrap_runtime::run(br_args).await;
             std::process::exit(code);
         }
-        Some(Command::Node { center, name, tags }) => {
+        Some(Command::Node {
+            center,
+            name,
+            tags,
+            reset_identity,
+        }) => {
+            // The reset is a local, one-shot action on the node machine: it
+            // needs no center, so it never opens a session.
+            if reset_identity {
+                return commands::node::reset_identity(&name);
+            }
+            // clap makes `--center` mandatory unless `--reset-identity` is
+            // given; say so plainly rather than unwrapping a value clap
+            // already guaranteed.
+            let Some(center) = center else {
+                return Err(
+                    "`node` needs --center <URL> (or --reset-identity to forget the \
+                     local identity file)"
+                        .into(),
+                );
+            };
             return commands::node::handle_node(center, name, tags).await;
         }
         Some(Command::SandboxDebug {

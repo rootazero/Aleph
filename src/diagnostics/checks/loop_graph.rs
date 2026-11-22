@@ -40,10 +40,6 @@ impl HealthCheck for LoopGraphCheck {
         ID
     }
 
-    fn title(&self) -> &'static str {
-        "Loop graph"
-    }
-
     async fn run(&self, _posture: Posture) -> Vec<Finding> {
         let path = self.data_dir.join(DB_FILENAME);
         // "absent" below has to mean absent. `Path::exists()` also returns

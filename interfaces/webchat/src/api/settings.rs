@@ -34,7 +34,10 @@ impl GeneralConfigApi {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BehaviorConfig {
     pub output_mode: String,
-    pub typing_speed: u32,
+    // `typing_speed` is deliberately ABSENT: the server retired the key
+    // (2026-08-17 wire audit, config-003), so a mirror here would be a field
+    // the server never sends — every `behavior_config.get` would fail to decode
+    // and the settings page would render its load-error arm.
 }
 
 pub struct BehaviorConfigApi;

@@ -108,36 +108,32 @@ impl MediaProvider for ImageMediaProvider {
     ) -> Result<MediaOutput, MediaError> {
         let image_input = Self::convert_input(input, media_type)?;
 
+        let map_err = |e| match e {
+            VisionError::NoProvider => MediaError::NoProvider {
+                media_type: "image".to_string(),
+            },
+            e => MediaError::ProviderError {
+                provider: "vision-pipeline".to_string(),
+                message: e.to_string(),
+            },
+        };
+
         if let Some(prompt_text) = prompt {
-            match self
-                .pipeline
+            self.pipeline
                 .understand_image(&image_input, prompt_text)
                 .await
-            {
-                Ok(result) => Ok(MediaOutput::Description {
+                .map(|result| MediaOutput::Description {
                     text: result.description,
-                }),
-                Err(VisionError::NoProvider) => Err(MediaError::NoProvider {
-                    media_type: "image".to_string(),
-                }),
-                Err(e) => Err(MediaError::ProviderError {
-                    provider: "vision-pipeline".to_string(),
-                    message: e.to_string(),
-                }),
-            }
+                })
+                .map_err(map_err)
         } else {
-            match self.pipeline.ocr(&image_input).await {
-                Ok(result) => Ok(MediaOutput::Text {
+            self.pipeline
+                .ocr(&image_input)
+                .await
+                .map(|result| MediaOutput::Text {
                     text: result.full_text,
-                }),
-                Err(VisionError::NoProvider) => Err(MediaError::NoProvider {
-                    media_type: "image".to_string(),
-                }),
-                Err(e) => Err(MediaError::ProviderError {
-                    provider: "vision-pipeline".to_string(),
-                    message: e.to_string(),
-                }),
-            }
+                })
+                .map_err(map_err)
         }
     }
 }

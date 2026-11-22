@@ -109,6 +109,24 @@ pub(crate) fn mcp_tool_registry() -> Option<&'static Arc<crate::tools::ToolHandl
     MCP_TOOL_REGISTRY.get()
 }
 
+/// Face ⑤, the one derivation of "may this run see MCP server `server_id`",
+/// shared by the run loop and the MCP face. A server no plugin declared is
+/// visible; a plugin-owned one is visible only when the extension manager can
+/// resolve its owner from the supplied scope.
+pub(crate) fn visible_mcp_servers(
+    visibility: crate::extension::visibility::VisibilityCtx,
+    ext: Option<Arc<crate::extension::ExtensionManager>>,
+) -> crate::tools::handlers::McpServerFilter {
+    Arc::new(move |server_id| {
+        match crate::extension::mcp_config::owning_plugin_of_server_id(server_id) {
+            None => true,
+            Some(owner) => {
+                crate::extension::visibility::owner_visible_via(ext.as_deref(), owner, &visibility)
+            }
+        }
+    })
+}
+
 /// Build the per-request `ToolService` for a chat turn.
 ///
 /// * `tool_registry` — shared `LoopToolRegistry` (agent builtins + MCP).
@@ -168,6 +186,9 @@ pub fn build_request_tool_service(
     tool_health: Option<Arc<crate::tool_metadata::ToolHealthCache>>,
 ) -> Arc<dyn ToolService> {
     let session_id: String = session_id.into();
+    // Construction inherits the Policy Arc from this registry's canonical
+    // mounted facade. Run/resume/MCP/slash therefore share the same guard,
+    // without a process-global policy slot or a per-face rule map.
     let mut svc = ScopedToolService::new(tool_registry, allowed_tools);
     if let Some(st) = subagent_tool {
         svc = svc.with_subagent_tool(st);

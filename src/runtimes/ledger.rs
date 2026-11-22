@@ -167,13 +167,10 @@ impl CapabilityLedger {
     /// Return the executable path *only* if the capability is `Ready`.
     #[must_use]
     pub fn executable(&self, name: &str) -> Option<&Path> {
-        self.entries.get(name).and_then(|e| {
-            if e.status == CapabilityStatus::Ready {
-                Some(e.bin_path.as_path())
-            } else {
-                None
-            }
-        })
+        self.entries
+            .get(name)
+            .filter(|e| e.status == CapabilityStatus::Ready)
+            .map(|e| e.bin_path.as_path())
     }
 
     /// Insert or update a capability entry.
@@ -239,21 +236,23 @@ impl CapabilityLedger {
     /// already have for latency. The recorded version stays as-of
     /// `last_probed`, which is why that field exists.
     pub fn revalidate_ready(&mut self) -> usize {
-        let stale: Vec<String> = self
-            .entries
-            .values()
-            .filter(|e| {
-                e.status == CapabilityStatus::Ready
-                    && !e.bin_path.as_os_str().is_empty()
-                    && !e.bin_path.exists()
-            })
-            .map(|e| e.name.clone())
-            .collect();
-        for name in &stale {
-            warn!("capability '{name}' was recorded Ready but its binary is gone; marking Missing");
-            self.mark_missing(name);
+        let mut dropped = 0;
+        for entry in self.entries.values_mut() {
+            if entry.status == CapabilityStatus::Ready
+                && !entry.bin_path.as_os_str().is_empty()
+                && !entry.bin_path.exists()
+            {
+                warn!(
+                    "capability '{}' was recorded Ready but its binary is gone; marking Missing",
+                    entry.name
+                );
+                entry.status = CapabilityStatus::Missing;
+                entry.bin_path.clear();
+                entry.version.clear();
+                dropped += 1;
+            }
         }
-        stale.len()
+        dropped
     }
 
     /// Build an enhanced PATH string with Ready entries' bin directories
@@ -274,12 +273,10 @@ impl CapabilityLedger {
 
         for entry in ready_entries {
             if let Some(parent) = entry.bin_path.parent() {
-                if !parent.as_os_str().is_empty() {
+                if !parent.as_os_str().is_empty() && !seen.contains(parent) {
                     let parent_buf = parent.to_path_buf();
-                    // rust-doctor-disable-next-line excessive-clone
-                    if seen.insert(parent_buf.clone()) {
-                        paths.push(parent_buf);
-                    }
+                    seen.insert(parent_buf.clone());
+                    paths.push(parent_buf);
                 }
             }
         }
@@ -287,8 +284,8 @@ impl CapabilityLedger {
         // Append system PATH
         if let Ok(system_path) = std::env::var("PATH") {
             for p in std::env::split_paths(&system_path) {
-                // rust-doctor-disable-next-line excessive-clone
-                if seen.insert(p.clone()) {
+                if !seen.contains(&p) {
+                    seen.insert(p.clone());
                     paths.push(p);
                 }
             }

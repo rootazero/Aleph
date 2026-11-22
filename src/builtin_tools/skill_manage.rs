@@ -14,7 +14,6 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::domain::skill::{PromptScope, SkillId, SkillSource};
-use crate::domain::Entity;
 use crate::error::{AlephError, Result};
 use crate::skill::{
     install_allowed, parse_skill_content, scan_content, SkillConfigUpdate, SkillState, SkillSystem,

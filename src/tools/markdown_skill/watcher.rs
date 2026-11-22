@@ -15,7 +15,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::error::{AlephError, Result};
 
-use super::loader::SkillLoader;
+use super::loader::{is_skill_file_name, SkillLoader};
 use super::registry_owner::markdown_skill_registry_owner;
 use super::tool_adapter::MarkdownCliTool;
 
@@ -120,7 +120,15 @@ impl SkillWatcher {
     ///
     /// This is a blocking async function that processes file events
     /// and invokes the reload callback when skills change.
-    pub async fn run(mut self, skills_dir: PathBuf, reload_callback: ReloadCallback) -> Result<()> {
+    ///
+    /// `_skills_dir` is kept for API compatibility: the watcher already
+    /// watches the directory it was built with, and the event handling below
+    /// derives the affected skill directories from the event paths themselves.
+    pub async fn run(
+        mut self,
+        _skills_dir: PathBuf,
+        reload_callback: ReloadCallback,
+    ) -> Result<()> {
         info!("Skill watcher event loop started");
 
         while let Some(event) = self.event_rx.recv().await {
@@ -134,9 +142,7 @@ impl SkillWatcher {
             }
 
             // Reload affected skills
-            if let Err(e) =
-                Self::handle_skill_events(&skills_dir, &skill_events, &reload_callback).await
-            {
+            if let Err(e) = Self::handle_skill_events(&skill_events, &reload_callback).await {
                 error!(error = %e, "Failed to handle skill events");
             }
         }
@@ -175,14 +181,11 @@ impl SkillWatcher {
     fn is_skill_file(path: &Path) -> bool {
         path.file_name()
             .and_then(|n| n.to_str())
-            .is_some_and(|name| {
-                name.eq_ignore_ascii_case("SKILL.md") || name.to_lowercase().ends_with(".skill.md")
-            })
+            .is_some_and(is_skill_file_name)
     }
 
     /// Handle skill reload events
     async fn handle_skill_events(
-        _skills_dir: &Path,
         events: &[SkillEvent],
         reload_callback: &ReloadCallback,
     ) -> Result<()> {

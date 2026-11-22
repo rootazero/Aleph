@@ -184,14 +184,16 @@ impl MediaCache {
             return Err(CacheError::Download(format!("HTTP {}", response.status)));
         }
 
-        if let Some(content_length) = response.headers.get(reqwest::header::CONTENT_LENGTH) {
-            if let Some(content_length) = content_length.to_str().ok().and_then(|s| s.parse().ok())
-            {
-                if content_length > MAX_FILE_SIZE {
-                    return Err(CacheError::TooLarge {
-                        size: content_length,
-                    });
-                }
+        if let Some(content_length) = response
+            .headers
+            .get(reqwest::header::CONTENT_LENGTH)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<u64>().ok())
+        {
+            if content_length > MAX_FILE_SIZE {
+                return Err(CacheError::TooLarge {
+                    size: content_length,
+                });
             }
         }
 
@@ -237,9 +239,10 @@ impl MediaCache {
     /// Remove all cached files for a session.
     pub fn cleanup_session(session_id: &str) -> Result<(), CacheError> {
         let dir = session_dir(session_id)?;
-        if dir.exists() {
-            std::fs::remove_dir_all(&dir)?;
-            debug!(session_id, "cleaned up media cache");
+        match std::fs::remove_dir_all(&dir) {
+            Ok(()) => debug!(session_id, "cleaned up media cache"),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
         }
         Ok(())
     }
@@ -285,24 +288,22 @@ impl MediaCache {
             if !meta.is_dir() {
                 continue;
             }
+            let entry_path = entry.path();
             // Prefer .created_at marker over directory mtime (mtime updates on every write)
-            let created = entry.path().join(".created_at");
-            let timestamp = if created.exists() {
-                std::fs::metadata(&created)
-                    .ok()
-                    .and_then(|m| m.modified().ok())
-            } else {
-                meta.modified().ok()
-            };
+            let created = entry_path.join(".created_at");
+            let timestamp = std::fs::metadata(&created)
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .or_else(|| meta.modified().ok());
             let age = timestamp
                 .and_then(|t| now.duration_since(t).ok())
                 .unwrap_or(Duration::ZERO);
             // If timestamp is in the future (clock skew), treat as fresh
             if age > STALE_THRESHOLD && age != Duration::ZERO {
-                if let Err(e) = std::fs::remove_dir_all(entry.path()) {
-                    warn!(path = %entry.path().display(), error = %e, "failed to remove stale media dir");
+                if let Err(e) = std::fs::remove_dir_all(&entry_path) {
+                    warn!(path = %entry_path.display(), error = %e, "failed to remove stale media dir");
                 } else {
-                    debug!(path = %entry.path().display(), "removed stale media dir");
+                    debug!(path = %entry_path.display(), "removed stale media dir");
                 }
             }
         }
@@ -330,8 +331,7 @@ impl MediaCache {
         let id = uuid::Uuid::new_v4().to_string();
         let mime = item
             .mime_type
-            .as_deref()
-            .map(|s| s.to_string())
+            .clone()
             .unwrap_or_else(|| detect_mime(&item.url, &item.media_type));
 
         debug!(
@@ -437,7 +437,7 @@ impl MediaCache {
             size: Some(cached.size),
             // rust-doctor-disable-next-line excessive-clone
             url: Some(item.url.clone()),
-            path: Some(cached.local_path.to_string_lossy().to_string()),
+            path: Some(cached.local_path.to_string_lossy().into_owned()),
             data: None,
             is_voice_note: false,
             is_video_note: false,
@@ -459,6 +459,7 @@ impl MediaCache {
         let (header, data) = rest.split_once(',').ok_or_else(|| {
             CacheError::Download("Invalid data URL: no comma separator".to_string())
         })?;
+        let is_base64 = header.contains("base64");
         let mime = if header.contains(';') {
             let mime_part = header.split(';').next().unwrap_or("");
             if mime_part.is_empty() {
@@ -466,7 +467,7 @@ impl MediaCache {
             } else {
                 Some(mime_part.to_string())
             }
-        } else if !header.is_empty() && !header.contains("base64") {
+        } else if !header.is_empty() && !is_base64 {
             Some(header.to_string())
         } else {
             None
@@ -479,7 +480,7 @@ impl MediaCache {
         // the encoded length; the downstream check remains the authoritative
         // cap on the decoded size.
         let encoded_len = data.len();
-        if header.contains("base64") {
+        if is_base64 {
             // base64 expands by 4/3, so the decoded size is at most
             // (encoded_len / 4) * 3 (ignore padding bytes).
             let approx = encoded_len.saturating_mul(3) / 4;
@@ -495,7 +496,7 @@ impl MediaCache {
             )));
         }
 
-        let bytes = if header.contains("base64") {
+        let bytes = if is_base64 {
             BASE64
                 .decode(data)
                 .map_err(|e| CacheError::Download(format!("Base64 decode failed: {e}")))?

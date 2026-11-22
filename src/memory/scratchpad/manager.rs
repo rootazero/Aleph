@@ -483,7 +483,8 @@ impl ScratchpadManager {
         // measurable. Refuse (rather than silently drop) so the model
         // sees the limit and clears / archives the scratchpad.
         const MAX_NOTES: usize = 500;
-        let existing_note_count = content
+        let notes_body = extract_section(&content, NOTES_HEADER).unwrap_or("");
+        let existing_note_count = notes_body
             .lines()
             .filter(|l| l.trim_start().starts_with("- ["))
             .count();

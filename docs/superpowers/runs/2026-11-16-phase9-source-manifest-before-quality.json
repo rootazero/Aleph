@@ -1,0 +1,222 @@
+{
+  "base": "3892804c112fd6e574166a4c03a7c40a77d0b239",
+  "branch": "runtime-proof",
+  "scope": "Phase9 source, test and QA recipe files; generated Panel assets recorded separately",
+  "files": [
+    {
+      "path": "Cargo.lock",
+      "sha256": "12300967333b45f8a0fa1f401cf13a559b5b8a881ee95550b1bbf1a8d42e21f5",
+      "bytes": 426085
+    },
+    {
+      "path": "desktop/nsh-shell/src/main.rs",
+      "sha256": "694330bf975c2bfec59d1b9e1407b436317936a10dae106ad524146aaae6b088",
+      "bytes": 4046
+    },
+    {
+      "path": "desktop/nsh-shell/src/shell_host.rs",
+      "sha256": "42baa5175487f76d1c08faafedff029a4cc5795a41f5ca967ded6e511de228f0",
+      "bytes": 3342
+    },
+    {
+      "path": "desktop/shell/build.rs",
+      "sha256": "351072bfba7f2cd364ad13fef24fc3b4980e1b7ce6dcd144be435e59b2dc1aba",
+      "bytes": 2007
+    },
+    {
+      "path": "desktop/shell/src/main.rs",
+      "sha256": "68528645ba208298a1b94505d2f36bb70dd110696415088381d42c90e144c1fd",
+      "bytes": 102286
+    },
+    {
+      "path": "desktop/shell/src/phase9_qa.rs",
+      "sha256": "94023b1e0336a8535d19662cb0368d34c508cb59868bfcd3b7894d597e4d63e8",
+      "bytes": 4281
+    },
+    {
+      "path": "desktop/shell/src/qa_root.rs",
+      "sha256": "ff3af8cf87ec79322097603949cfa4867b3fccbd34347c2442db86c718f1af36",
+      "bytes": 39208
+    },
+    {
+      "path": "interfaces/webchat/Cargo.toml",
+      "sha256": "58dc39418b0cffc0418d0c11d88c4581492cc1d9fa8ec832eb6cfee1ffec8eba",
+      "bytes": 8054
+    },
+    {
+      "path": "interfaces/webchat/src/components/artifacts/mod.rs",
+      "sha256": "3a58b680d028854a82a9f80bd9e21b22b0592182e89e304dad28101df79aef35",
+      "bytes": 26230
+    },
+    {
+      "path": "interfaces/webchat/src/components/chat_sidebar.rs",
+      "sha256": "0213eadd7914dcba6a3974d9f026e07cf0b9d56b38b1489294195a9238104bfc",
+      "bytes": 132691
+    },
+    {
+      "path": "interfaces/webchat/src/context.rs",
+      "sha256": "919be859ca3db9de16b0de2f51821508005a6dd155c10d5a8b1086fa9a8ec96f",
+      "bytes": 172813
+    },
+    {
+      "path": "interfaces/webchat/src/platform/wide/views/chat/events.rs",
+      "sha256": "4fa84ed1ffbdf37be9b34437945c56398d393fa7f2a01137e42745df8b4f91c7",
+      "bytes": 117550
+    },
+    {
+      "path": "interfaces/webchat/src/state/reattach.rs",
+      "sha256": "d15d1790b9b48cc899f5aefe6fb4a7566b1b53ce32895322e9d1ed6e48c2185a",
+      "bytes": 17277
+    },
+    {
+      "path": "interfaces/webchat/src/state/sessions.rs",
+      "sha256": "807cf9b5b74aefa36fd277e5139780a866893e21a617b23daad6128f99062123",
+      "bytes": 53487
+    },
+    {
+      "path": "justfile",
+      "sha256": "1aba2fe18517c94e5639b68f9fcc44929d2c670868ea714ef3adf6dcb9ecf8d0",
+      "bytes": 36737
+    },
+    {
+      "path": "qa/cargo_lock_delta.py",
+      "sha256": "7f8f7e48d982bd2382c1d8bd03596b31b4e82762cd7634cdb8fe5af40c5ccf4a",
+      "bytes": 2773
+    },
+    {
+      "path": "qa/fixtures/nsh-panel-parity/runtime-valid.json",
+      "sha256": "941f322582be634325c59bc5c231b1a07592ed84b2388c4c9842920b89da3edc",
+      "bytes": 7143
+    },
+    {
+      "path": "qa/fixtures/nsh-panel-parity/scenario.json",
+      "sha256": "71b7f3bbcc592f879841be9d7846a4e8ce5e9a837635cbf6cb9edc88fb87876c",
+      "bytes": 160
+    },
+    {
+      "path": "qa/nsh_panel_driver.js",
+      "sha256": "82ead3372c454cace62bb90c25afebcc6a18ea1dd8f453837341e642ae889ebe",
+      "bytes": 9114
+    },
+    {
+      "path": "qa/nsh_panel_driver.test.mjs",
+      "sha256": "c2b788714ec6390c92c6c786fd99ae70bc065190c5e91519485459ee07aefb69",
+      "bytes": 3185
+    },
+    {
+      "path": "qa/nsh_panel_gateway.py",
+      "sha256": "b1c7e35e00ca52a5d9355801791a0591c8373f49375ab38e908de0a833364fb0",
+      "bytes": 6100
+    },
+    {
+      "path": "qa/nsh_panel_launcher.py",
+      "sha256": "37e4ba13a2614258dc663786735e9a4fd6a87fc6510359f1c80df1d3a21aa1f0",
+      "bytes": 20586
+    },
+    {
+      "path": "qa/nsh_panel_provider.py",
+      "sha256": "cc51df7dfa05bbcd0644d9082f65ca3a311c586c2d4bf6f1d3f834c8fc419c78",
+      "bytes": 3821
+    },
+    {
+      "path": "qa/nsh_panel_runtime.schema.json",
+      "sha256": "05cd5638ebe655e6d5c4cc4716b69077bd5ce9c3a983bd793852df08b33f2bbe",
+      "bytes": 3455
+    },
+    {
+      "path": "qa/phase9_runtime.md",
+      "sha256": "8885e863ef565290f3ba60b93708dcc7c75dedbe2f118118195cdb0b54109492",
+      "bytes": 6302
+    },
+    {
+      "path": "qa/phase9_test_closure.py",
+      "sha256": "ce8694789cd4b7ef3cefef10ccb979ef0618df70b5c41449da74bdf36ad314b5",
+      "bytes": 8108
+    },
+    {
+      "path": "qa/test_cargo_lock_delta.py",
+      "sha256": "970ae8654c491415bced4f22f9d0709b650a6c58846ecb76e324d1e653e7211d",
+      "bytes": 1625
+    },
+    {
+      "path": "qa/test_nsh_panel_gateway.py",
+      "sha256": "c5e6d4aa91a7c519d5719587f7eb3db97bd06fcbb3d2fd17516e8c61cf697139",
+      "bytes": 1865
+    },
+    {
+      "path": "qa/test_nsh_panel_launcher.py",
+      "sha256": "4909044c4dab6a5af0788e694792d906d157ff2f45a688044c1aa52d879b08cd",
+      "bytes": 8752
+    },
+    {
+      "path": "qa/test_nsh_panel_provider.py",
+      "sha256": "a52738077b644e83fa2dc4484475842cb13c56de734636db265125ced57ecc58",
+      "bytes": 2395
+    },
+    {
+      "path": "qa/test_phase9_test_closure.py",
+      "sha256": "9f3f1c06c0b2f937e9080b4e3c600e74cd4e997e761be948aec7778863d3f7e6",
+      "bytes": 8284
+    },
+    {
+      "path": "src/builtin_tools/runtime_manage.rs",
+      "sha256": "403c893642191c84c0fe07b300ad4a46c5cd3b2c268c3e63d0abf834add8b85e",
+      "bytes": 82915
+    },
+    {
+      "path": "src/discovery/home_scan_census.rs",
+      "sha256": "99b769192605faf17332db806825329f729ec6980647451b7360a91f88d1d3cd",
+      "bytes": 21329
+    },
+    {
+      "path": "src/extension/claude_cache_tests.rs",
+      "sha256": "7860e0e869495db1e2dc4ad2a41511ffa65613135efa5b4177ee63e9a8bcbffb",
+      "bytes": 25366
+    },
+    {
+      "path": "src/extension/context_adapter.rs",
+      "sha256": "105f92f8f4bb2c9716c8f8d22efb691d1cd56af6d35e3699897d4113e6d0a4ed",
+      "bytes": 43444
+    },
+    {
+      "path": "src/extension/hooks/executor.rs",
+      "sha256": "330286b0b86e2125fd21b3972c060fd5ae4951e71edf91fb5fa8c7fce2a3a111",
+      "bytes": 131752
+    },
+    {
+      "path": "src/extension/hooks/registry/tests.rs",
+      "sha256": "b2739dad266a097bde4db5580b95a7c45084e28c458c74b6e3725e517305c1c5",
+      "bytes": 24777
+    },
+    {
+      "path": "src/extension/mcp_plugin_tests.rs",
+      "sha256": "a94b5fc38ec4457459f7c6b5c5b199db709cdc930e47b3a29a754123223201d3",
+      "bytes": 12293
+    },
+    {
+      "path": "src/extension/mod.rs",
+      "sha256": "e1b552cf4aae2a92e2922dbd52c9c8bfccafaf7055897c798e53e007ca99cb07",
+      "bytes": 133598
+    },
+    {
+      "path": "src/extension/service_ops.rs",
+      "sha256": "4f640c079fc52a3e3755f34c756758c4c1eb5dd4258a64f5cb3c4083f50b7fee",
+      "bytes": 16190
+    },
+    {
+      "path": "src/extension/visibility.rs",
+      "sha256": "6903d44e94c7e45ab948790cf85dcd2ec4bc41df96008b2f2dafdbd71d8b072e",
+      "bytes": 27876
+    },
+    {
+      "path": "src/gateway/handlers/daemon_control.rs",
+      "sha256": "f65d9d96828286c2b73972ca6c2dc4ee82cbdb1d4571a195c2071d4200a92d1f",
+      "bytes": 10847
+    },
+    {
+      "path": "src/utils/paths.rs",
+      "sha256": "acbd0b5cdb7426d35a2956ce17b1a655afdd0a0ec32899f7be5941c241463b97",
+      "bytes": 110200
+    }
+  ]
+}

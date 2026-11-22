@@ -21,9 +21,12 @@ pub fn open_sqlite_safe(path: &Path) -> rusqlite::Result<Connection> {
         }
     }
     let conn = Connection::open(path)?;
+    // `busy_timeout` first: switching the journal mode needs an exclusive
+    // lock, so a database another process is currently writing to has to be
+    // waited for instead of being rejected with `SQLITE_BUSY` outright.
     conn.execute_batch(
-        "PRAGMA journal_mode=WAL;
-         PRAGMA busy_timeout=5000;
+        "PRAGMA busy_timeout=5000;
+         PRAGMA journal_mode=WAL;
          PRAGMA synchronous=NORMAL;
          PRAGMA foreign_keys=ON;",
     )?;

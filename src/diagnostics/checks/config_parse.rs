@@ -59,10 +59,6 @@ impl HealthCheck for ConfigParseCheck {
         ID
     }
 
-    fn title(&self) -> &'static str {
-        "Config file"
-    }
-
     async fn run(&self, _posture: Posture) -> Vec<Finding> {
         let display = self.config_path.display().to_string();
 

@@ -209,8 +209,6 @@ pub struct WorkflowManifestStep {
     pub reduce: Option<CollectReduce>,
 }
 
-/// serde `skip_serializing_if` helper — keeps non-reviewed steps byte-identical.
-
 /// The `isolation` values a manifest step may declare.
 ///
 /// Aleph does not *apply* this hint — it does not need to: the dispatcher gives
@@ -224,6 +222,9 @@ pub struct WorkflowManifestStep {
 /// nobody can interpret, so a typo (`"worktee"`) fails at the boundary instead
 /// of riding through import → save → export as data that looks meaningful.
 pub(crate) const ISOLATION_VOCABULARY: &[&str] = &["worktree", "none"];
+
+/// serde `skip_serializing_if` helper — a `false` flag is omitted from the wire,
+/// so a step that does not set it serialises byte-identically to a legacy manifest.
 const fn is_false(v: &bool) -> bool {
     !*v
 }

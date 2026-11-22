@@ -47,6 +47,10 @@ pub use state::{MemoryState, MemoryStatus};
 pub struct MemoryRuntimeConfig {
     pub metadata_path: PathBuf,
     pub note_memory_dir: PathBuf,
+    /// Hybrid (vector + FTS) retrieval fusion tuning. Defaults to the
+    /// historical hardcoded behaviour, so a site that does not care about
+    /// ranking says so explicitly instead of inheriting it by accident.
+    pub retrieval_tuning: crate::memory::store::sqlite::RetrievalTuning,
 }
 
 pub struct MemoryRuntime {
@@ -58,6 +62,7 @@ pub struct MemoryRuntime {
     pub(crate) search_settings: search::MemorySearchSettings,
     changed: Notify,
     provider: ProviderHandle,
+    observations: std::sync::OnceLock<Arc<crate::capability::events::SourceEventFactory>>,
     #[cfg(test)]
     initialization_gate: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
 }
@@ -68,6 +73,10 @@ struct MemoryInner {
     driver: Option<JoinHandle<()>>,
     admitted: usize,
     rotation_failed: bool,
+    source_observation: Option<(
+        CapturedBinding,
+        Arc<crate::capability::events::SourceObservation>,
+    )>,
 }
 
 pub(crate) fn resource_id() -> CapabilityId {
@@ -159,11 +168,13 @@ impl MemoryRuntime {
                 driver: None,
                 admitted: 0,
                 rotation_failed: false,
+                source_observation: None,
             }),
             tasks: tasks::MemoryTasks::default(),
             search_settings: search::MemorySearchSettings::default(),
             changed: Notify::new(),
             provider,
+            observations: std::sync::OnceLock::new(),
             #[cfg(test)]
             initialization_gate: Mutex::new(None),
         })
@@ -197,6 +208,41 @@ impl MemoryRuntime {
         bundle.current_reconciler()
     }
 
+    pub(crate) fn install_source_observer(
+        &self,
+        factory: Arc<crate::capability::events::SourceEventFactory>,
+    ) {
+        let _ = self.observations.set(factory);
+    }
+
+    pub(crate) fn with_source_observation<R>(
+        &self,
+        read: impl FnOnce(Option<Arc<crate::capability::events::SourceObservation>>) -> R,
+    ) -> R {
+        let inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        read(
+            inner
+                .source_observation
+                .as_ref()
+                .map(|(_, observation)| observation.clone()),
+        )
+    }
+
+    pub(crate) fn source_observation_for_binding(
+        &self,
+        binding: &CapturedBinding,
+    ) -> Option<Arc<crate::capability::events::SourceObservation>> {
+        let inner = self.inner.try_lock().ok()?;
+        inner
+            .source_observation
+            .as_ref()
+            .filter(|(source, _)| source == binding)
+            .map(|(_, observation)| observation.clone())
+    }
+
     pub(crate) fn provider_registration(self: &Arc<Self>) -> ProviderRegistration {
         ProviderRegistration::new(
             self.descriptor(&VisibilityScope::default())
@@ -204,10 +250,6 @@ impl MemoryRuntime {
             self.provider.clone(),
         )
         .with_activator(Arc::new(MemoryActivator::new(self)))
-    }
-
-    pub(crate) fn provider(&self) -> ProviderHandle {
-        self.provider.clone()
     }
 
     pub fn status(&self) -> MemoryStatus {
@@ -307,6 +349,7 @@ impl MemoryRuntime {
         self.changed.notify_waiters();
     }
 
+    #[cfg(test)]
     pub(crate) fn worker_stop(&self) -> Result<tokio::sync::watch::Receiver<bool>, AlephError> {
         self.inner
             .lock()
@@ -475,7 +518,7 @@ impl MemoryRuntime {
                     self.begin_drain(&mut inner);
                 }
             }
-            let maintenance = {
+            let publish = || {
                 let mut inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
                 let maintenance = MemoryOperation::for_initialization(self, &mut inner);
                 if let Some((operation, bundle)) = &maintenance {
@@ -488,11 +531,20 @@ impl MemoryRuntime {
                         .map_err(|error| {
                             AlephError::other(format!("memory resource binding failed: {error:?}"))
                         })
-                        .and_then(|_| bundle.mount(self, operation));
+                        .and_then(|binding| bundle.mount(self, operation).map(|()| binding));
                     match mounted {
-                        Ok(()) => {
+                        Ok(binding) => {
                             inner.status.state = MemoryState::Running;
                             let _ = self.provider.transition(ProviderState::Ready);
+                            inner.source_observation =
+                                self.observations.get().and_then(|factory| {
+                                    self.descriptor(&VisibilityScope::default())
+                                        .ok()
+                                        .map(|descriptor| (binding, factory.system(descriptor)))
+                                });
+                            if let Some((_, observation)) = &inner.source_observation {
+                                observation.mark_committed();
+                            }
                         }
                         Err(error) => {
                             Self::record_error(&mut inner, error.to_string());
@@ -508,6 +560,34 @@ impl MemoryRuntime {
                 self.changed.notify_waiters();
                 maintenance
             };
+            let (maintenance, publication) = if let Some(factory) = self.observations.get() {
+                match factory
+                    .policy
+                    .with_source_publication(&resource_id(), publish)
+                {
+                    Ok((maintenance, running)) => (maintenance, Some(running)),
+                    Err(_) => {
+                        let mut inner =
+                            self.inner.lock().unwrap_or_else(|error| error.into_inner());
+                        Self::record_error(&mut inner, "memory source publication stopped".into());
+                        self.begin_drain(&mut inner);
+                        (None, None)
+                    }
+                }
+            } else {
+                (publish(), None)
+            };
+            let observation = self
+                .inner
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .source_observation
+                .as_ref()
+                .map(|(_, observation)| observation.clone());
+            if let Some(observation) = observation {
+                observation.flush();
+            }
+            drop(publication);
             // The last permit may lock the source on Drop; release it outside
             // the source gate after every spawned task has a retained handle.
             drop(maintenance);
@@ -561,6 +641,17 @@ impl MemoryRuntime {
                         inner.status.state = MemoryState::Failed;
                         let _ = self.provider.transition(ProviderState::Failed);
                     }
+                }
+                let observation = inner
+                    .source_observation
+                    .take()
+                    .map(|(_, observation)| observation);
+                if let Some(observation) = &observation {
+                    observation.mark_withdrawn();
+                }
+                drop(inner);
+                if let Some(observation) = observation {
+                    observation.flush();
                 }
                 self.changed.notify_waiters();
                 return;

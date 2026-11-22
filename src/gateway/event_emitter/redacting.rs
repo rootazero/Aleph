@@ -58,6 +58,8 @@ use crate::gateway::event_emitter::EventEmitter;
 pub struct RedactingEmitter {
     inner: Arc<dyn EventEmitter + Send + Sync>,
     masker: SecretMasker,
+    // Arbitrary operator regexes require a complete message, not a fixed lookbehind.
+    pending: tokio::sync::Mutex<Vec<StreamEvent>>,
 }
 
 impl RedactingEmitter {
@@ -66,20 +68,17 @@ impl RedactingEmitter {
         Self {
             inner,
             masker: SecretMasker::new(),
+            pending: tokio::sync::Mutex::new(Vec::new()),
         }
     }
 
     fn mask(&self, text: &str) -> String {
         self.masker.mask(text)
     }
-}
 
-#[async_trait]
-impl EventEmitter for RedactingEmitter {
-    async fn emit(&self, event: StreamEvent) -> Result<(), EventEmitError> {
-        // Every arm is explicit rather than a catch-all `_ => event`, so a NEW
-        // text-bearing variant is a compile error here instead of a silent hole.
-        let redacted = match event {
+    fn redact(&self, event: StreamEvent) -> StreamEvent {
+        // Every arm is explicit so a new text-bearing variant cannot bypass masking.
+        match event {
             StreamEvent::ResponseChunk {
                 run_id,
                 seq,
@@ -267,8 +266,98 @@ impl EventEmitter for RedactingEmitter {
             | StreamEvent::ContextGauge { .. }
             | StreamEvent::AskUser { .. }
             | StreamEvent::ModelResolved { .. }) => other,
-        };
-        self.inner.emit(redacted).await
+        }
+    }
+}
+
+#[async_trait]
+impl EventEmitter for RedactingEmitter {
+    async fn emit(&self, mut event: StreamEvent) -> Result<(), EventEmitError> {
+        let mut pending = self.pending.lock().await;
+        // These are message boundaries, unlike gauges/traces interleaved with deltas.
+        let boundary = matches!(
+            &event,
+            StreamEvent::ResponseChunk { is_final: true, .. }
+                | StreamEvent::ResponseChunk {
+                    is_intermediate: true,
+                    ..
+                }
+                | StreamEvent::ToolStart { .. }
+                | StreamEvent::RunComplete { .. }
+                | StreamEvent::RunError { .. }
+                | StreamEvent::RunRetrying { .. }
+        );
+        match &mut event {
+            StreamEvent::ResponseChunk {
+                run_id,
+                delta,
+                full_text,
+                is_final,
+                is_intermediate,
+                chunk_index,
+                ..
+            } => {
+                if let Some(StreamEvent::ResponseChunk {
+                    delta: accumulated,
+                    full_text: snapshot,
+                    ..
+                }) = pending.iter_mut().find(|e| {
+                    matches!(e,
+                    StreamEvent::ResponseChunk { run_id: id, .. } if id == run_id)
+                }) {
+                    accumulated.push_str(delta);
+                    *snapshot = std::mem::take(full_text);
+                    if *is_final || *is_intermediate {
+                        *full_text = snapshot.clone();
+                        delta.clear();
+                        // Keep completion at its original position, after interleaved events.
+                        pending.push(event);
+                    }
+                } else {
+                    *chunk_index = 0;
+                    pending.push(event);
+                }
+            }
+            StreamEvent::Reasoning {
+                run_id,
+                content,
+                is_complete,
+                ..
+            } => {
+                if let Some(StreamEvent::Reasoning {
+                    content: accumulated,
+                    is_complete: false,
+                    ..
+                }) = pending.iter_mut().rev().find(|e| {
+                    matches!(e,
+                        StreamEvent::Reasoning { run_id: id, .. } if id == run_id)
+                }) {
+                    accumulated.push_str(content);
+                    if *is_complete {
+                        content.clear();
+                        pending.push(event);
+                    }
+                } else {
+                    pending.push(event);
+                }
+            }
+            _ => pending.push(event),
+        }
+        if !boundary
+            && pending.iter().any(|e| {
+                matches!(
+                    e,
+                    StreamEvent::ResponseChunk { .. } | StreamEvent::Reasoning { .. }
+                )
+            })
+        {
+            return Ok(());
+        }
+        // Keep the original event order/sequence, and redact before Instant sees deltas.
+        for event in pending.drain(..) {
+            self.inner.emit(self.redact(event)).await?;
+        }
+        Ok(())
     }
 
     fn next_seq(&self) -> u64 {
@@ -368,6 +457,126 @@ mod tests {
             !rendered.contains(KEY),
             "an unmasked credential survived the emitter leg: {rendered}"
         );
+    }
+
+    #[tokio::test]
+    async fn split_credentials_are_buffered_before_plain_or_instant_delivery() {
+        use crate::gateway::event_emitter::{DynEventEmitter, InstantBufferingEmitter};
+
+        let text = "你好 sk-ABCDEFGHIJKLMNOPQRSTUVWX";
+        let masked = SecretMasker::new().mask(text);
+        for instant in [false, true] {
+            let collector = Arc::new(CollectingEventEmitter::new());
+            let inner: Arc<dyn EventEmitter + Send + Sync> = if instant {
+                Arc::new(InstantBufferingEmitter::new(DynEventEmitter::new(
+                    collector.clone(),
+                )))
+            } else {
+                collector.clone()
+            };
+            let emitter = RedactingEmitter::new(inner);
+            let mut full = String::new();
+            for (index, delta) in ["你好 sk-", "ABCDEFGHIJKLMNOPQRSTUVWX"]
+                .into_iter()
+                .enumerate()
+            {
+                full.push_str(delta);
+                emitter
+                    .emit(StreamEvent::ResponseChunk {
+                        run_id: "r".into(),
+                        seq: index as u64 * 2 + 1,
+                        delta: delta.into(),
+                        full_text: full.clone(),
+                        chunk_index: index as u32,
+                        is_final: false,
+                        is_intermediate: false,
+                    })
+                    .await
+                    .unwrap();
+                emitter
+                    .emit(StreamEvent::Reasoning {
+                        run_id: "r".into(),
+                        seq: index as u64 * 2 + 2,
+                        content: delta.into(),
+                        is_complete: false,
+                    })
+                    .await
+                    .unwrap();
+                assert!(
+                    collector.events().await.is_empty(),
+                    "no prefix may escape early"
+                );
+            }
+            emitter
+                .emit(StreamEvent::Reasoning {
+                    run_id: "r".into(),
+                    seq: 5,
+                    content: String::new(),
+                    is_complete: true,
+                })
+                .await
+                .unwrap();
+            assert!(collector.events().await.is_empty());
+            emitter
+                .emit(StreamEvent::ResponseChunk {
+                    run_id: "r".into(),
+                    seq: 6,
+                    delta: String::new(),
+                    full_text: text.into(),
+                    chunk_index: 2,
+                    is_final: true,
+                    is_intermediate: false,
+                })
+                .await
+                .unwrap();
+            emitter
+                .emit(StreamEvent::RunComplete {
+                    run_id: "r".into(),
+                    seq: 7,
+                    summary: Default::default(),
+                    total_duration_ms: 0,
+                })
+                .await
+                .unwrap();
+            let events = collector.events().await;
+            let response: String = events
+                .iter()
+                .filter_map(|event| match event {
+                    StreamEvent::ResponseChunk { delta, .. } => Some(delta.as_str()),
+                    _ => None,
+                })
+                .collect();
+            let reasoning: String = events
+                .iter()
+                .filter_map(|event| match event {
+                    StreamEvent::Reasoning { content, .. } => Some(content.as_str()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(response, masked);
+            assert_eq!(reasoning, masked);
+            let reasoning_done = events
+                .iter()
+                .position(|e| {
+                    matches!(
+                        e,
+                        StreamEvent::Reasoning {
+                            is_complete: true,
+                            ..
+                        }
+                    )
+                })
+                .unwrap();
+            let response_done = events
+                .iter()
+                .position(|e| matches!(e, StreamEvent::ResponseChunk { is_final: true, .. }))
+                .unwrap();
+            assert!(reasoning_done < response_done);
+            assert!(matches!(
+                events.last(),
+                Some(StreamEvent::RunComplete { .. })
+            ));
+        }
     }
 
     /// **All three** legs of an unattended run must agree.

@@ -1,3 +1,5 @@
+//! lock-policy: none
+//!
 //! `aleph sandbox-debug` — smoke-test the active sandbox profile.
 //!
 //! Codex parity: `codex debug sandbox --seatbelt|--landlock|--windows ...`.

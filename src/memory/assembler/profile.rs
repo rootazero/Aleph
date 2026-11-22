@@ -25,18 +25,18 @@ impl UserProfileLoader {
             .join("personal")
             .join("profile.md");
         let body = tokio::fs::read_to_string(&path).await.ok()?;
-        Some(strip_frontmatter(&body))
+        Some(strip_frontmatter(&body).to_string())
     }
 }
 
-fn strip_frontmatter(s: &str) -> String {
+fn strip_frontmatter(s: &str) -> &str {
     let trimmed = s.trim_start();
     if let Some(rest) = trimmed.strip_prefix("---\n") {
         if let Some(end) = rest.find("\n---\n") {
-            return rest[end + 5..].trim_start().to_string();
+            return rest[end + 5..].trim_start();
         }
     }
-    s.to_string()
+    s
 }
 
 #[cfg(test)]

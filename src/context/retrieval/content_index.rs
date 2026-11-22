@@ -47,6 +47,7 @@
 //! loading required.
 
 use crate::sync_primitives::Mutex;
+use crate::utils::sqlite_open::open_sqlite_safe;
 use crate::utils::text_format::truncate_with_marker;
 use std::path::Path;
 
@@ -124,12 +125,14 @@ pub struct ContentIndex {
 impl ContentIndex {
     /// Open (creating if absent) an index at `db_path` and ensure the schema.
     pub fn open(db_path: &Path) -> Result<Self, IndexError> {
-        let conn = Connection::open(db_path)?;
+        let conn = open_sqlite_safe(db_path)?;
         Self::from_conn(conn)
     }
 
-    /// Open an ephemeral in-memory index. Used by tests and by callers that
-    /// want indexing without touching disk.
+    /// Open an ephemeral in-memory index.
+    ///
+    /// Test-only: production opens the on-disk index through [`Self::open`].
+    #[cfg(test)]
     pub fn open_in_memory() -> Result<Self, IndexError> {
         let conn = Connection::open_in_memory()?;
         Self::from_conn(conn)
@@ -324,6 +327,7 @@ impl ContentIndex {
     /// near-ties without letting proximity override a decisive RRF lead.
     /// Single-term queries skip the pass entirely, leaving RRF order byte-for-
     /// byte unchanged.
+    #[cfg(test)]
     pub fn search(
         &self,
         session_id: &str,
@@ -402,10 +406,13 @@ impl ContentIndex {
         Ok(finalize(fused, limit))
     }
 
-    /// Number of chunks indexed by `session_id`, across all its sources. Cheap;
-    /// used by the `ctx_search` tool to tell the model whether anything of *its
-    /// own* is indexed yet — a global count would leak the existence of other
-    /// sessions' output.
+    /// Number of chunks indexed by `session_id`, across all its sources.
+    ///
+    /// Test-only: production counts through [`Self::len_sessions`] — the
+    /// `ctx_search` tool asks the result store, which scopes the count to the
+    /// session's own key set (a global count would leak the existence of other
+    /// sessions' output).
+    #[cfg(test)]
     pub fn len(&self, session_id: &str) -> Result<usize, IndexError> {
         self.len_sessions(&[session_id])
     }
@@ -493,13 +500,14 @@ fn drop_pre_scope_tables(conn: &Connection) -> Result<(), IndexError> {
         if exists == 0 {
             continue;
         }
-        // `prepare` is the cheapest column probe that works on a virtual table
-        // (`PRAGMA table_info` would too, but needs row parsing). It fails iff
-        // the column is absent.
-        if conn
-            .prepare(&format!("SELECT session_id FROM {table} LIMIT 0"))
-            .is_err()
-        {
+        // Inspect schema directly: a missing column may surface as either
+        // SqliteFailure or SqlInputError, depending on SQLite preparation.
+        let scoped: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name = 'session_id')",
+            params![table],
+            |row| row.get(0),
+        )?;
+        if !scoped {
             tracing::warn!(
                 table,
                 "content index predates session scoping; recreating it empty \

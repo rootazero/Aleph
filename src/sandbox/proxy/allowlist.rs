@@ -68,7 +68,7 @@ impl AllowList {
             // wildcard, but "a.b.example.com" and "example.com" itself do not.
             host.strip_suffix(suffix.as_ref())
                 .and_then(|prefix| prefix.strip_suffix('.'))
-                .map_or(false, |label| !label.is_empty() && !label.contains('.'))
+                .is_some_and(|label| !label.is_empty() && !label.contains('.'))
         })
     }
 

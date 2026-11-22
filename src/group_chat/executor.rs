@@ -156,9 +156,7 @@ impl GroupChatExecutor {
         speaker: &Speaker,
         content: &str,
     ) {
-        let Some(db) = self.db.clone() else { return };
-        let session_id = session_id.to_string();
-        let content = content.to_string();
+        let Some(db) = &self.db else { return };
 
         let (speaker_type, speaker_id, speaker_name) = match &speaker {
             Speaker::Coordinator => ("coordinator", None, "Coordinator"),
@@ -167,13 +165,13 @@ impl GroupChatExecutor {
         };
         if let Err(e) = db
             .insert_group_chat_turn(
-                &session_id,
+                session_id,
                 round,
                 sequence,
                 speaker_type,
                 speaker_id,
                 speaker_name,
-                &content,
+                content,
             )
             .await
         {
@@ -284,7 +282,7 @@ impl GroupChatExecutor {
             // instead of waiting out the provider timeout. Cancellation maps
             // to `SessionInactive` — the same terminal signal the round-entry
             // gate uses, so callers treat it uniformly.
-            let cancel = session.cancel_token.clone();
+            let cancel = &session.cancel_token;
             let provider = self.default_provider.current();
             tokio::select! {
                 res = provider.process(RequestPayload::new(&msgs)) => {
@@ -362,12 +360,12 @@ impl GroupChatExecutor {
         let mut prior_discussion = String::new();
         // Deduplicate persona respondents and clamp count to total participants
         let mut seen = std::collections::HashSet::new();
-        plan.respondents.retain(|r| seen.insert(r.persona_id.clone()));
+        plan.respondents.retain(|r| seen.insert(r.persona_id.to_ascii_lowercase()));
+        plan.respondents.sort_by_key(|r| r.order);
         if plan.respondents.len() > session.participants.len() {
             plan.respondents.truncate(session.participants.len());
         }
         let total_respondents = plan.respondents.len();
-        plan.respondents.sort_by_key(|r| r.order);
         let session_id = session.id.clone();
 
         struct PreparedResponse {
@@ -427,7 +425,7 @@ impl GroupChatExecutor {
                 // Same `select!`-on-cancel as the coordinator call: an
                 // `end_session` fired mid-persona unwinds the round instead
                 // of holding the session mutex through the provider timeout.
-                let cancel = session.cancel_token.clone();
+                let cancel = &session.cancel_token;
                 tokio::select! {
                     res = provider
                         .process(
@@ -501,7 +499,7 @@ impl GroupChatExecutor {
         // Append the user/system turn to history (matches the original
         // semantic that `add_turn` records both user prompts and persona
         // responses).
-        session.add_turn(round, Speaker::System, user_turn_text.clone());
+        session.add_turn(round, Speaker::System, user_turn_text);
         for p in &prepared {
             let speaker = Speaker::Persona {
                 id: p.persona_id.clone(),
@@ -535,10 +533,10 @@ impl GroupChatExecutor {
         // Build the live-stream `GroupChatMessage` list. The persistence
         // sequence (which includes the user turn) is independent of the
         // live-stream sequence (which omits the user turn and numbers from 0).
-        for p in &prepared {
+        for p in prepared {
             let speaker = Speaker::Persona {
-                id: p.persona_id.clone(),
-                name: p.persona_name.clone(),
+                id: p.persona_id,
+                name: p.persona_name,
             };
             let sequence =
                 p.i.try_into()
@@ -559,7 +557,7 @@ impl GroupChatExecutor {
             messages.push(GroupChatMessage {
                 session_id: session_id.clone(),
                 speaker,
-                content: p.content.clone(),
+                content: p.content,
                 round,
                 sequence,
                 is_final,

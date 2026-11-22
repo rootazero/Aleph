@@ -16,26 +16,28 @@ pub fn extract_text(item: &MessageItem) -> String {
     }
 }
 
-fn build_media_url(media: &MediaRef) -> Option<String> {
+fn build_media_url(media: &MediaRef, cdn_base_url: &str) -> Option<String> {
     if let Some(url) = &media.full_url {
         return Some(url.clone());
     }
     if let Some(param) = &media.encrypt_query_param {
-        let base = crate::gateway::interfaces::wechat::types::WEIXIN_CDN_BASE_URL;
-        return Some(format!("{base}/download?encrypted_query_param={param}"));
+        return Some(format!(
+            "{}/download?encrypted_query_param={param}",
+            cdn_base_url.trim_end_matches('/')
+        ));
     }
     None
 }
 
 /// Convert a message item to an attachment.
-fn item_to_attachment(item: &MessageItem, index: usize) -> Option<Attachment> {
+fn item_to_attachment(item: &MessageItem, index: usize, cdn_base_url: &str) -> Option<Attachment> {
     match item {
         MessageItem::Image(i) => Some(Attachment {
             id: format!("img_{index}"),
             mime_type: "image/jpeg".to_string(),
             filename: None,
             size: None,
-            url: build_media_url(&i.media),
+            url: build_media_url(&i.media, cdn_base_url),
             path: None,
             data: None,
             is_voice_note: false,
@@ -46,7 +48,7 @@ fn item_to_attachment(item: &MessageItem, index: usize) -> Option<Attachment> {
             mime_type: "audio/amr".to_string(),
             filename: None,
             size: None,
-            url: build_media_url(&v.media),
+            url: build_media_url(&v.media, cdn_base_url),
             path: None,
             data: None,
             is_voice_note: false,
@@ -57,7 +59,7 @@ fn item_to_attachment(item: &MessageItem, index: usize) -> Option<Attachment> {
             mime_type: "application/octet-stream".to_string(),
             filename: f.file_name.clone(),
             size: f.file_size,
-            url: build_media_url(&f.media),
+            url: build_media_url(&f.media, cdn_base_url),
             path: None,
             data: None,
             is_voice_note: false,
@@ -68,7 +70,7 @@ fn item_to_attachment(item: &MessageItem, index: usize) -> Option<Attachment> {
             mime_type: "video/mp4".to_string(),
             filename: None,
             size: None,
-            url: build_media_url(&v.media),
+            url: build_media_url(&v.media, cdn_base_url),
             path: None,
             data: None,
             is_voice_note: false,
@@ -80,9 +82,8 @@ fn item_to_attachment(item: &MessageItem, index: usize) -> Option<Attachment> {
 
 /// Guess chat type (dm or group) from message.
 #[must_use]
-pub fn guess_chat_type(msg: &serde_json::Value, account_id: &str) -> (String, String) {
+pub fn guess_chat_type(msg: &serde_json::Value, _account_id: &str) -> (String, String) {
     let room_id = msg.get("room_id").or(msg.get("chat_room_id"));
-    let to_user_id = msg.get("to_user_id").and_then(|v| v.as_str()).unwrap_or("");
     let from_user_id = msg
         .get("from_user_id")
         .and_then(|v| v.as_str())
@@ -91,16 +92,9 @@ pub fn guess_chat_type(msg: &serde_json::Value, account_id: &str) -> (String, St
     let has_room = room_id
         .and_then(|v| v.as_str())
         .is_some_and(|s| !s.is_empty());
-    let is_group = has_room
-        || (to_user_id == account_id
-            && !from_user_id.is_empty()
-            && msg.get("msg_type").and_then(|v| v.as_u64()) == Some(1));
 
-    if is_group {
-        let id = room_id
-            .and_then(|v| v.as_str())
-            .unwrap_or(to_user_id)
-            .to_string();
+    if has_room {
+        let id = room_id.and_then(|v| v.as_str()).unwrap_or("").to_string();
         ("group".to_string(), id)
     } else {
         ("dm".to_string(), from_user_id.to_string())
@@ -113,6 +107,7 @@ pub fn map_message_to_inbound(
     msg: &Message,
     channel_id: &ChannelId,
     account_id: &str,
+    cdn_base_url: &str,
 ) -> Option<InboundMessage> {
     let sender_id = UserId::new(msg.from_user_id.clone());
     let (chat_type, effective_chat_id) = {
@@ -135,7 +130,7 @@ pub fn map_message_to_inbound(
             text.push_str(&item_text);
         }
 
-        if let Some(attachment) = item_to_attachment(item, index) {
+        if let Some(attachment) = item_to_attachment(item, index, cdn_base_url) {
             attachments.push(attachment);
         }
     }
@@ -250,7 +245,7 @@ mod tests {
             },
             aes_key: None,
         });
-        let attachment = item_to_attachment(&item, 0).unwrap();
+        let attachment = item_to_attachment(&item, 0, "https://cdn.example/c2c").unwrap();
         assert_eq!(attachment.mime_type, "image/jpeg");
         assert_eq!(
             attachment.url,
@@ -270,7 +265,7 @@ mod tests {
             },
             aes_key: None,
         });
-        let attachment = item_to_attachment(&item, 0).unwrap();
+        let attachment = item_to_attachment(&item, 0, "https://cdn.example/c2c").unwrap();
         assert_eq!(attachment.mime_type, "application/octet-stream");
         assert_eq!(attachment.filename, Some("report.pdf".to_string()));
         assert_eq!(attachment.size, Some(2048));
@@ -301,11 +296,22 @@ mod tests {
             ],
             context_token: None,
         };
-        let inbound = map_message_to_inbound(&msg, &ChannelId::new("wechat"), "bot").unwrap();
+        let inbound = map_message_to_inbound(
+            &msg,
+            &ChannelId::new("wechat"),
+            "bot",
+            "https://cdn.example/c2c",
+        )
+        .unwrap();
 
         assert_eq!(inbound.text, "Check this out\n[图片]");
         assert_eq!(inbound.attachments.len(), 1);
         assert_eq!(inbound.attachments[0].mime_type, "image/jpeg");
+        // The configured CDN base is what the download URL is built from.
+        assert_eq!(
+            inbound.attachments[0].url.as_deref(),
+            Some("https://cdn.example/c2c/download?encrypted_query_param=param")
+        );
     }
 
     #[test]

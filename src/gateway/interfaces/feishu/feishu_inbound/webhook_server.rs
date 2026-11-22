@@ -88,7 +88,9 @@ async fn handle_webhook_after_admission(
                 &state.bot_open_id,
                 &state.user_cache,
                 &state.api,
-            ) {
+            )
+            .await
+            {
                 let is_duplicate = state
                     .dedup
                     .lock()
@@ -122,21 +124,24 @@ async fn handle_webhook_after_admission(
 
 /// Resolve the effective event payload string from a raw webhook body.
 ///
-/// If an Encrypt Key is configured and the body carries an `encrypt` field, the
-/// signature (when the signing headers are present) is verified and the payload is
-/// AES-decrypted. Otherwise the raw body is returned unchanged (plaintext mode).
+/// If an Encrypt Key is configured, the body MUST carry an `encrypt` field and
+/// valid signing headers; plaintext events are rejected. The only exception is
+/// a URL-verification challenge that arrives as a plaintext `{"challenge":...}`
+/// body with no `encrypt` field, which is allowed exclusively when no token or
+/// event-type fields are present (i.e. it is structurally a bare challenge).
+/// Without an Encrypt Key the raw body is returned unchanged (plaintext mode).
 fn resolve_payload(
     state: &WebhookState,
     headers: &HeaderMap,
     body_str: &str,
 ) -> Result<String, StatusCode> {
-    let encrypt_field = serde_json::from_str::<serde_json::Value>(body_str)
-        .ok()
-        .and_then(|v| {
-            v.get("encrypt")
-                .and_then(|e| e.as_str())
-                .map(str::to_string)
-        });
+    let parsed = serde_json::from_str::<serde_json::Value>(body_str).ok();
+
+    let encrypt_field = parsed.as_ref().and_then(|v| {
+        v.get("encrypt")
+            .and_then(|e| e.as_str())
+            .map(str::to_string)
+    });
 
     match (state.config.encrypt_key.as_ref(), encrypt_field) {
         (Some(key), Some(encrypted)) => {
@@ -158,7 +163,27 @@ fn resolve_payload(
                 StatusCode::BAD_REQUEST
             })
         }
-        _ => Ok(body_str.to_string()),
+        (Some(_key), None) => {
+            // Encrypt Key is configured but the body arrived in plaintext.
+            // Allow only a bare URL-verification challenge: a JSON object
+            // containing a "challenge" field and nothing that looks like a
+            // real event (no "token", no "header", no "event" fields).
+            let is_bare_challenge = parsed.as_ref().is_some_and(|v| {
+                v.get("challenge").is_some()
+                    && v.get("token").is_none()
+                    && v.get("header").is_none()
+                    && v.get("event").is_none()
+            });
+            if is_bare_challenge {
+                Ok(body_str.to_string())
+            } else {
+                tracing::warn!(
+                    "Feishu webhook: encrypt key configured but plaintext event received; rejecting"
+                );
+                Err(StatusCode::UNAUTHORIZED)
+            }
+        }
+        (None, _) => Ok(body_str.to_string()),
     }
 }
 
@@ -217,7 +242,6 @@ mod tests {
                 streaming: true,
                 render_mode: "auto".into(),
                 typing_indicator: true,
-                reaction_notifications: true,
                 group_session_scope:
                     crate::gateway::interfaces::feishu::config::GroupSessionScope::default(),
                 connection_mode: "webhook".into(),
@@ -258,7 +282,6 @@ mod tests {
                     streaming: true,
                     render_mode: "auto".into(),
                     typing_indicator: true,
-                    reaction_notifications: true,
                     group_session_scope:
                         crate::gateway::interfaces::feishu::config::GroupSessionScope::default(),
                     connection_mode: "webhook".into(),
@@ -270,7 +293,6 @@ mod tests {
                     accounts: None,
                     default_account: None,
                 },
-                "bot".into(),
             )),
         }
     }
@@ -410,35 +432,62 @@ mod tests {
             .await
             .expect("provider must admit the request");
         provider.transition(ProviderState::Stopping).unwrap();
-        let response = handle_webhook_after_admission(
-            state,
-            HeaderMap::new(),
-            Bytes::from(r#"{"challenge":"late","token":"token"}"#),
-            admission,
-        )
-        .await;
+        let (headers, body) = crypto::test_support::signed_event(
+            state.config.encrypt_key.as_deref().unwrap(),
+            r#"{"challenge":"late","token":"token"}"#,
+        );
+        let response =
+            handle_webhook_after_admission(state, headers, Bytes::from(body), admission).await;
 
         assert!(matches!(response, Err(StatusCode::SERVICE_UNAVAILABLE)));
     }
 
     #[tokio::test]
-    async fn test_challenge_response() {
+    async fn signed_challenge_rejects_wrong_token_and_tampered_signature() {
         let state = make_state();
+        let key = state.config.encrypt_key.clone().unwrap();
         let app = Router::new()
             .route("/feishu/events", post(handle_webhook))
             .with_state(state);
 
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/feishu/events")
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"challenge":"abc123","token":"token"}"#))
-                    .unwrap(),
-            )
-            .await
+        for wrong_token in [true, false] {
+            let payload = serde_json::json!({
+                "challenge": "abc123",
+                "token": if wrong_token { "wrong" } else { "token" }
+            })
+            .to_string();
+            let (mut headers, body) = crypto::test_support::signed_event(&key, &payload);
+            if !wrong_token {
+                headers.insert("x-lark-signature", "tampered".parse().unwrap());
+            }
+            let mut request = Request::builder()
+                .method("POST")
+                .uri("/feishu/events")
+                .body(Body::from(body))
+                .unwrap();
+            request.headers_mut().extend(headers);
+            let response = app.clone().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_challenge_response() {
+        let state = make_state();
+        let (headers, body) = crypto::test_support::signed_event(
+            state.config.encrypt_key.as_deref().unwrap(),
+            r#"{"challenge":"abc123","token":"token"}"#,
+        );
+        let app = Router::new()
+            .route("/feishu/events", post(handle_webhook))
+            .with_state(state);
+        let mut request = Request::builder()
+            .method("POST")
+            .uri("/feishu/events")
+            .body(Body::from(body))
             .unwrap();
+        request.headers_mut().extend(headers);
+        let response = app.oneshot(request).await.unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
         let body = axum::body::to_bytes(response.into_body(), 1024)

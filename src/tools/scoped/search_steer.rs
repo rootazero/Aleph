@@ -104,7 +104,7 @@ const PASSTHROUGH: &[&str] = &["sudo", "env", "time", "nice", "command", "nohup"
 /// only one classified.
 fn classify(cmd: &str) -> Option<Replacement> {
     let first = first_segment(cmd);
-    let mut tokens = first.split_whitespace().peekable();
+    let mut tokens = first.split_whitespace();
 
     // Skip `VAR=value` prefixes and passthrough wrappers to reach the real verb.
     let verb = loop {
@@ -162,10 +162,11 @@ fn first_segment(cmd: &str) -> &str {
 
 /// Whether `cmd` is a single command with no pipeline, list or heredoc.
 fn is_whole_command(cmd: &str) -> bool {
+    // `||` needs no arm of its own: it contains `|`, which is already
+    // excluded above.
     !cmd.contains('|')
         && !cmd.contains(';')
         && !cmd.contains("&&")
-        && !cmd.contains("||")
         && !cmd.contains('\n')
         && !cmd.contains("<<")
 }

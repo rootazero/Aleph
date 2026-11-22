@@ -332,7 +332,11 @@ const SPEED_MIN: f32 = 0.7;
 const SPEED_MAX: f32 = 1.2;
 
 fn clamp_speed(speed: f32) -> f32 {
-    speed.clamp(SPEED_MIN, SPEED_MAX)
+    if !speed.is_finite() {
+        1.0
+    } else {
+        speed.clamp(SPEED_MIN, SPEED_MAX)
+    }
 }
 
 impl GenerationProvider for ElevenLabsProvider {

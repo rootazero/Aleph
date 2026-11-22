@@ -40,20 +40,25 @@ impl DefaultGroupChatCommandParser {
 
         let after = trimmed.strip_prefix("/groupchat")?.trim();
 
-        if after == "start" || after.starts_with("start ") {
-            let args = after.strip_prefix("start")?.trim();
-            parse_start_command(args)
-        } else if after == "continue" || after.starts_with("continue ") {
-            let args = after.strip_prefix("continue")?.trim();
-            parse_continue_command(args)
-        } else if after == "mention" || after.starts_with("mention ") {
-            let args = after.strip_prefix("mention")?.trim();
-            parse_mention_command(args)
-        } else if after == "end" || after.starts_with("end ") {
-            let session_id = after.strip_prefix("end")?.trim().to_string();
-            Some(GroupChatRequest::End { session_id })
-        } else {
-            None
+        let (verb, args) = match after.split_once(char::is_whitespace) {
+            Some((v, a)) => (v, a.trim()),
+            None => (after, ""),
+        };
+
+        match verb {
+            "start" => parse_start_command(args),
+            "continue" => parse_continue_command(args),
+            "mention" => parse_mention_command(args),
+            "end" => {
+                if args.is_empty() {
+                    None
+                } else {
+                    Some(GroupChatRequest::End {
+                        session_id: args.to_string(),
+                    })
+                }
+            }
+            _ => None,
         }
     }
 }
@@ -134,6 +139,9 @@ fn parse_start_command(args: &str) -> Option<GroupChatRequest> {
         match tok.as_str() {
             "--preset" => {
                 let val = iter.next()?;
+                if val.starts_with("--") {
+                    return None;
+                }
                 for id in val.split(',') {
                     let id = id.trim();
                     if !id.is_empty() {

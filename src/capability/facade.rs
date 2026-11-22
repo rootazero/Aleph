@@ -2,7 +2,9 @@
 //!
 //! [`Zahir`] is the read/query face every consumer (UI, MCP projection, ACP
 //! JSON projection) goes through. It never invokes a capability directly; it
-//! describes, resolves (into a lease), subscribes to change, and projects.
+//! describes, resolves (into a lease), subscribes to change, and projects —
+//! plus [`Zahir::activate`], the one entry point that runs a provider's
+//! activation hook instead of reading state.
 //!
 //! Task 1 establishes the trait and the pure transport types. The immutable
 //! snapshot / lease-invalidation semantics are documented here and implemented
@@ -15,8 +17,9 @@ use crate::capability::descriptor::{
 use crate::capability::ownership::{OwnerGeneration, OwnerRef, VisibilityScope};
 use crate::capability::provider::ProviderId;
 use crate::capability::provider_registry::ActivationError;
+use crate::capability::special::CapturedSpecialEntry;
 use crate::memory::runtime::MemoryRuntime;
-use std::sync::Weak;
+use crate::sync_primitives::Weak;
 
 /// Source identity is kind-specific; Resources never manufacture Tool entries.
 #[derive(Debug, Clone)]
@@ -30,6 +33,11 @@ pub enum BackendSourceEvidence {
         provider_generation: u64,
     },
     MemoryResource(Weak<MemoryRuntime>),
+    /// A special capability capture from the canonical special registry.
+    Special {
+        capture: CapturedSpecialEntry,
+        provider_generation: u64,
+    },
 }
 
 impl PartialEq for BackendSourceEvidence {
@@ -56,6 +64,16 @@ impl PartialEq for BackendSourceEvidence {
                 },
             ) => a_id == b_id && a_generation == b_generation,
             (Self::MemoryResource(a), Self::MemoryResource(b)) => Weak::ptr_eq(a, b),
+            (
+                Self::Special {
+                    capture: a,
+                    provider_generation: ag,
+                },
+                Self::Special {
+                    capture: b,
+                    provider_generation: bg,
+                },
+            ) => a == b && ag == bg,
             _ => false,
         }
     }
@@ -131,9 +149,9 @@ impl BackendLease {
                 provider_generation,
                 ..
             } => Some(*provider_generation),
-            BackendSourceEvidence::Provider { .. } | BackendSourceEvidence::MemoryResource(_) => {
-                None
-            }
+            BackendSourceEvidence::Provider { .. }
+            | BackendSourceEvidence::MemoryResource(_)
+            | BackendSourceEvidence::Special { .. } => None,
         }
     }
 }
@@ -319,7 +337,8 @@ pub struct Projection {
     pub capabilities: Vec<CapabilityId>,
 }
 
-/// The read/query face of the capability layer.
+/// The read/query face of the capability layer, plus the one activation entry
+/// point.
 ///
 /// [`Zahir::resolve`] returns `Result<`[`BackendLease`]`, `[`ResolveError`]`>`,
 /// never a live handler: the lease names its owner generation so a consumer can
@@ -329,10 +348,64 @@ pub struct Projection {
 /// subscription state machine.
 pub trait Zahir {
     fn describe(&self, scope: Scope) -> CapabilitySnapshot;
+
+    /// Load only the requested descriptor without activating its provider.
+    /// Existing facades retain scoped discovery semantics by default.
+    fn lookup_descriptor(&self, reference: &Reference) -> Option<CapabilityDescriptor> {
+        self.describe(Scope {
+            namespace: Some(reference.id.namespace.clone()),
+            visibility: reference.visibility.clone(),
+            ..Scope::default()
+        })
+        .capabilities
+        .into_iter()
+        .find(|descriptor| descriptor.id == reference.id)
+    }
+
+    /// Load metadata and its cache eligibility from the same producing source.
+    ///
+    /// `cacheable=true` guarantees this descriptor's revision belongs to the
+    /// same canonical source/domain as descriptor_revision and cannot be reused
+    /// for different metadata. Derive the flag from the actual selected source,
+    /// never an earlier probe or public kind/revision equality. Unsupported
+    /// sources conservatively preserve the existing lookup contract uncached.
+    fn lookup_descriptor_for_cache(
+        &self,
+        reference: &Reference,
+    ) -> Option<(CapabilityDescriptor, bool)> {
+        self.lookup_descriptor(reference)
+            .map(|descriptor| (descriptor, false))
+    }
+
+    /// A live metadata freshness hint, never an authorization decision.
+    ///
+    /// Return Some only when the exact visibility is currently valid and this
+    /// source's descriptor revision cannot be reused for different metadata.
+    /// Provider closure/revocation must suppress the hint. None conservatively
+    /// reloads via lookup_descriptor_for_cache; notifications cannot supply this proof.
+    fn descriptor_revision(&self, _reference: &Reference) -> Option<CapabilityRevision> {
+        None
+    }
+
     fn resolve(&self, reference: Reference) -> Result<BackendLease, ResolveError>;
     fn validate_lease(&self, lease: &BackendLease) -> Result<(), ResolveError>;
+    /// Activate the provider behind `reference` and mint a lease for it.
+    ///
+    /// The one non-read operation on this trait: it runs the provider's
+    /// activation hook before returning the lease.
     fn activate(&self, reference: Reference) -> Result<BackendLease, ActivationError>;
     fn subscribe(&self, scope: Scope, cursor: Cursor) -> CapabilityChangeStream;
+    /// Independent, live-only observations. Filters cannot supply authorization.
+    fn subscribe_events(
+        &self,
+        _scope: crate::capability::event_audience::TrustedEventScope,
+        _filter: crate::capability::events::EventFilter,
+    ) -> Result<
+        crate::capability::events::ScopedEventSubscription,
+        crate::capability::events::EventError,
+    > {
+        Err(crate::capability::events::EventError::Unsupported)
+    }
     fn project(&self, target: TransportTarget, scope: Scope) -> Projection;
 }
 

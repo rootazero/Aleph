@@ -1,0 +1,95 @@
+{
+  "artifact": "phase11_gateway_admission_checkpoint",
+  "version": "2026-11-22.12",
+  "status": "PASS_SCOPED_GATEWAY_ADMISSION / NOT_PHASE11_ACCEPTANCE",
+  "candidate_parent": "ec7410373430c065ac36ffee6d8e0844816de463",
+  "contract": {
+    "path": "docs/superpowers/specs/2026-11-21-phase11-nsh-cutover.md",
+    "section": 17
+  },
+  "actual": {
+    "case": "strict shared admission of an owned current production aleph-server on non-default loopback, without launching another server",
+    "server_binary_sha256": "98106438373f0fb36a4f55e5f3f02acec0663fd554b1c4397ca63186b669bf87",
+    "test_binary_sha256": "6874579891a99406e863382ae472731b0913298cdf46d7f03d59a979f20e70a0",
+    "fixture_removed": true,
+    "panel_assets_unchanged": true,
+    "children": [
+      {
+        "name": "model",
+        "exit_code": -15,
+        "forced": false
+      },
+      {
+        "name": "gateway",
+        "exit_code": 0,
+        "forced": false
+      }
+    ]
+  },
+  "checks": {
+    "protocol": "419 unit + 11 integration passed; 2 doctests ignored",
+    "core_probe": "3 passed; full Core suite not run",
+    "shared_host": "17 unit + 8 verifier integration passed; owned live test normally ignored, explicitly run separately and passed",
+    "nsh_full": "20 unit + 8 process + 2 window passed; isolated OS credential test ignored",
+    "nsh_default": "19 unit + 8 process + 2 window passed",
+    "retained_tauri": "165 full + 190 lite qa-owned-root passed",
+    "clippy": "strict NSH embedded-core/qa-service and host gateway-admission all-targets passed",
+    "cargo": "4 GiB gate before each; serial offline locked jobs 1 except normal dependency-edge refresh; no native/build overlap",
+    "lock": "five existing package dependency edges; no new package identities"
+  },
+  "limits": [
+    "local HTTP compatibility is not authenticated process identity, atomic snapshot or bind reservation",
+    "real fixture tested shared path, not packaged NSH cold start or WebView admission",
+    "no service registration, stop, takeover, recovery, or persisted target mutation; no default installed endpoint or account touched",
+    "real Windows/Linux, release packaging, default/rollback, common 14-day track and Tauri deletion remain open"
+  ],
+  "gates": {
+    "P11-A": "OPEN",
+    "P11-B": "OPEN",
+    "P11-C": "OPEN",
+    "P11-D": "OPEN",
+    "P11-E": "OPEN",
+    "P11-F": "OPEN",
+    "P11-G": "OPEN",
+    "P11-H": "OPEN"
+  },
+  "phase10_original_matrix_sha256": {
+    ".phase10-evidence/g7-official-matrix.Ji0duOcq/matrix.json": "fbf5f1272be769ae554ba53df065ef171badb6bbe942bb90e254168664e5f7c2"
+  },
+  "source_sha256": {
+    "Cargo.lock": "d13808937fce0dc2963f3644553cf286c64de9dee4fcf613894b98aae301c137",
+    "desktop/host/Cargo.toml": "b98a8deeaae0195e29123943a741402652f378dc6f463aac0dfd4e37f83dab7a",
+    "desktop/host/src/local_server.rs": "9e7aecb0ebfef7cbe30295d540f8fbc961582693b08426bfb62aff6eb03adf3b",
+    "desktop/host/src/local_server/admission.rs": "600065bdf0d64cb3b7738524e99837f98a1917c2132321465cad2e5cf42805fc",
+    "desktop/nsh-shell/Cargo.toml": "312204e88fffd8304d624155232653c08182bcc5e0461841dffc28cd36f2a4e4",
+    "desktop/nsh-shell/src/main.rs": "97596dba9287e772d4f87189a0a75df248834b7125a91370950f47ac321da597",
+    "desktop/nsh-shell/src/shell_host.rs": "6dfd913d41330b5c33c06f0309d71421c75a78e9c479e48dd8103db7ff55ecb0",
+    "shared/protocol/src/gateway_probe.rs": "accc3986626b027711833e17ebbafc0d091c5c93abd04cea54046dd707909fa7",
+    "shared/protocol/src/lib.rs": "14baccfa172f6d4ad3316c5a5c19830a50a68bf28ef0653921350e57e6fb935d",
+    "src/gateway/server/probe.rs": "331990216fb38105ff523a93d29d413efe2b961c8848ffaa6a0cbf057da37195",
+    "docs/superpowers/specs/2026-11-21-phase11-nsh-cutover.md": "261fda0457471f29437e93aba60511d77d2ff719122f03828d0abdfa249297da",
+    "docs/superpowers/runs/2026-11-21-phase11-nsh-inventory.json": "6d0ee31cbbf267307f1ab31d788335fbd08a86e23fb92dccc90a3f90bcdf92b3",
+    "docs/reference/DESKTOP_SHELL.md": "a269b9202a34d816520e149444fae0a99f596d669bdfef7cf257d5fe880277d9",
+    "qa/nsh_panel_gateway.py": "f64f2c7f918152b1d27856520b1cbb7f3247eaa5c515eec90df30cb0331f12e3"
+  },
+  "raw_sha256": {
+    ".phase10-evidence/phase11-gateway-admission.TlR5J7/protocol-red.log": "656c861b3b3ada9f6bf9ce9587d5d408f85fa030a5a41a0bf916ceb59783ad1b",
+    ".phase10-evidence/phase11-gateway-admission.TlR5J7/protocol-green.log": "3d3a8c200d6baf98572c982bbb236aa577ac62ffc258654773d9f60e9b7608d7",
+    ".phase10-evidence/phase11-gateway-admission.TlR5J7/core-probe.log": "5c7b5765b5dae04e4f08660d7cd33cf6f9ae9ce4e62d7cd3cabfffedf45a0f1c",
+    ".phase10-evidence/phase11-gateway-admission.TlR5J7/host-red.log": "398ea9267bc0d9b90f3937b6dbc27dfe8c21e3caa57518399db89fa278cf13ce",
+    ".phase10-evidence/phase11-gateway-admission.TlR5J7/host-wait-red.log": "5b18e24667578fa0df411df6f4da1ae2cd20ddc42d3e170320a574654695b409",
+    ".phase10-evidence/phase11-gateway-admission.TlR5J7/host-behavior-red.log": "52b255507af1ef93d278a63fc3bcc477556f4745137d4e1d2fe2a40ddcacdae5",
+    ".phase10-evidence/phase11-gateway-admission.TlR5J7/host-final.log": "45cd83dc39edfd1125da6348eec8a97b5f81ae2f55c7635983a2f77c29205533",
+    ".phase10-evidence/phase11-gateway-admission.TlR5J7/host-clippy.log": "e2e36ed017637f6a3dcfb2a81dc6733d1b36045e36184ca05275303fa6b7d69f",
+    ".phase10-evidence/phase11-gateway-admission.TlR5J7/nsh-red.log": "1e0b41314b4ef820a2e4c93a4c217420a9602eb72071ad856151adfbaea20db2",
+    ".phase10-evidence/phase11-gateway-admission.TlR5J7/nsh-full.log": "e575c88189c51a6a9ccb33eac5d5a7f9b39f8be5ee56ecb39966094f56c2c80c",
+    ".phase10-evidence/phase11-gateway-admission.TlR5J7/nsh-default.log": "6b13129d2718ab0394c46e8f9582a040c01710042a839f7056c7dff779b9d091",
+    ".phase10-evidence/phase11-gateway-admission.TlR5J7/nsh-clippy.log": "a93314f4f151018172b76eaf63d5ddd3bae47b4d4736f1ba387ee5641a335b9c",
+    ".phase10-evidence/phase11-gateway-admission.TlR5J7/tauri-full.log": "3e1b19355d714c37948ca1fc5b0fa2d400d4e284a43501735e31e493172a6a84",
+    ".phase10-evidence/phase11-gateway-admission.TlR5J7/tauri-lite.log": "ed76a751e427bf57413c7129eb2b87bf8c12d06569719f370be5b5c295837f7f",
+    ".phase10-evidence/phase11-gateway-admission.TlR5J7/server-build.log": "c1f7eba9efc03f2d4d399dcb2669d967edb2ae899e8e8defddac6dcd281b00ad",
+    ".phase10-evidence/phase11-gateway-admission.TlR5J7/actual-admission.log": "f1a493b5e7eaf6b4123c4b4e5ffdb3a6edfdc3f6fd1b61a723800330803f1bb4",
+    ".phase10-evidence/phase11-gateway-admission.TlR5J7/actual-gateway/gateway.json": "487c20e289050436495d2f36eb3fdc9008ebdf70b12ba4f04162fc79d47a618f",
+    ".phase10-evidence/phase11-gateway-admission.TlR5J7/actual-gateway/gateway-cleanup.json": "20cf66d12c9640530c9ef54135f7a8d5a836bed3937b5e787ddbffce1557a162"
+  }
+}

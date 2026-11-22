@@ -173,7 +173,7 @@ pub fn advertised_tools() -> std::collections::BTreeSet<String> {
     // matching fails, a ceiling so a runaway bulk registration cannot slip
     // through as "fine" because the count would only go up.
     assert!(
-        insert_count >= 1 && insert_count <= 32,
+        (1..=32).contains(&insert_count),
         "constructor direct-insert scan returned {insert_count} entries — outside the \
          1..=32 band, so either the scanner stopped matching the \
          `tools.insert(\"name\".to_string(), …)` shape or a runaway bulk insert swept \

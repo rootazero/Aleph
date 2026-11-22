@@ -1,0 +1,578 @@
+{
+  "status": "ACCEPTED_UNDER_AMENDED_CONTRACT",
+  "acceptance_amendment": {
+    "date": "2026-11-21",
+    "scope": "Only close_ms median and p95 limits are 1.30; all other original limits and all observations unchanged. Not a performance improvement.",
+    "decision": "docs/superpowers/runs/2026-11-21-phase10-acceptance-amendment.md",
+    "receipt": "docs/superpowers/runs/2026-11-21-phase10-acceptance-amendment.json",
+    "historical_matrix_verdict": "NOT_ACCEPTED"
+  },
+  "scope": "Local macOS candidate integrity index; not a release or acceptance receipt. / 本机候选证据索引，不是验收或发布回执。",
+  "head": "0e4e1d4ebaa6e6dee8d6af9928f969d2e90f42b7",
+  "baseline": "Official NSH 0.6.0 (5541637)",
+  "source_sha256": {
+    "Cargo.toml": "b73abce06e5f06595e16f4b48e6a1a7112644a05bc3eef9bb1720a06452865e0",
+    "Cargo.lock": "555ccd6f1a0a0da1904ebf9c0b05974fbccce81dd1643912cdaf2fd5f3d0a448",
+    "desktop/nsh-shell/Cargo.toml": "c442ddefe49db1161ff2081593941f772ae06b2a2c6fb5dfb208e14106bd272c",
+    "desktop/nsh-shell/src/main.rs": "a3be87d1bf0e20ef42b83272527d6ea184988a8ae24aa2bada2266c79f8d0041",
+    "desktop/nsh-shell/src/shell_host.rs": "42baa5175487f76d1c08faafedff029a4cc5795a41f5ca967ded6e511de228f0",
+    "desktop/nsh-shell/src/panel_bridge.rs": "249c33cf74b2078c17e6f5e16d088747fd1f770256d705ce20ea5a5b22733145",
+    "desktop/nsh-shell/src/panel_bridge.js": "33cc18b60e7ffa38a39324f74e5a7aa272c69225985e7f4e186583b202a3c016",
+    "desktop/nsh-shell/macos/Info.plist": "7206f796111a079348f150e1050c5fbf3697eaa88ff3d72f901f9f30e1cabd95",
+    "desktop/nsh-shell/macos/bundle-local.sh": "c868f8bff36c9fa6debcae1a1a32d373ab9e9be88715d9bc0dd50901134c779b",
+    "desktop/nsh-shell/tests/nsh_window_compat.rs": "78374130e23b144345769c0743d282bdfd244bf6cf3840c1392252156cbd3398",
+    "interfaces/webchat/src/app.rs": "3cb53b579067336f8a80b6ccdafb3a85a51b60d9c688b348f3b60be9fc255375",
+    "interfaces/webchat/src/app/shell_bridge.rs": "32fbcde692e081ac468c9a77ba26f2c67154da77e43e63b7de50242f5ed473dc",
+    "shared/protocol/src/lib.rs": "8f7487dc4deeb711e0fa6eeb91e997a9a8c8bdd7ecf7bba20aade1b27dd1fe8e",
+    "shared/protocol/src/panel_shell.rs": "83040efc55614fa8a4fa2b38debaad82386ea20115918740a35adeb55a44ea79",
+    "qa/nsh_panel_launcher.py": "85dda49c544795886c6180ccd9864d5625b1b0eb7c6b6b2c30dc7661bdc8deea",
+    "qa/nsh_panel_matrix.py": "d3cb6d9d24b68abc26b384ba351716adfaa50cca13342767bf49712206940280",
+    "qa/nsh_panel_runtime.schema.json": "9c068b4ef647ef8fc206513dfb43bcccbd1b5d8dcf751e4f44ff9a863b83eb47",
+    "qa/nsh_panel_driver.js": "178436a53757a07a553c2a22e42363b38ff689a7c441ba174cdb5d14b41e9f6e",
+    ".phase10-evidence/run-phase10-official-comparison.sh": "fdb00a2061de6a9ee6047719bbbb971545bc80ad93a1ce483b756141c0df0aa4",
+    ".phase10-evidence/official-canonical.mYMCixUf/sha256.json": "d6a017968256566d310e485d50dbf384308bb33a2326f68b3a19a970a8c6a6eb",
+    "desktop/nsh-shell/macos/test_bundle_local.py": "3e376287271177628ab58c19befbd3da473aa3495442d275750720870409a49d"
+  },
+  "original_matrix_source": {
+    "path": ".phase10-evidence/g7-official-matrix.Pkose4KF/source-identity.json",
+    "sha256": "b72055849acaafb7603c048d619349d7749811dd52221d8dbced7d4475344694"
+  },
+  "source_differences_since_matrix": {
+    "desktop/nsh-shell/src/panel_bridge.rs": {
+      "matrix": "d863b16a97fcb860974108496d252bdaf30707517a941328450e5d45df84087a",
+      "current": "249c33cf74b2078c17e6f5e16d088747fd1f770256d705ce20ea5a5b22733145",
+      "binary_rebuild_sha256": "fed640635c1bf6697e76af723c075935169bb58c3b96e752a8495483df2077cc",
+      "interpretation": "The source and executable changed after Pkose4KF. The scoped clean rebuild matched the later coalesced-listener executable in Ji0duOcq, before the tray Quit candidate."
+    },
+    "desktop/nsh-shell/macos/bundle-local.sh": {
+      "matrix": "0bb41cc6adb897f113f0b73c1e539585e4f1656c85fd06d3b2cb7f757e8b94e0",
+      "current": "c868f8bff36c9fa6debcae1a1a32d373ab9e9be88715d9bc0dd50901134c779b"
+    }
+  },
+  "binary_sha256": {
+    ".phase10-target/debug/aleph-nsh-shell": "fed640635c1bf6697e76af723c075935169bb58c3b96e752a8495483df2077cc",
+    ".phase10-target/debug/aleph-desktop-shell": "0ef781fb9d7de46b2bcea51d6b223ac0b156ba4a3e81d8d6066116680bd33fde",
+    ".phase10-target/debug/aleph-server": "1902bf9b94318b9a67fa5151c5043ddec7dab0cdf996aa0e8dc607bf5f891417"
+  },
+  "canonical_assets": {
+    "path": ".phase10-evidence/official-canonical.mYMCixUf/sha256.json",
+    "sha256": "d6a017968256566d310e485d50dbf384308bb33a2326f68b3a19a970a8c6a6eb",
+    "verified_files": 18
+  },
+  "build_log": {
+    "path": ".phase10-evidence/official-build-verification.nOiD50",
+    "sha256": "ad22476e9e5bd3f1ac0fa3b2e4bc327ae813d891d879bd11e88d11af2a4491bd"
+  },
+  "native": {
+    "G1": {
+      "status": "PASS_RESIDENT_LIFECYCLE",
+      "evidence": [
+        {
+          "path": ".phase10-evidence/g1-official-current-e3w84dqy/receipt.json",
+          "sha256": "5b3f3f370eb60fe7491c98bad16d8736be307eb7bad73e1dba12811130523810",
+          "status": "PASS_CLOSE_REOPEN_AND_OWNED_SETTLEMENT_WITH_ISOLATED_GATEWAY"
+        },
+        {
+          "path": ".phase10-evidence/g1-official-resized-6_7rpfra/receipt.json",
+          "sha256": "fe44ce4e9117fc779d4b914f3773acc00745508bb482c19b072134afccee058c",
+          "status": "PASS_RESIZED_CLOSE_REOPEN_HIDDEN_QUIT_AND_OWNED_SETTLEMENT"
+        },
+        {
+          "path": ".phase10-evidence/official-invalid-startup.json",
+          "sha256": "c5e1e27737c23fb2bece72e5ec68944fb8c0e46a9886ee0db279afc24575ec37",
+          "status": "PASS_REFUSED_INVALID_STARTUP"
+        }
+      ]
+    },
+    "G2": {
+      "status": "PASS_NORMAL_PACKAGED_REACTIVATION_AND_TRAY",
+      "evidence": [
+        {
+          "path": ".phase10-evidence/g1-official-current-e3w84dqy/receipt.json",
+          "sha256": "5b3f3f370eb60fe7491c98bad16d8736be307eb7bad73e1dba12811130523810",
+          "status": "PASS_CLOSE_REOPEN_AND_OWNED_SETTLEMENT_WITH_ISOLATED_GATEWAY"
+        },
+        {
+          "path": ".phase10-evidence/g2-tray-d6pwnub_/receipt.json",
+          "sha256": "a75508cae9fd5a48d3553f3a7f3aeaa5217e8c885533e0ecb256d93ca8f534b4",
+          "status": "PASS_TRAY_ONLY"
+        }
+      ]
+    },
+    "G3": {
+      "status": "PASS_NATIVE_TOGGLE_DISABLE_CONFLICT_RELEASE",
+      "evidence": [
+        {
+          "path": ".phase10-evidence/g3-hotkey-uesy2u1t/receipt.json",
+          "sha256": "5eaea2734f7970f149515b7a67c3f49eec5a77d360e655576ecc19a754efc046",
+          "status": "PASS_HOTKEY_ENABLED"
+        },
+        {
+          "path": ".phase10-evidence/g3-hotkey-fl_jsz7n/receipt.json",
+          "sha256": "d9ad34073cda021e4662f5beda5ea91f6be82ec9103d0acd45076ea7d057539a",
+          "status": "PASS_HOTKEY_DISABLED"
+        },
+        {
+          "path": ".phase10-evidence/g3-official-conflict-6dkacdqz/receipt.json",
+          "sha256": "e2c1b0f3c09a1e47f55243f8bf48e4c970cfb67b6445be29415dcd96ead843f6",
+          "status": "PASS_CONFLICT_AND_RELEASE"
+        }
+      ]
+    },
+    "G4": {
+      "status": "PASS_TARGETED_AND_UNQUALIFIED_DISPATCH_WITH_RESTORATION",
+      "evidence": [
+        {
+          "path": ".phase10-evidence/g4-official-panel-_7kpm0cr/receipt.json",
+          "sha256": "7b4ba81bb52bb0dcf61345198ca2179817c6d21b5b4932b2a5c71c838c07e562",
+          "status": "PASS_TARGETED_ROUTES"
+        },
+        {
+          "path": ".phase10-evidence/g4-default-dispatch-lmd3unzg/receipt.json",
+          "sha256": "f13c129665567fe9723e579f03306ffb88ac510961bfb2fd6206b9edc96720b9",
+          "status": "PASS_SYSTEM_DEFAULT_COLD_AND_WARM"
+        },
+        {
+          "path": ".phase10-evidence/g4-official-reload.T89qTsUR/receipt.json",
+          "sha256": "82f5ae9f9a15e43cfa18c32fe92256be6ba047273f176ba0d57148ec2d544017",
+          "status": "PASS_RELOAD_IN_PROGRESS"
+        },
+        {
+          "path": ".phase10-evidence/g4-origin-usqgd91o/receipt.json",
+          "sha256": "99b7888257da9b36c0e9353d4583f76f2da46a08a9190f17e4c27060278614ba",
+          "status": "PASS_BRIDGE_ONLY_ON_TRUSTED_TOP_FRAME"
+        },
+        {
+          "path": ".phase10-evidence/g4-official-panel-zll9j6qx/receipt.json",
+          "sha256": "29044402d343647cdd62649dc9a8234c59b5121616dabe1cfb0060e79e562863",
+          "status": "PASS_TARGETED_ROUTES",
+          "shell_sha256": "fed640635c1bf6697e76af723c075935169bb58c3b96e752a8495483df2077cc",
+          "gateway_sha256": "163dab4065437c6de9dfdf7a08ee545921732ec8f2115e45034831fcdfc18fee"
+        }
+      ]
+    },
+    "G5": {
+      "status": "PASS_DEDICATED_SIGNED_QA_NOTIFICATION_PRESENTATION_AND_ACTION",
+      "evidence": [
+        {
+          "path": ".phase10-evidence/g5-official-d1d_qoaj/receipt.json",
+          "sha256": "d142232f4b624ccc7f79c8afb7a0ab7ba2ca3de6e1236f29b86a12a281c7efc5",
+          "status": "SAME_WINDOW_CHAT_AFTER_OS_ADMISSION_OPERATOR_CONFIRMATION_REQUIRED"
+        },
+        {
+          "path": ".phase10-evidence/g5-official-2wphghqq/click-verification.json",
+          "sha256": "4fcb39376311ae0e7b76a79b65f8ae755f3715b9342539e2bb7189df29e95b3e",
+          "status": "PASS_NOTIFICATION_ACTION_SAME_WINDOW_AFTER_LISTENER_COALESCE"
+        },
+        {
+          "path": ".phase10-evidence/g5-official-d1d_qoaj/click-verification.json",
+          "sha256": "d7a3504677d1a129dbf15a6aa080e386032033f631b0b94282db0a905efa5392",
+          "status": "PASS_NATIVE_NOTIFICATION_CARD_ACTION_SAME_WINDOW_CHAT"
+        }
+      ]
+    },
+    "G6": {
+      "status": "PARTIAL_PHYSICAL_TOPOLOGY_NOT_EXERCISED",
+      "evidence": [
+        {
+          "path": ".phase10-evidence/g6-actual-ikue8zka/receipt.json",
+          "sha256": "226378790cb0e64d1a6d1460c36c6a77916b2a978fe00b0ad666e61af12d08fb",
+          "status": "PASS_ACTUAL_NSH_PLACEMENT"
+        }
+      ]
+    },
+    "G7": {
+      "status": "ACCEPTED_UNDER_QUIT_ONLY_AMENDED_CONTRACT",
+      "amended_assessment": "docs/superpowers/runs/2026-11-21-phase10-acceptance-amendment.json",
+      "historical_performance_verdict": "NOT_ACCEPTED_PERFORMANCE",
+      "evidence": [
+        {
+          "path": ".phase10-evidence/g7-official-matrix.Z9mbnVmh/matrix.json",
+          "sha256": "9a73ab89eb4aab6af60a51c4e1d5d6571e3e267c8acbcb5d057d69568d03b6cd",
+          "status": "NOT_ACCEPTED_DEBUG_PROFILE",
+          "failure_metrics": [
+            "input_ms:p95",
+            "close_ms:median"
+          ]
+        },
+        {
+          "path": ".phase10-evidence/g7-official-managed-9mt2xujl/receipt.json",
+          "sha256": "1d67b3795434fcc2981fc52bb9236b63a9d96730ca442c82224ebb228ba8ab8a",
+          "status": "PASS_SAME_LAUNCHD_MANAGED_GATEWAY"
+        },
+        {
+          "path": ".phase10-evidence/g7-official-busy-oswcl4oj/receipt.json",
+          "sha256": "0b01f0acaaba2389619e8b3dc838cf1bf4df14e01fc00719f066dd2b340b8f66",
+          "status": "PASS_BUSY_HIDDEN_QUIT_WITH_ISOLATED_GATEWAY"
+        },
+        {
+          "path": ".phase10-evidence/shared-panel-ui-zujald1p/receipt.json",
+          "sha256": "fda80fe19c9bd24683cdb03ff4c06130e99364f16676496536fa244b2e7a3d5e",
+          "status": "PASS_BOTH_SHARED_ASSET_REPLY_STREAM_WIRE_AND_TOOL_CARD_FOLD"
+        },
+        {
+          "path": ".phase10-evidence/shared-panel-reasoning.yRpfZFK5/receipt.json",
+          "sha256": "28c60fac2244d1d0f8ecb102c64062d6ba808f70e050cff11bfe5b5b56c62e56",
+          "status": "PASS_BOTH_SHARED_ASSET_REPLY_STREAM_WIRE_AND_REASONING_FOLD"
+        },
+        {
+          "path": ".phase10-evidence/shared-panel-resized-reasoning.7rmPXvWe/receipt.json",
+          "sha256": "3bbacf5c58f3b199b522ab3e4da89026d9dd70a0894e81149ede18516ed039ca",
+          "status": "PASS_BOTH_SHARED_ASSET_REPLY_STREAM_WIRE_AND_RESIZED_REASONING_FOLD"
+        }
+      ]
+    }
+  },
+  "g7_formal_comparisons": [
+    {
+      "path": ".phase10-evidence/g7-official-matrix.Z9mbnVmh/matrix.json",
+      "sha256": "9a73ab89eb4aab6af60a51c4e1d5d6571e3e267c8acbcb5d057d69568d03b6cd",
+      "status": "NOT_ACCEPTED",
+      "passing_runs": 80,
+      "matching_captured_http_assets": 320,
+      "forced_gateway_cleanup": 0,
+      "reducer_status": "VALID",
+      "threshold_status": "NOT_ACCEPTED",
+      "failure_metrics": [
+        "input_ms:p95",
+        "close_ms:median"
+      ],
+      "close_median_ms": {
+        "baseline": 43.032499999999345,
+        "candidate": 50.34649999999965
+      },
+      "close_median_ratio": 1.1699645616685161,
+      "close_p95_ms": {
+        "baseline": 61.25,
+        "candidate": 61.45600000000013
+      },
+      "close_p95_ratio": 1.0033632653061246,
+      "input_p95_ms": {
+        "baseline": 207,
+        "candidate": 762
+      },
+      "input_p95_ratio": 3.681159420289855,
+      "binary_manifest_sha256": "784534e33ac371e777bc2b125c634f61eac366f1e139b55ddf9095e1db69b0d1",
+      "relevant_binary_sha256": {
+        "nsh": "fed640635c1bf6697e76af723c075935169bb58c3b96e752a8495483df2077cc",
+        "gateway": "3d97a101b0eff154d59e8e3f552c4dae42804ee8c73ac653c68027928947bd2b",
+        "lock": "555ccd6f1a0a0da1904ebf9c0b05974fbccce81dd1643912cdaf2fd5f3d0a448"
+      },
+      "native_close_decomposition_medians_ms": {
+        "tauri_request_to_closed": 0.459,
+        "tauri_closed_to_settled": 42.529,
+        "nsh_request_to_closed": 15.889,
+        "nsh_closed_to_settled": 34.489
+      },
+      "interpretation": "Close-path delta precedes the native closed marker; this is a diagnostic decomposition, not a causal allocation or acceptance change."
+    },
+    {
+      "path": ".phase10-evidence/g7-official-matrix.EBv53V0e/matrix.json",
+      "sha256": "8c5edb7754a150baadc64fb2d32e61e78b28a128704fbabe82432bce8041a49f",
+      "status": "NOT_ACCEPTED",
+      "passing_runs": 80,
+      "matching_captured_http_assets": 320,
+      "reducer_status": "VALID",
+      "threshold_status": "NOT_ACCEPTED",
+      "failure_metrics": [
+        "input_ms:p95",
+        "close_ms:median"
+      ],
+      "close_median_ms": {
+        "baseline": 47.709499999999935,
+        "candidate": 62.188499999999294
+      },
+      "close_median_ratio": 1.303482534924897
+    },
+    {
+      "path": ".phase10-evidence/g7-official-matrix.Pkose4KF/matrix.json",
+      "sha256": "b52d5374e8bdfb1315e9a70be8c79610ec1bd215e80d93ea9b0e738eaa785da3",
+      "status": "NOT_ACCEPTED",
+      "passing_runs": 80,
+      "matching_captured_http_assets": 320,
+      "reducer_status": "VALID",
+      "threshold_status": "NOT_ACCEPTED",
+      "failure_metrics": [
+        "close_ms:median"
+      ],
+      "close_median_ms": {
+        "baseline": 43.84899999999925,
+        "candidate": 49.4434999999994
+      },
+      "close_median_ratio": 1.1275855777782902
+    },
+    {
+      "path": ".phase10-evidence/g7-official-matrix.Ji0duOcq/matrix.json",
+      "sha256": "fbf5f1272be769ae554ba53df065ef171badb6bbe942bb90e254168664e5f7c2",
+      "status": "NOT_ACCEPTED",
+      "passing_runs": 80,
+      "matching_captured_http_assets": 320,
+      "forced_gateway_cleanup": 0,
+      "reducer_status": "VALID",
+      "threshold_status": "NOT_ACCEPTED",
+      "failure_metrics": ["close_ms:median", "close_ms:p95"],
+      "close_median_ms": {"baseline": 41.298, "candidate": 51.794},
+      "close_median_ratio": 1.2541527434742639,
+      "close_p95_ms": {"baseline": 57.849, "candidate": 72.014},
+      "close_p95_ratio": 1.2448616224999398,
+      "input_p95_ms": {"baseline": 30, "candidate": 32},
+      "input_p95_ratio": 1.0666666666666667,
+      "source_manifest_sha256": "fe231f7a1d8dc82c63af3a0983b6b749ee4f3d7380e4743cf890a477dcd6c700",
+      "binary_manifest_sha256": "e39f6010a09541f90100cfea39bfd64b8e6b9e7b14386a8f3978c272fc5622f1",
+      "gateway_sha256": "1902bf9b94318b9a67fa5151c5043ddec7dab0cdf996aa0e8dc607bf5f891417"
+    }
+  ],
+  "g7_profile_diagnostics": [
+    {
+      "path": ".phase10-evidence/g7-optimized-matrix.1kIQ9DQJ/matrix.json",
+      "sha256": "ba4494dd968b7c8da13405cb6c2e3ae3df815911553193a4c93a2176079fdfc6",
+      "profile": "CARGO_PROFILE_DEV_OPT_LEVEL=3,debug_assertions=true",
+      "classification": "separate-profile diagnostic; not a replacement candidate",
+      "status": "NOT_ACCEPTED",
+      "passing_runs": 80,
+      "matching_captured_http_assets": 320,
+      "forced_gateway_cleanup": 0,
+      "reducer_status": "VALID",
+      "threshold_status": "NOT_ACCEPTED",
+      "failure_metrics": [
+        "close_ms:median"
+      ],
+      "close_median_ms": {
+        "baseline": 42.2765,
+        "candidate": 51.2505
+      },
+      "close_median_ratio": 1.2122692275851166,
+      "close_p95_ms": {
+        "baseline": 60.794,
+        "candidate": 68.408
+      },
+      "close_p95_ratio": 1.1252426226272563,
+      "binary_sha256": {
+        "tauri": "95d3bc32d5ef168ddc61fd15a0fc59f4c4bc4ccf27a5f94d46e74142e35c7872",
+        "nsh": "d7883c0b97e4463e5b2301014395bbb59af3d09902e1ce7db49ba9f5437ae48a",
+        "gateway": "3d97a101b0eff154d59e8e3f552c4dae42804ee8c73ac653c68027928947bd2b"
+      },
+      "binary_manifest_sha256": "34aa9cd2c6545bfb288efc97754da935359f33aec99d6d55b50284a29c4625cf",
+      "build_profile_sha256": "cfd660295835fdd5977ba4469665e2723e8793f5f58fe57d2275df2f5ca5a975"
+    },
+    {
+      "path": ".phase10-evidence/g7-official-hide-now/receipt.json",
+      "classification": "official NSH 0.6.0 public-API diagnostic; not a G7 matrix",
+      "status": "DIAGNOSTIC_COMPLETE",
+      "samples": 12,
+      "normal_exit": 12,
+      "median_ms": {
+        "direct": 29.1084795,
+        "hide_immediate": 31.788542
+      },
+      "interpretation": "Immediate public hide followed by quit_app was slower in this fixture; no product change adopted."
+    }
+  ],
+  "unresolved": [],
+  "deferred": [
+    "G6 physical display topology is user-deferred and NOT TESTED / 用户暂缓多屏物理拓扑验收，仍未测试"
+  ],
+  "historical_failures": [
+    "The retained G7 matrix fails close_ms:median and close_ms:p95 under the original contract. The separately approved 2026-11-21 Quit-only amendment accepts the same full data; the original matrix verdict is not edited."
+  ],
+  "official_quit_api": {
+    "source": "nsh-platform-macos-0.6.0/src/app.rs",
+    "quit_app_dispatch": "DispatchQueue::main().exec_async",
+    "window_close": "finish_running closes the native NSWindow, then stops the engine and event loop",
+    "alternative": "nsh-core DesktopCommand::Quit routes through nsh-platform-macos chrome.rs to the same quit_app",
+    "finding": "No public inline-main-thread quit or close-animation option; no supported fast path identified.",
+    "main_queue_diagnostic": {
+      "path": ".phase10-evidence/g7-official-main-queue.BKRiCDAI/receipt.json",
+      "sha256": "9d1f12734af8f31edf1d391a7406f16205718150a9f3cc7dee056bc322fd50d5",
+      "normal_exits": 24,
+      "median_ms": {"to_preceding_callback": 1.083, "callback_to_return": 25.039},
+      "classification": "extra callback preceding public Quit; not the native teardown entry or a G7 result"
+    },
+    "debugger_diagnostic": {
+      "path": ".phase10-evidence/g7-official-lldb.pziwhT3b/receipt.json",
+      "sha256": "77c035ae0ea88d502313421f8cebc9fe6089f29d5f4e604b27e907c73867fefa",
+      "normal_exits": 6,
+      "classification": "confirms execution order; debugger timing is perturbed and not a G7 result"
+    },
+    "retained_matrix_reduction": {
+      "path": ".phase10-evidence/g7-reduce-retained.b3AUkKuf/parity-receipt.json",
+      "sha256": "1fea66278acd54105032830d13bb1b5af5ac54e7833bd13b66779d95bb229357",
+      "observations": 80,
+      "only_differing_field": "run_id",
+      "failure_metrics": ["close_ms:median", "close_ms:p95"],
+      "classification": "unchanged reducer replay; no new native samples"
+    },
+    "supported_control_diagnostics": [
+      {
+        "path": ".phase10-evidence/g7-official-appkit-entry.BihOZsLh/receipt.json",
+        "sha256": "b5cebf7d54564d9de7b01d75f67221e48dbab44a98689080ceb88698c6d288f2",
+        "normal_exits": 32,
+        "classification": "AppKit terminate was slower than quit_app"
+      },
+      {
+        "path": ".phase10-evidence/g7-official-window-close.2aCJoJWR/receipt.json",
+        "sha256": "7a5c1ab2b27b0ef34a25a735c8f60bfb4717f1b0db21181228ce2eb93bc83dec",
+        "normal_exits": 32,
+        "classification": "disabling the public window shadow was slower"
+      },
+      {
+        "path": ".phase10-evidence/g7-official-quit-dispatch-tail.UoiDuW5F/receipt.json",
+        "sha256": "2bb41c3cd9988d162a283e1abf55a1880a801d52f418efa15c90199286ad1877",
+        "normal_exits": 24,
+        "classification": "timestamp-only dispatch tail; cannot allocate time inside the Quit callback"
+      },
+      {
+        "path": ".phase10-evidence/g7-official-appview-differential.tzOHKpct/receipt.json",
+        "sha256": "6908224c510970b622f88f443a77fcd30cef9ce0a3b761d0fad07ced916e8c07",
+        "normal_exits": 18,
+        "classification": "embedded AppView versus standalone; no demonstrated gain large enough to justify replacing the owner"
+      }
+    ],
+    "official_release_comparison": {
+      "path": ".phase10-evidence/g7-official-release-compare.gAEM4XHF/receipt.json",
+      "sha256": "adc375442647d5a59e8e18c32764a77ad94db63814349a55e04761dbbbc5cdfa",
+      "classification": "source only; 0.6.1 has no change to the standalone Quit path; no dependency change or runtime test"
+    }
+  },
+  "candidate_rebuild": {
+    "source_sha256": "249c33cf74b2078c17e6f5e16d088747fd1f770256d705ce20ea5a5b22733145",
+    "binary_sha256": "fed640635c1bf6697e76af723c075935169bb58c3b96e752a8495483df2077cc",
+    "method": "Scoped cargo clean -p aleph-nsh-shell in .phase10-target, then offline locked serial build; output binary hash matches G7 matrix candidate.",
+    "tests": "4 unit tests and 2 compatibility tests passed after clean rebuild."
+  },
+  "g4_regression": {
+    "path": ".phase10-evidence/g4-official-panel-zll9j6qx/receipt.json",
+    "sha256": "29044402d343647cdd62649dc9a8234c59b5121616dabe1cfb0060e79e562863",
+    "status": "PASS_TARGETED_ROUTES",
+    "gateway_sha256": "163dab4065437c6de9dfdf7a08ee545921732ec8f2115e45034831fcdfc18fee"
+  },
+  "review_after_listener_coalescing": {
+    "spec": "PASS_SCOPED_SOURCE_ONLY",
+    "details": "The full Pi output records a conditional source PASS followed by a focused source PASS. Neither verifies binary identity or native behavior; the exact rebuild and G4/G5 receipts cover those separately. No G7 verdict."
+  },
+  "gateway_input_fix": {
+    "source": "src/gateway/server/connection/off_loop.rs",
+    "source_sha256": "c19f5d9249b7f8d3639bc7cedd8b0ab15ae70ba4ee824de3a700aac575c06e2a",
+    "gateway_sha256": "1902bf9b94318b9a67fa5151c5043ddec7dab0cdf996aa0e8dc607bf5f891417",
+    "before": {
+      "path": ".phase10-evidence/g7-system-info-order-before.bkv8k2n0/receipt.json",
+      "sha256": "9360184a90007ae9ed477511a124dfedd888b7dcb784c1295dda08b9c79fe4f8",
+      "health_ms": [224, 242]
+    },
+    "after": {
+      "path": ".phase10-evidence/g7-system-info-order-after.wwq_xr8d/receipt.json",
+      "sha256": "8519f6230c9fbb80a51757127cfefe892f3cf5437ff668bf0494cdb0afc95317",
+      "health_ms": [3, 4]
+    },
+    "nsh_diagnostic": {
+      "path": ".phase10-evidence/g7-trace-input.4rn01lxk/summary.jsonl",
+      "sha256": "7640c93ba3d975b419a6a56ff326e92ec64e467591ab1c2f4d6dccb23de3b888",
+      "functional_passes": 12,
+      "send_to_reply_ms": {"min": 21, "median": 23, "max": 25},
+      "interpretation": "Diagnostic only; not a formal p95 or a native Quit result."
+    },
+    "focused_off_loop_tests": {
+      "path": ".phase10-evidence/g7-offloop-focused-tests.4VDZjoYd",
+      "sha256": "89d30a5a7d160ba3f03683392f8265f8fbfd2c74e20321effa71257a315f115d",
+      "passed": 9
+    }
+  },
+  "matched_kernel_exit_notice_probe": {
+    "path": ".phase10-evidence/g7-native-exit-observer.a426cLjK/trial.3ixykj9i/receipt.json",
+    "sha256": "b768456a2491a80d628c561a562c66528de075d4621cbe281b65dd742edb4615",
+    "valid_rounds": 12,
+    "median_request_to_exit_notice_ms": { "tauri": 9.494, "nsh": 22.162 },
+    "median_exit_notice_to_observed_settlement_ms": { "tauri": 30.568, "nsh": 33.5 },
+    "classification": "Independent kqueue receipt timestamp, matched by PID and nonce to unchanged functional smoke runs with native exit status 0. No kernel event timestamp or formal performance verdict."
+  },
+  "close_clock_domain_audit": {
+    "path": ".phase10-evidence/g7-close-stage-audit.mfhHr4G2/receipt.json",
+    "sha256": "263026984baa87a0ac4648985726585885c91c1269dbf18019fa3d4b31abd506",
+    "complete_matrices": 6,
+    "measured_rounds_per_surface_per_matrix": 30,
+    "classification": "Diagnostic only. Verified original medians and p95 and distinguishes collector receipt clocks from native markers. Does not treat markers as kernel exit or change reducer inputs."
+  },
+  "restored_candidate_audit": {
+    "path": ".phase10-evidence/g7-tray-candidate.IThQBKIR/restored-candidate-audit.json",
+    "sha256": "1cd97c5d0616335233b5d6b8552d14ab00b842cd6f401b6a24b56f26ad4d4b8f",
+    "matrix": ".phase10-evidence/g7-official-matrix.Ji0duOcq/matrix.json",
+    "note": "Byte-identical shell rebuild and binary/source identity verified. The same live identity audit rejects the historical tray-first matrix on the changed main.rs. No observations were added."
+  },
+  "appview_real_panel_probe": {
+    "path": ".phase10-evidence/g7-official-appview-panel.qW5RC3Tt/trial.oe7nv1vu/receipt.json",
+    "sha256": "d3172bc0dc54dc41250199d4d403074bd1e1e3e75ed626e3806ba45375d0e15f",
+    "binary_sha256": "ae893eedd77b609223078aaab4e8571f5a0ee0ba00c5def09a13dc21195fc2b4",
+    "valid_rounds": 18,
+    "median_request_to_host_return_ms": {
+      "standalone": 12.641771,
+      "appview_default": 12.510125,
+      "appview_animation_none": 10.934229
+    },
+    "classification": "Signed, isolated real Panel and Gateway differential. Does not include formal settlement timing or complete Aleph native integration. No product change."
+  },
+  "appview_animation_probe": {
+    "path": ".phase10-evidence/g7-official-appview-animation.Zndvo9ET/receipt.json",
+    "sha256": "0dbaca37c46c2f2697d83a5e143c8bcc43b42159137aafc62285887165d37ad3",
+    "normal_exits_after_real_webview_load": 36,
+    "request_to_return_median_ms": {"standalone": 21.490, "embedded_default": 16.558, "embedded_no_animation": 14.673},
+    "embedded_window_close_median_ms": {"default": 13.743, "no_animation": 11.570},
+    "interpretation": "Diagnostic only. The fixture owns the window and can set its animation policy; the official standalone API exposes no equivalent option."
+  },
+  "tray_quit_candidate": {
+    "disposition": "REVERTED_AFTER_VALID_REJECTION",
+    "source": "desktop/nsh-shell/src/main.rs",
+    "source_sha256": "0d66a3445f7b69cd43881831905f40860ee93bc828fce608624c255c96165443",
+    "nsh_binary_sha256": "6594f15ef6fc8516dfdf7d7cfca238e87e740cf552d3c8140dfc08f33452ac24",
+    "isolated_probe": {
+      "path": ".phase10-evidence/g7-official-tray-drain.tFMi03fg/receipt.json",
+      "sha256": "a3a3a99b81f2d83a2fca173da70f7a83cad8b396b616a9e332839d245521eed5",
+      "normal_exits_with_tray_witnessed": 24,
+      "median_before_ms": 26.226,
+      "median_release_first_ms": 20.043,
+      "interpretation": "Diagnostic only: release occurs inside the timed span; 3 of 12 pairs were slower."
+    },
+    "native_hidden_tray_quit": {
+      "path": ".phase10-evidence/g7-tray-candidate.IThQBKIR/g2.log",
+      "sha256": "80f47b084d758c127d1c4508d8da248915eddeff8ec3b5fd2298fda2f981598b",
+      "status": "PASS_TRAY_ONLY"
+    },
+    "shell_tests": {
+      "path": ".phase10-evidence/g7-tray-candidate.IThQBKIR/tests.log",
+      "sha256": "a534ed1ede8990f682d6aacac5c0cf534b3e17014594bdb2314ba1b5d4a1dc37",
+      "passed": 6
+    },
+    "review": {
+      "spec": "PASS_SCOPED_SOURCE_ONLY",
+      "spec_run_id": "28d9bedf-39bf-4a2b-8826-1b7b1cd11387",
+      "spec_artifact": {"path": ".phase10-evidence/g7-tray-candidate.IThQBKIR/review-SPEC.md", "sha256": "a5268e80c7ed0cad72a9f2dd4a52b01fe0f72694ef81400de306a5c9e52576c5"},
+      "scope_note": "The probe has 24 samples, not 20. G2 was a native tray action, not the authenticated QA action. These reviews did not accept G7.",
+      "quality_first_attempt": "250268c2-a899-4058-81ae-569419ab0067: timed out after 240000ms, no verdict",
+      "quality": "PASS_SCOPED_SOURCE_ONLY",
+      "quality_run_id": "19373748-b9f4-4973-a3c0-79be6abcc220",
+      "quality_artifact": {"path": ".phase10-evidence/g7-tray-candidate.IThQBKIR/review-QUALITY.md", "sha256": "f8932152b3ad152e40b533943dd5dd6e212a6626c443e588043c1b436c5fe07b"}
+    },
+    "invalid_first_comparison": {
+      "path": ".phase10-evidence/g7-official-matrix.qkkIhcmL/matrix.json",
+      "sha256": "af7a7c36df051c9b6f391e632fd032af63b6ddefa6236730f5278f509357239a",
+      "status": "INVALID",
+      "surface": "tauri",
+      "zero_based_index": 35,
+      "reason": "resource_sampling_not_100ms",
+      "note": "35 valid comparator rounds; no candidate rounds and no performance verdict. Original dist restored; restart from round zero without reusing observations."
+    },
+    "formal_comparison": {
+      "status": "VALID_NOT_ACCEPTED",
+      "path": ".phase10-evidence/g7-official-matrix.GTOolWzL/matrix.json",
+      "sha256": "9a9fc1bcc45ebdd6a3772b5bde2290f5c4b4d3898528d8b5e3e59d486fab3564",
+      "source_manifest_sha256": "e814bc940915a94dccc5a5e508c29c1c8936b36b5cf5734aeec31cf36c079c40",
+      "binary_manifest_sha256": "ac1b6fce5d54883a154d137eac8b76ac528bc1e99fececa6bc3852abd237f586",
+      "audit": {"path": ".phase10-evidence/g7-tray-candidate.IThQBKIR/completion-audit.json", "sha256": "db88a8ab42cd90723f4850551f84fd0f5774086de451f5112d21450f0c53c3b4"},
+      "functional_passes": 80,
+      "http_assets_verified": 320,
+      "unforced_gateway_cleanups": 80,
+      "failure_metrics": ["close_ms:median"],
+      "close_median_ms": {"tauri": 44.6565, "nsh": 55.9265, "ratio": 1.252370875460474},
+      "close_p95_ms": {"tauri": 63.292, "nsh": 73.126, "ratio": 1.155375086898798}
+    }
+  }
+}

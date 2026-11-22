@@ -176,16 +176,12 @@ pub async fn run_startup_catchup<C: Clock>(
 
         // Deferred jobs get staggered next_run_at_ms
         let jobs = guard.jobs_mut();
-        for (rank, &(idx, _)) in missed_indices.iter().enumerate() {
-            if rank >= max_missed {
-                let deferred_rank = (rank - max_missed) as i64;
-                if let Some(job) = jobs.get_mut(idx) {
-                    let offset = (deferred_rank.saturating_add(1)).saturating_mul(stagger_interval);
-                    job.state.next_run_at_ms = Some(now.saturating_add(offset));
-                    changed = true;
-                }
+        for (deferred_rank, &(idx, _)) in missed_indices.iter().skip(max_missed).enumerate() {
+            if let Some(job) = jobs.get_mut(idx) {
+                let offset = ((deferred_rank as i64).saturating_add(1)).saturating_mul(stagger_interval);
+                job.state.next_run_at_ms = Some(now.saturating_add(offset));
+                changed = true;
             }
-            // Immediate jobs keep their existing next_run_at_ms (already <= now)
         }
     }
 

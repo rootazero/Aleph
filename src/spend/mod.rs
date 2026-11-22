@@ -106,7 +106,7 @@ impl Principal {
     /// construction a valid `u-`-prefixed string.
     pub fn user(id: impl Into<String>) -> Self {
         let id = id.into();
-        if id.is_empty() || id == Self::UNATTRIBUTED_KEY || id.starts_with('@') {
+        if id.is_empty() || id.starts_with('@') {
             Self::Unattributed
         } else {
             Self::User(id)
@@ -388,8 +388,10 @@ impl SpendLedger for InMemorySpendLedger {
     ) -> anyhow::Result<()> {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let key = (principal.as_key().to_string(), period_start_ms);
-        let is_new_row = !state.rows.contains_key(&key);
-        let row = state.rows.entry(key).or_default();
+        let (row, is_new_row) = match state.rows.entry(key) {
+            std::collections::hash_map::Entry::Occupied(e) => (e.into_mut(), false),
+            std::collections::hash_map::Entry::Vacant(e) => (e.insert(Row::default()), true),
+        };
         match delta {
             Delta::Usd(usd) => {
                 if !usd.is_finite() {
@@ -758,11 +760,13 @@ pub fn principal_from_metadata(meta: &HashMap<String, String>) -> Principal {
     // string an upstream caller stamps into `AUTHOR_USER_KEY` collapses to
     // `Unattributed` instead of writing to the same `principal_id` row
     // space as the sentinel — silent misattribution rather than a panic.
-    meta.get(crate::gateway::execution_engine::AUTHOR_USER_KEY)
-        .cloned()
-        .or_else(|| crate::scope::scope_from_metadata(meta).map(|attr| attr.owner_user_id))
-        .map(Principal::user)
-        .unwrap_or(Principal::Unattributed)
+    if let Some(author) = meta.get(crate::gateway::execution_engine::AUTHOR_USER_KEY) {
+        Principal::user(author.as_str())
+    } else if let Some(attr) = crate::scope::scope_from_metadata(meta) {
+        Principal::user(attr.owner_user_id)
+    } else {
+        Principal::Unattributed
+    }
 }
 
 // ============================================================================
@@ -781,8 +785,16 @@ pub fn principal_from_metadata(meta: &HashMap<String, String>) -> Principal {
 /// why the split exists.
 #[must_use]
 pub fn check(principal: &Principal, now_ms: i64) -> Verdict {
-    let policy = current_policy();
-    check_with(principal, now_ms, &policy, &*global_ledger())
+    let policy = GLOBAL_POLICY.load();
+    let default_policy;
+    let policy_ref = match &policy {
+        Some(p) => &**p,
+        None => {
+            default_policy = crate::config::types::policies::SpendPolicy::default();
+            &default_policy
+        }
+    };
+    check_with(principal, now_ms, policy_ref, &*global_ledger())
 }
 
 /// The logic [`check`] delegates to, with `policy` and `ledger` taken as
@@ -915,7 +927,7 @@ pub(crate) fn check_with(
 /// principal exactly at the ceiling is denied, not let through for one more
 /// call — see G10.
 fn ceiling_blown(spent_usd: f64, limit_usd: f64) -> bool {
-    if !spent_usd.is_finite() {
+    if !spent_usd.is_finite() || !limit_usd.is_finite() {
         return true;
     }
     spent_usd >= limit_usd

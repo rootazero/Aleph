@@ -321,6 +321,11 @@ impl SessionManager {
                 compaction_count INTEGER DEFAULT 0
             );
 
+            CREATE TABLE IF NOT EXISTS session_epoch_reservations (
+                base_key TEXT PRIMARY KEY NOT NULL,
+                epoch INTEGER NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 session_key TEXT NOT NULL,

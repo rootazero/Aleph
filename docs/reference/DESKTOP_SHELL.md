@@ -1,5 +1,29 @@
 # DESKTOP_SHELL.md
 
+## NSH macOS Phase10 scope / NSH macOS Phase10 范围
+
+`desktop/nsh-shell/` is the official NSH 0.6.0 alternative host for the same
+Leptos/WASM Panel, not a second business UI. Its resident window, tray, summon
+hotkey, validated `aleph://open`, notifications and placement have local macOS
+evidence. [Phase10 closeout](../superpowers/runs/2026-11-21-phase10-closeout.md)
+uses the explicitly approved Quit-only median/p95 ≤ 1.30× amendment; it does
+**not** claim faster Quit or a pass under the original limits. Physical display
+topology remains user-deferred and NOT TESTED. / NSH 只托管同一 Panel；按用户批准的
+退出门槛修订收尾，不声称提速，多屏拓扑仍未测试。
+
+The Tauri host described below remains available and was the G7 comparator.
+No default desktop switch, daemon-supervisor migration, release distribution,
+Windows/Linux NSH acceptance or Tauri removal follows. NSH uses an existing
+Gateway; its root owns native callbacks and tasks, not that Gateway's lifetime.
+`ALEPH_SHELL_HOTKEY=disabled` avoids shortcut registration. Notification OS
+permission is not a product feature-disable switch; no such switch is supplied.
+/ 保留下述 Tauri；NSH 不接管独立 Gateway，热键可禁用，通知权限不等于功能开关。
+
+Phase11 now has a [scoped real Panel/native status proof](../superpowers/runs/2026-11-22-phase11-production-panel-receipt.json): the regenerated canonical WASM performs an empty nonce-isolated credential load, obtains real credentialless Gateway authorization and renders its actual read-only native login-status component. The [QA guide](../../qa/phase11_nsh_panel_status.md) separates this from protected pairing, OS writes, performance and platform/default/dual-track acceptance. / 已验证真实 Panel 的有限功能链路，不是全期或跨平台验收。
+
+A separate [protected Panel checkpoint](../superpowers/runs/2026-11-22-phase11-protected-panel-receipt.json) proves actual ticket submission, native save, distinct-document stored-credential reload, isolated deletion and canonical helper-confirmed Alice binding plus shutdown. Its [guide](../../qa/phase11_nsh_pairing.md) states that the protected-auth helper is not the full production server; TLS/remote, other platforms, service/default/dual-track and removal remain open. / 受保护配对证据独立，不扩张完整生产服务或三平台结论。
+
+
 The **desktop shell** (`desktop/shell/`, crate `aleph-desktop-shell`) is the
 "last-mile native shell" — a thin Tauri v2 app that turns the existing Leptos
 Panel into a real desktop application. It is **not** the Panel and **not** the
@@ -30,7 +54,7 @@ lifecycle, OS notifications, and launch-at-login.
 ```
 ┌──────────────────── aleph-desktop-shell (Tauri v2) ────────────────────┐
 │  main.rs     builder, window, plugins, run-loop, daemon supervisor      │
-│  daemon.rs   locate / launch / probe aleph-server; relaunch if it dies  │
+│  daemon.rs   legacy reconcile / explicit stop; shared startup reexports │
 │  tray.rs     system tray icon + menu                                    │
 │  notify.rs   ws://…/ws  → subscribe → OS notifications  (best-effort)    │
 │  update.rs   background GitHub-Releases auto-update    (best-effort)     │
@@ -136,6 +160,8 @@ stop the local daemon.
 
 ### Daemon health supervision
 
+The full Tauri shell delegates startup, status-only readiness probes and relaunch I/O to the unpublished `aleph-desktop-host` library in `desktop/host/src/local_server.rs`. Opt-in NSH `embedded-core` uses the same launcher but checks canonical `/health` and `/ready` documents for the local target before mounting the Panel. Only connection refusal permits launching the bundled sibling; incompatible listeners are left untouched. That compatibility check does not authenticate a process. NSH has no persistent supervisor or stop action yet; version takeover, legacy autostart removal and explicit stop remain in `desktop/shell/src/daemon.rs`. See the [scoped admission receipt](../superpowers/runs/2026-11-22-phase11-gateway-admission-receipt.json). / NSH 仅显式启用的本地 full 路径执行严格启动准入；不接管现有进程，尚未完成监督、停服与三平台验收。
+
 The daemon can crash, be killed, or be stopped out from under the shell. A
 supervisor task probes `GET /ready` every few seconds for the shell's whole
 lifetime. After a short run of failures it declares the daemon down,
@@ -203,6 +229,14 @@ unconfigured endpoint is logged and the shell carries on unaffected. CalVer
 versions (`YY.M.D`) are valid semver, so the updater's version comparison
 works unchanged; see *Build & release* for how CI signs and publishes the
 update manifest.
+
+`desktop/host/src/updater.rs::verify_artifact` is the pure, source-compatible
+minisign adapter for the NSH migration; it has no default trust key or I/O and
+is not yet mounted as an NSH updater. It verifies the global signature before
+using the signed version. Existing configs leave `requireSignedVersion` at the
+pinned plugin's false default, so authenticated old artifacts without a signed
+version still do not bind the announced version. This is not complete rollback
+protection. / NSH 迁移现阶段只有纯验签器；未接下载或安装，不改变现有信任和兼容策略，也不冒称完整防回滚。
 
 ### `aleph://` deep links
 

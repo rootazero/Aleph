@@ -26,7 +26,11 @@ impl GenerationProgress {
     /// * `percentage` - Progress from 0 to 100
     /// * `step` - Description of current step
     pub fn new<S: Into<String>>(percentage: f32, step: S) -> Self {
-        let clamped = percentage.clamp(0.0, 100.0);
+        let clamped = if percentage.is_nan() {
+            0.0
+        } else {
+            percentage.clamp(0.0, 100.0)
+        };
         Self {
             percentage: clamped,
             step: step.into(),

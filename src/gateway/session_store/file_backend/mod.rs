@@ -644,7 +644,6 @@ fn new_session_meta(
         last_active_at: now,
         message_count,
         total_tokens: 0,
-        auto_reset_at: None,
         state: Some(SessionState::Created),
         topic: None,
         status: None,
@@ -1160,6 +1159,17 @@ impl SessionStore for FileSessionStore {
         // branched session could write between the rewrite and the commit
         // and be lost by the rewrite.
         let mut guard = self.lock_metadata(&new_key_str).await?;
+        // Create-if-absent, decided by the store under its own lock. The
+        // caller-side preflight (`get_metadata`) is a fast path only: another
+        // writer can create the target between that check and this call, and
+        // the branch would then replace a session the caller never owned.
+        // The guard read the document after taking the lock, so `None` here is
+        // authoritative — no window between "does it exist" and "write it".
+        if guard.existing().is_some() {
+            return Err(SessionStoreError::AlreadyExists(format!(
+                "Session {new_key_str} already exists"
+            )));
+        }
         self.write_transcript_locked(&guard, &new_key_str, &checkpoint_messages)
             .await?;
         // P1 data isolation: this is a freshly-created session (new_key), so
@@ -1284,6 +1294,47 @@ impl SessionStore for FileSessionStore {
                 identity_meta
                     .custom
                     .insert("topic".to_string(), serde_json::json!(topic));
+            });
+            guard.commit().await?;
+        }
+        Ok(())
+    }
+
+    /// See the trait doc. The file backend keeps the origin on the session's
+    /// identity metadata, exactly like the SQL backend: the origin channel is
+    /// written only when it is still unset, and the origin conversation id
+    /// lands in `custom["origin_conversation"]`. A default no-op here would
+    /// silently drop the origin for every file-backed session.
+    async fn set_source_channel(
+        &self,
+        key: &SessionKey,
+        channel: &str,
+        conversation: Option<&str>,
+    ) -> Result<(), SessionStoreError> {
+        let channel = channel.trim();
+        if channel.is_empty() || channel == "unknown" {
+            return Ok(());
+        }
+        let conversation = conversation
+            .map(str::trim)
+            .filter(|c| !c.is_empty())
+            .map(str::to_string);
+        let key_str = key.to_key_string();
+        let mut guard = self.lock_metadata(&key_str).await?;
+        if let Some(meta) = guard.existing_mut() {
+            with_identity_meta(meta, |identity_meta| {
+                let current = identity_meta.source_channel.trim();
+                // Never clobber an already-recorded real origin.
+                if !current.is_empty() && current != "unknown" {
+                    return;
+                }
+                identity_meta.source_channel = channel.to_string();
+                if let Some(ref conv) = conversation {
+                    identity_meta.custom.insert(
+                        crate::gateway::session_store::types::ORIGIN_CONVERSATION_KEY.to_string(),
+                        serde_json::json!(conv),
+                    );
+                }
             });
             guard.commit().await?;
         }
@@ -1425,6 +1476,35 @@ impl SessionStore for FileSessionStore {
             }
         }
         Ok(max_epoch)
+    }
+
+    async fn reserve_next_epoch(&self, base_key_pattern: &str) -> Result<u32, SessionStoreError> {
+        use crate::utils::atomic_io::{with_file_lock, write_atomic};
+        use sha2::{Digest, Sha256};
+
+        let persisted = self.get_current_epoch(base_key_pattern).await?;
+        let dir = self.config.base_dir.join(".epoch-reservations");
+        let path = dir.join(hex::encode(Sha256::digest(base_key_pattern.as_bytes())));
+        tokio::task::spawn_blocking(move || -> std::io::Result<u32> {
+            std::fs::create_dir_all(&dir)?;
+            with_file_lock(&path.with_extension("lock"), |_| {
+                let reserved: u32 = match std::fs::read_to_string(&path) {
+                    Ok(value) => value
+                        .parse()
+                        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?,
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => 0,
+                    Err(e) => return Err(e),
+                };
+                let next = persisted.max(reserved).checked_add(1).ok_or_else(|| {
+                    std::io::Error::new(std::io::ErrorKind::InvalidData, "Session epoch exhausted")
+                })?;
+                write_atomic(&path, next.to_string().as_bytes())?;
+                Ok(next)
+            })
+        })
+        .await
+        .map_err(|e| SessionStoreError::DatabaseError(e.to_string()))?
+        .map_err(SessionStoreError::from)
     }
 
     async fn get_session_topic(
@@ -1645,37 +1725,6 @@ impl SessionStore for FileSessionStore {
         let meta = self.read_metadata(&key_str).await?;
         let messages = self.read_transcript(&key_str, Some(message_limit)).await?;
         Ok(SessionPreview { meta, messages })
-    }
-
-    async fn count_by_state(&self, state: SessionState) -> Result<usize, SessionStoreError> {
-        let sessions = self.list_sessions(SessionFilter::default()).await?;
-        Ok(sessions
-            .into_iter()
-            .filter(|m| m.state == Some(state))
-            .count())
-    }
-
-    async fn list_by_state(
-        &self,
-        state: SessionState,
-    ) -> Result<Vec<SessionMetadata>, SessionStoreError> {
-        let sessions = self.list_sessions(SessionFilter::default()).await?;
-        Ok(sessions
-            .into_iter()
-            .filter(|m| m.state == Some(state))
-            .collect())
-    }
-
-    async fn set_error(
-        &self,
-        key: &SessionKey,
-        _error_msg: Option<&str>,
-    ) -> Result<(), SessionStoreError> {
-        self.set_state(key, SessionState::Error).await
-    }
-
-    async fn stop(&self, key: &SessionKey) -> Result<(), SessionStoreError> {
-        self.set_state(key, SessionState::Stopped).await
     }
 
     async fn set_idle(&self, key: &SessionKey) -> Result<(), SessionStoreError> {

@@ -789,7 +789,7 @@ mod tests {
         use crate::extension::runtime::wasm::tests::guest_fixture::manifest_with_context_identity_guest;
         use crate::extension::{ExtensionConfig, ExtensionManager};
         use crate::providers::message::UnifiedMessage;
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let _home = crate::utils::paths::IsolatedDiscoveryHome::new();
         let root = tempfile::tempdir().unwrap();
         let directory = root.path().join("plugins/context-guest");
         std::fs::create_dir_all(&directory).unwrap();

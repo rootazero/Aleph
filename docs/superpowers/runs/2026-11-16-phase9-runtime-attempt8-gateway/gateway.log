@@ -1,0 +1,17 @@
+ALEPH-BOOT ts=2026-11-16T11:05:47.822143+00:00 pid=27140 version=26.9.1
+PII filtering engine initialized (enabled: true)
+╔═══════════════════════════════════════════════╗
+║         Aleph Gateway v26.9.1           ║
+╠═══════════════════════════════════════════════╣
+║  WebSocket: ws://127.0.0.1:53926          ║
+║  Protocol:  JSON-RPC 2.0                      ║
+╚═══════════════════════════════════════════════╝
+
+Available methods:
+  - health    : Check server health status
+  - echo      : Echo back parameters (testing)
+  - version   : Get server version info
+  - agent.run : Execute agent request with streaming
+
+Agents: ["main"]
+

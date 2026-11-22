@@ -3,13 +3,11 @@
 //! All secret patterns are defined here in one place to prevent drift
 //! between the two consumers.
 //!
-//! **This file is NOT the repo's vendor catalog.** `crate::secrets::vendor_patterns`
-//! knows Slack `xapp-`, Stripe, SendGrid, HuggingFace, Replicate, Groq, xAI,
-//! Perplexity, npm, PyPI, DigitalOcean, Google OAuth, Telegram, Twilio and
-//! GitLab credentials that this catalog does not: the two overlap only
-//! partially. The gap is deliberate for now — which of the two is the single
-//! source of truth is an owner decision, and copying one into the other
-//! would make that decision silently instead of explicitly.
+//! Vendor prefix shapes come from `crate::secrets::vendor_patterns`; this file
+//! consumes that constant rather than maintaining a second vendor table. The
+//! catalogs still have deliberately different roles: this file also owns
+//! contextual masking replacements, while the network/byte catalogs own leak
+//! labels and block actions. Neither catalog subsumes the other's policy.
 
 use regex::Regex;
 use std::borrow::Cow;
@@ -47,16 +45,12 @@ pub(crate) struct SecretPattern {
     pub replacement: &'static str,
 }
 
-#[derive(Clone)]
-pub(crate) struct LeakPatternDef {
-    pub name: &'static str,
-    pub regex: Regex,
-    pub action: super::leak_detector::LeakAction,
-}
+pub(crate) use super::leak_detector::LeakPattern;
+pub(crate) type LeakPatternDef = LeakPattern;
 
 #[derive(Clone)]
 pub(crate) struct LeakDetectorAssets {
-    pub patterns: Vec<LeakPatternDef>,
+    pub patterns: Vec<LeakPattern>,
 }
 
 #[must_use]
@@ -64,14 +58,18 @@ pub(crate) fn secret_masker_patterns() -> Vec<SecretPattern> {
     static PATTERNS: OnceLock<Vec<SecretPattern>> = OnceLock::new();
     PATTERNS
         .get_or_init(|| {
-            vec![
+            let mut patterns = vec![
                 SecretPattern {
-                    regex: Regex::new(r"\bsk-[a-zA-Z0-9]{20,}").unwrap(),
-                    replacement: "sk-***REDACTED***",
+                    regex: Regex::new(r"\bsk-proj-[a-zA-Z0-9_\-]{20,}").unwrap(),
+                    replacement: "sk-proj-***REDACTED***",
                 },
                 SecretPattern {
-                    regex: Regex::new(r"\bsk-ant-[a-zA-Z0-9\-]{20,}").unwrap(),
+                    regex: Regex::new(r"\bsk-ant-[a-zA-Z0-9_\-]{20,}").unwrap(),
                     replacement: "sk-ant-***REDACTED***",
+                },
+                SecretPattern {
+                    regex: Regex::new(r"\bsk-[a-zA-Z0-9_\-]{20,}").unwrap(),
+                    replacement: "sk-***REDACTED***",
                 },
                 SecretPattern {
                     // `\b` anchors the start so an in-string occurrence of
@@ -197,18 +195,21 @@ pub(crate) fn secret_masker_patterns() -> Vec<SecretPattern> {
                     // prose of a URL that had no credential at all.
                     //
                     // The password may contain `@` itself, so the class is
-                    // greedy over the whole non-whitespace run and the match
-                    // settles on its LAST `@` — stopping at the first one
-                    // left the tail of the password in clear.
-                    regex: Regex::new(r"://([^\s:/@]+):(\S*)@").unwrap(),
+                    // greedy over the non-delimiter run and the match
+                    // settles on its LAST `@` before path/query/fragment/space —
+                    // stopping at the first one left the tail of the password in clear,
+                    // while matching `\S*` crossed into path/query delimiters and corrupted URLs.
+                    regex: Regex::new(r"://([^\s:/@]+):([^/\s?#]*)@").unwrap(),
                     replacement: "://${1}:***REDACTED***@",
                 },
                 SecretPattern {
                     // Same quoted-key gap as the AWS and token rules, and the
                     // same reason for capturing the prefix: `db_password = "…"`
                     // must keep its spacing and its quotes, because only the
-                    // value is the secret. The 8-character floor stays.
-                    regex: Regex::new(r#"(?i)(password|passwd|pwd|secret)(\s*["']?\s*[=:]\s*["']?)([^\s'"]{8,})(["']?)"#).unwrap(),
+                    // value is the secret. The 8-character floor stays. An
+                    // escaped character (notably `\"`) belongs to the value,
+                    // matching the shell parser instead of ending the mask early.
+                    regex: Regex::new(r#"(?i)(password|passwd|pwd|secret)(\s*["']?\s*[=:]\s*["']?)((?:\\.|[^\s'"]){8,})(["']?)"#).unwrap(),
                     replacement: "${1}${2}***REDACTED***${4}",
                 },
                 SecretPattern {
@@ -226,7 +227,16 @@ pub(crate) fn secret_masker_patterns() -> Vec<SecretPattern> {
                     regex: Regex::new(r"\b[MN][A-Za-z\d]{23,}\.[\w-]{6,7}\.[\w-]{27,}\b").unwrap(),
                     replacement: "***DISCORD_TOKEN_REDACTED***",
                 },
-            ]
+            ];
+            patterns.extend(
+                crate::secrets::vendor_patterns::VENDOR_SECRET_PATTERNS
+                    .iter()
+                    .map(|(_, source)| SecretPattern {
+                        regex: Regex::new(source).expect("static vendor pattern compiles"),
+                        replacement: "***REDACTED***",
+                    }),
+            );
+            patterns
         })
         .clone()
 }
@@ -238,13 +248,18 @@ pub(crate) fn leak_detector_assets() -> LeakDetectorAssets {
         .get_or_init(|| {
             let patterns = vec![
                 LeakPatternDef {
-                    name: "openai_key",
-                    regex: Regex::new(r"\bsk-[a-zA-Z0-9]{20,}").unwrap(),
+                    name: "openai_project_key",
+                    regex: Regex::new(r"\bsk-proj-[a-zA-Z0-9_\-]{20,}").unwrap(),
                     action: super::leak_detector::LeakAction::Block,
                 },
                 LeakPatternDef {
                     name: "anthropic_key",
-                    regex: Regex::new(r"\bsk-ant-[a-zA-Z0-9\-]{20,}").unwrap(),
+                    regex: Regex::new(r"\bsk-ant-[a-zA-Z0-9_\-]{20,}").unwrap(),
+                    action: super::leak_detector::LeakAction::Block,
+                },
+                LeakPatternDef {
+                    name: "openai_key",
+                    regex: Regex::new(r"\bsk-[a-zA-Z0-9_\-]{20,}").unwrap(),
                     action: super::leak_detector::LeakAction::Block,
                 },
                 LeakPatternDef {
@@ -337,9 +352,10 @@ mod tests {
         // must NOT be treated as an OpenAI key by either the masker or the leak
         // detector (the latter's openai_key action is Block). Real keys at a
         // boundary still match.
-        // The exec patterns use a hyphen-free body (`sk-[a-zA-Z0-9]{20,}`), so a
-        // false positive needs "·sk-" followed by 20+ CONTIGUOUS alnum — e.g. a
-        // URL slug "elon-musk-<run>" or "disk-<run>".
+        // The left word boundary keeps "sk-" inside a larger hyphenated word
+        // from matching. A false positive needs "·sk-" at a boundary followed by
+        // 20+ credential characters — e.g. a URL slug "elon-musk-<run>" or
+        // "disk-<run>".
         let benign =
             "see elon-musk-teslarobotaxiupdate2025q3report and disk-cleanuputility1234567890";
         let real = "OPENAI_API_KEY=sk-abcdefghijklmnopqrstuvwxyz1234";
@@ -371,6 +387,17 @@ mod tests {
             masker_openai.regex.is_match(real),
             "masker openai pattern missed a real boundary key"
         );
+    }
+
+    #[test]
+    fn masker_consumes_every_vendor_pattern() {
+        let masker = secret_masker_patterns();
+        for (label, source) in crate::secrets::vendor_patterns::VENDOR_SECRET_PATTERNS {
+            assert!(
+                masker.iter().any(|pattern| pattern.regex.as_str() == *source),
+                "masker must consume the shared {label} pattern"
+            );
+        }
     }
 
     #[test]

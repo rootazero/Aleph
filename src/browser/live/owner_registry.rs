@@ -127,8 +127,12 @@ impl LiveOwnerRegistry {
         }
     }
 
-    /// The ONLY registration authority is the record captured inside the exact
-    /// owner's mutation scope. No profile/current-tab/PID/URL discovery occurs.
+    /// Test-only convenience wrapper: the registration path proper is
+    /// [`Self::register_operation_fresh`], which also reports whether the
+    /// call created the registration. Production publishes through the fresh
+    /// form so it can compensate correctly, so this wrapper has no
+    /// production caller.
+    #[cfg(test)]
     pub(crate) fn register_operation(
         &self,
         record: &BrowserOperationRecord,
@@ -137,11 +141,12 @@ impl LiveOwnerRegistry {
             .map(|(lease, _)| lease)
     }
 
-    /// As [`Self::register_operation`], also reporting whether THIS call created
-    /// the registration (`true`) or joined an existing identical-owner one
-    /// (`false`). A publisher that fails afterwards may compensate with
-    /// `retire_target` only for a newly created registration, never one that
-    /// may already back a live resource.
+    /// The ONLY registration authority is the record captured inside the exact
+    /// owner's mutation scope. No profile/current-tab/PID/URL discovery
+    /// occurs. Reports whether THIS call created the registration (`true`) or
+    /// joined an existing identical-owner one (`false`). A publisher that
+    /// fails afterwards may compensate with `retire_target` only for a newly
+    /// created registration, never one that may already back a live resource.
     pub(crate) fn register_operation_fresh(
         &self,
         record: &BrowserOperationRecord,
@@ -263,34 +268,6 @@ impl LiveOwnerRegistry {
         tombstone(&mut st, k, token.epoch());
         true
     }
-
-    /// Permanently retire this owner for routing (no CDP/engine side effects).
-    /// Compare first: a replaced target token cannot retire a newer registration.
-    pub(crate) fn retire_owner(&self, token: &OwnerRouteLease) -> bool {
-        if !Arc::ptr_eq(&self.0, &token.registry.0) {
-            return false;
-        }
-        let mut st = self.0.lock().unwrap_or_else(PoisonError::into_inner);
-        if !st
-            .active
-            .get(&key(&token.binding()))
-            .is_some_and(|r| Arc::ptr_eq(r, &token.registration))
-        {
-            return false;
-        }
-        token.owner().retire_routing();
-        let removed: Vec<_> = st
-            .active
-            .iter()
-            .filter(|(_, r)| Arc::ptr_eq(r.record.owner(), token.owner()))
-            .map(|(k, r)| (k.clone(), r.epoch))
-            .collect();
-        for (k, epoch) in removed {
-            st.active.remove(&k);
-            tombstone(&mut st, k, epoch);
-        }
-        true
-    }
 }
 
 /// Distinct owners with an active registration, snapshotted so sinks can be
@@ -317,7 +294,6 @@ fn tombstone(st: &mut State, key: Key, epoch: u64) {
 mod tests {
     use super::super::tests::fixture;
     use super::*;
-    use crate::browser::cdp_backend::BrowserOperationKind;
     use crate::browser::engine::EngineHandle;
 
     pub(super) fn record(
@@ -325,12 +301,7 @@ mod tests {
         handle: &Arc<EngineHandle>,
         target: &str,
     ) -> BrowserOperationRecord {
-        BrowserOperationRecord::capture_for_test(
-            owner,
-            handle,
-            target.into(),
-            BrowserOperationKind::Open,
-        )
+        BrowserOperationRecord::capture_for_test(owner, handle, target.into())
     }
 
     #[tokio::test]
@@ -358,10 +329,6 @@ mod tests {
             registry.lookup_exact(&b.binding()).unwrap().owner(),
             &ob
         ));
-        assert!(registry.retire_owner(&a));
-        assert!(registry.lookup_exact(&a.binding()).is_err());
-        assert!(registry.lookup_exact(&b.binding()).is_ok());
-        assert!(!registry.retire_owner(&a));
         assert!(registry
             .register_operation(&record(&oa, &ha, "T1"))
             .is_err());
@@ -379,7 +346,6 @@ mod tests {
         assert!(new.epoch() > old.epoch());
         assert!(old.validate().is_err());
         assert!(!registry.retire_target(&old));
-        assert!(!registry.retire_owner(&old));
         assert_eq!(
             registry.lookup_exact(&new.binding()).unwrap().epoch(),
             new.epoch()

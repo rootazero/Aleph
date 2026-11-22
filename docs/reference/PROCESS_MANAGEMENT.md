@@ -12,9 +12,11 @@ Singleton 强制由 OS 级 `flock` 保证（Spec C, 2026-05-02 起改为结构�
   服务不在时，CLI 自己拿锁本地写入。两条路径都不会与服务竞争。
 - OS 在进程退出（正常、panic、SIGKILL）时自动释放 `flock`。`kill -9 <pid>`
   之后**无需 sleep**，可立即 `aleph-server start`。
-- 反向回归脚本 `scripts/spec_c_regression.sh` 锁住四条不变量：
-  SQLite 走 `open_sqlite_safe`、vault/acp 走 `vault_io`/`atomic_io`、
-  每个 CLI 子命令显式声明 policy、`acquire_instance_lock` 不再有遗留 caller。
+- 反向回归门禁在 `tests/spec_c_invariants.rs`（`scripts/spec_c_regression.sh`
+  只是它的薄包装，CI 直接跑这个测试）：四条不变量按 **语法树** 判定——
+  SQLite 走 `open_sqlite_safe`、vault/acp 只能经 `vault_io`/`atomic_io`
+  写入、每个 CLI 子命令的 `//! lock-policy:` 声明必须与代码一致、单例锁
+  只有一个持有者。因为按 AST 判定，`#[cfg(test)]` 里的代码不算违规。
 
 启动时任何 `Another Aleph instance holds the lock …` 都意味着**锁此刻确实
 被某个活进程握着**（OS 报了争用；持有者一退出 OS 就释放）。三种措辞只是

@@ -421,6 +421,9 @@ fn walk(
 /// spent downstream is a click at (0, 0) — a wrong answer that looks like an
 /// answer.
 fn rect_from(model: &dom::BoxModel) -> Option<Rect> {
+    if model.border.len() < 8 {
+        return None;
+    }
     let q = &model.border;
     let xs = [q[0], q[2], q[4], q[6]];
     let ys = [q[1], q[3], q[5], q[7]];

@@ -70,8 +70,12 @@ impl Default for ReconcilerConfig {
 pub struct MemoryConfig {
     #[serde(default = "defaults::default_enabled")]
     pub enabled: bool,
-    #[serde(default = "defaults::default_vector_db")]
-    pub vector_db: String,
+    // A `vector_db` backend selector used to live here. It was cut rather
+    // than wired: one backend (sqlite + sqlite-vec) is the store, so the
+    // selector chose nothing. `Config::migrate_vector_db_in_toml` went with it
+    // — it existed only to keep that one value correct. Stray keys in existing
+    // config.toml files are silently ignored (no `deny_unknown_fields`), and
+    // `config::dead_keys` names this one so the operator can delete the line.
     // A top-level `similarity_threshold` used to live here. It was cut rather
     // than wired: retrieval ranks on RRF-fused rank scores (and rank-derived
     // FTS scores), so no quantity with honest "similarity in [0,1]" semantics
@@ -176,7 +180,6 @@ impl Default for MemoryConfig {
     fn default() -> Self {
         Self {
             enabled: defaults::default_enabled(),
-            vector_db: defaults::default_vector_db(),
             embedding: EmbeddingSettings::default(),
             dreaming: DreamingConfig::default(),
             memory_decay: MemoryDecayPolicy::default(),

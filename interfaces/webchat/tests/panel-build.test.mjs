@@ -48,7 +48,15 @@ test('final candidate resolves at root public base', async () => {
 
 test('capability source is included in build provenance', async () => {
   const { build } = await readCandidate();
-  assert.equal(build.source_inputs.includes('interfaces/webchat/src/panel/source.rs'), true);
+  for (const source of [
+    'interfaces/webchat/src/panel/source.rs',
+    'interfaces/webchat/src/context.rs',
+    'interfaces/webchat/src/panel/capability_surface.rs',
+  ]) {
+    const input = build.source_inputs.find((path) => source === path || source.startsWith(`${path}/`));
+    assert.ok(input, `${source} must be covered by build provenance`);
+    assert.match(build.source_input_hashes[input], /^[0-9a-f]{64}$/);
+  }
 });
 
 test('final candidate resolves under /panel/ public base', async () => {

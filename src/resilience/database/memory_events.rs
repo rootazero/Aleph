@@ -48,7 +48,11 @@ impl StateDatabase {
         } else {
             "pulse"
         };
-        let envelope = envelope.clone();
+        let fact_id = envelope.fact_id.clone();
+        let event_type_tag = envelope.event.event_type_tag();
+        let timestamp = envelope.timestamp;
+        let correlation_id = envelope.correlation_id.clone();
+        let partition = envelope.partition.clone();
 
         self.with_conn(move |conn| {
             // Single statement: compute next seq for this fact_id and INSERT in
@@ -63,14 +67,14 @@ impl StateDatabase {
                        ?2, ?3, ?4, ?5, ?6, ?7, ?8
                 "#,
                 params![
-                    envelope.fact_id,
-                    envelope.event.event_type_tag(),
+                    fact_id,
+                    event_type_tag,
                     event_json,
                     actor,
                     tier,
-                    envelope.timestamp,
-                    envelope.correlation_id,
-                    envelope.partition,
+                    timestamp,
+                    correlation_id,
+                    partition,
                 ],
             )
             .map_err(|e| AlephError::other(format!("Failed to append memory event: {e}")))?;
@@ -295,7 +299,6 @@ struct MemoryEventRow {
     event_type: String,
     event_json: String,
     actor: String,
-    _tier: String,
     timestamp: i64,
     correlation_id: Option<String>,
     partition: Option<String>,
@@ -323,7 +326,6 @@ impl MemoryEventRow {
             event_type: row.get::<_, String>(3)?,
             event_json: row.get(4)?,
             actor: row.get(5)?,
-            _tier: row.get::<_, String>(6)?,
             timestamp: row.get(7)?,
             correlation_id: row.get(8)?,
             partition: row.get(9)?,
@@ -359,7 +361,7 @@ impl MemoryEventRow {
         let actor: EventActor = self
             .actor
             .parse()
-            .map_err(|e: String| AlephError::other(e))?;
+            .map_err(AlephError::other)?;
         Ok(Some(MemoryEventEnvelope {
             id: self.id,
             fact_id: self.fact_id,

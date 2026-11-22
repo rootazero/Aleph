@@ -57,14 +57,14 @@ impl DreamStage for MentionWeaveStage {
                 .into_iter()
                 .filter_map(|r| {
                     let note = KnowledgeNote::from_markdown(&r.filename, &r.content).ok()?;
-                    let mut names = vec![note.title.clone()];
-                    names.extend(note.aliases.iter().cloned());
+                    let body = note.body_text();
+                    let mut names = vec![note.title];
+                    names.extend(note.aliases);
                     Some(MentionDoc {
                         path: r.path,
                         names,
-                        body: note.body_text(),
-                        // rust-doctor-disable-next-line excessive-clone
-                        linked_raw: note.links.clone(),
+                        body,
+                        linked_raw: note.links,
                     })
                 })
                 .collect();

@@ -14,6 +14,7 @@ async fn timed_out_graph_compute_remains_owned_until_blocking_completion() {
         MemoryRuntimeConfig {
             metadata_path: root.path().join("memory/metadata.db"),
             note_memory_dir: root.path().join("notes"),
+            retrieval_tuning: Default::default(),
         },
         Arc::new(OwnershipTree::new()),
     );

@@ -24,7 +24,14 @@ impl MemoryBundle {
     ) -> Result<Arc<Self>, AlephError> {
         Ok(Arc::new(Self {
             note_memory_dir: config.note_memory_dir.clone(),
-            backend: Arc::new(SqliteMemoryBackend::new(&config.metadata_path)?.with_runtime(owner)),
+            backend: Arc::new(
+                SqliteMemoryBackend::new(&config.metadata_path)?
+                    .with_runtime(owner)
+                    .with_retrieval_tuning(
+                        config.retrieval_tuning.rrf_k,
+                        config.retrieval_tuning.bm25_bonus_weight,
+                    ),
+            ),
             stop: watch::channel(false).0,
             services: Mutex::new(None),
             watcher: tokio::sync::Mutex::new(None),

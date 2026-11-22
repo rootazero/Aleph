@@ -268,8 +268,11 @@ impl ProviderCooldown {
     pub(crate) async fn cool(&self, provider: &str, dur: Duration) {
         let until = Instant::now() + dur;
         let mut map = self.0.write().await;
-        let slot = map.entry(provider.to_string()).or_insert(until);
-        *slot = (*slot).max(until);
+        if let Some(slot) = map.get_mut(provider) {
+            *slot = (*slot).max(until);
+        } else {
+            map.insert(provider.to_string(), until);
+        }
     }
 
     /// Drop `provider`'s pacing window, returning whether one was parked.

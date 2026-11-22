@@ -275,8 +275,11 @@ impl PimTool {
                     // used to blank the event and an omitted start/end used to
                     // move it to now() — silent data loss on any partial edit.
                     // Read the current event and fill the gaps before writing.
-                    let needs_current =
-                        args.title.is_none() || args.start.is_none() || args.end.is_none();
+                    let needs_current = args.title.is_none()
+                        || args.start.is_none()
+                        || args.end.is_none()
+                        || args.calendar_id.is_none()
+                        || args.all_day.is_none();
                     // Fetch the current event only when a field is omitted;
                     // surface a fetch error as this action's error (this fn
                     // returns Option, so a bare `?` on the Result is not valid —

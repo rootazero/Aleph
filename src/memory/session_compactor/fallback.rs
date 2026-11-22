@@ -25,6 +25,7 @@ fn first_sentence(text: &str) -> &str {
 /// concatenate, limit to `max_chars`.
 #[must_use]
 pub fn deterministic_truncate(messages: &[(String, String)], max_chars: usize) -> String {
+    use std::fmt::Write as _;
     // messages is Vec<(role, content)>
     let mut result = String::new();
     for (role, content) in messages {
@@ -32,15 +33,11 @@ pub fn deterministic_truncate(messages: &[(String, String)], max_chars: usize) -
         if !result.is_empty() {
             result.push('\n');
         }
-        result.push_str(&format!("[{role}] {sentence}"));
+        let _ = write!(result, "[{role}] {sentence}");
     }
     if result.len() > max_chars {
         // Truncate at char boundary safely
-        let boundary = result
-            .char_indices()
-            .take_while(|(i, _)| *i <= max_chars)
-            .last()
-            .map_or(0, |(i, c)| i + c.len_utf8());
+        let boundary = result.floor_char_boundary(max_chars);
         format!("{}\n[Truncated]", &result[..boundary])
     } else {
         result

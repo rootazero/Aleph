@@ -7,6 +7,27 @@
 
 use alephcore::sync_primitives::Arc;
 
+/// Open a `SQLite` connection off the async executor.
+///
+/// `open_sqlite_safe` does filesystem work — parent-directory creation, the
+/// `open` itself and the pragma batch — and six of these run back to back at
+/// boot. On a slow filesystem that blocks the executor thread for as long as
+/// the syscalls take, delaying every other task the runtime is running. The
+/// error is rendered as a string so each caller can still name the store it
+/// could not open.
+async fn open_sqlite_off_executor(path: &std::path::Path) -> Result<rusqlite::Connection, String> {
+    let path = path.to_path_buf();
+    match tokio::task::spawn_blocking(move || {
+        alephcore::utils::sqlite_open::open_sqlite_safe(&path)
+    })
+    .await
+    {
+        Ok(Ok(conn)) => Ok(conn),
+        Ok(Err(e)) => Err(e.to_string()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 /// Open `coord.db`, create the `SqliteCoordTaskStore`, run migrations, and
 /// derive the sibling `SqliteSnapshotStore` from the same connection
 /// (avoids the `SQLite` "database is locked" hazard that two independent
@@ -37,7 +58,7 @@ pub(super) async fn init_coord_and_snapshot(
     };
 
     let db_path = dir.join("coord.db");
-    let conn = match alephcore::utils::sqlite_open::open_sqlite_safe(&db_path) {
+    let conn = match open_sqlite_off_executor(&db_path).await {
         Ok(c) => c,
         Err(e) => {
             if !daemon {
@@ -105,7 +126,7 @@ pub(super) async fn init_team_store(daemon: bool) -> Option<TeamStoreHandles> {
     };
 
     let db_path = dir.join("teams.db");
-    let conn = match alephcore::utils::sqlite_open::open_sqlite_safe(&db_path) {
+    let conn = match open_sqlite_off_executor(&db_path).await {
         Ok(c) => c,
         Err(e) => {
             if !daemon {
@@ -178,7 +199,7 @@ pub(super) async fn init_teams_evolution_stores(daemon: bool) -> TeamsEvolution 
 
     macro_rules! init_store {
         ($store_ty:ident, $trait_ty:ty, $label:expr, $db:expr) => {{
-            match alephcore::utils::sqlite_open::open_sqlite_safe(&$db) {
+            match open_sqlite_off_executor(&$db).await {
                 Ok(conn) => {
                     let store = Arc::new($store_ty::new(conn));
                     match store.migrate().await {
@@ -214,36 +235,37 @@ pub(super) async fn init_teams_evolution_stores(daemon: bool) -> TeamsEvolution 
 
     // ArtifactStore needs a concrete return for downstream `session_coordinator`,
     // so we cannot use the trait-object macro path. Mirror the macro by hand.
-    let artifact_store: Option<Arc<SqliteArtifactStore>> =
-        match alephcore::utils::sqlite_open::open_sqlite_safe(&db_path) {
-            Ok(conn) => {
-                let store = Arc::new(SqliteArtifactStore::new(conn));
-                match store.migrate().await {
-                    Ok(()) => {
-                        if !daemon {
-                            println!("  Artifact store initialized (SQLite)");
-                        }
-                        Some(store)
+    let artifact_store: Option<Arc<SqliteArtifactStore>> = match open_sqlite_off_executor(&db_path)
+        .await
+    {
+        Ok(conn) => {
+            let store = Arc::new(SqliteArtifactStore::new(conn));
+            match store.migrate().await {
+                Ok(()) => {
+                    if !daemon {
+                        println!("  Artifact store initialized (SQLite)");
                     }
-                    Err(e) => {
-                        if !daemon {
-                            eprintln!(
-                                "Warning: Artifact store migration failed: {e}. Related tools disabled."
-                            );
-                        }
-                        None
+                    Some(store)
+                }
+                Err(e) => {
+                    if !daemon {
+                        eprintln!(
+                            "Warning: Artifact store migration failed: {e}. Related tools disabled."
+                        );
                     }
+                    None
                 }
             }
-            Err(e) => {
-                if !daemon {
-                    eprintln!(
-                        "Warning: Failed to open teams.db for Artifact store: {e}. Related tools disabled."
-                    );
-                }
-                None
+        }
+        Err(e) => {
+            if !daemon {
+                eprintln!(
+                    "Warning: Failed to open teams.db for Artifact store: {e}. Related tools disabled."
+                );
             }
-        };
+            None
+        }
+    };
 
     let event_log = init_store!(
         SqliteEventLogStore,

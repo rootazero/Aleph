@@ -501,7 +501,12 @@ pub(crate) fn InputArea() -> impl IntoView {
         input_text.set(String::new());
         let dash = dashboard;
         spawn_local(async move {
-            match crate::api::ClarificationApi::resolve(&dash, &ask.session_key, &reply)
+            match crate::api::ClarificationApi::resolve(
+                &dash,
+                &ask.session_key,
+                &reply,
+                crate::api::expected_request_id(&ask.request_id),
+            )
                 .await
                 .map(|o| (o.accepted, o.is_finished()))
             {

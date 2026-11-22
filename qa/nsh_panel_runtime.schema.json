@@ -1,0 +1,210 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Phase9 bounded Panel runtime observations",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "surface",
+    "origin",
+    "qa_run_id",
+    "events",
+    "resources",
+    "direct_child",
+    "gateway"
+  ],
+  "properties": {
+    "fixture_cleanup": { "type": "boolean" },
+    "version": {
+      "const": 1
+    },
+    "surface": {
+      "enum": [
+        "tauri",
+        "nsh"
+      ]
+    },
+    "origin": {
+      "enum": [
+        "protocol_fixture",
+        "live_gateway"
+      ]
+    },
+    "qa_run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "capture": {
+      "type": "object"
+    },
+    "resource_scope": {
+      "type": "object",
+      "required": ["complete", "kind"],
+      "properties": {
+        "complete": { "type": "boolean" },
+        "kind": { "type": "string" },
+        "owner_pid": { "type": "integer", "minimum": 1 },
+        "coalition_id": { "type": "integer", "minimum": 1 },
+        "settled_at_ns": { "type": "integer", "minimum": 1 },
+        "settled_at_ms": { "type": "number", "minimum": 0 },
+        "ownership_sample_count": { "type": "integer", "minimum": 2 }
+      }
+    },
+    "gateway": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "events": {
+      "type": "array",
+      "minItems": 8,
+      "items": {
+        "$ref": "#/$defs/event"
+      }
+    },
+    "resources": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "$ref": "#/$defs/resource"
+      }
+    },
+    "direct_child": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "exit_code",
+        "forced"
+      ],
+      "properties": {
+        "exit_code": {
+          "type": "integer"
+        },
+        "forced": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "qa_run_id",
+        "kind",
+        "at_ms",
+        "session_key",
+        "run_id",
+        "connection_epoch",
+        "payload"
+      ],
+      "properties": {
+        "qa_run_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "enum": [
+            "ready",
+            "rendered",
+            "rpc-error",
+            "route-error",
+            "qa-error",
+            "qa-diagnostic",
+            "projection-violation",
+            "hello",
+            "route-requested",
+            "route-ready",
+            "input",
+            "send-received",
+            "queued",
+            "accepted",
+            "streamed",
+            "complete",
+            "artifact-refreshed",
+            "disconnected",
+            "snapshot",
+            "rejected",
+            "reconnected",
+            "close-requested",
+            "closed"
+          ]
+        },
+        "at_ms": {
+          "type": "number",
+          "minimum": 0
+        },
+        "browser_at_ms": {"type": "number", "minimum": 0},
+        "browser_time_origin_ms": {"type": "number", "minimum": 1},
+        "native_clock_origin_ns": {"type": "integer", "minimum": 1},
+        "native_clock_ns": {"type": "integer", "minimum": 1},
+        "native_at_ms": {
+          "type": "number",
+          "minimum": 0
+        },
+        "session_key": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "connection_epoch": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "payload": {
+          "type": "object"
+        }
+      }
+    },
+    "resource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "at_ms",
+        "rss_mb",
+        "threads"
+      ],
+      "properties": {
+        "sample_monotonic_ns": {"type": "integer", "minimum": 1},
+        "at_ms": {
+          "type": "number",
+          "minimum": -175
+        },
+        "rss_mb": {
+          "type": "number",
+          "minimum": 0
+        },
+        "threads": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "owner_pid": { "type": "integer", "minimum": 1 },
+        "coalition_id": { "type": "integer", "minimum": 1 },
+        "pids": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "integer", "minimum": 1 } },
+        "per_process": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["pid", "rss_mb", "threads"],
+            "properties": {
+              "pid": { "type": "integer", "minimum": 1 },
+              "rss_mb": { "type": "number", "minimum": 0 },
+              "threads": { "type": "integer", "minimum": 1 }
+            }
+          }
+        }
+      }
+    }
+  }
+}

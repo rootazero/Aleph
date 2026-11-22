@@ -261,12 +261,12 @@ fn assemble_fallbacks(
     // endpoint) has to convert the request shape, and some OpenAI-compat Claude
     // shims reject the conversion outright (the -10003 "bad parameter" gap). A
     // homogeneous chain sends the same format the primary already proved valid.
-    let protocol_of = |name: &str| -> Option<String> {
+    let protocol_of = |name: &str| -> Option<&str> {
         config
             .providers
             .iter()
             .find(|(n, _)| n.eq_ignore_ascii_case(name))
-            .map(|(_, pc)| pc.protocol())
+            .map(|(_, pc)| pc.protocol.as_deref().unwrap_or("openai"))
     };
     let primary_protocol = protocol_of(primary_provider_key);
 
@@ -315,7 +315,6 @@ fn assemble_fallbacks(
         let Some((built_key, provider)) = built
             .iter()
             .find(|(k, _)| k.eq_ignore_ascii_case(name.as_str()))
-            .map(|(k, v)| (k, v))
         else {
             tracing::error!(
                 provider = %name,

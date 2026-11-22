@@ -1,0 +1,102 @@
+   Compiling aleph-protocol v0.1.0 (/home/zou/data/workspace/Aleph/shared/protocol)
+   Compiling aleph-desktop v26.9.1 (/home/zou/data/workspace/Aleph/desktop/shared)
+   Compiling aleph-client v0.1.0 (/home/zou/data/workspace/Aleph/shared/client)
+   Compiling aleph-desktop-linux v26.9.1 (/home/zou/data/workspace/Aleph/desktop/linux)
+   Compiling shared-ui-logic v0.1.0 (/home/zou/data/workspace/Aleph/shared/ui_logic)
+   Compiling aleph-logging v26.9.1 (/home/zou/data/workspace/Aleph/shared/logging)
+   Compiling aleph-cdp v26.9.1 (/home/zou/data/workspace/Aleph/crates/aleph-cdp)
+   Compiling aleph-slot-api v26.9.1 (/home/zou/data/workspace/Aleph/crates/aleph-slot-api)
+   Compiling alephcore v26.9.1 (/home/zou/data/workspace/Aleph)
+warning: unused import: `Channel`
+   --> src/gateway/interfaces/mod.rs:154:35
+    |
+154 |     use crate::gateway::channel::{Channel, ChannelFactory};
+    |                                   ^^^^^^^
+    |
+    = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: value assigned to `registration` is never read
+   --> src/gateway/handlers/providers/handlers.rs:352:85
+    |
+352 |     let mut registration: Option<(String, Arc<dyn crate::providers::AiProvider>)> = None;
+    |                                                                                     ^^^^ this value is reassigned later and never used
+...
+388 |                 registration = Some((params.name.clone(), provider));
+    |                 ------------ `registration` is overwritten here before the previous value is read
+    |
+    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> src/gateway/telecom/sms_inbox.rs:908:13
+    |
+908 |         let mut empty_account = envelope("", "message-1", "body", now);
+    |             ----^^^^^^^^^^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `sanitize_segment` is never used
+   --> src/extension/hooks/output_budget.rs:150:4
+    |
+150 | fn sanitize_segment(session_id: &str) -> String {
+    |    ^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `panel_snapshot` is never read
+   --> src/extension/projection.rs:143:16
+    |
+127 | pub(crate) struct PluginProjection {
+    |                   ---------------- field in this struct
+...
+143 |     pub(crate) panel_snapshot: aleph_protocol::panel::PanelUiCapabilitySnapshot,
+    |                ^^^^^^^^^^^^^^
+    |
+    = note: `PluginProjection` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: field `api_key` is never read
+  --> src/generation/providers/fal/mod.rs:59:5
+   |
+57 | pub struct FalProvider {
+   |            ----------- field in this struct
+58 |     client: Client,
+59 |     api_key: String,
+   |     ^^^^^^^
+   |
+   = note: `FalProvider` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+
+warning: function `fxhash_str` is never used
+   --> src/goal/types.rs:491:4
+    |
+491 | fn fxhash_str(s: &str) -> u64 {
+    |    ^^^^^^^^^^
+
+warning: function `completed_here` is never used
+   --> src/gateway/btw/promote.rs:103:4
+    |
+103 | fn completed_here(span: &[SessionEventRecord]) -> bool {
+    |    ^^^^^^^^^^^^^^
+
+warning: method `generate_session_topic` is never used
+   --> src/gateway/inbound_router/command_handler.rs:555:25
+    |
+218 | impl InboundMessageRouter {
+    | ------------------------- method in this implementation
+...
+555 |     pub(super) async fn generate_session_topic(&self, session_key: &SessionKey) -> Option<String> {
+    |                         ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: field `sequence_number` is never read
+  --> src/gateway/openai_api/responses/sse.rs:49:5
+   |
+39 | struct StreamState {
+   |        ----------- field in this struct
+...
+49 |     sequence_number: u64,
+   |     ^^^^^^^^^^^^^^^
+
+warning: `alephcore` (lib test) generated 10 warnings (run `cargo fix --lib -p alephcore --tests` to apply 1 suggestion)
+    Finished `test` profile [unoptimized] target(s) in 19m 50s
+  Executable unittests src/lib.rs (target/debug/deps/alephcore-34bd7780123b3487)
+TESTBUILD_EXIT=0

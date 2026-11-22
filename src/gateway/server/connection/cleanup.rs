@@ -21,6 +21,20 @@ use tracing::{debug, info, warn};
 
 use super::ConnectionContext;
 
+/// Await the best-effort SQLite stamp without blocking a runtime worker.
+/// Callers release the connections-map lock before entering this boundary.
+pub(super) async fn touch_device_last_seen(
+    store: Arc<crate::gateway::security::store::SecurityStore>,
+    device_id: String,
+) {
+    let result = tokio::task::spawn_blocking(move || store.touch_device(&device_id)).await;
+    match result {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => debug!("failed to stamp device last_seen: {e}"),
+        Err(e) => debug!("device last_seen task failed: {e}"),
+    }
+}
+
 /// Disconnect-side cleanup shared by every termination path inside
 /// `handle_connection`.
 ///
@@ -63,33 +77,33 @@ pub(super) async fn run_cleanup(
         );
     }
 
-    // 3. Cluster Phase 0b: drop this connection's node session if it was a
-    // node, and emit a `node.disconnected` lifecycle event.
-    let node_ident = ctx.node_registry.node_identity_by_conn(conn_id);
-    if ctx.node_registry.deregister(conn_id) {
-        if let Some((node_id, name)) = node_ident {
-            if let Some(store) = ctx.security_store.as_ref() {
-                if let Err(e) = store.touch_device(&node_id) {
-                    debug!(
-                        "failed to stamp node last_seen on disconnect for {}: {}",
-                        node_id, e
-                    );
-                }
-            }
-            if let Err(e) = ctx
-                .event_bus
-                .publish_json(&crate::gateway::event_bus::TopicEvent::new(
-                    "node.disconnected",
-                    serde_json::json!({"node_id": node_id, "name": name, "conn_id": conn_id}),
-                ))
-            {
-                warn!(
-                    error = %e,
-                    node_id = %node_id,
-                    conn_id = %conn_id,
-                    "failed to publish node.disconnected event"
-                );
-            }
+    // 3. Cluster node registry: drop this connection's node session if it was a
+    //    node, and emit a `node.disconnected` lifecycle event.
+    //
+    //    The registry hands back the session it actually removed, so the
+    //    identity published below comes from the SAME critical section that
+    //    removed it. Reading the identity separately first could name a
+    //    different session than the one removed (a re-announce on this same
+    //    connection between the two reads).
+    if let Some(session) = ctx.node_registry.deregister(conn_id) {
+        let node_id = session.node_id;
+        let name = session.device_name;
+        if let Some(store) = ctx.security_store.as_ref() {
+            touch_device_last_seen(store.clone(), node_id.clone()).await;
+        }
+        if let Err(e) = ctx
+            .event_bus
+            .publish_json(&crate::gateway::event_bus::TopicEvent::new(
+                "node.disconnected",
+                serde_json::json!({"node_id": node_id, "name": name, "conn_id": conn_id}),
+            ))
+        {
+            warn!(
+                error = %e,
+                node_id = %node_id,
+                conn_id = %conn_id,
+                "failed to publish node.disconnected event"
+            );
         }
     }
 
@@ -120,4 +134,40 @@ pub(super) async fn run_cleanup(
     }
 
     info!("Connection closed: {}", conn_id);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gateway::security::store::{DeviceUpsertData, SecurityStore};
+
+    #[tokio::test]
+    async fn last_seen_is_persisted_before_the_boundary_returns() {
+        let store = Arc::new(SecurityStore::in_memory().unwrap());
+        store
+            .upsert_device(&DeviceUpsertData {
+                device_id: "node-1",
+                device_name: "Node",
+                device_type: None,
+                public_key: b"key",
+                fingerprint: "fingerprint",
+                role: "node",
+                scopes: &[],
+                user_id: None,
+            })
+            .unwrap();
+        assert!(store
+            .get_device("node-1")
+            .unwrap()
+            .unwrap()
+            .last_seen_at
+            .is_none());
+        touch_device_last_seen(store.clone(), "node-1".to_string()).await;
+        assert!(store
+            .get_device("node-1")
+            .unwrap()
+            .unwrap()
+            .last_seen_at
+            .is_some());
+    }
 }

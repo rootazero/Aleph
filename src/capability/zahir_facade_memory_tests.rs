@@ -43,6 +43,7 @@ async fn resource_resolve_does_not_mint_custom_scope_or_accept_another_tree() {
         MemoryRuntimeConfig {
             metadata_path: root.path().join("metadata.db"),
             note_memory_dir: root.path().join("notes"),
+            retrieval_tuning: Default::default(),
         },
         tree.clone(),
     );
@@ -88,13 +89,14 @@ async fn resource_resolve_does_not_mint_custom_scope_or_accept_another_tree() {
 }
 
 #[tokio::test]
-async fn stale_tool_does_not_reacquire_after_restart() {
+async fn memory_runtime_restart_captures_new_generation_and_fences_old_lease() {
     let root = tempfile::tempdir().unwrap();
     let tree = Arc::new(OwnershipTree::new());
     let runtime = MemoryRuntime::new(
         MemoryRuntimeConfig {
             metadata_path: root.path().join("metadata.db"),
             note_memory_dir: root.path().join("notes"),
+            retrieval_tuning: Default::default(),
         },
         tree.clone(),
     );
@@ -136,6 +138,7 @@ async fn resource_lease_is_source_backed_and_controls_stay_independent() {
         MemoryRuntimeConfig {
             metadata_path: root.path().join("metadata.db"),
             note_memory_dir: root.path().join("notes"),
+            retrieval_tuning: Default::default(),
         },
         tree.clone(),
     );

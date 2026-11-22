@@ -87,16 +87,25 @@ impl Performer<'_> {
             // No grid becomes current here, so nothing needs marking dirty.
             if self.screen.saved.is_none() {
                 let (rows, cols) = self.screen.grid.dims();
+                // Inherit the scrollback limit that the operator configured
+                // (or that was last set via set_scrollback_limit) so that
+                // entering the alternate screen cannot silently reset it to
+                // the Grid::new default of 1000.
+                let scrollback_limit = self.screen.grid.scrollback_limit();
                 // One alternate buffer, two entry policies. 47/1047 take back
                 // whatever was parked on the last exit; 1049 always starts
                 // blank, which is the whole of the difference between them.
                 let alt = match buffer {
-                    AltBuffer::Legacy => self
-                        .screen
-                        .retained_alt
-                        .take()
-                        .unwrap_or_else(|| Grid::new(rows, cols)),
-                    AltBuffer::Cleared => Grid::new(rows, cols),
+                    AltBuffer::Legacy => self.screen.retained_alt.take().unwrap_or_else(|| {
+                        let mut g = Grid::new(rows, cols);
+                        g.set_scrollback_limit(scrollback_limit);
+                        g
+                    }),
+                    AltBuffer::Cleared => {
+                        let mut g = Grid::new(rows, cols);
+                        g.set_scrollback_limit(scrollback_limit);
+                        g
+                    }
                 };
                 let primary = std::mem::replace(&mut self.screen.grid, alt);
                 self.screen.saved = Some(primary);

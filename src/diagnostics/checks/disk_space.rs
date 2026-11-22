@@ -53,10 +53,6 @@ impl HealthCheck for DiskSpaceCheck {
         ID
     }
 
-    fn title(&self) -> &'static str {
-        "Disk space"
-    }
-
     async fn run(&self, _posture: Posture) -> Vec<Finding> {
         let display = self.data_dir.display().to_string();
 

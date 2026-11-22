@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 
 use super::qa_verdict::{self, Baseline, CheckEntry, CheckOutcome, Impact, Subtraction};
 use crate::browser::backend::BrowserBackend;
+use crate::browser::engine::{capabilities, Cap, Engine};
 use crate::browser::error::BrowserError;
 use crate::browser::manager::ProfileManager;
 use crate::browser::tab_registry;
@@ -331,10 +332,20 @@ fn evaluate_buffer_checks(
     checks: &mut Vec<(&'static str, CheckOutcome)>,
     precise: bool,
     driver: &str,
+    engine: Option<Engine>,
     flags: &CheckFlags,
     console_sub: Option<&Subtraction>,
     network_sub: Option<&Subtraction>,
 ) {
+    // Whether the ENGINE behind the cdp driver can deliver an uncaught
+    // exception at all. The driver folds `Runtime.exceptionThrown` into the
+    // console ring, but obscura never emits that event (the measured
+    // capability row `error_events` is `Unsupported` on that build), so on
+    // that engine an uncaught exception is indistinguishable from its
+    // absence. "No error lines" is not a claim the tool may make there: the
+    // driver gate below answers "can this driver deliver the event at all",
+    // and this answers "can this ENGINE" (判据 §9: one verb, one gate).
+    let sees_uncaught = engine.is_some_and(|e| capabilities(e).error_events == Cap::Supported);
     if let Some(sub) = console_sub {
         if !precise {
             if flags.console {
@@ -382,15 +393,33 @@ fn evaluate_buffer_checks(
                         "check_errors",
                         CheckOutcome::Fail {
                             detail: format!(
-                                "{} new error-level console line(s) (console.error and uncaught \
-                                 exceptions share the cdp [error] ring): {}",
+                                "{} new error-level console line(s) ({}): {}",
                                 new_errors.len(),
+                                if sees_uncaught {
+                                    "console.error and uncaught exceptions share the cdp [error] ring"
+                                } else {
+                                    "console.error only — this engine does not emit \
+                                     Runtime.exceptionThrown, so uncaught exceptions are \
+                                     invisible here"
+                                },
                                 sample_lines(&new_errors)
                             ),
                         },
                     ));
-                } else {
+                } else if sees_uncaught {
                     checks.push(("check_errors", CheckOutcome::Pass));
+                } else {
+                    checks.push((
+                        "check_errors",
+                        CheckOutcome::Unverified {
+                            reason: format!(
+                                "the engine behind driver '{driver}' does not emit \
+                                 Runtime.exceptionThrown, so an uncaught exception cannot be \
+                                 told apart from its absence — console.error lines are still \
+                                 seen, and none arrived"
+                            ),
+                        },
+                    ));
                 }
                 if matched_errors > 0 {
                     checks.push((
@@ -784,13 +813,16 @@ impl BrowserQaTool {
                 &to_lines(&network_final),
             )
         });
-        let precise = backend
+        let cdp = backend
             .as_any()
-            .is::<crate::browser::cdp_backend::CdpBackend>();
+            .downcast_ref::<crate::browser::cdp_backend::CdpBackend>();
+        let precise = cdp.is_some();
+        let engine = cdp.map(|cdp| cdp.engine());
         evaluate_buffer_checks(
             &mut checks,
             precise,
             driver_label(backend),
+            engine,
             &CheckFlags {
                 console: v.check_console,
                 errors: v.check_errors,
@@ -1317,6 +1349,7 @@ mod tests {
             &mut checks,
             true,
             "cdp",
+            Some(Engine::Chromium),
             &flags(false, true, false),
             Some(&console),
             None,
@@ -1334,6 +1367,37 @@ mod tests {
             .any(|(_, o)| matches!(o, CheckOutcome::Warn { .. })));
     }
 
+    /// The engine gate: on an engine that never emits
+    /// `Runtime.exceptionThrown` — obscura, on the measured build — "no new
+    /// error lines" is NOT a pass. An uncaught exception is invisible there,
+    /// so the strongest honest outcome is UNVERIFIED. The driver gate above
+    /// already covers "this driver cannot deliver the event"; this covers
+    /// "this engine cannot", and the two are separate facts (判据 §9).
+    #[test]
+    fn an_engine_without_error_events_cannot_pass_the_error_check() {
+        let mut checks = Vec::new();
+        let console = sub(&["[log] quiet"], &[]);
+        evaluate_buffer_checks(
+            &mut checks,
+            true,
+            "cdp",
+            Some(Engine::Obscura),
+            &flags(false, true, false),
+            Some(&console),
+            None,
+        );
+        assert!(
+            checks.iter().any(|(name, o)| {
+                *name == "check_errors" && matches!(o, CheckOutcome::Unverified { .. })
+            }),
+            "{checks:?}"
+        );
+        assert!(
+            !checks.iter().any(|(_, o)| matches!(o, CheckOutcome::Pass)),
+            "an exception class the engine cannot see must not be reported as a pass: {checks:?}"
+        );
+    }
+
     /// Review Focus #3 at the tool layer: a fingerprint the baseline absorbs
     /// is NOT a pass — it is unverified. The mutation "treat matched as
     /// clean" must turn this red.
@@ -1345,6 +1409,7 @@ mod tests {
             &mut checks,
             true,
             "cdp",
+            Some(Engine::Chromium),
             &flags(true, true, false),
             Some(&console),
             None,
@@ -1371,6 +1436,7 @@ mod tests {
             &mut checks,
             true,
             "cdp",
+            Some(Engine::Chromium),
             &flags(false, true, false),
             Some(&console),
             None,
@@ -1399,6 +1465,7 @@ mod tests {
             &mut checks,
             true,
             "cdp",
+            Some(Engine::Chromium),
             &flags(false, false, true),
             None,
             Some(&network),
@@ -1427,6 +1494,7 @@ mod tests {
             &mut checks,
             true,
             "cdp",
+            Some(Engine::Chromium),
             &flags(true, true, false),
             Some(&console),
             None,
@@ -1451,6 +1519,7 @@ mod tests {
             &mut checks,
             true,
             "cdp",
+            Some(Engine::Chromium),
             &flags(true, false, false),
             Some(&console),
             None,
@@ -1469,6 +1538,7 @@ mod tests {
             &mut checks,
             true,
             "cdp",
+            Some(Engine::Chromium),
             &flags(true, true, false),
             Some(&console),
             None,
@@ -1496,6 +1566,7 @@ mod tests {
             &mut checks,
             false,
             "managed (playwright-cli)",
+            None,
             &flags(true, true, true),
             Some(&console),
             Some(&network),

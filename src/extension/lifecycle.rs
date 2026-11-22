@@ -159,6 +159,22 @@ pub struct ReloadReport {
     pub summary: LoadSummary,
 }
 
+/// What one READ-ONLY discovery pass found — the answer to "is this an
+/// installed plugin?".
+///
+/// The ids and the unreadable sources ride together because they are two
+/// halves of ONE answer: a plugin whose source could not be read is UNKNOWN
+/// this pass, not ABSENT. A caller that reads a missing id as "not
+/// installed" while `unreadable` is non-empty reports a lie.
+#[derive(Debug, Default, Clone)]
+pub struct DiscoveredPluginIds {
+    /// `(id, origin)` for every plugin root the pass found.
+    pub ids: Vec<(String, PluginOrigin)>,
+    /// The plugin sources this pass could not read (paths). Their plugins are
+    /// unknown this pass.
+    pub unreadable: Vec<PathBuf>,
+}
+
 /// What one discovery pass did — `load_all` reports the summary, `reload`
 /// reports all three.
 pub(super) struct LoadOutcome {
@@ -746,13 +762,21 @@ impl ExtensionManager {
     /// The offline CLI's answer to "is this an installed plugin?", so that
     /// `aleph-server plugin enable <id>` accepts exactly the ids a load would
     /// list — a Claude Code install included — and nothing else.
-    pub fn discovered_plugin_ids(&self) -> ExtensionResult<Vec<(String, PluginOrigin)>> {
-        Ok(self
-            .collect_plugin_dirs()?
-            .dirs
-            .iter()
-            .map(|found| (self.identify(found).id().to_string(), found.origin))
-            .collect())
+    ///
+    /// The sources the pass could NOT read come with it
+    /// ([`DiscoveredPluginIds::unreadable`]): their plugins are unknown this
+    /// pass, so a caller must not read an id missing from `ids` as "not
+    /// installed" while `unreadable` is non-empty.
+    pub fn discovered_plugin_ids(&self) -> ExtensionResult<DiscoveredPluginIds> {
+        let collected = self.collect_plugin_dirs()?;
+        Ok(DiscoveredPluginIds {
+            ids: collected
+                .dirs
+                .iter()
+                .map(|found| (self.identify(found).id().to_string(), found.origin))
+                .collect(),
+            unreadable: collected.unreadable,
+        })
     }
 
     /// The id of a directory whose manifest does not parse: the directory's
@@ -867,9 +891,7 @@ impl ExtensionManager {
                 output.plugin_id, id
             ));
         }
-        let Some(manifest) = manifest else {
-            return None;
-        };
+        let manifest = manifest?;
         if manifest.id != id {
             return Some(format!(
                 "plugin manifest declares id '{}' but '{}' was authorised; \
@@ -2631,6 +2653,7 @@ handler = "handler"
         assert!(manager
             .discovered_plugin_ids()
             .unwrap()
+            .ids
             .iter()
             .any(|(id, _)| id == "lazy-wasm"));
         assert!(manager
@@ -3426,7 +3449,19 @@ handler = "handler"
 
         let loader = manager.get_plugin_loader_for_test().write_owned().await;
         let mut call = Box::pin(b4_execute_canonical(&service, "b4-admitted-a"));
-        assert!(futures::poll!(call.as_mut()).is_pending());
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if let std::task::Poll::Ready(result) = futures::poll!(call.as_mut()) {
+                    panic!("canonical call completed before loader admission: {result:?}");
+                }
+                if owner.admission.available_permits() == RuntimeOwner::MAX_IN_FLIGHT as usize - 1 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("sealed production call must acquire admission before reload");
         assert_eq!(
             owner.admission.available_permits(),
             RuntimeOwner::MAX_IN_FLIGHT as usize - 1,
@@ -6639,7 +6674,7 @@ priority = 60
         let session = test_support::session(&face);
         let mut rx = face
             .sessions()
-            .attach_stream(&session.id)
+            .attach_stream(&test_support::operator(), &session.id)
             .expect("known session");
         install_mcp_face(face.clone());
         let installed = try_mcp_face().expect("installed");

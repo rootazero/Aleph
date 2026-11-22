@@ -21,7 +21,10 @@ use crate::cluster::{sha256_hex, NodeRegistry, ResolveError, MAX_FILE_BYTES};
 use crate::error::{AlephError, Result};
 use crate::tools::AlephTool;
 
-const DEFAULT_TIMEOUT_MS: u64 = 120_000;
+/// The reverse-RPC window for ONE node call — see `node_invoke`'s
+/// `DEFAULT_TIMEOUT_MS` for why it must enclose the center's approval window
+/// (120s) rather than match it.
+const DEFAULT_TIMEOUT_MS: u64 = 150_000;
 const B64: base64::engine::general_purpose::GeneralPurpose =
     base64::engine::general_purpose::STANDARD;
 
@@ -39,7 +42,7 @@ pub struct NodeFileArgs {
     /// Overwrite an existing destination. Default false.
     #[serde(default)]
     pub overwrite: bool,
-    /// Reverse-RPC timeout in ms (default 120000).
+    /// Reverse-RPC timeout in ms (default 150000).
     #[serde(default)]
     pub timeout_ms: Option<u64>,
 }
@@ -73,15 +76,27 @@ Example: {"node":"worker-1","direction":"push","local_path":"/tmp/build.sh","rem
     type Output = Value;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        let (channel, declared) = match self.node_registry.resolve(&args.node) {
-            Ok(v) => v,
-            Err(ResolveError::NotFound) => {
-                return Err(AlephError::tool(format!("node '{}' not online", args.node)))
-            }
-            Err(e @ (ResolveError::Ambiguous(_) | ResolveError::NodeNotFound { .. })) => {
-                return Err(AlephError::tool(format!("node '{}' {e}", args.node)))
-            }
-        };
+        let (channel, declared, catalog_malformed) =
+            match self.node_registry.resolve_with_catalog(&args.node) {
+                Ok(v) => v,
+                Err(ResolveError::NotFound) => {
+                    return Err(AlephError::tool(format!("node '{}' not online", args.node)))
+                }
+                Err(e @ ResolveError::Ambiguous(_)) => {
+                    return Err(AlephError::tool(format!("node '{}' {e}", args.node)))
+                }
+            };
+        // A peer whose declared catalog could not be parsed must NOT be read as
+        // "this node declares no commands": that reading silently switches the
+        // center-side fail-fast layer off for this node (the empty-catalog fast
+        // path below defers to node authority). Fail closed instead — the same
+        // rule `node_invoke` applies.
+        if catalog_malformed {
+            return Err(AlephError::tool(format!(
+                "node '{}' declared a malformed command catalog; refusing to invoke",
+                args.node
+            )));
+        }
         let timeout = args.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS);
 
         let needed = match args.direction.as_str() {
@@ -227,6 +242,11 @@ Example: {"node":"worker-1","direction":"push","local_path":"/tmp/build.sh","rem
                 let local =
                     check_and_resolve_path(Path::new(&args.local_path), &get_denied_paths(), None)
                         .map_err(|e| AlephError::tool(format!("local path rejected: {e}")))?;
+                if !args.overwrite && tokio::fs::try_exists(&local).await.unwrap_or(false) {
+                    return Err(AlephError::tool(
+                        "local target exists (set overwrite)".to_string(),
+                    ));
+                }
                 // BT-D-R4-25: replace the exists()-then-write() TOCTOU pair
                 // with an atomic create_new flag. OpenOptions::create_new
                 // fails with AlreadyExists at the syscall level if the file
@@ -283,24 +303,17 @@ Example: {"node":"worker-1","direction":"push","local_path":"/tmp/build.sh","rem
                     })?;
                 }
                 if !args.overwrite {
-                    // Use OpenOptions::create_new + rename to make the
-                    // existence check and the destination creation atomic.
-                    // First rename tmp onto a side path, then create_new
-                    // the destination by linking from the side path's bytes
-                    // — but POSIX rename does not provide create_new. The
-                    // portable, atomic variant is: open(tmp) + rename.
-                    // The create_new(tmp) above already prevents concurrent
-                    // tmp corruption; the rename below replaces destination
-                    // atomically (POSIX rename(2)) which fails with
-                    // AlreadyExists only when the destination exists AND
-                    // no overwrite is requested AND the rename target is
-                    // not a parent (which local is not).
+                    // Check whether destination exists before rename. POSIX rename(2)
+                    // atomically overwrites regular files without returning AlreadyExists,
+                    // so we must enforce overwrite: false here to prevent data loss.
+                    if tokio::fs::try_exists(&local).await.unwrap_or(false) {
+                        let _ = tokio::fs::remove_file(&tmp_path).await;
+                        return Err(AlephError::tool(
+                            "local target exists (set overwrite)".to_string(),
+                        ));
+                    }
                     if let Err(e) = tokio::fs::rename(&tmp_path, &local).await {
                         let _ = tokio::fs::remove_file(&tmp_path).await;
-                        // AlreadyExists on POSIX rename means the target
-                        // exists (it was created between the earlier
-                        // exists() check and now) — treat as overwrite
-                        // refusal to preserve the no-overwrite contract.
                         if e.kind() == std::io::ErrorKind::AlreadyExists {
                             return Err(AlephError::tool(
                                 "local target exists (set overwrite)".to_string(),
@@ -363,7 +376,6 @@ mod tests {
                 .into_iter()
                 .map(|c| CommandDescriptor {
                     name: c.to_string(),
-                    schema: json!({}),
                 })
                 .collect(),
             tags: vec![],
@@ -452,6 +464,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pull_refuses_overwrite_when_false() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = dir.path().join("existing.bin");
+        tokio::fs::write(&local, b"pre-existing-content").await.unwrap();
+        let payload = b"new-payload".to_vec();
+        let (reg, rx, ch) = registry_with_node(vec!["file.read"]);
+        spawn_file_responder(rx, ch, Some(payload));
+
+        let tool = NodeFileTool::new(reg);
+        let err = tool
+            .call(NodeFileArgs {
+                node: "worker-1".to_string(),
+                direction: "pull".to_string(),
+                local_path: local.to_string_lossy().to_string(),
+                remote_path: "existing.bin".to_string(),
+                overwrite: false,
+                timeout_ms: Some(2_000),
+            })
+            .await
+            .expect_err("overwrite false must fail");
+        assert!(err.to_string().contains("local target exists"), "{err}");
+        assert_eq!(std::fs::read(&local).unwrap(), b"pre-existing-content");
+    }
+
+    #[tokio::test]
     async fn push_rejects_oversize_local() {
         let dir = tempfile::tempdir().unwrap();
         let local = dir.path().join("big.bin");
@@ -520,7 +557,6 @@ mod tests {
             channel: channel.clone(),
             declared_commands: vec![CommandDescriptor {
                 name: "file.read".into(),
-                schema: json!({}),
             }],
             tags: vec![],
             version: None,

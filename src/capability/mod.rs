@@ -30,25 +30,51 @@
 //! ("waiting for: sessionPersistence") in Rust's shape — no plugin tree, no
 //! topological boot, just the sentence a reader needs.
 
-use crate::sync_primitives::Arc;
-use std::sync::OnceLock;
+use crate::sync_primitives::{Arc, OnceLock};
 
+pub mod activation;
+pub mod ambient;
+pub mod audit;
 pub mod backend;
+pub mod constraints;
 pub mod descriptor;
 pub mod diagnostic_control;
 pub mod effect_claim;
+pub mod event_audience;
+pub mod events;
+#[cfg(test)]
+mod events_scoped_tests;
 pub mod facade;
+pub mod grant;
+pub mod lifecycle;
 pub mod ownership;
+pub mod policy;
+pub mod policy_runtime;
+#[cfg(test)]
+mod policy_runtime_tests;
+pub mod production_init;
 pub mod projection_host;
 pub mod provider;
 pub mod provider_backend;
 pub mod provider_registry;
+pub mod special;
+pub mod special_dispatch;
+#[cfg(test)]
+mod special_tests;
+pub mod tool_adapters;
+pub mod ui;
+pub mod ui_surface;
+#[cfg(test)]
+mod ui_surface_tests;
 pub(crate) mod versioned_registry;
 pub mod zahir_facade;
 
 /// The membership rule that decides what belongs in this module's roster.
 #[cfg(test)]
 pub(crate) mod census;
+
+#[cfg(test)]
+mod grant_integration_tests;
 
 /// What a read observes when this capability was NEVER installed.
 ///

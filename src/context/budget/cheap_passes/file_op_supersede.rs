@@ -202,9 +202,9 @@ fn path_key(op: &FileOp<'_>, raw_path: Option<&str>) -> String {
 /// The path argument of `op`'s tool call exactly as the tool spelled it.
 ///
 /// Mirrors the `"path"` → `"file_path"` precedence of
-/// [`file_ops::canonical_path`]: the two must agree on which argument the
+/// [`file_ops::canonical_path`] — the two must agree on which argument the
 /// call named, or the group key would describe an argument the tool never
-/// read.
+/// read. The precedence itself is owned by [`file_ops::raw_path`].
 fn raw_path_of<'a>(messages: &'a [UnifiedMessage], op: &FileOp<'_>) -> Option<&'a str> {
     let UnifiedMessage::Assistant { content } = messages.get(op.msg_index)? else {
         return None;
@@ -215,12 +215,7 @@ fn raw_path_of<'a>(messages: &'a [UnifiedMessage], op: &FileOp<'_>) -> Option<&'
         }
         _ => None,
     })?;
-    match arguments.get("path") {
-        Some(serde_json::Value::String(raw)) => Some(raw.as_str()),
-        _ => arguments
-            .get("file_path")
-            .and_then(serde_json::Value::as_str),
-    }
+    file_ops::raw_path(arguments)
 }
 
 #[async_trait]

@@ -3,12 +3,12 @@
 //! and navigates the webview to the trust page; the page reads it via
 //! `get_pending_cert` and resolves it via `approve_cert` / `reject_cert`.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::Serialize;
 
-use crate::cert_trust::{store::TrustStore, CertInfo};
+use crate::cert_trust::{CertInfo, store::TrustStore};
 
 /// True while a cert-trust prompt owns the webview. The lite supervisor reads
 /// this to skip its relocation tick so the user isn't pulled off the prompt.

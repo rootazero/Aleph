@@ -443,9 +443,7 @@ fn clamp_line(line: &str, max_chars: usize) -> Cow<'_, str> {
     };
     let dropped = line.get(split..).map_or(0, |s| s.chars().count());
     let prefix = line.get(..split).unwrap_or(line);
-    Cow::Owned(format!(
-        "{prefix}… (+{dropped} chars, line truncated)"
-    ))
+    Cow::Owned(format!("{prefix}… (+{dropped} chars, line truncated)"))
 }
 
 /// Render a subset of `lines` identified by the sorted, deduped `kept` indices.
@@ -526,7 +524,8 @@ pub(super) fn is_error_signal(line: &str) -> bool {
     // prefix check instead.
     let trimmed = line.trim_start();
     let b = trimmed.as_bytes();
-    if b.len() >= 2 && b.get(1) == Some(&b'/') && b.first().copied().map(|c| c | 0x20) == Some(b'e') {
+    if b.len() >= 2 && b.get(1) == Some(&b'/') && b.first().copied().map(|c| c | 0x20) == Some(b'e')
+    {
         return true;
     }
     const NEEDLES: [&str; 10] = [

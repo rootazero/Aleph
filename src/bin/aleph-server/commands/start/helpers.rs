@@ -12,6 +12,12 @@ use crate::daemon::{expand_path, remove_pid_file};
 use alephcore::gateway::session_store::SessionStore;
 use alephcore::gateway::{GatewayConfig as FullGatewayConfig, SessionManager};
 
+/// How long the daemon waits for the bundled-content extraction before it
+/// gives up waiting and boots anyway. The extraction is a `spawn_blocking`
+/// task: timing out the wait does not cancel it, it only stops the BOOT from
+/// depending on a network clone that may never answer.
+const BUNDLED_EXTRACTION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
 /// Compile the operator's `[[security.mask_patterns]]` into the process-wide
 /// redaction set, before any run can produce output.
 ///
@@ -192,15 +198,8 @@ pub(super) fn load_gateway_config(
                 }
             }
         }
-        None => match FullGatewayConfig::load_default() {
-            Ok(cfg) => cfg,
-            Err(e) => {
-                if !args.daemon {
-                    eprintln!("Warning: {e}, using defaults");
-                }
-                FullGatewayConfig::default()
-            }
-        },
+        None => FullGatewayConfig::load_default()
+            .map_err(|e| format!("Error loading default config: {e}"))?,
     };
 
     // CLI args override config file settings only when explicitly provided.
@@ -217,10 +216,10 @@ pub(super) fn load_gateway_config(
 }
 
 /// Initialize the session store backend based on configuration.
-/// Selects by string: `"file"` enables the JSON/JSONL file backend, any
-/// other value selects `SQLite`. That describes THIS FUNCTION; the SHIPPED
-/// default is `"file"` (`config::types::general::default_session_store_backend`),
-/// so the file branch is the one a stock install takes.
+/// Selects by string: `"file"` enables the JSON/JSONL file backend and
+/// `"sqlite"` selects `SQLite`; unknown values are rejected. The SHIPPED default
+/// is `"file"` (`config::types::general::default_session_store_backend`), so the
+/// file branch is the one a stock install takes.
 /// Returns the trait object and an optional owned `SessionManager` for `SQLite`
 /// so the caller can attach raw-memory writer and event bus before wrapping.
 pub(super) async fn initialize_session_store(
@@ -302,8 +301,7 @@ pub(super) async fn initialize_session_store(
             }
             Err(e) => Err(format!("Error: Failed to initialize file session store: {e}").into()),
         }
-    } else {
-        // SQLite default
+    } else if backend == "sqlite" {
         let sm = match SessionManager::with_defaults() {
             Ok(sm) => sm,
             Err(e) => {
@@ -318,6 +316,11 @@ pub(super) async fn initialize_session_store(
         }
         let dyn_store: Arc<dyn SessionStore> = Arc::new(sm.clone());
         Ok((dyn_store, Some(sm)))
+    } else {
+        Err(
+            format!("Unknown session store backend '{backend}'; expected 'file' or 'sqlite'.")
+                .into(),
+        )
     }
 }
 
@@ -377,19 +380,41 @@ pub(super) fn build_sqlite_session_service(
 /// Initialize the `ExtensionManager` for the plugin system.
 pub(super) async fn initialize_extension_manager(
     daemon: bool,
+    bundled_content_only: bool,
     ownership_tree: Arc<alephcore::capability::ownership::OwnershipTree>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Migrate old single-dir layout and update official skills. Resolve via the
     // authoritative resolver (ALEPH_HOME / $HOME) so bundled content is
     // extracted into the SAME ~/.aleph as the rest of the daemon's state.
     let aleph_home = alephcore::utils::paths::get_config_dir()?;
-    // Bundled extraction may perform a one-time network clone on first run;
-    // run it off the async executor so a slow clone never stalls startup.
+    // Bundled extraction may perform a one-time network clone on first run.
+    // It runs off the async executor so a slow clone never blocks the
+    // executor — but the daemon still waits for it, so the wait is bounded:
+    // a black-holed network would otherwise keep the daemon from ever
+    // starting. After the deadline the daemon boots and the extraction keeps
+    // running in the background; it writes the manifest when it finishes.
     let home_for_extract = aleph_home.clone();
-    let _ = tokio::task::spawn_blocking(move || {
-        alephcore::bundled::extract_bundled_content(&home_for_extract)
-    })
-    .await;
+    let extraction = tokio::task::spawn_blocking(move || {
+        alephcore::bundled::extract_bundled_content(&home_for_extract, bundled_content_only)
+    });
+    match tokio::time::timeout(BUNDLED_EXTRACTION_TIMEOUT, extraction).await {
+        Ok(Ok(Ok(()))) => {}
+        Ok(Ok(Err(e))) => {
+            tracing::error!(
+                error = %e,
+                "Bundled content extraction failed — the official skills and marketplace may be missing"
+            );
+        }
+        Ok(Err(e)) => {
+            tracing::error!(error = %e, "Bundled content extraction task failed");
+        }
+        Err(_) => {
+            tracing::warn!(
+                timeout_secs = BUNDLED_EXTRACTION_TIMEOUT.as_secs(),
+                "Bundled content extraction is still running — continuing startup without it"
+            );
+        }
+    }
 
     match alephcore::extension::ExtensionManager::with_defaults_with_ownership_tree(ownership_tree)
         .await
@@ -578,15 +603,52 @@ mod tests {
             "production boundary must exclude tests"
         );
         let production = alephcore::utils::source_scan::code_text(&prefix);
-        for reaper in [
-            "kill_all_running_background",
-            "shutdown_browsers_global",
-            "close_all",
-        ] {
+        for reaper in ["kill_all_running_background", "shutdown_browsers_global"] {
             assert!(
                 production.contains(&format!("{reaper}(")),
                 "the common teardown must still call {reaper}()"
             );
+        }
+        assert!(production.contains("startup_resources.install_pty(manager)"));
+        assert!(production.contains("startup_resources.finish(result).await"));
+        let cleanup_at = production
+            .find("startup_resources.cleanup().await")
+            .expect("the orderly path must await owned cleanup");
+        let scope_at = production
+            .find("builtin_registration_scope.take()")
+            .expect("the registry scope must remain owned until cleanup");
+        assert!(cleanup_at < scope_at);
+
+        let owner_src = include_str!("builder/startup_resources.rs").replace('\r', "");
+        let owner_prefix = alephcore::utils::source_scan::production_prefix(&owner_src);
+        assert!(owner_prefix.len() < owner_src.len());
+        let owner = alephcore::utils::source_scan::code_text(&owner_prefix);
+        assert!(owner.contains("self.pty = Some(manager)"));
+        assert!(owner.contains("self.cleanup().await"));
+        assert!(owner.contains("if let Some(manager) = self.pty"));
+        let stop_at = owner
+            .find("manager.deactivate().await")
+            .expect("the installed PTY manager must be stopped and joined");
+        for teardown in [
+            "events.close()",
+            "bridge.clone().join().await",
+            "host.clone().close_and_await().await",
+        ] {
+            let teardown_at = owner.find(teardown).expect("owned teardown must remain");
+            assert!(stop_at < teardown_at, "PTY stop must precede {teardown}");
+        }
+
+        let pty_src = include_str!("../../../../gateway/pty/manager.rs").replace('\r', "");
+        let pty_prefix = alephcore::utils::source_scan::production_prefix(&pty_src);
+        assert!(pty_prefix.len() < pty_src.len());
+        let pty = alephcore::utils::source_scan::code_text(&pty_prefix);
+        for stop_edge in [
+            "let cleanup = self.close_all_checked()",
+            "let generation = self.begin_stop()?",
+            "poll_fn(|cx| self.poll_stop(generation, cx)).await",
+            "Pin::new(&mut owned.handle).poll(cx)",
+        ] {
+            assert!(pty.contains(stop_edge), "PTY stop must retain {stop_edge}");
         }
     }
 }

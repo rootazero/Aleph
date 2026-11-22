@@ -8,8 +8,6 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
 
-use super::Entity;
-
 // ---------------------------------------------------------------------------
 // SkillId
 // ---------------------------------------------------------------------------
@@ -193,14 +191,7 @@ impl SkillSource {
     /// question at compile time rather than inherit someone else's label.
     #[must_use]
     pub fn provenance(&self) -> String {
-        match self {
-            Self::Bundled => "bundled".to_string(),
-            Self::Global => "user".to_string(),
-            Self::Workspace => "workspace".to_string(),
-            Self::Plugin(id) => format!("plugin:{}", id.as_str()),
-            Self::Compat(CompatRoot::Claude) => "claude".to_string(),
-            Self::Compat(CompatRoot::Agents) => "agents".to_string(),
-        }
+        self.to_string()
     }
 
     /// Priority for override resolution. Higher value wins.
@@ -216,6 +207,19 @@ impl SkillSource {
             Self::Global => 2,
             Self::Plugin(_) => 3,
             Self::Workspace => 4,
+        }
+    }
+}
+
+impl fmt::Display for SkillSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Bundled => f.write_str("bundled"),
+            Self::Global => f.write_str("user"),
+            Self::Workspace => f.write_str("workspace"),
+            Self::Plugin(id) => write!(f, "plugin:{}", id.as_str()),
+            Self::Compat(CompatRoot::Claude) => f.write_str("claude"),
+            Self::Compat(CompatRoot::Agents) => f.write_str("agents"),
         }
     }
 }
@@ -265,7 +269,7 @@ impl<'de> Deserialize<'de> for Os {
     where
         D: serde::Deserializer<'de>,
     {
-        let s: String = String::deserialize(deserializer)?;
+        let s = std::borrow::Cow::<'de, str>::deserialize(deserializer)?;
         // Reuse the FromStr impl so serde and FromStr can never drift. The
         // serde `#[serde(alias)]` attribute is case-sensitive (e.g. it would
         // accept `macos` but reject `MACOS`); FromStr is case-insensitive.
@@ -299,7 +303,13 @@ impl FromStr for Os {
 // ---------------------------------------------------------------------------
 
 /// Controls how a skill's prompt content is injected.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// Deserialization accepts the same vocabulary — and the same
+/// case-insensitivity — as [`PromptScope::from_str`], so that the config
+/// path (`skills.toml` → `SkillEntryConfig::scope_override`) and the RPC
+/// path (`skills.set` → `PromptScope`) share one vocabulary and one case
+/// policy. Serialization always emits the canonical lowercase name.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PromptScope {
     /// Injected into the system prompt.
@@ -311,6 +321,44 @@ pub enum PromptScope {
     Standalone,
     /// Skill is disabled entirely.
     Disabled,
+}
+
+impl<'de> Deserialize<'de> for PromptScope {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = std::borrow::Cow::<'de, str>::deserialize(deserializer)?;
+        // Reuse the FromStr impl so serde and FromStr can never drift. A
+        // derived `rename_all = "lowercase"` is case-SENSITIVE: `scope =
+        // "System"` in skills.toml failed the whole config file, while the
+        // RPC path lowercased first and accepted it — two answers to one
+        // question. FromStr is case-insensitive.
+        s.parse().map_err(serde::de::Error::custom)
+    }
+}
+
+/// Error returned when parsing an unknown PromptScope string.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("unknown prompt scope: {0}")]
+pub struct ParsePromptScopeError(String);
+
+impl FromStr for PromptScope {
+    type Err = ParsePromptScopeError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.eq_ignore_ascii_case("system") {
+            Ok(Self::System)
+        } else if s.eq_ignore_ascii_case("tool") {
+            Ok(Self::Tool)
+        } else if s.eq_ignore_ascii_case("standalone") {
+            Ok(Self::Standalone)
+        } else if s.eq_ignore_ascii_case("disabled") {
+            Ok(Self::Disabled)
+        } else {
+            Err(ParsePromptScopeError(s.to_string()))
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -401,6 +449,43 @@ impl InstallKind {
             Self::Uv => "uv",
             Self::Go => "go",
             Self::Download => "download",
+        }
+    }
+}
+
+impl fmt::Display for InstallKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Error returned when parsing an unknown InstallKind string.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("unknown install kind: {0}")]
+pub struct ParseInstallKindError(String);
+
+impl FromStr for InstallKind {
+    type Err = ParseInstallKindError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.eq_ignore_ascii_case("brew") {
+            Ok(Self::Brew)
+        } else if s.eq_ignore_ascii_case("apt") {
+            Ok(Self::Apt)
+        } else if s.eq_ignore_ascii_case("scoop") {
+            Ok(Self::Scoop)
+        } else if s.eq_ignore_ascii_case("winget") {
+            Ok(Self::Winget)
+        } else if s.eq_ignore_ascii_case("npm") {
+            Ok(Self::Npm)
+        } else if s.eq_ignore_ascii_case("uv") {
+            Ok(Self::Uv)
+        } else if s.eq_ignore_ascii_case("go") {
+            Ok(Self::Go)
+        } else if s.eq_ignore_ascii_case("download") {
+            Ok(Self::Download)
+        } else {
+            Err(ParseInstallKindError(s.to_string()))
         }
     }
 }
@@ -548,8 +633,10 @@ impl From<String> for SkillContent {
 ///
 /// A `SkillManifest` represents a fully resolved skill with its identity,
 /// content, eligibility, installation instructions, and invocation
-/// policy. It implements `Entity<Id=SkillId>` (formerly `AggregateRoot`, removed
-/// 2026-08-16 — see `src/domain/mod.rs`).
+/// policy. Its identity is the inherent [`SkillManifest::id`] accessor; the
+/// `Entity` marker trait it once implemented (and `AggregateRoot` before it)
+/// were removed because no generic bound ever used them — see
+/// `src/domain/mod.rs`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkillManifest {
     /// Unique skill identifier.
@@ -638,6 +725,12 @@ impl SkillManifest {
     }
 
     // --- Accessors ---
+
+    /// Unique skill identifier.
+    #[must_use]
+    pub fn id(&self) -> &SkillId {
+        &self.id
+    }
 
     /// Human-readable name.
     #[must_use]
@@ -825,14 +918,6 @@ impl SkillManifest {
     /// caller silently skipping the call.
     pub fn set_allowed_tools(&mut self, tools: Option<Vec<String>>) {
         self.allowed_tools = tools;
-    }
-}
-
-impl Entity for SkillManifest {
-    type Id = SkillId;
-
-    fn id(&self) -> &Self::Id {
-        &self.id
     }
 }
 
@@ -1040,7 +1125,7 @@ mod tests {
     // === Task 3 tests ===
 
     #[test]
-    fn test_skill_manifest_entity_trait() {
+    fn test_skill_manifest_id_accessor() {
         let manifest = SkillManifest::new(
             "git:commit",
             "Git Commit",
@@ -1049,7 +1134,8 @@ mod tests {
             SkillSource::Bundled,
         );
 
-        // Entity trait
+        // Inherent identity accessor (the `Entity` marker trait it used to
+        // implement was cut in 2026-11-21 — no generic bound used it).
         assert_eq!(manifest.id().as_str(), "git:commit");
         assert_eq!(format!("{}", manifest.id()), "git:commit");
 

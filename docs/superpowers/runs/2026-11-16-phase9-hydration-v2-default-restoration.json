@@ -1,0 +1,8 @@
+{
+  "status": "PASS",
+  "method": "byte-exact restoration of the newly fixed canonical default bundle after the isolated QA replay",
+  "default_build_receipt": "docs/superpowers/runs/2026-11-16-phase9-panel-hydration-v2-default.json",
+  "files": 9,
+  "manifest_sha256": "19f4ebbffd8711fbd7a7adec295130eca0209b2583d7dbb327abbc6450c658a6",
+  "qa_ingress_name_present": false
+}

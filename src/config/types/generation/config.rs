@@ -27,7 +27,6 @@ use super::provider::GenerationProviderConfig;
 /// output_dir = "~/.aleph/generation"
 /// auto_paste_threshold_mb = 5
 /// background_task_threshold_seconds = 30
-/// smart_routing_enabled = true
 ///
 /// [generation.image_providers.dalle]
 /// provider_type = "openai"
@@ -74,10 +73,6 @@ pub struct GenerationConfig {
     #[serde(default = "default_background_task_threshold_seconds")]
     pub background_task_threshold_seconds: u32,
 
-    /// Enable smart routing based on generation type and capabilities
-    #[serde(default = "default_smart_routing_enabled")]
-    pub smart_routing_enabled: bool,
-
     /// Provider configurations
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub providers: HashMap<String, GenerationProviderConfig>,
@@ -111,10 +106,6 @@ const fn default_background_task_threshold_seconds() -> u32 {
     30 // 30 seconds
 }
 
-const fn default_smart_routing_enabled() -> bool {
-    true
-}
-
 impl Default for GenerationConfig {
     fn default() -> Self {
         Self {
@@ -126,7 +117,6 @@ impl Default for GenerationConfig {
             output_dir: None,
             auto_paste_threshold_mb: default_auto_paste_threshold_mb(),
             background_task_threshold_seconds: default_background_task_threshold_seconds(),
-            smart_routing_enabled: default_smart_routing_enabled(),
             providers: HashMap::new(),
             image_providers: HashMap::new(),
             video_providers: HashMap::new(),

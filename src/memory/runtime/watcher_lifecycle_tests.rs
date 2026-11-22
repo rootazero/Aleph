@@ -23,6 +23,7 @@ async fn activation_watcher_indexes_external_edits_and_stops_with_its_source() {
         MemoryRuntimeConfig {
             metadata_path: root.path().join("memory/metadata.db"),
             note_memory_dir: notes.clone(),
+            retrieval_tuning: Default::default(),
         },
         Arc::new(OwnershipTree::new()),
         MemoryServicesConfig {

@@ -7,13 +7,18 @@
 //! **Projection-only boundary:** `list_tools_arc_impl` exposes a view of the
 //! live tool map. The returned list is not a second registry or authorization
 //! source.
+//!
+//! Both operations are synchronous: the registry is a plain
+//! `Mutex<HashMap<..>>` and neither path has anything to await.
+//! `AlephToolServer`'s public methods stay `async` because their live
+//! callers already await them.
 
 use super::ToolMap;
 use crate::sync_primitives::Arc;
 use crate::tools::traits::AlephToolDyn;
 use crate::tools::types::ToolUpdateInfo;
 
-pub(super) async fn replace_tool_arc_impl(
+pub(super) fn replace_tool_arc_impl(
     tools: &ToolMap,
     tool: Arc<dyn AlephToolDyn>,
 ) -> ToolUpdateInfo {
@@ -39,7 +44,7 @@ pub(super) async fn replace_tool_arc_impl(
     }
 }
 
-pub(super) async fn list_tools_arc_impl(tools: &ToolMap) -> Vec<Arc<dyn AlephToolDyn>> {
+pub(super) fn list_tools_arc_impl(tools: &ToolMap) -> Vec<Arc<dyn AlephToolDyn>> {
     let guard = tools.lock().unwrap_or_else(|e| e.into_inner());
     guard.values().cloned().collect()
 }

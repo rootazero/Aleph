@@ -539,7 +539,7 @@ pub async fn handle_files_delete(
 
 /// Handle `agents.tools_schema` — return tool category metadata for Panel UI
 pub async fn handle_tools_schema(request: JsonRpcRequest) -> JsonRpcResponse {
-    use crate::executor::{BUILTIN_TOOL_DEFINITIONS, TOOL_CATEGORIES};
+    use crate::executor::{builtin_tool_description, TOOL_CATEGORIES};
 
     let categories: Vec<serde_json::Value> = TOOL_CATEGORIES
         .iter()
@@ -548,10 +548,12 @@ pub async fn handle_tools_schema(request: JsonRpcRequest) -> JsonRpcResponse {
                 .tools
                 .iter()
                 .map(|tool_name| {
-                    let description = BUILTIN_TOOL_DEFINITIONS
-                        .iter()
-                        .find(|d| d.name == *tool_name)
-                        .map_or("", |d| d.description);
+                    // The catalog is not the only place a description
+                    // lives: the tools the registry registers outside it
+                    // carry theirs in the registry-only table, and a lookup
+                    // that read the catalog alone showed the Panel a blank
+                    // description for every one of them.
+                    let description = builtin_tool_description(tool_name);
                     json!({
                         "name": tool_name,
                         "description": description,

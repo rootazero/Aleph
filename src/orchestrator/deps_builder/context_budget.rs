@@ -96,8 +96,8 @@ fn derive_summarizer_input_budget(
     chain_min_window: u64,
 ) -> usize {
     let summary_model = super::summary::effective_summary_model(config, primary_provider_key);
-    let window = match summary_model.as_ref().map(|(model, _)| model.as_str()) {
-        Some(model) => capabilities_for(model)
+    let window = if let Some((model, _)) = summary_model {
+        capabilities_for(&model)
             .map(|c| u64::from(c.context_window))
             .or_else(|| {
                 config
@@ -106,8 +106,9 @@ fn derive_summarizer_input_budget(
                     .and_then(|p| p.context_window)
                     .map(u64::from)
             })
-            .unwrap_or(chain_min_window),
-        None => chain_min_window,
+            .unwrap_or(chain_min_window)
+    } else {
+        chain_min_window
     };
     (window / 4).clamp(
         MIN_SUMMARIZER_INPUT_BUDGET,
@@ -320,26 +321,22 @@ fn derive_chain_min_budget(
     primary_provider_key: &str,
     fallbacks: &[String],
 ) -> ChainMinBudget {
-    let mut keys = vec![primary_provider_key.to_string()];
+    let mut keys: Vec<&str> = vec![primary_provider_key];
     for name in fallbacks {
         if !keys.iter().any(|k| k.eq_ignore_ascii_case(name)) {
-            keys.push(name.clone());
+            keys.push(name.as_str());
         }
     }
     let mut best: Option<ChainMinBudget> = None;
     for key in &keys {
-        let provider = config.providers.get(key);
+        let provider = config.providers.get(*key);
         // The live FailoverProvider can migrate across EVERY model a provider
         // declares (model_catalog is seeded with the full list), so size the
         // budget from the smallest window any of them could land on — not just
         // `models.first()`, which would let a narrower sibling listed later
         // overflow the budget the chain-min design exists to keep safe. An empty
         // models list still contributes one evaluation (config window / default).
-        let models: Vec<Option<&str>> = match provider {
-            Some(p) if !p.models.is_empty() => p.models.iter().map(|m| Some(m.as_str())).collect(),
-            _ => vec![None],
-        };
-        for model in models {
+        let mut eval_model = |model: Option<&str>| {
             let budget = derive_token_budget(provider, model);
             let is_smaller = best
                 .as_ref()
@@ -347,11 +344,19 @@ fn derive_chain_min_budget(
             if is_smaller {
                 best = Some(ChainMinBudget {
                     budget,
-                    provider: key.clone(),
+                    provider: (*key).to_string(),
                     model: model.map(str::to_string),
                     chain_len: keys.len(),
                 });
             }
+        };
+
+        if let Some(p) = provider.filter(|p| !p.models.is_empty()) {
+            for m in &p.models {
+                eval_model(Some(m.as_str()));
+            }
+        } else {
+            eval_model(None);
         }
     }
     // `keys` always holds at least the primary, so `best` is always `Some`;
@@ -588,6 +593,19 @@ pub fn build_context_budget_refiner(
     primary_provider_key: &str,
 ) -> Option<ContextBudgetRefiner> {
     let cb = config.effective_context_budget()?;
+    let mut provider_windows = HashMap::new();
+    let mut provider_max_tokens = HashMap::new();
+    for (name, p) in &config.providers {
+        if p.context_window.is_some() || p.max_tokens.is_some() {
+            let lower = name.to_ascii_lowercase();
+            if let Some(w) = p.context_window {
+                provider_windows.insert(lower.clone(), w);
+            }
+            if let Some(m) = p.max_tokens {
+                provider_max_tokens.insert(lower, m);
+            }
+        }
+    }
     Some(ContextBudgetRefiner {
         explicit_token_budget: cb.token_budget,
         global_warning: cb.warning_threshold,
@@ -598,16 +616,8 @@ pub fn build_context_budget_refiner(
             .providers
             .get(primary_provider_key)
             .and_then(|p| p.max_tokens),
-        provider_windows: config
-            .providers
-            .iter()
-            .filter_map(|(name, p)| p.context_window.map(|w| (name.to_ascii_lowercase(), w)))
-            .collect(),
-        provider_max_tokens: config
-            .providers
-            .iter()
-            .filter_map(|(name, p)| p.max_tokens.map(|m| (name.to_ascii_lowercase(), m)))
-            .collect(),
+        provider_windows,
+        provider_max_tokens,
     })
 }
 
@@ -663,8 +673,8 @@ impl ContextBudgetRefiner {
         // catalog), never by the primary's — otherwise a run served by a
         // 32k-window provider is budgeted at the primary's 200k window and
         // the prompt gate admits far more than the model can take.
+        let is_primary = serving_provider.eq_ignore_ascii_case(&self.primary_provider_key);
         let serving_key = serving_provider.to_ascii_lowercase();
-        let is_primary = serving_key == self.primary_provider_key.to_ascii_lowercase();
         let window = if is_primary {
             u64::from(resolve_context_window_with_override(
                 window_override,

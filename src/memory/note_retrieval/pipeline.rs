@@ -87,8 +87,7 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
         if self.scoring.mmr_enabled {
             let t0 = Instant::now();
             let n = facts.len();
-            // rust-doctor-disable-next-line excessive-clone
-            let contents: Vec<String> = facts.iter().map(|f| f.fact.content.clone()).collect();
+            let contents: Vec<&str> = facts.iter().map(|f| f.fact.content.as_str()).collect();
             let relevance: Vec<f32> = facts.iter().map(|f| f.score).collect();
             let order = scoring::mmr_reorder(&contents, &relevance, self.scoring.mmr_lambda);
             let mut slots: Vec<Option<ScoredFact>> = facts.into_iter().map(Some).collect();
@@ -223,16 +222,14 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
         let blended = blend_scores(&originals, &reranked, self.rerank_weight);
 
         // Rebuild ScoredFacts in blended order, carrying the new scores.
-        let mut by_key: HashMap<String, ScoredFact> = facts
-            .into_iter()
-            .enumerate()
-            .map(|(i, f)| (i.to_string(), f))
-            .collect();
-        let mut out = Vec::with_capacity(by_key.len());
+        let mut slots: Vec<Option<ScoredFact>> = facts.into_iter().map(Some).collect();
+        let mut out = Vec::with_capacity(blended.len());
         for (key, score) in blended {
-            if let Some(mut fact) = by_key.remove(&key) {
-                fact.score = score;
-                out.push(fact);
+            if let Ok(idx) = key.parse::<usize>() {
+                if let Some(mut fact) = slots.get_mut(idx).and_then(Option::take) {
+                    fact.score = score;
+                    out.push(fact);
+                }
             }
         }
         sink.record("rerank", t0.elapsed().as_millis() as u64, input, out.len());

@@ -14,8 +14,6 @@ use serde_json::Value;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommandDescriptor {
     pub name: String,
-    #[serde(default)]
-    pub schema: Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -27,13 +25,11 @@ pub struct Environment {
     pub status: String,
     #[serde(default)]
     pub commands: Vec<CommandDescriptor>,
-    /// Operator-assigned labels. These are what `node_invoke_many` selects on,
-    /// so the fleet list must show them — the backend has always sent them, the
-    /// Panel just dropped them on the floor.
+    /// Labels the NODE declares for itself in its connect frame — NOT
+    /// operator-assigned: a peer picks its own labels, so they are a
+    /// selection hint for `node_invoke_many`, never an authorization gate.
     #[serde(default)]
     pub tags: Vec<String>,
-    #[serde(default)]
-    pub connected_at: i64,
     /// Unix seconds. Only meaningful for an offline node; `None` + offline means
     /// "enrolled but has never connected".
     #[serde(default)]

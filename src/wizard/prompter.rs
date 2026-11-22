@@ -143,15 +143,9 @@ impl RpcPrompter {
                 "Answer channel closed unexpectedly (flow may have panicked)".to_string(),
             )),
             Err(_) => {
-                // Reclaim our sender so it cannot outlive the prompt.
-                // The old code branched on whether the reclaim returned `Some`
-                // (the entry was still here) and only fell through to
-                // `rx.try_recv()` in the `None` branch — but `Some` means an
-                // `answer()` raced ahead of us, consumed the sender with
-                // `send()`, and dropped it; the value is therefore already in
-                // `rx`, exactly the case we must not drop. Always attempt
-                // `try_recv()` first; only declare timeout if nothing came
-                // through.
+                // Reclaim our sender so it cannot outlive the prompt. An
+                // `answer()` may have raced ahead and already put the value in
+                // `rx`, so always try_recv() before declaring a timeout.
                 {
                     let mut answers = self.answers.write().unwrap_or_else(|e| e.into_inner());
                     answers.remove(&step_id);

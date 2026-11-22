@@ -112,6 +112,7 @@ impl Fixture {
             MemoryRuntimeConfig {
                 metadata_path: dir.path().join("metadata.db"),
                 note_memory_dir: dir.path().join("note"),
+                retrieval_tuning: Default::default(),
             },
             Arc::new(crate::capability::ownership::OwnershipTree::new()),
         );

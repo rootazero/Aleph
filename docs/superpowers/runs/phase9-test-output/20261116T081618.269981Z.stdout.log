@@ -1,0 +1,6 @@
+
+running 1 test
+test diagnostics::checks::browser_runtime::tests::the_managed_finding_agrees_with_the_tool_gate ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 22421 filtered out; finished in 0.01s
+

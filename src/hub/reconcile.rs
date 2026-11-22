@@ -117,28 +117,31 @@ pub fn mark_installed_state(
     // Using a Vec per key lets us detect collisions: `by_name[k].len() > 1`
     // means we can't safely attribute the installed state to any single
     // catalog entry.
-    let mut by_name: HashMap<(String, String), Vec<&ExtensionEntry>> = HashMap::new();
+    let mut by_name: HashMap<(&'static str, String), Vec<&ExtensionEntry>> =
+        HashMap::with_capacity(installed.len());
     // Parallel MCP facade-id index: the MCP branch below would otherwise do
     // an O(installed) linear scan per catalog entry, turning this loop into
     // O(catalog × installed). The façade id is unique per install, so a
     // single HashMap lookup suffices.
-    let mut by_mcp_facade: HashMap<String, &ExtensionEntry> = HashMap::new();
+    let mut by_mcp_facade: HashMap<&str, &ExtensionEntry> =
+        HashMap::with_capacity(installed.len());
     for e in installed {
         by_name
-            .entry((e.kind.as_str().to_string(), e.name.trim().to_lowercase()))
+            .entry((e.kind.as_str(), e.name.trim().to_lowercase()))
             .or_default()
             .push(e);
         if e.kind == ExtensionKind::Mcp {
-            by_mcp_facade.insert(e.id.clone(), e);
+            by_mcp_facade.insert(e.id.as_str(), e);
         }
     }
 
     for e in catalog.iter_mut() {
+        let origin = origins.iter().find(|o| o.entry_id == e.id);
         let enabled = if e.kind == ExtensionKind::Mcp {
             let expected = format!("local:mcp:{}", mcp_server_id(&e.id));
-            by_mcp_facade.get(&expected).map(|ie| ie.enabled)
+            by_mcp_facade.get(expected.as_str()).map(|ie| ie.enabled)
         } else {
-            let key = (e.kind.as_str().to_string(), e.name.trim().to_lowercase());
+            let key = (e.kind.as_str(), e.name.trim().to_lowercase());
             match by_name.get(&key) {
                 Some(candidates) if candidates.len() == 1 => candidates.first().map(|c| c.enabled),
                 Some(candidates) => {
@@ -146,10 +149,13 @@ pub fn mark_installed_state(
                     // the ledger to disambiguate — the install_origin row ties
                     // an entry_id to a backend, so if exactly one candidate has
                     // a ledger row matching our catalog id we can claim it.
-                    let ours = candidates.iter().find(|c| {
-                        origins.iter().any(|o| o.entry_id == e.id)
-                            && local_ref_addresses(&ledger_local_ref(origins, &e.id), &c.id)
-                    });
+                    let ours = match origin {
+                        Some(o) => candidates
+                            .iter()
+                            .find(|c| local_ref_addresses(&o.local_ref, &c.id))
+                            .copied(),
+                        None => None,
+                    };
                     match ours {
                         Some(c) => Some(c.enabled),
                         None => {
@@ -169,23 +175,11 @@ pub fn mark_installed_state(
         if let Some(en) = enabled {
             e.installed = true;
             e.enabled = en;
-            if let Some(origin) = origins.iter().find(|o| o.entry_id == e.id) {
+            if let Some(origin) = origin {
                 e.update_available = crate::hub::origin::update_available(origin, e);
             }
         }
     }
-}
-
-/// Look up the ledger `local_ref` for an entry id (used to disambiguate
-/// installed-set collisions). Returns `""` when the entry has no ledger row,
-/// which makes `local_ref_addresses("", _)` false and lets the caller fall
-/// through to the warning path.
-fn ledger_local_ref(origins: &[InstallOrigin], entry_id: &str) -> String {
-    origins
-        .iter()
-        .find(|o| o.entry_id == entry_id)
-        .map(|o| o.local_ref.clone())
-        .unwrap_or_default()
 }
 
 #[cfg(test)]

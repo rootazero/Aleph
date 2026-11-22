@@ -39,15 +39,10 @@ pub const EP_SEND_MESSAGE: &str = "ilink/bot/sendmessage";
 pub const EP_SEND_TYPING: &str = "ilink/bot/sendtyping";
 pub const EP_GET_CONFIG: &str = "ilink/bot/getconfig";
 pub const EP_GET_UPLOAD_URL: &str = "ilink/bot/getuploadurl";
-pub const EP_GET_BOT_QR: &str = "ilink/bot/get_bot_qrcode";
-pub const EP_GET_QR_STATUS: &str = "ilink/bot/get_qrcode_status";
 
 /// Long poll timeout in milliseconds
 pub const LONG_POLL_TIMEOUT_MS: u64 = 35_000;
 pub const API_TIMEOUT_MS: u64 = 15_000;
-
-/// QR timeout in milliseconds
-pub const QR_TIMEOUT_MS: u64 = 120_000;
 
 /// Config timeout in milliseconds
 pub const CONFIG_TIMEOUT_MS: u64 = 10_000;
@@ -275,30 +270,6 @@ pub struct OutboundItem {
 #[derive(Debug, Clone, Serialize)]
 pub struct TextItemContent {
     pub text: String,
-}
-
-/// QR login response
-#[derive(Debug, Clone, Deserialize)]
-pub struct QrCodeResponse {
-    pub qrcode: Option<String>,
-    #[serde(rename = "qrcode_img_content")]
-    pub qrcode_img_content: Option<String>,
-}
-
-/// QR status response
-#[derive(Debug, Clone, Deserialize)]
-pub struct QrStatusResponse {
-    pub status: String,
-    #[serde(rename = "ilink_bot_id")]
-    pub ilink_bot_id: Option<String>,
-    #[serde(rename = "bot_token")]
-    pub bot_token: Option<String>,
-    #[serde(rename = "baseurl")]
-    pub base_url: Option<String>,
-    #[serde(rename = "ilink_user_id")]
-    pub ilink_user_id: Option<String>,
-    #[serde(rename = "redirect_host")]
-    pub redirect_host: Option<String>,
 }
 
 /// Typing indicator payload

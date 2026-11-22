@@ -220,9 +220,9 @@ async fn execute_cron_job(
 
     // Resolve agent, defaulting to "main" when unset and gracefully falling
     // back to the built-in default when the bound agent was deleted.
-    let requested_agent = snapshot.agent_id.as_deref().unwrap_or("main").to_string();
+    let requested_agent = snapshot.agent_id.as_deref().unwrap_or("main");
     let (agent, resolved_agent_id, fell_back) =
-        match resolve_cron_agent(&registry, &requested_agent).await {
+        match resolve_cron_agent(&registry, requested_agent).await {
             Some(resolved) => resolved,
             None => {
                 warn!(job_id = %snapshot.id, requested = %requested_agent,
@@ -282,17 +282,14 @@ async fn execute_cron_job(
         "executing cron job"
     );
 
-    // Capture delivery targets before moving snapshot fields
-    let deliver_channel = snapshot.source_channel_id.clone();
-    let deliver_conversation = snapshot.source_conversation_id.clone();
-
     match adapter.execute(request, agent, emitter).await {
         Ok(()) => {
             let ended_at = chrono::Utc::now().timestamp_millis();
 
             // Extract final response from collected events (shared with the
             // group-chat broadcaster via `reply_emitter::extract_final_response`).
-            let final_response = extract_final_response(&collector.events().await);
+            let events = collector.events().await;
+            let final_response = extract_final_response(&events);
 
             // P3: when the harness reports
             // `BudgetExhaustedPartialResult`, persist the partial text
@@ -303,7 +300,7 @@ async fn execute_cron_job(
             // form. The label is single-source from
             // `TerminateReason::as_static_str()`.
             let mut wrote_carryover = false;
-            if let Some((label, detail)) = extract_terminate_reason(&collector).await {
+            if let Some((label, detail)) = extract_terminate_reason(&events) {
                 if label == crate::orchestrator::dispatch::BUDGET_PARTIAL_RESULT_LABEL {
                     if let Some(ref text) = final_response {
                         // Prefer the granular cap label exposed via
@@ -360,7 +357,7 @@ async fn execute_cron_job(
 
             // Deliver response to source channel if available
             let delivery_status = if let (Some(ref ch_id), Some(ref conv_id)) =
-                (&deliver_channel, &deliver_conversation)
+                (&snapshot.source_channel_id, &snapshot.source_conversation_id)
             {
                 match deliverable {
                     Some(ref response_text) => {
@@ -633,14 +630,13 @@ fn build_cron_prompt(snapshot: &JobSnapshot) -> String {
 ///   "some budget".
 ///
 /// `None` when no `RunComplete` event was observed.
-async fn extract_terminate_reason(
-    collector: &CollectingEventEmitter,
+fn extract_terminate_reason(
+    events: &[StreamEvent],
 ) -> Option<(String, Option<String>)> {
-    let events = collector.events().await;
-    for event in events.into_iter().rev() {
+    for event in events.iter().rev() {
         if let StreamEvent::RunComplete { summary, .. } = event {
-            if let Some(label) = summary.terminate_reason {
-                return Some((label, summary.terminate_detail));
+            if let Some(label) = &summary.terminate_reason {
+                return Some((label.clone(), summary.terminate_detail.clone()));
             }
         }
     }

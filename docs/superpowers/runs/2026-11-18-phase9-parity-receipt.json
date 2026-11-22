@@ -1,0 +1,149 @@
+{
+  "acceptance_reason": "all_thresholds_met",
+  "baseline": {
+    "close_ms": {
+      "median": 47.679000000001,
+      "p95": 77.4439999999995,
+      "sample_count": 30.0,
+      "warmup_count": 10.0
+    },
+    "first_frame_ms": {
+      "median": 5357.951,
+      "p95": 5443.839,
+      "sample_count": 30.0,
+      "warmup_count": 10.0
+    },
+    "input_ms": {
+      "median": 198.5,
+      "p95": 213.0,
+      "sample_count": 30.0,
+      "warmup_count": 10.0
+    },
+    "reconnect_ms": {
+      "median": 1041.5,
+      "p95": 1087.0,
+      "sample_count": 30.0,
+      "warmup_count": 10.0
+    },
+    "route_ms": {
+      "median": 33.0,
+      "p95": 34.0,
+      "sample_count": 30.0,
+      "warmup_count": 10.0
+    },
+    "rss_mb": {
+      "median": 678.1015625,
+      "p95": 717.46875,
+      "sample_count": 30.0,
+      "warmup_count": 10.0
+    },
+    "threads": {
+      "median": 76.0,
+      "p95": 78.0,
+      "sample_count": 30.0,
+      "warmup_count": 10.0
+    }
+  },
+  "candidate": {
+    "close_ms": {
+      "median": 48.92099999999937,
+      "p95": 61.36499999999978,
+      "sample_count": 30.0,
+      "warmup_count": 10.0
+    },
+    "first_frame_ms": {
+      "median": 4933.0425,
+      "p95": 4969.122,
+      "sample_count": 30.0,
+      "warmup_count": 10.0
+    },
+    "input_ms": {
+      "median": 198.5,
+      "p95": 211.0,
+      "sample_count": 30.0,
+      "warmup_count": 10.0
+    },
+    "reconnect_ms": {
+      "median": 1022.5,
+      "p95": 1089.0,
+      "sample_count": 30.0,
+      "warmup_count": 10.0
+    },
+    "route_ms": {
+      "median": 33.0,
+      "p95": 35.0,
+      "sample_count": 30.0,
+      "warmup_count": 10.0
+    },
+    "rss_mb": {
+      "median": 640.84375,
+      "p95": 685.796875,
+      "sample_count": 30.0,
+      "warmup_count": 10.0
+    },
+    "threads": {
+      "median": 68.0,
+      "p95": 70.0,
+      "sample_count": 30.0,
+      "warmup_count": 10.0
+    }
+  },
+  "comparisons": {
+    "close_ms": {
+      "median_accepted": true,
+      "median_ratio": 1.0260492040520637,
+      "p95_accepted": true,
+      "p95_ratio": 0.7923790093486929
+    },
+    "first_frame_ms": {
+      "median_accepted": true,
+      "median_ratio": 0.9206957099831633,
+      "p95_accepted": true,
+      "p95_ratio": 0.9127973843458633
+    },
+    "input_ms": {
+      "median_accepted": true,
+      "median_ratio": 1.0,
+      "p95_accepted": true,
+      "p95_ratio": 0.9906103286384976
+    },
+    "reconnect_ms": {
+      "median_accepted": true,
+      "median_ratio": 0.9817570811329813,
+      "p95_accepted": true,
+      "p95_ratio": 1.0018399264029438
+    },
+    "route_ms": {
+      "median_accepted": true,
+      "median_ratio": 1.0,
+      "p95_accepted": true,
+      "p95_ratio": 1.0294117647058822
+    },
+    "rss_mb": {
+      "median_accepted": true,
+      "median_ratio": 0.9450557046902542
+    },
+    "threads": {
+      "median_accepted": true,
+      "median_delta": -8.0
+    }
+  },
+  "failure_metrics": [],
+  "invalid_reason": null,
+  "protocol": {
+    "measured": 30,
+    "order": "tauri_then_nsh",
+    "p95_rank_one_based": 29,
+    "warmups": 10
+  },
+  "run_id": "matrix",
+  "status": "VALID",
+  "threshold_status": "ACCEPTED",
+  "thresholds": {
+    "latency_median_ratio": 1.1,
+    "latency_p95_ratio": 1.2,
+    "rss_median_ratio": 1.1,
+    "threads_median_delta": 2.0
+  },
+  "version": 1
+}

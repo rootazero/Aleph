@@ -1,0 +1,31 @@
+{
+  "kind": "production_gateway",
+  "isolated": true,
+  "url": "http://127.0.0.1:56860/",
+  "binary": "/Volumes/TBU4/Workspace/Aleph/.phase9-target/debug/aleph-server",
+  "binary_sha256": "3d97a101b0eff154d59e8e3f552c4dae42804ee8c73ac653c68027928947bd2b",
+  "pid": 43993,
+  "model_endpoint": "deterministic_protocol_fixture",
+  "panel_assets": {
+    "index.html": {
+      "sha256": "01ba38ba50b53babbd3a48d42cf51d47f9102b729deb36c64e2a7be60c6b8d43",
+      "bytes": 7425,
+      "capture": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/2026-11-16-phase9-runtime-attempt15-gateway/served-assets/index.html"
+    },
+    "aleph_panel.js": {
+      "sha256": "54e23c229879dcfb0453aeba0a0272d5610a7745ceb9ff841701f4923bf2aad1",
+      "bytes": 121503,
+      "capture": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/2026-11-16-phase9-runtime-attempt15-gateway/served-assets/aleph_panel.js"
+    },
+    "aleph_panel_bg.wasm": {
+      "sha256": "9dd254d4b946ed3381b5738a29cf84e0191c7e8fb081b8fd4938b15b958769bb",
+      "bytes": 70925787,
+      "capture": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/2026-11-16-phase9-runtime-attempt15-gateway/served-assets/aleph_panel_bg.wasm"
+    },
+    "tailwind.css": {
+      "sha256": "3ede8d53cbb11d0707f68c53653103749ca33026a82e497b389db328e4cde9e7",
+      "bytes": 146900,
+      "capture": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/2026-11-16-phase9-runtime-attempt15-gateway/served-assets/tailwind.css"
+    }
+  }
+}

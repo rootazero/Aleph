@@ -400,7 +400,44 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             Some(fs_scope),
             self.tool_registry.execute_tool(tool_id, arguments),
         );
-        match execution.await {
+
+        let deadline = request.timeout_secs.map(|timeout_secs| std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs));
+
+        // The run's own cancellation token. `ExecutionEngine::cancel` marks
+        // it for every stop, so this dispatch observes `/stop` the same way
+        // the agent loop does. A run that is already gone cannot be
+        // cancelled any more, and then the deadline below is the only bound.
+        let run_cancel_token = {
+            let runs = self.active_runs.read().await;
+            runs.get(run_id).map(|run| run.cancel_token.clone())
+        };
+
+        let result = tokio::select! {
+            biased;
+            _ = async {
+                match run_cancel_token {
+                    Some(token) => token.cancelled().await,
+                    None => std::future::pending::<()>().await,
+                }
+            } => {
+                return Err(ExecutionError::Cancelled);
+            }
+            _ = async {
+                if let Some(dl) = deadline {
+                    let now = std::time::Instant::now();
+                    if dl > now {
+                        tokio::time::sleep(dl - now).await;
+                    }
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            } => {
+                return Err(ExecutionError::Timeout);
+            }
+            exec_result = execution => exec_result,
+        };
+
+        match result {
             Ok(result) => {
                 // Settle any `_media` the tool declared into BOTH lanes — the
                 // artifact store (workspace pane) and this run's channel
@@ -550,6 +587,19 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         let mode = self.resolve_turn_mode(request).await;
         let think = self.resolve_turn_think_level(request).await;
         let memory = self.resolve_turn_memory_mode(request).await;
+        // A configured canonical capability must not use this raw shortcut.
+        // Returning Fallthrough is deliberate: the guarded full loop remains
+        // the sole place that evaluates facts, approval, and effects.
+        if self.capability_policy.as_ref().is_some_and(|policy| {
+            policy.is_configured(&crate::capability::descriptor::CapabilityId {
+                namespace: crate::capability::backend::TOOL_NAMESPACE.to_string(),
+                name: name.to_string(),
+            })
+        }) {
+            return Err(format!(
+                "`/{name}` targets a configured capability and must use the guarded path"
+            ));
+        }
         let caller_role = request.metadata.get("caller_role").map(String::as_str);
         let caller_is_operator = crate::tools::turn_context::role_is_operator(caller_role);
 

@@ -118,11 +118,6 @@ pub struct BuiltinToolRegistry {
         Option<crate::builtin_tools::runtime::RuntimeTool<crate::builtin_tools::MemorySearchTool>>,
     /// The sole Memory lifecycle source; per-call adapters retain no bundle.
     pub(crate) memory_runtime: Option<Arc<crate::memory::runtime::MemoryRuntime>>,
-    /// Memory context provider — used by the `remember` tool to resolve the
-    /// per-agent `CuratedMemoryStore`. Uses `OnceCell` for deferred injection:
-    /// the registry is wrapped in `Arc` before the MCP is constructed.
-    pub(crate) memory_context_provider:
-        Arc<tokio::sync::OnceCell<Arc<crate::thinker::MemoryContextProvider>>>,
     /// Cluster node registry, injected at startup via `set_node_registry`; `node_invoke` uses it for addressing.
     pub(crate) node_registry: Arc<tokio::sync::OnceCell<Arc<crate::cluster::NodeRegistry>>>,
     /// Security store holding the `role=node` device records, injected at
@@ -343,8 +338,6 @@ pub struct BuiltinToolRegistry {
     /// Session-complete tool (optional - requires `memory_db`)
     pub(crate) session_complete_tool:
         Option<crate::builtin_tools::session_complete::SessionCompleteTool>,
-    /// Memory-reflect tool (optional - requires `MemoryReflector`, injected by Task 8)
-    pub(crate) memory_reflect_tool: Option<crate::builtin_tools::memory_reflect::MemoryReflectTool>,
     /// Channel registry for deferred injection (same pattern as `gateway_context`).
     /// Used by `channel_pairing` tool.
     pub(crate) channel_registry_cell: Arc<tokio::sync::OnceCell<Arc<ChannelRegistry>>>,
@@ -393,10 +386,6 @@ pub struct BuiltinToolRegistry {
     /// the same (optionally project-scoped) agent id the compaction pipeline
     /// writes session raw chunks under.
     pub(crate) memory_project_scoped: bool,
-    /// Memory backend for the `recall_context` tool (pre-compression recovery).
-    /// Built per-call with the active session id from `session_context_handle`.
-    #[allow(dead_code)]
-    pub(crate) recall_context_db: Option<crate::memory::store::MemoryBackend>,
     /// Memory backend for the `memory_trace` tool (evidence-chain walk).
     /// Capability-runtime diagnostic control surface for
     /// `capability_projection_diagnostics` (enablement gate). Mirrors the

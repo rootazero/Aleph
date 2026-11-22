@@ -119,7 +119,14 @@ impl Channel for MatrixChannel {
         let sdk_client = Arc::new(client::MatrixSdkClient::connect(&self.config).await?);
         tracing::info!("Matrix bot authenticated as {}", sdk_client.user_id());
 
-        let deduper = Arc::new(dedupe::EventDeduper::new(&self.config.dedupe_store_path())?);
+        let dedupe_path = self.config.dedupe_store_path();
+        let deduper = Arc::new(
+            tokio::task::spawn_blocking(move || dedupe::EventDeduper::new(&dedupe_path))
+                .await
+                .map_err(|e| {
+                    ChannelError::Internal(format!("Matrix dedupe worker failed: {e}"))
+                })??,
+        );
 
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         self.shutdown_tx = Some(shutdown_tx);
@@ -269,12 +276,20 @@ impl ChannelFactory for MatrixChannelFactory {
     }
 
     async fn create(&self, config: serde_json::Value) -> ChannelResult<Box<dyn Channel>> {
+        self.create_with_id("matrix", config).await
+    }
+
+    async fn create_with_id(
+        &self,
+        id: &str,
+        config: serde_json::Value,
+    ) -> ChannelResult<Box<dyn Channel>> {
         let config: MatrixConfig = serde_json::from_value(config)
             .map_err(|e| ChannelError::ConfigError(format!("Invalid Matrix config: {e}")))?;
 
         config.validate().map_err(ChannelError::ConfigError)?;
 
-        Ok(Box::new(MatrixChannel::new("matrix", config)))
+        Ok(Box::new(MatrixChannel::new(id, config)))
     }
 }
 

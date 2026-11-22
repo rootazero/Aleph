@@ -206,7 +206,6 @@ impl ErrorCooldown {
                 Duration::from_secs_f64(secs)
             }
         };
-
         entry.cooldown_until = Instant::now() + cooldown;
 
         tracing::warn!(
@@ -235,7 +234,9 @@ impl ErrorCooldown {
     /// - `ErrorPolicyMode::Reply` → always `true`.
     /// - `ErrorPolicyMode::Once` → `true` only if no error has been sent to this
     ///   `scope_key` within the last 60 seconds.
-    /// - `ErrorPolicyMode::AdminOnly` → `true` only if the user is in the allowed list.
+    /// - `ErrorPolicyMode::AdminOnly` → the same 60-second window as `Once`:
+    ///   delivery has no actor identity to filter on, so "admin only" cannot be
+    ///   enforced here (the config loader warns when it is selected).
     pub fn should_send_error(
         &self,
         scope_key: &str,
@@ -245,29 +246,23 @@ impl ErrorCooldown {
         match policy.mode {
             ErrorPolicyMode::Silent => false,
             ErrorPolicyMode::Reply => true,
-            ErrorPolicyMode::Once => {
+            // `AdminOnly` shares the window: there is no actor identity at
+            // delivery time, so it degrades to `Once` rather than filtering.
+            ErrorPolicyMode::Once | ErrorPolicyMode::AdminOnly => {
                 let now = Instant::now();
-                if let Some(last) = self.error_policy_cooldowns.get(scope_key) {
-                    if now.saturating_duration_since(*last) < Duration::from_secs(60) {
-                        return false;
+                match self.error_policy_cooldowns.entry(scope_key.to_owned()) {
+                    dashmap::mapref::entry::Entry::Vacant(entry) => {
+                        entry.insert(now);
+                        true
+                    }
+                    dashmap::mapref::entry::Entry::Occupied(mut entry) => {
+                        if now.saturating_duration_since(*entry.get()) < Duration::from_secs(60) {
+                            return false;
+                        }
+                        entry.insert(now);
+                        true
                     }
                 }
-                self.error_policy_cooldowns
-                    .insert(scope_key.to_owned(), now);
-                true
-            }
-            ErrorPolicyMode::AdminOnly => {
-                // AdminOnly: same as Once but only for admin users
-                // (caller should check admin status before calling this)
-                let now = Instant::now();
-                if let Some(last) = self.error_policy_cooldowns.get(scope_key) {
-                    if now.saturating_duration_since(*last) < Duration::from_secs(60) {
-                        return false;
-                    }
-                }
-                self.error_policy_cooldowns
-                    .insert(scope_key.to_owned(), now);
-                true
             }
         }
     }
@@ -382,6 +377,37 @@ mod tests {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
             (state.consecutive_failures, state.tripped_at)
+        }
+    }
+
+    #[test]
+    fn once_and_admin_only_have_one_concurrent_winner_per_scope() {
+        for mode in [ErrorPolicyMode::Once, ErrorPolicyMode::AdminOnly] {
+            let cooldown = std::sync::Arc::new(ErrorCooldown::new());
+            let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+            let policy = ErrorPolicy {
+                mode,
+                ..ErrorPolicy::default()
+            };
+            let workers: Vec<_> = (0..8)
+                .map(|_| {
+                    let cooldown = cooldown.clone();
+                    let barrier = barrier.clone();
+                    let policy = policy.clone();
+                    std::thread::spawn(move || {
+                        barrier.wait();
+                        cooldown.should_send_error("shared", &policy, "error")
+                    })
+                })
+                .collect();
+            assert_eq!(
+                workers
+                    .into_iter()
+                    .filter_map(|worker| worker.join().unwrap().then_some(()))
+                    .count(),
+                1
+            );
+            assert!(cooldown.should_send_error("other", &policy, "error"));
         }
     }
 
@@ -568,7 +594,6 @@ mod tests {
         let ec = ErrorCooldown::new();
         let policy = ErrorPolicy {
             mode: ErrorPolicyMode::Silent,
-            template: None,
             max_retries: 3,
         };
         assert!(!ec.should_send_error("conv-1", &policy, "any error"));
@@ -580,7 +605,6 @@ mod tests {
         let ec = ErrorCooldown::new();
         let policy = ErrorPolicy {
             mode: ErrorPolicyMode::Reply,
-            template: None,
             max_retries: 3,
         };
         assert!(ec.should_send_error("conv-1", &policy, "error 1"));
@@ -592,7 +616,6 @@ mod tests {
         let ec = ErrorCooldown::new();
         let policy = ErrorPolicy {
             mode: ErrorPolicyMode::Once,
-            template: None,
             max_retries: 3,
         };
         assert!(ec.should_send_error("conv-1", &policy, "error 1"));
@@ -604,7 +627,6 @@ mod tests {
         let ec = ErrorCooldown::new();
         let policy = ErrorPolicy {
             mode: ErrorPolicyMode::Once,
-            template: None,
             max_retries: 3,
         };
         assert!(ec.should_send_error("conv-1", &policy, "error 1"));
@@ -621,7 +643,6 @@ mod tests {
         let ec = ErrorCooldown::new();
         let policy = ErrorPolicy {
             mode: ErrorPolicyMode::Once,
-            template: None,
             max_retries: 3,
         };
         assert!(ec.should_send_error("conv-a", &policy, "error a"));

@@ -99,7 +99,9 @@ pub(super) async fn cookies(be: &CdpBackend, op: &CookieOp) -> Result<String, Br
                 .iter()
                 .filter(|c| {
                     domain.as_ref().is_none_or(|d| {
-                        c.domain.trim_start_matches('.') == d.trim_start_matches('.')
+                        c.domain
+                            .trim_start_matches('.')
+                            .eq_ignore_ascii_case(d.trim_start_matches('.'))
                     }) && path.as_ref().is_none_or(|p| &c.path == p)
                 })
                 .map(render_cookie)

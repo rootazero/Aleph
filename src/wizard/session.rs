@@ -156,17 +156,22 @@ pub trait WizardFlow: Send + Sync {
 /// sequentially.
 pub struct WizardSession {
     id: String,
+    // Only three handles escape this struct: `status` and `error` are cloned
+    // into the spawned flow task, and `answers` is handed to the prompter.
+    // `current_step`, `step_rx` and `cancel_tx` stay owned here — callers share
+    // the session itself through `Arc<WizardSession>` — so they need no `Arc`
+    // of their own.
     status: Arc<RwLock<WizardStatus>>,
-    current_step: Arc<RwLock<Option<WizardStep>>>,
+    current_step: RwLock<Option<WizardStep>>,
     // step_tx is intentionally NOT stored here: only the prompter (inside the spawned
     // flow task) holds a sender.  When the flow task completes the prompter is dropped,
     // the last sender goes away, the channel closes, and `next()` receives None which
     // lets it surface the Done/Error result.  Storing step_tx here would keep the
     // channel alive indefinitely and cause `next()` to block forever.
-    step_rx: Arc<tokio::sync::Mutex<mpsc::Receiver<WizardStep>>>,
+    step_rx: tokio::sync::Mutex<mpsc::Receiver<WizardStep>>,
     answers: Arc<RwLock<HashMap<String, PendingAnswer>>>,
     error: Arc<RwLock<Option<String>>>,
-    cancel_tx: Arc<RwLock<Option<oneshot::Sender<()>>>>,
+    cancel_tx: RwLock<Option<oneshot::Sender<()>>>,
 }
 
 impl WizardSession {
@@ -194,11 +199,11 @@ impl WizardSession {
         let session = Self {
             id: id.clone(),
             status: Arc::new(RwLock::new(WizardStatus::Running)),
-            current_step: Arc::new(RwLock::new(None)),
-            step_rx: Arc::new(tokio::sync::Mutex::new(step_rx)),
+            current_step: RwLock::new(None),
+            step_rx: tokio::sync::Mutex::new(step_rx),
             answers,
             error: Arc::new(RwLock::new(None)),
-            cancel_tx: Arc::new(RwLock::new(Some(cancel_tx))),
+            cancel_tx: RwLock::new(Some(cancel_tx)),
         };
 
         // Spawn the flow runner
@@ -294,7 +299,11 @@ impl WizardSession {
             Err(mpsc::error::TryRecvError::Empty) => {}
         }
 
-        if settled || self.is_done() {
+        // Re-read the live status: `settled` is a pre-lock snapshot, and the
+        // flow may have settled while this call waited for the receiver. A
+        // terminal status never reverts to `Running`, so the fresh read is
+        // authoritative and no second predicate is needed.
+        if self.is_done() {
             return self.terminal_result();
         }
 

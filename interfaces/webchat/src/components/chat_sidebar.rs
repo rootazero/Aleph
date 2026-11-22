@@ -18,13 +18,185 @@ use crate::views::chat::agent_identity::agent_color_for_id;
 use crate::views::chat::state::{ChatState, ContextUsage};
 // The topic grammar is the protocol crate's, not a view module's: the server
 // classifies delivery from the same parser (`event_visibility`).
-use aleph_protocol::team_topic::{parse_team_topic, TeamTopicKind};
+use aleph_protocol::team_topic::{TeamTopicKind, parse_team_topic};
 // The wire shape of the wait lane's `pending[]` entries — the same type the
 // server serializes onto `chat.history`, so a field rename there is a
 // compile error here rather than a client that silently reads an empty queue.
 use aleph_protocol::queue::PendingRun;
 
 use web_sys::HtmlInputElement;
+
+/// Await a snapshot without replacing a session that has advanced meanwhile.
+/// The temporary transcript clone is a checkpoint, not another state authority.
+async fn await_current_history<T>(
+    dash: DashboardState,
+    chat: ChatState,
+    key: &str,
+    load: impl std::future::Future<Output = T>,
+) -> Option<T> {
+    let epoch = dash.connection_epoch.get_untracked();
+    let sends = chat.sends.get_untracked();
+    let messages = chat.messages.get_untracked();
+    let active_run = chat.active_run_id.get_untracked();
+    let phase = chat.phase.get_untracked();
+    let reasoning = chat.reasoning_text.get_untracked();
+    let limit = chat.history_limit.get_untracked();
+    let loaded = load.await;
+    (dash.connection_epoch.try_get_untracked() == Some(epoch)
+        && chat.session_key.try_get_untracked().flatten().as_deref() == Some(key)
+        && chat.sends.try_get_untracked() == Some(sends)
+        && chat
+            .messages
+            .try_with_untracked(|current| current == &messages)
+            == Some(true)
+        && chat.active_run_id.try_get_untracked() == Some(active_run)
+        && chat.phase.try_get_untracked() == Some(phase)
+        && chat.reasoning_text.try_get_untracked() == Some(reasoning)
+        && chat.history_limit.try_get_untracked() == Some(limit))
+    .then_some(loaded)
+}
+
+#[cfg(test)]
+mod hydration_progress_tests {
+    use super::{ChatState, DashboardState, await_current_history};
+    use futures::{FutureExt, channel::oneshot};
+    use leptos::prelude::*;
+
+    #[test]
+    fn delayed_reconnect_traces_cannot_replace_a_new_send_or_stream() {
+        let owner = Owner::new();
+        let (dash, chat) = owner.with(|| (DashboardState::new(), ChatState::new()));
+        dash.connection_epoch.set(7);
+        chat.session_key.set(Some("agent:main:main:race".into()));
+        chat.push_user_message("persisted row");
+        let old_rows = chat.messages.get_untracked();
+        let (history_tx, history_rx) = oneshot::channel::<()>();
+        let (traces_tx, traces_rx) = oneshot::channel();
+        let pending = async {
+            if let Some(rows) = await_current_history(dash, chat, "agent:main:main:race", async {
+                history_rx.await.unwrap();
+                traces_rx.await.unwrap()
+            })
+            .await
+            {
+                chat.messages.set(rows);
+            }
+        };
+        futures::pin_mut!(pending);
+        assert!(pending.as_mut().now_or_never().is_none());
+        history_tx.send(()).unwrap();
+        assert!(pending.as_mut().now_or_never().is_none());
+        chat.sends.update(|count| *count += 1);
+        chat.push_user_message("new user bubble");
+        chat.start_assistant_message("new-run");
+        chat.append_chunk("new-run", "new streamed content");
+        let current_rows = chat.messages.get_untracked();
+        traces_tx.send(old_rows).unwrap();
+        futures::executor::block_on(pending);
+        assert_eq!(dash.connection_epoch.get_untracked(), 7);
+        assert_eq!(
+            chat.session_key.get_untracked().as_deref(),
+            Some("agent:main:main:race")
+        );
+        assert_eq!(chat.messages.get_untracked(), current_rows);
+        assert_eq!(
+            chat.assistant_text_for_run("new-run"),
+            "new streamed content"
+        );
+    }
+
+    #[test]
+    fn delayed_history_estimate_cannot_replace_live_chunks_without_a_local_send() {
+        let owner = Owner::new();
+        let (dash, chat) = owner.with(|| (DashboardState::new(), ChatState::new()));
+        dash.connection_epoch.set(7);
+        chat.session_key.set(Some("agent:main:main:race".into()));
+        chat.start_assistant_message("live-run");
+        chat.append_chunk("live-run", "first ");
+        let old_rows = chat.messages.get_untracked();
+        let (history_tx, history_rx) = oneshot::channel::<()>();
+        let (traces_tx, traces_rx) = oneshot::channel::<()>();
+        let (estimate_tx, estimate_rx) = oneshot::channel();
+        let pending = async {
+            if let Some(rows) = await_current_history(dash, chat, "agent:main:main:race", async {
+                history_rx.await.unwrap();
+                traces_rx.await.unwrap();
+                estimate_rx.await.unwrap()
+            })
+            .await
+            {
+                chat.messages.set(rows);
+            }
+        };
+        futures::pin_mut!(pending);
+        assert!(pending.as_mut().now_or_never().is_none());
+        history_tx.send(()).unwrap();
+        assert!(pending.as_mut().now_or_never().is_none());
+        traces_tx.send(()).unwrap();
+        assert!(pending.as_mut().now_or_never().is_none());
+        chat.append_chunk("live-run", "latest chunk");
+        let current_rows = chat.messages.get_untracked();
+        estimate_tx.send(old_rows).unwrap();
+        futures::executor::block_on(pending);
+        assert_eq!(chat.sends.get_untracked(), 0);
+        assert_eq!(chat.messages.get_untracked(), current_rows);
+        assert_eq!(
+            chat.assistant_text_for_run("live-run"),
+            "first latest chunk"
+        );
+    }
+
+    #[test]
+    fn send_progress_without_a_bubble_also_invalidates_history() {
+        let owner = Owner::new();
+        let (dash, chat) = owner.with(|| (DashboardState::new(), ChatState::new()));
+        chat.session_key.set(Some("agent:main:main:race".into()));
+        let (response_tx, response_rx) = oneshot::channel();
+        let pending = await_current_history(dash, chat, "agent:main:main:race", response_rx);
+        futures::pin_mut!(pending);
+        assert!(pending.as_mut().now_or_never().is_none());
+        chat.sends.update(|count| *count += 1);
+        response_tx.send("old snapshot").unwrap();
+        assert!(futures::executor::block_on(pending).is_none());
+    }
+
+    #[test]
+    fn a_larger_history_window_supersedes_the_older_request() {
+        let owner = Owner::new();
+        let (dash, chat) = owner.with(|| (DashboardState::new(), ChatState::new()));
+        chat.session_key.set(Some("agent:main:main:race".into()));
+        chat.history_limit.set(40);
+        let (old_tx, old_rx) = oneshot::channel();
+        let old = await_current_history(dash, chat, "agent:main:main:race", old_rx);
+        futures::pin_mut!(old);
+        assert!(old.as_mut().now_or_never().is_none());
+        chat.history_limit.set(80);
+        let (new_tx, new_rx) = oneshot::channel();
+        let new = await_current_history(dash, chat, "agent:main:main:race", new_rx);
+        futures::pin_mut!(new);
+        assert!(new.as_mut().now_or_never().is_none());
+        old_tx.send(40).unwrap();
+        assert!(futures::executor::block_on(old).is_none());
+        new_tx.send(80).unwrap();
+        assert_eq!(futures::executor::block_on(new), Some(Ok(80)));
+    }
+
+    #[test]
+    fn unchanged_history_is_still_accepted() {
+        let owner = Owner::new();
+        let (dash, chat) = owner.with(|| (DashboardState::new(), ChatState::new()));
+        chat.session_key.set(Some("agent:main:main:stable".into()));
+        assert_eq!(
+            futures::executor::block_on(await_current_history(
+                dash,
+                chat,
+                "agent:main:main:stable",
+                async { "persisted snapshot" },
+            )),
+            Some("persisted snapshot")
+        );
+    }
+}
 
 /// A session entry returned by the backend (`sessions.list`) — the type the
 /// server constructs the row from, shared through `aleph-protocol`.
@@ -34,7 +206,7 @@ use web_sys::HtmlInputElement;
 /// carried no dials, so tapping a row there restored the folder and dropped the
 /// tier and the mode while the server kept enforcing them.
 use crate::api::sessions::{SessionListRow as SessionEntry, SessionRowKnobs};
-use crate::components::team_chat_entry::{enter_team_chat, AgentEntry};
+use crate::components::team_chat_entry::{AgentEntry, enter_team_chat};
 
 /// Should a `run.session_updated` frame re-hydrate the open transcript from
 /// `chat.history`?
@@ -120,8 +292,38 @@ pub(crate) async fn hydrate_session_history(
     // flight. Comparing the response against the limit it was actually issued
     // with is what keeps `history_has_more` honest.
     let limit = chat.history_limit.get_untracked();
-    match ChatApi::history(&dash, &key, Some(limit)).await {
-        Ok(loaded) => {
+    let Some(loaded) = await_current_history(dash, chat, &key, async {
+        let loaded = ChatApi::history(&dash, &key, Some(limit)).await?;
+        let run_ids: Vec<String> = {
+            let mut seen = std::collections::HashSet::new();
+            loaded
+                .messages
+                .iter()
+                .filter(|m| m.role == "assistant")
+                .filter_map(|m| m.run_id.clone())
+                .filter(|r| seen.insert(r.clone()))
+                .collect()
+        };
+        let traces: std::collections::HashMap<String, Vec<serde_json::Value>> =
+            if run_ids.is_empty() {
+                std::collections::HashMap::new()
+            } else {
+                match crate::api::trace::TraceApi::by_runs(&dash, &key, run_ids).await {
+                    Ok(runs) => runs,
+                    Err(e) => {
+                        web_sys::console::warn_1(&format!("trace.by_runs failed: {e}").into());
+                        std::collections::HashMap::new()
+                    }
+                }
+            };
+        Ok::<_, String>((loaded, traces))
+    })
+    .await
+    else {
+        return (None, Vec::new());
+    };
+    match loaded {
+        Ok((loaded, traces)) => {
             let active_run = loaded.active_run;
             let pending = loaded.pending;
             let history = loaded.messages;
@@ -134,33 +336,13 @@ pub(crate) async fn hydrate_session_history(
                 crate::views::chat::state::history_window_gap(history.len(), limit, loaded.total);
             chat.history_has_more.set(has_more);
             chat.history_above.set(above);
-            // Distinct assistant run_ids → fetch their persisted traces.
-            let run_ids: Vec<String> = {
-                let mut seen = std::collections::HashSet::new();
-                history
-                    .iter()
-                    .filter(|m| m.role == "assistant")
-                    .filter_map(|m| m.run_id.clone())
-                    .filter(|r| seen.insert(r.clone()))
-                    .collect()
-            };
-
-            let traces: std::collections::HashMap<String, Vec<serde_json::Value>> =
-                if run_ids.is_empty() {
-                    std::collections::HashMap::new()
-                } else {
-                    match crate::api::trace::TraceApi::by_runs(&dash, &key, run_ids).await {
-                        Ok(runs) => runs,
-                        Err(e) => {
-                            web_sys::console::warn_1(&format!("trace.by_runs failed: {e}").into());
-                            std::collections::HashMap::new()
-                        }
-                    }
-                };
-
-            // Build the transcript in order: replay traced assistant
-            // runs into the (already-cleared) real chat; push user rows
-            // and trace-less assistant rows as plain bubbles.
+            // Transcript, metadata and plan commit without an intervening
+            // await. The optional gauge estimate must not delay their render.
+            let usage = occupancy_from_history(&history);
+            let needs_estimate = usage.is_none();
+            if let Some(real) = usage {
+                chat.context_usage.set(Some(real));
+            }
             chat.messages.set(Vec::new());
             for (i, m) in history.iter().enumerate() {
                 let ts = m
@@ -237,29 +419,6 @@ pub(crate) async fn hydrate_session_history(
                 ws.unseen_artifacts.set(0);
             }
 
-            // Re-project the gauge from the persisted occupancy. Hydration only
-            // runs for a conversation with no local transcript to preserve, and
-            // for that case the persisted occupancy is the authoritative source
-            // (None = no real occupancy yet ⇒ fall back to a core estimate
-            // below; the gauge stays hidden only if that estimate also fails).
-            // A conversation restored from its background state keeps the
-            // occupancy its snapshot carried, which is fresher than this.
-            match occupancy_from_history(&history) {
-                Some(real) => chat.context_usage.set(Some(real)),
-                None => {
-                    // No real occupancy recorded → ask core for a next-prompt
-                    // estimate so a freshly-opened conversation still shows a
-                    // `≈N%` gauge. Null/err ⇒ leave it hidden.
-                    let est = ChatApi::context_estimate(&dash, &key).await.ok().flatten();
-                    chat.context_usage.set(est.map(|e| ContextUsage {
-                        used_tokens: e.used_tokens,
-                        window_tokens: e.window_tokens,
-                        total_tokens: u64::from(e.used_tokens),
-                        is_estimate: true,
-                    }));
-                }
-            }
-
             // The durable execution list, applied AFTER the replay loop.
             //
             // Order is the whole point. `replay_run` feeds every persisted
@@ -320,6 +479,37 @@ pub(crate) async fn hydrate_session_history(
                 });
             }
 
+            #[cfg(all(target_arch = "wasm32", feature = "runtime-qa"))]
+            if let Some(window) = web_sys::window() {
+                // Observe the production replay commit; the QA driver waits for a frame after it.
+                let applied = js_sys::Object::new();
+                let _ = js_sys::Reflect::set(&applied, &"session_key".into(), &key.as_str().into());
+                let _ = js_sys::Reflect::set(
+                    &applied,
+                    &"connection_epoch".into(),
+                    &wasm_bindgen::JsValue::from_f64(dash.connection_epoch.get_untracked() as f64),
+                );
+                let _ =
+                    js_sys::Reflect::set(&window, &"__alephPanelQaHistoryApplied".into(), &applied);
+            }
+
+            if needs_estimate {
+                // Capture a fresh checkpoint after our own synchronous replay.
+                // A newer send/stream must keep its gauge and run-follow state.
+                let Some(estimate) =
+                    await_current_history(dash, chat, &key, ChatApi::context_estimate(&dash, &key))
+                        .await
+                else {
+                    return (None, Vec::new());
+                };
+                chat.context_usage
+                    .set(estimate.ok().flatten().map(|e| ContextUsage {
+                        used_tokens: e.used_tokens,
+                        window_tokens: e.window_tokens,
+                        total_tokens: u64::from(e.used_tokens),
+                        is_estimate: true,
+                    }));
+            }
             (active_run, pending)
         }
         Err(e) => {
@@ -572,7 +762,8 @@ pub fn ChatSidebar() -> impl IntoView {
     let sessions = RwSignal::new(Vec::<SessionEntry>::new());
     let is_loading = RwSignal::new(false);
     // Which agent is selected in the dropdown (synced with chat.agent_id)
-    let selected_agent = RwSignal::new(Option::<String>::None);
+    // Sidebar remounts after a connection loss; the active conversation owns selection.
+    let selected_agent = RwSignal::new(chat.agent_id.get_untracked());
     // Agent picker popover visibility — closes on mouse-leave to match the
     // model picker / project menu affordances (see model_picker.rs).
     let agent_picker_open = RwSignal::new(false);
@@ -2169,8 +2360,8 @@ mod rehydrate_tests {
 
 #[cfg(test)]
 mod last_run_face_tests {
-    use super::{last_run_notice, run_badge, RunBadge, SessionEntry};
-    use crate::i18n::{td_string, Locale};
+    use super::{RunBadge, SessionEntry, last_run_notice, run_badge};
+    use crate::i18n::{Locale, td_string};
     use aleph_protocol::{DanglingCallView, LastRunState, RunProgressView};
 
     /// `n` calls that crossed the dispatch line and never came back.
@@ -2408,7 +2599,9 @@ mod last_run_face_tests {
             inspected: true,
             ..LastRunState::default()
         };
-        assert!(last_run_notice(&odd, Locale::default()).is_some_and(|n| n.contains("quarantined")));
+        assert!(
+            last_run_notice(&odd, Locale::default()).is_some_and(|n| n.contains("quarantined"))
+        );
         let row = SessionEntry {
             key: "agent:main:main:s4".into(),
             last_run: Some(odd),

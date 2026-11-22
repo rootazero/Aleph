@@ -1172,10 +1172,11 @@ mod tests {
             // ...and afterwards the old lease is dead before any further I/O.
             *h.backend.during_io.lock().unwrap() = None;
             let before = hits(&h);
-            assert!(h
-                .bridge
-                .save_blocking(&req, lease.lease_id, &cred("x"))
-                .is_err());
+            assert!(
+                h.bridge
+                    .save_blocking(&req, lease.lease_id, &cred("x"))
+                    .is_err()
+            );
             assert!(h.bridge.delete_blocking(&req, lease.lease_id).is_err());
             assert_eq!(hits(&h), before);
         }
@@ -1493,9 +1494,11 @@ mod tests {
 
     #[test]
     fn scope_rejects_unknown_fields() {
-        assert!(serde_json::from_value::<GatewayCredentialScope>(
-            serde_json::json!({"gateway_origin": "http://a:1", "account": "x"})
-        )
-        .is_err());
+        assert!(
+            serde_json::from_value::<GatewayCredentialScope>(
+                serde_json::json!({"gateway_origin": "http://a:1", "account": "x"})
+            )
+            .is_err()
+        );
     }
 }

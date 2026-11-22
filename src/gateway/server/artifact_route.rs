@@ -37,10 +37,15 @@
 //!
 //! An exported transcript is HTML this process generated from session content,
 //! and an SVG is a live document too. Both are served under
-//! [`ARTIFACT_DOCUMENT_CSP`] — `default-src 'none'` plus `sandbox`, which forces
-//! an opaque origin and disables scripting — so even a hole in the exporter's
-//! escaping cannot reach the gateway origin. `SecurityHeadersLayer` defers to a
-//! response that already carries a policy; see `crate::security::headers`.
+//! [`ARTIFACT_DOCUMENT_CSP`] — the export module's own policy plus `sandbox`,
+//! which forces an opaque origin and disables scripting — so even a hole in
+//! the exporter's escaping cannot reach the gateway origin.
+//! `SecurityHeadersLayer` defers to a response that already carries a policy;
+//! see `crate::security::headers`.
+//!
+//! The policy is **derived** from `crate::export::CONTENT_SECURITY_POLICY`
+//! rather than written out here: one literal, one owner. The served policy
+//! adds what a header can carry and a document's own `<meta>` tag cannot.
 
 use std::net::{IpAddr, SocketAddr};
 
@@ -67,13 +72,24 @@ use super::handler::refuse_insecure_remote;
 
 /// Response policy for artifact bytes that a browser would treat as a document.
 ///
-/// `default-src 'none'` starves it of every fetch, `img-src data:` keeps a
-/// self-contained export's inline images working, `style-src 'unsafe-inline'`
-/// keeps its `<style>` block working, and `sandbox` (empty allow-list) forces an
-/// opaque origin with scripting disabled. Nothing here can reach the gateway
-/// origin, read its storage, or call its RPCs.
+/// **Derived, not written here.** The base is
+/// [`crate::export::CONTENT_SECURITY_POLICY`] — one literal, one owner — and
+/// this is that literal plus the directive a *header* can carry and the
+/// document's own `<meta>` tag cannot:
+///
+/// * `sandbox` forces an opaque origin and disables scripting. Nothing here
+///   can reach the gateway origin, read its storage, or call its RPCs.
+/// * `allow-downloads` is in the sandbox's allow-list because the export's own
+///   attachment rows are `<a download="...">` links to `data:` URLs. A
+///   sandbox without it refuses every download, so the row would be on the
+///   page and dead — an offered attachment that cannot be taken.
+///
+/// The base policy is what the rest means: `default-src 'none'` starves the
+/// document of every fetch, `img-src data:` keeps a self-contained export's
+/// inline images working, and `style-src 'unsafe-inline'` keeps its `<style>`
+/// block working.
 pub const ARTIFACT_DOCUMENT_CSP: &str =
-    "default-src 'none'; img-src data:; style-src 'unsafe-inline'; sandbox";
+    concat!(crate::export::content_security_policy!(), "; sandbox allow-downloads");
 
 /// Per-minute byte reads allowed per remote IP.
 ///

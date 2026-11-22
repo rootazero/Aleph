@@ -9,7 +9,9 @@
 1. Before modification: `cp ~/.aleph/config.toml ~/.aleph/config.toml.bak`
 2. Use `agent_create` / `agent_delete` tools for creating/deleting agents
 3. Edit workspace files (SOUL.md, MEMORY.md) directly — reload on next agent resolution
-4. config.toml agent changes auto-reload via fswatch
+4. config.toml agent changes are NOT applied by the file watcher — it swaps
+   its own snapshot and hot-applies PII privacy only. Call `config.reload`
+   (or restart) for the change to reach the running daemon.
 
 ## Config Structure
 
@@ -18,7 +20,6 @@
 model = "claude-sonnet-4"
 workspace_root = "~/.aleph/workspaces"
 agents_root = "~/.aleph/agents"
-bootstrap_max_chars = 20000
 
 [[agents.list]]
 id = "main"                # Required, unique

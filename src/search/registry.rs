@@ -262,14 +262,14 @@ impl SearchRegistry {
         if let Some(safe) = cfg.safe_search {
             defaults.safe_search = safe;
         }
-        if let Some(include) = cfg.include_domains.clone() {
+        if let Some(ref include) = cfg.include_domains {
             if !include.is_empty() {
-                defaults.include_domains = include;
+                defaults.include_domains = include.clone();
             }
         }
-        if let Some(exclude) = cfg.exclude_domains.clone() {
+        if let Some(ref exclude) = cfg.exclude_domains {
             if !exclude.is_empty() {
-                defaults.exclude_domains = exclude;
+                defaults.exclude_domains = exclude.clone();
             }
         }
         registry.config_defaults = Some(defaults);

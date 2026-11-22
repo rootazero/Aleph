@@ -106,7 +106,7 @@ impl MemoryServices {
             memory.reflection.enabled && memory.reflection.open_loop_inject_prompt,
         )
         .with_extensions(inputs.extensions.clone())
-        .with_curated_config(memory.curated.clone().into())
+        .with_curated_config(memory.curated.into())
         .with_curated_root(inputs.curated_root.clone())
         .with_orientation(orientation.clone())
         .with_orientation_budget(crate::memory::notes::orientation::types::TokenBudget {

@@ -79,7 +79,6 @@ use crate::gateway::security::store::OWNER_USER_ID;
 use crate::gateway::session_store::error::SessionStoreError;
 use crate::gateway::session_store::SessionStore;
 use crate::projects::ProjectStore;
-use crate::scope::ScopeId;
 
 /// What one backfill pass did. Every field is a distinct outcome on purpose:
 /// "already stamped" and "could not be stamped" are the two answers a bare
@@ -148,7 +147,7 @@ pub async fn backfill_legacy_room_attribution(
         // so this half of the write changes no verdict. It is written anyway
         // so the pair is never half-set.
         let owner = project.owner_user_id.as_deref().unwrap_or(OWNER_USER_ID);
-        let scope = ScopeId::Project(project.id.clone()).render();
+        let scope = aleph_protocol::scope::project_scope_id(&project.id);
         match sessions.backfill_attribution(&key, owner, &scope).await {
             Ok(true) => {
                 report.stamped += 1;

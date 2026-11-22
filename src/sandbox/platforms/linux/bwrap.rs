@@ -351,9 +351,10 @@ impl BubblewrapDriver {
                 // process can write into, so protecting `cwd` alone left
                 // `<extra>/.git` (and `.aleph` / `.codex` / `.agents`) creatable
                 // and writable there. Same shape as `ReadWritePaths` below.
-                let mut all = vec![cwd];
-                all.extend(paths.iter().map(|p| p.as_path()));
-                push_metadata_protection_args(args, all)?;
+                push_metadata_protection_args(
+                    args,
+                    std::iter::once(cwd).chain(paths.iter().map(PathBuf::as_path)),
+                )?;
             }
             FsPolicy::ReadWritePaths { read, write } => {
                 let cwd_str = cwd.to_str().ok_or_else(|| {
@@ -389,9 +390,10 @@ impl BubblewrapDriver {
                 // path. bwrap evaluates mounts in order: later mounts
                 // shadow earlier ones, so emitting `--ro-bind-try` after
                 // the writable `--bind` is what makes these read-only.
-                let mut all = vec![cwd];
-                all.extend(write.iter().map(|p| p.as_path()));
-                push_metadata_protection_args(args, all)?;
+                push_metadata_protection_args(
+                    args,
+                    std::iter::once(cwd).chain(write.iter().map(PathBuf::as_path)),
+                )?;
             }
             FsPolicy::FullRead { exclude } => {
                 args.push("--ro-bind".into());

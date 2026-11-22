@@ -15,8 +15,11 @@
 //! [`ORPHAN_GRACE`] — the window that keeps the put→apply race from eating a
 //! just-uploaded asset — and a dedupe hit in `put_asset` re-touches the file
 //! so a re-referenced old asset re-arms the same window. The actual sweep
-//! runs in-apply (still inside the per-canvas critical section); the unit
-//! tests below exercise that path through real `apply` calls.
+//! runs in-apply (still inside the per-canvas critical section). The unit
+//! tests below exercise the put/read path through real `put_asset` and
+//! `read_asset` calls — content addressing, the dedupe branch's grace-window
+//! re-touch, the mime table, the byte caps and asset-id rejection — but they
+//! do NOT drive the in-apply sweep, nor the grace window's expiry.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -165,15 +168,42 @@ impl CanvasStore {
             // would land a dangling reference. Best-effort — a failed touch
             // degrades to the pre-existing race window, never to data loss
             // of referenced content (the sweep only reaps UNreferenced files).
-            match std::fs::OpenOptions::new().write(true).open(&path) {
-                Ok(f) => {
-                    if let Err(e) = f.set_modified(SystemTime::now()) {
-                        warn!(canvas = %id, asset = %asset_id, error = %e,
-                            "canvas: could not renew asset grace window on dedupe");
-                    }
+            //
+            // The open and the mtime bump are blocking syscalls, so they
+            // run on the blocking pool: doing them inline would park an
+            // async worker thread on a slow disk WHILE the per-canvas write
+            // lock is held.
+            enum TouchFailure {
+                Open(std::io::Error),
+                SetModified(std::io::Error),
+            }
+            let touched = tokio::task::spawn_blocking(move || {
+                match std::fs::OpenOptions::new().write(true).open(&path) {
+                    Ok(file) => file
+                        .set_modified(SystemTime::now())
+                        .map_err(TouchFailure::SetModified),
+                    Err(e) => Err(TouchFailure::Open(e)),
                 }
-                Err(e) => warn!(canvas = %id, asset = %asset_id, error = %e,
-                    "canvas: could not reopen asset to renew its grace window"),
+            })
+            .await;
+            match touched {
+                Ok(Ok(())) => {}
+                Ok(Err(TouchFailure::Open(e))) => {
+                    warn!(canvas = %id, asset = %asset_id, error = %e,
+                        "canvas: could not reopen asset to renew its grace window")
+                }
+                Ok(Err(TouchFailure::SetModified(e))) => {
+                    warn!(canvas = %id, asset = %asset_id, error = %e,
+                        "canvas: could not renew asset grace window on dedupe")
+                }
+                // The join failed (the blocking task panicked or the runtime
+                // went away), so the touch did not happen: the grace window
+                // was NOT renewed — the same degradation as a failed
+                // set_modified, reported in the same style.
+                Err(e) => {
+                    warn!(canvas = %id, asset = %asset_id, error = %e,
+                        "canvas: could not renew asset grace window on dedupe")
+                }
             }
             return Ok(asset_id);
         }

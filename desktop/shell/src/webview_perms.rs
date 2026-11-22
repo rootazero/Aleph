@@ -87,7 +87,7 @@ fn grant_linux(pview: &tauri::webview::PlatformWebview) {
 #[cfg(target_os = "windows")]
 fn grant_windows(pview: &tauri::webview::PlatformWebview) {
     use webview2_com::Microsoft::Web::WebView2::Win32::*;
-    use webview2_com::{take_pwstr, PermissionRequestedEventHandler};
+    use webview2_com::{PermissionRequestedEventHandler, take_pwstr};
     use windows_core::PWSTR;
 
     let controller = pview.controller();

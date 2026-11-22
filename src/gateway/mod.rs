@@ -23,11 +23,15 @@
 //! ```
 
 // Social Connectivity: Link data models (always compiled)
-pub mod link;
 
 pub mod admin_api;
 pub mod announce_delivery;
 pub mod btw;
+pub mod capability_events;
+#[cfg(test)]
+mod capability_events_tests;
+#[cfg(test)]
+mod capability_terminal_tests;
 pub mod credential_planner;
 pub mod data_url;
 pub mod event_bus;
@@ -76,6 +80,7 @@ pub mod session_projector;
 pub mod session_snapshot;
 pub mod session_store;
 // loop_callback_adapter removed (depended on old OTAF agent_loop types)
+pub mod capability_ui;
 pub mod channel;
 pub mod channel_approval;
 pub mod channel_chunking;
@@ -87,7 +92,6 @@ pub mod continuation_lifecycle;
 pub mod delivery_queue;
 pub mod goal_budget;
 pub mod hot_reload;
-pub mod http_server;
 pub mod inbound_context;
 pub mod inbound_router;
 pub mod interfaces;

@@ -23,7 +23,7 @@ pub trait Clock: Send + Sync + 'static {
         // to a huge `u32`, making `timestamp_opt` reject it and silently
         // collapse to the epoch instead of the true pre-epoch instant.
         DateTime::from_timestamp_millis(self.now_ms())
-            .unwrap_or_else(|| DateTime::from_timestamp(0, 0).unwrap_or_else(Utc::now))
+            .unwrap_or(DateTime::<Utc>::UNIX_EPOCH)
     }
 }
 

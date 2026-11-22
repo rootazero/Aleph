@@ -8,6 +8,8 @@
 //! This is what lets the Stable body ride the KV-cache prefix unchanged across
 //! every turn of a long task (mirrors `curated_memory_envelope`).
 
+use std::fmt::Write;
+
 use crate::strategy::types::Strategy;
 
 /// Full `<strategy>` body for the Stable `StrategyLayer` — objective, approach,
@@ -23,29 +25,29 @@ pub fn render_strategy_summary(s: &Strategy) -> String {
     out.push_str(s.approach.trim());
     out.push('\n');
 
-    let phases: Vec<&str> = s
+    let mut phases = s
         .phases
         .iter()
         .map(|p| p.trim())
         .filter(|p| !p.is_empty())
-        .collect();
-    if !phases.is_empty() {
+        .peekable();
+    if phases.peek().is_some() {
         out.push_str("Phases:\n");
-        for (i, phase) in phases.iter().enumerate() {
-            out.push_str(&format!("  {}. {phase}\n", i + 1));
+        for (i, phase) in phases.enumerate() {
+            let _ = writeln!(out, "  {}. {phase}", i + 1);
         }
     }
 
-    let guardrails: Vec<&str> = s
+    let mut guardrails = s
         .guardrails
         .iter()
         .map(|g| g.trim())
         .filter(|g| !g.is_empty())
-        .collect();
-    if !guardrails.is_empty() {
+        .peekable();
+    if guardrails.peek().is_some() {
         out.push_str("Guardrails (advisory — stay sovereign over moment-to-moment relevance):\n");
-        for g in &guardrails {
-            out.push_str(&format!("  - {g}\n"));
+        for g in guardrails {
+            let _ = writeln!(out, "  - {g}");
         }
     }
 
@@ -97,7 +99,7 @@ pub fn render_guardrails_only(s: &Strategy) -> String {
         out.push('\n');
     }
     if hidden > 0 {
-        out.push_str(&format!("- … ({hidden} more guardrails elided)\n"));
+        let _ = writeln!(out, "- … ({hidden} more guardrails elided)");
     }
     out.truncate(out.trim_end().len());
     out
@@ -118,16 +120,16 @@ pub fn render_workflow_global_frame(s: &Strategy) -> String {
     out.push_str(s.objective.trim());
     out.push('\n');
 
-    let guardrails: Vec<&str> = s
+    let mut guardrails = s
         .guardrails
         .iter()
         .map(|g| g.trim())
         .filter(|g| !g.is_empty())
-        .collect();
-    if !guardrails.is_empty() {
+        .peekable();
+    if guardrails.peek().is_some() {
         out.push_str("Cross-cutting guardrails:\n");
-        for g in &guardrails {
-            out.push_str(&format!("  - {g}\n"));
+        for g in guardrails {
+            let _ = writeln!(out, "  - {g}");
         }
     }
     out.truncate(out.trim_end().len());
@@ -137,7 +139,6 @@ pub fn render_workflow_global_frame(s: &Strategy) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::strategy::types::Strategy;
 
     fn sample() -> Strategy {
         Strategy {

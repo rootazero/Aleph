@@ -201,7 +201,8 @@ pub(crate) fn update_session_model(
 ) -> SessionModelUpdate {
     let update = {
         let mut guard = map().write().unwrap_or_else(|e| e.into_inner());
-        if let Some(existing) = guard.get(session_key) {
+        let existing = guard.get(session_key);
+        if let Some(existing) = existing {
             if existing.generation == u64::MAX {
                 warn!(
                     session_key,
@@ -215,7 +216,7 @@ pub(crate) fn update_session_model(
                 };
             }
         }
-        let generation = guard.get(session_key).map_or(0, |state| state.generation) + 1;
+        let generation = existing.map_or(0, |state| state.generation) + 1;
         guard.insert(
             session_key.to_string(),
             SessionModelState {

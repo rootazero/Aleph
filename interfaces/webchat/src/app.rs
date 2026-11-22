@@ -1,10 +1,15 @@
-use crate::i18n::{I18nContextProvider, t_string, use_i18n};
+#[cfg(feature = "panel-modular")]
+use crate::i18n::t_string;
+use crate::i18n::{I18nContextProvider, use_i18n};
 use crate::state::memory::MemoryState;
 use aleph_protocol::browser_live::{CLOSED_TOPIC, RESOURCE_TOPIC};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use leptos_router::components::Router;
 use leptos_router::hooks::{use_location, use_navigate};
+
+#[cfg(target_arch = "wasm32")]
+mod shell_bridge;
 
 // Views
 use crate::views::agent_trace::AgentTrace;
@@ -191,15 +196,16 @@ fn AppContent() -> impl IntoView {
     // sessions no longer freeze while another tab is in view.
     {
         let ws = expect_context::<WorkspaceState>();
-        // The dispatcher outlives every component, so it cannot look the i18n
-        // context up on demand — hand it the (Copy) handle once here.
+        // The dispatcher outlives every component, so capture the existing
+        // context and provide it only when a localized trace needs it.
+        let i18n = use_i18n();
         let _root_run_sub = subscribe_run_events(
             &state,
             session_map,
             chat_state,
             ws,
             canvas_state,
-            use_i18n(),
+            move || i18n,
         );
         // Root-level subscription is app-lifetime; no on_cleanup needed.
     }
@@ -232,18 +238,19 @@ fn AppContent() -> impl IntoView {
         });
     }
 
-    // Typewriter reveal clock — paces the Panel's streamed-text reveal at the
-    // configured `behavior.typing_speed` (chars/sec). Provided here so the chat
-    // view (reader) and the behavior settings page (writer-on-save) share one
-    // clock. The animation ticker advances the reveal between token arrivals;
-    // the boot fetch wires the *live* typing_speed/output_mode (previously the
-    // slider was a dead knob — see state/typewriter.rs). `f` repair-hotkey
-    // pattern aside, this is pure presentation (R10).
+    // Typewriter reveal clock — paces the Panel's streamed-text reveal.
+    // Provided here so the chat view (reader) and the behavior settings page
+    // (writer-on-save) share one clock. The animation ticker advances the
+    // reveal between token arrivals; the boot fetch wires the *live*
+    // output_mode. The reveal RATE is a Panel-local constant
+    // (`state::typewriter::DEFAULT_CPS`) — the server retired
+    // `behavior.typing_speed`, so there is no server-owned rate to fetch (see
+    // state/typewriter.rs). `f` repair-hotkey pattern aside, this is pure
+    // presentation (R10).
     let typewriter = TypewriterClock::new();
     provide_context(typewriter);
     spawn_local(async move {
         if let Ok(cfg) = BehaviorConfigApi::get(&state).await {
-            typewriter.cps.set(cfg.typing_speed);
             typewriter.instant.set(cfg.output_mode == "instant");
         }
     });
@@ -502,6 +509,7 @@ fn AppContent() -> impl IntoView {
                 </button>
             </Show>
             <Router>
+                {#[cfg(target_arch = "wasm32")] { view! { <shell_bridge::ShellBridge /> } }}
                 // Left column — context-aware sidebar, full window height.
                 // Phone has its own tab bar; see `not_phone` above.
                 <Show when=legacy_chrome>

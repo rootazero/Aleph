@@ -69,6 +69,7 @@ async function runHost(publicBase) {
   page.on('pageerror', (error) => pageErrors.push(error.name || 'Error'));
   page.on('console', (message) => browserLogs.push(message.type()));
   page.on('requestfailed', (request) => failedRequests.push({
+    origin: new URL(request.url()).origin,
     path: new URL(request.url()).pathname,
     error: request.failure()?.errorText ?? 'unknown',
   }));
@@ -112,6 +113,8 @@ async function runHost(publicBase) {
     assert.equal(await page.locator('[data-terminal-sidebar]').count(), 1);
     assert.equal(await page.locator('[data-terminal-view]').count(), 1);
 
+    await page.waitForFunction(() => globalThis.__fillTexts?.includes('Production host screen ✓'), undefined, { timeout: 5_000 });
+    assert.ok(await page.evaluate(() => globalThis.__fillTexts.includes('Production host screen ✓')), 'initial attach snapshot must reach native canvas before any live frame');
     const before = await page.locator('canvas').evaluate((canvas) => canvas.toDataURL());
     gateway.emit('pty.screen', {
       session_id: 'production-fixture-session',

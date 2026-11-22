@@ -325,7 +325,7 @@ impl BoundedWitnesses {
     /// answered yet, so such a write may create an entry but never rewrites the
     /// `served` an earlier turn already filled in.
     fn record(&mut self, key: String, attempted: Dialed, served: Option<Dialed>) {
-        if !self.map.contains_key(&key) && self.map.len() >= MAX_TRACKED_SESSIONS {
+        if self.map.len() >= MAX_TRACKED_SESSIONS && !self.map.contains_key(&key) {
             // Evict exactly the stalest entry. O(n) at the cap only, and the
             // cap is the exceptional path — cheap insurance against wedging.
             if let Some(oldest) = self
@@ -339,19 +339,18 @@ impl BoundedWitnesses {
         }
         self.seq += 1;
         let tick = self.seq;
-        match self.map.get_mut(&key) {
-            Some((t, witness)) => {
-                // An anchor for a session already in the map states nothing new
-                // about recency; only a real answer refreshes the eviction age.
+        match self.map.entry(key) {
+            std::collections::hash_map::Entry::Occupied(mut entry) => {
+                let (t, witness) = entry.get_mut();
                 if served.is_some() {
                     *t = tick;
                 }
                 witness.absorb(&attempted, served);
             }
-            None => {
+            std::collections::hash_map::Entry::Vacant(entry) => {
                 let first = attempted;
                 let served = served.unwrap_or_else(|| first.clone());
-                self.map.insert(key, (tick, RouteWitness { first, served }));
+                entry.insert((tick, RouteWitness { first, served }));
             }
         }
     }

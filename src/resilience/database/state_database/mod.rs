@@ -178,11 +178,7 @@ impl StateDatabase {
         Self::create_schema(&conn, DEFAULT_EMBEDDING_DIM)?;
 
         // Update embedding dimension in schema_info
-        conn.execute(
-            "INSERT OR REPLACE INTO schema_info (key, value) VALUES ('embedding_dimension', ?1)",
-            params![DEFAULT_EMBEDDING_DIM.to_string()],
-        )
-        .map_err(|e| AlephError::config(format!("Failed to update schema_info: {}", e)))?;
+        Self::record_embedding_dim(&conn, DEFAULT_EMBEDDING_DIM)?;
 
         // Drop obsolete tables (matches `new()` / `new_with_dim()`).
         // Without this, a future migration that drops a real table leaves
@@ -471,7 +467,11 @@ impl StateDatabase {
     /// Serialize embedding vector to bytes (f32 array -> bytes)
     #[must_use]
     pub fn serialize_embedding(embedding: &[f32]) -> Vec<u8> {
-        embedding.iter().flat_map(|f| f.to_le_bytes()).collect()
+        let mut bytes = Vec::with_capacity(embedding.len() * 4);
+        for f in embedding {
+            bytes.extend_from_slice(&f.to_le_bytes());
+        }
+        bytes
     }
 
     /// Store or update a sticker description in the cache.

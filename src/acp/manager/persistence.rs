@@ -78,26 +78,22 @@ fn apply_event_to_store(
             cwd,
             session_name,
         } => {
-            // Match the full triple so a `backend` name doesn't displace the
-            // unnamed/default entry under the same cwd.
-            let prior_created = store
-                .iter()
-                .find(|s| {
-                    s.harness_id == *harness_id && s.cwd == *cwd && s.session_name == *session_name
-                })
-                .map(|s| s.created_at);
-            store.retain(|s| {
-                !(s.harness_id == *harness_id && s.cwd == *cwd && s.session_name == *session_name)
-            });
             let now = chrono::Utc::now();
-            store.push(crate::acp::session::PersistedAcpSession {
-                harness_id: harness_id.clone(),
-                acp_session_id: acp_session_id.clone(),
-                cwd: cwd.clone(),
-                created_at: prior_created.unwrap_or(now),
-                last_used_at: now,
-                session_name: session_name.clone(),
-            });
+            if let Some(existing) = store.iter_mut().find(|s| {
+                s.harness_id == *harness_id && s.cwd == *cwd && s.session_name == *session_name
+            }) {
+                existing.acp_session_id = acp_session_id.clone();
+                existing.last_used_at = now;
+            } else {
+                store.push(crate::acp::session::PersistedAcpSession {
+                    harness_id: harness_id.clone(),
+                    acp_session_id: acp_session_id.clone(),
+                    cwd: cwd.clone(),
+                    created_at: now,
+                    last_used_at: now,
+                    session_name: session_name.clone(),
+                });
+            }
         }
         AcpSessionEvent::Removed {
             harness_id,
@@ -152,12 +148,8 @@ pub async fn wire_persistence(
             }),
     ));
 
-    // The hook closure needs to `move` its sender, but the returned
-    // sender must outlive the closure. Wrap the underlying sender in
-    // `Arc` so both the hook and the public return value are cheap
-    // clones of the same channel endpoint.
+    // UnboundedSender is already a cheap cloneable channel endpoint.
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<crate::acp::AcpSessionEvent>();
-    let tx = Arc::new(tx);
 
     // Single persistence worker. All events flow through this task
     // serially, so every disk write reflects the cumulative state of
@@ -215,7 +207,7 @@ pub async fn wire_persistence(
 
     // Hook is now a pure channel sender: no locking, no spawning, no
     // snapshot capture. The cost per event is one bounded `unbounded_send`.
-    let hook_tx = Arc::clone(&tx);
+    let hook_tx = tx.clone();
     manager
         .set_persistence_hook(Arc::new(move |event| {
             // `send` only fails if the worker task has exited (e.g.
@@ -247,10 +239,7 @@ pub async fn wire_persistence(
         }
     }
 
-    // Unwrap the Arc if it's the last clone, otherwise clone the sender.
-    // Returning `UnboundedSender` (not `Arc<UnboundedSender>`) keeps the
-    // public API ergonomic for callers.
-    Arc::try_unwrap(tx).unwrap_or_else(|arc| (*arc).clone())
+    tx
 }
 
 // Exposed to sibling test modules in `acp::manager::tests` so they can pin

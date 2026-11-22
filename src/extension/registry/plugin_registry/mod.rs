@@ -11,7 +11,7 @@ use super::types::{
     ServiceRegistration, SkillRegistration, ToolRegistration,
 };
 use crate::extension::capability::ContextGrantAudit;
-use crate::extension::types::{HookEvent, PluginRecord, PluginStatus};
+use crate::extension::types::{PluginRecord, PluginStatus};
 
 mod context;
 
@@ -265,14 +265,6 @@ impl PluginRegistry {
         }
     }
 
-    /// Get all hooks registered for a specific event.
-    ///
-    /// Returns hooks in priority order (lower priority = earlier in list).
-    #[must_use]
-    pub fn get_hooks_for_event(&self, event: HookEvent) -> Vec<&HookRegistration> {
-        self.hooks.iter().filter(|h| h.event == event).collect()
-    }
-
     /// List all registered hooks.
     #[must_use]
     pub fn list_hooks(&self) -> Vec<&HookRegistration> {
@@ -331,16 +323,22 @@ impl PluginRegistry {
     /// Register a skill.
     ///
     /// The skill is stored under both its namespaced key (`plugin_id:name`) and its
-    /// short name (`name`) for backward compatibility. First-come wins for the short key.
+    /// short name (`name`) for backward compatibility. First-come wins for the short key,
+    /// except that the registering plugin may refresh its own short-key entry.
     pub fn register_skill(&mut self, skill: SkillRegistration) {
         let namespaced_key =
             crate::extension::namespaced_component_key(&skill.plugin_id, &skill.name);
         let short_key = skill.name.clone();
 
-        // Register under short name for backward compat (first-come wins)
-        self.skills
+        // Register under short name: first-come wins, but the owning plugin
+        // may refresh its own entry (same-owner refresh rule).
+        let short_entry = self
+            .skills
             .entry(short_key)
             .or_insert_with(|| skill.clone());
+        if short_entry.plugin_id == skill.plugin_id {
+            *short_entry = skill.clone();
+        }
         // Always register under namespaced key
         self.skills.insert(namespaced_key, skill);
     }
@@ -385,15 +383,23 @@ impl PluginRegistry {
             crate::extension::namespaced_component_key(&agent.plugin_id, &agent.name);
         let short_key = agent.name.clone();
 
-        // Register under short name for backward compat (first-come wins)
-        self.agents
-            .entry(short_key)
-            .or_insert_with(|| agent.clone());
+        // Only claim the short key when it is unowned or already owned by this plugin.
+        match self.agents.get(&short_key) {
+            Some(existing) if existing.plugin_id != agent.plugin_id => {}
+            _ => {
+                self.agents.insert(short_key, agent.clone());
+            }
+        }
         // Always register under namespaced key
         self.agents.insert(namespaced_key, agent);
     }
 
     /// Get an agent by name.
+    ///
+    /// Test-only: production resolves agents through the registrar
+    /// (`AgentRegistration::qualified_name` / the registry map) — this lookup
+    /// by bare name has no production caller.
+    #[cfg(test)]
     #[must_use]
     pub fn get_agent(&self, name: &str) -> Option<&AgentRegistration> {
         if name.contains(':') {
@@ -433,11 +439,6 @@ impl PluginRegistry {
     #[must_use]
     pub fn diagnostics(&self) -> &[PluginDiagnostic] {
         &self.diagnostics
-    }
-
-    /// Clear all diagnostic messages.
-    pub fn clear_diagnostics(&mut self) {
-        self.diagnostics.clear();
     }
 
     // =========================================================================
@@ -484,50 +485,31 @@ impl PluginRegistry {
             .retain(|d| d.plugin_id.as_deref() != Some(plugin_id));
     }
 
-    // =========================================================================
-    // Statistics
-    // =========================================================================
-
-    /// Get registry statistics.
-    #[must_use]
-    pub fn stats(&self) -> RegistryStats {
-        let context = self.context_stats();
-        RegistryStats {
-            plugins: self.plugins.len(),
-            active_plugins: self.list_active_plugins().len(),
-            tools: self.list_tools().len(),
-            hooks: self.hooks.len(),
-            services: self.services.len(),
-            commands: self
-                .list_skills()
-                .into_iter()
-                .filter(|s| s.skill_type == crate::extension::types::SkillType::Command)
-                .count(),
-            skills: self
-                .list_skills()
-                .into_iter()
-                .filter(|s| s.skill_type == crate::extension::types::SkillType::Skill)
-                .count(),
-            agents: self.list_agents().len(),
-            contexts: context.registrations,
-            context_bundles: context.bundles,
-            diagnostics: self.diagnostics.len(),
-        }
-    }
 }
 
-/// Registry statistics.
-#[derive(Debug, Clone, Default)]
-pub struct RegistryStats {
-    pub plugins: usize,
-    pub active_plugins: usize,
-    pub tools: usize,
-    pub hooks: usize,
-    pub services: usize,
-    pub commands: usize,
-    pub skills: usize,
-    pub agents: usize,
-    pub contexts: usize,
-    pub context_bundles: usize,
-    pub diagnostics: usize,
+#[cfg(test)]
+mod agent_refresh_tests {
+    use super::*;
+
+    #[test]
+    fn agent_refresh_updates_own_short_key_but_not_another_plugins() {
+        let mut registry = PluginRegistry::default();
+        let mut agent = AgentRegistration {
+            plugin_id: "owner".into(),
+            name: "reviewer".into(),
+            content: "old".into(),
+            ..Default::default()
+        };
+        registry.register_agent(agent.clone());
+        agent.content = "new".into();
+        registry.register_agent(agent.clone());
+        assert_eq!(registry.agents["reviewer"].content, "new");
+        assert_eq!(registry.agents["owner:reviewer"].content, "new");
+        agent.plugin_id = "other".into();
+        agent.content = "other content".into();
+        registry.register_agent(agent);
+        assert_eq!(registry.agents["reviewer"].plugin_id, "owner");
+        assert_eq!(registry.agents["reviewer"].content, "new");
+        assert_eq!(registry.agents["other:reviewer"].content, "other content");
+    }
 }

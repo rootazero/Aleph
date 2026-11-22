@@ -18,8 +18,8 @@ fn test_wechat_properties() {
     test_channel_properties(&channel);
 
     assert_eq!(channel.channel_type(), "wechat");
-    assert!(channel.capabilities().images);
-    assert!(channel.capabilities().audio);
+    assert!(!channel.capabilities().images);
+    assert!(!channel.capabilities().audio);
     assert!(channel.capabilities().typing_indicator);
     assert!(!channel.capabilities().reactions);
     assert_eq!(channel.capabilities().max_message_length, 4000);

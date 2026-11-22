@@ -38,8 +38,10 @@ pub(super) fn HarnessDetailPanel(
     let timeout_seconds = RwSignal::new(info.config.timeout_seconds);
     let args_text = RwSignal::new(info.config.args.join(", "));
     let output_format_type = RwSignal::new({
+        // `output_format` is an internally tagged enum on the core side:
+        // `{"type": "plain_text"}` / `{"type": "json", "field": "…"}`.
         if let Some(obj) = info.config.output_format.as_object() {
-            if obj.contains_key("json") {
+            if obj.get("type").and_then(|v| v.as_str()) == Some("json") {
                 "json".to_string()
             } else {
                 "plain_text".to_string()
@@ -52,8 +54,6 @@ pub(super) fn HarnessDetailPanel(
         info.config
             .output_format
             .as_object()
-            .and_then(|obj| obj.get("json"))
-            .and_then(|v| v.as_object())
             .and_then(|obj| obj.get("field"))
             .and_then(|v| v.as_str())
             .unwrap_or("result")
@@ -91,10 +91,14 @@ pub(super) fn HarnessDetailPanel(
             .filter(|s| !s.is_empty())
             .collect();
 
+        // The core deserializes `output_format` as an internally tagged
+        // enum (`{"type": "plain_text"}` / `{"type": "json", "field": …}`).
+        // The previous untagged shapes (`"plain_text"` / `{"json": {...}}`)
+        // were rejected by the server with INVALID_PARAMS.
         let output_format = if mode.get() == "oneshot" && output_format_type.get() == "json" {
-            serde_json::json!({ "json": { "field": json_field_name.get() } })
+            serde_json::json!({ "type": "json", "field": json_field_name.get() })
         } else {
-            serde_json::json!("plain_text")
+            serde_json::json!({ "type": "plain_text" })
         };
 
         let env: std::collections::HashMap<String, String> = env_pairs

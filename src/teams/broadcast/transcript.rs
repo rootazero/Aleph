@@ -9,20 +9,29 @@
 /// estimating tokens as `chars/4`.
 #[must_use]
 pub fn format_transcript(history: &[(String, String)], token_budget: usize) -> String {
-    // Accumulate from most recent backward until budget is exhausted, then reverse to oldest-first.
-    let mut kept_rev: Vec<String> = Vec::new();
     let mut used = 0usize;
-    for (from, content) in history.iter().rev() {
-        let line = format!("[{from}]: {content}");
-        let cost = line.chars().count() / 4 + 1; // rough token estimate
-        if used + cost > token_budget && !kept_rev.is_empty() {
+    let mut start_idx = history.len();
+    for (i, (from, content)) in history.iter().enumerate().rev() {
+        let char_count = from.chars().count() + content.chars().count() + 4; // "[", "]: "
+        let cost = char_count / 4 + 1; // rough token estimate
+        if used + cost > token_budget && start_idx < history.len() {
             break;
         }
         used += cost;
-        kept_rev.push(line);
+        start_idx = i;
     }
-    kept_rev.reverse();
-    kept_rev.join("\n")
+
+    let mut out = String::new();
+    for (i, (from, content)) in history[start_idx..].iter().enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        out.push('[');
+        out.push_str(from);
+        out.push_str("]: ");
+        out.push_str(content);
+    }
+    out
 }
 
 #[cfg(test)]

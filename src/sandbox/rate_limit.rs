@@ -148,9 +148,8 @@ impl SandboxRateLimiter {
             return Ok(());
         }
 
-        let wc = match self.config.per_category.get(category) {
-            Some(wc) => wc,
-            None => return Ok(()),
+        let Some(wc) = self.config.per_category.get(category) else {
+            return Ok(());
         };
 
         let now = Instant::now();
@@ -177,9 +176,8 @@ impl SandboxRateLimiter {
         let max = wc.max_requests + wc.burst_allow;
 
         if count >= max {
-            let oldest = match entry.timestamps.front() {
-                Some(t) => t,
-                None => return Ok(()),
+            let Some(oldest) = entry.timestamps.front() else {
+                return Ok(());
             };
             let retry_after = (*oldest + window_dur).duration_since(now);
             return Err(format!(

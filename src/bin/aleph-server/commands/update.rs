@@ -1,3 +1,5 @@
+//! lock-policy: none
+//!
 //! `update` subcommand for the standalone `aleph-server` binary.
 //!
 //! The desktop app self-updates through Tauri's bundled updater; the
@@ -245,6 +247,13 @@ fn run_installer() -> Result<(), Box<dyn Error>> {
     dir_builder
         .create(&temp_dir)
         .map_err(|e| format!("failed to create private temp directory: {e}"))?;
+    // Cleanup is tied to the directory's lifetime instead of a single
+    // explicit call at the end: a failed write or a failed installer launch
+    // returns before that call and used to leak the downloaded release
+    // script under the system temp directory.
+    let _temp_dir_guard = TempDirGuard {
+        path: temp_dir.clone(),
+    };
     let temp_path = temp_dir.join(installer_name);
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);
@@ -294,13 +303,26 @@ fn run_installer() -> Result<(), Box<dyn Error>> {
     .status()
     .map_err(|e| format!("failed to launch the installer: {e}"))?;
 
-    // Best-effort cleanup of the private temporary directory.
-    let _ = std::fs::remove_dir_all(&temp_dir);
-
     if !status.success() {
         return Err(format!("installer exited with status {status}").into());
     }
     Ok(())
+}
+
+/// Removes the private temporary installer directory when it goes out of
+/// scope.
+///
+/// The downloaded installer must not outlive the command that fetched it:
+/// every return path after the directory was created (write failure, launch
+/// failure, non-zero installer status) removes it again.
+struct TempDirGuard {
+    path: std::path::PathBuf,
+}
+
+impl Drop for TempDirGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
 }
 
 /// Returns `(url, filename)` of the platform's installer asset.

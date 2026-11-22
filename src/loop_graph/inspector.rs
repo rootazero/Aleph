@@ -210,25 +210,20 @@ impl<'a> LoopGraphInspector<'a> {
             return Ok(None);
         };
 
-        let incoming: Vec<(GraphEdge, GraphNode)> = edges
-            .iter()
-            .filter(|e| e.to_id == node_id)
-            .filter_map(|e| {
-                by_id
-                    .get(e.from_id.as_str())
-                    .map(|n| ((*e).clone(), (*n).clone()))
-            })
-            .collect();
-
-        let outgoing: Vec<(GraphEdge, GraphNode)> = edges
-            .iter()
-            .filter(|e| e.from_id == node_id)
-            .filter_map(|e| {
-                by_id
-                    .get(e.to_id.as_str())
-                    .map(|n| ((*e).clone(), (*n).clone()))
-            })
-            .collect();
+        let mut incoming = Vec::new();
+        let mut outgoing = Vec::new();
+        for e in &edges {
+            if e.to_id == node_id {
+                if let Some(n) = by_id.get(e.from_id.as_str()) {
+                    incoming.push(((*e).clone(), (*n).clone()));
+                }
+            }
+            if e.from_id == node_id {
+                if let Some(n) = by_id.get(e.to_id.as_str()) {
+                    outgoing.push(((*e).clone(), (*n).clone()));
+                }
+            }
+        }
 
         // ancestors / descendants walk OwnsReference both directions, bounded.
         let ancestor_chain = walk_chain(
@@ -260,7 +255,7 @@ impl<'a> LoopGraphInspector<'a> {
             .iter()
             .filter(|(e, _)| matches!(e.kind, EdgeKind::Watches | EdgeKind::Audits))
             .filter_map(|(_, src)| {
-                if !can_cover_kind(src.kind) {
+                if !crate::loop_graph::store::can_cover(src.kind) {
                     return None;
                 }
                 if !seen_coverage_ids.insert(src.id.as_str()) {
@@ -308,26 +303,23 @@ impl<'a> LoopGraphInspector<'a> {
             .filter(|n| n.id != node_id)
             .map(|n| n.id.as_str())
             .collect();
-        let post_edges: Vec<&GraphEdge> = edges.iter().collect();
         let pre_by_id: HashMap<&str, &GraphNode> =
             nodes.iter().map(|n| (n.id.as_str(), n)).collect();
-        let post_by_id: HashMap<&str, &GraphNode> = nodes
-            .iter()
-            .filter(|n| n.id != node_id)
-            .map(|n| (n.id.as_str(), n))
-            .collect();
 
         // Coverage predicate, evaluated against a node-index: the edges are
         // identical pre/post (drop_node does not cascade), so the ONLY thing
         // the removal changes is whether a coverage SOURCE still exists.
-        let has_coverage = |by_id: &HashMap<&str, &GraphNode>, target: &str| -> bool {
-            post_edges.iter().any(|e| {
+        let has_coverage = |filter_removed: bool, target: &str| -> bool {
+            edges.iter().any(|e| {
                 e.to_id == target
                     && e.from_id != target
                     && matches!(e.kind, EdgeKind::Watches | EdgeKind::Audits)
-                    && by_id
+                    && pre_by_id
                         .get(e.from_id.as_str())
-                        .is_some_and(|s| can_cover_kind(s.kind))
+                        .is_some_and(|s| {
+                            (!filter_removed || s.id != node_id)
+                                && crate::loop_graph::store::can_cover(s.kind)
+                        })
             })
         };
 
@@ -340,13 +332,13 @@ impl<'a> LoopGraphInspector<'a> {
             if !n.kind.is_optimization_loop() {
                 continue;
             }
-            if has_coverage(&post_by_id, &n.id) {
+            if has_coverage(true, &n.id) {
                 continue;
             }
             // Naked in the post-state. Was it covered BEFORE? Only then is
             // the removal the cause; an already-naked loop is pre-existing
             // exposure, not blast radius.
-            if has_coverage(&pre_by_id, &n.id) {
+            if has_coverage(false, &n.id) {
                 would_become_naked.push(n.id.clone());
             } else {
                 already_naked.push(n.id.clone());
@@ -362,12 +354,17 @@ impl<'a> LoopGraphInspector<'a> {
 
         // Lightweight lint pass for the simulated state.
         let mut lint_findings = Vec::new();
-        for e in &post_edges {
-            let missing: Vec<&str> = [e.from_id.as_str(), e.to_id.as_str()]
-                .into_iter()
-                .filter(|id| !present.contains(*id))
-                .collect();
-            if !missing.is_empty() {
+        for e in &edges {
+            let from_missing = !present.contains(e.from_id.as_str());
+            let to_missing = !present.contains(e.to_id.as_str());
+            if from_missing || to_missing {
+                let mut missing = Vec::with_capacity(2);
+                if from_missing {
+                    missing.push(e.from_id.as_str());
+                }
+                if to_missing {
+                    missing.push(e.to_id.as_str());
+                }
                 lint_findings.push(format!(
                     "悬空边: {} -[{}]-> {} (节点 {:?} 已消失)",
                     e.from_id,
@@ -421,24 +418,24 @@ impl<'a> LoopGraphInspector<'a> {
         let edges = self.store.list_edges(self.agent_id)?;
         let findings = self.store.lint(self.agent_id)?;
 
-        let mut node_counts: std::collections::BTreeMap<&'static str, usize> =
+        let mut node_counts: std::collections::BTreeMap<(&'static str, NodeKind), usize> =
             std::collections::BTreeMap::new();
         for n in &nodes {
-            *node_counts.entry(n.kind.as_str()).or_insert(0) += 1;
+            *node_counts.entry((n.kind.as_str(), n.kind)).or_insert(0) += 1;
         }
         let node_counts_by_kind: Vec<(NodeKind, usize)> = node_counts
             .into_iter()
-            .filter_map(|(s, c)| NodeKind::parse(s).map(|k| (k, c)))
+            .map(|((_, k), c)| (k, c))
             .collect();
 
-        let mut edge_counts: std::collections::BTreeMap<&'static str, usize> =
+        let mut edge_counts: std::collections::BTreeMap<(&'static str, EdgeKind), usize> =
             std::collections::BTreeMap::new();
         for e in &edges {
-            *edge_counts.entry(e.kind.as_str()).or_insert(0) += 1;
+            *edge_counts.entry((e.kind.as_str(), e.kind)).or_insert(0) += 1;
         }
         let edge_counts_by_kind: Vec<(EdgeKind, usize)> = edge_counts
             .into_iter()
-            .filter_map(|(s, c)| EdgeKind::parse(s).map(|k| (k, c)))
+            .map(|((_, k), c)| (k, c))
             .collect();
 
         let naked_loop_count = findings.iter().filter(|f| f.contains("裸奔优化环")).count();
@@ -476,9 +473,9 @@ fn walk_chain(
     kind: EdgeKind,
     direction: Direction,
 ) -> Result<Vec<GraphNode>> {
-    let mut visited: HashSet<String> = HashSet::new();
+    let mut visited: HashSet<&str> = HashSet::new();
     let mut out: Vec<GraphNode> = Vec::new();
-    let mut frontier: Vec<String> = vec![start.to_string()];
+    let mut frontier: Vec<&str> = vec![start];
     let mut steps: usize = 0;
 
     while let Some(current) = frontier.pop() {
@@ -489,7 +486,7 @@ fn walk_chain(
             )));
         }
         steps += 1;
-        if !visited.insert(current.clone()) {
+        if !visited.insert(current) {
             continue;
         }
         let next_edges = edges.iter().filter(|e| {
@@ -501,25 +498,18 @@ fn walk_chain(
         });
         for e in next_edges {
             let next_id = match direction {
-                Direction::Up => &e.from_id,
-                Direction::Down => &e.to_id,
+                Direction::Up => e.from_id.as_str(),
+                Direction::Down => e.to_id.as_str(),
             };
-            if let Some(n) = by_id.get(next_id.as_str()) {
+            if let Some(n) = by_id.get(next_id) {
                 if !visited.contains(next_id) {
-                    frontier.push(next_id.clone());
+                    frontier.push(next_id);
                     out.push((*n).clone());
                 }
             }
         }
     }
     Ok(out)
-}
-
-/// Mirror of `LoopGraphStore::coverage_source_rejection` — the lint says a
-/// watcher has to RUN, so the inspector refuses to count `Anchor`/`Frozen`
-/// as coverage. `Root` is allowed (a human reads the digest, three-layer cap).
-fn can_cover_kind(kind: NodeKind) -> bool {
-    kind.is_optimization_loop() || kind == NodeKind::Root
 }
 
 #[cfg(test)]

@@ -9,8 +9,6 @@ use serde::{Deserialize, Serialize};
 pub struct MemoryConfig {
     #[serde(default)]
     pub enabled: bool,
-    #[serde(default)]
-    pub vector_db: String,
 
     // A `similarity_threshold` field is deliberately ABSENT: the server cut
     // the top-level key (it was a never-wired retrieval no-op), so a mirror

@@ -111,6 +111,14 @@ const TOLERATED: &[Tolerated] = &[
         retired: true,
     },
     Tolerated {
+        path: "memory.vector_db",
+        why: "retired 2026-11-19 (severed-wire audit) — the backend selector chose nothing: \
+              one backend (sqlite + sqlite-vec) is the store, and the knob had no reader \
+              outside src/config/; the [memory] migration that kept its value correct went \
+              with it",
+        retired: true,
+    },
+    Tolerated {
         path: "unified_tools.native.search",
         why: "retired 2026-09-25 — `SearchToolConfig` (enabled / default_max_results / \
               default_timeout_seconds) had zero readers; the `search` tool reads the top-level \
@@ -140,6 +148,20 @@ const TOLERATED: &[Tolerated] = &[
         path: "profiles.*.tools",
         why: "retired — the live tool gate is AgentInstanceConfig.tool_whitelist (sourced from \
               agent.skills); see src/config/types/profile.rs",
+        retired: true,
+    },
+    Tolerated {
+        path: "profiles.*.smart_recall.score_threshold",
+        why: "retired 2026-11-20 (severed-wire audit) — the Phase 2 trigger counts primary \
+              results (src/builtin_tools/memory_search.rs, min_primary_results); the score \
+              threshold was read by nothing, so the documented semantics never happened",
+        retired: true,
+    },
+    Tolerated {
+        path: "generation.smart_routing_enabled",
+        why: "retired 2026-11-20 (severed-wire audit) — no smart-routing mechanism exists; the \
+              flag gated nothing (see review-results/config-context-batch/config-types-report.md \
+              finding 26)",
         retired: true,
     },
     Tolerated {

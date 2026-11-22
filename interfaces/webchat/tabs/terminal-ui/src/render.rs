@@ -68,6 +68,7 @@ pub fn viewport_cells(px_w: f64, px_h: f64, m: &CellMetrics) -> (u16, u16) {
 /// does not know the client's theme; `Default` and `Indexed` resolve here.
 pub struct Theme {
     pub fg: &'static str,
+    #[cfg(not(test))]
     pub bg: &'static str,
     pub palette: [&'static str; 16],
 }
@@ -77,6 +78,7 @@ impl Theme {
     pub const fn dark() -> Self {
         Self {
             fg: "#e8e6e1",
+            #[cfg(not(test))]
             bg: "#0d0d12",
             palette: [
                 "#0d0d12", "#e05561", "#8cc265", "#d18f52", "#4aa5f0", "#c162de", "#42b3c2",
@@ -95,6 +97,7 @@ impl Theme {
         }
     }
 
+    #[cfg(not(test))]
     #[must_use]
     pub fn resolve_bg(&self, c: PtyColor) -> Option<String> {
         match c {
@@ -242,6 +245,7 @@ fn run_font(m: &CellMetrics, attrs: PtyAttrs) -> String {
 }
 
 /// Repaint the whole grid.
+#[cfg(not(test))]
 pub fn paint(ctx: &CanvasRenderingContext2d, screen: &ClientScreen, m: CellMetrics, theme: &Theme) {
     if !m.is_usable() {
         return;

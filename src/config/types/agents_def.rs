@@ -198,19 +198,6 @@ pub enum AgentModelRef {
     Legacy(String),
 }
 
-impl AgentModelRef {
-    /// Returns the model id (carried by both variants). Used only for display
-    /// and "no-validation" paths; the real drop-detection resolution lives in
-    /// `agent_resolver::resolve_model_ref`.
-    #[allow(dead_code)] // crated so the test pattern-matches via the helper; revisit with a real display consumer
-    pub(crate) fn model_str(&self) -> &str {
-        match self {
-            Self::Qualified { model, .. } => model,
-            Self::Legacy(s) => s,
-        }
-    }
-}
-
 // =============================================================================
 // AgentDefinition
 // =============================================================================
@@ -680,7 +667,6 @@ mod model_ref_tests {
     fn legacy_bare_string_roundtrips() {
         let m: AgentModelRef = serde_json::from_value(serde_json::json!("claude-opus-4")).unwrap();
         assert_eq!(m, AgentModelRef::Legacy("claude-opus-4".to_string()));
-        assert_eq!(m.model_str(), "claude-opus-4");
     }
 
     #[test]
@@ -696,7 +682,6 @@ mod model_ref_tests {
                 model: "claude-sonnet-4".to_string(),
             }
         );
-        assert_eq!(m.model_str(), "claude-sonnet-4");
     }
 
     #[test]

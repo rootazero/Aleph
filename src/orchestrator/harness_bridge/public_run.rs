@@ -75,6 +75,11 @@ message. Use only what is needed to answer the caller, share nothing else from i
 do not mention the lookup or the approval. The operator reviews your exact reply before \
 it is sent.";
 
+pub static PUBLIC_LOOKUP_SYSTEM_PROMPT: std::sync::LazyLock<String> =
+    std::sync::LazyLock::new(|| format!("{PUBLIC_SYSTEM_PROMPT}{PUBLIC_LOOKUP_PROMPT_ADDENDUM}"));
+pub static PRIVATE_DRAFT_SYSTEM_PROMPT: std::sync::LazyLock<String> =
+    std::sync::LazyLock::new(|| format!("{PUBLIC_SYSTEM_PROMPT}{PRIVATE_DRAFT_PROMPT_ADDENDUM}"));
+
 /// Prefix of the synthetic same-turn message carrying the approved lookup
 /// result into a private draft.
 ///
@@ -154,9 +159,9 @@ pub(crate) async fn run_public_with(
             (Arc::new(NullToolService::new()), None)
         };
     let system_prompt = if lookup.is_some() {
-        format!("{PUBLIC_SYSTEM_PROMPT}{PUBLIC_LOOKUP_PROMPT_ADDENDUM}")
+        PUBLIC_LOOKUP_SYSTEM_PROMPT.as_str()
     } else {
-        PUBLIC_SYSTEM_PROMPT.to_string()
+        PUBLIC_SYSTEM_PROMPT
     };
     let run = run_isolated(
         llm,
@@ -213,7 +218,7 @@ pub(crate) async fn run_private_draft_with(
         &request.history,
         &request.text,
         Some(carrier),
-        format!("{PUBLIC_SYSTEM_PROMPT}{PRIVATE_DRAFT_PROMPT_ADDENDUM}"),
+        PRIVATE_DRAFT_SYSTEM_PROMPT.as_str(),
         Arc::new(NullToolService::new()),
         &cancel,
     )
@@ -281,7 +286,7 @@ async fn run_isolated(
     history: &[PublicHistoryTurn],
     text: &str,
     same_turn_carrier: Option<String>,
-    system_prompt: String,
+    system_prompt: &str,
     tools: Arc<dyn ToolService>,
     cancel: &CancellationToken,
 ) -> Result<FlowOutcome, FlowError> {
@@ -290,7 +295,6 @@ async fn run_isolated(
     }
 
     let started = std::time::Instant::now();
-    let provider_name = llm.name().to_string();
 
     let (session, sid, current_turn) =
         ephemeral_session(run_id, history, text, same_turn_carrier).await?;
@@ -299,14 +303,14 @@ async fn run_isolated(
         tool_descriptor_lookup: None,
         session: session.clone(),
         tools,
-        llm,
+        llm: llm.clone(),
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: None,
         context_budget: None,
         context_compactor: None,
         context_fabric: None,
         trace_sink: None,
-        system_prompt: Some(system_prompt),
+        system_prompt: Some(system_prompt.to_string()),
         system_prompt_parts: None,
         recall_context: None,
         guardrails: None,
@@ -327,7 +331,7 @@ async fn run_isolated(
     match harness.run(&sid, &mut cb, cancel).await {
         Ok(()) => {}
         Err(HarnessError::Cancelled) => return Err(FlowError::Cancelled),
-        Err(e) => return Err(super::error::classify_harness_error(e, &provider_name)),
+        Err(e) => return Err(super::error::classify_harness_error(e, llm.name())),
     }
     if cancel.is_cancelled() {
         return Err(FlowError::Cancelled);
@@ -337,7 +341,7 @@ async fn run_isolated(
         .get_events(&sid, None, None)
         .await
         .map_err(|e| FlowError::Internal(format!("public session read failed: {e}")))?;
-    let mut final_text = String::new();
+    let mut final_text: Option<&str> = None;
     let mut iterations: u32 = 0;
     for r in &records {
         // Seeded history turns carry their own assistant rows; only this
@@ -350,14 +354,15 @@ async fn run_isolated(
                 continue;
             }
             iterations += 1;
-            if !content.text.trim().is_empty() {
-                final_text = content.text.clone();
+            let trimmed = content.text.trim();
+            if !trimmed.is_empty() {
+                final_text = Some(trimmed);
             }
         }
     }
 
     Ok(FlowOutcome {
-        final_text: final_text.trim().to_string(),
+        final_text: final_text.unwrap_or_default().to_string(),
         iterations,
         total_tokens: u32::try_from(harness.total_tokens()).unwrap_or(u32::MAX),
         duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),

@@ -83,7 +83,14 @@ impl FeishuSender {
         };
 
         if has_image && !message.text.is_empty() {
-            let _ = api.send_text(chat_id, &message.text, reply_to).await;
+            api.send_text(chat_id, &message.text, reply_to)
+                .await
+                .map_err(|error| {
+                    // The image is already delivered: never expose a whole-message retry.
+                    ChannelError::Internal(format!(
+                        "Partial delivery: image {msg_id} sent, caption failed: {error:?}; do not resend the image"
+                    ))
+                })?;
         }
 
         Ok(SendResult {
@@ -96,6 +103,92 @@ impl FeishuSender {
 #[cfg(test)]
 mod tests {
     use super::should_use_card;
+
+    #[tokio::test]
+    async fn caption_failure_reports_sent_image_without_retrying_it() {
+        use super::*;
+        use crate::gateway::interfaces::feishu::auth::TokenManager;
+        use wiremock::{
+            matchers::{body_partial_json, method, path},
+            Mock, MockServer, ResponseTemplate,
+        };
+
+        for status in [429, 403] {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/open-apis/auth/v3/app_access_token/internal"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "code": 0, "msg": "ok", "app_access_token": "test-token", "expire": 7200
+                })))
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .and(path("/open-apis/im/v1/images"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "code": 0, "msg": "ok", "data": {"image_key": "image-key"}
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .and(path("/open-apis/im/v1/messages"))
+                .and(body_partial_json(serde_json::json!({"msg_type": "image"})))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "code": 0, "msg": "ok", "data": {"message_id": "sent-image-id"}
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .and(path("/open-apis/im/v1/messages"))
+                .and(body_partial_json(serde_json::json!({"msg_type": "text"})))
+                .respond_with(
+                    ResponseTemplate::new(status).set_body_json(serde_json::json!({
+                        "code": 999, "msg": "caption denied"
+                    })),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+            let http = reqwest::Client::new();
+            let auth = Arc::new(TokenManager::new(
+                "app",
+                "secret",
+                &server.uri(),
+                http.clone(),
+            ));
+            let api = Arc::new(FeishuApi::new(auth, &server.uri(), http));
+            let mut message = OutboundMessage::text("chat", "caption");
+            message
+                .attachments
+                .push(crate::gateway::channel::Attachment {
+                    id: "image".into(),
+                    mime_type: "image/png".into(),
+                    filename: None,
+                    size: None,
+                    url: None,
+                    path: None,
+                    data: Some(vec![1]),
+                    is_voice_note: false,
+                    is_video_note: false,
+                });
+            let config: FeishuConfig = serde_json::from_value(serde_json::json!({
+                "app_id": "app", "app_secret": "secret"
+            }))
+            .unwrap();
+            let error = FeishuSender::send_message(&api, message, &config)
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(&error, ChannelError::Internal(_)),
+                "must not retry a delivered image: {error}"
+            );
+            let detail = error.to_string();
+            assert!(detail.contains("sent-image-id"));
+            assert!(detail.contains("caption"));
+            server.verify().await;
+        }
+    }
 
     #[test]
     fn test_should_use_card_auto_plain() {

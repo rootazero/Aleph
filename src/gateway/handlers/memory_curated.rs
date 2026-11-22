@@ -282,9 +282,11 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        let mut memory = MemoryConfig::default();
-        memory.injection_mode = MemoryInjectionMode::Context;
-        memory.project_scoped = false;
+        let mut memory = MemoryConfig {
+            injection_mode: MemoryInjectionMode::Context,
+            project_scoped: false,
+            ..MemoryConfig::default()
+        };
         memory.curated.memory_char_limit = LIMIT;
         memory.curated.user_char_limit = LIMIT;
         memory.embedding.providers.clear();
@@ -292,6 +294,7 @@ mod tests {
             MemoryRuntimeConfig {
                 metadata_path: root.join("runtime/metadata.db"),
                 note_memory_dir: root.join("runtime/note"),
+                retrieval_tuning: Default::default(),
             },
             Arc::new(OwnershipTree::new()),
             MemoryServicesConfig {

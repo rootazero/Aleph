@@ -37,6 +37,7 @@ pub enum AcquireResult {
 /// the entry so the next request can retry (P7: Defensive Design).
 pub struct IdempotencySlot {
     key: String,
+    sender: watch::Sender<Option<Value>>,
     guard: Option<std::sync::Arc<DashMap<String, CacheEntry>>>,
 }
 
@@ -62,19 +63,24 @@ impl IdempotencySlot {
     /// next caller deserves a fresh `Proceed`, not the value from a cancelled
     /// run. The transition is therefore purely an `and_modify`; if it reports
     /// `Vacant`, the function returns silently.
+    ///
+    /// **G4-03 fix**: A stale slot (pruned after 2×TTL) can complete or discard
+    /// its replacement if only the key is checked. Now we fence on acquisition
+    /// identity: the slot stores the channel sender from its InFlight entry,
+    /// and only modifies/removes entries whose sender matches. This prevents
+    /// ABA races where the key is reused by a newer generation.
     pub fn complete(mut self, result: Value) {
         if let Some(cache) = self.guard.take() {
             let key = self.key.clone();
-
             // Atomic transition: InFlight → Complete (notify waiters in-place).
-            // If the entry was removed between `try_acquire` and now, this
-            // `and_modify` simply does nothing — which is the correct outcome
-            // (see doc comment above).
+            // Only modify if the entry's sender matches ours (same generation).
             cache.entry(key).and_modify(|entry| {
                 if let CacheEntry::InFlight(tx, _) = entry {
-                    let _ = tx.send(Some(result.clone()));
+                    if tx.same_channel(&self.sender) {
+                        let _ = tx.send(Some(result.clone()));
+                        *entry = CacheEntry::Complete(result.clone(), Instant::now());
+                    }
                 }
-                *entry = CacheEntry::Complete(result, Instant::now());
             });
         }
     }
@@ -86,9 +92,15 @@ impl IdempotencySlot {
 
     fn do_discard(&mut self) {
         if let Some(cache) = self.guard.take() {
-            if let Some((_, CacheEntry::InFlight(tx, _))) = cache.remove(&self.key) {
-                let _ = tx.send(None);
-            }
+            cache.remove_if(&self.key, |_, entry| {
+                if let CacheEntry::InFlight(tx, _) = entry {
+                    if tx.same_channel(&self.sender) {
+                        let _ = tx.send(None);
+                        return true;
+                    }
+                }
+                false
+            });
         }
     }
 }
@@ -105,7 +117,6 @@ pub struct IdempotencyGuard {
     cache: std::sync::Arc<DashMap<String, CacheEntry>>,
     ttl: Duration,
 }
-
 impl IdempotencyGuard {
     /// Create a new guard with the given TTL for cached results.
     #[must_use]
@@ -163,17 +174,19 @@ impl IdempotencyGuard {
                 }
                 // Still expired — replace with InFlight without releasing the lock.
                 let (tx, _rx) = watch::channel(None);
-                *e.get_mut() = CacheEntry::InFlight(tx, Instant::now());
+                *e.get_mut() = CacheEntry::InFlight(tx.clone(), Instant::now());
                 AcquireResult::Proceed(IdempotencySlot {
                     key: key.to_string(),
+                    sender: tx,
                     guard: Some(self.cache.clone()),
                 })
             }
             Entry::Vacant(e) => {
                 let (tx, _rx) = watch::channel(None);
-                e.insert(CacheEntry::InFlight(tx, Instant::now()));
+                e.insert(CacheEntry::InFlight(tx.clone(), Instant::now()));
                 AcquireResult::Proceed(IdempotencySlot {
                     key: key.to_string(),
+                    sender: tx,
                     guard: Some(self.cache.clone()),
                 })
             }
@@ -229,6 +242,40 @@ impl IdempotencyGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stale_slots_cannot_complete_or_discard_a_replacement() {
+        for action in ["complete", "discard", "drop"] {
+            let guard = IdempotencyGuard::new(Duration::from_secs(10));
+            let AcquireResult::Proceed(stale) = guard.try_acquire("key") else {
+                panic!("first acquisition must proceed");
+            };
+            if let CacheEntry::InFlight(_, started) =
+                guard.cache.get_mut("key").unwrap().value_mut()
+            {
+                *started = Instant::now() - Duration::from_secs(21);
+            }
+            assert_eq!(guard.prune(), 1);
+            let AcquireResult::Proceed(current) = guard.try_acquire("key") else {
+                panic!("replacement must proceed");
+            };
+            let AcquireResult::Waiting(rx) = guard.try_acquire("key") else {
+                panic!("duplicate must wait");
+            };
+            match action {
+                "complete" => stale.complete(serde_json::json!("stale")),
+                "discard" => stale.discard(),
+                _ => drop(stale),
+            }
+            assert!(matches!(
+                guard.try_acquire("key"),
+                AcquireResult::Waiting(_)
+            ));
+            assert_eq!(*rx.borrow(), None);
+            current.complete(serde_json::json!("current"));
+            assert_eq!(*rx.borrow(), Some(serde_json::json!("current")));
+        }
+    }
 
     #[test]
     fn test_first_request_proceeds() {

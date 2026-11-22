@@ -10,15 +10,21 @@
 //! - **REST API v4**: Uses bot token in `Authorization: Bearer` header for sending
 //!   messages via `POST /api/v4/posts` and other API methods.
 //!
+//! Attachments are neither uploaded nor extracted: an outbound request carrying
+//! one is rejected, and an inbound post that has files only surfaces them as a
+//! note appended to the message text.
+//!
 //! # Usage
 //!
-//! ```toml
-//! [[channels]]
-//! id = "mattermost"
-//! channel_type = "mattermost"
-//! enabled = true
+//! `Config.channels` is a MAP keyed by instance id, so the table header carries
+//! the id and the keys are flat. The `[[channels]]` array-of-tables form this
+//! example used until 2026-11-22 does not parse at all — the server refuses to
+//! boot with `invalid type: sequence, expected a map`.
 //!
-//! [channels.config]
+//! ```toml
+//! [channels.mattermost]
+//! type = "mattermost"
+//! enabled = true
 //! server_url = "https://mattermost.example.com"
 //! bot_token = "your-bot-token"
 //! allowed_channels = ["channel-id-1"]
@@ -93,10 +99,14 @@ impl MattermostChannel {
     /// Get Mattermost-specific capabilities
     fn capabilities() -> ChannelCapabilities {
         ChannelCapabilities {
-            attachments: true,
-            images: true,
-            audio: true,
-            video: true,
+            // The send path builds no attachment list (see
+            // `message_ops::build_outbound`: `attachments: Vec::new()`), so
+            // advertising the media capabilities would promise something the
+            // adapter cannot deliver.
+            attachments: false,
+            images: false,
+            audio: false,
+            video: false,
             reactions: true,
             replies: true,
             editing: true,
@@ -107,7 +117,8 @@ impl MattermostChannel {
             polls: false,
             group_icons: false,
             max_message_length: 16383,
-            max_attachment_size: 100 * 1024 * 1024, // 100MB
+            // The channel sends no attachments at all.
+            max_attachment_size: 0,
             stream_protocol: Default::default(),
         }
     }
@@ -214,6 +225,19 @@ impl Channel for MattermostChannel {
         let send_typing = self.config.send_typing;
         let api_base = self.api_base.clone();
         Box::pin(async move {
+            // Fail closed: the REST payload carries text only, so an attachment
+            // or button request must error out instead of being dropped.
+            if !message.attachments.is_empty() {
+                return Err(ChannelError::UnsupportedFeature(
+                    "Mattermost does not support attachments".to_string(),
+                ));
+            }
+            if message.inline_keyboard.is_some() {
+                return Err(ChannelError::UnsupportedFeature(
+                    "Mattermost does not support buttons".to_string(),
+                ));
+            }
+
             // Send typing indicator if enabled
             if send_typing {
                 let _ = MattermostMessageOps::send_typing_with_base(
@@ -331,12 +355,20 @@ impl ChannelFactory for MattermostChannelFactory {
     }
 
     async fn create(&self, config: serde_json::Value) -> ChannelResult<Box<dyn Channel>> {
+        self.create_with_id("mattermost", config).await
+    }
+
+    async fn create_with_id(
+        &self,
+        id: &str,
+        config: serde_json::Value,
+    ) -> ChannelResult<Box<dyn Channel>> {
         let config: MattermostConfig = serde_json::from_value(config)
             .map_err(|e| ChannelError::ConfigError(format!("Invalid Mattermost config: {e}")))?;
 
         config.validate().map_err(ChannelError::ConfigError)?;
 
-        Ok(Box::new(MattermostChannel::new("mattermost", config)))
+        Ok(Box::new(MattermostChannel::new(id, config)))
     }
 }
 
@@ -347,10 +379,10 @@ mod tests {
     #[test]
     fn test_channel_capabilities() {
         let caps = MattermostChannel::capabilities();
-        assert!(caps.attachments);
-        assert!(caps.images);
-        assert!(caps.audio);
-        assert!(caps.video);
+        assert!(!caps.attachments);
+        assert!(!caps.images);
+        assert!(!caps.audio);
+        assert!(!caps.video);
         assert!(caps.reactions);
         assert!(caps.replies);
         assert!(caps.editing);
@@ -359,7 +391,8 @@ mod tests {
         assert!(!caps.read_receipts);
         assert!(caps.rich_text);
         assert_eq!(caps.max_message_length, 16383);
-        assert_eq!(caps.max_attachment_size, 100 * 1024 * 1024);
+        // The adapter sends no attachments at all.
+        assert_eq!(caps.max_attachment_size, 0);
     }
 
     #[test]

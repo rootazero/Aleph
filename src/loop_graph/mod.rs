@@ -39,6 +39,7 @@ pub use types::{EdgeKind, GraphEdge, GraphNode, NodeKind, Origin};
 
 use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::sync_primitives::{Arc, Ordering};
+use tokio::sync::broadcast::error::RecvError;
 
 /// Process-global graph store. Initialized once at daemon boot
 /// (`constructor.rs`); `None` until then so tests / early-boot read as
@@ -199,12 +200,12 @@ pub fn spawn_event_persister(
                             "loop_graph: audit persister failed to append event — audit gap");
                     }
                 }
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                Err(RecvError::Lagged(n)) => {
                     lag_counter.fetch_add(n, Ordering::AcqRel);
                     tracing::warn!(dropped = n,
                         "loop_graph: audit persister lagged — events dropped (audit may lose, never block)");
                 }
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                Err(RecvError::Closed) => {
                     tracing::debug!("loop_graph: audit persister exiting (bus closed)");
                     break;
                 }

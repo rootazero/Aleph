@@ -67,7 +67,8 @@ pub use context_blocks::compute_runtime_state_blocks;
 // orchestrator crate and reaches them via the `context_blocks` module directly
 // (or via the `pub(crate)` re-export below).
 pub(crate) use context_blocks::{
-    active_execution_plan, active_standing_goal, active_timer_loop, live_deadline_status,
+    active_execution_plan, active_standing_goal, active_timer_loop, goal_tier_live,
+    live_deadline_status, loop_tier_live,
 };
 // Producer-side bound for `StandingGoalLayer`, asserted by
 // `thinker::prompt_contract::conditionally_silent_dynamic_layers_are_bounded`.
@@ -241,8 +242,7 @@ pub struct AgentHarnessRunner {
     /// switch, `run.session_updated` live refresh) does not re-assemble the
     /// prompt. Session-keyed because the measured prompt is session-shaped —
     /// see [`context_estimate::OverheadCache`].
-    pub estimate_overhead_cache:
-        std::sync::Arc<crate::orchestrator::harness_bridge::context_estimate::OverheadCache>,
+    pub estimate_overhead_cache: Arc<context_estimate::OverheadCache>,
 
     /// Boot-time `[general] language`, threaded into `PromptConfig.language` so
     /// `LanguageLayer` tells the model which language to answer in.

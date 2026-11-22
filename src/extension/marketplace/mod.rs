@@ -356,7 +356,7 @@ impl MarketplaceManager {
         marketplace_name: Option<&str>,
         scope: crate::extension::types::PluginScope,
         project_dir: Option<&std::path::Path>,
-    ) -> Result<std::path::PathBuf, String> {
+    ) -> Result<InstalledPlugin, String> {
         let mut results = self.search_plugin(plugin_name);
 
         if let Some(mkt) = marketplace_name {
@@ -385,6 +385,14 @@ impl MarketplaceManager {
                         validation.errors.join("\n  - ")
                     ));
                 }
+                // The warnings are not fatal, but they are the operator's only
+                // clue that the installed plugin is not actually usable yet
+                // (entry file never built, duplicate hook handler, ...). They
+                // travel with the outcome instead of being dropped here.
+                let warnings = validation.warnings.clone();
+                for warning in &warnings {
+                    tracing::warn!(plugin = plugin_name, "{}", warning);
+                }
                 let install_dir =
                     crate::extension::visibility::scope_install_dir(scope, project_dir)?;
                 // review(extension): refuse symlink escapes at the install
@@ -402,7 +410,8 @@ impl MarketplaceManager {
                         "Refusing to install '{plugin_name}' into unsafe location: {e}"
                     ));
                 }
-                installer::install_plugin_from_cache(plugin_path, &install_dir, plugin_name)
+                let path = installer::install_plugin_from_cache(plugin_path, &install_dir, plugin_name)?;
+                Ok(InstalledPlugin { path, warnings })
             }
             _ => {
                 let names: Vec<_> = results
@@ -499,12 +508,17 @@ impl MarketplaceManager {
                         validation.errors.join("\n  - ")
                     ));
                 }
+                let warnings = validation.warnings.clone();
+                for warning in &warnings {
+                    tracing::warn!(plugin = plugin_name, "{}", warning);
+                }
 
                 installer::update_plugin_from_cache(plugin_path, &install_dir, plugin_name)?;
 
                 Ok(UpdateOutcome::Updated {
                     from: installed_version,
                     to: candidate_version,
+                    warnings,
                 })
             }
             _ => {
@@ -567,6 +581,21 @@ impl MarketplaceManager {
 // Update outcome
 // =============================================================================
 
+/// The result of a marketplace install: where the plugin landed, plus the
+/// non-fatal validation warnings the operator should see.
+#[derive(Debug, Clone)]
+pub struct InstalledPlugin {
+    /// Directory the plugin was installed into.
+    pub path: std::path::PathBuf,
+    /// Non-fatal validation warnings (entry file missing, duplicate hook
+    /// handler, non-semver version, ...). The install itself succeeded.
+    pub warnings: Vec<String>,
+}
+
+// =============================================================================
+// Update outcome
+// =============================================================================
+
 /// Result of an [`update_to_scope`](MarketplaceManager::update_to_scope) call.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UpdateOutcome {
@@ -576,6 +605,8 @@ pub enum UpdateOutcome {
         from: Option<String>,
         /// Version now installed (if the marketplace declared one).
         to: Option<String>,
+        /// Non-fatal validation warnings for the updated plugin.
+        warnings: Vec<String>,
     },
     /// No change was needed — the installed version is already current.
     AlreadyLatest {
@@ -650,24 +681,25 @@ fn resolve_plugin_path(
     // inside the marketplace directory. Returning `None` rather than joining
     // an empty path matters: an empty relative path resolves to the
     // marketplace root itself, and the installer copies whatever it is given.
-    let source = source.as_relative_path()?;
+    let relative = Path::new(source.as_relative_path()?);
+    // Reject malformed paths instead of rewriting them into valid local paths.
+    if relative.components().any(|component| {
+        matches!(
+            component,
+            Component::Prefix(_) | Component::RootDir | Component::ParentDir
+        )
+    }) {
+        return None;
+    }
 
-    // Strip leading "./" or "." to get a plain relative component.
-    let relative = source
-        .strip_prefix("./")
-        .or_else(|| source.strip_prefix('.'))
-        .unwrap_or(source);
-
-    // Defense-in-depth: the `source` field comes from a marketplace manifest,
-    // which may be untrusted. Keep only normal path components so a crafted
-    // value (`../../etc`, `/etc/passwd`) can never escape the marketplace
-    // directory. RootDir/Prefix/ParentDir/CurDir components are dropped.
-    let safe: PathBuf = Path::new(relative)
-        .components()
-        .filter(|c| matches!(c, Component::Normal(_)))
-        .collect();
-
-    Some(marketplace_dir.join(safe))
+    // Intermediate symlinks must stay within the canonical marketplace root.
+    let candidate = marketplace_dir.join(relative);
+    let canonical_root = marketplace_dir.canonicalize().ok()?;
+    let canonical = candidate.canonicalize().ok()?;
+    if !canonical.starts_with(&canonical_root) {
+        return None;
+    }
+    Some(canonical)
 }
 
 // =============================================================================
@@ -677,6 +709,56 @@ fn resolve_plugin_path(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn removing_dot_preserves_every_marketplace_cache() {
+        let cache = tempfile::TempDir::new().unwrap();
+        for name in [BUILTIN_MARKETPLACE_NAME, "other"] {
+            std::fs::create_dir(cache.path().join(name)).unwrap();
+            std::fs::write(cache.path().join(name).join("keep.txt"), name).unwrap();
+        }
+        let mut mgr = MarketplaceManager::new(HashMap::new(), Some(cache.path().to_path_buf()));
+        assert!(mgr.remove(".").is_err());
+        for name in [BUILTIN_MARKETPLACE_NAME, "other"] {
+            assert_eq!(
+                std::fs::read_to_string(cache.path().join(name).join("keep.txt")).unwrap(),
+                name
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn plugin_source_symlinks_must_stay_inside_the_marketplace() {
+        use std::os::unix::fs::symlink;
+        use types::MarketplacePluginSource;
+
+        let root = tempfile::TempDir::new().unwrap();
+        let outside = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir(outside.path().join("existing-plugin")).unwrap();
+        symlink(outside.path(), root.path().join("alias")).unwrap();
+        let escaped = MarketplacePluginSource::Path("./alias/existing-plugin".to_string());
+        assert_eq!(resolve_plugin_path(root.path(), &escaped), None);
+
+        std::fs::create_dir(root.path().join("plugins")).unwrap();
+        std::fs::create_dir(root.path().join("plugins/inside")).unwrap();
+        symlink(root.path().join("plugins"), root.path().join("internal")).unwrap();
+        let internal = MarketplacePluginSource::Path("./internal/inside".to_string());
+        assert_eq!(
+            resolve_plugin_path(root.path(), &internal),
+            Some(root.path().join("plugins/inside").canonicalize().unwrap())
+        );
+        std::fs::create_dir(root.path().join("existing-plugin")).unwrap();
+        for source in ["../existing-plugin", "/plugins/inside", "./missing"] {
+            assert_eq!(
+                resolve_plugin_path(
+                    root.path(),
+                    &MarketplacePluginSource::Path(source.to_string())
+                ),
+                None
+            );
+        }
+    }
 
     #[test]
     fn should_update_skips_equal_versions() {
@@ -908,6 +990,7 @@ mod tests {
         let cache = tempfile::TempDir::new().unwrap();
         let builtin = cache.path().join(BUILTIN_MARKETPLACE_NAME);
         std::fs::create_dir_all(builtin.join(".claude-plugin")).unwrap();
+        std::fs::create_dir(builtin.join("diagnostics")).unwrap();
         std::fs::write(
             builtin.join(".claude-plugin").join("marketplace.json"),
             r#"{"name":"aleph-official","plugins":[
@@ -1053,6 +1136,9 @@ mod tests {
         // copied, so this reaches no disk. Calling it for an installable entry
         // would install into the developer's real `~/.aleph`.
         let local = make_local_marketplace(THREE_ENTRIES);
+        for name in ["alpha", "beta"] {
+            std::fs::create_dir_all(local.path().join("plugins").join(name)).unwrap();
+        }
         let cache = tempfile::TempDir::new().unwrap();
         let mgr = browsing_manager(&local, &cache);
 
@@ -1099,18 +1185,20 @@ mod tests {
 
     #[test]
     fn test_resolve_plugin_path_strips_dot_slash() {
-        use std::path::PathBuf;
-        let root = PathBuf::from("/marketplace");
+        let root = tempfile::tempdir().unwrap();
+        for name in ["foo", "bar"] {
+            std::fs::create_dir_all(root.path().join("plugins").join(name)).unwrap();
+        }
         let path = |s: &str| {
             crate::extension::marketplace::types::MarketplacePluginSource::Path(s.to_string())
         };
         assert_eq!(
-            resolve_plugin_path(&root, &path("./plugins/foo")),
-            Some(PathBuf::from("/marketplace/plugins/foo"))
+            resolve_plugin_path(root.path(), &path("./plugins/foo")),
+            Some(root.path().join("plugins/foo").canonicalize().unwrap())
         );
         assert_eq!(
-            resolve_plugin_path(&root, &path("plugins/bar")),
-            Some(PathBuf::from("/marketplace/plugins/bar"))
+            resolve_plugin_path(root.path(), &path("plugins/bar")),
+            Some(root.path().join("plugins/bar").canonicalize().unwrap())
         );
     }
 }

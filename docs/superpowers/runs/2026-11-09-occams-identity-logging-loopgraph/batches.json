@@ -1,0 +1,80 @@
+{
+  "run_id": "2026-11-09-occams-identity-logging-loopgraph",
+  "created_at": "2026-11-09T21:30:00+08:00",
+  "target_modules": [
+    "src/identity",
+    "src/logging",
+    "src/loop_graph"
+  ],
+  "worktree_path": "/home/zou/data/workspace/Aleph-wt-rev-identity-logging-loopgraph",
+  "batches": [
+    {
+      "id": "IDEN1",
+      "name": "Identity Core & Keystore & Ledger",
+      "module": "src/identity",
+      "files": [
+        "src/identity/mod.rs",
+        "src/identity/actor.rs",
+        "src/identity/hash.rs",
+        "src/identity/keystore.rs",
+        "src/identity/ledger.rs"
+      ],
+      "file_count": 5,
+      "loc": 2177
+    },
+    {
+      "id": "IDEN2",
+      "name": "Identity Record, Schema, Artifact, Export & Verify",
+      "module": "src/identity",
+      "files": [
+        "src/identity/record.rs",
+        "src/identity/schema.rs",
+        "src/identity/artifact.rs",
+        "src/identity/export.rs",
+        "src/identity/verify.rs"
+      ],
+      "file_count": 5,
+      "loc": 2319
+    },
+    {
+      "id": "LOG1",
+      "name": "Logging Infrastructure & Dynamic Level Control",
+      "module": "src/logging",
+      "files": [
+        "src/logging/mod.rs",
+        "src/logging/error.rs",
+        "src/logging/file_appender.rs",
+        "src/logging/level_control.rs"
+      ],
+      "file_count": 4,
+      "loc": 499
+    },
+    {
+      "id": "LOOP1",
+      "name": "Loop Graph Core & Events, Templates, Snapshot & Export",
+      "module": "src/loop_graph",
+      "files": [
+        "src/loop_graph/mod.rs",
+        "src/loop_graph/types.rs",
+        "src/loop_graph/events.rs",
+        "src/loop_graph/templates.rs",
+        "src/loop_graph/snapshot.rs",
+        "src/loop_graph/export.rs"
+      ],
+      "file_count": 6,
+      "loc": 2588
+    },
+    {
+      "id": "LOOP2",
+      "name": "Loop Graph Store, Service & Inspector",
+      "module": "src/loop_graph",
+      "files": [
+        "src/loop_graph/store.rs",
+        "src/loop_graph/service.rs",
+        "src/loop_graph/inspector.rs"
+      ],
+      "file_count": 3,
+      "loc": 4518
+    }
+  ]
+}

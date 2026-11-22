@@ -83,7 +83,18 @@ pub async fn poll_prediction(
     api_key: &str,
     id: &str,
 ) -> GenerationResult<PredictionResponse> {
+    if id.is_empty()
+        || id.len() > 128
+        || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(GenerationError::invalid_parameters(
+            format!("Invalid prediction ID format: {id}"),
+            Some("prediction_id".to_string()),
+        ));
+    }
+
     let url = format!("{endpoint}/v1/predictions/{id}");
+    let auth_header = format!("Bearer {api_key}");
     let mut attempts = 0;
 
     loop {
@@ -96,7 +107,7 @@ pub async fn poll_prediction(
 
         let response = client
             .get(&url)
-            .header("Authorization", format!("Bearer {api_key}"))
+            .header("Authorization", &auth_header)
             .send()
             .await
             .map_err(|e| GenerationError::network(e.to_string()))?;

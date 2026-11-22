@@ -119,17 +119,17 @@ fn classify(root: &Path, path: &Path) -> Option<NoteKey> {
         return None;
     }
     let rel = path.strip_prefix(root).ok()?;
-    let parts: Vec<&str> = rel
-        .components()
-        .map(|c| c.as_os_str().to_str())
-        .collect::<Option<Vec<_>>>()?;
-    let [agent_id, category, _file] = parts.as_slice() else {
+    let mut comps = rel.components();
+    let agent_id = comps.next()?.as_os_str().to_str()?;
+    let category = comps.next()?.as_os_str().to_str()?;
+    let _file = comps.next()?.as_os_str().to_str()?;
+    if comps.next().is_some() {
         return None;
-    };
+    }
     if agent_id.is_empty() || agent_id.starts_with('.') {
         return None;
     }
-    if !CATEGORY_DIRS.contains(category) {
+    if !CATEGORY_DIRS.contains(&category) {
         return None;
     }
     let title = path.file_stem().and_then(|s| s.to_str())?;
@@ -137,8 +137,8 @@ fn classify(root: &Path, path: &Path) -> Option<NoteKey> {
         return None;
     }
     Some(NoteKey {
-        agent_id: (*agent_id).to_string(),
-        category: (*category).to_string(),
+        agent_id: agent_id.to_string(),
+        category: category.to_string(),
         title: title.to_string(),
     })
 }

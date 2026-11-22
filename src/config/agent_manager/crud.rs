@@ -2,7 +2,7 @@
 
 use std::fs;
 
-use toml_edit::Array;
+use toml_edit::{Array, InlineTable, Value};
 use tracing::{info, warn};
 
 use crate::config::agent_resolver::{initialize_agent_dir, initialize_agent_identity};
@@ -471,6 +471,11 @@ impl AgentManager {
         }
 
         let path = std::path::Path::new(filename);
+        if filename.contains('/') || filename.contains('\\') || path.components().count() != 1 {
+            return Err(AlephError::invalid_config(format!(
+                "Invalid filename '{filename}': must not contain path separators or traversal"
+            )));
+        }
         for component in path.components() {
             match component {
                 std::path::Component::Normal(_) => {}
@@ -568,7 +573,7 @@ fn apply_patch_to_table(agent_table: &mut toml_edit::Table, patch: &AgentPatch) 
         // previously-set `avatar`.
         let ident_item = agent_table
             .entry("identity")
-            .or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+            .or_insert_with(|| toml_edit::Item::Value(Value::InlineTable(InlineTable::new())));
         let t = ident_item
             .as_table_like_mut()
             .ok_or_else(|| AlephError::invalid_config("Agent identity must be a table"))?;
@@ -600,13 +605,13 @@ fn apply_patch_to_table(agent_table: &mut toml_edit::Table, patch: &AgentPatch) 
     }
 
     if let Some(subagents) = &patch.subagents {
-        let mut t = toml_edit::Table::new();
+        let mut inline = InlineTable::new();
         let mut arr = Array::new();
         for a in &subagents.allow {
             arr.push(a.as_str());
         }
-        t["allow"] = toml_edit::value(arr);
-        agent_table["subagents"] = toml_edit::Item::Table(t);
+        inline.insert("allow", Value::Array(arr));
+        agent_table["subagents"] = toml_edit::value(inline);
     }
 
     if let Some(allowed_links) = &patch.allowed_links {

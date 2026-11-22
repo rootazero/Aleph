@@ -155,21 +155,36 @@ pub(crate) fn sync_official_with_urls(
 ///
 /// Extracts bundled skills to `~/.aleph/skills/` and plugins to
 /// `~/.aleph/plugins/cache/aleph-official/` if version has changed.
-pub fn extract_bundled_content(aleph_home: &Path) {
+/// Materialize the bundled skills and the official plugin marketplace cache.
+///
+/// Returns `Err` when the content could not be materialized. The far end of
+/// this wire used to be `()`: every failure was a `warn!` inside the function
+/// and the daemon booted "healthy" with an empty `~/.aleph/skills/`. The
+/// caller decides what a failure means, but the function has to be able to
+/// say one first.
+pub fn extract_bundled_content(
+    aleph_home: &Path,
+    bundled_content_only: bool,
+) -> Result<(), String> {
     let skills_dir = aleph_home.join("skills");
     let plugins_cache = aleph_home
         .join("plugins")
         .join("cache")
         .join("aleph-official");
+    // The cache DIRECTORY is created by the extraction itself (atomically, via
+    // a swap). Creating it up front would leave an empty cache behind when
+    // the bundle turns out to be empty — and an empty cache that exists
+    // reads as "the official marketplace is ready and has nothing in it".
+    let plugins_cache_parent = aleph_home.join("plugins").join("cache");
 
     // Ensure directories exist
     if let Err(e) = std::fs::create_dir_all(&skills_dir) {
         warn!(error = %e, path = %skills_dir.display(), "Failed to create skills directory");
-        return;
+        return Err(format!("create {}: {e}", skills_dir.display()));
     }
-    if let Err(e) = std::fs::create_dir_all(&plugins_cache) {
-        warn!(error = %e, path = %plugins_cache.display(), "Failed to create plugins cache directory");
-        return;
+    if let Err(e) = std::fs::create_dir_all(&plugins_cache_parent) {
+        warn!(error = %e, path = %plugins_cache_parent.display(), "Failed to create plugins cache directory");
+        return Err(format!("create {}: {e}", plugins_cache_parent.display()));
     }
 
     // Load or create manifest
@@ -189,7 +204,7 @@ pub fn extract_bundled_content(aleph_home: &Path) {
     // First-run bootstrap: try to pull the latest official content from the
     // external repos; on any failure fall back to the embedded snapshot below.
     let first_run = manifest.skills.is_empty() && manifest.bundled_version.is_empty();
-    if first_run {
+    if first_run && !bundled_content_only {
         match sync_official_now(aleph_home, SyncKind::All) {
             Ok(r) => {
                 info!(
@@ -211,7 +226,7 @@ pub fn extract_bundled_content(aleph_home: &Path) {
                     let _ = manifest.reconcile(&skills_dir);
                     let _ = manifest.save(&skills_dir);
                     cleanup_legacy_dir(aleph_home);
-                    return;
+                    return Ok(());
                 }
             }
             Err(e) => {
@@ -221,10 +236,26 @@ pub fn extract_bundled_content(aleph_home: &Path) {
     }
 
     // Check if extraction is needed
+    // The gate may only short-circuit when the artifacts are still on disk.
+    // A version comparison cannot see a skill directory the user deleted, nor
+    // a marketplace cache a cleanup removed: the manifest row outlives the
+    // directory, `reconcile` reaps the row, and the content never comes back.
+    // The version says "this bundle was extracted"; only the filesystem says
+    // "it is still there".
+    let official_skills_present = manifest
+        .skills
+        .iter()
+        .filter(|(_, entry)| entry.is_official())
+        .all(|(name, _)| skills_dir.join(name).is_dir());
+    let plugin_cache_present = dir_has_content(&plugins_cache);
+
     if manifest.bundled_version == BUNDLED_VERSION
-        && !manifest.skills.values().any(|entry| {
-            entry.source == SkillOrigin::Official && entry.version.as_deref() != Some(BUNDLED_VERSION)
-        })
+        && !manifest
+            .skills
+            .values()
+            .any(|entry| entry.is_official() && entry.version.as_deref() != Some(BUNDLED_VERSION))
+        && official_skills_present
+        && plugin_cache_present
     {
         debug!(version = BUNDLED_VERSION, "Bundled content is up to date");
         // Still reconcile to catch manually added skills
@@ -234,7 +265,7 @@ pub fn extract_bundled_content(aleph_home: &Path) {
         if let Err(e) = manifest.save(&skills_dir) {
             warn!(error = %e, "Failed to save manifest after reconcile");
         }
-        return;
+        return Ok(());
     }
 
     info!(
@@ -249,7 +280,7 @@ pub fn extract_bundled_content(aleph_home: &Path) {
     // the same name would overwrite and prune the user's files on upgrade.
     if let Err(e) = manifest.reconcile(&skills_dir) {
         warn!(error = %e, "Failed to reconcile before extraction; aborting to protect user skills");
-        return;
+        return Err(format!("reconcile {}: {e}", skills_dir.display()));
     }
 
     // Extract skills
@@ -282,6 +313,21 @@ pub fn extract_bundled_content(aleph_home: &Path) {
 
     // Clean up legacy skills-official directory
     cleanup_legacy_dir(aleph_home);
+
+    if skills_ok && plugins_ok {
+        Ok(())
+    } else {
+        Err(format!(
+            "bundled content incomplete: skills_ok={skills_ok}, plugins_ok={plugins_ok}"
+        ))
+    }
+}
+
+/// True if `dir` exists and holds at least one entry.
+fn dir_has_content(dir: &Path) -> bool {
+    std::fs::read_dir(dir)
+        .map(|rd| rd.filter_map(|e| e.ok()).next().is_some())
+        .unwrap_or(false)
 }
 
 /// Extract bundled skills to the skills directory.
@@ -289,7 +335,18 @@ pub fn extract_bundled_content(aleph_home: &Path) {
 fn extract_skills(bundled: &Dir, skills_dir: &Path, manifest: &mut InstallRegistry) -> bool {
     let mut all_ok = true;
 
-    for dir in bundled.dirs() {
+    // An empty embedded bundle is a failed build (the `skills/` submodule was
+    // never initialised), not an empty set of skills to extract. The clone
+    // path already refuses an empty checkout; without the counterpart here the
+    // extractor would "succeed" with zero skills and stamp the bundle version,
+    // and every later startup would short-circuit on that stamp.
+    let dirs: Vec<_> = bundled.dirs().collect();
+    if dirs.is_empty() {
+        warn!("Bundled skills directory is empty (uninitialised submodule?) — refusing to stamp the bundle as extracted");
+        return false;
+    }
+
+    for dir in dirs {
         // Use file_name() to get the base directory name, matching reconcile()
         let Some(name_os) = dir.path().file_name() else {
             warn!(path = ?dir.path(), "Bundled skill dir has no file_name, skipping");
@@ -312,11 +369,15 @@ fn extract_skills(bundled: &Dir, skills_dir: &Path, manifest: &mut InstallRegist
         // Skip if user has a non-official skill with the same name. Successfully
         // extracted skills need not be rewritten when another skill is retried.
         if let Some(entry) = manifest.skills.get(&name) {
-            if entry.source != SkillOrigin::Official {
+            if !entry.is_official() {
                 debug!(skill = %name, source = ?entry.source, "Skipping user skill");
                 continue;
             }
-            if entry.version.as_deref() == Some(BUNDLED_VERSION) {
+            if entry.version.as_deref() == Some(BUNDLED_VERSION) && skills_dir.join(&name).is_dir()
+            {
+                // Already extracted at this version AND still on disk. A row
+                // whose directory the user deleted must not short-circuit the
+                // extraction: the content has to come back.
                 continue;
             }
         }
@@ -361,6 +422,15 @@ fn extract_skills(bundled: &Dir, skills_dir: &Path, manifest: &mut InstallRegist
 /// it into place. This ensures the cache is never in a partially-extracted
 /// state if the process crashes mid-extraction.
 fn extract_plugins(bundled: &Dir, cache_dir: &Path) -> bool {
+    // An empty embedded bundle is a failed build (the `plugins/` submodule was
+    // never initialised), not an empty marketplace. Refuse to write it: an
+    // empty cache that exists reads as "the official marketplace is ready and
+    // has nothing in it", and the version stamp would make it permanent.
+    if bundled.files().next().is_none() && bundled.dirs().next().is_none() {
+        warn!("Bundled plugins directory is empty (uninitialised submodule?) — refusing to stamp the bundle as extracted");
+        return false;
+    }
+
     let tmp_dir = cache_dir.with_extension("tmp");
 
     // Clean up any leftover temp directory from a previous crash.
@@ -461,8 +531,10 @@ fn swap_dir_into_place(staged: &Path, dest: &Path) -> bool {
     if let Err(e) = std::fs::rename(staged, dest) {
         let dest_exists = matches!(
             e.kind(),
-            std::io::ErrorKind::AlreadyExists | std::io::ErrorKind::DirectoryNotEmpty
-        );
+            std::io::ErrorKind::AlreadyExists
+                | std::io::ErrorKind::DirectoryNotEmpty
+                | std::io::ErrorKind::PermissionDenied
+        ) || dest.exists();
         if !dest_exists {
             warn!(error = %e, "Failed to atomically swap plugin cache");
             return false;
@@ -618,7 +690,15 @@ fn extract_dir_contents(dir: &Dir, target: &Path) -> std::io::Result<()> {
         }
         match std::fs::rename(&tmp, &dest) {
             Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            Err(e)
+                if dest.exists()
+                    || matches!(
+                        e.kind(),
+                        std::io::ErrorKind::AlreadyExists
+                            | std::io::ErrorKind::PermissionDenied
+                            | std::io::ErrorKind::DirectoryNotEmpty
+                    ) =>
+            {
                 // BUNDLED-R4-02: destination may be a directory (not a file),
                 // which `remove_file` cannot delete and would cause the
                 // rename to fail and the skill to be marked `version: None`
@@ -653,10 +733,12 @@ fn extract_dir_contents(dir: &Dir, target: &Path) -> std::io::Result<()> {
 }
 
 /// Filesystem-source analogue of `extract_skills`: walks a cloned checkout
-/// (each top-level dir is one skill) and applies the SAME manifest gating —
-/// official-only overwrite, skip names owned by non-official skills, prune
-/// stale files within each official skill dir. Returns true if all extractions
-/// succeeded.
+/// (each top-level dir is one skill) and applies the manifest gating with a
+/// DIFFERENT ownership rule: the sync owns the names it installed
+/// ([`SkillOrigin::Synced`]) and may take over a name the bundle owns (its
+/// copy is the fresher one), but it never touches a user-owned or
+/// third-party skill. Prunes stale files within each skill dir. Returns true
+/// if all extractions succeeded.
 pub(crate) fn extract_skill_tree_from_dir(
     src_root: &Path,
     skills_dir: &Path,
@@ -685,16 +767,21 @@ pub(crate) fn extract_skill_tree_from_dir(
         if name.starts_with('.') || name.contains('/') || name.contains('\\') || name.len() > 255 {
             continue;
         }
-        // Skip if a non-official skill already owns this name (user/3rd-party wins).
+        // A user-owned or third-party skill keeps the name: only the two
+        // system producers write here, and each owns the names it installed.
+        // The network copy takes ownership of a name the bundle also ships
+        // (it is the fresher copy — the user asked for the sync), and from
+        // then on the bundle leaves that name alone instead of restoring its
+        // own copy on the next binary upgrade.
         if let Some(e) = manifest.skills.get(&name) {
-            if e.source != SkillOrigin::Official {
+            if !e.is_system_owned() {
                 debug!(skill = %name, source = ?e.source, "Skipping user-owned skill name");
                 continue;
             }
         }
         let target = skills_dir.join(&name);
         let version = match copy_tree_with_prune(&entry.path(), &target) {
-            Ok(()) => Some(BUNDLED_VERSION.to_string()),
+            Ok(()) => None,
             Err(e) => {
                 warn!(skill = %name, error = %e, "Failed to extract skill from checkout");
                 all_ok = false;
@@ -704,7 +791,11 @@ pub(crate) fn extract_skill_tree_from_dir(
         manifest.skills.insert(
             name.clone(),
             SkillEntry {
-                source: SkillOrigin::Official,
+                // The network copy is owned by the sync, not by the binary.
+                // The version is deliberately empty: the binary's
+                // `BUNDLED_VERSION` says nothing about the content that was
+                // just copied, and the origin is the fact that matters.
+                source: SkillOrigin::Synced,
                 version,
                 url: None,
             },
@@ -879,7 +970,7 @@ mod tests {
     }
 
     #[test]
-    fn extract_skill_tree_from_dir_copies_official_and_skips_user_owned() {
+    fn extract_skill_tree_from_dir_copies_synced_and_skips_user_owned() {
         let tmp = tempfile::tempdir().unwrap();
         let src = tmp.path().join("src");
         let skills = tmp.path().join("skills");
@@ -909,12 +1000,53 @@ mod tests {
         assert!(!skills.join("search").exists(), "user-owned name skipped");
         assert_eq!(
             manifest.skills.get("api-design").unwrap().source,
-            SkillOrigin::Official
+            SkillOrigin::Synced,
+            "the network copy is owned by the sync, not by the binary"
         );
         assert_eq!(
             manifest.skills.get("search").unwrap().source,
             SkillOrigin::Local
         );
+    }
+
+    /// The two producers write into the same directory, so ownership of a
+    /// name has to be explicit: once the sync owns a name, the bundle must
+    /// leave it alone (no revert on the next binary upgrade), and the sync
+    /// must be able to take a name the bundle owns.
+    #[test]
+    fn the_sync_takes_a_bundled_name_and_the_bundle_then_leaves_it_alone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        let skills = tmp.path().join("skills");
+        std::fs::create_dir_all(src.join("api-design")).unwrap();
+        std::fs::write(
+            src.join("api-design").join("SKILL.md"),
+            b"# from the network",
+        )
+        .unwrap();
+        std::fs::create_dir_all(&skills).unwrap();
+
+        // The bundle owns the name first.
+        let mut manifest = InstallRegistry::new("");
+        manifest.skills.insert(
+            "api-design".to_string(),
+            SkillEntry {
+                source: SkillOrigin::Official,
+                version: Some(BUNDLED_VERSION.to_string()),
+                url: None,
+            },
+        );
+
+        assert!(extract_skill_tree_from_dir(&src, &skills, &mut manifest));
+        assert_eq!(
+            manifest.skills.get("api-design").unwrap().source,
+            SkillOrigin::Synced,
+            "the sync takes ownership of the name it ships"
+        );
+        let entry = manifest.skills.get("api-design").expect("the synced row");
+        assert_eq!(entry.source, SkillOrigin::Synced);
+        assert!(!entry.is_official());
+        assert!(entry.is_system_owned());
     }
 
     /// Build a local git repo containing a single skill leaf `<leaf>/SKILL.md`.

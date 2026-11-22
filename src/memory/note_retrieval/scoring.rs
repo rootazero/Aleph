@@ -29,7 +29,7 @@ use std::collections::HashSet;
 /// (returns `1.0`) so misconfiguration can never zero out results.
 #[must_use]
 pub fn recency_multiplier(updated_at: i64, now: i64, half_life_days: f32) -> f32 {
-    if half_life_days <= 0.0 {
+    if !half_life_days.is_finite() || half_life_days <= 0.0 {
         return 1.0;
     }
     let age_days = ((now - updated_at).max(0) as f32) / 86_400.0;
@@ -103,13 +103,13 @@ fn jaccard(a: &HashSet<&str>, b: &HashSet<&str>) -> f32 {
 ///
 /// `contents[i]` and `relevance[i]` must align. Returns a permutation of the
 /// input indices. Inputs of length < 2 are returned in original order.
-pub fn mmr_reorder(contents: &[String], relevance: &[f32], lambda: f32) -> Vec<usize> {
+pub fn mmr_reorder<T: AsRef<str>>(contents: &[T], relevance: &[f32], lambda: f32) -> Vec<usize> {
     let n = contents.len();
     if n < 2 || contents.len() != relevance.len() {
         return (0..n).collect();
     }
     let lambda = lambda.clamp(0.0, 1.0);
-    let tokens: Vec<HashSet<&str>> = contents.iter().map(|c| token_set(c)).collect();
+    let tokens: Vec<HashSet<&str>> = contents.iter().map(|c| token_set(c.as_ref())).collect();
 
     let mut remaining: Vec<usize> = (0..n).collect();
     let mut selected: Vec<usize> = Vec::with_capacity(n);

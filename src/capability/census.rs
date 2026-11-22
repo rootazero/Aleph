@@ -655,9 +655,22 @@ fn writer_receivers(text: &str) -> std::collections::BTreeSet<String> {
 }
 
 /// Is this static declaration visible outside its module?
+///
+/// Only an unrestricted `pub` reaches beyond the declaring module. The
+/// restricted forms — `pub(crate)`, `pub(super)`, `pub(in path)` — stop at a
+/// boundary inside the module tree, so they are not module-external: the
+/// `LazySite::is_pub` rule this predicate serves is about a handle "reachable
+/// from every module", which a crate- or super-visible static is not.
 fn is_public_decl(line: &str) -> bool {
     let t = line.trim_start();
-    t.starts_with("pub ") || t.starts_with("pub(")
+    let Some(rest) = t.strip_prefix("pub") else {
+        return false;
+    };
+    // `pub(` opens a restricted form; `pub ` (any whitespace) is unrestricted.
+    if rest.starts_with('(') {
+        return false;
+    }
+    rest.starts_with(char::is_whitespace)
 }
 
 /// Verdict of the first-caller-wins arm, with the fact the guards need.
@@ -741,9 +754,22 @@ impl Census {
     }
 }
 
+/// The source walk, in a deterministic order.
+///
+/// `rust_sources_under` walks directories with `read_dir`, whose order is
+/// filesystem-dependent, so an unsorted walk makes every census output that
+/// lists sites order-dependent: the same tree yields a different handle order
+/// from one run to the next. Sorting by path makes the census a function of
+/// the tree rather than of the filesystem.
+fn sorted_sources(root: &std::path::Path) -> Vec<(String, String)> {
+    let mut sources = rust_sources_under(root);
+    sources.sort_by(|a, b| a.0.cmp(&b.0));
+    sources
+}
+
 fn take_census() -> Census {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let sources = rust_sources_under(&root);
+    let sources = sorted_sources(&root);
     assert!(
         sources.len() > 100,
         "the source walk found only {} files under src/ — the census scanned \
@@ -1392,7 +1418,7 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
     /// Every roster declaration across `src/`.
     fn rosters_in_src() -> Vec<String> {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        rust_sources_under(&root)
+        sorted_sources(&root)
             .into_iter()
             .flat_map(|(rel, text)| {
                 roster_collections(&strip_comment_lines(&production_prefix(&text)))
@@ -1497,7 +1523,7 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
     fn roster_accessors() -> Vec<AccessorSite> {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut out = Vec::new();
-        for (rel, text) in rust_sources_under(&root) {
+        for (rel, text) in sorted_sources(&root) {
             let prod = strip_comment_lines(&production_prefix(&text));
             for at in word_occurrences(&prod, "SlotStatus") {
                 let Some(arrow) = slot_status_return_at(&prod, at) else {
@@ -2025,7 +2051,7 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
             decline_file: std::collections::BTreeMap::new(),
             in_impl: std::collections::BTreeSet::new(),
         };
-        for (rel, text) in rust_sources_under(&manifest_src()) {
+        for (rel, text) in sorted_sources(&manifest_src()) {
             if !text.contains("CapabilitySlot") {
                 continue;
             }
@@ -2102,7 +2128,7 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
             installs: HopMap::new(),
             declines: HopMap::new(),
         };
-        for (rel, text) in rust_sources_under(&manifest_src()) {
+        for (rel, text) in sorted_sources(&manifest_src()) {
             if rel.starts_with("src/capability/") || test_only.contains(&rel) {
                 continue;
             }
@@ -2257,7 +2283,7 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
     /// instead of a per-guard workaround.
     fn test_only_module_files() -> std::collections::BTreeSet<String> {
         let mut out = std::collections::BTreeSet::new();
-        for (rel, text) in rust_sources_under(&manifest_src()) {
+        for (rel, text) in sorted_sources(&manifest_src()) {
             for line in cfg_test_portion(&text).lines() {
                 let t = strip_visibility(line.trim_start()).trim_start();
                 let Some(rest) = t.strip_prefix("mod ") else {
@@ -2581,7 +2607,7 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
 
         let mut sites: Vec<CondSite> = Vec::new();
         let mut suppressed = 0usize;
-        for (rel, text) in rust_sources_under(&manifest_src()) {
+        for (rel, text) in sorted_sources(&manifest_src()) {
             if rel.starts_with("src/capability/") {
                 continue;
             }
@@ -3011,7 +3037,7 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
         let mut gates = 0usize;
         let mut offenders: Vec<String> = Vec::new();
 
-        for (rel, text) in rust_sources_under(&manifest_src()) {
+        for (rel, text) in sorted_sources(&manifest_src()) {
             if rel.starts_with("src/capability/") || test_only.contains(&rel) {
                 continue;
             }
@@ -3118,7 +3144,7 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
         let test_only = test_only_module_files();
 
         let mut called: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-        for (rel, text) in rust_sources_under(&manifest_src()) {
+        for (rel, text) in sorted_sources(&manifest_src()) {
             if rel.starts_with("src/capability/") || test_only.contains(&rel) {
                 continue;
             }
@@ -3197,7 +3223,7 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
     /// stayed green after the line it was checking had been deleted.
     fn slot_declarations() -> Vec<SlotDecl> {
         let mut out = Vec::new();
-        for (rel, text) in rust_sources_under(&manifest_src()) {
+        for (rel, text) in sorted_sources(&manifest_src()) {
             if rel.starts_with("src/capability/") {
                 continue;
             }
@@ -3299,7 +3325,7 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
     fn every_slot_pins_its_own_missing_semantics() {
         let decls = slot_declarations();
         let test_only = test_only_module_files();
-        let sources = rust_sources_under(&manifest_src());
+        let sources = sorted_sources(&manifest_src());
 
         let mut tally: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
         for d in &decls {
@@ -3467,7 +3493,7 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
         ));
         assert!(names_type("impl<T> CapabilitySlot<T> {", "CapabilitySlot"));
 
-        let sources = rust_sources_under(&manifest_src());
+        let sources = sorted_sources(&manifest_src());
 
         // Declarations, read out of the inherent impls.
         let mod_rs = sources
@@ -3676,6 +3702,43 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
             "the parameter BEHIND the arrow must survive — the `>` of `->` \
              closes nothing: {params:?}"
         );
+    }
+
+    /// The module-external predicate, exercised on synthetic declarations.
+    ///
+    /// The rule the census states is "visible outside its module", so the
+    /// restricted forms do not qualify: `pub(crate)` stops at the crate,
+    /// `pub(super)` at the parent module and `pub(in path)` at the named one.
+    /// A predicate that counted them would file a crate-visible container as
+    /// "reachable from every module" and hold it to the roster rule the
+    /// module-external reading does not apply to.
+    ///
+    /// The positive cases matter as much as the negative ones: a predicate
+    /// that stopped matching altogether would make the guard below vacuously
+    /// green, which is the same silence the recogniser test above was written
+    /// against.
+    #[test]
+    fn the_module_external_predicate_excludes_restricted_visibilities() {
+        for line in [
+            "pub static GLOBAL_THING: OnceLock<u8> = OnceLock::new();",
+            "    pub static GLOBAL_THING: OnceLock<u8> = OnceLock::new();",
+        ] {
+            assert!(
+                is_public_decl(line),
+                "not module-external, but the rule says it is: {line}"
+            );
+        }
+        for line in [
+            "pub(crate) static THING: OnceLock<u8> = OnceLock::new();",
+            "pub(super) static THING: OnceLock<u8> = OnceLock::new();",
+            "pub(in crate::memory) static THING: OnceLock<u8> = OnceLock::new();",
+            "static THING: OnceLock<u8> = OnceLock::new();",
+        ] {
+            assert!(
+                !is_public_decl(line),
+                "counted as module-external, but the rule says it is not: {line}"
+            );
+        }
     }
 
     /// Every `pub` container static must be on the roster, or self-initialising.

@@ -80,11 +80,10 @@ pub(crate) enum HookAction {
 )]
 pub(crate) fn resolve(app: &AppHandle, host: &str, leaf_der: &[u8], reason: &str) -> HookAction {
     use crate::cert_trust::{
-        decide,
+        Decision, decide,
         fingerprint::{fingerprint_sha256, parse_cert_info},
         pending,
         store::TrustStore,
-        Decision,
     };
 
     let Some(path) = pending::store_path() else {
@@ -123,7 +122,7 @@ fn prompt(
     info: crate::cert_trust::CertInfo,
     changed_from: Option<String>,
 ) {
-    use crate::cert_trust::pending::{set_trust_pending, PendingCert, PendingRecord};
+    use crate::cert_trust::pending::{PendingCert, PendingRecord, set_trust_pending};
 
     if let Some(state) = app.try_state::<PendingCert>() {
         *state

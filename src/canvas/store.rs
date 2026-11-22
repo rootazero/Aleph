@@ -152,7 +152,24 @@ impl CanvasStore {
     pub async fn get(&self, id: &str) -> Result<CanvasDoc, CanvasError> {
         Self::checked_id(id)?;
         match super::doc_io::read(&self.doc_path(id)).await? {
-            Some(doc) => Ok(doc),
+            Some(doc) => {
+                // The directory name and the document id are ONE identity. The
+                // listing already refuses a mismatch (it skips such a row), so
+                // `get` has to reach the same conclusion: otherwise a
+                // mismatched document is invisible in the library yet
+                // addressable by its directory id, and every asset path
+                // derived from it points at a different directory.
+                // (2026-11-20 severed-wire audit CAN-02.)
+                if doc.id != id {
+                    warn!(canvas = %id, doc_id = %doc.id,
+                        "canvas: document id does not match its directory");
+                    return Err(CanvasError::Internal(format!(
+                        "canvas {id} holds a document with id {}",
+                        doc.id
+                    )));
+                }
+                Ok(doc)
+            }
             None => Err(CanvasError::NotFound(format!("canvas {id}"))),
         }
     }
@@ -161,16 +178,22 @@ impl CanvasStore {
     /// — never silently, and never fails the whole listing (§5.23b). Every
     /// RPC/tool face uses the listing form because it needs the
     /// `owner_user_id` for visibility filtering.
-    pub async fn list_entries(&self) -> Vec<CanvasListing> {
+    pub async fn list_entries(&self) -> Result<Vec<CanvasListing>, CanvasError> {
         let mut rows = Vec::new();
         let mut entries = match tokio::fs::read_dir(&self.root).await {
             Ok(entries) => entries,
             // A root that does not exist yet is an empty library, not a fault.
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return rows,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(rows),
             Err(e) => {
-                warn!(root = %self.root.display(), error = %e,
-                    "canvas: cannot enumerate canvas root");
-                return rows;
+                // A root that cannot be enumerated is NOT an empty library:
+                // reporting "no canvases" here hides every canvas from the
+                // Panel and from the model at once, and the caller cannot
+                // tell "the library is empty" from "the library is
+                // unreadable". (2026-11-20 severed-wire audit CAN-05.)
+                return Err(CanvasError::Internal(format!(
+                    "cannot enumerate canvas root {}: {e}",
+                    self.root.display()
+                )));
             }
         };
         loop {
@@ -178,14 +201,29 @@ impl CanvasStore {
                 Ok(Some(entry)) => entry,
                 Ok(None) => break,
                 Err(e) => {
-                    warn!(root = %self.root.display(), error = %e,
-                        "canvas: directory enumeration failed mid-way");
-                    break;
+                    // A half-enumerated library is not a library: the rows
+                    // collected so far would be presented as the complete set.
+                    // (2026-11-20 severed-wire audit CAN-05.)
+                    return Err(CanvasError::Internal(format!(
+                        "canvas directory enumeration failed mid-way: {e}"
+                    )));
                 }
             };
             let name = entry.file_name().to_string_lossy().into_owned();
-            if !entry.path().is_dir() {
-                continue; // stray files (.DS_Store and friends) are not rows
+            // `metadata` (not `entry.file_type()`) FOLLOWS symlinks, so a
+            // canvas directory reached through a symlink still counts as a
+            // row — `Path::is_dir()` had that same property, and losing it
+            // would silently drop a row from the library. A failed stat is
+            // "unknown", and unknown is not "a row": skipped LOUDLY, like
+            // every other broken row here (§5.23b).
+            match tokio::fs::metadata(entry.path()).await {
+                Ok(metadata) if metadata.is_dir() => {}
+                Ok(_) => continue, // stray files (.DS_Store and friends) are not rows
+                Err(e) => {
+                    warn!(canvas = %name, error = %e,
+                        "canvas: cannot stat canvas entry — skipping");
+                    continue;
+                }
             }
             match super::doc_io::read(&entry.path().join("doc.json")).await {
                 Ok(Some(doc)) => {
@@ -225,7 +263,7 @@ impl CanvasStore {
                 .cmp(&a.row.updated_at_ms)
                 .then_with(|| a.row.id.cmp(&b.row.id))
         });
-        rows
+        Ok(rows)
     }
 
     /// The only write entry point: validate, lock, check `base_revision`,
@@ -254,6 +292,13 @@ impl CanvasStore {
         validate::apply_ops(doc, &ops)?;
         doc.revision += 1;
         doc.updated_at_ms = now_ms();
+        // The byte budget is checked HERE, after the revision and the
+        // timestamp have been bumped and before the commit: those two
+        // fields are part of the bytes that land on disk, so the gate has
+        // to measure the document as it will be written. A rejection drops
+        // the guard uncommitted — the file on disk is left exactly as it
+        // was.
+        validate::check_document_size(doc)?;
         // `commit(&mut self)` keeps the per-canvas lock (see doc_io): the
         // publish below must happen inside the same critical section, or two
         // racing applies could publish in reverse revision order.
@@ -457,7 +502,7 @@ mod tests {
             "an over-cap title is caller-fixable, not internal: {err:?}"
         );
         assert!(
-            store.list_entries().await.is_empty(),
+            store.list_entries().await.expect("listing succeeds").is_empty(),
             "a refused create must leave nothing on disk"
         );
         // No title asked for still takes the default.
@@ -734,7 +779,11 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(store.list_entries().await.len(), 1, "it must still list");
+        assert_eq!(
+            store.list_entries().await.expect("listing succeeds").len(),
+            1,
+            "it must still list"
+        );
         assert_eq!(
             store.get(&doc.id).await.unwrap().title.len(),
             MAX_TITLE_BYTES * 3,
@@ -915,7 +964,7 @@ mod tests {
         std::fs::create_dir_all(&bad_dir).unwrap();
         std::fs::write(bad_dir.join("doc.json"), "{ this is not json").unwrap();
 
-        let entries = store.list_entries().await;
+        let entries = store.list_entries().await.expect("listing succeeds");
         assert_eq!(entries.len(), 1, "the broken row is skipped, not fatal");
         assert_eq!(entries[0].row.id, good.id);
 
@@ -1223,7 +1272,11 @@ mod tests {
             store.get(&doc.id).await.unwrap_err(),
             CanvasError::NotFound(_)
         ));
-        assert!(store.list_entries().await.is_empty());
+        assert!(store
+            .list_entries()
+            .await
+            .expect("listing succeeds")
+            .is_empty());
         drop(dir);
     }
 

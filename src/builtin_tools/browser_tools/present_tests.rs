@@ -14,7 +14,7 @@ use aleph_protocol::browser_live::{
 };
 use tokio::sync::broadcast::error::TryRecvError;
 
-use crate::browser::cdp_backend::{BrowserOperationKind, BrowserOperationRecord};
+use crate::browser::cdp_backend::BrowserOperationRecord;
 use crate::browser::live::tests::fixture as owner_fixture;
 
 struct Fixture {
@@ -810,12 +810,7 @@ async fn owned_rig() -> OwnedRig {
     let lifecycle =
         BrowserLiveLifecycle::new(resources.clone(), grants.clone()).with_event_bus(bus.clone());
     let producer = BrowserLiveProducer::new_with_lifecycle(lifecycle, owners.clone());
-    let record = BrowserOperationRecord::capture_for_test(
-        &owner,
-        &handle,
-        "T1".into(),
-        BrowserOperationKind::Open,
-    );
+    let record = BrowserOperationRecord::capture_for_test(&owner, &handle, "T1".into());
     OwnedRig {
         f: Fixture {
             producer,

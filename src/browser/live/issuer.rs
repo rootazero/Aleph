@@ -33,9 +33,17 @@ pub struct BrowserViewerIssuerState {
 }
 
 impl BrowserViewerIssuerState {
-    /// Only Frames are allowed in this first issuer surface. Input/navigation
-    /// require a separately reviewed server policy, never a request flag.
-    #[allow(dead_code)] // the production backend/producer composition root is not installed yet
+    /// The issuer over a bare store pair, without a lifecycle.
+    ///
+    /// The permission set is fixed by the issuer itself — `Frames` plus the
+    /// two control permissions (`HumanInput`, `Navigate`), never a request
+    /// flag: a caller cannot widen what a grant may do.
+    ///
+    /// Test-only: the production composition root is
+    /// [`Self::new_with_lifecycle`] (src/gateway/server/browser_live_runtime.rs),
+    /// which takes the grants and the resources from the lifecycle itself so
+    /// the issuer and the revocation path can never act on different stores.
+    #[cfg(test)]
     pub(crate) fn new(
         grants: ViewerGrantStore,
         resources: ResourceRegistry,
@@ -97,7 +105,17 @@ impl BrowserViewerIssuerState {
             lifecycle,
             origin,
             launch_base,
-            allowed_permissions: vec![ViewerPermission::Frames],
+            // The three permissions the viewer surface can carry. `Frames` is
+            // the view; `HumanInput` and `Navigate` are the control
+            // permissions — without them every `take` and every input event
+            // is denied, so the control plane (and with it the intervention
+            // path) could never fire. A request is still filtered through
+            // this list, and a grant without `Frames` is refused downstream.
+            allowed_permissions: vec![
+                ViewerPermission::Frames,
+                ViewerPermission::HumanInput,
+                ViewerPermission::Navigate,
+            ],
             max_ttl,
         }))
     }

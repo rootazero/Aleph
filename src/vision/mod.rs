@@ -49,14 +49,17 @@ impl VisionPipeline {
             return Err(VisionError::NoProvider);
         }
 
-        let mut last_err = VisionError::NoProvider;
-        let mut any_capable = false;
+        // `last_err` is `Some` exactly when at least one capable provider was
+        // tried: a capable provider either succeeds (early return) or records
+        // its error here. `None` therefore means "no registered provider
+        // supports this capability", which is a different failure than
+        // "every capable provider failed".
+        let mut last_err: Option<VisionError> = None;
 
         for provider in &self.providers {
             if !provider.capabilities().image_understanding {
                 continue;
             }
-            any_capable = true;
             match provider.understand_image(image, prompt).await {
                 Ok(result) => return Ok(result),
                 Err(e) => {
@@ -65,18 +68,17 @@ impl VisionPipeline {
                         error = %e,
                         "Vision provider failed for understand_image, trying next"
                     );
-                    last_err = e;
+                    last_err = Some(e);
                 }
             }
         }
 
-        if !any_capable {
-            return Err(VisionError::UnsupportedCapability(
+        match last_err {
+            Some(e) => Err(e),
+            None => Err(VisionError::UnsupportedCapability(
                 "image_understanding".to_string(),
-            ));
+            )),
         }
-
-        Err(last_err)
     }
 
     /// Extract text from the given image via OCR.
@@ -90,14 +92,15 @@ impl VisionPipeline {
             return Err(VisionError::NoProvider);
         }
 
-        let mut last_err = VisionError::NoProvider;
-        let mut any_capable = false;
+        // Same invariant as `understand_image`: `Some` means "a capable
+        // provider was tried and failed", `None` means "no registered
+        // provider supports OCR".
+        let mut last_err: Option<VisionError> = None;
 
         for provider in &self.providers {
             if !provider.capabilities().ocr {
                 continue;
             }
-            any_capable = true;
             match provider.ocr(image).await {
                 Ok(result) => return Ok(result),
                 Err(e) => {
@@ -106,16 +109,15 @@ impl VisionPipeline {
                         error = %e,
                         "Vision provider failed for OCR, trying next"
                     );
-                    last_err = e;
+                    last_err = Some(e);
                 }
             }
         }
 
-        if !any_capable {
-            return Err(VisionError::UnsupportedCapability("ocr".to_string()));
+        match last_err {
+            Some(e) => Err(e),
+            None => Err(VisionError::UnsupportedCapability("ocr".to_string())),
         }
-
-        Err(last_err)
     }
 }
 

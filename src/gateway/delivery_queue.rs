@@ -37,8 +37,9 @@
 //! record behind — replayed verbatim on the next boot, i.e. a duplicate. The
 //! outcome of an interrupted attempt is exactly as ambiguous as
 //! [`SendFailed`](ChannelError::SendFailed), so it gets the same verdict:
-//! [`DeliveryStore::mark_inflight`] stamps the row immediately before the send
-//! crosses the transport boundary, and [`DeliveryStore::reconcile_inflight`]
+//! the attempt stamp is written in the same transaction that revalidates the
+//! row (`DeliveryStore::begin_replay`) immediately before the send crosses the
+//! transport boundary, and [`DeliveryStore::reconcile_inflight`]
 //! (run once per process by [`spawn_drain`]) retires every surviving stamp into
 //! the dead-letter table as [`DeadLetterReason::UnknownOutcome`] instead of
 //! re-sending it. This mirrors openclaw's
@@ -965,13 +966,27 @@ impl DeliveryStore {
 
         if payload.len() > self.config.max_payload_bytes {
             let bytes = payload.len();
+            // The rejected body must NOT be persisted. The dead-letter table
+            // bounds its ROW COUNT, not its bytes, so storing the payload
+            // grows the database by exactly the size the limit exists to
+            // reject. What is kept is a bounded diagnostic: the identity of
+            // the delivery and the size it had.
+            let diagnostic = serde_json::json!({
+                "channel_id": channel_id,
+                "conversation_id": message.conversation_id.as_str(),
+                "original_bytes": bytes,
+                "max_payload_bytes": self.config.max_payload_bytes,
+                "note": "payload exceeded max_payload_bytes; the body was not retained",
+            });
+            let diagnostic_payload = serde_json::to_string(&diagnostic)
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
             Self::insert_dead_letter(
                 conn,
                 self.config.max_queue_len,
                 DeadLetterInsert {
                     channel_id,
                     conversation_id: message.conversation_id.as_str(),
-                    payload: &payload,
+                    payload: &diagnostic_payload,
                     attempts: 0,
                     last_error: &format!(
                         "payload {bytes} B exceeds max_payload_bytes {} (never enqueued); last transport error: {last_error}",
@@ -1381,6 +1396,11 @@ impl DeliveryStore {
     /// after an abrupt exit. Best-effort by design — a failure here is logged by
     /// the caller and the send proceeds, because refusing to deliver is a worse
     /// outcome than risking one duplicate.
+    ///
+    /// The production send path stamps through [`begin_replay`](Self::begin_replay),
+    /// which writes the same column inside the transaction that also revalidates
+    /// the row and the durable policy. This method stays the raw statement
+    /// helper; nothing outside the store's own tests calls it.
     pub fn mark_inflight(&self, id: i64, now: i64) -> rusqlite::Result<()> {
         self.guard().execute(
             "UPDATE outbound_deliveries SET inflight_since = ?1 WHERE id = ?2",
@@ -1391,6 +1411,14 @@ impl DeliveryStore {
 
     /// Replay choke point: row existence, durable policy and attempt stamp are
     /// atomic. This also fences in-memory claims retired by a replacement.
+    ///
+    /// A row that still carries a stamp from a previous attempt is an
+    /// *unsettled* attempt: the previous send may have crossed the transport
+    /// boundary but never reached settlement. Replaying it automatically would
+    /// risk a duplicate delivery, which the module's policy forbids — such
+    /// rows must be surfaced as `UnknownOutcome` for explicit operator
+    /// recovery instead. We therefore refuse to claim any row whose stamp is
+    /// already set, rather than overwriting it.
     pub(crate) fn begin_replay(&self, id: i64, channel_id: &str) -> rusqlite::Result<bool> {
         let failures = self
             .policy_failures
@@ -1404,8 +1432,13 @@ impl DeliveryStore {
         if Self::has_marker(&tx, channel_id)? {
             return Ok(false);
         }
+        // Only claim a row that has no residual stamp. A stamped row is an
+        // unsettled prior attempt; overwriting the stamp here would turn an
+        // ambiguous send into an automatic retry, violating the rule that
+        // ambiguous sends become `UnknownOutcome`, never silent re-sends.
         let changed = tx.execute(
-            "UPDATE outbound_deliveries SET inflight_since = ?1 WHERE id = ?2 AND channel_id = ?3",
+            "UPDATE outbound_deliveries SET inflight_since = ?1 \
+             WHERE id = ?2 AND channel_id = ?3 AND inflight_since IS NULL",
             params![now_secs(), id, channel_id],
         )?;
         tx.commit()?;
@@ -1667,11 +1700,13 @@ impl DeliveryStore {
 
     /// Most-recently dead-lettered deliveries, newest first, for troubleshooting
     /// (parity-plus over openclaw, which retains failed rows but exposes no
-    /// inspection path). Rows whose payload no longer deserializes are skipped.
+    /// inspection path). Oversize diagnostics project a content-free message;
+    /// other rows whose payload no longer deserializes are skipped.
     pub fn recent_dead_letters(&self, limit: usize) -> rusqlite::Result<Vec<DeadLetter>> {
         let conn = self.guard();
         let raw: Vec<(
             String,
+            Option<String>,
             String,
             i64,
             Option<String>,
@@ -1681,19 +1716,20 @@ impl DeliveryStore {
             bool,
         )> = {
             let mut stmt = conn.prepare(
-                "SELECT channel_id, payload, attempts, last_error, reason, created_at, died_at, retired_by_policy
+                "SELECT channel_id, conversation_id, payload, attempts, last_error, reason, created_at, died_at, retired_by_policy
                  FROM dead_letters ORDER BY died_at DESC LIMIT ?1",
             )?;
             let rows = stmt.query_map(params![limit as i64], |r| {
                 Ok((
                     r.get::<_, String>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, i64>(2)?,
-                    r.get::<_, Option<String>>(3)?,
+                    r.get::<_, Option<String>>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, i64>(3)?,
                     r.get::<_, Option<String>>(4)?,
-                    r.get::<_, i64>(5)?,
+                    r.get::<_, Option<String>>(5)?,
                     r.get::<_, i64>(6)?,
-                    r.get::<_, bool>(7)?,
+                    r.get::<_, i64>(7)?,
+                    r.get::<_, bool>(8)?,
                 ))
             })?;
             rows.collect::<rusqlite::Result<Vec<_>>>()?
@@ -1701,6 +1737,7 @@ impl DeliveryStore {
         let mut out = Vec::with_capacity(raw.len());
         for (
             channel_id,
+            conversation_id,
             payload,
             attempts,
             last_error,
@@ -1710,23 +1747,30 @@ impl DeliveryStore {
             retired_by_policy,
         ) in raw
         {
-            if let Ok(message) = serde_json::from_str::<OutboundMessage>(&payload) {
-                out.push(DeadLetter {
-                    channel_id,
-                    message,
-                    attempts: attempts.max(0) as u32,
-                    last_error: last_error.unwrap_or_default(),
-                    // Rows written before the column existed carry the DEFAULT
-                    // ('exhausted'), which is exactly what they were.
-                    reason: reason.as_deref().map_or(
-                        DeadLetterReason::Exhausted,
-                        DeadLetterReason::from_str_lossy,
-                    ),
-                    created_at,
-                    died_at,
-                    retired_by_policy,
-                });
-            }
+            // Pre-column rows default to exhausted. Oversize rows deliberately
+            // store diagnostics, not messages, and are never redrivable.
+            let reason = reason.as_deref().map_or(
+                DeadLetterReason::Exhausted,
+                DeadLetterReason::from_str_lossy,
+            );
+            let message = if reason == DeadLetterReason::PayloadTooLarge {
+                OutboundMessage::text(conversation_id.as_deref().unwrap_or_default(), "")
+            } else {
+                let Ok(message) = serde_json::from_str::<OutboundMessage>(&payload) else {
+                    continue;
+                };
+                message
+            };
+            out.push(DeadLetter {
+                channel_id,
+                message,
+                attempts: attempts.max(0) as u32,
+                last_error: last_error.unwrap_or_default(),
+                reason,
+                created_at,
+                died_at,
+                retired_by_policy,
+            });
         }
         Ok(out)
     }
@@ -3283,6 +3327,10 @@ mod tests {
         let dl = s.recent_dead_letters(10).unwrap();
         assert_eq!(dl.len(), 1, "but still visible to the operator");
         assert_eq!(dl[0].reason, DeadLetterReason::PayloadTooLarge);
+        assert_eq!(dl[0].message.conversation_id, big.conversation_id);
+        assert!(dl[0].message.text.is_empty());
+        assert!(dl[0].message.attachments.is_empty());
+        assert!(!format!("{:?}", dl[0]).contains(&"x".repeat(2000)));
         // Two questions, two answers. The old single assertion said
         // `!replay_safe()` with the message "redriving it would re-hit the cap"
         // — a true sentence attached to the wrong predicate, which is how the

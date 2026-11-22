@@ -1,0 +1,58 @@
+{
+  "memory_gate": {
+    "argv": [
+      "python3",
+      "qa/browser_live/check_memory.py",
+      "--required-bytes",
+      "4294967296"
+    ],
+    "cwd": "/Volumes/TBU4/Workspace/Aleph",
+    "env_overrides": {
+      "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+      "RUST_BACKTRACE": "1"
+    },
+    "exit_code": 0,
+    "timed_out": false,
+    "pid": 60712,
+    "cleanup_error": null,
+    "group_probe": null,
+    "unjoined_descendants": false,
+    "elapsed_seconds": 0.04310370801249519,
+    "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/hydration-progress-red-memory.stdout.log",
+    "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/hydration-progress-red-memory.stderr.log",
+    "output": "available_bytes=8434319360 required_bytes=4294967296 ALLOW\n"
+  },
+  "command": {
+    "argv": [
+      "cargo",
+      "test",
+      "-p",
+      "aleph-panel",
+      "--lib",
+      "--offline",
+      "--locked",
+      "--jobs",
+      "1",
+      "hydration_progress_tests"
+    ],
+    "cwd": "/Volumes/TBU4/Workspace/Aleph",
+    "env_overrides": {
+      "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+      "RUST_BACKTRACE": "1"
+    },
+    "exit_code": 101,
+    "timed_out": false,
+    "pid": 60756,
+    "cleanup_error": null,
+    "group_probe": null,
+    "unjoined_descendants": false,
+    "elapsed_seconds": 55.723160916997585,
+    "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/hydration-progress-red.stdout.log",
+    "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/hydration-progress-red.stderr.log",
+    "output": "\nrunning 3 tests\ntest components::chat_sidebar::hydration_progress_tests::unchanged_history_is_still_accepted ... ok\ntest components::chat_sidebar::hydration_progress_tests::delayed_history_estimate_cannot_replace_live_chunks_without_a_local_send ... FAILED\ntest components::chat_sidebar::hydration_progress_tests::delayed_reconnect_traces_cannot_replace_a_new_send_or_stream ... FAILED\n\nfailures:\n\n---- components::chat_sidebar::hydration_progress_tests::delayed_history_estimate_cannot_replace_live_chunks_without_a_local_send stdout ----\n\nthread 'components::chat_sidebar::hydration_progress_tests::delayed_history_estimate_cannot_replace_live_chunks_without_a_local_send' (16297632) panicked at interfaces/webchat/src/components/chat_sidebar.rs:126:9:\nassertion `left == right` failed\n  left: [ChatMessage { id: \"assistant-live-run\", role: \"assistant\", content: \"first \", attachments: [], tool_calls: [], is_streaming: true, is_intermediate: false, error: None, model_info: None, timestamp: Some(0), iteration: Some(1), is_final: false, text_finalized: false, agent_id: None, plan_archive: None, author_user_id: None }]\n right: [ChatMessage { id: \"assistant-live-run\", role: \"assistant\", content: \"first latest chunk\", attachments: [], tool_calls: [], is_streaming: true, is_intermediate: false, error: None, model_info: None, timestamp: Some(0), iteration: Some(1), is_final: false, text_finalized: false, agent_id: None, plan_archive: None, author_user_id: None }]\nstack backtrace:\n   0: __rustc::rust_begin_unwind\n             at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:679:5\n   1: core::panicking::panic_fmt\n             at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/panicking.rs:80:14\n   2: core::panicking::assert_failed_inner\n   3: core::panicking::assert_failed::<alloc::vec::Vec<aleph_panel::platform::wide::views::chat::state::ChatMessage>, alloc::vec::Vec<aleph_panel::platform::wide::views::chat::state::ChatMessage>>\n             at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/panicking.rs:407:5\n   4: aleph_panel::components::chat_sidebar::hydration_progress_tests::delayed_history_estimate_cannot_replace_live_chunks_without_a_local_send\n             at ./src/components/chat_sidebar.rs:126:9\n   5: aleph_panel::components::chat_sidebar::hydration_progress_tests::delayed_history_estimate_cannot_replace_live_chunks_without_a_local_send::{closure#0}\n             at ./src/components/chat_sidebar.rs:93:82\n   6: <aleph_panel::components::chat_sidebar::hydration_progress_tests::delayed_history_estimate_cannot_replace_live_chunks_without_a_local_send::{closure#0} as core::ops::function::FnOnce<()>>::call_once\n             at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/ops/function.rs:250:5\n   7: <fn() -> core::result::Result<(), alloc::string::String> as core::ops::function::FnOnce<()>>::call_once\n             at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/ops/function.rs:250:5\nnote: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.\n\n---- components::chat_sidebar::hydration_progress_tests::delayed_reconnect_traces_cannot_replace_a_new_send_or_stream stdout ----\n\nthread 'components::chat_sidebar::hydration_progress_tests::delayed_reconnect_traces_cannot_replace_a_new_send_or_stream' (16297633) panicked at interfaces/webchat/src/components/chat_sidebar.rs:85:9:\nassertion `left == right` failed\n  left: [ChatMessage { id: \"user-0\", role: \"user\", content: \"persisted row\", attachments: [], tool_calls: [], is_streaming: false, is_intermediate: false, error: None, model_info: None, timestamp: Some(0), iteration: None, is_final: false, text_finalized: false, agent_id: None, plan_archive: None, author_user_id: None }]\n right: [ChatMessage { id: \"user-0\", role: \"user\", content: \"persisted row\", attachments: [], tool_calls: [], is_streaming: false, is_intermediate: false, error: None, model_info: None, timestamp: Some(0), iteration: None, is_final: false, text_finalized: false, agent_id: None, plan_archive: None, author_user_id: None }, ChatMessage { id: \"user-1\", role: \"user\", content: \"new user bubble\", attachments: [], tool_calls: [], is_streaming: false, is_intermediate: false, error: None, model_info: None, timestamp: Some(0), iteration: None, is_final: false, text_finalized: false, agent_id: None, plan_archive: None, author_user_id: None }, ChatMessage { id: \"assistant-new-run\", role: \"assistant\", content: \"new streamed content\", attachments: [], tool_calls: [], is_streaming: true, is_intermediate: false, error: None, model_info: None, timestamp: Some(0), iteration: Some(1), is_final: false, text_finalized: false, agent_id: None, plan_archive: None, author_user_id: None }]\nstack backtrace:\n   0: __rustc::rust_begin_unwind\n             at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:679:5\n   1: core::panicking::panic_fmt\n             at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/panicking.rs:80:14\n   2: core::panicking::assert_failed_inner\n   3: core::panicking::assert_failed::<alloc::vec::Vec<aleph_panel::platform::wide::views::chat::state::ChatMessage>, alloc::vec::Vec<aleph_panel::platform::wide::views::chat::state::ChatMessage>>\n             at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/panicking.rs:407:5\n   4: aleph_panel::components::chat_sidebar::hydration_progress_tests::delayed_reconnect_traces_cannot_replace_a_new_send_or_stream\n             at ./src/components/chat_sidebar.rs:85:9\n   5: aleph_panel::components::chat_sidebar::hydration_progress_tests::delayed_reconnect_traces_cannot_replace_a_new_send_or_stream::{closure#0}\n             at ./src/components/chat_sidebar.rs:50:70\n   6: <aleph_panel::components::chat_sidebar::hydration_progress_tests::delayed_reconnect_traces_cannot_replace_a_new_send_or_stream::{closure#0} as core::ops::function::FnOnce<()>>::call_once\n             at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/ops/function.rs:250:5\n   7: <fn() -> core::result::Result<(), alloc::string::String> as core::ops::function::FnOnce<()>>::call_once\n             at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/ops/function.rs:250:5\nnote: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.\n\n\nfailures:\n    components::chat_sidebar::hydration_progress_tests::delayed_history_estimate_cannot_replace_live_chunks_without_a_local_send\n    components::chat_sidebar::hydration_progress_tests::delayed_reconnect_traces_cannot_replace_a_new_send_or_stream\n\ntest result: FAILED. 1 passed; 2 failed; 0 ignored; 0 measured; 1562 filtered out; finished in 0.07s\n\n   Compiling aleph-panel v0.2.0 (/Volumes/TBU4/Workspace/Aleph/interfaces/webchat)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 54.06s\n     Running unittests src/lib.rs (.phase9-target/debug/deps/aleph_panel-72e2fd442cb5e1fe)\nerror: test failed, to rerun pass `-p aleph-panel --lib`\n"
+  },
+  "source_sha256": "bfea1681b63124d48eb0131b842ef229680186c295c8a968e47ea74b6cd5a5fd",
+  "lock_sha256": "12300967333b45f8a0fa1f401cf13a559b5b8a881ee95550b1bbf1a8d42e21f5",
+  "phase": "deliberate regression RED",
+  "status": "FAIL"
+}

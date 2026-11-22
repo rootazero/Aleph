@@ -274,6 +274,10 @@ impl SessionMap {
         // 2. Incoming conversation: restore from its persistent background state into the singleton (keep the live entry, don't remove it).
         let incoming = self.ensure_background(conv);
         singleton.restore_from(incoming.capture_snapshot());
+        // A fresh background snapshot has no agent yet; metadata owns identity.
+        singleton
+            .agent_id
+            .set(self.meta(conv).map(|meta| meta.agent_id));
         // 3. Fill in order + update active.
         self.order.update(|o| {
             if !o.contains(&conv) {
@@ -372,14 +376,24 @@ impl SessionMap {
 
     /// Bind a run to a conversation: register route, running+1, backfill meta.session_key.
     ///
-    /// Idempotent on `run_id`: a second bind for an already-bound run is a
-    /// no-op. The routes table is the source of truth for "is this run
+    /// Idempotent on `run_id`: a second bind preserves route and count, but
+    /// may fill a previously unknown session key for the same conversation.
+    /// The routes table is the source of truth for "is this run
     /// bound"; the caller-side `route_lookup` guards in `events.rs` and
     /// `chat_sidebar.rs` remain as defence-in-depth but are no longer the
     /// only thing preventing a phantom `running` residue from a duplicate
     /// bind (T2.8).
     pub fn bind_run(&self, run_id: &str, conv: ConvId, session_key: Option<&str>) {
-        if self.route.with_untracked(|m| m.contains_key(run_id)) {
+        if let Some(bound) = self.route_lookup(run_id) {
+            if bound == conv
+                && self
+                    .meta(conv)
+                    .is_some_and(|meta| meta.session_key.is_none())
+            {
+                if let Some(key) = session_key {
+                    self.set_session_key(conv, key);
+                }
+            }
             return;
         }
         self.route.update(|m| {
@@ -529,8 +543,8 @@ impl SessionMap {
         doomed
     }
 
-    /// The session this client is showing that the server reports as running
-    /// while this client holds no route for it — a turn to **re-join**.
+    /// The active session to hydrate after reconnect. Idle sessions need a fresh
+    /// transcript; live sessions need it when this client holds no run route.
     ///
     /// The mirror of [`Self::settle_runs_absent_from`], and the half that was
     /// missing. A reconnect repaired only the negative direction: routes the
@@ -558,8 +572,10 @@ impl SessionMap {
     pub fn rejoin_target(&self, live: &HashSet<String>) -> Option<String> {
         let conv = self.active_conv()?;
         let key = self.meta(conv)?.session_key?;
+        // An idle conversation also needs a fresh transcript: it may have
+        // completed while this socket was disconnected.
         if !live.contains(&key) {
-            return None;
+            return Some(key);
         }
         // Already following a run in this conversation: the route is the thing
         // being re-established, so holding one IS the answer.
@@ -639,10 +655,11 @@ mod tests {
             let a = map.open_conversation("agent-a", "A");
             let b = map.open_conversation("agent-b", "B");
 
-            // Activate A, stamp its agent_id on the singleton, then switch to B.
+            // A new conversation projects its canonical agent before any send.
             map.activate(singleton, a);
-            singleton.agent_id.set(Some("agent-a".into()));
+            assert_eq!(singleton.agent_id.get_untracked(), Some("agent-a".into()));
             map.activate(singleton, b);
+            assert_eq!(singleton.agent_id.get_untracked(), Some("agent-b".into()));
 
             // A is now background (present in live), B is active (absent from live).
             assert_eq!(map.active.get_untracked(), Some(b));
@@ -657,7 +674,7 @@ mod tests {
                 singleton.agent_id.get_untracked()
             );
 
-            // Switch back to A restores its stamped agent_id into the singleton.
+            // Switching back restores A's canonical agent.
             map.activate(singleton, a);
             assert_eq!(singleton.agent_id.get_untracked(), Some("agent-a".into()));
         });
@@ -1043,18 +1060,19 @@ mod tests {
         });
     }
 
-    /// `rejoin_target` is the positive half of the reconnect repair: the run
-    /// the server IS driving that this client cannot route.
+    /// Reconnect hydrates idle sessions and reattaches unfollowed live runs.
     #[test]
-    fn rejoin_target_names_only_a_live_session_this_client_cannot_route() {
+    fn rejoin_target_restores_idle_or_unfollowed_live_sessions() {
         with_owner(|| {
             let map = SessionMap::new();
             let singleton = ChatState::new();
             let conv = map.adopt_session(singleton, "agent-a", "sess-a", || "A".into());
 
-            // Server says nothing is running -> nothing to join (the other
-            // direction is `settle_runs_absent_from`'s).
-            assert_eq!(map.rejoin_target(&HashSet::new()), None);
+            // Idle sessions still need the history snapshot after reconnect.
+            assert_eq!(
+                map.rejoin_target(&HashSet::new()).as_deref(),
+                Some("sess-a")
+            );
 
             let live = HashSet::from(["sess-a".to_string()]);
             assert_eq!(map.rejoin_target(&live).as_deref(), Some("sess-a"));

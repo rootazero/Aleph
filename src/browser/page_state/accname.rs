@@ -164,7 +164,10 @@ impl<'a> FrameIndex<'a> {
         let mut out = Vec::new();
         let mut cursor = index;
         for _ in 0..self.frame.nodes.len() {
-            let Some(parent) = self.frame.nodes[cursor].parent else {
+            let Some(node) = self.frame.nodes.get(cursor) else {
+                break;
+            };
+            let Some(parent) = node.parent else {
                 break;
             };
             if parent >= cursor {

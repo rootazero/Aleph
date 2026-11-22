@@ -1,0 +1,73 @@
+{
+  "version": 1,
+  "kind": "phase10_webview_delivery_witness",
+  "date": "2026-11-18",
+  "status": "DELIVERY_PASS_WHOLE_RUN_NOT_ACCEPTED",
+  "scope": {
+    "purpose": "Prove the narrow QA-only Rust-to-existing-external-WebView page-control path without changing the default WASM asset.",
+    "purpose_zh": "证明 QA-only Rust 到现有外部 WebView 的窄页面控制路径，不修改默认 WASM 资产。",
+    "production_ingress": false,
+    "typed_os_event_sink": "BLOCKED"
+  },
+  "source": {
+    "nsh_revision": "f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1",
+    "shell_source": "desktop/nsh-shell/src/main.rs",
+    "qa_driver": "qa/nsh_panel_driver.js",
+    "raw_runtime_document": ".phase10-evidence/rust-webview-witness-output/nsh-0.json",
+    "raw_native_stdout": ".phase10-evidence/rust-webview-witness-output/nsh-0.stdout.log",
+    "launcher_receipt": ".phase10-evidence/rust-webview-witness.json"
+  },
+  "build": {
+    "status": "PASS",
+    "command_policy": "memory gate; cargo --offline --locked --jobs 1",
+    "target_dir": ".phase10-target",
+    "aleph_nsh_shell_sha256": "97d61d50cd57aa75d297efa70e846fdaa6207ff93a2f7cb278a9e29f5699d73d",
+    "aleph_server_sha256": "679fde6dae6f53d7e9e05a8b2f73a718b319b43309a7f7838ebdbdfb7b8aabd2"
+  },
+  "delivery": {
+    "status": "PASS",
+    "path": "Rust ElementRef::post_message -> WebKit window message -> existing QA window.nsh.postMessage -> native QA on_message",
+    "path_zh": "Rust ElementRef::post_message -> WebKit window message -> 现有 QA window.nsh.postMessage -> native QA on_message",
+    "qa_run_id": "16d4b0b8c2f845cf8fd960733c27c8d2",
+    "nonce_verified": true,
+    "event": {
+      "kind": "rust-webview-message",
+      "browser_at_ms": 81,
+      "native_at_ms": 754.889,
+      "at_ms": 755.575,
+      "payload": {
+        "source": "nsh-shell",
+        "sequence": 1
+      }
+    },
+    "raw_stdout_sha256": "b10dc06fe954770277238ff04b3445644a876b9a867997a2b10fcc9d40ccc60b",
+    "raw_runtime_document_sha256": "f086d4048a11c1e11f08fb0c9ee4d3f1f1bf878600f58e4145c3d968cb7c28df",
+    "gateway_cleanup_sha256": "7d41e910a80f4d62923174bfac0b38f22ee69241fe15f913624f2c8ac503359e"
+  },
+  "whole_run": {
+    "status": "NOT_ACCEPTED",
+    "launcher_status": "NOT_CLOSED",
+    "reason": "The immutable Phase9 runtime schema rejected the new Phase10 event kind 'rust-webview-message'. The same raw run also emitted the pre-existing QA error 'Error: Production history replay did not apply' and reported resource_scope.complete=false.",
+    "reason_zh": "不可变 Phase9 runtime schema 拒绝了 Phase10 新事件 kind 'rust-webview-message'；同一原始运行还产生既有 QA 错误 'Error: Production history replay did not apply'，并报告 resource_scope.complete=false。",
+    "schema_was_modified": false,
+    "gateway_cleanup": {
+      "forced": false,
+      "fixture_removed": true,
+      "panel_assets_unchanged": true
+    }
+  },
+  "limits": [
+    "This is a QA-only page-control witness, not production Panel ingress.",
+    "ElementRef::post_message has no reviewed queue, delivery-error, ordering, or teardown contract.",
+    "No typed native OS-event sink was implemented or proven.",
+    "The sender is scheduled from the component body; no duplicate was observed in this run, but the one-shot QA receiver does not prove sender idempotence under rerender.",
+    "No G1-G7 acceptance claim is made."
+  ],
+  "limits_zh": [
+    "这是 QA-only 页面控制 witness，不是生产 Panel ingress。",
+    "ElementRef::post_message 尚无经过评审的队列、投递错误、顺序或 teardown 契约。",
+    "未实现或证明 typed native OS-event sink。",
+    "发送动作从组件体调度；本次未观察到重复，但一次性 QA receiver 不能证明重渲染下发送端幂等。",
+    "未声称 G1-G7 验收通过。"
+  ]
+}

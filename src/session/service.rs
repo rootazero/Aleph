@@ -85,18 +85,15 @@ pub trait SessionService: Send + Sync + 'static {
     /// (test doubles override it too).
     async fn emit_batch(
         &self,
-        id: &SessionId,
-        events: Vec<SessionEvent>,
-        retire: Option<Retire>,
+        _id: &SessionId,
+        _events: Vec<SessionEvent>,
+        _retire: Option<Retire>,
     ) -> Result<Vec<EventSeq>, SessionError> {
         // Only the in-process actor service can emit atomically. Reading-mode
         // impls (and any future impl that splits storage from sequencing)
         // return this same "not supported" shape, so the params are unused on
-        // purpose — suppress the lint with leading underscores rather than
-        // suppress `unused_variables` project-wide.
-        let _id = id;
-        let _events = events;
-        let _retire = retire;
+        // purpose — suppress the lint with leading underscores in the signature
+        // rather than suppress `unused_variables` project-wide.
         Err(SessionError::Other(
             "this SessionService cannot append atomically (only InProcessActorSessionService can)"
                 .into(),
@@ -212,7 +209,7 @@ pub fn decline_global_session_service(because: &'static str) {
 /// Fetch the process-wide `SessionService`, if one has been installed.
 ///
 /// ⚠️ `None` here says nothing about whether boot reached this slot — that is
-/// the whole point of the round. Ask `global_session_service_slot``().outcome()`
+/// the whole point of the round. Ask `global_session_service_slot().outcome()`
 /// for that; never infer it from this function.
 #[inline]
 pub fn global_session_service() -> Option<Arc<dyn SessionService>> {

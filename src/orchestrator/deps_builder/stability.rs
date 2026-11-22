@@ -9,7 +9,7 @@ use crate::harness::StallConfig;
 ///
 /// Returned as a struct (not tuple) so consumers can name fields and future
 /// additions don't break callers.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct StabilityTriple {
     pub stall_config: Option<StallConfig>,
     pub consecutive_failure_cap: Option<usize>,
@@ -19,11 +19,7 @@ pub struct StabilityTriple {
 /// Build the P0 rescue triple from `[stability]`. Each field is independent.
 pub fn build_stability_triple(config: &Config) -> StabilityTriple {
     let Some(s) = config.stability.as_ref() else {
-        return StabilityTriple {
-            stall_config: None,
-            consecutive_failure_cap: None,
-            turn_timeout: None,
-        };
+        return StabilityTriple::default();
     };
     let stall_config = s
         .stall_timeout_secs

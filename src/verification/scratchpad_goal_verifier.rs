@@ -120,15 +120,13 @@ fn veto_reason(snapshot: &ScratchpadSnapshot) -> String {
     // Same principle `plan_carry.rs` was built on: "丢掉已完成项会让模型手里的每个
     // 下标都错位" (FEATURE_LOCATOR §3.13 ⑥). This was the one model-facing
     // surface still dropping them.
-    let pending: Vec<(usize, &crate::memory::scratchpad::PlanItem)> = snapshot
+    let pending_count = snapshot.items.iter().filter(|i| !i.is_done()).count();
+    let objective = snapshot.objective.as_deref().unwrap_or("");
+    let listed = snapshot
         .items
         .iter()
         .enumerate()
         .filter(|(_, i)| !i.is_done())
-        .collect();
-    let objective = snapshot.objective.as_deref().unwrap_or("");
-    let listed = pending
-        .iter()
         .take(MAX_LISTED)
         .map(|(idx, i)| {
             if i.is_in_progress() {
@@ -139,7 +137,7 @@ fn veto_reason(snapshot: &ScratchpadSnapshot) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    let overflow = pending.len().saturating_sub(MAX_LISTED);
+    let overflow = pending_count.saturating_sub(MAX_LISTED);
     let more_note = if overflow > 0 {
         format!("\n…and {overflow} more.")
     } else {
@@ -154,7 +152,7 @@ fn veto_reason(snapshot: &ScratchpadSnapshot) -> String {
          step with `scratchpad(action='complete_item', item_index=N)`, using \
          the bracketed index. If the objective is already fully achieved, \
          call `scratchpad(action='clear', …)` to finish.",
-        n = pending.len(),
+        n = pending_count,
     )
 }
 

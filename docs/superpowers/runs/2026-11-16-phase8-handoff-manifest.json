@@ -1,0 +1,67 @@
+{
+  "format": 1,
+  "baseline_commit": "e08af3789dbf194f02f08461c215eb3c7701557f",
+  "scope": "Frozen Phase8 source, dependency and reducer inputs before local main integration; documentation review is recorded separately.",
+  "files": {
+    "Cargo.lock": {
+      "sha256": "d6f2e99dd2df5868b15f2940d74cf8845ea7c26d3ff69819ce42422180bb1cdb",
+      "bytes": 433419
+    },
+    "desktop/nsh-shell/Cargo.toml": {
+      "sha256": "bb919eda6b1b6fdba704caf97074038648b57b70c6b66afeee5f966eb3f8e1c3",
+      "bytes": 1035
+    },
+    "desktop/nsh-shell/src/components/message_list.rs": {
+      "sha256": "8494cf631f3401537ead2d33bb448618abd2b715469628a621e70a99090771b2",
+      "bytes": 5224
+    },
+    "desktop/nsh-shell/src/connection.rs": {
+      "sha256": "15de7865cd2970f15a85c0e3e568799bddbfe48c7d4dd971b3c0005653af4463",
+      "bytes": 32987
+    },
+    "desktop/nsh-shell/src/main.rs": {
+      "sha256": "c6e7e6e8afd5a5ec9bd2820897f5009b74ba16ef09903fe1c28882c2aa62aaec",
+      "bytes": 10988
+    },
+    "desktop/nsh-shell/src/session.rs": {
+      "sha256": "82db5b817d4f6654cebc348b2f412d6ea5dbdd346277ed7a0edccb99bd7e6284",
+      "bytes": 16235
+    },
+    "desktop/nsh-shell/tests/nsh_v05_window_compat.rs": {
+      "sha256": "5d4ec1b98424e83ccfb16c709150c35002f689ad0f6cd5d01643d0f5c68f2ed7",
+      "bytes": 1101
+    },
+    "qa/nsh_panel_parity.md": {
+      "sha256": "cfb97c34ecf37861be37d6c4512d653f3f210432adb2180b6a7cc0108e2c065c",
+      "bytes": 3681
+    },
+    "qa/nsh_panel_parity.py": {
+      "sha256": "906d4b85d0de7dc1356e937389e50d668de086bdfb69965448001f7070ca60e0",
+      "bytes": 6442
+    },
+    "qa/nsh_panel_parity.schema.json": {
+      "sha256": "d744be77f1eaddda0bdbbc9140f8834d3eaedcaf2972cdb549e00f80eb6fff7d",
+      "bytes": 2848
+    },
+    "src/capability/ui_surface_tests.rs": {
+      "sha256": "9d419e48fc993e869903f05bfda3d1e335db2b701c173dd7488f512f56d7e9aa",
+      "bytes": 31819
+    },
+    "src/capability/zahir_facade.rs": {
+      "sha256": "7e6364b431c78ef1e4768bea804107f0e99315ec7e9e8169450ae754ed635a1b",
+      "bytes": 125042
+    },
+    "src/gateway/capability_events_tests.rs": {
+      "sha256": "cb225cb4c64b37d276975bc6aa2659a70ebc3dc0a5099a6704bc1ca8167986a2",
+      "bytes": 71461
+    },
+    "src/gateway/capability_terminal_tests.rs": {
+      "sha256": "f869f00e47ee934b14076dd5db467d2ca6271da912f5447d0c4cd39e2c5d00fe",
+      "bytes": 48222
+    },
+    "src/runtimes/bootstrap.rs": {
+      "sha256": "61e93658ebf56767bf2cb43300568bb924ee9ccdac6b132be03eb3e78e2a8350",
+      "bytes": 23244
+    }
+  }
+}

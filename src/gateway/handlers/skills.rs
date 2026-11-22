@@ -57,6 +57,25 @@ pub async fn handle_update(request: JsonRpcRequest) -> JsonRpcResponse {
         );
     }
 
+    // Parse every parameter before mutating anything: an invalid scope must not
+    // leave the skill half-updated.
+    let scope = match params.scope.as_deref().map(str::to_lowercase) {
+        None => None,
+        Some(s) => match s.as_str() {
+            "system" => Some(PromptScope::System),
+            "tool" => Some(PromptScope::Tool),
+            "standalone" => Some(PromptScope::Standalone),
+            "disabled" => Some(PromptScope::Disabled),
+            _ => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    "Invalid scope value".to_string(),
+                )
+            }
+        },
+    };
+
     ensure_shared_system_initialized().await;
 
     let skill_id = SkillId::new(&params.skill_id);
@@ -75,20 +94,7 @@ pub async fn handle_update(request: JsonRpcRequest) -> JsonRpcResponse {
         }
     }
 
-    if let Some(scope_str) = &params.scope {
-        let scope = match scope_str.to_lowercase().as_str() {
-            "system" => PromptScope::System,
-            "tool" => PromptScope::Tool,
-            "standalone" => PromptScope::Standalone,
-            "disabled" => PromptScope::Disabled,
-            _ => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    "Invalid scope value".to_string(),
-                )
-            }
-        };
+    if let Some(scope) = scope {
         if let Err(e) = system
             .update_config(&skill_id, SkillConfigUpdate::SetScope(scope))
             .await

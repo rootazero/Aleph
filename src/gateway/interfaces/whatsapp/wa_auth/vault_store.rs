@@ -31,9 +31,10 @@ pub struct WaAuthManager {
 
 impl WaAuthManager {
     pub fn new(account_id: impl Into<String>) -> Self {
-        let path = crate::secrets::vault::SecretVault::default_path();
-        let vault = SecretVault::open_or_backup(path);
+        let account_id = account_id.into();
         let crypto = crate::gateway::security::SharedTokenManager::global_crypto();
+        let path = crate::secrets::vault::SecretVault::default_path();
+        let vault = tokio::task::block_in_place(|| SecretVault::open_or_backup(path));
         Self::with_vault_and_crypto(vault, account_id, crypto)
     }
 
@@ -60,7 +61,6 @@ impl WaAuthManager {
     pub fn save(&self, data: &WaAuthData) -> Result<(), WaAuthError> {
         let bytes =
             bincode::serialize(data).map_err(|e| WaAuthError::Serialization(e.to_string()))?;
-
         // Fail closed: WhatsApp auth credentials include Signal session state
         // and signed pre-keys. Writing them as plaintext bincode to the vault
         // would silently expose them to any attacker who can read the file.
@@ -74,8 +74,10 @@ impl WaAuthManager {
                     .into(),
             )
         })?;
+        // Version the lossless encoding; legacy lossy UTF-8 entries need re-authentication.
+        let encoded = format!("hex-v1:{}", hex::encode(bytes));
         let encrypted = crypto
-            .encrypt(&String::from_utf8_lossy(&bytes))
+            .encrypt(&encoded)
             .map_err(|e| WaAuthError::Serialization(format!("Encryption failed: {e}")))?;
         let entry = crate::secrets::types::EncryptedEntry {
             ciphertext: encrypted.ciphertext,
@@ -120,8 +122,18 @@ impl WaAuthManager {
             .decrypt(&entry.ciphertext, &entry.nonce, &entry.salt)
             .map_err(|e| WaAuthError::Serialization(format!("Decryption failed: {e}")))?;
 
-        let data: WaAuthData = bincode::deserialize(&decrypted.into_bytes())
-            .map_err(|e| WaAuthError::Serialization(e.to_string()))?;
+        let encoded = decrypted.strip_prefix("hex-v1:").ok_or_else(|| {
+            WaAuthError::Serialization(
+                "Legacy WhatsApp auth encoding is not recoverable; please re-authenticate".into(),
+            )
+        })?;
+        let bytes = hex::decode(encoded).map_err(|e| {
+            WaAuthError::Serialization(format!(
+                "Invalid WhatsApp auth encoding: {e}; please re-authenticate"
+            ))
+        })?;
+        let data: WaAuthData =
+            bincode::deserialize(&bytes).map_err(|e| WaAuthError::Serialization(e.to_string()))?;
         Ok(data)
     }
 
@@ -159,15 +171,14 @@ mod tests {
         let auth = WaAuthManager::with_vault_and_crypto(vault, "test_account", Some(crypto));
 
         let data = WaAuthData {
-            creds_blob: vec![1, 2, 3],
-            keys_blob: vec![4, 5, 6],
-            app_state_sync: vec![7, 8, 9],
+            creds_blob: (0..=255).collect(),
+            keys_blob: vec![0xff, 0x80, 0, 0xfe],
+            app_state_sync: vec![0xf0, 0x28, 0x8c, 0x28],
         };
 
         auth.save(&data).unwrap();
         let loaded = auth.load().unwrap();
-        assert_eq!(loaded.creds_blob, data.creds_blob);
-        assert_eq!(loaded.keys_blob, data.keys_blob);
+        assert_eq!(loaded, data);
     }
 
     #[test]

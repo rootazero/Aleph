@@ -28,7 +28,12 @@ use crate::mcp::types::McpTool;
 use crate::sync_primitives::Arc;
 
 fn strip_server_prefix<'a>(s: &'a str, server_name: &str) -> &'a str {
-    s.strip_prefix(&format!("{server_name}:")).unwrap_or(s)
+    if let Some(rest) = s.strip_prefix(server_name) {
+        if let Some(inner) = rest.strip_prefix(':') {
+            return inner;
+        }
+    }
+    s
 }
 
 /// Default timeout for the entire MCP server connection process
@@ -1078,18 +1083,11 @@ impl McpServerConnection {
 
     /// Check if this connection provides a specific tool
     pub async fn has_tool(&self, name: &str) -> bool {
-        // Check with and without namespace prefix
-        let full_name = if name.starts_with(&format!("{}:", self.name)) {
-            name.to_string()
-        } else {
-            format!("{}:{}", self.name, name)
-        };
-
         self.cached_tools
             .read()
             .await
             .iter()
-            .any(|t| t.name == full_name || t.name == name)
+            .any(|t| t.name == name || strip_server_prefix(&t.name, &self.name) == name)
     }
 
     /// Answer the input requests a server attached to an interim result.

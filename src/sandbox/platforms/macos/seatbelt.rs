@@ -459,11 +459,18 @@ pub struct SeatbeltDriver {
 /// Escape a string for safe inclusion in SBPL (Sandbox Profile Language).
 /// SBPL uses double quotes for string literals; backslash and quote must be escaped.
 fn escape_sbpl(s: &str) -> String {
-    s.replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n")
-        .replace('\r', "\\r")
-        .replace('\t', "\\t")
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 /// Recognise the four forms in which a caller may pass an IP-literal host:

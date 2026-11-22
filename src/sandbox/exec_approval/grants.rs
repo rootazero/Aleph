@@ -205,7 +205,14 @@ impl GrantStore {
     #[must_use]
     pub fn with_path(path: impl Into<PathBuf>) -> Self {
         let path = path.into();
-        let (entries, stamp) = Self::read_file(&path);
+        let (entries, stamp) = Self::read_file(&path).unwrap_or_else(|e| {
+            warn!(
+                error = %e,
+                path = %path.display(),
+                "approval-grants registry could not be read at startup — starting with no grants"
+            );
+            (BTreeMap::new(), file_stamp(&path))
+        });
         Self {
             session: Mutex::new(SessionInner::default()),
             persistent: RwLock::new(PersistentCache { entries, stamp }),
@@ -405,19 +412,28 @@ impl GrantStore {
         guard.entries.contains_key(fingerprint)
     }
 
-    fn read_file(path: &Path) -> (BTreeMap<String, Grant>, FileStamp) {
+    /// Read the persisted registry.
+    ///
+    /// A missing file is an empty registry (that is what "no grant yet" looks
+    /// like on disk). Every other read failure is an ERROR, not an empty
+    /// registry: an unreadable file is not the same fact as "there are no
+    /// grants", and a caller that cannot tell them apart writes an empty
+    /// registry over grants it never read.
+    fn read_file(path: &Path) -> io::Result<(BTreeMap<String, Grant>, FileStamp)> {
         let stamp = file_stamp(path);
-        let Ok(raw) = std::fs::read(path) else {
-            return (BTreeMap::new(), stamp);
+        let raw = match std::fs::read(path) {
+            Ok(raw) => raw,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok((BTreeMap::new(), stamp)),
+            Err(e) => return Err(e),
         };
         match serde_json::from_slice::<GrantsDoc>(&raw) {
-            Ok(doc) if doc.version <= DOC_VERSION => (
+            Ok(doc) if doc.version <= DOC_VERSION => Ok((
                 doc.grants
                     .into_iter()
                     .map(|g| (g.fingerprint.clone(), g))
                     .collect(),
                 stamp,
-            ),
+            )),
             Ok(doc) => {
                 warn!(
                     version = doc.version,
@@ -425,7 +441,7 @@ impl GrantStore {
                     "approval-grants registry is from a newer version — treating as empty \
                      (every gated call asks again)"
                 );
-                (BTreeMap::new(), stamp)
+                Ok((BTreeMap::new(), stamp))
             }
             Err(e) => {
                 warn!(
@@ -433,7 +449,7 @@ impl GrantStore {
                     path = %path.display(),
                     "corrupt approval-grants registry — treating as empty"
                 );
-                (BTreeMap::new(), stamp)
+                Ok((BTreeMap::new(), stamp))
             }
         }
     }
@@ -449,7 +465,20 @@ impl GrantStore {
                 return;
             }
         }
-        let (entries, stamp) = Self::read_file(&self.path);
+        let (entries, stamp) = match Self::read_file(&self.path) {
+            Ok((entries, stamp)) => (entries, stamp),
+            Err(e) => {
+                // Keep the cached grants and the cached stamp: the file is
+                // temporarily unreadable, not emptied. The stamp is NOT
+                // advanced, so the next call tries again.
+                warn!(
+                    error = %e,
+                    path = %self.path.display(),
+                    "approval-grants registry could not be read — keeping the cached grants"
+                );
+                return;
+            }
+        };
         let mut guard = self.persistent.write().unwrap_or_else(|e| e.into_inner());
         guard.entries = entries;
         guard.stamp = stamp;
@@ -478,7 +507,7 @@ impl GrantStore {
             .open(&lock_path)?;
         lock.lock_exclusive()?;
 
-        let (mut entries, _) = Self::read_file(&self.path);
+        let (mut entries, _) = Self::read_file(&self.path)?;
         let result = (|| {
             if f(&mut entries) {
                 let doc = GrantsDoc {
@@ -494,10 +523,19 @@ impl GrantStore {
             Ok(())
         })();
 
-        {
+        if result.is_ok() {
             let mut guard = self.persistent.write().unwrap_or_else(|e| e.into_inner());
             guard.entries = entries;
             guard.stamp = file_stamp(&self.path);
+        } else {
+            // The cache must not claim what the disk never accepted. A grant
+            // that was not written — or a removal that never landed — would
+            // otherwise be honoured (or dropped) in this process until the
+            // next restart, while the file on disk says something else.
+            warn!(
+                path = %self.path.display(),
+                "approval-grants registry write failed — the cache still shows the previous state"
+            );
         }
         let _ = FileExt::unlock(&lock);
         result
@@ -839,6 +877,45 @@ mod tests {
         assert_eq!(
             s.granted_within(Some("s1"), "fp-a", true),
             Some(GrantScope::Always)
+        );
+    }
+
+    /// An unreadable registry is not an empty registry. If a read error were
+    /// flattened into "no grants", the next write would overwrite the file
+    /// with an empty one and every persistent grant would be gone.
+    #[test]
+    fn an_unreadable_registry_is_never_overwritten() {
+        let dir = TempDir::new().expect("tempdir");
+        // A directory reads as an error (EISDIR) on every platform this repo
+        // builds for, unlike a permission bit, which root ignores.
+        let store = GrantStore::with_path(dir.path().to_path_buf());
+        assert!(
+            store.remember_always(grant("fp-a")).is_err(),
+            "a registry that cannot be read must not be written over"
+        );
+        assert!(dir.path().is_dir(), "the path must still be a directory");
+    }
+
+    /// The cache must not claim what the disk never accepted: a grant that was
+    /// never written must not be honoured in this process until the next
+    /// restart, while the file on disk says something else.
+    #[test]
+    fn a_failed_write_does_not_publish_the_cache() {
+        let dir = TempDir::new().expect("tempdir");
+        let path = dir.path().join("approval-grants.json");
+        std::fs::write(&path, b"{\"version\":1,\"grants\":[]}").expect("seed");
+        // The atomic write goes to `<path stem>.json.tmp`; a directory there
+        // makes the write fail while the read still succeeds.
+        std::fs::create_dir(dir.path().join("approval-grants.json.tmp"))
+            .expect("block the tmp write");
+        let store = GrantStore::with_path(path);
+        assert!(
+            store.remember_always(grant("fp-a")).is_err(),
+            "the write failure must reach the caller"
+        );
+        assert!(
+            !store.persistent_contains("fp-a"),
+            "a grant the disk never accepted must not be cached"
         );
     }
 }

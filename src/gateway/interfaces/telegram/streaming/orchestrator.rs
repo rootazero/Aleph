@@ -1,4 +1,6 @@
-use crate::gateway::channel::{ChannelResult, InboundMessage};
+#[cfg(test)]
+use crate::gateway::channel::InboundMessage;
+use crate::gateway::channel::{ChannelError, ChannelResult};
 use crate::gateway::event_emitter::StreamEvent;
 use crate::gateway::interfaces::telegram::config_v2::StreamingOptions;
 use crate::gateway::interfaces::telegram::delivery::TelegramDelivery;
@@ -92,9 +94,8 @@ impl StreamOrchestrator {
     }
 
     /// Main event loop. Receives `StreamEvents` and routes them to lanes.
-    pub async fn run(mut self, initial_inbound: InboundMessage) -> ChannelResult<()> {
+    pub async fn run(mut self, inbound_message_id: Option<i64>) -> ChannelResult<()> {
         let answer_lane = self.get_lane(LaneId::Answer);
-        let inbound_message_id: Option<i64> = initial_inbound.id.as_str().parse().ok();
 
         while let Some(event) = self.event_rx.recv().await {
             tracing::debug!("StreamOrchestrator received event: {:?}", event);
@@ -160,28 +161,59 @@ impl StreamOrchestrator {
                     // pure-reasoning side question therefore settles unmarked,
                     // which is the same thing that arm already promises for
                     // every other rewrite.
+                    // Settle the reasoning lane FIRST so any pending reasoning
+                    // content (a final delta that never reached the first
+                    // preview threshold, or a tail merged by debounce) is
+                    // delivered before the answer lane is finalized:
+                    // `finalize_streamed` settles on everything the lane
+                    // accumulated, previewed or not. It is a no-op when the
+                    // reasoning lane is disabled or empty.
+                    let reasoning_lane = self.get_lane(LaneId::Reasoning);
+                    let reasoning_result =
+                        if self.reasoning_lane && reasoning_lane.has_content().await {
+                            reasoning_lane.finalize_streamed().await.map(|_| ())
+                        } else {
+                            Ok(())
+                        };
                     let raw = summary.final_response.as_deref().unwrap_or("");
                     let outcome = match crate::gateway::reply_emitter::sanitize_final_response(raw)
                     {
-                        Some(text) if self.side_answer => {
-                            answer_lane
-                                .finalize(&crate::gateway::btw::format_side_answer(&text))
-                                .await
+                        Some(text) if self.side_answer => answer_lane
+                            .finalize(&crate::gateway::btw::format_side_answer(&text))
+                            .await
+                            .map(|_| ()),
+                        Some(text) => answer_lane.finalize(&text).await.map(|_| ()),
+                        None if answer_lane.has_content().await => {
+                            answer_lane.finalize_streamed().await.map(|_| ())
                         }
-                        Some(text) => answer_lane.finalize(&text).await,
-                        None => answer_lane.finalize_streamed().await,
+                        None => Ok(()),
                     };
-                    if let Err(e) = outcome {
-                        tracing::warn!("Failed to finalize answer lane: {}", e);
+                    // Propagate the FIRST delivery failure so the caller can
+                    // observe it: if the final Telegram edit failed, surface
+                    // that error instead of silently succeeding. The
+                    // reasoning-lane settle is best-effort display cleanup and
+                    // must not mask an answer-lane delivery failure.
+                    match (outcome, reasoning_result) {
+                        (Err(e), _) => return Err(e),
+                        (Ok(()), Err(e)) => return Err(e),
+                        (Ok(()), Ok(())) => {}
                     }
                     break;
                 }
                 StreamEvent::RunError { error, .. } => {
                     tracing::warn!("Run error: {}", error);
                     let error_msg = format!("Error: {error}");
-                    let _ = answer_lane.write_chunk(&error_msg).await;
-                    let _ = answer_lane.finalize(&error_msg).await;
-                    break;
+                    // Best-effort: attempt to deliver the error notice, but do
+                    // not let a delivery failure on the error path mask the
+                    // original run error — return the run error itself.
+                    if let Err(e) = answer_lane.finalize(&error_msg).await {
+                        tracing::warn!("Failed to deliver error notice to Telegram: {}", e);
+                    }
+                    // The turn failed: report it to the caller instead of
+                    // ending the loop successfully, so the caller can decide
+                    // what to surface. The error notice itself is best-effort
+                    // and must not mask the run error.
+                    return Err(ChannelError::SendFailed(format!("run failed: {error}")));
                 }
                 _ => {
                     tracing::debug!("Ignoring event in orchestrator: {:?}", event);
@@ -274,7 +306,7 @@ mod tests {
             raw: None,
         };
 
-        tokio::spawn(orchestrator.run(inbound));
+        tokio::spawn(orchestrator.run(inbound.id.as_str().parse().ok()));
 
         tx.send(StreamEvent::ResponseChunk {
             run_id: "r1".to_string(),
@@ -349,7 +381,7 @@ mod tests {
             raw: None,
         };
 
-        tokio::spawn(orchestrator.run(inbound));
+        tokio::spawn(orchestrator.run(inbound.id.as_str().parse().ok()));
 
         tx.send(StreamEvent::ResponseChunk {
             run_id: "r1".to_string(),
@@ -431,7 +463,7 @@ mod tests {
                 is_group: false,
                 raw: None,
             };
-            let run = tokio::spawn(orchestrator.run(inbound));
+            let run = tokio::spawn(orchestrator.run(inbound.id.as_str().parse().ok()));
             // Under `min_initial_chars`, so the lane accumulates without a
             // network send.
             tx.send(StreamEvent::Reasoning {

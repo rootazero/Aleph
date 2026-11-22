@@ -121,7 +121,7 @@ impl DreamStage for NoteDecayStage {
         // the same per-note query itself). This is what feeds `access_weight`:
         // a recalled-but-rarely-edited note now scores on its recall recency
         // instead of a hardcoded 0.0.
-        let mut last_hits: std::collections::HashMap<String, i64> =
+        let mut last_hits: std::collections::HashMap<&str, i64> =
             std::collections::HashMap::new();
         for note in &ctx.notes {
             if let Ok(Some(t)) = ctx
@@ -130,8 +130,7 @@ impl DreamStage for NoteDecayStage {
                 .recall_signals_last_hit(&ctx.agent_id, &note.path)
                 .await
             {
-                // rust-doctor-disable-next-line excessive-clone
-                last_hits.insert(note.path.clone(), t);
+                last_hits.insert(note.path.as_str(), t);
             }
         }
 
@@ -189,7 +188,7 @@ impl DreamStage for NoteDecayStage {
             }
 
             // --- Compute activity score ---
-            let last_recalled = last_hits.get(&note.path).copied();
+            let last_recalled = last_hits.get(note.path.as_str()).copied();
             let score = compute_score(last_recalled, note.updated_at, now, incoming_count);
 
             // --- Determine archive threshold ---
@@ -341,20 +340,26 @@ impl DreamStage for NoteDecayStage {
         // we don't borrow `ctx.notes` while later calling `&mut ctx.indexer`.
         // Protected-type categories are dropped here (cheap, no file read); the
         // per-note permanent flag is checked after parsing below.
-        let candidates: Vec<(String, String, String)> = ctx
+        let candidate_indices: Vec<usize> = ctx
             .notes
             .iter()
-            .filter(|n| !archived_paths.contains(n.path.as_str()))
-            .filter(|n| !self.category_protected(&n.category))
-            .filter_map(|n| {
-                let (cat, fname) = n.path.split_once('/')?;
-                // rust-doctor-disable-next-line excessive-clone
-                Some((n.path.clone(), cat.to_string(), fname.to_string()))
+            .enumerate()
+            .filter(|(_, n)| !archived_paths.contains(n.path.as_str()))
+            .filter(|(_, n)| !self.category_protected(&n.category))
+            .filter_map(|(idx, n)| {
+                n.path.split_once('/')?;
+                Some(idx)
             })
             .collect();
 
-        for (note_path, category, filename) in candidates {
-            let last_hit = last_hits.get(&note_path).copied();
+        for idx in candidate_indices {
+            let note_entry = &ctx.notes[idx];
+            let note_path = note_entry.path.as_str();
+            let (category, filename) = match note_path.split_once('/') {
+                Some(pair) => pair,
+                None => continue,
+            };
+            let last_hit = last_hits.get(note_path).copied();
 
             let days = match last_hit {
                 Some(t) => ((now_ts - t).max(0) as f32) / 86400.0_f32,
@@ -365,7 +370,7 @@ impl DreamStage for NoteDecayStage {
                 .indexer
                 .memory_dir()
                 .join(&ctx.agent_id)
-                .join(&category)
+                .join(category)
                 .join(format!("{filename}.md"));
 
             let content = match tokio::fs::read_to_string(&file_path).await {
@@ -373,7 +378,7 @@ impl DreamStage for NoteDecayStage {
                 Err(_) => continue,
             };
 
-            let note = match KnowledgeNote::from_markdown(&filename, &content) {
+            let note = match KnowledgeNote::from_markdown(filename, &content) {
                 Ok(n) => n,
                 Err(e) => {
                     tracing::debug!(path = %note_path, error = %e, "NoteDecay: parse failed, skipping");
@@ -404,7 +409,7 @@ impl DreamStage for NoteDecayStage {
                 let incoming = ctx
                     .indexer
                     .store()
-                    .get_incoming_links_any(&note_path, &filename, &ctx.agent_id)
+                    .get_incoming_links_any(note_path, filename, &ctx.agent_id)
                     .await
                     .map_or(0, |links| links.len());
                 if incoming < 3 {
@@ -413,7 +418,7 @@ impl DreamStage for NoteDecayStage {
                         .memory_dir()
                         .join(&ctx.agent_id)
                         .join("archive")
-                        .join(&category);
+                        .join(category);
                     let dest_path = archive_dir.join(format!("{filename}.md"));
                     let moved = tokio::fs::create_dir_all(&archive_dir).await.is_ok()
                         && tokio::fs::rename(&file_path, &dest_path).await.is_ok();
@@ -421,9 +426,9 @@ impl DreamStage for NoteDecayStage {
                         let _ = ctx
                             .indexer
                             .store()
-                            .remove_note_index(&note_path, &ctx.agent_id)
+                            .remove_note_index(note_path, &ctx.agent_id)
                             .await;
-                        ctx.note_contents.remove(note_path.as_str());
+                        ctx.note_contents.remove(note_path);
                         notes_archived += 1;
                         tracing::info!(path = %note_path, "NoteDecay: archived stale (NoteDrift-flagged) note");
                         continue;
@@ -457,7 +462,7 @@ impl DreamStage for NoteDecayStage {
 
             if let Err(e) = ctx
                 .indexer
-                .write_note_raw(&ctx.agent_id, &category, &filename, &patched)
+                .write_note_raw(&ctx.agent_id, category, filename, &patched)
                 .await
             {
                 tracing::warn!(path = %note_path, error = %e, "NoteDecay: write_note_raw failed");
@@ -466,7 +471,7 @@ impl DreamStage for NoteDecayStage {
 
             // Evict the cached body so downstream stages re-read the updated
             // markdown if they need it.
-            ctx.note_contents.remove(note_path.as_str());
+            ctx.note_contents.remove(note_path);
             tracing::debug!(
                 path = %note_path,
                 old_conf,

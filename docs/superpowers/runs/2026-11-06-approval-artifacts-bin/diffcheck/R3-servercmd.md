@@ -1,0 +1,62 @@
+# R3 — server commands / start path / native QA gateway / CI (diff 148ba09f5..HEAD)
+
+Base: `148ba09f5` (pre-fix) → `HEAD` (merged fixes B6-001..B6-004, B7 F-01..F-05, B8-01..B8-07,
+B9-01..B9-03, B10-001, B11-01..B11-04, B12-P1-01..P3-03, B14 F-01..F-11).
+Scope: `commands/{bootstrap_token,hooks,identity,node,plugins}.rs`, `commands/start/**`,
+`src/gateway/voice/streaming/relay.rs`, `src/bin/aleph-panel-native-qa-gateway/main.rs`,
+`.github/workflows/aleph-core-ci.yml`. Read-only static review; no cargo/test execution.
+
+## DC-01 [P1] Dynamic `handlers_mut().register(...)` loop breaks the gateway method-census test
+- location: src/bin/aleph-server/commands/start/builder/handlers/settings.rs:988-1001 (census: src/gateway/method_census.rs:606-613, failing test: src/gateway/method_census.rs:666-670)
+- kind: test-break
+- finding: The new "ACP verbs always answer" branch registers its ten method names through a `for method in [...]` loop whose receiver is `server.handlers_mut()` and whose first argument is not a literal. The census sweep walks every `src/**/*.rs` file and pushes into `unknown` for exactly this shape (`dynamic_rpc && rel != "src/gateway/handlers/mod.rs"`, the file that owns the phase-1 placeholder loops) — `the_scanner_classifies_every_receiver_it_meets` asserts `unknown.is_empty()`, so `cargo test -p alephcore` now fails with "settings.rs: dynamic .register( into an RPC registry …". The sibling fallback at settings.rs:1085-1086 is safe because its method name is a literal, and the drift test stays green because the `register_handler!` calls at settings.rs:923-976 still put the ten names into the sweep.
+- suggested-fix: Replace the loop with ten literal registrations (`server.handlers_mut().register("acp.list", unavailable);` …) — `unavailable` is a non-capturing (Copy) closure, so it can be passed repeatedly, and the census then classifies each name instead of rejecting the call site.
+
+## DC-02 [P1] `stopped` message now reports `fixtureClosed: false`, breaking the documented contract and the QA harness
+- location: src/bin/aleph-panel-native-qa-gateway/main.rs:822-823 (`fixture_closed: false`, was `true` at 148ba09f5)
+- kind: api-break
+- finding: The helper's `stopped` message flipped `fixtureClosed` from `true` to `false`, but that flag is a published protocol fact, not a local detail: the plan that defines the contract requires `stopped(listenerClosed:true, fixtureClosed:true)` (docs/superpowers/plans/2026-11-02-panel-native-runtime-completion-implementation.md:143) and the harness consumes it as a hard assertion — qa/native_ipc/native_project_gateway_smoke_test.mjs:242 (`assert.equal(stopped.fixtureClosed, true)`) now fails against the real helper, qa/native_ipc/native_project_native_io.mjs:312 makes `stopped` false, and qa/native_ipc/native_project_cleanup.mjs:28 fails the `helper_stopped` cleanup step (qa/native_ipc/native_project_native_io.mjs:727 then reports `helper_stop_failed`). The helper performs no fixture teardown in either revision, so `false` is neither true nor newly earned.
+- suggested-fix: Either release the fixture for real before emitting `stopped` (revoke the fixture's device tokens / drop the QA root) and keep `fixture_closed: true`, or change the flag and its consumers (protocol validator, native_io, cleanup, smoke test, plan) in one change.
+
+## DC-03 [P2] Shutdown ignores the server join result and always reports `listenerClosed: true`
+- location: src/bin/aleph-panel-native-qa-gateway/main.rs:806-812 (and the EOF path at 838-841)
+- kind: swallowed-error
+- finding: The base propagated the shutdown outcome (`server.await??` — a JoinError or io error killed the helper with a non-zero exit). HEAD replaces it with `tokio::time::timeout(5s, server).await.is_err()` and discards the result: a timed-out shutdown detaches the still-running server task, and a failed one is invisible, yet the helper then asserts the unverified fact `listener_closed: true` (main.rs:822). The harness reads that fact as proof the listener is gone (qa/native_ipc/native_project_native_io.mjs:313, cleanup.mjs:28), so a hung shutdown is reported as a clean stop.
+- suggested-fix: Capture the outcome (`Ok(Ok(()))` → closed) and set `listener_closed` from it (`false` on timeout or join error); keep the 5 s deadline so the helper can still exit, and report the failure instead of asserting it away.
+
+## DC-04 [P2] 16 KiB line bound is checked after the whole line has been buffered
+- location: src/bin/aleph-panel-native-qa-gateway/main.rs:442-456 (bound at 445), reader at 432
+- kind: partial-fix
+- finding: The stdin reader is `BufReader::new(tokio::io::stdin()).lines()`; `next_line()` has no size cap, so the entire line is read into memory before `line.len() > 16384` rejects it. The rejection itself is correct and stream-safe (the oversized line is answered with `bad_command` and the loop continues, so the framed-JSON stream does not desync), but the failure mode the bound was meant to remove — an unbounded line consuming unbounded memory in the helper — still occurs; only the protocol-level rejection was added. The protocol constant it mirrors is `MAX_LINE_BYTES = 16_384` (qa/native_ipc/native_project_protocol.mjs:6).
+- suggested-fix: Read the line with an explicit bound (`read_until(b'\n', &mut buf)` into a capped buffer, or `AsyncBufReadExt::take`/a manual cap) and error out as soon as the cap is exceeded, so the oversized line is never fully materialised.
+
+## DC-05 [P3] `release_response` ack uses a status outside the declared ack vocabulary
+- location: src/bin/aleph-panel-native-qa-gateway/main.rs:676-690 (status emitted at 682 and 689)
+- kind: api-break
+- finding: The release branch now reports `"released_before_park"` for the held-but-never-parked and idle/no-op cases, but the ack validator allows only `isOneOf(["ok"])(message.status)` (qa/native_ipc/native_project_protocol.mjs:83) — the new value is outside the published vocabulary. Nothing fails today only because `isAck` is never called by the harness, so the drift is latent.
+- suggested-fix: Keep `status: "ok"` and carry the distinction in a separate field, or add `"released_before_park"` to the protocol's ack vocabulary (protocol.mjs:83) and to any consumer that switches on the status.
+
+## DC-06 [P3] `runtime_channel_id` still leaves same-type instances on an unread key
+- location: src/bin/aleph-server/commands/start/builder/subsystems.rs:1315-1349 (used at 1058-1062 and 1159-1163)
+- kind: partial-fix
+- finding: The helper is right that the executor looks a policy up by the id the live channel reports (the channel type for factories that hardcode it), and the registry is the right authority to ask. But the resolution collapses on the type: two configured instances of a type whose factory hardcodes its runtime id (discord, slack, feishu …) both resolve to that type id, so the second policy registration overwrites the first and the per-instance distinction is lost; and when a type has two or more *distinct* registered ids, the `_ => instance_id` arm falls back to the config instance id — exactly the key nothing reads, i.e. the original silent-default failure the fix set out to remove.
+- suggested-fix: Make the ambiguity explicit: when more than one live channel of the type is registered, log a warning that the policies cannot be separated and register under the runtime id only when it is unambiguous; otherwise thread the instance id through `ChannelFactory::create` as the comment says.
+
+## DC-07 [P3] `revoke_exact` masks every non-ambiguity error as `already_revoked`
+- location: src/bin/aleph-panel-native-qa-gateway/main.rs:726-731 (catch-all at 730)
+- kind: swallowed-error
+- finding: `resolve_device` can fail with `unknown_device` (no binding, main.rs:937), `device_not_found` (955) or `ambiguous_device` (956), and the base already produced a typed protocol error for `device_not_found` while letting the other two kill the helper with `return Err(error)` (the base's `"device_not_found"` arm never matched `unknown_device`). HEAD fixes the crash but routes every remaining error to `already_revoked`, so a genuine internal failure (e.g. `list_panel_devices()` failing inside the store) is reported to the harness as "this device was already revoked", and the cleanup verdict `deviceRevoked` is then wrong.
+- suggested-fix: Map `unknown_device` to `not_found` (already in the vocabulary, protocol.mjs:91), keep `ambiguous_device` → `bad_state`, and route anything else to `internal` instead of `already_revoked`.
+
+## DC-08 [P3] New CI step re-checks the whole crate on all three OS runners while clippy still skips the gated bin
+- location: .github/workflows/aleph-core-ci.yml:422-423 (lint job matrix at 351-356, clippy step at 392-393)
+- kind: over-reach
+- finding: The step `cargo check -p alephcore --bin aleph-panel-native-qa-gateway --features native-qa -j1` has real value — the `native-qa` feature gates lib code (src/gateway/mod.rs:43-44, src/gateway/server/mod.rs:482/582/650/761/922, src/gateway/server/connection/dispatch.rs:304-317) and the bin itself (Cargo.toml:170, 415-417) that no other CI job compiles. But it runs in the matrix lint job on Linux, macOS and Windows, while the adjacent step it was added after is deliberately Linux-only for a measured memory reason (11.5 GB per rustc on the lib test target), and the lint leg (`cargo clippy -p alephcore -p aleph-desktop -- -D warnings`, no `--features native-qa`) still never lints the feature-gated code or the bin.
+- suggested-fix: Keep the compile check but scope it like its sibling (`if: runner.os == 'Linux'`) unless cross-platform coverage of the Windows branches is required, and add `--features native-qa` to the clippy step so the gated code is linted rather than only type-checked.
+
+## Summary
+- hunks-reviewed: 98 (bootstrap_token 4, hooks 11, identity 4, node 5, plugins 8, start/mod 4, start/helpers 4, start/runtime_warmup 4, builder/subsystems 5, builder/agent_init 26, builder/handlers/settings 4, gateway/voice/streaming/relay 4, native-qa-gateway 14, aleph-core-ci.yml 1)
+- concerns: 8
+- verdict: concerns-found
+- verified-clean (no section written): bootstrap_token.rs (store/HMAC errors now propagate, `Ok(None)` still exits 64 on a first run), identity.rs (fail-closed on HMAC mismatch, single-open export read with a post-read length check closes the TOCTOU), node.rs (the `std::sync::Mutex` is released before the await; persistence moved to `spawn_blocking`), plugins.rs (errors return `Err` instead of `process::exit`, exit code stays 1), hooks.rs (the fresh current-thread runtime is safe because the hooks command is dispatched at main.rs:206-208, before the server runtime exists at 262-285; 64 KiB cap + drain, 30 s/300 s deadlines, `kill_on_drop`), start/helpers.rs (`load_default` returns `Ok(default)` when no config file exists, so the new hard failure only fires on an invalid config; unknown session-store backends are rejected), start/runtime_warmup.rs (blocking work moved off the executor; the 30 s probe timeout detaches a still-running probe — the leaked blocking task/child is a residual, not a new failure mode), start/builder/agent_init/* (`expect` on a fresh registry replaced by `?`; four background tasks tracked and aborted on the error paths), start/mod.rs (the security-store fallback, the pairing-store /tmp and in-memory fallbacks are now hard errors; provider map is name-sorted with first-wins duplicate logging; the A2A "unavailable" reason is logged in daemon mode too), builder/subsystems.rs (the `cfg.read().await` guard is now dropped before the loop — no lock held across await), builder/handlers/settings.rs (the ACP/voice verbs are registered unconditionally and answer with `SERVICE_UNAVAILABLE`; the loop is the only census violation, see DC-01), relay.rs (the per-owner cap is live — the mint runs inside the dispatch scope that sets `CALLER_USER` — no await under the registry lock, and eviction drops the only sender so the backend closes).
+- not verified: no cargo/clippy/test/build was executed (forbidden by the brief), so DC-01 and DC-02 are derived from reading the census source and the harness assertions, not from a run. The second fix wave (commands/start/mod.rs, builder/subsystems.rs, builder/handlers/settings.rs, commands/update.rs, commands/daemon.rs, src/approval/node_requester.rs) is in flight and not merged; no findings are reported for those files.

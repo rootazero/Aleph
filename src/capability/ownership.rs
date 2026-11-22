@@ -10,9 +10,9 @@
 
 use crate::acp::manager::SessionKey;
 use crate::capability::descriptor::CapabilityId;
+use crate::sync_primitives::{Mutex, PoisonError};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
-use std::sync::Mutex;
 use tokio::sync::broadcast;
 
 /// Per-binding owner generation.
@@ -45,7 +45,7 @@ pub enum LifetimeScope {
 /// canonical run-id type yet (the only `RunId` in-tree is a deserialization
 /// params struct in `gateway::handlers::agent`). Align this to an existing
 /// type the moment one is introduced — see the module-level note.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
 pub struct RunId(pub String);
 
 /// A task identifier.
@@ -53,11 +53,11 @@ pub struct RunId(pub String);
 /// Same reasoning as [`RunId`]: no canonical task-id type exists yet (the
 /// domain-layer `TaskId` lives behind `#[cfg(test)]`), so this is a plain
 /// newtype until one is introduced.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
 pub struct TaskId(pub String);
 
 /// Who owns a capability binding.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub enum OwnerRef {
     /// Owned by the runtime itself (process-global, unowned-by-any-scope).
     Runtime,
@@ -77,7 +77,7 @@ pub enum OwnerRef {
 /// module must not depend on [`crate::capability::descriptor::CapabilityKind`]
 /// (that would make `descriptor` ↔ `ownership` a cycle), and the strings are
 /// compared against the kind/name spellings at describe time, not here.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, serde::Serialize)]
 pub struct VisibilityScope {
     /// The principal / agent allowed. `None` = unrestricted.
     pub principal: Option<String>,
@@ -271,17 +271,36 @@ struct BindingKey {
     visibility: VisibilityScope,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RegistrationToken {
+    capability: CapabilityId,
+    visibility: VisibilityScope,
+    owner: OwnerRef,
+    lifetime: LifetimeScope,
+    generation: OwnerGeneration,
+    binding_nonce: u64,
+}
+
 #[derive(Debug)]
 struct Binding {
     owner: OwnerRef,
     lifetime: LifetimeScope,
     generation: OwnerGeneration,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the binding incarnation fences exact rollback after a terminal-registration failure"
+        )
+    )]
+    binding_nonce: u64,
     claims: HashMap<FencingToken, (OwnerGeneration, OwnerRef)>,
 }
 
 #[derive(Debug)]
 struct OwnershipInner {
     generation_nonce: u64,
+    binding_nonce: u64,
     fencing_nonce: u64,
     revoked: HashSet<CapabilityId>,
     disposed: HashSet<LifetimeScope>,
@@ -307,6 +326,7 @@ impl OwnershipTree {
         Self {
             inner: Mutex::new(OwnershipInner {
                 generation_nonce: 0,
+                binding_nonce: 0,
                 fencing_nonce: 0,
                 revoked: HashSet::new(),
                 disposed: HashSet::new(),
@@ -329,7 +349,7 @@ impl OwnershipTree {
     pub fn subscribe_changes(&self) -> broadcast::Receiver<OwnershipChange> {
         self.inner
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .changes
             .subscribe()
     }
@@ -364,6 +384,14 @@ impl OwnershipTree {
         Ok(())
     }
 
+    fn next_binding_nonce(inner: &mut OwnershipInner) -> Result<u64, RegisterError> {
+        let nonce = inner.binding_nonce;
+        inner.binding_nonce = nonce
+            .checked_add(1)
+            .ok_or(RegisterError::GenerationExhausted)?;
+        Ok(nonce)
+    }
+
     /// Register or replace an ownership binding.
     ///
     /// The owner generation is the TREE EPOCH, not a per-binding counter: a
@@ -385,10 +413,7 @@ impl OwnershipTree {
         lifetime: LifetimeScope,
         visibility: VisibilityScope,
     ) -> Result<(), RegisterError> {
-        let mut inner = self
-            .inner
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
         Self::guard(&inner, &capability, lifetime)?;
         let key = Self::key(&capability, &visibility);
         if let Some(binding) = inner.bindings.get(&key) {
@@ -400,12 +425,14 @@ impl OwnershipTree {
             return Err(RegisterError::GenerationExhausted);
         }
         let generation = OwnerGeneration(inner.generation_nonce);
+        let binding_nonce = Self::next_binding_nonce(&mut inner)?;
         inner.bindings.insert(
             key,
             Binding {
                 owner,
                 lifetime,
                 generation,
+                binding_nonce,
                 claims: HashMap::new(),
             },
         );
@@ -421,33 +448,108 @@ impl OwnershipTree {
         lifetime: LifetimeScope,
         visibility: VisibilityScope,
     ) -> Result<(), RegisterError> {
-        let mut inner = self
-            .inner
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        Self::guard(&inner, &capability, lifetime)?;
-        let key = Self::key(&capability, &visibility);
-        if inner.bindings.contains_key(&key) {
-            return Ok(());
+        self.register_if_absent_with_token(capability, owner, lifetime, visibility)
+            .map(|_| ())
+    }
+
+    /// Insert only when absent and return an incarnation token for exact rollback.
+    pub(crate) fn register_if_absent_with_token(
+        &self,
+        capability: CapabilityId,
+        owner: OwnerRef,
+        lifetime: LifetimeScope,
+        visibility: VisibilityScope,
+    ) -> Result<Option<RegistrationToken>, RegisterError> {
+        self.register_if_absent_batch(std::iter::once((capability, owner, lifetime, visibility)))
+            .map(|mut tokens| tokens.pop())
+    }
+
+    /// Atomically insert every absent binding after validating every refusal gate.
+    /// No caller can observe a partial multi-capability registration.
+    pub(crate) fn register_if_absent_batch(
+        &self,
+        registrations: impl IntoIterator<
+            Item = (CapabilityId, OwnerRef, LifetimeScope, VisibilityScope),
+        >,
+    ) -> Result<Vec<RegistrationToken>, RegisterError> {
+        let registrations: Vec<_> = registrations.into_iter().collect();
+        let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut pending = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for (capability, owner, lifetime, visibility) in &registrations {
+            Self::guard(&inner, capability, *lifetime)?;
+            let key = Self::key(capability, visibility);
+            if inner.bindings.contains_key(&key) || !seen.insert(key) {
+                continue;
+            }
+            pending.push((
+                capability.clone(),
+                owner.clone(),
+                *lifetime,
+                visibility.clone(),
+            ));
         }
-        if inner.generation_nonce == u64::MAX {
+        if inner.generation_nonce == u64::MAX && !pending.is_empty() {
+            return Err(RegisterError::GenerationExhausted);
+        }
+        let missing = pending.len() as u64;
+        if inner.binding_nonce.checked_add(missing).is_none() {
             return Err(RegisterError::GenerationExhausted);
         }
         let generation = OwnerGeneration(inner.generation_nonce);
-        inner.bindings.entry(key).or_insert_with(|| Binding {
-            owner,
-            lifetime,
-            generation,
-            claims: HashMap::new(),
+        let mut tokens = Vec::with_capacity(pending.len());
+        for (capability, owner, lifetime, visibility) in pending {
+            let binding_nonce = inner.binding_nonce;
+            inner.binding_nonce += 1;
+            inner.bindings.insert(
+                Self::key(&capability, &visibility),
+                Binding {
+                    owner: owner.clone(),
+                    lifetime,
+                    generation,
+                    binding_nonce,
+                    claims: HashMap::new(),
+                },
+            );
+            tokens.push(RegistrationToken {
+                capability,
+                visibility,
+                owner,
+                lifetime,
+                generation,
+                binding_nonce,
+            });
+        }
+        Ok(tokens)
+    }
+
+    /// Remove one binding only when the exact registration incarnation remains
+    /// unclaimed and unrotated. Claims, replacement, and rotation all fail safe.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "preserves the exact-registration rollback invariant for terminal publication failures"
+        )
+    )]
+    pub(crate) fn rollback_if_matches(&self, token: &RegistrationToken) -> bool {
+        let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        let key = Self::key(&token.capability, &token.visibility);
+        let matches = inner.bindings.get(&key).is_some_and(|binding| {
+            binding.owner == token.owner
+                && binding.lifetime == token.lifetime
+                && binding.generation == token.generation
+                && binding.binding_nonce == token.binding_nonce
+                && binding.claims.is_empty()
         });
-        Ok(())
+        if matches {
+            inner.bindings.remove(&key);
+        }
+        matches
     }
 
     pub fn resolve(&self, capability: &CapabilityId, visibility: &VisibilityScope) -> Option<()> {
-        let inner = self
-            .inner
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
         let key = Self::key(capability, visibility);
         inner.bindings.get(&key).map(|_| ())
     }
@@ -468,12 +570,17 @@ impl OwnershipTree {
         capability: &CapabilityId,
         visibility: &VisibilityScope,
     ) -> Option<OwnerGeneration> {
-        let inner = self
-            .inner
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
         let key = Self::key(capability, visibility);
         inner.bindings.get(&key).map(|binding| binding.generation)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn exhaust_generation_for_test(&self) {
+        self.inner
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .generation_nonce = u64::MAX;
     }
 
     /// Read the owner of one `(CapabilityId, VisibilityScope)` binding.
@@ -488,10 +595,7 @@ impl OwnershipTree {
         capability: &CapabilityId,
         visibility: &VisibilityScope,
     ) -> Option<OwnerRef> {
-        let inner = self
-            .inner
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
         let key = Self::key(capability, visibility);
         inner
             .bindings
@@ -520,10 +624,7 @@ impl OwnershipTree {
         lifetime: &LifetimeScope,
         commit: impl FnOnce() -> R,
     ) -> Result<R, BindingValidationError> {
-        let inner = self
-            .inner
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
         Self::validate_binding(&inner, capability, visibility, expected, owner, *lifetime)?;
         Ok(commit())
     }
@@ -538,10 +639,7 @@ impl OwnershipTree {
         if captures.is_empty() {
             return Err(BindingValidationError::MissingBinding);
         }
-        let inner = self
-            .inner
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
         for capture in captures {
             Self::validate_binding(
                 &inner,
@@ -588,10 +686,7 @@ impl OwnershipTree {
     /// Invalidate only one capability's bindings across all visibility scopes.
     /// Revoked ids and disposed lifetimes remain terminal.
     pub fn rotate_capability(&self, id: &CapabilityId) -> Result<(), OwnershipError> {
-        let mut inner = self
-            .inner
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
         let next = inner
             .generation_nonce
             .checked_add(1)
@@ -625,10 +720,7 @@ impl OwnershipTree {
         capabilities: impl IntoIterator<Item = CapabilityId>,
         visibility: &VisibilityScope,
     ) -> HashMap<CapabilityId, OwnerGeneration> {
-        let inner = self
-            .inner
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
         capabilities
             .into_iter()
             .filter_map(|capability| {
@@ -648,10 +740,7 @@ impl OwnershipTree {
         owner: OwnerRef,
         request_id: String,
     ) -> Option<EffectClaim> {
-        let mut inner = self
-            .inner
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
         if inner.revoked.contains(capability) {
             return None;
         }
@@ -682,10 +771,7 @@ impl OwnershipTree {
         capability: &CapabilityId,
         visibility: &VisibilityScope,
     ) -> ClaimState {
-        let inner = self
-            .inner
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
         let Some(binding) = inner.bindings.get(&Self::key(capability, visibility)) else {
             return ClaimState::Unknown;
         };
@@ -705,26 +791,17 @@ impl OwnershipTree {
     }
 
     pub fn is_revoked(&self, capability: &CapabilityId) -> bool {
-        self.inner
-            .lock()
-            .expect("ownership mutex poisoned")
-            .revoked
-            .contains(capability)
+        let inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        inner.revoked.contains(capability)
     }
 
     pub fn is_disposed(&self, scope: LifetimeScope) -> bool {
-        let inner = self
-            .inner
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
         Self::lifetime_disposed(&inner, scope)
     }
 
     pub fn bump(&self, scope: LifetimeScope) -> Result<OwnerGeneration, OwnershipError> {
-        let mut inner = self
-            .inner
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
         let next_nonce = inner
             .generation_nonce
             .checked_add(1)
@@ -752,10 +829,7 @@ impl OwnershipTree {
     /// tombstone was created. Use [`revoke_bound`](Self::revoke_bound) when an
     /// unbound id must remain registerable.
     pub fn revoke(&self, capability: &CapabilityId) -> bool {
-        let mut inner = self
-            .inner
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
         Self::revoke_locked(&mut inner, capability)
     }
 
@@ -770,23 +844,31 @@ impl OwnershipTree {
     /// An existing binding is revoked with the identical irreversible
     /// transition as [`revoke`](Self::revoke).
     pub fn revoke_bound(&self, capability: &CapabilityId) -> BoundRevoke {
-        let mut inner = self
-            .inner
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.revoke_bound_with_receipt(capability).0
+    }
+
+    /// Factual removal receipt from the SAME mutation critical section.
+    /// Bindings are not source incarnations or human audience authority.
+    pub(crate) fn revoke_bound_with_receipt(
+        &self,
+        capability: &CapabilityId,
+    ) -> (BoundRevoke, Vec<CapturedBinding>) {
+        let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
         if inner.revoked.contains(capability) {
-            return BoundRevoke::AlreadyRevoked;
+            return (BoundRevoke::AlreadyRevoked, Vec::new());
         }
-        if !inner
+        let bindings = inner
             .bindings
-            .keys()
-            .any(|key| &key.capability == capability)
-        {
-            return BoundRevoke::NotBound;
+            .iter()
+            .filter(|(key, _)| &key.capability == capability)
+            .map(|(key, binding)| Self::captured_binding(key, binding))
+            .collect::<Vec<_>>();
+        if bindings.is_empty() {
+            return (BoundRevoke::NotBound, bindings);
         }
         let removed = Self::revoke_locked(&mut inner, capability);
         debug_assert!(removed, "a bound capability must lose its binding");
-        BoundRevoke::Revoked
+        (BoundRevoke::Revoked, bindings)
     }
 
     fn revoke_locked(inner: &mut OwnershipInner, capability: &CapabilityId) -> bool {
@@ -811,23 +893,40 @@ impl OwnershipTree {
     /// Disposing `Runtime` removes every binding and permanently blocks all
     /// later registration in this tree.
     pub fn dispose(&self, scope: LifetimeScope) -> bool {
-        let mut inner = self
-            .inner
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let before = inner.bindings.len();
-        inner
-            .bindings
-            .retain(|_, binding| rank(binding.lifetime) > rank(scope));
+        !self.dispose_with_receipt(scope).is_empty()
+    }
+
+    fn captured_binding(key: &BindingKey, binding: &Binding) -> CapturedBinding {
+        CapturedBinding {
+            capability: key.capability.clone(),
+            visibility: key.visibility.clone(),
+            generation: binding.generation,
+            owner: binding.owner.clone(),
+            lifetime: binding.lifetime,
+        }
+    }
+
+    /// Return precisely the facts removed by this dispose, including replacements
+    /// that won before its lock. Empty Runtime dispose still creates a tombstone.
+    pub(crate) fn dispose_with_receipt(&self, scope: LifetimeScope) -> Vec<CapturedBinding> {
+        let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut removed = Vec::new();
+        inner.bindings.retain(|key, binding| {
+            if rank(binding.lifetime) > rank(scope) {
+                return true;
+            }
+            removed.push(Self::captured_binding(key, binding));
+            false
+        });
         let new_tombstone = inner.disposed.insert(scope);
-        let bindings_released = before != inner.bindings.len();
+        let bindings_released = !removed.is_empty();
         if new_tombstone || bindings_released {
             // Emit on a real state transition: a binding was released, or a
             // fresh tombstone was inserted (empty-scope dispose). A duplicate
             // dispose on an already-tombstoned scope emits nothing.
             let _ = inner.changes.send(OwnershipChange::Disposed { scope });
         }
-        bindings_released
+        removed
     }
 }
 
@@ -865,6 +964,11 @@ mod tests {
     //!    subsequent claims; dispose wipes a lifetime and everything below it.
 
     use super::*;
+    // `std::cmp::Ordering` reaches this module through the `use super::*` glob.
+    // The atomic ordering imported here shadows it; this module only uses the
+    // atomic one, and the explicit import keeps the glob from deciding which
+    // `Ordering` a bare name means.
+    use crate::sync_primitives::{mpsc, AtomicUsize, Barrier, Ordering};
 
     fn cap_id(name: &str) -> CapabilityId {
         CapabilityId {
@@ -881,6 +985,86 @@ mod tests {
         VisibilityScope {
             workspace: Some(workspace.to_string()),
             ..VisibilityScope::default()
+        }
+    }
+
+    #[test]
+    fn mutation_receipts_preserve_public_tombstone_and_idempotence_semantics() {
+        let tree = OwnershipTree::new();
+        let id = cap_id("receipt");
+        assert_eq!(
+            tree.revoke_bound_with_receipt(&id),
+            (BoundRevoke::NotBound, vec![])
+        );
+        assert!(!tree.is_revoked(&id));
+        tree.register(
+            id.clone(),
+            OwnerRef::Runtime,
+            LifetimeScope::Runtime,
+            full_vis(),
+        )
+        .unwrap();
+        tree.register(
+            id.clone(),
+            OwnerRef::Task(TaskId("task".into())),
+            LifetimeScope::Task,
+            restricted_vis("private"),
+        )
+        .unwrap();
+        let (outcome, removed) = tree.revoke_bound_with_receipt(&id);
+        assert_eq!(outcome, BoundRevoke::Revoked);
+        assert_eq!(removed.len(), 2);
+        assert!(removed.iter().any(|binding| binding.owner
+            == OwnerRef::Task(TaskId("task".into()))
+            && binding.visibility == restricted_vis("private")));
+        assert_eq!(
+            tree.revoke_bound_with_receipt(&id),
+            (BoundRevoke::AlreadyRevoked, vec![])
+        );
+        assert_eq!(tree.revoke_bound(&id), BoundRevoke::AlreadyRevoked);
+        assert!(tree.dispose_with_receipt(LifetimeScope::Runtime).is_empty());
+        assert!(tree.is_disposed(LifetimeScope::Runtime));
+        assert!(!tree.dispose(LifetimeScope::Runtime));
+        assert_eq!(
+            tree.register(
+                cap_id("late"),
+                OwnerRef::Runtime,
+                LifetimeScope::Runtime,
+                full_vis()
+            ),
+            Err(RegisterError::Disposed)
+        );
+    }
+
+    #[test]
+    fn dispose_receipt_tracks_the_actual_concurrent_replacement() {
+        for _ in 0..32 {
+            let tree = std::sync::Arc::new(OwnershipTree::new());
+            let id = cap_id("replace-receipt");
+            let before = OwnerRef::Task(TaskId("before".into()));
+            let after = OwnerRef::Task(TaskId("after".into()));
+            tree.register(id.clone(), before.clone(), LifetimeScope::Task, full_vis())
+                .unwrap();
+            let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+            let worker_tree = tree.clone();
+            let worker_barrier = barrier.clone();
+            let worker_id = id.clone();
+            let replacement = after.clone();
+            let worker = std::thread::spawn(move || {
+                worker_barrier.wait();
+                worker_tree.register(worker_id, replacement, LifetimeScope::Task, full_vis())
+            });
+            barrier.wait();
+            let removed = tree.dispose_with_receipt(LifetimeScope::Runtime);
+            let result = worker.join().unwrap();
+            assert_eq!(removed.len(), 1);
+            assert_eq!(removed[0].capability, id);
+            assert_eq!(
+                removed[0].owner,
+                if result.is_ok() { after } else { before }
+            );
+            assert!(tree.dispose_with_receipt(LifetimeScope::Runtime).is_empty());
+            assert!(tree.generation(&id, &full_vis()).is_none());
         }
     }
 
@@ -1450,17 +1634,17 @@ mod tests {
         tree.register(id.clone(), owner.clone(), lifetime, visibility.clone())
             .unwrap();
         let generation = tree.generation(&id, &visibility).unwrap();
-        let entered = std::sync::Barrier::new(2);
-        let release = std::sync::Barrier::new(2);
-        let commits = std::sync::atomic::AtomicUsize::new(0);
-        let (attempt_tx, attempt_rx) = std::sync::mpsc::channel();
-        let (revoked_tx, revoked_rx) = std::sync::mpsc::channel();
+        let entered = Barrier::new(2);
+        let release = Barrier::new(2);
+        let commits = AtomicUsize::new(0);
+        let (attempt_tx, attempt_rx) = mpsc::channel();
+        let (revoked_tx, revoked_rx) = mpsc::channel();
         std::thread::scope(|scope| {
             let admission = scope.spawn(|| {
                 tree.with_current_binding(&id, &visibility, generation, &owner, &lifetime, || {
                     entered.wait();
                     release.wait();
-                    commits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    commits.fetch_add(1, Ordering::SeqCst);
                     7
                 })
             });
@@ -1468,9 +1652,7 @@ mod tests {
             let revoke = scope.spawn(|| {
                 attempt_tx.send(tree.inner.try_lock().is_err()).unwrap();
                 let result = tree.revoke(&id);
-                revoked_tx
-                    .send(commits.load(std::sync::atomic::Ordering::SeqCst))
-                    .unwrap();
+                revoked_tx.send(commits.load(Ordering::SeqCst)).unwrap();
                 result
             });
             let locked = attempt_rx.recv_timeout(TEST_WAIT);
@@ -1481,16 +1663,16 @@ mod tests {
             assert_eq!(admission.join().unwrap(), Ok(7));
             assert!(revoke.join().unwrap());
             assert!(locked.unwrap());
-            assert_eq!(pending, Err(std::sync::mpsc::TryRecvError::Empty));
+            assert_eq!(pending, Err(mpsc::TryRecvError::Empty));
             assert_eq!(revoked_rx.recv_timeout(TEST_WAIT).unwrap(), 1);
         });
         assert_eq!(
             tree.with_current_binding(&id, &visibility, generation, &owner, &lifetime, || {
-                commits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                commits.fetch_add(1, Ordering::SeqCst);
             }),
             Err(BindingValidationError::Revoked)
         );
-        assert_eq!(commits.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(commits.load(Ordering::SeqCst), 1);
     }
 
     #[test]
@@ -1551,10 +1733,7 @@ mod tests {
         // Move the test fixture to the last two representable generation steps
         // without exercising the production mutation path under test.
         {
-            let mut inner = tree
-                .inner
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut inner = tree.inner.lock().unwrap_or_else(PoisonError::into_inner);
             inner.generation_nonce = u64::MAX - 1;
             inner.fencing_nonce = u64::MAX - 2;
             let binding = inner
@@ -1590,10 +1769,7 @@ mod tests {
         let old_lease_state_before_failed_bump = tree.claim_state(&old_lease, &cap, &vis);
         let generation_before = tree.generation(&cap, &vis);
         let binding_before = {
-            let inner = tree
-                .inner
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let inner = tree.inner.lock().unwrap_or_else(PoisonError::into_inner);
             let binding = inner
                 .bindings
                 .get(&OwnershipTree::key(&cap, &vis))
@@ -1612,10 +1788,7 @@ mod tests {
         assert_eq!(tree.generation(&cap, &vis), generation_before);
         assert_eq!(tree.resolve(&cap, &vis), Some(()));
         let binding_after = {
-            let inner = tree
-                .inner
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let inner = tree.inner.lock().unwrap_or_else(PoisonError::into_inner);
             let binding = inner
                 .bindings
                 .get(&OwnershipTree::key(&cap, &vis))
@@ -1927,7 +2100,7 @@ mod tests {
 
     #[test]
     fn generations_for_holds_one_mutex_across_concurrent_bump() {
-        use std::sync::{mpsc, Arc};
+        use crate::sync_primitives::{mpsc, Arc};
         use std::thread;
 
         let tree = Arc::new(OwnershipTree::new());
@@ -2189,7 +2362,7 @@ mod tests {
 
     #[test]
     fn register_if_absent_is_atomic_under_stale_resolve_observation() {
-        use std::sync::{mpsc, Arc};
+        use crate::sync_primitives::{mpsc, Arc};
         use std::thread;
 
         let tree = Arc::new(OwnershipTree::new());
@@ -2339,7 +2512,7 @@ mod tests {
         // observer's only role here is to read the post-event state
         // through the same lock and confirm it matches what the event
         // payload asserts.
-        use std::sync::{mpsc, Arc};
+        use crate::sync_primitives::{mpsc, Arc};
 
         let tree = Arc::new(OwnershipTree::new());
         let cap_a = cap_id("a");

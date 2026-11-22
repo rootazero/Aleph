@@ -20,8 +20,8 @@
 //! ])
 //! .with_session("session-123");
 //!
-//! // Filter for all events from specific agents
-//! let filter = EventFilter::all()
+//! // Filter for completion events from specific agents
+//! let filter = EventFilter::new(vec![EventType::SubAgentCompleted])
 //!     .with_agent("agent-1")
 //!     .with_agent("agent-2");
 //! ```
@@ -55,10 +55,8 @@ pub struct EventFilter {
     pub event_types: Vec<EventType>,
 }
 
-fn add_to_option_set(target: &mut Option<HashSet<String>>, value: &str) {
-    target
-        .get_or_insert_with(HashSet::new)
-        .insert(value.to_string());
+fn add_to_option_set(target: &mut Option<HashSet<String>>, value: String) {
+    target.get_or_insert_with(HashSet::new).insert(value);
 }
 
 impl EventFilter {
@@ -85,14 +83,6 @@ impl EventFilter {
         }
     }
 
-    /// Create a filter that matches all events.
-    ///
-    /// Equivalent to `EventFilter::new(vec![EventType::All])`.
-    #[must_use]
-    pub fn all() -> Self {
-        Self::new(vec![EventType::All])
-    }
-
     /// Add a single session ID to filter on.
     ///
     /// If this is the first session added, creates a new filter set.
@@ -107,8 +97,8 @@ impl EventFilter {
     ///
     /// * `session_id` - The session ID to include
     #[must_use]
-    pub fn with_session(mut self, session_id: &str) -> Self {
-        add_to_option_set(&mut self.session_ids, session_id);
+    pub fn with_session(mut self, session_id: impl Into<String>) -> Self {
+        add_to_option_set(&mut self.session_ids, session_id.into());
         self
     }
 
@@ -142,8 +132,8 @@ impl EventFilter {
     ///
     /// * `agent_id` - The agent ID to include
     #[must_use]
-    pub fn with_agent(mut self, agent_id: &str) -> Self {
-        add_to_option_set(&mut self.agent_ids, agent_id);
+    pub fn with_agent(mut self, agent_id: impl Into<String>) -> Self {
+        add_to_option_set(&mut self.agent_ids, agent_id.into());
         self
     }
 
@@ -166,18 +156,28 @@ impl EventFilter {
     /// Check if an event matches this filter.
     ///
     /// Returns `true` if ALL of the following conditions are met:
-    /// 1. Session filter passes (no filter OR event session is in the set)
-    /// 2. Agent filter passes (no filter OR the event's agent is in the set).
+    /// 1. Event type filter passes (the event type is in `event_types`)
+    /// 2. Session filter passes (no filter OR event session is in the set)
+    /// 3. Agent filter passes (no filter OR the event's agent is in the set).
     ///    An event with an EMPTY agent id never matches a filter that names
     ///    agents — the check fails closed, so a nameless event is not
     ///    delivered to an agent-scoped subscriber.
-    /// 3. Event type filter passes (`event_types` contains `EventType::All` OR event type is in the list)
     ///
     /// # Arguments
     ///
     /// * `event` - The global event to check against this filter
     #[must_use]
     pub fn matches(&self, event: &GlobalEvent) -> bool {
+        // Fast-path: check event type filter first (cheapest discriminant integer comparison)
+        if self.event_types.is_empty() {
+            return false;
+        }
+
+        let target_type = event.event.event_type();
+        if !self.event_types.iter().any(|&t| t == target_type) {
+            return false;
+        }
+
         // Check session filter
         if let Some(ref session_ids) = self.session_ids {
             if !session_ids.contains(&event.source_session_id) {
@@ -196,16 +196,7 @@ impl EventFilter {
             }
         }
 
-        // Check event type filter
-        if self.event_types.is_empty() {
-            return false;
-        }
-
-        if self.event_types.contains(&EventType::All) {
-            return true;
-        }
-
-        self.event_types.contains(&event.event.event_type())
+        true
     }
 }
 
@@ -357,9 +348,6 @@ mod tests {
         });
     }
 
-    /// Both filters accept the event types they list; what separates them is
-    /// the polarity of the last assertion in each test (see the wildcard
-    /// short-circuit below).
     fn assert_filter_accepts_listed_types(filter: &EventFilter) {
         assert!(filter.matches(&make_global_event("s1", None, make_subagent_event())));
         assert!(filter.matches(&make_global_event("s1", None, make_process_event())));
@@ -379,21 +367,6 @@ mod tests {
             team_id: "t1".to_string(),
         };
         assert!(!filter.matches(&make_global_event("s1", None, other_event)));
-    }
-
-    #[test]
-    fn test_filter_event_type_all_matches_everything() {
-        let filter = EventFilter::all();
-
-        assert_filter_accepts_listed_types(&filter);
-
-        // The wildcard short-circuit: `EventType::All` accepts a type the
-        // filter never listed — the exact opposite of the sibling test above,
-        // and the behaviour that separates the two.
-        let other_event = AlephEvent::TeamDisbanded {
-            team_id: "t1".to_string(),
-        };
-        assert!(filter.matches(&make_global_event("s1", None, other_event)));
     }
 
     #[test]
@@ -442,7 +415,7 @@ mod tests {
     #[test]
     fn test_filter_builder_chaining() {
         // Test that builder methods can be chained
-        let filter = EventFilter::new(vec![EventType::All])
+        let filter = EventFilter::new(vec![EventType::SubAgentCompleted])
             .with_session("s1")
             .with_session("s2")
             .with_agent("a1")

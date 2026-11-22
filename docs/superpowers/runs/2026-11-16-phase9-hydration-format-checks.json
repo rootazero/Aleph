@@ -1,0 +1,18 @@
+{
+  "status": "PASS_SELECTED_SCOPE_WITH_PREEXISTING_RECURSIVE_FORMAT_DIFFERENCE",
+  "selected_scope": {
+    "exit_code": 0,
+    "files": 24,
+    "config": "skip_children=true",
+    "log": "docs/superpowers/runs/2026-11-16-phase9-hydration-targeted-rustfmt-check.log"
+  },
+  "recursive_probe": {
+    "exit_code": 1,
+    "log": "docs/superpowers/runs/2026-11-16-phase9-hydration-rustfmt-check.log",
+    "unmodified_baseline_child": "src/extension/runtime/wasm/host_functions.rs",
+    "byte_exact_base": true,
+    "base_sha256": "ceacd1869e85d5f201de71a05733633c56434a93874d9f65e90f85b0e8fb0497"
+  },
+  "source_manifest_sha256": "c489ab6324cf3aeb339bdb4083827c100ff669981d7595bb73ea25f283046b8e",
+  "diff_check_exit": 0
+}

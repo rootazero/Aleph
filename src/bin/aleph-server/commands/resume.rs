@@ -1,6 +1,8 @@
+//! lock-policy: run-no-lock
+//!
 //! `aleph-server resume <session-key>` — re-trigger an interrupted run.
 //!
-//! Policy: `NoLock`. This command never writes to the data directory; it reads
+//! This command never writes to the data directory; it reads
 //! the endpoint file and the bearer token and forwards to the running server.
 //!
 //! Deliberately **not** `LockOrIpc`. The local half of that policy exists for

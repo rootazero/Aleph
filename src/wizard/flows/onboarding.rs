@@ -56,9 +56,7 @@ impl OnboardingFlow {
     /// Get model options for a provider
     fn model_options(provider: &str) -> Vec<WizardOption> {
         match provider {
-            // Date-less aliases: the old dated picks here included ids that
-            // were already retired (claude-3-5-haiku) or days from retirement
-            // (claude-sonnet-4-20250514, gone 2026-06-15).
+            // Date-less aliases so the picks do not expire.
             "anthropic" => vec![
                 WizardOption::new(json!("claude-opus-4-8"), "Claude Opus 4.8")
                     .with_hint("Most capable, best for complex tasks"),
@@ -216,23 +214,14 @@ impl OnboardingFlow {
         data.secondary_provider = Some(secondary_provider.clone());
 
         if secondary_provider != "ollama" {
-            let api_key = if Some(&secondary_provider) == data.primary_provider.as_ref() {
-                let use_same = prompter
+            // Ask the "same key?" question only when both providers can share
+            // one key; `&&` keeps it ahead of the key prompt.
+            let reuse_primary_key = Some(&secondary_provider) == data.primary_provider.as_ref()
+                && prompter
                     .confirm("Use the same API key as the primary provider?", true)
                     .await?;
-                if use_same {
-                    data.primary_api_key.clone()
-                } else {
-                    Some(
-                        prompter
-                            .text(
-                                &format!("Enter your {secondary_provider} API key:"),
-                                Some("sk-..."),
-                                true,
-                            )
-                            .await?,
-                    )
-                }
+            let api_key = if reuse_primary_key {
+                data.primary_api_key.clone()
             } else {
                 Some(
                     prompter
@@ -286,9 +275,8 @@ impl OnboardingFlow {
         prompter: &RpcPrompter,
         data: &OnboardingData,
     ) -> Result<(), WizardSessionError> {
-        // Re-prompt on "no" so a user who hits the wrong button doesn't lose
-        // every answer collected so far to a single misclick — the old code
-        // returned `WizardSessionError::Cancelled` and the flow aborted.
+        // Re-prompt on "no" so a wrong button press does not discard every
+        // answer collected so far.
         let mut confirmed = false;
         while !confirmed {
             let review_text = Self::render_review(data);
@@ -308,10 +296,9 @@ impl OnboardingFlow {
              Messaging Apps: {}",
             data.primary_provider.as_deref().unwrap_or("Not set"),
             data.primary_model.as_deref().unwrap_or("Not set"),
-            if data.secondary_provider.is_some() {
+            if let Some(secondary_provider) = &data.secondary_provider {
                 format!(
-                    "{} / {}",
-                    data.secondary_provider.as_deref().unwrap_or(""),
+                    "{secondary_provider} / {}",
                     data.secondary_model.as_deref().unwrap_or("")
                 )
             } else {

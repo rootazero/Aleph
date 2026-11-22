@@ -67,6 +67,7 @@ type GuestBarrier = (
 #[derive(Debug)]
 struct LoadedWasmPlugin {
     plugin: Mutex<Option<extism::Plugin>>,
+    kernel: Arc<WasmCapabilityKernel>,
     #[cfg(test)]
     guest_barrier: Arc<Mutex<Option<GuestBarrier>>>,
     #[cfg(test)]
@@ -457,6 +458,7 @@ impl WasmRuntime {
             .unwrap_or_default();
         let loaded = Arc::new(LoadedWasmPlugin {
             plugin: Mutex::new(Some(plugin)),
+            kernel: kernel.clone(),
             #[cfg(test)]
             guest_barrier,
             #[cfg(test)]
@@ -632,11 +634,12 @@ impl WasmRuntime {
             .map_err(|e| ExtensionError::Runtime(format!("Failed to serialize input: {e}")))?;
 
         debug!(plugin = plugin_id, handler, "Calling WASM handler");
-
         let mut plugin = loaded
             .plugin
             .lock()
             .map_err(|error| ExtensionError::Runtime(format!("Failed to lock plugin: {error}")))?;
+
+        loaded.kernel.reset_per_execution_counters();
 
         let result = plugin
             .as_mut()
@@ -664,6 +667,58 @@ pub(crate) mod tests {
     use super::*;
     use crate::extension::types::PluginKind;
     use std::path::PathBuf;
+
+    #[test]
+    fn guest_calls_reset_execution_counters_but_preserve_rate_limit() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut manifest = guest_fixture::manifest_with_guest(
+            directory.path(),
+            "counter-reset",
+            guest_fixture::PAYLOAD_A,
+        );
+        manifest.wasm_resource_limits = Some(limits::WasmResourceLimits {
+            max_http_calls: 1,
+            max_log_entries: 1,
+            ..Default::default()
+        });
+        manifest.wasm_capabilities = Some(capabilities::WasmCapabilities {
+            http: Some(capabilities::HttpCapability {
+                rate_limit: Some(capabilities::RateLimit {
+                    requests_per_minute: 1,
+                    requests_per_hour: 1,
+                }),
+                allowlist: vec![],
+                credentials: vec![],
+                timeout_secs: 30,
+                max_request_bytes: 1024,
+                max_response_bytes: 2048,
+            }),
+            ..Default::default()
+        });
+        let mut runtime = WasmRuntime::new();
+        runtime.load_plugin(&manifest).unwrap();
+        let binding = runtime.bind(&manifest.id, guest_fixture::HANDLER).unwrap();
+        let kernel = &binding.instance.kernel;
+        kernel.check_rate_limit().unwrap();
+        for _ in 0..2 {
+            kernel.check_http_limit().unwrap();
+            assert!(kernel.check_http_limit().is_err());
+            kernel.log("info", "per-execution log").unwrap();
+            assert!(kernel.log("info", "over limit").is_err());
+            runtime
+                .call_bound(
+                    &binding,
+                    WasmToolInput {
+                        name: "test".into(),
+                        arguments: serde_json::json!({}),
+                    },
+                )
+                .unwrap();
+            assert!(kernel.check_rate_limit().is_err());
+        }
+        kernel.check_http_limit().unwrap();
+        kernel.log("info", "reset after final guest call").unwrap();
+    }
 
     #[test]
     fn test_wasm_runtime_not_found() {

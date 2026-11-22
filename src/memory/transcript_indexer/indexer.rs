@@ -169,7 +169,7 @@ impl TranscriptIndexer {
         }
 
         // Split by sentences
-        let sentences: Vec<&str> = text.split('.').filter(|s| !s.trim().is_empty()).collect();
+        let sentences = text.split('.').filter(|s| !s.trim().is_empty());
         let mut chunks = Vec::new();
         let mut current_chunk = String::new();
         let mut current_tokens = 0;
@@ -180,12 +180,8 @@ impl TranscriptIndexer {
             if current_tokens + sentence_tokens > self.config.max_tokens_per_chunk
                 && !current_chunk.is_empty()
             {
-                // rust-doctor-disable-next-line excessive-clone
-                chunks.push(current_chunk.clone());
-
-                // Add overlap from previous chunk
                 let overlap_text = self.get_overlap_text(&current_chunk);
-                current_chunk = overlap_text;
+                chunks.push(std::mem::replace(&mut current_chunk, overlap_text));
                 current_tokens = self.estimate_tokens(&current_chunk);
             }
 

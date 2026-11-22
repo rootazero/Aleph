@@ -95,15 +95,14 @@ where
     tokio::time::sleep(RETRY_DELAY).await;
     // Emit a structured event so the per-call `tool.execute` span set up by
     // `ScopedToolService::execute` carries a visible retry marker for
-    // downstream tracing consumers.
-    if let Err(ref e) = first {
-        tracing::info!(
-            "tool.retry" = true,
-            "tool.error" = %e,
-            "tool.delay_ms" = RETRY_DELAY.as_millis() as u64,
-            "tool one-shot retry"
-        );
-    }
+    // downstream tracing consumers. `first` is an `Err` on every path that
+    // reaches here, so `e` is that error.
+    tracing::info!(
+        "tool.retry" = true,
+        "tool.error" = %e,
+        "tool.delay_ms" = RETRY_DELAY.as_millis() as u64,
+        "tool one-shot retry"
+    );
     op().await
 }
 

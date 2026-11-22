@@ -868,7 +868,52 @@ impl GatewayServer {
         &mut self,
         store: Arc<dyn crate::gateway::session_store::SessionStore>,
     ) {
-        self.session_store = Some(store);
+        self.session_store = Some(Arc::clone(&store));
+        self.register_capability_ui_handlers(store);
+    }
+
+    fn register_capability_ui_handlers(
+        &mut self,
+        session_store: Arc<dyn crate::gateway::session_store::SessionStore>,
+    ) {
+        let event_bus = Arc::clone(&self.event_bus);
+        let attach_store = Arc::clone(&session_store);
+        self.handlers_mut().register("capabilities.ui.attach", move |request| {
+            let store = Arc::clone(&attach_store);
+            let bus = Arc::clone(&event_bus);
+            async move { crate::gateway::capability_ui::handle_attach(request, store, bus).await }
+        });
+        // `capabilities.ui.invoke` is the effect half of the capability-UI
+        // surface: after `capabilities.ui.attach` delivered a surface, the
+        // client that holds it calls back here to actuate an affordance. The
+        // expected first-party caller is the UI client bound to that
+        // connection (the Panel's capability-UI host / an ACP client) — the
+        // Rust core never invokes its own gateway RPC. No first-party client
+        // sends this method yet, so the arm below is the contract, not a live
+        // path: authorization is already wired on the server side
+        // (`method_census` Class::Open, `method_visibility` KeyChecked, and the
+        // per-connection lane/idempotency handling in
+        // `server/connection/dispatch.rs` + `acknowledged_effects.rs`), and
+        // the handler fails closed (SERVICE_UNAVAILABLE) when no projection
+        // host is mounted. Keep the registration until that client lands —
+        // deleting it would turn every such call into a bare Method-not-found
+        // and silently drop the capability-UI effect path.
+        self.handlers_mut().register(
+            "capabilities.ui.invoke",
+            crate::gateway::capability_ui::handle_invoke,
+        );
+        self.handlers_mut().register(
+            "capabilities.ui.ack",
+            crate::gateway::capability_ui::handle_ack,
+        );
+        self.handlers_mut().register(
+            "capabilities.ui.submit_input",
+            crate::gateway::capability_ui::handle_submit_input,
+        );
+        self.handlers_mut().register(
+            "capabilities.ui.detach",
+            crate::gateway::capability_ui::handle_detach,
+        );
     }
 
     /// Install the `TeamStore` so the WS event-delivery loop can resolve the
@@ -935,6 +980,14 @@ impl GatewayServer {
             if config.policies.terminal.enabled {
                 if let Err(error) = crate::gateway::pty::attach_event_bus(self.event_bus.clone()) {
                     warn!(%error, "terminal activation failed during gateway boot");
+                } else if let Some(source) = crate::capability::projection_host::projection_host()
+                    .and_then(|host| host.facade().terminal_source())
+                {
+                    if let Err(error) = crate::gateway::pty::manager()
+                        .bind_capability_source(Arc::downgrade(&source))
+                    {
+                        warn!(%error, "terminal capability source binding failed during gateway boot");
+                    }
                 }
             }
         }
@@ -1064,6 +1117,10 @@ impl GatewayServer {
                     .session_store
                     .clone()
                     .expect("session store must be installed before attachment routes"),
+                device_tokens: self.device_token_mgr.clone(),
+                shared_token: self.shared_token_mgr.clone(),
+                trusted_proxy_enabled: shared.trusted_proxy_enabled,
+                trusted_proxy_ips: shared.trusted_proxy_ips.clone(),
             }))
         });
 
@@ -1593,7 +1650,8 @@ mod tests {
         let applied = crate::config::live_apply::apply_live_sections(
             &disabled,
             &["policies.terminal"],
-            Some(&server.event_bus()),
+            Some(server.event_bus()),
+            None,
         )
         .await;
         assert!(manager.ready_generation().is_err());
@@ -1612,7 +1670,8 @@ mod tests {
         assert!(crate::config::live_apply::apply_live_sections(
             &enabled,
             &["policies.terminal"],
-            Some(&server.event_bus())
+            Some(server.event_bus()),
+            None,
         )
         .await
         .contains(&"policies.terminal"));
@@ -1623,7 +1682,8 @@ mod tests {
         assert!(crate::config::live_apply::apply_live_sections(
             &disabled,
             &["policies.terminal"],
-            Some(&server.event_bus()),
+            Some(server.event_bus()),
+            None,
         )
         .await
         .contains(&"policies.terminal"));

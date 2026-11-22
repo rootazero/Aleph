@@ -469,7 +469,8 @@ impl EngineHandle {
                 let _ = self.conn.detach(&session).await;
                 return Err(stalled(&format!("{domain}.enable")));
             }
-            let enabled = self.conn
+            let enabled = self
+                .conn
                 .call_with_timeout(
                     Some(&session),
                     &format!("{domain}.enable"),

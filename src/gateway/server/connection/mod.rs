@@ -44,6 +44,49 @@ use super::per_client_buffer::PerClientBuffer;
 use super::ConnectionState;
 use crate::gateway::security::SecurityStore;
 
+/// UI display events are delivered only to the connection that owns the surface.
+/// The event bus itself is process-wide, so this check belongs at the transport
+/// boundary rather than relying on a Panel-side surface-id check.
+#[must_use]
+fn ui_display_admits_connection(
+    topic: &str,
+    event_data: Option<&serde_json::Value>,
+    connection_id: &str,
+) -> bool {
+    if topic != "capabilities.ui.display" {
+        return true;
+    }
+    let host = crate::capability::projection_host::projection_host();
+    ui_display_admits_connection_at_host(
+        topic,
+        event_data,
+        connection_id,
+        host.map(|host| host.as_ref()),
+    )
+}
+
+fn ui_display_admits_connection_at_host(
+    topic: &str,
+    event_data: Option<&serde_json::Value>,
+    connection_id: &str,
+    host: Option<&crate::capability::projection_host::ProjectionHost>,
+) -> bool {
+    topic != "capabilities.ui.display"
+        || event_data.is_some_and(|data| {
+            data.get("connection_id")
+                .and_then(serde_json::Value::as_str)
+                == Some(connection_id)
+                && host.is_some_and(|host| {
+                    crate::gateway::capability_ui::display_mount_is_current(
+                        data,
+                        connection_id,
+                        host,
+                    )
+                })
+        })
+}
+
+mod acknowledged_effects;
 pub mod auth;
 pub mod cleanup;
 pub mod dispatch;
@@ -274,6 +317,16 @@ pub async fn handle_connection(
     // work, aborts active tasks and waits at most `OFF_LOOP_SHUTDOWN_GRACE` for
     // them before the connection cleanup runs (see the end of this function).
     let mut off_loop_rpcs = off_loop::OffLoopRpcs::new();
+    let mut ui_effects = acknowledged_effects::AcknowledgedEffects::new();
+    let ui_dispatch = acknowledged_effects::EffectDispatch {
+        middleware: ctx.middleware_chain.clone(),
+        connections: ctx.connections.clone(),
+        lanes: ctx.lane_manager.clone(),
+        idempotency: ctx.idempotency_guard.clone(),
+        conn_id: conn_id.clone(),
+        class: ctx.channel_class,
+        client_is_local: ctx.client_is_local,
+    };
 
     loop {
         tokio::select! {
@@ -284,8 +337,7 @@ pub async fn handle_connection(
                 }
                 match msg {
                     Some(Ok(WsMessage::Text(text))) => {
-                        let preview_end = text.char_indices().take_while(|(i, _)| *i < 200).last().map_or(text.len(), |(i, c)| i + c.len_utf8());
-                        debug!("WS recv from {}: {}", conn_id, &text[..preview_end]);
+                        debug!("WS recv from {}: {} bytes", conn_id, text.len());
 
                         // Reverse-RPC response interception: a frame that is a
                         // JSON-RPC *response* (has `id`, no `method`, and a
@@ -669,6 +721,22 @@ pub async fn handle_connection(
                                             continue;
                                         }
 
+                                        // Acknowledged UI effects must not wait inline for their
+                                        // own event/ack, Execute permit, or duplicate producer.
+                                        // Ack/input/detach stay in their unchanged Mutate lane.
+                                        if req.method == "capabilities.ui.invoke" {
+                                            match ui_dispatch.submit(&mut ui_effects, text.to_string(), req.id.clone(), caller_snapshot.clone(), idempotency_key.clone()).await {
+                                                Ok(()) => continue,
+                                                Err(response) => {
+                                                    if let Err(error) = write.send(WsMessage::Text(response.into())).await {
+                                                        error!(%error, %conn_id, "failed UI effect response");
+                                                        break;
+                                                    }
+                                                    continue;
+                                                }
+                                            }
+                                        }
+
                                         // Helper closure: standard lane dispatch (no idempotency)
                                         let do_lane_dispatch = |text: String, lm: Arc<LaneManager>, mc: MiddlewareChain, method: String, req_id: Option<serde_json::Value>, class: ChannelClass, connections: Arc<RwLock<HashMap<String, ConnectionState>>>, conn_id: String, client_is_local: bool, start: dispatch::CallerSnapshot| async move {
                                             let lane_result = lm.acquire(&method, class).await;
@@ -716,8 +784,8 @@ pub async fn handle_connection(
                                                 match ctx.idempotency_guard.try_acquire(key) {
                                                     AcquireResult::Cached(cached) => {
                                                         debug!("Idempotency hit: key={}", key);
-                                                        // Viewer payloads are only returnable while the
-                                                        // LIVE connection still holds the same principal.
+                                                        // Reapply live login/admin authority and identity
+                                                        // before returning a cached payload.
                                                         if dispatch::revalidate_for_dispatch(&ctx.connections, &conn_id, ctx.client_is_local, &req.method, &caller_snapshot).await.is_some() {
                                                             let resp = JsonRpcResponse::success(req.id.clone(), cached);
                                                             serde_json::to_string(&resp).unwrap_or_default()
@@ -873,12 +941,22 @@ pub async fn handle_connection(
                                                     // paired device's `last_seen_at`, so the Paired-devices roster
                                                     // reflects real activity, not the pairing date. Token
                                                     // validation alone only touches the token row's `last_used_at`.
+                                                    // The write is offloaded to the blocking-storage boundary so a
+                                                    // slow SQLite UPDATE / contended mutex never stalls this async
+                                                    // worker; best-effort, same as before.
                                                     if let (Some(store), Some(did)) =
                                                         (ctx.security_store.as_ref(), authed_device_id.as_deref())
                                                     {
-                                                        if let Err(e) = store.touch_device(did) {
-                                                            tracing::debug!("touch_device on connect failed: {e}");
-                                                        }
+                                                        let store = store.clone();
+                                                        let did = did.to_string();
+                                                        let _ = tokio::task::spawn_blocking(move || {
+                                                            if let Err(e) = store.touch_device(&did) {
+                                                                tracing::warn!(
+                                                                    "touch_device({did}) failed: {e}"
+                                                                );
+                                                            }
+                                                        })
+                                                        .await;
                                                     }
                                                     // Forensic trail: a remote connection that
                                                     // failed the Gateway-token login wall. Bounded
@@ -1046,15 +1124,51 @@ pub async fn handle_connection(
                                                     // name, and REFUSES a node whose device record was
                                                     // revoked by `cluster.deregister` (otherwise the
                                                     // node just resurrects itself on its next backoff).
-                                                    let node_result = node_connect_claim(
+                                                    let node_result = match node_connect_claim(
                                                         req.params.as_ref(),
-                                                    )
-                                                    .map(|claim| {
-                                                        let admission = ctx
-                                                            .security_store
-                                                            .as_ref()
-                                                            .map_or_else(
-                                                                || {
+                                                    ) {
+                                                        Some(claim) => {
+                                                            // The admission path touches SQLite (a
+                                                            // read, maybe a write) and takes the
+                                                            // process-wide name lock — a `std` mutex held
+                                                            // across that I/O. Running it on a Tokio
+                                                            // worker would block the whole runtime behind
+                                                            // it, so the WHOLE read-then-write sequence
+                                                            // (lock included) runs on a blocking thread.
+                                                            // Nothing is held across the await: the
+                                                            // connection guard was released above.
+                                                            let admission = match ctx.security_store.clone() {
+                                                                Some(store) => {
+                                                                    let presented_id = claim.presented_id.clone();
+                                                                    let device_name = claim.device_name.clone();
+                                                                    match tokio::task::spawn_blocking(move || {
+                                                                        crate::cluster::admit_node(
+                                                                            &store,
+                                                                            presented_id.as_deref(),
+                                                                            &device_name,
+                                                                        )
+                                                                    })
+                                                                    .await
+                                                                    {
+                                                                        Ok(admission) => admission,
+                                                                        Err(e) => {
+                                                                            // The blocking task could not be run to
+                                                                            // completion. Treat it exactly like a
+                                                                            // store outage: retryable, never an
+                                                                            // admission.
+                                                                            warn!(
+                                                                                error = %e,
+                                                                                "node admission task failed; the node will retry"
+                                                                            );
+                                                                            crate::cluster::NodeAdmission::StoreUnavailable {
+                                                                                detail: format!(
+                                                                                    "the node admission task did not complete ({e})"
+                                                                                ),
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
+                                                                None => {
                                                                     // No store wired (probe/test server):
                                                                     // LAN-trust degrade — keep the node usable.
                                                                     crate::cluster::NodeAdmission::Admitted {
@@ -1064,17 +1178,12 @@ pub async fn handle_connection(
                                                                             .unwrap_or_else(|| conn_id.clone()),
                                                                         minted: false,
                                                                     }
-                                                                },
-                                                                |store| {
-                                                                    crate::cluster::admit_node(
-                                                                        store,
-                                                                        claim.presented_id.as_deref(),
-                                                                        &claim.device_name,
-                                                                    )
-                                                                },
-                                                            );
-                                                        (claim, admission)
-                                                    });
+                                                                }
+                                                            };
+                                                            Some((claim, admission))
+                                                        }
+                                                        None => None,
+                                                    };
 
                                                     let node_payload = match &node_result {
                                                         Some((
@@ -1092,9 +1201,22 @@ pub async fn handle_connection(
                                                                 req.params.as_ref(),
                                                                 &rpc_channel_for_node,
                                                             ) {
+                                                                // Publish the name the REGISTRY stored, not
+                                                                // the raw string from the connect frame. The
+                                                                // registry bounds it (≤128 bytes) and both
+                                                                // `node.disconnected` arms publish that
+                                                                // bounded name, so publishing the raw peer
+                                                                // string here made the two events disagree —
+                                                                // and a peer could fan a multi-megabyte name
+                                                                // out to every admin subscriber of `node.**`.
+                                                                let registered_name = ctx
+                                                                    .node_registry
+                                                                    .node_identity_by_conn(&conn_id)
+                                                                    .map(|(_, name)| name)
+                                                                    .unwrap_or_else(|| claim.device_name.clone());
                                                                 if let Err(e) = ctx.event_bus.publish_json(&TopicEvent::new(
                                                                     "node.connected",
-                                                                    serde_json::json!({"node_id": node_id, "name": &claim.device_name, "conn_id": &conn_id}),
+                                                                    serde_json::json!({"node_id": node_id, "name": registered_name, "conn_id": &conn_id}),
                                                                 )) {
                                                                 tracing::warn!(
                                                                     error = %e,
@@ -1106,9 +1228,7 @@ pub async fn handle_connection(
                                                                 // Stamp last_seen so the offline half of
                                                                 // environments.list stays honest.
                                                                 if let Some(store) = ctx.security_store.as_ref() {
-                                                                    if let Err(e) = store.touch_device(node_id) {
-                                                                        debug!("failed to stamp node last_seen on connect for {}: {}", node_id, e);
-                                                                    }
+                                                                    cleanup::touch_device_last_seen(store.clone(), node_id.clone()).await;
                                                                 }
                                                             }
                                                             Some(serde_json::json!({
@@ -1129,9 +1249,20 @@ pub async fn handle_connection(
                                                                 "Refusing node {}: device record was revoked by cluster.deregister",
                                                                 node_id
                                                             );
+                                                            // `reason_code` names the CASE: the node client
+                                                            // picks the operator's recovery step from it, so a
+                                                            // revoked credential and an ambiguous name cannot
+                                                            // read alike. `reason` carries the center-side
+                                                            // detail. Both are additive — an older node
+                                                            // client ignores them and keeps its generic
+                                                            // message.
                                                             Some(serde_json::json!({
                                                                 "node_id": node_id,
                                                                 "status": "deregistered",
+                                                                "reason_code": "revoked",
+                                                                "reason": "this node's device record was revoked \
+                                                                           by cluster.deregister; its identity is dead \
+                                                                           and the center will refuse it forever",
                                                             }))
                                                         }
                                                         Some((
@@ -1141,7 +1272,9 @@ pub async fn handle_connection(
                                                             },
                                                         )) => {
                                                             warn!(
-                                                                "Refusing node {}: that id already belongs to a paired Panel device",
+                                                                "Refusing node {}: that id already belongs to a \
+                                                                 non-node device row (a paired Panel or an \
+                                                                 operator device), not an enrolled node",
                                                                 node_id
                                                             );
                                                             // Same terminal wire status as a deregistration:
@@ -1150,10 +1283,59 @@ pub async fn handle_connection(
                                                             // right for an id collision. Keeping one status
                                                             // avoids rippling a new verdict into the node
                                                             // client for a case only an operator can fix.
+                                                            // `reason_code` tells the client WHICH operator
+                                                            // step applies (an id collision is not a revoked
+                                                            // credential — the node's own file is fine).
                                                             Some(serde_json::json!({
                                                                 "node_id": node_id,
                                                                 "status": "deregistered",
+                                                                "reason_code": "identity_conflict",
+                                                                "reason": "that id already belongs to a non-node \
+                                                                           device (a paired Panel or an operator \
+                                                                           device), not to an enrolled node",
                                                             }))
+                                                        }
+                                                        Some((
+                                                            _,
+                                                            crate::cluster::NodeAdmission::Ambiguous {
+                                                                name,
+                                                                count,
+                                                            },
+                                                        )) => {
+                                                            warn!(
+                                                                "Refusing node '{}': {count} enrolled nodes share this name",
+                                                                name
+                                                            );
+                                                            // Same terminal wire status as a
+                                                            // deregistration: only an operator can repair the
+                                                            // duplicates, so the node must stop retrying.
+                                                            // The `reason` field carries the specificity —
+                                                            // no new status vocabulary, and an older node
+                                                            // client ignores the extra field.
+                                                            Some(serde_json::json!({
+                                                                "status": "deregistered",
+                                                                "reason_code": "ambiguous_name",
+                                                                "reason": format!(
+                                                                    "{count} enrolled nodes share the name '{name}'; an operator must deregister the duplicates by id"
+                                                                ),
+                                                            }))
+                                                        }
+                                                        Some((
+                                                            _,
+                                                            crate::cluster::NodeAdmission::StoreUnavailable {
+                                                                detail,
+                                                            },
+                                                        )) => {
+                                                            warn!(
+                                                                "Cannot admit node: {detail}; the node will retry"
+                                                            );
+                                                            // NO node payload at all: the node client treats
+                                                            // a reply without `result.node` as "the center did
+                                                            // not register this node" and retries with backoff.
+                                                            // A payload here would either register a node the
+                                                            // center cannot see or make the refusal terminal —
+                                                            // both wrong for a transient store outage.
+                                                            None
                                                         }
                                                         None => None,
                                                     };
@@ -1372,6 +1554,14 @@ pub async fn handle_connection(
                             if !crate::gateway::pty::manager::frame_admits(topic, event_data) {
                                 continue;
                             }
+                            // The event bus is process-wide; enforce UI ownership at
+                            // this transport boundary before the generic subscriber
+                            // receives the payload. Panel surface-id filtering is only
+                            // a second line of defense.
+                            if !ui_display_admits_connection(topic, event_data, &conn_id)
+                                || (topic == "capabilities.ui.display" && !crate::gateway::capability_ui::display_mount_admits(event_data, &conn_id)) {
+                                continue;
+                            }
 
                             // The login wall + permission-based scope guard check +
                             // surface audience + caller identity for the owner-scoped
@@ -1434,7 +1624,7 @@ pub async fn handle_connection(
                                 .note_frame(topic, visibility_payload)
                                 .await;
 
-                            let admits = wall_ok
+                            let mut admits = wall_ok
                                 && scope_allowed
                                 && crate::gateway::surface::delivery::audience_allows(
                                     event_data,
@@ -1457,8 +1647,19 @@ pub async fn handle_connection(
                                     // No store wired (probe/legacy wiring): skip the
                                     // 4th term entirely — zero-change guarantee, see
                                     // `GatewaySharedState::session_store`.
-                                    None => true,
+                                    None => !matches!(topic, "capability.event" | "capability.event.status" | "capabilities.ui.display"),
                                 };
+                            if admits && matches!(topic, "capability.event" | "capability.event.status" | "capabilities.ui.display") {
+                                // Session I/O cannot bless an identity restamped while
+                                // it was in flight. Selection and authority stay separate.
+                                admits = ctx.connections.read().await.get(&conn_id).is_some_and(|state| {
+                                    !state.first_message && state.caller_user == event_caller_user
+                                        && state.caller_role == event_caller_role
+                                        && wall_admits(Some(&state.caller_role), "")
+                                        && ctx.event_scope_guard.can_receive(topic, &state.permissions)
+                                        && crate::gateway::surface::delivery::audience_allows(event_data, state.channel_kind)
+                                }) && (topic != "capabilities.ui.display" || crate::gateway::capability_ui::display_mount_admits(event_data, &conn_id));
+                            }
 
                             // 5th term, and the only one that is not pass/fail:
                             // one frame (`stream.running_set_changed`) carries a
@@ -1542,6 +1743,12 @@ pub async fn handle_connection(
             Some(response) = off_loop_rpcs.next_response(), if !off_loop_rpcs.is_empty() => {
                 if let Err(e) = write.send(WsMessage::Text(response.into())).await {
                     error!("Failed to send response to {}: {}", conn_id, e);
+                    break;
+                }
+            }
+            Some(response) = ui_effects.next_response(), if !ui_effects.is_empty() => {
+                if let Err(error) = write.send(WsMessage::Text(response.into())).await {
+                    error!(%error, %conn_id, "failed UI effect completion response");
                     break;
                 }
             }
@@ -1630,6 +1837,9 @@ pub async fn handle_connection(
     // Drop queued and abort active off-loop RPCs BEFORE cleanup, waiting at most
     // `off_loop::OFF_LOOP_SHUTDOWN_GRACE`: a task stuck in a sync section must
     // not hold teardown hostage (it is cancelled at its next yield point).
+    ui_effects.stop();
+    crate::gateway::capability_ui::close_connection_surfaces(&conn_id).await;
+    ui_effects.join().await;
     off_loop_rpcs.shutdown().await;
     cleanup::run_cleanup(&conn_id, &ctx, &rpc_pending).await;
     Ok(())
@@ -1643,6 +1853,187 @@ mod response_frame_tests {
     /// recognised as a response, otherwise the pending reverse-RPC call waits
     /// out its full timeout even though the peer completed. serde maps JSON
     /// `null` to `None`, so only the KEY's presence tells the two apart.
+    #[tokio::test]
+    async fn ui_display_is_admitted_only_to_its_owner_connection() {
+        use crate::capability::descriptor::CapabilityId;
+        use crate::capability::ownership::{
+            LifetimeScope, OwnerRef, OwnershipTree, VisibilityScope,
+        };
+        use crate::capability::policy_runtime::CapabilityCallContext;
+        use crate::capability::projection_host::ProjectionHost;
+        use crate::capability::provider::{
+            ProviderHandle, ProviderId, ProviderLifecycle, ProviderTransport,
+        };
+        use crate::capability::special::{CapabilityHandlerRegistry, SpecialRegistration};
+        use crate::capability::ui_surface::UiSurface;
+        let root = tempfile::tempdir().unwrap();
+        let tree = Arc::new(OwnershipTree::new());
+        let memory = crate::memory::runtime::MemoryRuntime::new(
+            crate::memory::runtime::MemoryRuntimeConfig {
+                metadata_path: root.path().join("memory.db"),
+                note_memory_dir: root.path().join("notes"),
+                retrieval_tuning: Default::default(),
+            },
+            tree.clone(),
+        );
+        let policy = crate::capability::production_init::build_capability_policy(
+            &crate::Config::default(),
+            tree.clone(),
+        )
+        .unwrap();
+        let specials = CapabilityHandlerRegistry::new();
+        let host = ProjectionHost::mount_with_runtime_and_events(
+            crate::tools::registry::ToolHandlerRegistry::new(),
+            tree,
+            memory,
+            specials.clone(),
+            policy,
+            Arc::new(crate::capability::events::InMemoryEventStream::default()),
+            false,
+        );
+        assert!(host.wait_until_ready().await);
+        // Never install a process-global host: both the production gate and this
+        // isolated fixture use the same concrete host/source lookup below.
+        let surface_id = format!("current-mount-{}", uuid::Uuid::new_v4());
+        let id = CapabilityId {
+            namespace: "aleph/ui".into(),
+            name: surface_id.clone(),
+        };
+        let mount = |generation| {
+            let call = CapabilityCallContext::from_trusted_parts(
+                OwnerRef::Runtime,
+                Some("alice".into()),
+                None,
+                None,
+                Some("conn-a".into()),
+                "current-mount-fixture".into(),
+            );
+            let surface = Arc::new(UiSurface::new(
+                aleph_protocol::capability::UiAttachment {
+                    surface_id: surface_id.clone(),
+                    mount_generation: generation,
+                },
+                call,
+                Arc::new(|_| Ok(())),
+            ));
+            let mut descriptor = crate::capability::ui::descriptor();
+            descriptor.id = id.clone();
+            descriptor.lifetime = LifetimeScope::Session;
+            descriptor.visibility = VisibilityScope {
+                principal: Some("alice".into()),
+                ..Default::default()
+            };
+            let _ = host
+                .facade()
+                .bind_terminal_session(id.clone(), descriptor.visibility.clone())
+                .unwrap();
+            let provider = ProviderHandle::new(ProviderLifecycle::ready(
+                ProviderId::new(format!("fixture/{surface_id}/{generation}")).unwrap(),
+                ProviderTransport::InProcess,
+            ));
+            let registration = specials
+                .register_with_handle(
+                    SpecialRegistration::new(
+                        descriptor,
+                        crate::capability::ui::schema(),
+                        surface.clone(),
+                        provider,
+                    )
+                    .with_ui_surface(surface.clone()),
+                )
+                .unwrap();
+            (surface, registration)
+        };
+        let (first_surface, first_mount) = mount(7);
+        let event = serde_json::json!({"connection_id":"conn-a", "surface_id":surface_id, "mount_generation":7});
+        let admitted = |data: Option<&serde_json::Value>, connection: &str| {
+            ui_display_admits_connection_at_host(
+                "capabilities.ui.display",
+                data,
+                connection,
+                Some(host.as_ref()),
+            )
+        };
+        let mut facts = vec![
+            ("real own current mount", admitted(Some(&event), "conn-a")),
+            ("foreign connection", !admitted(Some(&event), "conn-b")),
+            ("missing frame", !admitted(None, "conn-a")),
+            (
+                "missing actual host",
+                !ui_display_admits_connection_at_host(
+                    "capabilities.ui.display",
+                    Some(&event),
+                    "conn-a",
+                    None,
+                ),
+            ),
+        ];
+        for invalid in [
+            serde_json::json!({"connection_id":"conn-a"}),
+            serde_json::json!({"connection_id":"conn-a", "surface_id":surface_id}),
+            serde_json::json!({"connection_id":"conn-a", "surface_id":surface_id, "mount_generation":"7"}),
+            serde_json::json!({"connection_id":"conn-a", "surface_id":surface_id, "mount_generation":-1}),
+            serde_json::json!({"connection_id":"conn-a", "surface_id":surface_id, "mount_generation":6}),
+            serde_json::json!({"connection_id":"conn-a", "surface_id":"missing-surface", "mount_generation":7}),
+            serde_json::json!({"connection_id":"conn-b", "surface_id":surface_id, "mount_generation":7}),
+        ] {
+            facts.push((
+                "missing/malformed/stale/forged attachment",
+                !admitted(Some(&invalid), invalid["connection_id"].as_str().unwrap()),
+            ));
+        }
+        first_surface.close().await.unwrap();
+        facts.push(("closed current surface", !admitted(Some(&event), "conn-a")));
+        let _ = first_mount.dispose();
+        facts.push(("withdrawn mount", !admitted(Some(&event), "conn-a")));
+        let (replacement_surface, replacement_mount) = mount(8);
+        let replacement = serde_json::json!({"connection_id":"conn-a", "surface_id":surface_id, "mount_generation":8});
+        facts.push((
+            "old mount cannot inherit replacement",
+            !admitted(Some(&event), "conn-a"),
+        ));
+        facts.push((
+            "real replacement own positive",
+            admitted(Some(&replacement), "conn-a"),
+        ));
+        facts.push((
+            "unrelated topic compatibility",
+            ui_display_admits_connection_at_host("session.created", Some(&event), "conn-b", None),
+        ));
+        replacement_surface.close().await.unwrap();
+        let _ = replacement_mount.dispose();
+        facts.push((
+            "replacement withdrawn",
+            !admitted(Some(&replacement), "conn-a"),
+        ));
+        // Close all fixture-owned workers before asserting the observed facts.
+        let closed = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            host.clone().close_and_await(),
+        )
+        .await
+        .unwrap();
+        assert!(closed.source_joined && closed.applier_joined);
+        for (scenario, observed) in facts {
+            assert!(observed, "current mount gate: {scenario}");
+        }
+    }
+
+    #[test]
+    fn unrelated_events_and_legacy_ui_frames_remain_admitted() {
+        let event = serde_json::json!({"connection_id": "conn-a"});
+        assert!(ui_display_admits_connection(
+            "session.created",
+            Some(&event),
+            "conn-b"
+        ));
+        assert!(!ui_display_admits_connection(
+            "capabilities.ui.display",
+            None,
+            "conn-b"
+        ));
+    }
+
     #[test]
     fn a_null_result_frame_is_a_response() {
         let resp = parse_response_frame(r#"{"jsonrpc":"2.0","id":"rpc-0","result":null}"#)

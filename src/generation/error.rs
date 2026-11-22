@@ -674,8 +674,11 @@ impl From<GenerationError> for AlephError {
                     suggestion,
                 }
             }
-            GenerationError::QuotaExceededError { message, .. } => {
-                Self::rate_limit(format!("Quota exceeded: {message}"))
+            GenerationError::QuotaExceededError { message, resets_at } => {
+                let reset_hint = resets_at
+                    .map(|r| format!(" (resets at: {r})"))
+                    .unwrap_or_default();
+                Self::rate_limit(format!("Quota exceeded: {message}{reset_hint}"))
             }
             GenerationError::TimeoutError { duration } => Self::Timeout {
                 suggestion: Some(format!(
@@ -684,11 +687,17 @@ impl From<GenerationError> for AlephError {
                 )),
             },
             GenerationError::NetworkError { message } => Self::network(message),
-            GenerationError::InvalidParametersError { message, .. } => {
-                Self::invalid_config(message)
+            GenerationError::InvalidParametersError { message, parameter } => {
+                let param_hint = parameter
+                    .map(|p| format!(" (parameter: {p})"))
+                    .unwrap_or_default();
+                Self::invalid_config(format!("{message}{param_hint}"))
             }
-            GenerationError::ContentFilteredError { message, .. } => {
-                Self::provider(format!("Content filtered: {message}"))
+            GenerationError::ContentFilteredError { message, category } => {
+                let cat_hint = category
+                    .map(|c| format!(" (category: {c})"))
+                    .unwrap_or_default();
+                Self::provider(format!("Content filtered: {message}{cat_hint}"))
             }
             GenerationError::UnsupportedFeatureError { message, .. } => Self::provider(message),
             GenerationError::ProviderError {
@@ -726,20 +735,28 @@ impl From<GenerationError> for AlephError {
             GenerationError::UnsupportedDimensionError { message, .. } => {
                 Self::invalid_config(message)
             }
-            GenerationError::JobFailedError { message, .. } => Self::provider(message),
+            GenerationError::JobFailedError { message, job_id } => {
+                let job_hint = job_id
+                    .map(|j| format!(" (job_id: {j})"))
+                    .unwrap_or_default();
+                Self::provider(format!("{message}{job_hint}"))
+            }
             GenerationError::DownloadError {
                 message,
+                url,
                 status_code,
-                ..
             } => {
-                // Preserve the status code hint in the message so the
+                // Preserve the URL and status code hint in the message so the
                 // AlephError downstream retains the diagnostic info the
                 // typed GenerationError had. AlephError::network() would
                 // discard it.
+                let url_hint = url
+                    .map(|u| format!(" (url: {u})"))
+                    .unwrap_or_default();
                 let status_hint = status_code
                     .map(|c| format!(" (HTTP {c})"))
                     .unwrap_or_default();
-                Self::network(format!("{message}{status_hint}"))
+                Self::network(format!("{message}{url_hint}{status_hint}"))
             }
             // SerializationError is a data-shape mismatch (JSON parse, schema
             // mismatch), NOT a transport problem. Mapping it to AlephError::IoError

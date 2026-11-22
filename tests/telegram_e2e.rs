@@ -2,16 +2,16 @@
 //!
 //! `aleph-server` is built and exercised end-to-end against a mock Telegram
 //! Bot API (no real Telegram network calls). The harness is the smallest
-//! piece that exercises the per-conversation routing, the orchestration
-//! layer, and the audit log through a real `ChannelRegistry` + send path.
+//! piece that exercises the per-conversation routing and the
+//! orchestration layer through a real `ChannelRegistry` + send path.
 //!
 //! These tests intentionally do NOT spin up an HTTP mock of the Telegram
 //! API — the bot library (teloxide) is the only thing that speaks that
 //! protocol, and gating it through a mock would mean rewriting the
 //! transport for the test. Instead we treat the Telegram channel's
 //! surface as: "given an `OutboundMessage` shape, what does the channel
-//! do with it before talking to Telegram?". The audit log records the
-//! outcome; the test asserts the outcome.
+//! do with it before talking to Telegram?". The test asserts the
+//! outcome.
 //!
 //! Real-network userbot-style tests (openclaw § `npm-telegram-live`
 //! parity) are deferred to a follow-up — they need a way to start a
@@ -20,10 +20,7 @@
 
 #![cfg(test)]
 
-use std::sync::Arc;
-
 use alephcore::gateway::channel::{Attachment, ConversationId, OutboundMessage};
-use alephcore::gateway::interfaces::telegram::audit::{AuditKind, AuditLog as TelegramAuditLog};
 use alephcore::gateway::interfaces::telegram::config_v2::{
     DmPolicy, GroupPolicy, LinkPreviewMode, StatusReactionConfig, StreamingOptions,
     TelegramAccountConfig, TelegramConfigV2,
@@ -59,30 +56,15 @@ fn silent_v2_config() -> TelegramConfigV2 {
     }
 }
 
-/// Channel construction succeeds and the audit log is wired.
+/// Channel construction succeeds and the outbound surface is wired.
 #[tokio::test]
-async fn telegram_channel_constructs_with_an_audit_log() {
+async fn telegram_channel_constructs() {
     let config = silent_v2_config();
     let channel = TelegramChannel::new("test-telegram", config);
 
-    let audit = channel.audit_log();
-    // Empty ring immediately after construction — nothing has been
-    // recorded yet.
-    assert!(audit.snapshot().is_empty());
-
-    // Push a row directly into the audit log to confirm the channel's
-    // accessor hands out a real, mutable ring (not a snapshot).
-    audit.push(alephcore::gateway::interfaces::telegram::audit::entry(
-        "test",
-        Some(123),
-        None,
-        AuditKind::UpdateReceived {
-            update_id: 1,
-            kind_label: "test-message".to_string(),
-        },
-    ));
-    let snap = audit.snapshot();
-    assert_eq!(snap.len(), 1, "the audit log is shared, not snapshotted");
+    // The channel is constructed from a multi-account config without
+    // touching the network (the bot is never started here).
+    let _ = channel;
 }
 
 /// `OutboundMessage::text` round-trips through `Attachment::default()`
@@ -109,35 +91,6 @@ fn outbound_message_and_attachment_default_fields_stay_wired() {
     };
     assert!(!att.is_voice_note);
     assert!(!att.is_video_note);
-}
-
-/// The audit log preserves chronological order under normal write
-/// patterns — a property the doctor relies on when it sorts rows by
-/// `at_ms`. Pinned here so a future "swap to a HashMap for O(1)
-/// insert" refactor that loses the order is observable by name.
-#[tokio::test]
-async fn audit_log_preserves_insertion_order() {
-    let log = TelegramAuditLog::new();
-    for i in 0..16 {
-        log.push(alephcore::gateway::interfaces::telegram::audit::entry(
-            "acct",
-            Some(1),
-            None,
-            AuditKind::SendAttempted {
-                message_id_kind: format!("m{i}"),
-                outcome: "succeeded".to_string(),
-            },
-        ));
-        // Yield to keep `at_ms` strictly monotonic; on platforms where
-        // the clock resolution is coarse this is what separates the rows.
-        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
-    }
-    let snap = log.snapshot();
-    assert_eq!(snap.len(), 16);
-    // First row is older than the last; a strict increasing-`at_ms`
-    // check survives a wall-clock rollback (a single zero-ms rollover
-    // would not produce 16 strictly-increasing timestamps).
-    assert!(snap.first().unwrap().at_ms < snap.last().unwrap().at_ms);
 }
 
 /// The `OutboundMessage::with_attachment` builder chains attachments in
@@ -198,26 +151,4 @@ fn status_reaction_config_thinking_defaults_to_none() {
 fn conversation_id_round_trip() {
     let id = ConversationId::new("-1001234567890:topic:42");
     assert_eq!(id.as_str(), "-1001234567890:topic:42");
-}
-
-/// Sanity: the audit log's `Arc` is the same Arc across multiple
-/// `snapshot()` calls — so the doctor and the channel write to the
-/// same backing store without having to share state through a Mutex
-/// guard.
-#[tokio::test]
-async fn audit_log_shares_state_across_handles() {
-    let channel = TelegramChannel::new("test", silent_v2_config());
-    let a = channel.audit_log();
-    let b = channel.audit_log();
-    let _ = Arc::ptr_eq(a, b);
-    a.push(alephcore::gateway::interfaces::telegram::audit::entry(
-        "acct",
-        Some(7),
-        None,
-        AuditKind::UpdateReceived {
-            update_id: 1,
-            kind_label: "msg".to_string(),
-        },
-    ));
-    assert_eq!(b.snapshot().len(), 1);
 }

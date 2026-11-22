@@ -1,0 +1,11 @@
+   Compiling alephcore v26.9.1 (/Volumes/TBU4/Workspace/Aleph)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `alephcore` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8m 44s
+     Running unittests src/lib.rs (.phase9-target/debug/deps/alephcore-fcfe678a58e433e6)
+kill: 25002: No such process
+kill: 25044: No such process
+kill: 25174: No such process

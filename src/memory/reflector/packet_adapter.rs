@@ -50,10 +50,13 @@ pub fn envelope_to_synthesis_context(envelope: &MemoryEnvelope) -> SynthesisCont
 
     let mut lookup = HashMap::new();
 
+    use std::fmt::Write as _;
+
     for slot in &envelope.slots {
         for item in &slot.items {
             let key = item_key(item);
-            body.push_str(&format!(
+            let _ = write!(
+                body,
                 "<retrieved_note path=\"{}\" score=\"{:.3}\">\n\
                  <title>{}</title>\n\
                  <content>{}</content>\n\
@@ -62,7 +65,7 @@ pub fn envelope_to_synthesis_context(envelope: &MemoryEnvelope) -> SynthesisCont
                 item.relevance,
                 escape_fence(&item.title),
                 escape_fence(&item.content),
-            ));
+            );
             lookup.insert(
                 key,
                 NoteMeta {
@@ -83,13 +86,18 @@ pub fn envelope_to_synthesis_context(envelope: &MemoryEnvelope) -> SynthesisCont
 /// Neutralise fence-escape substrings so a hostile note body cannot close
 /// the `<retrieved_note>` block early and inject instructions between
 /// blocks.
-fn escape_fence(s: &str) -> String {
-    s.replace("</retrieved_note>", "[/retrieved_note]")
-        .replace("<retrieved_note>", "[retrieved_note]")
-        .replace("</content>", "[/content]")
-        .replace("<content>", "[content]")
-        .replace("</title>", "[/title]")
-        .replace("<title>", "[title]")
+fn escape_fence<'a>(s: &'a str) -> std::borrow::Cow<'a, str> {
+    if !s.contains('<') {
+        return std::borrow::Cow::Borrowed(s);
+    }
+    std::borrow::Cow::Owned(
+        s.replace("</retrieved_note>", "[/retrieved_note]")
+            .replace("<retrieved_note>", "[retrieved_note]")
+            .replace("</content>", "[/content]")
+            .replace("<content>", "[content]")
+            .replace("</title>", "[/title]")
+            .replace("<title>", "[title]"),
+    )
 }
 
 /// Return the canonical lookup key for an item:

@@ -266,10 +266,7 @@ pub(super) fn read_clarify_choices(chars: &[char], start: usize) -> Vec<String> 
                 None => break,
             },
             // Identifier / expression element → dynamic menu, abstain entirely.
-            _ => {
-                out.clear();
-                return out;
-            }
+            _ => return Vec::new(),
         }
     }
     out

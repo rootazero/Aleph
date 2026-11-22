@@ -2,7 +2,7 @@
 
 use crate::capability::backend::CapabilityBackend;
 use crate::capability::descriptor::{CapabilityDescriptor, CapabilityId};
-use crate::capability::facade::{CapabilitySnapshot, Cursor, Scope};
+use crate::capability::facade::Scope;
 use crate::capability::provider_registry::{ProviderEntry, ProviderRegistry};
 
 #[derive(Clone)]
@@ -37,9 +37,13 @@ impl ProviderBackendAdapter {
         self.entries()
             .into_iter()
             .map(|entry| {
-                let mut descriptor = entry.descriptor;
-                descriptor.visibility = scope.visibility.clone();
-                descriptor
+                // The provider's DECLARED visibility, not the requested
+                // scope's. Fabricating the scope's visibility made every
+                // provider look visible to whoever asked, while the facade
+                // refuses to resolve a provider that has no ownership
+                // binding (2026-11-20 severed-wire audit ZF-02). Discovery
+                // now reports the visibility the provider actually carries.
+                entry.descriptor
             })
             .filter(|descriptor| Self::descriptor_in_scope(descriptor, scope))
             .collect()
@@ -53,12 +57,5 @@ impl CapabilityBackend for ProviderBackendAdapter {
 
     fn enumerate(&self, scope: &Scope) -> Vec<CapabilityDescriptor> {
         self.descriptors(scope)
-    }
-
-    fn snapshot(&self, scope: &Scope) -> CapabilitySnapshot {
-        CapabilitySnapshot {
-            capabilities: self.descriptors(scope),
-            committed_cursor: Cursor(self.registry.revision()),
-        }
     }
 }

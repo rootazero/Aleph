@@ -4,7 +4,7 @@
 use async_trait::async_trait;
 
 use crate::exec::bridge::ApprovalBridge;
-use crate::exec::manager::ExecApprovalManager;
+use crate::exec::manager::{ApprovalResolveOutcome, ExecApprovalManager};
 use crate::gateway::inbound_router::approval_callback::{
     ApprovalCallbackResult, ApprovalCallbackSink,
 };
@@ -47,46 +47,50 @@ impl ApprovalCallbackSink for ManagerCallbackSink {
         // the router lets the request through.
         let (id, decision) = ApprovalBridge::parse_callback(callback_data)?;
 
-        // Originator gate: a channel approval button may only be used by the
-        // person whose message triggered the approval. In a group chat several
-        // paired members see the same inline buttons; without this any of them
-        // could approve (or deny) another member's action — the group-chat
-        // approval bypass. `record_originator` returns `Some` only for a live
-        // record that recorded an originator, so non-channel / legacy records
-        // (`None`) fall through unchanged. Operators resolve via the
-        // `exec.approval.resolve` RPC — a different path — so this channel-only
-        // gate never blocks them.
-        if let Some(originator) = self.manager.record_originator(&id) {
-            if originator != user_id {
-                return Some(ApprovalCallbackResult {
-                    resolved: false,
-                    response_text: "只有发起该操作的用户可以在此审批。".to_string(),
-                });
-            }
-        }
-
-        // Snapshot the allowed_decisions BEFORE resolve; the record may be
-        // moved out of the live set during resolve, after which get_pending
-        // would return None. The allowed list is immutable post-create so
-        // this read is race-free for our purposes.
-        let allowed_for_clamp = self
-            .manager
-            .get_pending(&id)
-            .map(|p| p.record.allowed_decisions.clone())
-            .unwrap_or_default();
-        let resolved = self
-            .manager
-            .resolve_for_channel(&id, decision, Some(user_id.to_string()));
-        let response_text = if resolved {
-            // Pass the POST-clamp decision to decision_response_text. The
-            // manager internally clamps `decision` against allowed_decisions;
-            // echoing the pre-clamp value would tell the user "Allowed
-            // (always)" when their persistent grant was actually narrowed to
-            // a session grant. APPROVAL-R4-02.
-            let effective_decision = decision.clamped_for(&allowed_for_clamp);
-            ApprovalBridge::decision_response_text(&effective_decision).to_string()
-        } else {
-            "This approval has expired or already been processed.".to_string()
+        // The ORIGINATOR gate and the resolution happen in ONE locked step
+        // inside the manager (see `ExecApprovalManager::resolve_for_channel`):
+        // a channel approval button may only be used by the person whose
+        // message triggered the approval, and the card that is CHECKED must be
+        // the card that is RESOLVED. Checking the originator against a
+        // separate snapshot left a window in which the id — reusable once its
+        // card is resolved — was re-registered for another user's card: a
+        // delayed callback then answered a card its author never saw.
+        //
+        // A card that recorded NO originator is refused as well. The
+        // originator is what binds a card to the person allowed to answer it;
+        // without one the card would be answerable by ANY paired member — an
+        // unattended run's approval answered by whoever happens to be in the
+        // chat. Such a card is the operator's to answer, through the operator
+        // RPC (`exec.approval.resolve`), which is a different path and stays
+        // open. A card that is already resolved or expired has no live record
+        // and is reported as expired.
+        let outcome = self.manager.resolve_for_channel(&id, decision, user_id);
+        let (resolved, response_text) = match outcome {
+            ApprovalResolveOutcome::Resolved { decision } => (
+                true,
+                // The decision reported here is the EFFECTIVE one (post
+                // clamp), so the reply states what was actually approved
+                // instead of echoing the request. APPROVAL-R4-02.
+                ApprovalBridge::decision_response_text(&decision).to_string(),
+            ),
+            ApprovalResolveOutcome::WrongOriginator => (
+                false,
+                "只有发起该操作的用户可以在此审批。".to_string(),
+            ),
+            ApprovalResolveOutcome::NoOriginator => (
+                false,
+                "此审批没有关联的发起人，只能由操作员通过 operator RPC 处理。".to_string(),
+            ),
+            ApprovalResolveOutcome::OperatorOnly => (
+                false,
+                "此审批仅可由操作员通过 operator RPC 处理。".to_string(),
+            ),
+            ApprovalResolveOutcome::NotFound
+            | ApprovalResolveOutcome::NotLive
+            | ApprovalResolveOutcome::NotOffered => (
+                false,
+                "This approval has expired or already been processed.".to_string(),
+            ),
         };
         Some(ApprovalCallbackResult {
             resolved,
@@ -191,7 +195,9 @@ mod tests {
     #[tokio::test]
     async fn pending_approval_gets_resolved() {
         let manager = Arc::new(ExecApprovalManager::new());
-        let record = manager.create(&mock_request("rec-1"), 5_000);
+        let mut req = mock_request("rec-1");
+        req.originator_user_id = Some("u1".to_string());
+        let record = manager.create(&req, 5_000);
 
         // register_pending is synchronous: the entry is resolvable the instant
         // it returns, so the callback below cannot race ahead of registration.
@@ -252,10 +258,79 @@ mod tests {
         assert_eq!(resolved.decision, Some(ApprovalDecisionType::AllowOnce));
     }
 
-    /// A record with no originator (non-channel / legacy) keeps the prior
-    /// behaviour: any paired user may resolve — the gate is a no-op.
+    /// An approval id is reusable once its card is resolved. A DELAYED
+    /// callback must therefore not answer the NEXT card registered under that
+    /// id: the originator check and the resolution share one lock, so the
+    /// callback is always judged against the card that is actually resolved.
     #[tokio::test]
-    async fn no_originator_record_is_resolvable_by_anyone() {
+    async fn a_delayed_callback_does_not_answer_a_reused_approval_id() {
+        let manager = Arc::new(ExecApprovalManager::new());
+        let mut alice = mock_request("shared-id");
+        alice.originator_user_id = Some("alice".to_string());
+        let record = manager.create(&alice, 5_000);
+        let (id, rx, wait_timeout) = manager.register_pending(record);
+
+        // Alice answers her own card, which then leaves the live set.
+        let sink = ManagerCallbackSink::new(manager.clone());
+        let out = sink
+            .handle_callback(&format!("approve:{id}:once"), "alice")
+            .await
+            .expect("is an approval callback");
+        assert!(out.resolved);
+        assert_eq!(
+            manager
+                .await_registered(id.clone(), rx, wait_timeout)
+                .await
+                .decision,
+            Some(ApprovalDecisionType::AllowOnce)
+        );
+
+        // The id is free again: Bob's card is raised under it.
+        let mut bob = mock_request("shared-id");
+        bob.originator_user_id = Some("bob".to_string());
+        let record = manager.create(&bob, 5_000);
+        let (bob_id, bob_rx, bob_timeout) = manager.register_pending(record);
+        assert_eq!(bob_id, id);
+
+        // Alice's delayed callback must not answer BOB's card.
+        let out = sink
+            .handle_callback(&format!("approve:{id}:once"), "alice")
+            .await
+            .expect("is an approval callback");
+        assert!(
+            !out.resolved,
+            "a delayed callback must not answer another user's card"
+        );
+        assert!(
+            manager.get_pending(&id).is_some(),
+            "Bob's card stays pending for Bob"
+        );
+
+        // Bob answers his own card.
+        let out = sink
+            .handle_callback(&format!("approve:{bob_id}:once"), "bob")
+            .await
+            .expect("is an approval callback");
+        assert!(out.resolved);
+        assert_eq!(
+            manager
+                .await_registered(bob_id, bob_rx, bob_timeout)
+                .await
+                .decision,
+            Some(ApprovalDecisionType::AllowOnce)
+        );
+    }
+
+    /// A record with NO originator is refused for a channel button.
+    ///
+    /// The originator is what binds a card to the person allowed to answer
+    /// it. Without one the card was answerable by ANY paired member — an
+    /// unattended run's approval answered by whoever happened to be in the
+    /// chat. Such a card is the operator's to answer, through the operator
+    /// RPC (`exec.approval.resolve`), which is a different path and stays
+    /// open.
+    #[tokio::test]
+    async fn a_no_originator_record_is_refused_for_channel_callbacks() {
         let manager = Arc::new(ExecApprovalManager::new());
         // `mock_request` leaves `originator_user_id = None`.
         let record = manager.create(&mock_request("rec-legacy"), 5_000);
@@ -273,10 +348,21 @@ mod tests {
             .await
             .expect("is an approval callback");
         assert!(
-            out.resolved,
-            "a no-originator record stays resolvable by anyone"
+            !out.resolved,
+            "a card nobody owns must not be answerable by a paired member"
+        );
+        assert!(
+            manager.get_pending(&id).is_some(),
+            "the refused card stays pending for the operator"
         );
 
-        let _ = waiter.await.unwrap();
+        // The operator path is a different one, and still resolves it.
+        assert!(manager.resolve(
+            &id,
+            ApprovalDecisionType::AllowOnce,
+            Some("operator".to_string())
+        ));
+        let resolved = waiter.await.unwrap();
+        assert_eq!(resolved.decision, Some(ApprovalDecisionType::AllowOnce));
     }
 }

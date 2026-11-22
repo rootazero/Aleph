@@ -22,17 +22,15 @@ impl OutputFormat {
         match self {
             Self::PlainText => trimmed.to_string(),
             Self::JsonField { field } => {
-                if let Ok(json) = serde_json::from_str::<serde_json::Value>(trimmed) {
-                    if let Some(field_value) = json.get(field) {
-                        if let Some(text) = field_value.as_str() {
-                            return text.to_string();
-                        }
-                        return field_value.to_string();
-                    }
+                let Ok(json) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+                    return trimmed.to_string();
+                };
+                let Some(field_value) = json.get(field) else {
                     return json.to_string();
-                }
-                // Not valid JSON — return raw text
-                trimmed.to_string()
+                };
+                field_value
+                    .as_str()
+                    .map_or_else(|| field_value.to_string(), ToOwned::to_owned)
             }
         }
     }

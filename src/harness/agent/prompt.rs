@@ -111,19 +111,17 @@ pub(crate) fn build_prompt_with_transient_tail(
                     .collect();
                 let earlier = current_turn.is_some_and(|t| t != *turn_id);
                 if let Some(blocks) = reconstruct_assistant_blocks(content, &resolved, earlier) {
-                    messages.push(UnifiedMessage::Assistant { content: blocks });
-                    assistant_emitted = true;
                     // Record which surviving (non-orphan) tool_use call_ids this
                     // turn still owes results for, so a user message injected
                     // before they all land is held back below.
-                    for raw in &content.blocks {
-                        if let Some(ContentBlock::ToolCall { id, .. }) = parse_tool_use_block(raw) {
-                            if resolved.contains(id.as_str()) {
-                                open_tool_use_ids.insert(id.clone());
-                                expected_results.insert(id);
-                            }
+                    for block in &blocks {
+                        if let ContentBlock::ToolCall { id, .. } = block {
+                            open_tool_use_ids.insert(id.clone());
+                            expected_results.insert(id.clone());
                         }
                     }
+                    messages.push(UnifiedMessage::Assistant { content: blocks });
+                    assistant_emitted = true;
                 }
             }
             SessionEvent::UserMessage {
@@ -169,7 +167,11 @@ pub(crate) fn build_prompt_with_transient_tail(
                     // preserve its content as plain user text (R7: the model
                     // judges relevance) instead of an unpaired ToolResult the
                     // provider would reject.
-                    messages.push(orphan_result_note(call_id, tool_name, &output.value));
+                    let rendered = match &output.value {
+                        serde_json::Value::String(s) => std::borrow::Cow::Borrowed(s.as_str()),
+                        other => std::borrow::Cow::Owned(other.to_string()),
+                    };
+                    messages.push(orphan_result_note(call_id, tool_name, &rendered));
                     continue;
                 }
                 // Base case: the structured tool output as a JSON block. When
@@ -205,11 +207,7 @@ pub(crate) fn build_prompt_with_transient_tail(
                 let tool_name = resolve_tool_name(events, idx, call_id).unwrap_or("unknown");
                 if !open_tool_use_ids.remove(call_id) {
                     // Same pair-integrity downgrade as the ToolResult arm.
-                    messages.push(orphan_result_note(
-                        call_id,
-                        tool_name,
-                        &serde_json::Value::String(error.clone()),
-                    ));
+                    messages.push(orphan_result_note(call_id, tool_name, error));
                     continue;
                 }
                 messages.push(UnifiedMessage::ToolResult {
@@ -340,19 +338,15 @@ fn result_call_id_of_turn(event: &SessionEvent, turn: TurnId) -> Option<&str> {
 fn orphan_result_note(
     call_id: &str,
     tool_name: &str,
-    payload: &serde_json::Value,
+    rendered: &str,
 ) -> UnifiedMessage {
-    let rendered = match payload {
-        serde_json::Value::String(s) => s.clone(),
-        other => other.to_string(),
-    };
     tracing::warn!(
         call_id,
         tool_name,
         "downgrading orphaned/duplicate tool result to plain text \
          (no matching tool_use in the rebuilt prompt)",
     );
-    UnifiedMessage::user(orphan_tool_result_note(call_id, tool_name, &rendered))
+    UnifiedMessage::user(orphan_tool_result_note(call_id, tool_name, rendered))
 }
 
 /// Reconstruct one persisted assistant turn into provider content blocks.

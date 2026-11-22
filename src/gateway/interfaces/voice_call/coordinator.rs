@@ -30,7 +30,7 @@ use super::{
 };
 use crate::gateway::telecom::{
     lifecycle_bridge::{ControlAck, ControlCommand, ControlCompletion, LifecycleControlReceiver},
-    public_admission::{PublicAdmission, PublicRunPermit, PublicRunRegistry},
+    public_admission::{PublicRunPermit, PublicRunRegistry},
     PublicHistorySession, PublicHistoryStore, PublicHistoryTurn,
 };
 use crate::orchestrator::dispatch::{
@@ -406,13 +406,16 @@ fn validate_envelope(envelope: &TelecomEnvelope) -> bool {
         }
 }
 
-/// Trusted embedder entry point. Dropping this future revokes call authority,
-/// cancels owned work, and releases its public permit; it cannot spawn a
-/// second agent or leave a caller's active transcript in shared history.
+/// Test-only convenience wrapper: it pre-admits a permit and drives the call
+/// with no lifecycle control receiver. Production must use
+/// [`run_public_voice_call_controlled`], which validates the receiver before any
+/// provider or carrier work and keeps the call remotely hangup-able.
+#[cfg(test)]
 pub async fn run_public_voice_call(
     admitted: AdmittedVoiceCall,
     wiring: PublicVoiceWiring,
 ) -> VoiceCallReport {
+    use crate::gateway::telecom::public_admission::PublicAdmission;
     let permit = match wiring.registry.try_admit(admitted.context()) {
         PublicAdmission::Admitted(p) => p,
         PublicAdmission::OverSpend => return VoiceCallReport::new(VoiceCallTermination::OverSpend),

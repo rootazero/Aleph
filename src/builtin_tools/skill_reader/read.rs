@@ -159,33 +159,27 @@ impl ReadSkillTool {
         self
     }
 
-    /// Where `skill_read` would load `skill_id` from, in a run whose project
-    /// is `project_dir` (and whose agent id task-local is in scope): every
-    /// candidate directory, the one it reads first. Named so the `/<skill>`
-    /// pre-grant (`gateway::execution_engine::slash_skill_pregrant`) judges
-    /// the body the model will actually follow, by this resolution rather
-    /// than a second one.
-    pub(crate) fn load_candidates(project_dir: Option<&Path>, skill_id: &str) -> Vec<PathBuf> {
-        Self::with_auto_discover(project_dir).find_skill_dirs(skill_id)
+    /// The roots [`Self::scan_skill_dirs`] would scan for `skill_id`,
+    /// resolved on the caller's thread — they depend on the agent-id
+    /// task-local, which does not cross into `spawn_blocking`.
+    pub(crate) fn skill_dirs(project_dir: Option<&Path>) -> Vec<PathBuf> {
+        Self::with_auto_discover(project_dir).skills_dirs
     }
 
-    /// Collect every *distinct* directory that contains skill `skill_id`
-    /// (a `SKILL.md`), in precedence order (agent > project > global, per
-    /// [`crate::utils::paths::get_all_skills_dirs`]).
+    /// Where `skill_read` would load `skill_id` from, in a run whose
+    /// project is `project_dir` (and whose agent id task-local is in
+    /// scope): every candidate directory, the one it reads first. Named so
+    /// the `/<skill>` pre-grant (`gateway::execution_engine::
+    /// slash_skill_pregrant`) judges the body the model will actually
+    /// follow, by this resolution rather than a second one.
     ///
-    /// Paths are canonicalized so symlink / hard-link twins that resolve to the
-    /// same physical directory collapse to a single hit: a skill installed once
-    /// but surfaced through several roots (e.g. `~/.aleph/skills/<id>` and
-    /// `~/.claude/skills/<id>` both symlinking `~/.agents/skills/<id>`) is NOT a
-    /// collision. Canonicalization failures fall back to the raw path so a real
-    /// hit is never dropped. Genuine collisions (distinct physical dirs sharing
-    /// an id) are preserved for the caller to resolve by precedence — mirroring
-    /// codex's `seen_canonical_keys` dedup and `skill_list`'s first-occurrence
-    /// win rather than hermes-agent's hard refusal.
-    fn find_skill_dirs(&self, skill_id: &str) -> Vec<PathBuf> {
+    /// Split in two (`skill_dirs` + `scan_skill_dirs`) so the scan can run
+    /// on a blocking thread: the roots depend on the agent-id task-local,
+    /// which does not cross into `spawn_blocking`.
+    pub(crate) fn scan_skill_dirs(skills_dirs: Vec<PathBuf>, skill_id: &str) -> Vec<PathBuf> {
         let mut hits = Vec::new();
         let mut seen_canonical = std::collections::HashSet::new();
-        for skills_dir in &self.skills_dirs {
+        for skills_dir in &skills_dirs {
             #[cfg(test)]
             crate::utils::paths::assert_not_real_claude_home(skills_dir, "skill_read");
             // First: the obvious match — directory whose name equals the id.
@@ -218,6 +212,23 @@ impl ReadSkillTool {
             }
         }
         hits
+    }
+
+    /// Collect every *distinct* directory that contains skill `skill_id`
+    /// (a `SKILL.md`), in precedence order (agent > project > global, per
+    /// [`crate::utils::paths::get_all_skills_dirs`]).
+    ///
+    /// Paths are canonicalized so symlink / hard-link twins that resolve to the
+    /// same physical directory collapse to a single hit: a skill installed once
+    /// but surfaced through several roots (e.g. `~/.aleph/skills/<id>` and
+    /// `~/.claude/skills/<id>` both symlinking `~/.agents/skills/<id>`) is NOT a
+    /// collision. Canonicalization failures fall back to the raw path so a real
+    /// hit is never dropped. Genuine collisions (distinct physical dirs sharing
+    /// an id) are preserved for the caller to resolve by precedence — mirroring
+    /// codex's `seen_canonical_keys` dedup and `skill_list`'s first-occurrence
+    /// win rather than hermes-agent's hard refusal.
+    fn find_skill_dirs(&self, skill_id: &str) -> Vec<PathBuf> {
+        Self::scan_skill_dirs(self.skills_dirs.clone(), skill_id)
     }
 
     /// Validate `skill_id` to prevent path traversal attacks

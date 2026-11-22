@@ -123,18 +123,14 @@ impl MessageRouter {
     pub async fn send(&self, req: SendRequest) -> Result<TeamMessage> {
         // 1. Build recipients from to + cc lists
         let mut recipients = Vec::with_capacity(req.to.len() + req.cc.len());
-        for agent_id in &req.to {
-            recipients.push(Recipient {
-                agent_id: agent_id.clone(),
-                role: RecipientRole::To,
-            });
-        }
-        for agent_id in &req.cc {
-            recipients.push(Recipient {
-                agent_id: agent_id.clone(),
-                role: RecipientRole::Cc,
-            });
-        }
+        recipients.extend(req.to.into_iter().map(|agent_id| Recipient {
+            agent_id,
+            role: RecipientRole::To,
+        }));
+        recipients.extend(req.cc.into_iter().map(|agent_id| Recipient {
+            agent_id,
+            role: RecipientRole::Cc,
+        }));
 
         let team_id = req.team_id.clone();
         let from_agent = req.from_agent.clone();

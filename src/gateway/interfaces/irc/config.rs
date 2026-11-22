@@ -13,7 +13,7 @@ fn default_realname() -> String {
 }
 
 /// IRC channel configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct IrcConfig {
     /// IRC server hostname (e.g., "irc.libera.chat")
     pub server: String,
@@ -48,6 +48,27 @@ pub struct IrcConfig {
     /// Real name shown in WHOIS (default: "Aleph Bot")
     #[serde(default = "default_realname")]
     pub realname: String,
+}
+
+/// Hand-written so the `NickServ` password never reaches a log line, a panic
+/// message or a `tracing` field. Every other field is printed as-is.
+impl std::fmt::Debug for IrcConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IrcConfig")
+            .field("server", &self.server)
+            .field("port", &self.port)
+            .field("nick", &self.nick)
+            .field(
+                "password",
+                &self.password.as_ref().map(|_| "<redacted>".to_string()),
+            )
+            .field("channels", &self.channels)
+            .field("allowed_users", &self.allowed_users)
+            .field("require_mention", &self.require_mention)
+            .field("use_tls", &self.use_tls)
+            .field("realname", &self.realname)
+            .finish()
+    }
 }
 
 impl Default for IrcConfig {

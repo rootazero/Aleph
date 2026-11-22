@@ -201,29 +201,34 @@ pub(crate) async fn gate_action_evidence(
 /// the buffer's FIFO cap.
 #[must_use]
 pub(crate) fn render_rejected_block(rejected: &[(String, String, String)]) -> String {
+    use std::fmt::Write as _;
     if rejected.is_empty() {
         return String::new();
     }
-    let entries: Vec<String> = rejected
-        .iter()
-        .filter(|(target, _, _)| !target.is_empty())
-        .map(|(target, summary, reason)| {
-            if summary.is_empty() {
-                format!("  - supersede of '{target}' — rejected: {reason}")
-            } else {
-                format!("  - supersede of '{target}' (proposed '{summary}') — rejected: {reason}")
-            }
-        })
-        .collect();
-    if entries.is_empty() {
-        // Legacy fingerprint-only rows carry no context; nothing to show.
-        return String::new();
+    let mut buf = String::new();
+    for (target, summary, reason) in rejected {
+        if target.is_empty() {
+            continue;
+        }
+        if buf.is_empty() {
+            buf.push_str(
+                "Previously REJECTED edits — do NOT re-propose these (the recall-evidence \
+                 gate already turned them down; propose something better or SKIP):\n",
+            );
+        }
+        if summary.is_empty() {
+            let _ = writeln!(buf, "  - supersede of '{target}' — rejected: {reason}");
+        } else {
+            let _ = writeln!(
+                buf,
+                "  - supersede of '{target}' (proposed '{summary}') — rejected: {reason}"
+            );
+        }
     }
-    format!(
-        "Previously REJECTED edits — do NOT re-propose these (the recall-evidence \
-         gate already turned them down; propose something better or SKIP):\n{}\n\n",
-        entries.join("\n")
-    )
+    if !buf.is_empty() {
+        buf.push('\n');
+    }
+    buf
 }
 
 /// Charge the cycle's shared `EditBudget` ("textual learning rate") for a

@@ -87,7 +87,7 @@ impl SqliteCoordTaskStore {
     /// caller-side responsibility, no drift.
     ///
     /// No-op when the task has no `team_id` (`CoordTasks` can be orphan-scoped).
-    async fn emit_task_topic(&self, task: &CoordTask, verb: &str) {
+    async fn emit_task_topic(&self, task: &CoordTask, previous: Option<&CoordTask>, verb: &str) {
         // --- 1. Gateway WS topic (existing path, fire-and-forget) ----------
         if let Some(bus) = &self.bus {
             if let Some(team_id) = task.team_id.as_deref() {
@@ -117,20 +117,26 @@ impl SqliteCoordTaskStore {
         let task_id = task.id.clone();
         let bus = crate::event::GlobalBus::global();
 
+        // Assignment is a transition, not just a field on creation. Emit it
+        // for both the initial owner and every later change to a new owner.
+        let owner_changed = previous.map_or(false, |old| old.owner != task.owner);
+        if (verb == "created" || owner_changed) && task.owner.is_some() {
+            let owner = task.owner.as_deref().unwrap_or_default();
+            bus.broadcast(
+                "coord_task_store",
+                &task_id,
+                crate::event::AlephEvent::TeamTaskAssigned {
+                    team_id: team_id.clone(),
+                    task_id: task_id.clone(),
+                    assignee_id: owner.to_string(),
+                },
+            )
+            .await;
+        }
+        let previous_status = previous.map(|old| old.status.as_str().to_string());
+
         match verb {
             "created" => {
-                if let Some(owner) = &task.owner {
-                    bus.broadcast(
-                        "coord_task_store",
-                        &task_id,
-                        crate::event::AlephEvent::TeamTaskAssigned {
-                            team_id: team_id.clone(),
-                            task_id: task_id.clone(),
-                            assignee_id: owner.clone(),
-                        },
-                    )
-                    .await;
-                }
                 bus.broadcast(
                     "coord_task_store",
                     &task_id,
@@ -138,7 +144,7 @@ impl SqliteCoordTaskStore {
                         team_id: team_id.clone(),
                         task_id: task_id.clone(),
                         status: task.status.as_str().to_string(),
-                        progress: None,
+                        previous_status: previous_status.clone(),
                     },
                 )
                 .await;
@@ -178,7 +184,7 @@ impl SqliteCoordTaskStore {
                         team_id: team_id.clone(),
                         task_id: task_id.clone(),
                         status: task.status.as_str().to_string(),
-                        progress: None,
+                        previous_status,
                     },
                 )
                 .await;

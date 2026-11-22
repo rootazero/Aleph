@@ -156,7 +156,7 @@ pub async fn export_legacy_messages_from(
     // -----------------------------------------------------------------------
     let mut stmt = conn
         .prepare(
-            "SELECT key, agent_id, session_type, created_at, last_active_at, message_count, total_tokens, auto_reset_at, state, metadata, label, input_tokens, output_tokens, model, model_provider, parent_session_key, compaction_count FROM sessions",
+            "SELECT key, agent_id, session_type, created_at, last_active_at, message_count, total_tokens, state, metadata, label, input_tokens, output_tokens, model, model_provider, parent_session_key, compaction_count FROM sessions",
         )
         .map_err(|e| crate::error::AlephError::ConfigError {
             message: format!("Prepare failed: {e}"),
@@ -165,11 +165,11 @@ pub async fn export_legacy_messages_from(
 
     let session_rows = stmt
         .query_map([], |row| {
-            let state_str: Option<String> = row.get(8)?;
+            let state_str: Option<String> = row.get(7)?;
             let state = state_str
                 .and_then(|s| serde_json::from_str(&format!("\"{s}\"")).ok())
                 .unwrap_or_default();
-            let metadata_json: Option<String> = row.get(9)?;
+            let metadata_json: Option<String> = row.get(8)?;
             let (topic, status, identity_meta) =
                 SessionMetadata::parse_legacy_metadata_json(metadata_json.as_deref());
             Ok(SessionMetadata {
@@ -180,25 +180,24 @@ pub async fn export_legacy_messages_from(
                 last_active_at: row.get(4)?,
                 message_count: row.get(5)?,
                 total_tokens: row.get(6)?,
-                auto_reset_at: row.get(7)?,
                 state: Some(state),
                 topic,
                 status,
                 identity_meta,
-                label: row.get(10)?,
+                label: row.get(9)?,
                 // Legacy rows: ALTER TABLE ADD COLUMN without DEFAULT leaves
                 // NULL for pre-migration data. Coerce to 0 so the SQLite →
                 // file-based migration doesn't abort on the first legacy row.
-                input_tokens: row.get::<_, Option<i64>>(11)?.unwrap_or(0),
-                output_tokens: row.get::<_, Option<i64>>(12)?.unwrap_or(0),
-                model: row.get(13)?,
-                model_provider: row.get(14)?,
-                parent_session_key: row.get(15)?,
+                input_tokens: row.get::<_, Option<i64>>(10)?.unwrap_or(0),
+                output_tokens: row.get::<_, Option<i64>>(11)?.unwrap_or(0),
+                model: row.get(12)?,
+                model_provider: row.get(13)?,
+                parent_session_key: row.get(14)?,
                 // Same NULL coercion as input_tokens/output_tokens above:
                 // legacy ALTER TABLE ADD COLUMN without DEFAULT left NULL for
                 // pre-migration rows. Coerce to 0 so a single legacy row
                 // doesn't abort the entire SQLite → file-based migration.
-                compaction_count: row.get::<_, Option<i64>>(16)?.unwrap_or(0),
+                compaction_count: row.get::<_, Option<i64>>(15)?.unwrap_or(0),
                 ..Default::default()
             })
         })
@@ -718,7 +717,6 @@ async fn rebuild_metadata_from_transcript(
         // fabrications: a zero token count reads as "unknown", an invented one
         // would read as measured.
         total_tokens: 0,
-        auto_reset_at: None,
         state: Some(crate::gateway::session_manager::SessionState::Idle),
         derived_title,
         last_message_preview: preview,

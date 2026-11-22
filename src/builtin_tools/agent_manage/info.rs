@@ -73,10 +73,10 @@ impl fmt::Display for AgentInfoOutput {
 // =============================================================================
 
 /// Tool that returns detailed capabilities and configuration of a registered
-/// agent. Uses the catalog [`AgentRegistry`] (builtin + user/project
-/// `AgentDef`s), not the runtime instance registry — `agent_info` is read-only
-/// and accepts whatever the delegation face accepts (plugin sub-agents,
-/// builtin aliases like `planner` -> `plan`).
+/// agent. Reads the catalog [`AgentRegistry`] (builtin + user/project
+/// `AgentDef`s) first and falls back to the runtime instance registry, so
+/// `agent_info` answers for every agent that exists — the definitions the
+/// catalog holds AND the instances `agent_create` made.
 #[derive(Clone)]
 pub struct AgentInfoTool {
     catalog: Arc<AgentRegistry>,
@@ -84,6 +84,15 @@ pub struct AgentInfoTool {
     /// from the per-channel binding table (many-to-one aware) so the model
     /// sees the same channels `agent_list` reports instead of an empty list.
     store: Option<Arc<crate::gateway::agent_env::AgentEnvStore>>,
+    /// Optional runtime instance registry — the agents that exist as live
+    /// instances (`agent_create`, `config.toml [[agents.list]]`).
+    ///
+    /// The catalog holds *definitions*; this holds *instances*. An agent
+    /// `agent_create` just made is an instance with no catalog definition, so
+    /// without this the tool answered "not found" for an agent the model had
+    /// just created, while `agent_list` listed it — the two faces disagreed
+    /// about which agents exist.
+    runtime: Option<Arc<crate::gateway::agent_instance::AgentRegistry>>,
 }
 
 impl AgentInfoTool {
@@ -91,6 +100,7 @@ impl AgentInfoTool {
         Self {
             catalog,
             store: None,
+            runtime: None,
         }
     }
 
@@ -103,21 +113,43 @@ impl AgentInfoTool {
         self
     }
 
+    /// Wire the runtime instance registry so an agent that exists only as an
+    /// instance (`agent_create`) can be inspected. Without it the catalog is
+    /// the only source, and a freshly created agent is invisible here.
+    #[must_use]
+    pub fn with_runtime_registry(
+        mut self,
+        runtime: Arc<crate::gateway::agent_instance::AgentRegistry>,
+    ) -> Self {
+        self.runtime = Some(runtime);
+        self
+    }
+
     /// Compose the output without instantiating an `AlephTool` envelope.
     /// Used both by `call` (the tool path) and by tests / RPCs that already
     /// hold a `&AgentRegistry`.
-    fn build_output(&self, agent_id: &str) -> Result<AgentInfoOutput> {
+    async fn build_output(&self, agent_id: &str) -> Result<AgentInfoOutput> {
         let project_root = crate::projects::current_project_root();
-        let agent_def = self
-            .catalog
-            .resolve(agent_id, project_root.as_deref())
-            .ok_or_else(|| {
-                let available = self.catalog.available_agent_ids(project_root.as_deref());
-                AgentManageError::AgentNotFound {
-                    agent_id: agent_id.to_string(),
-                    available,
+        let Some(agent_def) = self.catalog.resolve(agent_id, project_root.as_deref()) else {
+            // Not a catalog definition — maybe a live instance (an agent
+            // `agent_create` made, or one registered from `config.toml`).
+            if let Some(runtime) = self.runtime.as_ref() {
+                if let Some(config) = runtime.get_config(agent_id).await {
+                    return Ok(Self::runtime_output(agent_id, &config));
                 }
-            })?;
+            }
+            let mut available = self.catalog.available_agent_ids(project_root.as_deref());
+            if let Some(runtime) = self.runtime.as_ref() {
+                available.extend(runtime.list().await);
+                available.sort();
+                available.dedup();
+            }
+            return Err(AgentManageError::AgentNotFound {
+                agent_id: agent_id.to_string(),
+                available,
+            }
+            .into());
+        };
 
         // Report the *effective* allowlist: expand named tool sets (e.g.
         // "INVESTIGATION") into concrete tools and union with the flat
@@ -154,6 +186,59 @@ impl AgentInfoTool {
             bound_channels: Vec::new(), // Filled in by `call` from the store.
         })
     }
+
+    /// The runtime view of an agent: what the instance registry actually
+    /// holds.
+    ///
+    /// The catalog fields a runtime instance has no answer for are reported
+    /// honestly — no `when_to_use`, the default context mode — rather than
+    /// invented. `mode` is `"Runtime"` so the model can tell the two faces
+    /// apart (the catalog reports `Primary` / `SubAgent`).
+    fn runtime_output(
+        agent_id: &str,
+        config: &crate::gateway::agent_instance::AgentInstanceConfig,
+    ) -> AgentInfoOutput {
+        AgentInfoOutput {
+            id: agent_id.to_string(),
+            description: identity_description(&config.agent_dir)
+                .or_else(|| config.display_name.clone())
+                .unwrap_or_default(),
+            when_to_use: None,
+            mode: "Runtime".to_string(),
+            // An empty whitelist means "every tool" (`tool_allowed_by`).
+            allowed_tools: if config.tool_whitelist.is_empty() {
+                vec!["*".to_string()]
+            } else {
+                config.tool_whitelist.clone()
+            },
+            denied_tools: config.tool_blacklist.clone(),
+            max_iterations: Some(config.max_loops),
+            context_mode: crate::agents::SpawnContext::from_context_mode(
+                &crate::agents::ContextMode::default(),
+            )
+            .as_arg()
+            .to_string(),
+            token_budget: config.max_tokens.map(|budget| budget as u32),
+            bound_channels: Vec::new(),
+        }
+    }
+}
+
+/// The description an agent's `IDENTITY.md` carries, if it has one.
+///
+/// `agent_create` writes the user's description into the identity file
+/// (`## Description`); the catalog's `description` field carries the same
+/// text for a catalog agent. A runtime agent reports the description from
+/// the file that holds it.
+fn identity_description(agent_dir: &std::path::Path) -> Option<String> {
+    let identity = std::fs::read_to_string(agent_dir.join("IDENTITY.md")).ok()?;
+    let body = identity.split("## Description").nth(1)?;
+    let body = body.split_once("\n## ").map_or(body, |(head, _)| head);
+    let description = body.trim();
+    if description.is_empty() {
+        return None;
+    }
+    Some(description.to_string())
 }
 
 #[async_trait]
@@ -169,7 +254,7 @@ impl AlephTool for AgentInfoTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         info!(agent_id = %args.agent_id, "agent_info requested");
 
-        let mut out = self.build_output(&args.agent_id)?;
+        let mut out = self.build_output(&args.agent_id).await?;
         // `bound_channels` is only known to the runtime `AgentEnvStore`; the
         // catalog knows nothing about per-channel switches. When the store
         // isn't wired (minimal server, embedded) we report an empty list
@@ -192,6 +277,7 @@ impl AlephTool for AgentInfoTool {
 mod tests {
     use super::*;
     use crate::agents::AgentRegistry;
+    use crate::builtin_tools::agent_manage::test_utils;
 
     fn test_registry() -> Arc<AgentRegistry> {
         Arc::new(AgentRegistry::with_builtins())
@@ -248,6 +334,76 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("not found"));
+    }
+
+    /// An agent that exists only as a runtime instance (one `agent_create`
+    /// made) has no catalog definition. `agent_info` used to answer "not
+    /// found" for it while `agent_list` listed it — the two faces disagreed
+    /// about which agents exist.
+    #[tokio::test]
+    async fn info_reports_an_agent_that_exists_only_as_a_runtime_instance() {
+        let runtime = Arc::new(crate::gateway::agent_instance::AgentRegistry::new());
+        let (sm, _sm_temp) = test_utils::session_store();
+        runtime
+            .register_config(
+                crate::gateway::agent_instance::AgentInstanceConfig {
+                    agent_id: "scout".to_string(),
+                    display_name: Some("Scout".to_string()),
+                    ..Default::default()
+                },
+                sm,
+            )
+            .await;
+
+        let tool = AgentInfoTool::new(test_registry()).with_runtime_registry(Arc::clone(&runtime));
+        let info = tool
+            .call(AgentInfoArgs {
+                agent_id: "scout".to_string(),
+            })
+            .await
+            .expect("a runtime instance must be inspectable");
+        assert_eq!(info.id, "scout");
+        assert_eq!(info.mode, "Runtime");
+        // An empty whitelist means "every tool".
+        assert_eq!(info.allowed_tools, vec!["*".to_string()]);
+        assert!(info.when_to_use.is_none());
+    }
+
+    /// The description an `agent_create` wrote into the identity file is the
+    /// same text the catalog carries for a catalog agent — the runtime face
+    /// reports it from the file that holds it.
+    #[tokio::test]
+    async fn info_reports_the_description_from_the_identity_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let agent_dir = temp.path().join("scout");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        std::fs::write(
+            agent_dir.join("IDENTITY.md"),
+            "# IDENTITY.md\n\n## Description\n\nFinds the missing thing.\n\n## Other\n\nignored\n",
+        )
+        .unwrap();
+
+        let runtime = Arc::new(crate::gateway::agent_instance::AgentRegistry::new());
+        let (sm, _sm_temp) = test_utils::session_store();
+        runtime
+            .register_config(
+                crate::gateway::agent_instance::AgentInstanceConfig {
+                    agent_id: "scout".to_string(),
+                    agent_dir,
+                    ..Default::default()
+                },
+                sm,
+            )
+            .await;
+
+        let tool = AgentInfoTool::new(test_registry()).with_runtime_registry(Arc::clone(&runtime));
+        let info = tool
+            .call(AgentInfoArgs {
+                agent_id: "scout".to_string(),
+            })
+            .await
+            .expect("a runtime instance must be inspectable");
+        assert_eq!(info.description, "Finds the missing thing.");
     }
 
     #[test]
