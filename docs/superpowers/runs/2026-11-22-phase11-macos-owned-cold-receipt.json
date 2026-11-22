@@ -1,0 +1,51 @@
+{
+  "version": "2026-11-22.14",
+  "status": "PASS_SCOPED_FOREGROUND_COLD_ADMISSION / NOT_PACKAGED_HOST_COLD_START",
+  "baseline": "c91fcad4a476f776b5b527504f5570c2c077122e",
+  "fixture": "desktop/host/src/local_server/admission.rs::tests::cold_start_admits_and_reaps_owned_bundled_gateway",
+  "source_sha256": {
+    "Cargo.lock": "7368cf881a870488bb4ea04241f5b6257833efb6bf74c4a5debbdd41ad37a9c6",
+    "desktop/host/Cargo.toml": "0d25e576d570af4d42f4eff5d41d73196c3fa012b2bc698c572ac07aa7924461",
+    "desktop/host/src/local_server/admission.rs": "e902c40daf6e585268c5ac2739d00560a5803f6eeac9b2d59b1432649727c75e",
+    "desktop/nsh-shell/macos/bundle-local.sh": "5b953ddf9485866df9b1d6fc1d08a7d8b334783ce641260d6fbd3b9441e7359d",
+    "docs/superpowers/specs/2026-11-21-phase11-nsh-cutover.md": "bc5289ae6f7c36af2e34105a7acb0e1c01368bdad38cd4bfd5be7a36bc9e9384",
+    "docs/superpowers/runs/2026-11-21-phase11-nsh-inventory.json": "abdd7608b27e87289e8c8974bc15bfea3fc1b36bc83d9f5b57185939172a3cc4"
+  },
+  "raw_sha256": {
+    ".phase10-evidence/phase11-macos-owned-cold.yQD2j5/cold-trace.log": "e3b77f18046de5e1ed598a3fef923afd6a46b7fb5f425ac89cda72ac6cf9ea67",
+    ".phase10-evidence/phase11-macos-owned-cold.yQD2j5/gateway-trace.trace": "882742f945a5e53e364df156c0d2524b28a97b2ed60c75bed1555aa904e86ab0",
+    ".phase10-evidence/phase11-macos-owned-cold.yQD2j5/cold-offline.log": "485ff84d9a8df7cecd2da89353a52785ce691578a6477844d1002dc3f7352e27",
+    ".phase10-evidence/phase11-macos-owned-cold.yQD2j5/gateway-offline.log": "6017431d46720e9c112d9c2bc6579ea9e3f230b151cd83401282d3414115f100",
+    ".phase10-evidence/phase11-macos-owned-cold.yQD2j5/cold-offline-backend.log": "9bc8d98c3809ddee18f9c5214e73b6925704f9b17d17f4d00159c8321c0c2fc4",
+    ".phase10-evidence/phase11-macos-owned-cold.yQD2j5/gateway-offline-backend.log": "cc10e5ddee5773e937e85f4a7556d9d52867f46c0a7672387cc6c056056012e9",
+    ".phase10-evidence/phase11-macos-owned-cold.yQD2j5/host-suite.log": "9932719e759fffaa40932a0d312edd5c4f798af6d692846d35eeae5a24ffd10b",
+    ".phase10-evidence/phase11-macos-owned-cold.yQD2j5/host-clippy.log": "46351e33899ffa64d63f7e91caa251760c90ffbd2e44f32f721b59a57aa33cd5"
+  },
+  "binary_sha256": {
+    ".phase10-evidence/phase11-macos-full-bundle.O5Xu3P/Aleph-NSH-Full.app/Contents/MacOS/aleph-server": "8cffc4e11c96e3eb06bbca9e2940284ebd45d99e01f22d58c622830f4bb15764"
+  },
+  "historical_sha256": {
+    ".phase10-evidence/g7-official-matrix.Ji0duOcq/matrix.json": "fbf5f1272be769ae554ba53df065ef171badb6bbe942bb90e254168664e5f7c2"
+  },
+  "effects": [
+    "fresh private state and non-default loopback",
+    "actual signed sibling runs in foreground with outbound denied and explicit file session backend",
+    "strict compatible readiness accepted",
+    "lsof matched original still-owned child PID",
+    "TERM followed by successful exit without forced cleanup",
+    "listener refused connection and fixture root removed"
+  ],
+  "checks": {
+    "explicit_ignored_case": "1 passed",
+    "host_suite": "17 unit and 8 integration passed; 2 opt-in cases ignored",
+    "clippy": "strict all targets with gateway-admission passed",
+    "cargo": "4 GiB memory gate; offline locked jobs 1 after dev-dependency lock edge refresh"
+  },
+  "limits": [
+    "unrestricted initial boot timed out during external content clones",
+    "offline diagnostic without explicit general config failed with empty backend",
+    "no timeout changes or production config fix",
+    "not NSH production detached-launch/GUI verification",
+    "no installed service, default endpoint, Windows/Linux, default switch or dual-track acceptance"
+  ]
+}

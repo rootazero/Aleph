@@ -220,6 +220,123 @@ mod tests {
             .unwrap();
     }
 
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    #[ignore = "requires the locally assembled macOS aleph-server sibling; starts only a private foreground process"]
+    async fn cold_start_admits_and_reaps_owned_bundled_gateway() {
+        use std::process::Stdio;
+        use std::time::Duration;
+        use tokio::process::Command;
+
+        let server = std::path::PathBuf::from(
+            std::env::var_os("ALEPH_GATEWAY_COLD_QA_BINARY").expect("provide the bundled server"),
+        );
+        let server = server.canonicalize().unwrap();
+        assert!(server.ends_with("Contents/MacOS/aleph-server"));
+        let root = tempfile::tempdir().unwrap();
+        let config = root.path().join("config.toml");
+        let listener = TcpListener::bind((super::DAEMON_HOST, 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        assert_ne!(port, super::super::DAEMON_PORT);
+        std::fs::write(
+            &config,
+            format!(
+                "[general]\nsession_store_backend = \"file\"\n\
+                 [gateway]\nhost = \"127.0.0.1\"\nport = {port}\n\
+                 [agents]\n[[agents.list]]\nid = \"main\"\ndefault = true\nname = \"Cold-start QA\"\n\
+                 [memory]\nenabled = false\n[memory.dreaming]\nenabled = false\n\
+                 [cron]\nenabled = false\n[heartbeat]\nenabled = false\n\
+                 [mcp]\nenabled = false\n[acp]\nenabled = false\n"
+            ),
+        )
+        .unwrap();
+        let log_path = std::path::PathBuf::from(
+            std::env::var_os("ALEPH_GATEWAY_COLD_QA_LOG").expect("provide a new Gateway log path"),
+        );
+        let log = std::fs::File::create_new(&log_path).unwrap();
+        let mut child = None;
+        drop(listener);
+        let admission = ensure(port, async || {
+            child = Some(
+                // Disable external content fetches; exercise the real embedded fallback.
+                Command::new("/usr/bin/sandbox-exec")
+                    .args(["-p", "(version 1) (allow default) (deny network-outbound)"])
+                    .arg(&server)
+                    .arg("--config")
+                    .arg(&config)
+                    .args(["--bind", "127.0.0.1", "--port", &port.to_string(), "start"])
+                    .env_clear()
+                    .env("HOME", root.path())
+                    .env("ALEPH_HOME", root.path())
+                    .env("TMPDIR", root.path())
+                    .current_dir(root.path())
+                    .stdin(Stdio::null())
+                    .stdout(log.try_clone().unwrap())
+                    .stderr(log)
+                    .kill_on_drop(true)
+                    .spawn()
+                    .map_err(|e| format!("could not start owned Gateway: {e}"))?,
+            );
+            Ok(())
+        })
+        .await;
+
+        let mut child = child.expect("cold admission must start a Gateway");
+        let pid = child.id().unwrap().to_string();
+        let selector = format!("-iTCP@127.0.0.1:{port}");
+        let owns_listener = Command::new("/usr/sbin/lsof")
+            .args(["-nP", "-a", "-p", &pid, &selector, "-sTCP:LISTEN", "-t"])
+            .output()
+            .await
+            .is_ok_and(|r| r.status.success() && r.stdout == format!("{pid}\n").as_bytes());
+        // Only the original, still-unreaped Child PID can receive this signal.
+        let before_shutdown = child.try_wait().unwrap();
+        let signaled = before_shutdown.is_none()
+            && Command::new("/bin/kill")
+                .args(["-TERM", &pid])
+                .status()
+                .await
+                .is_ok_and(|status| status.success());
+        let natural = match tokio::time::timeout(Duration::from_secs(30), child.wait()).await {
+            Ok(Ok(status)) => status.success(),
+            _ => {
+                child.kill().await.unwrap();
+                false
+            }
+        };
+        let port_closed = super::port_open(port).await == Some(false);
+        if admission.is_err() {
+            eprintln!(
+                "owned Child before shutdown: {before_shutdown:?}; owns listener: {owns_listener}"
+            );
+            let logs = root.path().join("logs");
+            if let Ok(entries) = std::fs::read_dir(logs) {
+                use std::io::{self, Read};
+                let mut diagnostic =
+                    std::fs::File::create_new(log_path.with_extension("trace")).unwrap();
+                for entry in entries.flatten().filter(|e| {
+                    e.file_name()
+                        .to_string_lossy()
+                        .starts_with("aleph-server.log.")
+                }) {
+                    if let Ok(file) = std::fs::File::open(entry.path()) {
+                        io::copy(&mut file.take(256 * 1024), &mut diagnostic).unwrap();
+                    }
+                }
+            }
+        }
+        let path = root.path().to_owned();
+        root.close().unwrap();
+        assert!(!path.exists());
+        admission.unwrap();
+        assert!(
+            owns_listener,
+            "started process did not own the admitted listener"
+        );
+        assert!(signaled && natural, "owned process did not exit cleanly");
+        assert!(port_closed, "owned listener did not close");
+    }
+
     #[tokio::test]
     async fn unknown_listener_is_refused_without_launch() {
         with_listener(

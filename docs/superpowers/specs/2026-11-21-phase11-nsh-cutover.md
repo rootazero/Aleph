@@ -1,7 +1,7 @@
 # Phase11 NSH Cutover Contract / Phase11 NSH 切换契约
 
 **Status / 状态:** implemented foundation slices, NOT P11-A–H acceptance / 基础切片已实施，不是全期验收
-**Version / 版本:** `2026-11-22.13`
+**Version / 版本:** `2026-11-22.14`
 **Scope / 范围:** official platform entry selection, fixed credential transport and immutable launch targets / 官方平台入口选择、固定凭据传输与不可变启动目标
 
 ## 1. Authority and non-goals / 权威与不做事项
@@ -286,3 +286,9 @@ Only after those observations may the fixture call the existing fixed load/delet
 The existing local bundle assembler keeps its two-argument host-only invocation. Explicit `--server <binary>` adds an executable at `Contents/MacOS/aleph-server`, the exact sibling that strict local startup resolves. The caller supplies a compatible `embedded-core` host and server; the assembler does not infer Cargo features or accept compatibility by file name. It ad-hoc signs the child before the outer bundle, verifies the bundle recursively and publishes with the same exclusive rename. Invalid input or failed signing must leave the destination unpublished. / 保留现有仅宿主入口；显式加装服务、内外签名与独占发布，不扫描 PATH、不改已安装包。
 
 **SPEC / 规格:** preserve the existing local application identity and no-replacement rule; this is local assembly, not installer/product identity, notarization, update feed, helper migration or feature verification. **QUALITY / 质量:** verify actual staged executables and signatures, host-only absence, invalid input with no published bundle, and the existing competing-publisher regression. The [local assembly receipt](../runs/2026-11-22-phase11-macos-full-bundle-receipt.json) binds the real debug payload signatures, untouched inputs and CLI help execution. Packaging is not cold-start evidence. / 使用真实本机签名工具，分别验证 full、仅宿主及拒绝路径，不冒称已经启动服务。
+
+## 19. Isolated macOS foreground cold admission / macOS 隔离前台冷启动准入
+
+The shared admission test starts the actual signed sibling from section 18 in a fresh private root on a non-default loopback port. Only the test process supplies the launcher; the server runs in the foreground with outbound connections denied using the local macOS sandbox, exercising the embedded-content fallback. `lsof` verifies that the original child owns the admitted listener; the test sends TERM only to that unreaped child and requires successful exit without forced cleanup, connection refusal, and root removal. / 真实服务、真实监听归属与回收；不经过 NSH 的生产后台启动器，也不注册服务。
+
+The unrestricted empty-root probe did not acquire readiness within the existing 40-second bound while startup was trying external content clones. An outbound-denied diagnostic exposed a separate missing `[general]` default (`Unknown session store backend ''; expected 'file' or 'sqlite'.`). The accepted fixture explicitly declares `file`; that declaration is not a production fix. Neither the admission timeout nor policy changed. See the [isolated cold-start receipt](../runs/2026-11-22-phase11-macos-owned-cold-receipt.json). / 保留失败证据，不放宽门槛；联网首次启动及默认配置仍需另证。

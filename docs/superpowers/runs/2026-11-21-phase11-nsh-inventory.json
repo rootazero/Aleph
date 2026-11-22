@@ -1,6 +1,6 @@
 {
   "artifact": "phase11-nsh-inventory",
-  "version": "2026-11-22.13",
+  "version": "2026-11-22.14",
   "status": "FOUNDATION_IMPLEMENTED / P11-A-H_NOT_ACCEPTED",
   "authority": [
     "docs/superpowers/plans/2026-11-21-phase11-nsh-cutover.md",
@@ -682,6 +682,12 @@
     "owner": "desktop/nsh-shell/macos/bundle-local.sh --server stages the exact Contents/MacOS/aleph-server sibling, signs the staged copies and publishes without replacement; two-argument mode remains host-only",
     "receipt": "docs/superpowers/runs/2026-11-22-phase11-macos-full-bundle-receipt.json",
     "limits": "caller supplies the embedded-core build; no feature validation, native helper migration, installer, release identity, update, cold start, stop or other-platform package acceptance"
+  },
+  "macos_owned_foreground_cold_start": {
+    "status": "PASS_SCOPED_FOREGROUND_COLD_ADMISSION / NOT_PACKAGED_HOST_COLD_START",
+    "receipt": "docs/superpowers/runs/2026-11-22-phase11-macos-owned-cold-receipt.json",
+    "effects": "Actual signed sibling built from production server code starts from a private empty state on non-default loopback with outbound networking denied and session backend explicitly configured; shared strict admission passes; original child owns the listener, exits 0 after TERM without forced cleanup, port refuses connections and root is removed",
+    "limits": "No NSH GUI/production detached-launch path, unrestricted fresh-home boot, default-config fix, installed service, Windows/Linux or Phase11 acceptance"
   },
   "active_reference_audit": {
     "census": "docs/superpowers/runs/2026-11-22-phase11-active-references.json",
