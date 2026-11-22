@@ -21,7 +21,7 @@ use std::sync::{
 };
 use std::task::Poll;
 use std::time::Duration;
-use tokio::sync::Notify;
+use tokio::sync::{Notify, RwLock};
 
 use super::super::{check_origin_rate, DispatchPeer, RpcExecutor};
 
@@ -262,11 +262,16 @@ async fn bound_idempotency_waiting_and_cached_results_revalidate_device() {
         }
     });
     let executor = executor(handlers, Arc::new(RateLimiter::new(Default::default())));
-    let producer = bind(&peer("alice")).await;
-    let waiting = peer("alice");
-    let waiter = bind(&waiting).await;
-    let cached = peer("alice");
-    let reader = bind(&cached).await;
+    let connections = Arc::new(RwLock::new(
+        ["producer", "waiter", "cache-reader"]
+            .into_iter()
+            .map(|id| (id.to_owned(), fixture_state("alice")))
+            .collect(),
+    ));
+    let legacy = |id: &str| DispatchPeer::legacy(connections.clone(), id.to_owned(), false);
+    let producer = bind(&legacy("producer")).await;
+    let waiter = bind(&legacy("waiter")).await;
+    let reader = bind(&legacy("cache-reader")).await;
     let request = |id| {
         JsonRpcRequest::with_id(
             "chat.send",
@@ -282,11 +287,10 @@ async fn bound_idempotency_waiting_and_cached_results_revalidate_device() {
         tokio::pin!(joined);
         assert!(matches!(futures::poll!(&mut joined), Poll::Pending));
         assert_eq!(hits.load(Ordering::SeqCst), 1);
-        waiting
-            .connections
+        connections
             .write()
             .await
-            .get_mut(&waiting.conn_id)
+            .get_mut("waiter")
             .unwrap()
             .device_id = Some("other-device".into());
         release.notify_one();
@@ -294,11 +298,10 @@ async fn bound_idempotency_waiting_and_cached_results_revalidate_device() {
         let joined = joined.await;
 
         let start = reader.snapshot().await.unwrap();
-        cached
-            .connections
+        connections
             .write()
             .await
-            .get_mut(&cached.conn_id)
+            .get_mut("cache-reader")
             .unwrap()
             .device_id = Some("other-device".into());
         let from_cache = execute(&executor, &reader, request(3), &start).await;
