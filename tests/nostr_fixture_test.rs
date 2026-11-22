@@ -1,5 +1,5 @@
 use alephcore::gateway::interfaces::nostr::message_ops::{
-    build_dm, build_text_note, derive_pubkey, sign_event,
+    build_text_note, derive_pubkey, sign_event,
 };
 
 const TEST_PRIVKEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -30,16 +30,6 @@ fn test_nostr_build_text_note() {
     assert_eq!(event.kind, 1);
     assert_eq!(event.content, "Hello Nostr!");
     assert_eq!(event.pubkey, pubkey);
-}
-
-#[test]
-fn test_nostr_build_dm() {
-    let pubkey = derive_pubkey(TEST_PRIVKEY).unwrap();
-    let recipient = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
-    let event = build_dm("Secret", &pubkey, recipient);
-
-    assert_eq!(event.kind, 4);
-    assert_eq!(event.content, "Secret");
 }
 
 #[test]

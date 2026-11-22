@@ -88,6 +88,18 @@ impl NostrMessageOps {
 
         let sub_id = format!("aleph-{}", own_pubkey.get(..8).unwrap_or(&own_pubkey));
 
+        // Kind 4 is a NIP-04 *encrypted* DM and this channel has no decryption:
+        // subscribing to it would only deliver ciphertext, so drop it once here
+        // instead of on every reconnect.
+        let mut kinds = config.subscription_kinds.clone();
+        if kinds.contains(&4) {
+            tracing::warn!(
+                "Nostr kind 4 (NIP-04 encrypted DM) is not subscribed: this channel has no \
+                 decryption, so kind-4 events would only ever be ciphertext"
+            );
+            kinds.retain(|kind| *kind != 4);
+        }
+
         loop {
             if *shutdown_rx.borrow() {
                 break;
@@ -114,7 +126,7 @@ impl NostrMessageOps {
             let (mut ws_tx, mut ws_rx) = ws_stream.split();
 
             // Send subscription request
-            let sub_msg = build_subscription(&sub_id, &own_pubkey, &config.subscription_kinds);
+            let sub_msg = build_subscription(&sub_id, &own_pubkey, &kinds);
             if let Err(e) = ws_tx
                 .send(tokio_tungstenite::tungstenite::Message::Text(
                     sub_msg.into(),
@@ -127,10 +139,7 @@ impl NostrMessageOps {
                 continue;
             }
 
-            tracing::info!(
-                "Nostr subscribed with id={sub_id}, kinds={:?}",
-                config.subscription_kinds
-            );
+            tracing::info!("Nostr subscribed with id={sub_id}, kinds={kinds:?}");
 
             // Dropping a connection fails all of its unconfirmed attempts.
             let mut pending: PendingWaiters = std::collections::HashMap::new();

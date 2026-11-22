@@ -64,6 +64,9 @@ pub struct EmailConfig {
     pub allowed_senders: Vec<String>,
 
     /// Use TLS for connections (default: true)
+    ///
+    /// Only `true` is accepted: `validate()` rejects cleartext IMAP/SMTP so
+    /// the account password is never sent over the wire unencrypted.
     #[serde(default = "default_true")]
     pub use_tls: bool,
 }
@@ -151,6 +154,15 @@ impl EmailConfig {
         }
         if self.folders.is_empty() {
             return Err("at least one folder must be specified".to_string());
+        }
+        if !self.use_tls {
+            // Both protocols (IMAP and SMTP) authenticate with the same
+            // password, so a cleartext connection would leak it twice.
+            return Err(
+                "use_tls=false is not supported: IMAP and SMTP must use TLS so credentials are \
+                 never sent in cleartext"
+                    .to_string(),
+            );
         }
         Ok(())
     }
@@ -274,6 +286,21 @@ mod tests {
         };
         let err = config.validate().unwrap_err();
         assert!(err.contains("poll_interval_secs"));
+    }
+
+    #[test]
+    fn test_validate_rejects_cleartext_tls() {
+        let config = EmailConfig {
+            imap_host: "imap.example.com".to_string(),
+            smtp_host: "smtp.example.com".to_string(),
+            username: "user@example.com".to_string(),
+            password: "secret".to_string(),
+            from_address: "aleph@example.com".to_string(),
+            use_tls: false,
+            ..Default::default()
+        };
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("use_tls"));
     }
 
     #[test]

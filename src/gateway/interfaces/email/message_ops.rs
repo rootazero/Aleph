@@ -4,10 +4,11 @@
 //! Separated from the channel struct for testability.
 
 use crate::gateway::channel::{
-    ChannelError, ChannelId, ConversationId, InboundMessage, InboundMessageSender, MessageId,
-    SendResult, UserId,
+    ChannelError, ChannelId, ChannelResult, ConversationId, InboundMessage, InboundMessageSender,
+    MessageId, SendResult, UserId,
 };
 use chrono::Utc;
+use std::collections::HashMap;
 use std::time::Duration;
 
 use super::config::EmailConfig;
@@ -16,6 +17,123 @@ const INITIAL_BACKOFF: Duration = Duration::from_secs(5);
 const MAX_BACKOFF: Duration = Duration::from_secs(300);
 const MAX_IMAP_BATCH_MESSAGES: usize = 32;
 const MAX_IMAP_MESSAGE_BYTES: u32 = 1024 * 1024;
+/// Upper bound on conversations whose inbound subject is remembered.
+const MAX_TRACKED_SUBJECTS: usize = 512;
+
+/// The last inbound mail seen from one conversation address.
+///
+/// Enough to answer inside the sender's mail thread: the subject line and the
+/// RFC 5322 `Message-ID` the reply points back at.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InboundThread {
+    /// Subject line of the inbound mail (may be empty).
+    pub subject: String,
+    /// RFC 5322 `Message-ID` of the inbound mail.
+    pub message_id: String,
+}
+
+/// Per-conversation inbound mail identity, keyed by sender address.
+///
+/// Written by the IMAP poll loop and read by `EmailChannel::send`, so a reply
+/// leaves as `Re: <subject>` with `In-Reply-To`/`References` pointing at the
+/// mail it answers. Best effort: past [`MAX_TRACKED_SUBJECTS`] an arbitrary
+/// entry is evicted — losing one only loses threading, never a message.
+pub type InboundThreadStore = std::sync::Arc<std::sync::Mutex<HashMap<String, InboundThread>>>;
+
+/// Authenticated IMAP session over TLS.
+type ImapSession = async_imap::Session<
+    async_native_tls::TlsStream<tokio_util::compat::Compat<tokio::net::TcpStream>>,
+>;
+
+/// Create an empty inbound thread store.
+#[must_use]
+pub fn new_inbound_thread_store() -> InboundThreadStore {
+    std::sync::Arc::new(std::sync::Mutex::new(HashMap::new()))
+}
+
+/// Remember the last inbound mail from `conversation`.
+pub fn remember_inbound_thread(
+    store: &InboundThreadStore,
+    conversation: &str,
+    subject: &str,
+    message_id: &str,
+) {
+    let message_id = message_id.trim();
+    if message_id.is_empty() {
+        return;
+    }
+    let mut map = match store.lock() {
+        Ok(map) => map,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if map.len() >= MAX_TRACKED_SUBJECTS && !map.contains_key(conversation) {
+        if let Some(stale) = map.keys().next().cloned() {
+            map.remove(&stale);
+        }
+    }
+    map.insert(
+        conversation.to_string(),
+        InboundThread {
+            subject: subject.trim().to_string(),
+            message_id: message_id.to_string(),
+        },
+    );
+}
+
+/// Subject to use when replying into `conversation`.
+///
+/// Returns `None` when no inbound mail from that conversation carried a
+/// subject; otherwise the remembered subject, prefixed with `Re: ` unless it
+/// already carries a reply prefix.
+#[must_use]
+pub fn reply_subject_for(store: &InboundThreadStore, conversation: &str) -> Option<String> {
+    let map = match store.lock() {
+        Ok(map) => map,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    let thread = map.get(conversation)?;
+    if thread.subject.is_empty() {
+        return None;
+    }
+    Some(if has_reply_prefix(&thread.subject) {
+        thread.subject.clone()
+    } else {
+        format!("Re: {}", thread.subject)
+    })
+}
+
+/// `Message-ID` to answer when replying into `conversation`.
+///
+/// Returns `None` when no inbound mail from that conversation has been seen
+/// yet; otherwise the remembered identifier, so the reply threads under it.
+#[must_use]
+pub fn reply_message_id_for(store: &InboundThreadStore, conversation: &str) -> Option<String> {
+    let map = match store.lock() {
+        Ok(map) => map,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    map.get(conversation)
+        .map(|thread| thread.message_id.clone())
+}
+
+fn has_reply_prefix(subject: &str) -> bool {
+    subject
+        .get(..3)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("re:"))
+}
+
+/// Wrap a message identifier in the angle brackets RFC 5322 requires.
+///
+/// Mail parsers hand back the identifier without them often enough that
+/// callers must not assume either shape.
+fn rfc_message_id(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.starts_with('<') && trimmed.ends_with('>') {
+        trimmed.to_string()
+    } else {
+        format!("<{trimmed}>")
+    }
+}
 
 /// Email message operations helper.
 ///
@@ -23,44 +141,6 @@ const MAX_IMAP_MESSAGE_BYTES: u32 = 1024 * 1024;
 pub struct EmailMessageOps;
 
 impl EmailMessageOps {
-    /// Extract agent name from email subject brackets.
-    ///
-    /// Pattern: `[agent-name] subject text` -> `Some("agent-name")`
-    ///
-    /// # Examples
-    /// ```ignore
-    /// assert_eq!(EmailMessageOps::extract_agent_from_subject("[coder] Fix the bug"), Some("coder".to_string()));
-    /// assert_eq!(EmailMessageOps::extract_agent_from_subject("No brackets"), None);
-    /// ```
-    #[must_use]
-    pub fn extract_agent_from_subject(subject: &str) -> Option<String> {
-        let subject = subject.trim();
-        if subject.starts_with('[') {
-            if let Some(end) = subject.find(']') {
-                let agent = &subject[1..end];
-                if !agent.is_empty() {
-                    return Some(agent.to_string());
-                }
-            }
-        }
-        None
-    }
-
-    /// Strip the agent tag from a subject line.
-    ///
-    /// `[agent-name] Hello` -> `"Hello"`
-    /// `No brackets` -> `"No brackets"`
-    #[must_use]
-    pub fn strip_agent_tag(subject: &str) -> String {
-        let subject = subject.trim();
-        if subject.starts_with('[') {
-            if let Some(end) = subject.find(']') {
-                return subject[end + 1..].trim().to_string();
-            }
-        }
-        subject.to_string()
-    }
-
     /// Parse email body text from raw email bytes.
     ///
     /// Prefers plain text part over HTML. Falls back to extracting
@@ -117,6 +197,20 @@ impl EmailMessageOps {
         message.message_id().map(|s| s.to_string())
     }
 
+    /// Count MIME parts the parser classifies as attachments.
+    ///
+    /// The channel has no attachment delivery path, so the count is used to
+    /// tell the model that something was attached instead of dropping it
+    /// silently.
+    #[must_use]
+    pub fn extract_attachment_count(raw_email: &[u8]) -> usize {
+        use mail_parser::MessageParser;
+
+        MessageParser::default()
+            .parse(raw_email)
+            .map_or(0, |message| message.attachments().count())
+    }
+
     /// Build a simple HTML email body from Markdown text.
     ///
     /// Wraps the Markdown content in a minimal HTML template.
@@ -161,11 +255,16 @@ impl EmailMessageOps {
     }
 
     /// Send email via SMTP using lettre.
+    ///
+    /// `in_reply_to` is the RFC 5322 `Message-ID` of the inbound mail being
+    /// answered. Setting it (plus `References`) is what makes the receiving
+    /// mail client thread the answer under the original message.
     pub async fn send_email(
         config: &EmailConfig,
         to: &str,
         subject: &str,
         body: &str,
+        in_reply_to: Option<&str>,
     ) -> Result<SendResult, ChannelError> {
         use lettre::message::header::ContentType;
         use lettre::transport::smtp::authentication::Credentials;
@@ -173,7 +272,7 @@ impl EmailMessageOps {
 
         let html_body = Self::markdown_to_html_email(body);
 
-        let email = Message::builder()
+        let mut builder = Message::builder()
             .from(
                 config
                     .from_address
@@ -183,27 +282,28 @@ impl EmailMessageOps {
             .to(to
                 .parse()
                 .map_err(|e| ChannelError::SendFailed(format!("Invalid recipient address: {e}")))?)
-            .subject(subject)
+            .subject(subject);
+
+        if let Some(in_reply_to) = in_reply_to.map(rfc_message_id) {
+            builder = builder
+                .in_reply_to(in_reply_to.clone())
+                .references(in_reply_to);
+        }
+
+        let email = builder
             .header(ContentType::TEXT_HTML)
             .body(html_body)
             .map_err(|e| ChannelError::SendFailed(format!("Failed to build email: {e}")))?;
 
         let creds = Credentials::new(config.username.clone(), config.password.clone());
 
-        let mailer = if config.use_tls {
-            AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&config.smtp_host)
-                .map_err(|e| {
-                    ChannelError::SendFailed(format!("Failed to create SMTP transport: {e}"))
-                })?
-                .port(config.smtp_port)
-                .credentials(creds)
-                .build()
-        } else {
-            AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&config.smtp_host)
-                .port(config.smtp_port)
-                .credentials(creds)
-                .build()
-        };
+        // `EmailConfig::validate` rejects `use_tls = false`, so STARTTLS is
+        // the only transport this channel ever builds.
+        let mailer = AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&config.smtp_host)
+            .map_err(|e| ChannelError::SendFailed(format!("Failed to create SMTP transport: {e}")))?
+            .port(config.smtp_port)
+            .credentials(creds)
+            .build();
 
         let response = mailer
             .send(email)
@@ -228,12 +328,18 @@ impl EmailMessageOps {
     ///
     /// Spawned as a tokio task. Connects to the IMAP server, polls for unseen
     /// messages, converts them to `InboundMessages`, and marks them as seen.
+    ///
+    /// Returns `Ok(())` when shutdown was requested and `Err` when the channel
+    /// hit a failure that retrying cannot fix (bad config, rejected login), so
+    /// the caller can publish `ChannelStatus::Error` instead of leaving the
+    /// channel looking healthy.
     pub async fn run_imap_poll_loop(
         config: EmailConfig,
         inbound_tx: InboundMessageSender,
         channel_id: ChannelId,
+        threads: InboundThreadStore,
         mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
-    ) {
+    ) -> ChannelResult<()> {
         let poll_interval = Duration::from_secs(config.poll_interval_secs);
         let mut backoff = INITIAL_BACKOFF;
 
@@ -242,7 +348,7 @@ impl EmailMessageOps {
                 break;
             }
 
-            match Self::poll_imap_once(&config, &inbound_tx, &channel_id).await {
+            match Self::poll_imap_once(&config, &inbound_tx, &channel_id, &threads).await {
                 Ok(count) => {
                     if count > 0 {
                         tracing::info!("Email: processed {count} new messages");
@@ -250,6 +356,10 @@ impl EmailMessageOps {
                     backoff = INITIAL_BACKOFF; // Reset backoff on success
                 }
                 Err(e) => {
+                    if Self::is_fatal_imap_error(&e) {
+                        tracing::error!("Email IMAP poll failed fatally: {e}");
+                        return Err(e);
+                    }
                     tracing::warn!("Email IMAP poll error: {e}, retrying in {backoff:?}");
                     tokio::select! {
                         _ = tokio::time::sleep(backoff) => {},
@@ -276,20 +386,31 @@ impl EmailMessageOps {
         }
 
         tracing::info!("Email IMAP poll loop stopped");
+        Ok(())
     }
 
-    /// Perform a single IMAP poll cycle.
+    /// Errors that retrying cannot fix: bad configuration or rejected credentials.
+    fn is_fatal_imap_error(error: &ChannelError) -> bool {
+        matches!(
+            error,
+            ChannelError::ConfigError(_) | ChannelError::AuthFailed(_)
+        )
+    }
+
+    /// Verify IMAP reachability and credentials without polling for mail.
     ///
-    /// Connects to the IMAP server, searches for unseen messages in each
-    /// configured folder, fetches and parses them, then marks them as seen.
-    ///
-    /// Uses `tokio_util::compat` to bridge tokio's `AsyncRead/AsyncWrite` with
-    /// the `futures::AsyncRead/AsyncWrite` that `async-imap` expects.
-    async fn poll_imap_once(
-        config: &EmailConfig,
-        inbound_tx: &InboundMessageSender,
-        channel_id: &ChannelId,
-    ) -> Result<usize, ChannelError> {
+    /// Called from `EmailChannel::start` so the channel only reports
+    /// `Connected` after it has actually reached the server, and a rejected
+    /// login surfaces as an error instead of as a warning inside a poll loop
+    /// nobody is watching.
+    pub async fn check_imap_connection(config: &EmailConfig) -> ChannelResult<()> {
+        let mut session = Self::connect_imap(config).await?;
+        let _ = session.logout().await;
+        Ok(())
+    }
+
+    /// Open a TLS IMAP connection and authenticate.
+    async fn connect_imap(config: &EmailConfig) -> Result<ImapSession, ChannelError> {
         use tokio_util::compat::TokioAsyncReadCompatExt;
 
         let tcp_stream =
@@ -297,24 +418,30 @@ impl EmailMessageOps {
                 .await
                 .map_err(|e| ChannelError::Internal(format!("IMAP TCP connect failed: {e}")))?;
         // Wrap tokio TcpStream with compat layer so it implements futures::AsyncRead/Write
-        let compat_stream = tcp_stream.compat();
-
-        let tls_stream = if config.use_tls {
-            let tls = async_native_tls::TlsConnector::new();
-            tls.connect(&config.imap_host, compat_stream)
-                .await
-                .map_err(|e| ChannelError::Internal(format!("IMAP TLS connect failed: {e}")))?
-        } else {
-            return Err(ChannelError::ConfigError(
-                "Non-TLS IMAP connections are not supported for security reasons".to_string(),
-            ));
-        };
+        let tls = async_native_tls::TlsConnector::new();
+        let tls_stream = tls
+            .connect(&config.imap_host, tcp_stream.compat())
+            .await
+            .map_err(|e| ChannelError::Internal(format!("IMAP TLS connect failed: {e}")))?;
 
         let client = async_imap::Client::new(tls_stream);
-        let mut session = client
+        client
             .login(&config.username, &config.password)
             .await
-            .map_err(|(e, _)| ChannelError::AuthFailed(format!("IMAP login failed: {e}")))?;
+            .map_err(|(e, _)| ChannelError::AuthFailed(format!("IMAP login failed: {e}")))
+    }
+
+    /// Perform a single IMAP poll cycle.
+    ///
+    /// Connects to the IMAP server, searches for unseen messages in each
+    /// configured folder, fetches and parses them, then marks them as seen.
+    async fn poll_imap_once(
+        config: &EmailConfig,
+        inbound_tx: &InboundMessageSender,
+        channel_id: &ChannelId,
+        threads: &InboundThreadStore,
+    ) -> Result<usize, ChannelError> {
+        let mut session = Self::connect_imap(config).await?;
 
         let mut total_processed = 0;
 
@@ -394,13 +521,21 @@ impl EmailMessageOps {
                     }
 
                     let subject = Self::extract_subject(body).unwrap_or_default();
+                    let attachment_count = Self::extract_attachment_count(body);
                     let text = Self::extract_body_text(body);
                     let message_id = Self::extract_message_id(body)
                         .unwrap_or_else(|| format!("email-{}", uuid::Uuid::new_v4()));
 
-                    if text.is_empty() {
+                    if text.is_empty() && attachment_count == 0 {
                         continue;
                     }
+
+                    // Remember subject and Message-ID so the reply to this
+                    // sender threads under the same mail-client conversation.
+                    remember_inbound_thread(threads, &sender, &subject, &message_id);
+
+                    let text =
+                        crate::gateway::interfaces::with_attachment_note(text, attachment_count);
 
                     let inbound = InboundMessage {
                         id: MessageId::new(&message_id),
@@ -409,7 +544,7 @@ impl EmailMessageOps {
                         sender_id: UserId::new(sender.clone()),
                         sender_name: Some(sender.clone()),
                         text,
-                        attachments: Vec::new(), // TODO: extract email attachments
+                        attachments: Vec::new(), // inbound attachments are reported in `text`
                         timestamp: Utc::now(),
                         reply_to: None,
                         is_group: false,
@@ -701,77 +836,45 @@ mod tests {
     use super::*;
 
     // ------------------------------------------------------------------
-    // Agent extraction from subject
+    // Reply threading
     // ------------------------------------------------------------------
 
     #[test]
-    fn test_extract_agent_basic() {
+    fn test_inbound_thread_roundtrip_threads_reply() {
+        let store = new_inbound_thread_store();
+        assert_eq!(reply_subject_for(&store, "a@example.com"), None);
+        assert_eq!(reply_message_id_for(&store, "a@example.com"), None);
+
+        remember_inbound_thread(&store, "a@example.com", "  Fix the bug  ", "<id-1@mail>");
         assert_eq!(
-            EmailMessageOps::extract_agent_from_subject("[coder] Fix the bug"),
-            Some("coder".to_string())
+            reply_subject_for(&store, "a@example.com"),
+            Some("Re: Fix the bug".to_string())
+        );
+        assert_eq!(
+            reply_message_id_for(&store, "a@example.com").as_deref(),
+            Some("<id-1@mail>")
+        );
+
+        // Already a reply: the prefix is not stacked again.
+        remember_inbound_thread(&store, "a@example.com", "Re: Fix the bug", "<id-2@mail>");
+        assert_eq!(
+            reply_subject_for(&store, "a@example.com"),
+            Some("Re: Fix the bug".to_string())
+        );
+
+        // A blank subject still keeps the identity, just no subject to repeat.
+        remember_inbound_thread(&store, "b@example.com", "   ", "<id-3@mail>");
+        assert_eq!(reply_subject_for(&store, "b@example.com"), None);
+        assert_eq!(
+            reply_message_id_for(&store, "b@example.com").as_deref(),
+            Some("<id-3@mail>")
         );
     }
 
     #[test]
-    fn test_extract_agent_with_spaces() {
-        assert_eq!(
-            EmailMessageOps::extract_agent_from_subject("  [researcher] Find papers  "),
-            Some("researcher".to_string())
-        );
-    }
-
-    #[test]
-    fn test_extract_agent_no_brackets() {
-        assert_eq!(
-            EmailMessageOps::extract_agent_from_subject("No brackets here"),
-            None
-        );
-    }
-
-    #[test]
-    fn test_extract_agent_empty_brackets() {
-        assert_eq!(
-            EmailMessageOps::extract_agent_from_subject("[] Empty brackets"),
-            None
-        );
-    }
-
-    #[test]
-    fn test_extract_agent_brackets_not_at_start() {
-        assert_eq!(
-            EmailMessageOps::extract_agent_from_subject("Re: [coder] Fix bug"),
-            None
-        );
-    }
-
-    // ------------------------------------------------------------------
-    // Subject tag stripping
-    // ------------------------------------------------------------------
-
-    #[test]
-    fn test_strip_agent_tag_present() {
-        assert_eq!(
-            EmailMessageOps::strip_agent_tag("[coder] Fix the bug"),
-            "Fix the bug"
-        );
-    }
-
-    #[test]
-    fn test_strip_agent_tag_absent() {
-        assert_eq!(
-            EmailMessageOps::strip_agent_tag("No brackets"),
-            "No brackets"
-        );
-    }
-
-    #[test]
-    fn test_strip_agent_tag_empty_subject() {
-        assert_eq!(EmailMessageOps::strip_agent_tag(""), "");
-    }
-
-    #[test]
-    fn test_strip_agent_tag_only_brackets() {
-        assert_eq!(EmailMessageOps::strip_agent_tag("[agent]"), "");
+    fn test_rfc_message_id_wraps_once() {
+        assert_eq!(rfc_message_id("abc@example.com"), "<abc@example.com>");
+        assert_eq!(rfc_message_id(" <abc@example.com> "), "<abc@example.com>");
     }
 
     // ------------------------------------------------------------------

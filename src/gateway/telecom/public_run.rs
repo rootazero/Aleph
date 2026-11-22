@@ -154,6 +154,11 @@ pub const PUBLIC_REPLY_DELIVERY_TIMEOUT: Duration = Duration::from_secs(30);
 /// observed before the commit boundary suppresses the reply and history append.
 /// Once submitted, `/stop` cannot retract transport acceptance: an eventual
 /// `Ok(())` is still recorded, while an error or timeout is never recorded.
+///
+/// Test-only convenience wrapper: production calls
+/// [`run_public_sms_with_private_read`] directly, so this alias is not a
+/// production entry point.
+#[cfg(test)]
 pub async fn run_public_sms(
     registry: &Arc<PublicRunRegistry>,
     harness: Option<Arc<dyn HarnessRunner>>,
@@ -176,7 +181,7 @@ pub async fn run_public_sms(
     .await
 }
 
-/// [`run_public_sms`] with the optional private turn. `private` is wired
+/// The public run with the optional private turn. `private` is wired
 /// only when `[telecom_private_read]` is enabled; it takes effect only
 /// together with `operator_control` (approvals need the trusted plane).
 /// Then, and only then, the public run offers `request_private_lookup`, and

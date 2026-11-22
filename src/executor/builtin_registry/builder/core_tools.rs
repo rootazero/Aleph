@@ -157,7 +157,10 @@ impl BuiltinToolRegistry {
             "skill_list",
             SkillListTool::DESCRIPTION,
             <SkillListTool as AlephTool>::MAX_RESULT_TOKENS,
-            serde_json::json!({"type": "object", "properties": {}, "required": []}),
+            // The handler reads a `filter` keyword, so the schema has to
+            // declare it: a schema that names no argument cannot express the
+            // filter the tool has always honoured.
+            tool_schema::<crate::builtin_tools::skill_reader::ListSkillsArgs>("skill_list"),
         );
         reg(
             tools,
@@ -354,6 +357,42 @@ impl BuiltinToolRegistry {
             tool_schema::<crate::builtin_tools::artifact_publish::ArtifactPublishArgs>(
                 "artifact_publish",
             ),
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::BuiltinToolRegistry;
+
+    /// The `skill_list` handler reads a `filter` keyword. Its schema used to
+    /// declare no arguments at all, so the model could not express the
+    /// filter through the schema the tool advertises.
+    #[test]
+    fn skill_list_schema_declares_the_filter_it_reads() {
+        let mut tools = HashMap::new();
+        BuiltinToolRegistry::register_core_tools(&mut tools);
+
+        let schema = tools
+            .get("skill_list")
+            .and_then(|tool| tool.parameters_schema.as_ref())
+            .expect("skill_list must be registered with a schema");
+        let filter = &schema["properties"]["filter"];
+        assert!(
+            !filter.is_null(),
+            "skill_list's schema must declare the `filter` argument"
+        );
+        let types: Vec<&str> = filter["type"]
+            .as_array()
+            .expect("filter must declare a type")
+            .iter()
+            .filter_map(|t| t.as_str())
+            .collect();
+        assert!(
+            types.contains(&"string"),
+            "filter must be a string keyword, got {types:?}"
         );
     }
 }

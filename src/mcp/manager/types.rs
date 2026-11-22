@@ -10,6 +10,7 @@
 
 use crate::sync_primitives::Arc;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
@@ -59,6 +60,13 @@ pub struct McpManagerConfig {
     /// Command arguments
     #[serde(default)]
     pub args: Vec<String>,
+    /// Working directory the spawned stdio process starts in. `None` = inherit
+    /// the server's own cwd (the historical behaviour). Only the stdio
+    /// transport spawns a process, so a `cwd` on a remote transport, or a path
+    /// that is not an existing directory, is a configuration error:
+    /// [`Self::validate`] refuses it instead of spawning in the wrong place.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<PathBuf>,
     /// URL for remote servers (http/sse transport)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
@@ -103,6 +111,7 @@ impl McpManagerConfig {
             transport: McpTransportType::Stdio,
             command: Some(command.into()),
             args: Vec::new(),
+            cwd: None,
             url: None,
             env: HashMap::new(),
             headers: HashMap::new(),
@@ -121,6 +130,7 @@ impl McpManagerConfig {
             transport: McpTransportType::Http,
             command: None,
             args: Vec::new(),
+            cwd: None,
             url: Some(url.into()),
             env: HashMap::new(),
             headers: HashMap::new(),
@@ -139,6 +149,7 @@ impl McpManagerConfig {
             transport: McpTransportType::Sse,
             command: None,
             args: Vec::new(),
+            cwd: None,
             url: Some(url.into()),
             env: HashMap::new(),
             headers: HashMap::new(),
@@ -171,6 +182,14 @@ impl McpManagerConfig {
         self
     }
 
+    /// Set the working directory for a spawned (stdio) server process.
+    /// `None` leaves the child in the server's own cwd.
+    #[must_use]
+    pub fn with_cwd(mut self, cwd: impl Into<PathBuf>) -> Self {
+        self.cwd = Some(cwd.into());
+        self
+    }
+
     /// Set required runtime
     pub fn with_runtime(mut self, runtime: impl Into<String>) -> Self {
         self.requires_runtime = Some(runtime.into());
@@ -196,6 +215,43 @@ impl McpManagerConfig {
     pub fn with_tool_filter(mut self, filter: McpToolFilter) -> Self {
         self.tool_filter = Some(filter);
         self
+    }
+
+    /// Reject configurations whose `cwd` cannot actually be applied.
+    ///
+    /// A `cwd` the child never receives is the worst of both worlds: the server
+    /// starts, every RPC answers, and the tools quietly operate on the wrong
+    /// tree. So a `cwd` that names no directory (or that is set on a transport
+    /// with no child process to receive it) is reported as a configuration
+    /// error at the spawn funnel instead of being dropped.
+    ///
+    /// Relative paths are accepted and resolved exactly as the child would
+    /// resolve them — against the server process cwd.
+    pub fn validate(&self) -> Result<(), String> {
+        let Some(cwd) = self.cwd.as_deref() else {
+            return Ok(());
+        };
+        if self.transport != McpTransportType::Stdio {
+            return Err(format!(
+                "MCP server '{}': cwd {} is only supported by the stdio transport, not {}",
+                self.id,
+                cwd.display(),
+                self.transport
+            ));
+        }
+        match std::fs::metadata(cwd) {
+            Ok(meta) if meta.is_dir() => Ok(()),
+            Ok(_) => Err(format!(
+                "MCP server '{}': cwd {} is not a directory",
+                self.id,
+                cwd.display()
+            )),
+            Err(e) => Err(format!(
+                "MCP server '{}': cwd {} is not accessible: {e}",
+                self.id,
+                cwd.display()
+            )),
+        }
     }
 }
 
@@ -728,6 +784,43 @@ mod tests {
         assert_eq!(format!("{}", McpTransportType::Stdio), "stdio");
         assert_eq!(format!("{}", McpTransportType::Http), "http");
         assert_eq!(format!("{}", McpTransportType::Sse), "sse");
+    }
+
+    #[test]
+    fn default_stdio_config_has_no_cwd() {
+        // The documented default: the child inherits the server's own cwd.
+        let config = McpManagerConfig::stdio("id", "Name", "srv");
+        assert!(config.cwd.is_none());
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn cwd_that_is_not_a_directory_is_refused() {
+        let config = McpManagerConfig::stdio("id", "Name", "srv")
+            .with_cwd("/nonexistent/aleph-mcp-cwd-for-test");
+        let err = config.validate().expect_err("must refuse an unusable cwd");
+        assert!(err.contains("is not accessible"), "{err}");
+        assert!(err.contains("id"), "the error names the server: {err}");
+    }
+
+    #[test]
+    fn cwd_on_a_remote_transport_is_refused() {
+        // Nothing would spawn, so accepting it would silently drop the setting.
+        let config =
+            McpManagerConfig::http("id", "Name", "https://example.test/mcp").with_cwd("/tmp");
+        let err = config.validate().expect_err("must refuse cwd on http");
+        assert!(
+            err.contains("only supported by the stdio transport"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn existing_directory_is_an_acceptable_cwd() {
+        let dir = std::env::temp_dir();
+        let config = McpManagerConfig::stdio("id", "Name", "srv").with_cwd(dir.clone());
+        assert!(config.validate().is_ok());
+        assert_eq!(config.cwd.as_deref(), Some(dir.as_path()));
     }
 
     #[test]

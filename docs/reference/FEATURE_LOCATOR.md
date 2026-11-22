@@ -2161,7 +2161,7 @@ CONTROL 是**归因臂**：没有它，capped 臂上的任何 4xx 分不出「ke
 BT-D-R4-22 的 DNS-pin 缺口是**结构性**的：crawl4ai / firecrawl 服务端收到 URL 后在**自己的网络位置**重新解析 DNS 并自行跟随重定向，Aleph 侧 `safe_fetch` 的 pin 无法穿越进程边界——两个 provider API 都不接受一个预解析的地址，validate-then-delegate 正是审计标 High 的那个形状。「接回」因此同时是**重新引入 High 缺口**与**制造已修复的假象**；而内置 readability 已覆盖 HTML→markdown，provider 的增量价值趋零。两个方向都指向摘除。
 
 - 删 `src/fetch/registry.rs` 与 `src/fetch/factory.rs` **整文件**；`builtin_tools/web_fetch/mod.rs` 删 `fetch_providers` 字段与 151-190 的跳过块；`web_fetch/types.rs` 删 `Extractor::{Crawl4ai,Firecrawl}`；`crawl4ai.rs` 删零调用者的 `health_check` 与永真的 `is_healthy`；`fetch/provider.rs` trait 删 `is_available`；`start/mod.rs:893` 删死的 vault 注入块。
-- `constructor/mod.rs` 摘除 `FetchRegistry` 装配，改为 `[fetch] enabled` 时**一次性启动 warn**——新纯函数 `inert_fetch_backend_names`（constructor/mod.rs:1490）。配了不生效必须出声，静默才是缺陷。
+- `constructor/mod.rs` 摘除 `FetchRegistry` 装配，改为 `[fetch]` 里配了 backend 时**一次性启动 warn**——新纯函数 `inert_fetch_backend_names`（constructor/mod.rs:1490）。配了不生效必须出声，静默才是缺陷。
 - **配置面刻意保留**：`[fetch]` 段、`fetch_config.get/update/test` RPC、`Config::migrate_fetch` 不动——运维意图与连接测试还有读者，删配置面是另一笔账。
 
 **B1 · `SearchErrorKind`：kind 是派生，不是携带**

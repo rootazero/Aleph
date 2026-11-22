@@ -2,7 +2,7 @@ use super::access::AccessController;
 use super::config_resolver::ResolvedConfig;
 use super::config_v2::TelegramAccountConfig;
 use super::offset::OffsetTracker;
-use crate::sync_primitives::{Arc, AtomicBool};
+use crate::sync_primitives::Arc;
 use reqwest_legacy as reqwest;
 use teloxide::Bot;
 use tokio::sync::oneshot;
@@ -39,8 +39,6 @@ pub struct BotInstance {
     /// Stops the per-account health probe. The probe task owns the receiver,
     /// so the sender has to be held here for `stop()` to reach it.
     pub health_shutdown_tx: Option<oneshot::Sender<()>>,
-    /// Connection health flag — updated by the polling watchdog's `get_me()` probe.
-    pub is_healthy: Arc<AtomicBool>,
 }
 
 impl BotInstance {
@@ -59,7 +57,6 @@ impl BotInstance {
             offset_tracker: None,
             shutdown_tx: None,
             health_shutdown_tx: None,
-            is_healthy: Arc::new(AtomicBool::new(true)),
         }
     }
 

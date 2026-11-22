@@ -113,7 +113,6 @@ impl SessionManager {
             last_active_at: now,
             message_count: 0,
             total_tokens: 0,
-            auto_reset_at: None,
             state: Some(SessionState::Created),
             topic: None,
             status: None,

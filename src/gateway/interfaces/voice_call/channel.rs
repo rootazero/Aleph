@@ -195,16 +195,11 @@ mod tests {
     }
 
     #[test]
-    fn config_roundtrip_preserves_switches_and_defaults() {
+    fn config_roundtrip_preserves_routing_fields() {
         let defaults: VoiceCallConfig = serde_json::from_value(config()).unwrap();
-        assert!(defaults.inbound_enabled);
-        assert!(defaults.outbound_enabled);
-        let mut disabled = defaults;
-        disabled.inbound_enabled = false;
-        disabled.outbound_enabled = false;
         let restored: VoiceCallConfig =
-            serde_json::from_value(serde_json::to_value(&disabled).unwrap()).unwrap();
-        assert_eq!(restored, disabled);
+            serde_json::from_value(serde_json::to_value(&defaults).unwrap()).unwrap();
+        assert_eq!(restored, defaults);
         restored.validate().unwrap();
     }
 }

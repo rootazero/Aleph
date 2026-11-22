@@ -16,6 +16,27 @@ use tracing::{info, warn};
 use super::{BuiltinToolConfig, BuiltinToolRegistry};
 use crate::tool_metadata::{ToolSource, UnifiedTool};
 
+/// Const-friendly string equality.
+///
+/// `str`'s `PartialEq` is not const-stable, so a literal cannot be compared
+/// to a const `&str` in a `const _: () = assert!(..)` item. Comparing the
+/// bytes keeps the compile-time link between a registered literal name and
+/// the tool's own `NAME` const.
+const fn const_str_eq(left: &str, right: &str) -> bool {
+    let (left, right) = (left.as_bytes(), right.as_bytes());
+    if left.len() != right.len() {
+        return false;
+    }
+    let mut index = 0;
+    while index < left.len() {
+        if left[index] != right[index] {
+            return false;
+        }
+        index += 1;
+    }
+    true
+}
+
 #[allow(clippy::type_complexity)]
 impl BuiltinToolRegistry {
     /// Build task-coordination and team-management tools and register schemas.
@@ -455,7 +476,18 @@ impl BuiltinToolRegistry {
                 ut = ut
                     .with_parameters_schema(td.parameters.clone())
                     .with_services(td.services.clone());
-                tools.insert(td.name.clone(), ut);
+                // The literal name is REQUIRED here: the source census that
+                // checks "every advertised tool is dispatchable" can only see
+                // a `tools.insert("name", …)` literal — a `td.name.clone()`
+                // insert is invisible to it, and a tool the census cannot see
+                // is a tool the registry's own guards do not know about. The
+                // assertion below ties the literal to the tool's own NAME
+                // const, so the two cannot drift apart.
+                const _: () = assert!(const_str_eq(
+                    <TeamTaskControlTool as crate::tools::AlephTool>::NAME,
+                    "team_task_control"
+                ));
+                tools.insert("team_task_control".to_string(), ut);
             }
             info!("Registered team_task_control tool");
             Some(tool)
@@ -482,7 +514,18 @@ impl BuiltinToolRegistry {
                 ut = ut
                     .with_parameters_schema(td.parameters.clone())
                     .with_services(td.services.clone());
-                tools.insert(td.name.clone(), ut);
+                // The literal name is REQUIRED here: the source census that
+                // checks "every advertised tool is dispatchable" can only see
+                // a `tools.insert("name", …)` literal — a `td.name.clone()`
+                // insert is invisible to it, and a tool the census cannot see
+                // is a tool the registry's own guards do not know about. The
+                // assertion below ties the literal to the tool's own NAME
+                // const, so the two cannot drift apart.
+                const _: () = assert!(const_str_eq(
+                    <TaskExitJournalTool as crate::tools::AlephTool>::NAME,
+                    "task_exit_journal"
+                ));
+                tools.insert("task_exit_journal".to_string(), ut);
             }
             info!("Registered task_exit_journal tool");
             Some(tool)

@@ -2110,7 +2110,7 @@ async fn start_server_body(
     let app_config_for_channels = app_config.clone();
     let app_config_for_reload = app_config.clone();
     let app_config_for_oauth = app_config.clone();
-    let app_config_for_pty = app_config.clone();
+    let app_config_for_application = app_config.clone();
     // Clone here so `app_config` remains available for downstream wiring
     // (e.g. the task reaper that reads `tasks_reaper` after handlers are
     // registered). `register_config_handlers` owns it via `Arc`, so the
@@ -2293,15 +2293,16 @@ async fn start_server_body(
     // Explicit denying seam until the real browser backend/registry/public
     // origin composition root is supplied. No bind-address origin inference.
     register_browser_viewer_handlers(&mut server);
-    // `pty.spawn` needs the live config to read `[policies.terminal]` (the
-    // session gate, and the scrollback/session-cap values) — its siblings
-    // are already registered stateless in `HandlerRegistry::new()`. See
-    // `register_pty_handlers`'s doc for why it alone is wired here.
-    register_pty_handlers(&mut server, &app_config_for_pty, &terminal_source);
+    // `pty.spawn` reads `[policies.terminal]` (the session gate, and the
+    // scrollback/session-cap values) through the terminal source it shares
+    // with the canonical Tool — its siblings are already registered stateless
+    // in `HandlerRegistry::new()`. See `register_pty_handlers`'s doc for why it
+    // alone is wired here.
+    register_pty_handlers(&mut server, &terminal_source);
     if let Some(manager) = alephcore::gateway::pty::try_manager() {
         startup_resources.install_pty(manager);
     }
-    server.set_application_config(app_config_for_pty.clone());
+    server.set_application_config(app_config_for_application.clone());
 
     // OAuth state: restore from vault if chatgpt provider exists
     let oauth_vault = auth_bundle.auth_ctx.shared_token_mgr.clone();

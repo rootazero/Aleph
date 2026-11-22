@@ -80,7 +80,6 @@ fn silent_config() -> ResolvedConfig {
         streaming: StreamingOptions::default(),
         error_policy: ErrorPolicy {
             mode: ErrorPolicyMode::Silent,
-            template: None,
             max_retries: 3,
         },
         max_retries: 3,

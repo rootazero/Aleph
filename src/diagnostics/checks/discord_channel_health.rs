@@ -5,9 +5,8 @@
 //! `DiscordConfig::validate()` (empty / too-short bot token) — but the
 //! validation surface there covers only the **credential half**. Misaligned
 //! intents (`guild_messages` on, `message_content` off → the bot sees message
-//! events whose `content` is the empty string), a `slash_commands_enabled`
-//! flag with no `application_id` (the gateway silently registers nothing),
-//! or a deliberately-tweaked `max_message_length` (Discord's hard limit is
+//! events whose `content` is the empty string), or a deliberately-tweaked
+//! `max_message_length` (Discord's hard limit is
 //! 2000; the only value the channel ever honours), are all surfaces where
 //! the bot **starts cleanly** and then quietly fails to read or reply.
 //!
@@ -94,10 +93,6 @@ struct DiscordConfigShape {
     #[serde(default)]
     bot_token: String,
     #[serde(default)]
-    application_id: Option<u64>,
-    #[serde(default)]
-    slash_commands_enabled: Option<bool>,
-    #[serde(default)]
     intents: IntentsShape,
     #[serde(default)]
     max_message_length: Option<u64>,
@@ -152,14 +147,6 @@ impl DiscordConfigShape {
             problems.push("intents_misaligned");
         }
 
-        // slash_commands_enabled without an application_id: serenity's
-        // global-command registration requires both, and the gateway
-        // silently registers nothing if only one is present. The bot still
-        // starts; the slash UI never appears.
-        if self.slash_commands_enabled.unwrap_or(true) && self.application_id.is_none() {
-            problems.push("application_id_missing");
-        }
-
         // max_message_length override above Discord's hard ceiling. The
         // `discord` channel hard-codes 2000 in its `capabilities()`
         // builder; a config that promises something larger is meaningless
@@ -181,8 +168,8 @@ fn findings_for(verdict: &DiscordVerdict) -> Vec<Finding> {
         DiscordVerdict::Ok => vec![Finding::ok(
             CHECK_ID,
             "Discord channel config looks healthy",
-            "bot_token, intents, slash-command wiring, and message-length \
-             ceiling all line up with what the discord channel expects.",
+            "bot_token, intents, and the message-length ceiling all line up \
+             with what the discord channel expects.",
         )
         .with_tag(TAG_DISCORD_OK)],
         DiscordVerdict::Misconfigured(tags) => {
@@ -197,10 +184,6 @@ fn findings_for(verdict: &DiscordVerdict) -> Vec<Finding> {
                     "intents_misaligned" => {
                         "guild_messages is on but message_content is off — \
                          incoming message content will read as the empty string"
-                    }
-                    "application_id_missing" => {
-                        "slash_commands_enabled is true but no application_id \
-                         is set — slash commands will silently not register"
                     }
                     "max_message_length_too_high" => {
                         "max_message_length exceeds Discord's 2000-char ceiling — \
@@ -217,8 +200,7 @@ fn findings_for(verdict: &DiscordVerdict) -> Vec<Finding> {
             )
             .with_fix_hint(
                 "Edit the discord section of the config: provide a real bot \
-                 token, pair guild_messages with message_content, set \
-                 application_id when slash_commands_enabled is true, and \
+                 token, pair guild_messages with message_content, and \
                  leave max_message_length at the Discord ceiling (2000).",
             )
             .with_tag(TAG_DISCORD_MISCONFIGURED)]
@@ -368,8 +350,10 @@ mod tests {
 
     #[test]
     fn misconfigured_lists_each_problem() {
-        let verdict =
-            DiscordVerdict::Misconfigured(vec!["intents_misaligned", "application_id_missing"]);
+        let verdict = DiscordVerdict::Misconfigured(vec![
+            "intents_misaligned",
+            "max_message_length_too_high",
+        ]);
         let f = findings_for(&verdict);
         assert_eq!(f.len(), 1);
         assert_eq!(f[0].severity, Severity::Warning);
@@ -381,7 +365,7 @@ mod tests {
             f[0].detail
         );
         assert!(
-            f[0].detail.contains("application_id"),
+            f[0].detail.contains("max_message_length"),
             "detail: {}",
             f[0].detail
         );
@@ -399,14 +383,12 @@ mod tests {
     }
 
     /// `intent_violations` is the heart of the check: a healthy config
-    /// (full token + aligned intents + application_id when slash on)
-    /// reports no violations.
+    /// (full token + aligned intents + sane message ceiling) reports no
+    /// violations.
     #[test]
     fn healthy_config_has_no_violations() {
         let shape = DiscordConfigShape {
             bot_token: "x".repeat(DISCORD_MIN_BOT_TOKEN_LEN + 1),
-            application_id: Some(123),
-            slash_commands_enabled: Some(true),
             intents: IntentsShape::default(),
             max_message_length: Some(DISCORD_MAX_MESSAGE_LENGTH),
         };
@@ -448,29 +430,6 @@ mod tests {
     }
 
     #[test]
-    fn slash_without_application_id_violates() {
-        let shape = DiscordConfigShape {
-            slash_commands_enabled: Some(true),
-            application_id: None,
-            ..Default::default()
-        };
-        let v = shape.invariant_violations();
-        assert!(v.contains(&"application_id_missing"));
-    }
-
-    #[test]
-    fn slash_off_without_application_id_is_fine() {
-        // slash_commands_enabled=false means application_id is irrelevant.
-        let shape = DiscordConfigShape {
-            slash_commands_enabled: Some(false),
-            application_id: None,
-            ..Default::default()
-        };
-        let v = shape.invariant_violations();
-        assert!(!v.contains(&"application_id_missing"));
-    }
-
-    #[test]
     fn oversized_message_length_violates() {
         let shape = DiscordConfigShape {
             max_message_length: Some(DISCORD_MAX_MESSAGE_LENGTH + 1),
@@ -487,7 +446,7 @@ mod tests {
         let mut tmp = tempfile::NamedTempFile::new().expect("tempfile");
         tmp.write_all(
             format!(
-                "[channels.discord]\nbot_token = \"{}\"\napplication_id = 999\nslash_commands_enabled = true\nmax_message_length = {}\n",
+                "[channels.discord]\nbot_token = \"{}\"\nmax_message_length = {}\n",
                 "x".repeat(DISCORD_MIN_BOT_TOKEN_LEN + 1),
                 DISCORD_MAX_MESSAGE_LENGTH,
             )
@@ -509,14 +468,14 @@ mod tests {
         assert_eq!(verdict, DiscordVerdict::Ok);
     }
 
-    /// End-to-end: a config whose discord section violates two invariants
-    /// at once reports both in a single `Misconfigured` verdict.
+    /// End-to-end: a config whose discord section has misaligned intents
+    /// reports the violation through the `Misconfigured` verdict.
     #[tokio::test]
-    async fn probe_a_misaligned_config_reports_each_violation() {
+    async fn probe_a_misaligned_config_reports_the_violation() {
         let mut tmp = tempfile::NamedTempFile::new().expect("tempfile");
         tmp.write_all(
             format!(
-                "[channels.discord]\nbot_token = \"{}\"\nslash_commands_enabled = true\n\n[channels.discord.intents]\nguild_messages = true\nmessage_content = false\n",
+                "[channels.discord]\nbot_token = \"{}\"\n\n[channels.discord.intents]\nguild_messages = true\nmessage_content = false\n",
                 "x".repeat(DISCORD_MIN_BOT_TOKEN_LEN + 1)
             )
             .as_bytes(),
@@ -526,7 +485,6 @@ mod tests {
         match verdict {
             DiscordVerdict::Misconfigured(tags) => {
                 assert!(tags.contains(&"intents_misaligned"));
-                assert!(tags.contains(&"application_id_missing"));
             }
             other => panic!("expected Misconfigured, got {other:?}"),
         }

@@ -1,6 +1,8 @@
 //! `WeChat` Authentication & Token Management
 //!
-//! QR login flow, context token storage, and session persistence.
+//! Context token storage and session persistence. There is no QR login flow:
+//! the bot token comes from configuration, and the only per-user credential
+//! Aleph keeps is the `context_token` of each conversation.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -84,20 +86,6 @@ impl ContextTokenStore {
             let _ = tokio::fs::rename(&tmp_path, &path).await;
         }
     }
-}
-
-/// QR Login result credentials.
-#[derive(Debug, Clone)]
-pub struct QrLoginResult {
-    pub account_id: String,
-    pub token: String,
-    pub base_url: String,
-    pub user_id: String,
-}
-
-/// Perform QR login flow (requires interactive terminal).
-pub async fn qr_login(_hermes_home: &str, _bot_type: &str) -> Result<QrLoginResult, String> {
-    Err("QR login requires terminal interaction. Use CLI tool instead.".to_string())
 }
 
 #[cfg(test)]

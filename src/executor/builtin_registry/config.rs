@@ -7,7 +7,6 @@ use crate::config::Config;
 use crate::gateway::context::GatewayContext;
 use crate::generation::GenerationProviderRegistry;
 use crate::memory::store::MemoryBackend;
-use crate::memory::EmbeddingProvider;
 
 /// Configuration for builtin tools
 #[derive(Clone, Default)]
@@ -27,13 +26,17 @@ pub struct BuiltinToolConfig {
     /// Shared config handle for `ConfigReadTool`
     pub config: Option<Arc<tokio::sync::RwLock<Config>>>,
     /// Stable Memory source; constructing a registry does not start it.
+    ///
+    /// This is where the note/profile half of Memory enters the tool
+    /// registry: the `note_orient` and `user_profile` tools are built from
+    /// this runtime (see `builder/constructor/mod.rs`), and dispatch reports
+    /// "not wired at startup" when it is absent. There is no separate
+    /// handle for either of them.
     pub memory_runtime: Option<Arc<crate::memory::runtime::MemoryRuntime>>,
     /// Memory backend for `memory_search` and `memory_browse` tools
     pub memory_db: Option<MemoryBackend>,
     /// Raw session memory, independent of the derived notes/vector backend.
     pub raw_memory_store: Option<Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>>,
-    /// Embedding provider for semantic memory search
-    pub embedder: Option<Arc<dyn EmbeddingProvider>>,
     /// Gateway context for sessions tools (`sessions_list`, `sessions_send`)
     pub gateway_context: Option<Arc<GatewayContext>>,
     /// Session store for session tools (`session_new`, `session_set_topic`).
@@ -126,21 +129,9 @@ pub struct BuiltinToolConfig {
     /// `insert_with_capture_filter` so extensions can mutate or block them.
     pub capture_registry: Option<Arc<crate::memory::extensions::MemoryExtensionRegistry>>,
 
-    /// Note orientation handle (Spec 5 Task 12).
-    /// When set, `note_orient` tool is registered and dispatched, and
-    /// `note_schema` tool always has its `memory_dir` resolved.
-    /// `None` → note orientation tools unavailable at runtime (schema tool still registered
-    /// but dispatched stateless from `memory_dir` derived from paths).
-    pub orientation: Option<Arc<dyn crate::memory::notes::orientation::NoteOrientation>>,
-
     /// Memory dir root for `note_schema` tool (Spec 5 Task 12).
     /// Points to the `note` subdirectory (e.g. `~/.aleph/memory/note`).
     pub note_memory_dir: Option<std::path::PathBuf>,
-
-    /// Profile synthesizer for `user_profile` tool (Spec 7 Task 9).
-    /// When set, the `user_profile` tool is registered and dispatched.
-    pub profile_synthesizer:
-        Option<Arc<dyn crate::memory::notes::profile::synthesizer::ProfileSynthesizer>>,
 
     /// Sandbox for exec-class tools (`code_exec`, `bash_exec`).
     /// `None` → tools return a structured "sandbox not configured" error.

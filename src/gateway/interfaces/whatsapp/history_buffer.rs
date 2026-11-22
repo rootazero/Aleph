@@ -85,6 +85,26 @@ impl GroupHistoryBuffer {
         }
     }
 
+    /// Prepend the buffered history to `message`, then record the message
+    /// itself so the next one in the same group sees it.
+    ///
+    /// This is the consumer side of the buffer: the event loop calls it once
+    /// per accepted inbound, which is what makes `inject_context` mean
+    /// something to the agent. Non-group messages pass through unchanged.
+    pub async fn absorb(&self, mut message: InboundMessage) -> InboundMessage {
+        if !message.is_group {
+            return message;
+        }
+        if let Some(context) = self.get_context(&message.conversation_id).await {
+            message.text = format!("{context}\n{}", message.text);
+            // The block is "since your last reply", so it must not be
+            // injected into the following turn a second time.
+            self.clear(&message.conversation_id).await;
+        }
+        self.add(&message).await;
+        message
+    }
+
     pub async fn get_context(&self, conv_id: &ConversationId) -> Option<String> {
         if !self.config.inject_context {
             return None;
@@ -166,5 +186,32 @@ mod tests {
             ctx.contains("world"),
             "context missing second message: {ctx}"
         );
+    }
+
+    /// `absorb` is the only connector between the buffer and the agent: the
+    /// text it returns must carry the earlier messages, and a direct message
+    /// must come back byte-for-byte unchanged.
+    #[tokio::test]
+    async fn absorb_injects_earlier_group_messages_once() {
+        let buffer = GroupHistoryBuffer::new(HistoryBufferConfig::default());
+        let conv = ConversationId::new("chat-2@g.us");
+
+        let first = buffer
+            .absorb(make_group_message(conv.as_str(), "first"))
+            .await;
+        assert_eq!(first.text, "first");
+
+        let second = buffer
+            .absorb(make_group_message(conv.as_str(), "second"))
+            .await;
+        assert!(
+            second.text.contains("first") && second.text.ends_with("second"),
+            "absorb did not prepend history: {}",
+            second.text
+        );
+
+        let mut direct = make_group_message("dm-chat", "direct");
+        direct.is_group = false;
+        assert_eq!(buffer.absorb(direct).await.text, "direct");
     }
 }

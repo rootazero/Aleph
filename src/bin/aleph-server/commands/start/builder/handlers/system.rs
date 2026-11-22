@@ -42,21 +42,15 @@ pub(in crate::commands::start) fn register_browser_viewer_handlers(server: &mut 
 
 /// Registers the live terminal ingress for every `pty.*` method.
 /// The shared source keeps legacy RPCs on the same policy/facts/effect path as
-/// the canonical Tool and the capability RPC.
+/// the canonical Tool and the capability RPC — including `[policies.terminal]`
+/// itself, which the source owns: the handlers hold no `Config` of their own.
 pub(in crate::commands::start) fn register_pty_handlers(
     server: &mut GatewayServer,
-    config: &Arc<tokio::sync::RwLock<alephcore::Config>>,
     source: &Arc<alephcore::capability::tool_adapters::TerminalCapabilitySource>,
 ) {
     use alephcore::gateway::handlers::pty;
 
-    register_handler!(
-        server,
-        "pty.spawn",
-        pty::handle_spawn_with_source,
-        config,
-        source
-    );
+    register_handler!(server, "pty.spawn", pty::handle_spawn_with_source, source);
     register_handler!(server, "pty.input", pty::handle_input_with_source, source);
     register_handler!(server, "pty.attach", pty::handle_attach_with_source, source);
     register_handler!(server, "pty.resize", pty::handle_resize_with_source, source);

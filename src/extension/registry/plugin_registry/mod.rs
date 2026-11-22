@@ -11,7 +11,7 @@ use super::types::{
     ServiceRegistration, SkillRegistration, ToolRegistration,
 };
 use crate::extension::capability::ContextGrantAudit;
-use crate::extension::types::{HookEvent, PluginRecord, PluginStatus};
+use crate::extension::types::{PluginRecord, PluginStatus};
 
 mod context;
 
@@ -265,14 +265,6 @@ impl PluginRegistry {
         }
     }
 
-    /// Get all hooks registered for a specific event.
-    ///
-    /// Returns hooks in priority order (lower priority = earlier in list).
-    #[must_use]
-    pub fn get_hooks_for_event(&self, event: HookEvent) -> Vec<&HookRegistration> {
-        self.hooks.iter().filter(|h| h.event == event).collect()
-    }
-
     /// List all registered hooks.
     #[must_use]
     pub fn list_hooks(&self) -> Vec<&HookRegistration> {
@@ -403,6 +395,11 @@ impl PluginRegistry {
     }
 
     /// Get an agent by name.
+    ///
+    /// Test-only: production resolves agents through the registrar
+    /// (`AgentRegistration::qualified_name` / the registry map) — this lookup
+    /// by bare name has no production caller.
+    #[cfg(test)]
     #[must_use]
     pub fn get_agent(&self, name: &str) -> Option<&AgentRegistration> {
         if name.contains(':') {
@@ -442,11 +439,6 @@ impl PluginRegistry {
     #[must_use]
     pub fn diagnostics(&self) -> &[PluginDiagnostic] {
         &self.diagnostics
-    }
-
-    /// Clear all diagnostic messages.
-    pub fn clear_diagnostics(&mut self) {
-        self.diagnostics.clear();
     }
 
     // =========================================================================
@@ -493,36 +485,6 @@ impl PluginRegistry {
             .retain(|d| d.plugin_id.as_deref() != Some(plugin_id));
     }
 
-    // =========================================================================
-    // Statistics
-    // =========================================================================
-
-    /// Get registry statistics.
-    #[must_use]
-    pub fn stats(&self) -> RegistryStats {
-        let context = self.context_stats();
-        RegistryStats {
-            plugins: self.plugins.len(),
-            active_plugins: self.list_active_plugins().len(),
-            tools: self.list_tools().len(),
-            hooks: self.hooks.len(),
-            services: self.services.len(),
-            commands: self
-                .list_skills()
-                .into_iter()
-                .filter(|s| s.skill_type == crate::extension::types::SkillType::Command)
-                .count(),
-            skills: self
-                .list_skills()
-                .into_iter()
-                .filter(|s| s.skill_type == crate::extension::types::SkillType::Skill)
-                .count(),
-            agents: self.list_agents().len(),
-            contexts: context.registrations,
-            context_bundles: context.bundles,
-            diagnostics: self.diagnostics.len(),
-        }
-    }
 }
 
 #[cfg(test)]
@@ -550,20 +512,4 @@ mod agent_refresh_tests {
         assert_eq!(registry.agents["reviewer"].content, "new");
         assert_eq!(registry.agents["other:reviewer"].content, "other content");
     }
-}
-
-/// Registry statistics.
-#[derive(Debug, Clone, Default)]
-pub struct RegistryStats {
-    pub plugins: usize,
-    pub active_plugins: usize,
-    pub tools: usize,
-    pub hooks: usize,
-    pub services: usize,
-    pub commands: usize,
-    pub skills: usize,
-    pub agents: usize,
-    pub contexts: usize,
-    pub context_bundles: usize,
-    pub diagnostics: usize,
 }

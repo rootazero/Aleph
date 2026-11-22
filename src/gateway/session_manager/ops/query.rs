@@ -253,48 +253,11 @@ impl SessionManager {
         })
         .await
     }
-
-    /// Count sessions by state
-    pub async fn count_by_state(&self, state: SessionState) -> Result<usize, SessionManagerError> {
-        self.query_blocking(move |conn| {
-            let count: i64 = conn
-                .query_row(
-                    "SELECT COUNT(*) FROM sessions WHERE state = ?",
-                    params![state.to_string()],
-                    |row| row.get(0),
-                )
-                .unwrap_or(0);
-
-            Ok(count as usize)
-        })
-        .await
-    }
-
-    /// List sessions filtered by state
-    pub async fn list_by_state(
-        &self,
-        state: SessionState,
-    ) -> Result<Vec<SessionMetadata>, SessionManagerError> {
-        self.query_blocking(move |conn| {
-            let mut stmt = conn
-                .prepare(
-                    &format!("SELECT {SESSION_COLUMNS} FROM sessions WHERE state = ? ORDER BY last_active_at DESC"),
-                )
-                .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
-
-            let rows = stmt
-                .query_map(params![state.to_string()], map_session_metadata)
-                .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
-
-            collect_rows(rows, "list_by_state")
-        })
-        .await
-    }
 }
 
 /// Collect a listing whose contract is "the complete list, or `Err`".
 ///
-/// `list_sessions` / `list_by_state` feed decisions that assert absence —
+/// `list_sessions` feeds decisions that assert absence —
 /// `projects.channel.bind`'s `NothingToMove` receipt is one — so a row that
 /// fails to decode must not become a shorter list. Every failing row is
 /// logged by index before the listing fails, so one bad row does not hide a

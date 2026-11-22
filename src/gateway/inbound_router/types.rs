@@ -832,7 +832,7 @@ mod slash_access_tests {
         // ignoring unrelated channel fields (no deny_unknown_fields).
         let raw = serde_json::json!({
             "bot_token": "secret",
-            "polling_interval_secs": 5,
+            "send_typing": true,
             "allow_admin_from": ["111"],
             "group_user_allowed_commands": ["status", "ping"],
         });

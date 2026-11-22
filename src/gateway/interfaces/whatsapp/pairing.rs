@@ -129,6 +129,7 @@ impl PairingState {
 }
 
 /// Returns a short tag for the state variant (for transition error messages).
+#[cfg(test)]
 pub(crate) const fn state_tag(state: &PairingState) -> &'static str {
     match state {
         PairingState::Idle => "Idle",
@@ -158,6 +159,9 @@ pub(crate) const fn state_tag(state: &PairingState) -> &'static str {
 /// | Connected      | Disconnected                                       |
 /// | Disconnected   | Initializing, Connected (auto-reconnect), Idle     |
 /// | Failed         | Idle                                               |
+/// Test-only: the pairing flow validates transitions inline; this table is
+/// the executable statement of the same rules.
+#[cfg(test)]
 pub fn validate_transition(from: &PairingState, to: &PairingState) -> Result<(), String> {
     let valid = match from {
         PairingState::Idle => matches!(to, PairingState::Initializing),

@@ -370,8 +370,14 @@ pub async fn handle_plugin_install(
 
         println!("Searching for plugin '{source}'...");
         match manager.install_to_scope(source, None, plugin_scope, None) {
-            Ok(path) => {
-                println!("Plugin '{source}' installed to {path:?}");
+            Ok(installed) => {
+                println!(
+                    "Plugin '{source}' installed to {:?}",
+                    installed.path
+                );
+                for warning in &installed.warnings {
+                    println!("Warning: {warning}");
+                }
             }
             Err(e) => {
                 return Err(e.to_string().into());
@@ -441,10 +447,13 @@ pub async fn handle_plugin_update(
     let mut failed = 0usize;
     for plugin_name in &names {
         match manager.update_to_scope(plugin_name, None, plugin_scope, None, force) {
-            Ok(UpdateOutcome::Updated { from, to }) => {
+            Ok(UpdateOutcome::Updated { from, to, warnings }) => {
                 let from = from.unwrap_or_else(|| "-".to_string());
                 let to = to.unwrap_or_else(|| "-".to_string());
                 println!("Updated '{plugin_name}': {from} → {to}");
+                for warning in &warnings {
+                    println!("Warning: {warning}");
+                }
                 updated += 1;
             }
             Ok(UpdateOutcome::AlreadyLatest { version }) => {

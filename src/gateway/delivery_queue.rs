@@ -37,8 +37,9 @@
 //! record behind — replayed verbatim on the next boot, i.e. a duplicate. The
 //! outcome of an interrupted attempt is exactly as ambiguous as
 //! [`SendFailed`](ChannelError::SendFailed), so it gets the same verdict:
-//! [`DeliveryStore::mark_inflight`] stamps the row immediately before the send
-//! crosses the transport boundary, and [`DeliveryStore::reconcile_inflight`]
+//! the attempt stamp is written in the same transaction that revalidates the
+//! row (`DeliveryStore::begin_replay`) immediately before the send crosses the
+//! transport boundary, and [`DeliveryStore::reconcile_inflight`]
 //! (run once per process by [`spawn_drain`]) retires every surviving stamp into
 //! the dead-letter table as [`DeadLetterReason::UnknownOutcome`] instead of
 //! re-sending it. This mirrors openclaw's
@@ -1395,6 +1396,11 @@ impl DeliveryStore {
     /// after an abrupt exit. Best-effort by design — a failure here is logged by
     /// the caller and the send proceeds, because refusing to deliver is a worse
     /// outcome than risking one duplicate.
+    ///
+    /// The production send path stamps through [`begin_replay`](Self::begin_replay),
+    /// which writes the same column inside the transaction that also revalidates
+    /// the row and the durable policy. This method stays the raw statement
+    /// helper; nothing outside the store's own tests calls it.
     pub fn mark_inflight(&self, id: i64, now: i64) -> rusqlite::Result<()> {
         self.guard().execute(
             "UPDATE outbound_deliveries SET inflight_since = ?1 WHERE id = ?2",

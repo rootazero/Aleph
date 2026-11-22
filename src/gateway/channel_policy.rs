@@ -299,8 +299,10 @@ pub struct ChannelAccessConfig {
     pub groups: Vec<String>,
 
     /// Bot-to-bot loop protection (active when the channel admits bot-authored
-    /// inbound messages). Per-channel override; falls back to global defaults
-    /// via [`crate::gateway::pair_loop_guard::resolve_pair_loop_settings`].
+    /// inbound messages). Per-channel override; falls back to the router-wide
+    /// default via [`crate::gateway::pair_loop_guard::resolve_pair_loop_settings`].
+    /// Read at boot by `PairLoopGuardConfig::from_channel_config` and applied
+    /// per channel by `InboundMessageRouter::pair_loop_config_for`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bot_loop_protection: Option<PairLoopGuardConfig>,
 }

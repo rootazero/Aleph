@@ -60,20 +60,3 @@ fn test_build_flex_payload() {
     assert!(json.contains("\"type\":\"flex\""));
     assert!(json.contains("\"altText\":\"Flex message\""));
 }
-
-#[test]
-fn test_deserialize_user_profile() {
-    use alephcore::gateway::interfaces::line::message_ops::LineUserProfile;
-
-    let json = r#"{
-        "displayName": "John Doe",
-        "userId": "U123456",
-        "pictureUrl": "https://example.com/photo.jpg",
-        "statusMessage": "Hello!"
-    }"#;
-    let profile: LineUserProfile = serde_json::from_str(json).unwrap();
-    assert_eq!(profile.display_name, "John Doe");
-    assert_eq!(profile.user_id, "U123456");
-    assert!(profile.picture_url.is_some());
-    assert_eq!(profile.status_message.as_deref(), Some("Hello!"));
-}

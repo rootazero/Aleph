@@ -344,11 +344,11 @@ async fn dispatch_event(
     ctx: &WebhookContext,
     raw_event: &serde_json::Value,
 ) -> Result<(), String> {
-    let (source, reply_token, text) = match event {
+    // The webhook `replyToken` is parsed off the wire but deliberately unused:
+    // LINE answers through the metered push API (see the module docs).
+    let (source, text) = match event {
         LineEvent::Message {
-            reply_token,
-            source,
-            message,
+            source, message, ..
         } => {
             use super::types::LineMessage;
             let text = match message {
@@ -361,36 +361,16 @@ async fn dispatch_event(
                 LineMessage::Unknown => return Err("Unsupported LINE message type".into()),
                 _ => "[LINE attachment]".into(),
             };
-            (source, reply_token.clone(), text)
+            (source, text)
         }
-        LineEvent::Follow {
-            reply_token,
-            source,
-        } => (source, reply_token.clone(), "[Follow event]".to_string()),
-        LineEvent::Unfollow { source } => (source, None, "[Unfollow event]".to_string()),
-        LineEvent::Join {
-            reply_token,
-            source,
-        } => (source, reply_token.clone(), "[Join event]".to_string()),
-        LineEvent::Leave { source } => (source, None, "[Leave event]".to_string()),
+        LineEvent::Follow { source, .. } => (source, "[Follow event]".to_string()),
+        LineEvent::Unfollow { source } => (source, "[Unfollow event]".to_string()),
+        LineEvent::Join { source, .. } => (source, "[Join event]".to_string()),
+        LineEvent::Leave { source } => (source, "[Leave event]".to_string()),
         LineEvent::Postback {
-            reply_token,
-            source,
-            postback,
-        } => (
-            source,
-            reply_token.clone(),
-            format!("[Postback: {}]", postback.data),
-        ),
-        LineEvent::Beacon {
-            reply_token,
-            source,
-            beacon,
-        } => (
-            source,
-            reply_token.clone(),
-            format!("[Beacon: {}]", beacon.hwid),
-        ),
+            source, postback, ..
+        } => (source, format!("[Postback: {}]", postback.data)),
+        LineEvent::Beacon { source, beacon, .. } => (source, format!("[Beacon: {}]", beacon.hwid)),
         LineEvent::AccountLink { .. } => return Ok(()),
     };
 
@@ -416,10 +396,6 @@ async fn dispatch_event(
         |s| UserId::new(s.clone()),
     );
 
-    let mut raw = raw_event.clone();
-    if let Some(token) = reply_token {
-        raw["reply_token"] = token.into();
-    }
     let (id, attachments) = if let LineEvent::Message { message, .. } = event {
         (
             MessageId::new(message.id()),
@@ -439,7 +415,7 @@ async fn dispatch_event(
         timestamp: chrono::Utc::now(),
         reply_to: None,
         is_group,
-        raw: Some(raw),
+        raw: Some(raw_event.clone()),
         metadata: vec![],
     };
 
@@ -476,7 +452,6 @@ mod tests {
             Some("https://example.org/image.jpg")
         );
         assert_eq!(inbound.raw.as_ref().unwrap()["message"], raw["message"]);
-        assert_eq!(inbound.raw.as_ref().unwrap()["reply_token"], "reply");
         let unknown = serde_json::json!({"type":"message", "source":{"type":"user", "userId":"U1"}, "message":{"type":"future"}});
         let event: LineEvent = serde_json::from_value(unknown.clone()).unwrap();
         assert!(dispatch_event(&event, &ctx, &unknown).await.is_err());

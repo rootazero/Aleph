@@ -277,6 +277,12 @@ pub enum ContextLifecycleEvent {
     FoldRecorded,
     RestoreRequested,
     TurnEnd,
+    /// Reserved for an explicit host-owned session shutdown.
+    ///
+    /// Nothing emits this today: a turn end is not a session shutdown (see
+    /// `docs/reference/CONTEXT_PLUGINS.md`). It stays in the closed
+    /// enumeration because the wire tag is part of the published
+    /// lifecycle vocabulary — a subscriber may already filter on it.
     SessionShutdown,
 }
 

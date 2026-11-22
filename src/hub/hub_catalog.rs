@@ -118,13 +118,15 @@ impl HubCatalogArtifact {
                 return Err(format!("duplicate entry id '{}'", e.id));
             }
             // Wire-controlled `config_schema` flows directly to the Panel's
-            // schema-driven form renderer. An unbounded schema (deep nesting,
-            // huge arrays) can OOM the UI or hang the validator. We can't
-            // `serde_json::to_string` the Value here without a second
-            // allocation, so bound by structural depth + property count
-            // instead of bytes.
+            // schema-driven form renderer. One check, owned by
+            // `extension::manifest::config_validation`: structural
+            // depth/property budget (an unbounded schema can OOM the UI or hang
+            // the validator) plus schema compilation (a hub schema that does
+            // not compile would fail later, inside the renderer).
             if let Some(schema) = &e.config_schema {
-                if let Err(reason) = validate_config_schema(schema) {
+                if let Err(reason) =
+                    crate::extension::manifest::validate_config_schema_declaration(schema)
+                {
                     return Err(format!(
                         "entry '{}' has invalid config_schema: {reason}",
                         e.id
@@ -146,48 +148,6 @@ impl HubCatalogArtifact {
         }
         Ok(())
     }
-}
-
-/// Bound the structural complexity of a wire-supplied `config_schema`. JSON
-/// Schema has no intrinsic size limit, so a hostile publisher could ship a
-/// schema with 10k nested `allOf` branches or a 100k-entry `enum` and stall
-/// the Panel's form renderer. Depth <= 16 and <= 1024 total properties are
-/// generous for any realistic extension config (typical schemas are < 5
-/// levels, < 50 properties).
-fn validate_config_schema(schema: &serde_json::Value) -> Result<(), String> {
-    const MAX_DEPTH: usize = 16;
-    const MAX_PROPERTIES: usize = 1024;
-
-    fn walk(v: &serde_json::Value, depth: usize, budget: &mut usize) -> Result<(), String> {
-        if depth > MAX_DEPTH {
-            return Err(format!("schema nesting exceeds {MAX_DEPTH} levels"));
-        }
-        match v {
-            serde_json::Value::Object(map) => {
-                if map.len() > *budget {
-                    return Err(format!("schema has >{MAX_PROPERTIES} properties"));
-                }
-                *budget -= map.len();
-                for value in map.values() {
-                    walk(value, depth + 1, budget)?;
-                }
-            }
-            serde_json::Value::Array(items) => {
-                if items.len() > *budget {
-                    return Err(format!("schema has >{MAX_PROPERTIES} properties"));
-                }
-                *budget -= items.len();
-                for item in items {
-                    walk(item, depth + 1, budget)?;
-                }
-            }
-            _ => {}
-        }
-        Ok(())
-    }
-
-    let mut budget = MAX_PROPERTIES;
-    walk(schema, 0, &mut budget)
 }
 
 impl HubCatalogEntry {
@@ -311,18 +271,44 @@ mod tests {
     }
 
     #[test]
-    fn validate_config_schema_budget() {
-        let mut map = serde_json::Map::new();
-        for i in 0..1024 {
-            map.insert(format!("prop_{i}"), serde_json::Value::Bool(true));
-        }
-        let exact_schema = serde_json::Value::Object(map.clone());
-        assert!(validate_config_schema(&exact_schema).is_ok());
+    fn wire_supplied_config_schema_runs_the_shared_check() {
+        // The budget and the compile check both live in
+        // `extension::manifest::config_validation`; this asserts the wire path
+        // actually reaches that one owner, for both halves.
+        let mut entries = serde_json::Map::new();
+        entries.insert("id".into(), serde_json::json!("aleph-hub:a"));
+        entries.insert("kind".into(), serde_json::json!("mcp"));
+        entries.insert("category".into(), serde_json::json!("other"));
+        entries.insert("name".into(), serde_json::json!("A"));
+        entries.insert("description".into(), serde_json::json!("d"));
+        entries.insert("repo_url".into(), serde_json::Value::Null);
+        entries.insert("trust_tier".into(), serde_json::json!("official"));
+        entries.insert(
+            "install_spec".into(),
+            serde_json::json!({"type": "mcp_stdio", "command": "npx", "args": []}),
+        );
 
-        map.insert("prop_1024".into(), serde_json::Value::Bool(true));
-        let over_schema = serde_json::Value::Object(map);
-        assert!(validate_config_schema(&over_schema)
-            .unwrap_err()
-            .contains(">1024 properties"));
+        let mut unbounded = entries.clone();
+        let mut props = serde_json::Map::new();
+        for i in 0..1025 {
+            props.insert(format!("prop_{i}"), serde_json::Value::Bool(true));
+        }
+        unbounded.insert("config_schema".into(), serde_json::Value::Object(props));
+        let art = artifact(&format!("[{}]", serde_json::Value::Object(unbounded)), "");
+        assert!(
+            art.validate().unwrap_err().contains(">1024 properties"),
+            "budget half missing"
+        );
+
+        let mut uncompilable = entries;
+        uncompilable.insert("config_schema".into(), serde_json::json!({"type": 123}));
+        let art = artifact(
+            &format!("[{}]", serde_json::Value::Object(uncompilable)),
+            "",
+        );
+        assert!(
+            art.validate().unwrap_err().contains("invalid JSON Schema"),
+            "compile half missing"
+        );
     }
 }

@@ -30,7 +30,7 @@ use tracing::warn;
 use crate::artifacts::{ArtifactOrigin, ArtifactRecord, ArtifactStore};
 use crate::error::{AlephError, Result};
 use crate::export::{
-    collect_artifacts, exported_document_bytes, render_document_html, ExportDocument,
+    collect_artifacts_with_drops, exported_document_bytes, render_document_html, ExportDocument,
     MAX_EXPORTED_DOCUMENT_BYTES,
 };
 use crate::gateway::event_emitter::artifact_ping::publish_artifact_ping;
@@ -62,7 +62,9 @@ pub struct ArtifactPublishArgs {
     pub content: String,
 
     /// Artifact ids from this session to embed as figures, in the order they
-    /// should appear. Get them from a previous tool result or `artifacts.list`.
+    /// should appear. Get them from the tool result that produced them: the
+    /// ids of the media a tool settled are reported there, under
+    /// `_media_artifacts`.
     #[serde(default)]
     pub figures: Vec<String>,
 }
@@ -237,7 +239,14 @@ async fn resolve_figures(
     // the bytes from the probe above: that reader is the one place that decides
     // what a document may inline, and duplicating its rule here is how the two
     // would drift.
-    let figures = collect_artifacts(store, session_key, &records).await;
+    //
+    // The reader also reports what it had to drop. A figure that lost the
+    // budget race is still a figure the model asked for, so it is named here
+    // rather than silently missing from the document.
+    let (figures, dropped) = collect_artifacts_with_drops(store, session_key, &records).await;
+    for drop in dropped {
+        skipped.push(format!("{}: {}", drop.id, drop.reason.as_str()));
+    }
     (figures, skipped)
 }
 

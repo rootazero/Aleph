@@ -848,16 +848,21 @@ where
 
             match fast_result {
                 Ok(response) => {
-                    return self
-                        .finalize_fast_path_success(
-                            &run_id,
-                            &request,
-                            &agent,
-                            &emitter,
-                            response,
-                            trace_task_persisted,
-                        )
+                    self.finalize_fast_path_success(
+                        &run_id,
+                        &request,
+                        &agent,
+                        &emitter,
+                        response,
+                        trace_task_persisted,
+                    )
+                    .await?;
+                    // Same post-run steering rescue as the normal completion
+                    // path: a side question steered into this command was
+                    // acknowledged into the log but never answered.
+                    self.post_run_steering_rescue(&request, &agent, &emitter)
                         .await;
+                    return Ok(());
                 }
                 Err(ExecutionError::Fallthrough { ref reason }) => {
                     // Skills/custom commands need LLM processing — fall through
@@ -1243,35 +1248,55 @@ where
         // user asked the agent to stop, so pending messages wait for the next
         // interaction instead of restarting the loop they just killed.
         if matches!(final_state, RunState::Completed) {
-            if let Some(rescue) =
-                super::steering::build_steering_rescue_request(self.orchestrator.as_ref(), &request)
-                    .await
-            {
-                info!(
-                    session = %request.session_key.to_key_string(),
-                    rescue_run = %rescue.run_id,
-                    "post-run steering rescue: unanswered steering burst detected; re-driving loop",
-                );
-                // The rescue's outcome must NOT replace the original run's
-                // result: the original message was already answered, and
-                // propagating e.g. a rescue `AgentBusy` (another run grabbed
-                // the freed slot — it reads the same log and covers the
-                // burst) would make the inbound router's busy/retry loop
-                // re-execute the already-answered original message. Log and
-                // swallow; the burst is never dropped — at worst it defers to
-                // the next interaction. Box::pin breaks the infinitely-sized
-                // recursive future.
-                if let Err(e) = Box::pin(self.execute(rescue, agent, emitter)).await {
-                    warn!(
-                        session = %request.session_key.to_key_string(),
-                        error = %e,
-                        "post-run steering rescue run failed; burst defers to next interaction",
-                    );
-                }
-            }
+            self.post_run_steering_rescue(&request, &agent, &emitter)
+                .await;
         }
 
         final_result
+    }
+    /// Post-run steering rescue: when a steering burst landed after the
+    /// harness's final follow-up check — but before this run's state flipped
+    /// out of `Running` — it was acknowledged into the session log yet has no
+    /// live loop left to answer it. One bounded re-read closes that race: if
+    /// an unanswered burst remains, re-drive the loop over the existing log
+    /// via the resume flow, reusing this run's emitter so the answer reaches
+    /// the same client.
+    ///
+    /// Shared by the normal completion path and the slash fast-path
+    /// completion: the fast path used to skip it, so a side question steered
+    /// into a direct-tool slash command stayed unanswered until the next
+    /// unrelated turn.
+    ///
+    /// The rescue's outcome never replaces the original run's result: the
+    /// original message was already answered, and propagating e.g. a rescue
+    /// `AgentBusy` (another run grabbed the freed slot — it reads the same log
+    /// and covers the burst) would make the inbound router's busy/retry loop
+    /// re-execute the already-answered original message. Log and swallow; the
+    /// burst is never dropped — at worst it defers to the next interaction.
+    /// Box::pin breaks the infinitely-sized recursive future.
+    async fn post_run_steering_rescue<E: EventEmitter + Send + Sync + 'static>(
+        &self,
+        request: &RunRequest,
+        agent: &Arc<AgentInstance>,
+        emitter: &Arc<E>,
+    ) {
+        let Some(rescue) =
+            super::steering::build_steering_rescue_request(self.orchestrator.as_ref(), request).await
+        else {
+            return;
+        };
+        info!(
+            session = %request.session_key.to_key_string(),
+            rescue_run = %rescue.run_id,
+            "post-run steering rescue: unanswered steering burst detected; re-driving loop",
+        );
+        if let Err(e) = Box::pin(self.execute(rescue, agent.clone(), emitter.clone())).await {
+            warn!(
+                session = %request.session_key.to_key_string(),
+                error = %e,
+                "post-run steering rescue run failed; burst defers to next interaction",
+            );
+        }
     }
 }
 

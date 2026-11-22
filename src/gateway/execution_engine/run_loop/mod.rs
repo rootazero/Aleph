@@ -697,11 +697,17 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     );
                     // §5.4: same receipt as the deny arm; `Cancelled` because
                     // the run did what the hook asked — this is not an error.
-                    // Unlike the deny arm, the receipt is the ONLY report
-                    // here: `execute.rs` drops this `Ok` string
-                    // (`Ok(_response)`), so a refused batch is a silent stop
-                    // — see `journal_hook_stop`'s doc.
+                    // Two reports, two audiences: the receipt is the
+                    // transcript row (reload-visible), and the stop text
+                    // goes out as the run's FINAL response chunk, because
+                    // `execute.rs` drops the returned `Ok` string
+                    // (`Ok(_response)`) and no `RunComplete` follows — the
+                    // orchestrator drain never ran on this arm. Without the
+                    // chunk a chat channel gets no reply at all.
                     journal_hook_stop(request, RunOutcome::Cancelled, &stop_msg).await;
+                    emitter
+                        .emit_response_chunk(run_id, &stop_msg, &stop_msg, 0, true, false)
+                        .await;
                     return Ok(stop_msg);
                 }
                 Ok(_) => {}
@@ -763,7 +769,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // `media_send` / `image_generate` reached the artifact pane and stopped
         // there. Clone rather than move: `request` goes into the loop below.
         let delivery_media = request.pending_media.clone();
-        let mut result = crate::agents::with_agent_id(
+        let result = crate::agents::with_agent_id(
             Some(agent.id().to_string()),
             crate::projects::with_project_root(
                 request.workspace_override.clone(),
@@ -813,10 +819,14 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         )
         .await;
 
-        // AgentEnd — observers witness the end; Interceptor-kind hooks may
-        // rewrite the final assistant text via `update_output:` (hermes
-        // `transform_llm_output` parity). This reuses the exact `updated_output`
-        // seam already honored on the AfterToolCall path — no new protocol.
+        // AgentEnd — observers witness the end. Interceptor-kind hooks may
+        // NOT rewrite the final assistant text here: the harness already
+        // streamed and persisted it before this seam fires, and the returned
+        // string is dropped by `execute.rs` (`Ok(_response)`), so an
+        // `update_output:` on this seam would be swallowed silently. It is
+        // reported as unsupported instead of pretending to work — the
+        // `update_output:` protocol belongs to the tool seams (AfterToolCall
+        // applies it to the tool result, before the model sees it).
         // block / deny are meaningless post-hoc (the run is over) and ignored.
         if let Some(executor) = hook_executor.as_ref() {
             let mut ctx = lifecycle_hook_context(&hook_session_id, run_id, &agent, None);
@@ -826,14 +836,20 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 Err(e) => ctx = ctx.with_env("AGENT_ERROR", e.to_string()),
             }
             executor.execute_observers(HookEvent::AgentEnd, &ctx).await;
-            // Only the success path carries a final text to transform.
-            if let Ok(ref mut text) = result {
+            // Only the success path carries a final text; `update_output:`
+            // on this seam is rejected (the output is already delivered).
+            if result.is_ok() {
                 if let Ok((_ctx, hr)) = executor
                     .execute_interceptors(HookEvent::AgentEnd, ctx)
                     .await
                 {
-                    if let Some(new_text) = hr.updated_output {
-                        *text = new_text;
+                    if hr.updated_output.is_some() {
+                        warn!(
+                            run_id = run_id,
+                            "AgentEnd hook returned `update_output:`; ignored — the run \
+                             output was already delivered. Use a tool hook's \
+                             `update_output:` to transform a tool result."
+                        );
                     }
                 }
             }

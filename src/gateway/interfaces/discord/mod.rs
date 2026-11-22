@@ -28,19 +28,11 @@
 pub mod api;
 pub mod commands;
 pub mod config;
-pub mod draft;
-pub mod group_policy;
 pub mod permissions;
-pub mod reconnect;
-pub mod resolver;
 pub mod security;
-pub mod session_key;
 
 pub use commands::{ComponentId, ComponentKind};
 pub use config::{DiscordConfig, IntentsConfig};
-pub use draft::{DraftChunker, DraftStream};
-pub use reconnect::{CooldownStore, ReconnectCoordinator, ReconnectDecision};
-pub use resolver::{Candidate, ChannelResolutionError, DiscordResolver, ResolvedChannel};
 
 use crate::gateway::channel::{
     Attachment, Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
@@ -53,8 +45,6 @@ use async_trait::async_trait;
 use chrono::{TimeZone, Utc};
 use tokio::sync::{oneshot, RwLock};
 
-use std::collections::HashMap;
-
 use serenity::{
     all::{
         ButtonStyle, ChannelId as SerenityChannelId, CommandDataOptionValue, ComponentInteraction,
@@ -64,44 +54,6 @@ use serenity::{
     },
     Client,
 };
-
-/// Thread binding - links a Discord thread to a conversation
-#[derive(Debug, Clone)]
-pub struct ThreadBinding {
-    /// Discord thread ID
-    pub thread_id: u64,
-    /// Bound conversation ID
-    pub conversation_id: ConversationId,
-    /// Guild ID where the thread exists
-    pub guild_id: u64,
-    /// Parent channel ID
-    pub parent_channel_id: u64,
-    /// Thread name
-    pub name: String,
-    /// When the binding was created
-    pub created_at: chrono::DateTime<Utc>,
-}
-
-impl ThreadBinding {
-    /// Create a new thread binding from thread details
-    #[must_use]
-    pub fn new(
-        thread_id: u64,
-        conversation_id: ConversationId,
-        guild_id: u64,
-        parent_channel_id: u64,
-        name: String,
-    ) -> Self {
-        Self {
-            thread_id,
-            conversation_id,
-            guild_id,
-            parent_channel_id,
-            name,
-            created_at: Utc::now(),
-        }
-    }
-}
 
 /// Discord channel implementation
 pub struct DiscordChannel {
@@ -128,18 +80,6 @@ pub struct DiscordChannel {
     /// `None` (no enabled provider), and the inbound path then forwards audio
     /// messages untouched so they remain visible to the user.
     stt_source: Option<Arc<crate::gateway::voice::inbound::SttSource>>,
-    /// Reconnect coordinator (T2.5): owns the backoff schedule, presence
-    /// cooldown gate, and `last_event_at` watchdog that feeds the channel
-    /// health monitor's zombie-detection sweep. Always present (constructed
-    /// with defaults in `new()`) so the wiring never silently disappears.
-    ///
-    /// Wrapped in `Arc` so the [`Handler`] cloned into serenity's event
-    /// callback shares the same underlying backoff / cooldown / atomic
-    /// `last_event_nanos` — `mark_event()` called from a serenity gateway
-    /// event must feed the same watchdog the health monitor reads. R2 D6
-    /// wired the mark; the `Arc` is what lets the handler reach it
-    /// without taking a second mutable borrow of the channel.
-    reconnect: Arc<reconnect::ReconnectCoordinator>,
     /// Component dispatch table (R2 D1): owned by the channel and shared
     /// (via Arc) with the Handler so button clicks resolve to typed
     /// DispatchOutcome instead of becoming raw inbound text. Constructed
@@ -169,7 +109,6 @@ impl DiscordChannel {
             http: None,
             test_mode: false,
             stt_source: None,
-            reconnect: Arc::new(reconnect::ReconnectCoordinator::with_defaults()),
             registry: Arc::new(commands::CommandRegistry::with_defaults()),
         }
     }
@@ -202,15 +141,6 @@ impl DiscordChannel {
     #[must_use]
     pub fn stt_source(&self) -> Option<&Arc<crate::gateway::voice::inbound::SttSource>> {
         self.stt_source.as_ref()
-    }
-
-    /// Read-only view of the reconnect coordinator. Exposed so the health
-    /// monitor's sweep (which lives in `channel_health_monitor`) and the
-    /// inbound path share the same schedule — every place that touches the
-    /// backoff goes through this handle.
-    #[must_use]
-    pub fn reconnect(&self) -> &reconnect::ReconnectCoordinator {
-        &self.reconnect
     }
 
     /// Get Discord-specific capabilities
@@ -344,7 +274,6 @@ struct Handler {
     instance_id: String,
     status: Arc<RwLock<ChannelStatus>>,
     bot_user_id: Arc<RwLock<Option<u64>>>,
-    thread_bindings: Arc<RwLock<HashMap<u64, ThreadBinding>>>,
     /// Signalled once by `ready()` so `start()` can await the actual gateway
     /// handshake instead of guessing with a fixed sleep (a slow network made
     /// the 500ms guess return while the channel still read `Connecting`, and
@@ -356,18 +285,8 @@ struct Handler {
     /// the inbound path then forwards audio messages untouched so they remain
     /// visible to the user, and the agent sees the raw attachment metadata.
     stt_source: Option<Arc<crate::gateway::voice::inbound::SttSource>>,
-    /// Reconnect watchdog (R2 D6): shared `Arc` with the parent
-    /// `DiscordChannel`'s reconnect coordinator. Serenity's gateway events
-    /// stamp the `last_event_nanos` atomic on every observed event so the
-    /// health monitor's `is_zombie()` sweep can distinguish "socket alive"
-    /// from "socket wedged". Without this stamp the coordinator's
-    /// `seconds_since_last_event` is permanently `0`, and every channel
-    /// trips the staleness watchdog the moment it goes idle.
-    reconnect: Arc<reconnect::ReconnectCoordinator>,
     /// Component dispatch table — Arc-shared from the parent
-    /// `DiscordChannel`. Lives alongside the reconnect coordinator so a
-    /// future refactor that consolidates the two Arc-shared fields can
-    /// find them together.
+    /// `DiscordChannel`.
     registry: Arc<commands::CommandRegistry>,
 }
 
@@ -464,11 +383,6 @@ impl Handler {
 #[async_trait]
 impl EventHandler for Handler {
     async fn ready(&self, _ctx: Context, ready: Ready) {
-        // R2 D6: stamp the liveness atomic first so the watchdog's first
-        // `seconds_since_last_event` read returns 0 (sentinel for "never
-        // seen"), not "stale" — the watchdog will see the next gateway
-        // event and tick down from there.
-        self.reconnect.mark_event();
         tracing::info!(
             "Discord bot connected: {}#{} ({})",
             ready.user.name,
@@ -488,17 +402,11 @@ impl EventHandler for Handler {
     }
 
     async fn message(&self, ctx: Context, msg: Message) {
-        // R2 D6: liveness stamp AFTER the self-loop guard so the bot's
-        // own outbound messages don't trivially keep the watchdog fed —
-        // the watchdog wants gateway activity (inbound + outbound),
-        // not "I just spoke". Marking AFTER the early-return makes the
-        // guard the source of truth for "is this the bot itself".
         let bot_self_id = *self.bot_user_id.read().await;
         let is_self = bot_self_id == Some(msg.author.id.get());
         if msg.author.bot && is_self {
             return;
         }
-        self.reconnect.mark_event();
         let is_foreign_bot = msg.author.bot && !is_self;
 
         // Check if this is a DM
@@ -679,13 +587,6 @@ impl EventHandler for Handler {
     }
 
     async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
-        // R2 D6: stamp the liveness atomic first, BEFORE the
-        // component-handler dispatch and the unknown-variant early-return,
-        // because both of those still represent gateway activity the
-        // watchdog should see. Filtering by interaction kind would
-        // reintroduce the "every interaction event is its own decision"
-        // problem the watchdog exists to solve.
-        self.reconnect.mark_event();
         // Button / select-menu clicks (approval UI): forward the callback to the
         // router's approval sink via a cb_-prefixed inbound message, then ACK.
         if let Interaction::Component(component) = &interaction {
@@ -825,19 +726,6 @@ impl EventHandler for Handler {
             channel_id,
             new_channel.parent_id.map_or(0, |p| p.get())
         );
-
-        let binding = ThreadBinding::new(
-            channel_id,
-            ConversationId::new(channel_id.to_string()),
-            new_channel.guild_id.get(),
-            new_channel.parent_id.map_or(0, |p| p.get()),
-            new_channel.name.clone(),
-        );
-
-        self.thread_bindings
-            .write()
-            .await
-            .insert(channel_id, binding);
     }
 
     async fn thread_update(
@@ -850,10 +738,7 @@ impl EventHandler for Handler {
             return;
         }
         let channel_id = new_channel.id.get();
-        if let Some(binding) = self.thread_bindings.write().await.get_mut(&channel_id) {
-            binding.name = new_channel.name.clone();
-            tracing::debug!("Thread updated: {} ({})", channel_id, new_channel.name);
-        }
+        tracing::debug!("Thread updated: {} ({})", channel_id, new_channel.name);
     }
 
     async fn thread_delete(
@@ -866,15 +751,7 @@ impl EventHandler for Handler {
             return;
         }
         let channel_id = channel.id.get();
-        if self
-            .thread_bindings
-            .write()
-            .await
-            .remove(&channel_id)
-            .is_some()
-        {
-            tracing::debug!("Thread deleted: {}", channel_id);
-        }
+        tracing::debug!("Thread deleted: {}", channel_id);
     }
 }
 
@@ -929,8 +806,7 @@ impl Channel for DiscordChannel {
             intents |= GatewayIntents::GUILD_MEMBERS;
         }
         // Thread events (THREAD_CREATE/UPDATE/DELETE) are only delivered
-        // with the GUILDS intent — without it the thread bindings are
-        // never populated and `thread_create` never runs.
+        // with the GUILDS intent — without it `thread_create` never runs.
         if self.config.intents.guild_threads {
             intents |= GatewayIntents::GUILDS;
         }
@@ -943,16 +819,8 @@ impl Channel for DiscordChannel {
             instance_id: self.info.id.as_str().to_string(),
             status: self.channel_state.status_handle(),
             bot_user_id: Arc::new(RwLock::new(None)),
-            thread_bindings: Arc::new(RwLock::new(HashMap::new())),
             ready_notify: ready_notify.clone(),
             stt_source: self.stt_source.clone(),
-            // R2 D6: share the parent's reconnect coordinator so the
-            // serenity gateway events (ready / message / interaction_create)
-            // stamp the same `last_event_nanos` atomic the health monitor
-            // reads from `seconds_since_last_event`. Without this clone the
-            // watchdog is permanently stale and every idle channel trips
-            // the staleness sweep.
-            reconnect: Arc::clone(&self.reconnect),
             // R2 D1: share the parent's CommandRegistry so component
             // clicks (button / select-menu) resolve to typed
             // DispatchOutcome via `commands::dispatch_component_click`
@@ -1251,6 +1119,11 @@ impl Channel for DiscordChannel {
     }
 
     async fn send_typing(&self, conversation_id: &ConversationId) -> ChannelResult<()> {
+        // The generic reply-emitter typing loop is channel-agnostic, so this
+        // knob can only be honoured here.
+        if !self.config.send_typing {
+            return Ok(());
+        }
         if self.test_mode {
             if self.status() != ChannelStatus::Connected {
                 return Err(ChannelError::NotConnected(

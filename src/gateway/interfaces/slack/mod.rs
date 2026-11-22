@@ -276,6 +276,11 @@ impl Channel for SlackChannel {
     }
 
     async fn send_typing(&self, conversation_id: &ConversationId) -> ChannelResult<()> {
+        // The generic reply-emitter typing loop is channel-agnostic, so this
+        // knob can only be honoured here.
+        if !self.config.send_typing {
+            return Ok(());
+        }
         SlackMessageOps::post_typing_with_base(
             &self.client,
             &self.config.bot_token,
@@ -318,12 +323,13 @@ impl Channel for SlackChannel {
                 "message editing is disabled".to_string(),
             ));
         }
-        SlackMessageOps::update_message(
+        SlackMessageOps::update_message_with_base(
             &self.client,
             &self.config.bot_token,
             conversation_id.as_str(),
             message_id.as_str(),
             new_text,
+            self.api_base.as_deref(),
         )
         .await
     }
@@ -338,11 +344,12 @@ impl Channel for SlackChannel {
                 "message deletion is disabled".to_string(),
             ));
         }
-        SlackMessageOps::delete_message(
+        SlackMessageOps::delete_message_with_base(
             &self.client,
             &self.config.bot_token,
             conversation_id.as_str(),
             message_id.as_str(),
+            self.api_base.as_deref(),
         )
         .await
     }

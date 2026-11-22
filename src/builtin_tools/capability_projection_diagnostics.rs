@@ -502,8 +502,9 @@ impl DiagnosticTool {
     /// LLM-facing description. The seven operations are listed in the
     /// order `parse_request` discriminates them; the strict
     /// `deny_unknown_fields` contract is enforced at parse time, not
-    /// here, so the schema below only names the `operation` tag and
-    /// leaves the variant body free-form.
+    /// here, so the schema below names the `operation` tag together
+    /// with the arguments the operation bodies carry (`tool_name`,
+    /// `plane`, `duration_ms`).
     pub const DESCRIPTION: &'static str = "\
 Capability-runtime diagnostic control surface. Enablement-gated on \
 `ALEPH_CAPABILITY_DIAGNOSTICS=1` at startup; when disabled, the tool is \
@@ -529,10 +530,19 @@ Operations (tagged `operation`):\n\
 
     /// Schema for the LLM-facing `UnifiedTool`. The strict
     /// `deny_unknown_fields` contract is enforced by `parse_request` at
-    /// dispatch time; this schema only advertises the `operation` tag
-    /// and leaves the variant body free-form, so the model sees the
-    /// seven operation names without an over-specified shape the
-    /// parser would then have to keep in sync.
+    /// dispatch time; this schema names the `operation` tag AND the three
+    /// parameters the operation bodies carry, because a schema that named
+    /// only the tag could not express `revoke_tool` or `hold` at all — the
+    /// model had no way to say which tool to revoke or which plane to
+    /// freeze.
+    ///
+    /// The conditional required-ness ("`tool_name` only with `revoke_tool`",
+    /// "`plane` and `duration_ms` only with `hold`") is stated in the
+    /// descriptions rather than in a `oneOf`: the provider schema adapters
+    /// flatten `oneOf`/`anyOf` into a flat object and lose the per-branch
+    /// required sets (the OpenAI adapter intersects them, the Gemini one
+    /// unions them), so a union schema would arrive at the model with the
+    /// wrong requiredness. `parse_request` stays the enforcement point.
     #[must_use]
     pub fn definition(&self) -> crate::ToolDefinition {
         crate::ToolDefinition::new(
@@ -540,6 +550,7 @@ Operations (tagged `operation`):\n\
             Self::DESCRIPTION,
             serde_json::json!({
                 "type": "object",
+                "description": "The `operation` decides which of the other arguments apply: `revoke_tool` needs `tool_name`; `hold` needs `plane` and `duration_ms`; the other five operations take no arguments.",
                 "properties": {
                     "operation": {
                         "type": "string",
@@ -552,6 +563,21 @@ Operations (tagged `operation`):\n\
                             "release",
                             "close",
                         ],
+                    },
+                    "tool_name": {
+                        "type": "string",
+                        "description": "The tool binding to revoke. Required when `operation` is `revoke_tool`; the other operations reject it.",
+                    },
+                    "plane": {
+                        "type": "string",
+                        "enum": ["source_intake", "delivery"],
+                        "description": "The projection plane to freeze. Required when `operation` is `hold`; the other operations reject it.",
+                    },
+                    "duration_ms": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 5000,
+                        "description": "How long the hold lasts, in milliseconds (1..=5000). Required when `operation` is `hold`; the other operations reject it.",
                     },
                 },
                 "required": ["operation"],
@@ -866,6 +892,49 @@ mod tests {
             status_after.applied_tool_ids.len()
         );
         assert!(!tree.is_disposed(LifetimeScope::Runtime));
+    }
+
+    // ---- TDD test 4: the schema names the operation bodies ----
+
+    /// The schema the model is sent has to name the arguments the parser
+    /// requires. It used to name only the `operation` tag, so `revoke_tool`
+    /// and `hold` could not be expressed at all — the model had no way to
+    /// say which tool to revoke or which plane to freeze.
+    #[test]
+    fn diagnostic_schema_names_the_operation_bodies() {
+        let schema = DiagnosticTool::new(empty_control()).definition().parameters;
+        let properties = &schema["properties"];
+
+        assert_eq!(
+            properties["tool_name"]["type"],
+            json!("string"),
+            "revoke_tool's body argument must be declared as a string"
+        );
+        assert_eq!(
+            properties["plane"]["enum"],
+            json!(["source_intake", "delivery"]),
+            "plane must offer exactly the two planes the parser accepts"
+        );
+        assert_eq!(
+            properties["duration_ms"]["type"],
+            json!("integer"),
+            "duration_ms must be declared as an integer"
+        );
+        assert_eq!(
+            properties["duration_ms"]["minimum"],
+            json!(1),
+            "duration_ms's lower bound is the one the parser enforces"
+        );
+        assert_eq!(
+            properties["duration_ms"]["maximum"],
+            json!(5000),
+            "duration_ms's upper bound is the one the parser enforces"
+        );
+        assert_eq!(
+            schema["required"],
+            json!(["operation"]),
+            "only `operation` is required for every operation"
+        );
     }
 
     // ---- TDD test 3: bounded schema ----

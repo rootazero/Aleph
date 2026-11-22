@@ -526,52 +526,10 @@ impl MessagesDb {
         rows.collect()
     }
 
-    /// Get all chats
-    pub fn list_chats(&self) -> SqliteResult<Vec<ChatInfo>> {
-        let sql = r#"
-            SELECT
-                ROWID,
-                guid,
-                chat_identifier,
-                display_name,
-                group_id
-            FROM chat
-            ORDER BY ROWID DESC
-        "#;
-
-        let mut stmt = self.conn.prepare(sql)?;
-        let rows = stmt.query_map([], |row| {
-            let group_id: Option<String> = row.get(4)?;
-            Ok(ChatInfo {
-                rowid: row.get(0)?,
-                guid: row.get(1)?,
-                chat_identifier: row.get(2)?,
-                display_name: row.get(3)?,
-                is_group: group_id.is_some(),
-            })
-        })?;
-
-        rows.collect()
-    }
-
     /// Get message count
     pub fn message_count(&self) -> SqliteResult<i64> {
         self.conn
             .query_row("SELECT COUNT(*) FROM message", [], |row| row.get(0))
-    }
-
-    /// Reset the last message marker (useful for testing)
-    pub const fn reset_marker(&mut self) {
-        self.last_message_rowid = 0;
-    }
-
-    /// Set the marker to skip all existing messages
-    pub fn skip_existing(&mut self) -> SqliteResult<()> {
-        self.last_message_rowid = self
-            .conn
-            .query_row("SELECT MAX(ROWID) FROM message", [], |row| row.get(0))
-            .unwrap_or(0);
-        Ok(())
     }
 }
 

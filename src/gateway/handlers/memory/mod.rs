@@ -830,25 +830,6 @@ pub(crate) async fn handle_owned_reembed(
 }
 
 /// Start a background reembed migration.
-pub async fn handle_reembed(
-    request: JsonRpcRequest,
-    db: MemoryBackend,
-    memory_dir: std::path::PathBuf,
-    embedder: Arc<dyn EmbeddingProvider>,
-    event_bus: Arc<GatewayEventBus>,
-    reembed_state: Arc<ReembedState>,
-) -> JsonRpcResponse {
-    start_reembed(
-        request,
-        db,
-        memory_dir,
-        embedder,
-        event_bus,
-        reembed_state,
-        None,
-    )
-}
-
 fn start_reembed(
     request: JsonRpcRequest,
     db: MemoryBackend,

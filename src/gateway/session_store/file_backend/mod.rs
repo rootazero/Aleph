@@ -644,7 +644,6 @@ fn new_session_meta(
         last_active_at: now,
         message_count,
         total_tokens: 0,
-        auto_reset_at: None,
         state: Some(SessionState::Created),
         topic: None,
         status: None,
@@ -1301,6 +1300,47 @@ impl SessionStore for FileSessionStore {
         Ok(())
     }
 
+    /// See the trait doc. The file backend keeps the origin on the session's
+    /// identity metadata, exactly like the SQL backend: the origin channel is
+    /// written only when it is still unset, and the origin conversation id
+    /// lands in `custom["origin_conversation"]`. A default no-op here would
+    /// silently drop the origin for every file-backed session.
+    async fn set_source_channel(
+        &self,
+        key: &SessionKey,
+        channel: &str,
+        conversation: Option<&str>,
+    ) -> Result<(), SessionStoreError> {
+        let channel = channel.trim();
+        if channel.is_empty() || channel == "unknown" {
+            return Ok(());
+        }
+        let conversation = conversation
+            .map(str::trim)
+            .filter(|c| !c.is_empty())
+            .map(str::to_string);
+        let key_str = key.to_key_string();
+        let mut guard = self.lock_metadata(&key_str).await?;
+        if let Some(meta) = guard.existing_mut() {
+            with_identity_meta(meta, |identity_meta| {
+                let current = identity_meta.source_channel.trim();
+                // Never clobber an already-recorded real origin.
+                if !current.is_empty() && current != "unknown" {
+                    return;
+                }
+                identity_meta.source_channel = channel.to_string();
+                if let Some(ref conv) = conversation {
+                    identity_meta.custom.insert(
+                        crate::gateway::session_store::types::ORIGIN_CONVERSATION_KEY.to_string(),
+                        serde_json::json!(conv),
+                    );
+                }
+            });
+            guard.commit().await?;
+        }
+        Ok(())
+    }
+
     /// See the trait doc. The `IS NULL AND IS NULL` predicate the SQL backend
     /// puts in its `WHERE` clause is the `is_some()` early return here — same
     /// rule, and it must stay in the implementation rather than the caller for
@@ -1685,37 +1725,6 @@ impl SessionStore for FileSessionStore {
         let meta = self.read_metadata(&key_str).await?;
         let messages = self.read_transcript(&key_str, Some(message_limit)).await?;
         Ok(SessionPreview { meta, messages })
-    }
-
-    async fn count_by_state(&self, state: SessionState) -> Result<usize, SessionStoreError> {
-        let sessions = self.list_sessions(SessionFilter::default()).await?;
-        Ok(sessions
-            .into_iter()
-            .filter(|m| m.state == Some(state))
-            .count())
-    }
-
-    async fn list_by_state(
-        &self,
-        state: SessionState,
-    ) -> Result<Vec<SessionMetadata>, SessionStoreError> {
-        let sessions = self.list_sessions(SessionFilter::default()).await?;
-        Ok(sessions
-            .into_iter()
-            .filter(|m| m.state == Some(state))
-            .collect())
-    }
-
-    async fn set_error(
-        &self,
-        key: &SessionKey,
-        _error_msg: Option<&str>,
-    ) -> Result<(), SessionStoreError> {
-        self.set_state(key, SessionState::Error).await
-    }
-
-    async fn stop(&self, key: &SessionKey) -> Result<(), SessionStoreError> {
-        self.set_state(key, SessionState::Stopped).await
     }
 
     async fn set_idle(&self, key: &SessionKey) -> Result<(), SessionStoreError> {

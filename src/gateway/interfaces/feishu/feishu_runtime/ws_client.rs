@@ -27,7 +27,7 @@ pub struct WsLoopContext {
 
 pub async fn run_ws_loop(ctx: WsLoopContext) {
     let dedup = Arc::new(StdMutex::new(MessageDedup::new()));
-    let policy = InboundPolicy::new(ctx.config.clone(), ctx.bot_open_id.clone());
+    let policy = InboundPolicy::new(ctx.config.clone());
     let mut shutdown_rx = ctx.shutdown_rx;
     let mut backoff = RestartBackoff::with_defaults();
     let mut current_url = ctx.initial_ws_url;
@@ -64,7 +64,9 @@ pub async fn run_ws_loop(ctx: WsLoopContext) {
                                                 &ctx.bot_open_id,
                                                 &ctx.user_cache,
                                                 &ctx.api,
-                                            ) {
+                                            )
+                                            .await
+                                            {
                                                 let is_duplicate = dedup
                                                     .lock()
                                                     .unwrap_or_else(|e| e.into_inner())

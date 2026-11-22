@@ -5,8 +5,10 @@
 //! Historically these fields were parsed but never acted on. This module gives
 //! them meaning by:
 //!
-//! 1. Verifying the declared schema is itself a well-formed JSON Schema
-//!    (catches plugin-author mistakes before they reach users).
+//! 1. Verifying the declared schema is itself a well-formed JSON Schema *and*
+//!    small enough to render (structural depth / member budget) — catches
+//!    plugin-author mistakes before they reach users, and keeps a hostile
+//!    schema from stalling the Panel's form renderer.
 //! 2. Validating a concrete configuration value against that schema.
 //! 3. Summarising UI hints (e.g. how many fields are marked sensitive) so
 //!    callers can surface or audit them.
@@ -21,15 +23,69 @@ use serde_json::Value as JsonValue;
 
 use super::ConfigUiHint;
 
-/// Verify that a declared `config_schema` is a well-formed JSON Schema.
+/// Deepest nesting a declared `config_schema` may reach.
+pub(crate) const MAX_SCHEMA_DEPTH: usize = 16;
+/// Total number of object properties / array items a `config_schema` may hold.
+pub(crate) const MAX_SCHEMA_PROPERTIES: usize = 1024;
+
+/// Verify that a declared `config_schema` is safe to accept.
 ///
-/// Returns `Err` with a human-readable reason if the schema cannot be compiled.
-/// A plugin whose schema fails this check would silently reject every config
-/// value at runtime, so this is treated as an authoring error.
+/// This is the single owner of "may this schema come in over the wire / out of
+/// a manifest": it enforces the structural budget first ([`check_complexity`])
+/// and then compiles the schema with `jsonschema`. Both halves are needed — a
+/// schema that compiles can still be unbounded, and a bounded schema can still
+/// be invalid — and every caller (`validation`, `plugin_ops`, the hub catalogue)
+/// relies on this one function so the two checks cannot drift apart.
+///
+/// Returns `Err` with a human-readable reason: the budget errors mention depth
+/// or property count, compile errors say the JSON Schema is invalid. A plugin
+/// whose schema fails this check would either silently reject every config
+/// value at runtime or stall the Panel's schema-driven form, so both are
+/// treated as authoring errors.
 pub fn validate_config_schema_declaration(schema: &JsonValue) -> Result<(), String> {
+    check_complexity(schema)?;
     jsonschema::validator_for(schema)
         .map(|_| ())
         .map_err(|e| format!("invalid JSON Schema in config_schema: {e}"))
+}
+
+/// Bound the structural complexity of a `config_schema`. JSON Schema has no
+/// intrinsic size limit, so a hostile publisher could ship a schema with 10k
+/// nested `allOf` branches or a 100k-entry `enum` and stall the Panel's form
+/// renderer. Depth <= 16 and <= 1024 total members are generous for any
+/// realistic extension config (typical schemas are < 5 levels, < 50
+/// properties).
+fn check_complexity(schema: &JsonValue) -> Result<(), String> {
+    fn walk(v: &JsonValue, depth: usize, budget: &mut usize) -> Result<(), String> {
+        if depth > MAX_SCHEMA_DEPTH {
+            return Err(format!("schema nesting exceeds {MAX_SCHEMA_DEPTH} levels"));
+        }
+        match v {
+            JsonValue::Object(map) => {
+                if map.len() > *budget {
+                    return Err(format!("schema has >{MAX_SCHEMA_PROPERTIES} properties"));
+                }
+                *budget -= map.len();
+                for value in map.values() {
+                    walk(value, depth + 1, budget)?;
+                }
+            }
+            JsonValue::Array(items) => {
+                if items.len() > *budget {
+                    return Err(format!("schema has >{MAX_SCHEMA_PROPERTIES} properties"));
+                }
+                *budget -= items.len();
+                for item in items {
+                    walk(item, depth + 1, budget)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    let mut budget = MAX_SCHEMA_PROPERTIES;
+    walk(schema, 0, &mut budget)
 }
 
 /// Validate a concrete configuration value against the plugin's `config_schema`.
@@ -109,6 +165,38 @@ mod tests {
         let bad = json!({ "type": 123 });
         let err = validate_config_schema_declaration(&bad).unwrap_err();
         assert!(err.contains("config_schema"), "got: {err}");
+    }
+
+    #[test]
+    fn property_budget_is_enforced_by_the_declaration_check() {
+        let mut map = serde_json::Map::new();
+        for i in 0..MAX_SCHEMA_PROPERTIES {
+            map.insert(format!("prop_{i}"), JsonValue::Bool(true));
+        }
+        // Exactly at the budget, and a schema that compiles: accepted.
+        let exact = JsonValue::Object(map.clone());
+        assert!(validate_config_schema_declaration(&exact).is_ok());
+
+        map.insert("prop_over".into(), JsonValue::Bool(true));
+        let over = JsonValue::Object(map);
+        let err = validate_config_schema_declaration(&over).unwrap_err();
+        assert!(err.contains(">1024 properties"), "got: {err}");
+    }
+
+    #[test]
+    fn depth_budget_is_enforced_by_the_declaration_check() {
+        fn nested(depth: usize) -> JsonValue {
+            let mut schema = json!({ "type": "object" });
+            for _ in 0..depth {
+                schema = json!({ "type": "array", "items": schema });
+            }
+            schema
+        }
+        // `nested(MAX_SCHEMA_DEPTH)` stays inside the budget; one more level
+        // does not. Same limits as the hub's wire-supplied schemas.
+        assert!(validate_config_schema_declaration(&nested(MAX_SCHEMA_DEPTH)).is_ok());
+        let err = validate_config_schema_declaration(&nested(MAX_SCHEMA_DEPTH + 1)).unwrap_err();
+        assert!(err.contains("nesting exceeds"), "got: {err}");
     }
 
     #[test]

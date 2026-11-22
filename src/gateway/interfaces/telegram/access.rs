@@ -202,7 +202,6 @@ mod tests {
                 streaming: None,
                 error_policy: Some(ErrorPolicy {
                     mode: ErrorPolicyMode::Silent,
-                    template: None,
                     max_retries: 3,
                 }),
                 html_fallback: None,

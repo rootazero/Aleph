@@ -33,7 +33,9 @@ use super::handlers::group_chat::SharedOrchestrator;
 
 use super::agent_env::AgentEnvStore;
 use super::inbound_context::InboundContext;
-use super::pair_loop_guard::{PairLoopFacts, PairLoopGuard, PairLoopGuardConfig};
+use super::pair_loop_guard::{
+    resolve_pair_loop_settings, PairLoopFacts, PairLoopGuard, PairLoopGuardConfig,
+};
 use super::pairing_store::PairingStore;
 use super::routing_config::RoutingConfig;
 use crate::command::CommandParser;
@@ -98,8 +100,12 @@ pub struct InboundMessageRouter {
     dedup_tracker: Mutex<InboundDedupTracker>,
     /// Pair-loop guard for explicit bot-authored traffic and bounded public SMS ingress.
     pair_loop_guard: Arc<PairLoopGuard>,
-    /// Effective pair-loop-guard config (channel-level overrides may layer on later).
+    /// Router-wide pair-loop-guard default, used when the message's channel
+    /// declares no override.
     pair_loop_config: PairLoopGuardConfig,
+    /// Per-channel pair-loop-guard overrides, keyed by the channel id the
+    /// inbound message reports (the same key `channel_configs` uses).
+    pair_loop_overrides: HashMap<String, PairLoopGuardConfig>,
     /// Group chat orchestrator
     pub(super) group_chat_orch: Option<SharedOrchestrator>,
     /// Group chat executor
@@ -175,6 +181,7 @@ impl InboundMessageRouter {
             dedup_tracker: Mutex::new(InboundDedupTracker::new()),
             pair_loop_guard: Arc::new(PairLoopGuard::new()),
             pair_loop_config: PairLoopGuardConfig::default(),
+            pair_loop_overrides: HashMap::new(),
             group_chat_orch: None,
             group_chat_executor: None,
             active_group_sessions: Mutex::new(HashMap::new()),
@@ -357,6 +364,25 @@ impl InboundMessageRouter {
     /// Register channel-specific configuration
     pub fn register_channel_config(&mut self, channel_id: &str, config: ChannelConfig) {
         self.channel_configs.insert(channel_id.to_string(), config);
+    }
+    /// Register a per-channel pair-loop-guard override.
+    ///
+    /// The operator's key is `bot_loop_protection` inside the channel's
+    /// `access` block; it is read per channel so one noisy channel can widen
+    /// or disable the guard without changing every other channel. Channels
+    /// without an override keep the router-wide default.
+    pub fn register_pair_loop_override(&mut self, channel_id: &str, config: PairLoopGuardConfig) {
+        self.pair_loop_overrides
+            .insert(channel_id.to_string(), config);
+    }
+    /// Effective pair-loop-guard config for one inbound message: the
+    /// channel's override when it declares one, else the router-wide default.
+    fn pair_loop_config_for(&self, channel_id: &str) -> PairLoopGuardConfig {
+        resolve_pair_loop_settings(
+            self.pair_loop_overrides.get(channel_id),
+            Some(&self.pair_loop_config),
+            true,
+        )
     }
 
     /// Clone the fully-assembled `channel_id → ChannelConfig` map. Called once
@@ -566,9 +592,10 @@ impl InboundMessageRouter {
                 sender_id: meta.provider_account_id.as_str(),
                 receiver_id: meta.service_address.as_str(),
             };
-            let result = self
-                .pair_loop_guard
-                .record_and_check(&facts, &self.pair_loop_config);
+            let result = self.pair_loop_guard.record_and_check(
+                &facts,
+                &self.pair_loop_config_for(msg.channel_id.as_str()),
+            );
             if result.suppressed {
                 warn!(
                     binding_ref = %meta.binding_ref,
@@ -591,9 +618,10 @@ impl InboundMessageRouter {
             sender_id: msg.sender_id.as_str(),
             receiver_id: msg.channel_id.as_str(),
         };
-        let result = self
-            .pair_loop_guard
-            .record_and_check(&facts, &self.pair_loop_config);
+        let result = self.pair_loop_guard.record_and_check(
+            &facts,
+            &self.pair_loop_config_for(msg.channel_id.as_str()),
+        );
         if result.suppressed {
             warn!(
                 channel_id = %msg.channel_id.as_str(),

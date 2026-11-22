@@ -313,11 +313,21 @@ pub async fn handle_create(
         .with_args(params.config.args)
         .with_env(env)
         .with_auto_start(params.config.enabled.unwrap_or(true));
+    if let Some(cwd) = params.config.cwd {
+        cfg = cfg.with_cwd(cwd);
+    }
     if let Some(rt) = params.config.requires_runtime {
         cfg = cfg.with_runtime(rt);
     }
     if let Some(t) = params.config.timeout_seconds {
         cfg = cfg.with_timeout(t);
+    }
+
+    // Refuse a `cwd` this host cannot apply before anything is persisted: an
+    // accepted-then-dropped cwd starts the server against the wrong tree while
+    // every call still looks healthy.
+    if let Err(reason) = cfg.validate() {
+        return JsonRpcResponse::error(request.id, INVALID_PARAMS, reason);
     }
 
     if let Err(e) = mcp.add_server(cfg).await {
@@ -397,10 +407,33 @@ pub async fn handle_update(
     let is_remote = existing.url.is_some();
     let mut new_cfg = existing.clone();
     new_cfg.env = env;
+    // `cwd: None` from the panel means "unchanged", not "clear it": the panel
+    // never receives a `cwd` it did not send, so treating the absence as a
+    // clear would let any unrelated edit erase a cwd set in `config.toml`.
+    if let Some(cwd) = params.config.cwd {
+        if is_remote {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                format!(
+                    "MCP server '{}': cwd is only supported by the stdio transport, not http/sse",
+                    params.id
+                ),
+            );
+        }
+        new_cfg.cwd = Some(cwd.into());
+    }
     if !is_remote {
         new_cfg.command = Some(params.config.command);
         new_cfg.args = params.config.args;
         new_cfg.requires_runtime = params.config.requires_runtime;
+    }
+
+    // Same fail-loud rule as create, and before the remove/add swap: refusing
+    // here leaves the running server untouched instead of tearing it down for
+    // a config that cannot start.
+    if let Err(reason) = new_cfg.validate() {
+        return JsonRpcResponse::error(request.id, INVALID_PARAMS, reason);
     }
 
     // Restart cleanly so the running client picks up the new config.
@@ -486,6 +519,9 @@ pub(crate) fn unified_entry_to_manager_config(
         .with_env(env)
         .with_auto_start(sc.enabled)
         .with_timeout(sc.timeout_seconds);
+    if let Some(cwd) = sc.cwd.clone() {
+        cfg = cfg.with_cwd(cwd);
+    }
     if let Some(rt) = sc.requires_runtime.clone() {
         cfg = cfg.with_runtime(rt);
     }
@@ -731,7 +767,7 @@ mod tests {
             command: "npx".to_string(),
             args: vec!["-y".to_string(), "@x/y".to_string()],
             env: env(&[("API_TOKEN", "t-real"), ("REGION", "us")]),
-            cwd: None,
+            cwd: Some("/srv/mcp-work".to_string()),
             requires_runtime: Some("node".to_string()),
             timeout_seconds: 30,
             enabled: false,
@@ -742,6 +778,13 @@ mod tests {
         assert_eq!(cfg.command.as_deref(), Some("npx"));
         assert!(!cfg.auto_start); // enabled=false -> auto_start=false
         assert_eq!(cfg.requires_runtime.as_deref(), Some("node"));
+        // The legacy entry's cwd used to stop here (the converter dropped it,
+        // so the child started in the daemon's cwd while every call looked
+        // healthy). It has to survive the conversion.
+        assert_eq!(
+            cfg.cwd.as_deref(),
+            Some(std::path::Path::new("/srv/mcp-work"))
+        );
         // secret -> vault ref + a write; non-secret stays inline. Same
         // field_key-with-hash shape as the inline test above; derive
         // expected values through the helper so a future hash change

@@ -6,8 +6,11 @@ use chrono::Utc;
 
 /// Convert a Matrix timeline event JSON into an `InboundMessage`.
 ///
-/// Returns `None` for events that should be ignored (own messages, filtered rooms,
-/// unsupported types, policy violations, duplicates).
+/// Test-only shorthand for [`convert_timeline_event_in_room`] with
+/// `is_direct = None`, i.e. an unresolved room relationship. Production goes
+/// through [`convert_timeline_event_in_room`], which carries the direct/group
+/// distinction the adapter resolved.
+#[cfg(test)]
 pub fn convert_timeline_event(
     event: &serde_json::Value,
     room_id: &str,
@@ -18,7 +21,9 @@ pub fn convert_timeline_event(
     convert_timeline_event_in_room(event, room_id, channel_id, own_user_id, config, None)
 }
 
-/// Unknown room relationships are conservatively treated as groups.
+/// Room relationships the adapter could not resolve are treated as direct
+/// messages (`is_direct = None`): the inbound router then applies the stricter
+/// DM pairing/allowlist gate instead of the open group policy.
 pub fn convert_timeline_event_in_room(
     event: &serde_json::Value,
     room_id: &str,
@@ -38,7 +43,9 @@ pub fn convert_timeline_event_in_room(
         }
         _ => None,
     }?;
-    inbound.is_group = !is_direct.unwrap_or(false);
+    // Unknown ⇒ direct, so an unresolved relationship still passes through the
+    // DM pairing gate rather than the open group policy.
+    inbound.is_group = !is_direct.unwrap_or(true);
     Some(inbound)
 }
 
@@ -136,10 +143,9 @@ fn convert_room_message(
         .and_then(|eid| eid.as_str())
         .map(|id| MessageId::new(id.to_string()));
 
-    // Determine whether this room is a direct (DM) room from the account-data
-    // direct-rooms map carried on the event; fall back to the room's
-    // m.direct marker in the event itself. Unknown rooms stay conservative
-    // and are treated as group rooms.
+    // Provisional only: [`convert_timeline_event_in_room`] overwrites `is_group`
+    // with the relationship the adapter resolved from the SDK room, which is the
+    // authoritative source. This event-local fallback never decides routing.
     let is_direct_room = event["direct_rooms"][room_id]
         .as_array()
         .is_some_and(|users| users.iter().any(|user| user.as_str() == Some(sender)))
@@ -246,7 +252,7 @@ mod tests {
             ),
         ] {
             let event = serde_json::json!({"type":kind, "sender":"@u:h", "event_id":"$e", "content":content});
-            for (direct, group) in [(Some(true), false), (Some(false), true), (None, true)] {
+            for (direct, group) in [(Some(true), false), (Some(false), true), (None, false)] {
                 let msg = convert_timeline_event_in_room(
                     &event,
                     "!r:h",
@@ -330,7 +336,9 @@ mod tests {
         assert_eq!(msg.sender_id.as_str(), "@user:matrix.org");
         assert_eq!(msg.text, "Hello from Matrix!");
         assert_eq!(msg.id.as_str(), "$event123");
-        assert!(msg.is_group);
+        // The room relationship is unresolved here, which now falls back to
+        // direct so the DM pairing gate answers.
+        assert!(!msg.is_group);
     }
 
     #[test]

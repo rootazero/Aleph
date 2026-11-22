@@ -60,19 +60,6 @@ pub enum IMessageTarget {
     },
 }
 
-impl IMessageTarget {
-    /// Get the target string for sending
-    #[must_use]
-    pub fn to_target_string(&self) -> String {
-        match self {
-            Self::Phone { number, .. } => number.clone(),
-            Self::Email { email } => email.clone(),
-            Self::ChatId { id } => format!("chat_id:{id}"),
-            Self::ChatGuid { guid } => guid.clone(),
-        }
-    }
-}
-
 /// Parse error
 #[derive(Debug, thiserror::Error)]
 #[allow(clippy::enum_variant_names)]

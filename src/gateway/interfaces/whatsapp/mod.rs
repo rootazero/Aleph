@@ -19,16 +19,17 @@
 //!
 //! [channels.config]
 //! phone_number = "+1234567890"
+//! # DMs default to `pairing`: numbers listed here are the ones the agent
+//! # may answer. Any other DM is dropped before it reaches the agent.
+//! paired_numbers = ["+1234567890"]
 //! ```
 
 pub mod config;
-pub mod message;
 pub mod pairing;
 
 pub mod history_buffer;
 pub mod media;
 pub mod reactions;
-pub mod types;
 pub mod wa_auth;
 pub mod wa_inbound;
 pub mod wa_outbound;
@@ -200,7 +201,7 @@ impl WhatsAppChannel {
         };
         let policy = crate::gateway::interfaces::whatsapp::wa_inbound::policy::InboundPolicy::new(
             access,
-            vec![],
+            self.config.paired_numbers.clone(),
         );
         let driver = PairingStateDriver::new(Arc::clone(&pairing_state));
         let mut shutdown_rx = shutdown_rx;
@@ -224,13 +225,16 @@ impl WhatsAppChannel {
                                 connected.store(false, Ordering::SeqCst);
                             }
                             _ => {
-                                for msg in crate::gateway::interfaces::whatsapp::wa_inbound::mapper::map_event_to_inbound(&event, &channel_id, &history_buffer).await {
+                                for msg in crate::gateway::interfaces::whatsapp::wa_inbound::mapper::map_event_to_inbound(&event, &channel_id).await {
                                     if !chat_config.is_chat_allowed(msg.conversation_id.as_str()) {
                                         tracing::debug!(channel = %channel_id, "Inbound chat blocked by allowed_chats");
                                         continue;
                                     }
                                     match policy.evaluate(&msg) {
                                         crate::gateway::interfaces::whatsapp::wa_inbound::policy::InboundPolicyResult::Accept => {
+                                            // Hand the agent the earlier group messages it
+                                            // has not answered yet (history.inject_context).
+                                            let msg = history_buffer.absorb(msg).await;
                                             if let Err(e) = reaction_handler.send_ack(&msg).await {
                                                 tracing::debug!(
                                                     channel = %channel_id,
@@ -246,10 +250,15 @@ impl WhatsAppChannel {
                                             tracing::debug!(channel = %channel_id, sender = msg.sender_id.as_str(), reason, "Inbound message blocked by policy");
                                         }
                                         crate::gateway::interfaces::whatsapp::wa_inbound::policy::InboundPolicyResult::NeedsPairing(sender) => {
-                                            tracing::info!(channel = %channel_id, %sender, "Inbound DM needs pairing");
-                                            if inbound_tx.send(msg).is_err() {
-                                                break 'events;
-                                            }
+                                            // Fail closed: an unpaired DM must never reach the
+                                            // agent, which would otherwise answer an unknown
+                                            // sender with the owner's identity. Approval happens
+                                            // out of band, so drop it and say why.
+                                            tracing::warn!(
+                                                channel = %channel_id,
+                                                %sender,
+                                                "Dropped inbound DM from unpaired number; add it to paired_numbers to approve"
+                                            );
                                         }
                                     }
                                 }
@@ -427,7 +436,7 @@ impl Channel for WhatsAppChannel {
         };
         let policy = crate::gateway::interfaces::whatsapp::wa_inbound::policy::InboundPolicy::new(
             access,
-            vec![],
+            self.config.paired_numbers.clone(),
         );
         let driver = PairingStateDriver::new(Arc::clone(&pairing_state));
         let mut shutdown_rx = shutdown_rx;
@@ -449,21 +458,25 @@ impl Channel for WhatsAppChannel {
                                 connected.store(false, Ordering::SeqCst);
                             }
                             _ => {
-                                for msg in crate::gateway::interfaces::whatsapp::wa_inbound::mapper::map_event_to_inbound(&event, &channel_id, &history_buffer).await {
+                                for msg in crate::gateway::interfaces::whatsapp::wa_inbound::mapper::map_event_to_inbound(&event, &channel_id).await {
                                     if !chat_config.is_chat_allowed(msg.conversation_id.as_str()) {
                                         tracing::debug!(channel = %channel_id, "Inbound chat blocked by allowed_chats");
                                         continue;
                                     }
                                     match policy.evaluate(&msg) {
                                         crate::gateway::interfaces::whatsapp::wa_inbound::policy::InboundPolicyResult::Accept => {
+                                            // Hand the agent the earlier group messages it
+                                            // has not answered yet (history.inject_context).
+                                            let msg = history_buffer.absorb(msg).await;
                                             // Spec §3.2 / Task 5: fire the configured
                                             // ack reaction (pre-reply emoji) right
                                             // after the inbound message is accepted
                                             // by policy. `ReactionHandler::send_ack`
-                                            // is a no-op for `Off`/`Minimal` levels
-                                            // and for group `Mentions` mode, so this
-                                            // is safe to call unconditionally on
-                                            // every accepted inbound.
+                                            // no-ops for level `Off` and for a missing
+                                            // `reactions.ack` block; when it does run it
+                                            // replies for `Ack`/`Minimal`/`Extensive`,
+                                            // gated by `ack.direct` on DMs and by
+                                            // `group = "always"` on groups.
                                             if let Err(e) = reaction_handler.send_ack(&msg).await {
                                                 tracing::debug!(
                                                     channel = %channel_id,
@@ -479,10 +492,15 @@ impl Channel for WhatsAppChannel {
                                             tracing::debug!(channel = %channel_id, sender = msg.sender_id.as_str(), reason, "Inbound message blocked by policy");
                                         }
                                         crate::gateway::interfaces::whatsapp::wa_inbound::policy::InboundPolicyResult::NeedsPairing(sender) => {
-                                            tracing::info!(channel = %channel_id, %sender, "Inbound DM needs pairing");
-                                            if inbound_tx.send(msg).is_err() {
-                                                break 'events;
-                                            }
+                                            // Fail closed: an unpaired DM must never reach the
+                                            // agent, which would otherwise answer an unknown
+                                            // sender with the owner's identity. Approval happens
+                                            // out of band, so drop it and say why.
+                                            tracing::warn!(
+                                                channel = %channel_id,
+                                                %sender,
+                                                "Dropped inbound DM from unpaired number; add it to paired_numbers to approve"
+                                            );
                                         }
                                     }
                                 }
@@ -564,7 +582,7 @@ impl Channel for WhatsAppChannel {
         &self,
         conversation_id: &crate::gateway::channel::ConversationId,
     ) -> ChannelResult<()> {
-        if self.test_mode {
+        if self.test_mode || !self.config.send_typing {
             return Ok(());
         }
 
@@ -579,7 +597,7 @@ impl Channel for WhatsAppChannel {
     }
 
     async fn mark_read(&self, message_id: &MessageId) -> ChannelResult<()> {
-        if self.test_mode {
+        if self.test_mode || !self.config.mark_read {
             return Ok(());
         }
 
@@ -820,6 +838,79 @@ mod tests {
         assert!(tokio::time::timeout(Duration::from_millis(20), rx.recv())
             .await
             .is_err());
+        channel.stop().await.unwrap();
+    }
+
+    /// W-01: with the default `dm_policy = "pairing"`, a DM from a number
+    /// absent from `paired_numbers` is dropped before the agent sees it,
+    /// while an approved number still gets through.
+    #[tokio::test]
+    async fn pairing_drops_dm_from_unpaired_number() {
+        use std::time::Duration;
+
+        let config = WhatsAppConfig {
+            paired_numbers: vec!["+15550001111".to_string()],
+            ..WhatsAppConfig::default()
+        };
+        let (mut channel, fake) = WhatsAppChannel::for_test_with_fake("wa-test", config);
+        let mut rx = channel.inbound_subscribe();
+        channel.start().await.unwrap();
+
+        fake.emit_text_message("15550000000@s.whatsapp.net", "mallory", "unpaired")
+            .await
+            .unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), rx.recv())
+                .await
+                .is_err(),
+            "an unpaired DM must never reach the agent"
+        );
+
+        fake.emit_text_message("15550001111@s.whatsapp.net", "owner", "paired")
+            .await
+            .unwrap();
+        let msg = tokio::time::timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(msg.text, "paired");
+        channel.stop().await.unwrap();
+    }
+
+    /// W-03: group messages the agent has not answered yet are prepended to
+    /// the next inbound from that group, and only once.
+    #[tokio::test]
+    async fn group_history_is_injected_into_the_next_inbound() {
+        use crate::gateway::channel_policy::GroupPolicy;
+        use std::time::Duration;
+
+        let mut config = WhatsAppConfig::default();
+        config.access.group_policy = GroupPolicy::Open;
+        let (mut channel, fake) = WhatsAppChannel::for_test_with_fake("wa-test", config);
+        let mut rx = channel.inbound_subscribe();
+        channel.start().await.unwrap();
+
+        fake.emit_text_message("111@g.us", "alice", "first")
+            .await
+            .unwrap();
+        let first = tokio::time::timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(first.text, "first");
+
+        fake.emit_text_message("111@g.us", "bob", "second")
+            .await
+            .unwrap();
+        let second = tokio::time::timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            second.text.contains("first") && second.text.ends_with("second"),
+            "group history was not injected: {}",
+            second.text
+        );
         channel.stop().await.unwrap();
     }
 

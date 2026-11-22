@@ -50,7 +50,6 @@ impl BuiltinToolRegistry {
             >,
         >,
         Option<crate::builtin_tools::session_complete::SessionCompleteTool>,
-        Option<crate::builtin_tools::memory_reflect::MemoryReflectTool>,
     )> {
         // Fallback only — see the identical note in `coord_team_tools.rs`. The
         // acting identity is resolved per call by
@@ -502,35 +501,34 @@ impl BuiltinToolRegistry {
             None
         };
 
-        // Memory-reflect tool — always constructed; reflector injected later by Task 8.
-        // Registration is gated on injection_mode (same rule as the other retrieval tools).
+        // The retrieval tools are gated on injection_mode (same rule for all
+        // of them).
         let expose_retrieval_tools = matches!(
             config.injection_mode,
             crate::config::types::memory::MemoryInjectionMode::Tools
                 | crate::config::types::memory::MemoryInjectionMode::Hybrid,
         );
-        let memory_reflect_tool = {
-            let agent_id = current_agent_id.clone();
-            let tool = crate::builtin_tools::memory_reflect::MemoryReflectTool::new(agent_id);
 
-            // Register tool schema only when retrieval tools are exposed
-            if expose_retrieval_tools {
-                use crate::tools::AlephTool;
-                let td = tool.definition();
-                let mut ut = UnifiedTool::new(
-                    format!("builtin:{}", td.name),
-                    &td.name,
-                    &td.description,
-                    ToolSource::Builtin,
-                );
-                ut = ut
-                    .with_parameters_schema(td.parameters.clone())
-                    .with_services(td.services.clone());
-                tools.insert(td.name.clone(), ut);
-                info!("Registered memory_reflect tool");
-            }
-            Some(tool)
-        };
+        // memory_reflect tool — schema only. The registry holds no instance:
+        // the dispatch arm builds the tool per call from the Memory runtime
+        // (see `tool_registry_impl.rs`), so an instance kept here could only
+        // ever be an unwired placeholder.
+        if expose_retrieval_tools {
+            use crate::builtin_tools::memory_reflect::{MemoryReflectArgs, MemoryReflectTool};
+            use crate::executor::builtin_registry::builder::core_tools::tool_schema;
+            use crate::tools::AlephTool;
+            let schema = tool_schema::<MemoryReflectArgs>("memory_reflect");
+            let mut ut = UnifiedTool::new(
+                format!("builtin:{}", <MemoryReflectTool as AlephTool>::NAME),
+                <MemoryReflectTool as AlephTool>::NAME,
+                <MemoryReflectTool as AlephTool>::DESCRIPTION,
+                ToolSource::Builtin,
+            );
+            ut.parameters_schema = Some(schema);
+            ut.services = <MemoryReflectTool as AlephTool>::services();
+            tools.insert(<MemoryReflectTool as AlephTool>::NAME.to_string(), ut);
+            info!("Registered memory_reflect tool");
+        }
 
         // recall_context tool — gated on injection_mode (retrieval tools only)
         if expose_retrieval_tools {
@@ -603,7 +601,6 @@ impl BuiltinToolRegistry {
             skill_manage_tool,
             note_manage_tool,
             session_complete_tool,
-            memory_reflect_tool,
         ))
     }
 }

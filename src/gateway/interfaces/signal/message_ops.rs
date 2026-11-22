@@ -270,9 +270,21 @@ impl SignalMessageOps {
             if !resp.status().is_success() {
                 let status = resp.status();
                 let resp_body = resp.text().await.unwrap_or_default();
-                return Err(ChannelError::SendFailed(format!(
-                    "Signal send failed ({status}): {resp_body}"
-                )));
+                // `SignalError::from_status` is the single owner of the
+                // status -> error mapping: a 429 becomes `RateLimited`
+                // carrying the server's `retry-after`, so the caller can back
+                // off instead of seeing a generic send failure.
+                return match SignalError::from_status(status, &resp_body) {
+                    SignalError::RateLimited { retry_after_secs } => {
+                        Err(ChannelError::RateLimited { retry_after_secs })
+                    }
+                    error => {
+                        tracing::warn!("Signal send failed: {error}");
+                        Err(ChannelError::SendFailed(format!(
+                            "Signal send failed ({status}): {resp_body}"
+                        )))
+                    }
+                };
             }
 
             // signal-cli returns a timestamp as the message ID
@@ -339,10 +351,16 @@ impl SignalMessageOps {
         // Extract text from dataMessage
         let data_message = &envelope["dataMessage"];
         let text = data_message["message"].as_str().unwrap_or("");
+        // signal-cli lists attachments here; nothing extracts them yet, so the
+        // count is carried into the text rather than dropped silently.
+        let attachment_count = data_message["attachments"].as_array().map_or(0, Vec::len);
 
-        if text.is_empty() {
+        if text.is_empty() && attachment_count == 0 {
             return None;
         }
+
+        let text =
+            crate::gateway::interfaces::with_attachment_note(text.to_string(), attachment_count);
 
         let source_name = envelope["sourceName"]
             .as_str()
@@ -375,7 +393,7 @@ impl SignalMessageOps {
             conversation_id: ConversationId::new(conversation_id),
             sender_id: UserId::new(source.clone()),
             sender_name: Some(source_name),
-            text: text.to_string(),
+            text,
             attachments: Vec::new(),
             timestamp,
             reply_to: None,
@@ -529,6 +547,67 @@ mod tests {
 
         let result = SignalMessageOps::convert_message(&msg, &channel_id, "+1234567890", &config);
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_convert_reports_attachments_in_text() {
+        let msg = serde_json::json!({
+            "envelope": {
+                "source": "+9876543210",
+                "sourceName": "Alice",
+                "timestamp": 1700000000000_i64,
+                "dataMessage": {
+                    "message": "see attached",
+                    "timestamp": 1700000000000_i64,
+                    "attachments": [
+                        { "contentType": "image/jpeg", "filename": "a.jpg" },
+                        { "contentType": "application/pdf", "filename": "b.pdf" }
+                    ]
+                }
+            }
+        });
+
+        let channel_id = ChannelId::new("signal");
+        let config = SignalConfig {
+            phone_number: "+1234567890".to_string(),
+            ..Default::default()
+        };
+
+        let inbound =
+            SignalMessageOps::convert_message(&msg, &channel_id, "+1234567890", &config).unwrap();
+        assert_eq!(
+            inbound.text,
+            "see attached\n\n[2 attachment(s) not supported on this channel]"
+        );
+        assert!(inbound.attachments.is_empty());
+    }
+
+    #[test]
+    fn test_convert_attachment_only_message_is_not_dropped() {
+        let msg = serde_json::json!({
+            "envelope": {
+                "source": "+9876543210",
+                "timestamp": 1700000000000_i64,
+                "dataMessage": {
+                    "message": "",
+                    "timestamp": 1700000000000_i64,
+                    "attachments": [{ "contentType": "image/jpeg" }]
+                }
+            }
+        });
+
+        let channel_id = ChannelId::new("signal");
+        let config = SignalConfig {
+            phone_number: "+1234567890".to_string(),
+            ..Default::default()
+        };
+
+        let inbound =
+            SignalMessageOps::convert_message(&msg, &channel_id, "+1234567890", &config).unwrap();
+        assert_eq!(
+            inbound.text,
+            "[1 attachment(s) not supported on this channel]"
+        );
     }
 
     #[test]

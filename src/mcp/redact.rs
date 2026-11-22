@@ -51,7 +51,10 @@ fn find_ascii_case_insensitive(haystack: &str, needle: &str) -> Option<usize> {
 }
 
 fn conservative_redact(text: &str) -> String {
-    let mut current = text.to_string();
+    // Raw vendor credentials use the same catalog as approval and gateway
+    // masking. The assignment pass below remains as a supplement for the
+    // deliberately short `key=value` values its existing contract accepts.
+    let mut current = crate::exec::SecretMasker::new().mask(text);
     for (needle, replacement) in CONSERVATIVE_PATTERNS {
         let mut out = String::with_capacity(current.len());
         let mut remaining = current.as_str();
@@ -122,6 +125,19 @@ mod tests {
         let out = conservative_redact(input);
         assert!(!out.contains("abc123.def456"), "got: {out}");
         assert!(out.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn conservative_redact_uses_shared_raw_credential_patterns() {
+        for key in [
+            "sk-proj-abcdefghijklmnopqrstuvwxyz12345678",
+            "sk_live_abcdefghijklmnopqrstuvwxyz1234",
+        ] {
+            let input = format!("upstream rejected raw credential {key}");
+            let out = conservative_redact(&input);
+            assert!(!out.contains(key), "raw credential survived: {out}");
+            assert!(out.contains("***REDACTED***"), "got: {out}");
+        }
     }
 
     #[test]

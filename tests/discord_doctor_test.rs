@@ -35,8 +35,6 @@ async fn healthy_config_yields_discord_ok_tag() {
         r#"[channels.discord]
 type = "discord"
 bot_token = "{}"
-application_id = 999
-slash_commands_enabled = true
 max_message_length = 2000
 
 [channels.discord.intents]
@@ -65,17 +63,15 @@ direct_messages = true
     assert!(!findings[0].is_problem());
 }
 
-/// A config that has both an `intents_misaligned` violation and an
-/// `application_id_missing` violation must surface BOTH in the
-/// single `Misconfigured` finding, not just the first one.
+/// An `intents_misaligned` violation is reported with the operator-facing
+/// explanation in the finding detail.
 #[tokio::test]
-async fn misaligned_intents_and_missing_application_id_both_surfaced() {
+async fn misaligned_intents_are_reported() {
     let mut tmp = tempfile::NamedTempFile::new().unwrap();
     let payload = format!(
         r#"[channels.discord]
 type = "discord"
 bot_token = "{}"
-slash_commands_enabled = true
 
 [channels.discord.intents]
 guild_messages = true
@@ -92,11 +88,6 @@ message_content = false
         findings[0]
             .detail
             .contains("guild_messages is on but message_content is off"),
-        "{:?}",
-        findings[0]
-    );
-    assert!(
-        findings[0].detail.contains("application_id"),
         "{:?}",
         findings[0]
     );

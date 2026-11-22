@@ -524,7 +524,7 @@ check-phase5:
 # Wiring parity guards: catch "severed wire" drift where both ends exist but the
 # connection is missing. Each is a grep-level diff against a triaged baseline —
 # green now, fails only on a NEW severance. See the 2026-07-15 wire audit.
-check-wiring: check-rpc-wiring check-tool-wiring check-config-wiring check-discovery-wiring check-event-wiring check-domain-wiring check-seam-wiring check-capability-wiring
+check-wiring: check-rpc-wiring check-tool-wiring check-config-wiring check-discovery-wiring check-event-wiring check-domain-wiring check-exec-wiring check-executor-wiring check-export-wiring check-seam-wiring check-capability-wiring check-extension-wiring check-fetch-wiring check-gateway-wiring
 
 # RPC: no Panel rpc_call / rate-lane classifier may name a method with no handler
 # (→ METHOD_NOT_FOUND / phantom rate-lane guard).
@@ -571,6 +571,43 @@ check-capability-wiring:
 # cuts the 2026-11-21 src/domain audit made stay cut.
 check-domain-wiring:
     python3 scripts/domain_wire_audit.py
+
+# Exec: the approval record carries no write-only field, the operator's
+# custom-pattern reason reaches the denial and the audit trail, the grants
+# registry never publishes a failed write, and the secret catalogs stay one
+# catalog. Cuts the 2026-11-21 src/exec audit made stay cut.
+check-exec-wiring:
+    python3 scripts/exec_wire_audit.py
+
+# Executor: every registry-only tool has a description in the ONE table, the
+# team tools register under a literal name the census can see, the tool
+# categories stay complete, and the dead registry knobs stay cut.
+check-executor-wiring:
+    python3 scripts/executor_wire_audit.py
+
+# Export: one CSP literal with one owner, the served policy allows
+# downloads, a zero timestamp renders as absent, a budget-dropped figure is
+# reported to the model, and the Panel's export call carries an idempotency
+# key.
+check-export-wiring:
+    python3 scripts/export_wire_audit.py
+
+# Extension: the severed manifest/registry wires stay cut, the plugin agent
+# `mode:` key still fails loudly, and the config-schema budget keeps exactly
+# one owner.
+check-extension-wiring:
+    python3 scripts/extension_wire_audit.py
+
+# Fetch: the section-level routing knobs stay cut (nothing read them) and the
+# boot warn keeps its producer.
+check-fetch-wiring:
+    python3 scripts/fetch_wire_audit.py
+
+# Gateway: the severed config/link/adapter wires stay cut, the pair-loop
+# override stays connected per channel, and the deliberately dark wires stay
+# dark.
+check-gateway-wiring:
+    python3 scripts/gateway_wire_audit.py
 
 # ─── Lint ───
 

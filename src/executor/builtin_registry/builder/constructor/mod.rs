@@ -72,7 +72,7 @@ impl BuiltinToolRegistry {
             // path is built-in `safe_fetch` only. Surface that once at
             // startup instead of letting the config silently do nothing.
             if let Some(ref fetch_cfg) = cfg_guard.fetch {
-                let inert = inert_fetch_backend_names(fetch_cfg);
+                let inert = inert_fetch_backend_names(fetch_cfg, cfg_guard.search.as_ref());
                 if !inert.is_empty() {
                     tracing::warn!(
                         backends = ?inert,
@@ -923,19 +923,20 @@ impl BuiltinToolRegistry {
             info!("Registered schemas for media_understand, audio_transcribe, document_extract");
         }
 
-        // Capability-runtime diagnostic control surface. Listed in
-        // BUILTIN_TOOL_DEFINITIONS for *catalog* purposes (so the
-        // BUILTIN_TOOL_DEFINITIONS tripwire sees the name) and
-        // dispatched in registry.rs, but the runtime advertisement is
-        // GATED on `diagnostics_control: Some(_)` — when the env
+        // Capability-runtime diagnostic control surface. The name is in
+        // REGISTRY_ONLY_TOOL_NAMES (NOT in BUILTIN_TOOL_DEFINITIONS — the
+        // catalog holds the unconditional tools), and it IS in the dispatch
+        // census: the census reads the `Registered schema for …` log line
+        // this block emits, so the two directions of the registry-only
+        // guard agree. What is GATED is the runtime advertisement, on
+        // `diagnostics_control: Some(_)` — when the env
         // `ALEPH_CAPABILITY_DIAGNOSTICS=1` is not set at startup,
-        // the tool is not in the runtime tool map, not in the LLM-
-        // facing tool list, and not in the dispatch census. The
-        // wire-level three-part check (operator + loopback + conn_id)
-        // lives in the tool module itself; this is the *enablement*
-        // half of the two-part guard, mirroring the media_pipeline
-        // block above. Keeping the registration block here (not
-        // unconditional) is the only reason a normal-mode build
+        // the tool is not in the runtime tool map and not in the LLM-
+        // facing tool list. The wire-level three-part check (operator +
+        // loopback + conn_id) lives in the tool module itself; this is the
+        // *enablement* half of the two-part guard, mirroring the
+        // media_pipeline block above. Keeping the registration block here
+        // (not unconditional) is the only reason a normal-mode build
         // cannot accidentally dispatch the tool.
         if let Some(ref dc) = config.diagnostics_control {
             let td = crate::builtin_tools::capability_projection_diagnostics::DiagnosticTool::new(
@@ -1201,7 +1202,6 @@ impl BuiltinToolRegistry {
             skill_manage_tool,
             note_manage_tool,
             session_complete_tool,
-            memory_reflect_tool,
         ) = Self::build_collab_session_tools(&config, &mut tools, &current_agent_id)?;
 
         Ok(Self {
@@ -1279,7 +1279,6 @@ impl BuiltinToolRegistry {
             strategy_tool: strategy_tool.with_session_key_handle(memory_session_key_handle.clone()),
             memory_search_tool,
             memory_runtime: config.memory_runtime.clone(),
-            memory_context_provider: Arc::new(tokio::sync::OnceCell::new()),
             node_registry: Arc::new(tokio::sync::OnceCell::new()),
             node_security_store: Arc::new(tokio::sync::OnceCell::new()),
             gateway_event_bus: Arc::new(tokio::sync::OnceCell::new()),
@@ -1473,7 +1472,6 @@ impl BuiltinToolRegistry {
             skill_manage_tool,
             note_manage_tool,
             session_complete_tool,
-            memory_reflect_tool,
             note_orient_tool,
             note_schema_tool,
             user_profile_tool,
@@ -1568,23 +1566,29 @@ async fn resolve_transcription(
 
 /// Names of the `[fetch]` backends an operator configured that will never be
 /// consulted at runtime (BT-D-R4-22 — see the `web_fetch_tool` construction
-/// above). Empty when the section is absent, disabled, or empty; the caller
-/// logs a single startup warning for the non-empty case so the config is not
+/// above). Empty when the section is absent or empty; the caller logs a
+/// single startup warning for the non-empty case so the config is not
 /// silently inert.
 ///
 /// A firecrawl-only setup has no `[fetch].backends` entry (Strategy V: it
-/// shares the `[search]` config), so an enabled section with a non-empty
-/// `default_provider` but no backends still names the default — the operator
-/// expects fetch routing from it either way.
-fn inert_fetch_backend_names(fetch_cfg: &crate::config::types::FetchConfigInternal) -> Vec<String> {
-    if !fetch_cfg.enabled {
-        return Vec::new();
-    }
+/// shares the `[search]` config), so the shared firecrawl backend is named
+/// too — but only when the operator actually wrote a `[fetch]` section,
+/// because a search-only firecrawl setup is not fetch intent.
+fn inert_fetch_backend_names(
+    fetch_cfg: &crate::config::types::FetchConfigInternal,
+    search_cfg: Option<&crate::config::types::SearchConfigInternal>,
+) -> Vec<String> {
     let mut names: Vec<String> = fetch_cfg.backends.keys().cloned().collect();
-    if names.is_empty() && !fetch_cfg.default_provider.is_empty() {
-        names.push(fetch_cfg.default_provider.clone());
+    names.extend(fetch_cfg.verified_shared.keys().cloned());
+    if search_cfg
+        .and_then(|search| search.backends.get("firecrawl"))
+        .and_then(|backend| backend.base_url.as_deref())
+        .is_some_and(|base_url| !base_url.is_empty())
+    {
+        names.push("firecrawl".to_string());
     }
     names.sort();
+    names.dedup();
     names
 }
 
@@ -1605,52 +1609,58 @@ mod tests {
         }
     }
 
-    fn fetch_cfg(
-        enabled: bool,
-        default_provider: &str,
-        backends: HashMap<String, FetchBackendConfig>,
-    ) -> FetchConfigInternal {
+    fn fetch_cfg(backends: HashMap<String, FetchBackendConfig>) -> FetchConfigInternal {
         FetchConfigInternal {
-            enabled,
-            default_provider: default_provider.into(),
-            fallback_providers: None,
             backends,
             verified_shared: HashMap::new(),
         }
     }
 
+    fn search_with_firecrawl(base_url: &str) -> crate::config::types::SearchConfigInternal {
+        serde_json::from_value(serde_json::json!({
+            "backends": { "firecrawl": { "provider_type": "firecrawl", "base_url": base_url } }
+        }))
+        .unwrap()
+    }
+
     #[test]
-    fn disabled_section_warns_about_nothing() {
-        let mut backends = HashMap::new();
-        backends.insert("crawl4ai".into(), backend("crawl4ai"));
-        let cfg = fetch_cfg(false, "crawl4ai", backends);
+    fn empty_section_warns_about_nothing() {
+        let cfg = fetch_cfg(HashMap::new());
         assert!(
-            inert_fetch_backend_names(&cfg).is_empty(),
-            "an operator who disabled the section opted out deliberately"
+            inert_fetch_backend_names(&cfg, None).is_empty(),
+            "an empty section expresses no fetch intent"
         );
     }
 
     #[test]
-    fn enabled_section_names_configured_backends_sorted() {
+    fn section_names_configured_backends_sorted() {
         let mut backends = HashMap::new();
         backends.insert("zeta".into(), backend("crawl4ai"));
         backends.insert("alpha".into(), backend("crawl4ai"));
-        let cfg = fetch_cfg(true, "alpha", backends);
-        assert_eq!(inert_fetch_backend_names(&cfg), vec!["alpha", "zeta"]);
+        let cfg = fetch_cfg(backends);
+        assert_eq!(
+            inert_fetch_backend_names(&cfg, None),
+            vec!["alpha", "zeta"]
+        );
     }
 
     #[test]
     fn firecrawl_style_section_without_backends_still_warns() {
-        // Strategy V: firecrawl shares the [search] config, so an enabled
-        // [fetch] section can have a default_provider but zero backend
-        // entries. The operator still expects fetch routing — warn.
-        let cfg = fetch_cfg(true, "firecrawl", HashMap::new());
-        assert_eq!(inert_fetch_backend_names(&cfg), vec!["firecrawl"]);
+        // Strategy V: firecrawl shares the [search] config, so a [fetch]
+        // section can have zero backend entries while the operator still
+        // expects fetch routing — warn about the shared backend.
+        let cfg = fetch_cfg(HashMap::new());
+        let search = search_with_firecrawl("https://api.firecrawl.dev");
+        assert_eq!(
+            inert_fetch_backend_names(&cfg, Some(&search)),
+            vec!["firecrawl"]
+        );
     }
 
     #[test]
-    fn enabled_but_truly_empty_section_warns_about_nothing() {
-        let cfg = fetch_cfg(true, "", HashMap::new());
-        assert!(inert_fetch_backend_names(&cfg).is_empty());
+    fn verified_shared_backend_names_are_reported() {
+        let mut cfg = fetch_cfg(HashMap::new());
+        cfg.verified_shared.insert("firecrawl".into(), true);
+        assert_eq!(inert_fetch_backend_names(&cfg, None), vec!["firecrawl"]);
     }
 }

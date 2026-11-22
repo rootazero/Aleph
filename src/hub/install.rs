@@ -566,14 +566,17 @@ pub async fn run_install(
                 // Plugin install via the marketplace path (SHA-256 + atomic copy).
                 let marketplace = ctx.marketplace.ok_or("marketplace unavailable")?;
                 let marketplace_name = plugin_marketplace_name(&ctx.entry.source_id);
-                let path = marketplace.install_to_scope(
+                let installed = marketplace.install_to_scope(
                     &ctx.entry.name,
                     marketplace_name,
                     PluginScope::User,
                     None,
                 )?;
+                for warning in &installed.warnings {
+                    tracing::warn!(plugin = ctx.entry.name, "{}", warning);
+                }
                 Ok(InstallOutcome::Plugin {
-                    path: path.display().to_string(),
+                    path: installed.path.display().to_string(),
                 })
             }
         }

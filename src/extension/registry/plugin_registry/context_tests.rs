@@ -920,7 +920,6 @@ fn context_stats_and_clear_cover_real_registration_and_audit_state() {
     assert_eq!(stats.active_plugins, 2);
     assert_eq!(stats.audit_retained_events, 3);
     assert_eq!(stats.audit_total_events, 3);
-    assert_eq!(registry.stats().contexts, 3);
     registry.clear();
     assert_eq!(registry.context_stats(), ContextStats::default());
     assert!(registry.context_audit().is_empty());
