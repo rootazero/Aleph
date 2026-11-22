@@ -122,7 +122,7 @@ pub fn DesktopAutostartSection() -> impl IntoView {
     move || {
         available.get().then(|| {
             view! {
-                <div class="bg-surface-sunken/40 rounded-xl p-4">
+                <div class="bg-surface-sunken/40 rounded-xl p-4" data-testid="desktop-autostart-section">
                     <div class="flex items-center justify-between gap-4">
                         <div>
                             <h2 class="text-xl font-semibold text-text-primary mb-2">
@@ -134,7 +134,7 @@ pub fn DesktopAutostartSection() -> impl IntoView {
                         </div>
                         {if nsh {
                             view! {
-                                <div class="text-sm text-text-secondary" role="status" aria-live="polite">
+                                <div class="text-sm text-text-secondary" role="status" aria-live="polite" data-testid="desktop-autostart-status">
                                     <p>{move || match status.get() {
                                         None => t!(i18n, settings.general.autostart.status_loading).into_any(),
                                         Some(AutostartStatus::Enabled {}) => t!(i18n, settings.general.autostart.status_enabled).into_any(),

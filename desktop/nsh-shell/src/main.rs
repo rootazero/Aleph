@@ -62,6 +62,21 @@ fn main() -> std::process::ExitCode {
         );
         return std::process::ExitCode::SUCCESS;
     }
+    let status_qa = match std::env::var_os("ALEPH_PANEL_QA_STATUS") {
+        None => false,
+        Some(value)
+            if value == "1"
+                && cfg!(all(debug_assertions, feature = "qa-service"))
+                && endpoint.is_some()
+                && nonce.is_some() =>
+        {
+            true
+        }
+        Some(_) => {
+            eprintln!("NSH host refused Panel status QA without its isolated debug context");
+            return std::process::ExitCode::FAILURE;
+        }
+    };
     let settings =
         match shell_host::HostSettings::from_launch(&args, endpoint.as_deref(), nonce.as_deref()) {
             Ok(settings) => settings,
@@ -80,8 +95,13 @@ fn main() -> std::process::ExitCode {
         .map(|nonce| {
             format!(
             "{}\ninstallAlephPanelQa({}, event => window.nsh.postMessage(JSON.stringify(event)));",
-            include_str!("../../../qa/nsh_panel_driver.js"),
-            serde_json::json!({"nonce": nonce, "qa_run_id": qa_run_id, "message": message})
+            if status_qa {
+                include_str!("../../../qa/phase11_nsh_panel_status.js")
+            } else {
+                include_str!("../../../qa/nsh_panel_driver.js")
+            },
+            serde_json::json!({"nonce": nonce, "qa_run_id": qa_run_id, "message": message,
+                "status_labels": std::env::var("ALEPH_PANEL_QA_STATUS_LABELS").unwrap_or_default()})
         )
         })
         .unwrap_or_default();

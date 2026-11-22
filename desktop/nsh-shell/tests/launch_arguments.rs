@@ -6,6 +6,7 @@ fn launch(args: &[&str]) -> Output {
         .args(args)
         .env_remove("ALEPH_NSH_QA_URL")
         .env_remove("ALEPH_NSH_QA_NONCE")
+        .env_remove("ALEPH_PANEL_QA_STATUS")
         .output()
         .expect("launch owned shell process")
 }
@@ -46,6 +47,25 @@ fn status_rejects_qa_url_and_malformed_identity_without_echoing_input() {
         launch(&["--autostart-status", "extra"]).status.code(),
         Some(1)
     );
+}
+
+#[test]
+fn status_observer_refuses_invalid_or_missing_qa_context_before_launch() {
+    for value in ["1", "synthetic-secret"] {
+        // The old entry also rejects this target; a RED cannot open a window.
+        let output = Command::new(env!("CARGO_BIN_EXE_aleph-nsh-shell"))
+            .args(["--connect", "http://box.invalid"])
+            .env("ALEPH_PANEL_QA_STATUS", value)
+            .env_remove("ALEPH_NSH_QA_URL")
+            .env_remove("ALEPH_NSH_QA_NONCE")
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stdout.is_empty());
+        let error = String::from_utf8(output.stderr).unwrap();
+        assert!(error.contains("refused Panel status QA"));
+        assert!(!error.contains("synthetic-secret"));
+    }
 }
 
 #[test]

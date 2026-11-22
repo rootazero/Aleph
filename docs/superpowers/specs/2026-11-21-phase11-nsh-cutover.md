@@ -1,7 +1,7 @@
 # Phase11 NSH Cutover Contract / Phase11 NSH 切换契约
 
 **Status / 状态:** implemented foundation slices, NOT P11-A–H acceptance / 基础切片已实施，不是全期验收
-**Version / 版本:** `2026-11-22.9`
+**Version / 版本:** `2026-11-22.10`
 **Scope / 范围:** official platform entry selection, fixed credential transport and immutable launch targets / 官方平台入口选择、固定凭据传输与不可变启动目标
 
 ## 1. Authority and non-goals / 权威与不做事项
@@ -240,3 +240,19 @@ Before implementation, the narrow desktop-only API is frozen as `updater::verify
 - TDD must demonstrate real acceptance, tampered payload/key/comment rejection, present-version mismatch under both policies, explicit missing-version behavior, old-algorithm compatibility and malformed envelopes. All dependencies are already in the current lock; normal offline lock regeneration may add direct edges but must add/remove no package identity.
 
 **SPEC author pass:** traced the actual Aleph check/download/install sequence and pinned policy default; signature verification precedes the existing service-stop/apply stage. **QUALITY author pass after SPEC:** checked verification-before-comment, both policy directions, no implicit trust defaults and real cryptographic fixtures. These author passes do not accept download, staging, single-apply ownership, package-manager behavior, installation/rollback, restart or any platform gate. / 作者顺序审查；后续安装生命周期仍须独立接通与实测。
+
+## 15. Production Panel native status proof / 生产 Panel 原生状态实证
+
+The committed WASM lacks the newly added NSH bridge identifiers. Source checks and the small HTML credential fixture do not demonstrate the shipped Leptos component. Preserve existing dist bytes before the canonical rebuild; retain actual HTTP asset hashes before and after the run. / 先保留旧产物，重建并绑定真实 HTTP 字节，不以源码存在冒充渲染完成。
+
+- An opt-in `ALEPH_PANEL_QA_STATUS=1` observer requires an admitted debug QA endpoint/nonce. Unknown values or a missing QA context fail before opening a window. It selects a fixed QA script, never a new production invoke command or RPC response provider.
+- Own a fresh loopback Gateway/provider with the existing `isolated_gateway` fixture, a fresh native data directory and the canonical nonce-isolated credential namespace. Build the current Gateway/host and canonical Panel serially after the required memory gates. Do not touch installed services or production credentials/login items.
+- The observer must see the production Panel's empty credential-load reply and a real credentialless authorized `connect` response before routing through the real SPA to `/settings/general`. It never supplies a token or calls the native status/credential methods itself. Credentialless authorization is not protected-user proof.
+- The actual `DesktopAutostartSection` must trigger its document-bound native status read and render visible translated unavailable/read-only text without a checkbox. Stable test IDs identify the real component; labels remain owned by the locale sources. The expected unbundled macOS status is `Unavailable(NotAppBundle)`, not false/disabled.
+- Accept only strict boolean effects, one consistent native document, an ordered fixture/close/closed sequence, real host exit zero and native-engine return. Require unchanged served assets and joined, non-forced Gateway/provider cleanup. Timeout or incomplete observations fail; neither is natural shutdown evidence.
+- This is a functional native integration proof, not a performance matrix, pairing/protected-identity test, all-helper census, full/lite service migration, platform parity or any P11 gate closure. / 仅功能链路实证，不放宽性能合同或跨平台、双轨门槛。
+
+- Keep the native process's real OS login context: the controlled real-store experiment passed with its existing `HOME` and failed with a synthetic `HOME`. Isolate using the canonical QA credential service, native `data_dir` and `ALEPH_HOME`; the separately owned Gateway keeps its existing private HOME. / 原生 OS store 依赖真实登录上下文，隔离不是伪造 HOME。
+- An OS worker releases its permit after its synchronous OS body returns and before waking the result receiver. This preserves ownership if the UI future disappears while avoiding a spurious busy failure on the receiver's next sequential request. Apply the same order to credential and login-status workers. Completion of the OS body is not an OS-thread join or an all-helper shutdown claim. / 先完成 OS 操作、释放准入，再发布结果；不冒称线程 join。
+
+**SPEC author pass:** separated actual component/RPC effects from a direct bridge fixture, and confined the observer to the existing nonce-owned debug path. **QUALITY author pass after SPEC:** checked stale-asset identity, no synthetic RPC success, unavailable-state rendering, isolated cleanup and all negative acceptance directions. No independent reviewer was dispatched. / 先规格后质量的作者审查，不冒称独立审核。

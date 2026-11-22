@@ -1,6 +1,6 @@
 {
   "artifact": "phase11-nsh-inventory",
-  "version": "2026-11-22.9",
+  "version": "2026-11-22.10",
   "status": "FOUNDATION_IMPLEMENTED / P11-A-H_NOT_ACCEPTED",
   "authority": [
     "docs/superpowers/plans/2026-11-21-phase11-nsh-cutover.md",
@@ -554,7 +554,7 @@
       "remaining": [
         "per-caller/non-IPC migration dispositions beyond this census",
         "ordered full-scope SPEC/QUALITY review",
-        "native WebView credential effect proof: resolved for isolated fixture only; production Panel open",
+        "native WebView credential effects and production Panel credentialless/read-only status resolved; protected-user pairing/persistence remains open",
         "three-platform production ownership transfer"
       ]
     },
@@ -578,12 +578,13 @@
       "official platform dependencies and cfg entry implementation",
       "fixed credential transport + canonical-store adapter",
       "targeted Rust/JS regressions",
+      "production Panel WASM empty-store/native status rendering and natural host return against a real owned Gateway",
       "real macOS isolated OS-store roundtrip",
       "real macOS WebView typed IPC, two-document lease revocation, no-effect controls, store deletion/absence and natural return"
     ],
     "open": [
       "P11-A complete per-caller review",
-      "production Panel WASM credential E2E (fixture native IPC passed)",
+      "protected-user pairing/persistence and production TLS/remote native E2E",
       "production full/lite/remote target and daemon supervision migration",
       "three-platform OS integration",
       "autostart/updater/packaging",
@@ -595,8 +596,8 @@
     "checks": {
       "node": "node --test desktop/nsh-shell/tests/panel_bridge.test.mjs: 11 passed",
       "protocol": "cargo test -p aleph-protocol --offline --locked --jobs 1: 416 unit + 11 integration passed; 2 doctests ignored",
-      "shell_default": "cargo test -p aleph-nsh-shell --offline --locked --jobs 1: 19 unit + 7 real-process launch + 2 integration passed",
-      "shell_qa": "cargo test -p aleph-nsh-shell --features qa-service --offline --locked --jobs 1: 19 unit + 7 real-process launch + 2 integration passed; 1 real-store test ignored by default",
+      "shell_default": "cargo test -p aleph-nsh-shell --offline --locked --jobs 1: 19 unit + 8 real-process launch + 2 integration passed",
+      "shell_qa": "cargo test -p aleph-nsh-shell --features qa-service --offline --locked --jobs 1: 19 unit + 8 real-process launch + 2 integration passed; 1 real-store test ignored by default",
       "os_store": "cargo test -p aleph-nsh-shell --features qa-service --offline --locked --jobs 1 isolated_os_store_roundtrip_and_revoked_lease -- --ignored --test-threads=1: 1 passed; unique namespace, save/load/stale-delete-denial/delete/absence, cleanup; not native WebView delivery",
       "panel_native": "cargo test -p aleph-panel --lib native_credentials --offline --locked --jobs 1: 24 passed",
       "panel_wasm": "cargo check -p aleph-panel --target wasm32-unknown-unknown --offline --locked --jobs 1: passed; existing dead_code warnings",
@@ -608,7 +609,8 @@
       "shared_host": "cargo test -p aleph-desktop-host -p aleph-desktop-shell --offline --locked --jobs 1: shared-host 10 + retained full shell 165 passed; cargo clippy -p aleph-desktop-host --all-targets --offline --locked --jobs 1 -- -D warnings: passed",
       "native_qa": "PASS_SCOPED_NATIVE_CREDENTIAL_EFFECTS: .phase10-evidence/phase11-launch-credentials.EU3xi4/receipt.json; ten effects, two documents, natural exit after endpoint ownership change; prior .phase10-evidence/phase11-native-credentials.Kje8rAAJ/receipt.json retained; not Panel WASM/desktop parity/performance",
       "native_receipt_tests": "cd qa && python3 -m unittest test_phase11_nsh_credentials -v: 7 passed; legacy credential evaluator unchanged; optional status extension rejects missing/wrong-document/collapsed status",
-      "qa_python_suite": "uv run --offline --no-project --no-python-downloads --python python3 --with jsonschema python -m unittest discover -s qa -p 'test_*.py' -v: 88 passed; plain python3 first blocked four module imports by missing jsonschema, resolved in isolated cached uv environment"
+      "qa_python_suite": "uv run --offline --no-project --no-python-downloads --python python3 --with jsonschema==4.25.1 python -m unittest discover -s qa -p 'test_*.py' -v: 94 passed; cached isolated uv environment",
+      "production_panel_native": "PASS_SCOPED_PRODUCTION_PANEL_STATUS; actual current Panel/native component and RPC, not pairing/protected identity or performance; docs/superpowers/runs/2026-11-22-phase11-production-panel-receipt.json"
     }
   },
   "updater_trust": {
@@ -645,7 +647,7 @@
     "lifecycle": "CLI synchronous; Panel independent bounded worker permit and JS slot; 15s timeout, pagehide and late-navigation reply fencing",
     "ui": "localized read-only NSH states; original Tauri plugin still owns writable toggle",
     "receipt": "docs/superpowers/runs/2026-11-22-phase11-autostart-receipt.json",
-    "not_tested": ["production Panel WASM rendering", "real OS enabled/disabled/approval transitions", "setters", "Windows/Linux native implementation", "installer/updater", "default/rollback", "performance", "real 14-day dual operation"],
+    "not_tested": ["real OS enabled/disabled/approval transitions", "setters", "Windows/Linux native implementation", "installer/updater", "default/rollback", "performance", "real 14-day dual operation"],
     "review": "author SPEC then distinct QUALITY, not independent; P11-A-H remain OPEN"
   },
   "shared_local_server_source": {
@@ -710,6 +712,17 @@
     "login_item": "nsh-core 0.6.0 src/element/desktop.rs:1082 launch_at_login collapses Disabled/RequiresApproval/Unavailable/read errors to false; set_launch_at_login returns Result but no public detailed status getter was located",
     "single_instance": "nsh-core 0.6.0 src/single_instance.rs assigns uniqueness to release runners; Rust-hosted run_app uniqueness/forwarding not yet proven",
     "policy": "do not report unavailable as disabled; do not infer single-instance from a SecondInstance event consumer; no toolkit patch or dependency fork"
+  },
+  "production_panel_native_slice": {
+    "status": "PASS_SCOPED_PRODUCTION_PANEL_STATUS / NOT_PHASE11_ACCEPTANCE",
+    "receipt": "docs/superpowers/runs/2026-11-22-phase11-production-panel-receipt.json",
+    "guide": "qa/phase11_nsh_panel_status.md",
+    "ownership": "real Leptos DesktopAutostartSection + fixed native IPC + canonical nonce-isolated OS store + owned production Gateway; no supplied RPC results",
+    "effects": "empty credential load, real credentialless connect authorization, real settings route/status query, correct translated unavailable/read-only text, no toggle, document binding and natural native return",
+    "lifecycle_fix": "credential and status workers complete OS I/O, release admission, then publish the value; UI cancellation never releases an in-progress OS operation; not an OS-thread join",
+    "fixture_fix": "preserve native HOME after controlled real-store failure; isolate credential service, native data_dir and ALEPH_HOME instead; Gateway keeps its private HOME",
+    "assets": "canonical normal just wasm rebuilt and committed; previous nine dist files and both failed native runs retained locally; actual HTTP identities stable during final run",
+    "not_proven": ["protected-user pairing", "TLS/remote", "all-helper census", "performance", "three-platform parity", "service/default/rollback", "14-day dual operation", "Tauri removal"]
   },
   "operations": {
     "foundation_commit": "9e48df355236585c4fa7d94e5098c12e445d9dab",

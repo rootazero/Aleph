@@ -31,8 +31,9 @@ impl Reader {
             .spawn(move || {
                 // Keep the permit through the real OS read, even if navigation
                 // drops the receiver. No entered Tokio runtime is required.
-                let _permit = permit;
-                let _ = sender.send(read(&identity));
+                let status = read(&identity);
+                drop(permit);
+                let _ = sender.send(status);
             });
         if worker.is_err() {
             return AutostartStatus::Failed {};
@@ -158,6 +159,7 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(1));
         };
         assert_eq!(status, read(crate::shell_host::APP_ID));
+        assert_eq!(reader.permit.available_permits(), 1);
     }
 
     #[test]

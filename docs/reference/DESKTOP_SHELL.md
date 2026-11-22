@@ -19,6 +19,8 @@ Gateway; its root owns native callbacks and tasks, not that Gateway's lifetime.
 permission is not a product feature-disable switch; no such switch is supplied.
 / 保留下述 Tauri；NSH 不接管独立 Gateway，热键可禁用，通知权限不等于功能开关。
 
+Phase11 now has a [scoped real Panel/native status proof](../superpowers/runs/2026-11-22-phase11-production-panel-receipt.json): the regenerated canonical WASM performs an empty nonce-isolated credential load, obtains real credentialless Gateway authorization and renders its actual read-only native login-status component. The [QA guide](../../qa/phase11_nsh_panel_status.md) separates this from protected pairing, OS writes, performance and platform/default/dual-track acceptance. / 已验证真实 Panel 的有限功能链路，不是全期或跨平台验收。
+
 
 The **desktop shell** (`desktop/shell/`, crate `aleph-desktop-shell`) is the
 "last-mile native shell" — a thin Tauri v2 app that turns the existing Leptos

@@ -1,0 +1,199 @@
+{
+  "artifact": "phase11-production-panel-native-status",
+  "version": "2026-11-22.10",
+  "status": "PASS_SCOPED_PRODUCTION_PANEL_STATUS / NOT_PHASE11_ACCEPTANCE",
+  "candidate_parent": "36955672d499cf1f084cdb013d6b41bc6612c687",
+  "authority": "docs/superpowers/specs/2026-11-21-phase11-nsh-cutover.md",
+  "contract_section": 15,
+  "source_sha256": {
+    "Cargo.lock": "1546896d95408075b2a81610b60d4c888a19f6e6947232d86f13b38ec0cc3e7e",
+    "desktop/nsh-shell/src/main.rs": "edbfa30edbf878691596f0d418a039d8e19b024c879245b1cf90e6e7f33d1ae9",
+    "desktop/nsh-shell/src/credentials.rs": "b58a1597e3c83376407ff2c4662916690f24b87107380af83935bc889abca22d",
+    "desktop/nsh-shell/src/autostart.rs": "e29fc53335ce158b938350eb0d1890bb5bf5e46f4d669ac3caa63c5b5120e980",
+    "desktop/nsh-shell/src/shell_host.rs": "ec3d8f90973a324d1dc0a60bf82aa8f20ae0766e737be0cdfdc03818697a515a",
+    "desktop/nsh-shell/src/panel_bridge.rs": "5c24f162dd662b667bcf8f3640065fe67ce01931c527f9a13d23a90492f3a1de",
+    "desktop/nsh-shell/src/panel_bridge.js": "2dbd70d86a51637b105e8f819eda712f0ca7489dcc0bdcca27b8489cd367e780",
+    "desktop/nsh-shell/tests/launch_arguments.rs": "ed8ef3b3c8280656fd70333d2f90207adda3961121d443b087437f812a4fba82",
+    "shared/protocol/src/panel_shell.rs": "f15c34fb6a99a0d57ed67b10e0d273ea252566eb0a12dc907dd390f4f63eb2d4",
+    "interfaces/webchat/src/api/native_credentials.rs": "6ddb2122fb7c1c82271f6347da6fdf553214f2eec2bab9d7ad62447a6e57c9a9",
+    "interfaces/webchat/src/app/shell_bridge.rs": "32fbcde692e081ac468c9a77ba26f2c67154da77e43e63b7de50242f5ed473dc",
+    "interfaces/webchat/src/context.rs": "feb42ca4c55a40d3d16f255a29ad06e5aa33f3a45d63002cb369e390c8175a57",
+    "interfaces/webchat/src/platform/wide/views/settings/desktop_autostart.rs": "b44b3749962fc29db3e1a5266f67afc1f4b74ee9e4866b5d773fdc96f7f6a8fe",
+    "interfaces/webchat/locales/en.json": "45aa0c1ca400ab04f77b908cf8a5d20e55143cea7107e3e9e86136dc13965024",
+    "interfaces/webchat/locales/zh.json": "6b1813aca8ec309dccb97eb8daae9ef74a6c88df0d99c14d6f9dfd38acddfc56",
+    "qa/phase11_nsh_panel_status.py": "e3bf63484987bed86af814f1f6de0c6b04655268fc612ece5d605bc46ad0cfb0",
+    "qa/phase11_nsh_panel_status.js": "3fd8b4cf996251fae80ae75ac4091c1a8982251ee57f5950e687c12971fad351",
+    "qa/test_phase11_nsh_panel_status.py": "265fba5ce2a40e58a704df66cbc4cbea818e52bf11d6fcee5971077f4d405802",
+    "qa/phase11_nsh_panel_status.md": "6f630b887e76b05bef765d7a0fd8894290675532be2b27d218bc2da12e67a452",
+    "docs/superpowers/specs/2026-11-21-phase11-nsh-cutover.md": "fb5bac841796deb6d268766de3cd4803cf4e64dc929ca42c5a21482391f94b97",
+    "docs/superpowers/runs/2026-11-21-phase11-nsh-inventory.json": "e128d6e365951f76edb1243b74b815621ceb1153d086a6587a41944b356283f0",
+    "docs/reference/DESKTOP_SHELL.md": "de7d87679857f26a762bc98d71b0382477a235bdaa2be162b8f05e2251a1a461"
+  },
+  "dist_sha256": {
+    "interfaces/webchat/dist/index.html": "01ba38ba50b53babbd3a48d42cf51d47f9102b729deb36c64e2a7be60c6b8d43",
+    "interfaces/webchat/dist/index.html.br": "592703426e6d493d424eb6b99b985a2af12af3d457a03ee6d9e8ab32ab299059",
+    "interfaces/webchat/dist/aleph_panel.js": "53be3d5177e308f419c34cfa0e2950df347bdd7a262547229e72863e8a4eea9c",
+    "interfaces/webchat/dist/aleph_panel.js.br": "3cca43f004db98d72bf8dbd408119ddfe59d38b765d1ab61ea5f9b29ee6c1edd",
+    "interfaces/webchat/dist/tailwind.css": "3ede8d53cbb11d0707f68c53653103749ca33026a82e497b389db328e4cde9e7",
+    "interfaces/webchat/dist/tailwind.css.br": "0f5ed19f316a4ed7ef0ef5c5a9b1d31a862fbd02ad23a5a0ddfa20a2d69af972",
+    "interfaces/webchat/dist/aleph_panel_bg.wasm": "72953ab0e1b76226d44cae5e3ad8c3afd451320fa0fe6a6bfcbdf925cf05437e",
+    "interfaces/webchat/dist/aleph_panel_bg.wasm.br": "c0926044142ab5bd4787860727faf8b3bf39cc6f6f6b7fda986a19acc9d53214",
+    "interfaces/webchat/dist/snippets/aleph-panel-4f6e070d4bce8856/inline0.js": "6b729d2c4a33ef2283b46dacdda18ce896352c10df3f4ad650cad0b993a30967"
+  },
+  "raw_sha256": {
+    ".phase10-evidence/phase11-production-panel.3xoj_pn1/receipt.json": "97a7ef91d530d832cb08c388a43f79bbda0a7a1559ec3e3e3c52283b066efb81",
+    ".phase10-evidence/phase11-production-panel.3xoj_pn1/diagnostic-receipt.json": "94d1888e957946ce64d6f3e5521479502abe25cae47f4cdb751cad010e991222",
+    ".phase10-evidence/phase11-production-panel.3xoj_pn1/preserved-home-receipt.json": "4efd4cdccd6952131016f21cebfb07cd53d57042be108864dac4198255709412",
+    ".phase10-evidence/phase11-production-panel.3xoj_pn1/final-receipt.json": "64b58487dd84aa6e350c951cd80b60a7693382b003672ad796c0b78139db3748",
+    ".phase10-evidence/phase11-production-panel.3xoj_pn1/existing_home.log": "e306f52f07193d7496d665f80fbe8887cde8bf091f520a28fd1dedf08fdadf41",
+    ".phase10-evidence/phase11-production-panel.3xoj_pn1/isolated_home.log": "969e9a480b5758a06b264b633a3124dd20f2a954008d543e186687c18aa2bb18",
+    ".phase10-evidence/phase11-production-panel.3xoj_pn1/host-default-red.log": "0609211f02c444b169763aabdebfb81b8af1f377ac05a9be8e6035e120d89e20",
+    ".phase10-evidence/phase11-production-panel.3xoj_pn1/qa-tests-final.log": "27ba663c0cc05e8ead5879dfddee5d635e2df202f2c655c2d5b3b81fb881adc0",
+    ".phase10-evidence/phase11-production-panel.3xoj_pn1/node-tests-final.log": "b31730623bfe50ff1ccec180032de369efcec956d2e804d164c6d50a61719a63",
+    ".phase10-evidence/phase11-production-panel.3xoj_pn1/host-default-tests.log": "21bd18b247ee8b58814c2613577eaf2b0b7b378376b1ae5908ebe69ac15c419d",
+    ".phase10-evidence/phase11-production-panel.3xoj_pn1/host-qa-tests.log": "29a7b4ff879ead3ff14cabbb89895fb8b3e70d1104eafcedef9bade57cc01a30",
+    ".phase10-evidence/phase11-production-panel.3xoj_pn1/panel-credential-tests.log": "d1f5cb84073a7b82da3d856e81c5ce55089b18cee57e42e13e8aa54d1a705644",
+    ".phase10-evidence/phase11-production-panel.3xoj_pn1/tauri-full-tests.log": "742942d48a6e33cebbe16c67ab5a5c5ac115303016f118011533eaeee41e520a",
+    ".phase10-evidence/phase11-production-panel.3xoj_pn1/tauri-lite-tests.log": "042b3297d719bd9113243c3dafcaa6f3db71ae306b1909ca3fb6c4339bc5478c",
+    ".phase10-evidence/phase11-production-panel.3xoj_pn1/clippy-final.log": "86aa0d56620d110db2a32e69fe5f82d143690c7001d3378c7f1b606b46e3a2d7",
+    ".phase10-evidence/phase11-production-panel.3xoj_pn1/panel-build.log": "22bc9c5e14590ed7c2c1cbe0e4e1dc896d84afda0dd93b8e40a573985c8907bb",
+    ".phase10-evidence/phase11-production-panel.3xoj_pn1/gateway-build.log": "5a6d125ec3192e4f9590732ea225c06165815ad6aa7da18920a453bfa50a892c",
+    ".phase10-evidence/phase11-production-panel.3xoj_pn1/host-final-build.log": "2bc683fb4e4f4f21ee9ee39e2b8ecce2efe20d3b1be57bda5316aa519ab3d30a",
+    ".phase10-evidence/phase11-production-panel.3xoj_pn1/dist-check.log": "357126acb37f3661f914b7ff5ee2fd301840250d0077129c2a9cb8dd5e4ac47b",
+    ".phase10-evidence/phase11-production-panel.3xoj_pn1/baseline-check.log": "42c5350cf3dbc8212538dc52415dc27676f94d1727083a091f87f58e2983068c",
+    ".phase10-evidence/phase11-production-panel.3xoj_pn1/prior-dist-sha256.json": "2c3bedbc708f19dc93c7c02fcf5cf947b1e4392e65234403b39689b5fbe34b25",
+    ".phase10-evidence/phase11-production-panel.3xoj_pn1/bin/cargo": "7661b32d6133682f6f6d0405dc5e027f24d422045e0c4b54b3515cba5cfc6d34"
+  },
+  "native": {
+    "receipt": ".phase10-evidence/phase11-production-panel.3xoj_pn1/final-receipt.json",
+    "binary": ".phase10-evidence/phase11-production-panel.3xoj_pn1/aleph-nsh-shell-final",
+    "binary_sha256": "98899a7274868ab44655f3654fb43efeec6aeb37e9a5f7d1343413ac68dc8d1b",
+    "gateway_binary": ".phase10-evidence/phase11-production-panel.3xoj_pn1/aleph-server",
+    "gateway_binary_sha256": "2302178de920ea46b230a3999aeb0238d930879cac87985c2f9acab1a65fecd2",
+    "document": "701647b7f54b159a7d0debe3c4ada3b1",
+    "effects": {
+      "component_visible": true,
+      "connect_authorized_without_credential": true,
+      "credential_load_empty": true,
+      "document_bound": true,
+      "native_marker": true,
+      "readonly_text_correct": true,
+      "status_text_correct": true,
+      "toggle_absent": true
+    },
+    "status": {
+      "reason": "not_app_bundle",
+      "status": "unavailable"
+    },
+    "returncode": 0,
+    "engine_return_owned_drained": true,
+    "served_assets": {
+      "index.html": {
+        "sha256": "01ba38ba50b53babbd3a48d42cf51d47f9102b729deb36c64e2a7be60c6b8d43",
+        "bytes": 7425
+      },
+      "aleph_panel.js": {
+        "sha256": "53be3d5177e308f419c34cfa0e2950df347bdd7a262547229e72863e8a4eea9c",
+        "bytes": 121199
+      },
+      "aleph_panel_bg.wasm": {
+        "sha256": "72953ab0e1b76226d44cae5e3ad8c3afd451320fa0fe6a6bfcbdf925cf05437e",
+        "bytes": 70967315
+      },
+      "tailwind.css": {
+        "sha256": "3ede8d53cbb11d0707f68c53653103749ca33026a82e497b389db328e4cde9e7",
+        "bytes": 146900
+      }
+    },
+    "cleanup": {
+      "fixture_removed": true,
+      "panel_assets_unchanged": true,
+      "children": [
+        {
+          "name": "model",
+          "exit_code": -15,
+          "forced": false
+        },
+        {
+          "name": "gateway",
+          "exit_code": 0,
+          "forced": false
+        }
+      ]
+    }
+  },
+  "verification": {
+    "panel_assets": "ALEPH_PANEL_RUNTIME_QA=0 just wasm through the retained memory/offline/locked/jobs=1 Cargo wrapper; dist/baseline/precompression guards passed; nine prior dist files preserved",
+    "qa_python": "cached isolated uv jsonschema==4.25.1; top-level QA 94 passed",
+    "bridge_js": "11 passed",
+    "nsh_default": "19 unit + 8 process launch + 2 window passed",
+    "nsh_qa_service": "19 unit + 8 process launch + 2 window passed; 1 real-store test ignored by default",
+    "panel_native_credentials": "24 passed",
+    "nsh_clippy": "all-targets qa-service -D warnings passed",
+    "tauri_full": "165 passed; unit suite only",
+    "tauri_lite_qa_owned_root": "190 passed; unit suite only",
+    "cargo_policy": "4 GiB memory gate ALLOW before each Cargo invocation; offline locked jobs=1; native runs never overlapped compilation"
+  },
+  "red_and_failures": [
+    {
+      "kind": "evaluator",
+      "observation": "test_actual_effects_native_return_and_owned_cleanup_are_required failed against the stub before implementation; unit negatives retain fail-closed directions"
+    },
+    {
+      "kind": "qa_admission",
+      "observation": "real-process refusal assertion failed before the fixed debug+qa-service+nonce/endpoint script gate was implemented"
+    },
+    {
+      "kind": "native_fixture",
+      "raw": ".phase10-evidence/phase11-production-panel.3xoj_pn1/receipt.json",
+      "observation": "FAIL preserved, no native empty credential load or settings status"
+    },
+    {
+      "kind": "native_diagnostic",
+      "raw": ".phase10-evidence/phase11-production-panel.3xoj_pn1/diagnostic-receipt.json",
+      "observation": "FAIL preserved: actual WASM/composer and probe/ready succeeded; credential reply failed; no JS errors. This intermediate diagnostic binary was not separately archived; its recorded hash is retained, not treated as final-candidate identity."
+    },
+    {
+      "kind": "controlled_home_experiment",
+      "raw": [
+        ".phase10-evidence/phase11-production-panel.3xoj_pn1/existing_home.log",
+        ".phase10-evidence/phase11-production-panel.3xoj_pn1/isolated_home.log"
+      ],
+      "observation": "same real isolated-store test passed with the real login HOME and failed Unavailable with synthetic HOME; native runner now preserves HOME while isolating canonical service/data_dir/ALEPH_HOME"
+    },
+    {
+      "kind": "fixture_environment_test",
+      "observation": "test_native_environment_preserves_the_os_login_context observed synthetic HOME != original HOME before the fix"
+    },
+    {
+      "kind": "worker_handoff",
+      "raw": ".phase10-evidence/phase11-production-panel.3xoj_pn1/host-default-red.log",
+      "observation": "existing sequential credential test failed because completion was sent before the OS permit was released; both credential/status workers now finish the OS body, release the permit, then send the result"
+    }
+  ],
+  "review": {
+    "spec": "author review before the boundary; fixed observer never invokes native APIs or supplies RPC results",
+    "quality": "distinct author pass after SPEC: native source reviewed, real effects and asset identities checked, HOME experiment and result-publication ordering resolved",
+    "independent": "NOT PERFORMED; no child agent authorized or dispatched"
+  },
+  "gates": {
+    "P11-A": "OPEN",
+    "P11-B": "OPEN",
+    "P11-C": "OPEN",
+    "P11-D": "OPEN",
+    "P11-E": "OPEN",
+    "P11-F": "OPEN",
+    "P11-G": "OPEN",
+    "P11-H": "OPEN"
+  },
+  "limitations": [
+    "real macOS unbundled functional slice only",
+    "credentialless authorized connect is not protected identity, pairing or credential persistence",
+    "no TLS/remote or full/lite daemon lifecycle acceptance",
+    "OS body completion is not OS-thread join or all-helper census",
+    "no login-item setter/production login or service mutation",
+    "no Windows/Linux native parity, release performance or physical multi-display proof",
+    "no default switch, rollback rehearsal, real common 14-day dual operation or Tauri removal",
+    "no push, tag, release, signing trust/key/feed changes"
+  ]
+}

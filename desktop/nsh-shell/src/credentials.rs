@@ -134,8 +134,11 @@ impl CredentialService {
         if std::thread::Builder::new()
             .name("panel-credentials".to_owned())
             .spawn(move || {
-                let _permit = permit;
-                let _ = send.send(service.invoke_blocking(generation, call));
+                let reply = service.invoke_blocking(generation, call);
+                // The OS operation is finished. Publish its completion only
+                // after releasing admission for the receiver's next request.
+                drop(permit);
+                let _ = send.send(reply);
             })
             .is_err()
         {
@@ -433,7 +436,7 @@ mod tests {
     }
 
     #[test]
-    fn blocked_worker_rejects_overlap_and_keeps_its_permit_until_real_exit() {
+    fn blocked_worker_rejects_overlap_and_keeps_its_permit_until_store_completion() {
         let gate = Arc::new((Mutex::new(false), Condvar::new()));
         let store = Arc::new(MemoryStore {
             block_load: Some(gate.clone()),
@@ -470,6 +473,7 @@ mod tests {
                 error: CredentialError::Rejected
             }
         );
+        assert_eq!(service.0.worker.available_permits(), 1);
         assert!(matches!(
             block_on(service.invoke(service.generation(), CredentialCall::Load {})),
             CredentialReply::Loaded { .. }
