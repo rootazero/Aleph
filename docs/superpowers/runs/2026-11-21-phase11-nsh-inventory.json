@@ -1,6 +1,6 @@
 {
   "artifact": "phase11-nsh-inventory",
-  "version": "2026-11-22.16",
+  "version": "2026-11-22.17",
   "status": "FOUNDATION_IMPLEMENTED / P11-A-H_NOT_ACCEPTED",
   "authority": [
     "docs/superpowers/plans/2026-11-21-phase11-nsh-cutover.md",
@@ -763,6 +763,12 @@
     "effects": "real Panel ticket submission; Gateway-derived Alice identity; native save ACK; distinct-document reload with stored credential and no new ticket; native cleanup delete and final absence; independent helper pairing confirmation and listener/fixture shutdown",
     "limits": "no production account/store/service mutation, TLS/remote, cross-platform parity, performance/default/rollback/dual-track/removal claim",
     "failures_retained": "old binary RED; malformed cleanup load args and helper snake_case wire assumptions corrected in QA only; two orphaned QA items removed with exact nonce+account metadata-only OS cleanup and independently verified absent; not retroactive native cleanup proof"
+  },
+  "macos_external_gateway_quit_survival": {
+    "status": "PASS_SCOPED_EXTERNAL_GATEWAY_SURVIVES_QUIT / NOT_PHASE11_ACCEPTANCE",
+    "receipt": "docs/superpowers/runs/2026-11-22-phase11-nsh-quit-survival-receipt.json",
+    "effect": "An independently started real fixture Gateway keeps the same sole listener PID, instance ID, start time and version and remains ready across a natural native NSH return; only the fixture then shuts down its own Gateway.",
+    "limits": "QA external-target route on private loopback; not a tray click, production local admission or detached launch, explicit stop, recovery, target switching or native Windows/Linux proof."
   },
   "operations": {
     "foundation_commit": "9e48df355236585c4fa7d94e5098c12e445d9dab",

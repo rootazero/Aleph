@@ -3,7 +3,7 @@ import unittest
 
 from pathlib import Path
 
-from phase11_nsh_panel_status import evaluate, native_environment
+from phase11_nsh_panel_status import evaluate, gateway_sample, native_environment
 
 
 class PanelStatusAcceptance(unittest.TestCase):
@@ -37,6 +37,28 @@ class PanelStatusAcceptance(unittest.TestCase):
     def test_actual_effects_native_return_and_owned_cleanup_are_required(self):
         events, cleanup = self.valid()
         self.assertTrue(evaluate(events, 0, cleanup)["accepted"])
+
+    def test_quit_requires_the_same_ready_gateway_before_and_after(self):
+        events, cleanup = self.valid()
+        cleanup["children"][1]["pid"] = 42
+        sample = {"listener_pids": [42], "instance_id": "the-instance", "started_at_unix": 17,
+                  "version": "2026.11.22", "ready": True}
+        self.assertTrue(evaluate(events, 0, cleanup, gateway_survival=[sample, dict(sample)])["accepted"])
+        for key, value in [("listener_pids", [43]), ("listener_pids", [42, 43]),
+                           ("listener_pids", [True]), ("instance_id", "replacement"),
+                           ("started_at_unix", 18), ("version", "changed"), ("ready", 1)]:
+            for index in [0, 1]:
+                samples = [dict(sample), dict(sample)]
+                samples[index][key] = value
+                self.assertFalse(evaluate(events, 0, cleanup, gateway_survival=samples)["accepted"], (index, key, value))
+        for samples in [[], [sample], {}, 42, [None, sample], [sample, sample, sample]]:
+            self.assertFalse(evaluate(events, 0, cleanup, gateway_survival=samples)["accepted"])
+
+    def test_survival_probe_refuses_the_default_port_and_external_origins(self):
+        for url in ["http://127.0.0.1:18790/", "http://192.0.2.1:20001/",
+                    "http://qa@127.0.0.1:20001/", "https://127.0.0.1:20001/"]:
+            with self.subTest(url=url), self.assertRaises(ValueError):
+                gateway_sample(url)
 
     def test_every_effect_is_a_strict_boolean(self):
         events, cleanup = self.valid()

@@ -25,6 +25,8 @@ The receipt and its Gateway-output directory must be new. The fixture owns the p
 3. The visible component displays the canonical translated unavailable/read-only text, no checkbox, and actual `Unavailable(NotAppBundle)`, not false/disabled. The locale sources own the expected text.
 4. The host emits ordered fixture/close/native-return observations and exits zero. The served HTTP asset identities remain unchanged; the owned Gateway/provider are joined without forced kill and their private fixture is removed.
 
+For the opt-in external Gateway survival check, add `--verify-gateway-survival` and use a new receipt path. The runner samples the original fixture Gateway before host launch and after the native engine returns, before the fixture starts cleanup. Both samples must have the same sole listener PID and Gateway instance ID/start time/version, and both must be ready. The QA observer calls the same native `quit()` as the tray action; it does not click the tray menu. This does not exercise production local admission or detached launch. See [the scoped survival receipt](../docs/superpowers/runs/2026-11-22-phase11-nsh-quit-survival-receipt.json). / 可选验收确认同一服务在原生退出后仍就绪；不冒称托盘点击或本地分离启动。
+
 The observer's 45-second deadline records incomplete effects and closes; it does not convert a timeout into success. Native process timeout fails too. Diagnostics contain only fixed asset names, counters, error classes and booleans, never credentials or page text. / 超时保留失败；诊断不输出凭据、页面正文或拒绝 URL。
 
 ## Scope / 范围

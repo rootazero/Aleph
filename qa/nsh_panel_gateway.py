@@ -69,6 +69,8 @@ def isolated_gateway(binary, output, *, mid_turn_steering=True):
         port, provider_port = free_port(), free_port()
         while provider_port == port:
             provider_port = free_port()
+        if 18790 in (port, provider_port):
+            raise RuntimeError("fixture_must_not_use_default_gateway_port")
         (aleph / "config.toml").write_text(f'''[execution]
 mid_turn_steering = {str(mid_turn_steering).lower()}
 [general]

@@ -1,7 +1,7 @@
 # Phase11 NSH Cutover Contract / Phase11 NSH 切换契约
 
 **Status / 状态:** implemented foundation slices, NOT P11-A–H acceptance / 基础切片已实施，不是全期验收
-**Version / 版本:** `2026-11-22.16`
+**Version / 版本:** `2026-11-22.17`
 **Scope / 范围:** official platform entry selection, fixed credential transport and immutable launch targets / 官方平台入口选择、固定凭据传输与不可变启动目标
 
 ## 1. Authority and non-goals / 权威与不做事项
@@ -310,3 +310,9 @@ An owned macOS Gateway accepted TERM and closed its listener, but a process samp
 **SPEC:** keep one shared runtime lookup and version parser. Replace its synchronous locator and version subprocess waits with cancellable Tokio child I/O; preserve PATH, no-window behavior and status/version interpretation. Keep the warmup's existing overall per-probe 30-second deadline. Bound each command and cap captured streams; timeout explicitly terminates and waits for the direct child, while cancellation relies on Tokio kill-on-drop (not arbitrary descendants or an awaited reap on drop). No timeout change for the desktop or shutdown fixture. / 不新增守护器，不保证任意进程树回收。
 
 **QUALITY preflight:** test stdout/stderr preservation and a real owned subprocess that exceeds the deadline. Then rerun unchanged native shutdown acceptance against the rebuilt sibling. / 测真实子进程和原样退出验收，不放宽判据。
+
+## 23. External Gateway survival across native Quit / 原生退出不停止既有 Gateway
+
+**SPEC:** opt-in extension of the existing real-Panel status fixture. The fixture owns and starts a real Gateway first on private, non-default IPv4 loopback. Use the existing nonce-isolated QA endpoint and the fixed observer that invokes the same native `quit()` as the tray action, not an OS kill. Before launching the shell and after it has returned naturally, verify `/health`, `/ready`, and the sole listener PID; require the original fixture PID, identical Gateway instance ID/start time/version, readiness and unchanged assets. Only the fixture owner cleans up after the post-Quit sample. / 只扩展 QA；先有服务，后退出宿主；采样完成后由夹具清理。
+
+**QUALITY preflight:** fail on missing samples, wrong or additional listener PID, different process instance, not-ready responses, or failed native/fixture shutdown. No production startup profile, port override or stop behavior changes. This validates native Quit on the QA external-target route, not a tray click, canonical-local admission at port 18790, detached startup, restart recovery or target switching. / 保留生产路径，明确局部实测边界。
