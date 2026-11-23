@@ -21,12 +21,16 @@ enum Phase {
     Closed,
 }
 
+enum RequestProgress {
+    Waiting(oneshot::Sender<Reply>),
+    Abandoned,
+    Resolved,
+}
+
 struct Requests {
     phase: Phase,
     limit: usize,
-    // The reservation survives resolution until PendingCall drops. This also
-    // prevents a late drop from deleting a different reservation for the ID.
-    pending: HashMap<String, Option<oneshot::Sender<Reply>>>,
+    pending: HashMap<String, RequestProgress>,
 }
 
 pub(super) struct RequestState(Mutex<Requests>);
@@ -67,18 +71,29 @@ impl RequestState {
             return Err(CliError::Other("Duplicate in-flight request ID".into()));
         };
         let (sender, receiver) = oneshot::channel();
-        entry.insert(Some(sender));
+        entry.insert(RequestProgress::Waiting(sender));
         Ok(PendingCall {
             requests: self.clone(),
             id,
             receiver,
+            retain_on_drop: false,
         })
     }
 
     pub(super) fn resolve(&self, id: &str, result: Reply) {
         let mut requests = self.lock();
-        if let Some(sender) = requests.pending.get_mut(id).and_then(Option::take) {
-            let _ = sender.send(result);
+        match requests.pending.get_mut(id) {
+            Some(RequestProgress::Abandoned) => {
+                requests.pending.remove(id);
+            }
+            Some(progress @ RequestProgress::Waiting(_)) => {
+                if let RequestProgress::Waiting(sender) =
+                    std::mem::replace(progress, RequestProgress::Resolved)
+                {
+                    let _ = sender.send(result);
+                }
+            }
+            Some(RequestProgress::Resolved) | None => {}
         }
     }
 
@@ -123,9 +138,15 @@ pub(super) struct PendingCall {
     requests: Arc<RequestState>,
     id: String,
     receiver: oneshot::Receiver<Reply>,
+    retain_on_drop: bool,
 }
 
 impl PendingCall {
+    /// A sent request can still occupy a remote slot after the caller leaves.
+    pub(super) fn retain_until_reply(&mut self) {
+        self.retain_on_drop = true;
+    }
+
     pub(super) async fn wait(mut self, timeout: Duration) -> CliResult<Reply> {
         tokio::time::timeout(timeout, &mut self.receiver)
             .await
@@ -136,7 +157,15 @@ impl PendingCall {
 
 impl Drop for PendingCall {
     fn drop(&mut self) {
-        self.requests.lock().pending.remove(&self.id);
+        let mut requests = self.requests.lock();
+        if self.retain_on_drop {
+            if let Some(progress @ RequestProgress::Waiting(_)) = requests.pending.get_mut(&self.id)
+            {
+                *progress = RequestProgress::Abandoned;
+                return;
+            }
+        }
+        requests.pending.remove(&self.id);
     }
 }
 

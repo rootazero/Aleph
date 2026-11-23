@@ -1,6 +1,8 @@
 mod autostart;
 mod credentials;
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+mod ipc_status;
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 mod panel_bridge;
 mod platform;
 mod shell_host;
@@ -32,8 +34,18 @@ fn main() -> std::process::ExitCode {
         return std::process::ExitCode::FAILURE;
     };
     if args.as_slice() == ["--help"] {
-        println!("Usage: aleph-nsh-shell [--connect <origin> | --autostart-status]\n\nConnects to an existing Gateway; does not start, stop or reconfigure a service.\nUse HTTPS for a remote origin. No target or credential URL is persisted.\n--autostart-status reads the current app login item without changing it.");
+        println!("Usage: aleph-nsh-shell [--connect <origin> | --autostart-status | --desktop-ipc-status <socket>]\n\nConnects to an existing Gateway; does not start, stop or reconfigure a service.\nUse HTTPS for a remote origin. No target or credential URL is persisted.\n--autostart-status reads the current app login item without changing it.\n--desktop-ipc-status reads health over Unix IPC from an already-running Gateway, without opening the Panel or falling back to WebSocket.");
         return std::process::ExitCode::SUCCESS;
+    }
+    if args.iter().any(|arg| arg == ipc_status::FLAG) {
+        let qa = [
+            "ALEPH_NSH_QA_URL",
+            "ALEPH_NSH_QA_NONCE",
+            "ALEPH_PANEL_QA_STATUS",
+        ]
+        .iter()
+        .any(|name| std::env::var_os(name).is_some());
+        return ipc_status::run(&args, qa);
     }
     let qa = ["ALEPH_NSH_QA_URL", "ALEPH_NSH_QA_NONCE"].map(|name| {
         std::env::var_os(name)

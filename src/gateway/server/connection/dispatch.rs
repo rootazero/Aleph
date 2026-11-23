@@ -123,8 +123,25 @@ pub(super) struct DispatchPeer {
     pub(super) connections: Arc<ConnectionTable>,
     pub(super) conn_id: String,
     legacy_loopback: bool,
-    #[cfg(test)]
-    bound: Option<CallerSnapshot>,
+    #[cfg(any(unix, test))]
+    bound: Option<BoundPeer>,
+}
+
+#[cfg(any(unix, test))]
+#[derive(Clone)]
+struct BoundPeer {
+    expected: CallerSnapshot,
+    #[cfg(unix)]
+    owner_store: Option<Arc<crate::gateway::security::SecurityStore>>,
+}
+
+#[cfg(unix)]
+pub(super) fn active_desktop_owner(
+    store: &crate::gateway::security::SecurityStore,
+) -> Option<&'static str> {
+    use crate::gateway::security::store::{UserStatus, OWNER_USER_ID};
+    let owner = store.get_user(OWNER_USER_ID).ok()??;
+    (owner.status == UserStatus::Active).then(|| owner.role.wire_role())
 }
 
 impl DispatchPeer {
@@ -137,12 +154,32 @@ impl DispatchPeer {
             connections,
             conn_id,
             legacy_loopback,
-            #[cfg(test)]
+            #[cfg(any(unix, test))]
             bound: None,
         }
     }
 
-    // No production listener creates a pre-bound peer in S1-A.
+    #[cfg(unix)]
+    pub(super) fn desktop(
+        connections: Arc<ConnectionTable>,
+        conn_id: String,
+        owner_store: Arc<crate::gateway::security::SecurityStore>,
+    ) -> Self {
+        Self {
+            bound: Some(BoundPeer {
+                expected: CallerSnapshot {
+                    role: None,
+                    user: Some(crate::gateway::security::store::OWNER_USER_ID.to_owned()),
+                    verified_user: None,
+                    device_id: None,
+                },
+                owner_store: Some(owner_store),
+            }),
+            ..Self::legacy(connections, conn_id, false)
+        }
+    }
+
+    // Test fixture for a generic established peer, not an IPC admission path.
     #[cfg(test)]
     pub(super) fn bound(
         connections: Arc<ConnectionTable>,
@@ -150,12 +187,16 @@ impl DispatchPeer {
         expected: CallerSnapshot,
     ) -> Self {
         Self {
-            bound: Some(expected),
+            bound: Some(BoundPeer {
+                expected,
+                #[cfg(unix)]
+                owner_store: None,
+            }),
             ..Self::legacy(connections, conn_id, false)
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(unix, test))]
     pub(super) async fn snapshot(&self) -> Option<CallerSnapshot> {
         self.view().snapshot().await
     }
@@ -165,7 +206,7 @@ impl DispatchPeer {
             connections: &self.connections,
             conn_id: &self.conn_id,
             legacy_loopback: self.legacy_loopback,
-            #[cfg(test)]
+            #[cfg(any(unix, test))]
             bound: self.bound.as_ref(),
         }
     }
@@ -175,8 +216,8 @@ struct PeerView<'a> {
     connections: &'a ConnectionTable,
     conn_id: &'a str,
     legacy_loopback: bool,
-    #[cfg(test)]
-    bound: Option<&'a CallerSnapshot>,
+    #[cfg(any(unix, test))]
+    bound: Option<&'a BoundPeer>,
 }
 
 impl<'a> PeerView<'a> {
@@ -185,30 +226,45 @@ impl<'a> PeerView<'a> {
             connections,
             conn_id,
             legacy_loopback,
-            #[cfg(test)]
+            #[cfg(any(unix, test))]
             bound: None,
         }
     }
 
     async fn snapshot(&self) -> Option<CallerSnapshot> {
-        #[cfg(test)]
-        if let Some(expected) = self.bound {
-            let table = self.connections.read().await;
-            let state = table.get(self.conn_id)?;
-            if state.first_message || !matches!(state.caller_role.as_str(), "member" | "operator") {
-                return None;
-            }
-            let live = CallerSnapshot::from_state(state);
+        #[cfg(any(unix, test))]
+        if let Some(bound) = self.bound {
+            let live = {
+                let table = self.connections.read().await;
+                let state = table.get(self.conn_id)?;
+                if state.first_message
+                    || !matches!(state.caller_role.as_str(), "member" | "operator")
+                {
+                    return None;
+                }
+                CallerSnapshot::from_state(state)
+            };
             // Role remains live for the existing admin gate. The bound user,
             // verified user and device cannot drift within a connection.
-            return (live
+            if !live
                 .user
                 .as_deref()
                 .is_some_and(|user| !user.trim().is_empty())
-                && live.user == expected.user
-                && live.verified_user == expected.verified_user
-                && live.device_id == expected.device_id)
-                .then_some(live);
+                || live.user != bound.expected.user
+                || live.verified_user != bound.expected.verified_user
+                || live.device_id != bound.expected.device_id
+            {
+                return None;
+            }
+            #[cfg(unix)]
+            if let Some(store) = &bound.owner_store {
+                let role = active_desktop_owner(store)?;
+                return Some(CallerSnapshot {
+                    role: Some(role.to_owned()),
+                    ..live
+                });
+            }
+            return Some(live);
         }
         Some(CallerSnapshot::read(self.connections, self.conn_id, self.legacy_loopback).await)
     }

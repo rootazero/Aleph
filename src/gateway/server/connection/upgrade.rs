@@ -189,34 +189,7 @@ pub async fn ws_upgrade_handler(
     };
 
     ws.on_upgrade(move |socket: WebSocket| async move {
-        let ctx = ConnectionContext {
-            // Shared chain built once at server construction (cloning shares the
-            // global request-state registry instead of resetting it per connect).
-            middleware_chain: state.middleware_chain.clone(),
-            event_bus: state.event_bus.clone(),
-            connections: state.connections.clone(),
-            subscription_manager: state.subscription_manager.clone(),
-            presence: state.presence.clone(),
-            state_versions: state.state_versions.clone(),
-            rate_limiter: state.rate_limiter.clone(),
-            lane_manager: state.lane_manager.clone(),
-            idempotency_guard: state.idempotency_guard.clone(),
-            event_scope_guard: state.event_scope_guard.clone(),
-            channel_class,
-            ping_interval_secs: state.ping_interval_secs,
-            idle_timeout_secs: state.idle_timeout_secs,
-            require_idempotency_key: state.require_idempotency_key,
-            security_store: state.security_store.clone(),
-            device_token_mgr: state.device_token_mgr.clone(),
-            client_ip,
-            client_is_local,
-            node_registry: state.node_registry.clone(),
-            exec_approval_manager: state.exec_approval_manager.clone(),
-            audit_log: state.audit_log.clone(),
-            session_store: state.session_store.clone(),
-            team_store: state.team_store.clone(),
-            event_visibility: state.event_visibility.clone(),
-        };
+        let ctx = ConnectionContext::from_shared(&state, channel_class, client_ip, client_is_local);
         if let Err(e) = handle_connection(socket, peer_addr, ctx).await {
             error!("Connection error from {}: {}", peer_addr, e);
         }

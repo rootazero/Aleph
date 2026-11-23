@@ -88,6 +88,8 @@ pub mod auth;
 pub mod cleanup;
 pub mod dispatch;
 pub mod forward;
+#[cfg(unix)]
+pub(super) mod local_ipc;
 pub mod off_loop;
 mod rpc;
 pub mod upgrade;
@@ -230,6 +232,42 @@ pub struct ConnectionContext {
     /// Process-shared run→session / session→owner cache backing the filter.
     /// See `crate::gateway::event_visibility`.
     event_visibility: Arc<crate::gateway::event_visibility::EventVisibilityIndex>,
+}
+
+impl ConnectionContext {
+    fn from_shared(
+        state: &super::GatewaySharedState,
+        channel_class: ChannelClass,
+        client_ip: IpAddr,
+        client_is_local: bool,
+    ) -> Self {
+        Self {
+            middleware_chain: state.middleware_chain.clone(),
+            event_bus: state.event_bus.clone(),
+            connections: state.connections.clone(),
+            subscription_manager: state.subscription_manager.clone(),
+            presence: state.presence.clone(),
+            state_versions: state.state_versions.clone(),
+            rate_limiter: state.rate_limiter.clone(),
+            lane_manager: state.lane_manager.clone(),
+            idempotency_guard: state.idempotency_guard.clone(),
+            event_scope_guard: state.event_scope_guard.clone(),
+            channel_class,
+            ping_interval_secs: state.ping_interval_secs,
+            idle_timeout_secs: state.idle_timeout_secs,
+            require_idempotency_key: state.require_idempotency_key,
+            security_store: state.security_store.clone(),
+            device_token_mgr: state.device_token_mgr.clone(),
+            client_ip,
+            client_is_local,
+            node_registry: state.node_registry.clone(),
+            exec_approval_manager: state.exec_approval_manager.clone(),
+            audit_log: state.audit_log.clone(),
+            session_store: state.session_store.clone(),
+            team_store: state.team_store.clone(),
+            event_visibility: state.event_visibility.clone(),
+        }
+    }
 }
 
 pub async fn handle_connection(

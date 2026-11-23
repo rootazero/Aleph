@@ -8,6 +8,8 @@ use aleph_protocol::framing::{
 use serde::de::{DeserializeSeed, Error, MapAccess, SeqAccess, Visitor};
 use serde_json::{Map, Value};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+#[cfg(unix)]
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 pub const MAX_FRAME_BYTES: u32 = DEFAULT_MAX_PAYLOAD_BYTES;
 pub const MAX_INFLIGHT: u32 = 8;
@@ -20,16 +22,44 @@ const MAX_STRING_BYTES: usize = 65_536;
 /// EOF before a new header is clean; EOF within a frame is an error.
 /// If cancelled, discard the stream rather than restarting at a partial frame.
 pub async fn read_frame(reader: &mut (impl AsyncRead + Unpin)) -> io::Result<Option<String>> {
+    let Some(len) = read_frame_length(reader).await? else {
+        return Ok(None);
+    };
+    read_body(reader, len).await.map(Some)
+}
+
+/// Reserve wire bytes after validating the header and before allocating the body.
+#[cfg(unix)]
+pub async fn read_frame_budgeted(
+    reader: &mut (impl AsyncRead + Unpin),
+    budget: &std::sync::Arc<Semaphore>,
+) -> io::Result<Option<(String, OwnedSemaphorePermit)>> {
+    let Some(len) = read_frame_length(reader).await? else {
+        return Ok(None);
+    };
+    let permit = budget
+        .clone()
+        .acquire_many_owned(len)
+        .await
+        .map_err(invalid_data)?;
+    Ok(Some((read_body(reader, len).await?, permit)))
+}
+
+async fn read_frame_length(reader: &mut (impl AsyncRead + Unpin)) -> io::Result<Option<u32>> {
     let mut header = [0; HEADER_BYTES];
     if reader.read(&mut header[..1]).await? == 0 {
         return Ok(None);
     }
     reader.read_exact(&mut header[1..]).await?;
-    let len = decode_header(header, MAX_FRAME_BYTES)
-        .map_err(|_| invalid_data("invalid IPC frame length"))?;
+    decode_header(header, MAX_FRAME_BYTES)
+        .map(Some)
+        .map_err(|_| invalid_data("invalid IPC frame length"))
+}
+
+async fn read_body(reader: &mut (impl AsyncRead + Unpin), len: u32) -> io::Result<String> {
     let mut body = vec![0; len as usize];
     reader.read_exact(&mut body).await?;
-    String::from_utf8(body).map(Some).map_err(invalid_data)
+    String::from_utf8(body).map_err(invalid_data)
 }
 
 /// If cancelled, discard the stream rather than writing behind a partial frame.
@@ -136,7 +166,7 @@ pub mod unix {
     use std::{
         fs,
         os::unix::fs::{FileTypeExt, MetadataExt},
-        path::Path,
+        path::{Path, PathBuf},
     };
 
     use tokio::net::UnixStream;
@@ -159,15 +189,12 @@ pub mod unix {
     }
 
     pub async fn connect(endpoint: &Path) -> io::Result<UnixStream> {
-        private_parent(endpoint)?;
-        let socket = fs::symlink_metadata(endpoint)?;
-        if !socket.file_type().is_socket()
-            || socket.uid() != effective_uid()
-            || socket.mode() & 0o7777 != 0o600
-        {
+        let endpoint = private_endpoint(endpoint)?;
+        let socket = fs::symlink_metadata(&endpoint)?;
+        if !socket.file_type().is_socket() || socket.uid() != effective_uid() {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
-                "IPC endpoint is not an owned mode-0600 socket",
+                "IPC endpoint is not an owned socket",
             ));
         }
         let stream = UnixStream::connect(endpoint).await?;
@@ -175,25 +202,49 @@ pub mod unix {
         Ok(stream)
     }
 
-    pub fn private_parent(endpoint: &Path) -> io::Result<fs::Metadata> {
-        if !endpoint.is_absolute() || endpoint.file_name().is_none() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "IPC endpoint must be an absolute socket path",
-            ));
-        }
+    pub fn private_endpoint(endpoint: &Path) -> io::Result<PathBuf> {
+        let name = endpoint
+            .file_name()
+            .filter(|_| endpoint.is_absolute())
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "IPC endpoint must be an absolute socket path",
+                )
+            })?;
         let parent = endpoint.parent().ok_or(io::ErrorKind::InvalidInput)?;
+        let uid = effective_uid();
         let metadata = fs::symlink_metadata(parent)?;
-        if !metadata.is_dir()
-            || metadata.uid() != effective_uid()
-            || metadata.mode() & 0o7777 != 0o700
-        {
+        if !metadata.is_dir() || metadata.uid() != uid || metadata.mode() & 0o7777 != 0o700 {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 "IPC endpoint requires an owned mode-0700 parent",
             ));
         }
-        Ok(metadata)
+        let canonical = fs::canonicalize(parent)?;
+        if !fs::symlink_metadata(&canonical)
+            .is_ok_and(|live| live.dev() == metadata.dev() && live.ino() == metadata.ino())
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "IPC parent changed",
+            ));
+        }
+        // Use the checked path, not a caller-provided ancestor alias. A root-owned
+        // sticky directory (e.g. /private/tmp) can contain an owned private dir.
+        for ancestor in canonical.ancestors().skip(1) {
+            let entry = fs::symlink_metadata(ancestor)?;
+            let trusted_owner = entry.uid() == 0 || entry.uid() == uid;
+            let root_sticky = entry.uid() == 0 && entry.mode() & 0o1000 != 0;
+            let writable_by_others = entry.mode() & 0o022 != 0;
+            if !entry.is_dir() || !trusted_owner || (writable_by_others && !root_sticky) {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "IPC parent has an untrusted ancestor",
+                ));
+            }
+        }
+        Ok(canonical.join(name))
     }
 }
 
@@ -263,15 +314,15 @@ mod tests {
         use crate::{AlephClient, CliConfig, CliError};
         use aleph_protocol::{JsonRpcRequest, JsonRpcResponse};
         use serde_json::json;
-        use std::os::unix::fs::PermissionsExt;
+        use std::{os::unix::fs::PermissionsExt, time::Duration};
         use tokio::{net::UnixListener, sync::oneshot, time::timeout};
 
         let dir = tempfile::tempdir_in("/tmp").unwrap();
         std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         let endpoint = dir.path().join("ipc");
         let listener = UnixListener::bind(&endpoint).unwrap();
-        std::fs::set_permissions(&endpoint, std::fs::Permissions::from_mode(0o600)).unwrap();
         let (received, observed) = oneshot::channel();
+        let (release, released) = oneshot::channel();
         let peer = async {
             let (mut stream, _) = listener.accept().await.unwrap();
             unix::require_same_user(&stream).unwrap();
@@ -302,7 +353,20 @@ mod tests {
                     .await
                     .unwrap();
             }
-            assert!(read_frame(&mut stream).await.unwrap().is_some());
+            let expired_one: JsonRpcRequest =
+                serde_json::from_str(&read_frame(&mut stream).await.unwrap().unwrap()).unwrap();
+            let expired_two: JsonRpcRequest =
+                serde_json::from_str(&read_frame(&mut stream).await.unwrap().unwrap()).unwrap();
+            assert_eq!(expired_one.method, "expire-one");
+            assert_eq!(expired_two.method, "expire-two");
+            released.await.unwrap();
+            let response = JsonRpcResponse::success(expired_one.id.unwrap(), json!(false));
+            write_frame(&mut stream, &serde_json::to_string(&response).unwrap())
+                .await
+                .unwrap();
+            let unanswered: JsonRpcRequest =
+                serde_json::from_str(&read_frame(&mut stream).await.unwrap().unwrap()).unwrap();
+            assert_eq!(unanswered.method, "unanswered");
             received.send(()).unwrap();
             assert_eq!(read_frame(&mut stream).await.unwrap(), None);
         };
@@ -320,11 +384,35 @@ mod tests {
             assert_eq!(first.unwrap(), "first");
             assert_eq!(second.unwrap(), "second");
             assert!(client.reconnect(&CliConfig::default()).await.is_err());
-            let (unanswered, closed) =
-                tokio::join!(client.call::<(), Value>("unanswered", None), async {
-                    observed.await.unwrap();
-                    client.close().await
-                });
+            for method in ["expire-one", "expire-two"] {
+                assert!(matches!(
+                    client
+                        .call_with_timeout::<(), Value>(method, None, Duration::ZERO)
+                        .await,
+                    Err(CliError::Timeout(_))
+                ));
+            }
+            assert!(matches!(
+                client.call_with_timeout::<(), Value>("over-limit", None, Duration::ZERO).await,
+                Err(CliError::Other(message)) if message == "In-flight request limit reached"
+            ));
+            release.send(()).unwrap();
+            let call = async {
+                loop {
+                    match client.call::<(), Value>("unanswered", None).await {
+                        Err(CliError::Other(message))
+                            if message == "In-flight request limit reached" =>
+                        {
+                            tokio::task::yield_now().await;
+                        }
+                        result => break result,
+                    }
+                }
+            };
+            let (unanswered, closed) = tokio::join!(call, async {
+                observed.await.unwrap();
+                client.close().await
+            });
             closed.unwrap();
             assert!(matches!(unanswered, Err(CliError::Disconnected(_))));
         };

@@ -68,6 +68,14 @@ use cli::{Args, Command, PluginAction, PluginsAction};
 /// `main()` and then build the tokio runtime manually.
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = Args::parse();
+    if args.desktop_ipc.is_some() {
+        if !cfg!(unix) {
+            return Err("Desktop IPC is unavailable on this platform".into());
+        }
+        if !matches!(args.command, Some(Command::Start) | None) {
+            return Err("--desktop-ipc is only available when starting the Gateway".into());
+        }
+    }
 
     // `--config <path>` has to pin the config file for the WHOLE process, not
     // just for the gateway loader that is handed the flag. Do it here, before

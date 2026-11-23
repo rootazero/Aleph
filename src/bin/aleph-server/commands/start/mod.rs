@@ -4046,7 +4046,9 @@ async fn start_server_body(
     );
 
     let shutdown_rx = setup_graceful_shutdown(args);
-    let run_result = server.run_until_shutdown(shutdown_rx).await;
+    let run_result = server
+        .run_with_desktop_ipc(shutdown_rx, args.desktop_ipc.as_deref())
+        .await;
     if let Some(handle) = webchat_handle {
         handle.abort();
         if let Err(e) = handle.await {

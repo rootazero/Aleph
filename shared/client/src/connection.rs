@@ -78,6 +78,7 @@ impl SocketWriter {
 struct Socket {
     write: Mutex<Option<SocketWriter>>,
     requests: Arc<RequestState>,
+    retain_sent_requests: bool,
     stop_io: watch::Sender<bool>,
 }
 
@@ -91,9 +92,15 @@ impl Socket {
     }
 
     fn new(write: SocketWriter) -> Arc<Self> {
+        let retain_sent_requests = match &write {
+            SocketWriter::WebSocket(_) => false,
+            #[cfg(unix)]
+            SocketWriter::Local(_) => true,
+        };
         Arc::new(Self {
             write: Mutex::new(Some(write)),
             requests: Arc::new(RequestState::new()),
+            retain_sent_requests,
             stop_io: watch::channel(false).0,
         })
     }
@@ -900,8 +907,11 @@ impl AlephClient {
         // `device_token` / `bootstrap_ticket`. Method + id + size suffice.
         debug!(method = %method, id = %id, bytes = json.len(), "Sending request");
 
-        let pending = socket.requests.reserve(id, during_handshake)?;
+        let mut pending = socket.requests.reserve(id, during_handshake)?;
         socket.send_text(json).await?;
+        if socket.retain_sent_requests {
+            pending.retain_until_reply();
+        }
         // Disconnect after sending has unknown business outcome. Do not resend.
         let result = pending.wait(timeout).await?;
 

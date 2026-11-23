@@ -19,6 +19,22 @@ use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS};
 /// On success, returns a compatible version and the intersection of
 /// requested and implemented features.
 pub async fn handle(request: JsonRpcRequest) -> JsonRpcResponse {
+    negotiate(
+        request,
+        format!("conn-{}", Uuid::new_v4()),
+        // Legacy wire hints, not enforced transport limits.
+        HelloLimits {
+            max_message_bytes: 8_388_608,
+            max_inflight_requests: 128,
+        },
+    )
+}
+
+pub(crate) fn negotiate(
+    request: JsonRpcRequest,
+    connection_id: String,
+    limits: HelloLimits,
+) -> JsonRpcResponse {
     let params: HelloParams = match request.params.clone() {
         Some(p) => match serde_json::from_value(p) {
             Ok(v) => v,
@@ -51,13 +67,9 @@ pub async fn handle(request: JsonRpcRequest) -> JsonRpcResponse {
             name: "aleph-server".to_string(),
             version: env!("ALEPH_VERSION").to_string(),
         },
-        connection_id: format!("conn-{}", Uuid::new_v4()),
+        connection_id,
         features: negotiate_features(&params.features, &[]),
-        // Retained for legacy wire compatibility, not enforced transport limits.
-        limits: HelloLimits {
-            max_message_bytes: 8_388_608,
-            max_inflight_requests: 128,
-        },
+        limits,
     };
 
     let result_value = match serde_json::to_value(&result) {

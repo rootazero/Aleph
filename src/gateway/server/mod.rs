@@ -957,6 +957,10 @@ impl GatewayServer {
     /// Build a unified axum Router with WebSocket + `ControlPlane` UI routes.
     /// WebSocket connections are handled at `/ws`, everything else serves the Panel UI.
     pub fn build_router(&self) -> Router {
+        self.router_from_shared(self.build_shared_state())
+    }
+
+    fn build_shared_state(&self) -> Arc<GatewaySharedState> {
         // Build the middleware chain ONCE here (cloned per connection) rather
         // than per-connection, so the global request-state registry is
         // installed a single time and its counters accumulate across
@@ -992,7 +996,7 @@ impl GatewayServer {
             }
         }
 
-        let shared = Arc::new(GatewaySharedState {
+        Arc::new(GatewaySharedState {
             handlers: self.handlers.clone(),
             event_bus: self.event_bus.clone(),
             connections: self.connections.clone(),
@@ -1032,8 +1036,10 @@ impl GatewayServer {
             session_store: self.session_store.clone(),
             team_store: self.team_store.clone(),
             event_visibility: self.event_visibility.clone(),
-        });
+        })
+    }
 
+    fn router_from_shared(&self, shared: Arc<GatewaySharedState>) -> Router {
         // Strip query strings from the Panel/control-plane fallback before any
         // static-file or SPA handler sees the request. This prevents bootstrap
         // tickets, legacy tokens, or device tokens from appearing in server logs
@@ -1402,6 +1408,69 @@ impl GatewayServer {
         Ok(())
     }
 
+    /// Serve the existing network routes and an explicitly enabled, read-only local endpoint.
+    pub async fn run_with_desktop_ipc(
+        &self,
+        mut shutdown: tokio::sync::oneshot::Receiver<()>,
+        endpoint: Option<&std::path::Path>,
+    ) -> Result<(), GatewayError> {
+        let Some(endpoint) = endpoint else {
+            return self.run_until_shutdown(shutdown).await;
+        };
+        #[cfg(not(unix))]
+        {
+            let _ = (endpoint, &mut shutdown);
+            Err(GatewayError::ConnectionError(
+                "Desktop IPC is unavailable on this platform".into(),
+            ))
+        }
+        #[cfg(unix)]
+        {
+            use connection::local_ipc;
+            self.check_network_exposure()?;
+            let endpoint = local_ipc::bind(endpoint).map_err(|error| {
+                GatewayError::ConnectionError(format!("Desktop IPC bind failed: {error}"))
+            })?;
+            let state = self.build_shared_state();
+            let router = self.router_from_shared(state.clone());
+            self.spawn_background_tasks();
+
+            let stop = tokio_util::sync::CancellationToken::new();
+            let (stop_network, network_shutdown) = tokio::sync::oneshot::channel();
+            let network = self.run_network(router, network_shutdown);
+            // The local task owns admitted peers through cleanup. Dropping this
+            // future signals shutdown rather than aborting their cleanup futures.
+            let _stop_on_drop = stop.clone().drop_guard();
+            let mut local = tokio::spawn(local_ipc::serve(endpoint, state, stop.clone()));
+            tokio::pin!(network);
+            let (network_result, local_result) = tokio::select! {
+                _ = &mut shutdown => {
+                    stop.cancel();
+                    let _ = stop_network.send(());
+                    tokio::join!(network, local)
+                }
+                result = &mut network => {
+                    stop.cancel();
+                    (result, local.await)
+                }
+                result = &mut local => {
+                    let _ = stop_network.send(());
+                    (network.await, result)
+                }
+            };
+            network_result.and(
+                local_result
+                    .map_err(std::io::Error::other)
+                    .and_then(|result| result)
+                    .map_err(|error| {
+                        GatewayError::ConnectionError(format!(
+                            "Desktop IPC listener failed: {error}"
+                        ))
+                    }),
+            )
+        }
+    }
+
     /// Run the server with graceful shutdown support
     pub async fn run_until_shutdown(
         &self,
@@ -1410,7 +1479,14 @@ impl GatewayServer {
         self.spawn_background_tasks();
         let router = self.build_router();
         self.check_network_exposure()?;
+        self.run_network(router, shutdown).await
+    }
 
+    async fn run_network(
+        &self,
+        router: Router,
+        shutdown: tokio::sync::oneshot::Receiver<()>,
+    ) -> Result<(), GatewayError> {
         // Native TLS tiers terminate in-process via axum-server's own listener;
         // plaintext binds its own listener below and stays on axum::serve. The
         // bind is deliberately *not* hoisted above this branch — axum-server

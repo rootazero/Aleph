@@ -47,6 +47,12 @@ pub struct Args {
     #[arg(long)]
     pub port: Option<u16>,
 
+    /// Opt in to read-only Desktop IPC at a fresh absolute Unix socket path in an owned 0700 directory
+    ///
+    /// The caller manages the directory. The server leaves the socket entry after exit.
+    #[arg(long, value_name = "SOCKET_PATH")]
+    pub desktop_ipc: Option<PathBuf>,
+
     /// Force start even if port appears to be in use
     #[arg(long)]
     pub force: bool,
@@ -609,6 +615,18 @@ mod tests {
         ] {
             assert_eq!(parse(argv).bundled_content_only, expected);
         }
+    }
+
+    #[test]
+    fn desktop_ipc_is_explicitly_opt_in() {
+        assert!(parse(&["aleph-server", "start"]).desktop_ipc.is_none());
+        let args = parse(&[
+            "aleph-server",
+            "--desktop-ipc",
+            "/tmp/gateway.sock",
+            "start",
+        ]);
+        assert_eq!(args.desktop_ipc, Some(PathBuf::from("/tmp/gateway.sock")));
     }
 
     #[test]
