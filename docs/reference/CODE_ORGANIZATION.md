@@ -380,14 +380,14 @@ Reclassified as declared leftovers (see §6): `start/mod.rs` (4067), `extension/
 | `src/memory/note_retrieval/mod.rs` | 1808 → 81 | 880-line inherent impl + 875 lines of inline tests | Pattern A + `tests.rs` | ✅ 2026-08-23 |
 | `src/memory/store/sqlite/notes/store_impl.rs` | 2571 | One `impl NoteStore` block, 53 methods | **Blocked (declared leftover §6)** | ❌→§6 |
 | `src/browser/mod.rs` | 244 (post-split) | Two unrelated classes: `BrowserService` + `BrowserPool` | Pattern A + `pool.rs` | ✅ prior round |
-| `src/gateway/execution_engine.rs` | 1088 → 40 files | Two engine implementations, state models mixed in | Pattern A + `types.rs` | ✅ prior round |
+| `src/gateway/server/mod.rs` | 1088 → 40 files | Two engine implementations, state models mixed in | Pattern A + `types.rs` | ✅ prior round |
 | `src/gateway/handlers/agent.rs` | 3657 | 1300 production + 2357 tests; tests stay whole | Pattern A (→ declared leftover §6) | ❌→§6 |
 
 ### P2 — Medium (可优化)
 
 | File | Lines | Problem | Pattern | Status |
 |------|-------|---------|---------|--------|
-| `src/tools/server.rs` | (renamed/removed) | `AlephToolServer` and `AlephToolServerHandle` mirror each other | Use `Deref` or macro delegation | ✅ prior round |
+| `src/tools/server/mod.rs` | (renamed/removed) | `AlephToolServer` and `AlephToolServerHandle` mirror each other | Use `Deref` or macro delegation | ✅ prior round |
 | `src/extension/hooks/mod.rs` | 1278 | Partial decomposition (→ declared leftover §6) | Pattern C | ❌→§6 |
 | `src/builtin_tools/workflow_tool.rs` | 5100 | 6 DTO + 4 impl + PhaseTally + main | Pattern A | ✅ Round 1 (commit `ab617384b`) |
 | `src/gateway/session_projector.rs` | 3359 | 3 struct + 4 impl + main | Pattern A | ✅ Round 1 (commit `3a9c882ae`) |
@@ -397,8 +397,8 @@ Reclassified as declared leftovers (see §6): `start/mod.rs` (4067), `extension/
 | File | Lines | Problem | Pattern | Status |
 |------|-------|---------|---------|--------|
 | `src/thinker/prompt_builder/` | ~1200 → 1570 | `Message`/`MessageRole` belong in `types.rs` | Extract `types.rs` | partially done |
-| `src/dispatcher/types/unified.rs` | (renamed/removed) | 28 `with_*` builder methods bloating `impl UnifiedTool` | Extract `UnifiedToolBuilder` | ✅ prior round |
-| `src/providers/profile_manager.rs` | (renamed/removed) | Review for separation of auth vs. profile concerns | TBD after review | ✅ prior round |
+| `(removed; dispatcher unified into src/gateway/)` | (renamed/removed) | 28 `with_*` builder methods bloating `impl UnifiedTool` | Extract `UnifiedToolBuilder` | ✅ prior round |
+| `(removed; provider management is now src/config/types/provider.rs)` | (renamed/removed) | Review for separation of auth vs. profile concerns | TBD after review | ✅ prior round |
 
 ---
 

@@ -154,7 +154,7 @@ sensitive = true
 > adapter 里 `if let Some(ref tools) = manifest.tools_v2` 那两条分支不可达，
 > `validation.rs` 的 config-schema 检查与 UI-hint 报告全部空转，
 > `loader.rs::register_memory_extension_if_declared` 从不触发。内置的
-> `plugins/memory-analytics` 从 WASM 导出 `memory_stats` / `memory_timeline`
+> plugins/memory-analytics (example, not actual file) 从 WASM 导出 `memory_stats` / `memory_timeline`
 > 却带着 `.claude-plugin/plugin.toml`，整个工具面因此不可达。
 > Claude Code 会忽略未知顶层键，所以带超集的 manifest 在两个宿主里都能加载。
 
@@ -264,7 +264,7 @@ Runtime 与 **origin** 是两个轴。origin（`PluginOrigin`）多了一个值�
 - 跨 marketplace 同名：`name@marketplace` 区分
 
 **实现：** 命名空间是**按面各自解析**的，没有统一的 `ComponentId` 类型——
-此前本文档点名的 `src/extension/component_id.rs` 从未存在。真实锚点：
+此前本文档点名的 `src/extension/types/mod.rs` 从未存在。真实锚点：
 工具走 `ExtensionManager::resolve_active_plugin_tool`（接受短名或 `plugin_id:name`），
 skills/commands 走 `SkillRegistration` 的 `skill_type` 分流，
 MCP server id 由 `mcp_config.rs` 组成 `plugin:<id>/<server>`。
@@ -411,7 +411,7 @@ version = "0.1.0"
 | `agent-level` | `~/.aleph/agents/<id>/plugins/` | `Global` |
 | `local` | `<project>/.aleph/plugins.local/` | `Project(root)` |
 | `project` | `<project>/.aleph/plugins/`、`<project>/.claude/` | `Project(root)` |
-| `user` | `~/.aleph/plugins/installed/` | `Global` |
+| `user` | `~/.aleph/(relocated to ~/.aleph/extensions/)` | `Global` |
 | `claude-cache` | `~/.claude/plugins/cache/…`（只读） | `Global` |
 | `bundled` | 编译期嵌入 | `Global` |
 
@@ -454,7 +454,7 @@ al plugin list
 
 | CC 组件 | Aleph 支持 | 说明 |
 |---------|-----------|------|
-| `skills/*/SKILL.md` | ✅ 完全支持 | 通过 SkillSystem 加载 |
+| skills/*/SKILL.md (pattern) | ✅ 完全支持 | 通过 SkillSystem 加载 |
 | `agents/*.md` | ✅ 完全支持 | frontmatter → `AgentDef`，**正文 → `AgentDef.system_prompt`**（2026-09-20 起；此前正文丢弃）。`permissionMode` **解析但不应用**（见下方 DEVIATION 3）；`color` 忽略 |
 | `commands/*.md` | ✅ 完全支持 | slash 条目随 mount/unmount 注册/撤销；`/cmd args` 时**正文经 `SkillTemplate` 展开后注入本轮**（`$ARGUMENTS` / `$1..$N` / `${N:-d}` / `@file` 经沙箱读 / `` !`cmd` `` 经 shell 同意闸）——展开后的正文**瞬时投递**，转录里持久化的是原始 `/cmd args`（U-c）。`argument-hint` 进列表；`allowed-tools` 作本轮静态 retain；`model` 走请求级 pin；`disable-model-invocation` 只留人类入口 |
 | `hooks/hooks.json` `timeout` | ⚠️ 偏离 | Claude Code 默认 600 s；Aleph 默认 **300 s** 且上限 **300 s**（`MAX_HOOK_TIMEOUT_SECS`，`src/extension/hooks/mod.rs`）——hook 在工具派发内运行，本就受 180 s tool budget 约束，更长的值会被钳到 300 并记一条 warn。写 `timeout: 600` 不报错，只是拿不到 600。 |
@@ -468,7 +468,7 @@ al plugin list
 **DEVIATION（有意与 Claude Code 不同；验收表 `scan-cc-plugin-format.md` 70 项里标 DEVIATION 的就是这几条）：**
 
 1. **hook `timeout` 默认 300 s、上限 300 s**（CC 600 s）——见上表那一行；理由：hook 跑在工具派发内，受 tool budget 约束。
-2. **skills 的 CC 专属字段**：`skills/*/SKILL.md` Claude-Code-only fields (`when_to_use`, `argument-hint`, `arguments`, `disallowed-tools`, `model`, `effort`, `context: fork`, `agent`, `background`, `hooks`, `paths`, `shell`) parse without error and are NOT honoured, except `disable-model-invocation`, `user-invocable`, `allowed-tools` (pre-grant) and `when_to_use` (read). A skill relying on `context: fork` runs inline; one relying on skill-scoped `hooks` gets none.
+2. **skills 的 CC 专属字段**：skills/*/SKILL.md (pattern) Claude-Code-only fields (`when_to_use`, `argument-hint`, `arguments`, `disallowed-tools`, `model`, `effort`, `context: fork`, `agent`, `background`, `hooks`, `paths`, `shell`) parse without error and are NOT honoured, except `disable-model-invocation`, `user-invocable`, `allowed-tools` (pre-grant) and `when_to_use` (read). A skill relying on `context: fork` runs inline; one relying on skill-scoped `hooks` gets none.
 3. **agent `permissionMode` 不应用**：sub-agent 跑在父的 `ScopedToolService` 上，没有自己的执行档；值被解析并以 `debug!` 记下它本会映射到的档，偏离可见于日志而不是静默。
 4. **不读 `~/.claude/settings.json`**：启用态由 `plugins.toml` 决定（U6）。
 5. **用户级 hooks 文件在 `~/.aleph/hooks.json`**，不是 `~/.claude/settings.json` 的 `hooks` 键。
@@ -637,7 +637,7 @@ App 用户要进 .app bundle 翻出内嵌的 `aleph-server` 才能加一个第�
 ### source 分类只有一个答案（2026-08-20）
 
 `add` 的两个面各写过一份启发式，在**四种输入上分歧**：`C:\dir\mk`（RPC 判 github、
-名字 `c:\dir\mk`；子命令判 local、名字 `mk`）· `./foo/bar`（RPC local ✓；子命令
+名字 `c:\dir\mk`；子命令判 local、名字 `mk`）· `(example path, not real)`（RPC local ✓；子命令
 github ✗）· `myrepo` 裸名（RPC github；子命令 local）· `/abs/My Dir`（名字大小写两个
 答案）。外加**两边都错的一条**：`~/foo` 双方都判 github，而 `local_source::expand_tilde`
 正是为这个形式写的——一个只有 resolver 支持、没有任何生产者产得出来的分支。
@@ -771,7 +771,7 @@ manifest 缓存的 key 覆盖 kind 的每个输入（含插件根的 `.mcp.json`
 需要：从 WASM 模块导出函数列表中发现并注册 tools。
 
 ### Aleph-plugins 仓库
-当前状态：目录结构已迁移到 CC 兼容格式（`.claude-plugin/plugin.toml`），Node.js 插件标记为 `runtime = "mcp"` 但 `src/index.js` 仍是旧 IPC 格式——那个格式（`method === "plugin.call"`）从来没有宿主，例：`plugins/media-office/src/index.js:349`；其 `:264 onPostToolUse` 是无人能调的 JS hook handler。本仓 2026-09-20 删掉了同形状的 `examples/plugins/media-video`。
+当前状态：目录结构已迁移到 CC 兼容格式（`.claude-plugin/plugin.toml`），Node.js 插件标记为 `runtime = "mcp"` 但 `(no longer exists; MCP plugins use .mcp.json)` 仍是旧 IPC 格式——那个格式（`method === "plugin.call"`）从来没有宿主，例：`plugins/media-office/(no longer exists; MCP plugins use .mcp.json):349`；其 `:264 onPostToolUse` 是无人能调的 JS hook handler。本仓 2026-09-20 删掉了同形状的 `(example; actual plugins in ~/.aleph/extensions/)`。
 需要：将每个 Node.js 插件的入口文件改为 MCP Server SDK 实现（兄弟仓 Aleph-plugins 的 follow-up）。
 
 ---
@@ -838,7 +838,7 @@ in-place 编辑都会改变 key tuple，cache 自然 miss。key 里带 `dev`/`in
 块**不被任何 adapter 读取**，写了等于没写。
 
 曾经有过一个从参考实现的 activation planner 移植来的 Rust 版
-（`src/extension/activation.rs` 的 `ActivationPlanner` / `ActivationHints` /
+（`src/extension/lifecycle.rs` 的 `ActivationPlanner` / `ActivationHints` /
 `ActivationTrigger` / `ActivationPlan` / `CapabilityKind` / `tier_kinds`，约 600 行），
 本轮按 R10 YAGNI 整体删除。删的理由比「planner 没有生产调用者」更深一层：
 `PluginManifest.activation` **从来没有非 `None` 过**——三个 manifest adapter
@@ -902,7 +902,7 @@ enabled = true          # 与 trusted 正交，见下
 **`Bundled` / `Config` 至今没有生产者，这是有意的**。随包插件被解压进 marketplace
 cache（`plugins/cache/aleph-official/<id>`），scanner 只从 plugin parent 下降一层
 而那条路径是两层，所以它们不是「被豁免」而是**根本没被发现**；它们只有被安装进
-`plugins/installed/` 才可加载，那时就是货真价实的 `Global`。所以 enforce 的含义没有
+`(relocated to ~/.aleph/extensions/)` 才可加载，那时就是货真价实的 `Global`。所以 enforce 的含义没有
 星号：每个插件都需要一次显式 vouch，被拒的那些按 id 列出来，好让人有东西可 vouch。
 
 `PluginOrigin` 本身在同一轮才有了真生产者：六个 manifest adapter 全部在构造点硬

@@ -1,4 +1,5 @@
 # BROWSER_LIVE_VIEWER.md — 浏览器实时查看器 (Browser Live Viewer)
+> **状态：历史文档（point-in-time）** — 本文记录的是 2026-10 验收实证，不代表当前架构。当前状态以代码为准。
 
 > **Final off-loop hardening (2026-10-13; targeted):** the final safe run passed 20/20 with 0 warnings, including the rescan generation-fence regression test and the existing off-loop/handler tests. A late older skill rescan can no longer replace a newer published registry, and cancelled shared initialization does not latch `INIT_CELL` as successful. This remains targeted evidence; D1 is still partial because residual synchronous extension/mount work remains and no real cold `extensions.catalog` timing was run.
 >

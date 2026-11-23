@@ -7,7 +7,7 @@ Terminology in Aleph is aligned with Anthropic's managed-agents paradigm ([blog]
 ### Harness
 **Anthropic meaning:** The loop that calls the LLM and routes tool calls to relevant infrastructure. Stateless; recoverable via `wake(session_id)` after crashes.
 
-**Aleph today:** The Think→Act loop lives in `src/harness/` (post-Phase-7). The legacy `src/agent_loop/` directory was deleted in 2026-04-21. No external-CLI meaning.
+**Aleph today:** The Think→Act loop lives in `src/harness/` (post-Phase-7). The legacy `src/harness/ (agent loop refactored into harness in Phase 5/6)` directory was deleted in 2026-04-21. No external-CLI meaning.
 
 ### Sandbox
 **Anthropic meaning:** Execution environment where the agent runs code and edits files. Provisioned on-demand via `execute(name, input) → string`.
@@ -17,10 +17,10 @@ Terminology in Aleph is aligned with Anthropic's managed-agents paradigm ([blog]
 **Do not confuse with:** `OsSandboxDriver` / `ExecSecurityGate` / `ApprovalGate` — these are lower-level primitives that sit *beneath* the `Sandbox` trait. `OsSandboxDriver` is the macOS `sandbox-exec` driver invoked by `WorkspaceSandbox`; `ExecSecurityGate` is the pre-exec filesystem guard for `file_write`/`file_edit`; `ApprovalGate` is the user-facing prompt path for capability elevation.
 
 ### WorkspaceSandbox
-**Aleph-specific:** Concrete `Sandbox` implementation (`src/sandbox/workspace.rs`). Provisions `~/.aleph/workspaces/{hash(session_id)}/` lazily on first exec-class call, enforces a strict per-session capability baseline, escalates out-of-baseline requests through `ApprovalGate`, caches per-session grants, and delegates OS isolation to an `OsSandboxDriverTrait` implementation. Implements the six-step execute pipeline described in [SANDBOX.md](./SANDBOX.md).
+**Aleph-specific:** Concrete `Sandbox` implementation (`src/sandbox/workspace/mod.rs`). Provisions `~/.aleph/workspaces/{hash(session_id)}/` lazily on first exec-class call, enforces a strict per-session capability baseline, escalates out-of-baseline requests through `ApprovalGate`, caches per-session grants, and delegates OS isolation to an `OsSandboxDriverTrait` implementation. Implements the six-step execute pipeline described in [SANDBOX.md](./SANDBOX.md).
 
 ### OsSandboxDriver
-**Aleph-specific:** macOS `sandbox-exec` driver (`src/exec/sandbox/executor.rs`). Implements `OsSandboxDriverTrait` so `WorkspaceSandbox` can generate SBPL profiles and run subprocesses under seatbelt. Formerly named `SandboxManager`; renamed in Phase 3 Task 4 to reflect its OS-level role and free the name for Anthropic's agent-level Sandbox meaning.
+**Aleph-specific:** macOS `sandbox-exec` driver (`src/sandbox/driver.rs`). Implements `OsSandboxDriverTrait` so `WorkspaceSandbox` can generate SBPL profiles and run subprocesses under seatbelt. Formerly named `SandboxManager`; renamed in Phase 3 Task 4 to reflect its OS-level role and free the name for Anthropic's agent-level Sandbox meaning.
 
 ### OsSandboxDriverTrait
 **Aleph-specific:** The seam between `WorkspaceSandbox` and OS-level seatbelt (`src/sandbox/driver.rs`). Two methods: `profile_for(caps, cwd) -> OsSandboxProfile` and `run(program, args, env, stdin, cwd, profile, timeout, max_output_bytes) -> SandboxOutput`. Lets tests substitute a fake driver without invoking the real `sandbox-exec` binary.
@@ -37,7 +37,7 @@ Terminology in Aleph is aligned with Anthropic's managed-agents paradigm ([blog]
 **Anthropic meaning:** The "hands" — custom tools, MCP servers, execution environments — all reached through one `execute()` surface. The brain is agnostic to the backing.
 
 **Aleph today:** `ToolService` trait (`src/tools/service.rs`), backed in
-production by `ScopedToolService` (`src/tools/scoped.rs`) — a per-request
+production by `ScopedToolService` (`src/tools/scoped/mod.rs`) — a per-request
 adapter built by `gateway::execution_engine::tool_service_builder` that
 exposes an allow-listed view over `LoopToolRegistry`, carries
 `with_confirmation` (HITL `requires_confirmation` gate) and

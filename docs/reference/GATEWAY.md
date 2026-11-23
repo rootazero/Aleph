@@ -383,7 +383,7 @@ pub trait Interface: Send + Sync {
 
 `handlers::channel::create_channel_from_config` resolves a configured
 `[channels.<type>]` entry through the plugin table in
-`interfaces/plugin.rs`, and returns `None` for a type that is not in it —
+`(removed; plugin system is now src/extension/)`, and returns `None` for a type that is not in it —
 after which `initialize_channels` logs `Failed to create channel` and continues.
 **A `ChannelFactory` that is not registered in `interfaces::register_channel_plugins`
 is therefore unreachable, however complete it is.**
@@ -464,7 +464,7 @@ They are two tools on purpose: `ToolFacts::idempotent` is keyed on the tool **na
 `channel_message` would gate it under the `Ask` exec tier — and a tier never widens,
 so there would be no way back.
 
-Slack implements it in `interfaces/slack/directory.rs::ConversationDirectory`
+Slack implements it in `src/gateway/interfaces/slack/directory.rs::ConversationDirectory`
 (`conversations.list` + `users.list`, cursor-paginated, 15-minute TTL cache, hard page
 cap). The cap is not cosmetic: `ChannelRegistry` holds the channel's **read guard**
 across the adapter call, so an unbounded sweep would block the write lock that
@@ -843,7 +843,7 @@ them *before* the busy lane: the inbound router's execute path
 (`inbound_router/executor.rs:451`), inside `stamp_slash_mode`
 (`slash_command.rs:98`, whose first statement it is) which the `agent.run` and
 `chat.send` run-start handlers call before `busy_queue::spawn_queued_run`
-(`src/bin/aleph-server/server_init.rs:272,466`; the guard
+(`src/bin/aleph-server/commands/start/mod.rs`; the guard
 `every_run_start_handler_stamps_the_slash_mode_before_the_busy_lane` is phrased
 over that file's handlers and inherits nothing outside it), and as the first
 statement of `ExecutionEngine::execute` (`execution_engine/execute.rs:375`).
@@ -1169,7 +1169,7 @@ Gateway hot reload 与 plugin WASM code loading 是两个边界。Stage E 只证
 
 ## HTTP Server
 
-**Location**: `src/gateway/http_server.rs`
+**Location**: `src/gateway/server/mod.rs`
 
 Alongside WebSocket, Gateway serves:
 - Static files (WebChat UI)
@@ -1182,10 +1182,10 @@ Alongside WebSocket, Gateway serves:
   Implemented in `src/gateway/server/metrics_endpoint.rs` +
   `src/gateway/middleware/latency.rs`.
 - MCP server face (`POST/GET/DELETE /mcp`, Streamable HTTP) — Aleph as an MCP
-  *server* for dsh / pi-mcp-adapter / Claude Code: `tools/list` + `tools/call`
+  *server* for dsh / pi-mcp-adapter / Claude Code: `src/tools/registry.rs` + `src/tools/server/mod.rs`
   over the same scoped dispatch a chat turn uses, whitelist from
   `[mcp_server].expose`, loopback free / remote bearer (device or gateway
-  token), `notifications/tools/list_changed` on plugin transitions. Implemented
+  token), `notifications/src/tools/registry.rs_changed` on plugin transitions. Implemented
   in `src/gateway/mcp_face/`; real-machine `qa/mcp_face/run.sh`.
 
 Abuse protection at WS upgrade: besides the global `max_connections` cap, a
@@ -1385,10 +1385,10 @@ return a handler from `Channel::webhook_handler()`. `build_router()` registers
 
 Aleph 对外**是一个 MCP server**：dsh 一行 `cordis.yml`、pi 一行 `pi-mcp-adapter` 配置、Claude Code 一行
 `.mcp.json`（`type: http`）都能挂上，零专属代码。**客户端侧的接法只写一份**：`packages/pi-aleph/README.md`——
-一个 JS-free 的 pi 包（`package.json#pi = { skills, mcp }` + `mcp.json` + `skills/aleph/SKILL.md`），README 同时给出
+一个 JS-free 的 pi 包（`package.json#pi = { skills, mcp }` + `mcp.json` + `(removed or relocated; skills are now under ~/.aleph/skills/)`），README 同时给出
 pi（经 pi-mcp-adapter）、Claude Code `.mcp.json`（`type: http`）与 dsh `cordis.yml` 的三行配置；本节不抄那三行。设计母本：spec
 `docs/superpowers/specs/2026-09-20-plugin-scope-and-cc-compat-design.md` §3.7。它是一张**接口脸**（R4：
-纯 I/O），把 `tools/call` 翻成 Aleph 自己的工具调用路径；**wire 类型复用 `src/mcp/{jsonrpc,protocol,types}.rs`，
+纯 I/O），把 `src/tools/server/mod.rs` 翻成 Aleph 自己的工具调用路径；**wire 类型复用 `src/mcp/{jsonrpc,protocol,types}.rs`，
 信封复用网关自己的 `protocol::JsonRpc{Request,Response}`（客户端侧的 `mcp/jsonrpc.rs` 的 id 是 `u64`，回不了字符串 id），不复制**（CLAUDE.md 禁用清单 2026-09-20 那一行）。
 
 | 项 | 决定 |
@@ -1401,13 +1401,13 @@ pi（经 pi-mcp-adapter）、Claude Code `.mcp.json`（`type: http`）与 dsh `c
 | 会话 / principal | 每个 MCP session ↔ 一个 Aleph 会话；principal `McpClient { client_name }`（来自 `initialize.clientInfo.name`）。调用走**同一条** scoped dispatch（审批门 + spend ledger + hooks）——不是第二条执行路径 |
 | 审批 | 「有没有 operator 能答」是**连接表**上的事实：`McpFace` 每次调用问 `OperatorPresence` 探针（`GatewayServer::operator_presence_probe()`），派发时 `unattended = !present`——无 operator 界面时 confirm 门**立刻** fail-closed，结果 `isError: true`，文本末尾附 `MCP_APPROVAL_HINT`（告诉对端模型卡本会去哪、怎么开）。⚠️ 这一步**不是** `OperatorApprovalRequester` 的「零订阅者即拒绝」——boot 给事件总线挂了内部消费者，那条臂在真服务器上**永远不触发**（FL 附录 D.0.199）。**有 operator 在线时**：卡按现有审批流升起，**没有死线**（2026-08-28 裁定），MCP 客户端那边等的是它自己的超时（dsh 60 s / adapter 30 s）；客户端放弃后卡**仍挂在 Panel 上**——用户裁定接受这个形状（U-d），「handler future 掉落时收回卡」记为 follow-up，未建 |
 | 错误形状 | 工具执行错误 → `isError: true` 的结果（**不是**协议错误）；不在 `expose` → tool not found；body 不是 JSON-RPC → 400 + JSON-RPC error body；非 `initialize` 请求缺 session 头 → 400；未知 / 过期 session → 404 |
-| 通知 | 插件 mount/unmount/reload（`lifecycle.rs::after_transition` 里的 `if let Some(face) = try_mcp_face() { face.notify_tools_list_changed() }`，G3 钉住这个调用点）与 `expose` 变更 → 向每条活着的 MCP session 广播 `notifications/tools/list_changed`。进程级句柄 `try_mcp_face() -> Option<&'static Arc<McpFace>>`（同 spend 的 `install_ledger` 形状，FL §5.25）让 lifecycle 不必穿 7 个构造点 |
+| 通知 | 插件 mount/unmount/reload（`lifecycle.rs::after_transition` 里的 `if let Some(face) = try_mcp_face() { face.notify_tools_list_changed() }`，G3 钉住这个调用点）与 `expose` 变更 → 向每条活着的 MCP session 广播 `notifications/src/tools/registry.rs_changed`。进程级句柄 `try_mcp_face() -> Option<&'static Arc<McpFace>>`（同 spend 的 `install_ledger` 形状，FL §5.25）让 lifecycle 不必穿 7 个构造点 |
 | 名字 | Aleph 工具名已是 `[a-z0-9_]`，满足 dsh 的 64 字符规则（dsh 侧展示为 `mcp__<server>__<tool>`）；P6 逐名验证无超长名 |
 
 **有 operator 在线时的审批卡是「挂着的」，这是接受下来的形状（用户裁定 2026-09-20，U-d）。** 一个需要确认的
-`tools/call` 在 Panel 上升起一张没有死线的卡（2026-08-28 裁定：审批不超时）；MCP 客户端那边等的是**它自己的**超时
+`src/tools/server/mod.rs` 在 Panel 上升起一张没有死线的卡（2026-08-28 裁定：审批不超时）；MCP 客户端那边等的是**它自己的**超时
 （dsh 60 s、pi-mcp-adapter 30 s），到点后客户端把这次调用当失败，而卡**仍挂在 Panel 上**——operator 点批准时，那个
-`tools/call` 的 handler future 早已被丢弃，批准落在一个没有人在等的动作上。两种后果都比它们的替代品便宜：立刻拒绝
+`src/tools/server/mod.rs` 的 handler future 早已被丢弃，批准落在一个没有人在等的动作上。两种后果都比它们的替代品便宜：立刻拒绝
 会把每一个 attended 调用变成 unattended（那正是 `deny` 阶段要证的另一臂），给卡加死线会推翻 08-28 的裁定。
 「handler future 掉落时收回卡」记为 follow-up，未建；在那之前，Panel 上一张来自 `McpClient` 的旧卡读作
 「对端已经放弃了」，不是「还在等」。

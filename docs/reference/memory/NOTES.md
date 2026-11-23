@@ -53,7 +53,7 @@ All note categories are enumerated by `CATEGORY_DIRS` in `src/memory/notes/index
     └── query/*.md                 # Spec 8: filed-back query answers
 ```
 
-`NoteIndexer::ensure_dirs` creates every one of these directories lazily on first use. Filenames are sanitized by `sanitize_title` (see §4) to strip path separators and filesystem-unsafe characters, so a malicious note title like `../../etc/passwd` becomes the literal `etcpasswd` before ever touching disk.
+`NoteIndexer::ensure_dirs` creates every one of these directories lazily on first use. Filenames are sanitized by `sanitize_title` (see §4) to strip path separators and filesystem-unsafe characters, so a malicious note title like `(example path for testing)` becomes the literal `etcpasswd` before ever touching disk.
 
 ## 3. Frontmatter Schema
 
@@ -574,7 +574,7 @@ Three generated files live in each agent's note directory and are managed by `sr
 
 `read_snapshot` assembles these three files into an `OrientationSnapshot` that is injected into agent prompts: `schema_text` comes from `SchemaDoc::compact_for_prompt()` (Tag Taxonomy + Page Thresholds + Update Policy sections only, to reduce prompt tokens); `index_text` is the full `index.md`; `recent_log_tail` is the last 20 log entries.
 
-> The `src/wiki/` directory and its `WikiGitManager` / `generate_index_content` were removed. All orientation functionality now lives in `src/memory/notes/orientation/`.
+> The `(removed; memory system is now src/memory/)` directory and its `WikiGitManager` / `generate_index_content` were removed. All orientation functionality now lives in `src/memory/notes/orientation/`.
 
 ## 10. Skills as Notes
 
@@ -584,7 +584,7 @@ A distinct subsystem lives in `src/skill/` — `SkillSystem`, `SkillId`, `Prompt
 
 ## 11. `note_manage` Tool
 
-`NoteManageTool` (`src/builtin_tools/note_manage.rs`) is the unified LLM-facing CRUD surface for every note category. Action enum:
+`NoteManageTool` (`src/builtin_tools/note_manage/mod.rs`) is the unified LLM-facing CRUD surface for every note category. Action enum:
 
 ```rust
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -674,7 +674,7 @@ Frontmatter is produced by `KnowledgeNote::to_markdown` (the single real write p
 **Deprecation status (verified by grep):**
 
 - `src/builtin_tools/skill_manage.rs` is still present and active — but it configures **extension skills** (§10), not skill-category notes. The module exists; it does not overlap with `note_manage`.
-- `wiki_manage` is **removed**. The `src/wiki/` directory has been deleted; orientation functionality moved to `src/memory/notes/orientation/` (§9).
+- `wiki_manage` is **removed**. The `(removed; memory system is now src/memory/)` directory has been deleted; orientation functionality moved to `src/memory/notes/orientation/` (§9).
 
 ## 12. Event Sourcing
 
@@ -757,7 +757,7 @@ The graph is **materialized offline** by `GraphRecomputeStage` (`src/memory/drea
 
 **MentionWeaveStage** (`src/memory/dreaming/stages/mention_weave.rs`) is a separate, corpus-scanning consumer — not a reader of the materialized cache above. It sits in the Consolidate pipeline between `NoteWeaveStage` (real links win first) and `NoteDecayStage` (so mention edges count toward `link_weight` the same cycle it runs), and scans every note body for **unlinked mentions** of another note's filename/alias via `src/memory/notes/links/mentions.rs::scan_mentions`: deterministic exact matching (ASCII names require word boundaries on both sides; CJK names match as substrings since CJK text has no word boundaries; a name must be ≥4 ASCII chars or ≥2 CJK chars to qualify, and a name owned by more than one note is dropped wholesale — the same never-guess rule as §5.2), zero LLM. Each cycle **fully replaces** the `relation = 'mention'` edge set (`NoteStore::replace_mention_links`, one transaction) — capped at `MAX_MENTIONS_PER_NOTE = 5` per source note and `MAX_MENTIONS_PER_CYCLE = 200` overall (deterministic truncation over the `(from, to)`-sorted scan output) — inserting rows at `confidence = 0.35` with `resolved_by = 'mention_scan'` and `ON CONFLICT(agent_id, from_note, to_note) DO NOTHING`, so an existing real wikilink or typed relation for the same pair always wins over the soft mention edge.
 
-**Canvas / gateway enrichment.** `graph.query` (`src/gateway/handlers/graph.rs::handle_query_impl`) layers three graph-health signals onto the base node/edge feed before returning: top-3-per-node MinHash similarity edges (`related_edges_between`, surfaced as edge kind `related_similarity`, deduped against real links by undirected pair), `bridge_nodes` (the materialized `bridge` insight, filtered to nodes visible in this response), and `surprising_edges` (the materialized `surprising` insight, both endpoints visible). The panel's galaxy renderer (`interfaces/webchat/src/platform/wide/views/canvas/galaxy_build.rs` + `gl/edges.rs`) maps each edge's `relation`/`kind` string to a render code and tint via `edge_kind_code`/`edge_kind_color`; `mention` and `related_similarity` render at a fixed dim brightness (not confidence-scaled, since they are soft/derived edges rather than authored links), and any edge present in `surprising_edges` overrides its base kind with a bloom-emphasized code regardless of its real relation.
+**Canvas / gateway enrichment.** `graph.query` (`src/gateway/handlers/graph/mod.rs::handle_query_impl`) layers three graph-health signals onto the base node/edge feed before returning: top-3-per-node MinHash similarity edges (`related_edges_between`, surfaced as edge kind `related_similarity`, deduped against real links by undirected pair), `bridge_nodes` (the materialized `bridge` insight, filtered to nodes visible in this response), and `surprising_edges` (the materialized `surprising` insight, both endpoints visible). The panel's galaxy renderer (`(removed; canvas is now interfaces/webchat/src/platform/wide/views/canvas/mod.rs)` + `gl/edges.rs`) maps each edge's `relation`/`kind` string to a render code and tint via `edge_kind_code`/`edge_kind_color`; `mention` and `related_similarity` render at a fixed dim brightness (not confidence-scaled, since they are soft/derived edges rather than authored links), and any edge present in `surprising_edges` overrides its base kind with a bloom-emphasized code regardless of its real relation.
 
 ## 15. Governance verdict archive
 
