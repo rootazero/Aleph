@@ -461,6 +461,12 @@ no separate transport-liveness signal to tell them apart (openclaw restarts on
 excluded as configuration. Mapped from openclaw's `isManagedAccount` +
 `lifecycle` in `gateway/channel-health-policy.ts`.
 
+**XMPP transport lifetime / XMPP 连接生命周期.** Reads with no new `>` still
+count toward the input limit, but cannot complete a stanza, so they skip the
+XML scan. When the receive loop exits for a reconnect, it releases both halves
+of the old TCP connection before waiting. The input limit and reconnect schedule
+are unchanged. / 未读到新的 `>` 时，数据仍计入输入上限，但不会完成 stanza，因此跳过 XML 扫描。接收循环退出并准备重连时，先释放旧 TCP 的读写两端，再等待下次尝试。输入上限和重连间隔不变。
+
 **Adapter rule**: do not unconditionally overwrite `status` on a connection
 task's exit path. That one line erases the failure the line above just
 recorded, blinding both `channels.list` and the monitor.

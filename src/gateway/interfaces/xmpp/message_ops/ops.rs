@@ -313,7 +313,11 @@ impl XmppMessageOps {
                                             }
                                         }
 
-                                        // Process all complete stanzas in the buffer
+                                        // The previous iteration drained all complete stanzas.
+                                        // Without a new `>` this read cannot complete another one.
+                                        if !read_buf[..n].contains(&b'>') {
+                                            continue 'inner;
+                                        }
                                         while let Some((stanza, remaining)) = extract_stanza(&buffer) {
                                             buffer = remaining;
 
@@ -434,6 +438,9 @@ impl XmppMessageOps {
                 }
             };
 
+            // Retire the failed transport before waiting to reconnect.
+            drop(reader);
+            drop(writer);
             if !should_reconnect || *shutdown_rx.borrow() {
                 break;
             }
@@ -491,12 +498,19 @@ mod regression_tests {
             shutdown_rx,
         ));
         let (mut socket, _) = listener.accept().await.unwrap();
-        let mut header = [0; 1024];
-        let _bytes_read = socket.read(&mut header).await.unwrap();
+        let stream_header = build_stream_header("127.0.0.1");
+        let mut header = vec![0; stream_header.len()];
+        socket.read_exact(&mut header).await.unwrap();
+        assert_eq!(header, stream_header.as_bytes());
         let payload = format!("<message><body>{}", "a".repeat(MAX_STANZA_SIZE));
         let _ = socket.write_all(payload.as_bytes()).await;
-        let closed = tokio::time::timeout(Duration::from_secs(2), socket.read(&mut header)).await;
+        // Observe closure before the one-second reconnect backoff elapses.
+        let closed = tokio::time::timeout(INITIAL_BACKOFF, socket.read(&mut header)).await;
         task.abort();
-        assert!(matches!(closed, Ok(Ok(0)) | Ok(Err(_))));
+        let _ = task.await;
+        assert!(
+            matches!(closed, Ok(Ok(0)) | Ok(Err(_))),
+            "expected the socket to close before reconnecting, got {closed:?}"
+        );
     }
 }

@@ -211,9 +211,9 @@ impl BrowserViewerIssuerState {
     }
 
     /// Policy-only forwarder for `browser.viewer.resource.decide`: the owner's
-    /// explicit decision on one exact revision. Never widens permissions (the
-    /// allowed set stays Frames-only; a later `issue` is still required) and
-    /// is denied without a lifecycle, so it can never be a reported-success
+    /// explicit decision on one exact revision. It does not issue a grant or
+    /// change its permission policy. It is denied without a lifecycle, so it
+    /// can never be a reported-success
     /// no-op. All failures are the same generic denial.
     pub(crate) fn decide(
         &self,
