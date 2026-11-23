@@ -1,5 +1,7 @@
 # Skill Trigger Enhancement Implementation Plan
 
+> **状态：历史文档（point-in-time）** — 本文记录的是 2026-04-06 设计（`docs/reference/SKILL_TRIGGER_ENHANCEMENT.md`）当时的实施计划，不代表当前架构。当前状态以代码为准（`when_to_use` 现落在 `src/skill/manifest.rs` 与 `src/domain/skill.rs`）。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add `when_to_use` field to SkillManifest so the LLM knows when to proactively invoke each skill, with XML output and proactive trigger guidance.
@@ -13,7 +15,7 @@
 ### Task 1: Add when_to_use field to SkillManifest
 
 **Files:**
-- Modify: `src/domain/skill.rs:377-568`
+- Modify: `src/domain/skill.rs:669`
 
 - [ ] **Step 1: Write failing tests**
 
@@ -53,7 +55,7 @@ Expected: FAIL — `when_to_use` method does not exist
 
 - [ ] **Step 3: Add field to SkillManifest struct**
 
-In `src/domain/skill.rs`, add after the `emoji` field (line 406):
+In `src/domain/skill.rs`, add after the `emoji` field (line 667):
 
 ```rust
     /// Trigger hint — describes when this skill should be proactively invoked.
@@ -62,7 +64,7 @@ In `src/domain/skill.rs`, add after the `emoji` field (line 406):
 
 - [ ] **Step 4: Update constructor**
 
-In `SkillManifest::new()` (line 418-434), add after `emoji: None,`:
+In `SkillManifest::new()` (line 699), add after `emoji: None,`:
 
 ```rust
             when_to_use: None,
@@ -70,7 +72,7 @@ In `SkillManifest::new()` (line 418-434), add after `emoji: None,`:
 
 - [ ] **Step 5: Add getter**
 
-After the `emoji()` getter (line 499-501), add:
+After the `emoji()` getter (line 803), add:
 
 ```rust
     /// When this skill should be proactively invoked.
@@ -81,7 +83,7 @@ After the `emoji()` getter (line 499-501), add:
 
 - [ ] **Step 6: Add setter**
 
-After the `set_emoji()` setter (line 566-568), add:
+After the `set_emoji()` setter (line 894), add:
 
 ```rust
     /// Set the when_to_use trigger hint.
@@ -107,7 +109,7 @@ git commit -m "feat(skill): add when_to_use field to SkillManifest"
 ### Task 2: Parse when-to-use from YAML frontmatter
 
 **Files:**
-- Modify: `src/skill/manifest.rs:64-85` (RawFrontmatter) and `src/skill/manifest.rs:134-241` (parse_skill_content)
+- Modify: `src/skill/manifest.rs:107` (RawFrontmatter) and `src/skill/manifest.rs:422` (parse_skill_content)
 
 - [ ] **Step 1: Write failing test**
 
@@ -150,7 +152,7 @@ Expected: FAIL — `when_to_use` is None because it's not parsed from frontmatte
 
 - [ ] **Step 3: Add field to RawFrontmatter**
 
-In `src/skill/manifest.rs`, in the `RawFrontmatter` struct (line 64-85), add after the `emoji` field (line 84):
+In `src/skill/manifest.rs`, in the `RawFrontmatter` struct (line 107), add after the `emoji` field (line 127):
 
 ```rust
     #[serde(default)]
@@ -161,7 +163,7 @@ Note: The struct uses `#[serde(rename_all = "kebab-case")]` so the YAML key `whe
 
 - [ ] **Step 4: Add parsing logic in parse_skill_content**
 
-In `src/skill/manifest.rs`, in `parse_skill_content()`, add after the emoji handling (after line 237 `manifest.set_emoji(emoji);` and its closing brace):
+In `src/skill/manifest.rs`, in `parse_skill_content()`, add after the emoji handling (after line 671 `manifest.set_emoji(emoji);` and its closing brace):
 
 ```rust
     if let Some(when) = raw.when_to_use {
@@ -240,7 +242,7 @@ Expected: FAIL — `<when>` tag not generated yet
 
 - [ ] **Step 3: Update build_skills_prompt_xml to include when tag**
 
-In `src/skill/prompt.rs`, in `build_skills_prompt_xml()`, add after the description closing tag line (`buf.push_str("</description>\n");` around line 39):
+In `src/skill/prompt.rs`, in `render_skill_fragment()` (reached from `build_skills_prompt_xml()`), add after the description closing tag line (`buf.push_str("</description>\n");` around line 137):
 
 ```rust
         if let Some(when) = skill.when_to_use() {

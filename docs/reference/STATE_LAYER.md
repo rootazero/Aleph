@@ -6,7 +6,7 @@
 ## 1. Misleading Name, Living Code
 
 The directory `src/resilience/` no longer hosts any "resilience" middleware.
-Its self-description in `src/resilience/mod.rs:1-5` says:
+Its self-description in `src/resilience/mod.rs:1` says:
 
 ```
 //! Resilience Module — Database and Core Types
@@ -65,7 +65,7 @@ called once during binary boot.
 
 **Encapsulation is leak-free:** all 28 consumer files import
 `crate::resilience::StateDatabase` (the pub re-export from
-`src/resilience/mod.rs:15`). A `grep` for
+`src/resilience/mod.rs:12`). A `grep` for
 `use crate::resilience::database::events` (or any other submodule path)
 returns **zero matches**. The God-object surface is the boundary; the
 internal partitioning is invisible to callers.
@@ -122,7 +122,7 @@ with zero architectural improvement.
   §3.3 row 8 + §4.2 P7 row + footnote ⁷
 - P7 design: `docs/superpowers/specs/2026-04-25-p7-state-layer-design.md`
 - StateDatabase struct: `src/resilience/database/state_database/mod.rs:20`
-- Misleading mod.rs comment: `src/resilience/mod.rs:1-5`
-- Pub re-export: `src/resilience/mod.rs:15`
+- Misleading mod.rs comment: `src/resilience/mod.rs:1`
+- Pub re-export: `src/resilience/mod.rs:12`
 - Migration entry: `src/resilience/database/migration.rs`
 - Cross-domain types: `src/resilience/types.rs`

@@ -1,5 +1,7 @@
 # Model-Perceivable Ecosystem Implementation Plan
 
+> **状态：历史文档（point-in-time）** — 本文记录的是 2026-04-06 当时的设计/结论，不代表当前架构。当前状态以代码为准（落地部分见 `src/thinker/layers/agent_catalog.rs` 与 `src/builtin_tools/agent_manage/`）。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make the LLM aware of available sub-agents and MCP tools via lightweight prompt catalog + on-demand discovery tools.
