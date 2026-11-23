@@ -1,0 +1,102 @@
+{
+  "platform": "darwin",
+  "server_sha256": "7efa4a27a1b8f1affcae919e5e6255bdafe5df1d65cefa9aeae0609e0c66dbfd",
+  "shell_sha256": "ea7600bb2c219a9e31b75d3f6c7ec1d8c16ef1c91ba04341a69903ea5ac4a9f8",
+  "web_index_sha256": "e08a6f87714bb1933928c6fc10d1c232f792507316c224265e9844c526605e37",
+  "desktop": {
+    "phases": [
+      {
+        "phase": "unavailable",
+        "window": {
+          "width": 1180,
+          "height": 832,
+          "name": "Aleph"
+        },
+        "threads": 18,
+        "screenshot": "desktop-unavailable.png"
+      },
+      {
+        "phase": "connected",
+        "window": {
+          "width": 1180,
+          "height": 832,
+          "name": "Aleph"
+        },
+        "threads": 12,
+        "screenshot": "desktop-connected.png"
+      },
+      {
+        "phase": "sessions",
+        "window": {
+          "width": 1180,
+          "height": 832,
+          "name": "Aleph"
+        },
+        "threads": 10,
+        "screenshot": "desktop-sessions.png"
+      },
+      {
+        "phase": "restored",
+        "window": {
+          "width": 1180,
+          "height": 832,
+          "name": "Aleph"
+        },
+        "threads": 11,
+        "screenshot": "desktop-restored.png"
+      }
+    ],
+    "layout_key": "aleph.panel.layout.v1:desktop-ipc:e968826efacc2f5e62673ac71c6464d9",
+    "default_layout": {
+      "version": 1,
+      "order": [
+        {
+          "plugin_id": "aleph",
+          "tab_id": "overview"
+        },
+        {
+          "plugin_id": "aleph",
+          "tab_id": "sessions"
+        },
+        {
+          "plugin_id": "aleph",
+          "tab_id": "capabilities"
+        }
+      ],
+      "hidden": [],
+      "active": {
+        "plugin_id": "aleph",
+        "tab_id": "overview"
+      }
+    },
+    "restored_layout": {
+      "version": 1,
+      "order": [
+        {
+          "plugin_id": "aleph",
+          "tab_id": "capabilities"
+        },
+        {
+          "plugin_id": "aleph",
+          "tab_id": "overview"
+        },
+        {
+          "plugin_id": "aleph",
+          "tab_id": "sessions"
+        }
+      ],
+      "hidden": [
+        {
+          "plugin_id": "aleph",
+          "tab_id": "sessions"
+        }
+      ],
+      "active": {
+        "plugin_id": "aleph",
+        "tab_id": "capabilities"
+      }
+    }
+  },
+  "subject_matches_desktop": true,
+  "gateway_exit": 0
+}

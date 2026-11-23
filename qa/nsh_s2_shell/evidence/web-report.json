@@ -1,0 +1,91 @@
+{
+  "console": [
+    "error: Failed to load resource: the server responded with a status of 404 ()",
+    "error: WebSocket connection to 'wss://127.0.0.1:62614/v1/ws' failed: HTTP Authentication failed; no valid credentials available",
+    "warning: Unrecognized feature: 'web-share'.",
+    "warning: Unrecognized feature: 'web-share'.",
+    "warning: Unrecognized feature: 'web-share'.",
+    "warning: Unrecognized feature: 'web-share'.",
+    "warning: Unrecognized feature: 'web-share'.",
+    "error: WebSocket connection to 'wss://127.0.0.1:62614/v1/ws' failed: HTTP Authentication failed; no valid credentials available"
+  ],
+  "steps": [
+    {
+      "name": "served_and_unpaired",
+      "status": 200,
+      "csp": "script-src 'self' 'wasm-unsafe-eval'; img-src 'self' blob: data:; connect-src 'self'",
+      "nosniff": "nosniff"
+    },
+    {
+      "name": "paired_overview_healthy",
+      "cookies": [
+        {
+          "name": "__Host-aleph-v1",
+          "httpOnly": true,
+          "secure": true,
+          "sameSite": "Strict"
+        }
+      ]
+    },
+    {
+      "name": "sessions_listed"
+    },
+    {
+      "name": "capabilities_open",
+      "texts": [
+        "Overview",
+        "Sessions",
+        "Capabilities",
+        "Customize",
+        "Overview",
+        "enabled",
+        "Sessions",
+        "enabled",
+        "Capabilities",
+        "enabled"
+      ]
+    },
+    {
+      "name": "layout_edited",
+      "key": "nsh:com.aleph.panel:aleph.panel.layout.v1:https://127.0.0.1:62614:e968826efacc2f5e62673ac71c6464d9",
+      "saved": {
+        "version": 1,
+        "order": [
+          {
+            "plugin_id": "aleph",
+            "tab_id": "capabilities"
+          },
+          {
+            "plugin_id": "aleph",
+            "tab_id": "overview"
+          },
+          {
+            "plugin_id": "aleph",
+            "tab_id": "sessions"
+          }
+        ],
+        "hidden": [
+          {
+            "plugin_id": "aleph",
+            "tab_id": "sessions"
+          }
+        ],
+        "active": {
+          "plugin_id": "aleph",
+          "tab_id": "capabilities"
+        }
+      }
+    },
+    {
+      "name": "reload_restores_layout",
+      "tabOrder": [
+        "Open Capabilities",
+        "Open Overview"
+      ]
+    },
+    {
+      "name": "cookie_cleared_shows_pairing"
+    }
+  ],
+  "ok": true
+}

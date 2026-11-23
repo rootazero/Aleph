@@ -1,5 +1,7 @@
 # S2 NSH runtime spike / S2 NSH 运行时探针回执
 
+> The reproduction under `qa/nsh_s2_spike/` was removed from the tree with the [S2 shell receipt](2026-11-23-nsh-panel-s2-shell-receipt.md); links below resolve at commit `ec2d264ac`. / 探针目录已随 S2 外壳回执删除，下文链接请在 `ec2d264ac` 查看。
+
 ## Scope / 范围
 
 S2 (customizable Panel shell) chose approach B: keep the Rust-root NSH host in `desktop/nsh-shell` and embed an NSH `AppView` that runs the shared TSX shell as one native component, while the Web target packages the same TSX. Before writing the S2 design, this spike answered four questions on NSH 0.6.0 (`nsh 0.6.0 (5541637)`, the `v0.6.0` tag, matching the `=0.6.0` crate pins):
