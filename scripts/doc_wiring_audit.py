@@ -51,6 +51,20 @@ ENTRY_DOCS = [
 # the architecture skill is versioned there, so this guard does not police it.
 REFERENCE_DIR = "docs/reference"
 
+# JSON-RPC method and notification names. They contain a slash and look like
+# paths, but they are protocol identifiers, not files in this repository.
+# A file name whose extension is followed by extra characters: the shape a
+# botched rewrite leaves behind when it pastes a path over a method name.
+MANGLED_RE = re.compile(r"^.+\.(rs|ts|tsx|js|py|json|toml|md|sh|yml|yaml)[_\-][\w\-]*$")
+
+KNOWN_NON_PATHS = {
+    "notifications/tools/list_changed",
+    "tools/call",
+    "tools/list",
+    "tools/list_changed",
+    "tools/truncate",
+}
+
 # Phrases that assert a single-track (Tauri-only) desktop host. They were true
 # before the NSH migration and became false after it.
 CUT_PHRASES = [
@@ -61,8 +75,7 @@ CUT_PHRASES = [
 ]
 
 # Identifiers that look like a crate but are not one.
-CRATE_ALIASES = {
-    "aleph-shell-v1",
+CRATE_ALIASES = {    "aleph-shell-v1",
     "aleph",
 }
 
@@ -219,6 +232,51 @@ def check_links(rel, text):
             candidate = (ROOT / rel).parent / target
         if not candidate.exists():
             bad("LINKS", f"{rel} links to a missing target: {target}")
+
+
+def check_unknown_roots(rel, text):
+    """Catch a path that was mangled into something that no longer reads as one.
+
+    `path_candidates` only inspects tokens whose first segment is a real
+    directory here, so two shapes slipped through unnoticed:
+
+    * MANGLED - a real file name with junk glued onto its extension, e.g. the
+      JSON-RPC method `notifications/tools/list_changed` rewritten into
+      `notifications/src/tools/registry.rs_changed`.
+    * ROOTS  - a path that exists only once the missing `src/` prefix is put
+      back, e.g. `identity/artifact.rs` for `src/identity/artifact.rs`.
+    """
+    for token in CODE_RE.findall(text):
+        token = token.strip().rstrip(".,;:")
+        if " " in token or not token or "/" not in token:
+            continue
+        if any(ch in token for ch in "<>{}()[]=→"):
+            continue
+        if "://" in token or token.startswith(("/", "~")) or ":" in token:
+            continue
+        token = re.sub(r":\d+$", "", token)
+        token = token.split("::", 1)[0]
+        if "…" in token or "..." in token:
+            continue
+        if token in KNOWN_NON_PATHS:
+            continue
+        head = token.split("/", 1)[0]
+        if not head or head.startswith("."):
+            continue
+        if (ROOT / head).exists():
+            continue
+        last = token.rsplit("/", 1)[-1]
+        if MANGLED_RE.match(last):
+            bad(
+                "MANGLED",
+                f"{rel} names a mangled path whose file name carries junk: {token}",
+            )
+            continue
+        if path_exists(f"src/{token}"):
+            advisory(
+                "ROOTS",
+                f"{rel} names a path that only exists under src/: {token}",
+            )
 
 
 def check_paths(rel, text, backlog):
@@ -406,6 +464,7 @@ def main():
     for rel, text in docs:
         check_links(rel, text)
         check_paths(rel, text, backlog)
+        check_unknown_roots(rel, text)
         check_crates(rel, text, crates)
         check_just(rel, text, targets)
         check_ports(rel, text, daemon_port)

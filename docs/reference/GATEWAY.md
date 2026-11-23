@@ -1185,7 +1185,8 @@ Alongside WebSocket, Gateway serves:
   *server* for dsh / pi-mcp-adapter / Claude Code: `src/tools/registry.rs` + `src/tools/server/mod.rs`
   over the same scoped dispatch a chat turn uses, whitelist from
   `[mcp_server].expose`, loopback free / remote bearer (device or gateway
-  token), `notifications/src/tools/registry.rs_changed` on plugin transitions. Implemented
+  token), the `notifications/tools/list_changed` JSON-RPC notification on plugin
+  transitions. Implemented
   in `src/gateway/mcp_face/`; real-machine `qa/mcp_face/run.sh`.
 
 Abuse protection at WS upgrade: besides the global `max_connections` cap, a
@@ -1401,7 +1402,7 @@ pi（经 pi-mcp-adapter）、Claude Code `.mcp.json`（`type: http`）与 dsh `c
 | 会话 / principal | 每个 MCP session ↔ 一个 Aleph 会话；principal `McpClient { client_name }`（来自 `initialize.clientInfo.name`）。调用走**同一条** scoped dispatch（审批门 + spend ledger + hooks）——不是第二条执行路径 |
 | 审批 | 「有没有 operator 能答」是**连接表**上的事实：`McpFace` 每次调用问 `OperatorPresence` 探针（`GatewayServer::operator_presence_probe()`），派发时 `unattended = !present`——无 operator 界面时 confirm 门**立刻** fail-closed，结果 `isError: true`，文本末尾附 `MCP_APPROVAL_HINT`（告诉对端模型卡本会去哪、怎么开）。⚠️ 这一步**不是** `OperatorApprovalRequester` 的「零订阅者即拒绝」——boot 给事件总线挂了内部消费者，那条臂在真服务器上**永远不触发**（FL 附录 D.0.199）。**有 operator 在线时**：卡按现有审批流升起，**没有死线**（2026-08-28 裁定），MCP 客户端那边等的是它自己的超时（dsh 60 s / adapter 30 s）；客户端放弃后卡**仍挂在 Panel 上**——用户裁定接受这个形状（U-d），「handler future 掉落时收回卡」记为 follow-up，未建 |
 | 错误形状 | 工具执行错误 → `isError: true` 的结果（**不是**协议错误）；不在 `expose` → tool not found；body 不是 JSON-RPC → 400 + JSON-RPC error body；非 `initialize` 请求缺 session 头 → 400；未知 / 过期 session → 404 |
-| 通知 | 插件 mount/unmount/reload（`lifecycle.rs::after_transition` 里的 `if let Some(face) = try_mcp_face() { face.notify_tools_list_changed() }`，G3 钉住这个调用点）与 `expose` 变更 → 向每条活着的 MCP session 广播 `notifications/src/tools/registry.rs_changed`。进程级句柄 `try_mcp_face() -> Option<&'static Arc<McpFace>>`（同 spend 的 `install_ledger` 形状，FL §5.25）让 lifecycle 不必穿 7 个构造点 |
+| 通知 | 插件 mount/unmount/reload（`lifecycle.rs::after_transition` 里的 `if let Some(face) = try_mcp_face() { face.notify_tools_list_changed() }`，G3 钉住这个调用点）与 `expose` 变更 → 向每条活着的 MCP session 广播 `notifications/tools/list_changed`（JSON-RPC 通知方法名）。进程级句柄 `try_mcp_face() -> Option<&'static Arc<McpFace>>`（同 spend 的 `install_ledger` 形状，FL §5.25）让 lifecycle 不必穿 7 个构造点 |
 | 名字 | Aleph 工具名已是 `[a-z0-9_]`，满足 dsh 的 64 字符规则（dsh 侧展示为 `mcp__<server>__<tool>`）；P6 逐名验证无超长名 |
 
 **有 operator 在线时的审批卡是「挂着的」，这是接受下来的形状（用户裁定 2026-09-20，U-d）。** 一个需要确认的
