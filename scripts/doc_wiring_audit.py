@@ -47,6 +47,12 @@ STALE_PATHS = {}
 # Every backticked code symbol that occurs nowhere in the tracked source, per
 # document. Recorded into the same baseline file under "SYMBOLS".
 STALE_SYMBOLS = {}
+# Files whose identifiers are about the docs, not the code: the baseline lists
+# stale names, so reading it would make every baselined name look current.
+SYMBOL_SOURCE_EXCLUDED = {
+    "scripts/doc_wiring_audit_baseline.json",
+    "scripts/doc_wiring_audit.py",
+}
 
 ENTRY_DOCS = [
     "AGENTS.md",
@@ -320,7 +326,7 @@ def known_symbols():
     ).stdout.splitlines()
     names = set()
     for rel in listed:
-        if not SOURCE_RE.search(rel):
+        if not SOURCE_RE.search(rel) or rel in SYMBOL_SOURCE_EXCLUDED:
             continue
         path = ROOT / rel
         if not path.is_file():
