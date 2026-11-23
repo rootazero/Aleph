@@ -1,6 +1,7 @@
 //! Browser-local loading. The shared host registry is a descriptor projection only.
 
-use super::{registry::TabRegistry, sdk::PanelSdk, PanelHostState};
+use super::{sdk::PanelSdk, PanelHostState};
+use shared_ui_logic::panel::registry::TabRegistry;
 use aleph_protocol::panel::{PanelTabDescriptor, PanelTabKey, PanelTabStatus, PANEL_UI_API_MAJOR};
 use futures::{future::LocalBoxFuture, FutureExt};
 use leptos::prelude::{GetUntracked, Set};

@@ -1,9 +1,9 @@
 use super::{
     capability_surface::CapabilitySurface,
     loader::{PanelLoadStatus, PanelLoader},
-    projection::PanelProjection,
     sdk::PanelSdk,
 };
+use shared_ui_logic::panel::projection::PanelProjection;
 use crate::context::DashboardState;
 use crate::i18n::{t_string, use_i18n};
 use aleph_protocol::panel::PanelTabKey;

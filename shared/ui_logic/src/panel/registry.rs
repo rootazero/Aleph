@@ -58,13 +58,13 @@ impl TabRegistry {
         self.source_revision = revision;
     }
 
-    pub(crate) fn set_asset_integrity(&mut self, key: &PanelTabKey, integrity: Option<String>) {
+    pub fn set_asset_integrity(&mut self, key: &PanelTabKey, integrity: Option<String>) {
         if let Some(index) = self.entries.iter().position(|entry| &entry.key == key) {
             self.asset_integrities[index] = integrity;
         }
     }
 
-    pub(crate) fn asset_integrity(&self, key: &PanelTabKey) -> Option<&str> {
+    pub fn asset_integrity(&self, key: &PanelTabKey) -> Option<&str> {
         self.entries
             .iter()
             .position(|entry| &entry.key == key)

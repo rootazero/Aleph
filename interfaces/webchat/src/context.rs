@@ -7,7 +7,7 @@ use crate::api::native_credentials::{
 };
 use crate::components::sidebar::SystemAlert;
 #[cfg(feature = "panel-modular")]
-use crate::panel::discovery::{PanelDiscoveryState, SnapshotUpdate};
+use shared_ui_logic::panel::discovery::{PanelDiscoveryState, SnapshotUpdate};
 use crate::state::notifications::{PendingApprovalView, PendingAskView};
 use futures::channel::{mpsc, oneshot};
 use futures::{FutureExt, StreamExt};
@@ -3053,7 +3053,7 @@ pub fn DashboardContext(children: Children) -> impl IntoView {
         state.panel_discovery.update(|discovery| {
             discovery.begin_connection(1);
             let _ =
-                discovery.accept_snapshot(1, crate::panel::source::community_fixture_snapshot());
+                discovery.accept_snapshot(1, shared_ui_logic::panel::source::community_fixture_snapshot());
         });
     }
     provide_context(state);
