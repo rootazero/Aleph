@@ -8,6 +8,7 @@ release_dir     := "target/release"
 debug_dir       := "target/debug"
 panel_dir       := "interfaces/webchat"
 panel_dist      := "interfaces/webchat/dist"
+panel_tsx_dir   := "interfaces/panel"
 server_bin      := "aleph-server"
 shell_dir       := "desktop/shell"
 memory_gate     := "qa/browser_live/check_memory.py"
@@ -395,6 +396,39 @@ wasm-modular:
     (cd {{panel_dir}} && bun run panel:tabs:build -- --output=.panel-modular-dist)
     (cd {{panel_dir}} && PANEL_TABS_OUTPUT=.panel-modular-dist bun run panel:tabs:report)
     (cd {{panel_dir}} && PANEL_TABS_OUTPUT=.panel-modular-dist bun run panel:tabs:test)
+
+# The shared TSX Panel (`interfaces/panel`): its Rust model's cargo tests and the
+# TSX tests (`nsh test`), the type check, and the web host's Node tests.
+panel-tsx-test:
+    nsh test {{panel_tsx_dir}}
+    nsh check {{panel_tsx_dir}}
+    node --test {{panel_tsx_dir}}/web/host.test.mjs
+
+# Package the TSX Panel for the Web (`out-web/`; the Gateway serves it at
+# `/v1/panel/` only when `panel_web_dir` points at it). NSH resolves its
+# generated workspace (`.nsh/rust`) on its own: seeding it with the root lock
+# keeps wasm-bindgen at the version the installed CLI and `just wasm` use.
+panel-tsx-web:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    nsh check {{panel_tsx_dir}}
+    cp Cargo.lock {{panel_tsx_dir}}/.nsh/rust/Cargo.lock
+    llvm_ar="$(rustc --print sysroot)/lib/rustlib/$(rustc -vV | sed -n 's/^host: //p')/bin/llvm-ar"
+    if [ -x "$llvm_ar" ]; then export AR_wasm32_unknown_unknown="${AR_wasm32_unknown_unknown:-$llvm_ar}"; fi
+    export CC_wasm32_unknown_unknown="${CC_wasm32_unknown_unknown:-clang}"
+    rm -rf {{panel_tsx_dir}}/out-web
+    nsh package --target web -o {{panel_tsx_dir}}/out-web {{panel_tsx_dir}}
+
+# Build the TSX Panel's JS bundle (`out-bundle/`), which the NSH shell's
+# `tsx-panel` feature compiles in.
+panel-tsx-bundle:
+    nsh check {{panel_tsx_dir}}
+    nsh build {{panel_tsx_dir}} -o {{panel_tsx_dir}}/out-bundle
+
+# Run the NSH shell with the embedded TSX Panel (macOS), talking to an
+# already-running Gateway over its Desktop IPC socket (an absolute path).
+shell-tsx-dev socket: panel-tsx-bundle
+    ALEPH_SHELL_PANEL=tsx ALEPH_SHELL_PANEL_IPC={{socket}} cargo run -p aleph-nsh-shell --features tsx-panel
 
 # Verify the committed panel dist is a matched js+wasm pair (no closure-trampoline
 # drift). Run by `just wasm`, in CI on every dist change, and gating each release.

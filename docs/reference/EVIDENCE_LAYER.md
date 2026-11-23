@@ -93,9 +93,10 @@ L2 里带日期的那几份已按此格式标注。
 | 检查 | 规则 |
 |---|---|
 | `DUAL` | 每个入口层文档必须同时提到 Tauri 与 NSH —— 防止入口层只描述一轨 |
-| `SYNC` | `AGENTS.md` 与 `CLAUDE.md` 归一化后必须逐字一致 —— 两份宪法不能各说一套 |
-| `STALE` | 禁止单轨断言（把桌面宿主整体说成"只有 Tauri"的写法；具体字面量见 `scripts/doc_wiring_audit.py` 的 `STALE_PATTERNS`） |
+| `SYNC` | `AGENTS.md` 与 `CLAUDE.md` 归一化后必须一致，只允许 `SYNC_ALLOWED_DIFFS` 列出的章节不同 —— 两份宪法不能各说一套 |
+| `STALE` | 禁止单轨断言（把桌面宿主整体说成"只有 Tauri"的写法；具体字面量见 `scripts/doc_wiring_audit.py` 的 `CUT_PHRASES`） |
 | `PATHS` | 文档里点名的仓库路径必须真实存在（带 baseline 棘轮：新出现的失效路径算失败） |
+| `SYMBOLS` | 反引号里形似代码的符号（`a::b`、`f()`、带下划线的小写名、多驼峰名）必须在受跟踪源码中出现；标题含 Historical / Superseded / 历史记录 的章节豁免（同样是 baseline 棘轮） |
 | `LINKS` | 本地 Markdown 链接必须可解析 |
 | `CRATES` / `JUST` / `PORT` | 点名的 crate、`just` 目标、端口号必须与代码一致 |
 | `MANGLED` / `ROOTS` | 路径拼写损坏（文件扩展名后粘上多余片段）与"缺 `src/` 前缀"要能被发现 |

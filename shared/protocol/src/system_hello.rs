@@ -101,6 +101,11 @@ pub struct HelloResult {
     pub connection_id: String,
     pub features: Vec<Feature>,
     pub limits: HelloLimits,
+    /// Opaque, stable per-user value for client-side storage keys (Panel
+    /// layout). It is not an identity: clients must not derive authority
+    /// from it. Absent on legacy `/ws` and when the Gateway has no key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<String>,
 }
 
 /// Select the latest version both peers support within the same major.
@@ -205,10 +210,26 @@ mod tests {
                 max_message_bytes: 8_388_608,
                 max_inflight_requests: 128,
             },
+            subject: Some("0123456789abcdef0123456789abcdef".to_string()),
         };
         let json = serde_json::to_value(&result).unwrap();
         let back: HelloResult = serde_json::from_value(json).unwrap();
         assert_eq!(back.server.name, "aleph-server");
         assert_eq!(back.connection_id, "conn-001");
+        assert_eq!(back.subject, result.subject);
+    }
+
+    #[test]
+    fn hello_result_without_subject_round_trips_for_old_clients() {
+        let wire = serde_json::json!({
+            "protocol": {"major": 1, "minor": 0},
+            "server": {"name": "aleph-server", "version": "26.9.1"},
+            "connection_id": "conn-001",
+            "features": [],
+            "limits": {"max_message_bytes": 1, "max_inflight_requests": 1},
+        });
+        let back: HelloResult = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(back.subject, None);
+        assert_eq!(serde_json::to_value(&back).unwrap(), wire);
     }
 }

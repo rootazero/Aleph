@@ -59,7 +59,7 @@ pub fn ProjectsSidebar() -> impl IntoView {
         let discovery = dash.panel_discovery.get();
         if matches!(
             discovery.status(),
-            crate::panel::discovery::PanelDiscoveryStatus::Ready { .. }
+            shared_ui_logic::panel::discovery::PanelDiscoveryStatus::Ready { .. }
         ) {
             // Reflect server selection without issuing another selection write.
             tab_state

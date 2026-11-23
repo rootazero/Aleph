@@ -14,6 +14,12 @@ pub const PANEL_PROJECT_SELECT_METHOD: &str = "panel.project.select";
 /// Response metadata for host fencing; never accepted as request authorization.
 pub const PANEL_PROJECT_GENERATION_HEADER: &str = "x-aleph-panel-project-generation";
 
+/// Error code a Panel host adapter (the TSX shell's web `host.js` or the
+/// desktop `aleph.rpc` handler) answers when it has no connection to the
+/// Gateway. Produced client-side, never by the Gateway; outside the codes in
+/// `jsonrpc.rs`.
+pub const PANEL_HOST_UNAVAILABLE: i32 = -32090;
+
 /// Non-authorizing context metadata, independent of Core source revisions.
 #[derive(Serialize, Deserialize, Clone, Debug, Default, Eq, PartialEq)]
 pub struct PanelProjectSelection {
@@ -332,8 +338,8 @@ mod tests {
     }
 
     #[test]
-    fn panel_webchat_source_does_not_define_another_wire_shape() {
-        let source = include_str!("../../../interfaces/webchat/src/panel/source.rs");
+    fn panel_model_source_does_not_define_another_wire_shape() {
+        let source = include_str!("../../ui_logic/src/panel/source.rs");
         for name in [
             "PanelUiCapabilityDeclaration",
             "PanelUiCapabilitySnapshot",

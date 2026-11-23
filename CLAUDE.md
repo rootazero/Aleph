@@ -64,9 +64,9 @@
 | 宿主 | 位置 | 现状（2026-11-23） |
 |---|---|---|
 | 遗留 Tauri 宿主 | `desktop/shell`（`aleph-desktop-shell`，Tauri v2） | **仍在发版**：CI `aleph-app-release.yml` 与 `just shell-build` 走它；自带 updater / `aleph://` deeplink / macOS 菜单 / 服务管理 |
-| NSH 宿主 | `desktop/nsh-shell`（`aleph-nsh-shell`，nsh 0.6.0） | **目标形态**：窗口 + 托盘 + 全局快捷键 + 通知授权 + 面板桥；尚无 updater / deeplink / macOS 菜单 / 服务控制，**尚无 release 流水线与 `just` 目标** |
+| NSH 宿主 | `desktop/nsh-shell`（`aleph-nsh-shell`，nsh 0.6.0） | **目标形态**：窗口 + 托盘 + 全局快捷键 + 通知授权 + 面板桥；尚无 updater / deeplink / macOS 菜单 / 服务控制，**尚无 release 流水线与构建 `just` 目标**（仅有开发入口 `just shell-tsx-dev`） |
 
-- **宿主↔Panel 走类型化契约**：`shared/protocol/src/panel_shell.rs`（`ShellRequest` / `ShellReply` / `PanelReply`）。
+- **宿主↔Panel 走类型化契约**：`shared/protocol/src/panel_shell.rs`（宿主发 `ShellRequest`、收 `PanelReply`；凭据与自启动状态以 `CredentialCall` / `CredentialReply` / `AutostartStatus` 嵌在其中）。
   宿主侧实现 `desktop/nsh-shell/src/panel_bridge.rs`，Panel 侧消费 `interfaces/webchat/src/app/shell_bridge.rs`。
   旧的 `__TAURI_INTERNALS__` 只剩两处未迁移消费者：`interfaces/webchat/src/api/native_credentials.rs`、
   `interfaces/webchat/src/platform/wide/views/voice/audio.rs`。
@@ -193,7 +193,7 @@
 - 恢复与原子边界：reducer fail-closed pinned（`src/capability/effect_claim.rs`：`duplicate_claim_and_illegal_migration_remain_fail_closed`）+ `SessionService::emit_batch` 默认 `Err`、唯一生产 override `InProcessActorSessionService` + `SessionEventStore::append_batch` 单事务（已审计，committed）。`StateDatabase` / ACP JSON / MCP 类型与工具视图是 projection-only，`GlobalBus` 是 notification-only。
 - `CapabilityBackend::generation()` 与 `CapabilityDescriptor.owner_generation` 已删去（旧权威回收）；generation 权威只在 `BackendLease.owner_generation` + `OwnershipTree::generation()`。
 - 订阅接真实 broadcast（committed）：`ZahirFacade::subscribe` 先 `ToolHandlerRegistry::subscribe()` 再 `describe`，drain 进纯值 `CapabilityChangeStream`；broadcast 是 live notification（256 槽、lag 可丢），**不是** durable recovery source；durable recovery 只认 `SessionEventStore`。`subscribe` 的 caller cursor 被**忽略**（同步 snapshot-anchored API 无 replay，不是去重/过滤 hint），cursor 超过 snapshot 时 fail-closed 锚定到 snapshot revision，不伪造逐条恢复。
-- `to_metadata_form`（`src/tools/service.rs:453`）仍是旧 Tool compatibility wrapper。**EffectClaim producer integration** deferred（无生产 `SessionEvent::EffectClaim*` 构造点，下期独立 approval）；automatic Safe Replay、external-effect exactly-once、universal durable scheduler、完整 ACP server gate、其余 kind backend 均 deferred。详情见 [FEATURE_LOCATOR §3.5d](docs/reference/FEATURE_LOCATOR.md)。
+- `to_metadata_form`（定义在 `crates/aleph-slot-api/src/tool.rs:423`，经 `src/tools/service.rs` 再导出）仍是旧 Tool compatibility wrapper。**EffectClaim producer integration** deferred（无生产 `SessionEvent::EffectClaim*` 构造点，下期独立 approval）；automatic Safe Replay、external-effect exactly-once、universal durable scheduler、完整 ACP server gate、其余 kind backend 均 deferred。详情见 [FEATURE_LOCATOR §3.5d](docs/reference/FEATURE_LOCATOR.md)。
 
 ---
 

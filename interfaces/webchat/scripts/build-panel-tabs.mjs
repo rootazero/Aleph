@@ -45,6 +45,11 @@ const sourceInputs = [
   'Cargo.toml',
   'interfaces/webchat/Cargo.toml',
   'interfaces/webchat/src',
+  // Compiled into the Panel WASM: the shared Panel model and wire types.
+  'shared/ui_logic/Cargo.toml',
+  'shared/ui_logic/src',
+  'shared/protocol/Cargo.toml',
+  'shared/protocol/src',
   'interfaces/webchat/scripts/build-panel-tabs.mjs',
   'interfaces/webchat/panel_loader.js',
   'interfaces/webchat/tabs/terminal/Cargo.toml',

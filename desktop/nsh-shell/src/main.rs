@@ -4,8 +4,17 @@ mod credentials;
 mod ipc_status;
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 mod panel_bridge;
+#[cfg(feature = "tsx-panel")]
+mod panel_host;
+#[cfg(all(feature = "tsx-panel", target_os = "macos"))]
+mod panel_surface;
 mod platform;
 mod shell_host;
+
+#[cfg(all(feature = "tsx-panel", not(target_os = "macos")))]
+compile_error!(
+    "tsx-panel embeds the Panel with the macOS AppView only; Linux and Windows are outside S2"
+);
 
 #[cfg(all(target_os = "macos", debug_assertions))]
 #[path = "../../../qa/phase9_clock.rs"]
@@ -97,6 +106,22 @@ fn main() -> std::process::ExitCode {
                 return std::process::ExitCode::FAILURE;
             }
         };
+    match std::env::var_os("ALEPH_SHELL_PANEL") {
+        None => {}
+        Some(value)
+            if value == "tsx" && cfg!(feature = "tsx-panel") && settings.qa_nonce.is_none() =>
+        {
+            #[cfg(feature = "tsx-panel")]
+            panel_surface::register(panel_host::Target::resolve(
+                args.iter().any(|arg| arg == "--connect"),
+                std::env::var_os(panel_host::IPC_ENV),
+            ));
+        }
+        Some(_) => {
+            eprintln!("NSH host refused ALEPH_SHELL_PANEL: only \"tsx\", in a tsx-panel build, without QA");
+            return std::process::ExitCode::FAILURE;
+        }
+    }
     #[cfg(feature = "embedded-core")]
     if settings.acquires_local_server {
         let readiness = tokio::runtime::Builder::new_current_thread()
@@ -154,21 +179,8 @@ fn main() -> std::process::ExitCode {
         let window = main_window();
         let close_window = window.clone();
         window.on_close_press(move |_| close_window.hide());
-        let view = element_ref();
-        let credentials = credentials::CredentialService::new(
-            &props.gateway.get_untracked(),
-            props.nonce.get_untracked().as_deref(),
-        );
-        let bridge = panel_bridge::Bridge::start(
-            view,
-            props.bridge_prefix.get_untracked(),
-            window.clone(),
-            credentials,
-            autostart::Reader::new(props.nonce.get_untracked().as_deref()),
-        );
-        let navigation = bridge.clone();
-        let terminated = bridge.clone();
         let shortcut_window = window.clone();
+        let bridge_window = window.clone();
         let show = move || {
             window.show();
             window.focus();
@@ -212,6 +224,26 @@ fn main() -> std::process::ExitCode {
                 }
             });
         }
+        #[cfg(feature = "tsx-panel")]
+        if panel_surface::registered() {
+            return nsh_core::prelude::native(panel_surface::SURFACE)
+                .flex_1()
+                .into_element();
+        }
+        let view = element_ref();
+        let credentials = credentials::CredentialService::new(
+            &props.gateway.get_untracked(),
+            props.nonce.get_untracked().as_deref(),
+        );
+        let bridge = panel_bridge::Bridge::start(
+            view,
+            props.bridge_prefix.get_untracked(),
+            bridge_window,
+            credentials,
+            autostart::Reader::new(props.nonce.get_untracked().as_deref()),
+        );
+        let navigation = bridge.clone();
+        let terminated = bridge.clone();
         web_view(props.url)
             .flex_1()
             .element_ref(&view)
@@ -248,6 +280,7 @@ fn main() -> std::process::ExitCode {
                     quit();
                 }
             })
+            .into_element()
     }
     let mut placement = MainWindowOptions::default();
     // Use the public hide command so NSH reports visibility to the shortcut.

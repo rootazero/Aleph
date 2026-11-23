@@ -161,7 +161,7 @@ impl PanelSdk {
         let state = self.state.panel_discovery.try_get_untracked()?;
         matches!(
             state.status(),
-            crate::panel::discovery::PanelDiscoveryStatus::Ready { .. }
+            shared_ui_logic::panel::discovery::PanelDiscoveryStatus::Ready { .. }
         )
         .then(|| (state.context_epoch(), state.project_context().generation))
     }
@@ -573,7 +573,7 @@ impl PanelSubscription {
 mod tests {
     use super::{PanelSdk, PanelSdkError};
     use crate::context::{DashboardState, GatewayEvent};
-    use crate::panel::registry::TabRegistry;
+    use shared_ui_logic::panel::registry::TabRegistry;
     use crate::panel::{PanelHostState, PanelModuleHandle, PanelMountState};
     use aleph_protocol::panel::{
         PanelTabDescriptor, PanelTabKey, PanelTabStatus, PanelUiTrust, PANEL_UI_API_MAJOR,

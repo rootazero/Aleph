@@ -95,6 +95,21 @@ mod rpc;
 pub mod upgrade;
 pub(super) mod web_v1;
 
+/// The read-only methods both v1 entries (Desktop IPC and Web `/v1/ws`)
+/// mount. One list so the two entries cannot drift apart; everything else
+/// is rejected with `METHOD_NOT_FOUND` before it reaches Core. Mutating
+/// methods such as `panel.project.select` stay off until a later stage
+/// approves them.
+pub(super) const V1_METHODS: &[&str] = &[
+    "health",
+    "sessions.list",
+    aleph_protocol::panel::PANEL_UI_CAPABILITY_SNAPSHOT_METHOD,
+];
+
+pub(super) fn v1_mounted(method: &str) -> bool {
+    V1_METHODS.contains(&method)
+}
+
 // Bring every helper used by the orchestrator into this module's scope.
 // (The test module in `handler.rs` reaches them via the re-exports
 // declared at the bottom of this file.)

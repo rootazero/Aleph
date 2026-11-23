@@ -1,13 +1,13 @@
 use super::{
     capability_surface::CapabilitySurface,
     loader::{PanelLoadStatus, PanelLoader},
-    projection::PanelProjection,
     sdk::PanelSdk,
 };
 use crate::context::DashboardState;
 use crate::i18n::{t_string, use_i18n};
 use aleph_protocol::panel::PanelTabKey;
 use leptos::{html, prelude::*, task::spawn_local};
+use shared_ui_logic::panel::projection::PanelProjection;
 
 #[component]
 pub fn PanelShell(projection: PanelProjection, initial_tab: Option<PanelTabKey>) -> impl IntoView {

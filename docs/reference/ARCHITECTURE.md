@@ -659,10 +659,10 @@ around it, and the host is mid-migration:
 | Host | Location | State (2026-11) |
 |---|---|---|
 | Legacy Tauri host | `desktop/shell` (`aleph-desktop-shell`) | **Still the released build** — the release workflow and `just shell-build` target it; carries the updater, `aleph://` deeplink, macOS menu and service management |
-| NSH host | `desktop/nsh-shell` (`aleph-nsh-shell`) | **Forward form** — window, tray, global shortcut, notification permission and the typed Panel bridge; no updater, deeplink, macOS menu or service control yet, and no release pipeline or `just` target |
+| NSH host | `desktop/nsh-shell` (`aleph-nsh-shell`) | **Forward form** — window, tray, global shortcut, notification permission and the typed Panel bridge; no updater, deeplink, macOS menu or service control yet, and no release pipeline or build `just` target (only the development entry `just shell-tsx-dev`) |
 
 The host↔Panel contract is typed, not ad-hoc: `shared/protocol/src/panel_shell.rs`
-(`ShellRequest` / `ShellReply` / `PanelReply`), implemented host-side in
+(the host sends `ShellRequest` and receives `PanelReply`; credential and autostart payloads ride inside them), implemented host-side in
 `desktop/nsh-shell/src/panel_bridge.rs` and consumed Panel-side in
 `interfaces/webchat/src/app/shell_bridge.rs`. The switch is gated by the Phase 11 plan
 ([docs/superpowers/plans/2026-11-21-phase11-nsh-cutover.md](../superpowers/plans/2026-11-21-phase11-nsh-cutover.md)).

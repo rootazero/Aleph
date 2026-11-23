@@ -1,0 +1,13 @@
+{
+  "name": "Aleph Panel",
+  "id": "com.aleph.panel",
+  "version": "0.1.0",
+  "build": 1,
+  "rust": ".",
+  "capabilities": {
+    "host": ["aleph.rpc", "aleph.pair", "aleph.connect", "aleph.connection"]
+  },
+  "web": {
+    "host": "./web/host.js"
+  }
+}

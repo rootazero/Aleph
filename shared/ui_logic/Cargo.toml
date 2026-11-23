@@ -42,6 +42,11 @@ web-sys = { version = "0.3", optional = true, features = [
 
 [features]
 default = ["wasm"]
+# Runtime-neutral Panel model (registry, projection, discovery, sources).
+panel = []
+# Webchat's terminal-pilot spike fixtures; enabled only through
+# `aleph-panel/panel-tab-spike` so both crates read one switch.
+panel-tab-spike = ["panel"]
 wasm = [
     "dep:wasm-bindgen",
     "dep:wasm-bindgen-futures",

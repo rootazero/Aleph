@@ -1,19 +1,15 @@
 //! Feature-gated Panel projection and browser-only lifecycle boundary.
 
 pub mod capability_surface;
-pub mod discovery;
 pub mod loader;
-pub mod projection;
-pub mod registry;
 pub mod sdk;
 mod shell;
-pub mod source;
 
 pub use shell::PanelShell;
 
 use aleph_protocol::panel::PanelTabKey;
 use leptos::prelude::{RwSignal, Update};
-use registry::TabRegistry;
+use shared_ui_logic::panel::registry::TabRegistry;
 use std::sync::{Arc, Mutex};
 
 /// Shell-owned descriptor projection, not an authoritative plugin registry.

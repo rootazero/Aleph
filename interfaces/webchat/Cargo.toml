@@ -35,8 +35,8 @@ crate-type = ["cdylib", "rlib"]
 # produce a native .exe from a WASM-only entry.
 
 [features]
-panel-modular = []
-panel-tab-spike = ["panel-modular"]
+panel-modular = ["shared-ui-logic/panel"]
+panel-tab-spike = ["panel-modular", "shared-ui-logic/panel-tab-spike"]
 runtime-qa = []
 default = ["legacy-terminal"]
 legacy-terminal = ["dep:aleph-terminal-ui"]

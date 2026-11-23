@@ -47,7 +47,7 @@ use crate::components::token_wall::TokenWall;
 use crate::components::workspace_panel::WorkspacePanel;
 use crate::context::{DashboardContext, DashboardState};
 #[cfg(feature = "panel-modular")]
-use crate::panel::discovery::{PanelDiscoveryState, PanelDiscoveryStatus};
+use shared_ui_logic::panel::discovery::{PanelDiscoveryState, PanelDiscoveryStatus};
 use crate::platform::phone::agents::PhoneAgents;
 use crate::platform::phone::chat::PhoneChat;
 use crate::platform::phone::dashboard::PhoneDashboard;
@@ -673,12 +673,12 @@ fn MainContent() -> impl IntoView {
         let dashboard = expect_context::<DashboardState>();
         let location = use_location();
         let i18n = use_i18n();
-        let projection = crate::panel::projection::PanelProjection::builtins(
+        let projection = shared_ui_logic::panel::projection::PanelProjection::builtins(
             t_string!(i18n, panel_spike.pilot).to_string(),
         );
         return move || {
             let path = location.pathname.get();
-            let route = crate::panel::projection::PanelProjection::select_route(
+            let route = shared_ui_logic::panel::projection::PanelProjection::select_route(
                 &path,
                 projection.as_ref().ok(),
             );
@@ -695,7 +695,7 @@ fn MainContent() -> impl IntoView {
                     .into_any();
                 }
                 match route {
-                    crate::panel::projection::PanelRoute::Modular(initial_tab) => {
+                    shared_ui_logic::panel::projection::PanelRoute::Modular(initial_tab) => {
                         if let Ok(projection) = projection.as_ref() {
                             return view! {
                                 <crate::panel::PanelShell
@@ -706,7 +706,7 @@ fn MainContent() -> impl IntoView {
                             .into_any();
                         }
                     }
-                    crate::panel::projection::PanelRoute::Unavailable => {
+                    shared_ui_logic::panel::projection::PanelRoute::Unavailable => {
                         return view! {
                             <section class="h-full flex flex-col" data-panel-shell="panel-error">
                                 <div role="status">"Panel unavailable"</div>
@@ -714,7 +714,7 @@ fn MainContent() -> impl IntoView {
                         }
                         .into_any();
                     }
-                    crate::panel::projection::PanelRoute::Legacy => {}
+                    shared_ui_logic::panel::projection::PanelRoute::Legacy => {}
                 }
             }
             view! { <LegacyMainContent /> }.into_any()
@@ -729,7 +729,7 @@ fn explicit_community_panel(
     path: &str,
     discovery: &PanelDiscoveryState,
 ) -> Option<(
-    crate::panel::projection::PanelProjection,
+    shared_ui_logic::panel::projection::PanelProjection,
     aleph_protocol::panel::PanelTabKey,
 )> {
     match discovery.status() {
@@ -745,7 +745,7 @@ fn explicit_community_panel(
         }
     }
 
-    let key = match crate::panel::projection::PanelProjection::explicit_key(path) {
+    let key = match shared_ui_logic::panel::projection::PanelProjection::explicit_key(path) {
         Some(key) => {
             leptos::logging::log!(
                 "🔍 [routing] Step 2 PASS: explicit_key({}) = {:?}",
@@ -778,7 +778,7 @@ fn explicit_community_panel(
     };
 
     let projection =
-        match crate::panel::projection::PanelProjection::from_snapshot(snapshot.clone()) {
+        match shared_ui_logic::panel::projection::PanelProjection::from_snapshot(snapshot.clone()) {
             Ok(projection) => {
                 leptos::logging::log!("🔍 [routing] Step 4 PASS: from_snapshot succeeded");
                 projection
