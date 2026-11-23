@@ -76,6 +76,52 @@ impl PanelLayout {
     pub fn to_json(&self) -> String {
         serde_json::to_string(self).expect("layout holds only strings")
     }
+
+    /// Swap `key` with its neighbour one step towards the front (`forward`)
+    /// or the back of the order. Returns whether the order changed.
+    pub fn move_one(&mut self, key: &PanelTabKey, forward: bool) -> bool {
+        let Some(index) = self.order.iter().position(|candidate| candidate == key) else {
+            return false;
+        };
+        let target = if forward {
+            index.checked_sub(1)
+        } else {
+            Some(index + 1).filter(|next| *next < self.order.len())
+        };
+        match target {
+            Some(target) => {
+                self.order.swap(index, target);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Hide or show a tab the layout already orders. Hiding the active tab
+    /// clears `active`; `restore` then picks the first live slot.
+    pub fn set_hidden(&mut self, key: &PanelTabKey, hidden: bool) -> bool {
+        if !self.order.contains(key) || self.hidden.contains(key) == hidden {
+            return false;
+        }
+        if hidden {
+            self.hidden.push(key.clone());
+            if self.active.as_ref() == Some(key) {
+                self.active = None;
+            }
+        } else {
+            self.hidden.retain(|candidate| candidate != key);
+        }
+        true
+    }
+
+    /// Record `key` as active. Only `restore` decides whether it is live.
+    pub fn select(&mut self, key: &PanelTabKey) -> bool {
+        if !self.order.contains(key) || self.hidden.contains(key) {
+            return false;
+        }
+        self.active = Some(key.clone());
+        true
+    }
 }
 
 /// Restore a stored layout against the current registry. A damaged or
@@ -344,5 +390,51 @@ mod tests {
             layout_storage_key("wss://h:1", None),
             "aleph.panel.layout.v1:wss://h:1"
         );
+    }
+
+    #[test]
+    fn move_one_swaps_neighbours_and_stops_at_the_ends() {
+        let mut layout = PanelLayout::default_for(&three());
+        assert!(!layout.move_one(&key("p", "a"), true));
+        assert!(layout.move_one(&key("p", "a"), false));
+        assert_eq!(
+            layout.order,
+            vec![key("p", "b"), key("p", "a"), key("p", "c")]
+        );
+        assert!(layout.move_one(&key("p", "c"), true));
+        assert_eq!(
+            layout.order,
+            vec![key("p", "b"), key("p", "c"), key("p", "a")]
+        );
+        assert!(!layout.move_one(&key("p", "a"), false));
+        assert!(!layout.move_one(&key("p", "missing"), false));
+    }
+
+    #[test]
+    fn hiding_the_active_tab_hands_activity_to_the_first_live_slot() {
+        let mut layout = PanelLayout::default_for(&three());
+        assert!(layout.set_hidden(&key("p", "a"), true));
+        assert!(!layout.set_hidden(&key("p", "a"), true));
+        assert_eq!(layout.active, None);
+        assert!(!layout.select(&key("p", "a")));
+
+        let restored = restore(Some(&layout.to_json()), &three());
+        assert_eq!(restored.layout.active, Some(key("p", "b")));
+        assert!(!restored.slots.contains(&LayoutSlot::Live(key("p", "a"))));
+
+        let mut layout = restored.layout;
+        assert!(layout.set_hidden(&key("p", "a"), false));
+        assert!(layout.select(&key("p", "a")));
+        let restored = restore(Some(&layout.to_json()), &three());
+        assert_eq!(restored.layout.active, Some(key("p", "a")));
+    }
+
+    #[test]
+    fn edits_ignore_keys_the_layout_does_not_order() {
+        let mut layout = PanelLayout::default_for(&three());
+        let before = layout.clone();
+        assert!(!layout.set_hidden(&key("p", "missing"), true));
+        assert!(!layout.select(&key("p", "missing")));
+        assert_eq!(layout, before);
     }
 }

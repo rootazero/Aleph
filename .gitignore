@@ -200,3 +200,8 @@ cef-rs/
 /.phase10-evidence/
 /.phase10-target/
 /.phase10-target-optimized/
+
+# NSH Panel shell build output (interfaces/panel)
+interfaces/panel/.nsh/
+interfaces/panel/out-*/
+interfaces/panel/target/

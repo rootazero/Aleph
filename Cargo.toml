@@ -21,6 +21,7 @@ members = [
     "interfaces/cli",
     "interfaces/tui",
     "interfaces/webchat",
+    "interfaces/panel",
     "interfaces/webchat/tabs/terminal-ui",
     "interfaces/webchat/tabs/terminal-pilot",
     "interfaces/webchat/tabs/terminal",

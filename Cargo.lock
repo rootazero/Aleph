@@ -379,6 +379,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "aleph-panel-ui"
+version = "0.1.0"
+dependencies = [
+ "aleph-protocol",
+ "nsh-core",
+ "serde_json",
+ "shared-ui-logic",
+]
+
+[[package]]
 name = "aleph-protocol"
 version = "0.1.0"
 dependencies = [

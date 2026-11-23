@@ -1,0 +1,28 @@
+{
+  "frames": [
+    {
+      "name": "hello",
+      "payload": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"system.hello\",\"params\":{\"protocol\":{\"major\":1,\"minor\":0},\"client\":{\"name\":\"aleph-panel\",\"version\":\"0.1.0\",\"platform\":\"web\",\"ui_runtime\":\"nsh\"},\"features\":[]}}",
+      "wire_hex": "000000c07b226a736f6e727063223a22322e30222c226964223a312c226d6574686f64223a2273797374656d2e68656c6c6f222c22706172616d73223a7b2270726f746f636f6c223a7b226d616a6f72223a312c226d696e6f72223a307d2c22636c69656e74223a7b226e616d65223a22616c6570682d70616e656c222c2276657273696f6e223a22302e312e30222c22706c6174666f726d223a22776562222c2275695f72756e74696d65223a226e7368227d2c226665617475726573223a5b5d7d7d"
+    },
+    {
+      "name": "call",
+      "payload": "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"sessions.list\",\"params\":{}}",
+      "wire_hex": "0000003d7b226a736f6e727063223a22322e30222c226964223a322c226d6574686f64223a2273657373696f6e732e6c697374222c22706172616d73223a7b7d7d"
+    },
+    {
+      "name": "result",
+      "payload": "{\"jsonrpc\":\"2.0\",\"result\":{\"label\":\"会话 ✓\"},\"id\":2}",
+      "wire_hex": "000000387b226a736f6e727063223a22322e30222c22726573756c74223a7b226c6162656c223a22e4bc9ae8af9d20e29c93227d2c226964223a327d"
+    },
+    {
+      "name": "error",
+      "payload": "{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32601,\"message\":\"method unavailable on Web v1\"},\"id\":3}",
+      "wire_hex": "000000597b226a736f6e727063223a22322e30222c226572726f72223a7b22636f6465223a2d33323630312c226d657373616765223a226d6574686f6420756e617661696c61626c65206f6e20576562207631227d2c226964223a337d"
+    }
+  ],
+  "header_bytes": 4,
+  "host_unavailable_code": -32090,
+  "max_payload": 1048576,
+  "oversize_header_hex": "00100001"
+}

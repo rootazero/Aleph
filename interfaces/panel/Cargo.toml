@@ -1,0 +1,16 @@
+[package]
+name = "aleph-panel-ui"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "NSH UI set of the shared TSX Panel shell: a thin binding over the shared Panel model"
+
+# A root workspace member (not a workspace of its own like the S2 spike app):
+# `nsh build`/`nsh package` link it through their generated workspace, and the
+# desktop host `aleph-nsh-shell` links the same crate for the embedded surface.
+
+[dependencies]
+nsh-core = "=0.6.0"
+aleph-protocol = { path = "../../shared/protocol" }
+shared-ui-logic = { path = "../../shared/ui_logic", default-features = false, features = ["panel"] }
+serde_json = "1"
