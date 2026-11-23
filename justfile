@@ -419,6 +419,17 @@ panel-tsx-web:
     rm -rf {{panel_tsx_dir}}/out-web
     nsh package --target web -o {{panel_tsx_dir}}/out-web {{panel_tsx_dir}}
 
+# Build the TSX Panel's JS bundle (`out-bundle/`), which the NSH shell's
+# `tsx-panel` feature compiles in.
+panel-tsx-bundle:
+    nsh check {{panel_tsx_dir}}
+    nsh build {{panel_tsx_dir}} -o {{panel_tsx_dir}}/out-bundle
+
+# Run the NSH shell with the embedded TSX Panel (macOS), talking to an
+# already-running Gateway over its Desktop IPC socket (an absolute path).
+shell-tsx-dev socket: panel-tsx-bundle
+    ALEPH_SHELL_PANEL=tsx ALEPH_SHELL_PANEL_IPC={{socket}} cargo run -p aleph-nsh-shell --features tsx-panel
+
 # Verify the committed panel dist is a matched js+wasm pair (no closure-trampoline
 # drift). Run by `just wasm`, in CI on every dist change, and gating each release.
 check-dist:

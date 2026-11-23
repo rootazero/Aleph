@@ -424,6 +424,9 @@ pub struct AlephClient {
     /// handshake. Cleared on every handshake first, set only when the response
     /// proves the credential path (see [`AlephClient::verified_identity`]).
     identity: Arc<std::sync::Mutex<Option<VerifiedIdentity>>>,
+    /// The opaque per-user subject from a Desktop IPC `system.hello`. Set once:
+    /// an IPC connection is never reconnected in place.
+    hello_subject: std::sync::OnceLock<String>,
     /// Keep concurrent reconnect attempts from each installing a candidate.
     reconnect_lock: Mutex<()>,
 }
@@ -527,6 +530,9 @@ impl AlephClient {
             .mark_ready_with_limit(result.limits.max_inflight_requests as usize)
         {
             return Err(CliError::Disconnected("IPC closed during handshake".into()));
+        }
+        if let Some(subject) = result.subject {
+            let _ = client.hello_subject.set(subject);
         }
         Ok((client, events))
     }
@@ -686,6 +692,7 @@ impl AlephClient {
             role: Arc::new(std::sync::Mutex::new(String::new())),
             credential: Arc::new(std::sync::Mutex::new(None)),
             identity: Arc::new(std::sync::Mutex::new(None)),
+            hello_subject: std::sync::OnceLock::new(),
             reconnect_lock: Mutex::new(()),
         };
         client.spawn_reader(read, socket);
@@ -1044,6 +1051,14 @@ impl AlephClient {
     /// Record what a handshake just granted.
     fn set_role(&self, role: String) {
         *self.role.lock().unwrap_or_else(|e| e.into_inner()) = role;
+    }
+
+    /// The opaque per-user subject the Gateway reported in a Desktop IPC
+    /// `system.hello`. `None` for a WebSocket client, or when the Gateway has
+    /// no shared-token secret to derive one from.
+    #[must_use]
+    pub fn hello_subject(&self) -> Option<String> {
+        self.hello_subject.get().cloned()
     }
 
     /// Whether the current socket is live and has completed its handshake.
