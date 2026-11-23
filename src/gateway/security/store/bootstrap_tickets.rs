@@ -191,6 +191,41 @@ impl SecurityStore {
         code: &str,
         device_id: Option<&str>,
     ) -> Result<ConsumedBootstrapTicket, BootstrapTicketError> {
+        self.consume_bootstrap_ticket_transaction(code, device_id, |_, _| Ok(()))
+    }
+
+    pub(in crate::gateway::security) fn exchange_bound_ticket(
+        &self,
+        code: &str,
+        device_id: &str,
+        persist: impl FnOnce(&rusqlite::Connection, &str) -> SqliteResult<()>,
+    ) -> Result<(), BootstrapTicketError> {
+        self.consume_bootstrap_ticket_transaction(code, Some(device_id), |tx, user_id| {
+            let user_id = user_id.ok_or(BootstrapTicketError::Invalid)?;
+            let active: bool = tx
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM users WHERE user_id = ?1 AND status = ?2)",
+                    params![user_id, super::users::UserStatus::Active.as_str()],
+                    |row| row.get(0),
+                )
+                .map_err(|error| BootstrapTicketError::Store(error.to_string()))?;
+            if !active {
+                return Err(BootstrapTicketError::Invalid);
+            }
+            persist(tx, user_id).map_err(|error| BootstrapTicketError::Store(error.to_string()))
+        })?;
+        Ok(())
+    }
+
+    fn consume_bootstrap_ticket_transaction(
+        &self,
+        code: &str,
+        device_id: Option<&str>,
+        on_consume: impl FnOnce(
+            &rusqlite::Transaction<'_>,
+            Option<&str>,
+        ) -> Result<(), BootstrapTicketError>,
+    ) -> Result<ConsumedBootstrapTicket, BootstrapTicketError> {
         let mut conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let tx = conn
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
@@ -250,7 +285,6 @@ impl SecurityStore {
             }
             Some((_, None, user_id, None)) => user_id,
         };
-
         // Repeat validity predicates at the write boundary, including expiry
         // since time can advance after the SELECT.
         let consumed_at = current_timestamp_ms();
@@ -266,6 +300,7 @@ impl SecurityStore {
         if updated == 0 {
             return Err(BootstrapTicketError::Invalid);
         }
+        on_consume(&tx, user_id.as_deref())?;
 
         tx.commit()
             .map_err(|e| BootstrapTicketError::Store(e.to_string()))?;
@@ -343,6 +378,56 @@ mod tests {
             store.consume_bootstrap_ticket("bt-1", Some("dev-1")),
             Err(BootstrapTicketError::Invalid)
         );
+    }
+
+    #[test]
+    fn bound_exchange_rolls_back_ticket_and_device_if_issuance_fails() {
+        use crate::gateway::security::store::UserRole;
+        use crate::gateway::security::DeviceTokenManager;
+        use std::sync::Arc;
+
+        let store = Arc::new(store());
+        store
+            .create_user("fixture-user", "Fixture user", UserRole::Member)
+            .unwrap();
+        let manager = DeviceTokenManager::new(store.clone());
+        let ticket = manager
+            .create_bootstrap_ticket(None, Some("fixture-user"))
+            .unwrap();
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute_batch(
+                "CREATE TEMP TRIGGER refuse_token BEFORE INSERT ON tokens
+             BEGIN SELECT RAISE(ABORT, 'fixture issuance failure'); END;",
+            )
+            .unwrap();
+        assert!(manager
+            .exchange_principal_bound_bootstrap_ticket(&ticket)
+            .is_err());
+        assert!(store.list_devices().unwrap().is_empty());
+
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute_batch("DROP TRIGGER refuse_token")
+            .unwrap();
+        let result = manager
+            .exchange_principal_bound_bootstrap_ticket(&ticket)
+            .unwrap();
+        let row = manager
+            .validate_device_token(&result.device_token)
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.device_id, result.device_id);
+        let device = store.get_device(&row.device_id).unwrap().unwrap();
+        assert_eq!(device.user_id.as_deref(), Some("fixture-user"));
+        assert!(manager
+            .exchange_principal_bound_bootstrap_ticket(&ticket)
+            .is_err());
+        assert_eq!(store.list_devices().unwrap().len(), 1);
     }
 
     #[test]

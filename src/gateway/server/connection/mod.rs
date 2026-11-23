@@ -93,6 +93,7 @@ pub(super) mod local_ipc;
 pub mod off_loop;
 mod rpc;
 pub mod upgrade;
+pub(super) mod web_v1;
 
 // Bring every helper used by the orchestrator into this module's scope.
 // (The test module in `handler.rs` reaches them via the re-exports

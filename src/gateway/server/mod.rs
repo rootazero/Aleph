@@ -1350,13 +1350,21 @@ impl GatewayServer {
         Ok(())
     }
 
+    fn native_tls_router(
+        &self,
+        state: Arc<GatewaySharedState>,
+        stop: tokio_util::sync::CancellationToken,
+    ) -> Router {
+        self.router_from_shared(state.clone())
+            .merge(connection::web_v1::routes(state, stop))
+    }
+
     /// Run the Gateway server
     ///
     /// This method runs indefinitely, accepting new connections and
     /// processing messages. Each connection is handled in its own task.
     pub async fn run(&self) -> Result<(), GatewayError> {
         self.spawn_background_tasks();
-        let router = self.build_router();
         self.check_network_exposure()?;
 
         // Native TLS tiers terminate in-process via axum-server's own listener;
@@ -1385,6 +1393,9 @@ impl GatewayServer {
             let tls = axum_server::tls_rustls::RustlsConfig::from_pem(cert_pem, key_pem)
                 .await
                 .map_err(|e| GatewayError::ConnectionError(format!("rustls config: {e}")))?;
+            let stop = tokio_util::sync::CancellationToken::new();
+            let _stop_on_drop = stop.clone().drop_guard();
+            let router = self.native_tls_router(self.build_shared_state(), stop);
             axum_server::bind_rustls(self.addr, tls)
                 .serve(router.into_make_service_with_connect_info::<SocketAddr>())
                 .await
@@ -1399,6 +1410,7 @@ impl GatewayServer {
                 source: e,
             })?;
         info!("Aleph listening on http://{}", self.addr);
+        let router = self.build_router();
         axum::serve(
             listener,
             router.into_make_service_with_connect_info::<SocketAddr>(),
@@ -1432,12 +1444,11 @@ impl GatewayServer {
                 GatewayError::ConnectionError(format!("Desktop IPC bind failed: {error}"))
             })?;
             let state = self.build_shared_state();
-            let router = self.router_from_shared(state.clone());
             self.spawn_background_tasks();
 
             let stop = tokio_util::sync::CancellationToken::new();
             let (stop_network, network_shutdown) = tokio::sync::oneshot::channel();
-            let network = self.run_network(router, network_shutdown);
+            let network = self.run_network(state.clone(), network_shutdown);
             // The local task owns admitted peers through cleanup. Dropping this
             // future signals shutdown rather than aborting their cleanup futures.
             let _stop_on_drop = stop.clone().drop_guard();
@@ -1477,14 +1488,13 @@ impl GatewayServer {
         shutdown: tokio::sync::oneshot::Receiver<()>,
     ) -> Result<(), GatewayError> {
         self.spawn_background_tasks();
-        let router = self.build_router();
         self.check_network_exposure()?;
-        self.run_network(router, shutdown).await
+        self.run_network(self.build_shared_state(), shutdown).await
     }
 
     async fn run_network(
         &self,
-        router: Router,
+        state: Arc<GatewaySharedState>,
         shutdown: tokio::sync::oneshot::Receiver<()>,
     ) -> Result<(), GatewayError> {
         // Native TLS tiers terminate in-process via axum-server's own listener;
@@ -1512,10 +1522,14 @@ impl GatewayServer {
             let tls = axum_server::tls_rustls::RustlsConfig::from_pem(cert_pem, key_pem)
                 .await
                 .map_err(|e| GatewayError::ConnectionError(format!("rustls config: {e}")))?;
+            let stop = tokio_util::sync::CancellationToken::new();
+            let _stop_on_drop = stop.clone().drop_guard();
+            let router = self.native_tls_router(state, stop.clone());
             let handle = axum_server::Handle::new();
             let shutdown_handle = handle.clone();
             tokio::spawn(async move {
                 let _ = shutdown.await;
+                stop.cancel();
                 shutdown_handle.graceful_shutdown(Some(Duration::from_secs(3)));
             });
             axum_server::bind_rustls(self.addr, tls)
@@ -1535,6 +1549,7 @@ impl GatewayServer {
         info!("Aleph listening on http://{}", self.addr);
         info!("  WebSocket: ws://{}/ws", self.addr);
         info!("  Panel UI:  http://{}/", self.addr);
+        let router = self.router_from_shared(state);
         axum::serve(
             listener,
             router.into_make_service_with_connect_info::<SocketAddr>(),

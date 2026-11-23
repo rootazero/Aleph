@@ -212,6 +212,47 @@ impl DeviceTokenManager {
         })
     }
 
+    /// Pair a fresh device for an explicit Core principal in one store transaction.
+    pub(crate) fn exchange_principal_bound_bootstrap_ticket(
+        &self,
+        ticket: &str,
+    ) -> Result<BootstrapExchangeResult, DeviceTokenError> {
+        let device_id = format!("device-{}", Uuid::new_v4());
+        let token_id = format!("dt-{}", Uuid::new_v4());
+        let device_token = format!("aleph-dt-{}", Uuid::new_v4());
+        let token_hash = hash_device_token(&device_token);
+        let scopes = ["*".to_owned()];
+        self.store
+            .exchange_bound_ticket(ticket, &device_id, |tx, user| {
+                SecurityStore::upsert_device_on(
+                    tx,
+                    &DeviceUpsertData {
+                        device_id: &device_id,
+                        device_name: "Remote Panel",
+                        device_type: Some(PANEL_DEVICE_TYPE),
+                        public_key: b"",
+                        fingerprint: &device_id,
+                        role: "operator",
+                        scopes: &scopes,
+                        user_id: Some(user),
+                    },
+                )?;
+                SecurityStore::issue_device_token_on(
+                    tx,
+                    &token_id,
+                    &device_id,
+                    &token_hash,
+                    "operator",
+                    &scopes,
+                    current_timestamp_ms() + DEFAULT_DEVICE_TOKEN_TTL_MS,
+                )
+            })?;
+        Ok(BootstrapExchangeResult {
+            device_id,
+            device_token,
+        })
+    }
+
     /// Validate a device token and return its row if active.
     pub fn validate_device_token(
         &self,

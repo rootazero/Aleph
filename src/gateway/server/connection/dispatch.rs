@@ -123,16 +123,22 @@ pub(super) struct DispatchPeer {
     pub(super) connections: Arc<ConnectionTable>,
     pub(super) conn_id: String,
     legacy_loopback: bool,
-    #[cfg(any(unix, test))]
     bound: Option<BoundPeer>,
 }
 
-#[cfg(any(unix, test))]
 #[derive(Clone)]
 struct BoundPeer {
     expected: CallerSnapshot,
+    authority: BoundAuthority,
+}
+
+#[derive(Clone)]
+enum BoundAuthority {
+    Web(super::web_v1::WebBinding),
     #[cfg(unix)]
-    owner_store: Option<Arc<crate::gateway::security::SecurityStore>>,
+    Desktop(Arc<crate::gateway::security::SecurityStore>),
+    #[cfg(test)]
+    Fixture,
 }
 
 #[cfg(unix)]
@@ -154,8 +160,22 @@ impl DispatchPeer {
             connections,
             conn_id,
             legacy_loopback,
-            #[cfg(any(unix, test))]
             bound: None,
+        }
+    }
+
+    pub(super) fn web(
+        connections: Arc<ConnectionTable>,
+        conn_id: String,
+        expected: CallerSnapshot,
+        binding: super::web_v1::WebBinding,
+    ) -> Self {
+        Self {
+            bound: Some(BoundPeer {
+                expected,
+                authority: BoundAuthority::Web(binding),
+            }),
+            ..Self::legacy(connections, conn_id, false)
         }
     }
 
@@ -173,7 +193,7 @@ impl DispatchPeer {
                     verified_user: None,
                     device_id: None,
                 },
-                owner_store: Some(owner_store),
+                authority: BoundAuthority::Desktop(owner_store),
             }),
             ..Self::legacy(connections, conn_id, false)
         }
@@ -189,14 +209,12 @@ impl DispatchPeer {
         Self {
             bound: Some(BoundPeer {
                 expected,
-                #[cfg(unix)]
-                owner_store: None,
+                authority: BoundAuthority::Fixture,
             }),
             ..Self::legacy(connections, conn_id, false)
         }
     }
 
-    #[cfg(any(unix, test))]
     pub(super) async fn snapshot(&self) -> Option<CallerSnapshot> {
         self.view().snapshot().await
     }
@@ -206,7 +224,6 @@ impl DispatchPeer {
             connections: &self.connections,
             conn_id: &self.conn_id,
             legacy_loopback: self.legacy_loopback,
-            #[cfg(any(unix, test))]
             bound: self.bound.as_ref(),
         }
     }
@@ -216,7 +233,6 @@ struct PeerView<'a> {
     connections: &'a ConnectionTable,
     conn_id: &'a str,
     legacy_loopback: bool,
-    #[cfg(any(unix, test))]
     bound: Option<&'a BoundPeer>,
 }
 
@@ -226,13 +242,11 @@ impl<'a> PeerView<'a> {
             connections,
             conn_id,
             legacy_loopback,
-            #[cfg(any(unix, test))]
             bound: None,
         }
     }
 
     async fn snapshot(&self) -> Option<CallerSnapshot> {
-        #[cfg(any(unix, test))]
         if let Some(bound) = self.bound {
             let live = {
                 let table = self.connections.read().await;
@@ -256,15 +270,17 @@ impl<'a> PeerView<'a> {
             {
                 return None;
             }
-            #[cfg(unix)]
-            if let Some(store) = &bound.owner_store {
-                let role = active_desktop_owner(store)?;
-                return Some(CallerSnapshot {
-                    role: Some(role.to_owned()),
-                    ..live
-                });
-            }
-            return Some(live);
+            let role = match &bound.authority {
+                BoundAuthority::Web(binding) => binding.current_role()?,
+                #[cfg(unix)]
+                BoundAuthority::Desktop(store) => active_desktop_owner(store)?,
+                #[cfg(test)]
+                BoundAuthority::Fixture => return Some(live),
+            };
+            return Some(CallerSnapshot {
+                role: Some(role.to_owned()),
+                ..live
+            });
         }
         Some(CallerSnapshot::read(self.connections, self.conn_id, self.legacy_loopback).await)
     }

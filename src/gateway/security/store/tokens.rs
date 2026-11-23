@@ -1,6 +1,11 @@
 use super::types::DeviceTokenRow;
-use super::{current_timestamp_ms, SecurityStore};
-use rusqlite::{params, Result as SqliteResult};
+use super::{
+    current_timestamp_ms,
+    users::{UserRole, UserStatus},
+    SecurityStore,
+};
+use crate::gateway::security::PANEL_DEVICE_TYPE;
+use rusqlite::{params, OptionalExtension, Result as SqliteResult};
 
 impl SecurityStore {
     // ========== Shared Token (Secret Vault Master Key) Operations ==========
@@ -175,6 +180,20 @@ impl SecurityStore {
         expires_at: i64,
     ) -> SqliteResult<()> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        Self::issue_device_token_on(
+            &conn, token_id, device_id, token_hash, role, scopes, expires_at,
+        )
+    }
+
+    pub(in crate::gateway::security) fn issue_device_token_on(
+        conn: &rusqlite::Connection,
+        token_id: &str,
+        device_id: &str,
+        token_hash: &str,
+        role: &str,
+        scopes: &[String],
+        expires_at: i64,
+    ) -> SqliteResult<()> {
         let scopes_json = serde_json::to_string(scopes).unwrap_or_else(|e| {
             tracing::warn!("Failed to serialize device token scopes: {}", e);
             "[]".to_string()
@@ -232,6 +251,35 @@ impl SecurityStore {
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(e),
         }
+    }
+
+    /// Revalidate a previously authenticated Panel credential, without retaining its secret.
+    /// Read the token, device, and principal in one database snapshot.
+    pub(crate) fn active_device_principal(
+        &self,
+        token_id: &str,
+        device_id: &str,
+    ) -> SqliteResult<Option<(String, UserRole)>> {
+        let conn = self.conn.lock().unwrap_or_else(|error| error.into_inner());
+        let principal: Option<(String, String)> = conn
+            .query_row(
+                "SELECT u.user_id, u.role
+                 FROM tokens t JOIN devices d ON d.device_id = t.device_id
+                 JOIN users u ON u.user_id = d.user_id
+                 WHERE t.token_id = ?1 AND t.device_id = ?2
+                   AND t.revoked_at IS NULL AND t.expires_at > ?3
+                   AND d.revoked_at IS NULL AND d.device_type = ?4 AND u.status = ?5",
+                params![
+                    token_id,
+                    device_id,
+                    current_timestamp_ms(),
+                    PANEL_DEVICE_TYPE,
+                    UserStatus::Active.as_str()
+                ],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        Ok(principal.and_then(|(user, role)| Some((user, UserRole::from_str(&role)?))))
     }
 
     /// Revoke a single device token by token_id.
