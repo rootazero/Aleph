@@ -1,6 +1,6 @@
 # NSH 可定制 Panel 迁移路线图 / Migration Roadmap
 
-**Approved design:** [NSH Panel 增量重构设计](../specs/2026-11-22-nsh-panel-modular-refactor-design.md) (`4f951d4d1`)。批准的是设计；执行计划单独审阅。本路线图是阶段依赖与退场台账，不是跳过实施计划直接写代码的授权。
+**Approved design:** [NSH Panel 增量重构设计](../specs/2026-11-22-nsh-panel-modular-refactor-design.md) (`4f951d4d1`)。本路线图记录阶段依赖与退场门槛。已批准的工作包在实施计划落盘并自审后直接执行；未批准范围和发布操作不因此获批。
 
 **Goal:** 在 Rust Core 仍为唯一事实和授权权威的前提下，逐步交付共享 TSX、Desktop IPC、正式 Web 客户端与可按契约定制的 Panel。
 
@@ -12,7 +12,7 @@
 |---|---|---|
 | S0 契约基础 | 修正现有 hello；共享帧边界；R2 目标与当前挂载分开记录 | 现有 WS 无换线；1.0 协商与帧边界定向测试通过；明确新 endpoint 尚未上线 |
 | S1-A 共同接缝 | 共享 Client 请求状态与 Gateway 已绑定身份的分发路径 | 同一业务 handler 经新旧路径到达；方法可见性、速率、请求状态、幂等和清理不分叉 |
-| S1-B Desktop | 本地 UDS/Named Pipe endpoint，宿主通过 Client 使用它 | macOS/Linux UDS、Windows Named Pipe 真机验证；用户身份、帧边界、并发/关闭；没有悄悄回退 TCP/WS |
+| [S1-B Desktop](2026-11-23-nsh-panel-s1b-desktop-ipc.md) | 本地 UDS/Named Pipe endpoint，宿主通过 Client 使用它 | macOS/Linux UDS、Windows Named Pipe 真机验证；用户身份、帧边界、并发/关闭；不回退 TCP/WS。当前进度见 [S1-B 回执](../runs/2026-11-23-nsh-panel-s1b-desktop-ipc-verification.md)，平台门槛未关闭 |
 | S1-C Web | 同源显式 HTTPS 凭据交换与 `/v1/ws` | 真实浏览器经过相同主体完成 hello/RPC；缺凭据、过期、撤销、跨 Origin 拒绝；旧 `/ws` 不变 |
 | S2 可定制壳 | 共用 TSX 壳、稳定 ID 布局、已有贡献投影及挂载清理 | 两端真实渲染同一源码；显示/隐藏/排序/重启恢复；取消异步加载后资源归零，旧 SDK 拒绝 |
 | S3 会话纵切 | 会话/聊天/取消，真实 Native Component 与 Web fallback，替换同一能力的呈现 | 真实 Core 结果与后端身份；中文/日文 IME、流式、长列表；早期重取快照可用但不算 replay |

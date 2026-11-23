@@ -4712,11 +4712,11 @@ The single `--execute` under the explicit 120-second authorization ran as `dd6f8
 > 多屏物理拓扑仍 NOT TESTED；未切默认桌面、未移除 Tauri、未迁移 Swift Bridge。
 > / Shared Panel, official NSH 0.6.0, scoped amended acceptance only.
 
-> **NSH Panel 迁移 / Migration (S1-A):** [当前挂载与目标](DESKTOP_SHELL.md#nsh-panel-migration--panel-迁移)。
+> **NSH Panel 迁移 / Migration (S1-B Unix slice):** [当前挂载与目标](DESKTOP_SHELL.md#nsh-panel-migration--panel-迁移)。
 > [生产 WebView](../../desktop/nsh-shell/src/main.rs) 仍渲染 Leptos/WASM；非默认的
 > [`panel-modular` feature](../../interfaces/webchat/Cargo.toml) 在 [`app.rs`](../../interfaces/webchat/src/app.rs) 渲染 `PanelShell`。
-> [Gateway hello](../../src/gateway/handlers/system_hello.rs) 已诚实协商，legacy limits 仍只是提示；
-> [共享帧库](../../shared/protocol/src/framing.rs) 尚未接线。旧 `/ws` 已复用[普通 RPC 执行器](../../src/gateway/server/connection/rpc.rs)，[Client 请求](../../shared/client/src/connection/requests.rs) 按 socket 隔离；预绑定主体仅用于测试（[S1-A 回执](../superpowers/runs/2026-11-23-nsh-panel-s1a-shared-dispatch-verification.md)）。v1 传输、共享 TSX 和 S4 恢复尚未交付。
+> 旧 `/ws` 保留 `connect`，复用[普通 RPC 执行器](../../src/gateway/server/connection/rpc.rs)，[Client 请求](../../shared/client/src/connection/requests.rs) 按 socket 隔离（[S1-A 回执](../superpowers/runs/2026-11-23-nsh-panel-s1a-shared-dispatch-verification.md)）。
+> 显式启用的 [Unix 监听器](../../src/gateway/server/connection/local_ipc.rs) 执行同账户准入、有界 `system.hello` 和两个只读 RPC；[NSH 状态命令](../../desktop/nsh-shell/src/ipc_status.rs) 不回退 TCP/WS。[S1-B 回执](../superpowers/runs/2026-11-23-nsh-panel-s1b-desktop-ipc-verification.md) 区分 macOS 证据、Linux 真机缺口与 Windows 未实现。浏览器 v1、共享 TSX 和 S4 恢复尚未交付。
 > / The current renderer is unchanged; see the [retention gates](../superpowers/plans/2026-11-22-nsh-panel-migration-roadmap.md) before any legacy retirement.
 
 
