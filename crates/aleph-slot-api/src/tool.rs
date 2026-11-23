@@ -27,7 +27,8 @@
 //!   of descriptor-owned fields to the provider metadata shape — it
 //!   must NOT route through a synthetic `ToolCapabilityDescriptor` (that
 //!   manufactured replay identity that never existed).
-//! * `to_metadata_form` is a pure compatibility wrapper kept only for
+//! * `to_metadata_form` is a pure compatibility wrapper, still called by
+//!   `src/orchestrator/harness_bridge/public_lookup_tool.rs` and
 //!   `src/harness/tests/tools_surface.rs`; new callers should use
 //!   `ToolDefinition::to_metadata_definition` directly.
 
@@ -414,8 +415,9 @@ pub struct ToolImage {
 /// Previously this fabricated a revision-1 [`ToolCapabilityDescriptor`] per
 /// definition and projected through it — a lie, because loop-side definitions
 /// carry no revision and revision 1 is not canonical. The projection is now
-/// direct. Kept only because `src/harness/tests/tools_surface.rs` imports it;
-/// new callers should use [`ToolDefinition::to_metadata_definition`] directly.
+/// direct. Still called by `src/orchestrator/harness_bridge/public_lookup_tool.rs`
+/// and `src/harness/tests/tools_surface.rs`; new callers should use
+/// [`ToolDefinition::to_metadata_definition`] directly.
 ///
 /// This is a pure compatibility projection and does not provide canonical
 /// capability identity, authorization, or registry state.
