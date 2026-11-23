@@ -542,7 +542,7 @@ device token / bootstrap ticket / 共享 Gateway token)成为 **operator**,要�
 
 ## 与 openclaw 的对照映射 (Gap Analysis)
 
-> 参考实现:`openclaw` 的 **`src/node-host/`(边缘) ↔ `src/gateway/node-*`(中心)**。
+> 参考实现:`openclaw` 的 **`archive/removed-cluster/ (removed 2026-XX)`(边缘) ↔ `archive/removed-cluster/ (removed 2026-XX)`(中心)**。
 > **注意别走错门**:`openclaw/src/fleet/` 不是分布式节点子系统,那是多租户容器编排
 > (Docker/Podman 里跑整个 openclaw 实例),与本文无关。
 >
@@ -553,13 +553,13 @@ device token / bootstrap ticket / 共享 Gateway token)成为 **operator**,要�
 |------|----------|-------|------|
 | 拓扑 | 星型,node 拨出中心,单 WS | 同 | **对齐** |
 | **身份在握手回包里交回** | HelloOk 携 `auth.deviceToken`,客户端就地落盘(`packages/gateway-client/src/client.ts:866-876`) | `connect` 回包携 `result.node.node_id`,节点落盘(`cluster::admit_node`) | **映射**——Aleph「登记折叠进 connect」正是此模式;旧实现另开 socket 发 `cluster.enroll` 才是偏离 |
-| 未批准/已撤销 → 能力清零 | 配对未批准 ⇒ `effectiveCaps: []`(`src/gateway/node-connect-reconcile.ts:167`) | 设备 `revoked_at` ⇒ `NodeAdmission::Deregistered`,拒绝登记 | **映射**(注销粘性) |
+| 未批准/已撤销 → 能力清零 | 配对未批准 ⇒ `effectiveCaps: []`(`archive/removed-cluster/ (removed 2026-XX):167`) | 设备 `revoked_at` ⇒ `NodeAdmission::Deregistered`,拒绝登记 | **映射**(注销粘性) |
 | 反向 RPC 形状 | center 发 **event** `node.invoke.request`,node 回 **req** `node.invoke.result`;关联需 (id, nodeId, connId) 三元组 | 对称 req/res,靠**结构**区分(有 `method`=请求);pending 表天然 per-connection ⇒ connId 隐含 | **分道且更简**(少一层关联键) |
 | 断线 fail-fast | `unregister` reject 全部 pending | `PendingInvokes::cancel_all()` | **对齐** |
-| 舰队排序 | connected-first → displayName → nodeId(`src/gateway/node-catalog.ts:305-311`) | `handle_environments_list` 同序(online → name → id) | **对齐** |
+| 舰队排序 | connected-first → displayName → nodeId(`archive/removed-cluster/ (removed 2026-XX)`) | `handle_environments_list` 同序(online → name → id) | **对齐** |
 | 按名寻址归一化 | `node-match.ts::normalizeNodeKey` 已演进为 **Unicode**(NFC + `[^\p{L}\p{M}\p{N}]+ → -`,保留 CJK/带重音字母) | `cluster::normalize_node_key` 单一真源,在线/离线共用,**Unicode 感知**(`char::is_alphanumeric` + `to_lowercase`,保留 CJK/带重音字母;组合记号 `\p{M}` 有意折为分隔符,零依赖) | **对齐**(2026-07-20 收口 ASCII-only 漂移,见下「已闭合」) |
 | 重连退避 | 1s → ×2 → 30s,**无 jitter**(`client.ts:1506`;全仓 grep `jitter` 零命中) | 2s → ×2 → 60s,**±25% jitter** + 仅在活过 30s 的会话后重置 | 🟢 **超越**(N 节点不齐步撞门;不对"接受即关闭"的中心热转) |
-| 扇出 | **没有**——`invoke()` 只收单个 `nodeId`(`src/gateway/node-registry.ts:606`) | `node_invoke_many` 按 tag AND 并发扇出 + 部分失败容忍 + 结果确定序 | 🟢 **超越**(openclaw 无对应物) |
+| 扇出 | **没有**——`invoke()` 只收单个 `nodeId`(`archive/removed-cluster/ (removed 2026-XX):606`) | `node_invoke_many` 按 tag AND 并发扇出 + 部分失败容忍 + 结果确定序 | 🟢 **超越**(openclaw 无对应物) |
 | 并发调度 | 无(每 invoke 各自 Promise,无资源模型) | `ExclusiveScope::Nodes`——不同机器的 `node_invoke` 并行,同机器串行 | 🟢 **超越**(利用已有 `ConcurrencyClaim` 基建,Rust 侧独有) |
 | 出站背压 | `bufferedAmount > MAX_BUFFERED_BYTES` ⇒ **直接关 socket**(`node-registry.ts:894` `rejectSlowNodeSocket`) | 有界 mpsc(容量 64)+ **入队纳入 `timeout_ms` 预算**;入队卡死回 `OutboundWedged` **并触发关连接**(`with_close` 信号→读循环退出→全套 cleanup),节点退避重连 | **对齐**(2026-07-17 闭合;见下「存活性」节) |
 | 超时语义 | 解析为 `{ok:false, error:{code:"TIMEOUT"}}`(值) | `Timeout`(等响应超时)与 `OutboundWedged`(入队卡死)**两个类型化 Err**——「节点慢」与「socket 死」不再混为一谈 | 🟢 **超越**(Rust 类型安全 + 比 openclaw 单一 TIMEOUT 更细粒度,调用方/模型可分辨) |

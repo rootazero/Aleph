@@ -843,7 +843,7 @@ routing and `a2a_agents list` see real skill data.
 
 Ported from hermes-agent's `MoAClient` (spec:
 `docs/superpowers/specs/2026-07-05-moa-continuous-advisory-port-design.md`).
-`MoaProvider` (`src/providers/moa/provider.rs`) is a virtual `AiProvider`
+`MoaProvider` (`archive/removed-model-routing-moa/ (removed 2026-10-19)`) is a virtual `AiProvider`
 facade that sits in front of the acting model: each Think iteration it
 flattens the live conversation into a tool-free advisory view
 (`advisory_view.rs`, UTF-8-safe head+tail truncation, always ends on a user
@@ -856,7 +856,7 @@ keeps the `[system][task][tool-history]` prefix byte-stable and KV-cache
 reusable), then calls the aggregator, which IS the acting model. The harness
 sees one ordinary provider (R10); none of this touches `src/harness/`.
 
-- **Config**: `[moa]` (`src/config/types/moa.rs`) — named presets
+- **Config**: `[moa]` (`archive/removed-model-routing-moa/ (removed 2026-10-19)`) — named presets
   (`advisors: Vec<MoaSlot>` + `aggregator: MoaSlot`), `fanout` cadence,
   `advisor_timeout_secs`, `advisor_max_tokens`/temperatures,
   `default_preset`, `save_traces`.
@@ -873,10 +873,10 @@ sees one ordinary provider (R10); none of this touches `src/harness/`.
   A turn whose advisory view is byte-identical to the previous one is the
   harness re-issuing a request, not the task advancing: it always reuses and
   never consumes a cadence slot (`FanoutState.last_seen_signature`).
-- **Activation**: `moa` builtin tool (`src/builtin_tools/moa_manage.rs`,
+- **Activation**: `moa` builtin tool (`archive/removed-model-routing-moa/ (removed 2026-10-19)`,
   operator-tier gated via `method_authz`) — `on`/`off`/`once`/`status`/
   `list`/`set_preset`/`delete_preset`. Per-session state lives in
-  `src/providers/session_moa_handle.rs` (sticky vs one-shot; `take_for_run`
+  `archive/removed-model-routing-moa/ (removed 2026-10-19)` (sticky vs one-shot; `take_for_run`
   consumes a one-shot pref atomically — the single restore point, so
   success, error and cancel paths all leave no state behind). `/moa
   <prompt>` is a one-shot intercept on both the panel and channel dispatch
@@ -935,7 +935,7 @@ added four pieces on top of the port above:
   `list_models`'s `moa_presets` field (`src/builtin_tools/list_models.rs`),
   so Panel/CLI pickers see MoA presets without a new RPC.
 - **Advisor prompt-cache + multimodal**: `mark_cache_breakpoints`
-  (`src/providers/moa/advisory_view.rs`) marks an Anthropic ephemeral
+  (`archive/removed-model-routing-moa/ (removed 2026-10-19)`) marks an Anthropic ephemeral
   `cache_control` on the last text block of each of the last three
   advisory-view messages, so `per_iteration` fanout replays the cached
   prefix instead of re-billing it every tool step (hermes measured 0/1227
@@ -974,15 +974,15 @@ added four pieces on top of the port above:
   advisor slot, keeping team/session usage views honest.
 - **Panel visual config** (Round 4, 2026-07-06; deepened 2026-07-12): a
   visual `[moa]` preset editor at Settings → MoA
-  (`interfaces/webchat/src/platform/wide/views/settings/moa/`) — preset
+  (`archive/removed-model-routing-moa/ (removed 2026-10-19)`) — preset
   cards, a create/edit form whose advisor/aggregator dropdowns are
   constrained to already-configured, credentialed models
   (`options::available_options` over `providers.catalog`, with the synthetic
   `"moa"` pseudo-row filtered out), advanced knobs, and a global
   `save_traces` toggle. Writes go through the gateway RPCs
   `moa.{listPresets,savePreset,deletePreset,setDefault,setSaveTraces}`
-  (`src/gateway/handlers/moa.rs`) backed by the single write-core
-  `MoaPresetStore` (`src/providers/moa/preset_store.rs`) — the same core the
+  (`archive/removed-model-routing-moa/ (removed 2026-10-19)`) backed by the single write-core
+  `MoaPresetStore` (`archive/removed-model-routing-moa/ (removed 2026-10-19)`) — the same core the
   `moa` tool uses, so tool and panel never diverge. Each card shows the
   per-turn model-call count and a "Use in chat" action that arms the preset
   on the chat session's model selector (`ModelOverride{provider:"moa"}`); a
@@ -998,7 +998,7 @@ misbehaves or the conversation gets long. No new config, RPCs or trace
 events.
 
 - **Run-scoped advisor circuit breaker**
-  (`src/providers/moa/advisor_health.rs`). The fan-out had no memory: under
+  (`archive/removed-model-routing-moa/ (removed 2026-10-19)`). The fan-out had no memory: under
   `per_iteration`, a hung or mis-keyed advisor burned the full
   `advisor_timeout_secs` (default 120 s) on **every** tool iteration — up to
   40 minutes of dead wall-clock on a 20-step run, each wait blocking the
@@ -1883,7 +1883,7 @@ The decorator is wrapped in these modules (census:
 - `src/agents/subagent_spawner/mod.rs` — per spawn (label
   `req.agent_def.id`) and the child's cheap compaction provider, both on the
   parent run's accounting sink
-- `src/providers/moa/provider.rs` — one per MoA advisor
+- `archive/removed-model-routing-moa/ (removed 2026-10-19)` — one per MoA advisor
 
 This gives every consumer of the trace stream (gateway, log sink, future
 cost dashboard) the data needed to compute root vs subagent cache-hit
