@@ -88,7 +88,7 @@ pub mod auth;
 pub mod cleanup;
 pub mod dispatch;
 pub mod forward;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(super) mod local_ipc;
 pub mod off_loop;
 mod rpc;

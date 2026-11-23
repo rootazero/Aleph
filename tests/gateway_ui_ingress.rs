@@ -370,8 +370,15 @@ async fn attach(peer: &mut Peer, session: &str) -> Value {
 async fn pty_survives(f: &Fixture, marker: &str) {
     let id = f.pty.as_ref().unwrap();
     let manager = alephcore::gateway::pty::manager();
+    let input = if cfg!(windows) {
+        // cmd.exe executes on CR. Escape the first underscore so terminal
+        // input echo cannot itself satisfy the assertion on command output.
+        format!("@echo {}\r", marker.replacen('_', "^_", 1))
+    } else {
+        format!("{marker}\n")
+    };
     manager
-        .write(id, format!("{marker}\n").as_bytes())
+        .write(id, input.as_bytes())
         .expect("UI teardown must not close the real PTY input");
     tokio::time::timeout(Duration::from_secs(2), async {
         loop {
@@ -390,7 +397,7 @@ async fn pty_survives(f: &Fixture, marker: &str) {
         }
     })
     .await
-    .expect("PTY child output must still reach the server-held screen");
+    .unwrap_or_else(|_| panic!("PTY child output {marker} did not reach the server-held screen"));
 }
 
 async fn idempotent_display_waits_and_caches_null(f: &mut Fixture) {

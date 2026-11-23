@@ -15,7 +15,6 @@ use futures_util::{stream::FuturesUnordered, StreamExt};
 use serde_json::Value;
 use tokio::{
     io::{AsyncRead, AsyncWrite},
-    net::{UnixListener, UnixStream},
     sync::{OwnedSemaphorePermit, Semaphore},
     task::JoinSet,
     time::timeout,
@@ -41,11 +40,20 @@ use crate::{
     sync_primitives::Arc,
 };
 
+#[cfg(unix)]
+use tokio::net::UnixListener;
+
+#[cfg(windows)]
+mod windows;
+#[cfg(windows)]
+pub(in crate::gateway::server) use windows::{bind, serve};
+
 const MAX_CONNECTIONS: usize = 8;
 const WIRE_BUDGET: usize = 16 * 1024 * 1024;
 const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 const NO_NETWORK_ORIGIN: IpAddr = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
 
+#[cfg(unix)]
 pub(in crate::gateway::server) fn bind(path: &Path) -> io::Result<UnixListener> {
     let path = aleph_client::local_ipc::unix::private_endpoint(path)?;
     // Bind never replaces an occupied entry. The caller owns the directory
@@ -53,6 +61,7 @@ pub(in crate::gateway::server) fn bind(path: &Path) -> io::Result<UnixListener> 
     UnixListener::bind(path)
 }
 
+#[cfg(unix)]
 pub(in crate::gateway::server) async fn serve(
     listener: UnixListener,
     state: Arc<GatewaySharedState>,
@@ -79,7 +88,8 @@ pub(in crate::gateway::server) async fn serve(
                 let state = state.clone();
                 let stop = stop.clone();
                 tasks.spawn(async move {
-                    if let Err(error) = serve_peer(stream, state, stop).await {
+                    let (read, write) = stream.into_split();
+                    if let Err(error) = serve_peer(read, write, state, stop).await {
                         tracing::debug!(kind = ?error.kind(), "Desktop IPC peer closed");
                     }
                 });
@@ -97,7 +107,8 @@ pub(in crate::gateway::server) async fn serve(
 }
 
 async fn serve_peer(
-    stream: UnixStream,
+    mut read: impl AsyncRead + Unpin,
+    mut write: impl AsyncWrite + Unpin,
     state: Arc<GatewaySharedState>,
     stop: CancellationToken,
 ) -> io::Result<()> {
@@ -109,7 +120,6 @@ async fn serve_peer(
         return Ok(());
     };
     let budget = std::sync::Arc::new(Semaphore::new(WIRE_BUDGET));
-    let (mut read, mut write) = stream.into_split();
     let id = format!("ipc-{}", uuid::Uuid::new_v4());
     let hello = tokio::select! {
         biased;

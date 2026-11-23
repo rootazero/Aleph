@@ -8,8 +8,14 @@ use aleph_protocol::framing::{
 use serde::de::{DeserializeSeed, Error, MapAccess, SeqAccess, Visitor};
 use serde_json::{Map, Value};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+
+#[cfg(windows)]
+pub mod windows;
+
+// Do not expose the Windows endpoint until its native security gates pass.
+pub const AVAILABLE: bool = cfg!(unix);
 
 pub const MAX_FRAME_BYTES: u32 = DEFAULT_MAX_PAYLOAD_BYTES;
 pub const MAX_INFLIGHT: u32 = 8;
@@ -29,7 +35,7 @@ pub async fn read_frame(reader: &mut (impl AsyncRead + Unpin)) -> io::Result<Opt
 }
 
 /// Reserve wire bytes after validating the header and before allocating the body.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub async fn read_frame_budgeted(
     reader: &mut (impl AsyncRead + Unpin),
     budget: &std::sync::Arc<Semaphore>,
@@ -306,120 +312,5 @@ mod tests {
         assert!(parse_payload(&serde_json::to_string(&vec![0; 4097]).unwrap()).is_err());
         assert!(parse_payload(&serde_json::to_string(&"a".repeat(65_537)).unwrap()).is_err());
         assert!(parse_payload(r#"{"id":"one","id":"two"}"#).is_err());
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn local_client_uses_hello_and_correlates_out_of_order() {
-        use crate::{AlephClient, CliConfig, CliError};
-        use aleph_protocol::{JsonRpcRequest, JsonRpcResponse};
-        use serde_json::json;
-        use std::{os::unix::fs::PermissionsExt, time::Duration};
-        use tokio::{net::UnixListener, sync::oneshot, time::timeout};
-
-        let dir = tempfile::tempdir_in("/tmp").unwrap();
-        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-        let endpoint = dir.path().join("ipc");
-        let listener = UnixListener::bind(&endpoint).unwrap();
-        let (received, observed) = oneshot::channel();
-        let (release, released) = oneshot::channel();
-        let peer = async {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            unix::require_same_user(&stream).unwrap();
-            let hello: JsonRpcRequest =
-                serde_json::from_str(&read_frame(&mut stream).await.unwrap().unwrap()).unwrap();
-            assert_eq!(hello.method, "system.hello");
-            let response = JsonRpcResponse::success(
-                hello.id.unwrap(),
-                json!({
-                    "protocol": {"major": 1, "minor": 0},
-                    "server": {"name": "fixture", "version": "1"},
-                    "connection_id": "fixture-connection",
-                    "features": [],
-                    "limits": {"max_message_bytes": MAX_FRAME_BYTES, "max_inflight_requests": 2},
-                }),
-            );
-            write_frame(&mut stream, &serde_json::to_string(&response).unwrap())
-                .await
-                .unwrap();
-            let first: JsonRpcRequest =
-                serde_json::from_str(&read_frame(&mut stream).await.unwrap().unwrap()).unwrap();
-            let second: JsonRpcRequest =
-                serde_json::from_str(&read_frame(&mut stream).await.unwrap().unwrap()).unwrap();
-            assert_ne!(first.id, second.id);
-            for request in [second, first] {
-                let response = JsonRpcResponse::success(request.id.unwrap(), json!(request.method));
-                write_frame(&mut stream, &serde_json::to_string(&response).unwrap())
-                    .await
-                    .unwrap();
-            }
-            let expired_one: JsonRpcRequest =
-                serde_json::from_str(&read_frame(&mut stream).await.unwrap().unwrap()).unwrap();
-            let expired_two: JsonRpcRequest =
-                serde_json::from_str(&read_frame(&mut stream).await.unwrap().unwrap()).unwrap();
-            assert_eq!(expired_one.method, "expire-one");
-            assert_eq!(expired_two.method, "expire-two");
-            released.await.unwrap();
-            let response = JsonRpcResponse::success(expired_one.id.unwrap(), json!(false));
-            write_frame(&mut stream, &serde_json::to_string(&response).unwrap())
-                .await
-                .unwrap();
-            let unanswered: JsonRpcRequest =
-                serde_json::from_str(&read_frame(&mut stream).await.unwrap().unwrap()).unwrap();
-            assert_eq!(unanswered.method, "unanswered");
-            received.send(()).unwrap();
-            assert_eq!(read_frame(&mut stream).await.unwrap(), None);
-        };
-        let caller = async {
-            let hello = serde_json::from_value(json!({
-                "protocol": {"major": 1, "minor": 0},
-                "client": {"name": "fixture", "version": "1", "platform": "unix", "ui_runtime": "test"},
-                "features": [],
-            })).unwrap();
-            let (client, _events) = AlephClient::connect_local(&endpoint, &hello).await.unwrap();
-            let (first, second) = tokio::join!(
-                client.call::<(), String>("first", None),
-                client.call::<(), String>("second", None)
-            );
-            assert_eq!(first.unwrap(), "first");
-            assert_eq!(second.unwrap(), "second");
-            assert!(client.reconnect(&CliConfig::default()).await.is_err());
-            for method in ["expire-one", "expire-two"] {
-                assert!(matches!(
-                    client
-                        .call_with_timeout::<(), Value>(method, None, Duration::ZERO)
-                        .await,
-                    Err(CliError::Timeout(_))
-                ));
-            }
-            assert!(matches!(
-                client.call_with_timeout::<(), Value>("over-limit", None, Duration::ZERO).await,
-                Err(CliError::Other(message)) if message == "In-flight request limit reached"
-            ));
-            release.send(()).unwrap();
-            let call = async {
-                loop {
-                    match client.call::<(), Value>("unanswered", None).await {
-                        Err(CliError::Other(message))
-                            if message == "In-flight request limit reached" =>
-                        {
-                            tokio::task::yield_now().await;
-                        }
-                        result => break result,
-                    }
-                }
-            };
-            let (unanswered, closed) = tokio::join!(call, async {
-                observed.await.unwrap();
-                client.close().await
-            });
-            closed.unwrap();
-            assert!(matches!(unanswered, Err(CliError::Disconnected(_))));
-        };
-        timeout(HELLO_TIMEOUT, async {
-            tokio::join!(peer, caller);
-        })
-        .await
-        .unwrap();
     }
 }

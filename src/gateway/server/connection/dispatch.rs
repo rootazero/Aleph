@@ -135,13 +135,13 @@ struct BoundPeer {
 #[derive(Clone)]
 enum BoundAuthority {
     Web(super::web_v1::WebBinding),
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     Desktop(Arc<crate::gateway::security::SecurityStore>),
     #[cfg(test)]
     Fixture,
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(super) fn active_desktop_owner(
     store: &crate::gateway::security::SecurityStore,
 ) -> Option<&'static str> {
@@ -179,7 +179,7 @@ impl DispatchPeer {
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub(super) fn desktop(
         connections: Arc<ConnectionTable>,
         conn_id: String,
@@ -272,7 +272,7 @@ impl<'a> PeerView<'a> {
             }
             let role = match &bound.authority {
                 BoundAuthority::Web(binding) => binding.current_role()?,
-                #[cfg(unix)]
+                #[cfg(any(unix, windows))]
                 BoundAuthority::Desktop(store) => active_desktop_owner(store)?,
                 #[cfg(test)]
                 BoundAuthority::Fixture => return Some(live),

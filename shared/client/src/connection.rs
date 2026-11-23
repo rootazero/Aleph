@@ -25,31 +25,45 @@ use crate::tls;
 mod requests;
 use requests::RequestState;
 
+#[cfg(all(test, any(unix, windows)))]
+mod local_ipc_tests;
+
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 type WsReader = futures_util::stream::SplitStream<WsStream>;
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use crate::local_ipc;
+
+#[cfg(unix)]
+type LocalReader = tokio::net::unix::OwnedReadHalf;
+#[cfg(unix)]
+type LocalWriter = tokio::net::unix::OwnedWriteHalf;
+#[cfg(windows)]
+use tokio::net::windows::named_pipe::NamedPipeClient;
+#[cfg(windows)]
+type LocalReader = tokio::io::ReadHalf<NamedPipeClient>;
+#[cfg(windows)]
+type LocalWriter = tokio::io::WriteHalf<NamedPipeClient>;
 
 enum SocketReader {
     WebSocket(WsReader),
-    #[cfg(unix)]
-    Local(tokio::net::unix::OwnedReadHalf),
+    #[cfg(any(unix, windows))]
+    Local(LocalReader),
 }
 
 enum SocketWriter {
     WebSocket(futures_util::stream::SplitSink<WsStream, Message>),
-    #[cfg(unix)]
-    Local(tokio::net::unix::OwnedWriteHalf),
+    #[cfg(any(unix, windows))]
+    Local(LocalWriter),
 }
 
 impl SocketWriter {
     async fn send(&mut self, json: String, socket: &Socket) -> CliResult<()> {
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         let _ = socket;
         match self {
             Self::WebSocket(write) => Ok(write.send(Message::Text(json.into())).await?),
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             Self::Local(write) => {
                 // Dropping a partially written frame must retire the stream.
                 let mut stop_on_drop = StopSocketOnDrop(Some(socket));
@@ -68,7 +82,7 @@ impl SocketWriter {
     async fn close(self) -> CliResult<()> {
         match self {
             Self::WebSocket(mut write) => Ok(write.send(Message::Close(None)).await?),
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             Self::Local(_) => Ok(()),
         }
     }
@@ -94,7 +108,7 @@ impl Socket {
     fn new(write: SocketWriter) -> Arc<Self> {
         let retain_sent_requests = match &write {
             SocketWriter::WebSocket(_) => false,
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             SocketWriter::Local(_) => true,
         };
         Arc::new(Self {
@@ -471,35 +485,39 @@ impl AlephClient {
         Ok((client, events))
     }
 
-    /// Open an OS-authenticated Unix IPC connection. No network fallback or
+    /// Open an OS-authenticated local IPC connection. No network fallback or
     /// device credential is used. A retired IPC connection must be reopened explicitly.
     pub async fn connect_local(
         endpoint: &std::path::Path,
         hello: &aleph_protocol::system_hello::HelloParams,
     ) -> CliResult<(Self, mpsc::Receiver<StreamEvent>)> {
-        #[cfg(unix)]
-        {
-            tokio::time::timeout(local_ipc::HELLO_TIMEOUT, Self::open_local(endpoint, hello))
-                .await
-                .map_err(|_| CliError::Timeout("IPC handshake timed out".into()))?
+        #[cfg(not(any(unix, windows)))]
+        let _ = (endpoint, hello);
+        #[cfg(any(unix, windows))]
+        if local_ipc::AVAILABLE {
+            return tokio::time::timeout(
+                local_ipc::HELLO_TIMEOUT,
+                Self::open_local(endpoint, hello),
+            )
+            .await
+            .map_err(|_| CliError::Timeout("IPC handshake timed out".into()))?;
         }
-        #[cfg(not(unix))]
-        {
-            let _ = (endpoint, hello);
-            Err(CliError::Connection(
-                "Desktop IPC is unavailable on this platform".into(),
-            ))
-        }
+        Err(CliError::Connection(
+            "Desktop IPC is unavailable on this platform".into(),
+        ))
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     async fn open_local(
         endpoint: &std::path::Path,
         hello: &aleph_protocol::system_hello::HelloParams,
     ) -> CliResult<(Self, mpsc::Receiver<StreamEvent>)> {
         use aleph_protocol::system_hello::HelloResult;
 
+        #[cfg(unix)]
         let (read, write) = local_ipc::unix::connect(endpoint).await?.into_split();
+        #[cfg(windows)]
+        let (read, write) = tokio::io::split(local_ipc::windows::connect(endpoint).await?);
         let socket = Socket::new(SocketWriter::Local(write));
         let (client, events) = Self::with_socket(None, socket.clone(), SocketReader::Local(read));
         let result: HelloResult = client
@@ -714,7 +732,7 @@ impl AlephClient {
     async fn read_loop(read: SocketReader, socket: &Arc<Socket>, delivery: &Weak<EventDelivery>) {
         let mut read = match read {
             SocketReader::WebSocket(read) => read,
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             SocketReader::Local(mut read) => {
                 while let Ok(Some(text)) = local_ipc::read_frame(&mut read).await {
                     let Ok(value) = local_ipc::parse_payload(&text) else {

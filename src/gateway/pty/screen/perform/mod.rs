@@ -48,7 +48,17 @@ pub struct Screen {
     /// one per screen buffer: DECSC/DECRC in a shell prompt are always
     /// paired inside one buffer, and a second slot would have no producer.
     saved_cursor: Option<SavedCursor>,
+    /// Bytes the program asked the TERMINAL to send back (DSR/CPR replies),
+    /// awaiting the session's writer. Kept outside `ScreenState` so a soft
+    /// reset later in the same chunk cannot drop an answer a program is
+    /// blocked on: Windows ConPTY emits `CSI 6 n` at startup and renders
+    /// nothing until it gets one. Bounded by `MAX_PENDING_REPLY_BYTES`.
+    replies: Vec<u8>,
 }
+
+/// A flood of status requests with nobody draining replies cannot grow
+/// server memory without bound; a request past this is dropped unanswered.
+pub(super) const MAX_PENDING_REPLY_BYTES: usize = 4096;
 
 /// DECSC's slot. Position and style are one value because `ESC 7` saves
 /// both — splitting them invites a restore that returns the column and
@@ -123,6 +133,7 @@ impl Screen {
             last_sent_cwd: None,
             last_sent_cursor_pos: None,
             saved_cursor: None,
+            replies: Vec::new(),
         }
     }
 
@@ -184,6 +195,12 @@ impl Screen {
     /// Reads and clears the bell flag — a bell is an edge, not a level.
     pub fn take_bell(&mut self) -> bool {
         std::mem::take(&mut self.state.bell)
+    }
+
+    /// Takes the terminal replies queued by the last `feed` calls. The
+    /// session writes them to the child's input, as a real terminal would.
+    pub fn take_replies(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.replies)
     }
 
     /// True while the alternate screen buffer (`\e[?1049h`) is active —

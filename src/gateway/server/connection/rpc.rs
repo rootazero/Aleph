@@ -37,27 +37,29 @@ pub(super) fn check_origin_rate(
     limiter: &RateLimiter,
     origin: Option<IpAddr>,
     req: &JsonRpcRequest,
-) -> Result<(), JsonRpcResponse> {
+) -> Result<(), Box<JsonRpcResponse>> {
     let Some(origin) = origin else {
         return Ok(());
     };
     let key = RateLimitKey::new(&origin.to_string(), scope_for_method(&req.method));
-    limiter.check_and_record(&key).map_err(|error| match error {
-        RateLimitError::Exceeded { retry_after_ms, .. } => JsonRpcResponse::error_with_data(
-            req.id.clone(),
-            RATE_LIMITED,
-            "Rate limit exceeded",
-            serde_json::json!({"retry_after_ms": retry_after_ms}),
-        ),
-        RateLimitError::LockedOut {
-            lockout_remaining_ms,
-            ..
-        } => JsonRpcResponse::error_with_data(
-            req.id.clone(),
-            RATE_LIMITED,
-            "Rate limit lockout",
-            serde_json::json!({"lockout_remaining_ms": lockout_remaining_ms}),
-        ),
+    limiter.check_and_record(&key).map_err(|error| {
+        Box::new(match error {
+            RateLimitError::Exceeded { retry_after_ms, .. } => JsonRpcResponse::error_with_data(
+                req.id.clone(),
+                RATE_LIMITED,
+                "Rate limit exceeded",
+                serde_json::json!({"retry_after_ms": retry_after_ms}),
+            ),
+            RateLimitError::LockedOut {
+                lockout_remaining_ms,
+                ..
+            } => JsonRpcResponse::error_with_data(
+                req.id.clone(),
+                RATE_LIMITED,
+                "Rate limit lockout",
+                serde_json::json!({"lockout_remaining_ms": lockout_remaining_ms}),
+            ),
+        })
     })
 }
 
@@ -65,7 +67,7 @@ pub(super) fn prepare(
     req: &JsonRpcRequest,
     caller: &CallerSnapshot,
     require_key: bool,
-) -> Result<RpcPlan, JsonRpcResponse> {
+) -> Result<RpcPlan, Box<JsonRpcResponse>> {
     const SEP: char = '\u{1f}';
     let raw_key = req
         .params
@@ -74,11 +76,11 @@ pub(super) fn prepare(
         .and_then(serde_json::Value::as_str);
     // Prevent a raw key from forging another principal/method's slot.
     if raw_key.is_some_and(|key| key.contains(SEP)) {
-        return Err(JsonRpcResponse::error(
+        return Err(Box::new(JsonRpcResponse::error(
             req.id.clone(),
             INVALID_PARAMS,
             "idempotency_key contains a reserved separator character",
-        ));
+        )));
     }
     let key = raw_key.map(|key| {
         let principal = dispatch::idempotency_principal(&req.method, caller);
@@ -89,7 +91,7 @@ pub(super) fn prepare(
     let lane = Lane::for_method(&req.method);
     if require_key && lane.needs_idempotency() && key.is_none() {
         warn!(method = %req.method, %lane, "Rejecting mutating RPC without idempotency_key (require_idempotency_key=true)");
-        return Err(JsonRpcResponse::error_with_data(
+        return Err(Box::new(JsonRpcResponse::error_with_data(
             req.id.clone(),
             IDEMPOTENCY_KEY_REQUIRED,
             "idempotency_key required for mutating RPCs",
@@ -98,7 +100,7 @@ pub(super) fn prepare(
                 "lane": lane.to_string(),
                 "hint": "include a stable per-attempt idempotency_key (UUID v4) in params",
             }),
-        ));
+        )));
     }
     Ok(RpcPlan { lane, key })
 }

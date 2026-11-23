@@ -69,11 +69,15 @@ use cli::{Args, Command, PluginAction, PluginsAction};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = Args::parse();
     if args.desktop_ipc.is_some() {
-        if !cfg!(unix) {
+        if !aleph_client::local_ipc::AVAILABLE {
             return Err("Desktop IPC is unavailable on this platform".into());
         }
         if !matches!(args.command, Some(Command::Start) | None) {
             return Err("--desktop-ipc is only available when starting the Gateway".into());
+        }
+        #[cfg(windows)]
+        if let Some(endpoint) = args.desktop_ipc.as_deref() {
+            aleph_client::local_ipc::windows::validate_endpoint(endpoint)?;
         }
     }
 

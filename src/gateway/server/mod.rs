@@ -1423,63 +1423,68 @@ impl GatewayServer {
     /// Serve the existing network routes and an explicitly enabled, read-only local endpoint.
     pub async fn run_with_desktop_ipc(
         &self,
-        mut shutdown: tokio::sync::oneshot::Receiver<()>,
+        shutdown: tokio::sync::oneshot::Receiver<()>,
         endpoint: Option<&std::path::Path>,
     ) -> Result<(), GatewayError> {
         let Some(endpoint) = endpoint else {
             return self.run_until_shutdown(shutdown).await;
         };
-        #[cfg(not(unix))]
-        {
-            let _ = (endpoint, &mut shutdown);
-            Err(GatewayError::ConnectionError(
-                "Desktop IPC is unavailable on this platform".into(),
-            ))
+        #[cfg(not(any(unix, windows)))]
+        let _ = endpoint;
+        #[cfg(any(unix, windows))]
+        if aleph_client::local_ipc::AVAILABLE {
+            return self.run_local_endpoint(shutdown, endpoint).await;
         }
-        #[cfg(unix)]
-        {
-            use connection::local_ipc;
-            self.check_network_exposure()?;
-            let endpoint = local_ipc::bind(endpoint).map_err(|error| {
-                GatewayError::ConnectionError(format!("Desktop IPC bind failed: {error}"))
-            })?;
-            let state = self.build_shared_state();
-            self.spawn_background_tasks();
+        Err(GatewayError::ConnectionError(
+            "Desktop IPC is unavailable on this platform".into(),
+        ))
+    }
 
-            let stop = tokio_util::sync::CancellationToken::new();
-            let (stop_network, network_shutdown) = tokio::sync::oneshot::channel();
-            let network = self.run_network(state.clone(), network_shutdown);
-            // The local task owns admitted peers through cleanup. Dropping this
-            // future signals shutdown rather than aborting their cleanup futures.
-            let _stop_on_drop = stop.clone().drop_guard();
-            let mut local = tokio::spawn(local_ipc::serve(endpoint, state, stop.clone()));
-            tokio::pin!(network);
-            let (network_result, local_result) = tokio::select! {
-                _ = &mut shutdown => {
-                    stop.cancel();
-                    let _ = stop_network.send(());
-                    tokio::join!(network, local)
-                }
-                result = &mut network => {
-                    stop.cancel();
-                    (result, local.await)
-                }
-                result = &mut local => {
-                    let _ = stop_network.send(());
-                    (network.await, result)
-                }
-            };
-            network_result.and(
-                local_result
-                    .map_err(std::io::Error::other)
-                    .and_then(|result| result)
-                    .map_err(|error| {
-                        GatewayError::ConnectionError(format!(
-                            "Desktop IPC listener failed: {error}"
-                        ))
-                    }),
-            )
-        }
+    #[cfg(any(unix, windows))]
+    async fn run_local_endpoint(
+        &self,
+        mut shutdown: tokio::sync::oneshot::Receiver<()>,
+        endpoint: &std::path::Path,
+    ) -> Result<(), GatewayError> {
+        use connection::local_ipc;
+        self.check_network_exposure()?;
+        let endpoint = local_ipc::bind(endpoint).map_err(|error| {
+            GatewayError::ConnectionError(format!("Desktop IPC bind failed: {error}"))
+        })?;
+        let state = self.build_shared_state();
+        self.spawn_background_tasks();
+
+        let stop = tokio_util::sync::CancellationToken::new();
+        let (stop_network, network_shutdown) = tokio::sync::oneshot::channel();
+        let network = self.run_network(state.clone(), network_shutdown);
+        // The local task owns admitted peers through cleanup. Dropping this
+        // future signals shutdown rather than aborting their cleanup futures.
+        let _stop_on_drop = stop.clone().drop_guard();
+        let mut local = tokio::spawn(local_ipc::serve(endpoint, state, stop.clone()));
+        tokio::pin!(network);
+        let (network_result, local_result) = tokio::select! {
+            _ = &mut shutdown => {
+                stop.cancel();
+                let _ = stop_network.send(());
+                tokio::join!(network, local)
+            }
+            result = &mut network => {
+                stop.cancel();
+                (result, local.await)
+            }
+            result = &mut local => {
+                let _ = stop_network.send(());
+                (network.await, result)
+            }
+        };
+        network_result.and(
+            local_result
+                .map_err(std::io::Error::other)
+                .and_then(|result| result)
+                .map_err(|error| {
+                    GatewayError::ConnectionError(format!("Desktop IPC listener failed: {error}"))
+                }),
+        )
     }
 
     /// Run the server with graceful shutdown support

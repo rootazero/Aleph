@@ -47,10 +47,11 @@ pub struct Args {
     #[arg(long)]
     pub port: Option<u16>,
 
-    /// Opt in to read-only Desktop IPC at a fresh absolute Unix socket path in an owned 0700 directory
+    /// Opt in to read-only Desktop IPC at an explicit local endpoint
     ///
-    /// The caller manages the directory. The server leaves the socket entry after exit.
-    #[arg(long, value_name = "SOCKET_PATH")]
+    /// Unix requires a fresh absolute socket path in a caller-owned 0700 directory.
+    /// The server leaves the Unix socket entry after exit.
+    #[arg(long, value_name = "ENDPOINT")]
     pub desktop_ipc: Option<PathBuf>,
 
     /// Force start even if port appears to be in use

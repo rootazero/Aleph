@@ -275,6 +275,19 @@ impl PtySession {
         // once the child closes its descriptors.
         drop(slave);
 
+        #[cfg(windows)]
+        let killer: Box<dyn ChildKiller + Send + Sync> =
+            match WindowsProcessKiller::for_child(child.as_ref()) {
+                Ok(killer) => Box::new(killer),
+                Err(error) => {
+                    // Nothing owns the child yet; do not leave it running.
+                    let mut child = child;
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!("PTY process handle unavailable: {error}"));
+                }
+            };
+        #[cfg(not(windows))]
         let killer = child.clone_killer();
         // Read BEFORE `spawn_reader` moves the child onto the reader thread.
         let shell_pid = child.process_id();
@@ -465,6 +478,59 @@ impl PtySession {
 /// blocks inside one item rather than two `#[cfg]`-gated items so this doc
 /// comment governs both: split into two items, the Windows one carries the
 /// contract and the Unix one silently has none.
+/// Terminates a Windows PTY child through Aleph's own duplicate of its
+/// process handle.
+///
+/// `portable-pty` 0.9.0's Windows killer inverts `TerminateProcess`'s
+/// result: a successful kill reports whatever stale `GetLastError` value the
+/// thread held (observed: `os error 0` and `6`), and a failed one reports
+/// `Ok`. Close paths that require a confirmed kill then retained residuals
+/// for children that were already gone.
+#[cfg(windows)]
+#[derive(Debug)]
+struct WindowsProcessKiller(std::os::windows::io::OwnedHandle);
+
+#[cfg(windows)]
+impl WindowsProcessKiller {
+    fn for_child(child: &(dyn Child + Send + Sync)) -> std::io::Result<Self> {
+        let raw = child
+            .as_raw_handle()
+            .ok_or_else(|| std::io::Error::other("PTY child has no process handle"))?;
+        // SAFETY: `child` owns this open handle for the duration of the borrow;
+        // the duplicate below is independent of it.
+        let borrowed = unsafe { std::os::windows::io::BorrowedHandle::borrow_raw(raw) };
+        borrowed.try_clone_to_owned().map(Self)
+    }
+}
+
+#[cfg(windows)]
+impl ChildKiller for WindowsProcessKiller {
+    fn kill(&mut self) -> std::io::Result<()> {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
+        use windows_sys::Win32::System::Threading::{TerminateProcess, WaitForSingleObject};
+        let process = self.0.as_raw_handle();
+        // SAFETY: `process` is our open duplicate of the child's handle.
+        if unsafe { TerminateProcess(process, 1) } != 0 {
+            return Ok(());
+        }
+        let error = std::io::Error::last_os_error();
+        // Terminating a process that already exited fails; that is the goal.
+        // SAFETY: as above; a zero timeout only polls the handle's state.
+        if unsafe { WaitForSingleObject(process, 0) } == WAIT_OBJECT_0 {
+            return Ok(());
+        }
+        Err(error)
+    }
+
+    fn clone_killer(&self) -> Box<dyn ChildKiller + Send + Sync> {
+        // The trait cannot report failure; `portable-pty` unwraps here too.
+        Box::new(Self(
+            self.0.try_clone().expect("duplicate PTY process handle"),
+        ))
+    }
+}
+
 fn default_shell_command() -> (CommandBuilder, String) {
     #[cfg(windows)]
     {
@@ -626,11 +692,19 @@ fn spawn_reader(
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) => break,
-                    Ok(n) => reading
-                        .screen
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .feed(&buf[..n]),
+                    Ok(n) => {
+                        let replies = {
+                            let mut screen =
+                                reading.screen.lock().unwrap_or_else(|e| e.into_inner());
+                            screen.feed(&buf[..n]);
+                            screen.take_replies()
+                        };
+                        // Answer as a terminal would, after releasing the
+                        // screen lock. A closed session has nobody to answer.
+                        if !replies.is_empty() {
+                            let _ = reading.write_input(&replies);
+                        }
+                    }
                     Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
                     Err(_) => break,
                 }

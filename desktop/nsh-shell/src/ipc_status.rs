@@ -22,22 +22,27 @@ fn parse_endpoint(args: &[String], qa: bool) -> Result<&Path, &'static str> {
     if qa {
         return Err("QA configuration cannot be combined with Desktop IPC status");
     }
+    const USAGE: &str = "expected only --desktop-ipc-status <local endpoint>";
     let [flag, endpoint] = args else {
-        return Err("expected only --desktop-ipc-status <absolute socket path>");
+        return Err(USAGE);
     };
+    if flag != FLAG {
+        return Err(USAGE);
+    }
+    if !aleph_client::local_ipc::AVAILABLE {
+        return Err("Desktop IPC is unavailable on this platform");
+    }
     let endpoint = Path::new(endpoint);
-    if flag != FLAG || !endpoint.is_absolute() || endpoint.file_name().is_none() {
-        return Err("expected only --desktop-ipc-status <absolute socket path>");
+    #[cfg(windows)]
+    aleph_client::local_ipc::windows::validate_endpoint(endpoint)
+        .map_err(|_| r"Desktop IPC requires an explicit local \\.\pipe\name")?;
+    #[cfg(not(windows))]
+    if !endpoint.is_absolute() || endpoint.file_name().is_none() {
+        return Err(USAGE);
     }
     Ok(endpoint)
 }
 
-#[cfg(not(unix))]
-fn query(_endpoint: &Path) -> Result<String, &'static str> {
-    Err("Desktop IPC is unavailable on this platform")
-}
-
-#[cfg(unix)]
 fn query(endpoint: &Path) -> Result<String, &'static str> {
     use std::time::Duration;
 
@@ -95,13 +100,19 @@ mod tests {
 
     #[test]
     fn desktop_ipc_status_is_exclusive_and_absolute() {
-        let endpoint = std::env::current_dir().unwrap().join("status.sock");
-        let endpoint = endpoint.to_str().unwrap();
+        #[cfg(windows)]
+        let endpoint = r"\\.\pipe\aleph-status-test";
+        #[cfg(not(windows))]
+        let endpoint_path = std::env::current_dir().unwrap().join("status.sock");
+        #[cfg(not(windows))]
+        let endpoint = endpoint_path.to_str().unwrap();
         let standalone = args(&[FLAG, endpoint]);
-        assert_eq!(
-            parse_endpoint(&standalone, false).unwrap(),
-            Path::new(endpoint)
-        );
+        let result = parse_endpoint(&standalone, false);
+        if aleph_client::local_ipc::AVAILABLE {
+            assert_eq!(result.unwrap(), Path::new(endpoint));
+        } else {
+            assert_eq!(result, Err("Desktop IPC is unavailable on this platform"));
+        }
         assert!(parse_endpoint(&standalone, true).is_err());
         assert!(parse_endpoint(&args(&[FLAG]), false).is_err());
         assert!(parse_endpoint(&args(&[FLAG, "status.sock"]), false).is_err());
