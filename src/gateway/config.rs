@@ -150,6 +150,11 @@ pub struct GatewayServerConfig {
     /// `host`/`port`, a request Origin, or `allow_any_origin`.
     #[serde(default)]
     pub browser_viewer_origin: Option<String>,
+    /// Directory holding the TSX Panel web package (`nsh package --target
+    /// web` output). `None` (default) leaves `/v1/panel/` unmounted. Served
+    /// only on the native TLS router, same-origin with `/v1/ws`.
+    #[serde(default)]
+    pub panel_web_dir: Option<std::path::PathBuf>,
     /// Native in-process TLS. See [`GatewayTlsConfig`].
     #[serde(default)]
     pub tls: GatewayTlsConfig,
@@ -250,6 +255,7 @@ impl Default for GatewayServerConfig {
             protocol_version: 1,
             allowed_origins: Vec::new(),
             allow_any_origin: false,
+            panel_web_dir: None,
             browser_viewer_origin: None,
             tls: GatewayTlsConfig::default(),
             trusted_proxy: TrustedProxyConfig::default(),

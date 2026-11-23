@@ -216,6 +216,7 @@ async fn start_server_body(
         tls_cert_path: full_config.gateway.tls.cert_path.clone(),
         tls_key_path: full_config.gateway.tls.key_path.clone(),
         tls_san: full_config.gateway.tls.san.clone(),
+        panel_web_dir: full_config.gateway.panel_web_dir.clone(),
     };
     let mut server = GatewayServer::with_config(addr, server_config);
 

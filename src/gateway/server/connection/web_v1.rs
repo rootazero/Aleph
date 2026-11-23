@@ -110,6 +110,34 @@ pub(in crate::gateway::server) fn routes(
         }))
 }
 
+/// Content policy for the TSX Panel web package: its own scripts plus the
+/// WebAssembly module NSH compiles, images it renders from blobs, and
+/// network access only back to this origin (`/v1/session`, `/v1/ws`).
+const PANEL_CSP: &str =
+    "script-src 'self' 'wasm-unsafe-eval'; img-src 'self' blob: data:; connect-src 'self'";
+
+/// Static TSX Panel web package under `/v1/panel/`. Mounted only when a
+/// directory is configured, and only on the native TLS router so the page is
+/// same-origin with the Cookie-authenticated `/v1/ws`.
+pub(in crate::gateway::server) fn panel_routes(dir: &std::path::Path) -> Router {
+    Router::new()
+        .nest_service("/v1/panel", tower_http::services::ServeDir::new(dir))
+        .layer(axum::middleware::map_response(
+            |mut response: Response| async move {
+                let headers = response.headers_mut();
+                headers.insert(
+                    header::CONTENT_SECURITY_POLICY,
+                    HeaderValue::from_static(PANEL_CSP),
+                );
+                headers.insert(
+                    header::X_CONTENT_TYPE_OPTIONS,
+                    HeaderValue::from_static("nosniff"),
+                );
+                response
+            },
+        ))
+}
+
 fn one_header(headers: &HeaderMap, name: header::HeaderName) -> Option<&str> {
     let mut values = headers.get_all(name).iter();
     let value = values.next()?.to_str().ok()?;

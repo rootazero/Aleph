@@ -463,3 +463,70 @@ async fn web_socket_requires_hello_and_keeps_member_scope() {
     .await
     .expect("v1 and legacy connection rows must be removed");
 }
+
+async fn get_panel(app: Router, path: &str) -> axum::response::Response {
+    app.oneshot(
+        Request::get(path)
+            .header(header::HOST, "localhost:8443")
+            .extension(ConnectInfo(
+                "127.0.0.1:45000".parse::<SocketAddr>().unwrap(),
+            ))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn panel_route_absent_when_unconfigured() {
+    let (gateway, _, _) = fixture(true);
+    let app = gateway.native_tls_router(
+        gateway.build_shared_state(),
+        tokio_util::sync::CancellationToken::new(),
+    );
+    let response = get_panel(app, "/v1/panel/index.html").await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn panel_route_serves_index_with_csp() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("index.html"), "<!doctype html>panel").unwrap();
+    let (mut gateway, _, _) = fixture(true);
+    gateway.config.panel_web_dir = Some(root.path().to_path_buf());
+    let app = gateway.native_tls_router(
+        gateway.build_shared_state(),
+        tokio_util::sync::CancellationToken::new(),
+    );
+    for path in ["/v1/panel/", "/v1/panel/index.html"] {
+        let response = get_panel(app.clone(), path).await;
+        assert_eq!(response.status(), StatusCode::OK, "{path}");
+        assert_eq!(
+            response.headers()[header::CONTENT_SECURITY_POLICY],
+            "script-src 'self' 'wasm-unsafe-eval'; img-src 'self' blob: data:; connect-src 'self'"
+        );
+        assert_eq!(
+            response.headers()[header::X_CONTENT_TYPE_OPTIONS],
+            "nosniff"
+        );
+    }
+}
+
+#[tokio::test]
+async fn panel_route_rejects_traversal() {
+    let root = tempfile::tempdir().unwrap();
+    let package = root.path().join("package");
+    std::fs::create_dir(&package).unwrap();
+    std::fs::write(root.path().join("secret.txt"), "outside").unwrap();
+    let (mut gateway, _, _) = fixture(true);
+    gateway.config.panel_web_dir = Some(package);
+    let app = gateway.native_tls_router(
+        gateway.build_shared_state(),
+        tokio_util::sync::CancellationToken::new(),
+    );
+    for path in ["/v1/panel/../secret.txt", "/v1/panel/%2e%2e/secret.txt"] {
+        let response = get_panel(app.clone(), path).await;
+        assert_ne!(response.status(), StatusCode::OK, "{path}");
+    }
+}

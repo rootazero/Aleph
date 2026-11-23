@@ -347,6 +347,8 @@ pub struct GatewayConfig {
     pub tls_key_path: String,
     /// Mirrors `GatewayServerConfig::tls.san`.
     pub tls_san: Vec<String>,
+    /// Mirrors `GatewayServerConfig::panel_web_dir`.
+    pub panel_web_dir: Option<std::path::PathBuf>,
     /// Per-principal RPC rate-limit ceilings. Populated by the binary from
     /// the TOML `[gateway.rate_limit]` block (or the compiled defaults).
     /// RESTART-ONLY: read once here, when the limiter is built.
@@ -363,6 +365,7 @@ impl Default for GatewayConfig {
             idle_timeout_secs: 90,
             allowed_origins: Vec::new(),
             allow_any_origin: false,
+            panel_web_dir: None,
             trusted_proxy_enabled: false,
             trusted_proxy_ips: vec!["127.0.0.1".to_string(), "::1".to_string()],
             allow_insecure_remote: false,
@@ -1355,8 +1358,13 @@ impl GatewayServer {
         state: Arc<GatewaySharedState>,
         stop: tokio_util::sync::CancellationToken,
     ) -> Router {
-        self.router_from_shared(state.clone())
-            .merge(connection::web_v1::routes(state, stop))
+        let router = self
+            .router_from_shared(state.clone())
+            .merge(connection::web_v1::routes(state, stop));
+        match &self.config.panel_web_dir {
+            Some(dir) => router.merge(connection::web_v1::panel_routes(dir)),
+            None => router,
+        }
     }
 
     /// Run the Gateway server
