@@ -318,11 +318,7 @@ fn parse_progress_counts(line: &str) -> Option<(usize, usize)> {
     let rest = line.trim().strip_prefix("Progress: ")?;
     let (done, total) = rest.trim().split_once('/')?;
     let done = done.trim().parse::<usize>().ok()?;
-    let total = total
-        .split_whitespace()
-        .next()?
-        .parse::<usize>()
-        .ok()?;
+    let total = total.split_whitespace().next()?.parse::<usize>().ok()?;
     Some((done, total))
 }
 

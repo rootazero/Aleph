@@ -119,13 +119,21 @@ fn extract_from_json_code_block(response: &str) -> Option<String> {
         // Find closing ``` that stands on its own line (preceded only by whitespace)
         let mut search_pos = content_start;
         while let Some(search_slice) = body.get(search_pos..) {
-            let Some(pos) = search_slice.find(end_marker) else { break };
+            let Some(pos) = search_slice.find(end_marker) else {
+                break;
+            };
             let abs_pos = search_pos + pos;
-            let Some(before) = body.get(..abs_pos) else { break };
+            let Some(before) = body.get(..abs_pos) else {
+                break;
+            };
             let line_start = before.rfind('\n').map_or(0, |i| i + 1);
-            let Some(line_prefix) = before.get(line_start..) else { break };
+            let Some(line_prefix) = before.get(line_start..) else {
+                break;
+            };
             if line_prefix.trim().is_empty() {
-                return body.get(content_start..abs_pos).map(|s| s.trim().to_string());
+                return body
+                    .get(content_start..abs_pos)
+                    .map(|s| s.trim().to_string());
             }
             search_pos = abs_pos.saturating_add(end_marker.len());
         }
@@ -148,11 +156,17 @@ fn extract_from_generic_code_block(response: &str) -> Option<String> {
         // Find closing ``` that stands on its own line (preceded only by whitespace)
         let mut search_pos = content_start;
         while let Some(search_slice) = response.get(search_pos..) {
-            let Some(pos) = search_slice.find(marker) else { break };
+            let Some(pos) = search_slice.find(marker) else {
+                break;
+            };
             let abs_pos = search_pos + pos;
-            let Some(before) = response.get(..abs_pos) else { break };
+            let Some(before) = response.get(..abs_pos) else {
+                break;
+            };
             let line_start = before.rfind('\n').map_or(0, |i| i + 1);
-            let Some(line_prefix) = before.get(line_start..) else { break };
+            let Some(line_prefix) = before.get(line_start..) else {
+                break;
+            };
             if line_prefix.trim().is_empty() {
                 if let Some(content) = response.get(content_start..abs_pos) {
                     let trimmed = content.trim();

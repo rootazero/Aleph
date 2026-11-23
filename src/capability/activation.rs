@@ -8,9 +8,9 @@
 use crate::capability::constraints::{ConstraintContext, ConstraintSet, ConstraintViolation};
 #[cfg(test)]
 use crate::capability::descriptor::CapabilityDescriptor;
-use crate::capability::events::{ActivationEventHook, CapabilityEvent};
 #[cfg(test)]
 use crate::capability::events::CapabilityEventEmitter;
+use crate::capability::events::{ActivationEventHook, CapabilityEvent};
 use crate::capability::lifecycle::{CapabilityLifecycle, LifecycleError, LifecycleState};
 use crate::capability::ownership::OwnerGeneration;
 use crate::sync_primitives::Arc;

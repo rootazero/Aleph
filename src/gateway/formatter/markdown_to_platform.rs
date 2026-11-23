@@ -173,16 +173,6 @@ fn slack_inline(text: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Discord (mostly passthrough)
-// ---------------------------------------------------------------------------
-
-/// Markdown -> Discord (mostly passthrough, Discord understands standard MD).
-pub(super) fn markdown_to_discord(text: &str) -> String {
-    // Discord Markdown is very close to standard Markdown.
-    text.to_string()
-}
-
-// ---------------------------------------------------------------------------
 // IRC mIRC control codes
 // ---------------------------------------------------------------------------
 

@@ -1,0 +1,46 @@
+{
+  "PATHS": {
+    "docs/reference/AGENT_LOOP_TOOL_EXECUTION.md": [
+      "src/agent_loop/",
+      "src/agent_loop/loop_core.rs",
+      "src/agent_loop/mod.rs",
+      "src/agent_loop/tool_execution_context.rs",
+      "src/agent_loop/tool_orchestrator.rs",
+      "src/agent_loop/tool_pipeline.rs",
+      "src/exec/sandbox/audit.rs",
+      "src/session/streaming.rs"
+    ],
+    "docs/reference/BROWSER_LIVE_VIEWER.md": [
+      "qa/browser_managed/windows/wfp_probe.exe",
+      "src/gateway/pty/runtime.rs",
+      "target/debug/aleph-desktop-shell.exe",
+      "target/debug/aleph-server.exe"
+    ],
+    "docs/reference/PHASE_6B_BUILDER_AUDIT.md": [
+      "src/agent_loop/loop_core.rs:805-808",
+      "src/agent_loop/loop_core.rs:811-814",
+      "src/agent_loop/loop_core.rs:817-820",
+      "src/agent_loop/loop_core.rs:905-909",
+      "src/agent_loop/loop_core.rs:912-918",
+      "src/agent_loop/loop_core.rs:921-927",
+      "src/agent_loop/loop_core.rs:939-946",
+      "src/agent_loop/loop_core.rs:953-956",
+      "src/gateway/execution_engine/run_loop.rs",
+      "src/gateway/execution_engine/run_loop.rs:648-653",
+      "src/harness/skill_prefetch.rs",
+      "src/harness/tests/task10_wiring.rs",
+      "src/orchestrator/dispatch.rs:52-69",
+      "src/orchestrator/dispatch.rs:60-69",
+      "src/orchestrator/flow_run_tool.rs",
+      "src/orchestrator/harness_bridge.rs:188-204",
+      "src/orchestrator/harness_bridge.rs:82-87",
+      "tests/orchestrator_chain_propagation.rs"
+    ],
+    "docs/reference/WHATSAPP_ARCHITECTURE_DESIGN-2026-04-06.md": [
+      "src/gateway/interfaces/whatsapp/account.rs",
+      "src/gateway/interfaces/whatsapp/baileys_impl.rs",
+      "src/gateway/interfaces/whatsapp/baileys_runtime.rs",
+      "src/gateway/interfaces/whatsapp/factory.rs"
+    ]
+  }
+}

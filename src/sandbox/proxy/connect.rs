@@ -185,10 +185,7 @@ pub(super) async fn handle(inbound: TcpStream, allowlist: AllowList) -> Result<(
     }
 
     // Re-join the inbound halves into a single stream for symmetric splice.
-    let mut inbound = rd
-        .into_inner()
-        .reunite(wr)
-        .map_err(std::io::Error::other)?;
+    let mut inbound = rd.into_inner().reunite(wr).map_err(std::io::Error::other)?;
     let _ = tokio::io::copy_bidirectional(&mut inbound, &mut upstream).await;
     Ok(())
 }

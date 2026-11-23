@@ -174,7 +174,7 @@ impl EventFilter {
         }
 
         let target_type = event.event.event_type();
-        if !self.event_types.iter().any(|&t| t == target_type) {
+        if !self.event_types.contains(&target_type) {
             return false;
         }
 

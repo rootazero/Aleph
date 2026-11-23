@@ -206,9 +206,9 @@ public `load_all` 与 `reload` 仍是 discovery/mount 原语，不隐式激活 C
 
 ### B8.2 current Feishu lifecycle re-gate / B8.2 当前 Feishu 生命周期复闸（2026-10-25）
 
-The current code exposes a Gateway Feishu **provider lifecycle slice**, not a Tool and not a Zahir Capability. `ChannelRegistry` owns instances, desired intent, lifecycle serialization, replacement preflight, and webhook mounts (`src/gateway/channel_registry.rs:187-220,295-433,600-688,1460-1504`). Disabled boot records `Stopped` and is excluded from `start_all`; `create_channel` derives intent from `ChannelConfig.enabled`; restart records `Running` only after a complete stop/start/mount refresh.
+The current code exposes a Gateway Feishu **provider lifecycle slice**, not a Tool and not a Zahir Capability. `ChannelRegistry` owns instances, desired intent, lifecycle serialization, replacement preflight, and webhook mounts (`src/gateway/channel_registry.rs`). Disabled boot records `Stopped` and is excluded from `start_all`; `create_channel` derives intent from `ChannelConfig.enabled`; restart records `Running` only after a complete stop/start/mount refresh.
 
-`FeishuChannel` uses the shared `ProviderHandle` for state/generation admission. `api_handle` is only a derived cache fenced by provider instance and generation (`src/gateway/interfaces/feishu/mod.rs:51-183,334-405`; `src/gateway/interfaces/feishu/api_handle.rs:1-104`). Every retained HTTP call holds the shared API read guard through token acquisition; webhook admission uses the same guard and returns `503` after revocation (`src/gateway/interfaces/feishu/api.rs:61-115`; `src/gateway/interfaces/feishu/feishu_inbound/webhook_server.rs:48-120`). Stop retains serve/join/refresh/WS residuals and does not claim complete accepted-handler ownership/join.
+`FeishuChannel` uses the shared `ProviderHandle` for state/generation admission. `api_handle` is only a derived cache fenced by provider instance and generation (`src/gateway/interfaces/feishu/mod.rs`; `src/gateway/interfaces/feishu/api_handle.rs`). Every retained HTTP call holds the shared API read guard through token acquisition; webhook admission uses the same guard and returns `503` after revocation (`src/gateway/interfaces/feishu/api.rs`; `src/gateway/interfaces/feishu/feishu_inbound/webhook_server.rs`). Stop retains serve/join/refresh/WS residuals and does not claim complete accepted-handler ownership/join.
 
 The source-backed route is boot builder → `ChannelRegistry::register_for_boot` → `start_all` → `FeishuChannel::start` → runtime → `api_handle::publish` → `ProviderHandle::with_ready_commit`; outbound calls pass `admit_call` → `ProviderHandle::acquire_call` → `FeishuApi::admit`, while inbound webhook/WS forwarding uses the same admission fence. B8.2-A/B/C/D are all **NO-GO / deferred**: no Feishu descriptor/kind adapter, Feishu `BackendLease` route, Feishu callable resolve path, Feishu Capability observer, or durable provider lifecycle producer exists. Tool `ProjectionHost`/`ZahirFacade` production wiring is Tool-only evidence. Webhook remains Gateway-owned external effect; EffectClaim producer, Safe Replay, scheduler, and external exactly-once remain deferred. Current focused validation and the exact failure matrix are in `docs/research/aleph_modularization_phase2b_b8_2_closeout.md`; production Feishu → Zahir mount is prohibited.
 
@@ -328,7 +328,7 @@ Three things about this pair are load-bearing:
 - **They replace `bash`.** A `grep -r` does not read `.gitignore`, so one
   recursive run pours every hit under `node_modules/`, `target/` and `dist/`
   into the context window. `bash`'s own DESCRIPTION says so, and
-  `tools/scoped/search_steer.rs` repeats it at call time as a non-blocking
+  `src/tools/scoped/search_steer.rs` repeats it at call time as a non-blocking
   `<system-reminder>` when a shell command duplicates one of them. `rg` and
   `fd` are never steered — they are the sanctioned shell fallback.
 - **`file_ops{operation:"search"}` is a different face, not a duplicate.** That
@@ -502,7 +502,7 @@ pub struct MemorySearchOutput {
 **Architecture**:
 ```
 memory_search(query)
-  → Hybrid search (see [Retrieval](../memory/RETRIEVAL.md))
+  → Hybrid search (see [Retrieval](memory/RETRIEVAL.md))
     → Facts + raw memories fallback
   → ContextComptroller.arbitrate(results, budget)
     → Detect redundancy via cosine similarity (threshold: 0.95)
@@ -575,9 +575,7 @@ pub struct ToolDefinition {
 
 ## Tool Server
 
-**Location**: `src/tools/server.rs`
-
-The Tool Server manages tool execution:
+Current tool execution goes through `src/tools/service.rs` and `src/tools/scoped/mod.rs`. The `ToolServer` sketch below is historical:
 
 ```rust
 pub struct ToolServer {
@@ -707,18 +705,18 @@ The sites, in the order a new tool needs them:
 
 | # | File | What it buys |
 |---|------|--------------|
-| 1 | `executor/builtin_registry/definitions.rs` — `BUILTIN_TOOL_DEFINITIONS` | catalog row; the description starts being billed on every request |
+| 1 | `src/executor/builtin_registry/definitions.rs` — `BUILTIN_TOOL_DEFINITIONS` | catalog row; the description starts being billed on every request |
 | 2 | `definitions.rs` — `create_tool_boxed` | construction for `AlephToolServer` |
-| 3 | `registry/tool_registry_impl.rs` — `execute_tool` match arm | **dispatch**; without it every call answers `Unknown tool` |
-| 4 | `registry/struct_def.rs` | the instance field |
-| 5 | `builder/constructor/mod.rs` | construction + struct init (pass the shared `ToolContext` handle if the tool resolves paths) |
-| 6 | `builder/core_tools.rs` — `reg(...)` | registry-map row (`agent_init` completes the model's list from here) |
-| 7 | `builtin_registry/groups.rs` | Panel display category |
-| 8 | `config/types/tools.rs` — `default_core_tools()` | schema-resident vs collapsed behind a `get_tool_schema` round-trip |
-| 9 | `tools/adapters/registry_adapter.rs` — `READ_ONLY_TOOLS` | read-only ⇒ idempotent ⇒ auto-retry ⇒ callable under the `Ask` / `Plan` tiers |
-| 10 | `tools/fallback_registry.rs` — `ToolFamily::from_name` | which alternatives are suggested when it fails |
+| 3 | `src/executor/builtin_registry/registry/tool_registry_impl.rs` — `execute_tool` match arm | **dispatch**; without it every call answers `Unknown tool` |
+| 4 | `src/executor/builtin_registry/registry/struct_def.rs` | the instance field |
+| 5 | `src/executor/builtin_registry/builder/constructor/mod.rs` | construction + struct init (pass the shared `ToolContext` handle if the tool resolves paths) |
+| 6 | `src/executor/builtin_registry/builder/core_tools.rs` — `reg(...)` | registry-map row (`agent_init` completes the model's list from here) |
+| 7 | `src/executor/builtin_registry/groups.rs` | Panel display category |
+| 8 | `src/config/types/tools.rs` — `default_core_tools()` | schema-resident vs collapsed behind a `get_tool_schema` round-trip |
+| 9 | `src/tools/adapters/registry_adapter.rs` — `READ_ONLY_TOOLS` | read-only ⇒ idempotent ⇒ auto-retry ⇒ callable under the `Ask` / `Plan` tiers |
+| 10 | `src/tools/fallback_registry.rs` — `ToolFamily::from_name` | which alternatives are suggested when it fails |
 
-1–3 and 6 are enforced: `builtin_registry/dispatchable.rs` recovers both the
+1–3 and 6 are enforced: `src/executor/builtin_registry/dispatchable.rs` recovers both the
 advertised set and the dispatchable set **from the source text** (not from a
 list someone maintains) and fails naming the tool that is in one and not the
 other. 4–5 are compile errors. 7–10 are silent if missed — a Panel row that
@@ -729,9 +727,7 @@ that the `Ask` tier stops to ask about.
 
 ## Tool Filtering
 
-**Location**: `src/thinker/tool_filter.rs`
-
-Control which tools are available:
+Current tool availability is enforced by `src/tools/scoped/mod.rs`. The `ToolFilter` sketch and configuration below are historical:
 
 ```rust
 pub struct ToolFilter {
@@ -775,7 +771,7 @@ pub struct ToolResult {
 ### Ingress: 结果在进入上下文之前要经过什么
 
 唯一入口 `src/tool_output/ingress.rs::clean_for_ingress`，由
-`tools/scoped/dispatch.rs::apply_layer_two` 调用一次：
+`src/tools/scoped/dispatch.rs::apply_layer_two` 调用一次：
 
 ```text
 value (serde_json::Value —— 文本字段仍带真换行)
@@ -870,7 +866,7 @@ lower it. `fit_to_budget` measures the whole result the way Layer 2 does (flatte
 marker) and shrinks the cap proportionally, at most `FIT_ATTEMPTS` times, so the result arrives inline instead of
 being offloaded again. A result still over after those attempts is bounded by Layer 2.
 
-**Fetch by intent · 按意图取页** (`builtin_tools/web_fetch/intent.rs`) — `web_fetch` with a `prompt` on a page
+**Fetch by intent · 按意图取页** (`src/builtin_tools/web_fetch/intent.rs`) — `web_fetch` with a `prompt` on a page
 longer than that cap: the page is extracted whole (bounded by `WebFetchTool::INTENT_EXTRACT_MAX_CHARS`);
 `index_page` offloads and indexes it **once** through `recovery_footer_for` into the same store `ctx_search`
 reads; `sections_for_prompt` BM25-searches **this page's own sections** with the prompt

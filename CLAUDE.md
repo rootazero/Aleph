@@ -50,9 +50,31 @@
 
 ## 🛠 Tech Stack & Do NOT introduce
 
-**核心栈 / Core stack**: Rust Core (tokio + serde) · SQLite + sqlite-vec · JSON Schema (schemars)。当前 Panel / Current Panel: Leptos/WASM，由 NSH WebView 或 Tauri 宿主承载。NSH 迁移目标 / Target: Desktop/Web 共享 TSX、Native Components 及 Web fallback；未切默认，保留 Tauri 回退。→ [DESKTOP_SHELL.md](docs/reference/DESKTOP_SHELL.md#nsh-panel-migration--panel-迁移)
+**核心栈 / Core stack**: Rust Core (tokio + serde) · 记忆 SQLite + sqlite-vec · 接口 JSON Schema (schemars)。当前 Panel 为 Leptos/WASM，桌面宿主双轨（见下节）。迁移目标是 Desktop/Web 共享 TSX、Native Components 与 Web fallback；尚未切换默认。 / See [current and target mounts](docs/reference/DESKTOP_SHELL.md#nsh-panel-migration--panel-迁移).
 
 **Do NOT introduce**（基于 R1/R3/R7 推导，违者不得合入）→ [REDLINES.md](docs/reference/REDLINES.md)
+
+---
+
+## 🖥 桌面宿主：双轨现状（2026-11）
+
+> **一个 Panel，两个宿主。** Panel 代码只有一份（`interfaces/webchat` → `aleph-panel`，Leptos 0.8 CSR/WASM），
+> 由 `aleph-server` 内嵌资源（`rust_embed`）在 `http://127.0.0.1:18790` 提供；宿主只是 WebView 外壳。
+
+| 宿主 | 位置 | 现状（2026-11-23） |
+|---|---|---|
+| 遗留 Tauri 宿主 | `desktop/shell`（`aleph-desktop-shell`，Tauri v2） | **仍在发版**：CI `aleph-app-release.yml` 与 `just shell-build` 走它；自带 updater / `aleph://` deeplink / macOS 菜单 / 服务管理 |
+| NSH 宿主 | `desktop/nsh-shell`（`aleph-nsh-shell`，nsh 0.6.0） | **目标形态**：窗口 + 托盘 + 全局快捷键 + 通知授权 + 面板桥；尚无 updater / deeplink / macOS 菜单 / 服务控制，**尚无 release 流水线与 `just` 目标** |
+
+- **宿主↔Panel 走类型化契约**：`shared/protocol/src/panel_shell.rs`（`ShellRequest` / `ShellReply` / `PanelReply`）。
+  宿主侧实现 `desktop/nsh-shell/src/panel_bridge.rs`，Panel 侧消费 `interfaces/webchat/src/app/shell_bridge.rs`。
+  旧的 `__TAURI_INTERNALS__` 只剩两处未迁移消费者：`interfaces/webchat/src/api/native_credentials.rs`、
+  `interfaces/webchat/src/platform/wide/views/voice/audio.rs`。
+- **迁移门禁**：Phase 11（P11-A…P11-H）要求三平台证据 + ≥14 天双轨并行运行；Tauri 宿主的去留由门禁决定，不由文档决定。
+  计划与证据 → `docs/superpowers/plans/2026-11-21-phase11-nsh-cutover.md`。
+- **文档纪律**：证据层（`docs/superpowers/`、`docs/reports/`、`docs/engineering-reports/`、`docs/research/`）是时点记录，
+  **不是当前架构**；证据与代码冲突时以代码为准。规则与路线图 → `docs/superpowers/plans/2026-11-23-doc-architecture-realignment.md`。
+  文档地图 → [docs/README.md](docs/README.md)；三层契约 → [EVIDENCE_LAYER.md](docs/reference/EVIDENCE_LAYER.md)。
 
 ---
 
@@ -149,7 +171,7 @@
 
 [FEATURE_LOCATOR.md](docs/reference/FEATURE_LOCATOR.md) 是所有「我应该读哪个 doc」的入口。常用 reference：
 
-- [ARCHITECTURE.md](docs/reference/ARCHITECTURE.md) · [CODE_ORGANIZATION.md](docs/reference/CODE_ORGANIZATION.md) · [DESIGN_PATTERNS.md](docs/reference/DESIGN_PATTERNS.md)
+- [文档地图 docs/README.md](docs/README.md) · [EVIDENCE_LAYER.md](docs/reference/EVIDENCE_LAYER.md) · [ARCHITECTURE.md](docs/reference/ARCHITECTURE.md) · [CODE_ORGANIZATION.md](docs/reference/CODE_ORGANIZATION.md) · [DESIGN_PATTERNS.md](docs/reference/DESIGN_PATTERNS.md)
 - [HARNESS_PHILOSOPHY.md](docs/reference/HARNESS_PHILOSOPHY.md) · [SANDBOX.md](docs/reference/SANDBOX.md) · [SECURITY.md](docs/reference/SECURITY.md)
 - [PRODUCT_TOPOLOGY.md](docs/reference/PRODUCT_TOPOLOGY.md) · [RELEASE.md](docs/reference/RELEASE.md) · [WINDOWS_RUNTIME.md](docs/reference/WINDOWS_RUNTIME.md)
 - [MEMORY_SYSTEM.md](docs/reference/MEMORY_SYSTEM.md) · [TOOL_SYSTEM.md](docs/reference/TOOL_SYSTEM.md) · [SESSION_KNOBS.md](docs/reference/SESSION_KNOBS.md)

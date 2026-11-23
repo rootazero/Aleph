@@ -1688,7 +1688,9 @@ mod tests {
         // User un-parks: clears the barrier (tool) then supersedes the armed
         // marker. Without the supersede the next claim would gate on the future
         // pending marker and stay Idle until the ORIGINAL wake.
-        assert!(store.clear_wait_barrier("sess-unpark", None, Some(61_000), 2_000).unwrap());
+        assert!(store
+            .clear_wait_barrier("sess-unpark", None, Some(61_000), 2_000)
+            .unwrap());
         assert!(store.supersede_wait_timer("sess-unpark", 61_000).unwrap());
         assert_eq!(
             store
@@ -1859,7 +1861,9 @@ mod tests {
         assert_eq!(live.continuations_used, 0, "parking spends nothing");
 
         // The wake service clears the barrier, then the claim proceeds.
-        assert!(store.clear_wait_barrier("sess-task", Some("task-42"), None, 2_000).unwrap());
+        assert!(store
+            .clear_wait_barrier("sess-task", Some("task-42"), None, 2_000)
+            .unwrap());
         assert!(matches!(
             store
                 .try_claim_continuation("sess-task", None, 2_000, false, None)
@@ -1867,7 +1871,9 @@ mod tests {
             ContinuationDecision::Fire { .. }
         ));
         // Second clear is a no-op (CAS honesty).
-        assert!(!store.clear_wait_barrier("sess-task", Some("task-42"), None, 3_000).unwrap());
+        assert!(!store
+            .clear_wait_barrier("sess-task", Some("task-42"), None, 3_000)
+            .unwrap());
     }
 
     #[test]

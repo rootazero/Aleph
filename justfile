@@ -524,7 +524,7 @@ check-phase5:
 # Wiring parity guards: catch "severed wire" drift where both ends exist but the
 # connection is missing. Each is a grep-level diff against a triaged baseline —
 # green now, fails only on a NEW severance. See the 2026-07-15 wire audit.
-check-wiring: check-rpc-wiring check-tool-wiring check-config-wiring check-discovery-wiring check-event-wiring check-domain-wiring check-exec-wiring check-executor-wiring check-export-wiring check-seam-wiring check-capability-wiring check-extension-wiring check-fetch-wiring check-gateway-wiring
+check-wiring: check-rpc-wiring check-tool-wiring check-config-wiring check-discovery-wiring check-event-wiring check-domain-wiring check-exec-wiring check-executor-wiring check-export-wiring check-seam-wiring check-capability-wiring check-extension-wiring check-fetch-wiring check-gateway-wiring check-doc-wiring
 
 # RPC: no Panel rpc_call / rate-lane classifier may name a method with no handler
 # (→ METHOD_NOT_FOUND / phantom rate-lane guard).
@@ -608,6 +608,14 @@ check-fetch-wiring:
 # dark.
 check-gateway-wiring:
     python3 scripts/gateway_wire_audit.py
+
+# Docs: entry-layer and docs/reference statements must still point at code that
+# exists — a stale path or a half-migrated "the desktop app is X" claim is a
+# severed wire between the docs and the implementation. Baseline-ratcheted:
+# a path already listed in scripts/doc_wiring_audit_baseline.json is known
+# backlog, a NEW missing path fails.
+check-doc-wiring:
+    python3 scripts/doc_wiring_audit.py
 
 # ─── Lint ───
 

@@ -90,7 +90,7 @@ JSON,camelCase 键(贴合 `.workflow.js` 的 `meta`)。
 | `agent()` fan-in | ↔ | 一步 `dependsOn` 多个上游 |
 | `opts.{label,model,phase,schema,isolation,agentType,effort}` | ↔ 无损(经内嵌块 + bare 路径) | 存 manifest,不入 `WorkflowDef`;其中 `model`/`effort` 在 `run` 时盖任务元数据成为**可执行覆盖**(见上);`effort` 亦渲染为 bare-scan 可还原的 `effort: "…"` |
 | `opts.{review,requireGrounding,timeoutSecs,maxRetries,tolerateFailedDeps}`(bare literal) | ↔ 无损(bare 路径亦对称) | **可执行核心**:进 `WorkflowDef`,materialize 盖任务元数据。`requireGrounding`(2026-08-03)让声明式路径也能要求复审**碰一次现实**——`workflow_step_review.approve` 缺 `grounding` 即 bounce,证据词表与 loop_graph 锚点同一套(exit_code/numeric/line_count) |
-| `const NAME_SCHEMA = { … }` + `schema: NAME_SCHEMA` | → 导入解析 | 工程格式把 schema hoist 成顶层 `const` 再按名引用;裸扫描经 `interop/consts.rs` 的**有界数据字面量归一化器**解析 hoisted const(及 inline schema),把 JS-lax 写法(裸键 / 单引号 / 尾逗号)归一为 JSON;遇任何表达式值(标识符 / 函数调用 / 模板串 / 计算键)整个 schema **弃权**并记 `dropped`(R3:非 JS 引擎,只认纯数据) |
+| `const NAME_SCHEMA = { … }` + `schema: NAME_SCHEMA` | → 导入解析 | 工程格式把 schema hoist 成顶层 `const` 再按名引用;裸扫描经 `src/workflow/interop/consts.rs` 的**有界数据字面量归一化器**解析 hoisted const(及 inline schema),把 JS-lax 写法(裸键 / 单引号 / 尾逗号)归一为 JSON;遇任何表达式值(标识符 / 函数调用 / 模板串 / 计算键)整个 schema **弃权**并记 `dropped`(R3:非 JS 引擎,只认纯数据) |
 | `agent(buildPrompt(u))` / `agent(promptVar)` 动态 prompt | → 计数入 `dropped` | 非字面量 prompt 不可静态导入(R7/R10);裸扫描计数并报 "N agent()/clarify() call(s) with dynamic prompts not imported",全动态时空步骤错误也带计数 |
 | `pipeline(items, s1, s2)` | → 导入近似 | 运行时 item 列表未知 → 记 `dropped`;导出不生成 |
 | `TARGETS.forEach(() => agent(…))` / `items.map(…)` 数组扇出 | → 记 `dropped` | **2026-09-03 补**:`contains_call_like_keyword("for", …)` 的前边界规则刻意拒 `forEach(`(防 `iffy(`/`switcher` 误报),而动态 prompt 计数器只抓非字面量 prompt——于是**字面量 prompt 的扇出**(`TARGETS.forEach(() => agent("audit this target"))`)曾导入成**一个**步骤且 `dropped: []`,即一次被报告为无损的 N 路塌缩。现由一根独立的、带前导 `.` 的 needle(**不进**控制流关键字表,以免破坏前边界规则)推一条 `array fan-out (.forEach/.map) — runtime item list not statically known`。**刻意吵**:一个用来打日志的 `.map(` 也会触发它 |
@@ -151,7 +151,7 @@ JSON,camelCase 键(贴合 `.workflow.js` 的 `meta`)。
   记 `DynamicPrompt`,`scan_bare` 计数并入 `dropped`(全动态→空步骤时错误消息也带计数,P7)。
 - **schema 常量与 JS-lax 归一化**(2026-07-25):工程文件把 schema hoist 成顶层
   `const NAME_SCHEMA = { … }` 再 `schema: NAME_SCHEMA` 引用,且写成 JS 对象字面量
-  (裸键 / 单引号 / 尾逗号)——非合法 JSON。`interop/consts.rs` 的**有界数据字面量
+  (裸键 / 单引号 / 尾逗号)——非合法 JSON。`src/workflow/interop/consts.rs` 的**有界数据字面量
   归一化器** `parse_js_data` 只认 `object/array/string/number/bool/null` 纯数据形状,
   把 JS-lax 归一为 `serde_json::Value`,inline schema 与 hoisted-const 引用两路皆解析
   (`collect_consts` 建顶层 const 符号表,字符串感知、首声明胜)。**遇任何表达式值

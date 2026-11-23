@@ -71,7 +71,10 @@ impl ScopedToolService {
 
     /// Share startup restrictions; this never replaces existing Tool authorization.
     #[must_use]
-    pub fn with_capability_policy(mut self, policy: Arc<crate::capability::policy::PolicyEngine>) -> Self {
+    pub fn with_capability_policy(
+        mut self,
+        policy: Arc<crate::capability::policy::PolicyEngine>,
+    ) -> Self {
         self.capability_policy = Some(policy);
         self
     }

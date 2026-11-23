@@ -197,9 +197,9 @@ impl HarnessCallback for BroadcastCallback {
         if self.blocked_reason.is_none() {
             self.blocked_reason = Some(reason_str.clone());
         }
-        let _ = self.tx.send(FlowStreamEvent::SafetyBlock {
-            reason: reason_str,
-        });
+        let _ = self
+            .tx
+            .send(FlowStreamEvent::SafetyBlock { reason: reason_str });
     }
 
     fn on_complete_with_outcome(&mut self, outcome: &FlowOutcome) {

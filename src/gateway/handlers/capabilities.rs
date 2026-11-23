@@ -1,9 +1,14 @@
 //! Capability discovery over the gateway JSON-RPC face.
 
-use super::{INTERNAL_ERROR, INVALID_PARAMS, JsonRpcRequest, JsonRpcResponse, SERVICE_UNAVAILABLE, parse_params};
-use crate::gateway::protocol::PERMISSION_DENIED;
+use super::{
+    parse_params, JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS,
+    SERVICE_UNAVAILABLE,
+};
 use crate::capability::facade::{Scope, Zahir};
-use aleph_protocol::capability::{CapabilityDescribeParams, CapabilityDescription, PtyInvokeParams};
+use crate::gateway::protocol::PERMISSION_DENIED;
+use aleph_protocol::capability::{
+    CapabilityDescribeParams, CapabilityDescription, PtyInvokeParams,
+};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
@@ -111,23 +116,31 @@ pub async fn handle_terminal_invoke(request: JsonRpcRequest) -> JsonRpcResponse 
         ))
         | Err(crate::capability::special_dispatch::CapabilityInvocationError::Resolve(
             crate::capability::facade::ResolveError::Revoked,
-        )) => JsonRpcResponse::error(request.id, SERVICE_UNAVAILABLE, "terminal capability unavailable"),
+        )) => JsonRpcResponse::error(
+            request.id,
+            SERVICE_UNAVAILABLE,
+            "terminal capability unavailable",
+        ),
         Err(crate::capability::special_dispatch::CapabilityInvocationError::Cancelled) => {
-            JsonRpcResponse::error(request.id, SERVICE_UNAVAILABLE, "terminal capability cancelled")
+            JsonRpcResponse::error(
+                request.id,
+                SERVICE_UNAVAILABLE,
+                "terminal capability cancelled",
+            )
         }
         Err(crate::capability::special_dispatch::CapabilityInvocationError::Policy(error)) => {
             JsonRpcResponse::error(request.id, PERMISSION_DENIED, error.to_string())
         }
         Err(crate::capability::special_dispatch::CapabilityInvocationError::Resolve(error)) => {
-            JsonRpcResponse::error(request.id, SERVICE_UNAVAILABLE, format!("terminal capability unavailable: {error:?}"))
+            JsonRpcResponse::error(
+                request.id,
+                SERVICE_UNAVAILABLE,
+                format!("terminal capability unavailable: {error:?}"),
+            )
         }
         Err(crate::capability::special_dispatch::CapabilityInvocationError::Handler(
             crate::capability::special::CapabilityDispatchError::NotFound(_),
-        )) => JsonRpcResponse::error(
-            request.id,
-            INVALID_PARAMS,
-            "terminal session was not found",
-        ),
+        )) => JsonRpcResponse::error(request.id, INVALID_PARAMS, "terminal session was not found"),
         // A refusal the caller can act on (today: `[policies.terminal] enabled =
         // false`, whose message names the config key). Same class as the opaque
         // `Unavailable` above, but the remedy has to survive to the caller — and

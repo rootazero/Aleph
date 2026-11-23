@@ -102,9 +102,7 @@ pub async fn handle_plugins_install(url: &str) -> Result<(), Box<dyn std::error:
         || repo_name.contains('/')
         || repo_name.contains('\\')
     {
-        return Err(
-            format!("cannot derive a safe plugin directory name from URL: {url}").into(),
-        );
+        return Err(format!("cannot derive a safe plugin directory name from URL: {url}").into());
     }
     let dest_path = plugins_dir.join(repo_name);
 
@@ -371,10 +369,7 @@ pub async fn handle_plugin_install(
         println!("Searching for plugin '{source}'...");
         match manager.install_to_scope(source, None, plugin_scope, None) {
             Ok(installed) => {
-                println!(
-                    "Plugin '{source}' installed to {:?}",
-                    installed.path
-                );
+                println!("Plugin '{source}' installed to {:?}", installed.path);
                 for warning in &installed.warnings {
                     println!("Warning: {warning}");
                 }

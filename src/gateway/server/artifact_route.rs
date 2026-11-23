@@ -88,8 +88,10 @@ use super::handler::refuse_insecure_remote;
 /// document of every fetch, `img-src data:` keeps a self-contained export's
 /// inline images working, and `style-src 'unsafe-inline'` keeps its `<style>`
 /// block working.
-pub const ARTIFACT_DOCUMENT_CSP: &str =
-    concat!(crate::export::content_security_policy!(), "; sandbox allow-downloads");
+pub const ARTIFACT_DOCUMENT_CSP: &str = concat!(
+    crate::export::content_security_policy!(),
+    "; sandbox allow-downloads"
+);
 
 /// Per-minute byte reads allowed per remote IP.
 ///

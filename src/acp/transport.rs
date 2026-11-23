@@ -167,7 +167,9 @@ where
     });
     match task.await {
         Ok(result) => result,
-        Err(e) => Err(AlephError::IoError(format!("ACP stdin write task failed: {e}"))),
+        Err(e) => Err(AlephError::IoError(format!(
+            "ACP stdin write task failed: {e}"
+        ))),
     }
 }
 

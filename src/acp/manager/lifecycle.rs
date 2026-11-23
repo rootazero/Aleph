@@ -5,8 +5,8 @@ use tracing::{debug, info, warn};
 use super::{AcpAdapterManager, SessionEntry, SessionKey};
 use crate::acp::adapter::AdapterMode;
 use crate::acp::protocol::{AcpErrorCode, AcpOperationError};
-use crate::acp::AcpChunkCallback;
 use crate::acp::session::CancelDispatch;
+use crate::acp::AcpChunkCallback;
 use crate::error::Result;
 use crate::sync_primitives::Arc;
 

@@ -236,9 +236,10 @@ fn shape_is_well_formed(shape: &Shape) -> Result<(), CanvasError> {
                 "shape text exceeds the {MAX_SHAPE_TEXT_BYTES}-byte cap"
             )));
         }
-        Shape::AiImageFrame { reference_asset_ids, .. }
-            if reference_asset_ids.len() > MAX_REFERENCE_ASSETS =>
-        {
+        Shape::AiImageFrame {
+            reference_asset_ids,
+            ..
+        } if reference_asset_ids.len() > MAX_REFERENCE_ASSETS => {
             return Err(CanvasError::Invalid(format!(
                 "{} reference assets exceeds the {MAX_REFERENCE_ASSETS}-asset cap",
                 reference_asset_ids.len()

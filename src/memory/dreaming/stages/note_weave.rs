@@ -217,10 +217,7 @@ impl DreamStage for NoteWeaveStage {
         // deterministically, and (via the bare `?` below) took the whole dream
         // pipeline down with it, every cycle, forever. Cap the inputs like
         // MentionWeave caps its own (MAX_MENTIONS_PER_CYCLE).
-        let orphan_batch: Vec<&String> = orphans
-            .iter()
-            .take(MAX_ORPHANS_PER_EXTRACTION)
-            .collect();
+        let orphan_batch: Vec<&String> = orphans.iter().take(MAX_ORPHANS_PER_EXTRACTION).collect();
         let peer_batch: Vec<&String> = others.iter().take(MAX_PEERS_PER_EXTRACTION).collect();
         if orphans.len() > orphan_batch.len() || others.len() > peer_batch.len() {
             info!(

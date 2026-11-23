@@ -76,19 +76,13 @@ pub fn render_workflow_js(manifest: &WorkflowManifest) -> String {
                 }
                 if layer.len() == 1 {
                     if let Some(step) = layer.first().and_then(|&idx| manifest.steps.get(idx)) {
-                        out.push_str(&format!(
-                            "await {}\n",
-                            render_step_call(step)
-                        ));
+                        out.push_str(&format!("await {}\n", render_step_call(step)));
                     }
                 } else {
                     out.push_str("await parallel([\n");
                     for &i in layer {
                         if let Some(step) = manifest.steps.get(i) {
-                            out.push_str(&format!(
-                                "  () => {},\n",
-                                render_step_call(step)
-                            ));
+                            out.push_str(&format!("  () => {},\n", render_step_call(step)));
                         }
                     }
                     out.push_str("])\n");
@@ -455,7 +449,9 @@ fn topo_levels(manifest: &WorkflowManifest) -> Option<Vec<Vec<usize>>> {
 
     let mut placed = 0usize;
     let mut levels: Vec<Vec<usize>> = Vec::new();
-    let mut current: Vec<usize> = (0..n).filter(|&i| indegree.get(i).copied() == Some(0)).collect();
+    let mut current: Vec<usize> = (0..n)
+        .filter(|&i| indegree.get(i).copied() == Some(0))
+        .collect();
     let mut next: Vec<usize> = Vec::new();
     while !current.is_empty() {
         placed += current.len();

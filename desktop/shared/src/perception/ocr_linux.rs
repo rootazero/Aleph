@@ -106,12 +106,27 @@ fn parse_tesseract_tsv(tsv: &str) -> OcrResult {
         let block: u32 = cols.get(2).and_then(|c| c.trim().parse().ok()).unwrap_or(0);
         let par: u32 = cols.get(3).and_then(|c| c.trim().parse().ok()).unwrap_or(0);
         let line: u32 = cols.get(4).and_then(|c| c.trim().parse().ok()).unwrap_or(0);
-        let left: f64 = cols.get(6).and_then(|c| c.trim().parse().ok()).unwrap_or(0.0);
-        let top: f64 = cols.get(7).and_then(|c| c.trim().parse().ok()).unwrap_or(0.0);
-        let width: f64 = cols.get(8).and_then(|c| c.trim().parse().ok()).unwrap_or(0.0);
-        let height: f64 = cols.get(9).and_then(|c| c.trim().parse().ok()).unwrap_or(0.0);
+        let left: f64 = cols
+            .get(6)
+            .and_then(|c| c.trim().parse().ok())
+            .unwrap_or(0.0);
+        let top: f64 = cols
+            .get(7)
+            .and_then(|c| c.trim().parse().ok())
+            .unwrap_or(0.0);
+        let width: f64 = cols
+            .get(8)
+            .and_then(|c| c.trim().parse().ok())
+            .unwrap_or(0.0);
+        let height: f64 = cols
+            .get(9)
+            .and_then(|c| c.trim().parse().ok())
+            .unwrap_or(0.0);
         // tesseract reports conf as a float 0..100; -1 for non-word levels.
-        let conf: f64 = cols.get(10).and_then(|c| c.trim().parse().ok()).unwrap_or(-1.0);
+        let conf: f64 = cols
+            .get(10)
+            .and_then(|c| c.trim().parse().ok())
+            .unwrap_or(-1.0);
 
         let key = (block, par, line);
         let right = left + width;

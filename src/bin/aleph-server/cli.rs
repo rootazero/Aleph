@@ -610,8 +610,19 @@ mod tests {
         for (argv, expected) in [
             (&["aleph-server", "start"][..], false),
             (&["aleph-server", "--daemon", "start"][..], false),
-            (&["aleph-server", "--bundled-content-only", "start"][..], true),
-            (&["aleph-server", "--daemon", "--bundled-content-only", "start"][..], true),
+            (
+                &["aleph-server", "--bundled-content-only", "start"][..],
+                true,
+            ),
+            (
+                &[
+                    "aleph-server",
+                    "--daemon",
+                    "--bundled-content-only",
+                    "start",
+                ][..],
+                true,
+            ),
         ] {
             assert_eq!(parse(argv).bundled_content_only, expected);
         }

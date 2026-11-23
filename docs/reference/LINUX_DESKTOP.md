@@ -59,6 +59,26 @@ Wayland **刻意没有** X11 EWMH 那样的跨合成器窗口协议。所以：
 
 ## 3. 装什么
 
+### NSH 桌面候选版：安装前检查 / NSH desktop candidate preflight
+
+在 Linux 桌面上，从 Aleph 源码检出的根目录运行以下命令，再启动 NSH 候选版。这个入口**不安装 Aleph 本身**，不适用于独立 `aleph-server` 安装器或当前 Tauri 分发。/ Run these from the root of the Aleph source checkout before launching the Linux NSH candidate. This does **not** install Aleph itself or affect the standalone server installer or current Tauri distribution.
+
+```sh
+bash scripts/install-desktop-deps.sh --check
+# Only if libraries are missing / 仅在报缺库时：
+bash scripts/install-desktop-deps.sh --install
+```
+
+`--check`（默认）通过系统链接器缓存检查当前架构的 GTK4 / WebKitGTK 6 运行库，不需要开发包。`--install` 需要交互终端，使用发行版包管理器（普通用户需要 `sudo`），保留包管理器的确认并在安装后重新检查。/ `--check` (the default) checks for native-architecture GTK4 and WebKitGTK 6 in the system linker cache, without development headers. `--install` needs an interactive terminal; it runs the distro package manager (via `sudo` if not root), leaves its confirmation in place, and rechecks after installation.
+
+| 发行版 / Distribution | 运行时软件包 / Runtime packages |
+|---|---|
+| Arch Linux | `gtk4`, `webkitgtk-6.0` |
+| Debian / Ubuntu | `libgtk-4-1`, `libwebkitgtk-6.0-4` |
+| Fedora | `gtk4`, `webkitgtk6.0` |
+
+仅支持 `x86_64` / `aarch64` 的 glibc 链接器缓存。发行版版本若未提供这些包，或镜像、权限、安装后复检失败，脚本会返回非零；请使用本发行版的官方源解决，不要以 WebKitGTK 4.1 替代。脚本不会自行刷新索引、增加软件源或改变签名信任。/ The check supports the glibc linker cache on `x86_64` and `aarch64`. Old releases without the listed packages, mirror or permission failures, and failed rechecks produce a nonzero exit status. Use your distro's official repositories; WebKitGTK 4.1 is not a substitute. The script does not refresh package indexes, add repositories, or change signature trust.
+
 ### 桌面应用凭证存储 / Desktop credential storage
 
 原生桌面应用需要当前用户的 D-Bus 会话中有可用、已解锁的 Secret Service（`org.freedesktop.secrets`）。Arch 的精简桌面环境可能没有预装；Ubuntu/Debian 桌面若已有兼容提供者，沿用现有服务即可。以下是缺少提供者时的一种安装方式，**不要同时启动多个提供者**。
@@ -128,7 +148,7 @@ AT-SPI 每次调用的成本由**往返次数**决定，不由 CPU 决定。本�
 | ~70 节点窗口全深度快照 | 1.88 s | **0.32 s** |
 | 边际成本 | ~27 ms/节点 | **~4.6 ms/节点** |
 
-来源是三件事：`Cache.GetItems` 一次拿回整棵树（role/name/states/interfaces/parent）、剩余的几何与动作名并发发出（32 路）、总线连接共享。**墙钟预算 5s** (`ax/budget.rs`) 仍在，用来对付「卡死的应用永远不回 D-Bus」——超时返回**已读到的部分**而不是报错。
+来源是三件事：`Cache.GetItems` 一次拿回整棵树（role/name/states/interfaces/parent）、剩余的几何与动作名并发发出（32 路）、总线连接共享。**墙钟预算 5s** (`desktop/linux/src/ax/budget.rs`) 仍在，用来对付「卡死的应用永远不回 D-Bus」——超时返回**已读到的部分**而不是报错。
 
 不提供缓存的应用（老 Qt、桥只加载了一半）自动回落逐属性读：**慢，但不会空**。
 
@@ -158,7 +178,7 @@ export QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1
 3. 报"No managed window with id …" ⇒ 窗口 id 过期，重新 `window_list`。
 
 **"剪贴板没反应"**
-- 读到空串：多半剪贴板真的是空的（所有已安装工具都非零退出时按空处理，见 `linux/clipboard.rs` 模块文档）。
+- 读到空串：多半剪贴板真的是空的（所有已安装工具都非零退出时按空处理，见 `desktop/shared/src/linux/clipboard.rs` 模块文档）。
 - **写报错并列出试过的工具**：装的工具和会话类型对不上（X11 机器上只装了 `wl-clipboard`，或反之）。装匹配的那个。
 - 一个工具都没装 ⇒ 错误直接点名装什么。
 

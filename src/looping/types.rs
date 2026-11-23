@@ -491,16 +491,18 @@ impl LoopState {
 /// so the two countdowns cannot drift.
 fn next_tick_line(state: &LoopState, now_ms: u64) -> Option<String> {
     match state.cadence {
-        Cadence::ModelPaced { .. } => Some(match state.next_wake_ms.or(state.pending_tick_wake_ms) {
-            // `now_ms == 0` (clock unavailable) still gets a sensible line —
-            // "unset" tells the operator the fallback cadence is in effect
-            // rather than swallowing the line.
-            Some(wake) if now_ms != 0 && wake > now_ms => {
-                format!("next wake: in {}", fmt_duration_ms(wake - now_ms))
-            }
-            Some(_) => "next wake: due now".to_string(),
-            None => "next wake: unset (uses fallback)".to_string(),
-        }),
+        Cadence::ModelPaced { .. } => {
+            Some(match state.next_wake_ms.or(state.pending_tick_wake_ms) {
+                // `now_ms == 0` (clock unavailable) still gets a sensible line —
+                // "unset" tells the operator the fallback cadence is in effect
+                // rather than swallowing the line.
+                Some(wake) if now_ms != 0 && wake > now_ms => {
+                    format!("next wake: in {}", fmt_duration_ms(wake - now_ms))
+                }
+                Some(_) => "next wake: due now".to_string(),
+                None => "next wake: unset (uses fallback)".to_string(),
+            })
+        }
         // A fixed-cadence loop knows its next fire too: `try_claim_tick` clears
         // `next_wake_ms` (meaningless for Fixed) but stamps the absolute wake into
         // `pending_tick_wake_ms` when it enqueues the tick. Cleared during a firing

@@ -111,7 +111,11 @@ impl DocLocks {
     ) -> Result<DocGuard, CanvasError> {
         let permit = self.slot(id).lock_owned().await;
         let doc = read(&path).await.unwrap_or(None);
-        Ok(DocGuard { path, doc, _permit: permit })
+        Ok(DocGuard {
+            path,
+            doc,
+            _permit: permit,
+        })
     }
 
     /// How many slots the table is holding. Test-only observability for the
@@ -185,7 +189,11 @@ pub(super) async fn read(path: &Path) -> Result<Option<CanvasDoc>, CanvasError> 
         }
         Ok(_) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(CanvasError::Internal(format!("failed to read canvas doc: {e}"))),
+        Err(e) => {
+            return Err(CanvasError::Internal(format!(
+                "failed to read canvas doc: {e}"
+            )))
+        }
     }
     let contents = match tokio::fs::read_to_string(path).await {
         Ok(c) => c,

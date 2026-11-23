@@ -401,7 +401,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             self.tool_registry.execute_tool(tool_id, arguments),
         );
 
-        let deadline = request.timeout_secs.map(|timeout_secs| std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs));
+        let deadline = request.timeout_secs.map(|timeout_secs| {
+            std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs)
+        });
 
         // The run's own cancellation token. `ExecutionEngine::cancel` marks
         // it for every stop, so this dispatch observes `/stop` the same way

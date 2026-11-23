@@ -324,7 +324,7 @@ owned by `rerank_config.get`/`update` and edited on its own page, and mirroring
 it here spelled `model` against the backend's `models` (which carries
 `alias = "model"`), so every save from this page merged both spellings of one
 aliased field and died on `duplicate field 'models'`. Do not re-add a mirror of a
-section this page does not own. **`[memory]` is `ReloadImpact::Restart`** (`config/reload_impact.rs` —
+section this page does not own. **`[memory]` is `ReloadImpact::Restart`** (`src/config/reload_impact.rs` —
 `LIVE_SECTIONS` is route/behavior/execution only): saving persists to `config.toml`
 but nothing rebuilds the boot-captured `CuratedConfig`, which is why the page
 carries a restart note under its save button.
@@ -386,9 +386,9 @@ governance gate). This knob is read-side only.
 
 ⚠️ **`[memory] enabled` gets its first consumer here — a behaviour change for
 installs that set it to `false`.** The flag is documented above as the master
-switch, is surfaced by `config/ui_hints`, and is logged at startup by both
+switch, is surfaced by `src/config/ui_hints`, and is logged at startup by both
 `config::load` and `config::validate`; before 2026-08-11 **nothing read it to
-decide anything**. The gate in `assembler/hybrid.rs` reads
+decide anything**. The gate in `src/memory/assembler/hybrid.rs` reads
 `[memory.assembler] enabled`, a different flag with a narrower meaning (whether
 hybrid retrieval runs), so an install that turned the master switch off still
 had its curated memory and note index folded into every prompt. Those installs

@@ -1,5 +1,9 @@
 # Self-Growth Module Redesign
 
+> **状态：历史文档（point-in-time）** — 本文记录的是 2026-04-10 当时的设计，不代表当前架构。
+> 当前状态以代码为准（记忆检索现居 `src/memory/`，技能模型分类见 `docs/reference/SKILL_MODEL_TAXONOMY.md`）。
+> 三层文档契约 → `docs/reference/EVIDENCE_LAYER.md`。
+
 **Date**: 2026-04-10
 **Status**: Approved (Rev.2 — Skill-as-Fact integration)
 **Inspired by**: hermes-agent skill extraction mechanism

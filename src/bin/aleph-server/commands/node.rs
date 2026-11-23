@@ -139,7 +139,10 @@ pub fn reset_identity(name: &str) -> Result<(), Box<dyn std::error::Error>> {
             path.display()
         );
     } else {
-        println!("no node identity file at {} — nothing to reset.", path.display());
+        println!(
+            "no node identity file at {} — nothing to reset.",
+            path.display()
+        );
     }
     Ok(())
 }
@@ -914,7 +917,9 @@ mod tests {
         match parse_connect_verdict(&refused).expect("a verdict") {
             ConnectVerdict::Deregistered { reason, code } => {
                 assert_eq!(code, RefusalCode::Revoked);
-                assert!(reason.expect("the reason must be carried").contains("revoked"));
+                assert!(reason
+                    .expect("the reason must be carried")
+                    .contains("revoked"));
             }
             ConnectVerdict::Registered { .. } => panic!("must be refused"),
         }
@@ -943,16 +948,20 @@ mod tests {
 
     #[test]
     fn reset_identity_file_removes_the_credential_and_is_idempotent() {
-        let dir = std::env::temp_dir().join(format!(
-            "aleph-node-identity-test-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("aleph-node-identity-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("temp dir");
         let path = dir.join("worker-1.json");
-        std::fs::write(&path, r#"{"node_id":"uuid-123","center":"ws://127.0.0.1:18790"}"#)
-            .expect("seed the identity file");
+        std::fs::write(
+            &path,
+            r#"{"node_id":"uuid-123","center":"ws://127.0.0.1:18790"}"#,
+        )
+        .expect("seed the identity file");
 
-        assert!(reset_identity_file(&path).expect("remove"), "the file must go");
+        assert!(
+            reset_identity_file(&path).expect("remove"),
+            "the file must go"
+        );
         assert!(!path.exists(), "the credential must be gone");
         // A second reset is not an error: the node is already in the wanted state.
         assert!(

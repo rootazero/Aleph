@@ -1,0 +1,63 @@
+{
+  "artifact": "phase11_linux_native_runner_preflight",
+  "recorded_at": "2026-11-22T22:35:44+08:00",
+  "status": "BLOCKED / NOT RUN",
+  "scope": "Host eligibility only / 仅检查宿主是否符合验证条件",
+  "handoff": "docs/superpowers/prompts/2026-11-22-phase11-linux-native-runner.md",
+  "source": {
+    "branch": "main",
+    "start_commit": "445868f8c03f4ceeb3b569e6122e98076a919f8b",
+    "end_source_commit": "445868f8c03f4ceeb3b569e6122e98076a919f8b",
+    "end_source_commit_excludes_this_receipt": true,
+    "tree_at_preflight": "f6f6f52c6de083fd2a43610228fe91f937ae8899",
+    "worktree_clean_at_preflight": true,
+    "required_ancestor": "a9a5aff6ba5f1c035f4117e8306157b769e7cd2e",
+    "ancestry_check_exit_code": 0,
+    "lockfile": "Cargo.lock",
+    "lockfile_git_blob": "53b8ca0280ef36a37046376442c68f51c93f381a",
+    "lockfile_sha256": "fcee57eba791c491bc4a74027b0a89bb56f30ee9faa42e30193a34bf1a5a0a2d"
+  },
+  "host": {
+    "distribution": "Arch Linux",
+    "distribution_version_id": null,
+    "kernel": "7.2.9-arch1-1",
+    "arch": "x86_64",
+    "virtualization": "qemu",
+    "desktop_session_and_dependencies": "NOT RUN"
+  },
+  "blocked_by": "The current Linux session is a QEMU guest and the requester requires a physical host. The preflight commands succeeded; no product command was attempted. / 当前会话是 QEMU 来宾，不满足用户的物理机要求；环境探测命令成功，未执行产品命令。",
+  "raw_evidence": [
+    {
+      "command": "systemd-detect-virt --vm",
+      "exit_code": 0,
+      "stdout": "qemu\n",
+      "stdout_sha256": "86ca2e37fda25b46957ba9f1758528727a4d6792fb818ed55f5838726daae3ee",
+      "stderr": ""
+    },
+    {
+      "command": "rg -ix qemu /sys/class/dmi/id/sys_vendor",
+      "exit_code": 0,
+      "stdout": "QEMU\n",
+      "stdout_sha256": "0e443485bf9cd215677c57e35fe7b634b6b09e4c076a2e81a95d68fbf33f8d96",
+      "stderr": ""
+    }
+  ],
+  "results": {
+    "official_nsh_platform_linux_0_6_0_webview_run_app": "NOT RUN",
+    "x11_native_host_and_panel": "NOT RUN",
+    "wayland_native_host_and_panel": "NOT RUN",
+    "full_cold_start_reuse_conflict_listener_ownership_and_quit": "NOT RUN",
+    "lite_remote_no_local_service_effects": "NOT RUN",
+    "package_install_protocol_autostart_updater_and_rollback": "NOT RUN"
+  },
+  "package_sha256": null,
+  "binary_sha256": null,
+  "fixtures_started": [],
+  "cleanup": "None required; no QA fixture started and no service, credential or registration changed. / 未启动 QA 夹具，未修改服务、凭据或注册，无需清理。",
+  "acceptance": {
+    "task_12_linux": "OPEN / BLOCKED",
+    "p11_a": "OPEN",
+    "p11_b": "OPEN"
+  },
+  "next_step": "Resume from an interactive physical Linux desktop under an isolated test login with its own user D-Bus session. / 切换到物理 Linux 交互式桌面，使用有独立用户 D-Bus 会话的隔离测试登录，再执行交接验证。"
+}

@@ -168,7 +168,11 @@ pub fn scan_content(file: &str, content: &[u8]) -> ScanVerdict {
         });
     }
 
-    let level = findings.iter().map(|f| f.level).max().unwrap_or(ThreatLevel::Safe);
+    let level = findings
+        .iter()
+        .map(|f| f.level)
+        .max()
+        .unwrap_or(ThreatLevel::Safe);
     ScanVerdict { level, findings }
 }
 
@@ -178,7 +182,11 @@ pub fn merge_verdicts(verdicts: impl IntoIterator<Item = ScanVerdict>) -> ScanVe
     for v in verdicts {
         findings.extend(v.findings);
     }
-    let level = findings.iter().map(|f| f.level).max().unwrap_or(ThreatLevel::Safe);
+    let level = findings
+        .iter()
+        .map(|f| f.level)
+        .max()
+        .unwrap_or(ThreatLevel::Safe);
     ScanVerdict { level, findings }
 }
 

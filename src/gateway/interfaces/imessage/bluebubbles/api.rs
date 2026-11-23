@@ -203,9 +203,7 @@ impl BlueBubblesApi {
             }
             for chat in &chats {
                 let guid = chat.guid.clone();
-                let participants = chat
-                    .participants.as_deref()
-                    .unwrap_or_default();
+                let participants = chat.participants.as_deref().unwrap_or_default();
                 let is_one_on_one = participants.len() == 1;
                 let matches_part = is_one_on_one
                     && participants

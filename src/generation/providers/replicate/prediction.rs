@@ -85,7 +85,9 @@ pub async fn poll_prediction(
 ) -> GenerationResult<PredictionResponse> {
     if id.is_empty()
         || id.len() > 128
-        || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        || !id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
     {
         return Err(GenerationError::invalid_parameters(
             format!("Invalid prediction ID format: {id}"),

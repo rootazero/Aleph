@@ -25,7 +25,7 @@ Producers are the two chokepoints every **human** message passes through, and on
 
 Machine-originated runs — cron, heartbeat, teams dispatch, A2A, model-driven `sessions_send` — build their requests elsewhere and **deliberately do not stamp**. They are why this is a whitelist of two rather than a stamp on some deeper shared path: overnight automation that counted as "the user" would starve dreaming forever, and the corpora it churns are exactly the ones needing maintenance.
 
-**The whitelist is derived, not listed.** The two names above are the current answer, not the guard. The guard is a second column on `RUN_REQUEST_PRODUCERS` (`run_loop/tests.rs`) — the census that already knows every site in `src/` that starts a run — where each producer declares `Ingress::Human { stamp_in }` or `Ingress::Machine`. That placement buys the two things a roster of names cannot have: a **third** human entrance is asked the question the moment it is written (the census's own completeness assertion refuses to compile past an unclassified producer), and no machine producer may acquire the stamp — the direction that fails by turning dreaming off permanently, with nothing to report it. What it still cannot see, stated so nobody assumes otherwise: a human entrance that starts runs *without building a `RunRequest`*, and a producer that answers `Machine` about a path a person drives. The census makes the question unavoidable; it cannot make the answer true.
+**The whitelist is derived, not listed.** The two names above are the current answer, not the guard. The guard is a second column on `RUN_REQUEST_PRODUCERS` (`src/gateway/execution_engine/run_loop/tests.rs`) — the census that already knows every site in `src/` that starts a run — where each producer declares `Ingress::Human { stamp_in }` or `Ingress::Machine`. That placement buys the two things a roster of names cannot have: a **third** human entrance is asked the question the moment it is written (the census's own completeness assertion refuses to compile past an unclassified producer), and no machine producer may acquire the stamp — the direction that fails by turning dreaming off permanently, with nothing to report it. What it still cannot see, stated so nobody assumes otherwise: a human entrance that starts runs *without building a `RunRequest`*, and a producer that answers `Machine` about a path a person drives. The census makes the question unavoidable; it cannot make the answer true.
 
 **This wire has been cut once.** The 2026-08-08 severed-wire audit removed the whole apparatus on the correct observation that `record_activity` had zero callers; the same-day autonomy merge restored the consumers a parallel branch depended on, and nobody re-attached the producer. What survived was worse than either half alone: `idle_seconds()` measured **process uptime**, so the per-stage yield was dead after 15 minutes and *inverted* before it — a user active at window-open got a cycle that aborted at stage one, recorded `success`, and spent the day's once-per-day budget on nothing. `every_run_producer_declares_whether_a_human_is_at_the_other_end` (source-level, comment lines stripped so a doc mention cannot satisfy it) plus the behavioural `build_run_request_stamps_the_dream_idle_sensor` pin both halves. **A sensor with no producer is not a dormant feature; it is a predicate that silently answers the opposite question.**
 
@@ -35,7 +35,7 @@ There is **no** standalone `DreamGate` type. Whether a cycle runs at all is deci
 
 The idle check sits **before** the latch on purpose: an active user should not even claim it — the 60 s ticker simply asks again. And these gates are the *only* answer to the operator's "why didn't it run last night", because a cycle that never started leaves no row anywhere; `dreaming::daemon_status()` reads them without moving any of them and `dreaming.list_insights` ships the snapshot (§8).
 
-> An earlier three-level `DreamGate` (time/count/drift) abstraction existed in `src/memory/dreaming/gate.rs` but had **zero production consumers** (the daemon always used the inline checks above) and was removed under R10/YAGNI. Do not reintroduce it; add cycle-entry preconditions to `check_and_run` instead.
+> An earlier three-level `DreamGate` (time/count/drift) abstraction existed in src/memory/dreaming/gate.rs but had **zero production consumers** (the daemon always used the inline checks above) and was removed under R10/YAGNI. Do not reintroduce it; add cycle-entry preconditions to `check_and_run` instead.
 
 ### 3.1 Evolution discipline (`src/memory/dreaming/evolution/`)
 
@@ -228,7 +228,7 @@ STALE         — Note B contains outdated information that Note A has supersede
 
 `src/memory/dreaming/stages/note_synthesis.rs`. Only built into the Synthesize pipeline (§6.2); `should_run` returns `ctx.notes.len() >= 5`. Notes are grouped by category, **excluding `category == "synthesis"`** so output doesn't feed itself; only categories with ≥ 3 notes are synthesized. Up to 15 notes per category (300 chars each) concatenate into an LLM prompt asking for "cross-cutting themes … connections between different notes … key takeaways", with instruction to use `[[wikilinks]]` back to source paths. Output is written under the `synthesis/` category — a directory **not** in `CATEGORY_DIRS`, so the stage calls `tokio::fs::create_dir_all(memory_dir/{agent_id}/synthesis/)` before writing. Title `"{category} Synthesis"`, `tags = [<category>, "synthesis"]`, `links = [<every source path>]`, `facts = [<synthesis text>]`. `NoteIndexer::write_note` persists and indexes; `synthesis_count` increments per success.
 
-**DBSCAN helper.** `src/memory/dreaming/stages/types.rs` ships `dbscan(points, eps, min_pts)` using cosine distance; `DreamingConfig` exposes `cluster_dbscan_eps` (default `0.3`) / `cluster_dbscan_min_samples` (default `2`). The current synthesis stage groups by category; the helper is a reusable primitive for future stages.
+**DBSCAN helper (removed).** A `dbscan(points, eps, min_pts)` helper using cosine distance shipped in src/memory/dreaming/stages/types.rs, and `DreamingConfig` exposed `cluster_dbscan_eps` (default `0.3`) / `cluster_dbscan_min_samples` (default `2`). Both were **cut on 2026-07-18** as dead code; the current synthesis stage groups by category and no clustering helper remains.
 
 ### 5.4 NoteLint
 
@@ -361,7 +361,7 @@ pub struct DreamReport {
 
 ## 8. Persistence
 
-All DDL from `src/memory/store/sqlite/schema.rs`; `init_schema` is idempotent.
+All DDL from `src/memory/store/sqlite/schema/mod.rs`; `init_schema` is idempotent.
 
 **`dream_status`** — one-row singleton:
 

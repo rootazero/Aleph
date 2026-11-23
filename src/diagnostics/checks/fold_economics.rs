@@ -329,8 +329,8 @@ fn load_folds(
 /// Read the last window's `provider_usage` rows out of `state.db`. A missing
 /// `task_traces` table means "no telemetry yet", not an error.
 fn load_usage(state_db: &Path, cutoff_s: i64) -> Result<Vec<UsageRow>, String> {
-    let conn = open_sqlite_readonly(state_db)
-        .map_err(|e| format!("open {}: {e}", state_db.display()))?;
+    let conn =
+        open_sqlite_readonly(state_db).map_err(|e| format!("open {}: {e}", state_db.display()))?;
     if !table_exists(&conn, "task_traces")? {
         return Ok(Vec::new());
     }

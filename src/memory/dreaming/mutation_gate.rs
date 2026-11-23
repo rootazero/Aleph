@@ -197,7 +197,11 @@ impl MutationGate {
             return None;
         }
 
-        for i in 0..=self.merge_history.len().saturating_sub(MERGE_CYCLE_THRESHOLD) {
+        for i in 0..=self
+            .merge_history
+            .len()
+            .saturating_sub(MERGE_CYCLE_THRESHOLD)
+        {
             let first = &self.merge_history[i];
             let repeated = first.iter().find(|pair| {
                 (1..MERGE_CYCLE_THRESHOLD).all(|k| self.merge_history[i + k].contains(*pair))

@@ -81,8 +81,7 @@ impl Lease {
     /// Whether this lease has expired due to TTL.
     #[must_use]
     pub fn is_expired(&self) -> bool {
-        self.ttl
-            .is_some_and(|ttl| self.issued_at.elapsed() >= ttl)
+        self.ttl.is_some_and(|ttl| self.issued_at.elapsed() >= ttl)
     }
 
     /// Time remaining before expiration, if any.

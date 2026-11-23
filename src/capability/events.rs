@@ -183,11 +183,11 @@ pub enum EventError {
 }
 
 /// Durable sink for capability events.
-    ///
-    /// NO PRODUCTION IMPLEMENTATION (2026-11-20 severed-wire audit): the live
-    /// stream is the in-memory one, so capability events are lost on restart.
-    /// Kept as the contract a durable sink must satisfy.
-    pub trait EventPersistence: Send + Sync {
+///
+/// NO PRODUCTION IMPLEMENTATION (2026-11-20 severed-wire audit): the live
+/// stream is the in-memory one, so capability events are lost on restart.
+/// Kept as the contract a durable sink must satisfy.
+pub trait EventPersistence: Send + Sync {
     fn persist(&self, record: &CapabilityEventRecord) -> Result<(), String>;
 }
 

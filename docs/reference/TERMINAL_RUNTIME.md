@@ -73,11 +73,11 @@ Removed terminal-agent and model-routing code is archived under the repository r
 
 以下路径不再属于产品或 workspace：
 
-- `crates/agent-detect/` 及其 Apache-2.0 派生识别引擎
-- `src/gateway/pty/foreground.rs` 的前台进程探测
-- `src/gateway/runtime/` 与 `RuntimeAgents` 状态表
+- `(removed; terminal runtime detection is now src/gateway/pty/)` 及其 Apache-2.0 派生识别引擎
+- `src/gateway/pty/mod.rs` 的前台进程探测
+- `src/gateway/server/ (gateway runtime consolidated into server/)` 与 `RuntimeAgents` 状态表
 - `runtime.agents.list`、`runtime.agents.changed` 与 `terminal_sessions_*` 观察面
-- `src/builtin_tools/terminal.rs` 及 observation capability registry
+- `src/builtin_tools/terminal.rs (removed; terminal logic is now in src/gateway/pty/)` 及 observation capability registry
 - Webchat/TUI runtime agent panel、共享 `agent_panel` 状态和相应 locale
 - herdr/agent runtime QA 驱动与 fixtures
 

@@ -119,7 +119,7 @@ impl SqliteCoordTaskStore {
 
         // Assignment is a transition, not just a field on creation. Emit it
         // for both the initial owner and every later change to a new owner.
-        let owner_changed = previous.map_or(false, |old| old.owner != task.owner);
+        let owner_changed = previous.is_some_and(|old| old.owner != task.owner);
         if (verb == "created" || owner_changed) && task.owner.is_some() {
             let owner = task.owner.as_deref().unwrap_or_default();
             bus.broadcast(

@@ -154,7 +154,8 @@ pub fn compute_backoff_ms(consecutive_errors: u32) -> i64 {
     if consecutive_errors == 0 {
         return 0;
     }
-    let idx = (consecutive_errors.saturating_sub(1) as usize).min(BACKOFF_TIERS_MS.len().saturating_sub(1));
+    let idx = (consecutive_errors.saturating_sub(1) as usize)
+        .min(BACKOFF_TIERS_MS.len().saturating_sub(1));
     BACKOFF_TIERS_MS.get(idx).copied().unwrap_or(3_600_000)
 }
 

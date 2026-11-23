@@ -294,7 +294,8 @@ impl RequestGuard {
     fn settle(&mut self) {
         self.settled = true;
         self.requests_in_flight.fetch_sub(1, Ordering::SeqCst);
-        self.latency.observe(self.start.elapsed().as_millis() as u64);
+        self.latency
+            .observe(self.start.elapsed().as_millis() as u64);
     }
 }
 
@@ -307,7 +308,8 @@ impl Drop for RequestGuard {
         // state on its own, so mark it cancelled and free the capacity.
         let _ = self.registry.cancel(self.request_id);
         self.requests_in_flight.fetch_sub(1, Ordering::SeqCst);
-        self.latency.observe(self.start.elapsed().as_millis() as u64);
+        self.latency
+            .observe(self.start.elapsed().as_millis() as u64);
     }
 }
 

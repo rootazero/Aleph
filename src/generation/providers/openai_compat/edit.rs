@@ -73,8 +73,12 @@ pub(crate) async fn edit_image_impl(
     form = form.text("prompt", request.prompt.clone());
 
     // Add image - handle URL, data URI, or raw base64
-    let is_http = reference_image.get(..7).is_some_and(|s| s.eq_ignore_ascii_case("http://"))
-        || reference_image.get(..8).is_some_and(|s| s.eq_ignore_ascii_case("https://"));
+    let is_http = reference_image
+        .get(..7)
+        .is_some_and(|s| s.eq_ignore_ascii_case("http://"))
+        || reference_image
+            .get(..8)
+            .is_some_and(|s| s.eq_ignore_ascii_case("https://"));
     if is_http {
         // SSRF guard: `reference_image` is an LLM-controlled string and the
         // bytes are forwarded to a third-party multipart upload. A crafted

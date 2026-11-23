@@ -44,8 +44,8 @@ use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 use syn::{
-    Attribute, Expr, ExprCall, ExprLit, ExprPath, File, ImplItemFn, Item, ItemFn, ItemMod,
-    ItemUse, Lit, Local, Meta, Pat, Path as SynPath, Token, UseTree,
+    Attribute, Expr, ExprCall, ExprLit, ExprPath, File, ImplItemFn, Item, ItemFn, ItemMod, ItemUse,
+    Lit, Local, Meta, Pat, Path as SynPath, Token, UseTree,
 };
 
 /// The source tree this gate inspects.
@@ -398,7 +398,11 @@ fn cfg_meta_implies_test(meta: &Meta) -> bool {
         Meta::Path(p) => p.is_ident("test"),
         Meta::NameValue(_) => false,
         Meta::List(list) => {
-            let name = list.path.get_ident().map(|i| i.to_string()).unwrap_or_default();
+            let name = list
+                .path
+                .get_ident()
+                .map(|i| i.to_string())
+                .unwrap_or_default();
             match name.as_str() {
                 // `cfg(a, b)` is `a AND b` — it implies test when one
                 // predicate does.
@@ -600,9 +604,7 @@ impl<'ast> Visit<'ast> for Scanner<'_> {
     }
 
     fn visit_item_use(&mut self, u: &'ast ItemUse) {
-        if !LOCK_ACQUIRE_OWNERS.contains(&self.rel)
-            && use_imports_lock_acquire(&u.tree)
-        {
+        if !LOCK_ACQUIRE_OWNERS.contains(&self.rel) && use_imports_lock_acquire(&u.tree) {
             self.report(
                 Tag::LockOwner,
                 u.span(),
@@ -624,16 +626,17 @@ impl<'ast> Visit<'ast> for Scanner<'_> {
                 return;
             }
         };
-        let segments: Vec<String> = callee.segments.iter().map(|s| s.ident.to_string()).collect();
+        let segments: Vec<String> = callee
+            .segments
+            .iter()
+            .map(|s| s.ident.to_string())
+            .collect();
         let last = segments.last().map(String::as_str).unwrap_or("");
 
         // (1) A raw SQLite open.
         if segments.len() >= 2
             && segments[segments.len() - 2] == "Connection"
-            && matches!(
-                last,
-                "open" | "open_with_flags" | "open_with_flags_and_vfs"
-            )
+            && matches!(last, "open" | "open_with_flags" | "open_with_flags_and_vfs")
             && self.rel != SQLITE_OPEN_REL
         {
             self.report(
@@ -788,7 +791,9 @@ fn parse_lock_policy(doc: &str) -> Option<Vec<String>> {
 fn check_lock_policy(tree: &Tree) -> Vec<String> {
     let mut findings = Vec::new();
     let Some(commands) = tree.by_rel.get(COMMANDS_MOD) else {
-        findings.push(format!("{COMMANDS_MOD} is missing — no subcommand can be checked"));
+        findings.push(format!(
+            "{COMMANDS_MOD} is missing — no subcommand can be checked"
+        ));
         return findings;
     };
 
@@ -801,7 +806,9 @@ fn check_lock_policy(tree: &Tree) -> Vec<String> {
             continue;
         }
         let Some(src) = tree.command_module(&name) else {
-            findings.push(format!("{COMMANDS_MOD}: subcommand `{name}` has no source file"));
+            findings.push(format!(
+                "{COMMANDS_MOD}: subcommand `{name}` has no source file"
+            ));
             continue;
         };
 

@@ -79,7 +79,7 @@ lifecycle, OS notifications, and launch-at-login.
 
 ### Startup flow
 
-1. The window opens showing the bundled splash (`splash/index.html`), at the
+1. The window opens showing the bundled splash (`desktop/shell/splash/index.html`), at the
    size and position it had last run.
 2. A background thread (its own Tokio runtime) probes the daemon port. If a
    foreign process holds it the shell fails fast with a clear message;

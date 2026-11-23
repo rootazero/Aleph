@@ -307,11 +307,19 @@ mod tests {
             .with_meta("key2", "value2");
 
         assert_eq!(
-            timer.metadata.as_ref().and_then(|m| m.get("key1")).map(String::as_str),
+            timer
+                .metadata
+                .as_ref()
+                .and_then(|m| m.get("key1"))
+                .map(String::as_str),
             Some("value1")
         );
         assert_eq!(
-            timer.metadata.as_ref().and_then(|m| m.get("key2")).map(String::as_str),
+            timer
+                .metadata
+                .as_ref()
+                .and_then(|m| m.get("key2"))
+                .map(String::as_str),
             Some("value2")
         );
     }
@@ -366,15 +374,27 @@ mod tests {
 
         assert_eq!(timer.metadata.as_ref().map_or(0, |m| m.len()), 3);
         assert_eq!(
-            timer.metadata.as_ref().and_then(|m| m.get("provider")).map(String::as_str),
+            timer
+                .metadata
+                .as_ref()
+                .and_then(|m| m.get("provider"))
+                .map(String::as_str),
             Some("OpenAI")
         );
         assert_eq!(
-            timer.metadata.as_ref().and_then(|m| m.get("model")).map(String::as_str),
+            timer
+                .metadata
+                .as_ref()
+                .and_then(|m| m.get("model"))
+                .map(String::as_str),
             Some("gpt-4")
         );
         assert_eq!(
-            timer.metadata.as_ref().and_then(|m| m.get("app")).map(String::as_str),
+            timer
+                .metadata
+                .as_ref()
+                .and_then(|m| m.get("app"))
+                .map(String::as_str),
             Some("com.apple.Notes")
         );
     }
@@ -386,7 +406,11 @@ mod tests {
             .with_target(200);
 
         assert_eq!(
-            timer.metadata.as_ref().and_then(|m| m.get("key")).map(String::as_str),
+            timer
+                .metadata
+                .as_ref()
+                .and_then(|m| m.get("key"))
+                .map(String::as_str),
             Some("value")
         );
         assert_eq!(timer.target_ms, Some(200));

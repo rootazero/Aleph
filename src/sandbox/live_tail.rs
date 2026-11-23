@@ -135,7 +135,12 @@ impl Ring {
 /// as it was, and the caller's lossy conversion decides how to render it.
 fn trim_to_utf8_boundaries(mut bytes: Vec<u8>) -> Vec<u8> {
     let mut start = 0usize;
-    while start < bytes.len() && bytes.get(start).copied().is_some_and(|b| (b & 0xC0) == 0x80) {
+    while start < bytes.len()
+        && bytes
+            .get(start)
+            .copied()
+            .is_some_and(|b| (b & 0xC0) == 0x80)
+    {
         start += 1;
     }
     if start > 0 {

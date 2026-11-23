@@ -31,7 +31,7 @@
 永不延迟的生命线：`tool_search` / `get_tool_schema` / `ask_user` / `session_set_mode` / `self_config`
 （`NEVER_DEFER`——延迟发现机制本身会把模型困死在分区里）。`session_set_mode` 同时**常驻默认核**
 （R8 一步开关不藏在 get_tool_schema 往返后面）。`tool_search` 在 deferred 层非空且披露启用时
-由 `run_loop/inner.rs` 推进本请求的 core 集——它注册于 schema 快照**之后**（collapsed-but-unsnapshotted
+由 `src/gateway/execution_engine/run_loop/inner.rs` 推进本请求的 core 集——它注册于 schema 快照**之后**（collapsed-but-unsnapshotted
 类第三成员，见 `default_core_tools` 不变量注释），折叠它会让模型被指向一次必然 miss 的快照查询。
 
 ## 2. 红线定位 (Redline Position)
@@ -63,8 +63,8 @@
 `think_level` 走完 1–4 步却**一个客户端面都没有**，于是它被强制了很久而没人看得见。
 
 1. 载体入口：`chat.send`/`agent.run` 顶层 `mode` 参数（`SendParams.mode` → `AgentRunParams.mode`，
-   `handlers/chat.rs` + `handlers/agent.rs`，双入口 `server_init.rs` 同步）；
-2. 校验+stamp：`build_run_request`（`handlers/agent.rs`，未知 id fail-loud）→
+   `src/gateway/handlers/chat.rs` + `src/gateway/handlers/agent.rs`，双入口 `server_init.rs` 同步）；
+2. 校验+stamp：`build_run_request`（`src/gateway/handlers/agent.rs`，未知 id fail-loud）→
    `RunRequest.metadata[MODE_SESSION_KEY]`；
 3. 每轮解析：`src/gateway/execution_engine/turn_mode.rs::{resolve_turn_mode,resolve_session_mode}`
    （request > session > global，stamp-on-carry best-effort，malformed fail-soft；无 channel clamp——
@@ -72,10 +72,10 @@
    mode/think 解析（取值弃用、只为 stamp-on-carry 副作用——快路径就是这一 turn，骑在 slash 消息上的
    模式选择不得静默丢失）；
 4. 会话持久：`identity_meta.custom["session_mode"]`；`sessions.patch` 配对校验
-   （`db_handlers/modify.rs`，null=清除跟随全局）+ 列表投影 `aleph_protocol::SessionListRow.mode`（2026-09-02 起；alephcore 自己的 `SessionInfo` 已删）
+   （`src/gateway/handlers/session/db_handlers/modify.rs`，null=清除跟随全局）+ 列表投影 `aleph_protocol::SessionListRow.mode`（2026-09-02 起；alephcore 自己的 `SessionInfo` 已删）
    （`db_handlers/{query,types}.rs`）。
 
-**分区落点**（`run_loop/inner.rs`）：`mode_core_tools = session_mode.effective_core_tools(...)`
+**分区落点**（`src/gateway/execution_engine/run_loop/inner.rs`）：`mode_core_tools = session_mode.effective_core_tools(...)`
 喂进两处 `build_request_tool_service` 与 SchemaLookupTool 注册门；mode 延迟名并入
 `DeferredTools` 构造集（与 `defer_mcp_tools` 同一 Arc，`ToolSearchTool` 晋升路径不变）；
 ToolSearchTool 注册处把 `tool_search` 推进 `mode_core_tools`（披露启用时——快照豁免类第三成员）。
@@ -107,8 +107,8 @@ whenToUse 目录（chat=快问答 / work=通用多步 / code=repo 工程）+ "�
 `config.get_tool_permissions` 响应携带 `mode` + `modes`（与 tier 同一 fetch 同一解码器），
 `config.update_tool_permissions` 接受 `mode` 部分更新。
 
-**Panel**（`interfaces/webchat/`）：`views/chat/mode_picker.rs`（composer pill，exec_tier_picker
-克隆；mode presets 空=旧核→整体隐藏）+ `components/mode_labels.rs`（i18n 显式 match，未知 id 降级裸 id）+
+**Panel**（`interfaces/webchat/`）：`interfaces/webchat/src/platform/wide/views/chat/mode_picker.rs`（composer pill，exec_tier_picker
+克隆；mode presets 空=旧核→整体隐藏）+ `interfaces/webchat/src/components/mode_labels.rs`（i18n 显式 match，未知 id 降级裸 id）+
 `ChatState.session_mode`（会话覆盖，5 生命周期位点 + SessionSnapshot）+ **`ChatState.global_mode`**
 （全局默认镜像，picker fetch 喂入，全局态不随 clear_session 清空、不进快照）+ locales
 `settings.policies.mode_*`（en/zh）。**载运纪律（v2 P1 修复）**：4 条 send 路径（typed / queue-flush /

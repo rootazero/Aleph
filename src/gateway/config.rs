@@ -596,7 +596,10 @@ pattern = "cli:*"
 agent_id = "main"
 "#;
         let result = GatewayConfig::from_toml(toml);
-        assert!(result.is_ok(), "canonical [[bindings]] must load: {result:?}");
+        assert!(
+            result.is_ok(),
+            "canonical [[bindings]] must load: {result:?}"
+        );
     }
 
     #[test]

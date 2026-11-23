@@ -582,8 +582,7 @@ impl AcpAdapterEntry {
                 || self.output_format != OutputFormatSerde::default(),
             timeout_seconds: self.presence.timeout_seconds
                 || self.timeout_seconds != default_timeout(),
-            trust_level: self.presence.trust_level
-                || self.trust_level != default_trust_level(),
+            trust_level: self.presence.trust_level || self.trust_level != default_trust_level(),
         };
         self.hydrate_from_preset_with_presence(preset, &presence);
     }

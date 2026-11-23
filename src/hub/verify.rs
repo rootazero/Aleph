@@ -188,8 +188,7 @@ pub async fn verify_install(
                     (false, HealthObservation::Unknown)
                 }
             };
-            let other =
-                info.resource_count + info.resource_template_count + info.prompt_count;
+            let other = info.resource_count + info.resource_template_count + info.prompt_count;
             verdict_with_health(running, observation, info.tool_count, other)
         }
         InstallOutcome::Plugin { path } => verify_on_disk_path(path, "plugin"),

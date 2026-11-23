@@ -220,7 +220,9 @@ pub async fn wire_persistence(
             if let Err(e) = hook_tx.send(event) {
                 let harness_id = match &e.0 {
                     crate::acp::AcpSessionEvent::Created { harness_id, .. }
-                    | crate::acp::AcpSessionEvent::Removed { harness_id, .. } => harness_id.as_str(),
+                    | crate::acp::AcpSessionEvent::Removed { harness_id, .. } => {
+                        harness_id.as_str()
+                    }
                 };
                 warn!(
                     harness_id,

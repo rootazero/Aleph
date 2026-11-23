@@ -20,7 +20,7 @@ pub trait Sandbox: Send + Sync + 'static {
 ```
 
 Production boot wires an `Arc<dyn Sandbox>` pointing at `WorkspaceSandbox`
-(`src/sandbox/workspace.rs`). `WorkspaceSandbox` owns three concerns:
+(`src/sandbox/workspace/mod.rs`). `WorkspaceSandbox` owns three concerns:
 
 1. **Workspace provisioning** — materialize `~/.aleph/workspaces/{hash(session_id)}/`
    on first exec, keep it alive for the session, reuse on subsequent calls.
@@ -29,7 +29,7 @@ Production boot wires an `Arc<dyn Sandbox>` pointing at `WorkspaceSandbox`
    through `ApprovalGate`, cache per-session grants.
 3. **OS isolation** — delegate the actual subprocess launch to an
    `OsSandboxDriverTrait` implementation (today: macOS `sandbox-exec` via
-   `OsSandboxDriver` in `src/exec/sandbox/executor.rs`).
+   `OsSandboxDriver` in `src/sandbox/driver.rs`).
 
 The relationship at a glance:
 
@@ -60,7 +60,7 @@ The on-disk path is deterministic:
 workspace_root / session_key_to_filename(session_id)
 ```
 
-`session_key_to_filename` (`src/sandbox/workspace.rs:114`) SHA-256s the
+`session_key_to_filename` (`src/sandbox/workspace/mod.rs:114`) SHA-256s the
 JSON-serialized `SessionId` and truncates to 16 bytes (32 hex chars). That
 keeps the path short and safe across every `SessionKey` variant regardless of
 the characters those variants may carry.
@@ -74,7 +74,7 @@ Each `SessionWorkspace` carries:
 
 ## The six-step `execute` pipeline
 
-`WorkspaceSandbox::execute` (`src/sandbox/workspace.rs:124`) implements the
+`WorkspaceSandbox::execute` (`src/sandbox/workspace/mod.rs:124`) implements the
 spec §8 pipeline:
 
 1. **Session resolve** — `self.for_session(&cmd.session_id)` → lazy dir
@@ -249,7 +249,7 @@ Two rules follow from this:
 - **No `Command::new` anywhere in `src/builtin_tools/`** for exec-class tools.
   The sandbox seam is the only subprocess path.
 - **`with_sandbox` is the sole injection point.** Boot wiring in
-  `src/executor/builtin_registry/builder.rs` takes the shared
+  `(removed; tool registration is now src/tools/registry.rs)` takes the shared
   `Arc<dyn Sandbox>` from `AppContext` and calls `with_sandbox` on every
   exec-class tool it registers. A tool constructed without a sandbox returns
   a structured "sandbox not configured" error instead of falling back to
@@ -262,7 +262,7 @@ sandboxing:
 
 - **Fake OS driver** — implement `OsSandboxDriverTrait`, count `run` calls,
   return a canned `SandboxOutput`. Used by the unit tests in
-  `src/sandbox/workspace.rs` and the integration test.
+  `src/sandbox/workspace/mod.rs` and the integration test.
 - **Fake approval requester** — implement `ApprovalRequester` and hand the
   resulting box to `ApprovalGate::new(cfg, Some(Box::new(requester)))`. The
   unit tests use this to drive every branch of step 3 (approve / deny /
@@ -290,12 +290,12 @@ returns `NoopSandbox`.
 | `src/sandbox/command.rs` | `SandboxCommand`, `SandboxOutput`, `SandboxError` |
 | `src/sandbox/command_policy/` | content-level command hard-filter (`CommandPolicy` + `CommandPolicyHook` + default ruleset + TOML config) |
 | `src/sandbox/capabilities.rs` | `SandboxCapabilities` + `NetworkPolicy` + `is_within` |
-| `src/sandbox/workspace.rs` | `WorkspaceSandbox` + six-step pipeline |
+| `src/sandbox/workspace/mod.rs` | `WorkspaceSandbox` + six-step pipeline |
 | `src/sandbox/driver.rs` | `OsSandboxDriverTrait` + `OsSandboxProfile` |
 | `src/sandbox/factory.rs` | `build_sandbox` + `NoopSandbox` |
 | `src/sandbox/config.rs` | `SandboxConfig` (boot-time tunables) |
 | `src/sandbox/context.rs` | `SESSION_ID` task-local + `current_session()` |
-| `src/exec/sandbox/executor.rs` | `OsSandboxDriver` (macOS `sandbox-exec` driver) |
+| `src/sandbox/driver.rs` | `OsSandboxDriver` (macOS `sandbox-exec` driver) |
 | `src/session/tool_trace.rs` | `invoke_with_session_trace` — sets `SESSION_ID.scope(...)` |
 | `tests/sandbox_capability_approval.rs` | End-to-end capability approval flow |
 
@@ -386,13 +386,13 @@ security primitives but were verifiably never called from production code:
 
 - `src/sandbox/platforms/windows/wfp.rs` — every method either returned a
   hardcoded `Err` or a no-op `Ok(())`.
-- `src/sandbox/platforms/windows/appcontainer.rs` — every method returned
+- `src/sandbox/windows_init/imp/app_container.rs` — every method returned
   `Err("requires windows-sys 0.61+")`.
-- `src/sandbox/platforms/windows/acl.rs` — `dacl_allows_access` had zero
+- `src/sandbox/windows_init/imp/app_container.rs` — `dacl_allows_access` had zero
   callers tree-wide.
-- `src/sandbox/platforms/windows/filter.rs` — `FilterSet` referenced only by
+- `src/sandbox/platforms/windows/wfp.rs` — `FilterSet` referenced only by
   its own `#[cfg(test)]` module.
-- `src/sandbox/platforms/windows/token.rs` — `create_restricted_token` was
+- `src/sandbox/platforms/windows/elevation.rs` — `create_restricted_token` was
   imported by `driver.rs` but never invoked; the spawn path used plain
   `tokio::process::Command` with only a JobObject for protection.
 
@@ -586,7 +586,7 @@ regression.
 
 ### Windows protected-metadata DACL deny
 
-`launch_with_app_container` in `src/sandbox/windows_init.rs` now stamps
+`launch_with_app_container` in `src/sandbox/windows_init/mod.rs` now stamps
 `DENY_ACCESS` ACEs on every existing `<workspace>/{.git,.aleph,.codex,.agents}`
 subdirectory for the per-execution AppContainer SID, in addition to
 the Cycle 2 workspace `GRANT_ACCESS`. Because `SetEntriesInAclW`
@@ -833,11 +833,11 @@ and IP literals (`140.82.114.4`, `::1`).
 **Files changed:**
 
 - New: `src/sandbox/proxy/{mod.rs,allowlist.rs,connect.rs,socks5.rs,lifecycle.rs}`
-- Wired: `src/sandbox/workspace.rs` (`maybe_spawn_proxy`)
+- Wired: `src/sandbox/workspace/mod.rs` (`maybe_spawn_proxy`)
 - Comments only: `src/sandbox/platforms/{macos/seatbelt.rs,linux/bwrap.rs,windows/driver.rs}`
 
 **Entropy reduction:** dead field `SessionWorkspace.session_id`
-removed (`src/sandbox/workspace.rs`).
+removed (`src/sandbox/workspace/mod.rs`).
 
 **Verification:** 27 new unit tests in `sandbox::proxy::*` (allowlist
 matcher, CONNECT parse, SOCKS5 layout, lifecycle bind/handshake/shutdown,
@@ -904,7 +904,7 @@ run the target with broken egress control.
 - Wired: `src/sandbox/sandbox_init.rs` (netns-side fork bridge + env rewrite),
   `src/sandbox/platforms/linux/bwrap.rs` (`--unshare-net` + UDS bind-mount;
   the `AllowHosts` hard-fail now only guards raw non-loopback allowlists),
-  `src/sandbox/workspace.rs` (`maybe_spawn_proxy` Linux branch + `ActiveProxy`
+  `src/sandbox/workspace/mod.rs` (`maybe_spawn_proxy` Linux branch + `ActiveProxy`
   guard).
 
 **Entropy reduction:** the `AllowHosts`/`ProxyOnly` `UnsupportedPolicy`
@@ -1213,7 +1213,7 @@ whose second half has not been read yet.
 ### Deleted
 
 `normalize_path_for_sandbox`, `path_is_allowed`, `glob_to_regex` — three
-zero-consumer helpers in `platforms/common.rs`. `glob_to_regex` was a
+zero-consumer helpers in `src/sandbox/platforms/common.rs`. `glob_to_regex` was a
 semantically weaker twin of the live `deny_globs::glob_to_anchored_regex`
 (no whole-component `**`, escaped character classes instead of preserving
 them, no bare-pattern-subtree rule), and `deny_globs.rs` explicitly invites a

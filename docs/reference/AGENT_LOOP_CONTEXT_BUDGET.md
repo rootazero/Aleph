@@ -23,7 +23,7 @@ The context budget system manages token usage across agent turns using a three-t
 
 `structured/` appears in both Tier 1 and Tier 2: the same content-type router
 serves the ingress cleaner and the stale-result pruning pass, which is why it
-lives in `src/tool_output/structured/` rather than under `context/budget/`.
+lives in `src/tool_output/structured/` rather than under `src/context/budget/`.
 
 ## Tier 1: Inline Result Limiting
 
@@ -129,7 +129,7 @@ Located in `src/context/budget/cheap_passes/`:
 ## Tier 3: LLM Compactor
 
 `src/context/compact/compactor.rs::ContextCompactor::compact()` is invoked
-by `harness/agent/think.rs` when the budget directive requires it (directive
+by `src/harness/agent/think.rs` when the budget directive requires it (directive
 dispatch lives in `src/context/compact/directive.rs`; the harness only
 consumes the outcome). Falls back to deterministic truncation on provider
 failure — and when the compaction window carries a prior running summary,
@@ -232,7 +232,7 @@ impl ContextBudget {
   history, where drift is largest) no longer starts uncalibrated. Breaker /
   diminishing-returns / split counters remain strictly per-run; a model
   switch misses the slot and starts uncalibrated as before.
-- After each LLM turn, `harness/agent/think.rs` calls
+- After each LLM turn, `src/harness/agent/think.rs` calls
   `observe_actual_usage(usage.prompt_tokens_total())`. The saved `last_pressure`
   is the calibrated estimate of *that exact prompt*, so `observed / estimated`
   (with the previous factor backed out) is the residual error. It is clamped to
@@ -282,7 +282,7 @@ co-designed (FEATURE_LOCATOR §2.15):
 - **Watchdog**: `CacheMonitor` (per-agent, armed only after observed cache
   activity) warns on ≥3 consecutive misses — the live alarm for a broken
   stable prefix.
-- **Contract test**: `providers/protocols/anthropic/adapter_tests/prefix_stability.rs`
+- **Contract test**: `src/providers/protocols/anthropic/adapter_tests/prefix_stability.rs`
   pins "turn N+1 is a strict prefix extension of turn N" on raw request
   bodies.
 

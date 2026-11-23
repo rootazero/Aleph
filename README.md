@@ -97,7 +97,8 @@ Every tool runs inside an OS-native sandbox (Seatbelt / Landlock / AppContainer)
 
 ```
                 ┌─────────────────────────────────────────┐
-                │      🖥  Native Desktop App (Tauri)      │
+                │      🖥  Desktop host (WebView shell)    │
+                │   legacy Tauri · forward NSH             │
                 │   chat panel · tray · hotkey · notify    │
                 └──────────────────┬──────────────────────┘
                                    │  JSON-RPC (local)
@@ -125,6 +126,14 @@ Every tool runs inside an OS-native sandbox (Seatbelt / Landlock / AppContainer)
 
 Full design: [docs/reference/ARCHITECTURE.md](docs/reference/ARCHITECTURE.md) · [HARNESS_PHILOSOPHY.md](docs/reference/HARNESS_PHILOSOPHY.md)
 
+> **Two desktop hosts, one Panel.** The Panel UI is a single codebase
+> (`interfaces/webchat` → Leptos + WASM) served by `aleph-server` itself. The
+> desktop host is only the WebView around it, and it is mid-migration: the
+> released installers are still built from the legacy Tauri host
+> (`desktop/shell`), while the forward form is the NSH host
+> (`desktop/nsh-shell`). The switch is gated — see
+> [Phase 11 cutover](docs/superpowers/plans/2026-11-21-phase11-nsh-cutover.md).
+
 ---
 
 ## Install
@@ -146,6 +155,10 @@ runs entirely on one machine. Download the installer and launch it:
 On first launch it starts the daemon, registers launch-at-login, and lives
 in the system tray. Open the chat panel from the tray icon or the global
 hotkey.
+
+> The installers above are still produced by the legacy Tauri host
+> (`desktop/shell`). The NSH host (`desktop/nsh-shell`) is the forward form
+> and ships once the Phase 11 gates clear.
 
 ### 2. Aleph Panel — thin-shell app
 
@@ -246,7 +259,8 @@ Aleph/
 │   ├── extension/       # WASM + Node.js plugin system
 │   └── ...              # session · approval · scheduler · daemon · ...
 ├── desktop/
-│   ├── shell/           # Tauri desktop app (tray, hotkey, notifications, ...)
+│   ├── shell/           # Legacy Tauri desktop host (tray, hotkey, notifications, ...)
+│   ├── nsh-shell/       # Forward NSH desktop host (window, tray, hotkey, panel bridge)
 │   ├── shared/          # DesktopCapability trait + IPC protocol
 │   ├── macos/ + bridge/ # macOS native (AppKit, Vision, Swift bridge)
 │   ├── windows/         # Windows native (Win32)
@@ -266,6 +280,8 @@ Aleph/
 
 | Document | Link |
 |----------|------|
+| Documentation map | [docs/README.md](docs/README.md) |
+| Evidence layer contract | [EVIDENCE_LAYER.md](docs/reference/EVIDENCE_LAYER.md) |
 | Architecture | [ARCHITECTURE.md](docs/reference/ARCHITECTURE.md) |
 | Harness philosophy | [HARNESS_PHILOSOPHY.md](docs/reference/HARNESS_PHILOSOPHY.md) |
 | Agent system | [AGENT_SYSTEM.md](docs/reference/AGENT_SYSTEM.md) |

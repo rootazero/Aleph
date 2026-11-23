@@ -516,7 +516,9 @@ mod tests {
     /// is unwrapped and only its alt text survives.
     #[test]
     fn an_image_inside_a_link_does_not_nest_a_link() {
-        let html = render_markdown("[see the chart](https://example.com/page) and ![a chart](https://example.com/c.png)");
+        let html = render_markdown(
+            "[see the chart](https://example.com/page) and ![a chart](https://example.com/c.png)",
+        );
         assert_eq!(
             html.matches("<a ").count(),
             1,

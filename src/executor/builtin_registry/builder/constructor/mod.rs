@@ -1638,10 +1638,7 @@ mod tests {
         backends.insert("zeta".into(), backend("crawl4ai"));
         backends.insert("alpha".into(), backend("crawl4ai"));
         let cfg = fetch_cfg(backends);
-        assert_eq!(
-            inert_fetch_backend_names(&cfg, None),
-            vec!["alpha", "zeta"]
-        );
+        assert_eq!(inert_fetch_backend_names(&cfg, None), vec!["alpha", "zeta"]);
     }
 
     #[test]

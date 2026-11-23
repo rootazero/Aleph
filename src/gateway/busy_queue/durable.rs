@@ -617,11 +617,8 @@ pub async fn reinject_survivors(
         // The lane is the one the record was admitted to, read back from the
         // record instead of derived again here: the derivation rule may move,
         // and a queued message must not follow it onto another session.
-        let ticket = super::register_run_in_lane(
-            &payload.lane_key,
-            cfg.max_per_session,
-            &payload.run_id,
-        );
+        let ticket =
+            super::register_run_in_lane(&payload.lane_key, cfg.max_per_session, &payload.run_id);
         let Some(ticket) = ticket else {
             tracing::warn!(run_id = %run_id,
                 "busy-queue reinject: lane already full at boot; leaving record queued");

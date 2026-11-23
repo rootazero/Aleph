@@ -279,10 +279,7 @@ fn fence_mcp_result(mut value: Value, source: &ContentSource) -> Value {
     // Anything else — a capability-gated builtin routed through the same bridge
     // registry, or a future server shape — keeps the old whole-value fence
     // rather than having its structure guessed at.
-    let Some(blocks) = value
-        .get_mut("content")
-        .and_then(Value::as_array_mut)
-    else {
+    let Some(blocks) = value.get_mut("content").and_then(Value::as_array_mut) else {
         return fence_opaque(&value, source);
     };
     for block in blocks {

@@ -1,5 +1,7 @@
 # Model-Perceivable Ecosystem Implementation Plan
 
+> **状态：历史文档（point-in-time）** — 本文记录的是 2026-04-06 当时的设计/结论，不代表当前架构。当前状态以代码为准（落地部分见 `src/thinker/layers/agent_catalog.rs` 与 `src/builtin_tools/agent_manage/`）。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make the LLM aware of available sub-agents and MCP tools via lightweight prompt catalog + on-demand discovery tools.
@@ -8,7 +10,7 @@
 
 **Tech Stack:** Rust, existing PromptLayer trait, existing AlephTool trait, schemars for JSON Schema.
 
-**Note:** The working tree already has in-progress changes: `mcp_instructions.rs` (untracked new file), and modifications to `prompt_layer.rs`, `prompt_pipeline.rs`, `layers/mod.rs`. This plan builds on top of those changes.
+**Note:** The working tree already has in-progress changes: `mcp_instructions.rs` (untracked new file), and modifications to `prompt_layer.rs`, `prompt_pipeline.rs`, `src/thinker/layers/mod.rs`. This plan builds on top of those changes.
 
 ---
 
@@ -571,11 +573,11 @@ git commit -m "feat(thinker): implement AgentCatalogLayer with XML catalog gener
 ### Task 5: Implement McpToolIndexLayer
 
 **Files:**
-- Create: `src/thinker/layers/mcp_tool_index.rs`
+- Create: the MCP tool-index layer source (subsequently removed as dead code)
 
 - [ ] **Step 1: Create mcp_tool_index.rs with tests**
 
-Create `src/thinker/layers/mcp_tool_index.rs`:
+Create the MCP tool-index layer source (subsequently removed as dead code):
 
 ```rust
 //! McpToolIndexLayer — MCP server tool index injection (priority 1065)
@@ -746,7 +748,7 @@ Expected: ALL PASS
 - [ ] **Step 3: Commit**
 
 ```bash
-git add src/thinker/layers/mcp_tool_index.rs
+Stage the new MCP tool-index layer source (the historical path is omitted because the layer was subsequently removed).
 git commit -m "feat(thinker): implement McpToolIndexLayer with server-grouped tool index"
 ```
 
@@ -1040,12 +1042,12 @@ git commit -m "feat(tools): implement agent_info tool for on-demand agent discov
 ### Task 8: Implement mcp_tool_schema tool
 
 **Files:**
-- Create: `src/builtin_tools/mcp_discover.rs`
+- Create: the MCP discovery tool source (subsequently removed)
 - Modify: `src/builtin_tools/mod.rs` (register module)
 
 - [ ] **Step 1: Create mcp_discover.rs**
 
-Create `src/builtin_tools/mcp_discover.rs`:
+Create the MCP discovery tool source (subsequently removed):
 
 ```rust
 //! McpToolSchemaTool — return full MCP tool schema for on-demand discovery.
@@ -1232,7 +1234,7 @@ Expected: ALL PASS
 - [ ] **Step 4: Commit**
 
 ```bash
-git add src/builtin_tools/mcp_discover.rs src/builtin_tools/mod.rs
+Stage the new MCP discovery tool source and `src/builtin_tools/mod.rs` (the tool was subsequently removed).
 git commit -m "feat(tools): implement mcp_tool_schema tool for on-demand MCP discovery"
 ```
 

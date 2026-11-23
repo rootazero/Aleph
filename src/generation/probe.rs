@@ -69,9 +69,7 @@ fn probe_url(base_url: Option<&str>, provider_type: &str) -> Option<String> {
     let raw = base_url
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .or_else(|| {
-            get_preset_by_type(provider_type).and_then(|p| p.base_url)
-        })?;
+        .or_else(|| get_preset_by_type(provider_type).and_then(|p| p.base_url))?;
 
     match resolve_base_url(raw) {
         ResolvedUrl::Standard(base) => Some(format!("{base}/v1/models")),

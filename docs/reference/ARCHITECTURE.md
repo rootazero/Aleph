@@ -13,8 +13,8 @@
 │                           INTERFACE LAYER (I/O)                               │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐      │
-│  │ macOS    │  │  Tauri   │  │   CLI    │  │ Telegram │  │ Discord  │      │
-│  │  App     │  │   App    │  │          │  │Interface │  │Interface │      │
+│  │ macOS    │  │ Desktop  │  │   CLI    │  │ Telegram │  │ Discord  │      │
+│  │  App     │  │ Host(s)  │  │          │  │Interface │  │Interface │      │
 │  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘      │
 │       │             │             │             │             │             │
 │       └─────────────┴─────────────┴─────────────┴─────────────┘             │
@@ -197,13 +197,13 @@ Stage H 在保留 B5/B6 owner 与 publication authority 的前提下，把既有
 
 ### Current bounded Tool ProjectionHost mount / 当前有界 Tool ProjectionHost 挂载（2026-11-03）
 
-The production startup path is now source-backed and effect-verified for the bounded Tool-only slice. `src/bin/aleph-server/commands/start/mod.rs:242-305` creates one canonical `ToolHandlerRegistry` and one shared `Arc<OwnershipTree>`, passes them to `ProjectionHost::mount_with_memory`, installs the host, awaits `wait_until_ready`, and only then proceeds to diagnostics and later consumers. `src/capability/projection_host.rs:562-662` constructs `ZahirFacade::new_with_memory`, subscribes to registry and ownership streams before the initial snapshot, queues that snapshot for the default consumer, and starts the source/applier workers. `src/bin/aleph-server/commands/start/builder/startup_resources.rs:25-55` stops Memory before `ProjectionHost::close_and_await`; `src/capability/projection_host.rs:1248-1298` owns the shared cancellation-safe teardown and joins both workers.
+The production startup path is now source-backed and effect-verified for the bounded Tool-only slice. `src/bin/aleph-server/commands/start/mod.rs` creates one canonical `ToolHandlerRegistry` and one shared `Arc<OwnershipTree>`, passes them to `ProjectionHost::mount_with_runtime_and_events`, installs the host, awaits `wait_until_ready`, and only then proceeds to diagnostics and later consumers. `src/capability/projection_host.rs` constructs the Memory-backed `ZahirFacade` and subscribes to registry, ownership, and special-capability streams before the initial snapshot, queues that snapshot for the default consumer, and starts the source/applier workers. `src/bin/aleph-server/commands/start/builder/startup_resources.rs` stops Memory before `ProjectionHost::close_and_await`; `src/capability/projection_host.rs` owns the shared cancellation-safe teardown and joins both workers.
 
 The evidence distinguishes static wiring from observable effects. The startup ordering guards passed; real tests observed initial delivery through the default applier followed by fail-closed reads after close, ownership invalidation with unchanged registry revision, Memory Resource discovery with zero fake Tool entries, and lease rejection for custom-principal or foreign-tree authority. Cleanup tests observed Memory/host draining on early errors, preservation of the original startup error, cancellation-safe teardown, both worker joins, and idempotent concurrent close. All 12 named tests selected exactly one test and passed under the required memory gates; the full matrix and command evidence are in [`docs/superpowers/runs/2026-11-03-capability-tool-mount-evidence-run.md`](../superpowers/runs/2026-11-03-capability-tool-mount-evidence-run.md).
 
 This closes only the provider-neutral Tool host and the source-backed Memory Resource composition used by this startup path. `ProjectionHost`/`ZahirFacade` remain derived read/projection/notification surfaces; callable Tool authority remains `ToolHandlerRegistry`, and ownership/provider/generation authorities remain separate. This does not establish universal all-writer Memory stop, native unload, RSS reduction, process isolation, external exactly-once, EffectClaim producer integration, Safe Replay, a universal scheduler, Feishu/channel/Terminal/MCP lazy integration, or mounts for the remaining capability kinds.
 
-当前生产启动路径已经对有界 Tool-only 切片完成源码与效果证据闭合。`src/bin/aleph-server/commands/start/mod.rs:242-305` 创建一个 canonical `ToolHandlerRegistry` 与一个共享 `Arc<OwnershipTree>`，将其传入 `ProjectionHost::mount_with_memory`，安装 host，等待 `wait_until_ready`，然后才进入 diagnostics 与后续 consumer。`src/capability/projection_host.rs:562-662` 构造 `ZahirFacade::new_with_memory`，在 initial snapshot 前订阅 registry 与 ownership stream，把 snapshot 交给 default consumer，再启动 source/applier worker。`src/bin/aleph-server/commands/start/builder/startup_resources.rs:25-55` 先停止 Memory，再执行 `ProjectionHost::close_and_await`；`src/capability/projection_host.rs:1248-1298` 持有共享的 cancellation-safe teardown 并 join 两个 worker。
+当前生产启动路径已经对有界 Tool-only 切片完成源码与效果证据闭合。`src/bin/aleph-server/commands/start/mod.rs` 创建一个 canonical `ToolHandlerRegistry` 与一个共享 `Arc<OwnershipTree>`，将其传入 `ProjectionHost::mount_with_runtime_and_events`，安装 host，等待 `wait_until_ready`，然后才进入 diagnostics 与后续 consumer。`src/capability/projection_host.rs` 构造接入 Memory 的 `ZahirFacade`，在 initial snapshot 前订阅 registry、ownership 与 special-capability stream，把 snapshot 交给 default consumer，再启动 source/applier worker。`src/bin/aleph-server/commands/start/builder/startup_resources.rs` 先停止 Memory，再执行 `ProjectionHost::close_and_await`；`src/capability/projection_host.rs` 持有共享的 cancellation-safe teardown 并 join 两个 worker。
 
 证据明确区分静态接线与可观察效果：启动顺序守卫通过；真实测试观察到 default applier 的 initial delivery、close 后 fail-closed read、registry revision 不变的 ownership invalidation、零 fake Tool entry 的 Memory Resource discovery，以及对 custom-principal/foreign-tree authority 的 lease 拒绝。清理测试观察到 early error 下的 Memory/host 排空、原始 startup error 保留、取消安全 teardown、两个 worker join 与并发 close 幂等。12 个 named test 均实际选中一个测试并通过，且每次 Cargo 前均通过要求的 memory gate；完整矩阵与命令证据见上述 run record。
 
@@ -225,9 +225,9 @@ This closes only the bounded Generic Gateway read/lease contract. It does not cl
 
 ### B8.2 current Feishu lifecycle re-gate / B8.2 当前 Feishu 生命周期复闸（2026-10-25）
 
-The current worktree closes the Feishu **provider lifecycle slice** around Gateway authority; it does not mount Feishu into Zahir. `ChannelRegistry` owns channel instances, desired intent, lifecycle serialization, replacement preflight, and webhook mounts (`src/gateway/channel_registry.rs:187-220,295-433,600-688,1460-1504`). Disabled boot records `Stopped` and is excluded from `start_all`; `create_channel` derives intent from `ChannelConfig.enabled`; restart publishes `Running` only after a complete stop/start/mount refresh.
+The current worktree closes the Feishu **provider lifecycle slice** around Gateway authority; it does not mount Feishu into Zahir. `ChannelRegistry` owns channel instances, desired intent, lifecycle serialization, replacement preflight, and webhook mounts (`src/gateway/channel_registry.rs`). Disabled boot records `Stopped` and is excluded from `start_all`; `create_channel` derives intent from `ChannelConfig.enabled`; restart publishes `Running` only after a complete stop/start/mount refresh.
 
-`FeishuChannel` owns an in-process `ProviderHandle` for state/generation admission, while `api_handle` is a derived, instance/generation-fenced cache (`src/gateway/interfaces/feishu/mod.rs:51-183,334-405`; `src/gateway/interfaces/feishu/api_handle.rs:1-104`). Start commits Ready and derived publication together. Stop revokes first, cleans up refresh/WS/webhook tasks, drains admitted API work, and retains serve/join residuals. `FeishuApi::drain` proves admitted-call and inbound enqueue quiescence; Axum accepted-handler ownership is not independently held, so `HandlersUnjoined` remains a real residual (`src/gateway/interfaces/feishu/feishu_inbound/webhook_server.rs:29-120`).
+`FeishuChannel` owns an in-process `ProviderHandle` for state/generation admission, while `api_handle` is a derived, instance/generation-fenced cache (`src/gateway/interfaces/feishu/mod.rs`; `src/gateway/interfaces/feishu/api_handle.rs`). Start commits Ready and derived publication together. Stop revokes first, cleans up refresh/WS/webhook tasks, drains admitted API work, and retains serve/join residuals. `FeishuApi::drain` proves admitted-call and inbound enqueue quiescence; Axum accepted-handler ownership is not independently held, so `HandlersUnjoined` remains a real residual (`src/gateway/interfaces/feishu/feishu_inbound/webhook_server.rs`).
 
 Source-backed path: boot builder → `ChannelRegistry::register_for_boot` → `start_all` → `start_channel_inner` → `FeishuChannel::start` → runtime → `api_handle::publish` → `ProviderHandle::with_ready_commit`; outbound calls pass `admit_call` → `ProviderHandle::acquire_call` → `FeishuApi::admit`; inbound webhook/WS forwarding uses the same admission boundary. Stop/replacement follows registry serialization → revoke/withdraw → cleanup → API drain → mount removal after successful stop.
 
@@ -271,7 +271,7 @@ Recovery deliberately does not infer replay safety from a tool name, source, or 
 
 Phase 2B has shipped an inert-restricted replay *preparation* slice (commits `3490103d4` and `7d3bf4a5a` on `feature/capability-phase2-durable`; spec `docs/superpowers/specs/2026-10-04-capability-phase2b-safe-replay-design.md`, plan `docs/superpowers/plans/2026-10-04-capability-phase2b-safe-replay.md`). The shipped surface is: a `replay_contract_fingerprint` carried cross-restart on `ToolCallIdentity`; a private, non-`Copy` `ReplayPermit` produced by a `ReplayPreparer` whose registry-derived handler/descriptor/closed-state are captured from one immutable `ToolHandlerRegistry::snapshot_state()`; the original `call_id`, `tool_name`, `turn_id`, `effective_input`, and stored `ToolCallIdentity` are not registry-derived inputs; a durable expected-head/serialized claim and unanswered-call outcome precondition (`SessionEventStore::claim_replay_call` / `commit_replay_outcome`); and a `ResumeCoordinator::replay_dangling_calls` ordering — prepare/refuse → fresh head/generation fences → claim → invoke → commit → fresh reduction → VerifyOnly. The seam in `src/session/replay.rs` imports no `ToolHandlerRegistry`, `ScopedToolService`, MCP client, or platform API; no second registry, scheduler, ledger, or wire-protocol event is added; the `ReplayInvocation::NoEffect` path that leaked active cursor rows after a successful claim is removed (`7d3bf4a5a`).
 
-Production replay is **inert and VerifyOnly** today. `ToolCallRequested` is emitted before guardrail/sanitization in `src/harness/agent/act.rs:484-509` (serial) and `:821-833` (parallel), so the post-guardrail effective input is not durably captured; `ResumeCoordinator::replay_dangling_calls` keeps `effective_input = None`, and the gate (Option + mandatory `Refused` on `None`) forces every dangling call onto the existing unknown-outcome verification path. **No handler is invoked and no `ToolResult`/`ToolError` is appended in production.** The semantics are restricted at-least-once — original request count, effect invocation count, and durable receipt count are three independent numbers; this is not exactly-once, and the duplicate-effect tradeoff is the Safe registration owner's obligation. Delegated `repair_and_close_abandoned` (team/cron/heartbeat abandonment) remains VerifyOnly with no replay adapter and no permit capability. The post-guardrail durable `ToolCallEffectiveInput` marker, paired with a `release_replay_claim` store operation, is the explicit deferred work that, when landed, will let `effective_input` carry a non-`None` value and unlock actual handler invocation through this seam.
+In the Phase 2B preparation slice, production replay was **inert and VerifyOnly**. Both serial and parallel paths in `src/harness/agent/act.rs` emit `ToolCallRequested` before guardrail/sanitization; at that point the post-guardrail effective input was not yet durably captured; `ResumeCoordinator::replay_dangling_calls` keeps `effective_input = None`, and the gate (Option + mandatory `Refused` on `None`) forces every dangling call onto the existing unknown-outcome verification path. **No handler is invoked and no `ToolResult`/`ToolError` is appended in production.** The semantics are restricted at-least-once — original request count, effect invocation count, and durable receipt count are three independent numbers; this is not exactly-once, and the duplicate-effect tradeoff is the Safe registration owner's obligation. Delegated `repair_and_close_abandoned` (team/cron/heartbeat abandonment) remains VerifyOnly with no replay adapter and no permit capability. The post-guardrail durable `ToolCallEffectiveInput` marker, paired with a `release_replay_claim` store operation, is the explicit deferred work that, when landed, will let `effective_input` carry a non-`None` value and unlock actual handler invocation through this seam.
 
 The two real `ToolCallRequested` producers in `src/harness/agent/act.rs` receive only a read-only lookup through `HarnessDeps`. The startup path passes the existing MCP `ToolHandlerRegistry` explicitly; fixtures and builtin paths without a registry remain `None` and therefore fail closed. This is wiring, not recovery policy: the harness does not decide replay or execute recovery.
 
@@ -427,8 +427,7 @@ pattern.
 | **harness** | `src/harness/` | Think→Act loop, stop-hooks, context budget, compaction |
 | **agents** | `src/agents/` | Agent runtime, subagent spawning, team coordination |
 | **thinker** | `src/thinker/` | LLM interaction, prompt building, streaming |
-| **dispatcher** | `src/dispatcher/` | Task orchestration, tool filtering |
-| **engine** | `src/engine/` | Tool execution engine |
+| **tool_metadata** | `src/tool_metadata/` | Tool metadata and slash-command registry |
 | **providers** | `src/providers/` | AI provider implementations |
 | **tools** | `src/tools/` | AlephTool trait, tool server |
 | **builtin_tools** | `src/builtin_tools/` | Built-in tool implementations |
@@ -444,33 +443,27 @@ pattern.
 | **a2a** | `src/a2a/` | A2A protocol adapter |
 | **acp** | `src/acp/` | ACP protocol implementation |
 | **approval** | `src/approval/` | Approval system |
-| **arena** | `src/arena/` | Arena functionality |
 | **browser** | `src/browser/` | Browser automation |
 | **capability** | `src/capability/` | Capability system |
 | **cluster** | `src/cluster/` | Single-center node federation — reverse RPC, node registry, `node_invoke`/`node_file`, approval routing ([CLUSTER.md](./CLUSTER.md)) |
-| **components** | `src/components/` | Shared components |
-| **compressor** | `src/compressor/` | Context compression |
-| **core** | `src/core/` | Core types and primitives |
+| **context compaction** | `src/context/compact/` | Context compression |
 | **discovery** | `src/discovery/` | Service discovery |
 | **event** | `src/event/` | Event system |
 | **generation** | `src/generation/` | Media generation |
 | **group_chat** | `src/group_chat/` | Group chat management |
 | **hub** | `src/hub/` | Aleph Hub — extension catalog + install pipeline ([ALEPH_HUB.md](./ALEPH_HUB.md)) |
-| **intent** | `src/intent/` | Intent recognition |
 | **logging** | `src/logging/` | Logging infrastructure |
 | **loop_graph** | `src/loop_graph/` | Loop-governance topology (who watches/audits/anchors whom) — scaffolding only, adjudication stays in LLM turns ([GRAPH_LAYER.md](./GRAPH_LAYER.md)) |
 | **markdown** | `src/markdown/` | Markdown processing |
 | **media** | `src/media/` | Media processing |
 | **metrics** | `src/metrics/` | Metrics collection |
-| **permission** | `src/permission/` | Permission system |
 | **pii** | `src/pii/` | PII detection and handling |
-| **prompt** | `src/prompt/` | Prompt management |
+| **prompt builder** | `src/thinker/prompt_builder/` | Prompt assembly |
 | **resilience** | `src/resilience/` | State management (SQLite) |
 | **search** | `src/search/` | Search providers |
 | **secrets** | `src/secrets/` | Secret management |
 | **security** | `src/security/` | Security utilities |
 | **skill** | `src/skill/` | Skill system |
-| **supervisor** | `src/supervisor/` | Execution supervision |
 | **tasks** | `src/tasks/` | Task management |
 | **teams** | `src/teams/` | Team coordination |
 | **tool_output** | `src/tool_output/` | Tool output handling |
@@ -490,9 +483,8 @@ Agent execution's authoritative session state lives in
 persists each event synchronously to the `session_events` table.
 `AgentHarness` reads and writes history exclusively through
 `SessionService`. Gateway `session.*` RPC methods continue to use the
-legacy `SessionManager`. **There is no dual-write shim.** This paragraph
-used to name `src/session/shim.rs`: that file does not exist, and the
-mirroring it described was removed when `session_events` became the SSOT.
+legacy `SessionManager`. **There is no dual-write shim.** Mirroring was removed
+when `session_events` became the SSOT.
 `MessageProjector` (`src/gateway/session_projector.rs`) materialises
 `messages` from `session_events` asynchronously, and since 2026-09-13 it is
 the table's **only production writer**, pinned to the tree by
@@ -637,7 +629,7 @@ ProtocolRegistry.get(name)
 5. Registry updated atomically
 6. New requests use updated protocol
 
-See `docs/PROTOCOL_ADAPTER_USER_GUIDE.md` for user documentation.
+See `src/providers/protocols/definition.rs` for the YAML schema.
 
 ---
 
@@ -657,6 +649,23 @@ test-helpers = []          # 集成测试工具
 ---
 
 ## Platform Architecture
+
+### Desktop Hosts (dual-track)
+
+The Panel is one codebase (`interfaces/webchat` → `aleph-panel`, Leptos/WASM) served by
+`aleph-server` itself on `http://127.0.0.1:18790`. The desktop host is only the WebView
+around it, and the host is mid-migration:
+
+| Host | Location | State (2026-11) |
+|---|---|---|
+| Legacy Tauri host | `desktop/shell` (`aleph-desktop-shell`) | **Still the released build** — the release workflow and `just shell-build` target it; carries the updater, `aleph://` deeplink, macOS menu and service management |
+| NSH host | `desktop/nsh-shell` (`aleph-nsh-shell`) | **Forward form** — window, tray, global shortcut, notification permission and the typed Panel bridge; no updater, deeplink, macOS menu or service control yet, and no release pipeline or `just` target |
+
+The host↔Panel contract is typed, not ad-hoc: `shared/protocol/src/panel_shell.rs`
+(`ShellRequest` / `ShellReply` / `PanelReply`), implemented host-side in
+`desktop/nsh-shell/src/panel_bridge.rs` and consumed Panel-side in
+`interfaces/webchat/src/app/shell_bridge.rs`. The switch is gated by the Phase 11 plan
+([docs/superpowers/plans/2026-11-21-phase11-nsh-cutover.md](../superpowers/plans/2026-11-21-phase11-nsh-cutover.md)).
 
 ### Desktop Bridge
 
@@ -719,6 +728,8 @@ Gateway owns CDP; Panel/TUI are I/O only; opt-in only for an explicit valid `[ga
 ---
 
 ## Identity Context Flow
+
+The guest invitation flow below is historical; see [SECURITY.md](SECURITY.md) for what was removed.
 
 ### Overview
 
@@ -914,12 +925,12 @@ let result2 = executor.execute(&action2, &identity).await;
 |-----------|----------|----------------|
 | **IdentityContext** | `shared/protocol/src/auth.rs` | Immutable identity snapshot |
 | **SessionIdentityMeta** | `src/gateway/session_manager/` | Persistent identity metadata |
-| **PolicyEngine** | `src/gateway/security/policy_engine.rs` | Stateless permission checker |
-| **InvitationManager** | `src/gateway/security/invitation_manager.rs` | Guest invitation lifecycle |
+| **Legacy PolicyEngine** | Removed | Stateless permission checker |
+| **InvitationManager** | Removed | Guest invitation lifecycle |
 | **SessionManager** | `src/gateway/session_manager/` | Identity construction |
 | **Orchestrator** | `src/orchestrator/` | Identity injection into FlowRequest |
 | **AgentHarness** | `src/harness/` | Identity propagation through Think→Act loop |
-| **Engine** | `src/engine/` | Permission enforcement |
+| **Legacy Engine** | Removed | Permission enforcement in the former flow |
 
 ### Security Properties
 

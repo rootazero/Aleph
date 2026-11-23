@@ -1,5 +1,7 @@
 # Phase 6b — AgentLoop Builder Audit
 
+> **状态：历史文档（point-in-time）** — 本文记录的是 2026-04-20 当时的设计/结论，不代表当前架构。当前状态以代码为准（harness 现居 `src/harness/`）。
+
 **Date**: 2026-04-20
 **Status**: Task 10 artefact (Phase 6b).
 **Parent spec**: [docs/superpowers/specs/2026-04-20-managed-agents-phase-6-cleanup-design.md](../superpowers/specs/2026-04-20-managed-agents-phase-6-cleanup-design.md) §6.1.
@@ -229,7 +231,7 @@ concern: the `Arc<dyn ToolService>` held by the harness can be any
 backing store, including one that re-reads its registry on every
 `list()` call. Extending `ToolService` with an optional
 `refresh()` method — as the plan's checklist suggests — is the right
-shape, but **it is a `tools/` change, not a `harness/` change**, and
+shape, but **it is a `tools/` change, not a `src/harness/` change**, and
 it ripples into every `ToolService` implementation across the
 gateway, sandbox approval, and builtin tool suites.
 

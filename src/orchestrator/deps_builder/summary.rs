@@ -110,7 +110,11 @@ pub(crate) fn effective_summary_model(
             "preset aux_model",
         ),
     };
-    if base.models.first().is_some_and(|m| m.as_str() == model.as_str()) {
+    if base
+        .models
+        .first()
+        .is_some_and(|m| m.as_str() == model.as_str())
+    {
         // Resolved model == primary default: summarization runs on the main
         // model (the byte-identical cheap provider is never built).
         return base.models.first().map(|m| (m.clone(), "primary default"));
@@ -183,8 +187,9 @@ pub fn build_dream_provider(
         .filter(|s| !s.is_empty());
     let dream_model: &str = match explicit {
         Some(model) => model,
-        None => crate::providers::get_preset(primary_provider_key)
-            .and_then(|p| p.default_aux_model)?,
+        None => {
+            crate::providers::get_preset(primary_provider_key).and_then(|p| p.default_aux_model)?
+        }
     };
 
     // No-op when the resolved model is the primary's own default — the rebuilt

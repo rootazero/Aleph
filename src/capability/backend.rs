@@ -21,7 +21,7 @@ use crate::capability::provider::{
 use crate::capability::special as special_backend;
 use crate::sync_primitives::Arc;
 use crate::tools::descriptor::{
-    ReplayPolicy, ToolCapabilityDescriptor, ToolSource, canonicalize_json, canonicalize_services,
+    canonicalize_json, canonicalize_services, ReplayPolicy, ToolCapabilityDescriptor, ToolSource,
 };
 use async_trait::async_trait;
 use serde_json::Value;
@@ -539,10 +539,7 @@ mod tests {
     #[test]
     fn handler_registry_snapshot_cursor_tracks_registration_revision() {
         let registry = LegacyCapabilityHandlerRegistry::new();
-        assert_eq!(
-            Cursor(registry.special.revision()),
-            Cursor(0)
-        );
+        assert_eq!(Cursor(registry.special.revision()), Cursor(0));
 
         registry
             .register(
@@ -550,10 +547,7 @@ mod tests {
                 Arc::new(JsonLegacyCapabilityHandler),
             )
             .unwrap();
-        assert_eq!(
-            Cursor(registry.special.revision()),
-            Cursor(1)
-        );
+        assert_eq!(Cursor(registry.special.revision()), Cursor(1));
 
         registry
             .register(
@@ -561,10 +555,7 @@ mod tests {
                 Arc::new(JsonLegacyCapabilityHandler),
             )
             .unwrap();
-        assert_eq!(
-            Cursor(registry.special.revision()),
-            Cursor(2)
-        );
+        assert_eq!(Cursor(registry.special.revision()), Cursor(2));
     }
 
     #[test]

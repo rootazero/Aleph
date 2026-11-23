@@ -8,7 +8,6 @@
 //! - **Markdown** (passthrough, canonical internal format)
 //! - **`TelegramHtml`**: `<b>`, `<i>`, `<code>`, `<pre><code>`, `<a href="">`
 //! - **`SlackMrkdwn`**: `*bold*`, `_italic_`, `` `code` ``, `<url|text>`
-//! - **`DiscordMarkdown`**: Discord-flavored Markdown (close to standard)
 //! - **`IrcFormatting`**: mIRC control codes (`\x02` bold, `\x1D` italic)
 //! - **`PlainText`**: all formatting stripped
 //!
@@ -35,8 +34,7 @@ mod tests;
 use std::fmt;
 
 use markdown_to_platform::{
-    markdown_to_discord, markdown_to_irc, markdown_to_plain, markdown_to_slack_mrkdwn,
-    markdown_to_telegram_html,
+    markdown_to_irc, markdown_to_plain, markdown_to_slack_mrkdwn, markdown_to_telegram_html,
 };
 use platform_to_markdown::{irc_to_markdown, slack_mrkdwn_to_markdown, telegram_html_to_markdown};
 use splitting::split_message;
@@ -54,8 +52,6 @@ pub enum MarkupFormat {
     TelegramHtml,
     /// Slack mrkdwn format.
     SlackMrkdwn,
-    /// Discord-flavored Markdown.
-    DiscordMarkdown,
     /// IRC mIRC formatting codes.
     IrcFormatting,
     /// Plain text with all formatting stripped.
@@ -68,7 +64,6 @@ impl fmt::Display for MarkupFormat {
             Self::Markdown => write!(f, "markdown"),
             Self::TelegramHtml => write!(f, "telegram_html"),
             Self::SlackMrkdwn => write!(f, "slack_mrkdwn"),
-            Self::DiscordMarkdown => write!(f, "discord_markdown"),
             Self::IrcFormatting => write!(f, "irc_formatting"),
             Self::PlainText => write!(f, "plain_text"),
         }
@@ -92,7 +87,6 @@ impl MessageFormatter {
             MarkupFormat::Markdown => markdown.to_string(),
             MarkupFormat::TelegramHtml => markdown_to_telegram_html(markdown),
             MarkupFormat::SlackMrkdwn => markdown_to_slack_mrkdwn(markdown),
-            MarkupFormat::DiscordMarkdown => markdown_to_discord(markdown),
             MarkupFormat::IrcFormatting => markdown_to_irc(markdown),
             MarkupFormat::PlainText => markdown_to_plain(markdown),
         }
@@ -117,7 +111,7 @@ impl MessageFormatter {
     #[must_use]
     pub fn normalize(platform_text: &str, source: MarkupFormat) -> String {
         match source {
-            MarkupFormat::Markdown | MarkupFormat::DiscordMarkdown => platform_text.to_string(),
+            MarkupFormat::Markdown => platform_text.to_string(),
             MarkupFormat::TelegramHtml => telegram_html_to_markdown(platform_text),
             MarkupFormat::SlackMrkdwn => slack_mrkdwn_to_markdown(platform_text),
             MarkupFormat::IrcFormatting => irc_to_markdown(platform_text),

@@ -526,10 +526,10 @@ pub async fn run_dispatch_and_drain_classified(
         let summary = super::event_drain::build_run_summary(&outcome, None);
         let seq = emitter.next_seq();
         // Run-skeleton event → `warn` on send failure, matching the emit-tier
-        // policy the trait's default `emit_run_complete` applies (decorative
-        // Reasoning/Tool* events stay at `debug`). This second `RunComplete`
-        // producer used to discard the error, so the one path where the
-        // terminal frame is *most* likely to be missed failed invisibly.
+        // policy the trait's default methods apply (decorative events stay at
+        // `debug`). This second `RunComplete` producer used to discard the
+        // error, so the one path where the terminal frame is *most* likely to
+        // be missed failed invisibly.
         if let Err(e) = emitter
             .emit(crate::gateway::event_emitter::StreamEvent::RunComplete {
                 run_id: run_id.to_string(),

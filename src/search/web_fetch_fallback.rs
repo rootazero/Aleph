@@ -225,9 +225,11 @@ impl WebFetchSerpFallback {
             None,
         )
         .await?;
-        let body = read_capped(response, MAX_MIRROR_BODY_BYTES).await.map_err(|e| {
-            AlephError::provider(format!("Failed to read {} body: {}", mirror.name, e))
-        })?;
+        let body = read_capped(response, MAX_MIRROR_BODY_BYTES)
+            .await
+            .map_err(|e| {
+                AlephError::provider(format!("Failed to read {} body: {}", mirror.name, e))
+            })?;
 
         let parsed = match mirror.kind {
             MirrorKind::DdgHtml => parse_ddg_html(&body, options.validated_max_results()),

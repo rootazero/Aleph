@@ -5,8 +5,9 @@ Aleph provides three user-triggerable collaboration modes plus a shared sensing 
 **Runtime topology**: Named agents (Delegate, Team) dispatch through the
 Orchestrator → AgentHarness pipeline introduced in Phase 5/6. The Spawn mode
 (SubagentTool) was migrated to Harness in Phase 7 (2026-04-21). The legacy
-`src/agent_loop/` directory has been deleted. All agent execution now routes
-through Orchestrator → AgentHarness.
+agent-loop directory has been deleted. All agent execution now routes
+through Orchestrator → AgentHarness (`src/harness/agent.rs` and
+`src/harness/agent/`).
 
 ## Current runtime status
 
@@ -55,7 +56,7 @@ sub-agent has its own tool registry (excluding subagent tools to prevent
 recursion), token budget, and timeout. It returns a result and is destroyed.
 
 **Runtime**: Sub-agent spawning routes through Orchestrator → AgentHarness
-(Phase 7, 2026-04-21). The legacy `src/agent_loop/` directory has been deleted.
+(Phase 7, 2026-04-21). The legacy agent-loop directory has been deleted; spawning now uses `src/harness/agent.rs` and `src/harness/agent/`.
 
 **When LLM uses it**: Tasks benefiting from isolated context — parallel searches, code analysis, format conversion, translation.
 
@@ -382,7 +383,7 @@ Layer 1: TaskCoordinator ────────── CoordTask DAG (unified) 
 
 ### Layer 1: TaskCoordinator
 
-The task layer uses the unified `CoordTask` DAG system (from `agents/swarm/tasks/`) with DAG dependencies, priority, and metadata. `TeamTask` was retired in favor of this unified system.
+The task layer uses the unified `CoordTask` DAG system (from `src/agents/swarm/tasks/`) with DAG dependencies, priority, and metadata. `TeamTask` was retired in favor of this unified system.
 
 **Task Artifact System**: Each task can have structured outputs that other agents reference.
 
@@ -680,7 +681,7 @@ with the run-time gate — validation and enforcement cannot disagree.
 
 **Not exhaustive, and not a security boundary.** `get_tool_schema` and
 `subagent` are registered into the loop registry *after* the allowlist filter
-runs (`run_loop/inner.rs` — the "collapsed-but-unsnapshotted" class), so a
+runs (`src/gateway/execution_engine/run_loop/inner.rs` — the "collapsed-but-unsnapshotted" class), so a
 declared list never removes them. Runtime QA confirms it: a member declaring
 `["task_*", "message_send", "search", "web_fetch"]` enumerates exactly those
 plus those two. Since `subagent` spawns a differently-scoped agent, treat
@@ -715,7 +716,7 @@ edits the code it was asked to review, not an attacker.
 by id and skips `tools` entirely (an existing agent keeps its own surface), and
 a `self` leader is the caller's own agent. Both cases are reported:
 `MaterializedTeam.tools_ignored_for` → `TeamFromTemplateOutput.tools_ignored_for`,
-omitted from the output when empty. Guards live in `templates/materialize.rs`
+omitted from the output when empty. Guards live in `src/teams/templates/materialize.rs`
 tests: every built-in role satisfies its contract, only the two reasoning
 templates declare, no reviewer carries an edit tool, nothing globs `team_*`.
 The report does not yet reach every caller: `interfaces/webchat/src/api/teams.rs`
@@ -790,7 +791,7 @@ Modes 1–3 are all **in-process** — every agent runs inside the same
 over HTTP, with Agent Card discovery).
 
 Aleph has always *served* A2A — it exposes its own Agent Card at
-`/.well-known/agent-card.json` and answers `message/send` / `tasks/*` (including
+`/.well-known/agent-card.json` and answers `message/send` / `src/tasks/*` (including
 `tasks/pushNotificationConfig/*` and `agent/getAuthenticatedExtendedCard`) on
 `/a2a`. Registered push-notification webhooks now fire on every task
 status/artifact update (delivered fire-and-forget alongside the SSE stream), so
@@ -843,7 +844,7 @@ routing and `a2a_agents list` see real skill data.
 
 Ported from hermes-agent's `MoAClient` (spec:
 `docs/superpowers/specs/2026-07-05-moa-continuous-advisory-port-design.md`).
-`MoaProvider` (`src/providers/moa/provider.rs`) is a virtual `AiProvider`
+`MoaProvider` (`archive/removed-model-routing-moa/ (removed 2026-10-19)`) is a virtual `AiProvider`
 facade that sits in front of the acting model: each Think iteration it
 flattens the live conversation into a tool-free advisory view
 (`advisory_view.rs`, UTF-8-safe head+tail truncation, always ends on a user
@@ -856,7 +857,7 @@ keeps the `[system][task][tool-history]` prefix byte-stable and KV-cache
 reusable), then calls the aggregator, which IS the acting model. The harness
 sees one ordinary provider (R10); none of this touches `src/harness/`.
 
-- **Config**: `[moa]` (`src/config/types/moa.rs`) — named presets
+- **Config**: `[moa]` (`archive/removed-model-routing-moa/ (removed 2026-10-19)`) — named presets
   (`advisors: Vec<MoaSlot>` + `aggregator: MoaSlot`), `fanout` cadence,
   `advisor_timeout_secs`, `advisor_max_tokens`/temperatures,
   `default_preset`, `save_traces`.
@@ -873,10 +874,10 @@ sees one ordinary provider (R10); none of this touches `src/harness/`.
   A turn whose advisory view is byte-identical to the previous one is the
   harness re-issuing a request, not the task advancing: it always reuses and
   never consumes a cadence slot (`FanoutState.last_seen_signature`).
-- **Activation**: `moa` builtin tool (`src/builtin_tools/moa_manage.rs`,
+- **Activation**: `moa` builtin tool (`archive/removed-model-routing-moa/ (removed 2026-10-19)`,
   operator-tier gated via `method_authz`) — `on`/`off`/`once`/`status`/
   `list`/`set_preset`/`delete_preset`. Per-session state lives in
-  `src/providers/session_moa_handle.rs` (sticky vs one-shot; `take_for_run`
+  `archive/removed-model-routing-moa/ (removed 2026-10-19)` (sticky vs one-shot; `take_for_run`
   consumes a one-shot pref atomically — the single restore point, so
   success, error and cancel paths all leave no state behind). `/moa
   <prompt>` is a one-shot intercept on both the panel and channel dispatch
@@ -935,7 +936,7 @@ added four pieces on top of the port above:
   `list_models`'s `moa_presets` field (`src/builtin_tools/list_models.rs`),
   so Panel/CLI pickers see MoA presets without a new RPC.
 - **Advisor prompt-cache + multimodal**: `mark_cache_breakpoints`
-  (`src/providers/moa/advisory_view.rs`) marks an Anthropic ephemeral
+  (`archive/removed-model-routing-moa/ (removed 2026-10-19)`) marks an Anthropic ephemeral
   `cache_control` on the last text block of each of the last three
   advisory-view messages, so `per_iteration` fanout replays the cached
   prefix instead of re-billing it every tool step (hermes measured 0/1227
@@ -974,15 +975,15 @@ added four pieces on top of the port above:
   advisor slot, keeping team/session usage views honest.
 - **Panel visual config** (Round 4, 2026-07-06; deepened 2026-07-12): a
   visual `[moa]` preset editor at Settings → MoA
-  (`interfaces/webchat/src/platform/wide/views/settings/moa/`) — preset
+  (`archive/removed-model-routing-moa/ (removed 2026-10-19)`) — preset
   cards, a create/edit form whose advisor/aggregator dropdowns are
   constrained to already-configured, credentialed models
   (`options::available_options` over `providers.catalog`, with the synthetic
   `"moa"` pseudo-row filtered out), advanced knobs, and a global
   `save_traces` toggle. Writes go through the gateway RPCs
   `moa.{listPresets,savePreset,deletePreset,setDefault,setSaveTraces}`
-  (`src/gateway/handlers/moa.rs`) backed by the single write-core
-  `MoaPresetStore` (`src/providers/moa/preset_store.rs`) — the same core the
+  (`archive/removed-model-routing-moa/ (removed 2026-10-19)`) backed by the single write-core
+  `MoaPresetStore` (`archive/removed-model-routing-moa/ (removed 2026-10-19)`) — the same core the
   `moa` tool uses, so tool and panel never diverge. Each card shows the
   per-turn model-call count and a "Use in chat" action that arms the preset
   on the chat session's model selector (`ModelOverride{provider:"moa"}`); a
@@ -998,7 +999,7 @@ misbehaves or the conversation gets long. No new config, RPCs or trace
 events.
 
 - **Run-scoped advisor circuit breaker**
-  (`src/providers/moa/advisor_health.rs`). The fan-out had no memory: under
+  (`archive/removed-model-routing-moa/ (removed 2026-10-19)`). The fan-out had no memory: under
   `per_iteration`, a hung or mis-keyed advisor burned the full
   `advisor_timeout_secs` (default 120 s) on **every** tool iteration — up to
   40 minutes of dead wall-clock on a 20-step run, each wait blocking the
@@ -1119,7 +1120,7 @@ coordination-task DAG to completion without leader micro-management.
 ### Tolerant fan-in — a metadata-gated exception to that rule (2026-09-03)
 
 A task stamped `TOLERATE_FAILED_DEPS_METADATA_KEY`
-(`agents/swarm/tasks/acceptance.rs`; written by `workflow::compile::materialize`
+(`src/agents/swarm/tasks/acceptance.rs`; written by `workflow::compile::materialize`
 for a step declaring `tolerate_failed_deps`, and only then — an unstamped row
 is byte-identical) opts out of the **terminal-dead half** only: a
 `failed`/`cancelled` dependency stops blocking it and can never make it
@@ -1152,7 +1153,7 @@ Tests: `tolerant_dependent_of_a_failed_dep_is_ready_on_both_read_paths` (which
 also asserts the strict twin still derives `Unsatisfiable`),
 `tolerant_task_with_a_live_dep_left_is_still_blocked`,
 `get_newly_unblocked_reports_a_tolerant_dependent_when_its_dep_fails`
-(`agents/swarm/tasks/store/tests.rs`). The downstream prompt side is
+(`src/agents/swarm/tasks/store/tests.rs`). The downstream prompt side is
 [WORKFLOW_TEMPLATES.md](WORKFLOW_TEMPLATES.md) *Tolerant fan-in*.
 ### Scheduled work runs on somebody's behalf (cron / heartbeat)
 
@@ -1594,7 +1595,7 @@ dropping the filter reinstates the ghost rows.
 
 ### Argument validation (round-7, 2026-07-25)
 
-The `subagent` tool's arguments are parsed by hand (`subagent_tool/parse.rs`),
+The `subagent` tool's arguments are parsed by hand (`src/agents/subagent_tool/parse.rs`),
 not by serde, so two guards stand in for `#[serde(deny_unknown_fields)]`:
 
 - **Unknown top-level keys are rejected**, with the accepted set in the error. A
@@ -1883,7 +1884,7 @@ The decorator is wrapped in these modules (census:
 - `src/agents/subagent_spawner/mod.rs` — per spawn (label
   `req.agent_def.id`) and the child's cheap compaction provider, both on the
   parent run's accounting sink
-- `src/providers/moa/provider.rs` — one per MoA advisor
+- `archive/removed-model-routing-moa/ (removed 2026-10-19)` — one per MoA advisor
 
 This gives every consumer of the trace stream (gateway, log sink, future
 cost dashboard) the data needed to compute root vs subagent cache-hit

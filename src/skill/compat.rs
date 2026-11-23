@@ -68,9 +68,7 @@ impl From<&SkillManifest> for SkillInfo {
             description: manifest.description().to_string(),
             scope: manifest.scope().clone(),
             version: manifest.version().map(str::to_string),
-            allowed_tools: manifest
-                .allowed_tools()
-                .map(|tools| tools.to_vec()),
+            allowed_tools: manifest.allowed_tools().map(|tools| tools.to_vec()),
             argument_hint: None,
             plugin_id: match manifest.source() {
                 crate::domain::skill::SkillSource::Plugin(id) => Some(id.as_str().to_string()),

@@ -87,9 +87,10 @@ const BATCH_TASK_ARG_KEYS: &[&str] = &["task", "agent_type", "model", "timeout_s
 fn optional_string(value: Option<&Value>, key: &str) -> Result<Option<String>, String> {
     match value {
         None | Some(Value::Null) => Ok(None),
-        Some(v) => v.as_str().map(|s| Some(s.to_string())).ok_or_else(|| {
-            format!("'{key}' must be a string (got {})", value_kind(v))
-        }),
+        Some(v) => v
+            .as_str()
+            .map(|s| Some(s.to_string()))
+            .ok_or_else(|| format!("'{key}' must be a string (got {})", value_kind(v))),
     }
 }
 
@@ -111,9 +112,10 @@ fn optional_u64(value: Option<&Value>, key: &str) -> Result<Option<u64>, String>
 fn optional_bool(value: Option<&Value>, key: &str) -> Result<Option<bool>, String> {
     match value {
         None | Some(Value::Null) => Ok(None),
-        Some(v) => v.as_bool().map(Some).ok_or_else(|| {
-            format!("'{key}' must be a boolean (got {})", value_kind(v))
-        }),
+        Some(v) => v
+            .as_bool()
+            .map(Some)
+            .ok_or_else(|| format!("'{key}' must be a boolean (got {})", value_kind(v))),
     }
 }
 
@@ -330,15 +332,16 @@ pub(super) fn parse_args(input: &Value) -> Result<SubagentAction, String> {
 
     // Run action — top-level `task` is required UNLESS batch_tasks supplies
     // the actual sub-task descriptions.
-    let task = match task {
-        Some(t) if !t.trim().is_empty() => t,
-        _ if has_batch => String::new(),
-        Some(_) => return Err("task must not be empty".to_string()),
-        None => return Err(
-            "missing required field: task (or provide request_id to check background status)"
-                .to_string(),
-        ),
-    };
+    let task =
+        match task {
+            Some(t) if !t.trim().is_empty() => t,
+            _ if has_batch => String::new(),
+            Some(_) => return Err("task must not be empty".to_string()),
+            None => return Err(
+                "missing required field: task (or provide request_id to check background status)"
+                    .to_string(),
+            ),
+        };
 
     // Optional scalars are read through the strict helpers above: a
     // wrong-typed value is an error, not a default. Defaulting it would run

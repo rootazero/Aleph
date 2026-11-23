@@ -743,7 +743,7 @@ mod tests {
         // `fn` header before it to the next one. Bounded by the file's own
         // syntax rather than by a line count, which drifts onto a
         // neighbouring declaration the first time something above it grows.
-        fn enclosing_body<'a>(src: &'a str, at: usize) -> &'a str {
+        fn enclosing_body(src: &str, at: usize) -> &str {
             let start = ["\npub async fn ", "\npub fn ", "\nasync fn ", "\nfn "]
                 .iter()
                 .filter_map(|kw| src[..at].rfind(kw))

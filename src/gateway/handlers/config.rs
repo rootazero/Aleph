@@ -23,7 +23,9 @@ mod terminal_tests;
 /// duplicated the fact and broke loading of the canonical array-of-tables
 /// shape, so the count now comes from the app config.
 fn app_bindings_count() -> usize {
-    Config::load().map(|config| config.bindings.len()).unwrap_or(0)
+    Config::load()
+        .map(|config| config.bindings.len())
+        .unwrap_or(0)
 }
 
 /// Handle config.reload RPC request

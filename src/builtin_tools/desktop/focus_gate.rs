@@ -159,9 +159,7 @@ pub(super) async fn check_secure_only(
             return None;
         }
     };
-    let Some(el) = focused.as_ref() else {
-        return None;
-    };
+    let el = focused.as_ref()?;
     if !is_secure(el) {
         return None;
     }

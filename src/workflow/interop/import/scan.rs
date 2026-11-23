@@ -95,13 +95,17 @@ pub(super) fn scan_events(src: &str, consts: &ConstTable) -> Vec<ScanEvent> {
     let mut paren_depth: i32 = 0;
     let mut parallel_watch: Vec<i32> = Vec::new();
     while i < n {
-        let Some(&c) = chars.get(i) else { break; };
+        let Some(&c) = chars.get(i) else {
+            break;
+        };
         // Skip string-literal bodies so their contents are never tokenised
         // (parens inside a prompt must not perturb the depth count).
         if c == '\'' || c == '"' || c == '`' {
             i += 1;
             while i < n {
-                let Some(&d) = chars.get(i) else { break; };
+                let Some(&d) = chars.get(i) else {
+                    break;
+                };
                 if d == '\\' {
                     i += 2; // skip the escaped char so \" / \' does not close early
                     continue;
@@ -116,10 +120,18 @@ pub(super) fn scan_events(src: &str, consts: &ConstTable) -> Vec<ScanEvent> {
         // Identifier? Consume it, then check for a following `(`.
         if c.is_alphabetic() || c == '_' {
             let start = i;
-            while i < n && chars.get(i).copied().is_some_and(|c| c.is_alphanumeric() || c == '_') {
+            while i < n
+                && chars
+                    .get(i)
+                    .copied()
+                    .is_some_and(|c| c.is_alphanumeric() || c == '_')
+            {
                 i += 1;
             }
-            let ident: String = chars.get(start..i).map(|s| s.iter().collect()).unwrap_or_default();
+            let ident: String = chars
+                .get(start..i)
+                .map(|s| s.iter().collect())
+                .unwrap_or_default();
             if ident == "phase" || ident == "agent" || ident == "parallel" || ident == "clarify" {
                 let mut j = i;
                 while j < n && chars.get(j).copied().is_some_and(char::is_whitespace) {

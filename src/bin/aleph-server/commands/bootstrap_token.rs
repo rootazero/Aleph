@@ -20,13 +20,9 @@ use std::sync::Arc;
 /// required for token retrieval, but `SharedTokenManager::new` opens it).
 ///
 /// Returns `None` when the DB has no plaintext token (first-run state).
-fn read_token_from_db(
-    db_path: &Path,
-    data_dir: &Path,
-) -> Result<Option<String>, Box<dyn Error>> {
+fn read_token_from_db(db_path: &Path, data_dir: &Path) -> Result<Option<String>, Box<dyn Error>> {
     let store = Arc::new(
-        SecurityStore::open(db_path)
-            .map_err(|e| format!("Failed to open security store: {e}"))?,
+        SecurityStore::open(db_path).map_err(|e| format!("Failed to open security store: {e}"))?,
     );
     let token = store
         .get_shared_token_plaintext()

@@ -78,7 +78,7 @@ mod markdown;
 mod page;
 mod session_html;
 
-pub use collect::{collect_artifacts, collect_artifacts_with_drops, DroppedArtifact, DropReason};
+pub use collect::{collect_artifacts, collect_artifacts_with_drops, DropReason, DroppedArtifact};
 pub use document::render_document_html;
 pub use session_html::render_session_html;
 

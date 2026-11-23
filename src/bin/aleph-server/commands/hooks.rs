@@ -270,9 +270,7 @@ fn print_output(output: &ReviewOutput) {
 
 /// Read at most the production cap, then drain the rest so a verbose child
 /// cannot block on a full pipe. The boolean reports discarded or unread data.
-async fn read_review_capped<R: tokio::io::AsyncRead + Unpin>(
-    mut reader: R,
-) -> (Vec<u8>, bool) {
+async fn read_review_capped<R: tokio::io::AsyncRead + Unpin>(mut reader: R) -> (Vec<u8>, bool) {
     use tokio::io::AsyncReadExt;
 
     let mut buf = Vec::new();
@@ -357,11 +355,9 @@ fn run_bounded(
         };
         match tokio::time::timeout(timeout, run).await {
             Ok(result) => result,
-            Err(_) => Err(format!(
-                "hook review command timed out after {}s",
-                timeout.as_secs()
-            )
-            .into()),
+            Err(_) => {
+                Err(format!("hook review command timed out after {}s", timeout.as_secs()).into())
+            }
         }
     })
 }

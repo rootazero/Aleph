@@ -7,31 +7,32 @@ use std::sync::OnceLock;
 static SYSTEM_EMAIL_PATTERNS: OnceLock<Vec<Regex>> = OnceLock::new();
 
 fn system_email_patterns() -> &'static [Regex] {
-    SYSTEM_EMAIL_PATTERNS.get_or_init(|| {
-        vec![
-            Regex::new(r"(?i)^noreply@").expect("valid regex literal"),
-            Regex::new(r"(?i)^no-reply@").expect("valid regex literal"),
-            Regex::new(r"(?i)^donotreply@").expect("valid regex literal"),
-            // The three reserved example domains (RFC 6761 §6).
-            //
-            // This used to be `@(example|test|demo|sample|mock|localhost)\b`,
-            // whose `\b` matches after the FIRST LABEL of any domain — so
-            // `alice@sample.com`, `alice@demo.com` and `alice@mock.com`
-            // were exempt although they are ordinary registered domains.
-            // An allowlisted match is not even counted as a warning, so the
-            // operator got no signal at all that the address was let through.
-            // Only the names RFC 2606/6761/6762 actually reserve are exempt.
-            Regex::new(r"(?i)@(example\.(com|net|org))$").expect("valid regex literal"),
-            // Reserved TLDs: RFC 2606 reserves `.test`, `.example`,
-            // `.invalid` and `.localhost`; RFC 6762 reserves `.local`.
-            // `.internal` was removed — it is not an IANA special-use TLD,
-            // so `alice@corp.internal` is an ordinary address and must be
-            // filtered like any other.
-            Regex::new(r"(?i)\.(test|example|invalid|localhost|local)$")
-                .expect("valid regex literal"),
-        ]
-    })
-    .as_slice()
+    SYSTEM_EMAIL_PATTERNS
+        .get_or_init(|| {
+            vec![
+                Regex::new(r"(?i)^noreply@").expect("valid regex literal"),
+                Regex::new(r"(?i)^no-reply@").expect("valid regex literal"),
+                Regex::new(r"(?i)^donotreply@").expect("valid regex literal"),
+                // The three reserved example domains (RFC 6761 §6).
+                //
+                // This used to be `@(example|test|demo|sample|mock|localhost)\b`,
+                // whose `\b` matches after the FIRST LABEL of any domain — so
+                // `alice@sample.com`, `alice@demo.com` and `alice@mock.com`
+                // were exempt although they are ordinary registered domains.
+                // An allowlisted match is not even counted as a warning, so the
+                // operator got no signal at all that the address was let through.
+                // Only the names RFC 2606/6761/6762 actually reserve are exempt.
+                Regex::new(r"(?i)@(example\.(com|net|org))$").expect("valid regex literal"),
+                // Reserved TLDs: RFC 2606 reserves `.test`, `.example`,
+                // `.invalid` and `.localhost`; RFC 6762 reserves `.local`.
+                // `.internal` was removed — it is not an IANA special-use TLD,
+                // so `alice@corp.internal` is an ordinary address and must be
+                // filtered like any other.
+                Regex::new(r"(?i)\.(test|example|invalid|localhost|local)$")
+                    .expect("valid regex literal"),
+            ]
+        })
+        .as_slice()
 }
 
 /// Known test phone numbers, stored once and looked up by `&str` to avoid

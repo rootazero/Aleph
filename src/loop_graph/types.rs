@@ -10,7 +10,9 @@ use serde::{Deserialize, Serialize};
 /// What a graph node stands for. Loop kinds are *bindings* to existing
 /// entities (goal/cron/heartbeat/daemon/team/workflow) — never copies of
 /// their state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum NodeKind {
@@ -117,7 +119,9 @@ impl std::fmt::Display for NodeKind {
 /// deterministic conflict detector is on the NOT-build list (GRAPH_LAYER.md
 /// §4.3). If you came here hunting for `Arbitrates`'s missing consumer: there
 /// isn't one, and building it would violate R7.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum EdgeKind {
@@ -180,7 +184,9 @@ impl std::fmt::Display for EdgeKind {
 }
 
 /// First-class provenance: who put this node/edge in the graph.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum Origin {

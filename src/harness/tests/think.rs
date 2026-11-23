@@ -532,7 +532,10 @@ async fn callback_fires_on_delta_and_tool_call() {
     let session = MockSession::new(vec![turn_started_event(), user_message_event("do it")]);
     let deps = HarnessDeps {
         tools: Arc::new(OkTool),
-        ..default_deps(session.clone(), FixedProvider::with_tool_call("calling…", "echo"))
+        ..default_deps(
+            session.clone(),
+            FixedProvider::with_tool_call("calling…", "echo"),
+        )
     };
     let harness = AgentHarness::new(deps);
     let mut cb = CapturingCallback::default();
@@ -626,7 +629,10 @@ async fn think_tool_use_after_act_returns_continue() {
     let session = MockSession::new(vec![turn_started_event(), user_message_event("do it")]);
     let deps = HarnessDeps {
         tools: Arc::new(OkOnceTool),
-        ..default_deps(session.clone(), FixedProvider::with_tool_call("calling…", "echo"))
+        ..default_deps(
+            session.clone(),
+            FixedProvider::with_tool_call("calling…", "echo"),
+        )
     };
     let harness = AgentHarness::new(deps);
 
