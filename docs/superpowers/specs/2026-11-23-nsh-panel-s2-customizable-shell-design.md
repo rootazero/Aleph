@@ -32,7 +32,7 @@ src/gateway/server/connection/         one shared v1 method set; TLS router serv
 
 `interfaces/webchat/src/panel/{registry,projection,discovery,source}.rs` 只依赖 `aleph_protocol`（已核实），是 Leptos 与 TSX 共同需要的读侧索引与投影。它们搬到 `shared/ui_logic` 新的 `panel` feature 下，webchat 改为引用新路径，**旧文件删除，不留转发 shim**。`aleph-panel-ui` 以 `#[class]` / `#[module]` 把同一组类型暴露给 TSX，因此 Desktop（原生）与 Web（wasm）运行的是同一份 Rust 逻辑。
 
-- **代价:** `shared-ui-logic` 在 `panel` feature 下新增 `aleph-protocol` 依赖（该 crate 已用于 wasm 的 webchat）；webchat 有一轮 import 改动；TS↔Rust 绑定类型由 NSH 生成，绑定面需保持小。
+- **代价:** `shared-ui-logic` 已依赖 `aleph-protocol`，新增的只是 `panel` feature；webchat 有一轮 import 改动；TS↔Rust 绑定类型由 NSH 生成，绑定面需保持小。
 - **不采用:** 在 TS 中重写 `TabRegistry`/投影——那会产生同一事实的两份表述（判据 1、10）。
 - `sdk.rs`、`loader.rs`、`shell.rs`、`capability_surface.rs` 依赖 Leptos，不整体搬迁。计划阶段逐项盘点其中与运行时无关的代际/释放状态机（`sdk.rs` 的 `disposed`、`epoch`、`asset_is_current`）；只有两个渲染器都会调用的部分才抽到 `ui_logic::panel`。
 
