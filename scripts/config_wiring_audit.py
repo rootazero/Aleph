@@ -45,6 +45,12 @@ NOT_A_SECTION = {
     "ModePreset",            # id-only mirror of `SessionMode` exposed to UI /
                              # CLI surfaces (same role as `TierPreset`); the live
                              # consumer is `SessionMode` itself.
+    "TimeWindowConfig",      # sub-element of the LIVE capability_constraints
+                             # section; consumed by value inside that section's
+                             # own module (`if let Some(time) = rule.time` →
+                             # `Constraint::time_window(..)`), which the
+                             # type-name grep outside src/config/ cannot see.
+                             # Triaged 2026-11-23.
 }
 
 # Policy sections declared but never consumed core-side.
