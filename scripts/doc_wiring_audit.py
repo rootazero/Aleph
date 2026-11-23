@@ -25,10 +25,15 @@ Kinds of check:
           crate, the recipe or the port that the code actually has.
 * CUT   - a severed wire must stay severed: the pre-NSH single-track claims
           about the desktop host must not come back.
+
+PATHS and SYMBOLS are ratchets: the misses that already exist are recorded in
+scripts/doc_wiring_audit_baseline.json, and only a new miss fails. Re-record
+the baseline with --update-baseline after a sweep repairs entries.
 """
 import difflib
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -39,6 +44,9 @@ ADVISORY = []
 # file is a snapshot of this map: it shrinks when a sweep repairs a path and
 # grows when a document starts naming a path that never existed.
 STALE_PATHS = {}
+# Every backticked code symbol that occurs nowhere in the tracked source, per
+# document. Recorded into the same baseline file under "SYMBOLS".
+STALE_SYMBOLS = {}
 
 ENTRY_DOCS = [
     "AGENTS.md",
@@ -92,6 +100,15 @@ JUST_RE = re.compile(r"\bjust\s+([a-zA-Z0-9_-]+)")
 CRATE_RE = re.compile(r"^aleph-[a-z0-9]+(?:-[a-z0-9]+)*$")
 LOCAL_URL_RE = re.compile(r"(?:127\.0\.0\.1|localhost):(\d+)")
 DATED_DOC_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-")
+# A backticked Rust/TS path such as `Foo::bar`, `run()` or `snake_case_name`.
+SYMBOL_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*)(?:\(\))?$")
+CAMEL_RE = re.compile(r"^[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]+)+$")
+IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+# Source files whose identifiers count as "the code has this name".
+SOURCE_RE = re.compile(r"(\.(rs|ts|tsx|js|mjs|cjs|py|swift|sh|toml|json|yml|yaml)|justfile|/SKILL\.md)$")
+# A heading that marks its section as history: symbols under it are allowed to
+# be gone from the code.
+HISTORICAL_HEADING_RE = re.compile(r"Historical|Superseded|历史记录")
 
 
 def bad(check, detail):
@@ -293,6 +310,69 @@ def check_paths(rel, text, backlog):
         bad("PATHS", f"{rel} names a path that does not exist: {token}")
 
 
+def known_symbols():
+    """Every identifier that occurs in a tracked source file, submodules included."""
+    listed = subprocess.run(
+        ["git", "-C", str(ROOT), "ls-files", "--recurse-submodules"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.splitlines()
+    names = set()
+    for rel in listed:
+        if not SOURCE_RE.search(rel):
+            continue
+        path = ROOT / rel
+        if not path.is_file():
+            continue
+        names.update(IDENT_RE.findall(path.read_text(encoding="utf-8", errors="ignore")))
+    return names
+
+
+def symbol_candidates(text):
+    """Backticked tokens shaped like code symbols, outside historical sections.
+
+    Plain words stay out: a token counts only when it has a `::` path, a call
+    `()`, an underscore in a lower-case name, or at least two CamelCase humps.
+    """
+    historical_level = None
+    for line in text.splitlines():
+        heading = re.match(r"^(#+)\s", line)
+        if heading:
+            level = len(heading.group(1))
+            if historical_level is not None and level <= historical_level:
+                historical_level = None
+            if historical_level is None and HISTORICAL_HEADING_RE.search(line):
+                historical_level = level
+            continue
+        if historical_level is not None:
+            continue
+        for token in CODE_RE.findall(line):
+            token = token.strip()
+            match = SYMBOL_RE.match(token)
+            if not match:
+                continue
+            segments = match.group(1).split("::")
+            last = segments[-1]
+            snake = "_" in last and last == last.lower() and len(last) > 4
+            if "::" in token or token.endswith("()") or snake or CAMEL_RE.match(last):
+                yield token, segments
+
+
+def check_symbols(rel, text, backlog, symbols):
+    """A code symbol a document names must exist, unless it is on the recorded backlog."""
+    for token, segments in symbol_candidates(text):
+        missing = [s for s in segments if s not in symbols and s not in ("crate", "self", "super", "std")]
+        if not missing:
+            continue
+        STALE_SYMBOLS.setdefault(rel, [])
+        if token not in STALE_SYMBOLS[rel]:
+            STALE_SYMBOLS[rel].append(token)
+        if token in backlog.get(rel, []):
+            continue
+        bad("SYMBOLS", f"{rel} names a code symbol that does not exist: {token}")
+
+
 def check_crates(rel, text, crates):
     """A document that calls a name a crate must name a real crate."""
     for span in CODE_RE.finditer(text):
@@ -438,16 +518,16 @@ def check_reachability(docs):
 
 
 def load_backlog():
-    """The recorded list of paths that are already known to be stale.
+    """The recorded paths and symbols that are already known to be stale.
 
     A ratchet, not a silence: a path that is already listed here is reported as
     known backlog, a path that appears for the first time fails the guard.
     """
     path = ROOT / "scripts/doc_wiring_audit_baseline.json"
     if not path.is_file():
-        return {}
+        return {}, {}
     data = json.loads(path.read_text(encoding="utf-8"))
-    return data.get("PATHS", {})
+    return data.get("PATHS", {}), data.get("SYMBOLS", {})
 
 
 def main():
@@ -460,11 +540,13 @@ def main():
     crates = known_crates()
     targets = known_just_targets()
     daemon_port = code_daemon_port()
-    backlog = load_backlog()
+    backlog, symbol_backlog = load_backlog()
+    symbols = known_symbols()
 
     for rel, text in docs:
         check_links(rel, text)
         check_paths(rel, text, backlog)
+        check_symbols(rel, text, symbol_backlog, symbols)
         check_unknown_roots(rel, text)
         check_crates(rel, text, crates)
         check_just(rel, text, targets)
@@ -486,13 +568,17 @@ def main():
         "advisory": ADVISORY,
     }
     known_backlog = sum(len(v) for v in backlog.values())
+    known_symbols_backlog = sum(len(v) for v in symbol_backlog.values())
     if "--update-baseline" in sys.argv:
         # Re-record the ratchet: a path that was repaired leaves the backlog,
         # a path that is still stale stays on it.
         payload = {
             "PATHS": {
                 rel: sorted(set(tokens)) for rel, tokens in sorted(STALE_PATHS.items())
-            }
+            },
+            "SYMBOLS": {
+                rel: sorted(set(tokens)) for rel, tokens in sorted(STALE_SYMBOLS.items())
+            },
         }
         target = ROOT / "scripts/doc_wiring_audit_baseline.json"
         target.write_text(
@@ -500,9 +586,11 @@ def main():
             encoding="utf-8",
         )
         total = sum(len(v) for v in payload["PATHS"].values())
+        total_symbols = sum(len(v) for v in payload["SYMBOLS"].values())
         print(
             f"doc wiring audit: baseline re-recorded, {total} stale path(s) "
-            f"across {len(payload['PATHS'])} document(s)"
+            f"across {len(payload['PATHS'])} document(s), {total_symbols} stale "
+            f"symbol(s) across {len(payload['SYMBOLS'])} document(s)"
         )
         return 1 if BAD else 0
     if "--json" in sys.argv:
@@ -514,7 +602,8 @@ def main():
             print(f"  advisory {line}")
         print(
             f"doc wiring audit: {len(BAD)} failure(s), {len(ADVISORY)} advisory, "
-            f"{known_backlog} known stale path(s) on the backlog "
+            f"{known_backlog} known stale path(s) and {known_symbols_backlog} "
+            f"known stale symbol(s) on the backlog "
             f"({len(docs)} canonical documents)"
         )
     return 1 if BAD else 0
