@@ -1,0 +1,16 @@
+[package]
+name = "aleph-s2-spike-host"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Throwaway S2 runtime spike: a Rust-root NSH host (like desktop/nsh-shell)
+# that embeds an AppView running the spike's TSX bundle as a native component.
+[workspace]
+
+[dependencies]
+nsh-core = "=0.6.0"
+nsh-base = "=0.6.0"
+nsh-platform-macos = "=0.6.0"
+serde_json = "1"
+spike = { package = "nsh-app-aleph-s2-spike", path = "../app" }
