@@ -1,6 +1,6 @@
 # S2 可定制壳设计 / S2 customizable shell design
 
-**Status:** Draft, awaiting approval. Parent design: [NSH Panel 增量重构设计](2026-11-22-nsh-panel-modular-refactor-design.md) §4, §6, §7 (S2 row). Roadmap: [migration roadmap](../plans/2026-11-22-nsh-panel-migration-roadmap.md) "S2–S3". Runtime evidence: [S2 runtime spike receipt](../runs/2026-11-23-nsh-panel-s2-runtime-spike.md) (`ec2d264ac`).
+**Status:** Approved 2026-11-23 (D1–D3 resolved as recommended, §5). Parent design: [NSH Panel 增量重构设计](2026-11-22-nsh-panel-modular-refactor-design.md) §4, §6, §7 (S2 row). Roadmap: [migration roadmap](../plans/2026-11-22-nsh-panel-migration-roadmap.md) "S2–S3". Runtime evidence: [S2 runtime spike receipt](../runs/2026-11-23-nsh-panel-s2-runtime-spike.md) (`ec2d264ac`).
 
 ## 1. 目标与边界 / Goal and boundaries
 
@@ -71,7 +71,7 @@ TLS 路由（与 `/v1/session`、`/v1/ws` 同源）新增 `/v1/panel/`，用已�
 
 `ui_logic::panel::layout::PanelLayout { version: 1, order, hidden, active }` 只含 `PanelTabKey` 与纯数据。`restore(raw, &TabRegistry)`：版本未知或解析失败时恢复默认并给出修复说明；快照中已不存在的键保留为 `unavailable` 占位，不执行；新出现的键追加到末尾。存储走 NSH `Storage`（Desktop：设备上的 app 数据；Web：该 app 前缀下的 `localStorage`），键为 `aleph.panel.layout.v1:<endpoint>:<subject>`。损坏只重置表现，不碰会话或插件。
 
-`subject` 的来源是待决项（§5 D1）：当前 `HelloResult` 不含主体信息（`shared/protocol/src/system_hello.rs`）。
+`subject` 来自 `HelloResult` 新增的可选不透明字段（§5 D1）；当前 `HelloResult` 不含主体信息（`shared/protocol/src/system_hello.rs`）。
 
 ### 2.7 模块生命周期与 SDK / Module lifecycle and SDK
 
@@ -105,8 +105,8 @@ TLS 路由（与 `/v1/session`、`/v1/ws` 同源）新增 `/v1/panel/`，用已�
 - `qa/nsh_s2_spike/`：S2 真机 QA 取代其证据后删除，回执改为引用提交哈希。
 - Leptos 壳与页面不在 S2 删除：仍是默认渲染器，按 S5/S6 台账退场。
 
-## 5. 待决项 / Open decisions
+## 5. 已定决策 / Resolved decisions (2026-11-23)
 
-- **D1 布局主体键。** (a) 推荐：`HelloResult` 新增可选的不透明 `subject`，由 Gateway 从已绑定主体派生（服务端密钥 HMAC，不暴露用户 ID），旧客户端忽略；(b) 只按 endpoint 分键，并记录同一浏览器多用户共享布局的限制。
-- **D2 Web 包提供方式。** (a) 推荐：配置目录 + `ServeDir`，默认不挂载；(b) `rust_embed` 嵌入 `aleph-server`（体积约 +7.5 MB）。
-- **D3 浏览器配对表单。** (a) 推荐：S2 内提供最小表单（无它真实用户无法进入 Web 壳）；(b) S2 只经 QA fixture 交换 Cookie，表单留到 S3。
+- **D1 布局主体键：** `HelloResult` 新增可选的不透明 `subject`，由 Gateway 从已绑定主体派生（服务端密钥 HMAC，不暴露用户 ID），旧客户端忽略。
+- **D2 Web 包提供方式：** 配置目录 + `ServeDir`，默认不挂载；不嵌入 `aleph-server`。
+- **D3 浏览器配对表单：** S2 内提供最小配对表单。
