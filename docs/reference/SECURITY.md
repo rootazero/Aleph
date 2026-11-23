@@ -93,7 +93,7 @@ English: Probe each identity column before ALTER. A partially completed migratio
   via `SharedTokenManager::validate` — stamps `ConnectionState.caller_role`
   (`operator` / `guest`), and echoes `role` / `authorized` / `needs_token` so
   the Panel renders the wall or unlocks the full app.
-- **Channel tool gate** (`tools/scoped/dispatch.rs` +
+- **Channel tool gate** (`src/tools/scoped/dispatch.rs` +
   `method_authz::tool_requires_operator`): governs **channels only**. The
   inbound router stamps each channel run's `caller_role` from its
   `ChannelPermissionLevel` (default `Chat` ⇒ `guest`), and the tool-dispatch
@@ -126,9 +126,9 @@ English: Probe each identity column before ALTER. A partially completed migratio
 The role-based guest / invitation permission *engine* was deleted in the
 LAN-trust revert:
 
-- **`PolicyEngine`** (`src/gateway/security/policy_engine.rs`) — the
+- **Legacy `PolicyEngine`** — the
   per-tool `Owner` / `Guest` / `Anonymous` permission checker. Gone.
-- **`InvitationManager`** (`src/gateway/security/invitation_manager.rs`)
+- **`InvitationManager`**
   and the `aleph guests invite / list / revoke` CLI — guest invitation
   lifecycle. Gone.
 
@@ -360,11 +360,11 @@ discipline the channel clamp keeps by hand (`clamp_tier_for_channel`,
 only tighten: a conversation already at `Plan` is byte-identical, and no tier, no
 explicit `[policies.tool_permissions]` entry and no request-carried pick can
 raise it, because `Plan`'s refusal is rung 0 rather than a default. It rides to
-the tool layer on `TurnContext::side_question` (`tools/turn_context.rs:85`).
+the tool layer on `TurnContext::side_question` (`src/tools/turn_context.rs`).
 
 **Both `PLAN_REACHABLE_TOOLS` carve-outs are revoked** — a side question is
 strictly narrower than planning — at
-`ScopedToolService::permission_for`'s rung −1 (`tools/scoped/builder.rs:250`),
+`ScopedToolService::permission_for`'s rung −1 (`src/tools/scoped/builder.rs`),
 above the tier verdict, because neither is removable by configuration nor
 resolvable by approving a plan, which are the two repairs everything beneath it
 points at. The reasons differ and both are load-bearing:
@@ -409,7 +409,7 @@ Two further consequences:
   `a_side_question_admits_the_read_arm_of_a_multiplexer_and_refuses_the_rest`,
   `the_side_question_refusal_promises_reads_that_really_run`).
   `GateRule::SideQuestion` is checked **ahead of** `PlanMode` and `PolicyDeny`
-  (`tools/scoped/gate_chain.rs:433`), because both of those name a repair that
+  (`src/tools/scoped/gate_chain.rs`), because both of those name a repair that
   cannot work here (approve the plan; edit the policy). Its sentence tells the
   model the side question "can read and search" — so the per-call read
   re-admission in `dispatch.rs:238` is keyed on **`PlanMode | SideQuestion`**,
@@ -426,7 +426,7 @@ Two further consequences:
 `ToolFacts { name, idempotent, requires_approval }` has exactly one constructor,
 `ToolFacts::for_tool(name, Option<DeclaredFacts>)`
 (`config/types/policies/exec_tier.rs`, round 11 D8), and every face calls it: the
-scoped builder (`tools/scoped/builder.rs::tool_facts`) passes
+scoped builder (`src/tools/scoped/builder.rs::tool_facts`) passes
 `Some(DeclaredFacts { idempotent, requires_confirmation })` from the registry,
 and the slash fast path (`execution_engine/slash_command.rs`), which has no
 registry at hand, passes `None`. The builtin allowlists answer for every builtin
@@ -441,8 +441,8 @@ fails `NotFound`. That only ever adds a prompt, never removes one. The facts
 themselves come from the tool's own `ToolDefinition`:
 
 - `idempotent` ← `LoopTool::is_idempotent()` — the builtin pure-read allowlist
-  (`tools/retry.rs::is_idempotent_builtin_name`, which delegates to the single
-  `READ_ONLY_TOOLS` list in `tools/adapters/registry_adapter.rs` — read-only ⇒
+  (`src/tools/retry.rs::is_idempotent_builtin_name`, which delegates to the single
+  `READ_ONLY_TOOLS` list in `src/tools/adapters/registry_adapter.rs` — read-only ⇒
   idempotent, one source for the concurrency claim, auto-retry, and this tier
   rule) or an MCP server's
   `readOnlyHint` / `idempotentHint` (`mcp/protocol.rs::is_idempotent`).
@@ -1189,7 +1189,7 @@ Gateway owns CDP; Panel/TUI are I/O only; opt-in only for an explicit valid `[ga
 
 ## Command allowlist
 
-There is **no** `src/exec/allowlist.rs` and no `exec.allowlist` / `exec.blocklist`
+There is **no** standalone exec allowlist module and no `exec.allowlist` / `exec.blocklist`
 config table — an older revision of this doc invented one. There is a **grant
 registry** (`~/.aleph/approval-grants.json`, see *Standing grants* above), and it
 is deliberately not the same thing: it holds per-CALL exceptions a human created
@@ -1210,7 +1210,7 @@ described:
 
 The only command-shape allowlist in the tree is `READ_ONLY_TOOLS`
 (`src/tools/adapters/registry_adapter.rs`, consumed via
-`tools/retry.rs::is_idempotent_builtin_name`), the pure-read builtins the tier
+`src/tools/retry.rs::is_idempotent_builtin_name`), the pure-read builtins the tier
 treats as safe.
 
 ---
@@ -1334,7 +1334,7 @@ turn with a registered channel.
 
 ## Permission System
 
-There is no `src/permission/` module and there never was one. Limiting *what an
+There is no standalone permission module. Limiting *what an
 agent may do* is exactly three things, and they compose in this order:
 
 1. **`[policies.tool_permissions]`** — per-tool `allow` / `ask` / `deny`, exact
@@ -1364,7 +1364,7 @@ deterministic HITL gate (R7/R9).
 `every_file_that_parks_on_an_approval_also_writes_both_releases`
 (`src/tools/scoped/tests.rs`) is the list of those gates — do not count them
 here. The two trails are not written the same way at every gate: the tool-confirm
-gate's `tools/scoped/dispatch.rs::record_approval_decision` writes the signed
+gate's `src/tools/scoped/dispatch.rs::record_approval_decision` writes the signed
 identity ledger row (with its `[gate: <rule_id>]` suffix, "Signed agent ledger" below) and
 the session copy from ONE function; the sandbox capability-elevation gate
 (`sandbox/workspace/mod.rs`) writes its session copy itself, after the answer,
@@ -1375,8 +1375,7 @@ because that card is raised outside the `GateRule` chain. Query the session
 copy through the session service, alongside every other event of the run that
 produced it.
 
-**Deleted (2026-07-14), do not go looking for it**: `src/exec/approval/storage.rs`
-+ `audit.rs` and the `aleph-server audit` CLI command. They queried three SQLite
+**Deleted (2026-07-14), do not go looking for it**: the old approval `storage` and `audit` modules and the `aleph-server audit` CLI command. They queried three SQLite
 tables (`~/.aleph/approval_audit.db`) whose **only writers were test helpers** —
 an operator running `audit` got zeros and concluded nothing had happened, while
 the real trail sat in the session event log. That is worse than dead code.
@@ -1384,7 +1383,7 @@ the real trail sat in the session event log. That is worse than dead code.
 Deleted in the same sweep, all zero-consumer:
 `src/exec/approval/{escalation,binding,path_canonicalize}.rs` (path-escalation,
 binding-compliance and sensitive-directory checks that nothing ever called),
-`benches/approval_performance.rs`, and
+the approval performance benchmark, and
 `exec/allowed_decisions.rs::{decisions_for_risk, assess_command_decisions,
 risk_segments}`.
 
@@ -1917,7 +1916,7 @@ in this process rather than as a CLI's stdout. Every layer below still applies a
 sites, because none of them was ever a property of the transport: `check_navigation` runs in the
 tool, `post_nav` runs inside the backend's `open_tab`/`navigate`, the input scan runs before the
 approval gate, and `redact_and_wrap` runs on the way out. The full six-chokepoint enumeration
-(these four plus per-`ActionType` approval and the `tools/scoped` execution tier) is in
+(these four plus per-`ActionType` approval and the `src/tools/scoped` execution tier) is in
 [FEATURE_LOCATOR §3.12](FEATURE_LOCATOR.md) 第三轮 A.
 
 ⚠️ **What the new driver adds is a place they could be skipped, and it is held shut by convention
@@ -2960,7 +2959,7 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
      `ScopedToolService` re-decides it with the real facts and can raise the
      approval card. The residual is narrower and different in kind: this path
      CONSTRUCTS its own `ToolFacts`, a second statement of one fact, so a third
-     input added to that struct in `tools/scoped/builder.rs` alone leaves the
+     input added to that struct in `src/tools/scoped/builder.rs` alone leaves the
      fast path deciding on a stale shape — silently, and only for slash
      commands. Converging the two constructions is the open work.
      ✅ **Closed in round 11 (D8, `1eca4aaef`):** both faces now build through

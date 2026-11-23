@@ -177,29 +177,29 @@ src/harness/                  # 笨循环编排核心 (Thin Core)
 | 3 | Memory | `src/memory/` | 不动（最干净的一块） |
 | 4 | Context Management | `src/context/{budget,compact}/` | 5 处合并到 1 处 |
 | 5 | Prompt Assembly | `src/thinker/` | 历史名保留，不强行改名 |
-| 6 | Tool Calling / Structured Output | `src/tools/calling/` + `src/providers/bridge.rs` | |
+| 6 | Tool Calling / Structured Output | `src/harness/agent/act.rs` + `src/providers/protocols/` | |
 | 7 | State & Checkpointing | `src/session/` | `SessionEventStore` + `replay()` 已是事件溯源框架 |
 | 8 | Error Handling | `HarnessError` + 各域 typed error | 跨模块，无单一容身处 |
 | 9 | Guardrails | `src/{security,sandbox,approval,pii}/` | 4 域分立，不强搞 facade |
 | 10 | Verification & Feedback | `src/verification/` | 新建，吸收 stop_hooks |
 | 11 | Subagent Orchestration | `src/{agents,teams,orchestrator,group_chat}/` | 4 域职责正交，不合并 |
-| 12 | Initialization & Environment | `src/init_unified/` + `src/bin/aleph-server/commands/start/` | 装配顺序见 [BOOT_ASSEMBLY.md](BOOT_ASSEMBLY.md) |
+| 12 | Initialization & Environment | `src/bin/aleph-server/commands/start/` | 装配顺序见 [BOOT_ASSEMBLY.md](BOOT_ASSEMBLY.md) |
 
 ### 4.3 关键的"不归位" — YAGNI 撤回 (Retraction Pattern)
 
 dissolution 过程中识别并删除了 **~5,200 行无消费者的死代码**，并撤回了多项原计划：
 
-- ❌ `src/prompt/` (747 行) — 删除（消费链全死）
-- ❌ `src/payload/` (~1,700 行) — 删除（test-only 闭环）
+- ❌ 旧 `prompt` 模块 (747 行) — 删除（消费链全死）
+- ❌ 旧 `payload` 模块 (~1,700 行) — 删除（test-only 闭环）
 - ❌ `src/capability/` (~2,500 行) — 删除（test-only 闭环）
-- ❌ `src/prompt_assembly/` (289 行) — 删除（P0 临时占位，无消费者）
-- ❌ `src/permission/` — 删除（孤儿代码，零消费者）
+- ❌ 旧 `prompt_assembly` 模块 (289 行) — 删除（P0 临时占位，无消费者）
+- ❌ 旧 `permission` 模块 — 删除（孤儿代码，零消费者）
 - ❌ `VerifyStopHook` (194 行) — 删除（孤儿代码，零生产实例化）
-- ❌ `src/compressor/` — 删除（已证实死代码）
+- ❌ 旧 `compressor` 模块 — 删除（已证实死代码）
 - ❌ `PromptAssembler` / `Section` / `PromptLayer` trait — 撤回（与现有 PromptLayer/PromptPipeline 重复）
 - ❌ `SubagentOrchestrator` trait + Fork/Handoff/Graph 模式 — 撤回（零消费者，违反 R3）
-- ❌ `src/session/checkpoint/` Git 风格 trait — 撤回（事件溯源已覆盖）
-- ❌ `src/runtime/boot.rs` — 撤回（实际 boot 在 `aleph-server/commands/start/` 6,194 行，无重写动机）
+- ❌ 拟议的 session checkpoint Git 风格 trait — 撤回（事件溯源已覆盖）
+- ❌ 拟议的 runtime boot 模块 — 撤回（实际 boot 在 `src/bin/aleph-server/commands/start/` 6,194 行，无重写动机）
 
 **通用模式**：每发现一个"零现有消费者"的抽象，就删除/撤回，绝不"为未来留口"。
 
@@ -358,7 +358,7 @@ prune-the-prompt 是 R7（LLM 主权）/ R9（智慧在 Prompt）/ R10（薄 Har
 
 ## 9. 参考文献
 
-- 行业原文：`../Agent-Harness.md`（12 模块框架，中文）
+- 行业原文：《Agent Harness》（12 模块框架，中文；原文未收录在仓库中）
 - Anthropic Managed Agents 工程博客：https://www.anthropic.com/engineering/managed-agents
 - Beren Millidge, *AI 的脚手架* (2023) — 把 Agent Harness 类比为冯·诺依曼架构
 - Aleph 重构原始 spec：[2026-04-24-harness-dissolution-roadmap.md](../superpowers/specs/2026-04-24-harness-dissolution-roadmap.md)

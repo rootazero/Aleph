@@ -119,7 +119,7 @@ The rendered XML is injected as a `role=user` message containing a fenced `<Memo
 
 ## 3. Hybrid Search Algorithm
 
-`SqliteMemoryBackend::hybrid_search_notes` in `src/memory/store/sqlite/notes.rs` is the concrete implementation behind `NoteStore::hybrid_search_notes`. It takes the query embedding, the raw query text, an `agent_id`, a `dim_hint`, and a `limit`, and returns a `HybridSearchOutcome { results, vector_candidates, fts_candidates }` with full content loaded from disk (concurrently — a result set's wall time used to be the sum of its disk reads). The per-leg counts exist so a caller can report what actually ran: `"hybrid"` with `vector_candidates == 0` means the semantic half did not participate at all, which is a different instruction to the model than a semantic search that simply found nothing. `note_manage(query)` surfaces this as `SearchAdvisory`.
+`SqliteMemoryBackend::hybrid_search_notes` in `src/memory/store/sqlite/notes/store_impl.rs` is the concrete implementation behind `NoteStore::hybrid_search_notes`. It takes the query embedding, the raw query text, an `agent_id`, a `dim_hint`, and a `limit`, and returns a `HybridSearchOutcome { results, vector_candidates, fts_candidates }` with full content loaded from disk (concurrently — a result set's wall time used to be the sum of its disk reads). The per-leg counts exist so a caller can report what actually ran: `"hybrid"` with `vector_candidates == 0` means the semantic half did not participate at all, which is a different instruction to the model than a semantic search that simply found nothing. `note_manage(query)` surfaces this as `SearchAdvisory`.
 
 The algorithm has four steps:
 
@@ -213,7 +213,7 @@ Downstream consumers still receive `ScoredFact<MemoryFact>`, but the path is now
 
 ### 4.1 Stages Overview
 
-`ScoringPipeline::from_config` in `src/memory/scoring_pipeline/mod.rs` builds a seven-stage pipeline in a fixed insertion order. Each stage implements `ScoringStage { fn name(&self); fn apply(&self, candidates: Vec<ScoredFact>, ctx: &ScoringContext) -> Vec<ScoredFact>; }` and receives a shared `ScoringContext { query, query_embedding, timestamp, config: ScoringPipelineConfig }`. `run` drives them sequentially.
+The former `ScoringPipeline` and its config were removed. Current note scoring lives in `src/memory/note_retrieval/pipeline.rs` and uses recency reweighting, reinforcement, and MMR diversity. The stages and defaults below describe the removed pipeline, not the current implementation. `ScoringPipeline::from_config` built the stages in a fixed insertion order. Each stage implements `ScoringStage { fn name(&self); fn apply(&self, candidates: Vec<ScoredFact>, ctx: &ScoringContext) -> Vec<ScoredFact>; }` and receives a shared `ScoringContext { query, query_embedding, timestamp, config: ScoringPipelineConfig }`. `run` drives them sequentially.
 
 | # | Stage | Purpose | Key config key |
 |---|---|---|---|
@@ -230,7 +230,7 @@ Downstream consumers still receive `ScoredFact<MemoryFact>`, but the path is now
 
 ### 4.2 `cosine_rerank`
 
-Source: `src/memory/scoring_pipeline/stages/cosine_rerank.rs`. If `ctx.query_embedding` is `None`, the stage is a no-op passthrough. Otherwise, for each candidate that carries `fact.embedding`, it computes cosine similarity between the query vector and the fact vector (clamped to `[0, 1]`, returning 0 on zero-norm) and blends:
+If `ctx.query_embedding` is `None`, the stage is a no-op passthrough. Otherwise, for each candidate that carries `fact.embedding`, it computes cosine similarity between the query vector and the fact vector (clamped to `[0, 1]`, returning 0 on zero-norm) and blends:
 
 ```rust
 c.score = (1.0 - blend) * c.score + blend * sim;   // blend = ctx.config.rerank_blend
@@ -240,11 +240,11 @@ Facts without an embedding keep their original score. The stage re-sorts at the 
 
 ### 4.3 `mmr_diversity`
 
-Source: `src/memory/scoring_pipeline/stages/mmr_diversity.rs`. Greedy Maximal Marginal Relevance without dropping anything. For each candidate in input order, if it has no embedding it is treated as diverse and appended to `selected`. Otherwise, if its cosine similarity to any already-selected fact exceeds `mmr_similarity_threshold`, it is pushed to a `deferred` list. At the end, `deferred` is appended after `selected`, so near-duplicates end up at the tail rather than being dropped. This preserves recall but ranks visually distinct items higher — important when downstream uses the head of the list. Ordering semantics: input order matters; higher-scoring candidates should reach this stage first so the diverse survivors come from the top.
+Greedy Maximal Marginal Relevance without dropping anything. For each candidate in input order, if it has no embedding it is treated as diverse and appended to `selected`. Otherwise, if its cosine similarity to any already-selected fact exceeds `mmr_similarity_threshold`, it is pushed to a `deferred` list. At the end, `deferred` is appended after `selected`, so near-duplicates end up at the tail rather than being dropped. This preserves recall but ranks visually distinct items higher — important when downstream uses the head of the list. Ordering semantics: input order matters; higher-scoring candidates should reach this stage first so the diverse survivors come from the top.
 
 ### 4.4 `time_decay`
 
-Source: `src/memory/scoring_pipeline/stages/time_decay.rs`. If `time_decay_half_life_days <= 0`, the stage is a no-op. Otherwise:
+If `time_decay_half_life_days <= 0`, the stage is a no-op. Otherwise:
 
 ```rust
 let age_days = ((ctx.timestamp - c.fact.created_at).max(0) as f64) / 86400.0;
@@ -256,7 +256,7 @@ The `0.5 + 0.5 * exp(...)` shape floors decay at 0.5 so ancient facts retain hal
 
 ### 4.5 `recency_boost`
 
-Source: `src/memory/scoring_pipeline/stages/recency_boost.rs`. Additive (not multiplicative), runs before `time_decay`. Disabled when `recency_weight <= 0` or `recency_half_life_days <= 0`. Otherwise:
+Additive (not multiplicative), runs before `time_decay`. Disabled when `recency_weight <= 0` or `recency_half_life_days <= 0`. Otherwise:
 
 ```rust
 let boost = (-age_days / half_life as f64).exp() * weight as f64;
@@ -267,7 +267,7 @@ With defaults `recency_half_life_days = 14`, `recency_weight = 0.1`: a brand-new
 
 ### 4.6 `length_normalization`
 
-Source: `src/memory/scoring_pipeline/stages/length_normalization.rs`. Penalizes very long facts logarithmically. `anchor = config.length_norm_anchor.max(1) as f32` (default 500 chars). For each candidate:
+Penalizes very long facts logarithmically. `anchor = config.length_norm_anchor.max(1) as f32` (default 500 chars). For each candidate:
 
 ```rust
 let ratio = (c.fact.content.chars().count() as f32 / anchor).max(1.0);
@@ -279,7 +279,7 @@ The `ratio.max(1.0)` clamp means short facts get `log2(1) = 0` → factor 1.0 (n
 
 ### 4.7 `hard_min_score`
 
-Source: `src/memory/scoring_pipeline/stages/hard_min_score.rs`. Pure filter — no score mutation, no re-ordering. `candidates.into_iter().filter(|c| c.score >= threshold).collect()`. Threshold is `config.hard_min_score` (default 0.35). Placed after all multiplicative stages so a candidate that started at 0.9 but got hammered by decay + length penalties can still be dropped. Surviving order is preserved for `mmr_diversity`.
+Pure filter — no score mutation, no re-ordering. `candidates.into_iter().filter(|c| c.score >= threshold).collect()`. Threshold is `config.hard_min_score` (default 0.35). Placed after all multiplicative stages so a candidate that started at 0.9 but got hammered by decay + length penalties can still be dropped. Surviving order is preserved for `mmr_diversity`.
 
 ## 6. Reranker (Optional, Not Wired)
 
@@ -310,9 +310,9 @@ pub trait RerankProvider: Send + Sync {
 
 Config (`RerankConfig` in `provider.rs`) carries `enabled: bool` (default `false`), `provider`, `api_base`, `api_key` (vault-backed, never serialized), `models: Vec<String>`, `timeout_ms: 5000`, `rerank_weight: 0.6`. The `blend_scores` helper (`src/memory/rerank/mod.rs`) computes `final = rerank_weight * rerank_score + (1 - rerank_weight) * original_score` for sorted pairing. ⚠️ This paragraph claimed until 2026-08-23 that reranking was **not** wired into `NoteFactRetrieval`, and pointed at a file that does not exist. It is wired: `with_reranker` / `with_rerank_config` install it and `pipeline.rs::apply_rerank` is the stage, over-fetching by `RERANK_CANDIDATE_MULTIPLIER` (capped at `RERANK_MAX_CANDIDATES`) so the cross-encoder has a pool to reorder.
 
-## 7. Query Expander (Optional, Not Wired)
+## 7. Query Expander (Removed)
 
-`src/memory/query_expander.rs` exports `fn expand(query: &str) -> ExpandedQuery { original, bm25_query }`. When the input contains any CJK Unified Ideograph (`\u{4E00}..=\u{9FFF}`), the expander appends known Chinese synonyms (`喜欢 → 偏好 倾向 爱好`, `问题 → bug 错误 故障 缺陷`, and ten other groups from the static `SYNONYMS` table) to the BM25 query. The `original` field is left verbatim for vector search. No config key — the synonym table is hardcoded. **Not wired** into `NoteFactRetrieval` yet; hybrid search currently passes the raw query to both the FTS and embedding lookups.
+The unwired query expander was removed. It exported `fn expand(query: &str) -> ExpandedQuery { original, bm25_query }`. When the input contains any CJK Unified Ideograph (`\u{4E00}..=\u{9FFF}`), the expander appends known Chinese synonyms (`喜欢 → 偏好 倾向 爱好`, `问题 → bug 错误 故障 缺陷`, and ten other groups from the static `SYNONYMS` table) to the BM25 query. The `original` field is left verbatim for vector search. No config key — the synonym table is hardcoded. It was never wired into `NoteFactRetrieval`; hybrid search currently passes the raw query to both the FTS and embedding lookups.
 
 ## 8. Embedding Provider
 
@@ -349,7 +349,7 @@ pub trait EmbeddingProvider: Send + Sync {
 
 ### 7.3 Provider Presets
 
-From `src/config/types/memory.rs`:
+From `src/config/types/memory/embed.rs`:
 
 | Preset | `api_base` | Default model | Dimensions |
 |---|---|---|---|
@@ -374,7 +374,7 @@ Until 2026-08-05 the set was spelled out in five places and stopped at {768, 102
 
 ## 10. `AiMemoryRetriever`
 
-`src/memory/ai_retrieval.rs` is an LLM-in-the-loop alternative to vector retrieval. It sends a list of `MemoryCandidate { id, user_input, ai_output, timestamp }` (truncated) to an `AiProvider` with a strict JSON system prompt and parses `AiMemoryResult { selected_memory_ids, reasoning }` out. The request/result types:
+The unwired `AiMemoryRetriever` was removed. It was an LLM-in-the-loop alternative to vector retrieval. It sends a list of `MemoryCandidate { id, user_input, ai_output, timestamp }` (truncated) to an `AiProvider` with a strict JSON system prompt and parses `AiMemoryResult { selected_memory_ids, reasoning }` out. The request/result types:
 
 ```rust
 pub struct AiMemoryRequest { pub query: String, pub candidates: Vec<MemoryCandidate> }
@@ -387,7 +387,7 @@ pub struct AiMemoryResult {
 }
 ```
 
-`retrieve(query, candidates, exclude_inputs)` filters current-session inputs out, caps at `max_candidates`, issues one LLM call under a `tokio::time::timeout(self.timeout)`. On success, it intersects the returned IDs with the candidate set. On error or timeout, it falls back to `fallback_selection` (most recent N). Construction: `AiMemoryRetriever::with_policy(provider, &AiRetrievalPolicy { max_candidates, fallback_count, timeout_ms, content_truncate_length })`. Used when the runtime wants semantic selection rather than similarity — gated behind an `AiRetrievalPolicy` config flag.
+`retrieve(query, candidates, exclude_inputs)` filters current-session inputs out, caps at `max_candidates`, issues one LLM call under a `tokio::time::timeout(self.timeout)`. On success, it intersects the returned IDs with the candidate set. On error or timeout, it falls back to `fallback_selection` (most recent N). Construction: `AiMemoryRetriever::with_policy(provider, &AiRetrievalPolicy { max_candidates, fallback_count, timeout_ms, content_truncate_length })`. It had no production consumer.
 
 ## 11. RippleTask
 
@@ -444,7 +444,7 @@ Source: `src/builtin_tools/recall_context.rs`. Retrieves pre-compression convers
 
 ## 13. Audit and Explainability
 
-`src/memory/audit.rs` defines the shape of every audit record written about a memory fact.
+The former per-fact audit store and its unused `AuditEntry` types were removed. The current fact-lifecycle read model lives in `src/memory/explain.rs`; the audit types below are historical.
 
 ```rust
 pub struct AuditEntry {
@@ -460,9 +460,9 @@ pub struct AuditEntry {
 
 `AuditAction` covers `Created | Accessed | Updated | Invalidated | Restored | Deleted`. `AuditActor` covers `Agent | User | System | Decay`. `AuditDetails` is a `#[serde(tag = "type")]` enum with payloads per action — `Created { source, extraction_context }`, `Accessed { query, relevance_score, used_in_response }`, `Updated { old_content, new_content, reason }`, `Invalidated { reason }`, `Restored { new_strength }`, `Deleted { reason, days_in_recycle_bin }`.
 
-Explainability is served by two derived views. `FactExplanation { fact_id, content, is_valid, creation_source, access_count, invalidation_reason, events: Vec<ExplainedEvent> }` reconstructs a fact's lifecycle timeline. `ExplainedEvent { timestamp, action, description, actor }` is one line of that timeline. `ForgettingExplanation { fact_id, reason, actor, timestamp, days_since_creation, explanation }` is the specialized view for "why did this disappear?".
+The former audit vocabulary described two derived views. `FactExplanation { fact_id, content, is_valid, creation_source, access_count, invalidation_reason, events: Vec<ExplainedEvent> }` reconstructs a fact's lifecycle timeline. `ExplainedEvent { timestamp, action, description, actor }` is one line of that timeline. `ForgettingExplanation { fact_id, reason, actor, timestamp, days_since_creation, explanation }` is the specialized view for "why did this disappear?".
 
-**Explain path.** To trace why a note was returned or dropped: look up the fact by `fact_id`, materialize `Vec<AuditEntry>` ordered by `created_at`, fold them into a `FactExplanation`, and for each `Accessed` event inspect the `relevance_score` and `query`. For forgetting, materialize a `ForgettingExplanation` from the final `Invalidated` entry. This is the read side of memory observability; the write side — event-sourced note mutations — is covered in `NOTES.md` §12.
+**Former audit design (not a current explain path).** To trace why a note was returned or dropped: look up the fact by `fact_id`, materialize `Vec<AuditEntry>` ordered by `created_at`, fold them into a `FactExplanation`, and for each `Accessed` event inspect the `relevance_score` and `query`. For forgetting, materialize a `ForgettingExplanation` from the final `Invalidated` entry. This is the read side of memory observability; the write side — event-sourced note mutations — is covered in `NOTES.md` §12.
 
 ## 14. Reflection / Synthesis (Spec 2)
 
