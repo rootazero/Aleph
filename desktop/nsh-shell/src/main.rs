@@ -286,6 +286,8 @@ fn main() -> std::process::ExitCode {
             ..AppOptions::default()
         },
     );
+    #[cfg(target_os = "linux")]
+    let exit = std::process::ExitCode::from(exit);
     // run_app has returned: the owned native engine has stopped.
     if let Some(mut event) = LAST_EVENT
         .lock()
