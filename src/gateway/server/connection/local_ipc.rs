@@ -128,6 +128,7 @@ async fn serve_peer(
                 max_message_bytes: u64::from(MAX_FRAME_BYTES),
                 max_inflight_requests: MAX_INFLIGHT,
             },
+            system_hello::subject_for(&store, OWNER_USER_ID),
         )
     } else {
         JsonRpcResponse::error(request.id, AUTH_REQUIRED, "system.hello must be first")

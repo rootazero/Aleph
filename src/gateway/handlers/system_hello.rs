@@ -27,13 +27,38 @@ pub async fn handle(request: JsonRpcRequest) -> JsonRpcResponse {
             max_message_bytes: 8_388_608,
             max_inflight_requests: 128,
         },
+        None,
     )
+}
+
+const SUBJECT_DOMAIN: &str = "aleph.panel.subject.v1\0";
+
+/// Opaque per-user value for client storage keys: the first 16 bytes of
+/// HMAC-SHA256 under the Gateway's shared-token secret, hex encoded. It
+/// never contains the user id and changes when the secret is rotated, which
+/// only resets client presentation state.
+pub(crate) fn panel_subject(secret: &[u8; 32], user: &str) -> String {
+    let mut mac =
+        crate::gateway::security::crypto::hmac_sign(secret, &format!("{SUBJECT_DOMAIN}{user}"));
+    mac.truncate(32);
+    mac
+}
+
+/// The subject for `user`, or `None` when the store has no secret. A missing
+/// subject only makes the client fall back to an endpoint-wide layout.
+pub(crate) fn subject_for(
+    store: &crate::gateway::security::SecurityStore,
+    user: &str,
+) -> Option<String> {
+    let secret = store.get_shared_token_secret().ok().flatten()?;
+    Some(panel_subject(&secret, user))
 }
 
 pub(crate) fn negotiate(
     request: JsonRpcRequest,
     connection_id: String,
     limits: HelloLimits,
+    subject: Option<String>,
 ) -> JsonRpcResponse {
     let params: HelloParams = match request.params.clone() {
         Some(p) => match serde_json::from_value(p) {
@@ -70,6 +95,7 @@ pub(crate) fn negotiate(
         connection_id,
         features: negotiate_features(&params.features, &[]),
         limits,
+        subject,
     };
 
     let result_value = match serde_json::to_value(&result) {
@@ -88,6 +114,24 @@ pub(crate) fn negotiate(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn panel_subject_is_stable_and_user_scoped() {
+        let secret = [7u8; 32];
+        let owner = super::panel_subject(&secret, "u-owner");
+        assert_eq!(owner, super::panel_subject(&secret, "u-owner"));
+        assert_ne!(owner, super::panel_subject(&secret, "u-member"));
+        assert_ne!(owner, super::panel_subject(&[8u8; 32], "u-owner"));
+        assert_eq!(owner.len(), 32);
+        assert!(owner.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        assert!(!owner.contains("owner"));
+    }
+
+    #[test]
+    fn hello_without_secret_omits_subject() {
+        let store = crate::gateway::security::SecurityStore::in_memory().unwrap();
+        assert_eq!(super::subject_for(&store, "u-owner"), None);
+    }
     use super::*;
     use serde_json::json;
 

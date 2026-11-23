@@ -399,6 +399,10 @@ async fn serve(
                 max_message_bytes: u64::from(MAX_MESSAGE),
                 max_inflight_requests: 1,
             },
+            gateway
+                .security_store
+                .as_deref()
+                .and_then(|store| system_hello::subject_for(store, &binding.user)),
         )
     } else {
         JsonRpcResponse::error(request.id, AUTH_REQUIRED, "system.hello must be first")
