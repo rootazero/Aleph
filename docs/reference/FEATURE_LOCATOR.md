@@ -11,7 +11,7 @@
 > 2. 跳到对应词条，把里面的**代码锚点**和**打磨话术模板**贴进你的需求描述；
 > 3. 留意**实现状态**标记——`⚠️`/`❌` 的条目说明现状与直觉/旧描述有出入，先看「实现现状体检」一节。
 >
-> **附录**：A 实现现状体检 ｜ B 高频"混称"对照 ｜ **C 验证纪律全文**（这个绿是怎么骗你的）｜ **D 工程判据全文** ｜ **E 判据触发器清单**（§0–§10，根 `CLAUDE.md` 形状名索引的下一层——代码注释里的「CLAUDE.md §N」指的就是 E.N）
+> **附录**：A 实现现状体检 ｜ B 高频"混称"对照 ｜ **C 验证纪律全文**（这个绿是怎么骗你的）｜ **D 工程判据全文** ｜ **E 判据触发器清单**（§0–§10，根 `CLAUDE.md` 形状名索引的下一层——代码注释里的「CLAUDE.md §N」指的就是 E.N） ｜ 文末 **[Capability 与生命周期闭合记录](#capability-and-lifecycle-closure-records--capability-与生命周期闭合记录)**（§3.5d–§3.5l 及 2026-11 闭合）
 >
 > **状态图例**：✅ 已实现且与描述一致 ｜ ⚠️ 部分实现或与描述有出入 ｜ ❌ 未实现或描述不符
 >
@@ -1072,6 +1072,8 @@ The dictionary below preserves round-specific implementation evidence and earlie
     **两条腿都接上**：一个 `Arc<ToolHealthCache>` 在 boot **提前于两个消费者**创建（引擎远在 `init_tool_catalog` 之前就被 `Arc` 包住了，事后接不上），同一个 handle 交给引擎与 `ToolCatalog::with_health`，再经 `build_request_tool_service` 到 `with_health`；`ScopedToolService::refreshed_health_snapshot()` 只刷 `needs_refresh()` 为真的 probe 且**并发**跑——`refresh` 本身 single-flight（`OnceCell`）+ 200ms 硬死线（`PROBE_DEADLINE`），所以最坏是每个 TTL 窗口一次 200ms，**不是每 probe 一次**（browser probe 的 TTL 远大于 30s）。fail-open 语义不动：只有 probe **实际报了 Unhealthy** 才摘工具。`metadata_schema()` 是同步的、await 不了刷新，它读缓存现值并在 `health.generation()` 变化时自增自己的 generation，所以这里刷出来的结果下一次读就到。
 
 - **打磨话术**：「斜杠命令 = 工具（同源 ToolCatalog）。加新斜杠命令 = 注册新工具，不要另起命令树。热加载在 `registry.rs` 的 ArcSwap。`ParsedCommand.tool_id` 是 canonical 注册 id（别再 `{source}:{name}` 重建）；它的消费者是 `serialize_parsed_command`（`chat.send` 与频道 router 共用）——`command.execute` RPC 于 2026-09-20 CUT（零客户端，第二张脸），`handle_execute` / `split_namespace_action` 随之删除。**别名撞名不要在注册期改名**——那是永久且依赖注册顺序的；解析分层已经给了答案，且停用即回退。要拦'低优先级工具抢走 builtin 的 `/model`'，正确位置是 `find_best_match` 的分层规则，不是把人家的规范名改掉。」
+
+> **后续轮次 / Later rounds:** §3.5d–§3.5l 与 2026-11 的生命周期闭合记录集中在文末 [Capability 与生命周期闭合记录](#capability-and-lifecycle-closure-records--capability-与生命周期闭合记录)。
 
 ### 3.6 Provider/model binding and failure-only fallback (Current)
 - **口语关键词**：子代理模型绑定、per-turn model、session model pin、`BrainRef`、provider/model、失败后 fallback、retry budget、circuit breaker、cooldown、route attribution
@@ -4674,7 +4676,7 @@ The subsequent native window reached project A select and discovery but timed ou
 
 The next explicitly authorized window was `53638c0db1f1ee720ddd34d6c374c5d10bec2bbaac2959519c73f7775d77fc82`. It passed helper readiness, pairing, protected reload, and Global discovery; accepted native save seq 3 and load seq 4 (`credentialPresent:true`), plus Global connect/discovery and project A select/discovery receipts seq 1–6. It blocked at `project_a / monitor_command / project_a_control_failed` before any asset receipt. Diagnostics were monitor `{upgrades:3,refusedOrigin:1,refusedOriginKinds:{missing:0,appShell:1,other:0},refusedOther:0,refusedConcurrent:0,accepted:2,streamInvalid:0,helloSeen:2,installFailed:0,installFailedReason:null}`, trace `{records:4,unconsumed:2,ignoredLines:5,poisoned:null}`, helper `{sent:11,acknowledgements:1,timeouts:0,closed:0,invalid:0}`, receipt `{requests:7,retries:1,notFound:1,stale:0,invalid:0,cursorBefore:5,cursorAfter:6}`. All six exact cleanup facts passed. Static routing explains why: `/projects` mounts ProjectsView, while PanelShell is mounted only at `/terminal` and `/panel/{plugin}/{tab}`. Existing `open_project_a/b` only click `[data-panel-shell]` controls and cannot navigate. The fixed monitor has no route-navigation action; adding a wire action, direct navigation/invoke, or product/shell change is outside current scope. A/B assets, late-A fencing, endpoint/lease, and revocation remain unproven. No relaunch is allowed without a new scope decision and explicit 120-second authorization. / 随后一次明确授权的 window 为 `53638c0db1f1ee720ddd34d6c374c5d10bec2bbaac2959519c73f7775d77fc82`。helper readiness、pairing、protected reload 和 Global discovery 通过；accepted native save seq 3、load seq 4（`credentialPresent:true`），以及 Global connect/discovery、project A select/discovery receipts seq 1–6。运行在 `project_a / monitor_command / project_a_control_failed` 阻塞，没有 asset receipt。固定 diagnostics 如上，六项 exact cleanup 全部通过。静态路由说明了原因：`/projects` 挂载 ProjectsView，而 PanelShell 只在 `/terminal` 与 `/panel/{plugin}/{tab}` 挂载；既有 `open_project_a/b` 只点击 `[data-panel-shell]` controls，不会导航。固定 monitor 没有 route-navigation action；新增 wire action、direct navigation/invoke 或修改产品/shell 超出当前 scope。A/B assets、late-A fencing、endpoint/lease 与 revocation 仍未证明。没有新的 scope 决策和明确 120 秒授权不得重新 launch。
 
-## Fixed Panel navigation / 固定 Panel 导航
+### Fixed Panel navigation / 固定 Panel 导航
 
 Following the approved QA monitor scope expansion, the closed monitor action enum adds `navigate_projects`, `navigate_project_a`, and `navigate_project_b`. These actions map only to literal `/projects`, `/panel/project-a/overview`, and `/panel/project-b/overview` routes; the wire accepts no caller-supplied route or selector. Each document transition records `panel_navigation_arm: attempted → observed`, calls `expectReload()` before sending the fixed command on the authenticated old document, then waits for the new authenticated hello before using the new connection. Project selection remains on the real Projects UI and authenticated Gateway path; fixed route navigation only mounts the fixture Panel tab to drive its real asset fetch. Late-A UI fencing remains a separate blocked evidence boundary.
 
@@ -4682,13 +4684,13 @@ Actual monitor-JS tests cover the fixed routes, no selector/IPC side effects, ex
 
 实际 monitor-JS tests 覆盖固定 routes、无 selector/IPC side effect、拒绝额外 `route` 字段，以及 arm → command → authenticated accept 顺序。仓库根 Node suite 92/92；docs self-test、普通 docs check 和 `git diff --check` 通过。QA-owned shell monitor 已使用仓库 memory gate、`CARGO_BUILD_JOBS=1` 和 QA Tauri config 重建。fresh exclusive provenance contract v1 独立 inspect 为 `ok:true`，revision `063345f2f30bf999b28ee5d84aac860be8432fa7`。source-only preflight run `2e252708a7489f2443b50ac1f0a687ac8f30b69d836eb1bcdcfc5db2e95e2475` 为 `NOT_RUN/preflight_only`、`webviewLaunches:0`、`launchGate:new_explicit_budget_required`、`artifacts.ok:true`，六步 cleanup 顺序不变。本次 preflight 不包含 native outcome。
 
-## Latest fixed-navigation native boundary / 最新固定导航 native 边界
+### Latest fixed-navigation native boundary / 最新固定导航 native 边界
 
 The approved single 120-second run `0cff346e384736df43abd673ad47344b946f23514867f9c7ed7a225348347753` passed authenticated save/reload (`credentialPresent:true`), Global discovery, and project A select/discovery, then blocked at `{phase:"project_a",operation:"receipt",lastBoundary:"receipt",reason:"receipt_timeout",missingLayers:["receipt"]}`. The fixed navigation reached a third authenticated document, but no project A asset receipt arrived after 37 bounded `not_found` retries (cursor 6→6). Monitor `{upgrades:3,accepted:3,helloSeen:3,refusedOrigin:0,refusedOther:0,refusedConcurrent:0,streamInvalid:0,installFailed:0,refusedOriginKinds:{missing:0,appShell:0,other:0},installFailedReason:null}`; trace `{records:4,unconsumed:2,ignoredLines:5,poisoned:null}`; helper `{sent:47,acknowledgements:1,timeouts:0,closed:0,invalid:0}`; receipt `{requests:43,retries:37,notFound:37,stale:0,invalid:0,cursorBefore:6,cursorAfter:6}`. All six exact cleanup facts passed. Gateway source shows project selection persists by device identity, so selection loss is not established as cause; the absent asset request remains unexplained. The 120-second authorization is consumed; no relaunch without a new explicit authorization.
 
 最新一次批准的 120 秒运行 `0cff346e384736df43abd673ad47344b946f23514867f9c7ed7a225348347753` 通过 authenticated save/reload（`credentialPresent:true`）、Global discovery 和 project A select/discovery，随后在 `{phase:"project_a",operation:"receipt",lastBoundary:"receipt",reason:"receipt_timeout",missingLayers:["receipt"]}` 阻塞。固定导航已到达第三个 authenticated document，但 37 次有界 `not_found` retry 后无 project A asset receipt（cursor 6→6）。Monitor、trace、helper、receipt diagnostics 如英文对象；六项 exact cleanup facts 全部通过。Gateway 源码表明 project selection 按 device identity 保持，因此暂不能认定 selection loss 是原因；asset request 缺失仍未解释。120 秒授权已消耗；没有新的明确授权不得 relaunch。
 
-## Fixed Panel DOM diagnostics / 固定 Panel DOM 诊断
+### Fixed Panel DOM diagnostics / 固定 Panel DOM 诊断
 
 After the authenticated fixed-route transition still yielded no A asset receipt, added four fixed booleans to the QA monitor's existing `inspect`: `panelShell`, `panelTabA`, `panelTabB`, and `panelContent`. The runner uses bounded polling after A/B navigation and records only validated booleans in `diagnostics.panel`; an unavailable expected surface becomes `panel_route_unavailable`, while an available surface still requires the independent authenticated Gateway asset receipt. No DOM text, URL, credential or token is transmitted. Tests cover the actual monitor script extracted from `desktop/shell/src/main.rs`, delayed mount, malformed values, and no IPC side effects. This is QA-only observability, not product behavior or asset evidence.
 
@@ -4696,7 +4698,7 @@ Verification: root native IPC suite 95/95; docs self-test and normal check passe
 
 验证：仓库根 native IPC suite 95/95；docs self-test 与普通 check（`OK (7 files)`）通过；`git diff --check` 通过。monitor JS 改动后已使用 memory gate、`CARGO_BUILD_JOBS=1` 与 QA Tauri config 重建 QA-owned shell。fresh exclusive provenance v1 独立 inspect 为 `ok:true`，revision `063345f2f30bf999b28ee5d84aac860be8432fa7`。source-only preflight `ccebef52f59944689b888cfaca564cf2afbb3aadb462b1d2dd3933172a20bfb5` 返回 `NOT_RUN/preflight_only`、`webviewLaunches:0`、`launchGate:new_explicit_budget_required`、`artifacts.ok:true`，cleanup 顺序不变；不包含 native runtime evidence。
 
-## Authorized Panel DOM diagnostic run / 已授权 Panel DOM 诊断运行
+### Authorized Panel DOM diagnostic run / 已授权 Panel DOM 诊断运行
 
 The single `--execute` under the explicit 120-second authorization ran as `dd6f874403829221f12f09f277fe008dd30984091f21dd9b990c777bdd48a0a5` and returned `BLOCKED/panel_route_unavailable`. `helper_ready`, `protected_pairing`, `protected_reload`, and `global_discovery` passed; `project_a` blocked at bounded monitor inspect; cleanup passed. Accepted native traces: `panel_credential_save` seq 3 (`ok:true`, `resultShape:"null"`) and `panel_credential_load` seq 4 (`ok:true`, `resultShape:"lease_object"`, `credentialPresent:true`). Accepted six redacted receipts covered Global connect/discovery and project A select/discovery; no asset receipt. On A route the fixed DOM snapshot was `{panelShell:false,panelTabA:false,panelTabB:false,panelContent:false}`; B was not reached. Primary failure `{phase:"project_a",operation:"monitor_inspect",lastBoundary:"monitor_command",reason:"panel_route_unavailable",missingLayers:[]}`. Diagnostics: monitor `{upgrades:3,accepted:3,helloSeen:3,refusedOrigin:0,refusedOther:0,refusedConcurrent:0,streamInvalid:0,installFailed:0,refusedOriginKinds:{missing:0,appShell:0,other:0},installFailedReason:null}`; trace `{records:4,unconsumed:2,ignoredLines:5,poisoned:null}`; helper `{sent:11,acknowledgements:1,timeouts:0,closed:0,invalid:0}`; receipt `{requests:7,retries:1,notFound:1,stale:0,invalid:0,cursorBefore:5,cursorAfter:6}`. All six exact cleanup facts passed. This narrows, but does not explain, the asset gap: the expected Panel surface was absent from the authenticated A route. No project asset, B, late-A fence, lease/endpoint, or revocation proof. No retry or further launch under this authorization.
 
@@ -6283,6 +6285,11 @@ The single `--execute` under the explicit 120-second authorization ran as `dd6f8
 - **一个替身如果在缺陷自己那条维度上与生产不同，它就不是测试；修好它是修好那个 bug 的一部分** —— 一个碰撞缺陷活在「源和目标是同一个目录」这条维度上，而夹具给每个实例发了独立 tempdir ⇒ 那条碰撞在夹具里结构上不可能发生，夹具通过、缺陷发货。问：**这个缺陷活在哪条维度上，我的替身在那条维度上和生产一样吗？** 孪生形态在「戳」上：换掉一个无法证伪的旧戳时，检查新的那个**不是同样可以不做那件事就拿到**——一个更长的数字不自动是一个更难伪造的数字 → 附录 C.4
 - **一个没有任何 CI 腿能满足的红条件，是真的、并且不可达，绝不许留着当覆盖面读** —— 红条件若是「三个前置条件全为假的主机」而本仓三条腿没有一条是那样的主机，这条断言在这里**永远不会红**；不可达的守卫和没装上的守卫在每一份报告里同形（判据 §2 的「不可失败」那张脸）。不许拿「它在一个干净容器上会红」当覆盖面——那是关于一台**本仓不运行**的机器的话 → 附录 C.4
 
+## Capability and lifecycle closure records / Capability 与生命周期闭合记录
+
+> Round-by-round records from 2026-10-06 to 2026-11-04: the Capability contract (§3.5d–§3.5g), the Gateway lifecycle stages (Stage B–H, numbered §3.5e–§3.5l in their own series, so §3.5e and §3.5f appear twice), and the Memory, Terminal and Windows closures that followed. The `§3.5x` numbers are kept because plans and prompts cite them.
+> 2026-10-06 至 2026-11-04 的逐轮记录：Capability 契约（§3.5d–§3.5g）、Gateway 生命周期 Stage B–H（自成序列编号 §3.5e–§3.5l，因此 §3.5e、§3.5f 各出现两次），以及其后的 Memory、Terminal、Windows 闭合。`§3.5x` 编号保持不变，因为计划与 prompt 按编号引用。
+
 ### 3.5d Capability Phase 4：Zahir facade 与事实源边界（2026-10-06）
 
 **Capability Core 与 Provider lifecycle（2026-10-21 基础切片；Stage F/G/H 之前的历史基线）**：`src/capability/provider.rs` 在该日期定义了无副作用的 `ProviderLifecycle` / `ProviderHandle` 契约，覆盖 `Discovered → Disabled → Starting → Ready → Stopping → Stopped/Failed`，每次重新启动递增 generation，并通过 broadcast 发布 live transition。它不启动线程、IPC 或动态库，也不替代 `src/extension/lifecycle.rs::ExtensionManager` 与 `plugin_state.rs` 的 enabled 事实源。`ToolHandlerRegistry` 持有同一共享 ProviderHandle；`new_with_provider` 可为未来的 in-process 或 Bridge provider 装配 registry。Provider 未 `Ready` 时 registry 的 callable resolve 与 callable snapshots 为空，但注册数据保留，回到 `Ready` 后重新可见；`BackendLease` 额外记录 `provider_generation`，停止/重启后 `Zahir::validate_lease` 返回 `ResolveError::StaleProvider`。这段只记录 2026-10-21 的契约基线：当时尚未把 ExtensionManager mount/unmount 的副作用驱动接入；当前 bounded Tool-only WASM 接线见 Stage F/G/H 交叉说明。
@@ -6443,7 +6450,7 @@ English mirror (B7): B7 reuses the frozen provider lifecycle contract for exactl
 
 
 
-## 3.5e Gateway Bound retirement / Gateway Bound 生命周期退役（Stage B，2026-10-27）
+### 3.5e Gateway Bound retirement / Gateway Bound 生命周期退役（Stage B，2026-10-27）
 
 **已验证边界 / Verified bounded slice:** source-private `ChannelRegistry` Bound Generic Webhook/loopback composition. `replace_bound_channel` and `unregister_bound_channel` privately prepare and validate, fence the incumbent under the source gate, drain and join real work outside the gate, then atomically publish/remove after final checked revision validation. `complete_bound_work` validates source → `OwnershipTree` → `ProviderHandle` → original entry/ticket; stale completion returns `DiscardedStale` and cannot mutate a successor.
 
@@ -6451,7 +6458,7 @@ English mirror (B7): B7 reuses the frozen provider lifecycle contract for exactl
 
 **证据与限制 / Evidence and limits:** six Stage B contract tests, registry 59, binding 3, Webhook 51 and capability 222 passed; check, clippy, fmt and diff checks passed. The full bilingual command ledger is [`docs/superpowers/runs/2026-10-27-gateway-bound-retirement-run.md`](../superpowers/runs/2026-10-27-gateway-bound-retirement-run.md). R1 remains NO-GO/deferred; Feishu/R2, production mount/Zahir, public Bound send/ingress, EffectClaim, Safe Replay, durable recovery, universal scheduler, remaining provider kinds and all-channel resource matrices remain deferred. Independent review was attempted but unavailable due to an open ACP proxy circuit; it is not a pass.
 
-## 3.5f Gateway Bound compatibility closure / 兼容性闭合（Stage C，2026-10-28）
+### 3.5f Gateway Bound compatibility closure / 兼容性闭合（Stage C，2026-10-28）
 
 **已验证边界 / Verified bounded slice:** Legacy effect/queue admission validates the current association before side effects; retained webhook mounts are fenced by source publication; cold list/status/health/directory/snapshot/capture/read paths do not activate transport/provider/forwarder work; compatibility lifecycle delegates to the existing source-owned Bound start/stop path. Publication replacement/unregistration rechecks identity and advances revision under the channel write lock, with channel I/O outside the lock. Both Legacy ExplicitOnly mid-send contracts now prove old cleanup, successor behavior and no queue/dead-letter persistence: `Channel::send` returns an owned `'static` `SendOperation`, prepared under the channel guard and awaited after guard release. The operation preserves the actual instance policy and is not another association/lifecycle authority. This is a breaking signature migration for downstream `Channel` implementors.
 
@@ -6459,7 +6466,7 @@ English mirror (B7): B7 reuses the frozen provider lifecycle contract for exactl
 
 **证据与限制 / Evidence and limits:** current and detached baseline `ca03a1206` each reproduced both mid-send watchdog failures 3/3 before the fix, proving a structural baseline defect. Final suites at `f7ac10cd9` are GREEN: SMS 18, registry 63, webhook receiver 22, delivery 52, health 14, tools 54, webhook interface 51, capability 222; both focused tests passed three consecutive runs; check, clippy, fmt and diff checks pass with individual memory gates. Independent Task 2 re-review `del_mvrolh9o_4fzv` and full Stage C re-review `del_mvrpueoi_ya8x` both returned `Ready: Yes`, with no unresolved Critical/Important. See [`docs/superpowers/runs/2026-10-28-gateway-bound-compatibility-closure-run.md`](../superpowers/runs/2026-10-28-gateway-bound-compatibility-closure-run.md). R1 remains NO-GO/deferred; Stage E, Feishu/R2, production mount/Zahir, public Bound send/ingress, EffectClaim, Safe Replay, durable recovery, scheduler and remaining provider/kind integrations remain deferred.
 
-## 3.5h Gateway source-owned resource matrices / 源所有资源矩阵（Stage D，2026-10-28）
+### 3.5h Gateway source-owned resource matrices / 源所有资源矩阵（Stage D，2026-10-28）
 
 **已验证边界 / Verified bounded slice:** six table-driven tests in `src/gateway/channel_registry/resource_matrix.rs` cover one real Generic Webhook and a second test-only polling/socket shape. Cold matrices run both shapes across Discovered/Cold/Disabled with correct/wrong/missing ownership and scope; register/list/status/health/snapshot/capture/resolve/rejected reads allocate no observed provider resource. Correct-binding cold resolve fails non-Ready provider admission. Active/send/stop, real `replace_bound_channel`, stale entry/generation proofs, partial activation and failed-stop residual all have positive controls and real cleanup observations.
 
@@ -6469,7 +6476,7 @@ English mirror (B7): B7 reuses the frozen provider lifecycle contract for exactl
 
 **证据与限制 / Evidence and limits:** implementation HEAD `a741ac2c5`; every Cargo command had a separate ALLOW memory gate. Matrix 6/6 passed plus three final serial repeats; SMS 18, registry 63, webhook receiver 22, delivery 52, health 14, tools 54, webhook interface 51 and capability 222 passed; both mid-send tests passed three serial runs each; check/clippy/fmt/diff pass. Fresh reviewer `del_mvs1alzo_wzs8` and final re-review `del_mvs2i9s8_tbjc` both returned `Ready: Yes` with no unresolved Critical/Important. Full bilingual evidence is [`docs/superpowers/runs/2026-10-28-gateway-stage-d-resource-matrices-run.md`](../superpowers/runs/2026-10-28-gateway-stage-d-resource-matrices-run.md). Runs are Darwin arm64 only; full unfiltered/workspace/bins/provider QA was not run. R1 remains NO-GO/deferred; Stage E, production mount, Feishu/R2 and remaining provider/kind/resource-isolation claims remain deferred.
 
-## 3.5j Gateway Stage F provider boundary composition / Gateway Stage F provider boundary 组合（2026-10-29）
+### 3.5j Gateway Stage F provider boundary composition / Gateway Stage F provider boundary 组合（2026-10-29）
 
 **已验证边界 / Verified bounded slice:** the existing `ExtensionManager` production enable path now exercises a real discovered/Cold WASM provider through `ProviderHandle` state/generation/admission, `RuntimeOwner` ownership, canonical publication, `PluginLoader`, `WasmBinding` and the existing disposer. Discovered, Cold, and Disabled list/status/descriptor/projection observations perform zero guest-byte reads, zero instance creation, zero instance drops, and keep the lazy WASM runtime inactive. Activation reaches Ready, carries the current provider generation into the canonical publication, and executes real guest payload A. Replacement withdraws the old publication, rejects old provider/binding/canonical identities, executes payload B, and observes the exact old and successor `LoadedWasmPlugin` drops in `[old, new]` order after retained references are released.
 
@@ -6489,7 +6496,7 @@ English mirror (B7): B7 reuses the frozen provider lifecycle contract for exactl
 
 **审阅与限制 / Review and limits:** first independent findings were repaired; the second independent read-only gstack Pi review returned `Ready: Yes` with no Critical, Important or Minor findings. The receipt proves an exact Extism `LoadedWasmPlugin` instance boundary, not engine-wide JIT code unloading, anonymous mapping or executable-page reclamation, thread shutdown, or RSS reduction. Native dylib loading/unloading, new runtime/dependency, production Gateway/Feishu/R2/Terminal/Memory migration and production channel dynamic code loading remain deferred; `PluginLoader::shutdown` remains a separate bulk cleanup path.
 
-## 3.5k Gateway Stage G provider-neutral production mount readiness / Gateway Stage G provider-neutral production mount 就绪（2026-10-29）
+### 3.5k Gateway Stage G provider-neutral production mount readiness / Gateway Stage G provider-neutral production mount 就绪（2026-10-29）
 
 **已验证边界 / Verified bounded slice:** the provider-neutral production mount already exists in `/Volumes/TBU4/Workspace/Aleph/src/bin/aleph-server/commands/start/mod.rs:233-281`: startup creates the canonical `ToolHandlerRegistry` and one `Arc<OwnershipTree>`, mounts `ProjectionHost`, installs the host in the process slot, and awaits readiness. The same ownership tree is passed to `ExtensionManager`; the same canonical registry Arc is attached before first plugin load. `ChannelRegistry` remains channel-local and is not promoted to capability ownership.
 
@@ -6499,7 +6506,7 @@ English mirror (B7): B7 reuses the frozen provider lifecycle contract for exactl
 
 **证据与限制 / Evidence and limits:** this stage proves the provider-neutral Tool host composition and the exact in-process `LoadedWasmPlugin` receipt/drop boundary. It does not prove native unloading, engine/JIT or OS mapping reclamation, thread shutdown, RSS reduction, process isolation, concrete Feishu/channel Capability integration, or remaining capability kinds. Feishu/R2/Terminal/Memory/Sandbox, concrete Gateway channels, EffectClaim producers, automatic Safe Replay, universal durable scheduling, and the early-error drain fix remain deferred. No production Feishu/channel Capability mount or channel integration was added; the provider-neutral Tool host mount is documented above.
 
-## 3.5l Gateway Stage H declaration-only plugin reads / Gateway Stage H 插件只读声明发现（2026-10-30）
+### 3.5l Gateway Stage H declaration-only plugin reads / Gateway Stage H 插件只读声明发现（2026-10-30）
 
 **实现边界 / Implemented bounded slice:** Stage H keeps the existing `ExtensionManager`, `RuntimeOwner`, `ProviderLifecycle`, `ToolHandlerRegistry` and `OwnershipTree` authorities, and adds the exact public `ExtensionManager::ensure_discovered()` read boundary for ExtensionManager-managed tool-only WASM. The declaration-only pass scans, parses and applies the existing admission policy, publishes declaration rows, and declares eligible tool-only WASM as `RuntimeOwner(Cold)`. It does not call `unmount_all`, clear existing owners, call `mount_parsed` for deferred providers, read guest bytes, create a guest instance or provider resource, or publish canonical callable tools.
 
