@@ -117,6 +117,10 @@ async function run(fixturePath) {
         'session scope differs from original member');
       const write = await call(client, 3, 'chat.send');
       expect(write?.id === 3 && write?.error?.code === -32601, 'unsupported write entered Core');
+      const select = await call(client, 4, 'panel.project.select', { project_id: null });
+      expect(select?.id === 4 && select?.error?.code === -32601, 'project selection is mounted on Web v1');
+      const snapshot = await call(client, 5, 'panel.capabilities.snapshot');
+      expect(snapshot?.id === 5 && snapshot?.error?.code !== -32601, 'capability snapshot not mounted on Web v1');
 
       const legacy = await open('/ws', []);
       expect(legacy !== null, 'legacy WS upgrade failed');

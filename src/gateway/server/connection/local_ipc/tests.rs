@@ -201,6 +201,25 @@ async fn desktop_ipc_uses_gateway_and_releases_its_connection() {
             receive(&mut stream).await["error"]["code"],
             METHOD_NOT_FOUND
         );
+        // One v1 method set: the capability snapshot is mounted, the
+        // project selector (a connection-state write) is not.
+        send(
+            &mut stream,
+            json!({"jsonrpc":"2.0","method":"panel.project.select","id":6,"params":{"project_id":null}}),
+        )
+        .await;
+        assert_eq!(
+            receive(&mut stream).await["error"]["code"],
+            METHOD_NOT_FOUND
+        );
+        send(
+            &mut stream,
+            json!({"jsonrpc":"2.0","method":"panel.capabilities.snapshot","id":7}),
+        )
+        .await;
+        let snapshot = receive(&mut stream).await;
+        assert_eq!(snapshot["id"], 7, "{snapshot}");
+        assert_ne!(snapshot["error"]["code"], METHOD_NOT_FOUND);
 
         let held = json!({"jsonrpc":"2.0","method":"health","id":5});
         send(&mut stream, held.clone()).await;

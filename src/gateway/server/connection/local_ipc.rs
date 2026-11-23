@@ -269,7 +269,7 @@ async fn execute(
     text: &str,
     request: &JsonRpcRequest,
 ) -> io::Result<String> {
-    if !matches!(request.method.as_str(), "health" | "sessions.list") {
+    if !super::v1_mounted(&request.method) {
         return serialize(&JsonRpcResponse::error(
             request.id.clone(),
             METHOD_NOT_FOUND,

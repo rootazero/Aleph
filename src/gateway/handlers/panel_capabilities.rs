@@ -32,7 +32,14 @@ pub async fn handle(request: JsonRpcRequest) -> JsonRpcResponse {
     }
     let manager = match get_extension_manager() {
         Ok(manager) => manager,
-        Err(response) => return response,
+        // The shared accessor has no request id; answer with ours so the
+        // caller can correlate the failure instead of timing out.
+        Err(response) => {
+            return JsonRpcResponse {
+                id: request.id,
+                ..response
+            }
+        }
     };
     snapshot_response(request, manager.panel_ui_capability_snapshot())
 }
@@ -86,7 +93,14 @@ pub(crate) async fn handle_with_context(
     };
     let manager = match get_extension_manager() {
         Ok(manager) => manager,
-        Err(response) => return response,
+        // The shared accessor has no request id; answer with ours so the
+        // caller can correlate the failure instead of timing out.
+        Err(response) => {
+            return JsonRpcResponse {
+                id: request.id,
+                ..response
+            }
+        }
     };
     let snapshot = PanelUiContextSnapshot {
         snapshot: manager.panel_ui_capability_snapshot_for(&resolved.visibility),

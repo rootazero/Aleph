@@ -444,7 +444,7 @@ async fn serve(
             let Some(caller) = peer.snapshot().await else {
                 break;
             };
-            if !matches!(request.method.as_str(), "health" | "sessions.list") {
+            if !super::v1_mounted(&request.method) {
                 // Rejected traffic doesn't consume legacy RPC or auth buckets.
                 let key = RateLimitKey::new(
                     &format!("web-v1-unsupported:{}", addr.ip()),
