@@ -35,6 +35,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 BAD = []
 ADVISORY = []
+# Every backticked path token that does not exist, per document. The baseline
+# file is a snapshot of this map: it shrinks when a sweep repairs a path and
+# grows when a document starts naming a path that never existed.
+STALE_PATHS = {}
 
 ENTRY_DOCS = [
     "AGENTS.md",
@@ -185,6 +189,10 @@ def path_candidates(text):
         head = token.split("/", 1)[0]
         if not head or not (ROOT / head).exists():
             continue
+        if head.startswith("."):
+            # Hidden directories (.git/, .pi/, .cargo/) are not part of the
+            # tracked tree; a document may name them as environment context.
+            continue
         yield token
 
 
@@ -218,6 +226,9 @@ def check_paths(rel, text, backlog):
     for token in path_candidates(text):
         if path_exists(token):
             continue
+        STALE_PATHS.setdefault(rel, [])
+        if token not in STALE_PATHS[rel]:
+            STALE_PATHS[rel].append(token)
         if token in backlog.get(rel, []):
             continue
         bad("PATHS", f"{rel} names a path that does not exist: {token}")
@@ -415,6 +426,25 @@ def main():
         "advisory": ADVISORY,
     }
     known_backlog = sum(len(v) for v in backlog.values())
+    if "--update-baseline" in sys.argv:
+        # Re-record the ratchet: a path that was repaired leaves the backlog,
+        # a path that is still stale stays on it.
+        payload = {
+            "PATHS": {
+                rel: sorted(set(tokens)) for rel, tokens in sorted(STALE_PATHS.items())
+            }
+        }
+        target = ROOT / "scripts/doc_wiring_audit_baseline.json"
+        target.write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        total = sum(len(v) for v in payload["PATHS"].values())
+        print(
+            f"doc wiring audit: baseline re-recorded, {total} stale path(s) "
+            f"across {len(payload['PATHS'])} document(s)"
+        )
+        return 1 if BAD else 0
     if "--json" in sys.argv:
         print(json.dumps(report, indent=2, ensure_ascii=False))
     else:
