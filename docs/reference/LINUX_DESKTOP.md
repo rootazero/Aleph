@@ -148,7 +148,7 @@ AT-SPI 每次调用的成本由**往返次数**决定，不由 CPU 决定。本�
 | ~70 节点窗口全深度快照 | 1.88 s | **0.32 s** |
 | 边际成本 | ~27 ms/节点 | **~4.6 ms/节点** |
 
-来源是三件事：`Cache.GetItems` 一次拿回整棵树（role/name/states/interfaces/parent）、剩余的几何与动作名并发发出（32 路）、总线连接共享。**墙钟预算 5s** (`ax/budget.rs`) 仍在，用来对付「卡死的应用永远不回 D-Bus」——超时返回**已读到的部分**而不是报错。
+来源是三件事：`Cache.GetItems` 一次拿回整棵树（role/name/states/interfaces/parent）、剩余的几何与动作名并发发出（32 路）、总线连接共享。**墙钟预算 5s** (`desktop/linux/src/ax/budget.rs`) 仍在，用来对付「卡死的应用永远不回 D-Bus」——超时返回**已读到的部分**而不是报错。
 
 不提供缓存的应用（老 Qt、桥只加载了一半）自动回落逐属性读：**慢，但不会空**。
 
@@ -178,7 +178,7 @@ export QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1
 3. 报"No managed window with id …" ⇒ 窗口 id 过期，重新 `window_list`。
 
 **"剪贴板没反应"**
-- 读到空串：多半剪贴板真的是空的（所有已安装工具都非零退出时按空处理，见 `linux/clipboard.rs` 模块文档）。
+- 读到空串：多半剪贴板真的是空的（所有已安装工具都非零退出时按空处理，见 `desktop/shared/src/linux/clipboard.rs` 模块文档）。
 - **写报错并列出试过的工具**：装的工具和会话类型对不上（X11 机器上只装了 `wl-clipboard`，或反之）。装匹配的那个。
 - 一个工具都没装 ⇒ 错误直接点名装什么。
 

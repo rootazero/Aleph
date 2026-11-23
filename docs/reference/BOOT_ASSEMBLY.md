@@ -49,7 +49,7 @@ Total: 6,194 LOC across 5 files.
 | File | LOC | Responsibility |
 |------|-----|----------------|
 | `mod.rs` | 1,656 | Top-level orchestrator: tracing, config load, session store, extension manager, graceful shutdown wiring |
-| `builder/subsystems.rs` | 581 | Auth (`initialize_auth`), device store, channel registration, inbound routing |
+| `src/bin/aleph-server/commands/start/builder/subsystems.rs` | 581 | Auth (`initialize_auth`), device store, channel registration, inbound routing |
 | `builder/agent_init.rs` | 1,905 | `AgentHandlersResult`: provider registry, agent registry, tool registry, execution engine, embedder, compression service, multi-provider registry |
 | `builder/handlers.rs` | 1,951 | Gateway HTTP route registration |
 | `orchestrator_init.rs` | 94 | Multi-agent orchestrator subsystem |
@@ -91,7 +91,7 @@ instantiation site, and any dependency that must already be ready.
 
 ### Module 6 — Tool Calling / Structured Output
 - **Home**: `src/tools/`
-- **Primary instantiation**: per-call — invoked from `harness/agent.rs` during a turn.
+- **Primary instantiation**: per-call — invoked from `src/harness/agent.rs` during a turn.
 - **Dependencies**: tools registry (Module 2) populated.
 
 ### Module 7 — State & Session

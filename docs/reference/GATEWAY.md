@@ -188,7 +188,7 @@ Four things worth knowing before touching it:
   (`adjudicate_orphaned_tasks`, run from `settle`) only start after that join
   — so a survivor for a session the scan merely skipped, or a user whose
   message was lost pre-seed, waits for the **slowest resumed run** to finish
-  (`start/mod.rs` argues why the order must hold; FOLLOW-UP F27 is the
+  (`src/bin/aleph-server/commands/start/mod.rs` argues why the order must hold; FOLLOW-UP F27 is the
   per-session release).
 
 Status vocabulary (same on both surfaces): `resumed` · `already_resuming` ·
@@ -979,7 +979,7 @@ pub enum DmScope {
 
 ### Storage Schema
 
-Abridged from `session_manager/mod.rs`; that file is the source, this is the
+Abridged from `src/gateway/session_manager/mod.rs`; that file is the source, this is the
 shape. There is no `messages TEXT` JSON column and no `session_metadata`
 table — both were in this document long after they stopped existing.
 
@@ -1390,7 +1390,7 @@ Aleph 对外**是一个 MCP server**：dsh 一行 `cordis.yml`、pi 一行 `pi-m
 pi（经 pi-mcp-adapter）、Claude Code `.mcp.json`（`type: http`）与 dsh `cordis.yml` 的三行配置；本节不抄那三行。设计母本：spec
 `docs/superpowers/specs/2026-09-20-plugin-scope-and-cc-compat-design.md` §3.7。它是一张**接口脸**（R4：
 纯 I/O），把 `src/tools/server/mod.rs` 翻成 Aleph 自己的工具调用路径；**wire 类型复用 `src/mcp/{jsonrpc,protocol,types}.rs`，
-信封复用网关自己的 `protocol::JsonRpc{Request,Response}`（客户端侧的 `mcp/jsonrpc.rs` 的 id 是 `u64`，回不了字符串 id），不复制**（CLAUDE.md 禁用清单 2026-09-20 那一行）。
+信封复用网关自己的 `protocol::JsonRpc{Request,Response}`（客户端侧的 `src/mcp/jsonrpc.rs` 的 id 是 `u64`，回不了字符串 id），不复制**（CLAUDE.md 禁用清单 2026-09-20 那一行）。
 
 | 项 | 决定 |
 |---|---|

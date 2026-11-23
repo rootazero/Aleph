@@ -75,7 +75,7 @@ Phase A 交付三样东西，各自独立可验证：
 - `MAX_DIFF_INPUT_BYTES = 2 MiB` —— 超过就不 diff。
 
 三个工具通过 `AlephTool::mutates_file_content() -> true` 声明自己会改文件内容，并各自挂上 `_presentation`：
-`file_edit`（`file_ops/edit.rs`）· `file_write`（`file_ops/write.rs`，为此**新读一次 pre-image**）· `apply_patch`（`file_ops/apply_patch.rs`）。
+`file_edit`（`src/builtin_tools/file_ops/edit.rs`）· `file_write`（`src/builtin_tools/file_ops/write.rs`，为此**新读一次 pre-image**）· `apply_patch`（`src/builtin_tools/file_ops/apply_patch.rs`）。
 `plan_delete` 的 pre-image 读取是 **best-effort**：读不到就发 `PreImageUnavailable`，**不会**把一次删除变成失败
 （这是 fail-closed 的方向：少一个 diff，不是少一次删除）。
 
@@ -191,12 +191,12 @@ ToolOutput.metadata.presentation : Option<Presentation>          （src/session/
 - **join 的范围是整个 `FileChange`，不是每个 `Hunk`**——一把中段作为未改动上下文存活下来的密钥会被切进两个 hunk，
   两个被显示的半截都在泄露；按 hunk join 恰好漏掉**编辑**这个场景。跨 hunk 的误报代价是一份被扣下的 diff，那是 fail-closed 的一侧。
 - **`hunks.is_empty()` 提前返回**，所以一个已有的理由不会被一个假的 `Redacted` 覆盖掉。
-  这是**完整**而不是部分的：全仓产地已枚举——`file_ops/diff.rs` 在设 `TooLarge` 的同一口气里 `hunks.clear()`，
+  这是**完整**而不是部分的：全仓产地已枚举——`src/builtin_tools/file_ops/diff.rs` 在设 `TooLarge` 的同一口气里 `hunks.clear()`，
   其余一律经 `FileChange::unavailable(..)`（构造出来就没有 hunk），所以「有理由且有 hunk」这个状态不可达。
 - 第二遍扫描的成本上界是 `MAX_HUNK_LINES = 400`，与第一遍同阶，且 hunk 为空时整段跳过。
 
 ⚠️ `FileChange.path` **也被 mask**，而这不是 Phase A 的判断——它沿用孪生腿早就付过账的那条裁定
-（`execution_engine/unattended_redacting_sink.rs` 的模块 doc）：**没有白名单，不对「哪个字段算自由文本」做判断**，
+（`src/gateway/execution_engine/unattended_redacting_sink.rs` 的模块 doc）：**没有白名单，不对「哪个字段算自由文本」做判断**，
 identifier 形状的字段只花一次不会命中的正则，比一条需要人对每个新字段重新分类的规则便宜。
 而且「一个路径永远不像凭据」**不是我们能替运维承诺的**——`[[security.mask_patterns]]` 允许装任意正则。
 
@@ -214,7 +214,7 @@ identifier 形状的字段只花一次不会命中的正则，比一条需要人
 
 ### 2.3 ⚠️ attended / unattended 的不对称——已知开口
 
-写时那条脱敏**只包 unattended run**，两处读的是**同一个** `unattended` 布尔：trace sink 一侧在 `execution_engine/run_trace_sinks.rs` 的 `redact_if`（`run_loop/inner.rs` 只把这个 bool 传给 `RunTraceSinks::build`，它同时包住 run 自己的链与子代理的 harness 链），**event emitter** 一侧仍是 `run_loop/inner.rs` 的 `if unattended`。
+写时那条脱敏**只包 unattended run**，两处读的是**同一个** `unattended` 布尔：trace sink 一侧在 `src/gateway/execution_engine/run_trace_sinks.rs` 的 `redact_if`（`src/gateway/execution_engine/run_loop/inner.rs` 只把这个 bool 传给 `RunTraceSinks::build`，它同时包住 run 自己的链与子代理的 harness 链），**event emitter** 一侧仍是 `src/gateway/execution_engine/run_loop/inner.rs` 的 `if unattended`。
 所以纠正过的不变量是：
 
 > **unattended run 在实时帧与写盘两处都脱敏；attended run 两处都不脱敏。**
@@ -336,7 +336,7 @@ identifier 形状的字段只花一次不会命中的正则，比一条需要人
 `dynamic_bytes_sent` 因此上了线，**它而不是那些行才是 dynamic 半边的权威尺寸**：
 
 - 比 dynamic 行**小**：trim 咬到了；
-- 比 dynamic 行**大**：`prompt_builder/cache.rs` 在层被测量**之后**焊进了一个后管线的 `<strategy>` 块，没有哪一层拥有那些字节。
+- 比 dynamic 行**大**：`src/thinker/prompt_builder/cache.rs` 在层被测量**之后**焊进了一个后管线的 `<strategy>` 块，没有哪一层拥有那些字节。
   （今天 Cached 路径上不可达——只有 `subagent_spawner` 调 `with_strategy` 而那是 Basic 路径、不记录——
   但那是**关于现有调用方的陈述，不是关于这个函数的性质**，而那处焊接离测量点五行。判据 §5。）
 - stable 前缀是 trim 从不碰的**受保护地板**，所以 `Σ(stable 行) + dynamic_bytes_sent` 就是**真正发出去**的那个 prompt 的大小。
@@ -447,14 +447,14 @@ identifier 形状的字段只花一次不会命中的正则，比一条需要人
 `toolu_01ABC…_bash.txt`，也就是 store 里每一次 Anthropic 形状的调用。
 
 - **经仓内任何 id 生成器都不可达**：三个生成器全是定长形状加一个新鲜 uuid nonce
-  （`providers/delta.rs` · `providers/ollama.rs` · `providers/protocols/gemini/sse.rs`），攻击者**缩短不了自己的 id**。
-- **上游逐字透传 id 时可达**：`providers/protocols/openai_chat/proto_impl.rs` 原样带过 `tc.id`，
+  （`src/providers/delta.rs` · `src/providers/ollama.rs` · `src/providers/protocols/gemini/sse.rs`），攻击者**缩短不了自己的 id**。
+- **上游逐字透传 id 时可达**：`src/providers/protocols/openai_chat/proto_impl.rs` 原样带过 `tc.id`，
   Gemini 的 `sse.rs` 在载荷点名时也一样，而 Aleph 支持任意 `base_url`。
   一个敌意的「OpenAI 兼容」端点因此可以自己发 `id: "toolu"`。`tools.invoke` 不接受调用方给的 id。
 - **正解是精确匹配**（`stem == format!("{}_{}", sanitize(call), sanitize(tool))`，`tool` 从同一次调用的
   `SessionEvent::ToolCallRequested.name` 读），**它是被阻塞的，不是被忘了**：
   `browser_tools::offload_full_content` **刻意**把 blob 归在**调用方**工具而不是快照工具名下，
-  而 `browser_tools/exec.rs` 有一条断言逐字钉住这一点。不先处理那个例外就上精确匹配，
+  而 `src/builtin_tools/browser_tools/exec.rs` 有一条断言逐字钉住这一点。不先处理那个例外就上精确匹配，
   等于拿一个窄泄露换来**一整类**浏览器结果的假 `Expired`。
 - **交给用户的开放决定**（2026-09-07 裁定：Phase A 只修注释不修谓词）。仍需衡量的是那个取舍，而衡量需要测量。
   ⚠️ Phase A 之前**根本没有任何绑定**，所以发出去的东西严格优于原状。
@@ -502,7 +502,7 @@ identifier 形状的字段只花一次不会命中的正则，比一条需要人
 
 `src/capability/census.rs::every_installed_global_is_a_capability_slot` 在分支起点 `40a3579a8` 就是红的，
 差**恰好一条**——这既由推导预测（Task 18 只新增了一个生产 `CapabilitySlot`，即
-`thinker/prompt_size_registry.rs` 那个；`TEST_REGISTRY` 在 `#[cfg(test)]` 下被 `production_text` 剥掉）
+`src/thinker/prompt_size_registry.rs` 那个；`TEST_REGISTRY` 在 `#[cfg(test)]` 下被 `production_text` 剥掉）
 也由**直接测量**证实（2026-09-07 在 `40a3579a8` 上真跑的失败集合里就有它）。
 
 **这个字面量做的是相对 +1（48 → 49），刻意不去「修」成 50。** 把它调绿会让这道闸开始撒谎——
@@ -532,7 +532,7 @@ main 上某处加了一个生产 `CapabilitySlot` 而没有推这个数字，而
   从这个 worktree 里删要么对上游毫无作用、要么弄坏 submodule 指针，而 `include_dir!` 在编译期嵌入那棵树。
   CUT 晚一轮，落在它该落的那个仓里。
 - **`ToolGroup::headline` 无条件数 `rows.len()`**，而它的时长求和只算终态行（§4）。TUI 自 Phase B 起原样绘制它
-  （`widgets/tool_row.rs` 调 `headline()`）；Phase S 的 `group_tool_rows` 是 `ToolGroup` 的第二个生产者（§7.1）。
+  （`interfaces/tui/src/tui/widgets/tool_row.rs` 调 `headline()`）；Phase S 的 `group_tool_rows` 是 `ToolGroup` 的第二个生产者（§7.1）。
 - **`src/tools/result_processing.rs` 那处不是 rustfmt-clean 的行**（`hoist_presentation` 的畸形载荷断言，`:998`）
   在本分支上被**两个不同的实施者各拒绝过一次**，理由相同且正确：为一个装饰性收益去重排别人的活行会招来冲突。
   它由 Phase A 末尾一次格式化清理关闭（提交 `0834d7dae`，与另外九个文件一起）。两位实施者都称它「pre-existing」，
@@ -546,7 +546,7 @@ main 上某处加了一个生产 `CapabilitySlot` 而没有推这个数字，而
 ## 6. 改这一层之前 / Working notes
 
 - **「diff 没显示出来」先问是哪一段断了**：工具挂没挂 `_presentation`（普查 C 方向）· hoist 有没有跑
-  （`apply_layer_two`）· 哪条腿（实时帧 vs `trace.by_runs` 重放）· 还是**这个客户端根本没有渲染器**（§5.1：TUI 自 2026-09-11 起经 `widgets/tool_row.rs` 调 `diff_rows`；Panel 至 2026-09-23 仍没有——在 Panel 上这是最可能的答案）。
+  （`apply_layer_two`）· 哪条腿（实时帧 vs `trace.by_runs` 重放）· 还是**这个客户端根本没有渲染器**（§5.1：TUI 自 2026-09-11 起经 `interfaces/tui/src/tui/widgets/tool_row.rs` 调 `diff_rows`；Panel 至 2026-09-23 仍没有——在 Panel 上这是最可能的答案）。
 - **要给 `Presentation` / `FileChange` / `Hunk` / `HunkLine` 加字段**：`mask_presentation` 会编译不过。
   那是设计好的机制——把新字段**加进那个走查**，不要加 `..`。
 - **要给 `Unavailable` 加成员**：先答两句——「现有的哪一个都不是真的，为什么」，以及「**谁产它**」。
@@ -582,7 +582,7 @@ main 上某处加了一个生产 `CapabilitySlot` 而没有推这个数字，而
 
 | 交付 | 是什么 | 落点 |
 |---|---|---|
-| **一条管道** | `AgentTraceEmitSink` 不再自起 mpsc + 排水任务；`on_trace` 同步 `send` `FlowStreamEvent::Trace` 进 run 自己的 broadcast 通道，drain 原地取 `seq`（`event_drain.rs` 的 `FlowStreamEvent::Trace` 臂；排水循环是 `helpers.rs::run_dispatch_and_drain_classified`，`Lagged` 在那里只记一条 warn）。sink 只持 `broadcast::WeakSender`、每个事件 upgrade 一次——它**从不拥有**通道。通道由 `run_loop/inner.rs` 用 `orchestrator::flow_event_channel()` 创建，强 sender 按值移进 `FlowRequest.event_tx`、初始 receiver 当场 drop；`dispatch` 有 `event_tx` 则 `subscribe`，无则自建 | `src/gateway/execution_engine/agent_trace_emit_sink.rs` · `src/orchestrator/dispatch.rs` · `src/gateway/execution_engine/run_loop/inner.rs` · `src/gateway/execution_engine/{event_drain.rs,helpers.rs}` |
+| **一条管道** | `AgentTraceEmitSink` 不再自起 mpsc + 排水任务；`on_trace` 同步 `send` `FlowStreamEvent::Trace` 进 run 自己的 broadcast 通道，drain 原地取 `seq`（`event_drain.rs` 的 `FlowStreamEvent::Trace` 臂；排水循环是 `helpers.rs::run_dispatch_and_drain_classified`，`Lagged` 在那里只记一条 warn）。sink 只持 `broadcast::WeakSender`、每个事件 upgrade 一次——它**从不拥有**通道。通道由 `src/gateway/execution_engine/run_loop/inner.rs` 用 `orchestrator::flow_event_channel()` 创建，强 sender 按值移进 `FlowRequest.event_tx`、初始 receiver 当场 drop；`dispatch` 有 `event_tx` 则 `subscribe`，无则自建 | `src/gateway/execution_engine/agent_trace_emit_sink.rs` · `src/orchestrator/dispatch.rs` · `src/gateway/execution_engine/run_loop/inner.rs` · `src/gateway/execution_engine/{event_drain.rs,helpers.rs}` |
 | **`ReasoningEmitted`** | `LoopTraceEvent` / `AgentTraceEvent` 各加一个变体（`kind = "reasoning_emitted"`）；`think.rs` 经私有的 `emit_reasoning` 在 `TextEmitted{Final}` 的两个生产点（正常 Think 轮、grace 轮）旁各发一次，只记**非空白**的 thinking；无人值守时 `mask_trace_event` 写前脱敏（守卫 G3：`reasoning_emitted_is_masked_before_persistence_on_unattended_runs` · `trace_replay.rs::a_reasoning_row_replays_masked_on_the_by_runs_leg`）；`is_step_event` 放行上线；`task_traces` 落盘、`trace.by_runs` 原样回放。这是模型 thinking 的一份新的持久化拷贝，attended run 上它在实时帧与落盘两处都**不**脱敏——§2.3 的不变量原样适用于它。消费契约（一个迭代可以有两条，追加不替换）写在协议变体自己的 doc 上 | `src/harness/{trace.rs,agent/think.rs}` · `src/gateway/trace_protocol.rs` · `src/gateway/execution_engine/unattended_redacting_sink.rs` · `shared/protocol/src/{events.rs,trace_presentation.rs}` |
 | **子代理边界** | 子代理的 harness 事件不再进父 run 的 `agent_trace` 帧与 `task_traces` 行（子代理 harness 链终于 `NoopTraceSink`；它保留 scratchpad 推送，经 `ScratchpadProgressSink::sharing_queue` 与 run 共用一条队列，父子两边的进度行按一个顺序到达通道）；子代理的 `MeteringProvider` 仍握父链，`ProviderUsage` / `CacheHealthDegraded` 照旧落在父任务下（`teams.usage` 与 doctor 读它们），但后台子代理在 run 结束之后的这两种帧只落库、不上线（→ spec §5.4）。一个构造点决定两条链 | `src/gateway/execution_engine/run_trace_sinks.rs`（`RunTraceSinks::build` · `ChildTraceSinks`） |
 | **Step 与 reducer** | `StepEntry` · `step_headline` / `first_sentence` / `step_tally` / `HEADLINE_MAX_COLS` · `DetailLevel` / `effective_open` · `Transcript::{apply_live, apply_replay, finish_replay}` 与 `Change`；step 内的只读分组 `group_tool_rows` → `StepTool`（`group_entries` 的孪生）与 step 的工具汇总 `summarize_rows`（`summarize_turn` 的孪生）；`trace_result_to_wire` 从 TUI **搬**进 reducer（TUI 现在 import 它，不再各持一份） | `shared/ui_logic/src/transcript/{step.rs,detail.rs,reducer/,group.rs,turn_summary.rs}` |
@@ -591,7 +591,7 @@ main 上某处加了一个生产 `CapabilitySlot` 而没有推这个数字，而
 
 这一层有几条会在别处被「统一」掉的裁定。**正文只在 spec 里写一次**（判据 §1），这里给名字、守卫与指针：
 
-- **两条腿一处派生是结构性的，不是纪律性的**：`apply_live` 收到的 `StreamEvent::AgentTrace { event }` 与 `trace.by_runs` 的行是同一个 `AgentTraceEvent`，两条腿都进 `reducer/mod.rs` 的 `apply_trace`。守卫 G2 `the_live_leg_and_the_replay_leg_fold_to_the_same_entries`（`reducer/tests/g2.rs`，去掉时钟后比整份条目）→ spec §6 · §5.3。⚠️ 它的两条腿都是**手工构造的 fixture**：真 drain 帧对真 `trace.by_runs` 行的集成层 G2 推迟到 Phase T 的 qa/transcript_fold（计划中的 QA 装置，尚未落地；spec §5.3 的修订段）。
+- **两条腿一处派生是结构性的，不是纪律性的**：`apply_live` 收到的 `StreamEvent::AgentTrace { event }` 与 `trace.by_runs` 的行是同一个 `AgentTraceEvent`，两条腿都进 `shared/ui_logic/src/transcript/reducer/mod.rs` 的 `apply_trace`。守卫 G2 `the_live_leg_and_the_replay_leg_fold_to_the_same_entries`（`shared/ui_logic/src/transcript/reducer/tests/g2.rs`，去掉时钟后比整份条目）→ spec §6 · §5.3。⚠️ 它的两条腿都是**手工构造的 fixture**：真 drain 帧对真 `trace.by_runs` 行的集成层 G2 推迟到 Phase T 的 qa/transcript_fold（计划中的 QA 装置，尚未落地；spec §5.3 的修订段）。
 - **`iteration: None` 永不被追认**、**记录是权威的**（`ReasoningEmitted` 之于 thinking、`TextEmitted{Final}` 之于文字）、**没有记录覆盖的流式文字是临时的** → spec §4 · §5.2。
 - **`RunSummary.loops` 是终局闸**，`NeedsResync` 之后客户端怎么做 → spec §5.1 · §9。
 
@@ -607,8 +607,8 @@ grep -rn "TranscriptEntry::Step" interfaces --include=*.rs
 grep -rn "ReasoningEmitted\|reasoning_emitted" interfaces --include=*.rs
 ```
 
-- **reducer / step / detail**：`interfaces/` 里零调用者。谓词是：第一条命令的每一个命中都是注释、一句 UI 文案，或 Panel 自己 tool card 的 `effective_open` 测试——**没有一个是 reducer / step / detail 的调用者**，所以零消费者区间成立（这里刻意不写命中数：它随无关的注释变，复核时重跑命令、按这条谓词逐条读）。reducer 模块里唯一有生产调用者的是 `trace_result_to_wire`——它是从 TUI **搬**来的，TUI `app/trace.rs` 仍用它画自己的工具行，这不算 reducer 的消费者。
-- **`TranscriptEntry::Step`**：TUI 里只有编译臂（`widgets/chat_area.rs` 两处、`app/tests.rs` 一处），没有生产者。
+- **reducer / step / detail**：`interfaces/` 里零调用者。谓词是：第一条命令的每一个命中都是注释、一句 UI 文案，或 Panel 自己 tool card 的 `effective_open` 测试——**没有一个是 reducer / step / detail 的调用者**，所以零消费者区间成立（这里刻意不写命中数：它随无关的注释变，复核时重跑命令、按这条谓词逐条读）。reducer 模块里唯一有生产调用者的是 `trace_result_to_wire`——它是从 TUI **搬**来的，TUI `interfaces/tui/src/tui/app/trace.rs` 仍用它画自己的工具行，这不算 reducer 的消费者。
+- **`TranscriptEntry::Step`**：TUI 里只有编译臂（`interfaces/tui/src/tui/widgets/chat_area.rs` 两处、`interfaces/tui/src/tui/app/tests.rs` 一处），没有生产者。
 - **`AgentTraceEvent::ReasoningEmitted`**：TUI `app/trace.rs::append_trace_debug_entry` 里是 `=> {}`（直播 thinking 已经经 `StreamEvent::Reasoning` 画过一次；重放与非流式轮次在 Phase T 之前**不显示** thinking）；Panel 聊天转录的 `chat/events.rs::apply_trace_event` 按 `kind` 分派，落进 `_ => {}` 静默忽略；Panel 的 agent-trace 检查视图（`agent_trace_model.rs::map_node_type`）把它映成 Thinking 节点——那是调试面，不是转录。
   第三条命令**看不见**的那一层：共享 presenter（`shared/protocol/src/trace_presentation.rs` 的 `present_agent_trace_event*` 族）是这一行文字 `[Reasoning] iter N: <截断的文字>` 的唯一生产者（标签 `AgentTracePresentationLabels.reasoning_emitted`）；它的消费者就是调用它的每一处（普查：`rg present_agent_trace_event interfaces`），调用点里不出现变体名，所以按名字 grep 找不到它们。其中 TUI 算出了这份 presentation 但在上面那条 `=> {}` 臂丢弃；CLI `aleph trace show`（`trace_cmd.rs`）打印它；Panel 检查视图用它做节点正文。后两者同样是调试面，不是转录。
 
@@ -618,7 +618,7 @@ grep -rn "ReasoningEmitted\|reasoning_emitted" interfaces --include=*.rs
 
 ### 7.4 这一层的不变量与没做的
 
-- **发送端寿命不变量**：drain 要等**每一个强 sender** 都消失才收到 `Closed`，emit sink 只持弱半边。守卫：`no_sender_outlives_dispatch`（`src/orchestrator/tests/dispatch.rs`）· `a_live_sink_does_not_keep_the_channel_open`（`agent_trace_emit_sink.rs`）。机制与重访条件的所有者是 `FlowRequest.event_tx` 的 doc、emit sink 模块 doc 的「Why it holds a `WeakSender`」与 `run_loop/inner.rs` 创建通道处的注释；判据全文 → [FEATURE_LOCATOR 附录 D.4.51](FEATURE_LOCATOR.md)。
+- **发送端寿命不变量**：drain 要等**每一个强 sender** 都消失才收到 `Closed`，emit sink 只持弱半边。守卫：`no_sender_outlives_dispatch`（`src/orchestrator/tests/dispatch.rs`）· `a_live_sink_does_not_keep_the_channel_open`（`agent_trace_emit_sink.rs`）。机制与重访条件的所有者是 `FlowRequest.event_tx` 的 doc、emit sink 模块 doc 的「Why it holds a `WeakSender`」与 `src/gateway/execution_engine/run_loop/inner.rs` 创建通道处的注释；判据全文 → [FEATURE_LOCATOR 附录 D.4.51](FEATURE_LOCATOR.md)。
 - **顺序守卫是两条**：G1a `on_trace_publishes_onto_the_flow_channel_before_returning`（`agent_trace_emit_sink.rs`）· G1b `trace_frames_keep_their_place_in_the_run_seq_order`（`src/orchestrator/harness_bridge/tests.rs`）。为什么缺一不可 → spec §5.3 的修订段；判据全文 → [FEATURE_LOCATOR 附录 D.0.196](FEATURE_LOCATOR.md)。
 - **老 run**（2026-09-23 之前录的）在 `task_traces` 里没有 reasoning——冷加载时那些 step 的标题退到 text 首句 / 工具计数，不回 session 日志去猜（spec §13）。
 - **`TranscriptEntry::Reasoning` 兼容形状仍在**：本轮 TUI 生产流转由 Step reducer 接管；旧历史/测试与其他界面尚可使用旧变体，不能仅因 TUI 迁移就删除共享协议形状。
@@ -628,8 +628,8 @@ grep -rn "ReasoningEmitted\|reasoning_emitted" interfaces --include=*.rs
 
 English: The TUI now owns one shared `Transcript`, renders Step entries, and stages completed-session recovery before replacing the visible transcript. Active replay/live merging still requires a server watermark; missing data remains explicit.
 
-- **状态与渲染**：`interfaces/tui/src/tui/app/events.rs` 将属于当前会话的帧送入 `Transcript::apply_live`；`app/trace.rs` 保留 usage、context、plan 等旁路观测。`widgets/chat_area.rs` 渲染 Step，工具分组在 Step 内发生，末尾答复保持展开；`/detail brief|full` 与 `step_overrides` 控制显示。兼容旧命令的入口不拥有另一份转录。
-- **活动接入**：`Transcript::adopt_live_run` 幂等接纳已在执行的 run；向 live 状态直接 apply_replay/finish_replay 会返回 `NeedsResync`。`app/hydration.rs` 仅从完成历史构建替换稿。当前 `trace.by_runs` 没有与 live 帧共享的回放水位，因此不能按正文相似度去重拼接活动前缀；结束后刷新整份已加载会话。
+- **状态与渲染**：`interfaces/tui/src/tui/app/events.rs` 将属于当前会话的帧送入 `Transcript::apply_live`；`interfaces/tui/src/tui/app/trace.rs` 保留 usage、context、plan 等旁路观测。`interfaces/tui/src/tui/widgets/chat_area.rs` 渲染 Step，工具分组在 Step 内发生，末尾答复保持展开；`/detail brief|full` 与 `step_overrides` 控制显示。兼容旧命令的入口不拥有另一份转录。
+- **活动接入**：`Transcript::adopt_live_run` 幂等接纳已在执行的 run；向 live 状态直接 apply_replay/finish_replay 会返回 `NeedsResync`。`interfaces/tui/src/tui/app/hydration.rs` 仅从完成历史构建替换稿。当前 `trace.by_runs` 没有与 live 帧共享的回放水位，因此不能按正文相似度去重拼接活动前缀；结束后刷新整份已加载会话。
 - **恢复与公平性**：`commands::acquire_session_snapshot` 获取会话和 traces，`apply_acquired_session` 检查会话/代次并应用；`rpc_jobs.rs` 承载有界背景请求，`shared/client::stream_continuity` 从独立计数器报告队列溢出或解码丢失。继续使用 `try_send`，不能让慢 TUI 堵住 WebSocket 的 RPC 响应路由。
 - **终端所有权（2026-10-16）**：独立 `aleph-tui` 在 `main.rs` 调用 `aleph_logging::init_component_file_logging`，保持轮转、脱敏和日志级别过滤；文件初始化失败只在全屏绘制前报告，之后不安装控制台 writer。`keys.rs` 让输入框与聊天焦点下的 PageUp/PageDown 翻阅转录；滚轮通过同一动作派发，覆盖层保留自己的按键路由。`shared/client::classify_frame` 仅将 Gateway census 豁免的 `stream.session_updated` / `stream.running_set_changed` 视为无关通知，其余未知或损坏的聊天帧仍报告丢失。
 

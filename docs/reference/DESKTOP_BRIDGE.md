@@ -52,7 +52,7 @@ AlephBridge (Swift)          ← long-lived child process
 ### Spawn lifecycle
 
 The `SwiftBridge` client (`desktop/shared/src/bridge/client.rs`) spawns the
-helper lazily on the first call. A `Supervisor` (`bridge/supervisor.rs`)
+helper lazily on the first call. A `Supervisor` (`desktop/shared/src/bridge/supervisor.rs`)
 monitors the child process and respawns it with exponential backoff (1 s, 2 s,
 4 s, 8 s, 16 s, capped at 30 s) when it exits unexpectedly. After five
 restarts within a ten-minute window the bridge enters **disabled mode**: all

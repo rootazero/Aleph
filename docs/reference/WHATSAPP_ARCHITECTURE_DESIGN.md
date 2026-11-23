@@ -59,11 +59,11 @@ WhatsApp channel uses `whatsapp-rust` crate (wacore) directly — **no Go bridge
 | `mod.rs` | `WhatsAppChannel`, event loop, `status()`, factory, plugin registration |
 | `config.rs` | `WhatsAppConfig` + sub-configs |
 | `pairing.rs` | 9-variant FSM (`Idle/Initializing/WaitingQr/QrExpired/Scanned/Syncing/Connected/Disconnected/Failed`) + `to_channel_status()` |
-| `wa_runtime/traits.rs` | `trait WaRuntime` |
-| `wa_runtime/client.rs` | `RealWaRuntime` (wacore-backed) |
-| `wa_runtime/fake.rs` | `FakeWaRuntime` (test-only, 4 scenarios) |
-| `wa_runtime/event_loop.rs` | Event dispatch + `PairingState` driver |
-| `wa_runtime/state.rs` | **removed in R1** (was `ConnectionState`) |
+| `src/gateway/interfaces/whatsapp/wa_runtime/traits.rs` | `trait WaRuntime` |
+| `src/gateway/interfaces/whatsapp/wa_runtime/client.rs` | `RealWaRuntime` (wacore-backed) |
+| `src/gateway/interfaces/whatsapp/wa_runtime/fake.rs` | `FakeWaRuntime` (test-only, 4 scenarios) |
+| `src/gateway/interfaces/whatsapp/wa_runtime/event_loop.rs` | Event dispatch + `PairingState` driver |
+| `src/gateway/interfaces/whatsapp/wa_runtime/state.rs` | **removed in R1** (was `ConnectionState`) |
 | `wa_auth/` | `WaAuthManager` + `vault_store` (TempDir-isolated tests) |
 | `wa_inbound/` | `mapper` + `InboundPolicy` |
 | `wa_outbound/` | `sender` + `media` (conservative R1) |

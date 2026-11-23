@@ -85,7 +85,7 @@ Fold ownership is recorded atomically with the existing compaction events. Legac
 3. `aleph.plugin.toml` — **已废弃**（加载时打印 deprecation warning）
 4. `aleph.plugin.json` — **已废弃**
 5. `package.json` with `aleph` field — **已废弃**
-6. 无 manifest — **自动发现模式**（扫描 `skills/`、`agents/`、`commands/`、`hooks/`、`.mcp.json`）
+6. 无 manifest — **自动发现模式**（扫描 `skills/`、`src/agents/`、`commands/`、`hooks/`、`.mcp.json`）
 
 ### plugin.toml 超集 Schema
 
@@ -546,24 +546,24 @@ id + 插件的可见性键；其它 skill——**用户自己写的也算**—�
 ### Manifest 解析
 | 文件 | 职责 |
 |------|------|
-| `manifest/cc_plugin_toml.rs` | 解析 `.claude-plugin/plugin.toml` |
-| `manifest/cc_plugin_json.rs` | 解析 `.claude-plugin/plugin.json` |
-| `manifest/adapters/auto_discover.rs` | 无 manifest 时自动发现组件 |
-| `manifest/mod.rs` | 统一入口，优先级调度 |
-| `manifest/types.rs` | `PluginManifest`、`AlephExtensions`、`AlephRuntime` |
-| `manifest/declared_sections.rs` | **三个方言共用的**「声明的 section → capability」翻译（`[[tools]]`/`[[hooks]]`/`[[commands]]`/`[[services]]`/`[prompt]`） |
-| `manifest/component_source.rs` | 组件字段的 path / 数组 / 内联三形态，以及内联分支的真消费者 |
+| `src/extension/manifest/cc_plugin_toml.rs` | 解析 `.claude-plugin/plugin.toml` |
+| `src/extension/manifest/cc_plugin_json.rs` | 解析 `.claude-plugin/plugin.json` |
+| `src/extension/manifest/adapters/auto_discover.rs` | 无 manifest 时自动发现组件 |
+| `src/extension/manifest/mod.rs` | 统一入口，优先级调度 |
+| `src/extension/manifest/types.rs` | `PluginManifest`、`AlephExtensions`、`AlephRuntime` |
+| `src/extension/manifest/declared_sections.rs` | **三个方言共用的**「声明的 section → capability」翻译（`[[tools]]`/`[[hooks]]`/`[[commands]]`/`[[services]]`/`[prompt]`） |
+| `src/extension/manifest/component_source.rs` | 组件字段的 path / 数组 / 内联三形态，以及内联分支的真消费者 |
 | `plugin_vars.rs` | 四个 `${*_PLUGIN_ROOT}`/`${*_PLUGIN_DATA}` 的**唯一**展开器 + 配置→环境变量的唯一翻译 |
 
 ### Marketplace
 | 文件 | 职责 |
 |------|------|
-| `marketplace/mod.rs` | `MarketplaceManager` 编排 |
-| `marketplace/types.rs` | `MarketplaceManifest`、`MarketplaceConfig` |
-| `marketplace/manifest.rs` | 解析 `marketplace.toml` / `.json` |
-| `marketplace/github_source.rs` | GitHub git clone/pull |
-| `marketplace/local_source.rs` | 本地路径解析 |
-| `marketplace/installer.rs` | 复制插件到安装目录 |
+| `src/extension/marketplace/mod.rs` | `MarketplaceManager` 编排 |
+| `src/extension/marketplace/types.rs` | `MarketplaceManifest`、`MarketplaceConfig` |
+| `src/extension/marketplace/manifest.rs` | 解析 `marketplace.toml` / `.json` |
+| `src/extension/marketplace/github_source.rs` | GitHub git clone/pull |
+| `src/extension/marketplace/local_source.rs` | 本地路径解析 |
+| `src/extension/marketplace/installer.rs` | 复制插件到安装目录 |
 
 ### 其他
 | 文件 | 职责 |
@@ -573,7 +573,7 @@ id + 插件的可见性键；其它 skill——**用户自己写的也算**—�
 | `scope.rs` | Scope 路径解析 |
 | `mcp_config.rs` | 读取 `.mcp.json`，环境变量替换 |
 | `loader.rs` | 运行时加载（MCP/WASM/Static）|
-| `types/plugins.rs` | `PluginKind`、`PluginScope`、`PluginRecord` |
+| `src/extension/types/plugins.rs` | `PluginKind`、`PluginScope`、`PluginRecord` |
 
 ### CLI
 | 文件 | 职责 |
@@ -587,8 +587,8 @@ id + 插件的可见性键；其它 skill——**用户自己写的也算**—�
 ### Gateway
 | 文件 | 职责 |
 |------|------|
-| `gateway/handlers/plugins/handlers.rs` | RPC handlers（`plugin.*` + `plugin.marketplace.*`） |
-| `gateway/handlers/mod.rs` | RPC 方法注册 |
+| `src/gateway/handlers/plugins/handlers.rs` | RPC handlers（`plugin.*` + `plugin.marketplace.*`） |
+| `src/gateway/handlers/mod.rs` | RPC 方法注册 |
 
 ---
 
@@ -673,7 +673,7 @@ marketplace 仓」「manifest 坏了」，只有第一种值得继续敲字。�
 
 **marketplace 条目的 `source` 对象也只有一个读者（2026-09-20）**：判别键在磁盘上拼作 `source.source`
 （`claude-plugins-official` 当天的 310 条里 258 条对象形全是这个拼法，0 条 `type`），在官方文档里拼作
-`source.type`。两种拼法都进 `MarketplacePluginSource::external_kind()`（`marketplace/types.rs`）——先读
+`source.type`。两种拼法都进 `MarketplacePluginSource::external_kind()`（`src/extension/marketplace/types.rs`）——先读
 `source` 再读 `type`——而不是各建一个 serde 字段：对象形本来就不逐字段建模（五个无消费者的 struct，R10），
 拒绝消息引用的那个词才是唯一要读的东西。
 
@@ -807,7 +807,7 @@ manifest 原样喂给它 —— 真 resolver 一装，`[capabilities.http.creden
 
 `plugins.toml` 是明文，所以 `config_ui_hints` 标 `sensitive` 的值以
 `{{secret:NAME}}` 引用形式存放。**解析只发生在运行时那条边上**
-（`extension/plugin_secrets.rs`）：
+（`src/extension/plugin_secrets.rs`）：
 
 | 消费者 | 形态 | 为什么 |
 |--------|------|--------|
@@ -817,7 +817,7 @@ manifest 原样喂给它 —— 真 resolver 一装，`[capabilities.http.creden
 
 在 `plugin_settings` 里解析是一行，代价是把每个配置好的密钥灌进转录和设置页 ——
 所以运行时形态是另一个函数（`plugin_settings_for_runtime`），名字说明它站在哪一边。
-守卫是整目录规则（`builtin_tools/` 与 `gateway/handlers/` 不得读解析形态）。
+守卫是整目录规则（`src/builtin_tools/` 与 `src/gateway/handlers/` 不得读解析形态）。
 解析不了的引用**丢弃这个键**而不是透传占位符：读不到设置的插件走自己的默认值，
 而拿到 `{{secret:...}}` 的插件会把那个字面量当凭据发给远端。
 
@@ -925,7 +925,7 @@ R8/R9 的自我改进条款）。给它加 allowlist，要么自动放行模型�
 没拦住，因为「有东西写了一个目录」正是要拦的那件事），要么打断那个循环。而按上文
 `[trust] enforce` 自己的论证，默认还必须是关的——于是交付的是一个旋钮，不是一道控制。
 
-**真正存在的不对称在别处，且已修**：`skill/guard.rs` 的威胁扫描挂在**安装**路径
+**真正存在的不对称在别处，且已修**：`src/skill/guard.rs` 的威胁扫描挂在**安装**路径
 （`skill_manage` 两处 + markdown 上传），手工放进目录的技能绕过它；而 `skill_read`
 把正文**不加围栏**交给模型——这是对的，技能就是指令，加围栏会废掉这个机制——只是
 模型无从知道这段字是随包发的、是某天出现在技能目录里的、还是跟着刚 clone 的仓库
@@ -968,7 +968,7 @@ R8/R9 的自我改进条款）。给它加 allowlist，要么自动放行模型�
 迁移在既有的 `load_guard` 上串行。`set_plugin_enabled(true/false)`、watcher、`plugin.reload` / `hooks.reload` RPC
 都只调这四个原语——没有第五条改激活态的路。插件 id 就是 `String`（无 newtype）。
 
-守卫：G1 census（`registrar/` `service_ops.rs` `src/extension/loader.rs` `memory/extensions/` 里产生运行时副作用的
+守卫：G1 census（`registrar/` `service_ops.rs` `src/extension/loader.rs` `src/memory/extensions/` 里产生运行时副作用的
 `pub fn` 必须返回 `Disposer`）· G2 往返（夹具插件覆盖六种效果，`mount` → 六面快照 → `unmount` → 快照 == mount 前）·
 G3（`publishing_plugin_projections_has_exactly_one_author` 改钉 `lifecycle.rs` 里的那个调用点）。
 

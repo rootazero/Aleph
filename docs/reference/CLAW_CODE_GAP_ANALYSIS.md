@@ -20,7 +20,7 @@ file before re-investigating.
 
 | claw-code module | claw-code LOC | Considered for | Status | Reason |
 |---|---|---|---|---|
-| `trident.rs` stage 1 (supersede file-ops) | ~50 of 849 | `src/context/budget/cheap_passes/` | **PORTED + WIRED** → `cheap_passes/file_op_supersede.rs` (implements `PreflightStage`, registered in `orchestrator/harness_bridge.rs` alongside `ToolResultPruningStage` + `HistoricalImageStrippingStage`). Pure deterministic context reduction; R7-aligned. Safer than upstream (replaces tool-result body, never drops messages). |
+| `trident.rs` stage 1 (supersede file-ops) | ~50 of 849 | `src/context/budget/cheap_passes/` | **PORTED + WIRED** → `src/context/budget/cheap_passes/file_op_supersede.rs` (implements `PreflightStage`, registered in `orchestrator/harness_bridge.rs` alongside `ToolResultPruningStage` + `HistoricalImageStrippingStage`). Pure deterministic context reduction; R7-aligned. Safer than upstream (replaces tool-result body, never drops messages). |
 | `trident.rs` stage 2 (collapse chatty runs) | ~150 | `src/context/compact/` | **DECLINED** | Aleph's `tool_aware_chunker` already handles semantic-unit-aware chunking (since 2026-07-16 the chunker is text-path only — its tool-pairing machinery was cut as dead code, see FEATURE_LOCATOR §2.14 — but the chunking itself stands). "Chatty" is a heuristic — R7 violation. |
 | `trident.rs` stage 3 (cluster by cosine sim ≥0.6) | ~250 | `src/context/compact/` | **DECLINED** | Similarity threshold replaces LLM judgment — R7 violation. |
 | `recovery_recipes.rs` (FailureScenario → nudge map) | 941 | `src/providers/llm_retry.rs` | **DECLINED** | Already covered by `llm_retry::classify` + [[harness-claude-code-parity]] (Halt verdict, max_output_tokens recovery, prompt_too_long classify). The remaining recipes (`StaleBranch`, `CompileRedCrossCrate`) are git-workflow-specific to claw-code's coordinator role; not applicable to Aleph (R6). |
@@ -42,14 +42,14 @@ file before re-investigating.
 
 | File | total LOC | production LOC | role |
 |---|---|---|---|
-| `agent/think.rs` | 1294 | 1185 | run_turn_internal + race_llm_call + reactive_compact rescue + grace turn |
-| `agent/act.rs` | 853 | 825 | tool dispatch (serial + parallel) + turn budget + emit_tool_{success,error} |
+| `src/harness/agent/think.rs` | 1294 | 1185 | run_turn_internal + race_llm_call + reactive_compact rescue + grace turn |
+| `src/harness/agent/act.rs` | 853 | 825 | tool dispatch (serial + parallel) + turn budget + emit_tool_{success,error} |
 | `agent.rs` | 1207 | 764 | `AgentHarness` struct + Harness/SessionDriver impls + `run()` loop |
 | `trace.rs` | 473 | 401 | LoopTraceEvent collection |
-| `agent/prompt.rs` | 661 | 236 | build_prompt + parse_tool_use_block + resolve_tool_name |
+| `src/harness/agent/prompt.rs` | 661 | 236 | build_prompt + parse_tool_use_block + resolve_tool_name |
 | `deps.rs` | 286 | 220 | `HarnessDeps` DI + `StallTracker` |
 | `trait_def.rs` | 193 | 166 | `Harness` trait + `HarnessError` + `TurnState` |
-| `agent/guardrails.rs` | 123 | 123 | apply_input_guardrail + apply_tool_call_guardrail |
+| `src/harness/agent/guardrails.rs` | 123 | 123 | apply_input_guardrail + apply_tool_call_guardrail |
 | `callback.rs` | 148 | 97 | `HarnessCallback` + `NoopHarnessCallback` |
 | `chain_context.rs` | 158 | 96 | per-turn chain context |
 | `trace_sink.rs` | 33 | 33 | `TraceSink` trait |

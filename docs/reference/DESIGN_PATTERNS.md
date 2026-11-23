@@ -301,7 +301,7 @@ All Newtypes should implement:
 | `VariantId` | `String` | AB testing variant identifier | `dispatcher/model_router/advanced/ab_testing/types.rs` |
 | `ContextId` | `String` | Browser context identifier | `browser/context_registry.rs` |
 | `TaskId` | `String` | Browser task identifier | `browser/context_registry.rs` |
-| `SubscriptionId` | `String` | Event bus subscription identifier | `event/global_bus.rs` |
+| `SubscriptionId` | `String` | Event bus subscription identifier | `src/event/global_bus.rs` |
 | **Collections** |
 | `Ruleset` | `Vec<PermissionRule>` | Permission rule collection | `permission/rule.rs` |
 | **Values** |

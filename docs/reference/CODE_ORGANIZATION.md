@@ -162,7 +162,7 @@ bin/aleph_server/commands/
 
 ### Anti-Pattern 1: The God Object
 
-**File**: `extension/mod.rs` (1159 lines, 46 public methods)
+**File**: `src/extension/mod.rs` (1159 lines, 46 public methods)
 
 ```rust
 // ❌ One struct doing everything
@@ -242,7 +242,7 @@ pub struct FactStats { ... }      // statistics
 
 ## 6. Reference Examples
 
-### Good: `memory/store/sqlite/mod.rs`
+### Good: `src/memory/store/sqlite/mod.rs`
 
 Despite the line count, this file has **one job**: implement `MemoryStore` for SQLite backend.
 
@@ -362,7 +362,7 @@ Files identified for refactoring, ordered by priority. Each item links to the pa
 
 Completed: `src/gateway/server/handler.rs` (PR #1, commit `68f3290f`), `src/builtin_tools/workflow_tool.rs` (PR #4, commit `ab617384b`), `src/gateway/session_projector.rs` (PR #6, commit `3a9c882ae`).
 
-Reclassified as declared leftovers (see §6): `start/mod.rs` (4067), `extension/mod.rs` (1884), `extension/hooks/mod.rs` (1278), `handlers/agent.rs` (3657).
+Reclassified as declared leftovers (see §6): `src/bin/aleph-server/commands/start/mod.rs` (4067), `src/extension/mod.rs` (1884), `src/extension/hooks/mod.rs` (1278), `src/gateway/handlers/agent.rs` (3657).
 
 ### P0 — Critical (职责严重混杂)
 
@@ -376,7 +376,7 @@ Reclassified as declared leftovers (see §6): `start/mod.rs` (4067), `extension/
 
 | File | Lines | Problem | Pattern | Status |
 |------|-------|---------|---------|--------|
-| `src/memory/context/mod.rs` | ~600 | Types now split across `context/` submodules | Pattern B | ✅ prior round |
+| `src/memory/context/mod.rs` | ~600 | Types now split across `src/context/` submodules | Pattern B | ✅ prior round |
 | `src/memory/note_retrieval/mod.rs` | 1808 → 81 | 880-line inherent impl + 875 lines of inline tests | Pattern A + `tests.rs` | ✅ 2026-08-23 |
 | `src/memory/store/sqlite/notes/store_impl.rs` | 2571 | One `impl NoteStore` block, 53 methods | **Blocked (declared leftover §6)** | ❌→§6 |
 | `src/browser/mod.rs` | 244 (post-split) | Two unrelated classes: `BrowserService` + `BrowserPool` | Pattern A + `pool.rs` | ✅ prior round |

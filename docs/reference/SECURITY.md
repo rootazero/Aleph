@@ -203,7 +203,7 @@ without being asked. The exemption stood on two legs and the load-bearing one
 landed. The gate now runs inside `resume_named_session`, after the visibility
 gate and before the coordinator, refusing with an honest `PERMISSION_DENIED`
 that shares its wording with `BuildRunError::AgentForbidden`. See
-`handlers/resume.rs` and [AGENT_IDENTITY.md](AGENT_IDENTITY.md) §6 ①.
+`src/gateway/handlers/resume.rs` and [AGENT_IDENTITY.md](AGENT_IDENTITY.md) §6 ①.
 
 Full model and threat analysis in [AGENT_IDENTITY.md](AGENT_IDENTITY.md); the
 seam-level landmines are in `src/gateway/CLAUDE.md`.
@@ -425,10 +425,10 @@ Two further consequences:
 
 `ToolFacts { name, idempotent, requires_approval }` has exactly one constructor,
 `ToolFacts::for_tool(name, Option<DeclaredFacts>)`
-(`config/types/policies/exec_tier.rs`, round 11 D8), and every face calls it: the
+(`src/config/types/policies/exec_tier.rs`, round 11 D8), and every face calls it: the
 scoped builder (`src/tools/scoped/builder.rs::tool_facts`) passes
 `Some(DeclaredFacts { idempotent, requires_confirmation })` from the registry,
-and the slash fast path (`execution_engine/slash_command.rs`), which has no
+and the slash fast path (`src/gateway/execution_engine/slash_command.rs`), which has no
 registry at hand, passes `None`. The builtin allowlists answer for every builtin
 either way, and a declaration can only ADD to them (both fields are ORed), so no
 face can answer from a narrower source. `no_production_code_builds_tool_facts_by_hand`
@@ -507,16 +507,16 @@ These surfaces can execute tools **without passing through `ScopedToolService`**
 Some route gated calls back into the loop; others retain a narrower hard floor.
 Do not mistake the latter for full scoped authorization when adding a surface.
 
-1. **Slash-command fast path** (`execution_engine/slash_command.rs`). `/bash`,
+1. **Slash-command fast path** (`src/gateway/execution_engine/slash_command.rs`). `/bash`,
    `/file_ops` etc. dispatched straight into `BuiltinToolRegistry` — no tier, no
    `tool_permissions`, no `requires_confirmation`, no operator gate — and the
    path is reachable **from channels**. Now `slash_gate_reason()` returns the
    existing `ExecutionError::Fallthrough` for any gated call, routing it into the
    fully-gated agent loop; ungated slash commands keep their deterministic fast
    path.
-2. **`tools.invoke` RPC** (`gateway/handlers/tools_invoke.rs`) retains ordinary
+2. **`tools.invoke` RPC** (`src/gateway/handlers/tools_invoke.rs`) retains ordinary
    raw `ToolRegistry` dispatch, not a unified `ScopedToolService` gate. Its hard
-   floor reuses `security/dangerous_tools.rs` (dangerous/static confirmation
+   floor reuses `src/security/dangerous_tools.rs` (dangerous/static confirmation
    names and `ExecTier::Auto::asks_for_arguments`), plus confirmation declarations
    from the canonical descriptor and raw registry metadata. Argument-level
    risks such as `file_ops delete` and `loop_graph` root mutations are refused,
@@ -539,7 +539,7 @@ Do not mistake the latter for full scoped authorization when adding a surface.
 ### Unattended = fail closed
 
 A run with no human attached is stamped `UNATTENDED_KEY`
-(`execution_engine/mod.rs`) at every headless producer: cron **when its approval
+(`src/gateway/execution_engine/mod.rs`) at every headless producer: cron **when its approval
 is not routable** (a job carrying both a source channel and a conversation has a
 real `/approve` path — stamping it would auto-deny a working HITL flow),
 heartbeat and a2a always. `continuation_metadata` inserts the marker **last**, so
@@ -673,7 +673,7 @@ two real layers documented above:
   (`src/sandbox/command_policy/`), applied before every sandboxed exec on every
   tier. This is the only *blocking* command classifier.
 - **Exec tier + approval gate** — the metadata-driven tier
-  (`config/types/policies/exec_tier.rs`) enforced at `src/tools/scoped/`, which
+  (`src/config/types/policies/exec_tier.rs`) enforced at `src/tools/scoped/`, which
   raises the action-aware approval card via `src/sandbox/exec_approval/`.
 
 > **The prompt gets exactly one approval voice, and it is the enforced one.**
@@ -912,7 +912,7 @@ closer. Pinned by
 the twin of the session-grant guard.
 
 **And there is a way back.** `exec.grants.list` / `exec.grant.revoke`
-(`gateway/handlers/exec_grants.rs`, rendered under Settings → Policies) show
+(`src/gateway/handlers/exec_grants.rs`, rendered under Settings → Policies) show
 every standing grant with the summary that was approved, and take one back. Both
 are scoped exactly like their `exec.approvals.*` siblings: an unrestricted
 caller sees everything; a member sees only session grants for sessions already
@@ -1367,7 +1367,7 @@ here. The two trails are not written the same way at every gate: the tool-confir
 gate's `src/tools/scoped/dispatch.rs::record_approval_decision` writes the signed
 identity ledger row (with its `[gate: <rule_id>]` suffix, "Signed agent ledger" below) and
 the session copy from ONE function; the sandbox capability-elevation gate
-(`sandbox/workspace/mod.rs`) writes its session copy itself, after the answer,
+(`src/sandbox/workspace/mod.rs`) writes its session copy itself, after the answer,
 while its ledger row comes from a different function at a different chokepoint
 — `sandbox/exec_approval/gate.rs::record_gate_decision`, inside
 `ApprovalGate::request_approval_for_action`, without a `[gate: …]` suffix
@@ -1443,13 +1443,13 @@ needs only the turn's agent identity and therefore covers surfaces the ambient
 `ApprovalGate::request_approval_for_action`, whose `record_gate_decision` writes
 the ledger row for every real verdict (`Timeout` / `Unavailable` are not
 recorded). The session-log copy of the same verdict is written separately, in
-`sandbox/workspace/mod.rs`. So one elevation verdict has two writers in two
+`src/sandbox/workspace/mod.rs`. So one elevation verdict has two writers in two
 files, and a change to how either one attributes it does not reach the other
 (CLAUDE.md criteria #1 and #16). By design, elevation-gate ledger rows carry
 no `[gate: <rule_id>]` suffix. That suffix is reserved for cards produced by
 the `GateRule` chain.
 
-This is the first production consumer of `gateway/security/crypto.rs`'s Ed25519
+This is the first production consumer of `src/gateway/security/crypto.rs`'s Ed25519
 helpers, which had none (the `devices.public_key BLOB NOT NULL` column every
 writer fills with empty bytes is the visible half of that).
 
@@ -1620,13 +1620,13 @@ calendar boundaries backward in period-sized steps instead.
 
 `spend::install_policy`/`spend::install_ledger` install the two
 process-global handles this whole control reads; both must run at boot
-(`start/mod.rs`), unconditionally — including when no ceiling is
+(`src/bin/aleph-server/commands/start/mod.rs`), unconditionally — including when no ceiling is
 configured. `spend::update_policy` (the live-apply path for
 `[policies.spend]`) returns `false`, and the live-apply verdict honestly
 downgrades to `Restart`, when no handle has been installed yet; skipping
 installation on an unconfigured box would mean an operator could turn a
 ceiling *off* live but never turn one *on* live — the direction that
-matters less. A source-level census in `start/mod.rs`'s own test module
+matters less. A source-level census in `src/bin/aleph-server/commands/start/mod.rs`'s own test module
 (`boot_installs_the_spend_policy_and_the_spend_ledger`) pins that both calls
 exist in production, because nothing else can see their absence: it is not
 a compile error, no other test goes red, and a server missing either call
@@ -1877,15 +1877,15 @@ All outbound HTTP requests go through the SSRF engine:
 | Caller | File | Method |
 |--------|------|--------|
 | Web fetch tool | `builtin_tools/web_fetch.rs` | `safe_fetch()` |
-| Webhook delivery | `tasks/cron/webhook_target.rs` | `safe_fetch()` |
+| Webhook delivery | `src/tasks/cron/webhook_target.rs` | `safe_fetch()` |
 | Media downloader | `gateway/pipeline/media_download.rs` | `safe_fetch()` |
-| MCP HTTP transport | `mcp/transport/http.rs` | `safe_fetch()` |
-| MCP SSE transport | `mcp/transport/sse.rs` | `validate_url_with_pinned()` |
-| MCP preflight probe | `mcp/preflight.rs` | `validate_url_async()` + pinned `resolve()` |
-| A2A push webhook | `a2a/service/notification.rs` | `validate_url_async()` at register, `safe_fetch()` at send |
+| MCP HTTP transport | `src/mcp/transport/http.rs` | `safe_fetch()` |
+| MCP SSE transport | `src/mcp/transport/sse.rs` | `validate_url_with_pinned()` |
+| MCP preflight probe | `src/mcp/preflight.rs` | `validate_url_async()` + pinned `resolve()` |
+| A2A push webhook | `src/a2a/service/notification.rs` | `validate_url_async()` at register, `safe_fetch()` at send |
 | ~~Fetch providers (crawl4ai/firecrawl)~~ | **removed from runtime** (BT-D-R4-22) | The `[fetch]` provider chain was excised: a provider re-resolves DNS and follows redirects from **its own** network position, so the Aleph-side DNS pin cannot cross the process boundary — validate-then-delegate was exactly the audited High-severity gap. Config surface kept (`[fetch]` section, `fetch_config.get/update/test` RPC); boot logs a one-time warn via `inert_fetch_backend_names` for every backend configured in `[fetch]` (the section has no routing knob: `enabled`/`default_provider`/`fallback_providers` were cut because nothing read them). `web_fetch` uses the built-in `safe_fetch()` path only |
-| Media pipeline URLs | `media/pipeline.rs` | `validate_url_async()` |
-| Browser navigation | `browser/network_policy.rs` | `validate_url_async()` via `BrowserSsrfGuard` |
+| Media pipeline URLs | `src/media/pipeline.rs` | `validate_url_async()` |
+| Browser navigation | `src/browser/network_policy.rs` | `validate_url_async()` via `BrowserSsrfGuard` |
 
 ### Browser SSRF Guard
 
@@ -2551,7 +2551,7 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
   One-way, no auto-resume on reactivation (spec silent on the reverse;
   recorded as a deliberate P1 scope boundary, not an oversight).
 
-  ⚠️ **Cron was excluded until 2026-08-13 on a premise `handlers/users.rs`
+  ⚠️ **Cron was excluded until 2026-08-13 on a premise `src/gateway/handlers/users.rs`
   itself falsifies**: "`cron.*` is admin-gated, so a deactivated MEMBER owns
   none by construction". The owner guard in that file pins only
   `OWNER_USER_ID`, and `users.create` accepts `role: "admin"` — so a SECOND
@@ -2699,7 +2699,7 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
   no client is a member surface, not that there is only one. That page renders
   for anybody, calls, and reports this gate's refusal through
   `components::admin_refusal` instead of showing a member an empty roster. The
-  file named above is now `api/agent_binding.rs`; `api/workspace.rs` is the
+  file named above is now `interfaces/webchat/src/api/agent_binding.rs`; `interfaces/webchat/src/api/workspace.rs` is the
   real family.)*
   Nor was the read half worth what it
   looked like: `env_vars`, `system_prompt_override` and `allowed_tools` have
@@ -2919,11 +2919,11 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
      kept here for the criterion it teaches). `event_visibility::event_admits`
      resolves `team.<id>.*` through `ConnectionContext`'s `TeamStore`, and
      `teams: None` denies. That handle was installed by
-     `server.set_team_store(...)` inside `start/mod.rs`'s
+     `server.set_team_store(...)` inside `src/bin/aleph-server/commands/start/mod.rs`'s
      `if let (Some(ref ts), Some(ref cs)) = (&agent_result.team_store,
      &agent_result.coord_task_store)`, while the PRODUCER — the
      `teams.chat.send` registration driving `GroupChatBroadcaster` /
-     `publish_team_event` — sits under `builder/agent_init/mod.rs`'s
+     `publish_team_event` — sits under `src/bin/aleph-server/commands/start/builder/agent_init/mod.rs`'s
      `if let Some(ts) = team_store.clone()`, i.e. `team_store` ALONE. The two
      stores open two different databases from two different files (`teams.db`
      vs `coord.db`), and coord init returns `(None, None)` on any of three
@@ -3001,7 +3001,7 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
      in the state being probed.** Two calls that take the same early-return
      branch prove nothing, and they read exactly like a real guard.
   7. The admin gate's refusal wording is now ONE constant, not a Panel copy of
-     a server literal (resolved). `settings/network/cluster.rs` used to
+     a server literal (resolved). `interfaces/webchat/src/platform/wide/views/settings/network/cluster.rs` used to
      transcribe the server's refusal string and claim a doc comment's worth of
      drift protection it could not deliver: `aleph-panel` does not depend on
      `alephcore`, and its test fed its OWN constant into `fleet_error_label`, so
@@ -3009,7 +3009,7 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
      cluster page on the raw English protocol string with both crates' tests
      still green. The wording moved to
      `aleph_protocol::jsonrpc::ADMIN_REQUIRED_MESSAGE` — the one crate both
-     sides already depend on — and both the emit site (`server/connection/dispatch.rs`, via
+     sides already depend on — and both the emit site (`src/gateway/server/connection/dispatch.rs`, via
      `gateway::protocol`'s re-export beside `AUTH_REQUIRED`) and the match site
      read it, so there is no reword that moves one side without the other. The
      Panel test now feeds that shared constant in, which is what makes it able
@@ -3284,7 +3284,7 @@ attribution, and a bound workspace as the room's default cwd.
   renders nothing at all.
 - **Model-facing room management goes through the same authorization as the
   RPC face, and stops short of the one verb that grants reach.**
-  `project_manage` (R8) shares `projects::authz` with `handlers/projects.rs`
+  `project_manage` (R8) shares `projects::authz` with `src/gateway/handlers/projects.rs`
   — the same `project_for` (not-found for a non-member) and `is_owner`
   (owner or org admin; renamed `manageable_given`, `pub(crate)`, in round 11,
   with `manageable` as the public face the server now derives
@@ -3336,7 +3336,7 @@ attribution, and a bound workspace as the room's default cwd.
   one session, and the frame that tells a Panel to re-hydrate
   (`stream.session_updated`) used to be judged by `origin_channel`. That field
   is a surface CLASS — every Panel connection hardcodes the literal
-  `"gui:chat"` (`api/chat.rs`) — so reading it as "mine" said "mine" for a
+  `"gui:chat"` (`interfaces/webchat/src/api/chat.rs`) — so reading it as "mine" said "mine" for a
   second tab of the same user and for every other member of the room, and
   their turns never appeared until someone reselected the session. The frame
   therefore also carries `origin_run_id`: the run that caused the update,
@@ -3488,12 +3488,12 @@ still owed): FEATURE_LOCATOR §5.22 「第十一轮」.
   Refused(Deactivated | Gone), Unknown}`. The person checked is the AUTHOR,
   else the owner (`checked_person`; empty strings read as absent). The users
   table is reached through the capability slot `security/users-store`
-  (`gateway/security/store/slot.rs`, `FailsOpen`: with nothing installed every
+  (`src/gateway/security/store/slot.rs`, `FailsOpen`: with nothing installed every
   subject is `Legacy`, which is what tests and minimal servers have always
   had). Boot installs it unconditionally. Tests never install the process
   global; they inject through `resolve_with` / `resolve_with_users`, and
   `no_lib_test_installs_the_process_global_users_store` pins that.
-  `gateway/fire_gate.rs` is the single verdict → metadata mapping for the
+  `src/gateway/fire_gate.rs` is the single verdict → metadata mapping for the
   gateway families (`apply`, `authorize_session_run`, `admit_session_metadata`),
   and its `FireVerdict` keeps "refused" and "unknown" apart at the type level.
 - **Rulings (user-approved, spec §2).**
@@ -3529,13 +3529,13 @@ still owed): FEATURE_LOCATOR §5.22 「第十一轮」.
 | # | Executor | Person checked | Unknown | Refused (Deactivated / Gone) | Who sees the refusal / what next | Legacy (no person) |
 |---|---|---|---|---|---|---|
 | 1 | cron (`tasks/cron/executor.rs::admit_cron_fire`) | job owner (no author) | Skip this fire as a transient error: `consecutive_errors++` (backoff kept), no chain in either direction (`ExecutionResult.unadmitted`). Alert only once the streak reaches `TRANSIENT_ALERT_FLOOR`. Job stays enabled. | Job disabled (set, never toggle) + permanent error `principal deactivated (u-x) — job disabled at fire time` | Run history, `last_error`, immediate alert to the job's source channel. No exit is named: re-enabling takes `cron_manage` toggle, and the text does not say so. | `Granted::legacy` |
-| 2 | heartbeat (`tasks/heartbeat/service/timer.rs`, before the L1 probe) | task owner | L1 `Skipped` + error, `consecutive_errors++`, task stays armed. **Alerts only once the streak reaches cron's `TRANSIENT_ALERT_FLOOR`** (fix wave M3; it used to page on the first unknown beat). | Disabled at writeback (`ops::disable_walled_owner_task`): `… — task disabled at fire time` | History and alert. No exit is named. | `Granted::legacy` |
+| 2 | heartbeat (`src/tasks/heartbeat/service/timer.rs`, before the L1 probe) | task owner | L1 `Skipped` + error, `consecutive_errors++`, task stays armed. **Alerts only once the streak reaches cron's `TRANSIENT_ALERT_FLOOR`** (fix wave M3; it used to page on the first unknown beat). | Disabled at writeback (`ops::disable_walled_owner_task`): `… — task disabled at fire time` | History and alert. No exit is named. | `Granted::legacy` |
 | 3–5 | goal after-run / goal wake / loop tick (`execution_engine/execute.rs::admit_continuation`) | carried author, else owner | Re-arm the same step after 30 s (`rearm_*_after_busy`). No iteration spent. Retries without limit. Log only. | Goal `block_if_active`, loop `Paused`. Deactivated: "An administrator must reactivate that person…". **Gone: "That person no longer exists … Stop it and set a new goal / loop as a current user."** (fix wave M4 — the text used to offer a "reassign" no verb provides.) | `notify_origin` (the room channel if room-bound). Names no one, but discloses the status. | no stamp |
 | 6 | team dispatcher (`teams/dispatcher/schedule/authority.rs::authorize_claim`) | task author, else team owner, else origin-session owner | Stays `Pending`. Retried every tick, no backoff. Log only. | Task `Paused`; `result` names the person and the status and the exit (reactivate → set back to pending, or cancel and recreate) | Task drawer — every team member. **Names the person and the status** (M2, open). | spawn bare |
 | 7 | boot / on-demand resume (`gateway/resume_coordinator.rs::admit_resume`, pre-check `fire_gate::session_may_act`) | session row owner (no author rides a resume) — **room row with no author and no carried role: `caller_role` floored at `member`** | `HoldUnspent`: nothing written, no attempt spent, `report.refused` gets `authority_unknown` | Run closed once (`Abandoned`), counted under `abandoned` | Public notice names nobody. The operator report has the name + "send the message again". | no stamp |
 | 8 | announce (`gateway/announce_delivery.rs::admit_announce`) | session row owner (the initiator is not carried) — **same room floor** | Wait 30 s, at most 10 times, then give up at the fallback. Log only. | The delivery returns; warn log only | **Nobody in-band.** The result is left at the fallback. | no stamp |
 | 9 | busy-queue reinjection (`gateway/busy_queue/durable.rs::admit_reinjection`) | payload author, else row owner — same room floor when no author | Left journaled for the next boot. Log only. | Tombstoned `authority_refused`, with a `detail` naming the person | **Nobody in-band.** A queued message silently never runs. | no stamp |
-| — | deactivation freeze, team leg (`teams/background.rs`) | **team owner** (not the author) | n/a | `Paused`, `result` = `account 'u-x' was deactivated and owns this task's team…` | Task drawer. Names the person and the status. | n/a |
+| — | deactivation freeze, team leg (`src/teams/background.rs`) | **team owner** (not the author) | n/a | `Paused`, `result` = `account 'u-x' was deactivated and owns this task's team…` | Task drawer. Names the person and the status. | n/a |
 
 Reading the table:
 

@@ -705,18 +705,18 @@ The sites, in the order a new tool needs them:
 
 | # | File | What it buys |
 |---|------|--------------|
-| 1 | `executor/builtin_registry/definitions.rs` — `BUILTIN_TOOL_DEFINITIONS` | catalog row; the description starts being billed on every request |
+| 1 | `src/executor/builtin_registry/definitions.rs` — `BUILTIN_TOOL_DEFINITIONS` | catalog row; the description starts being billed on every request |
 | 2 | `definitions.rs` — `create_tool_boxed` | construction for `AlephToolServer` |
-| 3 | `registry/tool_registry_impl.rs` — `execute_tool` match arm | **dispatch**; without it every call answers `Unknown tool` |
-| 4 | `registry/struct_def.rs` | the instance field |
-| 5 | `builder/constructor/mod.rs` | construction + struct init (pass the shared `ToolContext` handle if the tool resolves paths) |
-| 6 | `builder/core_tools.rs` — `reg(...)` | registry-map row (`agent_init` completes the model's list from here) |
-| 7 | `builtin_registry/groups.rs` | Panel display category |
-| 8 | `config/types/tools.rs` — `default_core_tools()` | schema-resident vs collapsed behind a `get_tool_schema` round-trip |
+| 3 | `src/executor/builtin_registry/registry/tool_registry_impl.rs` — `execute_tool` match arm | **dispatch**; without it every call answers `Unknown tool` |
+| 4 | `src/executor/builtin_registry/registry/struct_def.rs` | the instance field |
+| 5 | `src/executor/builtin_registry/builder/constructor/mod.rs` | construction + struct init (pass the shared `ToolContext` handle if the tool resolves paths) |
+| 6 | `src/executor/builtin_registry/builder/core_tools.rs` — `reg(...)` | registry-map row (`agent_init` completes the model's list from here) |
+| 7 | `src/executor/builtin_registry/groups.rs` | Panel display category |
+| 8 | `src/config/types/tools.rs` — `default_core_tools()` | schema-resident vs collapsed behind a `get_tool_schema` round-trip |
 | 9 | `src/tools/adapters/registry_adapter.rs` — `READ_ONLY_TOOLS` | read-only ⇒ idempotent ⇒ auto-retry ⇒ callable under the `Ask` / `Plan` tiers |
 | 10 | `src/tools/fallback_registry.rs` — `ToolFamily::from_name` | which alternatives are suggested when it fails |
 
-1–3 and 6 are enforced: `builtin_registry/dispatchable.rs` recovers both the
+1–3 and 6 are enforced: `src/executor/builtin_registry/dispatchable.rs` recovers both the
 advertised set and the dispatchable set **from the source text** (not from a
 list someone maintains) and fails naming the tool that is in one and not the
 other. 4–5 are compile errors. 7–10 are silent if missed — a Panel row that
@@ -866,7 +866,7 @@ lower it. `fit_to_budget` measures the whole result the way Layer 2 does (flatte
 marker) and shrinks the cap proportionally, at most `FIT_ATTEMPTS` times, so the result arrives inline instead of
 being offloaded again. A result still over after those attempts is bounded by Layer 2.
 
-**Fetch by intent · 按意图取页** (`builtin_tools/web_fetch/intent.rs`) — `web_fetch` with a `prompt` on a page
+**Fetch by intent · 按意图取页** (`src/builtin_tools/web_fetch/intent.rs`) — `web_fetch` with a `prompt` on a page
 longer than that cap: the page is extracted whole (bounded by `WebFetchTool::INTENT_EXTRACT_MAX_CHARS`);
 `index_page` offloads and indexes it **once** through `recovery_footer_for` into the same store `ctx_search`
 reads; `sections_for_prompt` BM25-searches **this page's own sections** with the prompt

@@ -1213,7 +1213,7 @@ whose second half has not been read yet.
 ### Deleted
 
 `normalize_path_for_sandbox`, `path_is_allowed`, `glob_to_regex` — three
-zero-consumer helpers in `platforms/common.rs`. `glob_to_regex` was a
+zero-consumer helpers in `src/sandbox/platforms/common.rs`. `glob_to_regex` was a
 semantically weaker twin of the live `deny_globs::glob_to_anchored_regex`
 (no whole-component `**`, escaped character classes instead of preserving
 them, no bare-pattern-subtree rule), and `deny_globs.rs` explicitly invites a

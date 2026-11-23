@@ -10,7 +10,7 @@
 
 **Tech Stack:** Rust, existing PromptLayer trait, existing AlephTool trait, schemars for JSON Schema.
 
-**Note:** The working tree already has in-progress changes: `mcp_instructions.rs` (untracked new file), and modifications to `prompt_layer.rs`, `prompt_pipeline.rs`, `layers/mod.rs`. This plan builds on top of those changes.
+**Note:** The working tree already has in-progress changes: `mcp_instructions.rs` (untracked new file), and modifications to `prompt_layer.rs`, `prompt_pipeline.rs`, `src/thinker/layers/mod.rs`. This plan builds on top of those changes.
 
 ---
 

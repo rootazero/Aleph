@@ -55,8 +55,8 @@ Rails' `ApplicationRecord` or Django's shared `Connection`.
 | `paired_users.rs` | 60 | Telegram paired users |
 | `channel_offsets.rs` | 53 | Telegram offsets |
 | `replay.rs` | 18 | Replay helper |
-| `state_database/schema.rs` | 426 | DDL |
-| sticker_descriptions (in `state_database/mod.rs`) | — | Sticker storage |
+| `src/resilience/database/state_database/schema.rs` | 426 | DDL |
+| sticker_descriptions (in `src/resilience/database/state_database/mod.rs`) | — | Sticker storage |
 
 The only **public** submodule is `pub mod migration` (defined in
 `src/resilience/database/migration.rs`, 626 LOC) — it owns the three
@@ -84,11 +84,11 @@ internal partitioning is invisible to callers.
 
 | Domain | File count | % | Notable consumers |
 |---|---|---|---|
-| `gateway/` | 9 | 33% | execution_engine, handlers, Telegram interface |
-| `memory/` | 7 | 25% | events, integration tests, transcript_indexer |
-| `executor/` | 4 | 14% | builtin_registry (builder/config/definitions/registry) |
-| `bin/aleph-server/` | 3 | 11% | start/builder agent_init + handlers + subsystems |
-| `group_chat/` | 2 | 7% | executor, orchestrator |
+| `src/gateway/` | 9 | 33% | execution_engine, handlers, Telegram interface |
+| `src/memory/` | 7 | 25% | events, integration tests, transcript_indexer |
+| `src/executor/` | 4 | 14% | builtin_registry (builder/config/definitions/registry) |
+| `src/bin/aleph-server/` | 3 | 11% | start/builder agent_init + handlers + subsystems |
+| `src/group_chat/` | 2 | 7% | executor, orchestrator |
 | `arena/` | 1 | 4% | storage |
 | `lib.rs` | 1 | 4% | crate-level re-export |
 | `sync_primitives.rs` | 1 | 4% | shared `Arc`/`Mutex` helper |

@@ -79,7 +79,7 @@
 
 中心对每条连接强制两道闸,顺序是**先首帧规则、后登录墙**:
 
-1. **首帧必须是 `connect`**(`gateway/server/connection/mod.rs::handle_connection`;`server/handler.rs` 自 `4d1061370` 拆分后只剩 re-export)——否则回 `AUTH_REQUIRED`
+1. **首帧必须是 `connect`**(`gateway/server/connection/mod.rs::handle_connection`;`src/gateway/server/handler.rs` 自 `4d1061370` 拆分后只剩 re-export)——否则回 `AUTH_REQUIRED`
    **并关闭 socket**。
 2. **登录墙**:远程未授权连接只能发 `connect`,别的方法一律拒。
 
@@ -287,7 +287,7 @@ device_name 等值 → ③ 模糊(id 前缀 ≥4 字符 *或* 归一化 name 子
 精确提示(`node 'x' ambiguous — matches: worker-1 (id…), worker-2 (id…)`)。
 registry 只存在线会话,故无需"prefer-connected" tie-break。同一 `normalize_node_key`
 被 `cluster.deregister` 的离线回退寻址(`src/cluster/enrollment.rs::resolve_enrolled_node`,
-**私有**的已登记节点解析;`handlers/cluster.rs` 只做 I/O 翻译)复用,消除"在线名大小写
+**私有**的已登记节点解析;`src/gateway/handlers/cluster.rs` 只做 I/O 翻译)复用,消除"在线名大小写
 不敏感、离线敏感"的旧漂移。**中心侧 fail-fast**:
 仅当节点声明了非空命令目录且其中不含该命令时才拒绝(空目录→交节点权威)。
 下发即 `channel.call("tool.call", {tool, args})`。
@@ -477,7 +477,7 @@ device token / bootstrap ticket / 共享 Gateway token)成为 **operator**,要�
 `environments.list` 是**合并视图**:NodeRegistry 在线会话 + security_store 已登记
 (role=node、未吊销)但离线的设备(`status:"offline"`,附 `last_seen_at` Unix 秒,
 `null` = 登记后从未连入)。last_seen 在节点 connect/disconnect 两接缝经
-`SecurityStore::touch_device`(`gateway/security/store/devices.rs`)盖章——**不是**
+`SecurityStore::touch_device`(`src/gateway/security/store/devices.rs`)盖章——**不是**
 `SharedTokenManager`(那是凭据 vault,与设备表无关;旧写法 `TokenManager::touch_device`
 指向一个不存在的符号)。
 
@@ -654,7 +654,7 @@ device token / bootstrap ticket / 共享 Gateway token)成为 **operator**,要�
   绝不碰响应超时(长命令安全),且关连接→节点秒级重连,偶发误判也自愈。**该轮**四个 LLM 工具与
   `NodeRegistry` **零改动**(纯传输层收口)——这是当时那笔 diff 的记账,不是现状:
   一周后的注销掐断、以及 2026-09-05 的原子化,都改到了 `NodeRegistry`。锚点 `cluster/reverse_rpc.rs::with_close` +
-  `gateway/server/connection/mod.rs::handle_connection` 的 `rpc_close` select arm(写下时在 `server/handler.rs`)。
+  `gateway/server/connection/mod.rs::handle_connection` 的 `rpc_close` select arm(写下时在 `src/gateway/server/handler.rs`)。
 
 - **按名寻址 Unicode 化(2026-07-20 收口 ASCII-only 漂移)**:`normalize_node_key` 曾用
   `is_ascii_alphanumeric` + `to_ascii_lowercase`,把所有非 ASCII 字母当分隔符——中文/日文节点名

@@ -104,12 +104,12 @@
 - **原决策（已废）**：loopback（本机 App）= operator（Config）；remote（局域网 Panel）= Chat 默认，须显式提权。tier 治理“配置变更”而非“执行”。
 - **2026-06-16 落地（已被取代，多数文件已删）**：
   - 新建 src/gateway/panel_devices.rs（`PanelDeviceStore` + SQLite）+ `handlers/devices.rs`（`devices.list`/`set_level`/`revoke`）
-  - `server/handler.rs` connect 握手按 `device_id`+loopback 解析 tier，回填 `role`
+  - `src/gateway/server/handler.rs` connect 握手按 `device_id`+loopback 解析 tier，回填 `role`
   - `method_authz.rs::rpc_requires_operator` + `OPERATOR_RPC_METHODS` RPC 门；前端 `views/settings/security/devices.rs::PanelDevicesSection` + `ConfigGate` 包 17 配置页
 - **取代后的去留（2026-06-17 收敛）**：
   - **删除**：src/gateway/panel_devices.rs、src/gateway/handlers/devices.rs、前端 `views/settings/security/devices.rs`(`PanelDevicesSection`)、`components/permission.rs`(`ConfigGate`)、`method_authz.rs::rpc_requires_operator`/`OPERATOR_RPC_METHODS`、`devices.set_level` RPC。
-  - **保留并改义**：`server/handler.rs` connect 握手改为校验 Gateway token（`connect_authorized`）→ `caller_role` 仅 operator/guest 二值；登录墙（非 operator 仅放行 `connect`）取代逐 RPC 白名单；`method_authz.rs` 仅余 **channel** tier 的 `tool_requires_operator`（panel 已解耦）。
-  - **未受影响**：`security/store/devices.rs` 的 device 表（始终是 **cluster 节点**专用，与 panel tier 无关，仍由 `handlers/cluster.rs` 使用）。
+  - **保留并改义**：`src/gateway/server/handler.rs` connect 握手改为校验 Gateway token（`connect_authorized`）→ `caller_role` 仅 operator/guest 二值；登录墙（非 operator 仅放行 `connect`）取代逐 RPC 白名单；`method_authz.rs` 仅余 **channel** tier 的 `tool_requires_operator`（panel 已解耦）。
+  - **未受影响**：`src/gateway/security/store/devices.rs` 的 device 表（始终是 **cluster 节点**专用，与 panel tier 无关，仍由 `src/gateway/handlers/cluster.rs` 使用）。
 - **当前真相**：见 [FEATURE_LOCATOR §6.2](FEATURE_LOCATOR.md) 与附录 A #2/#3（均 ✅ 单层）。
 
 ---

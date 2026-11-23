@@ -231,7 +231,7 @@ concern: the `Arc<dyn ToolService>` held by the harness can be any
 backing store, including one that re-reads its registry on every
 `list()` call. Extending `ToolService` with an optional
 `refresh()` method — as the plan's checklist suggests — is the right
-shape, but **it is a `tools/` change, not a `harness/` change**, and
+shape, but **it is a `tools/` change, not a `src/harness/` change**, and
 it ripples into every `ToolService` implementation across the
 gateway, sandbox approval, and builtin tool suites.
 

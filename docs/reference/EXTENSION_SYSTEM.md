@@ -198,7 +198,7 @@ pub struct DisposeReport { pub plugin_id: PluginId, pub steps: Vec<(&'static str
 
 **The one rule — has an inverse → effect; recomputable from the registry → view.** Every registrar
 function that puts something into the running process (`registrar/`, `service_manager.rs`,
-`src/extension/loader.rs`, `memory/extensions/`) returns `#[must_use] Disposer`; the caller
+`src/extension/loader.rs`, `src/memory/extensions/`) returns `#[must_use] Disposer`; the caller
 (`lifecycle.rs::mount`) pushes it into the plugin's `EffectScope` under one of six fixed step labels,
 in this order: `registry_row`, `wasm_module`, `mcp_server`, `service`, `memory_extension`,
 `slash_command`. `unmount` disposes in reverse, so the registry row is the last thing to go and every
@@ -210,7 +210,7 @@ This is the ownership rule from DeepSeek Harness / Cordis (`scan-dsh-cordis.md` 
 signatures. It is **not** a fiber runtime: no DI container, no Proxy context, no cascade restart, no
 HMR (the three earlier rounds' rulings stand — HARNESS_PHILOSOPHY.md §8 第五课, narrowed 2026-09-20).
 Guard: `effects::census::every_crate_visible_registration_returns_a_disposer` (source-level census, G1;
-mutation: an extra `pub fn register_extra` in `registrar/api.rs` goes red by name) and the six-effect
+mutation: an extra `pub fn register_extra` in `src/extension/registrar/api.rs` goes red by name) and the six-effect
 round-trip (G2, `tests/plugin_lifecycle_roundtrip.rs` + the two fixtures in P1.13).
 
 ---

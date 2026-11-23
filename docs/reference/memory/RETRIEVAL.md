@@ -8,10 +8,10 @@
 
 | Method | Source | Scope |
 |---|---|---|
-| `retrieve(query, agent_id, limit)` | `note_retrieval/single_agent.rs` | Hybrid vector + FTS, one agent |
-| `vector_retrieve(query, agent_id, limit)` | `note_retrieval/single_agent.rs` | Pure vector, one agent |
-| `text_retrieve(query, agent_id, limit)` | `note_retrieval/single_agent.rs` | Pure FTS, rank-scored |
-| `retrieve_multi_agent(query, agents, limit)` | `note_retrieval/multi_agent.rs` | Hybrid across N agents, top-k merged |
+| `retrieve(query, agent_id, limit)` | `src/memory/note_retrieval/single_agent.rs` | Hybrid vector + FTS, one agent |
+| `vector_retrieve(query, agent_id, limit)` | `src/memory/note_retrieval/single_agent.rs` | Pure vector, one agent |
+| `text_retrieve(query, agent_id, limit)` | `src/memory/note_retrieval/single_agent.rs` | Pure FTS, rank-scored |
+| `retrieve_multi_agent(query, agents, limit)` | `src/memory/note_retrieval/multi_agent.rs` | Hybrid across N agents, top-k merged |
 
 ⚠️ **`retrieve_all_agents` is gone and must not come back** (it was in this table
 until 2026-08-23, four months after its deletion). It enumerated every corpus on

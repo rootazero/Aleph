@@ -383,7 +383,7 @@ Layer 1: TaskCoordinator ────────── CoordTask DAG (unified) 
 
 ### Layer 1: TaskCoordinator
 
-The task layer uses the unified `CoordTask` DAG system (from `agents/swarm/tasks/`) with DAG dependencies, priority, and metadata. `TeamTask` was retired in favor of this unified system.
+The task layer uses the unified `CoordTask` DAG system (from `src/agents/swarm/tasks/`) with DAG dependencies, priority, and metadata. `TeamTask` was retired in favor of this unified system.
 
 **Task Artifact System**: Each task can have structured outputs that other agents reference.
 
@@ -681,7 +681,7 @@ with the run-time gate — validation and enforcement cannot disagree.
 
 **Not exhaustive, and not a security boundary.** `get_tool_schema` and
 `subagent` are registered into the loop registry *after* the allowlist filter
-runs (`run_loop/inner.rs` — the "collapsed-but-unsnapshotted" class), so a
+runs (`src/gateway/execution_engine/run_loop/inner.rs` — the "collapsed-but-unsnapshotted" class), so a
 declared list never removes them. Runtime QA confirms it: a member declaring
 `["task_*", "message_send", "search", "web_fetch"]` enumerates exactly those
 plus those two. Since `subagent` spawns a differently-scoped agent, treat
@@ -716,7 +716,7 @@ edits the code it was asked to review, not an attacker.
 by id and skips `tools` entirely (an existing agent keeps its own surface), and
 a `self` leader is the caller's own agent. Both cases are reported:
 `MaterializedTeam.tools_ignored_for` → `TeamFromTemplateOutput.tools_ignored_for`,
-omitted from the output when empty. Guards live in `templates/materialize.rs`
+omitted from the output when empty. Guards live in `src/teams/templates/materialize.rs`
 tests: every built-in role satisfies its contract, only the two reasoning
 templates declare, no reviewer carries an edit tool, nothing globs `team_*`.
 The report does not yet reach every caller: `interfaces/webchat/src/api/teams.rs`
@@ -791,7 +791,7 @@ Modes 1–3 are all **in-process** — every agent runs inside the same
 over HTTP, with Agent Card discovery).
 
 Aleph has always *served* A2A — it exposes its own Agent Card at
-`/.well-known/agent-card.json` and answers `message/send` / `tasks/*` (including
+`/.well-known/agent-card.json` and answers `message/send` / `src/tasks/*` (including
 `tasks/pushNotificationConfig/*` and `agent/getAuthenticatedExtendedCard`) on
 `/a2a`. Registered push-notification webhooks now fire on every task
 status/artifact update (delivered fire-and-forget alongside the SSE stream), so
@@ -1120,7 +1120,7 @@ coordination-task DAG to completion without leader micro-management.
 ### Tolerant fan-in — a metadata-gated exception to that rule (2026-09-03)
 
 A task stamped `TOLERATE_FAILED_DEPS_METADATA_KEY`
-(`agents/swarm/tasks/acceptance.rs`; written by `workflow::compile::materialize`
+(`src/agents/swarm/tasks/acceptance.rs`; written by `workflow::compile::materialize`
 for a step declaring `tolerate_failed_deps`, and only then — an unstamped row
 is byte-identical) opts out of the **terminal-dead half** only: a
 `failed`/`cancelled` dependency stops blocking it and can never make it
@@ -1153,7 +1153,7 @@ Tests: `tolerant_dependent_of_a_failed_dep_is_ready_on_both_read_paths` (which
 also asserts the strict twin still derives `Unsatisfiable`),
 `tolerant_task_with_a_live_dep_left_is_still_blocked`,
 `get_newly_unblocked_reports_a_tolerant_dependent_when_its_dep_fails`
-(`agents/swarm/tasks/store/tests.rs`). The downstream prompt side is
+(`src/agents/swarm/tasks/store/tests.rs`). The downstream prompt side is
 [WORKFLOW_TEMPLATES.md](WORKFLOW_TEMPLATES.md) *Tolerant fan-in*.
 ### Scheduled work runs on somebody's behalf (cron / heartbeat)
 
@@ -1595,7 +1595,7 @@ dropping the filter reinstates the ghost rows.
 
 ### Argument validation (round-7, 2026-07-25)
 
-The `subagent` tool's arguments are parsed by hand (`subagent_tool/parse.rs`),
+The `subagent` tool's arguments are parsed by hand (`src/agents/subagent_tool/parse.rs`),
 not by serde, so two guards stand in for `#[serde(deny_unknown_fields)]`:
 
 - **Unknown top-level keys are rejected**, with the accepted set in the error. A

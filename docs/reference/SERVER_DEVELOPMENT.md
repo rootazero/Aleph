@@ -193,7 +193,7 @@ npm run build:css
 **配置文件**：
 - `tailwind.config.js`: 配置内容扫描路径（Rust 源文件 + HTML）
 - `styles/tailwind.css`: 源 CSS 文件（包含 @tailwind 指令）
-- `dist/tailwind.css`: 编译后的 CSS（嵌入到二进制）
+- `interfaces/webchat/dist/tailwind.css`: 编译后的 CSS（嵌入到二进制）
 
 **关键特性**：
 - 本地编译：无需 CDN，完全离线可用

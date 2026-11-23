@@ -66,7 +66,7 @@ Errors: `-32004` (id not found), `-32030` (duplicate path),
   `created_at_unix / updated_at_unix`.
 - Delivery log: ring buffer of last N deliveries per endpoint
   (default 50), capped at 1 MB on disk per endpoint. Pruned by a
-  daemon similar to `tasks/shared/reaper.rs`.
+  daemon similar to `src/tasks/shared/reaper.rs`.
 - Secrets are written through `SharedTokenManager` (vault) under
   the key `webhook:{id}:secret`, never inlined in the SQLite row.
 
@@ -145,7 +145,7 @@ struct ProxyConfig {
 
 1. Define `ProxyConfig` schema + SQLite migration.
 2. Plumb a `ProxyResolver` into every long-lived `reqwest::Client`
-   constructor (`providers/*`, `gateway/clawhub`, MCP transports).
+   constructor (`src/providers/*`, `gateway/clawhub`, MCP transports).
    Resolver returns `(url, optional auth)` for a given host.
 3. Add 4 RPCs above + wire `interfaces/cli/src/commands/proxy_cmd.rs`
    stubs to them.
@@ -200,7 +200,7 @@ When filling these gaps:
    the existing reaper pattern for cleanup. Don't introduce new
    storage primitives.
 3. **Validate at boundary.** Same shape as
-   `gateway/handlers/secrets.rs` — `INVALID_PARAMS` for shape
+   `src/gateway/handlers/secrets.rs` — `INVALID_PARAMS` for shape
    failures, dedicated codes (`NOT_FOUND` = `-32004`) for semantic
    failures, generic `INTERNAL_ERROR` for everything else.
 4. **Add a parse-guard test in `main.rs`** for backward-compat on
