@@ -373,7 +373,7 @@ openclaw 把整份目录放在每个 provider 插件的 `openclaw.plugin.json` �
 
 ### 8.3 pi（`@earendil-works/pi-ai`，2026-08 round-3）
 
-pi 的目录是**生成期 hydrate**：`scripts/generate-models.ts`（2762 行）从 models.dev / OpenRouter / Vercel AI Gateway 三源拉数据，叠加散在脚本里的裸常量修正，烧进每 provider 一个 JSON shard 随包发布；运行时另有 per-provider `fetchModels` overlay。与 Aleph 的编译期四表是**同一代际的两种打包方式**，可比的维度如下。
+pi 的目录是**生成期 hydrate**：模型生成脚本（审计时 2762 行）从 models.dev / OpenRouter / Vercel AI Gateway 三源拉数据，叠加散在脚本里的裸常量修正，烧进每 provider 一个 JSON shard 随包发布；运行时另有 per-provider `fetchModels` overlay。与 Aleph 的编译期四表是**同一代际的两种打包方式**，可比的维度如下。
 
 | 维度 | pi | Aleph | 裁决 |
 |------|-----|-------|------|
@@ -447,7 +447,7 @@ RouteLLM 可提炼的三条资产——score→threshold 决策契约、"阈值=
 
 ### 8.5 grok-bot-0.18-reconstructed（2026-09-02 round-6）
 
-一个 Cursor/Codex 后端的 TypeScript 助手，`README` 里把「Inference Router」列为一等子系统——但它的 router 是**一个 `settings.json` 枚举**（`shared/inference-router.ts`，默认 `cursor`，每会话在三处各读一遍磁盘），韧性全部住在 turn runner 里（`host/runner/*`）。它的重试边界**自述为 dormant**（`host-runner-composition.ts:1593-1605`：那条装配从未在生产里通电），所以下表把它的设计一律读作**意图**，不读作证据；能对标的只有「运行时路由与降级」这一族维度，目录层没有可比面。落地记录见 FEATURE_LOCATOR §3.6 round-6。
+一个 Cursor/Codex 后端的 TypeScript 助手，`README` 里把「Inference Router」列为一等子系统——但它的 router 是**一个 `settings.json` 枚举**（shared inference-router 模块，默认 `cursor`，每会话在三处各读一遍磁盘），韧性全部住在 turn runner 里（`host/runner/*`）。它的重试边界**自述为 dormant**（`host-runner-composition.ts:1593-1605`：那条装配从未在生产里通电），所以下表把它的设计一律读作**意图**，不读作证据；能对标的只有「运行时路由与降级」这一族维度，目录层没有可比面。落地记录见 FEATURE_LOCATOR §3.6 round-6。
 
 | 维度 | grok-bot（参考） | Aleph | 裁决 |
 |------|-----------------|-------|------|

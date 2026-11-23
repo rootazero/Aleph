@@ -137,7 +137,7 @@
 | H4 | `McpResourceManager`/`McpPromptManager` 仅测试构造（live 路径走 `McpReadResourceTool`/`McpGetPromptTool` 直连 handle） | 3.9 | dead-abstraction | S | Med / 0.92 | 删两 struct（P6 YAGNI）**或** builtins 改走 manager 单点 |
 | H5 | Resource subscribe/unsubscribe 死路（`client.subscribe_resource` 无非测试 caller）+ `resources/updated` 通知未路由（`classify_list_change` 只映 `*_list_changed`） | 3.9 | broken-wiring | M | Med / 0.88 | 补 `resources/updated` 臂并发事件 **或** 删订阅管线 |
 | H6 | `read_resource` 永不产 `ResourceContent::Image`（image-mime blob 被标 `binary`，消费侧 Image 臂死） | 3.9 | dead-field | S | Low / 0.85 | Blob 臂按 `mime.starts_with("image/")` 分流 **或** 删 Image 变体 |
-| H7 | `read_resource` 静默丢弃首项外的所有 content（`contents.into_iter().next()`，无 log/marker；对照 `tools/call` 有省略标记） | 3.9 | silent-swallow | S | Low / 0.8 | 映射全部 items **或** `len()>1` 时 warn |
+| H7 | `read_resource` 静默丢弃首项外的所有 content（`contents.into_iter().next()`，无 log/marker；对照 "tools/call" (JSON-RPC method) 有省略标记） | 3.9 | silent-swallow | S | Low / 0.8 | 映射全部 items **或** `len()>1` 时 warn |
 | H8 | HTTP/Auto 传输收不到 server 发起的 sampling（`set_request_handler` 仅装在 SSE 分支，`HttpTransport` 无 request-handler 支持） | 3.9 | broken-wiring | M | Low / 0.7 | 给 HttpTransport 补 request-handler **或** 文档化"sampling 仅 SSE" |
 | H9 | Skill `${ALEPH_SESSION_ID}` 生产永不解析（`with_session` 仅单测调；`read.rs:298` 用 `new()` 未线 session id） | 3.11 | broken-wiring | S | Med / 0.9 | `read.rs` 线入 session id **或** 删 session_id/with_session/token 死面 |
 | H10 | `InvocationPolicy.command_dispatch`（`DispatchSpec`/`ArgMode`）只写 `None`、解析器无字段可填、零读者 | 3.11 | dead-field | S | Low / 0.95 | 接 frontmatter `command-dispatch` 键 **或** YAGNI 删整套 |
