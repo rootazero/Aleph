@@ -72,13 +72,15 @@ impl SignalChannel {
             status: ChannelStatus::Disconnected,
             capabilities: Self::capabilities(),
         };
+        let client = reqwest::Client::new();
+        tracing::debug!(channel_id = %info.id, "Signal HTTP client constructed");
 
         Self {
             info,
             config,
             channel_state: ChannelState::new(100),
             shutdown_tx: None,
-            client: reqwest::Client::new(),
+            client,
             api_base: None,
         }
     }

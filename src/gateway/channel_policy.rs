@@ -8,11 +8,20 @@
 
 use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::config::types::policies::ExecTier;
+use crate::gateway::channel::ChannelError;
 use crate::gateway::execution_engine::CHANNEL_TOOL_PERMISSIONS_KEY;
-use crate::gateway::inbound_router::{ChannelConfig, ChannelPermissionLevel};
+use crate::gateway::inbound_router::{
+    ChannelConfig, ChannelPermissionLevel, ChannelPolicyConfig, SlashAccessConfig,
+};
+use crate::gateway::interfaces::{
+    feishu::FeishuConfig, line::LineConfig, matrix::MatrixConfig,
+    telegram::config::parse_activation_config,
+};
 use crate::gateway::pair_loop_guard::PairLoopGuardConfig;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 use tokio::sync::Notify;
 
 /// Highest execution tier an untrusted (`Chat`) channel may run at.
@@ -41,17 +50,175 @@ pub fn channel_permission_level_from_role(caller_role: &str) -> Option<ChannelPe
     }
 }
 
-/// Process-global snapshot of the boot-assembled `channel_id → ChannelConfig`
-/// map. The live map is owned privately by the inbound router — built once at
-/// boot via `register_channel_config`, immutable after the router is `Arc::new`d
-/// (there is no runtime re-registration). This read-only snapshot is published
-/// once from that map at the end of `initialize_inbound_router`, so a
-/// system-initiated continuation (goal wait-barrier wake / boot resume) firing
-/// long after boot can consult the SAME channel deny layer a live inbound
-/// message gets — which those paths otherwise cannot reach (the config map is in
-/// no global; `AgentInstance::origin_route` returns only channel + conversation,
-/// no permission data). `None` until boot sets it (tests / pre-channel-init) →
-/// callers fail closed to guest + no deny layer.
+/// Channel policy reduced from configuration for the runtime ID that reads it.
+/// The router, activation path, and continuation slot share one projection.
+#[derive(Default)]
+pub struct ChannelPolicyProjection {
+    entries: RwLock<HashMap<String, ProjectedChannelPolicy>>,
+}
+
+#[derive(Default)]
+struct ProjectedChannelPolicy {
+    config: Option<ChannelConfig>,
+    pair_loop: Option<PairLoopGuardConfig>,
+}
+
+impl ChannelPolicyProjection {
+    /// Publish credential-free settings for a declaration with no transport.
+    pub fn project_cold_declaration(&self, id: &str, declared: &Value) {
+        match parse_channel_declaration_policy(declared) {
+            Ok((config, pair_loop)) => self.set_activation(id, config, pair_loop),
+            Err(error) => {
+                tracing::warn!(channel = id, %error, "Cold channel requires policy repair before activation");
+                // A malformed, unrelated field must not discard valid denies
+                // for system continuations while the declaration is cold.
+                let tool_permissions = declared
+                    .get("tool_permissions")
+                    .and_then(|value| serde_json::from_value(value.clone()).ok());
+                self.set_config(
+                    id,
+                    ChannelConfig {
+                        tool_permissions,
+                        ..Default::default()
+                    },
+                );
+            }
+        }
+    }
+
+    pub(crate) fn get(&self, id: &str) -> Option<ChannelConfig> {
+        self.entries
+            .read()
+            .unwrap_or_else(|err| err.into_inner())
+            .get(id)
+            .and_then(|entry| entry.config.clone())
+    }
+
+    pub(crate) fn pair_loop(&self, id: &str) -> Option<PairLoopGuardConfig> {
+        self.entries
+            .read()
+            .unwrap_or_else(|err| err.into_inner())
+            .get(id)
+            .and_then(|entry| entry.pair_loop.clone())
+    }
+
+    pub(crate) fn set_config(&self, id: &str, config: ChannelConfig) {
+        self.entries
+            .write()
+            .unwrap_or_else(|err| err.into_inner())
+            .entry(id.to_owned())
+            .or_default()
+            .config = Some(config);
+    }
+
+    pub(crate) fn set_pair_loop(&self, id: &str, pair_loop: PairLoopGuardConfig) {
+        self.entries
+            .write()
+            .unwrap_or_else(|err| err.into_inner())
+            .entry(id.to_owned())
+            .or_default()
+            .pair_loop = Some(pair_loop);
+    }
+
+    pub(crate) fn set_activation(
+        &self,
+        id: &str,
+        config: ChannelConfig,
+        pair_loop: Option<PairLoopGuardConfig>,
+    ) {
+        self.entries
+            .write()
+            .unwrap_or_else(|err| err.into_inner())
+            .insert(
+                id.to_owned(),
+                ProjectedChannelPolicy {
+                    config: Some(config),
+                    pair_loop,
+                },
+            );
+    }
+
+    fn continuation_identity(&self, channel: &str, conversation: &str) -> HashMap<String, String> {
+        channel_identity_meta(
+            &self.get(channel).unwrap_or_default(),
+            channel,
+            conversation,
+        )
+    }
+}
+
+/// Reduce common policy without inspecting credentials. Use stable error text:
+/// deserialization errors from the original JSON can contain secret values.
+fn parse_channel_declaration_policy(
+    declared: &Value,
+) -> Result<(ChannelConfig, Option<PairLoopGuardConfig>), ChannelError> {
+    let slash_access: SlashAccessConfig = serde_json::from_value(declared.clone())
+        .map_err(|_| ChannelError::ConfigError("Invalid channel slash access policy".into()))?;
+    let policy: ChannelPolicyConfig = serde_json::from_value(declared.clone())
+        .map_err(|_| ChannelError::ConfigError("Invalid channel permission policy".into()))?;
+    let pair_loop = PairLoopGuardConfig::parse_channel_override(declared)
+        .map_err(|_| ChannelError::ConfigError("Invalid channel pair-loop policy".into()))?;
+    Ok((
+        ChannelConfig {
+            slash_access,
+            permission_level: policy.permission_level,
+            default_workspace: policy.default_workspace,
+            busy_input_mode: policy.busy_input_mode,
+            tool_permissions: policy.tool_permissions,
+            ..Default::default()
+        },
+        pair_loop,
+    ))
+}
+
+/// Reduce the policy for explicit cold activation before constructing a transport.
+pub(crate) fn parse_channel_activation_policy(
+    channel_type: &str,
+    runtime_config: &Value,
+    declared_config: &Value,
+) -> Result<(ChannelConfig, Option<PairLoopGuardConfig>), ChannelError> {
+    let (common, pair_loop) = parse_channel_declaration_policy(declared_config)?;
+    let invalid = || ChannelError::ConfigError("Invalid channel transport policy".into());
+    let mut platform = match channel_type {
+        "telegram" => {
+            let config = parse_activation_config(runtime_config.clone()).map_err(|_| invalid())?;
+            ChannelConfig::from(&config)
+        }
+        "feishu" => {
+            let config: FeishuConfig =
+                serde_json::from_value(runtime_config.clone()).map_err(|_| invalid())?;
+            if !config.group_policy.eq_ignore_ascii_case("open")
+                && !config.group_policy.eq_ignore_ascii_case("allowlist")
+            {
+                return Err(invalid());
+            }
+            ChannelConfig::from(&config)
+        }
+        "line" => {
+            let config: LineConfig =
+                serde_json::from_value(runtime_config.clone()).map_err(|_| invalid())?;
+            ChannelConfig::from(&config)
+        }
+        "matrix" => {
+            let config: MatrixConfig =
+                serde_json::from_value(runtime_config.clone()).map_err(|_| invalid())?;
+            ChannelConfig::from(&config)
+        }
+        _ => ChannelConfig::default(),
+    };
+    platform.slash_access = common.slash_access;
+    platform.permission_level = common.permission_level;
+    platform.default_workspace = common.default_workspace;
+    platform.busy_input_mode = common.busy_input_mode;
+    platform.tool_permissions = common.tool_permissions;
+    Ok((platform, pair_loop))
+}
+
+/// Process-global handle to the router's policy projection. Installed once
+/// after boot policy assembly, then kept current by explicit cold activation.
+/// It lets system-initiated continuations consult the same deny layer as live
+/// ingress without turning the origin route into a second policy authority.
+/// Missing before installation (or on an unknown ID) means guest + no deny.
 ///
 /// `IndistinguishableDefault`, on the axis that matters. The guest floor is
 /// unconditional (`channel_identity_meta` writes it before consulting the
@@ -78,11 +245,10 @@ pub fn channel_permission_level_from_role(caller_role: &str) -> Option<ChannelPe
 /// ⚠️ Read alongside [`wait_for_channel_config_snapshot`]: boot scans park on
 /// the publish rather than racing it, so on a healthy boot this default is
 /// unreachable. The diagnostic is for the boot that is not healthy.
-static CHANNEL_CONFIG_SNAPSHOT: CapabilitySlot<HashMap<String, ChannelConfig>> =
-    CapabilitySlot::new(
-        "gateway/channel-config-snapshot",
-        MissingSemantics::IndistinguishableDefault {
-            reads_as: "ChannelConfig::default() -- the guest floor with NO per-channel \
+static CHANNEL_CONFIG_SNAPSHOT: CapabilitySlot<Arc<ChannelPolicyProjection>> = CapabilitySlot::new(
+    "gateway/channel-config-snapshot",
+    MissingSemantics::IndistinguishableDefault {
+        reads_as: "ChannelConfig::default() -- the guest floor with NO per-channel \
                        tool-deny layer, identical to an unconfigured channel",
         },
     );
@@ -100,13 +266,10 @@ pub(crate) const fn channel_config_snapshot_slot() -> &'static dyn SlotStatus {
 /// silently dropping the per-channel deny layer.
 static SNAPSHOT_READY: Notify = Notify::const_new();
 
-/// Publish the boot channel-config snapshot. Called once from
-/// `initialize_inbound_router` after every `register_channel_config`, before the
-/// router is sealed in `Arc`. Idempotent — a later install (e.g. a second boot
-/// in a test process) returns `false` and is ignored by the slot.
-pub fn set_channel_config_snapshot(configs: HashMap<String, ChannelConfig>) {
-    if !CHANNEL_CONFIG_SNAPSHOT.install(configs) {
-        tracing::debug!("channel config snapshot already published; ignoring re-set");
+/// Publish the live projection after boot has assembled its initial entries.
+pub fn install_channel_policy_projection(projection: Arc<ChannelPolicyProjection>) {
+    if !CHANNEL_CONFIG_SNAPSHOT.install(projection) {
+        tracing::debug!("channel policy projection already published; ignoring re-set");
     }
     // Wake any boot scans parked in `wait_for_channel_config_snapshot`. Callers
     // that arrive after this see the slot already installed and never park.
@@ -173,11 +336,10 @@ pub async fn wait_for_channel_config_snapshot(timeout: std::time::Duration) -> b
 /// boot publish.
 #[must_use]
 pub fn system_continuation_identity(channel: &str, conversation: &str) -> HashMap<String, String> {
-    let cfg = CHANNEL_CONFIG_SNAPSHOT
-        .get()
-        .and_then(|m| m.get(channel).cloned())
-        .unwrap_or_default();
-    channel_identity_meta(&cfg, channel, conversation)
+    match CHANNEL_CONFIG_SNAPSHOT.get() {
+        Some(projection) => projection.continuation_identity(channel, conversation),
+        None => channel_identity_meta(&ChannelConfig::default(), channel, conversation),
+    }
 }
 
 /// Pure cfg → identity metadata (guest floor + deny layer), split from the
@@ -329,6 +491,77 @@ impl Default for ChannelAccessConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn activation_policy_uses_latest_declared_denies() {
+        let projection = ChannelPolicyProjection::default();
+        let original = json!({"enabled": false});
+        let (policy, pair_loop) =
+            parse_channel_activation_policy("signal", &original, &original).unwrap();
+        projection.set_activation("signal-cold", policy, pair_loop);
+        assert!(
+            projection
+                .get("signal-cold")
+                .unwrap()
+                .slash_command_gate("guest", "/model", false)
+                .allowed
+        );
+
+        let latest = json!({
+            "enabled": false,
+            "allow_admin_from": ["admin"],
+            "tool_permissions": {"overrides": {"bash": "deny"}},
+            "bot_loop_protection": {"enabled": false}
+        });
+        let (policy, pair_loop) =
+            parse_channel_activation_policy("signal", &latest, &latest).unwrap();
+        projection.set_activation("signal-cold", policy, pair_loop);
+
+        let policy = projection.get("signal-cold").unwrap();
+        assert!(!policy.slash_command_gate("guest", "/model", false).allowed);
+        assert!(policy.slash_command_gate("admin", "/model", false).allowed);
+        let metadata = projection.continuation_identity("signal-cold", "room");
+        assert_eq!(metadata["caller_role"], "guest");
+        let permissions: serde_json::Value =
+            serde_json::from_str(&metadata[CHANNEL_TOOL_PERMISSIONS_KEY]).unwrap();
+        assert_eq!(permissions["overrides"]["bash"], "deny");
+        assert!(!projection.pair_loop("signal-cold").unwrap().enabled);
+    }
+
+    #[test]
+    fn cold_policy_keeps_continuation_denies_separate_from_live_sibling() {
+        let projection = ChannelPolicyProjection::default();
+        projection.set_config("feishu", ChannelConfig::default());
+        projection.project_cold_declaration(
+            "feishu-cold",
+            &json!({
+                "type": "feishu",
+                "enabled": false,
+                "allow_admin_from": 123,
+                "tool_permissions": {"overrides": {"bash": "deny"}}
+            }),
+        );
+
+        let cold_metadata = projection.continuation_identity("feishu-cold", "room");
+        let permissions: serde_json::Value =
+            serde_json::from_str(&cold_metadata[CHANNEL_TOOL_PERMISSIONS_KEY]).unwrap();
+        assert_eq!(permissions["overrides"]["bash"], "deny");
+        assert!(!projection
+            .continuation_identity("feishu", "room")
+            .contains_key(CHANNEL_TOOL_PERMISSIONS_KEY));
+    }
+
+    #[test]
+    fn activation_policy_rejects_invalid_access() {
+        for malformed in [
+            json!({"tool_permissions": {"overrides": "bash"}}),
+            json!({"allow_admin_from": "admin"}),
+            json!({"bot_loop_protection": {"enabled": "false"}}),
+        ] {
+            assert!(parse_channel_activation_policy("signal", &malformed, &malformed).is_err());
+        }
+    }
 
     /// See `session::service::tests::the_accessor_exposes_this_handle_to_the_roster`
     /// for why this asserts through the accessor rather than the static.

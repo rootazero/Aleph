@@ -3558,6 +3558,8 @@ async fn start_server_body(
     }
 
     let app_config_snapshot = app_config_for_channels.read().await.clone();
+    let channel_policy =
+        Arc::new(alephcore::gateway::channel_policy::ChannelPolicyProjection::default());
     let channel_registry = initialize_channels(
         &mut server,
         &app_config_snapshot,
@@ -3567,6 +3569,7 @@ async fn start_server_body(
         auth_bundle.auth_ctx.shared_token_mgr.clone(),
         full_config.gateway.delivery_queue.to_runtime(),
         full_config.gateway.send_retry.to_policy(),
+        &channel_policy,
     )
     .await;
 
@@ -3942,6 +3945,7 @@ async fn start_server_body(
 
     initialize_inbound_router(
         channel_registry,
+        channel_policy,
         agent_result.execution_adapter,
         agent_result.agent_registry,
         channel_pairing_store,
