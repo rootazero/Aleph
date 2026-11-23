@@ -13,8 +13,8 @@
 │                           INTERFACE LAYER (I/O)                               │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐      │
-│  │ macOS    │  │  Tauri   │  │   CLI    │  │ Telegram │  │ Discord  │      │
-│  │  App     │  │   App    │  │          │  │Interface │  │Interface │      │
+│  │ macOS    │  │ Desktop  │  │   CLI    │  │ Telegram │  │ Discord  │      │
+│  │  App     │  │ Host(s)  │  │          │  │Interface │  │Interface │      │
 │  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘      │
 │       │             │             │             │             │             │
 │       └─────────────┴─────────────┴─────────────┴─────────────┘             │
@@ -657,6 +657,23 @@ test-helpers = []          # 集成测试工具
 ---
 
 ## Platform Architecture
+
+### Desktop Hosts (dual-track)
+
+The Panel is one codebase (`interfaces/webchat` → `aleph-panel`, Leptos/WASM) served by
+`aleph-server` itself on `http://127.0.0.1:18790`. The desktop host is only the WebView
+around it, and the host is mid-migration:
+
+| Host | Location | State (2026-11) |
+|---|---|---|
+| Legacy Tauri host | `desktop/shell` (`aleph-desktop-shell`) | **Still the released build** — the release workflow and `just shell-build` target it; carries the updater, `aleph://` deeplink, macOS menu and service management |
+| NSH host | `desktop/nsh-shell` (`aleph-nsh-shell`) | **Forward form** — window, tray, global shortcut, notification permission and the typed Panel bridge; no updater, deeplink, macOS menu or service control yet, and no release pipeline or `just` target |
+
+The host↔Panel contract is typed, not ad-hoc: `shared/protocol/src/panel_shell.rs`
+(`ShellRequest` / `ShellReply` / `PanelReply`), implemented host-side in
+`desktop/nsh-shell/src/panel_bridge.rs` and consumed Panel-side in
+`interfaces/webchat/src/app/shell_bridge.rs`. The switch is gated by the Phase 11 plan
+([docs/superpowers/plans/2026-11-21-phase11-nsh-cutover.md](../superpowers/plans/2026-11-21-phase11-nsh-cutover.md)).
 
 ### Desktop Bridge
 

@@ -97,8 +97,9 @@ Aleph 最初是一个 headless server。我们围绕真实的桌面 App 重新�
 
 ```
                 ┌─────────────────────────────────────────┐
-                │      🖥  原生桌面 App (Tauri)            │
-                │  聊天面板 · 托盘 · 热键 · 系统通知       │
+                │      🖥  桌面宿主（WebView 外壳）          │
+                │  遗留 Tauri · 目标形态 NSH                │
+                │  聊天面板 · 托盘 · 热键 · 系统通知         │
                 └──────────────────┬──────────────────────┘
                                    │  JSON-RPC（本地）
 ┌────────────┐  远程    ┌──────────▼──────────┐ ┌────────────────┐
@@ -124,6 +125,12 @@ Aleph 最初是一个 headless server。我们围绕真实的桌面 App 重新�
 ```
 
 完整设计：[docs/reference/ARCHITECTURE.md](docs/reference/ARCHITECTURE.md) · [HARNESS_PHILOSOPHY.md](docs/reference/HARNESS_PHILOSOPHY.md)
+
+> **两个桌面宿主，一份 Panel。** Panel UI 只有一份代码（`interfaces/webchat` → Leptos + WASM），
+> 由 `aleph-server` 自己提供服务；桌面宿主只是包在外面的 WebView 外壳，而且正在迁移中：
+> 目前发布的安装包仍由遗留 Tauri 宿主（`desktop/shell`）构建，目标形态是 NSH 宿主
+> （`desktop/nsh-shell`）。切换由门禁控制 —— 见
+> [Phase 11 切换计划](docs/superpowers/plans/2026-11-21-phase11-nsh-cutover.md)。
 
 ---
 
@@ -207,7 +214,8 @@ Aleph/
 │   ├── extension/       # WASM + Node.js 插件系统
 │   └── ...              # session · approval · scheduler · daemon · ...
 ├── desktop/
-│   ├── shell/           # Tauri 桌面 App（托盘、热键、通知 ...）
+│   ├── shell/           # 遗留 Tauri 桌面宿主（托盘、热键、通知 ...）
+│   ├── nsh-shell/       # 目标形态 NSH 桌面宿主（窗口、托盘、热键、面板桥）
 │   ├── shared/          # DesktopCapability trait + IPC 协议
 │   ├── macos/ + bridge/ # macOS 原生（AppKit、Vision、Swift bridge）
 │   ├── windows/         # Windows 原生（Win32）

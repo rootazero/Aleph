@@ -50,9 +50,30 @@
 
 ## 🛠 Tech Stack & Do NOT introduce
 
-**核心栈**: Rust Core (tokio + serde) · 记忆 SQLite + sqlite-vec · 接口 JSON Schema (schemars) · Panel Leptos/WASM · 桌面壳 Tauri。
+**核心栈**: Rust Core (tokio + serde) · 记忆 SQLite + sqlite-vec · 接口 JSON Schema (schemars) · Panel Leptos/WASM · 桌面宿主双轨（见下节）。
 
 **Do NOT introduce**（基于 R1/R3/R7 推导，违者不得合入）→ [REDLINES.md](docs/reference/REDLINES.md)
+
+---
+
+## 🖥 桌面宿主：双轨现状（2026-11）
+
+> **一个 Panel，两个宿主。** Panel 代码只有一份（`interfaces/webchat` → `aleph-panel`，Leptos 0.8 CSR/WASM），
+> 由 `aleph-server` 内嵌资源（`rust_embed`）在 `http://127.0.0.1:18790` 提供；宿主只是 WebView 外壳。
+
+| 宿主 | 位置 | 现状（2026-11-23） |
+|---|---|---|
+| 遗留 Tauri 宿主 | `desktop/shell`（`aleph-desktop-shell`，Tauri v2） | **仍在发版**：CI `aleph-app-release.yml` 与 `just shell-build` 走它；自带 updater / `aleph://` deeplink / macOS 菜单 / 服务管理 |
+| NSH 宿主 | `desktop/nsh-shell`（`aleph-nsh-shell`，nsh 0.6.0） | **目标形态**：窗口 + 托盘 + 全局快捷键 + 通知授权 + 面板桥；尚无 updater / deeplink / macOS 菜单 / 服务控制，**尚无 release 流水线与 `just` 目标** |
+
+- **宿主↔Panel 走类型化契约**：`shared/protocol/src/panel_shell.rs`（`ShellRequest` / `ShellReply` / `PanelReply`）。
+  宿主侧实现 `desktop/nsh-shell/src/panel_bridge.rs`，Panel 侧消费 `interfaces/webchat/src/app/shell_bridge.rs`。
+  旧的 `__TAURI_INTERNALS__` 只剩两处未迁移消费者：`interfaces/webchat/src/api/native_credentials.rs`、
+  `interfaces/webchat/src/platform/wide/views/voice/audio.rs`。
+- **迁移门禁**：Phase 11（P11-A…P11-H）要求三平台证据 + ≥14 天双轨并行运行；Tauri 宿主的去留由门禁决定，不由文档决定。
+  计划与证据 → `docs/superpowers/plans/2026-11-21-phase11-nsh-cutover.md`。
+- **文档纪律**：证据层（`docs/superpowers/`、`docs/reports/`、`docs/engineering-reports/`、`docs/research/`）是时点记录，
+  **不是当前架构**；证据与代码冲突时以代码为准。规则与路线图 → `docs/superpowers/plans/2026-11-23-doc-architecture-realignment.md`。
 
 ---
 

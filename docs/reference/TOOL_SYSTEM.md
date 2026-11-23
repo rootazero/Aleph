@@ -502,7 +502,7 @@ pub struct MemorySearchOutput {
 **Architecture**:
 ```
 memory_search(query)
-  → Hybrid search (see [Retrieval](../memory/RETRIEVAL.md))
+  → Hybrid search (see [Retrieval](memory/RETRIEVAL.md))
     → Facts + raw memories fallback
   → ContextComptroller.arbitrate(results, budget)
     → Detect redundancy via cosine similarity (threshold: 0.95)

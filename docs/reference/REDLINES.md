@@ -27,7 +27,7 @@
 
 ## 🛠 Tech Stack & Do NOT introduce
 
-**核心栈**: Rust Core (tokio + serde) · 记忆层 SQLite + sqlite-vec · 接口 JSON Schema (schemars) · Panel Leptos/WASM · 桌面壳 Tauri。
+**核心栈**: Rust Core (tokio + serde) · 记忆层 SQLite + sqlite-vec · 接口 JSON Schema (schemars) · Panel Leptos/WASM · 桌面宿主双轨（遗留 Tauri `desktop/shell` 仍在发版，目标形态 NSH `desktop/nsh-shell`，切换由 Phase 11 门禁控制）。
 
 **Do NOT introduce unless explicitly requested**（基于 R1/R3/R7 推导，违者不得合入）:
 
