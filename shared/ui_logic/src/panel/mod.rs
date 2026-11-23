@@ -6,6 +6,7 @@
 //! has a single implementation.
 
 pub mod discovery;
+pub mod layout;
 pub mod projection;
 pub mod registry;
 pub mod source;
