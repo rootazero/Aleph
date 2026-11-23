@@ -64,5 +64,5 @@ This contract is deliberately honest rather than ambitious: a `warn!` fires at e
 
 - `docs/superpowers/specs/2026-05-20-host-sandbox-netns-decision-design.md` — the binding decision for host-mode network isolation
 - `docs/reference/SKILL_MODEL_TAXONOMY.md` — the four-layer skill type map
-- `docs/reference/SKILL_SANDBOXING.md` — OS-native sandboxing for evolved skills
+- `docs/superpowers/specs/2026-05-20-sandbox-hardening-cycle1-design.md` — OS-native sandboxing (Seatbelt / Landlock / AppContainer) for evolved skills
 - `docs/reference/SANDBOX.md` — the underlying `Sandbox` trait and platform drivers (bwrap / seatbelt / Windows AppContainer)

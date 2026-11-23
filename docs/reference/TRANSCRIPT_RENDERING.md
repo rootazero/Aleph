@@ -3,7 +3,7 @@
 > **Tier 2**。落点索引在 [FEATURE_LOCATOR.md](FEATURE_LOCATOR.md) **§6.13**；判据触发器在它的**附录 E.0 / E.1 / E.3 / E.4 / E.7 / E.10**。
 > spec 母本：[`docs/superpowers/specs/2026-09-06-cc-style-transcript-rendering-design.md`](../superpowers/specs/2026-09-06-cc-style-transcript-rendering-design.md) ·
 > 计划：[`docs/superpowers/plans/2026-09-06-cc-render-phase-a-wire-and-shared-core.md`](../superpowers/plans/2026-09-06-cc-render-phase-a-wire-and-shared-core.md) ·
-> 逐 Task 台账（裁定 / 更正 / 残余）：`.superpowers/sdd/2026-09-06-cc-render-phase-a-wire-and-shared-core/progress.md`——实施期的本机工作笔记，
+> 逐 Task 台账（裁定 / 更正 / 残余）：.superpowers/sdd/2026-09-06-cc-render-phase-a-wire-and-shared-core/progress.md——实施期的本机工作笔记，
 > `.superpowers/` 被 `.gitignore` 排除，**不在仓库里**；下文提到「台账」处，可核对的只有本文复述的那部分。
 > 脱敏信任模型全文在 [SECURITY.md](SECURITY.md)；工具输出 ingress / 预算级联在 [FEATURE_LOCATOR §3.14](FEATURE_LOCATOR.md)；prompt 预算与截断在 [§1.2](FEATURE_LOCATOR.md)。
 >
@@ -528,7 +528,7 @@ main 上某处加了一个生产 `CapabilitySlot` 而没有推这个数字，而
 - **`ConnectionFailure::Timeout` 是零生产者、五消费者**（Panel 侧五处 match 臂）。Phase A 保留了这个变体并附上诚实的
   「今天没有路径产出它」注释，**没有**写计划里建议的那句点名产出路径的注释——那句会是假的。
   Phase C（连接 UX）必须二选一：把真实超时分类进它，或连同那五处一起 CUT。
-- **`plugins/diff-viewer` 的 CUT 只记了一条笔记，没有执行**：`plugins/` 是指向兄弟仓 Aleph-plugins 的 git submodule，
+- **兄弟仓 Aleph-plugins 里 plugins/diff-viewer 的 CUT 只记了一条笔记，没有执行**：`plugins/` 是指向兄弟仓 Aleph-plugins 的 git submodule，
   从这个 worktree 里删要么对上游毫无作用、要么弄坏 submodule 指针，而 `include_dir!` 在编译期嵌入那棵树。
   CUT 晚一轮，落在它该落的那个仓里。
 - **`ToolGroup::headline` 无条件数 `rows.len()`**，而它的时长求和只算终态行（§4）。TUI 自 Phase B 起原样绘制它
@@ -591,7 +591,7 @@ main 上某处加了一个生产 `CapabilitySlot` 而没有推这个数字，而
 
 这一层有几条会在别处被「统一」掉的裁定。**正文只在 spec 里写一次**（判据 §1），这里给名字、守卫与指针：
 
-- **两条腿一处派生是结构性的，不是纪律性的**：`apply_live` 收到的 `StreamEvent::AgentTrace { event }` 与 `trace.by_runs` 的行是同一个 `AgentTraceEvent`，两条腿都进 `reducer/mod.rs` 的 `apply_trace`。守卫 G2 `the_live_leg_and_the_replay_leg_fold_to_the_same_entries`（`reducer/tests/g2.rs`，去掉时钟后比整份条目）→ spec §6 · §5.3。⚠️ 它的两条腿都是**手工构造的 fixture**：真 drain 帧对真 `trace.by_runs` 行的集成层 G2 推迟到 Phase T 的 `qa/transcript_fold`（spec §5.3 的修订段）。
+- **两条腿一处派生是结构性的，不是纪律性的**：`apply_live` 收到的 `StreamEvent::AgentTrace { event }` 与 `trace.by_runs` 的行是同一个 `AgentTraceEvent`，两条腿都进 `reducer/mod.rs` 的 `apply_trace`。守卫 G2 `the_live_leg_and_the_replay_leg_fold_to_the_same_entries`（`reducer/tests/g2.rs`，去掉时钟后比整份条目）→ spec §6 · §5.3。⚠️ 它的两条腿都是**手工构造的 fixture**：真 drain 帧对真 `trace.by_runs` 行的集成层 G2 推迟到 Phase T 的 qa/transcript_fold（计划中的 QA 装置，尚未落地；spec §5.3 的修订段）。
 - **`iteration: None` 永不被追认**、**记录是权威的**（`ReasoningEmitted` 之于 thinking、`TextEmitted{Final}` 之于文字）、**没有记录覆盖的流式文字是临时的** → spec §4 · §5.2。
 - **`RunSummary.loops` 是终局闸**，`NeedsResync` 之后客户端怎么做 → spec §5.1 · §9。
 

@@ -158,10 +158,10 @@ static files), not `PreToolUse` / `PostToolUse` handlers. A plugin's hooks are `
 actions (its `prompt` / `http` / `agent` actions are dropped with a warning,
 `src/extension/manifest/parsers.rs`; only user-settings hooks run all four) or WASM exports.
 
-> Until 2026-09-20 this section described a `NodejsRuntime` at `src/extension/runtime/nodejs/` and an
+> Until 2026-09-20 this section described a `NodejsRuntime` at src/extension/runtime/nodejs/ and an
 > `@aleph/plugin-sdk` npm package (`packages/plugin-sdk/`, 906 lines of TypeScript with no host).
 > Both were doc-only; both are gone. The sibling repo still carries the phantom dialect:
-> `plugins/media-office/src/index.js:349` (`method === "plugin.call"`) and `:264` (`onPostToolUse`) —
+> plugins/media-office/src/index.js:349 (`method === "plugin.call"`) and :264 (`onPostToolUse`) —
 > follow-up in Aleph-plugins, not here.
 
 ---
@@ -243,7 +243,10 @@ discovery was the union of every project and every session saw everything.
 
 ## Plugin Discovery
 
-**Location**: `src/extension/discovery/`
+**Location**: `src/discovery/types.rs` (the `PluginDiscovery` struct; the scanning
+entry points live in `src/discovery/scanner.rs`). The former
+src/extension/discovery/ copy was **cut on 2026-08-09** as a duplicate of
+`crate::discovery`, so the shape shown below is the pre-cut one.
 
 ```rust
 pub struct PluginDiscovery {

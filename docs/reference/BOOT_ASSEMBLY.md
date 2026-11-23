@@ -11,7 +11,7 @@ different state:
 
 | Phase | When it runs | Where | What it does |
 |-------|--------------|-------|--------------|
-| **First-Time Setup** | Once per environment (idempotent on re-runs) | `src/init_unified/` | Creates directories, generates default config, opens databases, downloads runtimes, installs default skills |
+| **First-Time Setup** | Once per environment (idempotent on re-runs) | *(module removed 2026-08-02 — see §2)* | Creates directories, generates default config, opens databases, downloads runtimes, installs default skills |
 | **Runtime Boot** | Every server start | `src/bin/aleph-server/commands/start/` | Wires the 12 modules into a running gateway server |
 
 The two are decoupled: first-time setup is a no-op when its target state
@@ -19,9 +19,9 @@ already exists, so runtime boot can assume it. Failures in first-time
 setup do not corrupt runtime boot — they leave Aleph in an "uninstalled"
 state and exit before the gateway opens.
 
-## 2. First-Time Setup — `src/init_unified/`
+## 2. First-Time Setup — the former src/init_unified/ module (removed 2026-08-02)
 
-5-phase sequence executed by `InitializationCoordinator`:
+5-phase sequence that was executed by `InitializationCoordinator`:
 
 1. **Directories** — create `~/.aleph/{config,data,cache,logs}/` etc.
 2. **Config** — generate `~/.aleph/config/aleph.toml` with defaults
@@ -29,11 +29,14 @@ state and exit before the gateway opens.
 4. **Runtimes** — download Python / Node / etc. for skill execution
 5. **Skills** — install default skills bundled with the binary
 
-**Entry**: `src/init_unified/coordinator.rs:InitializationCoordinator`
-**Re-export site**: `src/lib.rs:99`
+**Entry**: the `InitializationCoordinator` in the removed
+src/init_unified/coordinator.rs — no replacement coordinator exists; the
+same outcomes are now reached lazily, directories by `src/utils/paths.rs`
+and the default config by `src/config/load.rs`.
+**Re-export site**: gone with the module (nothing re-exports it from `src/lib.rs`).
 **Idempotency**: each phase no-ops when its target state is already
-present, so this coordinator is safe to call on every start (current
-binary does call it).
+present, so this coordinator was safe to call on every start (the current
+binary no longer calls it — the state is created on demand instead).
 
 ## 3. Runtime Boot — `src/bin/aleph-server/commands/start/`
 
@@ -74,7 +77,7 @@ instantiation site, and any dependency that must already be ready.
 ### Module 3 — Memory
 - **Home**: `src/memory/`
 - **Primary instantiation**: `agent_init.rs::AgentHandlersResult.embedder` + `compression_service` — created alongside agent registry; concrete `MemoryStore` opened when first agent loads memory.
-- **Dependencies**: database (init_unified phase 3) must be ready.
+- **Dependencies**: database (first-time setup, §2) must be ready.
 
 ### Module 4 — Context Management
 - **Home**: `src/context/{budget,compact}/`
@@ -87,14 +90,14 @@ instantiation site, and any dependency that must already be ready.
 - **Dependencies**: provider registry (in `AgentHandlersResult.default_provider`), tools registry (Module 2), context (Module 4).
 
 ### Module 6 — Tool Calling / Structured Output
-- **Home**: `src/tools/calling/`
+- **Home**: `src/tools/`
 - **Primary instantiation**: per-call — invoked from `harness/agent.rs` during a turn.
 - **Dependencies**: tools registry (Module 2) populated.
 
 ### Module 7 — State & Session
 - **Home**: `src/session/`
 - **Primary instantiation**: `mod.rs:168 — initialize_session_store`. Builds `SqliteEventStore` and constructs `InProcessActorSessionService` via `mod.rs:249 — build_sqlite_session_service`.
-- **Dependencies**: database (init_unified phase 3) must be ready.
+- **Dependencies**: database (first-time setup, §2) must be ready.
 
 ### Module 8 — Error Handling
 - **Home**: cross-module (`HarnessError` in `src/harness/trait_def.rs` + typed errors elsewhere)
@@ -104,7 +107,7 @@ instantiation site, and any dependency that must already be ready.
 ### Module 9 — Guardrails
 - **Home**: `src/{security,sandbox,approval,pii}/`
 - **Primary instantiation**: `subsystems.rs:38 — initialize_auth` constructs `AuthBundle` (TokenManager, PairingManager, InvitationManager, GuestSessionManager). Sandbox / approval / PII assembled per-tool-call inside execution engine.
-- **Dependencies**: device store (created within `initialize_auth`), config (init_unified phase 2).
+- **Dependencies**: device store (created within `initialize_auth`), config (first-time setup, §2).
 
 ### Module 10 — Verification & Feedback
 - **Home**: `src/verification/`
@@ -121,8 +124,8 @@ instantiation site, and any dependency that must already be ready.
 - **Dependencies**: provider registry (within `AgentHandlersResult`), tools registry (Module 2).
 
 ### Module 12 — Initialization & Environment
-- **Home**: `src/init_unified/` + `src/config/`
-- **Primary instantiation**: `init_unified/coordinator.rs:InitializationCoordinator`. Re-exported at `src/lib.rs:99`.
+- **Home**: `src/config/` (the former src/init_unified/ module was removed on 2026-08-02)
+- **Primary instantiation**: none — the `InitializationCoordinator` was removed with the module.
 - **Dependencies**: filesystem only (creates everything else).
 
 ## 5. Cross-Module Invariants
@@ -133,10 +136,10 @@ first real bug surfaces.
 
 ### Invariant 1: Database open before any *Store impl is constructed
 `SqliteEventStore`, `SqliteTeamStore`, `SqliteCoordTaskStore`, etc. all
-require an open `rusqlite::Connection`. If init_unified phase 3
+require an open `rusqlite::Connection`. If first-time setup
 (Database) has not run, every store constructor panics at first call.
 Mitigation: the `initialize_session_store` ordering in `mod.rs:168` is
-sequenced after init_unified.
+sequenced after first-time setup.
 
 ### Invariant 2: Provider registry populated before AgentRegistry
 `AgentRegistry` resolves each agent's `provider_id` to a concrete
@@ -148,10 +151,10 @@ enforced at the type level.
 
 ### Invariant 3: Skill loader finishes before tool registry finalization
 Skills register additional tools into `BuiltinToolRegistry` during their
-load. If `BuiltinToolRegistry` is sealed before init_unified phase 5
-(Skills) completes, skill-provided tools are silently absent — no error,
-just missing capabilities. Mitigation: the registry's "no more tools"
-sentinel is deferred until after the install coordinator returns.
+load. If `BuiltinToolRegistry` is sealed before first-time setup
+(Skills install) completes, skill-provided tools are silently absent — no
+error, just missing capabilities. Mitigation: the registry's "no more
+tools" sentinel is deferred until after the skill install step returns.
 
 ## 6. References
 

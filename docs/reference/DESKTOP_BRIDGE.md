@@ -182,7 +182,7 @@ advertises exactly this list as `supported_methods`, so a method absent here is
 a method the Rust client will not attempt. There are no longer any declared-but-
 unserved constants: `input.clipboard_read` / `input.clipboard_write` had neither
 a handler nor a caller and were removed (clipboard access is done in-process by
-the limb — `desktop/macos/src/system/clipboard.rs`, `NSPasteboard` — never over
+the limb — `desktop/shared/src/macos/clipboard.rs`, `NSPasteboard` — never over
 the bridge). **Do not re-add a constant ahead of its handler**: a published
 method with nothing behind it answers `-32601` at runtime, which reads to the
 model as "this feature is broken" rather than "this feature does not exist".

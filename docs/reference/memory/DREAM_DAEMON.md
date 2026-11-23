@@ -35,7 +35,7 @@ There is **no** standalone `DreamGate` type. Whether a cycle runs at all is deci
 
 The idle check sits **before** the latch on purpose: an active user should not even claim it — the 60 s ticker simply asks again. And these gates are the *only* answer to the operator's "why didn't it run last night", because a cycle that never started leaves no row anywhere; `dreaming::daemon_status()` reads them without moving any of them and `dreaming.list_insights` ships the snapshot (§8).
 
-> An earlier three-level `DreamGate` (time/count/drift) abstraction existed in `src/memory/dreaming/gate.rs` but had **zero production consumers** (the daemon always used the inline checks above) and was removed under R10/YAGNI. Do not reintroduce it; add cycle-entry preconditions to `check_and_run` instead.
+> An earlier three-level `DreamGate` (time/count/drift) abstraction existed in src/memory/dreaming/gate.rs but had **zero production consumers** (the daemon always used the inline checks above) and was removed under R10/YAGNI. Do not reintroduce it; add cycle-entry preconditions to `check_and_run` instead.
 
 ### 3.1 Evolution discipline (`src/memory/dreaming/evolution/`)
 
@@ -228,7 +228,7 @@ STALE         — Note B contains outdated information that Note A has supersede
 
 `src/memory/dreaming/stages/note_synthesis.rs`. Only built into the Synthesize pipeline (§6.2); `should_run` returns `ctx.notes.len() >= 5`. Notes are grouped by category, **excluding `category == "synthesis"`** so output doesn't feed itself; only categories with ≥ 3 notes are synthesized. Up to 15 notes per category (300 chars each) concatenate into an LLM prompt asking for "cross-cutting themes … connections between different notes … key takeaways", with instruction to use `[[wikilinks]]` back to source paths. Output is written under the `synthesis/` category — a directory **not** in `CATEGORY_DIRS`, so the stage calls `tokio::fs::create_dir_all(memory_dir/{agent_id}/synthesis/)` before writing. Title `"{category} Synthesis"`, `tags = [<category>, "synthesis"]`, `links = [<every source path>]`, `facts = [<synthesis text>]`. `NoteIndexer::write_note` persists and indexes; `synthesis_count` increments per success.
 
-**DBSCAN helper.** `src/memory/dreaming/stages/types.rs` ships `dbscan(points, eps, min_pts)` using cosine distance; `DreamingConfig` exposes `cluster_dbscan_eps` (default `0.3`) / `cluster_dbscan_min_samples` (default `2`). The current synthesis stage groups by category; the helper is a reusable primitive for future stages.
+**DBSCAN helper (removed).** A `dbscan(points, eps, min_pts)` helper using cosine distance shipped in src/memory/dreaming/stages/types.rs, and `DreamingConfig` exposed `cluster_dbscan_eps` (default `0.3`) / `cluster_dbscan_min_samples` (default `2`). Both were **cut on 2026-07-18** as dead code; the current synthesis stage groups by category and no clustering helper remains.
 
 ### 5.4 NoteLint
 
@@ -361,7 +361,7 @@ pub struct DreamReport {
 
 ## 8. Persistence
 
-All DDL from `src/memory/store/sqlite/schema.rs`; `init_schema` is idempotent.
+All DDL from `src/memory/store/sqlite/schema/mod.rs`; `init_schema` is idempotent.
 
 **`dream_status`** — one-row singleton:
 

@@ -16,7 +16,7 @@
 Aleph 本地**不混源**。2026-06-20 曾把它做成多源联邦（`SourceProvider` trait +
 `ProviderRegistry` + 跨源去重），**当天即撤回**为单源消费者：本地混源意味着本地要做
 策展，而策展是产品判断而非运行时职责（R3 核心轻量化 / R10 删掉零消费者抽象）。撤回
-后 `src/hub/provider/`、`dedup.rs`、`display.rs`、`categorize.rs` 整体删除。
+后 src/hub/provider/、`dedup.rs`、`display.rs`、`categorize.rs` 整体删除。
 
 **推论**：想让一个扩展出现在用户的 Hub 里，改的是 Aleph-Hub 仓，不是本仓。本仓只有
 一个 HTTP 消费者与一个 URL 常量（`catalog_client.rs::ALEPH_HUB_URL`）。

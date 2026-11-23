@@ -190,7 +190,7 @@ mod tests {
 
 ## 测试形态说明 (Historical note)
 
-本文档此前指向 `tests/features/domain/`（Gherkin）与 `tests/specs/`（YAML +
+本文档此前指向 tests/features/domain/（Gherkin）与 tests/specs/（YAML +
 LlmJudge）两套 BDD 设施。**两者均已于 2026-07-27 删除**：承载它们的 runner
 target 早在 `6e7ab1303`（2026-05-05）就被删掉，此后 66 个 `.feature` / step /
 world 文件与 `cucumber` 依赖再未参与任何编译 —— 零执行断言，且其中多数针对的是
