@@ -74,7 +74,10 @@ impl FinalResponseEmitter {
 impl EventEmitter for FinalResponseEmitter {
     async fn emit(&self, event: StreamEvent) -> Result<(), EventEmitError> {
         if let StreamEvent::RunComplete { summary, .. } = event {
-            *self.final_response.lock().unwrap_or_else(|e| e.into_inner()) = summary.final_response;
+            *self
+                .final_response
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = summary.final_response;
         }
         Ok(())
     }
@@ -397,7 +400,10 @@ impl A2AMessageHandler for AgentLoopBridge {
                 // overwrite it.
                 if task_is_terminal(&self.task_manager, task_id).await {
                     let task = self.task_manager.get_task(task_id, None).await?;
-                    info!(task_id, "A2A bridge: task already terminal; keeping its terminal state");
+                    info!(
+                        task_id,
+                        "A2A bridge: task already terminal; keeping its terminal state"
+                    );
                     return Ok(task);
                 }
                 let task = self

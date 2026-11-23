@@ -248,11 +248,15 @@ pub fn split_frontmatter(
         suggestion: None,
     })?;
 
-    let yaml_str = after_open.get(..yaml_end).ok_or_else(|| AlephError::ConfigError {
-        message: "Invalid UTF-8 boundary in YAML frontmatter".to_string(),
-        suggestion: None,
-    })?;
-    let body = after_open.get(body_start..).map_or_else(String::new, |b| b.trim().to_string());
+    let yaml_str = after_open
+        .get(..yaml_end)
+        .ok_or_else(|| AlephError::ConfigError {
+            message: "Invalid UTF-8 boundary in YAML frontmatter".to_string(),
+            suggestion: None,
+        })?;
+    let body = after_open
+        .get(body_start..)
+        .map_or_else(String::new, |b| b.trim().to_string());
 
     let fm: Frontmatter = crate::yaml::from_str(yaml_str).map_err(|e| AlephError::ConfigError {
         message: format!("Failed to parse YAML frontmatter: {e}"),

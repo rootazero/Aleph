@@ -320,25 +320,18 @@ async fn fold_destroyed_target(handle: &Arc<EngineHandle>, ev: &CdpEvent) {
     let Some(target_id) = ev.params["targetId"].as_str() else {
         return;
     };
-    let removed = {
-        let mut tabs = handle.tabs.lock().await;
-        let removed = tabs.entries.remove(target_id);
-        if let Some(entry) = &removed {
-            if tabs.active.as_deref() == Some(target_id) {
-                // Naming ANY survivor as active would be a guess; leaving it
-                // unset lets `active_tab`'s documented last-listed fallback
-                // answer (the close path makes the same call).
-                tabs.active = None;
-            }
-            // Kept so `ensure_tab` can answer `TabGone` with the last URL the
-            // table observed — the same fact the registry's URL note carries,
-            // at the layer the verbs actually consult.
-            tabs.dead.insert(target_id.to_string(), entry.url.clone());
+    let mut tabs = handle.tabs.lock().await;
+    if let Some(entry) = tabs.entries.remove(target_id) {
+        if tabs.active.as_deref() == Some(target_id) {
+            // Naming ANY survivor as active would be a guess; leaving it
+            // unset lets `active_tab`'s documented last-listed fallback
+            // answer (the close path makes the same call).
+            tabs.active = None;
         }
-        removed
-    };
-    if removed.is_none() {
-        return;
+        // Kept so `ensure_tab` can answer `TabGone` with the last URL the
+        // table observed — the same fact the registry's URL note carries,
+        // at the layer the verbs actually consult.
+        tabs.dead.insert(target_id.to_string(), entry.url.clone());
     }
 }
 

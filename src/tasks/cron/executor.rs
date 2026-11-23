@@ -356,9 +356,10 @@ async fn execute_cron_job(
             let deliverable = final_response.as_deref().and_then(deliverable_text);
 
             // Deliver response to source channel if available
-            let delivery_status = if let (Some(ref ch_id), Some(ref conv_id)) =
-                (&snapshot.source_channel_id, &snapshot.source_conversation_id)
-            {
+            let delivery_status = if let (Some(ref ch_id), Some(ref conv_id)) = (
+                &snapshot.source_channel_id,
+                &snapshot.source_conversation_id,
+            ) {
                 match deliverable {
                     Some(ref response_text) => {
                         deliver_to_channel(
@@ -406,7 +407,7 @@ async fn execute_cron_job(
                     RunStatus::Ok
                 },
                 output: if fell_back {
-                    Some(prepend_fallback_note(final_response, &requested_agent))
+                    Some(prepend_fallback_note(final_response, requested_agent))
                 } else {
                     final_response
                 },
@@ -630,9 +631,7 @@ fn build_cron_prompt(snapshot: &JobSnapshot) -> String {
 ///   "some budget".
 ///
 /// `None` when no `RunComplete` event was observed.
-fn extract_terminate_reason(
-    events: &[StreamEvent],
-) -> Option<(String, Option<String>)> {
+fn extract_terminate_reason(events: &[StreamEvent]) -> Option<(String, Option<String>)> {
     for event in events.iter().rev() {
         if let StreamEvent::RunComplete { summary, .. } = event {
             if let Some(label) = &summary.terminate_reason {

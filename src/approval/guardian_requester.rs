@@ -643,7 +643,10 @@ mod tests {
         b.opened_at =
             Instant::now().checked_sub(GUARDIAN_BREAKER_COOLDOWN + Duration::from_secs(1));
 
-        assert!(b.allows(), "the first caller after the cooldown is the probe");
+        assert!(
+            b.allows(),
+            "the first caller after the cooldown is the probe"
+        );
         assert_eq!(b.state, BreakerState::HalfOpen);
         assert!(
             !b.allows(),
@@ -667,7 +670,10 @@ mod tests {
         b.opened_at =
             Instant::now().checked_sub(GUARDIAN_BREAKER_COOLDOWN + Duration::from_secs(1));
         assert!(b.allows(), "the probe is admitted");
-        assert!(!b.allows(), "the slot is taken while the probe is in flight");
+        assert!(
+            !b.allows(),
+            "the slot is taken while the probe is in flight"
+        );
 
         // The probe never came back: back-date the lease.
         b.probe_started_at =

@@ -988,11 +988,9 @@ mod tests {
             .await;
         let remaining = manager.list().len();
         manager.deactivate().await.unwrap();
-        assert!(
-            denied
-                .into_iter()
-                .all(|result| matches!(result, Err(CapabilityDispatchError::Unavailable)))
-        );
+        assert!(denied
+            .into_iter()
+            .all(|result| matches!(result, Err(CapabilityDispatchError::Unavailable))));
         assert!(
             closed.is_ok(),
             "disabling new terminal work must preserve owned cleanup: {closed:?}"

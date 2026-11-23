@@ -22,8 +22,7 @@ pub trait Clock: Send + Sync + 'static {
         // negative ms: e.g. `ms = -1` produced a negative `nanos` that wrapped
         // to a huge `u32`, making `timestamp_opt` reject it and silently
         // collapse to the epoch instead of the true pre-epoch instant.
-        DateTime::from_timestamp_millis(self.now_ms())
-            .unwrap_or(DateTime::<Utc>::UNIX_EPOCH)
+        DateTime::from_timestamp_millis(self.now_ms()).unwrap_or(DateTime::<Utc>::UNIX_EPOCH)
     }
 }
 

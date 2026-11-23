@@ -192,7 +192,9 @@ fn render_run_summary(name: &str, run_id: &str, team_id: &str, tasks: &[&CoordTa
             .unwrap_or(&task.subject);
         let err = task.result.as_deref().unwrap_or("").trim();
         let err_bounded = match err.char_indices().nth(160) {
-            Some((idx, _)) => err.get(..idx).map_or_else(|| err.to_string(), |s| format!("{s}…")),
+            Some((idx, _)) => err
+                .get(..idx)
+                .map_or_else(|| err.to_string(), |s| format!("{s}…")),
             None => err.to_string(),
         };
         out.push_str(&format!("\n- step '{step}' failed: {err_bounded}"));
@@ -324,7 +326,6 @@ impl TeamDispatcher {
         }
 
         for (rid, run_tasks) in ready_candidates {
-
             let Some((channel_id, conversation_id)) =
                 run_tasks.iter().find_map(|t| workflow_origin(&t.metadata))
             else {

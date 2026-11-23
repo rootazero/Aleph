@@ -692,19 +692,13 @@ mod tests {
     /// operator's retry with no visible reason.
     #[test]
     fn a_manual_retry_clears_the_pending_backoff_deadline() {
-        let pending = with_retry_not_before(
-            json!({ MAX_RETRIES_METADATA_KEY: 2 }),
-            1_700_000_000,
-        );
+        let pending = with_retry_not_before(json!({ MAX_RETRIES_METADATA_KEY: 2 }), 1_700_000_000);
         assert!(!is_retry_eligible(&pending, 1_699_999_999));
         let rearmed = with_retry_budget_reset_at(pending, 1_700_000_001);
         assert_eq!(read_retry_not_before(&rearmed), None);
         assert!(is_retry_eligible(&rearmed, 1_700_000_001));
         // The anchor and the sibling key survive the re-arm.
-        assert_eq!(
-            read_retry_budget_reset_at(&rearmed),
-            Some(1_700_000_001)
-        );
+        assert_eq!(read_retry_budget_reset_at(&rearmed), Some(1_700_000_001));
         assert_eq!(read_max_retries(&rearmed), Some(2));
     }
 
@@ -719,10 +713,7 @@ mod tests {
         });
         let stamped = with_retry_not_before(current, 1_700_000_500);
         assert_eq!(read_retry_not_before(&stamped), Some(1_700_000_500));
-        assert_eq!(
-            read_retry_budget_reset_at(&stamped),
-            Some(1_700_000_000)
-        );
+        assert_eq!(read_retry_budget_reset_at(&stamped), Some(1_700_000_000));
         assert_eq!(read_max_retries(&stamped), Some(2));
     }
 }

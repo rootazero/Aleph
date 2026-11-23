@@ -180,9 +180,9 @@ pub fn take_screenshot(region: Option<&ScreenRegion>) -> Result<Screenshot> {
         // to the primary monitor, unchanged from the legacy behavior.
         None => (primary_index(&monitors)?, region.copied()),
     };
-    let monitor = monitors
-        .get(index)
-        .ok_or_else(|| DesktopError::ScreenCapture("Selected monitor index out of range".to_string()))?;
+    let monitor = monitors.get(index).ok_or_else(|| {
+        DesktopError::ScreenCapture("Selected monitor index out of range".to_string())
+    })?;
 
     let image = local_region
         .as_ref()
@@ -229,9 +229,9 @@ pub fn capture_screen_png() -> Result<Vec<u8>> {
         .map_err(|e| DesktopError::ScreenCapture(format!("Failed to enumerate monitors: {e}")))?;
 
     let p_idx = primary_index(&monitors)?;
-    let monitor = monitors
-        .get(p_idx)
-        .ok_or_else(|| DesktopError::ScreenCapture("Primary monitor index out of range".to_string()))?;
+    let monitor = monitors.get(p_idx).ok_or_else(|| {
+        DesktopError::ScreenCapture("Primary monitor index out of range".to_string())
+    })?;
 
     let image = monitor
         .capture_image()

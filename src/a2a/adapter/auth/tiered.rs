@@ -171,7 +171,8 @@ mod tests {
             localhost_addr(),
             Credentials::BearerToken("my-token".to_string()),
         );
-        ctx.headers.insert("forwarded".to_string(), "for=203.0.113.7".to_string());
+        ctx.headers
+            .insert("forwarded".to_string(), "for=203.0.113.7".to_string());
         let principal = auth.authenticate(&ctx).await.unwrap();
         assert_eq!(principal.trust_level, TrustLevel::Trusted);
     }

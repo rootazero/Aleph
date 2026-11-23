@@ -544,10 +544,7 @@ impl ProjectStore {
                 project.id,
                 project.name,
                 project.owner_user_id,
-                project
-                    .workspace_path
-                    .as_ref()
-                    .map(|p| p.to_string_lossy()),
+                project.workspace_path.as_ref().map(|p| p.to_string_lossy()),
                 project.status.as_str(),
                 now,
             ],
@@ -1455,9 +1452,10 @@ impl ProjectStore {
         // half that succeeded (best effort: `remove_dir` only removes an
         // EMPTY directory, and something may have been written into it in
         // the meantime).
-        self.add(&target, Some(trimmed.to_string())).inspect_err(|_e| {
-            let _ = std::fs::remove_dir(&target);
-        })
+        self.add(&target, Some(trimmed.to_string()))
+            .inspect_err(|_e| {
+                let _ = std::fs::remove_dir(&target);
+            })
     }
 
     /// Look up the CURRENT CALLER's project bound to `path`.
@@ -1633,10 +1631,7 @@ fn canonical_dir(path: &Path) -> Result<PathBuf, ProjectError> {
     Ok(canonical)
 }
 
-fn resolve_display_name(
-    path: &Path,
-    override_name: Option<&str>,
-) -> Result<String, ProjectError> {
+fn resolve_display_name(path: &Path, override_name: Option<&str>) -> Result<String, ProjectError> {
     if let Some(name) = override_name {
         let trimmed = name.trim();
         if !trimmed.is_empty() {

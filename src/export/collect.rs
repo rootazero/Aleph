@@ -74,7 +74,9 @@ pub async fn collect_artifacts(
     session_key: &str,
     records: &[ArtifactRecord],
 ) -> Vec<ExportArtifact> {
-    collect_artifacts_with_drops(store, session_key, records).await.0
+    collect_artifacts_with_drops(store, session_key, records)
+        .await
+        .0
 }
 
 /// Read the bytes for each record, obeying the inline budget, and report the
@@ -244,8 +246,7 @@ mod tests {
             .await
             .expect("put");
 
-        let (collected, dropped) =
-            collect_artifacts_with_drops(&store, SESSION, &[record]).await;
+        let (collected, dropped) = collect_artifacts_with_drops(&store, SESSION, &[record]).await;
 
         assert_eq!(collected.len(), 1);
         assert!(collected[0].bytes.is_some());

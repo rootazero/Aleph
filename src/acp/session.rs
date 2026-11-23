@@ -584,13 +584,10 @@ impl AcpSession {
     }
 
     fn set_acp_session_id(&self, id: String) {
-        *self
-            .acp_session_id
-            .write()
-            .unwrap_or_else(|e| {
-                warn!(harness_id = %self.harness_id, "ACP session_id lock poisoned, recovering");
-                e.into_inner()
-            }) = Some(id);
+        *self.acp_session_id.write().unwrap_or_else(|e| {
+            warn!(harness_id = %self.harness_id, "ACP session_id lock poisoned, recovering");
+            e.into_inner()
+        }) = Some(id);
     }
 
     /// Check if the child process is still running.

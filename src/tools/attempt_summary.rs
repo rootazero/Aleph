@@ -194,15 +194,19 @@ fn resolve_request<'a>(
     call_id: &str,
 ) -> Option<(&'a str, &'a serde_json::Value)> {
     let upper = error_idx.min(events.len());
-    events.get(..upper)?.iter().rev().find_map(|r| match &r.event {
-        SessionEvent::ToolCallRequested {
-            call_id: id,
-            name,
-            input,
-            ..
-        } if id == call_id => Some((name.as_str(), input)),
-        _ => None,
-    })
+    events
+        .get(..upper)?
+        .iter()
+        .rev()
+        .find_map(|r| match &r.event {
+            SessionEvent::ToolCallRequested {
+                call_id: id,
+                name,
+                input,
+                ..
+            } if id == call_id => Some((name.as_str(), input)),
+            _ => None,
+        })
 }
 
 /// The kind of the failure a `repeated` row at `repeat_idx` repeats: the
@@ -215,7 +219,8 @@ fn repeated_kind(
     input: &serde_json::Value,
 ) -> Option<ToolErrorKind> {
     let upper = repeat_idx.min(events.len());
-    events.get(..upper)?
+    events
+        .get(..upper)?
         .iter()
         .enumerate()
         .rev()

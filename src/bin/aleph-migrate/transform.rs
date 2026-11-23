@@ -145,7 +145,8 @@ fn transform_session(
     result?;
 
     if !existed {
-        fs::rename(staging.path(), &session_dir).context("Failed to publish transformed session")?;
+        fs::rename(staging.path(), &session_dir)
+            .context("Failed to publish transformed session")?;
         return Ok(());
     }
 
@@ -392,8 +393,8 @@ fn store_attachment(
     } else {
         // Verify the parent before staging, then publish without clobbering a
         // file another session may have completed concurrently.
-        let canonical_dir = fs::canonicalize(&target_dir)
-            .context("Failed to resolve attachments subdirectory")?;
+        let canonical_dir =
+            fs::canonicalize(&target_dir).context("Failed to resolve attachments subdirectory")?;
         let canonical_attachments =
             fs::canonicalize(attachments_dir).context("Failed to resolve attachments directory")?;
         if !canonical_dir.starts_with(&canonical_attachments) {

@@ -39,8 +39,8 @@ pub fn authorize(state: &OpenAiApiState, headers: &HeaderMap) -> Result<(), ApiE
         .unwrap_or("");
     let token = extract_bearer_token(auth_header)
         .ok_or_else(|| ApiError::Unauthorized("Missing or invalid Authorization header".into()))?;
-    let expected = (state.api_token)()
-        .ok_or_else(|| ApiError::Unauthorized("Invalid API key".into()))?;
+    let expected =
+        (state.api_token)().ok_or_else(|| ApiError::Unauthorized("Invalid API key".into()))?;
     if !crate::security::secret_equal(Some(token), Some(expected.as_str())) {
         return Err(ApiError::Unauthorized("Invalid API key".into()));
     }

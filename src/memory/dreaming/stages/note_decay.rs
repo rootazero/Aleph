@@ -121,8 +121,7 @@ impl DreamStage for NoteDecayStage {
         // the same per-note query itself). This is what feeds `access_weight`:
         // a recalled-but-rarely-edited note now scores on its recall recency
         // instead of a hardcoded 0.0.
-        let mut last_hits: std::collections::HashMap<&str, i64> =
-            std::collections::HashMap::new();
+        let mut last_hits: std::collections::HashMap<&str, i64> = std::collections::HashMap::new();
         for note in &ctx.notes {
             if let Ok(Some(t)) = ctx
                 .indexer

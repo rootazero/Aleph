@@ -87,7 +87,10 @@ pub(super) fn migrate(conn: &Connection) -> crate::error::Result<()> {
             // discarded — a connection left with `foreign_keys = OFF` accepts
             // orphan rows for the rest of its life, silently, with every
             // later write claiming the FK was enforced.
-            let rollback_err = conn.execute_batch("ROLLBACK;").err().map(|err| err.to_string());
+            let rollback_err = conn
+                .execute_batch("ROLLBACK;")
+                .err()
+                .map(|err| err.to_string());
             let restore_err = conn
                 .execute_batch("PRAGMA foreign_keys = ON;")
                 .err()
@@ -95,14 +98,13 @@ pub(super) fn migrate(conn: &Connection) -> crate::error::Result<()> {
             // Read the EFFECTIVE state back: the PRAGMA is silently ignored
             // while a transaction is still open, so a swallowed ROLLBACK
             // failure would leave FK enforcement off with no error at all.
-            let fk_state = match conn.query_row("PRAGMA foreign_keys", [], |row| {
-                row.get::<_, i64>(0)
-            }) {
-                Ok(1) => "restored".to_string(),
-                Ok(0) => "still disabled".to_string(),
-                Ok(other) => format!("unexpected value {other}"),
-                Err(err) => format!("unknown ({err})"),
-            };
+            let fk_state =
+                match conn.query_row("PRAGMA foreign_keys", [], |row| row.get::<_, i64>(0)) {
+                    Ok(1) => "restored".to_string(),
+                    Ok(0) => "still disabled".to_string(),
+                    Ok(other) => format!("unexpected value {other}"),
+                    Err(err) => format!("unknown ({err})"),
+                };
             return Err(db_err(format!(
                 "legacy coord_tasks migration failed: {e}; rollback: {}; foreign_keys restore: \
                  {}; foreign_keys state: {fk_state}",

@@ -394,7 +394,9 @@ mod tests {
         let masker = secret_masker_patterns();
         for (label, source) in crate::secrets::vendor_patterns::VENDOR_SECRET_PATTERNS {
             assert!(
-                masker.iter().any(|pattern| pattern.regex.as_str() == *source),
+                masker
+                    .iter()
+                    .any(|pattern| pattern.regex.as_str() == *source),
                 "masker must consume the shared {label} pattern"
             );
         }

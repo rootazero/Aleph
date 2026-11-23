@@ -322,16 +322,17 @@ fn split_subject(text: &str) -> (String, String) {
     };
     let subject_raw = first.trim();
     // Strip `**bold**` wrapping if the entire subject is bolded.
-    let subject = if subject_raw.starts_with("**") && subject_raw.ends_with("**") && subject_raw.len() >= 4 {
-        let inner = &subject_raw[2..subject_raw.len() - 2];
-        if !inner.contains("**") {
-            inner.trim().to_string()
+    let subject =
+        if subject_raw.starts_with("**") && subject_raw.ends_with("**") && subject_raw.len() >= 4 {
+            let inner = &subject_raw[2..subject_raw.len() - 2];
+            if !inner.contains("**") {
+                inner.trim().to_string()
+            } else {
+                subject_raw.to_string()
+            }
         } else {
             subject_raw.to_string()
-        }
-    } else {
-        subject_raw.to_string()
-    };
+        };
     let rest = text
         .split_once('\n')
         .map_or_else(String::new, |(_, r)| r.trim().to_string());

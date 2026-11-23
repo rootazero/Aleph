@@ -358,10 +358,7 @@ impl MemoryEventRow {
                 return Ok(None);
             }
         };
-        let actor: EventActor = self
-            .actor
-            .parse()
-            .map_err(AlephError::other)?;
+        let actor: EventActor = self.actor.parse().map_err(AlephError::other)?;
         Ok(Some(MemoryEventEnvelope {
             id: self.id,
             fact_id: self.fact_id,

@@ -502,7 +502,11 @@ mod tests {
             "an over-cap title is caller-fixable, not internal: {err:?}"
         );
         assert!(
-            store.list_entries().await.expect("listing succeeds").is_empty(),
+            store
+                .list_entries()
+                .await
+                .expect("listing succeeds")
+                .is_empty(),
             "a refused create must leave nothing on disk"
         );
         // No title asked for still takes the default.

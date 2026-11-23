@@ -1130,7 +1130,10 @@ impl super::ChannelRegistry {
             if drained {
                 break;
             }
-            if tokio::time::timeout(BOUND_DRAIN_TIMEOUT, notified).await.is_err() {
+            if tokio::time::timeout(BOUND_DRAIN_TIMEOUT, notified)
+                .await
+                .is_err()
+            {
                 return Err(self.bound_cleanup_error(
                     entry,
                     format!(

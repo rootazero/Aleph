@@ -104,10 +104,16 @@ impl MediaProcessor {
     ) -> ContentBlock {
         let mime = &attachment.mime_type;
 
-        if mime.get(..6).is_some_and(|p| p.eq_ignore_ascii_case("image/")) {
+        if mime
+            .get(..6)
+            .is_some_and(|p| p.eq_ignore_ascii_case("image/"))
+        {
             self.process_image(attachment, supports_vision, session_id, run_id)
                 .await
-        } else if mime.get(..6).is_some_and(|p| p.eq_ignore_ascii_case("audio/")) {
+        } else if mime
+            .get(..6)
+            .is_some_and(|p| p.eq_ignore_ascii_case("audio/"))
+        {
             self.process_audio(attachment, session_id, run_id).await
         } else {
             tracing::info!(
@@ -395,9 +401,15 @@ fn fallback_text(attachment: &Attachment, error: &str) -> ContentBlock {
 
 /// Display label for a MIME type.
 fn media_kind(mime: &str) -> &'static str {
-    if mime.get(..6).is_some_and(|p| p.eq_ignore_ascii_case("image/")) {
+    if mime
+        .get(..6)
+        .is_some_and(|p| p.eq_ignore_ascii_case("image/"))
+    {
         "Image"
-    } else if mime.get(..6).is_some_and(|p| p.eq_ignore_ascii_case("audio/")) {
+    } else if mime
+        .get(..6)
+        .is_some_and(|p| p.eq_ignore_ascii_case("audio/"))
+    {
         "Audio"
     } else {
         "Attachment"

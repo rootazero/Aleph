@@ -220,7 +220,9 @@ pub(super) async fn live_ui_caller(
 ) -> Option<CallerSnapshot> {
     let connections = connections.read().await;
     let state = connections.get(conn_id)?;
-    if state.first_message || !super::auth::wall_admits(Some(&state.caller_role), "capabilities.ui.invoke") {
+    if state.first_message
+        || !super::auth::wall_admits(Some(&state.caller_role), "capabilities.ui.invoke")
+    {
         return None;
     }
     let live = CallerSnapshot {
@@ -249,7 +251,9 @@ pub async fn dispatch_for_connection(
 ) -> String {
     if method == "capabilities.ui.invoke" {
         return match live_ui_caller(connections, conn_id, start).await {
-            Some(live) => dispatch_snapshot(text, mc, live, client_is_local, Some(conn_id.to_owned())).await,
+            Some(live) => {
+                dispatch_snapshot(text, mc, live, client_is_local, Some(conn_id.to_owned())).await
+            }
             None => viewer_denied_response(req_id),
         };
     }

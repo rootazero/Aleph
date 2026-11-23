@@ -10,7 +10,6 @@
 //! - Channel registration
 //! - Inbound message routing
 
-
 #[cfg(test)]
 use alephcore::memory::notes::watcher::NoteVaultWatcher;
 use alephcore::sync_primitives::{Arc, RwLock};

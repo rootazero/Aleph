@@ -410,7 +410,8 @@ impl MarketplaceManager {
                         "Refusing to install '{plugin_name}' into unsafe location: {e}"
                     ));
                 }
-                let path = installer::install_plugin_from_cache(plugin_path, &install_dir, plugin_name)?;
+                let path =
+                    installer::install_plugin_from_cache(plugin_path, &install_dir, plugin_name)?;
                 Ok(InstalledPlugin { path, warnings })
             }
             _ => {

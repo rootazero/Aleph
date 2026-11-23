@@ -195,8 +195,7 @@ pub fn remove_pid_file(pid_file: &str) {
 pub fn handle_stop(pid_file: &str) -> Result<(), Box<dyn std::error::Error>> {
     let endpoint = read_endpoint_best_effort();
     let endpoint_pid = endpoint.as_ref().and_then(|ep| i32::try_from(ep.pid).ok());
-    let Some(pid) = endpoint_pid.or_else(|| read_pid_file(pid_file))
-    else {
+    let Some(pid) = endpoint_pid.or_else(|| read_pid_file(pid_file)) else {
         println!("No gateway daemon is running (no PID file or endpoint)");
         return Ok(());
     };
@@ -502,8 +501,7 @@ pub fn daemonize(
     // reboot, its PID may have been recycled by an unrelated process. Only a
     // matching live IPC endpoint is authoritative for the running instance.
     if let Some(pid) = read_pid_file(pid_file) {
-        let endpoint_pid = read_endpoint_best_effort()
-            .and_then(|ep| i32::try_from(ep.pid).ok());
+        let endpoint_pid = read_endpoint_best_effort().and_then(|ep| i32::try_from(ep.pid).ok());
         if endpoint_pid == Some(pid) && is_process_running(pid) {
             return Err(format!("Gateway already running (PID {pid})").into());
         }

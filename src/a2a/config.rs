@@ -53,8 +53,7 @@ pub struct A2AServerConfig {
 }
 
 /// A2A security settings
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 pub struct A2ASecurityConfig {
     /// Allow unauthenticated access from localhost.
     ///
@@ -69,7 +68,6 @@ pub struct A2ASecurityConfig {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tokens: Vec<String>,
 }
-
 
 /// A pre-registered remote A2A agent entry
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

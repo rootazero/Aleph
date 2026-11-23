@@ -224,13 +224,17 @@ impl ReloadImpact {
     /// verdicts: the overall answer has to be the one that demands the most
     /// of the operator.
     pub fn strongest(impacts: impl IntoIterator<Item = ReloadImpact>) -> ReloadImpact {
-        impacts.into_iter().fold(ReloadImpact::Inert, |verdict, impact| {
-            match (verdict, impact) {
-                (ReloadImpact::Restart, _) | (_, ReloadImpact::Restart) => ReloadImpact::Restart,
-                (ReloadImpact::Live, _) | (_, ReloadImpact::Live) => ReloadImpact::Live,
-                _ => ReloadImpact::Inert,
-            }
-        })
+        impacts
+            .into_iter()
+            .fold(ReloadImpact::Inert, |verdict, impact| {
+                match (verdict, impact) {
+                    (ReloadImpact::Restart, _) | (_, ReloadImpact::Restart) => {
+                        ReloadImpact::Restart
+                    }
+                    (ReloadImpact::Live, _) | (_, ReloadImpact::Live) => ReloadImpact::Live,
+                    _ => ReloadImpact::Inert,
+                }
+            })
     }
 
     /// Classify a dot-path config target (e.g. `"providers.openai"`,

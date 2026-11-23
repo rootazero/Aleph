@@ -285,10 +285,9 @@ fn clamp_chars(s: &str, max: usize) -> std::borrow::Cow<'_, str> {
     }
     match s.char_indices().nth(max) {
         None => std::borrow::Cow::Borrowed(s),
-        Some((byte_idx, _)) => std::borrow::Cow::Owned(format!(
-            "{}…",
-            s.get(..byte_idx).unwrap_or(s)
-        )),
+        Some((byte_idx, _)) => {
+            std::borrow::Cow::Owned(format!("{}…", s.get(..byte_idx).unwrap_or(s)))
+        }
     }
 }
 
@@ -702,8 +701,14 @@ impl ScratchpadManager {
         if let Some(pos) = content.find("_Last updated:") {
             if let Some(rest) = content.get(pos..) {
                 if let Some(end) = rest.find("_\n").or_else(|| rest.find("_\r\n")) {
-                    let end_offset = if rest[end..].starts_with("_\r\n") { 3 } else { 2 };
-                    if let (Some(before), Some(after)) = (content.get(..pos), content.get(pos + end + end_offset..)) {
+                    let end_offset = if rest[end..].starts_with("_\r\n") {
+                        3
+                    } else {
+                        2
+                    };
+                    if let (Some(before), Some(after)) =
+                        (content.get(..pos), content.get(pos + end + end_offset..))
+                    {
                         content = format!("{before}_Last updated: {now}_\n{after}");
                     }
                 }

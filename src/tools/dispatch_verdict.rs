@@ -274,10 +274,12 @@ pub(crate) async fn with_rebound_handler<F: Future>(
         ..current
     });
     DISPATCH_VERDICT
-        .scope(verdict, ADMITTED_HANDLER_IDENTITY.scope(Some(identity), future))
+        .scope(
+            verdict,
+            ADMITTED_HANDLER_IDENTITY.scope(Some(identity), future),
+        )
         .await
 }
-
 
 /// Canonical invoke checks both sealed lanes against the entire ambient tuple.
 pub(super) fn invocation_admitted(

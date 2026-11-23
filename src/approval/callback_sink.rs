@@ -73,10 +73,9 @@ impl ApprovalCallbackSink for ManagerCallbackSink {
                 // instead of echoing the request. APPROVAL-R4-02.
                 ApprovalBridge::decision_response_text(&decision).to_string(),
             ),
-            ApprovalResolveOutcome::WrongOriginator => (
-                false,
-                "只有发起该操作的用户可以在此审批。".to_string(),
-            ),
+            ApprovalResolveOutcome::WrongOriginator => {
+                (false, "只有发起该操作的用户可以在此审批。".to_string())
+            }
             ApprovalResolveOutcome::NoOriginator => (
                 false,
                 "此审批没有关联的发起人，只能由操作员通过 operator RPC 处理。".to_string(),

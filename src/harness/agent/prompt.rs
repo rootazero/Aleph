@@ -335,11 +335,7 @@ fn result_call_id_of_turn(event: &SessionEvent, turn: TurnId) -> Option<&str> {
 
 /// Downgrade an orphaned / duplicate tool result to a plain user text note
 /// (copy: `crate::thinker::nudges::orphan_tool_result_note`).
-fn orphan_result_note(
-    call_id: &str,
-    tool_name: &str,
-    rendered: &str,
-) -> UnifiedMessage {
+fn orphan_result_note(call_id: &str, tool_name: &str, rendered: &str) -> UnifiedMessage {
     tracing::warn!(
         call_id,
         tool_name,

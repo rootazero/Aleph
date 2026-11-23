@@ -296,8 +296,8 @@ mod tests {
                 }],
             })
             .expect("publish cold tool");
-        let identity = ToolDescriptorLookup::tool_call_identity(&registry, name)
-            .expect("cold identity");
+        let identity =
+            ToolDescriptorLookup::tool_call_identity(&registry, name).expect("cold identity");
         (Arc::new(registry), identity)
     }
 

@@ -1931,7 +1931,8 @@ mod tests {
         enable_for_test(tmp.path().to_path_buf());
         record_pty_spawn("u-1", "pwsh", "", Some("alice"));
         let state = tmp.path().join("pty-u-1").join(STATE_FILE);
-        let mut row: serde_json::Value = serde_json::from_slice(&std::fs::read(&state).unwrap()).unwrap();
+        let mut row: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&state).unwrap()).unwrap();
         row["pty_session_id"] = serde_json::Value::String("../../escape".to_string());
         std::fs::write(&state, serde_json::to_vec(&row).unwrap()).unwrap();
 

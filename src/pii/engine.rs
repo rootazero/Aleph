@@ -148,9 +148,7 @@ pub struct PiiEngine {
     excluded_providers: HashSet<String>,
 }
 
-fn build_lookup_tables(
-    config: &PrivacyConfig,
-) -> (HashMap<String, PiiAction>, HashSet<String>) {
+fn build_lookup_tables(config: &PrivacyConfig) -> (HashMap<String, PiiAction>, HashSet<String>) {
     let custom_rule_actions = config
         .custom_rules
         .iter()

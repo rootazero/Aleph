@@ -333,7 +333,8 @@ pub(crate) async fn import_state(
                     {
                         Ok(res)
                             if res.exception.is_none()
-                                && res.value.as_str() == Some(format!("restored:{origin}").as_str()) =>
+                                && res.value.as_str()
+                                    == Some(format!("restored:{origin}").as_str()) =>
                         {
                             imported_origins.push(origin.clone());
                             if let Err(e) =
@@ -348,7 +349,9 @@ pub(crate) async fn import_state(
                         }
                         Ok(res) => {
                             let value = res.value.as_str();
-                            if let Some(actual) = value.and_then(|value| value.strip_prefix("origin:")) {
+                            if let Some(actual) =
+                                value.and_then(|value| value.strip_prefix("origin:"))
+                            {
                                 report.warnings.push(format!(
                                     "localStorage for {origin} was not restored because the page landed on {actual}"
                                 ));

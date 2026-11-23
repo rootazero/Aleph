@@ -325,9 +325,13 @@ impl NodeRegistry {
                 }
             }
             inner.nodes_by_conn.insert(conn_id.clone(), node_id.clone());
-            inner
-                .nodes_by_id
-                .insert(node_id.clone(), RegisteredNode { session, catalog_malformed });
+            inner.nodes_by_id.insert(
+                node_id.clone(),
+                RegisteredNode {
+                    session,
+                    catalog_malformed,
+                },
+            );
         }
         for channel in to_close {
             channel.close_connection();
@@ -472,8 +476,7 @@ impl NodeRegistry {
             .values()
             .filter(|n| {
                 (q.len() >= 4 && n.session.node_id.to_ascii_lowercase().starts_with(&ql))
-                    || (!nq.is_empty()
-                        && normalize_node_key(&n.session.device_name).contains(&nq))
+                    || (!nq.is_empty() && normalize_node_key(&n.session.device_name).contains(&nq))
             })
             .collect();
         match fuzzy.as_slice() {
@@ -515,10 +518,7 @@ impl NodeRegistry {
         // `session.node_id` — under the SAME read guard, so the lookup cannot
         // miss. It is mapped to `NotFound` (not a panic) so the type stays
         // total.
-        let n = inner
-            .nodes_by_id
-            .get(&id)
-            .ok_or(ResolveError::NotFound)?;
+        let n = inner.nodes_by_id.get(&id).ok_or(ResolveError::NotFound)?;
         Ok((
             n.session.channel.clone(),
             n.session.declared_commands.clone(),
@@ -1802,7 +1802,9 @@ mod tests {
             "extra commands must be dropped"
         );
         assert!(
-            env.commands.iter().all(|c| c.name.len() <= MAX_COMMAND_NAME_BYTES),
+            env.commands
+                .iter()
+                .all(|c| c.name.len() <= MAX_COMMAND_NAME_BYTES),
             "every stored command name must respect the bound"
         );
         assert_eq!(
@@ -1842,8 +1844,9 @@ mod tests {
             Some(&malformed),
             &ch
         ));
-        let (_channel, declared, catalog_malformed) =
-            reg.resolve_with_catalog("d1").expect("the node is registered");
+        let (_channel, declared, catalog_malformed) = reg
+            .resolve_with_catalog("d1")
+            .expect("the node is registered");
         assert!(
             catalog_malformed,
             "a malformed catalog must not read as an empty one"
@@ -1862,8 +1865,9 @@ mod tests {
             Some(&empty),
             &ch2
         ));
-        let (_channel, declared, catalog_malformed) =
-            reg.resolve_with_catalog("d2").expect("the node is registered");
+        let (_channel, declared, catalog_malformed) = reg
+            .resolve_with_catalog("d2")
+            .expect("the node is registered");
         assert!(declared.is_empty());
         assert!(
             !catalog_malformed,

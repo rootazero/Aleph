@@ -233,13 +233,12 @@ impl HarnessRunner for AgentHarnessRunner {
         // directly; otherwise treat the incoming string as an ephemeral id
         // under `spec.agent` so orchestrator ↔ harness session identity stays
         // deterministic (no fresh-uuid divergence).
-        let session_id: SessionId =
-            parsed_session_key.unwrap_or_else(|| SessionKey::Ephemeral {
-                // rust-doctor-disable-next-line excessive-clone
-                agent_id: spec.agent.clone(),
-                // rust-doctor-disable-next-line excessive-clone
-                ephemeral_id: session_key.clone(),
-            });
+        let session_id: SessionId = parsed_session_key.unwrap_or_else(|| SessionKey::Ephemeral {
+            // rust-doctor-disable-next-line excessive-clone
+            agent_id: spec.agent.clone(),
+            // rust-doctor-disable-next-line excessive-clone
+            ephemeral_id: session_key.clone(),
+        });
 
         // Step 5: seed the session with the input as the appropriate event(s)
         // so the inner harness Think loop can read it. Preserve per-message

@@ -184,9 +184,7 @@ async fn persist_image_blocks(
 
     // Backward-compatible fallback for events that only carry Image blocks.
     for block in blocks {
-        if let Ok(ContentBlock::Image { data, mime_type }) =
-            ContentBlock::deserialize(block)
-        {
+        if let Ok(ContentBlock::Image { data, mime_type }) = ContentBlock::deserialize(block) {
             store
                 .store_attachment(
                     session_id,

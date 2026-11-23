@@ -1,7 +1,7 @@
 //! Verify module: Check migration integrity
 
-use alephcore::utils::sqlite_open::open_sqlite_safe;
 use crate::export::session_dir_name;
+use alephcore::utils::sqlite_open::open_sqlite_safe;
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OptionalExtension};
 use std::collections::{HashMap, HashSet};
@@ -344,10 +344,7 @@ struct SessionMetadataRow {
     tags: Option<String>,
 }
 
-fn validate_metadata(
-    metadata: &serde_json::Value,
-    session: &SessionMetadataRow,
-) -> Vec<String> {
+fn validate_metadata(metadata: &serde_json::Value, session: &SessionMetadataRow) -> Vec<String> {
     let Some(object) = metadata.as_object() else {
         return vec!["metadata must be a JSON object".to_string()];
     };
@@ -538,7 +535,10 @@ fn check_attachments(
                 continue;
             }
         };
-        let Some(count) = metadata["attachment_count"].as_i64().filter(|count| *count >= 0) else {
+        let Some(count) = metadata["attachment_count"]
+            .as_i64()
+            .filter(|count| *count >= 0)
+        else {
             // Without a trustworthy attachment count, this session may still
             // own blobs and the orphan reference set is incomplete.
             manifests_complete = false;
@@ -893,15 +893,15 @@ fn check_fts5_index(
             report.errors += 1;
             report.warnings.push(format!(
                 "FTS5 index contains {} rows for session {}; expected exactly one",
-                contents.len(), session_id
+                contents.len(),
+                session_id
             ));
         }
         if contents.first() != Some(expected) {
             report.errors += 1;
-            report.warnings.push(format!(
-                "FTS5 content mismatch for session {}",
-                session_id
-            ));
+            report
+                .warnings
+                .push(format!("FTS5 content mismatch for session {}", session_id));
         }
     }
     for session_id in expected_transcripts.keys() {

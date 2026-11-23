@@ -54,16 +54,16 @@ fn open_ledger() -> Result<AgentLedger, Box<dyn Error>> {
         .map_err(|e| format!("Failed to validate vault master token: {e}"))?
     {
         return Err(
-            "Vault master token failed HMAC validation; the security store is inconsistent."
-                .into(),
+            "Vault master token failed HMAC validation; the security store is inconsistent.".into(),
         );
     }
     // The manager's only public loader also populates its in-memory token, but
     // returns Option. Validate through the store first so its failures remain
     // distinguishable from a first run, then populate through that loader.
     if vault.try_load_token_from_db().is_none() {
-        return Err("Failed to recover the validated vault master token from the security store."
-            .into());
+        return Err(
+            "Failed to recover the validated vault master token from the security store.".into(),
+        );
     }
     Ok(AgentLedger::new(Arc::new(AgentKeystore::new(store, vault))))
 }

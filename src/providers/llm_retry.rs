@@ -70,8 +70,10 @@ pub fn has_status_code(msg: &str, code: u16) -> bool {
     while let Some(rel) = msg.get(from..).and_then(|slice| slice.find(needle)) {
         let start = from + rel;
         let end = start + needle.len();
-        let left_ok =
-            start == 0 || bytes.get(start.saturating_sub(1)).is_some_and(|b| !b.is_ascii_digit());
+        let left_ok = start == 0
+            || bytes
+                .get(start.saturating_sub(1))
+                .is_some_and(|b| !b.is_ascii_digit());
         let right_ok = bytes.get(end).is_none_or(|b| !b.is_ascii_digit());
         if left_ok && right_ok {
             return true;
@@ -236,7 +238,9 @@ pub fn extract_retry_after_str(raw: &str) -> Option<Duration> {
         .or_else(|| msg.find("retry-after: "))?;
     let start = msg.get(after_idx..)?.find(|c: char| c.is_ascii_digit())? + after_idx;
     let rest = msg.get(start..)?;
-    let end = rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len());
+    let end = rest
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(rest.len());
     let secs: u64 = rest.get(..end)?.parse().ok()?;
     Some(Duration::from_secs(secs))
 }

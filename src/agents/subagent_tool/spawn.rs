@@ -342,32 +342,49 @@ impl SubagentTool {
             // announcing would spend a fresh turn on the session that was just
             // stopped, telling it to "take any follow-up actions the original
             // task implies". This is the promise `loop_tool`'s cancel note
-            let (settled_iters, settled_tools, settled_tokens, label, final_text, success, summary, error) =
-                match &outcome {
-                    CompletedOutcome::Ok {
-                        final_text,
-                        iterations,
-                        tool_calls_made,
-                        total_tokens,
-                    } => (
-                        *iterations,
-                        *tool_calls_made,
-                        *total_tokens,
-                        "completed",
-                        final_text.clone(),
-                        true,
-                        final_text.clone(),
-                        None,
-                    ),
-                    CompletedOutcome::Err(msg) => {
-                        let label = match tree_lifecycle {
-                            aleph_protocol::subagent_tree::NodeLifecycle::Cancelled => "cancelled",
-                            aleph_protocol::subagent_tree::NodeLifecycle::TimedOut => "timed_out",
-                            _ => "failed",
-                        };
-                        (0, 0, 0, label, msg.clone(), false, String::new(), Some(msg.clone()))
-                    }
-                };
+            let (
+                settled_iters,
+                settled_tools,
+                settled_tokens,
+                label,
+                final_text,
+                success,
+                summary,
+                error,
+            ) = match &outcome {
+                CompletedOutcome::Ok {
+                    final_text,
+                    iterations,
+                    tool_calls_made,
+                    total_tokens,
+                } => (
+                    *iterations,
+                    *tool_calls_made,
+                    *total_tokens,
+                    "completed",
+                    final_text.clone(),
+                    true,
+                    final_text.clone(),
+                    None,
+                ),
+                CompletedOutcome::Err(msg) => {
+                    let label = match tree_lifecycle {
+                        aleph_protocol::subagent_tree::NodeLifecycle::Cancelled => "cancelled",
+                        aleph_protocol::subagent_tree::NodeLifecycle::TimedOut => "timed_out",
+                        _ => "failed",
+                    };
+                    (
+                        0,
+                        0,
+                        0,
+                        label,
+                        msg.clone(),
+                        false,
+                        String::new(),
+                        Some(msg.clone()),
+                    )
+                }
+            };
 
             // already makes to the model ("you asked for it to stop, so its
             // outcome is not news") held for every producer, not just that one.

@@ -34,7 +34,9 @@ impl UsageTotals {
                     self.input = self.input.saturating_add(u64::from(u.input));
                     self.output = self.output.saturating_add(u64::from(u.output));
                     self.cache_read = self.cache_read.saturating_add(u64::from(u.cache_read));
-                    self.cache_creation = self.cache_creation.saturating_add(u64::from(u.cache_creation));
+                    self.cache_creation = self
+                        .cache_creation
+                        .saturating_add(u64::from(u.cache_creation));
                     self.reasoning = self.reasoning.saturating_add(u64::from(u.reasoning));
                     self.with_usage = self.with_usage.saturating_add(1);
                 }

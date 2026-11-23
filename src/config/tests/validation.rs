@@ -114,7 +114,13 @@ fn test_ollama_without_api_key_passes() {
 
 #[test]
 fn test_valid_regex_patterns_pass() {
-    for pattern in ["^/code", "^/help", r"^/test_\d+", "^/cmd-[a-zA-Z]+", "^/status$"] {
+    for pattern in [
+        "^/code",
+        "^/help",
+        r"^/test_\d+",
+        "^/cmd-[a-zA-Z]+",
+        "^/status$",
+    ] {
         assert!(
             config_with_rule(pattern).validate().is_ok(),
             "command pattern {pattern:?} should be accepted"

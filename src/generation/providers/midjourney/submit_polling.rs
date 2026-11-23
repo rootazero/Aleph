@@ -16,7 +16,10 @@ use super::types::{
 
 impl MidjourneyProvider {
     /// Submit an imagine task to the API
-    pub(crate) async fn submit_imagine(&self, request: &ImagineRequest) -> GenerationResult<String> {
+    pub(crate) async fn submit_imagine(
+        &self,
+        request: &ImagineRequest,
+    ) -> GenerationResult<String> {
         let url = self.submit_url();
 
         debug!(url = %url, "Submitting Midjourney imagine task");

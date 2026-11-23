@@ -144,7 +144,12 @@ pub(super) fn read_agent_opts(chars: &[char], start: usize, consts: &ConstTable)
             }
         } else {
             let key_start = i;
-            while i < n && chars.get(i).copied().is_some_and(|c| c.is_alphanumeric() || c == '_') {
+            while i < n
+                && chars
+                    .get(i)
+                    .copied()
+                    .is_some_and(|c| c.is_alphanumeric() || c == '_')
+            {
                 i += 1;
             }
             if i == key_start {
@@ -155,7 +160,10 @@ pub(super) fn read_agent_opts(chars: &[char], start: usize, consts: &ConstTable)
                 opts.opts_abandoned = Some(abandon_note(chars, i, "not a key"));
                 break;
             }
-            chars.get(key_start..i).map(|s| s.iter().collect()).unwrap_or_default()
+            chars
+                .get(key_start..i)
+                .map(|s| s.iter().collect())
+                .unwrap_or_default()
         };
         i = first_non_ws(chars, i);
         if chars.get(i) != Some(&':') {
@@ -219,7 +227,10 @@ pub(super) fn read_agent_opts(chars: &[char], start: usize, consts: &ConstTable)
             // guessed.
             _ => {
                 let end = skip_value(chars, i);
-                let raw: String = chars.get(i..end.min(chars.len())).map(|s| s.iter().collect()).unwrap_or_default();
+                let raw: String = chars
+                    .get(i..end.min(chars.len()))
+                    .map(|s| s.iter().collect())
+                    .unwrap_or_default();
                 let raw = raw.trim();
                 if key == "schema" {
                     resolve_schema_ref(&mut opts, raw, consts);

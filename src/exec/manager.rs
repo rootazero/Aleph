@@ -457,9 +457,7 @@ pub(crate) enum ApprovalResolveOutcome {
     /// Applied to the addressed entry. Carries the EFFECTIVE decision (post
     /// clamp — a legacy `AllowAlways` narrows to `AllowSession`), so the
     /// caller confirms WHAT was approved instead of echoing the request.
-    Resolved {
-        decision: ApprovalDecisionType,
-    },
+    Resolved { decision: ApprovalDecisionType },
     /// Nothing is pending under this id.
     NotFound,
     /// The card is an operator approval: a channel button never answers one.
@@ -1281,7 +1279,12 @@ impl ExecApprovalManager {
             debug!(id = %id, ?decision, "Resolved approval by session");
             let (grant_key, originator) = pending
                 .get(&id)
-                .map(|e| (e.record.grant_key.clone(), e.record.originator_user_id.clone()))
+                .map(|e| {
+                    (
+                        e.record.grant_key.clone(),
+                        e.record.originator_user_id.clone(),
+                    )
+                })
                 .unwrap_or((None, None));
             Self::cascade_to_identical_cards(
                 &mut pending,
@@ -1556,11 +1559,7 @@ mod tests {
             };
             assert!(manager.is_operator_approval("private"));
             assert_eq!(
-                manager.resolve_for_channel(
-                    "private",
-                    ApprovalDecisionType::AllowOnce,
-                    "alice",
-                ),
+                manager.resolve_for_channel("private", ApprovalDecisionType::AllowOnce, "alice",),
                 ApprovalResolveOutcome::OperatorOnly,
             );
             for actor in [Some("alice".to_string()), None] {
@@ -2677,7 +2676,10 @@ mod tests {
             }
         );
         assert_eq!(
-            manager.await_registered(id.clone(), rx, timeout).await.decision,
+            manager
+                .await_registered(id.clone(), rx, timeout)
+                .await
+                .decision,
             Some(ApprovalDecisionType::AllowOnce)
         );
 
@@ -2706,7 +2708,10 @@ mod tests {
             }
         );
         assert_eq!(
-            manager.await_registered(bob_id, bob_rx, bob_timeout).await.decision,
+            manager
+                .await_registered(bob_id, bob_rx, bob_timeout)
+                .await
+                .decision,
             Some(ApprovalDecisionType::AllowSession)
         );
     }

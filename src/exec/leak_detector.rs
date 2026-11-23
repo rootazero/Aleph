@@ -123,7 +123,8 @@ impl LeakDetector {
         let mut current = Cow::Borrowed(content);
         for pattern in &self.patterns {
             if pattern.action == LeakAction::Redact {
-                if let Cow::Owned(redacted) = pattern.regex.replace_all(&current, "***REDACTED***") {
+                if let Cow::Owned(redacted) = pattern.regex.replace_all(&current, "***REDACTED***")
+                {
                     current = Cow::Owned(redacted);
                 }
             }

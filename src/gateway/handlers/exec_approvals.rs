@@ -225,7 +225,8 @@ fn originator_narrows_within_room<'a>(
 /// `current_caller_user()` is always an Aleph `u-*` id — so an id outside
 /// that namespace can never be the caller this gate compares against.
 fn is_aleph_principal_id(id: &str) -> bool {
-    id.strip_prefix("u-").is_some_and(|suffix| !suffix.is_empty())
+    id.strip_prefix("u-")
+        .is_some_and(|suffix| !suffix.is_empty())
 }
 
 /// Handle exec.approval.resolve

@@ -299,9 +299,7 @@ impl Drop for SteerWatch {
         // outlives its last receiver in a way an observer could catch.
         drop(sub.rx);
         let mut map = lock();
-        if let std::collections::hash_map::Entry::Occupied(mut entry) =
-            map.entry(sub.session_key)
-        {
+        if let std::collections::hash_map::Entry::Occupied(mut entry) = map.entry(sub.session_key) {
             let station = entry.get_mut();
             station.watchers = station.watchers.saturating_sub(1);
             if station.watchers == 0 {

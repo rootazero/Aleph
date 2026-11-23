@@ -249,8 +249,7 @@ impl ModelThresholdToml {
             if needle.is_empty() {
                 return false;
             }
-            model_lc.as_deref().is_some_and(|m| m.contains(&needle))
-                || provider_lc == needle
+            model_lc.as_deref().is_some_and(|m| m.contains(&needle)) || provider_lc == needle
         })
     }
 }

@@ -100,7 +100,6 @@ impl ArtifactStore {
             .as_ref()
     }
 
-
     /// Store `bytes` under `session_key` and return the record describing them.
     ///
     /// `origin` is the caller's declaration, never inferred. `filename` and
@@ -307,7 +306,9 @@ async fn publish(
 ) -> Result<(), ArtifactError> {
     write_atomic(blob, bytes).await?;
     let sidecar = serde_json::to_vec(record)?;
-    write_atomic(sidecar_path, &sidecar).await.map_err(ArtifactError::from)
+    write_atomic(sidecar_path, &sidecar)
+        .await
+        .map_err(ArtifactError::from)
 }
 
 /// Read at most `limit` bytes, mapping "missing" onto [`ArtifactError::NotFound`]
@@ -362,7 +363,10 @@ async fn read_records(dir: &Path) -> Result<Vec<ArtifactRecord>, ArtifactError> 
         if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
             continue;
         }
-        let name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default();
         let raw = match read_bounded(&path, name, MAX_SIDECAR_BYTES).await {
             Ok(raw) => raw,
             Err(e) => {

@@ -592,10 +592,9 @@ impl InboundMessageRouter {
                 sender_id: meta.provider_account_id.as_str(),
                 receiver_id: meta.service_address.as_str(),
             };
-            let result = self.pair_loop_guard.record_and_check(
-                &facts,
-                &self.pair_loop_config_for(msg.channel_id.as_str()),
-            );
+            let result = self
+                .pair_loop_guard
+                .record_and_check(&facts, &self.pair_loop_config_for(msg.channel_id.as_str()));
             if result.suppressed {
                 warn!(
                     binding_ref = %meta.binding_ref,
@@ -618,10 +617,9 @@ impl InboundMessageRouter {
             sender_id: msg.sender_id.as_str(),
             receiver_id: msg.channel_id.as_str(),
         };
-        let result = self.pair_loop_guard.record_and_check(
-            &facts,
-            &self.pair_loop_config_for(msg.channel_id.as_str()),
-        );
+        let result = self
+            .pair_loop_guard
+            .record_and_check(&facts, &self.pair_loop_config_for(msg.channel_id.as_str()));
         if result.suppressed {
             warn!(
                 channel_id = %msg.channel_id.as_str(),
