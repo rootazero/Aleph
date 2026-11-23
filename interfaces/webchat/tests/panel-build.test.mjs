@@ -49,7 +49,8 @@ test('final candidate resolves at root public base', async () => {
 test('capability source is included in build provenance', async () => {
   const { build } = await readCandidate();
   for (const source of [
-    'interfaces/webchat/src/panel/source.rs',
+    'shared/ui_logic/src/panel/source.rs',
+    'shared/protocol/src/panel.rs',
     'interfaces/webchat/src/context.rs',
     'interfaces/webchat/src/panel/capability_surface.rs',
   ]) {

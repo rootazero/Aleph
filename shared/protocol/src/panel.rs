@@ -332,8 +332,8 @@ mod tests {
     }
 
     #[test]
-    fn panel_webchat_source_does_not_define_another_wire_shape() {
-        let source = include_str!("../../../interfaces/webchat/src/panel/source.rs");
+    fn panel_model_source_does_not_define_another_wire_shape() {
+        let source = include_str!("../../ui_logic/src/panel/source.rs");
         for name in [
             "PanelUiCapabilityDeclaration",
             "PanelUiCapabilitySnapshot",
