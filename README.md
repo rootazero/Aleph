@@ -280,6 +280,8 @@ Aleph/
 
 | Document | Link |
 |----------|------|
+| Documentation map | [docs/README.md](docs/README.md) |
+| Evidence layer contract | [EVIDENCE_LAYER.md](docs/reference/EVIDENCE_LAYER.md) |
 | Architecture | [ARCHITECTURE.md](docs/reference/ARCHITECTURE.md) |
 | Harness philosophy | [HARNESS_PHILOSOPHY.md](docs/reference/HARNESS_PHILOSOPHY.md) |
 | Agent system | [AGENT_SYSTEM.md](docs/reference/AGENT_SYSTEM.md) |

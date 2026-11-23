@@ -46,6 +46,7 @@ ENTRY_DOCS = [
     "README.md",
     "README_CN.md",
     "CONTRIBUTING.md",
+    "docs/README.md",
 ]
 # `skills/` is a separate repository (the Aleph-skills submodule). Its copy of
 # the architecture skill is versioned there, so this guard does not police it.

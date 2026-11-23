@@ -86,7 +86,7 @@ code disagree, the code wins and the historical document is only an evidence tra
 | **P0** | Code fact baseline | §2 table above | every row cites a code location |
 | **P1** | L1 entry corrections | 6 files corrected | `AGENTS.md` ≡ `CLAUDE.md` (except the documented deltas) |
 | **P2** | L2 reference corrections | 74 docs triaged: corrected / banner-marked | no canonical doc asserts a single-track desktop host |
-| **P3** | L3 evidence banners | 7 directory banners + L1 rule | no historical document is reachable as "current" |
+| **P3** | L3 evidence banners | 目录地图 + 分层契约 + L1 规则（实现方式见 §7.2） | no historical document is reachable as "current" |
 | **P4** | Drift guard | `scripts/doc_wiring_audit.py` + `just check-wiring` | guard passes on the corrected tree |
 | **P5** | Acceptance | guard run, link check, diff check, staged commits | — |
 
@@ -124,3 +124,51 @@ Advisory (reported, non-failing): reference documents that are reachable from no
   service control that the Tauri host has.
 - Editing `docs/research/NSH_ADR-*` or the Phase 11 plan/receipts.
 - Any change to production code.
+
+---
+
+## 7. Implementation record / 实施记录
+
+> 快照：2026-11-23。本节记录**实际做了什么**，与 §4 路线图的差异一并写明。
+
+### 7.1 结果一览
+
+| Phase | 状态 | 落地物 |
+|---|---|---|
+| P0 代码事实基线 | ✅ | §2 表；每行给出代码位置（CI workflow、justfile、crate 名、协议文件） |
+| P1 入口层校正 | ✅ | `AGENTS.md`/`CLAUDE.md` 新增「桌面宿主：双轨现状（2026-11）」章节；`README.md`/`README_CN.md` 改架构图与说明；`CONTRIBUTING.md` R2 条目；`skills/architecture/SKILL.md`（**在 submodule 内单独提交**） |
+| P2 参考层校正 | ✅ | 46 份 reference 文档重新锚定路径（372 处补 `src/` 前缀 + 636 处唯一后缀解析）；`GATEWAY.md` 修回被写坏的 MCP 通知名；`ARCHITECTURE.md`/`PRODUCT_TOPOLOGY.md`/`SERVER_DEVELOPMENT.md`/`REDLINES.md` 改双轨表述；7 份时点文档加历史横幅 |
+| P3 证据层标注 | ✅（**方式与计划不同**，见 7.2） | 新增 `docs/README.md`（文档地图）与 `docs/reference/EVIDENCE_LAYER.md`（三层契约）；`AGENTS.md`/`CLAUDE.md` 的「文档纪律」条目指向二者；L2 内带日期的时点文档加历史横幅 |
+| P4 漂移守卫 | ✅ | `scripts/doc_wiring_audit.py` + `scripts/doc_wiring_audit_baseline.json`（棘轮基线）+ `just check-doc-wiring`（已并入 `just check-wiring`） |
+| P5 验收 | ✅ | 见 7.4 |
+
+### 7.2 与计划的偏离：证据层不逐份加横幅
+
+计划 P3 写的是「7 个目录各加横幅」。实现时改为：**目录级横幅换成分层契约 + 索引**。
+
+原因：`docs/superpowers/` 有 1982 份 md，`docs/engineering-reports/` 117 份，合计证据层 2400+ 份。逐份加横幅会让
+每次改文档都产生 2400 行噪音 diff，而且横幅本身也会过期（它会变成"我记得当时是历史文档"却没写当时结论的二手说明）。
+
+实际做法：
+
+1. `docs/README.md` 给出**目录级地图**：哪一层说"现在"，哪一层说"当时"。
+2. `docs/reference/EVIDENCE_LAYER.md` 给出**判定标准 + 写作规范 + 读取姿势**，并写明证据与代码冲突时以代码为准。
+3. 守卫脚本只对 L1/L2 强制检查（`docs/reference/` 中带日期前缀的文件自动视为时点文档而豁免）。
+4. L2 里仅 4 份带日期的时点文档逐份加横幅（其余 L2 都是当前层，不加）。
+
+### 7.3 守卫的棘轮
+
+`PATHS` 检查带 baseline：已知的 34 处历史路径（全部位于时点文档：`AGENT_LOOP_TOOL_EXECUTION.md` 8、
+`PHASE_6B_BUILDER_AUDIT.md` 18、`WHATSAPP_ARCHITECTURE_DESIGN-2026-04-06.md` 4、`BROWSER_LIVE_VIEWER.md` 4）记为
+「已知待办」，**新出现的失效路径才算失败**。用 `--update-baseline` 重新记录基线。
+
+守卫检查项最终形态：`LINKS` `PATHS` `CRATES` `JUST` `PORT` `DUAL` `STALE` `SYNC` `MANGLED` `ROOTS` `REACH`。
+其中 `MANGLED`（文件扩展名后粘多余片段）与 `ROOTS`（路径只存在于 `src/` 下而文档漏写前缀）是本轮发现的两类
+真实错误而新增的；`ROOTS` 的加入直接暴露了 372 处漏前缀。
+
+### 7.4 验收
+
+- `python3 scripts/doc_wiring_audit.py` → **0 failure**，9 条 advisory（6 条 CRATES 形似 crate 名、2 条 BROWSER_LIVE_VIEWER 历史端口、1 条 ROOTS 形似目录），77 份 canonical 文档。
+- `AGENTS.md` ≡ `CLAUDE.md`（归一化后逐字一致，守卫 `SYNC` 通过）。
+- 工作树仅剩本任务改动；5 个临时 worktree（`/tmp/aleph-doc-{A..E}`）与分支 `docs/anchor-sweep-{A..E}` 已删除。
+- 未跑 `cargo build/test`：本轮只改文档与脚本，没有生产代码改动。

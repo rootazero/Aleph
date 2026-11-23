@@ -74,6 +74,7 @@
   计划与证据 → `docs/superpowers/plans/2026-11-21-phase11-nsh-cutover.md`。
 - **文档纪律**：证据层（`docs/superpowers/`、`docs/reports/`、`docs/engineering-reports/`、`docs/research/`）是时点记录，
   **不是当前架构**；证据与代码冲突时以代码为准。规则与路线图 → `docs/superpowers/plans/2026-11-23-doc-architecture-realignment.md`。
+  文档地图 → [docs/README.md](docs/README.md)；三层契约 → [EVIDENCE_LAYER.md](docs/reference/EVIDENCE_LAYER.md)。
 
 ---
 
@@ -170,7 +171,7 @@
 
 [FEATURE_LOCATOR.md](docs/reference/FEATURE_LOCATOR.md) 是所有「我应该读哪个 doc」的入口。常用 reference：
 
-- [ARCHITECTURE.md](docs/reference/ARCHITECTURE.md) · [CODE_ORGANIZATION.md](docs/reference/CODE_ORGANIZATION.md) · [DESIGN_PATTERNS.md](docs/reference/DESIGN_PATTERNS.md)
+- [文档地图 docs/README.md](docs/README.md) · [EVIDENCE_LAYER.md](docs/reference/EVIDENCE_LAYER.md) · [ARCHITECTURE.md](docs/reference/ARCHITECTURE.md) · [CODE_ORGANIZATION.md](docs/reference/CODE_ORGANIZATION.md) · [DESIGN_PATTERNS.md](docs/reference/DESIGN_PATTERNS.md)
 - [HARNESS_PHILOSOPHY.md](docs/reference/HARNESS_PHILOSOPHY.md) · [SANDBOX.md](docs/reference/SANDBOX.md) · [SECURITY.md](docs/reference/SECURITY.md)
 - [PRODUCT_TOPOLOGY.md](docs/reference/PRODUCT_TOPOLOGY.md) · [RELEASE.md](docs/reference/RELEASE.md) · [WINDOWS_RUNTIME.md](docs/reference/WINDOWS_RUNTIME.md)
 - [MEMORY_SYSTEM.md](docs/reference/MEMORY_SYSTEM.md) · [TOOL_SYSTEM.md](docs/reference/TOOL_SYSTEM.md) · [SESSION_KNOBS.md](docs/reference/SESSION_KNOBS.md)
@@ -188,4 +189,4 @@
 
 ---
 
-*Last updated: 2026-10-24*
+*Last updated: 2026-11-23*

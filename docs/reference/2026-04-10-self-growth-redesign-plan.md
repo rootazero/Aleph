@@ -1,5 +1,9 @@
 # Self-Growth Module Redesign Implementation Plan
 
+> **状态：历史文档（point-in-time）** — 本文是 2026-04-10 的实施计划，记录当时的步骤拆分，不代表当前实现。
+> 当前状态以代码为准（记忆检索现居 `src/memory/`，相关子系统文档见 `docs/reference/MEMORY_SYSTEM.md`）。
+> 三层文档契约 → `docs/reference/EVIDENCE_LAYER.md`。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace Aleph's algorithm-heavy memory processing with LLM-driven skill extraction via reflection, storing skills as `FactType::Skill` facts in MemoryStore.

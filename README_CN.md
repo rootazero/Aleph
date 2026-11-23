@@ -235,6 +235,8 @@ Aleph/
 
 | 文档 | 链接 |
 |------|------|
+| 文档地图 | [docs/README.md](docs/README.md) |
+| 证据层契约 | [EVIDENCE_LAYER.md](docs/reference/EVIDENCE_LAYER.md) |
 | 架构 | [ARCHITECTURE.md](docs/reference/ARCHITECTURE.md) |
 | Harness 哲学 | [HARNESS_PHILOSOPHY.md](docs/reference/HARNESS_PHILOSOPHY.md) |
 | Agent 系统 | [AGENT_SYSTEM.md](docs/reference/AGENT_SYSTEM.md) |
