@@ -21,8 +21,8 @@
 
 - **类型**：微调（先验证，再决定是否补 wiring）→ **验证结论：链路已通，零开发**
 - **查证结论**：纠正/教训沉淀**端到端已连且生产存活**，分三跳逐一证实——
-  1. **写入** ✅ `src/builtin_tools/flag_user_correction.rs` 工具，构造于 `src/executor/builtin_registry/builder/constructor.rs:1793`（有 `memory_db` 即注册，**非死代码**），写 `aleph://correction/{id}`。
-  2. **蒸馏** ✅ `src/memory/dreaming/stages/feedback_distill.rs` 按前缀 + watermark 幂等读 → LLM 蒸馏 `feedback/` note，调度于 `src/memory/dreaming/mod.rs:172,218`（Consolidate + Synthesize 双 dream path）。
+  1. **写入** ✅ `src/builtin_tools/flag_user_correction.rs` 工具，构造于 `src/executor/builtin_registry/builder/optional_tools.rs`（有 `memory_db` 即注册，**非死代码**），写 `aleph://correction/{id}`。
+  2. **蒸馏** ✅ `src/memory/dreaming/stages/feedback_distill.rs` 按前缀 + watermark 幂等读 → LLM 蒸馏 `feedback/` note，调度于 `src/memory/dreaming/mod.rs`（Consolidate + Synthesize 双 dream path）。
   3. **召回** ✅ assembler `gather.rs:284`/`envelope.rs:34` 表面化 `feedback/` note；goal 教训另有 `GoalLessonsPromoteStage`→`lesson/`。
 - **关键判断（为何不补 wiring）**：backlog 原设想的"工具失败/LLM 拒绝 → 自动写 raw memory"的 **harness 错误 hook 故意不存在，也不应加**——违 R10「不做错误恢复」+ R7 LLM 主权，且会用瞬时报错噪声淹没记忆。沉淀**刻意做成 LLM/工具驱动**（R8）：LLM 判断"值得记"才调 `flag_user_correction`。因此"链路断"的前提不成立。
 - **若将来仍想强化**（非本 gap 范畴）：唯一正当方向是**强化 prompt 引导**（`special_actions.rs`）让 LLM 更主动调工具记教训，或加一个 LLM 可调的 `flag_lesson` 工具——**仍是工具驱动，不是 harness 自动 hook**。
@@ -41,7 +41,7 @@
   - **不加 `token_budget` per-model 覆盖**：预算已经 model-aware（按窗口派生），重复（YAGNI）。
 - **改动文件（4）**：
   1. `src/config/types/phase6_wiring.rs` — `ContextBudgetToml` 加 `model_thresholds: Vec<ModelThresholdToml>`；新 `ModelThresholdToml{model, warning_threshold?, critical_threshold?}`；`threshold_override_for(model, provider)` 首匹配子串。
-  2. `src/orchestrator/deps_builder.rs::build_context_budget_config` — 无条件 `derive_chain_min_budget` 取模型身份；override 逐项 `.or(global).unwrap_or(内置)`；解析后过同一 `0<warning<critical≤1.0` 防御闸。
+  2. `src/orchestrator/deps_builder/context_budget.rs::build_context_budget_config` — 无条件 `derive_chain_min_budget` 取模型身份；override 逐项 `.or(global).unwrap_or(内置)`；解析后过同一 `0<warning<critical≤1.0` 防御闸。
   3. `src/lib.rs` — re-export `ModelThresholdToml`。
   4. `docs/reference/AGENT_LOOP_CONTEXT_BUDGET.md` — 配置文档 + TOML 示例。
 - **匹配规则**：`model` 字段是大小写不敏感**子串**，先匹配 resolved model id，再匹配 provider key；声明顺序首匹配胜；空串永不匹配。
@@ -67,13 +67,13 @@
 - **类型**：新功能（Panel `f` 入口）
 - **核实纠正 backlog 原设想**：精读后发现「LLM 推理修复层」**大部分已存在、且按 R7/R10 不应再建**——
   - `src/builtin_tools/doctor.rs` 的 `DoctorOutput`/`src/diagnostics/finding.rs` 的 `Finding` **早已结构化**：`repairable: bool`（机械可修 vs 不可修的区分已有）+ `fix_hint: Option<String>`（不可修时引导走 `vault_store`/`self_config`）+ `repair_outcome`（Repaired/Failed/Skipped），整个 `DiagnosticReport` 已 `Serialize`，作为 JSON `tool_result` 自然流回 LLM。
-  - LLM 现在就能：`doctor(fix=false)` → 读 findings → 机械项 `doctor(fix=true)`、配置/凭据项 `self_config`/`vault_store`。CLI 侧（`interfaces/cli/src/commands/doctor.rs:262-351` 的 `prompt_for_repair()`）甚至已有完整 AI 修复回路。
+  - LLM 现在就能：`doctor(fix=false)` → 读 findings → 机械项 `doctor(fix=true)`、配置/凭据项 `self_config`/`vault_store`。CLI 侧（`interfaces/cli/src/commands/doctor.rs` 的 `prompt_for_repair()`）甚至已有完整 AI 修复回路。
   - **不应加 harness 错误 hook**（违 R10「不做错误恢复策略选择」）——续跑只在 goal/loop 的 execution-engine hook，不在工具返回值里。
 - **真实缺口仅一个**：Panel 没有 `f` 入口。「让 LLM 修复」= 用一句修复 prompt 把现有 loop + 现有工具串起来（R9 智慧在 prompt），**不在 doctor 里写修复分支**。故工作量从 M 收敛为 S，**doctor 工具/diagnostics 后端零改动**。
 - **设计（用户裁定：内联 prompt 注入，最小/R10 纯）**：`f` 键注入一句诊断-修复指令到 composer 并走现有 send 管线 → 现有 agent loop 接管。
 - **改动文件（5，纯前端）**：
-  1. `interfaces/webchat/src/views/chat/state.rs` — 加 `repair_pulse: RwSignal<u32>` + `request_repair()`（1:1 镜像 `retry_pulse`/`request_retry`，同样排除出 `SessionSnapshot`）。
-  2. `interfaces/webchat/src/views/chat/composer/mod.rs` — `chat.doctor_repair_prompt` locale 键（R9 的「智慧」载体，2026-08-18 从 `DOCTOR_REPAIR_PROMPT` Rust 常量搬进 `locales/{en,zh}.json`）+ 监听 `repair_pulse` 的 Effect：注入 prompt → run 空闲时 `send_message()`、活跃时 `enqueue_message()`（与 Enter 同语义）。
+  1. `interfaces/webchat/src/platform/wide/views/chat/state/mod.rs` — 加 `repair_pulse: RwSignal<u32>` + `request_repair()`（1:1 镜像 `retry_pulse`/`request_retry`，同样排除出 `SessionSnapshot`）。
+  2. `interfaces/webchat/src/platform/wide/views/chat/composer/mod.rs` — `chat.doctor_repair_prompt` locale 键（R9 的「智慧」载体，2026-08-18 从 `DOCTOR_REPAIR_PROMPT` Rust 常量搬进 `locales/{en,zh}.json`）+ 监听 `repair_pulse` 的 Effect：注入 prompt → run 空闲时 `send_message()`、活跃时 `enqueue_message()`（与 Enter 同语义）。
   3. `interfaces/webchat/src/state/hotkey.rs` — `HotkeyState` thread 进 `ChatState`；裸 `f` 绑定 + `focus_is_editable()` 护栏。
   4. `interfaces/webchat/src/app.rs` — `ChatState::new()` 绑定后传入 `HotkeyState::new(voice_mode, chat_state)`。
 - **关键正确性点（backlog 漏判）**：裸 `f` 会与「在输入框打字打到 f」冲突。护栏：**任何修饰符**（meta/ctrl/alt/shift）、palette/voice overlay 开启、或焦点在 `<input>`/`<textarea>`/contenteditable 时一律不触发；仅在全清时 `prevent_default` + `request_repair()`。Esc/⌘K 免护栏因其非用户会打入正文的字符。
@@ -92,7 +92,7 @@
   - `src/teams/dispatcher/`：按 `blocked_by` 边扫描 Runnable、选最闲 owner 并发执行。
 - **澄清落点（四处，FEATURE_LOCATOR.md）**：速查表行（`工具并发(群分) ≠ 任务 DAG`，标签即教学）、§3.3（状态翻 ✅ + concurrency.rs 自述引用 + 双层锚点）、§4.3 Workflow / §4.4 Task（任务 DAG 真身）、术语表"DAG"条目。
 - **何时才变成开发项**：仅当确有"工具调用之间需要真正的依赖图编排"（而非群分）——但该需求应上升到 Workflow 层表达，**不在工具层重造 DAG**（违 R6 简洁性）。本 gap 不触发任何代码。
-- **启动话术**（留作未来描述参考）：「这条不是 bug 是命名。要‘多步骤依赖编排’走 Workflow（`src/workflow/`）；`tools/concurrency.rs` 维持群分并行即可，不要在工具层造第二个 DAG。」
+- **启动话术**（留作未来描述参考）：「这条不是 bug 是命名。要‘多步骤依赖编排’走 Workflow（`src/workflow/`）；`src/tools/concurrency.rs` 维持群分并行即可，不要在工具层造第二个 DAG。」
 
 ---
 
@@ -103,11 +103,11 @@
 - **类型**：新建子系统（"恢复/新建双层"，非微调）
 - **原决策（已废）**：loopback（本机 App）= operator（Config）；remote（局域网 Panel）= Chat 默认，须显式提权。tier 治理“配置变更”而非“执行”。
 - **2026-06-16 落地（已被取代，多数文件已删）**：
-  - 新建 `src/gateway/panel_devices.rs`（`PanelDeviceStore` + SQLite）+ `handlers/devices.rs`（`devices.list`/`set_level`/`revoke`）
+  - 新建 src/gateway/panel_devices.rs（`PanelDeviceStore` + SQLite）+ `handlers/devices.rs`（`devices.list`/`set_level`/`revoke`）
   - `server/handler.rs` connect 握手按 `device_id`+loopback 解析 tier，回填 `role`
   - `method_authz.rs::rpc_requires_operator` + `OPERATOR_RPC_METHODS` RPC 门；前端 `views/settings/security/devices.rs::PanelDevicesSection` + `ConfigGate` 包 17 配置页
 - **取代后的去留（2026-06-17 收敛）**：
-  - **删除**：`src/gateway/panel_devices.rs`、`src/gateway/handlers/devices.rs`、前端 `views/settings/security/devices.rs`(`PanelDevicesSection`)、`components/permission.rs`(`ConfigGate`)、`method_authz.rs::rpc_requires_operator`/`OPERATOR_RPC_METHODS`、`devices.set_level` RPC。
+  - **删除**：src/gateway/panel_devices.rs、src/gateway/handlers/devices.rs、前端 `views/settings/security/devices.rs`(`PanelDevicesSection`)、`components/permission.rs`(`ConfigGate`)、`method_authz.rs::rpc_requires_operator`/`OPERATOR_RPC_METHODS`、`devices.set_level` RPC。
   - **保留并改义**：`server/handler.rs` connect 握手改为校验 Gateway token（`connect_authorized`）→ `caller_role` 仅 operator/guest 二值；登录墙（非 operator 仅放行 `connect`）取代逐 RPC 白名单；`method_authz.rs` 仅余 **channel** tier 的 `tool_requires_operator`（panel 已解耦）。
   - **未受影响**：`security/store/devices.rs` 的 device 表（始终是 **cluster 节点**专用，与 panel tier 无关，仍由 `handlers/cluster.rs` 使用）。
 - **当前真相**：见 [FEATURE_LOCATOR §6.2](FEATURE_LOCATOR.md) 与附录 A #2/#3（均 ✅ 单层）。
