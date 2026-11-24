@@ -7,7 +7,8 @@
 #[cfg(target_arch = "wasm32")]
 mod browser {
     use aleph_terminal_ui::{
-        TerminalConnection, TerminalEvent, TerminalEventStream, TerminalServices, TerminalText,
+        TerminalConnection, TerminalEvent, TerminalEventStream, TerminalMutationScope,
+        TerminalServices, TerminalText,
     };
     use futures::{future::LocalBoxFuture, FutureExt};
     use gloo_timers::future::TimeoutFuture;
@@ -41,6 +42,23 @@ mod browser {
             topic: String,
         ) -> Result<BrowserPanelSubscription, JsValue>;
 
+        #[wasm_bindgen(method, catch, js_name = terminalMutations)]
+        fn sdk_terminal_mutations(
+            this: &BrowserPanelSdk,
+        ) -> Result<BrowserTerminalMutations, JsValue>;
+
+        type BrowserTerminalMutations;
+        #[wasm_bindgen(method)]
+        fn revision(this: &BrowserTerminalMutations) -> String;
+        #[wasm_bindgen(method)]
+        fn pending(this: &BrowserTerminalMutations) -> bool;
+        #[wasm_bindgen(method)]
+        fn reserve(this: &BrowserTerminalMutations) -> Option<String>;
+        #[wasm_bindgen(method)]
+        fn cancel(this: &BrowserTerminalMutations, ticket: String);
+        #[wasm_bindgen(method)]
+        fn settle(this: &BrowserTerminalMutations, ticket: String);
+
         #[derive(Clone)]
         type BrowserPanelSubscription;
 
@@ -57,6 +75,27 @@ mod browser {
         fn sdk_locale(this: &BrowserPanelSdk) -> Result<String, JsValue>;
     }
 
+    struct MutationScope(BrowserTerminalMutations);
+    impl TerminalMutationScope for MutationScope {
+        fn revision(&self) -> u64 {
+            self.0.revision().parse().expect("host revision")
+        }
+        fn pending(&self) -> bool {
+            self.0.pending()
+        }
+        fn reserve(&self) -> Option<u64> {
+            self.0
+                .reserve()
+                .map(|ticket| ticket.parse().expect("host ticket"))
+        }
+        fn cancel(&self, ticket: u64) {
+            self.0.cancel(ticket.to_string());
+        }
+        fn settle(&self, ticket: u64) {
+            self.0.settle(ticket.to_string());
+        }
+    }
+
     #[derive(Deserialize)]
     struct ConnectionWire {
         connected: bool,
@@ -71,6 +110,7 @@ mod browser {
 
     pub(crate) struct Adapter {
         pub(crate) services: TerminalServices,
+        pub(crate) mutations: Rc<dyn TerminalMutationScope>,
         active: Rc<Cell<bool>>,
     }
 
@@ -82,6 +122,7 @@ mod browser {
 
     pub(crate) fn make(sdk: JsValue) -> Result<Adapter, JsValue> {
         let sdk: BrowserPanelSdk = sdk.unchecked_into();
+        let mutations = Rc::new(MutationScope(sdk.sdk_terminal_mutations()?));
         let active = Rc::new(Cell::new(true));
         let connection = RwSignal::new(read_connection(&sdk)?);
         let signal = Signal::derive(move || connection.get());
@@ -183,6 +224,7 @@ mod browser {
 
         let locale = sdk.sdk_locale().unwrap_or_else(|_| "en".to_string());
         Ok(Adapter {
+            mutations,
             services: TerminalServices {
                 invoke,
                 subscribe,

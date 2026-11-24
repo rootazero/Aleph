@@ -64,6 +64,9 @@ const pageHtml = (base, denied, empty) => `<!doctype html>
       holdAttaches: false,
       drainFailures: 0,
       spawnCount: 0,
+      holdMutation: false,
+      heldMutations: [],
+      disposedReplies: 0,
       delayList: 0,
       nextSession: 1,
       terminalLoadCount: 0,
@@ -116,6 +119,9 @@ const pageHtml = (base, denied, empty) => `<!doctype html>
         if (state.holdAttaches) await new Promise((resolve) => state.heldAttaches.push({ response, resolve }));
         return response;
       }
+      if (['pty.spawn', 'pty.close'].includes(method) && state.holdMutation) {
+        await new Promise((resolve) => state.heldMutations.push(resolve));
+      }
       if (method === 'pty.spawn') {
         state.spawnCount += 1;
         const session = { session_id: 'spawned-' + state.nextSession++, shell: 'fixture-shell', cwd: '', created_at: 1700000001, closed: false };
@@ -160,11 +166,45 @@ const pageHtml = (base, denied, empty) => `<!doctype html>
       };
     };
 
-    const sdk = {
-      invoke,
-      subscribeTerminal,
-      connection: () => ({ connected: state.connected, epoch: state.epoch }),
-      locale: () => 'en',
+    // The real host creates a fresh SDK per mount, but retains one payload-free
+    // coordinator in the authorized host/project scope (covered by Rust tests).
+    let mutationScope = { serial: 0, ticket: null, revision: 0 };
+    let disposeSdk = () => {};
+    const makeSdk = () => {
+      let active = true;
+      let owned = null;
+      const scope = mutationScope;
+      disposeSdk = () => { active = false; };
+      return {
+        async invoke(method, params) {
+          if (!active) throw Error('Disposed');
+          try { return await invoke(method, params); }
+          finally {
+            if (!active) { state.disposedReplies += 1; throw Error('Disposed'); }
+          }
+        },
+        terminalMutations() {
+          if (!active) throw Error('Disposed');
+          return {
+            revision: () => String(scope.revision),
+            pending: () => scope.ticket !== null,
+            reserve() {
+              if (!active || scope !== mutationScope || scope.ticket !== null) return undefined;
+              owned = scope.ticket = String(++scope.serial);
+              return owned;
+            },
+            cancel(ticket) {
+              if (owned === ticket && scope.ticket === ticket) { scope.ticket = null; owned = null; }
+            },
+            settle(ticket) {
+              if (owned === ticket && scope.ticket === ticket) { scope.ticket = null; owned = null; scope.revision += 1; }
+            },
+          };
+        },
+        subscribeTerminal,
+        connection: () => ({ connected: state.connected, epoch: state.epoch }),
+        locale: () => 'en',
+      };
     };
 
     const emit = (event) => {
@@ -205,11 +245,12 @@ const pageHtml = (base, denied, empty) => `<!doctype html>
         state.terminalModule = await loader.loadPanelModule(manifest.entry);
         state.terminalLoadCount += 1;
       }
-      state.mounted = state.terminalModule.mount(document.querySelector('#sidebar'), document.querySelector('#content'), sdk);
+      state.mounted = state.terminalModule.mount(document.querySelector('#sidebar'), document.querySelector('#content'), makeSdk());
       document.querySelector('#message').textContent = 'Terminal mounted';
     };
 
     const unmountTerminal = () => {
+      disposeSdk();
       state.mounted?.unmount();
       state.mounted = null;
       clearRoots();
@@ -238,6 +279,12 @@ const pageHtml = (base, denied, empty) => `<!doctype html>
         const previous = screens.get(sessionId);
         if (previous && seq < previous.seq) throw Error('fixture snapshots must not go backwards');
         screens.set(sessionId, { seq, text });
+      },
+      releaseMutation() {
+        state.holdMutation = false;
+        const release = state.heldMutations.shift();
+        if (!release) throw Error('no held mutation');
+        release();
       },
       releaseAttach() {
         const held = state.heldAttaches.shift();
@@ -586,6 +633,50 @@ async function runSpawnPath() {
   await page.close();
 }
 
+// A sent mutation outlives its SDK and module mount. The replacement must
+// neither unlock nor adopt its payload; only a new authoritative list may win.
+const runMutationRemount = async () => {
+  for (const close of [false, true]) {
+    for (const ambiguous of [false, true]) {
+      const page = await browser.newPage();
+      await page.goto(origin);
+      await page.click('#terminal');
+      await waitFor(page, () => document.querySelector('canvas') && document.querySelector('#sidebar [aria-label="New terminal"]')?.disabled === false);
+      await page.evaluate(({ close, ambiguous }) => {
+        __fixture.state.holdMutation = true;
+        __fixture.state.ambiguousSpawn = !close && ambiguous;
+        __fixture.state.ambiguousClose = close && ambiguous;
+      }, { close, ambiguous });
+      const listsBefore = (await callValues(page, 'pty.list')).length;
+      if (close) await page.locator('#sidebar button[aria-label="Close terminal"]').first().click();
+      else await page.getByRole('button', { name: 'New terminal', exact: true }).first().click();
+      await waitFor(page, () => __fixture.state.heldMutations.length === 1);
+      await page.click('#chat');
+      await page.click('#terminal');
+      await waitFor(page, (n) => __fixture.state.calls.filter(c => c.kind === 'invoke' && c.value.method === 'pty.list').length > n, listsBefore);
+      await page.waitForTimeout(250);
+      assert.equal(await page.getByRole('button', { name: 'New terminal', exact: true }).first().isDisabled(), true, 'remounted New tab must remain locked');
+      const closeButtons = page.locator('#sidebar button[aria-label="Close terminal"]');
+      for (const button of await closeButtons.all()) assert.equal(await button.isDisabled(), true, 'remounted Close must remain locked');
+      // Selection is still allowed and must survive the old mutation settlement.
+      await page.locator('#sidebar [role=tab]').nth(1).click();
+      await waitFor(page, () => __fixture.state.calls.filter(c => c.kind === 'invoke' && c.value.method === 'pty.attach').at(-1)?.value.params.session_id === 'sibling-fixture');
+      const selectedTitle = await page.locator('#sidebar [role=tab][aria-selected=true]').textContent();
+      const afterReplacement = (await callValues(page, 'pty.list')).length;
+      await page.evaluate(() => __fixture.releaseMutation());
+      await waitFor(page, (n) => __fixture.state.calls.filter(c => c.kind === 'invoke' && c.value.method === 'pty.list').length > n, afterReplacement);
+      await waitFor(page, () => __fixture.state.disposedReplies === 1);
+      await waitFor(page, (count) => document.querySelector('#sidebar [aria-label="New terminal"]')?.disabled === false && document.querySelectorAll('#sidebar [role=tab]').length === count, close ? 1 : 3);
+      assert.equal((await callValues(page, close ? 'pty.close' : 'pty.spawn')).length, 1, 'old gesture is never replayed');
+      assert.equal(await page.locator('#sidebar [role=tab][aria-selected=true]').textContent(), selectedTitle, 'late settlement cannot overwrite newer selection');
+      assert.equal((await callValues(page, 'pty.attach')).at(-1).session_id, 'sibling-fixture', 'old payload never changes the selected attachment');
+      assert.equal(await page.locator('#sidebar [role=tab]').count(), close ? 1 : 3, 'only the authoritative post-settlement list reconciles membership');
+      assert.equal(await page.getByText('Disposed', { exact: true }).count(), 0, 'old SDK errors cannot enter replacement UI');
+      await page.close();
+    }
+  }
+};
+
 // Exercise the mounted Rust view through the modular SDK adapter. The response
 // wake and queued frames/loss are deliberately in the same event-loop turn.
 async function runQueuedAttachPath(mode) {
@@ -678,9 +769,10 @@ try {
     await runHappyPath('/');
     await runHappyPath('/panel/');
   }
+  if (!scenario || scenario === 'remount') await runMutationRemount();
   if (!scenario || scenario === 'spawn') await runSpawnPath();
   if (!scenario || scenario === 'denied') await runDeniedPath();
-  if (scenario && !['queued-attach', 'happy', 'spawn', 'denied'].includes(scenario)) throw Error('unknown terminal scenario');
+  if (scenario && !['queued-attach', 'happy', 'spawn', 'denied', 'remount'].includes(scenario)) throw Error('unknown terminal scenario');
   console.log(JSON.stringify({
     protocol_fixture: 'passed',
     scenarios: scenario ? [scenario] : ['queued-attach', 'happy', 'spawn', 'denied'],

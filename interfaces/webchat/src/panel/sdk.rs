@@ -10,10 +10,11 @@ use futures::future::LocalBoxFuture;
 use futures::FutureExt;
 #[cfg(any(target_arch = "wasm32", test))]
 use leptos::prelude::Update;
-use leptos::prelude::{on_cleanup, use_context, Effect, Get, GetUntracked, Set};
+use leptos::prelude::{on_cleanup, use_context, Effect, Get, GetUntracked, Set, WithUntracked, WithValue};
 use leptos::task::spawn_local;
 use serde_json::Value;
 use std::collections::VecDeque;
+use shared_ui_logic::terminal_mutation::{TerminalMutationCoordinator, TerminalMutationScope};
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
@@ -85,6 +86,51 @@ impl SdkLifecycle {
     }
 }
 
+/// Narrow builtin-only handle. Releasing an issued ticket is independent of
+/// admission: disposal must not strand an RPC which already reached Gateway.
+pub(super) struct PanelTerminalMutations {
+    sdk: PanelSdk,
+    context: (u64, u64),
+    coordinator: Arc<TerminalMutationCoordinator>,
+    ticket: Mutex<Option<u64>>,
+}
+
+impl TerminalMutationScope for PanelTerminalMutations {
+    fn revision(&self) -> u64 {
+        self.coordinator.revision()
+    }
+    fn pending(&self) -> bool {
+        self.coordinator.pending()
+    }
+    fn reserve(&self) -> Option<u64> {
+        self.sdk.authorize_terminal_mutations().ok()?;
+        if self.sdk.terminal_project_context() != Some(self.context) {
+            return None;
+        }
+        let mut owned = self.ticket.lock().unwrap();
+        if owned.is_some() {
+            return None;
+        }
+        let ticket = self.coordinator.reserve()?;
+        *owned = Some(ticket);
+        Some(ticket)
+    }
+    fn cancel(&self, ticket: u64) {
+        let mut owned = self.ticket.lock().unwrap();
+        if *owned == Some(ticket) {
+            *owned = None;
+            self.coordinator.cancel(ticket);
+        }
+    }
+    fn settle(&self, ticket: u64) {
+        let mut owned = self.ticket.lock().unwrap();
+        if *owned == Some(ticket) {
+            *owned = None;
+            self.coordinator.settle(ticket);
+        }
+    }
+}
+
 impl PanelSdk {
     /// The host context must contain only descriptors accepted by host policy.
     /// A missing context fails closed, rather than granting default authority.
@@ -119,6 +165,57 @@ impl PanelSdk {
                 })
                 .unwrap_or_else(|| "en".into()),
         }
+    }
+
+    fn authorize_terminal_mutations(&self) -> Result<(), PanelSdkError> {
+        self.authorize()?;
+        let host = self.host.as_ref().ok_or(PanelSdkError::Denied)?;
+        let registry = host.registry.lock().unwrap();
+        // The reserved namespace can only be populated by host builtin startup.
+        if self.tab.plugin_id != "aleph"
+            || self.tab.tab_id != "terminal"
+            || !registry
+                .get(&self.tab)
+                .is_some_and(|entry| entry.trust == aleph_protocol::panel::PanelUiTrust::Verified)
+        {
+            return Err(PanelSdkError::Denied);
+        }
+        Ok(())
+    }
+
+    fn terminal_project_context(&self) -> Option<(u64, u64)> {
+        // The built-in terminal does not require community discovery to be
+        // ready. Reuse its identity counters without using discovery as an
+        // authorization check or resetting the scope on a transport refresh.
+        self.state.panel_discovery.try_with_untracked(|state| {
+            (state.context_epoch(), state.project_context().generation)
+        })
+    }
+
+    pub(super) fn terminal_mutations(&self) -> Result<PanelTerminalMutations, PanelSdkError> {
+        self.authorize_terminal_mutations()?;
+        let context = self.terminal_project_context().ok_or(PanelSdkError::Disposed)?;
+        let coordinator = self
+            .state
+            .terminal_mutations
+            .try_with_value(|scopes| {
+                let mut current = scopes.lock().unwrap();
+                if let Some((identity, coordinator)) = current.as_ref() {
+                    if *identity == context {
+                        return coordinator.clone();
+                    }
+                }
+                let coordinator = Arc::new(TerminalMutationCoordinator::default());
+                *current = Some((context, coordinator.clone()));
+                coordinator
+            })
+            .ok_or(PanelSdkError::Disposed)?;
+        Ok(PanelTerminalMutations {
+            sdk: self.clone(),
+            context,
+            coordinator,
+            ticket: Mutex::new(None),
+        })
     }
 
     pub fn invoke(
@@ -164,7 +261,6 @@ impl PanelSdk {
             })
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
     pub(super) fn asset_project_context(&self) -> Option<(u64, u64)> {
         let state = self.state.panel_discovery.try_get_untracked()?;
         matches!(
@@ -672,6 +768,7 @@ mod tests {
     use leptos::prelude::{provide_context, GetUntracked, Owner, Set, Update};
     use serde_json::{json, Value};
     use shared_ui_logic::panel::registry::TabRegistry;
+    use shared_ui_logic::terminal_mutation::TerminalMutationScope;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
@@ -741,6 +838,176 @@ mod tests {
                 terminal_pending: None,
             }),
         })
+    }
+
+    fn terminal_fixture() -> (PanelSdk, PanelHostState) {
+        let (mut sdk, _, _) = fixture();
+        let tab = PanelTabKey {
+            plugin_id: "aleph".into(),
+            tab_id: "terminal".into(),
+        };
+        let descriptor = PanelTabDescriptor {
+            key: tab.clone(),
+            label: "Terminal".into(),
+            icon: "terminal".into(),
+            order: 0,
+            entry: "./tabs/terminal/dev/terminal.js".into(),
+            api_major: PANEL_UI_API_MAJOR,
+            trust: PanelUiTrust::Verified,
+            permissions: vec!["pty.spawn".into(), "pty.close".into()],
+            status: PanelTabStatus::Enabled,
+            status_detail: None,
+        };
+        let host = PanelHostState::new(TabRegistry::new(vec![descriptor]).unwrap());
+        sdk.host = Some(host.clone());
+        sdk.tab = tab;
+        sdk.state.is_connected.set(true);
+        sdk.state.connection_epoch.set(7);
+        terminal_project(&sdk, "A", 1);
+        (sdk, host)
+    }
+
+    fn terminal_project(sdk: &PanelSdk, project: &str, generation: u64) {
+        sdk.state.panel_discovery.update(|state| {
+            state.invalidate_context();
+            let request = state.begin_connection(7).unwrap();
+            state.accept_context_snapshot_for_request(
+                7,
+                request,
+                aleph_protocol::panel::PanelUiContextSnapshot {
+                    snapshot: aleph_protocol::panel::PanelUiCapabilitySnapshot::new(10, Vec::new()),
+                    project_context: aleph_protocol::panel::PanelProjectSelection {
+                        project_id: Some(project.into()),
+                        generation,
+                    },
+                },
+            );
+        });
+    }
+
+    #[test]
+    fn terminal_mutation_scope_does_not_require_discovery_ready() {
+        Owner::new().with(|| {
+            let (sdk, _) = terminal_fixture();
+            let first = sdk.terminal_mutations().unwrap();
+            let pending = first.reserve().unwrap();
+            sdk.state.panel_discovery.update(|state| {
+                assert!(state.begin_connection(8).is_some());
+            });
+            assert!(sdk.asset_project_context().is_none());
+            let current = sdk.terminal_mutations().unwrap();
+            assert!(current.pending());
+            first.settle(pending);
+            assert_eq!(current.revision(), 1);
+            assert!(!current.pending());
+        });
+    }
+
+    #[test]
+    fn terminal_dispose_before_send_cancels_without_dispatch_or_invalidation() {
+        Owner::new().with(|| {
+            let (mut sdk, host) = terminal_fixture();
+            sdk.rpc = Arc::new(|_, _| panic!("disposed invoke reached Gateway"));
+            let scope = sdk.terminal_mutations().unwrap();
+            let ticket = scope.reserve().unwrap();
+            sdk.dispose();
+            assert_eq!(
+                block_on(sdk.invoke("pty.spawn", json!({}))),
+                Err("Disposed".into())
+            );
+            assert!(scope.reserve().is_none());
+            scope.cancel(ticket);
+            let mut next = PanelSdk::new(sdk.state, sdk.tab.clone());
+            next.host = Some(host);
+            let scope = next.terminal_mutations().unwrap();
+            assert!(!scope.pending());
+            assert_eq!(scope.revision(), 0);
+        });
+    }
+
+    #[test]
+    fn terminal_mutations_survive_disposed_shell_but_never_cross_dashboard_or_project() {
+        use futures::task::noop_waker_ref;
+        use std::task::{Context, Poll};
+        Owner::new().with(|| {
+            let (mut sdk, host) = terminal_fixture();
+            let scope = sdk.terminal_mutations().unwrap();
+            let ticket = scope.reserve().unwrap();
+            let (separate_app, _) = terminal_fixture();
+            let separate_scope = separate_app.terminal_mutations().unwrap();
+            assert!(
+                !separate_scope.pending(),
+                "separate application with same project identity"
+            );
+            let mut separate_shell = PanelSdk::new(sdk.state, sdk.tab.clone());
+            separate_shell.host = Some(PanelHostState::new(host.registry.lock().unwrap().clone()));
+            assert!(
+                separate_shell.terminal_mutations().unwrap().pending(),
+                "remount creates a new Shell but must share the pending action"
+            );
+            let (settle, rx) = futures::channel::oneshot::channel();
+            let rx = Arc::new(Mutex::new(Some(rx)));
+            let reached = Arc::new(AtomicUsize::new(0));
+            sdk.rpc = Arc::new({
+                let reached = reached.clone();
+                move |_, _| {
+                    reached.fetch_add(1, Ordering::SeqCst);
+                    let rx = rx.lock().unwrap().take().unwrap();
+                    async move { rx.await.unwrap() }.boxed_local()
+                }
+            });
+            let mut invoke = sdk.invoke("pty.spawn", json!({}));
+            let mut cx = Context::from_waker(noop_waker_ref());
+            assert!(matches!(invoke.as_mut().poll(&mut cx), Poll::Pending));
+            assert_eq!(reached.load(Ordering::SeqCst), 1);
+            sdk.dispose();
+            let mut replacement = PanelSdk::new(sdk.state, sdk.tab.clone());
+            replacement.host = separate_shell.host;
+            let next = replacement.terminal_mutations().unwrap();
+            assert!(next.pending());
+            next.settle(ticket);
+            assert!(next.pending(), "replacement cannot release another SDK's ticket");
+            assert!(next.reserve().is_none());
+            assert!(scope.reserve().is_none());
+            settle
+                .send(Ok(json!({"session_id":"stale-payload"})))
+                .unwrap();
+            assert_eq!(
+                block_on(invoke),
+                Err("Disposed".into()),
+                "old invoke reached Gateway but its wrapper still rejects delivery"
+            );
+            scope.settle(ticket);
+            scope.settle(ticket);
+            assert!(!next.pending());
+            assert_eq!(next.revision(), 1);
+            let unsent = next.reserve().unwrap();
+            next.cancel(unsent);
+            assert_eq!(next.revision(), 1);
+            let old_ticket = next.reserve().unwrap();
+            terminal_project(&replacement, "B", 2);
+            let project_b = replacement.terminal_mutations().unwrap();
+            assert!(!project_b.pending());
+            next.settle(old_ticket);
+            assert_eq!(project_b.revision(), 0);
+            assert!(next.reserve().is_none(), "old project cannot reserve");
+            let (separate, _) = terminal_fixture();
+            let separate = separate.terminal_mutations().unwrap();
+            assert_eq!(separate.revision(), 0);
+            assert!(!separate.pending());
+            let mut untrusted = host
+                .registry
+                .lock()
+                .unwrap()
+                .get(&replacement.tab)
+                .unwrap()
+                .clone();
+            untrusted.trust = PanelUiTrust::Trusted;
+            replacement.host = Some(PanelHostState::new(
+                TabRegistry::new(vec![untrusted]).unwrap(),
+            ));
+            assert!(replacement.terminal_mutations().is_err());
+        });
     }
 
     #[test]

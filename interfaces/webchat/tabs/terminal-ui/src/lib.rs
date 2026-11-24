@@ -13,8 +13,9 @@ mod tabs;
 mod view;
 
 pub use host::{
-    terminal_state, terminal_state_with_selection, TerminalConnection, TerminalEvent,
-    TerminalEventStream, TerminalSelection, TerminalServices, TerminalState, TerminalText,
+    terminal_state, terminal_state_with_mutations, terminal_state_with_selection,
+    TerminalConnection, TerminalEvent, TerminalEventStream, TerminalMutationScope,
+    TerminalSelection, TerminalServices, TerminalState, TerminalText,
 };
 pub use view::{TerminalContent, TerminalContentProps, TerminalSidebar};
 

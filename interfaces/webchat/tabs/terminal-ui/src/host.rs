@@ -81,30 +81,55 @@ pub struct TerminalText {
     pub write_refusal: String,
 }
 
+pub use shared_ui_logic::terminal_mutation::{TerminalMutationCoordinator, TerminalMutationScope};
+
 /// Payload-free invalidation shared only by owners of the same terminal state.
 /// Async writes retain this value, not owner-scoped signals or RPC responses.
-#[derive(Default)]
 pub(crate) struct MutationSettlements {
-    revision: Cell<u64>,
+    scope: Rc<dyn TerminalMutationScope>,
     listeners: RefCell<Vec<futures::channel::mpsc::UnboundedSender<()>>>,
 }
 
+impl Default for MutationSettlements {
+    fn default() -> Self {
+        Self::new(Rc::new(TerminalMutationCoordinator::default()))
+    }
+}
+
 impl MutationSettlements {
+    fn new(scope: Rc<dyn TerminalMutationScope>) -> Self {
+        Self {
+            scope,
+            listeners: RefCell::new(Vec::new()),
+        }
+    }
     pub fn revision(&self) -> u64 {
-        self.revision.get()
+        self.scope.revision()
+    }
+    pub fn pending(&self) -> bool {
+        self.scope.pending()
+    }
+    pub fn reserve(&self) -> Option<u64> {
+        self.scope.reserve()
+    }
+    pub fn cancel(&self, ticket: u64) {
+        self.scope.cancel(ticket);
+        self.wake();
+    }
+    pub fn settled(&self, ticket: u64) {
+        self.scope.settle(ticket);
+        self.wake();
+    }
+    pub(crate) fn wake(&self) {
+        self.listeners
+            .borrow_mut()
+            .retain(|listener| listener.unbounded_send(()).is_ok());
     }
 
     pub fn listen(&self, wake: futures::channel::mpsc::UnboundedSender<()>) {
         let mut listeners = self.listeners.borrow_mut();
         listeners.retain(|listener| !listener.is_closed());
         listeners.push(wake);
-    }
-
-    pub fn settled(&self) {
-        self.revision.set(self.revision.get().wrapping_add(1));
-        self.listeners
-            .borrow_mut()
-            .retain(|listener| listener.unbounded_send(()).is_ok());
     }
 }
 
@@ -156,4 +181,14 @@ pub fn terminal_state(services: TerminalServices) -> TerminalState {
         close_request: RwSignal::new(None),
         actions_disabled: RwSignal::new(true),
     }
+}
+
+/// Bind a fresh UI owner to the host's existing authorized terminal scope.
+pub fn terminal_state_with_mutations(
+    services: TerminalServices,
+    scope: Rc<dyn TerminalMutationScope>,
+) -> TerminalState {
+    let mut state = terminal_state(services);
+    state.settlements = Rc::new(MutationSettlements::new(scope));
+    state
 }

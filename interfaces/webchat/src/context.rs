@@ -934,6 +934,12 @@ fn is_pty_topic(topic: &str) -> bool {
     matches!(topic, "pty.screen" | "pty.exit")
 }
 
+#[cfg(feature = "panel-modular")]
+type TerminalMutationScope = (
+    (u64, u64),
+    Arc<shared_ui_logic::terminal_mutation::TerminalMutationCoordinator>,
+);
+
 #[derive(Clone, Copy)]
 pub struct DashboardState {
     pub is_connected: RwSignal<bool>,
@@ -968,6 +974,10 @@ pub struct DashboardState {
     pub connection_epoch: RwSignal<u64>,
     #[cfg(feature = "panel-modular")]
     pub panel_discovery: RwSignal<PanelDiscoveryState>,
+    // A route can replace PanelShell but not this dashboard. Only in-flight
+    // operations retain older project scopes after the current scope changes.
+    #[cfg(feature = "panel-modular")]
+    pub(crate) terminal_mutations: StoredValue<Mutex<Option<TerminalMutationScope>>>,
 
     // Phase 3: Channel to send RPC requests to message loop
     rpc_tx: StoredValue<Option<mpsc::UnboundedSender<RpcRequest>>>,
@@ -1307,6 +1317,8 @@ impl DashboardState {
             connection_epoch: RwSignal::new(0),
             #[cfg(feature = "panel-modular")]
             panel_discovery: RwSignal::new(PanelDiscoveryState::new()),
+            #[cfg(feature = "panel-modular")]
+            terminal_mutations: StoredValue::new(Mutex::new(None)),
             rpc_tx: StoredValue::new(None),
             next_id: StoredValue::new(Arc::new(Mutex::new(1))),
             event_handlers: StoredValue::new(Arc::new(Mutex::new(Vec::new()))),

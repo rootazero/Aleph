@@ -125,7 +125,8 @@ export function descriptorValue(json) { return JSON.parse(json); }
         let owner = Owner::new();
         let services = adapter.services.clone();
         let (sidebar_mount, content_mount) = owner.with(|| {
-            let state = aleph_terminal_ui::terminal_state(services);
+            let state =
+                aleph_terminal_ui::terminal_state_with_mutations(services, adapter.mutations.clone());
             let state_for_sidebar = state.clone();
             let sidebar_mount = mount_to(sidebar.clone(), move || {
                 view! { <aleph_terminal_ui::TerminalSidebar state=state_for_sidebar /> }

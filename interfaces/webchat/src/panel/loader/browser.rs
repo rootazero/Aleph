@@ -2,7 +2,8 @@
 
 use super::{map_error_code, LoadedModule, MountedTab, PanelLoadError};
 use crate::appearance::ThemeMode;
-use crate::panel::sdk::{PanelSdk, PanelSubscription};
+use crate::panel::sdk::{PanelSdk, PanelSubscription, PanelTerminalMutations};
+use shared_ui_logic::terminal_mutation::TerminalMutationScope;
 use aleph_protocol::panel::{PanelTabDescriptor, PanelTabKey};
 use futures::{future::LocalBoxFuture, FutureExt};
 use js_sys::{Reflect, JSON};
@@ -132,6 +133,14 @@ pub struct BrowserPanelSdk {
 
 #[wasm_bindgen]
 impl BrowserPanelSdk {
+    /// Payload-free coordinator for the exact authorized builtin Terminal only.
+    #[wasm_bindgen(js_name = terminalMutations)]
+    pub fn terminal_mutations(&self) -> Result<BrowserTerminalMutations, JsValue> {
+        self.sdk.terminal_mutations()
+            .map(|scope| BrowserTerminalMutations { scope })
+            .map_err(|error| JsValue::from_str(&error.to_string()))
+    }
+
     pub async fn invoke(&self, method: String, params: JsValue) -> Result<JsValue, JsValue> {
         let value = self
             .sdk
@@ -193,6 +202,34 @@ impl BrowserPanelSdk {
 
     pub fn locale(&self) -> String {
         self.sdk.locale()
+    }
+}
+
+#[wasm_bindgen]
+pub struct BrowserTerminalMutations {
+    scope: PanelTerminalMutations,
+}
+
+#[wasm_bindgen]
+impl BrowserTerminalMutations {
+    pub fn revision(&self) -> String {
+        self.scope.revision().to_string()
+    }
+    pub fn pending(&self) -> bool {
+        self.scope.pending()
+    }
+    pub fn reserve(&self) -> Option<String> {
+        self.scope.reserve().map(|ticket| ticket.to_string())
+    }
+    pub fn cancel(&self, ticket: String) {
+        if let Ok(ticket) = ticket.parse() {
+            self.scope.cancel(ticket);
+        }
+    }
+    pub fn settle(&self, ticket: String) {
+        if let Ok(ticket) = ticket.parse() {
+            self.scope.settle(ticket);
+        }
     }
 }
 

@@ -256,12 +256,21 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
             let new = new_request.get_untracked() != 0;
             new_request.set(0);
             let effect = if close.is_some() || new {
-                controller.try_update_value(|c| c.gesture(close)).flatten()
+                settlements.reserve().and_then(|ticket| {
+                    let request = controller.try_update_value(|c| c.gesture(close)).flatten();
+                    if request.is_none() {
+                        settlements.cancel(ticket);
+                    }
+                    request.map(|request| (request, Some(ticket)))
+                })
             } else {
                 None
             };
             let request = controller.try_update_value(|c| c.next(now)).flatten();
-            for request in effect.into_iter().chain(request) {
+            for (request, ticket) in effect
+                .into_iter()
+                .chain(request.map(|request| (request, None)))
+            {
                 let services = Rc::clone(&services);
                 let inbox = Rc::clone(&inbox);
                 let stop = Rc::clone(&stop_events);
@@ -270,6 +279,9 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
                 let settlements = Rc::clone(&settlements);
                 spawn_local(async move {
                     if stop.get() {
+                        if let Some(ticket) = ticket {
+                            settlements.cancel(ticket);
+                        }
                         return;
                     }
                     let (result, opened) =
@@ -305,17 +317,12 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
                             }
                         }
                     }
-                    if stop.get() {
-                        if matches!(
-                            request.kind,
-                            crate::recovery::RequestKind::Spawn
-                                | crate::recovery::RequestKind::Close
-                        ) {
-                            // Both success and error may follow a server-side
-                            // mutation. Never carry the old response across owners.
-                            settlements.settled();
-                        }
-                    } else {
+                    // Release on actual settlement, even if the initiating UI
+                    // or SDK was disposed. Only invalidation crosses owners.
+                    if let Some(ticket) = ticket {
+                        settlements.settled(ticket);
+                    }
+                    if !stop.get() {
                         inbox.borrow_mut().push((request, result));
                         let _ = wake.unbounded_send(());
                     }
@@ -335,8 +342,10 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
                 if status.get_untracked() != c.ready {
                     status.set(c.ready);
                 }
-                let disabled =
-                    c.effect_pending() || !c.covered || !c.current_connection().connected;
+                let disabled = settlements.pending()
+                    || c.effect_pending()
+                    || !c.covered
+                    || !c.current_connection().connected;
                 if actions_disabled.get_untracked() != disabled {
                     actions_disabled.set(disabled);
                 }
@@ -1078,6 +1087,18 @@ mod tests {
                     any_spawner::Executor::poll_local();
                     assert_eq!(lists.get(), 2);
                     if let Some((settle, result)) = settlement {
+                        assert!(state.actions_disabled.get_untracked(), "replacement buttons must remain locked while old mutation is pending");
+                        for attempt_close in [false, true] {
+                            if attempt_close {
+                                state.close_request.set(Some("s".into()));
+                            } else {
+                                state.new_request.set(1);
+                            }
+                            // Poll both actual dispatch paths, not just the UI flag.
+                            state.settlements.wake();
+                            any_spawner::Executor::poll_local();
+                            assert_eq!(writes.get(), 1, "replacement cannot dispatch a second mutation");
+                        }
                         let tabs = state.tabs.get_untracked();
                         settle.send(result).unwrap();
                         any_spawner::Executor::poll_local();
