@@ -928,6 +928,19 @@ impl PtyManager {
         self.attach_snapshot_at(self.ready_generation()?, session_id)
     }
 
+    /// Read the canonical primary ring under the same Ready-generation admission as attach.
+    pub(crate) fn history_at(
+        &self,
+        generation: u64,
+        request: &aleph_protocol::pty::PtyHistoryRequest,
+    ) -> Result<aleph_protocol::pty::PtyHistoryResponse, aleph_protocol::pty::PtyHistoryError> {
+        request.validate()?;
+        self.with_session_at(generation, &request.session_id, |session| {
+            Ok(session.with_screen(|screen| screen.history(request)))
+        })
+        .map_err(|_| aleph_protocol::pty::PtyHistoryError::Unavailable)?
+    }
+
     pub fn attach_snapshot_at(
         &self,
         generation: u64,

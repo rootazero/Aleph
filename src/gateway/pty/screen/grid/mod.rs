@@ -98,7 +98,9 @@ pub struct Grid {
     /// out-of-range-looking value, so subtract from `cols` rather than
     /// assuming `cursor_col < cols`.
     cursor_col: u16,
-    scrollback: std::collections::VecDeque<Vec<Cell>>,
+    pub(super) scrollback: std::collections::VecDeque<Vec<Cell>>,
+    /// Session-local count of full-height ring admissions; retention never resets it.
+    pub(super) history_next: u64,
     scrollback_limit: usize,
     /// Rows changed since the last [`Self::take_dirty`]. A row lands here on
     /// every write that touches it, so a client that missed no frames can be
@@ -144,6 +146,7 @@ impl Grid {
             cursor_col: 0,
             scrollback: std::collections::VecDeque::new(),
             scrollback_limit: 1000,
+            history_next: 0,
             // Starts empty, not full: a client that just attached gets a
             // full sync from `Screen::full_patch`, which reads every row
             // directly and does not consult this set at all. Seeding it

@@ -68,6 +68,10 @@ impl Grid {
                 self.scrollback.pop_front();
             }
             self.scrollback.push_back(first);
+            self.history_next = self
+                .history_next
+                .checked_add(1)
+                .expect("PTY history index exhausted");
         }
         self.rotate_region(top, bottom, true);
     }
