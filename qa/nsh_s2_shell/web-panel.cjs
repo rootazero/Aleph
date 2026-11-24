@@ -147,6 +147,10 @@ async function verifyNebula(page, fixture, frames, step, shot) {
   const search = page.getByText('Search', { exact: true });
   await input.fill('nebula-000');
   await search.click();
+  const orgNote = page.getByRole('button').filter({ hasText: 'nebula-000' }).filter({ hasNotText: 'main__u-owner' });
+  // This row exists only in search. Wait for the result list before clicking
+  // the personal row, which also exists in the pre-search graph list.
+  await orgNote.waitFor();
   const ownNote = page.getByRole('button').filter({ hasText: 'main__u-owner' }).filter({ hasText: 'nebula-000' });
   await ownNote.click();
   await page.getByText('Personal note fixture only.', { exact: false }).first().waitFor();
@@ -158,7 +162,6 @@ async function verifyNebula(page, fixture, frames, step, shot) {
   const hits = frames.find(({ request }) => request.method === 'graph.search');
   const exactMatches = hits?.response.result.results.filter((note) => note.id === 'reference/nebula-000');
   assert.deepEqual(exactMatches?.map((note) => note.agent_id).sort(), ['main', 'main__u-owner']);
-  const orgNote = page.getByRole('button').filter({ hasText: 'nebula-000' }).filter({ hasNotText: 'main__u-owner' });
   await orgNote.click();
   await page.getByText('Organization twin.', { exact: false }).waitFor();
   await page.getByText('Not in the current graph').waitFor();
@@ -225,7 +228,20 @@ async function run(fixturePath) {
     await page.getByText('enabled').first().waitFor({ timeout: 15000 });
     await page.screenshot({ path: shot('capabilities') });
     step('capabilities_open', { texts: (await page.locator('body').innerText()).split('\n').filter(Boolean) });
-    if (fixture.nebula) await verifyNebula(page, fixture, graphFrames, step, shot);
+    if (fixture.nebula) {
+      try {
+        await verifyNebula(page, fixture, graphFrames, step, shot);
+      } catch (error) {
+        report.graphFrames = graphFrames.map(({ request, response, bytes }) => ({
+          method: request.method, params: request.params, bytes,
+          error: response.error, returnedAddress: response.result?.node && {
+            agent_id: response.result.node.agent_id, node_id: response.result.node.id,
+          },
+        }));
+        await page.screenshot({ path: shot('nebula-failure') }).catch(() => {});
+        throw error;
+      }
+    }
 
     // 3. Customize: Capabilities first, Sessions hidden.
     await page.getByText('Customize').click();

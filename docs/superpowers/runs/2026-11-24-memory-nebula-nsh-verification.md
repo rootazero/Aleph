@@ -21,7 +21,19 @@ Use the [isolated fixture recipe](../../../qa/nsh_s2_shell/README.md). The `norm
 
 An isolated preflight routed only the graph replies through a scripted fixture while the previous Gateway served the packaged UI and handled real pairing. Chrome painted the 100-node scene, selected a node by its zoomed pixel, and the actual Canvas stroke reached the incident-edge highlight color. This proves the Web drawing and interaction path, not candidate Core data, authorization, or wire-size behavior. / 脚本响应预检验证了真实 Chrome 绘制、缩放后拾取与选中边高亮，不作 Core 或传输证据。
 
-**Pending at this checkpoint:** Candidate Gateway startup and all three browser runs. The previous Gateway binary with the final Web package passed the isolated pairing, modules, persisted layout, and cookie-loss flow. It was also used to preflight fixture indexing (2,400 active dense links), not to verify the new graph capability. / 候选 Gateway 的实际回放待完成；基线 Gateway 仅验证夹具和原有壳流程。
+**Passed on Windows:** The production `aleph-server` and packaged UI (product source through `1726b56cf`) passed all three `--web-only --nebula {normal,dense,off}` runs with Chrome 158.0.8127.37. Each used its own temporary Aleph home and loopback port. The first normal/dense attempt clicked a personal graph row while search was replacing the list; waiting for the search-only organization row fixed the driver, without changing either product artifact. / Windows 候选 Gateway 与真实 Chrome 三组均通过；初次回放因脚本在结果列表切换期间点击而失败，同一组产物加上结果就绪判据后通过。
+
+| 用例 / Case | 节点 × 边 / Nodes × edges | 图回复 / Graph | 个人详情 / Personal detail | 超限错误 / Oversize error | 画布就绪 / Canvas ready | 缩放帧间隔 / Zoom rAF p50 / p95 / max |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| Normal | 100 × 100 | 28,539 B | 649 B | 92 B | 205 ms | 49 samples: 31 / 32 / 63 ms |
+| Dense | 100 × 2,400 | 247,139 B | 4,537 B | 92 B | 288 ms | 49 samples: 31 / 32 / 32 ms |
+| Off / 停用 | — | Single `memory_unavailable` / 单次明确失败 | — | — | — | — |
+
+Byte counts are UTF-8 JSON-RPC bodies, excluding the four-byte binary frame prefix. Canvas ready is elapsed driver time from opening the tab to seeing the canvas, not an isolated layout benchmark. The rAF intervals span twelve in/out zoom pairs and reset; they include browser scheduling and idle time. This is one sample per fixture, not a regression comparison against the classic 3D view. The dense graph body used 23.6% of the Web v1 1 MiB limit; this sample did not justify a new Core edge cap or an algorithm change. / 字节数不含四字节帧头；就绪计时与帧间隔含浏览器调度，不是纯渲染耗时或跨渲染器对比。该密集样本未触及传输上限，不据此新增 Core 截断或更换算法。
+
+Both enabled runs picked an actual zoomed Canvas pixel, painted an emphasized incident stroke, resolved personal and organization twins to their exact addresses, kept the foreign twin out of search, and showed the organization detail as outside the current graph. Oversized content returned one error frame, no partial result, and no retry. Pairing, layout restore and cookie loss passed in all three runs. / 两组启用用例均验证实际像素拾取和关联边高亮、同路径分区寻址、外部分区不可见，以及超限仅报一次错误。三组均通过原壳配对、布局恢复与 Cookie 清除回归。
+
+Local receipts: `target/nebula-evidence/s2-candidate-{normal,dense,off}-1795519210/{report,web-report}.json`; Gateway SHA-256 `75bc3eb030d10c8e78dfa5aa389f3c076a4079b47d95d3d0d909aae182b42f0f`; Web index SHA-256 `7d4319e65b98a1a58f327ddd020ebdcd449a7171bc07a4c610b12be5ea77480f`. The Windows harness terminated its own temporary Gateway process after each run; this is not a graceful-shutdown check. / 证据保留于本地忽略目录；Windows 夹具结束时终止专用 Gateway，不作优雅停机验证。
 
 ## 评审和未覆盖门禁 / Review and outstanding gates
 
