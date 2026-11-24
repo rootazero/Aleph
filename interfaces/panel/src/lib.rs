@@ -62,9 +62,10 @@ const SHELL_PUBLIC_BASE: &str = "shell/";
 
 fn is_shell_module(key: &PanelTabKey) -> bool {
     key.plugin_id == BUILTIN_NAMESPACE
-        && SHELL_MODULES
-            .iter()
-            .any(|module| module.tab_id == key.tab_id)
+        && (key.tab_id == aleph_protocol::memory_graph::NEBULA_TAB_ID
+            || SHELL_MODULES
+                .iter()
+                .any(|module| module.tab_id == key.tab_id))
 }
 
 /// Add the shell's own modules to a Core snapshot as built-in declarations,

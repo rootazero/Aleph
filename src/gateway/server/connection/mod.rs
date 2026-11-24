@@ -104,6 +104,9 @@ pub(super) const V1_METHODS: &[&str] = &[
     "health",
     "sessions.list",
     aleph_protocol::panel::PANEL_UI_CAPABILITY_SNAPSHOT_METHOD,
+    aleph_protocol::memory_graph::GRAPH_QUERY_METHOD,
+    aleph_protocol::memory_graph::GRAPH_SEARCH_METHOD,
+    aleph_protocol::memory_graph::GRAPH_NODE_DETAIL_METHOD,
 ];
 
 pub(super) fn v1_mounted(method: &str) -> bool {

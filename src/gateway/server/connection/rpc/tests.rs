@@ -66,6 +66,25 @@ async fn execute(
 }
 
 #[tokio::test]
+async fn mounted_graph_reads_prepare_without_an_idempotency_key() {
+    let peer = peer("graph-reader");
+    let caller = peer.snapshot().await.unwrap();
+    for method in ["graph.query", "graph.search", "graph.node_detail"] {
+        assert!(super::super::v1_mounted(method), "{method}");
+        assert_eq!(Lane::for_method(method), Lane::Query, "{method}");
+        let request = JsonRpcRequest::with_id(method, None, json!(1));
+        assert!(prepare(&request, &caller, true).is_ok(), "{method}");
+    }
+    for method in [
+        "graph.update_note",
+        "graph.rename_note",
+        "graph.delete_note",
+    ] {
+        assert!(!super::super::v1_mounted(method), "{method}");
+    }
+}
+
+#[tokio::test]
 async fn ordinary_rpc_uses_one_inflight_slot() {
     let hits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let release = Arc::new(Notify::new());

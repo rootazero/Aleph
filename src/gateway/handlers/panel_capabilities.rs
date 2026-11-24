@@ -1,14 +1,75 @@
+use aleph_protocol::memory_graph::NEBULA_TAB_ID;
 use aleph_protocol::panel::{
-    PanelUiCapabilitySnapshot, PanelUiContextSnapshot, PANEL_PROJECT_SELECT_METHOD,
-    PANEL_UI_CAPABILITY_SNAPSHOT_METHOD,
+    PanelTabDescriptor, PanelTabKey, PanelTabStatus, PanelUiCapabilityDeclaration,
+    PanelUiCapabilityOrigin, PanelUiCapabilitySnapshot, PanelUiContextSnapshot, PanelUiTrust,
+    PANEL_PROJECT_SELECT_METHOD, PANEL_UI_API_MAJOR, PANEL_UI_CAPABILITY_SNAPSHOT_METHOD,
 };
 use serde::Deserialize;
+use shared_ui_logic::panel::registry::BUILTIN_NAMESPACE;
 
 use crate::gateway::handlers::plugins::get_extension_manager;
 use crate::gateway::panel_project_context::PanelRequestContext;
 use crate::gateway::protocol::{
     JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, PERMISSION_DENIED,
 };
+
+/// Add the renderer declaration only when the actual Core read surface is mounted.
+pub(crate) fn with_memory_nebula(
+    mut snapshot: PanelUiCapabilitySnapshot,
+    mounted: bool,
+) -> PanelUiCapabilitySnapshot {
+    let key = PanelTabKey {
+        plugin_id: BUILTIN_NAMESPACE.into(),
+        tab_id: NEBULA_TAB_ID.into(),
+    };
+    if !mounted
+        || snapshot
+            .declarations
+            .iter()
+            .any(|tab| tab.descriptor.key == key)
+    {
+        return snapshot;
+    }
+    snapshot.declarations.push(PanelUiCapabilityDeclaration {
+        descriptor: PanelTabDescriptor {
+            key,
+            label: "Memory Nebula".into(),
+            icon: "network".into(),
+            order: 0,
+            entry: format!("shell/{NEBULA_TAB_ID}"),
+            api_major: PANEL_UI_API_MAJOR,
+            trust: PanelUiTrust::Verified,
+            permissions: Vec::new(),
+            status: PanelTabStatus::Enabled,
+            status_detail: None,
+        },
+        origin: PanelUiCapabilityOrigin::BuiltIn,
+        plugin_version: env!("CARGO_PKG_VERSION").into(),
+        asset_integrity: None,
+        public_base: "shell/".into(),
+        source_revision: snapshot.revision,
+    });
+    snapshot
+}
+
+/// Preserve the outer RPC result, including any flattened project selection.
+pub(crate) fn project_memory_nebula(result: &mut serde_json::Value) {
+    let Ok(snapshot) = serde_json::from_value::<PanelUiCapabilitySnapshot>(result.clone()) else {
+        return;
+    };
+    let count = snapshot.declarations.len();
+    let projected = with_memory_nebula(snapshot, true);
+    if let Some(declaration) = projected.declarations.get(count) {
+        if let (Some(declarations), Ok(value)) = (
+            result
+                .get_mut("declarations")
+                .and_then(serde_json::Value::as_array_mut),
+            serde_json::to_value(declaration),
+        ) {
+            declarations.push(value);
+        }
+    }
+}
 
 /// Return the canonical Panel capability snapshot in the existing JSON-RPC envelope.
 pub fn snapshot_response(
@@ -130,7 +191,60 @@ mod tests {
     use serde_json::json;
 
     use super::snapshot_response;
-    use crate::gateway::protocol::JsonRpcRequest;
+
+    #[tokio::test]
+    async fn nebula_publication_tracks_mounted_reads() {
+        use crate::gateway::handlers::HandlerRegistry;
+
+        let request = JsonRpcRequest::with_id("panel.capabilities.snapshot", None, json!(43));
+        let mut registry = HandlerRegistry::new();
+        registry.register("panel.capabilities.snapshot", |request| async move {
+            JsonRpcResponse::success(request.id, json!({"revision": 19, "declarations": []}))
+        });
+        for method in ["graph.query", "graph.search"] {
+            registry.register(method, |request| async move {
+                JsonRpcResponse::success(request.id, json!({}))
+            });
+        }
+        let incomplete = registry.handle(&request).await.result.unwrap();
+        assert_eq!(incomplete, json!({"revision": 19, "declarations": []}));
+
+        registry.register("graph.node_detail", |request| async move {
+            JsonRpcResponse::success(request.id, json!({}))
+        });
+        let mounted = registry.handle(&request).await.result.unwrap();
+        assert_eq!(mounted["revision"], 19);
+        let snapshot: PanelUiCapabilitySnapshot = serde_json::from_value(mounted).unwrap();
+        assert_eq!(snapshot.declarations.len(), 1);
+        shared_ui_logic::panel::projection::PanelProjection::from_snapshot(snapshot.clone())
+            .expect("the published declaration must be admissible by the Panel");
+        let declaration = &snapshot.declarations[0];
+        assert_eq!(
+            declaration.descriptor.key.qualified(),
+            "aleph:memory-nebula"
+        );
+        assert_eq!(declaration.source_revision, 19);
+        assert_eq!(
+            declaration.descriptor.status,
+            aleph_protocol::panel::PanelTabStatus::Enabled
+        );
+        assert_eq!(
+            declaration.origin,
+            aleph_protocol::panel::PanelUiCapabilityOrigin::BuiltIn
+        );
+
+        let selection = json!({"project_id": "project-a", "generation": 4});
+        let mut contextual = json!({
+            "revision": 19, "declarations": [], "project_context": selection,
+        });
+        super::project_memory_nebula(&mut contextual);
+        assert_eq!(contextual["project_context"], selection);
+        assert_eq!(
+            contextual["declarations"],
+            serde_json::to_value(snapshot.declarations).unwrap()
+        );
+    }
+    use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse};
 
     #[test]
     fn response_result_is_exactly_the_shared_snapshot_shape() {

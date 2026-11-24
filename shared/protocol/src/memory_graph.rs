@@ -2,6 +2,11 @@
 
 use serde::{Deserialize, Serialize};
 
+pub const GRAPH_QUERY_METHOD: &str = "graph.query";
+pub const GRAPH_SEARCH_METHOD: &str = "graph.search";
+pub const GRAPH_NODE_DETAIL_METHOD: &str = "graph.node_detail";
+pub const NEBULA_TAB_ID: &str = "memory-nebula";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NoteNodeDto {
     pub id: String,   // path: "wiki/rust-ownership"
@@ -11,6 +16,7 @@ pub struct NoteNodeDto {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<String>,
     pub category: String,
+    #[serde(default)]
     pub tags: Vec<String>,
     pub link_count: usize,
     /// Community id from `notes_graph_cache` (Louvain). `None` on a cold cache
@@ -87,6 +93,7 @@ pub struct NoteDetailResponse {
     pub node: NoteNodeDto,
     pub content: String,
     pub backlinks: Vec<String>,
+    #[serde(default)]
     pub outgoing: Vec<OutgoingLinkDto>,
 }
 
@@ -102,10 +109,15 @@ pub struct SearchResultDto {
     pub category: String,
     /// `"title"` when the query matched the filename, `"content"` otherwise.
     pub match_field: String,
+    #[serde(default)]
     pub agent_id: String,
+    #[serde(default)]
     pub created_at: i64,
+    #[serde(default)]
     pub updated_at: i64,
+    #[serde(default)]
     pub tags: Vec<String>,
+    #[serde(default)]
     pub link_count: usize,
 }
 
@@ -123,8 +135,12 @@ pub struct NoteAddress {
 
 impl NoteNodeDto {
     pub fn address(&self) -> Option<NoteAddress> {
+        let agent_id = self.agent_id.as_ref()?;
+        if agent_id.is_empty() || self.id.is_empty() {
+            return None;
+        }
         Some(NoteAddress {
-            agent_id: self.agent_id.clone()?,
+            agent_id: agent_id.clone(),
             node_id: self.id.clone(),
         })
     }
