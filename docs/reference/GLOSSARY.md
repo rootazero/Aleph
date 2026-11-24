@@ -14,13 +14,13 @@ Terminology in Aleph is aligned with Anthropic's managed-agents paradigm ([blog]
 
 **Aleph today:** The agent-level `Sandbox` trait (`src/sandbox/mod.rs`) is the workspace + capability-ledger abstraction. Production boot wires `WorkspaceSandbox` (cwd + macOS seatbelt + approval gate). See [SANDBOX.md](./SANDBOX.md) for the pipeline, capabilities, and testing pattern.
 
-**Do not confuse with:** `OsSandboxDriver` / `ExecSecurityGate` / `ApprovalGate` — these are lower-level primitives that sit *beneath* the `Sandbox` trait. `OsSandboxDriver` is the macOS `sandbox-exec` driver invoked by `WorkspaceSandbox`; `ExecSecurityGate` is the pre-exec filesystem guard for `file_write`/`file_edit`; `ApprovalGate` is the user-facing prompt path for capability elevation.
+**Do not confuse with:** `OsSandboxDriver` is the macOS `sandbox-exec` driver used by `WorkspaceSandbox`; `ApprovalGate` handles requests for execution approval. See [Sandbox](SANDBOX.md) for the enforcement boundaries.
 
 ### WorkspaceSandbox
 **Aleph-specific:** Concrete `Sandbox` implementation (`src/sandbox/workspace/mod.rs`). Provisions `~/.aleph/workspaces/{hash(session_id)}/` lazily on first exec-class call, enforces a strict per-session capability baseline, escalates out-of-baseline requests through `ApprovalGate`, caches per-session grants, and delegates OS isolation to an `OsSandboxDriverTrait` implementation. Implements the six-step execute pipeline described in [SANDBOX.md](./SANDBOX.md).
 
 ### OsSandboxDriver
-**Aleph-specific:** macOS `sandbox-exec` driver (`src/sandbox/driver.rs`). Implements `OsSandboxDriverTrait` so `WorkspaceSandbox` can generate SBPL profiles and run subprocesses under seatbelt. Formerly named `SandboxManager`; renamed in Phase 3 Task 4 to reflect its OS-level role and free the name for Anthropic's agent-level Sandbox meaning.
+**Aleph-specific:** macOS `sandbox-exec` driver (`src/sandbox/driver.rs`). Implements `OsSandboxDriverTrait` so `WorkspaceSandbox` can generate SBPL profiles and run subprocesses under seatbelt. The Phase 3 Task 4 rename distinguished the OS driver from Anthropic's agent-level Sandbox.
 
 ### OsSandboxDriverTrait
 **Aleph-specific:** The seam between `WorkspaceSandbox` and OS-level seatbelt (`src/sandbox/driver.rs`). Two methods: `profile_for(caps, cwd) -> OsSandboxProfile` and `run(program, args, env, stdin, cwd, profile, timeout, max_output_bytes) -> SandboxOutput`. Lets tests substitute a fake driver without invoking the real `sandbox-exec` binary.
@@ -29,7 +29,7 @@ Terminology in Aleph is aligned with Anthropic's managed-agents paradigm ([blog]
 **Aleph-specific:** What a subprocess is allowed to do (`src/sandbox/capabilities.rs`): `fs_read`, `fs_write`, `network` (`None`/`AllowHosts`/`AllowAll`), `spawn_subprocess`. `::strict()` is the workspace baseline (no fs outside cwd, no network, no spawn). `is_within(&baseline)` enforces monotonic subset semantics: prefix-subset for paths, ordered `None ⊆ AllowHosts ⊆ AllowAll` for network, and `false ⊆ any` for spawn.
 
 ### Session
-**Anthropic meaning:** Append-only log recording everything that happened during an agent's work. Persists independently outside the harness; accessed via `getEvents()` / `emitEvent()`.
+**Anthropic meaning:** Append-only log recording everything that happened during an agent's work. Persists independently outside the harness; the harness reads events and appends new ones.
 
 **Aleph today:** `SessionService` trait (`src/session/`), backed by an in-process tokio actor with SQLite persistence. Trait shape permits cross-process backends later. Gateway `session.*` RPC still routes through the legacy `SessionManager` during Phase 1 (migrated in Phase 6); every SessionManager append is mirrored into SessionService via a dual-write shim. See [SESSION_SERVICE.md](./SESSION_SERVICE.md).
 
@@ -53,7 +53,7 @@ overrides. See [TOOL_SYSTEM.md](./TOOL_SYSTEM.md).
 ## Adapter terms (not Anthropic)
 
 ### AcpAdapter
-**Aleph-specific:** A Rust adapter that bridges an external CLI tool (claude-code, codex, gemini-cli, opencode, …) to the Agent Client Protocol. Formerly called `AcpHarness`; renamed in Phase 0 to free "Harness" for its Anthropic meaning.
+**Aleph-specific:** A Rust adapter that bridges an external CLI tool (claude-code, codex, gemini-cli, opencode, …) to the Agent Client Protocol. The Phase 0 rename reserved “Harness” for its Anthropic meaning.
 
 Defined in `src/acp/adapter.rs` (trait) and `src/acp/adapters/` (implementations).
 

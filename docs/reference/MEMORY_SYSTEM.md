@@ -406,7 +406,7 @@ Surfaces: `chat.send{memory}` / `agent.run{memory}`, `sessions.patch`
 Notes form an Obsidian-compatible knowledge graph through `[[wikilink]]` syntax:
 
 - **Extraction**: `extract_wikilinks()` parses `[[note-name]]` from markdown bodies
-- **Resolution**: `resolve_wikilink()` follows Obsidian rules — exact path match if `/` present, global filename search otherwise
+- **Resolution**: `src/memory/notes/links/resolve.rs` resolves an explicit path, a file name, or an alias against the indexed notes.
 - **Bidirectional linking**: `note_manage` tool supports `link` operations that create reciprocal connections
 - **Graph traversal**: `memory_explore` performs multi-hop Ripple exploration across the wikilink graph
 - **Maintenance**: Dream Daemon's `note_lint` stage repairs broken wikilinks and rewrites renamed targets
@@ -453,7 +453,7 @@ Both are materialized into SQLite tables `notes_sources` and `notes_provenance` 
 - `NoteStore::notes_citing(raw_id)` — every note that references a raw, from **both** tables: `notes_sources` (note-level, the `source_notes` frontmatter list) `UNION` `notes_provenance` (fact-level, an inline `<!-- src: ... -->` marker on one line). Neither contains the other — a note can quote a raw in a single fact without that raw reaching its frontmatter — and until 2026-08-23 the query read only the first, while this line, the trait doc, and the `RAW_MEMORY.md` retention invariant all already described the union.
 
 **Consumer:** The `memory_trace` builtin tool and the `memory.trace` gateway RPC expose the drill-down chain:
-- Kind `profile_section` → session IDs from `USER.md ## Sources`.
+- `TraceKind::ProfileSection` → session IDs from `USER.md ## Sources`.
 - Kind `note` → `source_notes` list (L2→L1), plus a `facts[]` block: every fact of the note with its marker text stripped, its `origin` (`raw_source` / `prior_note` / `inferred` / `system` / `legacy`), its `inferred` flag and its `source_id`. This is the first structured read of that axis. The markers are written on every fact at ingest and stripped from every other rendering; the one other path that reaches a caller is `note_manage(action='get')`, which returns the raw file — capped, unstructured, and with nothing saying what the HTML comments mean.
 - Kind `raw` → raw-memory content loaded from Markdown through `RawMemoryStore`.
 
@@ -586,7 +586,7 @@ tier — never quoting the stored content back verbatim, and treating the
 tool's success response as terminal (no repeated writes, no re-echo into
 another memory tool). This replaces the earlier "silent logging" design.
 
-## 18. Gap analysis vs hermes-agent / evolver / EverOS (2026-08-01)
+## 18. Historical comparison: hermes-agent / evolver / EverOS (2026-08-01)
 
 Recorded so the comparison is not redone. Reference trees: `hermes-agent`
 (Python, memory outsourced to pluggable providers — Honcho / mem0 / hindsight /

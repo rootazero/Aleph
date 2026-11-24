@@ -233,7 +233,7 @@ Source-backed path: boot builder → `ChannelRegistry::register_for_boot` → `s
 
 B8.2-A descriptor/kind, B8.2-B lease/generation/replacement, B8.2-C callable/effect, and B8.2-D observer/recovery are all **NO-GO / deferred**. The production `ProjectionHost`/`ZahirFacade` path is Tool-only evidence. There is no Feishu descriptor adapter, Feishu `BackendLease` route, Feishu callable resolve path, Feishu Capability subscription, or durable provider lifecycle producer. The Feishu webhook remains a Gateway-owned external effect; no Feishu `EffectClaim` producer, Safe Replay, scheduler, or external exactly-once path exists. Production Feishu → Zahir mount is prohibited until the first unclosed gate is closed. See `docs/research/aleph_modularization_phase2b_b8_2_closeout.md` for the current failure matrix, authority mapping, and focused evidence.
 
-### B7 historical Feishu provider vertical slice / B7 历史 Feishu provider 垂直切片
+### B7 Historical Feishu provider vertical slice / B7 历史 Feishu provider 垂直切片
 
 > Historical B7 baseline only. B8.2 above is the current status and re-gate; B7 validation text below is not current B8.2 evidence.
 
@@ -269,7 +269,7 @@ Terminal 当前在 `src/gateway/pty/manager.rs` 具有独立的受限 source-own
 
 Recovery deliberately does not infer replay safety from a tool name, source, or idempotence flag. `ReplayPolicyLookup` reads the current descriptor. Phase 2A now persists an optional call-time `ToolCallIdentity` on `ToolCallRequested` and carries it through `DanglingCall`; old rows decode to `None`, and unknown nested policy values fail closed. Recovery classifies a call as replay-eligible only when stored and current identities are both `Safe` with equal schema version and a matching nonempty `replay_contract_fingerprint`; `revision` is only a process-local equality/TOCTOU guard, not a cross-restart eligibility criterion. Phase 2A still does not execute eligible tools: it emits the existing unknown-outcome verification event. Safe execution remains a separate Phase 2B decision requiring an executor and external-effect/idempotency contract.
 
-Phase 2B has shipped an inert-restricted replay *preparation* slice (commits `3490103d4` and `7d3bf4a5a` on `feature/capability-phase2-durable`; spec `docs/superpowers/specs/2026-10-04-capability-phase2b-safe-replay-design.md`, plan `docs/superpowers/plans/2026-10-04-capability-phase2b-safe-replay.md`). The shipped surface is: a `replay_contract_fingerprint` carried cross-restart on `ToolCallIdentity`; a private, non-`Copy` `ReplayPermit` produced by a `ReplayPreparer` whose registry-derived handler/descriptor/closed-state are captured from one immutable `ToolHandlerRegistry::snapshot_state()`; the original `call_id`, `tool_name`, `turn_id`, `effective_input`, and stored `ToolCallIdentity` are not registry-derived inputs; a durable expected-head/serialized claim and unanswered-call outcome precondition (`SessionEventStore::claim_replay_call` / `commit_replay_outcome`); and a `ResumeCoordinator::replay_dangling_calls` ordering — prepare/refuse → fresh head/generation fences → claim → invoke → commit → fresh reduction → VerifyOnly. The seam in `src/session/replay.rs` imports no `ToolHandlerRegistry`, `ScopedToolService`, MCP client, or platform API; no second registry, scheduler, ledger, or wire-protocol event is added; the `ReplayInvocation::NoEffect` path that leaked active cursor rows after a successful claim is removed (`7d3bf4a5a`).
+Phase 2B has shipped an inert-restricted replay *preparation* slice (commits `3490103d4` and `7d3bf4a5a` on `feature/capability-phase2-durable`; spec `docs/superpowers/specs/2026-10-04-capability-phase2b-safe-replay-design.md`, plan `docs/superpowers/plans/2026-10-04-capability-phase2b-safe-replay.md`). The shipped surface is: a `replay_contract_fingerprint` carried cross-restart on `ToolCallIdentity`; a private, non-`Copy` `ReplayPermit` produced by a `ReplayPreparer` whose registry-derived handler/descriptor/closed-state are captured from one immutable `ToolHandlerRegistry::snapshot_state()`; the original `call_id`, `tool_name`, `turn_id`, `effective_input`, and stored `ToolCallIdentity` are not registry-derived inputs; a durable expected-head/serialized claim and unanswered-call outcome precondition (`SessionEventStore::claim_replay_call` / `commit_replay_outcome`); and a `ResumeCoordinator::replay_dangling_calls` ordering — prepare/refuse → fresh head/generation fences → claim → invoke → commit → fresh reduction → VerifyOnly. The seam in `src/session/replay.rs` imports no `ToolHandlerRegistry`, `ScopedToolService`, MCP client, or platform API; no second registry, scheduler, ledger, or wire-protocol event is added; the the no-effect invocation seam path that leaked active cursor rows after a successful claim is removed (`7d3bf4a5a`).
 
 In the Phase 2B preparation slice, production replay was **inert and VerifyOnly**. Both serial and parallel paths in `src/harness/agent/act.rs` emit `ToolCallRequested` before guardrail/sanitization; at that point the post-guardrail effective input was not yet durably captured; `ResumeCoordinator::replay_dangling_calls` keeps `effective_input = None`, and the gate (Option + mandatory `Refused` on `None`) forces every dangling call onto the existing unknown-outcome verification path. **No handler is invoked and no `ToolResult`/`ToolError` is appended in production.** The semantics are restricted at-least-once — original request count, effect invocation count, and durable receipt count are three independent numbers; this is not exactly-once, and the duplicate-effect tradeoff is the Safe registration owner's obligation. Delegated `repair_and_close_abandoned` (team/cron/heartbeat abandonment) remains VerifyOnly with no replay adapter and no permit capability. The post-guardrail durable `ToolCallEffectiveInput` marker, paired with a `release_replay_claim` store operation, is the explicit deferred work that, when landed, will let `effective_input` carry a non-`None` value and unlock actual handler invocation through this seam.
 
@@ -411,7 +411,7 @@ Exec-class tools (`code_exec`, `bash_exec`) route through an additional
 The sandbox owns per-session workspace provisioning
 (`~/.aleph/workspaces/{session_id}/`), capability enforcement, and OS-level
 seatbelt isolation via `OsSandboxDriver`. Tool-level permissions
-(`SmartFilter`) gate *whether* a call runs; the sandbox's capability check
+(`ScopedToolService`) gate *whether* a call runs; the sandbox's capability check
 gates *what the subprocess can do* once it is allowed to run. See
 [SANDBOX.md](./SANDBOX.md) for the six-step execute pipeline and testing
 pattern.
@@ -544,7 +544,7 @@ impl Deref for ExperimentId {
 ```
 
 **Newtype Catalog:**
-- **IDs**: `ExperimentId`, `VariantId`, `ContextId`, `TaskId`, `SubscriptionId`
+- **IDs**: `ProviderId`, `ProcessId`, `UserId`, `TaskId`, `SubscriptionId`
 - **Collections**: `Ruleset` (permission rules)
 - **Values**: `Answer` (question responses)
 
@@ -575,7 +575,7 @@ impl FromStr for TaskStatus {
 let status: TaskStatus = "pending".parse()?;
 ```
 
-**Implemented for:** `FactType`, `HookKind`, `DeviceType`, `TaskStatus`, `RuntimeKind`, and 10+ other types.
+**Examples:** `HookKind` and `RuntimeKind` implement this at their text boundaries.
 
 ### Complete Documentation
 
@@ -691,7 +691,7 @@ native macOS API access. The process-level split of responsibilities:
   `permission.rs`, all business logic, vault, and sessions
 
 This satisfies architectural redline R1 (Brain–Limb separation): the Rust
-core defines `DesktopCapability` traits; the helper provides physical
+core speaks the bridge protocol; the helper provides platform
 implementations over JSON-RPC 2.0 stdio. See
 [DESKTOP_BRIDGE.md](DESKTOP_BRIDGE.md) for the full protocol specification,
 method reference, error envelope, and debugging procedures.
@@ -964,15 +964,7 @@ let parts = builder.build_system_prompt_cached_with_mode(&tools, mode);
 let prompt = builder.build_system_prompt(&tools);
 ```
 
-> **Two entry points, two assembly paths, and nothing else.** The legacy
-> `SoulManifest`→prompt builders (`build_system_prompt_with_soul` /
-> `build_for_agent` / `build_for_agent_basic` / `build_with_budget` /
-> `build_system_prompt_with_mode` / `build_system_prompt_with_full_context` /
-> `build_system_prompt_with_context`) and the fork-snapshot cluster
-> (`capture_snapshot` / `execute_stable_only` / `build_from_snapshot`) were all
-> removed as dead entry points. Identity flows exclusively from the agent-dir
-> files threaded via `with_identity_files`; the `SoulManifest` struct survives
-> only as the parser behind the `identity.get` RPC.
+> The old identity-specific prompt builders and fork-snapshot APIs had no live consumers and were removed. The prompt builder takes identity files via `with_identity_files`; `SoulManifest` is the parser behind the identity preview RPC.
 
 ### Layers
 
@@ -1052,10 +1044,7 @@ at the Stable→Dynamic boundary.
 A fresh `PromptBuilder` (and pipeline) is constructed per build, so there is no
 in-pipeline mutable cache to invalidate. Layer renders are deterministic
 functions of their inputs, so rebuilding stays byte-stable when nothing changed
-— which is what keeps the provider-side prefix cache warm. (An earlier
-name-keyed `execute_cached()` and a session-level stable-prompt LRU were both
-removed: keyed by layer name with no input fingerprint, they could only ever
-serve stale sections.)
+— which is what keeps the provider-side prefix cache warm. The earlier name-keyed layer cache and session-level prefix LRU were removed: neither keyed on the inputs to the render.
 
 **Corollary that governs what may be added:** anything whose bytes change per
 run must NOT enter the system prompt, or it re-keys the whole conversation
@@ -1087,7 +1076,7 @@ Two filters, both enforced by tests rather than by review discipline
 ### TokenBudget
 
 `TokenBudget` caps the assembled prompt in characters (`max_total_chars`,
-window-scaled via `window_char_budget`). Enforcement is `fit_dynamic_suffix`:
+window-scaled via `window_char_budget`). Enforcement runs in `fit_dynamic_suffix_with_content`:
 the **stable prefix is a protected floor** and is never trimmed, so the cache
 breakpoint stays valid; only the per-request dynamic suffix is head/tail
 truncated, with a model-visible notice appended. A no-op for prompts under

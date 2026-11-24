@@ -261,7 +261,7 @@ Dev mode: `just shell-dev` (debug build + staging daemon, hot-running, no instal
 
 Snapshot of what was reviewed and what remains.
 
-### Reference comparison — `openai/codex` `app-server-daemon`
+### Historical reference comparison — `openai/codex` `app-server-daemon`
 
 Codex's daemon manager (`codex-rs/app-server-daemon/src/backend/pid.rs`) is the
 closest reference for Aleph's daemon-lifecycle / singleton code. Two takeaways:
@@ -291,7 +291,7 @@ so it offers product-shape parallels rather than directly portable core code.)
 |------|--------|-------|
 | Standalone server install on Windows | ✅ done | `scripts/install.ps1` added (was referenced by `cli.rs` but missing) |
 | Cross-platform process liveness | ✅ done | `src/utils/process_alive.rs` unifies two `#[cfg]` checks that had opposite, both-wrong Windows fallbacks |
-| PID-reuse-resistant lock diagnostic | ✅ done | `aleph.lock` now records holder start time; `process_matches` verifies it (mapped from Codex `PidRecord`, made cross-platform via `sysinfo`) |
+| PID-reuse-resistant lock diagnostic | ✅ done | `aleph.lock` now records holder start time; `process_matches` verifies it (cross-platform via `sysinfo`) |
 | `bootstrap-runtime` parallelism | ⛔ rejected | `install()` mutates process-global `PATH` via `set_var`; parallelizing would race the env. Sequential install is the correct design. |
 | `uv` venv post-install path (Windows) | ✅ verified correct | `expand_home` rewrites `/bin/python` → `\Scripts\python.exe` and expands repair args; no fix needed |
 | `stop`/`status` for non-daemon Windows servers | ⏳ follow-up (design refined — see below) | `gateway.pid` is written only by the Unix `daemonize`, so `stop`/`status` can't see a foreground/supervised server |

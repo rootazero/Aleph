@@ -106,7 +106,7 @@ pub struct RawMemory {
 }
 ```
 
-`RawMemory::new(content, source)` defaults `agent_id = "default"`, generates a UUID, and stamps `created_at`. Builder methods `with_agent`, `with_session`, `with_path`, and `with_attachment_text` decorate the record before insertion.
+The basic constructor defaults `agent_id` to `default`, generates a UUID and stamps `created_at`. The builder methods are `with_agent`, `with_session` and `with_path`.
 
 > **Removed 2026-08-06:** the `layer` column / field and its `with_layer` builder. It had zero producers and zero consumers — every row ever written carried `NULL` — while nine SELECT/INSERT statements still named it. Summary depth was always encoded in `path` (`d0`/`d1`/`d2`); "reserved for later" outlived the later. The column is nullable with no default, so dropping it from the DDL and the statements leaves existing databases readable (the stale column is simply never touched again) — the migration this was deferred over did not exist.
 
@@ -156,11 +156,11 @@ Relevant config fields on `SessionCompactorConfig`: `d1_min_fanout = 4`, `d2_min
 
 `src/memory/transcript_indexer/indexer.rs` handles near-realtime per-turn indexing (plain rows, no embeddings — recall over them is the substring transcripts leg of `memory_search`). `index_turn_text(session_key, seq, user_input, ai_output, namespace, agent)` combines the `[user]` / `[assistant]` pair, chunks it through `chunk_text` when estimated tokens (chars ÷ 4) exceed `max_tokens_per_chunk`, and inserts one `RawMemory` per chunk at path `aleph://transcript/{session_key}/{seq}` (or `…_chunk{i}` for multi-chunk turns; the prefix constant is `transcript_indexer::TRANSCRIPT_PATH_PREFIX`). `source = "transcript"`.
 
-Config keys on `TranscriptIndexerConfig` (`src/memory/transcript_indexer/config.rs`): `max_tokens_per_chunk = 400`, `overlap_tokens = 80`, `enable_chunking = true`. A separate `SemanticChunkConfig` (`similarity_threshold = 0.85`, `min_chunk_size = 50`, `max_chunk_size = 400`) governs the semantic-boundary chunker when embeddings are available.
+The chunker reads `max_tokens_per_chunk`, `overlap_tokens`, and `enable_chunking` from `src/memory/transcript_indexer/config.rs`, defaulting to 400, 80, and true. This indexer does not use an embedding-based semantic chunker.
 
 ### 6.3 Gateway Media Pipeline (attachment_text)
 
-The `attachment_text` column and the `RawMemory::with_attachment_text` builder exist so that extracted text from PDF / Word / image OCR travels alongside its originating turn rather than becoming a standalone row. The consumer is `CompressionService`, which in `src/memory/compression/service.rs` reads `raw.attachment_text` and injects up to 2000 characters of it into the per-memory prompt as `"{user_input}\n[Attachment]: {att_preview}"`. `RawMemorySource::Attachment` is reserved for the case of attachment-only rows (e.g. an uploaded document with no accompanying turn). As of this writing the production gateway write sites that populate `attachment_text` during normal message ingestion are not present in `src/gateway/`; the field is wired end-to-end through schema, store, and compression, and is exercised in `src/memory/compression/service.rs` tests (`with_attachment_text(...)`).
+The optional `RawMemory::attachment_text` field carries extracted text alongside its originating turn. When supplied, note ingestion includes an attachment excerpt in its input; see `src/memory/notes/ingest/ingestor/helpers.rs`. Do not infer from that consumer that ordinary Gateway message ingestion always populates the field.
 
 ### 6.4 Capture Hooks (Spec 1)
 
@@ -182,7 +182,7 @@ See: [docs/superpowers/specs/2026-04-13-memory-evolution-spec1-capture-hooks-des
 
 `src/memory/compression/service.rs` drives the L0→L1 distillation. Per workspace tick it calls `get_unprocessed_raw_memories(workspace_id, batch_size)` from the Markdown-backed store, then partitions the batch: `RawMemorySource::ToolInvocation` rows are per-call **telemetry** (consumed by the insights aggregator and dream signal metrics by source, independent of `is_processed`), not knowledge — they never enter the note-extraction LLM batch and are marked processed immediately so the unprocessed queue stays bounded. `Transcript` rows **are** ingested alongside SessionEnd / PreCompress / Delegation / Reflection (the historical filter that excluded them assumed a separate per-turn pipeline that never landed; excluding them starved L1 — Spec 1 G3-B). `Correction` rows are primarily consumed by the `FeedbackDistill` dream stage via the `aleph://correction/` path prefix, isolated from the `is_processed` flag this pipeline owns.
 
-The remaining ingestable rows are grouped by prompt-affecting source identity (a mixed drain MUST be split — the ingestor derives its per-source prompt from `raws[0].source`, so ungrouped Reflection/SessionEnd/Delegation rows would silently degrade to whichever source was fetched first). Each group goes through `CompoundIngestor::ingest_batch`, which writes/updates markdown notes under `<memory_dir>/<workspace>/<category>/<file>.md`; rows are marked processed per group right after that group's ingest settles (a failed group stays unprocessed and retries; an empty plan defers rows still within a 6-hour grace window). The latest `created_at` of the drained batch becomes the new `last_compression_timestamp`.
+The remaining ingestable rows are grouped by prompt-affecting source identity (a mixed drain MUST be split — the ingestor derives its per-source prompt from `raws[0].source`, so ungrouped Reflection/SessionEnd/Delegation rows would silently degrade to whichever source was fetched first). Each group goes through `CompoundIngestor::ingest_batch`, which writes/updates markdown notes under `<memory_dir>/<workspace>/<category>/<file>.md`; rows are marked processed per group right after that group's ingest settles (a failed group stays unprocessed and retries; an empty plan defers rows still within a 6-hour grace window). The latest `created_at` of the drained batch is persisted by `set_last_compression_timestamp`.
 
 #### Partitions a flush is responsible for
 

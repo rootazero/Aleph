@@ -158,7 +158,7 @@ static files), not `PreToolUse` / `PostToolUse` handlers. A plugin's hooks are `
 actions (its `prompt` / `http` / `agent` actions are dropped with a warning,
 `src/extension/manifest/parsers.rs`; only user-settings hooks run all four) or WASM exports.
 
-> Until 2026-09-20 this section described a `NodejsRuntime` at src/extension/runtime/nodejs/ and an
+> Until 2026-09-20 this section described an in-process Node runtime at src/extension/runtime/nodejs/ and an
 > `@aleph/plugin-sdk` npm package (`packages/plugin-sdk/`, 906 lines of TypeScript with no host).
 > Both were doc-only; both are gone. The sibling repo still carries the phantom dialect:
 > plugins/media-office/src/index.js:349 (`method === "plugin.call"`) and :264 (`onPostToolUse`) —
@@ -656,7 +656,7 @@ To migrate from V1 manifest format:
 ## Direct Commands —— ❌ 已删除（2026-09-20）
 
 这里曾有一节（~95 行）描述 `[[commands]] handler = "handlePing"` 式的 manifest、TypeScript
-`DirectCommandArgs` / `DirectCommandResult` 签名、以及 `plugins.executeCommand` RPC。
+当时的设计包括直接命令参数、结果 DTO 和 `plugins.executeCommand` RPC。
 
 **三者都不再存在。** `CommandRegistration` 在 2026-07-17 折进 `SkillRegistration { skill_type: Command }`
 （插件 `commands/*.md` 的 markdown 正文就是那个"handler"），之后 `plugins.executeCommand` 把一段
@@ -877,9 +877,7 @@ Response:
 
 ## Channel / Provider / HTTP-Route Plugins — ❌ 不存在（2026-08-19 更正）
 
-这里曾有三节共 ~490 行，描述插件如何贡献 **channel**、**provider** 和
-**HTTP route**：manifest 格式、handler 命名约定、`ChannelManager` API、
-`PluginProviderAdapter` API、路径参数语法。
+这里曾有三节共约 490 行，描述插件如何贡献 **channel**、**provider** 和 **HTTP route**，包括清单、handler 命名、适配器和路由参数。这些是未落地的设计。
 
 **三者在代码里都不存在，一行也没有。**
 
@@ -887,8 +885,7 @@ Response:
   零命中。`AlephExtensionsToml` 只有 `runtime` / `entry` / `permissions` /
   `capabilities` / `services` / `tools` / `hooks` / `commands` / `prompt` /
   `config_schema` / `config_ui_hints` / `memory`。
-- `[[providers]]`：同上，`ProviderDeclaration` 零命中。
-- `[[http_routes]]`：`http_route` / `HttpRoute` 在 `src/` 下零命中；字段根本不解析。
+- `[[providers]]` 和 `[[http_routes]]` 也不属于该清单；不会挂载 provider 或 HTTP handler。
 
 `CapabilityDeclaration` 的**全部**变体是
 `Tool | Hook | Service | Skill | Agent | McpServer` —— 那是一个插件今天能贡献的

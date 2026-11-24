@@ -218,11 +218,11 @@ The source-backed route is boot builder → `ChannelRegistry::register_for_boot`
 
 B7 (2026-10-24, uncommitted) reuses the frozen provider lifecycle contract for exactly one Gateway provider: the Feishu channel (`src/gateway/interfaces/feishu/**`, plus `src/gateway/inbound_router/executor.rs`). `src/gateway/channel_registry.rs::ChannelRegistry` stays the only Gateway lifecycle authority; the channel-internal `ProviderHandle` is an admission fence over `ProviderState`/generation, and `src/gateway/interfaces/feishu/api_handle.rs` is a generation-fenced derived cache, not an authority. Every outbound action and every outbound HTTP call is admitted against the current generation (the API read guard spans the whole call including the token await, so `drain()` really waits for in-flight calls); inbound webhook and WS forwarding are admitted too (unadmitted webhook ⇒ `503`); the read side never starts or authenticates anything (the old "rebuild config + second `TokenManager`" fallback in `try_create_feishu_emitter` is gone).
 
-Static in-process boundary (D-B): B7 proves authority and runtime-effect revocation, not hot unload or "code not mapped". B7 is **not** a unified Gateway, **not** a live Zahir facade, **not** EffectClaim producers / automatic Safe Replay / universal durable scheduler / durable external-effect exactly-once / MCP lazy, and **not** the remaining Gateway channels / terminal / memory providers. Known residuals: stop now signals the webhook server and awaits Axum's graceful-shutdown serve future, so Axum waits for the response tails visible to that future; FeishuChannel still does not directly own each accepted handler task, so this is not an independent per-handler ownership/join proof. A serve or join error is retained as `WebhookShutdownResidual` and blocks an unproven restart/disposal. `FeishuApi::admit_inbound()` forms the enqueue quiescence point via the existing calls read guard: after a revoke, newly arriving inbound is fail-closed, while already-admitted sends can still be waited on by `drain()`. Also, `qa/channels` needs a bare-environment Python `websockets` package that is not installed by default. Validation in the B7 implementation round: cargo fmt/test/check/clippy/build passed (only pre-existing clippy warnings) and `qa/channels/run.sh all` returned rc=0 (phase 1 reachability 18/18, phase 2 Lark failure paths 6/6, phase 3 approval 9/9). Full historical details are in `docs/reference/FEATURE_LOCATOR.md` §3.5g-historical; current B8.2 status is in `docs/research/aleph_modularization_phase2b_b8_2_closeout.md`.
+Static in-process boundary (D-B): B7 proves authority and runtime-effect revocation, not hot unload or "code not mapped". B7 is **not** a unified Gateway, **not** a live Zahir facade, **not** EffectClaim producers / automatic Safe Replay / universal durable scheduler / durable external-effect exactly-once / MCP lazy, and **not** the remaining Gateway channels / terminal / memory providers. Known residuals: stop now signals the webhook server and awaits Axum's graceful-shutdown serve future, so Axum waits for the response tails visible to that future; FeishuChannel still does not directly own each accepted handler task, so this is not an independent per-handler ownership/join proof. A serve or join error is retained as the webhook shutdown residual and blocks an unproven restart/disposal. `FeishuApi::admit_inbound()` forms the enqueue quiescence point via the existing calls read guard: after a revoke, newly arriving inbound is fail-closed, while already-admitted sends can still be waited on by `drain()`. Also, `qa/channels` needs a bare-environment Python `websockets` package that is not installed by default. Validation in the B7 implementation round: cargo fmt/test/check/clippy/build passed (only pre-existing clippy warnings) and `qa/channels/run.sh all` returned rc=0 (phase 1 reachability 18/18, phase 2 Lark failure paths 6/6, phase 3 approval 9/9). Full historical details are in `docs/reference/FEATURE_LOCATOR.md` §3.5g-historical; current B8.2 status is in `docs/research/aleph_modularization_phase2b_b8_2_closeout.md`.
 
 B7（2026-10-24，未提交）把已冻结的 provider lifecycle contract 复用到**一条** Gateway provider：Feishu channel（`src/gateway/interfaces/feishu/**`，外加 `src/gateway/inbound_router/executor.rs`）。`src/gateway/channel_registry.rs::ChannelRegistry` 仍是唯一的 Gateway lifecycle authority；channel 内部 `ProviderHandle` 只是 `ProviderState`/generation 上的 admission fence；`src/gateway/interfaces/feishu/api_handle.rs` 是 generation-fenced 的 derived cache，不是权威。channel 的每个 outbound 动作与 `FeishuApi` 的每个出站 HTTP 调用都按当前 generation 准入（API read guard 覆盖整段调用、含 token await，故 `drain()` 真能等住在途调用）；入站 webhook 与 WS 转发同样准入（未准入的 webhook 请求 `503`）；读侧不启动也不认证（`try_create_feishu_emitter` 里「重建 config + 第二个 `TokenManager`」的旧 fallback 已删除）。
 
-静态 in-process 边界（D-B）：B7 证明的是 authority 与 runtime effect 的撤销，不是热卸载、也不是「代码页未映射」。B7 **不等于** Gateway 已统一、**不等于** Zahir live facade，也**不等于** EffectClaim producer / automatic Safe Replay / universal durable scheduler / durable external-effect exactly-once / MCP lazy，或其余 Gateway channel / terminal / memory provider。已知残余：stop 现在先通知 webhook server，再等待 Axum graceful-shutdown serve future，因此 Axum 会等待该 future 可观察到的 response tail；但 FeishuChannel 仍不直接持有每个 accepted handler task，所以这不是独立的逐 handler ownership/join 证明。serve 或 join 失败会保留为 `WebhookShutdownResidual`，阻止无证据的 restart/disposal。`FeishuApi::admit_inbound()` 以现有 calls read guard 形成入队静止点：revoke 之后新入站的 inbound 是 fail-closed 的，而已准入的 send 仍可被 `drain()` 等待。另外，`qa/channels` 依赖默认未安装的裸环境 Python `websockets` 包。B7 实施轮验证：cargo fmt/test/check/clippy/build 通过（clippy 仅既有 warnings），`qa/channels/run.sh all` rc=0（phase 1 reachability 18/18、phase 2 Lark failure paths 6/6、phase 3 approval 9/9）。完整历史 decisions、残余与验证见 `docs/reference/FEATURE_LOCATOR.md` §3.5g-historical；当前 B8.2 状态见 `docs/research/aleph_modularization_phase2b_b8_2_closeout.md`。
+静态 in-process 边界（D-B）：B7 证明的是 authority 与 runtime effect 的撤销，不是热卸载、也不是「代码页未映射」。B7 **不等于** Gateway 已统一、**不等于** Zahir live facade，也**不等于** EffectClaim producer / automatic Safe Replay / universal durable scheduler / durable external-effect exactly-once / MCP lazy，或其余 Gateway channel / terminal / memory provider。已知残余：stop 现在先通知 webhook server，再等待 Axum graceful-shutdown serve future，因此 Axum 会等待该 future 可观察到的 response tail；但 FeishuChannel 仍不直接持有每个 accepted handler task，所以这不是独立的逐 handler ownership/join 证明。serve 或 join 失败会保留为 webhook 关闭残留项，阻止无证据的 restart/disposal。`FeishuApi::admit_inbound()` 以现有 calls read guard 形成入队静止点：revoke 之后新入站的 inbound 是 fail-closed 的，而已准入的 send 仍可被 `drain()` 等待。另外，`qa/channels` 依赖默认未安装的裸环境 Python `websockets` 包。B7 实施轮验证：cargo fmt/test/check/clippy/build 通过（clippy 仅既有 warnings），`qa/channels/run.sh all` rc=0（phase 1 reachability 18/18、phase 2 Lark failure paths 6/6、phase 3 approval 9/9）。完整历史 decisions、残余与验证见 `docs/reference/FEATURE_LOCATOR.md` §3.5g-historical；当前 B8.2 状态见 `docs/research/aleph_modularization_phase2b_b8_2_closeout.md`。
 
 ---
 
@@ -304,8 +304,7 @@ impl<T: AlephTool> AlephToolDyn for T { ... }
 | `file_write` | Write file | `path`, `content` |
 | `file_list` | List directory | `path`, `recursive?` |
 | `file_delete` | Delete file/dir | `path` |
-| `file_mkdir` | Create directory | `path` |
-| `file_chmod` | Change permissions | `path`, `mode` |
+| `file_ops` (`mkdir`) | Create directory | `path` |
 
 ### Tree Search
 
@@ -451,7 +450,6 @@ Gateway owns CDP; Panel/TUI are I/O only; opt-in only for an explicit valid `[ga
 |------|-------------|------|
 | `memory_store` | Store fact | `content`, `tags?` |
 | `memory_search` | Search memory with hybrid retrieval | `query`, `max_results?` |
-| `memory_forget` | Delete fact | `fact_id` |
 
 #### memory_search Tool
 
@@ -575,7 +573,7 @@ pub struct ToolDefinition {
 
 ## Tool Server
 
-Current tool execution goes through `src/tools/service.rs` and `src/tools/scoped/mod.rs`. The `ToolServer` sketch below is historical:
+Current tool execution goes through `src/tools/service.rs` and `src/tools/scoped/mod.rs`. The sketch below describes the retired server design:
 
 ```rust
 pub struct ToolServer {
@@ -727,7 +725,7 @@ that the `Ask` tier stops to ask about.
 
 ## Tool Filtering
 
-Current tool availability is enforced by `src/tools/scoped/mod.rs`. The `ToolFilter` sketch and configuration below are historical:
+Current tool availability is enforced by `src/tools/scoped/mod.rs`. The filter sketch and configuration below are historical:
 
 ```rust
 pub struct ToolFilter {
@@ -797,7 +795,7 @@ value (serde_json::Value —— 文本字段仍带真换行)
 3. **要重写文本字段就走 `tool_output::fence::rewrite_interior`**，别整体替换——
    不可信内容围栏是结构不是内容，见 [SECURITY.md](SECURITY.md#content-sanitization)。
 4. **任何会丢内容的 stage 都欠调用方一份原文。** `clean_for_ingress` 的
-   `full_original` 是 `apply_result_budget` 落盘的那一份，它决定被丢掉的行还能不能
+   `apply_result_budget` 落盘的是未截断的工具结果，它决定被丢掉的行还能不能
    靠 `ctx_search` / `read_file` 挖回来。压缩器一度不设它，理由是"压缩产物按构造小于
    预算所以落盘走不到"——真实 `take_snapshot` 压缩后 13 585 token / 8 000 预算，当场
    走到，落盘的是压缩正文，被丢掉的 443 个节点就此不可恢复。**只有"从不删内容"的

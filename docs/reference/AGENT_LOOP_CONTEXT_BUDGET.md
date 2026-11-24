@@ -262,7 +262,7 @@ few turns, adapting to content mix, the provider's tokenizer, and cache
 behaviour the static ratio cannot capture. This is purely an accuracy
 improvement to the number that already drives compaction — it adds no new
 decision category and makes no LLM call (R7/R10-safe). Compared to codex's
-one-shot `ServerObserved` prefill snapshot, the EWMA multiplier is continuous:
+one-shot server-observed prefill snapshot, the EWMA multiplier is continuous:
 it also corrects the estimate of the *growing tail* the provider hasn't yet
 counted.
 
@@ -302,7 +302,7 @@ pub struct Budget {
 window on the failover chain (`derive_chain_min_budget`,
 `src/orchestrator/deps_builder/context_budget.rs`). "The chain" is the one the
 failover walk itself uses, asked of the built chain at boot
-(`chain_fallback_names` → `FailoverProvider::chain_composition`), not a
+(provider names from the effective fallback chain), not a
 re-derivation from config — so a provider the walk cannot reach never sizes the
 budget. Each provider contributes its declared `models`; preset ladder rungs
 are not counted (a migration onto one is caught by the reactive rescue). The
