@@ -28,6 +28,14 @@ async function waitFor(predicate) {
   }
 }
 
+function assertTerminalCoverageOnce(requests, phase) {
+  for (const topic of ['pty.screen', 'pty.exit']) {
+    const subscribes = requests.filter((request) => request.method === 'events.subscribe' && request.params?.topics?.includes(topic));
+    assert.equal(subscribes.length, 1, `${phase}: exactly one confirmed upstream subscription for ${topic}`);
+    assert.equal(requests.some((request) => request.method === 'events.unsubscribe' && request.params?.topics?.includes(topic)), false, `${phase}: stale disposal must not release current ${topic} coverage`);
+  }
+}
+
 async function checkPositiveRoutes(origin) {
   const routes = ['/', '/panel/', '/terminal', '/panel/terminal'];
   for (const route of routes) {
@@ -80,6 +88,7 @@ async function runHost(publicBase) {
     assert.equal(startupResponse?.status(), 200, 'production host root route must return the staged HTML');
     assert.equal(gateway.state.httpPaths.slice(startupAssetStart).some((path) => path.includes('/tabs/terminal/')), false, 'Chat startup must not request Terminal assets');
 
+    const terminalRpcStart = gateway.state.rpc.length;
     const response = await page.goto(`${gateway.origin}${publicBase}terminal`, { waitUntil: 'networkidle' });
     assert.equal(response?.status(), 200, 'production host route must return the staged HTML');
     await page.waitForSelector('[data-panel-shell="terminal"]', { timeout: 20_000 });
@@ -149,6 +158,8 @@ async function runHost(publicBase) {
     await waitFor(() => gateway.state.rpc.some((request) => request.method === 'pty.attach' && request.params?.session_id === 'production-sibling-session'));
     assert.equal(gateway.state.rpc.some((request) => request.method === 'pty.close'), false, 'fallback must not close a non-test-owned PTY');
 
+    assertTerminalCoverageOnce(gateway.state.rpc.slice(terminalRpcStart), 'initial mount');
+    const reconnectRpcStart = gateway.state.rpc.length;
     const attachCountBeforeReconnect = gateway.state.rpc.filter((request) => request.method === 'pty.attach').length;
     gateway.closeSocket(gateway.state.sockets.indexOf(activeSocket));
     await waitFor(() => gateway.state.sockets.length >= 2 && gateway.state.sockets[0].readyState !== 1 && gateway.state.sockets.slice(1).some((socket) => socket.readyState === 1) && gateway.state.rpc.filter((request) => request.method === 'pty.attach').length > attachCountBeforeReconnect);
@@ -166,6 +177,7 @@ async function runHost(publicBase) {
     });
     await page.waitForFunction((previous) => document.querySelector('canvas')?.toDataURL() !== previous, beforeReconnect);
     await page.waitForFunction(() => globalThis.__fillTexts?.includes('Reconnect marker ✓'), undefined, { timeout: 5_000 });
+    assertTerminalCoverageOnce(gateway.state.rpc.slice(reconnectRpcStart), 'replacement epoch');
 
     assert.deepEqual(failedRequests, [], `production host had failed requests (${publicBase})`);
     assert.ok(gateway.state.httpResponses.every((response) => response.status < 400), `production host had HTTP failures (${publicBase})`);

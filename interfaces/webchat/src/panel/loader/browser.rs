@@ -151,6 +151,20 @@ impl BrowserPanelSdk {
         })
     }
 
+    #[wasm_bindgen(js_name = subscribeTerminal)]
+    pub async fn subscribe_terminal(
+        &self,
+        topic: String,
+    ) -> Result<BrowserPanelSubscription, JsValue> {
+        Ok(BrowserPanelSubscription {
+            subscription: self
+                .sdk
+                .subscribe_terminal(&topic)
+                .await
+                .map_err(|error| JsValue::from_str(&error))?,
+        })
+    }
+
     pub fn connection(&self) -> Result<JsValue, JsValue> {
         let snapshot = self
             .sdk
@@ -189,10 +203,20 @@ pub struct BrowserPanelSubscription {
 
 #[wasm_bindgen]
 impl BrowserPanelSubscription {
+    /// Decimal text preserves the confirmed u64 epoch across the JS boundary.
+    #[wasm_bindgen(js_name = coverageEpoch)]
+    pub fn coverage_epoch(&self) -> Result<String, JsValue> {
+        self.subscription
+            .coverage_epoch()
+            .map(|epoch| epoch.to_string())
+            .ok_or_else(|| JsValue::from_str("Not a terminal subscription"))
+    }
+
     pub fn drain(&self) -> Result<JsValue, JsValue> {
         to_js(Value::Array(
             self.subscription
-                .drain()
+                .try_drain()
+                .map_err(|error| JsValue::from_str(&error))?
                 .into_iter()
                 .map(|event| json!({ "topic": event.topic, "data": event.data }))
                 .collect(),

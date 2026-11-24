@@ -35,14 +35,17 @@ mod browser {
         #[wasm_bindgen(method, catch, js_name = connection)]
         fn sdk_connection(this: &BrowserPanelSdk) -> Result<JsValue, JsValue>;
 
-        #[wasm_bindgen(method, catch, js_name = subscribe)]
-        async fn sdk_subscribe(
+        #[wasm_bindgen(method, catch, js_name = subscribeTerminal)]
+        async fn sdk_subscribe_terminal(
             this: &BrowserPanelSdk,
             topic: String,
         ) -> Result<BrowserPanelSubscription, JsValue>;
 
         #[derive(Clone)]
         type BrowserPanelSubscription;
+
+        #[wasm_bindgen(method, catch, js_name = coverageEpoch)]
+        fn subscription_epoch(this: &BrowserPanelSubscription) -> Result<String, JsValue>;
 
         #[wasm_bindgen(method, catch, js_name = drain)]
         fn subscription_drain(this: &BrowserPanelSubscription) -> Result<JsValue, JsValue>;
@@ -132,12 +135,22 @@ mod browser {
                     if !active.get() {
                         return Err("terminal module disposed".to_string());
                     }
-                    let epoch = read_connection(&sdk).map_err(js_error)?.epoch;
-                    let subscription = sdk.sdk_subscribe(topic).await.map_err(js_error)?;
+                    let subscription = sdk.sdk_subscribe_terminal(topic).await.map_err(js_error)?;
                     if !active.get() {
                         subscription.subscription_dispose();
                         return Err("terminal module disposed".to_string());
                     }
+                    let epoch = match subscription
+                        .subscription_epoch()
+                        .map_err(js_error)
+                        .and_then(|epoch| epoch.parse::<u64>().map_err(|error| error.to_string()))
+                    {
+                        Ok(epoch) => epoch,
+                        Err(error) => {
+                            subscription.subscription_dispose();
+                            return Err(error);
+                        }
+                    };
                     let disposed = Rc::new(Cell::new(false));
                     let drain_subscription = subscription.clone();
                     let drain_disposed = Rc::clone(&disposed);

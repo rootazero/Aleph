@@ -17,6 +17,9 @@ pub struct TerminalEvent {
     pub data: Value,
 }
 
+/// A single confirmed connection epoch. A failed drain means coverage is
+/// uncertain (including local loss), never proof that no events arrived.
+/// The consumer owns disposal, including rollback of a partial topic pair.
 pub struct TerminalEventStream {
     pub coverage_epoch: u64,
     pub drain: Rc<dyn Fn() -> Result<Vec<TerminalEvent>, String>>,
