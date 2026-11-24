@@ -26,6 +26,25 @@ from qa_rpc import Ledger, Rpc, ran, ws_connect, http_json  # noqa: E402
 MEASURED_ON = "0.2.2"
 
 
+def pinned_obscura_tag():
+    """The tag Aleph installs, e.g. `v0.2.7` — read from the ledger's one
+    author (`obscura_tag!` in src/runtimes/specs.rs), never spelled here.
+
+    Not `MEASURED_ON`: that dates this file's expectations, and a bump moves
+    the pin first and the dates only once the stages have been re-run on the
+    new build. Comparing an installed binary against the date instead of the
+    pin is how `provision` once failed on a correct install.
+    """
+    specs = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         "..", "..", "src", "runtimes", "specs.rs")
+    with open(specs) as fh:
+        for line in fh:
+            m = re.fullmatch(r'\s*"(v[0-9][0-9.]*)"\s*', line)
+            if m:
+                return m.group(1)
+    raise SystemExit("could not read the pinned obscura tag from src/runtimes/specs.rs")
+
+
 def ps_lines(pattern):
     """Full command lines of live processes matching `pattern`.
 
@@ -307,8 +326,9 @@ async def stage_provision(rpc, led, a):
         led.check("(the rest of this stage needs that binary)", False, server_log(a)[-1500:])
         return
     led.check("it is executable", os.access(installed, os.X_OK))
-    led.check("`--version` reports the pinned tag", obscura_version(installed) == MEASURED_ON,
-              str(obscura_version(installed)))
+    led.check("`--version` reports the pinned tag",
+              obscura_version(installed) == pinned_obscura_tag().lstrip("v"),
+              f"binary={obscura_version(installed)} pin={pinned_obscura_tag()}")
     led.check(
         "obscura-worker was NOT installed beside it (one member, not the archive)",
         not os.path.exists(os.path.join(os.path.dirname(installed), "obscura-worker")),

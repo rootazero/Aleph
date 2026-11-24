@@ -79,7 +79,14 @@ fi
 # `command -v obscura` finds nothing on a machine that installed it through
 # Aleph — obscura is never put on PATH — and the fixture would then have
 # refused to run beside a perfectly good binary.
-OBSCURA_TAG="v0.2.2"
+# Read from the ledger's one author (`obscura_tag!` in src/runtimes/specs.rs)
+# rather than spelled here: a second copy would keep pointing this fixture at
+# the previous build after a bump, with nothing red (判据 §1).
+OBSCURA_TAG="$(sed -n 's/^ *"\(v[0-9][0-9.]*\)"$/\1/p' "$REPO/src/runtimes/specs.rs" | head -1)"
+if [ -z "$OBSCURA_TAG" ]; then
+  echo "could not read the pinned obscura tag from src/runtimes/specs.rs" >&2
+  exit 69
+fi
 OBSCURA_REPO="h4ckf0r0day/obscura"
 # `$HOME` is still the operator's own home here — `qa_redirect_home` runs much
 # further down, and this lookup has to read the machine's real ledger.
@@ -87,6 +94,9 @@ LEDGER_OBSCURA="$HOME/.aleph/runtimes/obscura/$OBSCURA_TAG/obscura"
 OBSCURA_BIN="${ALEPH_QA_OBSCURA:-}"
 if [ -z "$OBSCURA_BIN" ] && [ -x "$LEDGER_OBSCURA" ]; then OBSCURA_BIN="$LEDGER_OBSCURA"; fi
 if [ -z "$OBSCURA_BIN" ]; then OBSCURA_BIN="$(command -v obscura 2>/dev/null)"; fi
+# `provision` needs one too: it compares the bytes it installs against this
+# independently obtained copy. After a tag bump, download the release archive
+# by hand, check its published sha256, and point ALEPH_QA_OBSCURA at it.
 if [ -z "$OBSCURA_BIN" ] || [ ! -x "$OBSCURA_BIN" ]; then
   echo "no obscura binary; set ALEPH_QA_OBSCURA=/path/to/obscura" >&2
   echo "looked at: \$ALEPH_QA_OBSCURA, $LEDGER_OBSCURA, and PATH" >&2

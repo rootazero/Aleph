@@ -24,14 +24,22 @@ import glob
 import json
 import os
 import re
+import struct
 import subprocess
 import sys
+import zlib
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "browser_managed"))
 from qa_rpc import Ledger, Rpc, ran, ws_connect  # noqa: E402
+from drive import pinned_obscura_tag  # noqa: E402
 import websockets  # noqa: E402
 
-MEASURED_ON = "v0.2.2"
+
+
+# The table's `measured_on` must name the pinned build: read from the ledger's
+# one author, so a bump cannot leave this probe comparing the table against the
+# previous build's tag (判据 §1).
+MEASURED_ON = pinned_obscura_tag()
 
 
 class Raw:
@@ -80,6 +88,112 @@ class Raw:
                 return m.get("params", {})
 
 
+def png_color_box(png, rgb):
+    """The pixel bounding box `[x0, y0, x1, y1)` of every pixel exactly `rgb`.
+
+    Pure Python on purpose — no PIL in the QA venv: chunk walk, IDAT inflate,
+    the five PNG row filters, 8-bit RGB/RGBA only (what both engines emit).
+    `None` when no pixel matches or the format is one this does not decode.
+    """
+    if png[:8] != b"\x89PNG\r\n\x1a\n":
+        return None
+    pos, idat, width = 8, b"", 0
+    while pos < len(png):
+        length, kind = struct.unpack(">I4s", png[pos:pos + 8])
+        body = png[pos + 8:pos + 8 + length]
+        if kind == b"IHDR":
+            width, height, depth, color_type, _, _, interlace = struct.unpack(">IIBBBBB", body)
+            if depth != 8 or color_type not in (2, 6) or interlace:
+                return None
+            channels = 3 if color_type == 2 else 4
+        elif kind == b"IDAT":
+            idat += body
+        pos += 12 + length
+    raw = zlib.decompress(idat)
+    stride = width * channels
+    previous = bytearray(stride)
+    box = None
+    for y in range(height):
+        start = y * (stride + 1)
+        kind, line = raw[start], bytearray(raw[start + 1:start + 1 + stride])
+        for i in range(stride):
+            left = line[i - channels] if i >= channels else 0
+            up = previous[i]
+            up_left = previous[i - channels] if i >= channels else 0
+            if kind == 1:
+                line[i] = (line[i] + left) & 0xFF
+            elif kind == 2:
+                line[i] = (line[i] + up) & 0xFF
+            elif kind == 3:
+                line[i] = (line[i] + (left + up) // 2) & 0xFF
+            elif kind == 4:
+                guess = left + up - up_left
+                pa, pb, pc = abs(guess - left), abs(guess - up), abs(guess - up_left)
+                predictor = left if pa <= pb and pa <= pc else (up if pb <= pc else up_left)
+                line[i] = (line[i] + predictor) & 0xFF
+        for x in range(width):
+            if tuple(line[x * channels:x * channels + 3]) == rgb:
+                if box is None:
+                    box = [x, y, x + 1, y + 1]
+                else:
+                    box = [min(box[0], x), min(box[1], y), max(box[2], x + 1), max(box[3], y + 1)]
+        previous = line
+    return box
+
+
+async def measure_geometry(cdp, s, root):
+    """Where `#geo` is, three ways, in CSS px: `DOM.getBoxModel`'s border quad
+    (what `rect_from` turns into a snapshot rect and a click point),
+    `getBoundingClientRect`, and the `#ff00ff` pixels of
+    `Page.captureScreenshot` scaled by screenshot width / CSS viewport width.
+
+    A reading, not a table row: whether the three agree decides whether
+    `browser_screenshot` needs a geometry note on this engine. Engine-neutral,
+    so the same call is the decoder's control on chromium.
+    """
+    reading = {}
+    geo_id = find_node(root, "div", "geo")
+    bm = await cdp.call("DOM.getBoxModel", {"backendNodeId": geo_id}, s) if geo_id else {}
+    quad = bm.get("result", {}).get("model", {}).get("border")
+    if quad:
+        xs, ys = quad[0::2], quad[1::2]
+        reading["box_model"] = [min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys)]
+    r = await cdp.call("Runtime.evaluate", {
+        "expression": "(function(){ var r = document.getElementById('geo')"
+                      ".getBoundingClientRect(); return [r.x, r.y, r.width, r.height]; })()",
+        "returnByValue": True}, s)
+    reading["client_rect"] = r.get("result", {}).get("result", {}).get("value")
+    metrics = (await cdp.call("Page.getLayoutMetrics", {}, s)).get("result", {})
+    viewport = metrics.get("cssVisualViewport") or metrics.get("visualViewport") or {}
+    shot = await cdp.call("Page.captureScreenshot", {"format": "png"}, s)
+    data = shot.get("result", {}).get("data")
+    if not data:
+        reading["screenshot"] = f"no image: {json.dumps(shot.get('error'))[:160]}"
+        return reading
+    png = base64.b64decode(data)
+    width = struct.unpack(">I", png[16:20])[0] if png[:8] == b"\x89PNG\r\n\x1a\n" else 0
+    box = png_color_box(png, (0xFF, 0x00, 0xFF))
+    css_width = viewport.get("clientWidth")
+    reading["screenshot_px"] = {"image_width": width, "css_viewport_width": css_width,
+                                "magenta_box": box}
+    if box and width and css_width:
+        scale = width / css_width
+        x0, y0, x1, y1 = (v / scale for v in box)
+        reading["screenshot"] = [x0, y0, x1 - x0, y1 - y0]
+    else:
+        reading["screenshot"] = None
+    return reading
+
+
+def geometry_agrees(reading, tolerance=1.0):
+    """All three rectangles present and within `tolerance` CSS px of each other."""
+    rects = [reading.get(k) for k in ("box_model", "client_rect", "screenshot")]
+    if not all(isinstance(r, list) and len(r) == 4 for r in rects):
+        return False
+    return all(abs(a[i] - b[i]) <= tolerance
+               for a in rects for b in rects for i in range(4))
+
+
 def find_node(node, tag, ident):
     if node.get("nodeName", "").lower() == tag:
         attrs = node.get("attributes", [])
@@ -115,16 +229,64 @@ async def probe_obscura(ws_url, page_url, led):
 
         found = {}
 
-        # js_dialogs. Probed by dispatch rather than by effect on purpose: an
-        # engine with no dialogs never opens one, so there is no state to read.
-        # The refusal IS the observation here, and the next claim checks that
-        # the engine does not merely refuse the handler but never blocks either.
-        r = await cdp.call("Page.handleJavaScriptDialog", {"accept": True}, s)
-        found["js_dialogs"] = "unsupported" if "error" in r else "supported"
+        # js_dialogs, by effect, the way `browser_dialog` meets a dialog: the
+        # page opens one, `Page.javascriptDialogOpening` must ARRIVE (that is
+        # what sets the tab's pending-dialog latch the model is told about),
+        # `Page.handleJavaScriptDialog` must be accepted, and the page must
+        # then hold what the handler sent — `true` from confirm, the typed
+        # text from prompt. A handler that answers `{}` while the page reads
+        # its default would otherwise certify a no-op (判据 §11). obscura
+        # v0.2.7 emits the event only for `beforeunload` on `Page.close`
+        # (crates/obscura-cdp/src/domains/page.rs) and answers confirm/prompt
+        # noninteractively in JS, so all three kinds are measured here rather
+        # than inferred from that source reading.
+        dialogs_ok = True
+        for kind in ("alert", "confirm", "prompt"):
+            await ev(f"window.openDialog('{kind}')")
+            opened = await cdp.wait_event("Page.javascriptDialogOpening", s, timeout=2)
+            handled = await cdp.call("Page.handleJavaScriptDialog",
+                                     {"accept": True, "promptText": "caps-typed"}, s)
+            await asyncio.sleep(0.3)
+            got = await ev(f"window.__dlg['{kind}']")
+            want = {"alert": "returned", "confirm": True, "prompt": "caps-typed"}[kind]
+            led.log(f"  js_dialogs {kind}: opening event={'yes' if opened else 'none in 2s'}, "
+                    f"handle={json.dumps(handled.get('error') or 'ok')[:120]}, "
+                    f"page read {got!r} (accepted value {want!r})")
+            dialogs_ok = dialogs_ok and bool(opened) and "error" not in handled and got == want
+        found["js_dialogs"] = "supported" if dialogs_ok else "unsupported"
 
-        r = await cdp.call("Input.dispatchDragEvent",
-                           {"type": "dragOver", "x": 10, "y": 10, "data": {"items": []}}, s)
-        found["drag"] = "supported" if "error" not in r and await ev("window.__dragged") else "unsupported"
+        # drag, by effect, with the gesture `browser_drag` actually sends:
+        # six Input.dispatchMouseEvent calls (move, press, three interpolated
+        # moves, release — `cdp_backend::actions::drag`). The earlier probe
+        # sent Input.dispatchDragEvent, a method no Aleph verb dispatches, so
+        # it measured nothing about this row. Supported means the same thing
+        # qa/browser_managed's drag stage accepts on chromium (an HTML5 drop or
+        # a mouseup on the target), AND the press landed on the source — a
+        # bare mouseup with no press is a pointer release, not a drag.
+        drect = await ev(
+            "(function(){ function c(id){ var r = document.getElementById(id)"
+            ".getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; }"
+            " return {from: c('src'), to: c('dst')}; })()")
+        if drect:
+            (fx, fy), (tx, ty) = drect["from"], drect["to"]
+            gesture = [("mouseMoved", fx, fy, 0), ("mousePressed", fx, fy, 1)]
+            gesture += [("mouseMoved", fx + (tx - fx) * t / 3, fy + (ty - fy) * t / 3, 0)
+                        for t in (1, 2, 3)]
+            gesture += [("mouseReleased", tx, ty, 1)]
+            for mtype, x, y, cc in gesture:
+                # The mask `aleph_cdp::methods::input::dispatch_mouse_event`
+                # derives: 0 on release, the left button's 1 on everything else.
+                params = {"type": mtype, "x": x, "y": y, "button": "left", "clickCount": cc,
+                          "modifiers": 0, "buttons": 0 if mtype == "mouseReleased" else 1}
+                r = await cdp.call("Input.dispatchMouseEvent", params, s)
+                if "error" in r:
+                    led.log(f"  drag: Input.dispatchMouseEvent {mtype} errored: {json.dumps(r)[:200]}")
+            await asyncio.sleep(0.5)
+        state = await ev("({dragged: window.__dragged, pressed: window.__pressedSource,"
+                         " moves: window.__moves})") or {}
+        led.log(f"  drag (browser_drag's six mouse events, src→dst): {state} (rect={drect})")
+        found["drag"] = ("supported" if state.get("pressed") and
+                         state.get("dragged", "dropped:no") != "dropped:no" else "unsupported")
 
         # `touch` and `multi_connection` are NOT probed here,
         # and their absence is the point: R39 cut them from the capability
@@ -160,6 +322,16 @@ async def probe_obscura(ws_url, page_url, led):
         await cdp.call("Input.insertText", {"text": "caps-probe"}, s)
         found["insert_text"] = "supported" if await ev(
             "document.getElementById('txt').value === 'caps-probe'") else "unsupported"
+
+        # Screenshot geometry (design §4.5): is a pixel in obscura's image at
+        # the CSS position the DOM reports? Logged for the receipt and asserted
+        # against `browser_screenshot`'s behaviour, not the table.
+        geometry = await measure_geometry(cdp, s, root)
+        led.log(f"  geometry #geo (x, y, w, h in CSS px; fixture says 137, 211, 53, 29): "
+                f"{json.dumps(geometry)}")
+        led.log("  geometry verdict: " + ("the screenshot agrees with the DOM within 1 CSS px"
+                                         if geometry_agrees(geometry) else
+                                         "the screenshot does NOT agree with the DOM"))
 
         # The carried finding, measured here because this is the connection that
         # can measure it: obscura emits no dialog event AND does not block its
@@ -225,7 +397,10 @@ async def probe_obscura(ws_url, page_url, led):
         # from "never landed" — measured 2026-09-26 (v0.2.2, x86_64-linux):
         # a click on a real link navigated (the default action fires) and the
         # read-back came back null, i.e. arming the probe on this engine
-        # turns every navigating click into a false `EffectNotDelivered`.
+        # turned every navigating click into a false `EffectNotDelivered`.
+        # The probe now carries a document nonce (`window.__alephProbeDoc`),
+        # so the question this premise asks is whether a navigation is
+        # DETECTABLE: a null on a document without the nonce is Skipped.
         # `qa/browser_dual`'s `click` stage is the end-to-end witness.
         await ev("var a = document.createElement('a'); a.id = 'navlink';"
                  "a.href = 'index.html'; a.textContent = 'nav';"
@@ -236,7 +411,19 @@ async def probe_obscura(ws_url, page_url, led):
         navrect = await ev("(function(){ var r = document.getElementById('navlink').getBoundingClientRect(); "
                            "return {x: r.x + r.width / 2, y: r.y + r.height / 2}; })()")
         nav_sound = False
+
+        async def frame_tree_loader():
+            tree = await cdp.call("Page.getFrameTree", {}, s)
+            return tree.get("result", {}).get("frameTree", {}).get("frame", {}).get("loaderId")
+
         if navrect:
+            # The ⑦b reading behind `cdp_backend::navigate`'s comment: does an
+            # input-driven navigation announce, and then report, a NEW loader?
+            loader_before = await frame_tree_loader()
+            # The document nonce `cdp_backend::actions::arm_effect_probe` installs
+            # beside the flag; the read-back compares it before trusting a null.
+            await ev("window.__alephProbeDoc = 'caps-probe-doc'")
+            cdp.events = [e for e in cdp.events if e.get("method") != "Page.frameNavigated"]
             for mtype, cc in (("mouseMoved", 0), ("mousePressed", 1), ("mouseReleased", 1)):
                 await cdp.call("Input.dispatchMouseEvent",
                                {"type": mtype, "x": navrect["x"], "y": navrect["y"],
@@ -248,6 +435,20 @@ async def probe_obscura(ws_url, page_url, led):
                                     {"expression": "location.pathname", "returnByValue": True}, s)
             landed_path = landed.get("result", {}).get("result", {}).get("value")
             navhit = r.get("result", {}).get("result", {}).get("value") if "error" not in r else "<error>"
+            same_doc = await ev("window.__alephProbeDoc === 'caps-probe-doc'")
+            announced = [e["params"]["frame"].get("loaderId") for e in cdp.events
+                         if e.get("method") == "Page.frameNavigated" and e.get("sessionId") == s
+                         and "parentId" not in e["params"]["frame"]]
+            loader_after = await frame_tree_loader()
+            if not announced:
+                loader_verdict = "no main-frame Page.frameNavigated arrived"
+            elif announced[-1] != loader_before and loader_after != loader_before:
+                loader_verdict = "the event and the tree both carry a NEW loader"
+            else:
+                loader_verdict = "the OLD loader survives the navigation (⑦b still reproduces)"
+            led.log(f"  loaderId across a click-driven navigation: before={loader_before!r} "
+                    f"frameNavigated={announced!r} getFrameTree after={loader_after!r} — "
+                    + loader_verdict)
             # Fixture integrity, asserted: if the click did NOT navigate, the
             # premise measured nothing and "unsound" would be the wrong
             # conclusion (判据 §2 — a red for the wrong reason is the shape
@@ -258,9 +459,17 @@ async def probe_obscura(ws_url, page_url, led):
                     f"navHit={navhit!r} — "
                     + ("carried the flag or refused to answer (sound)"
                        if ("error" in r or navhit == "click")
-                       else "a CLEAN NULL on the new document — indistinguishable from "
-                            "'never landed' (unsound: a landed click reads as NoHit)"))
-            nav_sound = "error" in r or navhit == "click"
+                       else "a CLEAN NULL on the new document — by itself indistinguishable "
+                            "from 'never landed'; the nonce line below decides"))
+            # Sound if the read-back carries the flag, refuses to answer, or —
+            # since the nonce — can SEE it is reading a different document: the
+            # nonce is gone, so `effect_probe_readback_js` answers
+            # `{otherDocument: true}` and the action is Skipped, not failed. A
+            # null on a document whose nonce SURVIVED is still unsound.
+            led.log(f"  effect_probe premise 3, nonce: the probe's document nonce "
+                    + ("SURVIVED the navigation (a null there is indistinguishable)"
+                       if same_doc else "is gone on the new document (detectable)"))
+            nav_sound = "error" in r or navhit == "click" or same_doc is False
         found["effect_probe"] = (
             "supported" if persist and delivered and nav_sound else "unsupported")
 

@@ -42,7 +42,7 @@
 
 - [ ] **Step 1:** `obscura_tag!()` → `"v0.2.7"`；`OBSCURA_TAG` 文档改为「bump when a re-measured release is adopted; capability rows must be re-measured with it」。核对 `specs.rs` 中描述 release 资产的测试注释与 v0.2.7 资产清单一致（`gh api repos/h4ckf0r0day/obscura/releases/tags/v0.2.7`）。
 - [ ] **Step 2:** `run.sh`：`OBSCURA_TAG="$(sed -n 's/^ *"\(v[0-9.]*\)"$/\1/p' "$REPO/src/runtimes/specs.rs" | head -1)"`，空值即 `exit 69`；`caps.py`：`MEASURED_ON` 用同一正则从 `specs.rs` 读出。（`REPO` 在 `run.sh` 中已定义于 `:60` 左右，派生行放其后。）
-- [ ] **Step 3:** `cargo test -p aleph --lib runtimes::specs browser::engine::capability` → PASS（`the_obscura_tag_has_one_author`、`the_obscura_row_is_stamped_with_the_pinned_tag` 仍绿）。
+- [ ] **Step 3:** `cargo test -p alephcore --lib runtimes::specs browser::engine::capability` → PASS（`the_obscura_tag_has_one_author`、`the_obscura_row_is_stamped_with_the_pinned_tag` 仍绿）。
 - [ ] **Step 4:** `./qa/browser_dual/run.sh provision` → 台账装出 `~/.aleph/runtimes/obscura/v0.2.7/obscura`，sha256 与 release digest 一致（arm64：`fc7e73f2…0e5c`）。403 → 记为「无法运行」，改用 `gh release download` 手工取包、`shasum -a 256` 核对后以 `ALEPH_QA_OBSCURA` 继续，回执写明。
 - [ ] **Step 5:** 依次跑 `open snapshot click stall reap switch escape caps`。期望：除 `caps` 的能力 diff 外全绿。任一回归：先判 Aleph 适配 vs 上游退化；后者停下回报。
 - [ ] **Step 6:** 回执写「回归基线」：二进制 sha256、`obscura --version`、每阶段结果与 `caps` 的原始 diff。
@@ -80,9 +80,9 @@
   - 解析不变：`Null → NoHit`、`String → Hit`、其他（含 `{otherDocument}`）→ `Unknown`；给 `_` 臂加注释说明「另一个文档」走这里。nonce = `uuid::Uuid::new_v4().simple().to_string()`。
 
 - [ ] **Step 1: 失败测试** — `effect_probe_scripts_carry_the_same_nonce`：`install_js("e7","n1")` 含 `__alephProbeDoc = "n1"`；`readback_js("n1")` 含 `"n1"` 与 `otherDocument`；`readback_js("a\"b")` 的 nonce 经 JSON 转义。改造 `:3588` 既有测试的调用签名。
-- [ ] **Step 2:** `cargo test -p aleph --lib cdp_backend::actions` → 编译失败/断言失败。
+- [ ] **Step 2:** `cargo test -p alephcore --lib cdp_backend::actions` → 编译失败/断言失败。
 - [ ] **Step 3:** 按 Interfaces 实现；`:1777`、`:3836`、`:3886` 的 mock 仍按表达式含 `__alephProbeHit` 应答（回读脚本里保留该名字）。⚠️ 伪造注释补一句：页面也能写 `__alephProbeDoc`。
-- [ ] **Step 4:** `cargo test -p aleph --lib cdp_backend::actions` → PASS。
+- [ ] **Step 4:** `cargo test -p alephcore --lib cdp_backend::actions` → PASS。
 - [ ] **Step 5: 前提 3 重测** — `caps.py` 在自导航点击后读 `typeof window.__alephProbeDoc`，期望新文档上为 `"undefined"`（即回读会答 `{otherDocument}` → `Unknown`）；同时在不导航的点击上读回 nonce 仍在。记录到回执。
 - [ ] **Step 6:** Commit `fix(browser): effect probe tells a replaced document from a missed event`
 
@@ -97,9 +97,9 @@
 - Produces: `const OBSCURA_FALLBACK_BORDER: [f64; 8] = [8.0, 8.0, 108.0, 8.0, 108.0, 28.0, 8.0, 28.0];` — `rect_from` 在 `border == OBSCURA_FALLBACK_BORDER && width == 100 && height == 20` 时返回 `None`。
 
 - [ ] **Step 1: 失败测试** — `the_fabricated_fallback_box_is_no_box`（该 quad + 100×20 → `None`）；`a_real_box_near_the_fallback_is_kept`（border 同 quad 但 `height 21` → `Some`；quad 平移到 x=9 → `Some`）；`a_fabricated_box_reply_leaves_the_node_with_a_ref_and_no_rect`：`fetch_with_every_box_answered(<该 BoxModel>)` 后可见、有文本的元素 `rect == None` 且仍出现在 build 后的 refs 中。
-- [ ] **Step 2:** `cargo test -p aleph --lib page_state::fetch_obscura` → FAIL。
+- [ ] **Step 2:** `cargo test -p alephcore --lib page_state::fetch_obscura` → FAIL。
 - [ ] **Step 3:** 实现；`rect_from` 文档写来源（obscura `domains/dom.rs` 的 getBoxModel fallback，v0.2.2 与 v0.2.7 相同）、两条路径的代价（设计 §4.4 第 3、5 点）。
-- [ ] **Step 4:** 同命令 → PASS；`cargo test -p aleph --lib page_state` → PASS。
+- [ ] **Step 4:** 同命令 → PASS；`cargo test -p alephcore --lib page_state` → PASS。
 - [ ] **Step 5:** caps 记录：在 v0.2.7 上对页面所有元素调 `DOM.getBoxModel`，统计等于该 quad 的节点数与标签；写入回执。
 - [ ] **Step 6:** Commit `fix(browser): treat obscura's fabricated fallback box as no box`
 
@@ -114,7 +114,7 @@
 
 - [ ] **Step 1:** caps.py 几何测量：同一 `#geo` 的 `DOM.getBoxModel`（经 `rect_from` 同规则取整）、`getBoundingClientRect`、`Page.captureScreenshot{format:"png"}` 中 `#ff00ff` 像素的包围盒（纯 Python：解析 IHDR/IDAT，`zlib.decompress`，按 PNG 五种行过滤还原，RGBA/RGB 两种色型），按 `Page.getLayoutMetrics` 的 `cssVisualViewport` 与截图宽度求 DPR 后换算到 CSS px。容差 ≤ 1 CSS px。在 Chromium 上同样跑一次作对照（验证解码器本身）。
 - [ ] **Step 2:** 跑 caps，记录三组矩形到回执。
-- [ ] **Step 3（条件）:** 一致 → 不改代码，回执写结论。不一致 → `screenshot.rs` 加 `OBSCURA_SCREENSHOT_NOTE`（英文，意为：截图仅用于看内容，像素位置不作为点击坐标，点击请用 ref），先写测试 `obscura_screenshots_carry_the_geometry_note` / `chromium_screenshots_do_not`，再实现，`cargo test -p aleph --lib browser_tools::screenshot` → PASS。
+- [ ] **Step 3（条件）:** 一致 → 不改代码，回执写结论。不一致 → `screenshot.rs` 加 `OBSCURA_SCREENSHOT_NOTE`（英文，意为：截图仅用于看内容，像素位置不作为点击坐标，点击请用 ref），先写测试 `obscura_screenshots_carry_the_geometry_note` / `chromium_screenshots_do_not`，再实现，`cargo test -p alephcore --lib browser_tools::screenshot` → PASS。
 - [ ] **Step 4:** Commit `test(qa): measure obscura screenshot geometry`（若有代码改动另写 `feat(browser): …`）
 
 ### Task 6: loaderId（⑯b）复测
@@ -136,7 +136,7 @@
 
 - [ ] **Step 1:** 逐行：测到 `supported` 才改 `Cap::Supported`；仍 `unsupported` 的注释改为 v0.2.7 实测与新机制；`effect_probe` 在 Task 3 后翻 `Supported` 的前提是 Step 3 的 `click` 阶段在 obscura 上全绿。`drag` 一旦有效果读数，从 `NOT_PROBED` 的理由改为引用 `qa/browser_dual` 的 drag 探针。
 - [ ] **Step 2:** 同步 `NOT_PROBED` 文案、分歧名单 `vec![...]` 与引用断言（引用串必须仍在 production 前缀里出现）。
-- [ ] **Step 3:** `cargo test -p aleph --lib browser::engine` → PASS；`./qa/browser_dual/run.sh caps` → 能力 diff 为空；任一翻成 `Supported` 的行，跑对应阶段（`effect_probe` → `click`；其他行跑 caps）在两个引擎上全绿。
+- [ ] **Step 3:** `cargo test -p alephcore --lib browser::engine` → PASS；`./qa/browser_dual/run.sh caps` → 能力 diff 为空；任一翻成 `Supported` 的行，跑对应阶段（`effect_probe` → `click`；其他行跑 caps）在两个引擎上全绿。
 - [ ] **Step 4:** Commit `feat(browser): capability table re-measured on obscura v0.2.7`
 
 ### Task 8: 熵减 + 全量验证 + 回执
@@ -146,7 +146,7 @@
 - Modify: 回执
 
 - [ ] **Step 1:** 对 `grep -rn "v0\.2\.2" src/browser crates/aleph-cdp src/builtin_tools/browser_tools qa/browser_dual` 的每一处分类：本轮重测过 → 改写为 v0.2.7 结论；未重测 → 保留并确认写明了版本；dated 历史不动。
-- [ ] **Step 2:** `cargo check`、`cargo clippy --all-targets -- -D warnings`、`cargo test -p aleph --lib browser runtimes builtin_tools::browser_tools` → 全绿。
+- [ ] **Step 2:** `cargo check`、`cargo clippy --all-targets -- -D warnings`、`cargo test -p alephcore --lib browser runtimes builtin_tools::browser_tools` → 全绿。
 - [ ] **Step 3:** `qa/browser_dual/run.sh` 全部阶段最终一遍 → 全绿；回执补齐（每阶段结果、能力表最终值、刻意不做）。
 - [ ] **Step 4:** Commit `chore(browser): retire v0.2.2-era claims re-measured on v0.2.7`
 
