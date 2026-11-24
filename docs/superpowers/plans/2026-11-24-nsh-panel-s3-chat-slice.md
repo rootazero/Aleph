@@ -71,3 +71,5 @@
   Web v1 不拆分 socket：在"下一事件 / 下一请求"之间 select，请求仍串行执行，执行期间事件在接收端排队。
 - **Known flake (pre-existing, not S3):** `gateway::server::tests::mcp_route_is_mounted_only_when_a_face_and_auth_handles_are_set` intermittently fails with `snapshot store init: disk I/O error` (SQLite default snapshot store under concurrent processes); 1 of ~10 suite runs.
   已知抖动（既有，与 S3 无关）：上述测试在并发进程下偶发 SQLite `disk I/O error`。
+- **Idempotency key source (found on device in T7).** Design §5.3 said "UUID v4"; `crypto.randomUUID()` threw on the macOS shell because its embedded QuickJS is built without nsh's `crypto` feature. Enabling `nsh-platform-macos/crypto` would add 16 crates (RSA, P-256/384/521, simd-json). `Chat.tsx` instead builds a v4-format UUID from `Math.random` on every runtime: the key is namespaced by principal and method and only needs to be unique while cached, not unguessable.
+  幂等键来源（T7 真机发现）：桌面嵌入运行时无 Web Crypto；不为一个键引入 16 个加密 crate，改用 `Math.random` 生成 v4 形 UUID，各运行时同一代码路径。
