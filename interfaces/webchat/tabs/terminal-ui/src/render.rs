@@ -5,9 +5,10 @@
 //! under a frame. Run-level `fill_text` (not per-cell) is what keeps it cheap.
 
 use aleph_protocol::pty::{PtyAttrs, PtyColor};
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use web_sys::CanvasRenderingContext2d;
 
+use super::input::Selection;
 use super::session::ClientScreen;
 
 /// One cell's pixel size, measured once from the loaded font. No longer
@@ -220,6 +221,43 @@ fn run_extent(text: &str, cell_width: f64) -> f64 {
     UnicodeWidthStr::width(text) as f64 * cell_width
 }
 
+/// The columns one run covers, one entry per glyph cluster.
+///
+/// The cells a run covers are the same cells [`run_extent`] measured: the
+/// width of a prefix of the run, in the same `UnicodeWidthStr` semantics.
+/// A wide glyph covers two columns but is ONE cluster, so copying it must
+/// not produce two characters -- and the server already dropped the spacer
+/// cell that used to carry the second column.
+///
+/// A zero-width character (a combining mark, a zero-width joiner) belongs to
+/// the cluster before it: it is part of that glyph, not a cell of its own.
+#[must_use]
+pub fn run_char_columns(text: &str) -> Vec<(usize, usize, String)> {
+    let mut out: Vec<(usize, usize, String)> = Vec::new();
+    let mut cluster_start = 0usize;
+    let mut cluster = String::new();
+    for (offset, ch) in text.char_indices() {
+        let width = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if width > 0 && !cluster.is_empty() {
+            out.push((
+                UnicodeWidthStr::width(&text[..cluster_start]),
+                UnicodeWidthStr::width(&text[..offset]),
+                std::mem::take(&mut cluster),
+            ));
+            cluster_start = offset;
+        }
+        cluster.push(ch);
+    }
+    if !cluster.is_empty() {
+        out.push((
+            UnicodeWidthStr::width(&text[..cluster_start]),
+            UnicodeWidthStr::width(text),
+            cluster,
+        ));
+    }
+    out
+}
+
 /// The CSS `font` shorthand for one run, given its bold/italic attributes.
 ///
 /// Pure and separated out so it is testable without a live canvas, and so
@@ -278,6 +316,129 @@ pub fn paint(ctx: &CanvasRenderingContext2d, screen: &ClientScreen, m: CellMetri
         ctx.set_global_alpha(0.6);
         ctx.fill_rect(x, y, w, h);
         ctx.set_global_alpha(1.0);
+    }
+}
+
+/// Paint the user's selection over the grid.
+///
+/// The selection is a range of CELLS, so it is painted from the same metrics
+/// the text was painted with: a selection that started from a stale
+/// measurement would underline the wrong characters.
+#[cfg(not(test))]
+pub fn paint_selection(
+    ctx: &CanvasRenderingContext2d,
+    screen: &ClientScreen,
+    m: &CellMetrics,
+    theme: &Theme,
+    selection: &Selection,
+) {
+    if !m.is_usable() {
+        return;
+    }
+    let (rows, cols) = screen.dims();
+    let last_row = selection.end_row.min(rows.saturating_sub(1));
+    let last_col = selection.end_col.min(cols.saturating_sub(1));
+    ctx.set_fill_style_str(&theme.fg);
+    ctx.set_global_alpha(0.25);
+    for row in selection.start_row..=last_row {
+        let from = if row == selection.start_row {
+            selection.start_col
+        } else {
+            0
+        };
+        let to = if row == selection.end_row {
+            last_col
+        } else {
+            cols.saturating_sub(1)
+        };
+        if to < from {
+            continue;
+        }
+        let x = f64::from(from) * m.width;
+        let y = f64::from(row) * m.height;
+        ctx.fill_rect(x, y, f64::from(to - from + 1) * m.width, m.height);
+    }
+    ctx.set_global_alpha(1.0);
+}
+
+/// The latest measured geometry, coalesced into one report.
+///
+/// A viewport that changes while the user drags a window produces a burst of
+/// measurements; reporting each one would send a resize per frame. Only the
+/// LATEST measured size is worth reporting -- the size that is still true
+/// when the frame is drawn.
+///
+/// A size that has already been reported is not reported again, EXCEPT when
+/// a new connection is attached: the new session has never seen the size,
+/// and a PTY that was sized by a previous session is sized wrong until it
+/// is told.
+#[derive(Debug, Clone, Copy)]
+pub struct ResizeCoalescer {
+    /// The latest measured size.
+    latest: Option<(u16, u16)>,
+    /// The last size that was reported to the server.
+    reported: Option<(u16, u16)>,
+    /// Whether this view is still on screen.
+    live: bool,
+}
+
+impl Default for ResizeCoalescer {
+    fn default() -> Self {
+        Self {
+            latest: None,
+            reported: None,
+            live: true,
+        }
+    }
+}
+
+impl ResizeCoalescer {
+    /// A coalescer for a view that is on screen.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Record the size the viewport measures right now.
+    pub fn observe(&mut self, rows: u16, cols: u16) {
+        if !self.live {
+            return;
+        }
+        self.latest = Some((rows, cols));
+    }
+
+    /// The size to report, or `None` when there is nothing new to report.
+    pub fn take(&mut self) -> Option<(u16, u16)> {
+        if !self.live {
+            return None;
+        }
+        let latest = self.latest?;
+        if self.reported == Some(latest) {
+            return None;
+        }
+        self.reported = Some(latest);
+        Some(latest)
+    }
+
+    /// Report the current size again, even an unchanged one.
+    ///
+    /// A new connection has never been told the size; without this it would
+    /// keep the size of the session it replaced.
+    pub fn force(&mut self) {
+        self.reported = None;
+    }
+
+    /// The view is gone: nothing more is measured, and nothing more is sent.
+    pub fn release(&mut self) {
+        self.live = false;
+        self.latest = None;
+        self.reported = None;
+    }
+
+    /// Whether this view is still on screen.
+    #[must_use]
+    pub fn is_live(&self) -> bool {
+        self.live
     }
 }
 

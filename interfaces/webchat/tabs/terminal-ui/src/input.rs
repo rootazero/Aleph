@@ -162,7 +162,7 @@ pub fn selection_text(screen: &ClientScreen, selection: &Selection) -> String {
                     let cell = column + start;
                     let cell_end = column + end;
                     if cell_end > from && cell < to {
-                        out.push(ch);
+                        out.push_str(&ch);
                     }
                 }
             }
@@ -183,8 +183,7 @@ pub struct InputPipeline {
     queued_bytes: usize,
     in_flight: Option<QueuedInput>,
     composition_fence: Option<RequestFence>,
-    suppressed: Option<String>,
-    selection: Option<Selection>,
+    suppressed_kind: Option<String>,
 }
 
 impl InputPipeline {
@@ -204,13 +203,25 @@ impl InputPipeline {
                 limit: MAX_INPUT_BYTES,
             });
         }
+        // The in-flight write is RETAINED input: it is still on its way to
+        // the terminal, and it counts against both caps. Counting only the
+        // waiting queue would make the byte cap mean "256 KiB queued plus
+        // one more write in flight".
+        let retained = self.queued_bytes + self.in_flight_len();
         let waiting = self.queue.len() + usize::from(self.in_flight.is_some());
-        if waiting >= MAX_QUEUE_ITEMS || self.queued_bytes + bytes > MAX_QUEUE_BYTES {
+        if waiting >= MAX_QUEUE_ITEMS || retained + bytes > MAX_QUEUE_BYTES {
             return Err(InputError::QueueFull);
         }
         self.queued_bytes += bytes;
         self.queue.push_back(QueuedInput { payload, fence });
         Ok(())
+    }
+
+    fn in_flight_len(&self) -> usize {
+        self.in_flight
+            .as_ref()
+            .map(|item| item.payload.len())
+            .unwrap_or(0)
     }
 
     /// The next write to dispatch, if the head still belongs to the current
@@ -234,14 +245,19 @@ impl InputPipeline {
 
     /// The dispatched write settled.
     ///
-    /// A write that belonged to another selection says nothing about this
-    /// one. A write that failed is never replayed, and the suffix behind it
-    /// is dropped rather than sent on its own — a command fragment is worse
-    /// than no command.
+    /// A write that belonged to ANOTHER selection says nothing about this
+    /// one: its outcome must not drop the bytes the current terminal is
+    /// waiting for, and it must not publish an error about a terminal the
+    /// user is no longer looking at. The old write is gone either way --
+    /// an already-dispatched call is not cancelled by moving on.
+    ///
+    /// A write that belonged to THIS selection and failed is never replayed,
+    /// and the suffix behind it is dropped rather than sent on its own — a
+    /// command fragment is worse than no command.
     pub fn settled(&mut self, ok: bool, current: RequestFence) -> Option<InputError> {
         let item = self.in_flight.take()?;
         if item.fence != current {
-            self.discard_waiting();
+            // Stale: the bytes waiting for the CURRENT terminal stay.
             return None;
         }
         if ok {
@@ -263,14 +279,13 @@ impl InputPipeline {
     pub fn on_selection_changed(&mut self) {
         self.discard_waiting();
         self.composition_fence = None;
-        self.suppressed = None;
-        self.selection = None;
+        self.suppressed_kind = None;
     }
 
     /// The IME started composing. Nothing is sent yet.
     pub fn composition_start(&mut self, fence: RequestFence) {
         self.composition_fence = Some(fence);
-        self.suppressed = None;
+        self.suppressed_kind = None;
     }
 
     /// A preedit update. A preedit is not a commit: nothing is sent.
@@ -286,40 +301,77 @@ impl InputPipeline {
         if fence != current || text.is_empty() {
             return None;
         }
-        self.suppressed = Some(text.to_string());
         Some(text.to_string())
+    }
+
+    /// The browser is about to repeat something it already delivered: a
+    /// `paste` is followed by an `input` event with the same text, and a
+    /// `compositionend` by an `input` event with the committed text.
+    ///
+    /// The repeat is dropped, so the bytes are sent once. The suppression
+    /// holds the RAW text the browser repeats, not the payload that was
+    /// written — a bracketed paste is framed on the wire and bare in the
+    /// The browser is about to deliver an event this view already handled.
+    ///
+    /// The KIND is recorded, not the text: two different edits can carry the
+    /// same text, and a suppression that matches on text swallows the
+    /// second one -- the user's next keystroke disappears.
+    ///
+    /// A bracketed paste is framed on the wire and bare in the clipboard, so
+    /// the event the browser repeats is the BARE one; the kind is what
+    /// identifies it.
+    pub fn suppress_input_kind(&mut self, kind: &str) {
+        self.suppressed_kind = Some(kind.to_string());
     }
 
     /// The composition was canceled. Nothing is sent.
     pub fn composition_cancel(&mut self) {
         self.composition_fence = None;
-        self.suppressed = None;
+        self.suppressed_kind = None;
     }
 
-    /// An ordinary text insertion.
+    /// An ordinary text insertion, as the browser reports it.
     ///
-    /// `None` when the browser is repeating a commit it already delivered
-    /// through `compositionend`: the commit is sent once, not twice.
-    pub fn ordinary_input(&mut self, text: &str) -> Option<String> {
-        if let Some(suppressed) = self.suppressed.take() {
-            if suppressed == text {
+    /// `kind` is the event's `inputType`, and the KIND decides:
+    ///
+    /// * `insertCompositionText` is the IME's own delivery -- the preedit
+    ///   while it is typing, and the commit in the engines that report it
+    ///   that way. It is not an insertion: the IME owns the text until
+    ///   `compositionend`, and the commit is sent from there.
+    /// * The kind armed by [`InputPipeline::suppress_input_kind`] is the
+    ///   event this view already handled, and it is dropped.
+    ///
+    /// `None` also when the text belongs to a composition that outlived the
+    /// selection it started in: a composition opened in one terminal does
+    /// not get to type into the next one.
+    pub fn ordinary_input(
+        &mut self,
+        text: &str,
+        current: RequestFence,
+        kind: &str,
+    ) -> Option<String> {
+        if kind == "insertCompositionText" {
+            return None;
+        }
+        if let Some(suppressed) = self.suppressed_kind.take() {
+            if suppressed == kind {
+                // The event this view already handled.
                 return None;
             }
+            // The armed kind was something else: the suppression is stale,
+            // and THIS event is a real edit.
         }
         if text.is_empty() {
             return None;
         }
+        if let Some(fence) = self.composition_fence {
+            if fence != current {
+                self.composition_fence = None;
+                self.suppressed_kind = None;
+                return None;
+            }
+        }
         Some(text.to_string())
-    }
-
-    /// The current selection, if the user made one.
-    pub fn selection(&self) -> Option<Selection> {
-        self.selection
-    }
-
-    /// Record the user's selection.
-    pub fn set_selection(&mut self, selection: Option<Selection>) {
-        self.selection = selection;
     }
 
     /// How many writes are waiting behind the one in flight.
@@ -337,7 +389,10 @@ impl InputPipeline {
 mod tests {
     use super::*;
     use crate::recovery::RequestFence;
-    use aleph_protocol::pty::{PtyOperation, PtyScreenFrame, PtyScreenPatch, PtyRowPatch, PtyStyleRun};
+    use aleph_protocol::capability::PtyOperation;
+    use aleph_protocol::pty::{
+        PtyAttrs, PtyColor, PtyRowPatch, PtyScreenFrame, PtyScreenPatch, PtyStyleRun,
+    };
 
     fn fence(epoch: u64, revision: u64) -> RequestFence {
         RequestFence {
@@ -358,17 +413,15 @@ mod tests {
                     row: 0,
                     runs: vec![PtyStyleRun {
                         text: text.to_string(),
-                        fg: None,
-                        bg: None,
-                        attrs: None,
+                        fg: PtyColor::default(),
+                        bg: PtyColor::default(),
+                        attrs: PtyAttrs::default(),
                     }],
-                    ..Default::default()
                 }],
                 ..Default::default()
             },
-            ..Default::default()
         };
-        screen.apply(frame);
+        let _ = screen.apply(frame);
         screen
     }
 
@@ -417,6 +470,25 @@ mod tests {
         }
         .validate()
         .is_ok());
+
+        // A payload carrying the end marker would close the bracket early and
+        // hand the rest to the shell as ordinary typed input -- which, with
+        // bracketed paste on, is exactly the input it may run. The marker is
+        // removed so "a paste is inert until the user presses Enter" holds for
+        // arbitrary clipboard content and not just for content that happens
+        // not to contain it.
+        let hostile = "safe\x1b[201~rm -rf /";
+        let wrapped = encode_paste(hostile, Some(true)).expect("a bracketed paste");
+        assert_eq!(wrapped, "\x1b[200~saferm -rf /\x1b[201~");
+        assert_eq!(wrapped.matches(PASTE_END).count(), 1);
+
+        // Nothing is stripped when there is no bracket to break out of:
+        // silently editing bytes the user asked to send would be its own lie.
+        assert_eq!(
+            encode_paste(hostile, None).expect("an unwrapped paste"),
+            hostile,
+            "an unwrapped paste is passed through byte for byte"
+        );
     }
 
     /// The IME commits once. The preedit is not text yet, the commit is
@@ -435,8 +507,16 @@ mod tests {
             .composition_end(current, "中文")
             .expect("the committed text");
         assert_eq!(committed, "中文");
-        // The trailing `input` event repeats the commit and must be dropped.
-        assert!(pipeline.ordinary_input("中文").is_none());
+        // The commit is sent ONCE: the composition is over, and a second
+        // `compositionend` has nothing left to commit.
+        assert!(pipeline.composition_end(current, "中文").is_none());
+        // The IME's own delivery of the same text is not an insertion: it
+        // belongs to the composition, which already committed.
+        assert!(
+            pipeline
+                .ordinary_input("中文", current, "insertCompositionText")
+                .is_none()
+        );
         pipeline
             .enqueue(committed, current)
             .expect("the commit is queued");
@@ -455,6 +535,51 @@ mod tests {
         stale.composition_start(current);
         assert!(stale.composition_end(fence(7, 4), "中文").is_none());
         assert_eq!(stale.waiting(), 0);
+    }
+
+    /// The edit AFTER a composition is the user's own.
+    ///
+    /// The browser's own composition delivery is `insertCompositionText`;
+    /// the next ordinary edit is `insertText`, and it is a real edit even
+    /// when it carries the same text as the commit. A suppression that
+    /// matched on TEXT would swallow it, and the user would lose a
+    /// keystroke.
+    #[test]
+    fn terminal_input_keeps_the_next_real_edit_after_a_composition() {
+        let current = fence(7, 3);
+        let mut pipeline = InputPipeline::new();
+        pipeline.composition_start(current);
+        // The preedit, as the browser reports it.
+        assert!(pipeline.ordinary_input("zhong", current, "insertCompositionText").is_none());
+        let committed = pipeline
+            .composition_end(current, "中文")
+            .expect("the committed text");
+        assert_eq!(committed, "中文");
+        // The NEXT intentional edit carries the same text and must survive.
+        assert_eq!(
+            pipeline.ordinary_input("中文", current, "insertText"),
+            Some("中文".to_string())
+        );
+    }
+
+    /// A paste this view already sent is not sent again, and the edit after
+    /// it is not collateral damage.
+    #[test]
+    fn terminal_input_drops_the_paste_repeat_but_not_the_next_edit() {
+        let current = fence(7, 3);
+        let mut pipeline = InputPipeline::new();
+        pipeline.suppress_input_kind("insertFromPaste");
+        assert!(
+            pipeline
+                .ordinary_input("pasted", current, "insertFromPaste")
+                .is_none(),
+            "the paste this view already sent is not sent twice"
+        );
+        assert_eq!(
+            pipeline.ordinary_input("x", current, "insertText"),
+            Some("x".to_string()),
+            "the next real edit survives"
+        );
     }
 
     /// One write is in flight; the rest wait behind it. When the selection
@@ -500,6 +625,37 @@ mod tests {
         );
         assert_eq!(pipeline.waiting(), 0, "no command suffix is sent");
         assert!(pipeline.take_next(current).is_none());
+    }
+
+    /// An old write that settles late -- after the selection moved on --
+    /// says nothing about the terminal that is on screen NOW.
+    ///
+    /// It must not drop the current terminal's bytes, and it must not
+    /// publish an error about a terminal the user is not looking at. The
+    /// bytes stay queued behind the old write and go out once it is done.
+    #[test]
+    fn terminal_input_fifo_keeps_the_current_bytes_when_an_old_write_settles() {
+        let old = fence(1, 1);
+        let current = fence(2, 2);
+        let mut pipeline = InputPipeline::new();
+        pipeline.enqueue("old".to_string(), old).unwrap();
+        pipeline.take_next(old).expect("the old write dispatches");
+
+        // The selection moved: the waiting suffix of the old terminal is
+        // dropped, and the new terminal's bytes queue behind the write that
+        // is still in flight.
+        pipeline.on_selection_changed();
+        pipeline.enqueue("new".to_string(), current).unwrap();
+        assert_eq!(pipeline.waiting(), 1);
+
+        // The old write settles late, and it FAILED.
+        assert!(
+            pipeline.settled(false, current).is_none(),
+            "a stale failure is not an error about the current terminal"
+        );
+        assert_eq!(pipeline.waiting(), 1, "the current bytes are kept");
+        let next = pipeline.take_next(current).expect("the current bytes dispatch");
+        assert_eq!(next.payload, "new");
     }
 
     /// Copying the painted text must not duplicate a wide glyph's
