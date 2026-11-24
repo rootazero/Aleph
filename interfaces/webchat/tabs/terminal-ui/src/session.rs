@@ -50,45 +50,9 @@ pub fn resolve_session_list(list_result: Result<serde_json::Value, String>) -> L
     }
 }
 
-/// The end marker of a bracketed paste. Named because it is written twice for
-/// two different reasons — once to close the paste, once to be REMOVED from
-/// the payload — and those two must never drift apart.
-const PASTE_END: &str = "\x1b[201~";
-
-/// Turn clipboard text into the bytes a PTY should receive.
-///
-/// Wraps in `ESC[200~ ... ESC[201~` **only** when the program has said it
-/// wants bracketed paste (`CSI ?2004 h`, arriving as
-/// `PtyScreenPatch::bracketed_paste`).
-///
-/// `None` means the server has not told us yet — the field is `Some` only when
-/// the mode CHANGED, so a client that pasted before the first such frame knows
-/// nothing. Unknown is not "on": wrapping when the program is not expecting it
-/// leaves the literal escape sequences in the user's command line, which is a
-/// visible corruption of what they pasted. Not wrapping when it IS expecting
-/// it merely gives up the "this was pasted, do not execute it" hint, which is
-/// the weaker assumption and the right one to make while we do not know
-/// (spec §5, 判据 §8).
-///
-/// # Why the end marker is stripped
-///
-/// A paste containing `ESC[201~` would end the bracket early, and everything
-/// after it would arrive as ordinary typed input — which a shell with
-/// bracketed paste on treats as a command it may run on the next newline.
-/// Removing the marker is what makes "paste is inert until the user presses
-/// Enter" true for arbitrary clipboard content rather than only for content
-/// that happens not to contain it. Nothing is stripped in the unwrapped case:
-/// there is no bracket to break out of, and silently editing bytes the user
-/// asked to send would be its own lie.
-#[must_use]
-pub fn encode_paste(text: &str, bracketed: Option<bool>) -> Vec<u8> {
-    if bracketed == Some(true) {
-        let safe = text.replace(PASTE_END, "");
-        format!("\x1b[200~{safe}{PASTE_END}").into_bytes()
-    } else {
-        text.as_bytes().to_vec()
-    }
-}
+/// The end marker of a bracketed paste lives with the encoder that writes it:
+/// [`crate::input::encode_paste`] is the single place that knows both how to
+/// close a paste and how to remove a hostile one from a payload.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApplyOutcome {
@@ -145,9 +109,9 @@ pub struct ClientScreen {
     ///
     /// Deliberately `Option<bool>` and not `bool`: the patch field is `Some`
     /// only when the mode CHANGED, so "we have not been told" is a real state
-    /// here and it is not the same as "off". [`encode_paste`] treats the two
-    /// identically today, but it must be able to tell them apart to keep
-    /// being able to (判据 §8).
+    /// here and it is not the same as "off".
+    /// [`crate::input::encode_paste`] treats the two identically today, but
+    /// it must be able to tell them apart to keep being able to (判据 §8).
     bracketed_paste: Option<bool>,
     /// `Some` while an attach is in flight; frames land here instead of on
     /// the grid, because the snapshot they must be ordered against has not
@@ -223,8 +187,8 @@ impl ClientScreen {
     }
 
     /// Whether the program has asked for bracketed paste, or `None` if it has
-    /// not said either way. Feed it to [`encode_paste`]; do not collapse the
-    /// `None` here.
+    /// not said either way. Feed it to [`crate::input::encode_paste`]; do not
+    /// collapse the `None` here.
     #[must_use]
     pub const fn bracketed_paste(&self) -> Option<bool> {
         self.bracketed_paste
@@ -929,44 +893,9 @@ mod tests {
     /// up a hint. Unknown takes the weaker assumption (判据 §8).
     ///
     /// Reddens if `None` or `Some(false)` starts wrapping, if `Some(true)`
-    /// stops, or if the end marker survives inside a wrapped payload.
-    #[test]
-    fn paste_wraps_when_bracketed_paste_is_on_and_not_when_unknown() {
-        assert_eq!(
-            encode_paste("ls -la", Some(true)),
-            b"\x1b[200~ls -la\x1b[201~".to_vec()
-        );
-        assert_eq!(encode_paste("ls -la", None), b"ls -la".to_vec());
-        assert_eq!(encode_paste("ls -la", Some(false)), b"ls -la".to_vec());
-
-        // A payload carrying the end marker would close the bracket early and
-        // hand the rest to the shell as ordinary typed input — which, with
-        // bracketed paste on, is exactly the input it may run. The marker is
-        // removed so "a paste is inert until the user presses Enter" holds for
-        // arbitrary clipboard content and not just for content that happens
-        // not to contain it.
-        let hostile = "safe\x1b[201~rm -rf /";
-        let wrapped = encode_paste(hostile, Some(true));
-        assert_eq!(wrapped, b"\x1b[200~saferm -rf /\x1b[201~".to_vec());
-        assert_eq!(
-            String::from_utf8_lossy(&wrapped)
-                .matches("\x1b[201~")
-                .count(),
-            1,
-            "exactly one end marker, and it is ours"
-        );
-
-        // Nothing is stripped when there is no bracket to break out of:
-        // silently editing bytes the user asked to send would be its own lie.
-        assert_eq!(
-            encode_paste(hostile, None),
-            hostile.as_bytes().to_vec(),
-            "an unwrapped paste is passed through byte for byte"
-        );
-
-        // Multi-byte text survives; this is bytes, not chars.
-        assert_eq!(encode_paste("中文", None), "中文".as_bytes().to_vec());
-    }
+    /// stops, or if the end marker survives inside a wrapped payload. That
+    /// coverage now lives with the encoder, in
+    /// [`crate::input::encode_paste`].
 
     /// C9. `?25 l` hides the cursor; `?25 h` shows it again; a patch that says
     /// NOTHING leaves it alone.

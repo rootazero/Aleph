@@ -20,10 +20,11 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 #[cfg(not(test))]
 use wasm_bindgen::closure::Closure;
-use wasm_bindgen::JsCast;
+use wasm_bindgen::{JsCast, JsValue};
 use web_sys::CanvasRenderingContext2d;
 
 use crate::host::{TerminalEventStream, TerminalServices, TerminalState, TerminalText};
+use crate::input::{InputError, InputPipeline, Selection};
 use crate::session::ClientScreen;
 use crate::tabs::TabBar;
 use crate::{keymap, render, session};
@@ -107,6 +108,22 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
     actions_disabled.set(true);
     let font_family = StoredValue::new(render::FALLBACK_FONT_FAMILY.to_string());
     let font_size_px = StoredValue::new(render::FALLBACK_FONT_SIZE_PX);
+    // The text-entry surface, the write FIFO, the selection and the size
+    // coalescer are this view's own state. The recovery keeps the authority
+    // on WHICH terminal is current; the fence it hands out is what ties a
+    // write to that terminal and to nothing else.
+    let input_ref = NodeRef::<leptos::html::Input>::new();
+    let pipeline = StoredValue::new(InputPipeline::new());
+    let selection = RwSignal::new(None::<Selection>);
+    let drag_anchor = StoredValue::new(None::<(u16, u16)>);
+    let dragging = StoredValue::new(false);
+    let cell_metrics = StoredValue::new(None::<render::CellMetrics>);
+    let resize = StoredValue::new(render::ResizeCoalescer::new());
+    let input_error = RwSignal::new(None::<String>);
+    let focus_request = state.focus_request;
+    // The animation frame that is scheduled, if any: one at a time, and
+    // cancelled when the view goes away.
+    let frame = StoredValue::new(None::<AnimationFrameRequestHandle>);
 
     let stop_events = Rc::new(Cell::new(false));
     let event_streams = Rc::new(RefCell::new(Vec::<TerminalEventStream>::new()));
@@ -121,6 +138,11 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
     ));
     on_cleanup(move || {
         actions_disabled.try_set(true);
+        // The view is gone: the unsent suffix is dropped (it belongs to a
+        // terminal nobody can see any more), and nothing is measured or
+        // reported from here on.
+        pipeline.try_update_value(|p| p.discard_waiting());
+        resize.try_update_value(|r| r.release());
         cleanup_state.dispose();
     });
     // Gestures are consumed before dispatch, never replayed by a new owner.
@@ -132,10 +154,64 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
         crate::recovery::Request,
         Result<serde_json::Value, String>,
     )>::new()));
+
+    // Focus follows an explicit gesture, never a background update.
+    //
+    // A reconnect that lands while the user is typing somewhere else must
+    // not move the caret into a terminal they are not looking at, so the
+    // only two things that focus the surface are a click on the canvas and
+    // a New/select gesture the user actually made.
+    let focus_surface: Rc<dyn Fn()> = {
+        let input_ref = input_ref;
+        Rc::new(move || {
+            if let Some(el) = input_ref.try_get_untracked().flatten() {
+                let el: web_sys::HtmlInputElement = el.unchecked_into();
+                let _ = el.focus();
+            }
+        })
+    };
+
+    // Every byte the user produces goes through ONE funnel: the FIFO.
+    //
+    // A keystroke, an IME commit and a paste are the same wire call, and a
+    // second copy of it is where the two would drift -- the ordering
+    // guarantee only holds if there is one place that decides what is
+    // written next.
+    let enqueue: Rc<dyn Fn(String)> = {
+        let services = Rc::clone(&services);
+        let controller = controller;
+        let pipeline = pipeline;
+        let input_error = input_error;
+        let text = services.text.clone();
+        Rc::new(move |payload: String| {
+            let connection = services.connection.get_untracked();
+            // The write must belong to the terminal that is on screen NOW.
+            // A write queued for a terminal that has been switched away from
+            // is dropped, not redirected: a half-typed command arriving in
+            // the wrong shell is worse than no command.
+            let fence = controller
+                .try_with_value(|c| {
+                    (c.ready && c.current_connection() == connection).then(|| c.fence())
+                })
+                .flatten();
+            let Some(fence) = fence else { return; };
+            match pipeline.update_value(|p| p.enqueue(payload, fence)) {
+                Ok(()) => {}
+                Err(InputError::TooLarge { .. }) => {
+                    input_error.set(Some(text.input_too_large.clone()));
+                }
+                Err(_) => {
+                    input_error.set(Some(text.input_queue_full.clone()));
+                }
+            }
+        })
+    };
+
     spawn_local(async move {
         let mut painted_revision = 0_u64;
         let services = services_for_events;
         let mut last_connection = services.connection.get_untracked();
+        let mut last_bracketed: Option<bool> = None;
         while !stop_events.get() && alive.try_get_value().is_some() {
             let now = terminal_now_ms();
             let connection = services.connection.get_untracked();
@@ -152,6 +228,11 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
                     (stream.dispose)();
                 }
                 last_connection = connection;
+                // The connection went away: the writes that were waiting
+                // belong to a socket that no longer exists and are dropped
+                // rather than replayed into the replacement.
+                pipeline.update_value(|p| p.on_selection_changed());
+                selection.set(None);
             }
             let (subscriptions, replies): (Vec<_>, Vec<_>) = inbox
                 .borrow_mut()
@@ -210,6 +291,18 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
                     }
                 }
             }
+            // The paste mode belongs to the terminal, and it decides whether
+            // a paste is bracketed. A mode change invalidates the payloads
+            // that were encoded for the old one.
+            let bracketed = controller.with_value(|c| {
+                c.screen
+                    .as_ref()
+                    .and_then(ClientScreen::bracketed_paste)
+            });
+            if bracketed != last_bracketed {
+                last_bracketed = bracketed;
+                pipeline.update_value(|p| p.discard_waiting());
+            }
             for (request, result) in replies {
                 let effect = matches!(
                     request.kind,
@@ -234,13 +327,24 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
                 if attached && controller.with_value(|c| c.ready) {
                     measure_and_report(
                         canvas_ref,
-                        Rc::clone(&services),
-                        controller.with_value(|c| c.selected_id().map(str::to_string)),
                         font_family.get_value(),
                         font_size_px.get_value(),
                         repaint_tick,
-                        alive,
+                        cell_metrics,
+                        resize,
                     );
+                    // A session has never been told the size of the surface
+                    // it now lives on. Report it again even when it did not
+                    // change: a PTY that inherited the size of the session it
+                    // replaced is sized wrong until somebody tells it.
+                    resize.update_value(|r| r.force());
+                    // Focus is the user's gesture, never the attach's: a
+                    // background reconnect must not pull the caret into a
+                    // terminal nobody is looking at.
+                    if focus_request.get_untracked() {
+                        focus_request.set(false);
+                        focus_surface();
+                    }
                 }
             }
             if retry_request.get_untracked() {
@@ -250,6 +354,10 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
             if let Some(sid) = selection_request.get_untracked() {
                 selection_request.set(None);
                 controller.update_value(|c| c.select(&sid));
+                // The writes that were waiting for the previous terminal
+                // belong to a terminal that is no longer on screen.
+                pipeline.update_value(|p| p.on_selection_changed());
+                selection.set(None);
             }
             let close = close_request.get_untracked();
             close_request.set(None);
@@ -354,6 +462,62 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
                     repaint_tick.update(|tick| *tick = tick.wrapping_add(1));
                 }
             });
+            // Report the measured size, but only the LATEST one: a burst of
+            // geometry changes must not become a burst of RPCs, and the size
+            // that is still true when the frame is drawn is the one worth
+            // sending.
+            if let Some((rows, cols)) = resize.update_value(|r| r.take()) {
+                if let Some(sid) = controller.with_value(|c| c.selected_id().map(str::to_string)) {
+                    let services = Rc::clone(&services);
+                    spawn_local(async move {
+                        let _ = (services.invoke)(
+                            "pty.resize".to_string(),
+                            serde_json::json!({ "session_id": sid, "rows": rows, "cols": cols }),
+                        )
+                        .await;
+                    });
+                }
+            }
+
+            // One write in flight. The FIFO decides what goes next and this
+            // loop is the only place a `pty.input` starts, so the ordering is
+            // one decision in one place.
+            if controller.with_value(|c| c.ready) {
+                if let Some(sid) = controller.with_value(|c| c.selected_id().map(str::to_string)) {
+                    let fence = controller.with_value(|c| c.fence());
+                    if let Some(item) = pipeline.update_value(|p| p.take_next(fence)) {
+                        let services = Rc::clone(&services);
+                        let controller = controller;
+                        let pipeline = pipeline;
+                        let input_error = input_error;
+                        let text = services.text.clone();
+                        spawn_local(async move {
+                            let result = (services.invoke)(
+                                "pty.input".to_string(),
+                                serde_json::json!({
+                                    "session_id": sid,
+                                    "data": item.payload,
+                                    "base64": false,
+                                }),
+                            )
+                            .await;
+                            let ok = result.is_ok();
+                            // The bytes are gone either way. An ambiguous
+                            // failure is NOT a license to replay them, so the
+                            // suffix behind them is dropped and the user is
+                            // told, instead of a command fragment being sent.
+                            let failed = controller
+                                .try_with_value(|c| c.fence())
+                                .and_then(|fence| {
+                                    pipeline.try_update_value(|p| p.settled(ok, fence)).flatten()
+                                });
+                            if failed.is_some() {
+                                input_error.try_update(|e| *e = Some(text.input_failed.clone()));
+                            }
+                        });
+                    }
+                }
+            }
             futures::future::select(terminal_event_tick().boxed_local(), wake_rx.next()).await;
         }
     });
@@ -413,8 +577,7 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
             // the far side of `config.get`, and the user may well have left
             // the terminal view while it was in flight. `None` from any of
             // them means the owner is gone and there is no canvas to measure.
-            let (Some(sid), Some(family), Some(size)) = (
-                session_id.try_get_value(),
+            let (Some(family), Some(size)) = (
                 font_family.try_get_value(),
                 font_size_px.try_get_value(),
             ) else {
@@ -422,12 +585,11 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
             };
             measure_and_report(
                 canvas_ref,
-                Rc::clone(&services),
-                sid,
                 family,
                 size,
                 repaint_tick,
-                alive,
+                cell_metrics,
+                resize,
             );
         });
     });
@@ -441,28 +603,46 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
         let family = font_family.get_value();
         let size_px = font_size_px.get_value();
         #[cfg(not(test))]
-        request_animation_frame(move || {
-            let Some((canvas, ctx)) = canvas_ctx(canvas_ref) else {
-                return;
-            };
-            controller.with_value(|c| {
-                let theme = render::Theme::dark();
-                if let Some(s) = &c.screen {
-                    let m = render::measure(&ctx, &family, size_px);
-                    render::paint(&ctx, s, m, &theme);
-                } else {
-                    // Authoritative empty/last close must erase the old paint
-                    // even when the backing-store geometry has not changed.
-                    ctx.set_fill_style_str(theme.bg);
-                    ctx.fill_rect(
-                        0.0,
-                        0.0,
-                        f64::from(canvas.width()),
-                        f64::from(canvas.height()),
-                    );
-                }
+        {
+            // One frame at a time: the previous request is cancelled instead
+            // of being left to fire into a view that is already gone.
+            if let Some(handle) = frame.try_get_value().flatten() {
+                handle.cancel();
+            }
+            let handle = request_animation_frame_with_handle(move || {
+                frame.try_set_value(None);
+                let Some((canvas, ctx)) = canvas_ctx(canvas_ref) else {
+                    return;
+                };
+                controller.with_value(|c| {
+                    let theme = render::Theme::dark();
+                    if let Some(s) = &c.screen {
+                        let m = render::measure(&ctx, &family, size_px);
+                        render::paint(&ctx, s, m, &theme);
+                        // The selection is painted over the cells it covers,
+                        // with the metrics the pointer maths used.
+                        if let Some(sel) = selection.get_untracked() {
+                            if !sel.is_empty() {
+                                render::paint_selection(&ctx, s, m, &theme, &sel);
+                            }
+                        }
+                    } else {
+                        // Authoritative empty/last close must erase the old paint
+                        // even when the backing-store geometry has not changed.
+                        ctx.set_fill_style_str(theme.bg);
+                        ctx.fill_rect(
+                            0.0,
+                            0.0,
+                            f64::from(canvas.width()),
+                            f64::from(canvas.height()),
+                        );
+                    }
+                });
             });
-        });
+            if let Ok(handle) = handle {
+                frame.set_value(Some(handle));
+            }
+        }
         #[cfg(test)]
         let _ = (family, size_px);
     });
@@ -475,31 +655,27 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
     // Writing our own request locally would be a second, driftable answer to
     // "how big is this PTY" in exactly the multi-client case Task 10 exists
     // for.
-    let resize_services = Rc::clone(&services);
     Effect::new(move |_| {
         measure_and_report(
             canvas_ref,
-            Rc::clone(&resize_services),
-            session_id.get_value(),
             font_family.get_value(),
             font_size_px.get_value(),
             repaint_tick,
-            alive,
+            cell_metrics,
+            resize,
         );
 
         #[cfg(not(test))]
         {
-            let resize_services_for_callback = Rc::clone(&resize_services);
             let cb: Closure<dyn FnMut(js_sys::Array)> =
                 Closure::new(move |_entries: js_sys::Array| {
                     measure_and_report(
                         canvas_ref,
-                        Rc::clone(&resize_services_for_callback),
-                        session_id.get_value(),
                         font_family.get_value(),
                         font_size_px.get_value(),
                         repaint_tick,
-                        alive,
+                        cell_metrics,
+                        resize,
                     );
                 });
             if let Some((canvas, _ctx)) = canvas_ctx(canvas_ref) {
@@ -512,58 +688,98 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
         }
     });
 
-    // Bytes -> the PTY, base64-encoded (raw bytes, not JS `btoa`: control
-    // bytes and multi-byte UTF-8 -- Ctrl-C is 0x03, CJK input is more than
-    // one byte per character -- round-trip corrupted through `btoa`'s Latin-1
-    // assumption). Uses a small local encoder to avoid coupling terminal UI to voice code.
-    // adding a second one.
+    // ---- The keyboard and the pointer -------------------------------------
     //
-    // One function for both keystrokes and pastes: they are the same wire
-    // call, and a second copy of it is where the two would drift.
-    let send_services = Rc::clone(&services);
-    let send_bytes: Rc<dyn Fn(Vec<u8>)> = Rc::new(move |bytes: Vec<u8>| {
-        let connection = send_services.connection.get_untracked();
-        let Some(sid) = controller.with_value(|c| {
-            (c.ready && c.current_connection() == connection)
-                .then(|| c.selected_id().map(str::to_string))
-                .flatten()
-        }) else {
-            return;
-        };
-        let data = encode_base64(&bytes);
-        let services = Rc::clone(&send_services);
-        spawn_local(async move {
-            let _ = (services.invoke)(
-                "pty.input".to_string(),
-                serde_json::json!({ "session_id": sid, "data": data, "base64": true }),
-            )
-            .await;
-        });
-    });
+    // A canvas cannot hold text, so an IME has nothing to compose into and
+    // the clipboard has nowhere to land. The terminal therefore owns a real,
+    // focusable text field: the canvas is the VIEW of the terminal and this
+    // field is its KEYBOARD.
+    //
+    // One funnel for every byte the user produces -- a keystroke, an IME
+    // commit, a paste -- because they are the same wire call, and a second
+    // copy of it is where the two would drift.
+    let copy_selection: Rc<dyn Fn()> = {
+        let controller = controller;
+        let selection = selection;
+        let input_error = input_error;
+        let text = services.text.clone();
+        Rc::new(move || {
+            let Some(sel) = selection.get_untracked() else {
+                return;
+            };
+            if sel.is_empty() {
+                return;
+            }
+            // The text is derived from the painted runs, so a wide glyph's
+            // continuation cell is not copied twice.
+            let content = controller.with_value(|c| {
+                c.screen
+                    .as_ref()
+                    .map(|screen| crate::input::selection_text(screen, &sel))
+            });
+            let Some(content) = content else {
+                return;
+            };
+            write_clipboard(&content, &text.copy_failed, &input_error);
+        })
+    };
 
     // A key the keymap does not claim is left alone entirely, not even
     // `prevent_default()`, so any browser/OS shortcut we do not mean to
-    // swallow keeps working. That now includes the PASTE chords: the meta
-    // bail that used to live here has moved into `keymap::encode_key`, which
-    // takes `meta` and answers `Browser` for Cmd-V and Ctrl-Shift-V — one
-    // decision in one place rather than half a rule on each side (判据 §6).
-    let key_send_bytes = Rc::clone(&send_bytes);
-    let on_keydown = move |ev: web_sys::KeyboardEvent| match keymap::encode_key(
-        &ev.key(),
-        ev.ctrl_key(),
-        ev.alt_key(),
-        ev.shift_key(),
-        ev.meta_key(),
-    ) {
-        keymap::KeyAction::Bytes(bytes) => {
-            ev.prevent_default();
-            key_send_bytes(bytes);
+    // swallow keeps working. That includes the PASTE chords: the keymap
+    // answers `Browser` for Cmd-V and Ctrl-Shift-V -- one decision in one
+    // place rather than half a rule on each side.
+    //
+    // A PRINTABLE key is not claimed either: the text field inserts it and
+    // the `input` event delivers it exactly once. Only a control byte --
+    // something with no text to insert -- is claimed here, because the
+    // field would otherwise swallow it.
+    let handle_key = {
+        let enqueue = Rc::clone(&enqueue);
+        let selection = selection;
+        let copy_selection = Rc::clone(&copy_selection);
+        move |ev: web_sys::KeyboardEvent, claim_printable: bool| {
+            let key = ev.key();
+            let ctrl = ev.ctrl_key();
+            let alt = ev.alt_key();
+            let shift = ev.shift_key();
+            let meta = ev.meta_key();
+            // A copy chord with something selected is a copy. Without a
+            // selection `Ctrl-C` stays the terminal's interrupt.
+            if selection.get_untracked().is_some_and(|s| !s.is_empty())
+                && crate::input::is_copy_chord(&key, ctrl, shift, meta)
+            {
+                ev.prevent_default();
+                copy_selection();
+                return;
+            }
+            match keymap::encode_key(&key, ctrl, alt, shift, meta) {
+                keymap::KeyAction::Bytes(bytes) => {
+                    if claim_printable || is_control_bytes(&bytes) {
+                        ev.prevent_default();
+                        enqueue(String::from_utf8_lossy(&bytes).to_string());
+                    }
+                }
+                keymap::KeyAction::Browser => {}
+            }
         }
-        keymap::KeyAction::Browser => {}
     };
 
-    // Paste. The clipboard's TEXT is only readable from a `paste` event — a
-    // `keydown` handler cannot reach it at all — which is the whole reason
+    let on_surface_keydown = {
+        let handle_key = handle_key.clone();
+        move |ev: web_sys::KeyboardEvent| handle_key(ev, false)
+    };
+
+    // The canvas holds no text of its own, so a printable key pressed while
+    // it has the focus is sent straight away: there is no field to insert it
+    // into.
+    let on_canvas_keydown = {
+        let handle_key = handle_key.clone();
+        move |ev: web_sys::KeyboardEvent| handle_key(ev, true)
+    };
+
+    // Paste. The clipboard's TEXT is only readable from a `paste` event -- a
+    // `keydown` handler cannot reach it at all -- which is the whole reason
     // the keymap hands the paste chords back to the browser instead of
     // encoding them.
     //
@@ -572,28 +788,182 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
     // the server has said, and `encode_paste` treats unknown as "do not
     // wrap": the escape sequences showing up literally in someone's command
     // line is a visible corruption, while not sending them only gives up a
-    // hint (spec §5).
-    let paste_send_bytes = Rc::clone(&send_bytes);
-    let on_paste = move |ev: web_sys::ClipboardEvent| {
-        let Some(text) = ev
-            .clipboard_data()
-            .and_then(|d| d.get_data("text").ok())
-            .filter(|t| !t.is_empty())
-        else {
-            return;
-        };
-        // Read synchronously, inside the event handler, and passed to
-        // `send_bytes` as a value: the mode belongs to the screen as it is
-        // NOW, not as it may be by the time the `pty.input` RPC resolves.
-        let bracketed =
-            controller.with_value(|c| c.screen.as_ref().and_then(ClientScreen::bracketed_paste));
-        ev.prevent_default();
-        paste_send_bytes(session::encode_paste(&text, bracketed));
+    // hint.
+    let on_paste = {
+        let enqueue = Rc::clone(&enqueue);
+        let pipeline = pipeline;
+        let controller = controller;
+        let input_error = input_error;
+        let too_large = services.text.input_too_large.clone();
+        move |ev: web_sys::ClipboardEvent| {
+            let Some(text) = ev
+                .clipboard_data()
+                .and_then(|d| d.get_data("text").ok())
+                .filter(|t| !t.is_empty())
+            else {
+                return;
+            };
+            // Read synchronously, inside the event handler: the mode belongs
+            // to the screen as it is NOW, not as it may be by the time the
+            // `pty.input` RPC resolves.
+            let bracketed =
+                controller.with_value(|c| c.screen.as_ref().and_then(ClientScreen::bracketed_paste));
+            ev.prevent_default();
+            match crate::input::encode_paste(&text, bracketed) {
+                Ok(payload) => {
+                    // The browser delivers the pasted text AGAIN as an
+                    // `input` event. That repeat is dropped: a paste is one
+                    // write, not two.
+                    pipeline.update_value(|p| p.suppress_repeat(&text));
+                    enqueue(payload);
+                }
+                Err(InputError::TooLarge { .. }) => {
+                    // Refused BEFORE anything is queued. A paste that is
+                    // split is a paste the program never finishes reading.
+                    input_error.try_update(|e| *e = Some(too_large.clone()));
+                }
+                Err(_) => {}
+            }
+        }
     };
 
+    // The text field's `input` event: the browser's own report of what was
+    // inserted. A preedit is not text yet -- the IME is still typing -- and
+    // a commit the browser already delivered through `compositionend` is a
+    // repeat of the same bytes.
+    let on_input = {
+        let enqueue = Rc::clone(&enqueue);
+        let pipeline = pipeline;
+        let controller = controller;
+        move |ev: web_sys::Event| {
+            let ev: web_sys::InputEvent = ev.unchecked_into();
+            if ev.is_composing() || ev.input_type() == "insertCompositionText" {
+                // A preedit is not a commit.
+                return;
+            }
+            let Some(data) = ev.data() else {
+                return;
+            };
+            if data.is_empty() {
+                return;
+            }
+            let fence = controller.with_value(|c| c.fence());
+            let payload = pipeline.update_value(|p| p.ordinary_input(&data, fence));
+            if let Some(payload) = payload {
+                enqueue(payload);
+            }
+        }
+    };
+
+    // The IME. The preedit is not text yet, so nothing is sent until the
+    // commit -- and the commit is sent exactly once.
+    let on_composition_start = {
+        let pipeline = pipeline;
+        let controller = controller;
+        move |_ev: web_sys::CompositionEvent| {
+            let fence = controller.with_value(|c| c.fence());
+            pipeline.update_value(|p| p.composition_start(fence));
+        }
+    };
+
+    let on_composition_update = {
+        let pipeline = pipeline;
+        move |_ev: web_sys::CompositionEvent| {
+            pipeline.update_value(|p| p.composition_update(""));
+        }
+    };
+
+    let on_composition_end = {
+        let enqueue = Rc::clone(&enqueue);
+        let pipeline = pipeline;
+        let controller = controller;
+        move |ev: web_sys::CompositionEvent| {
+            let fence = controller.with_value(|c| c.fence());
+            let committed =
+                pipeline.update_value(|p| p.composition_end(fence, &ev.data().unwrap_or_default()));
+            if let Some(committed) = committed {
+                enqueue(committed);
+            }
+        }
+    };
+
+    // A blur cancels the transient interaction: the composition belonged to a
+    // field nobody is typing into any more, and the drag belonged to a
+    // pointer that is no longer over the canvas. Neither changes the PTY's
+    // modes.
+    let on_surface_blur = {
+        let pipeline = pipeline;
+        let dragging = dragging;
+        let drag_anchor = drag_anchor;
+        move |_ev: web_sys::FocusEvent| {
+            pipeline.update_value(|p| p.composition_cancel());
+            dragging.set(false);
+            drag_anchor.set_value(None);
+        }
+    };
+
+    // Pointer selection: the drag picks CELLS, not pixels, and the cells
+    // are the ones the painter used -- the same metrics, so a cell can
+    // never be two different things.
+    let on_canvas_mousedown = {
+        let focus_surface = Rc::clone(&focus_surface);
+        let canvas_ref = canvas_ref;
+        let cell_metrics = cell_metrics;
+        let drag_anchor = drag_anchor;
+        let dragging = dragging;
+        let selection = selection;
+        let repaint_tick = repaint_tick;
+        move |ev: web_sys::MouseEvent| {
+            // The canvas is the VIEW; the text field is the KEYBOARD. The
+            // click focuses the field, so an IME and the clipboard have
+            // somewhere to go.
+            ev.prevent_default();
+            focus_surface();
+            let Some(cell) = cell_at(&ev, canvas_ref, cell_metrics.get_value()) else {
+                selection.set(None);
+                repaint_tick.update(|tick| *tick = tick.wrapping_add(1));
+                return;
+            };
+            drag_anchor.set_value(Some(cell));
+            dragging.set(true);
+            selection.set(Some(Selection::new(cell.0, cell.1, cell.0, cell.1)));
+            repaint_tick.update(|tick| *tick = tick.wrapping_add(1));
+        }
+    };
+
+    let on_canvas_mousemove = {
+        let canvas_ref = canvas_ref;
+        let cell_metrics = cell_metrics;
+        let drag_anchor = drag_anchor;
+        let dragging = dragging;
+        let selection = selection;
+        let repaint_tick = repaint_tick;
+        move |ev: web_sys::MouseEvent| {
+            if !dragging.get_untracked() {
+                return;
+            }
+            let Some(anchor) = drag_anchor.get_value() else {
+                return;
+            };
+            let Some(cell) = cell_at(&ev, canvas_ref, cell_metrics.get_value()) else {
+                return;
+            };
+            selection.set(Some(Selection::new(anchor.0, anchor.1, cell.0, cell.1)));
+            repaint_tick.update(|tick| *tick = tick.wrapping_add(1));
+        }
+    };
+
+    let on_canvas_mouseup = {
+        let dragging = dragging;
+        move |_ev: web_sys::MouseEvent| {
+            dragging.set(false);
+        }
+    };
     let reconnecting = services.text.reconnecting.clone();
     let retry_label = services.text.retry.clone();
     let new_label = services.text.new_tab.clone();
+    let input_label = services.text.input_label.clone();
+    let copy_label = services.text.copy.clone();
     view! {
         // `data-terminal-view=""`: anchor for Part 2's `qa/terminal`
         // real-device rig. Zero in-crate consumers today -- keep it anyway.
@@ -623,14 +993,25 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
                 close_tab_label=services.text.close_tab.clone()
                 // Selection belongs to the local tab model. A click is accepted
                 // only when the existing tab is open, then the view attaches to it.
+                //
+                // The gesture also asks for the focus: the user picked this
+                // terminal, so the caret belongs here -- but only if the
+                // terminal is still the visible one when it is ready.
                 on_select=Callback::new(move |sid: String| {
                     selection_request.set(Some(sid));
+                    focus_request.set(true);
                 })
                 on_close=Callback::new(move |sid: String| close_request.set(Some(sid)))
-                on_new=Callback::new(move |(): ()| new_request.update(|request| *request += 1))
+                on_new=Callback::new(move |(): ()| {
+                    new_request.update(|request| *request += 1);
+                    focus_request.set(true);
+                })
             />
             <Show when=move || tabs.get().tabs().is_empty()>
-                <button type="button" class="px-3 py-2 text-sm" disabled=move || actions_disabled.get() on:click=move |_| new_request.update(|n| *n += 1)>{new_label.clone()}</button>
+                <button type="button" class="px-3 py-2 text-sm" disabled=move || actions_disabled.get() on:click=move |_| {
+                    new_request.update(|n| *n += 1);
+                    focus_request.set(true);
+                }>{new_label.clone()}</button>
             </Show>
             <div class="px-3 py-1 text-sm" role="status" data-terminal-status="">
                 {move || if status.get() { String::new() } else { reconnecting.clone() }}
@@ -641,12 +1022,43 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
             {move || error.get().map(|e| view! {
                 <div class="px-3 py-2 text-sm text-danger" role="alert">{e}</div>
             })}
+            {move || input_error.get().map(|e| view! {
+                <div class="px-3 py-2 text-sm text-danger" role="alert" data-terminal-input-error="">{e}</div>
+            })}
+            <Show when=move || selection.get().is_some_and(|s| !s.is_empty())>
+                <div class="px-3 py-1 text-sm">
+                    <button type="button" class="px-2 py-1" data-terminal-copy="" on:click=move |_| copy_selection()>
+                        {copy_label.clone()}
+                    </button>
+                </div>
+            </Show>
+            // The terminal's KEYBOARD: a real, focusable text field, hidden
+            // from sight but not from the focus ring. A canvas cannot hold
+            // text, so without this field an IME has nothing to compose
+            // into and the clipboard has nowhere to land.
+            <input
+                node_ref=input_ref
+                type="text"
+                autocomplete="off"
+                aria-label=input_label
+                style="position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0"
+                on:keydown=on_surface_keydown
+                on:input=on_input
+                on:compositionstart=on_composition_start
+                on:compositionupdate=on_composition_update
+                on:compositionend=on_composition_end
+                on:paste=on_paste
+                on:blur=on_surface_blur
+            />
             <canvas
                 node_ref=canvas_ref
                 tabindex="0"
                 class="flex-1 min-h-0 outline-none"
-                on:keydown=on_keydown
+                on:keydown=on_canvas_keydown
                 on:paste=on_paste
+                on:mousedown=on_canvas_mousedown
+                on:mousemove=on_canvas_mousemove
+                on:mouseup=on_canvas_mouseup
             />
         </div>
     }
@@ -688,12 +1100,11 @@ fn canvas_ctx(
 /// synchronous effect body.
 fn measure_and_report(
     canvas_ref: NodeRef<leptos::html::Canvas>,
-    services: Rc<TerminalServices>,
-    session_id: Option<String>,
     font_family: String,
     font_size_px: f64,
     repaint_tick: RwSignal<u32>,
-    owner: StoredValue<bool>,
+    cell_metrics: StoredValue<Option<render::CellMetrics>>,
+    resize: StoredValue<render::ResizeCoalescer>,
 ) {
     let Some((canvas, ctx)) = canvas_ctx(canvas_ref) else {
         return;
@@ -712,19 +1123,15 @@ fn measure_and_report(
     let _ = ctx.scale(dpr, dpr);
     repaint_tick.update(|n| *n = n.wrapping_add(1));
 
+    // ONE measurement: the metrics the pointer maths uses are the metrics
+    // the painter used, so a cell can never be two different things.
     let m = render::measure(&ctx, &font_family, font_size_px);
+    cell_metrics.try_set_value(Some(m));
     let (rows, cols) = render::viewport_cells(css_w, css_h, &m);
-    let Some(sid) = session_id else { return };
-    spawn_local(async move {
-        let _ = (services.invoke)(
-            "pty.resize".to_string(),
-            serde_json::json!({ "session_id": sid, "rows": rows, "cols": cols }),
-        )
-        .await;
-        if owner.try_get_value().is_some() {
-            repaint_tick.update(|n| *n = n.wrapping_add(1));
-        }
-    });
+    // The size is NOT sent from here. A burst of geometry changes would
+    // become a burst of RPCs; the coalescer keeps the latest one and the
+    // loop sends that.
+    resize.try_update_value(|r| r.observe(rows, cols));
 }
 
 async fn open_terminal_streams(
@@ -782,6 +1189,86 @@ fn device_pixel_ratio() -> f64 {
         .map(|w| w.device_pixel_ratio())
         .unwrap_or(1.0)
         .max(1.0)
+}
+
+/// Is this a CONTROL byte -- something with no text to insert?
+///
+/// A printable key is inserted by the text field and arrives through its
+/// `input` event; a control byte (`Enter`, `Tab`, `Escape`, `Ctrl-C`) has no
+/// text at all, so it has to be claimed by the key handler or the field
+/// would swallow it.
+fn is_control_bytes(bytes: &[u8]) -> bool {
+    match bytes.first() {
+        Some(byte) => *byte < 0x20 || *byte == 0x7f,
+        None => false,
+    }
+}
+
+/// The cell under the pointer.
+///
+/// The metrics are the PAINTER's metrics: the painter works in CSS pixels
+/// (the device-pixel scale is applied to the context, not to the
+/// coordinates), so the pointer's client coordinates are divided by the
+/// cell size in the same space. One measurement, one set of cells.
+fn cell_at(
+    ev: &web_sys::MouseEvent,
+    canvas_ref: NodeRef<leptos::html::Canvas>,
+    metrics: Option<render::CellMetrics>,
+) -> Option<(u16, u16)> {
+    let metrics = metrics?;
+    if metrics.width <= 0.0 || metrics.height <= 0.0 {
+        return None;
+    }
+    let el = canvas_ref.try_get_untracked().flatten()?;
+    let rect = el.get_bounding_client_rect();
+    let x = f64::from(ev.client_x()) - rect.left();
+    let y = f64::from(ev.client_y()) - rect.top();
+    if x < 0.0 || y < 0.0 {
+        return None;
+    }
+    let col = (x / metrics.width).floor();
+    let row = (y / metrics.height).floor();
+    if col < 0.0 || row < 0.0 {
+        return None;
+    }
+    Some((row as u16, col as u16))
+}
+
+/// Write to the clipboard from a user gesture.
+///
+/// The clipboard is permission-gated and can fail for reasons the user can
+/// act on. A failure that is invisible is a clipboard that silently did not
+/// update, so the failure is surfaced -- WITHOUT the content, which must
+/// not end up in a message or a log.
+fn write_clipboard(content: &str, failed: &str, error: &RwSignal<Option<String>>) {
+    let Some(window) = web_sys::window() else {
+        error.try_update(|slot| *slot = Some(failed.to_string()));
+        return;
+    };
+    let Some(clipboard) = window.navigator().clipboard() else {
+        error.try_update(|slot| *slot = Some(failed.to_string()));
+        return;
+    };
+    let promise = clipboard.write_text(content);
+    let on_ok = wasm_bindgen::closure::Closure::once_into_js(std::panic::AssertUnwindSafe({
+        let error = *error;
+        move || {
+            error.try_update(|slot| *slot = None);
+        }
+    }));
+    let on_err = wasm_bindgen::closure::Closure::once_into_js(std::panic::AssertUnwindSafe({
+        let error = *error;
+        let failed = failed.to_string();
+        move || {
+            error.try_update(|slot| *slot = Some(failed.clone()));
+        }
+    }));
+    let then = js_sys::Reflect::get(&promise, &JsValue::from_str("then"));
+    if let Ok(then) = then {
+        if let Some(function) = then.dyn_ref::<js_sys::Function>() {
+            let _ = function.call2(&promise, &on_ok, &on_err);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1241,11 +1728,6 @@ mod tests {
              Root tag was: {opening_tag:?}"
         );
     }
-    #[test]
-    fn pty_input_base64_preserves_control_and_utf8_bytes() {
-        assert_eq!(super::encode_base64(&[0x03, 0x00, 0xff]), "AwD/");
-        assert_eq!(super::encode_base64("终端".as_bytes()), "57uI56uv");
-    }
 }
 
 fn read_error(text: &TerminalText, error: &str) -> String {
@@ -1262,30 +1744,6 @@ fn write_error(text: &TerminalText, error: &str) -> String {
     } else {
         error.to_string()
     }
-}
-
-fn encode_base64(bytes: &[u8]) -> String {
-    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let lookup = |idx: usize| -> char { TABLE.get(idx).map(|&b| b as char).unwrap_or('=') };
-    let mut output = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let first = chunk.first().copied().unwrap_or(0);
-        let second = chunk.get(1).copied().unwrap_or(0);
-        let third = chunk.get(2).copied().unwrap_or(0);
-        output.push(lookup((first >> 2) as usize));
-        output.push(lookup(((first << 4 | second >> 4) & 0x3f) as usize));
-        output.push(if chunk.len() > 1 {
-            lookup(((second << 2 | third >> 6) & 0x3f) as usize)
-        } else {
-            '='
-        });
-        output.push(if chunk.len() > 2 {
-            lookup((third & 0x3f) as usize)
-        } else {
-            '='
-        });
-    }
-    output
 }
 
 #[component]
