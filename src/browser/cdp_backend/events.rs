@@ -155,6 +155,11 @@ pub(super) fn apply_event(tabs: &mut TabTable, ev: &CdpEvent) -> bool {
         // `Runtime.evaluate` turns the loader over properly. So on that engine
         // NOTHING loader-based can see a click-driven navigation — not this
         // arm, not `PageState::build`'s reset, not `navigate()`'s boundary.
+        // Re-measured 2026-11-25 on v0.2.7 (`qa/browser_dual` caps stage,
+        // premise 3): the stale loader did not reproduce — the frame tree held
+        // the new loader, and the main-frame event either carried it or did not
+        // arrive. That is one reading on one build, and v0.2.2 can still be
+        // pinned, so the other layer below stays load-bearing.
         //
         // That case is covered by the OTHER layer, and this comment names it so
         // the next reader does not conclude the document layer handles it:

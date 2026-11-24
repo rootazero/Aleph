@@ -414,14 +414,40 @@ fn walk(
     Ok(())
 }
 
+/// The box obscura's `DOM.getBoxModel` answers when its own
+/// `getBoundingClientRect` call yields no usable array: a constant quad at
+/// (8, 8), `width: 100`, `height: 20`, reported as SUCCESS with no marker on
+/// the wire (`crates/obscura-cdp/src/domains/dom.rs`, same arm at v0.2.2 and
+/// v0.2.7). Spent as geometry it becomes a click target and an `@8,8 100x20`
+/// token for an element whose position nobody measured.
+///
+/// [`rect_from`] answers `None` for it, which costs differently on the two
+/// visibility paths ([`super::build::visibility_of`]):
+/// * computed flags present (the normal path) — visibility is the flags', so
+///   the element keeps its ref and loses only its rectangle;
+/// * computed flags absent (the cross-check failed twice) — the box is the
+///   only evidence of presence, so the element drops out of the snapshot
+///   alongside every other boxless node. Accepted: an invented box is no
+///   evidence of presence either (判据 §8).
+///
+/// A REAL element at exactly (8, 8) and exactly 100×20 pays the same price.
+/// Width and height are compared too, so a box one pixel off is kept.
+const OBSCURA_FALLBACK_BORDER: [f64; 8] = [8.0, 8.0, 108.0, 8.0, 108.0, 28.0, 8.0, 28.0];
+
 /// A quad's bounding rect, or `None` when the engine reported nothing usable.
 ///
 /// A zero-area box is `None`, not `Some(0x0)`. obscura returns exactly that
 /// quad for a `display:none` element **successfully** (U2), and a zero rect
 /// spent downstream is a click at (0, 0) — a wrong answer that looks like an
 /// answer.
+///
+/// [`OBSCURA_FALLBACK_BORDER`] at exactly 100×20 is `None` for the same
+/// reason: it is the box obscura invents, not one it measured.
 fn rect_from(model: &dom::BoxModel) -> Option<Rect> {
     if model.border.len() < 8 {
+        return None;
+    }
+    if model.border == OBSCURA_FALLBACK_BORDER && model.width == 100 && model.height == 20 {
         return None;
     }
     let q = &model.border;
@@ -685,7 +711,9 @@ pub async fn fetch_obscura(
 ///
 /// **Q1 — does the engine resolve INHERITED properties before it answers?**
 /// This settles `visibility` and `cursor`, the two CSS inherits. Chromium: YES.
-/// obscura: NO, and that is read in obscura's own source below, never inferred
+/// obscura: **YES for `visibility` since v0.2.7, NO for `cursor`** — both
+/// measured on the binary (see "v0.2.7" below). At v0.2.2 the answer was NO
+/// for both, read in obscura's own source and on that binary, never inferred
 /// from CSS — CSS is exactly what the first version of this paragraph reasoned
 /// from, and it was right about the CSSOM and wrong about the only engine this
 /// file serves.
@@ -699,7 +727,7 @@ pub async fn fetch_obscura(
 /// | | Q1 `visibility` | Q1 `cursor` | Q2 `display` | Q2 `opacity` |
 /// |---|---|---|---|---|
 /// | Chromium | resolved ⇒ nothing to do | resolved ⇒ nothing to do | **yes**: a `display:none` subtree gets no `DOMSnapshot` layout entry at all, so `computed` is `None` and `rect: None` carries it (`fetch_chromium::computed_from`'s own doc) | **NO** — see below |
-/// | obscura | own value ⇒ **this function** | own value, and not even that (see the `cursor` section) | no ⇒ **this function** | no ⇒ **this function** |
+/// | obscura v0.2.7 | resolved ⇒ nothing to do (v0.2.2: own value ⇒ this function ORed it) | own value, and not even that (see the `cursor` section) | no ⇒ **this function** | no ⇒ **this function** |
 ///
 /// **So: `fetch_chromium` must not copy the `visibility` arm** — Chrome answers
 /// Q1 yes, and OR-ing there would hide elements Chrome correctly called visible.
@@ -720,6 +748,37 @@ pub async fn fetch_obscura(
 /// `visibility: hidden` descendant already reads `hidden`. The capture is
 /// `fetch_chromium`'s `fixtures/local-hidden-containers.domsnapshot.json`; the
 /// per-arm readings are in that function's doc, not restated here.
+///
+/// ## v0.2.7: `visibility` arrives resolved, so it is no longer ORed
+///
+/// Measured on the v0.2.7 release binary (`OBSCURA_READ_ON_SHA256` below),
+/// with Aleph's own flags, against stylesheet and inline fixtures:
+///
+/// | element | `getComputedStyle(el).visibility` |
+/// |---|---|
+/// | `<span>` inside `<div style="visibility:hidden">` | `"hidden"` (v0.2.2: `"visible"`) |
+/// | `<span>` inside `#ss-vis { visibility: hidden }` | `"hidden"` |
+/// | `<span>` appended by script into the hidden `<div>` | `"hidden"` |
+/// | `<span style="visibility:visible">` inside the hidden `<div>` | **`"visible"`** |
+///
+/// The last row is what v0.2.2 could not express, and the reason the arm goes
+/// rather than stays as a harmless no-op. On v0.2.7 an OR down the parent edge
+/// would produce exactly the error the v0.2.2 section below calls its residual:
+/// it would hide a descendant that re-shows itself. The engine now resolves
+/// what the OR approximated, so the OR can only add that error. The upstream
+/// change is obscura `f019ebe` ("implement checkVisibility() and inherit
+/// computed visibility").
+///
+/// **Cost, stated:** an operator-pinned v0.2.2 binary
+/// (`[general.browser.obscura] binary_path`) loses the arm and reports an
+/// inherited-hidden descendant as visible again. The stamp test
+/// (`the_obscura_source_claims_here_name_the_build_they_were_read_on`) covers
+/// the pinned build only, and says so.
+///
+/// The text-node arm is unchanged: a text node has no row, so it still takes
+/// its parent element's resolved answer whole, `visibility` included.
+///
+/// ## History: the v0.2.2 reading that justified the arm
 ///
 /// **Measured first, on the installed `v0.2.2` binary with default flags; the
 /// source lines below are corroboration, not the evidence.**
@@ -907,9 +966,15 @@ pub async fn fetch_obscura(
 ///   with the stamp below, which NAMES it, because obscura is the default
 ///   engine and the way this one rots is a user finding their modal has gone
 ///   missing, not a reader noticing a stale sentence.
-/// * `visibility` — cascaded, **and this OR is an APPROXIMATION.** See below.
+/// * `visibility` — **not cascaded since v0.2.7**: the engine resolves it (see
+///   "v0.2.7" above). Up to v0.2.2 it was cascaded, and that OR was an
+///   APPROXIMATION; the next section is kept as the record of why.
 ///
-/// ## The residual on `visibility`, named as a residual
+/// ## The residual the v0.2.2 `visibility` arm carried (history)
+///
+/// Closed by v0.2.7, which serves the resolved value, so the trade below no
+/// longer has to be made. Its reasoning still applies to any flag this
+/// function must re-derive from own values.
 ///
 /// `unwrap_or(false)` collapses two different answers into one wire value:
 /// `None` ("inherit — ask my ancestor") and `Some(false)` ("I declare
@@ -1066,14 +1131,11 @@ fn cascade_effective_styles(nodes: &mut [RawNode]) {
             (RawNodeKind::Element, Some(mut own)) => {
                 own.display_none |= from_parent.display_none;
                 own.opacity_zero |= from_parent.opacity_zero;
-                // `visibility` rides the SAME edge as the other two, and the
-                // reason is obscura's, not CSS's: `getComputedStyle` answers
-                // the element's OWN `visibility_hidden` with `None` collapsed
-                // into `false`, so the inheritance obscura computed into
-                // `effectively_invisible` never crosses the wire. Approximate
-                // in one direction only — see this function's doc for the
-                // residual and for why that direction is the cheap one.
-                own.visibility_hidden |= from_parent.visibility_hidden;
+                // `visibility` is NOT ORed: since v0.2.7 obscura answers the
+                // RESOLVED value, so the element's own row is already right,
+                // including a `visibility: visible` child that re-shows itself
+                // inside a hidden container — the one case an OR here would
+                // get wrong. See this function's doc, "v0.2.7".
                 own
             }
             // An element with no row of its own means the cross-check dropped
@@ -1620,30 +1682,26 @@ mod tests {
         assert_eq!(raw.viewport.content_height, 720);
     }
 
-    /// **F3 — the three flags obscura answers per-element are cascaded by the
-    /// fetcher, `visibility` among them.**
+    /// **F3 — the two non-inherited flags are cascaded by the fetcher;
+    /// `visibility` is the engine's own resolved answer since v0.2.7.**
     ///
     /// `Computed`'s doc puts this obligation on the fetcher: a child of a
     /// `display: none` subtree must itself carry `display_none: true`, because
-    /// `visibility_of` judges each node alone and never walks ancestors. The raw
-    /// `getComputedStyle` answer does not provide that on this engine, and the
-    /// reason is **obscura's, not CSS's**: `display` and `opacity` are not
-    /// inherited properties at all, and `visibility` is — but obscura's
-    /// computed-style map serves `style.visibility_hidden.unwrap_or(false)`,
-    /// the element's OWN value, and the inheritance pass that resolves it
-    /// writes `effectively_invisible`, which reaches no CDP surface
-    /// (`crates/obscura-render/src/lib.rs:1409-1413`, `paint.rs:1379-1387`,
-    /// `dom.rs:1043-1049`, all at `v0.2.2`). See [`cascade_effective_styles`]
-    /// for the reading that settles it on the shipped binary, for the full
-    /// derivation and for the residual the OR carries.
+    /// `visibility_of` judges each node alone and never walks ancestors.
+    /// `display` and `opacity` are not inherited properties, so the raw
+    /// `getComputedStyle` answer never provides that, on any engine.
     ///
-    /// **This assertion previously pinned the opposite answer**, on the CSS
-    /// argument — which is true of the CSSOM and false of this engine — and a
-    /// guard that would be cited as evidence for the defect costs more than no
-    /// guard at all (判据 §3). What it pins now is the OR: delete
-    /// `own.visibility_hidden |= from_parent.visibility_hidden` and `A#home`
-    /// goes back to reporting itself visible inside a hidden `<header>`, and
-    /// this test names it.
+    /// `visibility` IS inherited, and how this test treats it follows the
+    /// build. On v0.2.2 obscura served the element's OWN value
+    /// (`style.visibility_hidden.unwrap_or(false)`; `crates/obscura-render/src/lib.rs:1409-1413`,
+    /// `paint.rs:1379-1387`, `dom.rs:1043-1049` at `v0.2.2`), so the fetcher
+    /// ORed it down the tree and this test pinned `A#home` hidden. v0.2.7
+    /// resolves it (upstream f019ebe, measured on the stamped binary), so the
+    /// OR was removed — it would hide a child that declares
+    /// `visibility: visible` — and this test now pins the opposite: `A#home`'s
+    /// own row says visible and it stays visible. Re-adding the OR flips that
+    /// assertion, which is the point. See [`cascade_effective_styles`]' "v0.2.7"
+    /// section for the readings and the cost to an operator-pinned v0.2.2.
     ///
     /// **The corpus needed a shape the captured page does not otherwise give.**
     /// Every hidden container in the real fixture (`#hidden-none`,
@@ -1698,23 +1756,22 @@ mod tests {
         assert!(!crate::browser::page_state::build::visibility_of(h1));
         assert!(by_id(ID_MAIN).computed.unwrap().opacity_zero);
 
-        // …and `visibility` IS propagated, because obscura answers the own
-        // value. `A#home` is the `<header>`'s child; on the engine this fetcher
-        // serves, `getComputedStyle(a).visibility` is `"visible"` here, and
-        // believing it hands the model a ref carrying a PLAUSIBLE rect — a
-        // `visibility: hidden` subtree still generates boxes — so the click
-        // lands on a real coordinate where nothing is.
+        // …and `visibility` is NOT propagated: since v0.2.7 obscura answers
+        // the RESOLVED value, so an element whose own row says visible inside
+        // a hidden `<header>` is one that declared `visibility: visible` and
+        // re-showed itself — the engine's answer is the right one, and an OR
+        // here would hide it (`cascade_effective_styles`' doc, "v0.2.7").
         assert!(by_id(ID_HEADER).computed.unwrap().visibility_hidden);
         let a_home = by_id(ID_A_HOME);
         assert!(
-            a_home.computed.unwrap().visibility_hidden,
-            "an element inside a visibility:hidden subtree must say so: obscura \
-             reports each element's OWN `visibility`, never the inherited one \
-             (obscura-render/src/paint.rs:1379-1387 at v0.2.2), so nothing \
-             upstream of \
-             this cascade has applied the inheritance"
+            !a_home.computed.unwrap().visibility_hidden,
+            "obscura v0.2.7 resolves `visibility` itself, so a child row that \
+             says visible is a re-showing child and must stay visible — the \
+             v0.2.2-era OR would hide it"
         );
-        assert!(!crate::browser::page_state::build::visibility_of(a_home));
+        assert!(crate::browser::page_state::build::visibility_of(a_home));
+        // Its text node still takes the element's answer whole.
+        assert!(!by_id(ID_A_HOME_TEXT).computed.unwrap().visibility_hidden);
 
         // A sibling subtree is untouched — the cascade follows edges, not the
         // document order it walks in.
@@ -1744,9 +1801,8 @@ mod tests {
         // `the_cascade_is_transitive_through_an_element_that_carries_no_flag`
         // below is the one that covers that arm, and it needs a DIFFERENT shape
         // — two ELEMENT edges — which this row set does not contain.
-        let read: [(u64, fn(Computed) -> bool, &str); 3] = [
+        let read: [(u64, fn(Computed) -> bool, &str); 2] = [
             (ID_TITLE_TEXT, |c| c.display_none, "display_none"),
-            (ID_A_HOME_TEXT, |c| c.visibility_hidden, "visibility_hidden"),
             (ID_H1_TEXT, |c| c.opacity_zero, "opacity_zero"),
         ];
         for (id, flag, name) in read {
@@ -1779,15 +1835,16 @@ mod tests {
     /// picks the flag up from `MAIN` and `LI` does not, so `LI` goes back to
     /// reporting itself visible while nothing else moves.
     ///
-    /// Run over all three cascaded flags rather than one, because the three
+    /// Run over both cascaded flags rather than one, because the two
     /// `|=` lines are separate statements and a break in one is invisible to an
     /// assertion about another — which is the thing the other test's comment
     /// once claimed for itself and does not have.
     #[tokio::test]
     async fn the_cascade_is_transitive_through_an_element_that_carries_no_flag() {
-        let cases: [(usize, fn(Computed) -> bool, &str); 3] = [
+        // `visibility_hidden` (column 1) is not cascaded since v0.2.7 — the
+        // engine resolves it — so only the two flags this function still ORs.
+        let cases: [(usize, fn(Computed) -> bool, &str); 2] = [
             (0, |c| c.display_none, "display_none"),
-            (1, |c| c.visibility_hidden, "visibility_hidden"),
             (2, |c| c.opacity_zero, "opacity_zero"),
         ];
         for (col, flag, name) in cases {
@@ -2034,11 +2091,15 @@ mod tests {
     ///
     /// The repair is not a better sentence. It is a second value that **cannot
     /// be filled in from this repository or from the release page.**
-    const OBSCURA_READ_ON_TAG: &str = "v0.2.2";
+    const OBSCURA_READ_ON_TAG: &str = "v0.2.7";
 
-    /// sha256 of the EXTRACTED executable every behavioural reading in this
-    /// file was taken on: `~/.aleph/runtimes/obscura/v0.2.2/obscura`,
-    /// 94,864,016 bytes, Mach-O arm64, hashed on the measuring host.
+    /// sha256 of the EXTRACTED executable the current behavioural readings in
+    /// this file were taken on: `obscura` from the v0.2.7
+    /// `obscura-aarch64-macos.tar.gz` (archive sha256 `fc7e73f2…`, matching the
+    /// published digest), 72,726,992 bytes, Mach-O arm64, hashed on the
+    /// measuring host. The v0.2.2 readings this file still quotes as history
+    /// were taken on the binary in the first [`RECEIPTS`] row (94,864,016
+    /// bytes).
     ///
     /// **Not the release ARCHIVE's digest — and that distinction is the whole
     /// reason this constant is a digest at all.**
@@ -2067,7 +2128,7 @@ mod tests {
     /// 64 hex characters — that is fabrication, not the accident this repairs,
     /// and no unit test in this crate can tell the two apart.
     const OBSCURA_READ_ON_SHA256: &str =
-        "9e14e821fca149698b7dbf21c4e61a727b1032469660f2459792f18bbc2b2b4b";
+        "d09acc26fb1c5b0ea2ef297f55ea2430f765395d8cfd2eda78fcb50458153195";
 
     /// Every `(tag, digest)` this stamp has ever certified, oldest first. The
     /// LAST row is the live one, and appending is the only legal edit.
@@ -2103,10 +2164,16 @@ mod tests {
     /// produces a plausible value without holding the artefact is closed;
     /// inventing one is a different act, and this file does not claim to catch
     /// it.
-    const RECEIPTS: &[(&str, &str)] = &[(
-        "v0.2.2",
-        "9e14e821fca149698b7dbf21c4e61a727b1032469660f2459792f18bbc2b2b4b",
-    )];
+    const RECEIPTS: &[(&str, &str)] = &[
+        (
+            "v0.2.2",
+            "9e14e821fca149698b7dbf21c4e61a727b1032469660f2459792f18bbc2b2b4b",
+        ),
+        (
+            "v0.2.7",
+            "d09acc26fb1c5b0ea2ef297f55ea2430f765395d8cfd2eda78fcb50458153195",
+        ),
+    ];
 
     /// One claim class the stamp dates.
     struct DatedClaim {
@@ -2186,9 +2253,13 @@ mod tests {
             homes: &["src/browser/page_state/fetch_obscura.rs"],
         },
         DatedClaim {
-            claim: "`visibility` is served as the element's OWN value with `None` \
-                    collapsed to false, which is the entire reason \
-                    `cascade_effective_styles` exists",
+            claim: "`visibility` is served RESOLVED since v0.2.7 — a child of a \
+                    hidden container reads `hidden`, a child that declares \
+                    `visibility: visible` reads `visible` — which is why \
+                    `cascade_effective_styles` no longer ORs it. At v0.2.2 it was \
+                    the element's OWN value with `None` collapsed to false, and \
+                    the OR existed for that. If a new tag goes back to own \
+                    values, the OR has to come back",
             // obscura's own field name for the resolved answer. A second author
             // of "obscura resolves inheritance somewhere the wire cannot see"
             // has to name the place.
@@ -2251,7 +2322,10 @@ mod tests {
         },
         DatedClaim {
             claim: "NO TOP LAYER: `showModal()` sets an attribute and a flag, the \
-                    promoted dialog's rect is byte-identical before and after, and \
+                    promoted dialog lays out as an ordinary static block INSIDE \
+                    its ancestor's box (v0.2.7: a closed dialog has no box, the \
+                    open one is full-width normal flow; v0.2.2: rect \
+                    byte-identical before and after), and \
                     `DOM.getTopLayerElements` does not exist on this engine",
             needle: "no top layer",
             // `fetch_chromium.rs` says the phrase about its OWN captures, not
@@ -2266,13 +2340,16 @@ mod tests {
         DatedClaim {
             claim: "the DOM AGENT: the `dom::get_document(conn, Some(session), \
                     -1, true)` call in `fetch_obscura` turns on \
-                    NO event stream (0 unsolicited `DOM.*` events, measured twice) \
-                    and `DOM.disable` does not exist (`-32601 Unknown DOM method: \
-                    disable`) — which is why this fetcher does not pair its \
-                    handshake with a disable the way `fetch_chromium` does. If the \
-                    new tag emits `DOM.*` events, that omission becomes Task 17d's \
-                    D1 live on the DEFAULT engine; if it also implements \
-                    `DOM.disable`, the fix is `top_layer_backend_ids`' shape",
+                    NO event stream (0 unsolicited `DOM.*` events, measured twice \
+                    on v0.2.2 and again on v0.2.7 after a mutation) — which is why \
+                    this fetcher does not pair its handshake with a disable the \
+                    way `fetch_chromium` does. `DOM.disable` was absent on v0.2.2 \
+                    (`-32601 Unknown DOM method: disable`) and is accepted on \
+                    v0.2.7, with `backendNodeId` lookups still answering after it. \
+                    If a new tag emits `DOM.*` events, that omission becomes Task \
+                    17d's D1 live on the DEFAULT engine, and since v0.2.7 has \
+                    `DOM.disable` the fix is `top_layer_backend_ids`' shape, gated \
+                    on the build",
             needle: "Unknown DOM method",
             // `fetch_chromium.rs` carries the obscura reading because its
             // enabler/disabler census is justified BY it: an engine-blind
@@ -2341,13 +2418,15 @@ mod tests {
     /// and the reason is a fact about the BUILD, which is
     /// exactly the kind of fact this stamp exists to expire. Measured twice,
     /// independently, on the installed v0.2.2 artefact with default flags, with
-    /// a Chromium control in the third column:
+    /// a Chromium control in the last column. The v0.2.7 column was measured
+    /// once on the stamped binary, with a DOM mutation after the tree read;
+    /// the dialog rows are `qa/browser_dual`'s caps stage's to re-read:
     ///
-    /// | | obscura v0.2.2 | Chromium |
-    /// |---|---|---|
-    /// | unsolicited `DOM.*` with no handshake | **0** | 0 |
-    /// | unsolicited `DOM.*` after `DOM.getDocument(-1, true)` | **0** | many |
-    /// | `DOM.disable` | **`-32601 Unknown DOM method: disable`** | `ok` |
+    /// | | obscura v0.2.2 | obscura v0.2.7 | Chromium |
+    /// |---|---|---|---|
+    /// | unsolicited `DOM.*` with no handshake | **0** | — | 0 |
+    /// | unsolicited `DOM.*` after `DOM.getDocument(-1, true)` | **0** | **0** | many |
+    /// | `DOM.disable` | **`-32601 Unknown DOM method: disable`** | `ok`; lookups still answer | `ok` |
     /// | `DOM.enable` | accepted, and still emits nothing | — |
     /// | `alert()` → `Page.javascriptDialogOpening` | **no frames** | fires |
     /// | `Runtime.evaluate` after `alert()` | **0 ms, value 2** | times out at 4000 ms |
@@ -2848,6 +2927,31 @@ mod tests {
         let raw = fetch_with_every_box_answered(no_box_model()).await;
         assert!(raw.frames[0].nodes.iter().all(|n| n.rect.is_none()));
         // The flags are untouched, so the page is still describable.
+        assert!(raw.frames[0].nodes.iter().any(|n| n.computed.is_some()));
+    }
+
+    fn box_model_of(x: f64, y: f64, w: f64, h: f64) -> dom::BoxModel {
+        serde_json::from_value(box_model(x, y, w, h)["model"].clone()).expect("a BoxModel")
+    }
+
+    /// obscura's invented fallback box is no box — and only that exact box:
+    /// one pixel taller, or one pixel to the right, is a measurement.
+    #[test]
+    fn the_fabricated_fallback_box_is_no_box() {
+        assert_eq!(rect_from(&box_model_of(8.0, 8.0, 100.0, 20.0)), None);
+        assert!(rect_from(&box_model_of(8.0, 8.0, 100.0, 21.0)).is_some());
+        assert!(rect_from(&box_model_of(9.0, 8.0, 100.0, 20.0)).is_some());
+    }
+
+    /// On the normal path the invented box costs the rectangle and nothing
+    /// else: the flags are intact, so visibility and refs are still decided.
+    #[tokio::test]
+    async fn a_fabricated_box_reply_yields_rect_none_and_keeps_the_flags() {
+        let raw = fetch_with_every_box_answered(Responder::Reply(box_model(
+            8.0, 8.0, 100.0, 20.0,
+        )))
+        .await;
+        assert!(raw.frames[0].nodes.iter().all(|n| n.rect.is_none()));
         assert!(raw.frames[0].nodes.iter().any(|n| n.computed.is_some()));
     }
 

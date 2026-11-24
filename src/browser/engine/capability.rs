@@ -188,28 +188,24 @@ static OBSCURA: EngineCapabilities = EngineCapabilities {
     // both witnesses. What is being recorded here is that it is right on one
     // of them, not two.
     js_dialogs: Cap::Unsupported,
-    // **Unsupported as the fail-closed answer to an unknown, not as a
-    // measurement.** `browser_drag` does NOT send `Input.dispatchDragEvent`:
-    // `cdp_backend::actions::drag` sends six `Input.dispatchMouseEvent`s
-    // (move, press, three interpolated moves, release), which obscura answers
-    // `ok`. Task 0 probed `Input.dispatchDragEvent` — absent on obscura, and a
-    // report-success-no-op on Chrome — but that is a method no Aleph verb
-    // dispatches, so it certifies nothing either way about this row.
+    // **Supported on a MEASUREMENT (2026-11-25, pinned v0.2.7, arm64 macOS)
+    // — `qa/browser_dual`'s caps stage, by effect.** `browser_drag` does NOT
+    // send `Input.dispatchDragEvent`: `cdp_backend::actions::drag` sends six
+    // `Input.dispatchMouseEvent`s (move, press, three interpolated moves,
+    // release). Task 0 probed `dispatchDragEvent`, a method no Aleph verb
+    // dispatches, so it never decided this row; until v0.2.7 the row was
+    // `Unsupported` as the fail-closed answer to that unknown (判据 §8).
     //
-    // What is actually unknown is whether OBSCURA delivers a synthetic mouse
-    // sequence to a page's own drag listeners. Nobody has measured that on
-    // this engine: T0 read no `effect` for `Input.dispatchMouseEvent`, and
-    // `qa/browser_managed`'s drag stage — which DOES read the effect, and is
-    // what Chromium's row rests on — has never been run against obscura. (The
-    // earlier draft of this comment said "nobody has measured it" without the
-    // engine, which read as though the two rows answered the same evidence
-    // state; they do not, and the field doc above now states the rule both
-    // arms are answering.) An unknown may not be spent as a permission
-    // (判据 §8), so the row stays
-    // `Unsupported` and the refusal names chromium — and
-    // `capability_table_agrees_with_the_t0_support_matrix`'s `NOT_PROBED`
-    // carries the reason, so this exemption is argued rather than forgotten.
-    drag: Cap::Unsupported,
+    // The caps stage now sends exactly that six-event gesture at
+    // `caps.html`: the press lands on the source and the release on the
+    // target (`dropped:mouseup`), which is the bar Chromium's row passes in
+    // `qa/browser_managed`'s drag stage (an HTML5 drop OR a mouseup on the
+    // target). **Caveat the row cannot carry:** obscura fires NO HTML5
+    // drag-and-drop events (`dragstart`/`drop` never ran), so a page whose drop
+    // target listens only for `drop` will not react, and nothing reads that
+    // back. A `Partial` here would refuse the pointer drags that do work,
+    // because `require` admits only `Supported`.
+    drag: Cap::Supported,
     // **Corrected in task 16 against Task 0's probe, which ran the binary.**
     // The source survey read `domains/dom.rs:257`, saw a real implementation,
     // and recorded YES. The probe asked the running v0.2.2 server and got:
@@ -234,8 +230,10 @@ static OBSCURA: EngineCapabilities = EngineCapabilities {
     pdf: Cap::Supported,
     // Landed in obscura ce9714f, 2026-09-04 (`domains/input.rs:329`).
     insert_text: Cap::Supported,
-    // **Unsupported as a MEASURED verdict, 2026-09-26, obscura v0.2.2
-    // (x86_64-linux) — `qa/browser_dual`'s `caps` stage, three premises.**
+    // **Supported on a MEASUREMENT (2026-11-25, pinned v0.2.7, arm64 macOS) —
+    // opened by Aleph's document nonce, not by the new build.** History first:
+    // it was a MEASURED `Unsupported` on 2026-09-26, obscura v0.2.2
+    // (x86_64-linux) — `qa/browser_dual`'s `caps` stage, three premises.
     // Written `Unsupported` at implementation time as the fail-closed answer
     // to an unknown (no binary on that machine); the caps probe then measured
     // the two premises the row stated and added the third the first two
@@ -256,10 +254,17 @@ static OBSCURA: EngineCapabilities = EngineCapabilities {
     //      measured end-to-end by `qa/browser_dual`'s `click` stage, which
     //      went red on exactly that message the one run the row was flipped
     //      to `Supported`.
-    // The gate stays closed; what would open it is a read-back that survives
-    // (or detects) the navigation the dispatch caused, not a new obscura build
-    // alone.
-    effect_probe: Cap::Unsupported,
+    // What opened the gate is the second of those: a read-back that DETECTS
+    // the navigation. `arm_effect_probe` now installs a per-arm nonce in
+    // `window.__alephProbeDoc` beside the flag, and `effect_probe_readback_js`
+    // answers `{ otherDocument: true }` when the nonce is gone — which
+    // `ProbeReadback::Unknown` turns into Skipped, so the action stands. On
+    // v0.2.7 the read-back still answers a clean null after a self-navigating
+    // click, but the caps stage measured the nonce GONE on the new document
+    // (premises 1-2 still TRUE), so that null is no longer read as a miss.
+    // If a future build preserves `window` globals across a navigation, the
+    // nonce survives with them and this row has to close again.
+    effect_probe: Cap::Supported,
     // A pure lookup against Aleph's own per-tab `RefTable` — no engine
     // round-trip, so nothing to measure per engine (see the field doc).
     ref_precheck: Cap::Supported,
@@ -524,27 +529,26 @@ mod tests {
     /// second copy over there would be the two-authors shape this file spends
     /// most of its guards on (判据 §1).
     /// The rows in [`NOT_PROBED`] are the ones whose evidence lives
-    /// outside the T0 matrix. `effect_probe`'s entry changed KIND on
-    /// 2026-09-26: still not settled by T0's wire probe (it has no label
-    /// there), but no longer UNMEASURED — `qa/browser_dual`'s `caps` stage
-    /// ran the three premises against the real pinned-tag binary and the
-    /// row is now a measured `Unsupported` (see the `OBSCURA` row for the
-    /// evidence and what would open the gate).
+    /// outside the T0 matrix. `drag` and `effect_probe` are both settled by
+    /// `qa/browser_dual`'s `caps` stage against the real pinned-tag binary
+    /// (see the `OBSCURA` rows for the readings).
     const NOT_PROBED: [(&str, &str); 6] = [
         (
             "drag",
             "T0's Input.dispatchDragEvent label measures a method no browser_* verb \
-             dispatches; browser_drag sends Input.dispatchMouseEvent, whose effect T0 \
-             did not read on either engine",
+             dispatches; browser_drag sends Input.dispatchMouseEvent, whose effect is \
+             read by qa/browser_managed's drag stage on chromium and by \
+             qa/browser_dual's caps stage on obscura (2026-11-25: press on the source, \
+             mouseup on the target, no HTML5 drop) — a MEASURED Supported on both",
         ),
         (
             "effect_probe",
             "T0's wire matrix has no label for the probe; settled instead by \
-             qa/browser_dual's caps stage against the real pinned-tag binary on \
-             2026-09-26: premises 1-2 (window-global persistence, node-level \
-             delivery) hold, premise 3 (read-back after a self-navigating click) \
-             fails — a clean null on the new document is indistinguishable from \
-             'never landed', so the probe would lie on every link click",
+             qa/browser_dual's caps stage against the real pinned-tag binary: on \
+             v0.2.2 (2026-09-26) premise 3 failed — a clean null on the new \
+             document read as 'never landed'; on the 2026-11-25 pin the probe's \
+             document nonce is gone after the navigation, so that null is \
+             detected and skipped — a MEASURED Supported on both engines",
         ),
         (
             "ref_precheck",
@@ -606,9 +610,8 @@ mod tests {
         // Both engines upload, so this one's hint is the engine you are already
         // on — which is why `upload`'s refusal is unreachable on both today.
         assert_eq!(supported_by(|c| c.file_upload), Some(Engine::Chromium));
-        // The probe row: obscura is Unsupported on a MEASUREMENT (caps stage,
-        // 2026-09-26 — the read-back cannot survive a self-navigating click),
-        // so the door the hint names must be chromium.
+        // Both engines run the probe since v0.2.7 (caps stage, 2026-11-25),
+        // so the hint, like `drag`'s, names the first supporting engine.
         assert_eq!(supported_by(|c| c.effect_probe), Some(Engine::Chromium));
     }
 
@@ -851,29 +854,30 @@ mod tests {
             .collect();
         assert_eq!(
             exempt_disagreements,
-            vec![
-                "drag",
-                "effect_probe",
-                "network_interception",
-                "error_events"
-            ],
+            vec!["network_interception", "error_events"],
             "a matrix-exempt row other than \
-             `drag`/`effect_probe`/`network_interception`/`error_events` \
+             `network_interception`/`error_events` \
              now answers differently per engine. That difference is published to the model \
              as a route, and nothing in the matrix decides it — state the \
              reading that does, beside BOTH values, and check it here"
         );
 
-        // effect_probe's disagreement rests on a MEASURED ruling since
-        // 2026-09-26 (caps stage: premise 3 fails — the read-back answers a
-        // clean null on the new document after a self-navigating click), and
-        // BOTH values must say what the row needs to flip — checked in the
-        // source rather than trusted, because a published route resting on an
-        // argument nobody can read is the shape this test exists for.
+        // effect_probe's and drag's disagreements CLOSED on 2026-11-25 (caps
+        // stage on v0.2.7: the probe's nonce detects the navigation; the
+        // six-event drag lands). Like screencast below, the citation asserts
+        // stay: obscura's Supported rests on that stage, and on the nonce
+        // CONDITION the row states for closing again.
         let src = include_str!("capability.rs");
+        let production = crate::utils::source_scan::production_prefix(src);
         assert!(
-            src.contains("qa/browser_dual") && src.contains("clean null"),
+            production.contains("qa/browser_dual")
+                && production.contains("clean null")
+                && production.contains("__alephProbeDoc"),
             "obscura's effect_probe row no longer states the measurement it rests on"
+        );
+        assert!(
+            production.contains("dropped:mouseup") && production.contains("HTML5"),
+            "obscura's drag row no longer states its reading and the HTML5 caveat"
         );
         // network_interception's disagreement rests on a MEASUREMENT on the
         // obscura side since 2026-09-27 (the mock plan's Task 4 probe:
@@ -885,7 +889,6 @@ mod tests {
         // Scoped to the PRODUCTION prefix: the plan name also appears in
         // NOT_PROBED, which is test text — a citation that lives only beside
         // the guard certifies nothing about the rows it guards.
-        let production = crate::utils::source_scan::production_prefix(src);
         assert!(
             production.contains("2026-09-24-browser-network-mock"),
             "the network_interception rows no longer name the Task 4 probe that \
