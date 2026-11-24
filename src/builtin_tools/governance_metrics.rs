@@ -115,6 +115,10 @@ fn now_epoch_secs() -> i64 {
 
 #[async_trait]
 impl AlephTool for GovernanceMetricsTool {
+    fn services() -> Vec<aleph_slot_api::capability::Service> {
+        vec![crate::memory::runtime::required_service()]
+    }
+
     const NAME: &'static str = "governance_metrics";
     const DESCRIPTION: &'static str = r#"Read-only governance reality probe for the loop-governance audit ring.
 
@@ -142,16 +146,13 @@ last_run_status); for the loop topology use `loop_graph(action="status")`."#;
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let (window_days, since_epoch_secs) = resolve_window(args.window_days, now_epoch_secs());
 
+        // Every partition: a correction recorded inside a project-scoped
+        // session lands in that session's own partition (`main<SEP><ns>`), so
+        // a per-agent count read it as zero corrections while the row existed.
         let corrections = self
             .raw_store
-            .get_raw_by_path_prefix_since(
-                CORRECTION_PATH_PREFIX,
-                crate::routing::DEFAULT_AGENT_ID,
-                since_epoch_secs,
-                usize::MAX,
-            )
-            .await?
-            .len();
+            .count_raw_by_path_prefix_since_all_agents(CORRECTION_PATH_PREFIX, since_epoch_secs)
+            .await?;
         // Base corpus only. Project sub-cycles now write rows of their own, and
         // summing them here would inflate `runs` by the number of open projects
         // while leaving `feedback_distilled_sum` flat — that stage is

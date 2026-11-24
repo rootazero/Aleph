@@ -110,6 +110,7 @@ pub struct SessionCompactor {
     pub(crate) indexer: Option<crate::memory::transcript_indexer::TranscriptIndexer>,
     pub(crate) raw_memory_writer: Option<Arc<dyn RawMemoryStore>>,
     pub(crate) capture_registry: Option<Arc<MemoryExtensionRegistry>>,
+    pub(crate) memory_runtime: Option<std::sync::Weak<crate::memory::runtime::MemoryRuntime>>,
     /// Mirrors `MemoryConfig.project_scoped`. When on, post-turn session
     /// memory (pre-compress + d0/d1/d2 summaries + transcript index) is
     /// written under the active project's composed agent id so a session's

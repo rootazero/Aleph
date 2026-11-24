@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "NSH Panel parity receipt",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/validReceipt"
+    },
+    {
+      "type": "object",
+      "required": ["status", "invalid_reason"],
+      "properties": {
+        "status": { "const": "INVALID" },
+        "invalid_reason": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    }
+  ],
+  "$defs": {
+    "validReceipt": {
+      "type": "object",
+      "required": [
+        "version",
+        "run_id",
+        "status",
+        "threshold_status",
+        "baseline",
+        "candidate",
+        "comparisons",
+        "thresholds",
+        "acceptance_reason",
+        "invalid_reason",
+        "failure_metrics",
+        "protocol"
+      ],
+      "properties": {
+        "version": { "const": 1 },
+        "run_id": { "type": "string", "minLength": 1 },
+        "status": { "const": "VALID" },
+        "threshold_status": { "enum": ["ACCEPTED", "NOT_ACCEPTED"] },
+        "baseline": { "$ref": "#/$defs/metricSummary" },
+        "candidate": { "$ref": "#/$defs/metricSummary" },
+        "comparisons": { "type": "object", "minProperties": 1 },
+        "thresholds": {
+          "type": "object",
+          "required": ["latency_median_ratio", "latency_p95_ratio", "rss_median_ratio", "threads_median_delta"],
+          "properties": {
+            "latency_median_ratio": { "type": "number", "minimum": 0 },
+            "latency_p95_ratio": { "type": "number", "minimum": 0 },
+            "rss_median_ratio": { "type": "number", "minimum": 0 },
+            "threads_median_delta": { "type": "number", "minimum": 0 }
+          },
+          "additionalProperties": false
+        },
+        "acceptance_reason": { "type": ["string", "null"] },
+        "invalid_reason": { "const": null },
+        "failure_metrics": { "type": "array", "items": { "type": "string" } },
+        "protocol": {
+          "type": "object",
+          "required": ["warmups", "measured", "p95_rank_one_based", "order"],
+          "properties": {
+            "warmups": { "const": 10 },
+            "measured": { "const": 30 },
+            "p95_rank_one_based": { "const": 29 },
+            "order": { "const": "tauri_then_nsh" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "metricSummary": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "required": ["median", "p95", "sample_count", "warmup_count"],
+        "properties": {
+          "median": { "type": "number", "minimum": 0 },
+          "p95": { "type": "number", "minimum": 0 },
+          "sample_count": { "const": 30 },
+          "warmup_count": { "const": 10 }
+        },
+        "additionalProperties": false
+      }
+    }
+  }
+}

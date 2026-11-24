@@ -39,7 +39,7 @@ pub trait ProviderFactory: Send + Sync {
     ///   (e.g. `provider_type = "tavily"` with no `api_key` in the vault).
     ///   The registry logs a warning at WARN level and continues with the
     ///   remaining backends; the search tool can still satisfy requests
-    ///   via other providers or the legacy `TAVILY_API_KEY` env path.
+    ///   via other providers or a Tavily key supplied by config/vault.
     /// - `Err(_)` — hard construction failure (e.g. malformed `base_url`).
     ///   The registry treats this identically to `Ok(None)` for now
     ///   (warn + skip) but the distinct return shape lets future code

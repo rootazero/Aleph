@@ -174,6 +174,10 @@ pub enum ErrorPolicyMode {
     Reply,
     Silent,
     Once,
+    /// Intended for "tell only the operator", but delivery has no actor
+    /// identity, so it behaves exactly like [`Self::Once`]: the first error in
+    /// the window is shown to whoever is in the chat. Selecting it logs a
+    /// warning at config-load time.
     AdminOnly,
 }
 
@@ -181,8 +185,6 @@ pub enum ErrorPolicyMode {
 pub struct ErrorPolicy {
     #[serde(default)]
     pub mode: ErrorPolicyMode,
-    #[serde(default)]
-    pub template: Option<String>,
     #[serde(default = "default_max_retries")]
     pub max_retries: u32,
 }
@@ -191,7 +193,6 @@ impl Default for ErrorPolicy {
     fn default() -> Self {
         Self {
             mode: ErrorPolicyMode::default(),
-            template: None,
             max_retries: 3,
         }
     }
@@ -201,8 +202,8 @@ impl Default for ErrorPolicy {
 pub struct TelegramTopicConfig {
     pub id: String,
     pub thread_id: i32,
-    pub agent: Option<String>,
     pub block_streaming: Option<bool>,
+    pub agent: Option<String>,
     pub error_policy: Option<ErrorPolicy>,
     pub dm_policy: Option<DmPolicy>,
     pub group_policy: Option<GroupPolicy>,
@@ -214,8 +215,8 @@ pub struct TelegramTopicConfig {
 pub struct TelegramGroupConfig {
     pub id: String,
     pub chat_id: i64,
-    pub agent: Option<String>,
     pub block_streaming: Option<bool>,
+    pub agent: Option<String>,
     pub error_policy: Option<ErrorPolicy>,
     pub group_policy: Option<GroupPolicy>,
     pub send_typing: Option<bool>,
@@ -223,7 +224,7 @@ pub struct TelegramGroupConfig {
     pub topics: Vec<TelegramTopicConfig>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[derive(Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct TelegramAccountConfig {
     pub id: String,
     pub bot_token: String,
@@ -264,6 +265,32 @@ pub struct TelegramAccountConfig {
     pub link_preview: Option<LinkPreviewMode>,
     #[serde(default)]
     pub groups: Vec<TelegramGroupConfig>,
+}
+
+/// Hand-written so the bot token never reaches a log line, a panic message or
+/// a `tracing` field. Every other field is printed as-is.
+impl std::fmt::Debug for TelegramAccountConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TelegramAccountConfig")
+            .field("id", &self.id)
+            .field("bot_token", &"<redacted>")
+            .field("token_fingerprint", &self.token_fingerprint)
+            .field("bot_username", &self.bot_username)
+            .field("default_agent", &self.default_agent)
+            .field("dm_policy", &self.dm_policy)
+            .field("group_policy", &self.group_policy)
+            .field("send_typing", &self.send_typing)
+            .field("require_mention", &self.require_mention)
+            .field("allowed_users", &self.allowed_users)
+            .field("allowed_groups", &self.allowed_groups)
+            .field("streaming", &self.streaming)
+            .field("error_policy", &self.error_policy)
+            .field("proxy_url", &self.proxy_url)
+            .field("html_fallback", &self.html_fallback)
+            .field("link_preview", &self.link_preview)
+            .field("groups", &self.groups)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]

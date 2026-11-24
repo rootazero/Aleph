@@ -34,12 +34,22 @@ crate-type = ["cdylib", "rlib"]
 # itself is omitted so `cargo build --all-targets` and clippy do not try to
 # produce a native .exe from a WASM-only entry.
 
+[features]
+panel-modular = ["shared-ui-logic/panel"]
+panel-tab-spike = ["panel-modular", "shared-ui-logic/panel-tab-spike"]
+runtime-qa = []
+default = ["legacy-terminal"]
+legacy-terminal = ["dep:aleph-terminal-ui"]
+
 [dependencies]
 # Leptos framework (0.8.15 - The latest and greatest)
 leptos = { version = "0.8", features = ["csr"] }
 leptos_meta = { version = "0.8" }
 leptos_router = { version = "0.8" }
 leptos_i18n = { version = "0.6", features = ["csr", "cookie", "plurals", "format_datetime", "format_nums"] }
+
+# Browser-local declaration integrity validation
+base64 = { workspace = true }
 
 # WASM bindings
 wasm-bindgen = "0.2"
@@ -131,6 +141,7 @@ qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 # Internal logic
 shared-ui-logic = { path = "../../shared/ui_logic", features = ["wasm"] }
 aleph-protocol = { path = "../../shared/protocol" }
+aleph-terminal-ui = { path = "tabs/terminal-ui", optional = true }
 
 # Terminal grid rendering — must resolve to the same copy the server's PTY
 # grid uses (`cargo tree -p alephcore -i unicode-width`), which is 0.2.0.

@@ -15,8 +15,8 @@ use crate::memory::notes::KnowledgeNote;
 // rejected them, so those supersessions never promoted to a `superseded_by`
 // edge. The bare form (written by `NoteDrift::mark_contradictory`) still matches.
 static SUPERSEDED_RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-    // rust-doctor-disable-next-line unwrap-in-production
-    regex::Regex::new(r"(?m)^## Superseded by \[\[([^\]]+)\]\](?:\s*\([^)]*\))?\s*$").unwrap()
+    regex::Regex::new(r"(?m)^## Superseded by \[\[([^\]]+)\]\](?:\s*\([^)]*\))?\s*$")
+        .expect("superseded heading regex must compile")
 });
 
 /// Read the rendered markdown for `## Superseded by [[X]]` headings and merge
@@ -26,7 +26,9 @@ pub fn sync_body_to_frontmatter(note: &mut KnowledgeNote, full_markdown: &str) {
     let mut existing: std::collections::HashSet<String> =
         note.superseded_by.iter().cloned().collect();
     for cap in SUPERSEDED_RE.captures_iter(full_markdown) {
-        existing.insert(cap[1].to_string());
+        if let Some(target) = cap.get(1) {
+            existing.insert(target.as_str().to_string());
+        }
     }
     note.superseded_by = existing.into_iter().collect();
     note.superseded_by.sort();

@@ -11,8 +11,9 @@ use crate::a2a::domain::{A2AMessage, A2ARole};
 use crate::a2a::port::RegisteredAgent;
 use crate::a2a::service::SmartRouter;
 use crate::agents::sub_agents::{SubAgentRequest, SubAgentResult};
+use crate::memory::extensions::insert_helper::insert_with_runtime_capture_filter;
 use crate::memory::extensions::types::CaptureCtx;
-use crate::memory::extensions::{insert_with_capture_filter, MemoryExtensionRegistry};
+use crate::memory::extensions::MemoryExtensionRegistry;
 use crate::memory::namespace::NamespaceScope;
 use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
 use crate::sync_primitives::Arc;
@@ -32,6 +33,7 @@ pub struct A2ASubAgent {
     /// When set, delegation raw-memory writes go through `insert_with_capture_filter`.
     /// Task 11 wires the real registry at startup; `None` falls back to direct insert.
     capture_registry: Option<Arc<MemoryExtensionRegistry>>,
+    memory_runtime: Option<std::sync::Weak<crate::memory::runtime::MemoryRuntime>>,
 }
 
 /// Outcome of an A2A delegation via [`A2ASubAgent::execute_delegation`].
@@ -54,7 +56,18 @@ impl A2ASubAgent {
             client_pool,
             raw_memory_writer: None,
             capture_registry: None,
+            memory_runtime: None,
         }
+    }
+
+    /// Drop the cached HTTP client of an agent that is no longer registered.
+    ///
+    /// The pool is keyed by agent card id and the client bakes in the agent's
+    /// auth token. Without this, an agent removed through `a2a_agents remove`
+    /// keeps its client (and its token) in the pool for the lifetime of the
+    /// process.
+    pub async fn forget_client(&self, agent_id: &str) {
+        self.client_pool.remove(agent_id).await;
     }
 
     /// Attach an optional raw-memory writer for delegation hooks (Spec 1 G2).
@@ -74,6 +87,33 @@ impl A2ASubAgent {
     pub fn with_capture_registry(mut self, registry: Arc<MemoryExtensionRegistry>) -> Self {
         self.capture_registry = Some(registry);
         self
+    }
+
+    pub fn with_memory_runtime(
+        mut self,
+        runtime: std::sync::Weak<crate::memory::runtime::MemoryRuntime>,
+    ) -> Self {
+        self.memory_runtime = Some(runtime);
+        self
+    }
+
+    async fn record_delegation_memory(
+        &self,
+        request: &SubAgentRequest,
+        result: &SubAgentResult,
+        child_agent_id: &str,
+    ) {
+        if let Some(w) = self.raw_memory_writer.clone() {
+            emit_delegation_raw_with_registry(
+                w,
+                request,
+                result,
+                child_agent_id,
+                self.capture_registry.clone(),
+                self.memory_runtime.clone(),
+            )
+            .await;
+        }
     }
 
     /// Send a delegation request to an already-resolved remote agent.
@@ -115,15 +155,8 @@ impl A2ASubAgent {
                 // Spec 1 G2: record delegation outcome for parent-agent memory.
                 // Record unconditionally (matching sync path behaviour) so the
                 // parent sees failed attempts and can learn / retry.
-                if let Some(w) = self.raw_memory_writer.clone() {
-                    emit_delegation_raw_with_registry(
-                        w,
-                        request,
-                        &result,
-                        &agent.card.id,
-                        self.capture_registry.clone(),
-                    );
-                }
+                self.record_delegation_memory(request, &result, &agent.card.id)
+                    .await;
                 Ok(result)
             }
             Err(e) => {
@@ -187,15 +220,8 @@ impl A2ASubAgent {
                 };
 
                 // Spec 1 G2: record delegation outcome for parent-agent memory.
-                if let Some(w) = self.raw_memory_writer.clone() {
-                    emit_delegation_raw_with_registry(
-                        w,
-                        request,
-                        &result,
-                        &agent.card.id,
-                        self.capture_registry.clone(),
-                    );
-                }
+                self.record_delegation_memory(request, &result, &agent.card.id)
+                    .await;
 
                 Ok(result)
             }
@@ -287,12 +313,13 @@ impl A2ASubAgent {
 /// Kept as the entry point for the A2A path which still has those types in
 /// scope; the new harness-based `subagent_spawner` calls the primitive helper
 /// directly to avoid coupling on a2a request/result shapes.
-pub(crate) fn emit_delegation_raw_with_registry(
+pub(crate) async fn emit_delegation_raw_with_registry(
     writer: Arc<dyn RawMemoryStore>,
     request: &SubAgentRequest,
     result: &SubAgentResult,
     child_agent_id: impl Into<String>,
     registry: Option<Arc<MemoryExtensionRegistry>>,
+    runtime: Option<std::sync::Weak<crate::memory::runtime::MemoryRuntime>>,
 ) {
     let parent_agent_id = request
         .parent_agent_id
@@ -307,7 +334,9 @@ pub(crate) fn emit_delegation_raw_with_registry(
         parent_session_id,
         child_agent_id.into(),
         registry,
-    );
+        runtime,
+    )
+    .await;
 }
 
 /// Primitive-arg core of the G2 hook — agnostic to a2a request/result types.
@@ -317,10 +346,9 @@ pub(crate) fn emit_delegation_raw_with_registry(
 /// row that the A2A cross-process path emits. Without this hook the parent
 /// agent loses every lesson its local subagents learn.
 ///
-/// Spawns a fire-and-forget tokio task to write the row and (optionally) run
-/// it through the `MemoryExtensionRegistry` capture filter. Logs and returns
-/// when no tokio runtime is available rather than panicking.
-pub(crate) fn emit_delegation_primitives(
+/// The caller observes raw persistence; admitted derived callbacks are retained
+/// by their Memory source even if the caller stops waiting.
+pub(crate) async fn emit_delegation_primitives(
     writer: Arc<dyn RawMemoryStore>,
     prompt: String,
     summary: String,
@@ -328,6 +356,7 @@ pub(crate) fn emit_delegation_primitives(
     parent_session_id: Option<String>,
     child_agent_id: String,
     registry: Option<Arc<MemoryExtensionRegistry>>,
+    runtime: Option<std::sync::Weak<crate::memory::runtime::MemoryRuntime>>,
 ) {
     let content = format!("DELEGATION_PROMPT:\n{prompt}\n\nDELEGATION_RESULT:\n{summary}",);
 
@@ -338,24 +367,20 @@ pub(crate) fn emit_delegation_primitives(
         raw = raw.with_session(sid);
     }
 
-    if let Ok(rt) = tokio::runtime::Handle::try_current() {
-        rt.spawn(async move {
-            if let Some(reg) = registry {
-                let ctx = CaptureCtx {
-                    agent_id: parent_agent_id,
-                    namespace: NamespaceScope::Owner,
-                    session_id: parent_session_id,
-                    source_hint: "delegation".into(),
-                };
-                if let Err(e) = insert_with_capture_filter(&writer, &reg, &ctx, raw).await {
-                    tracing::warn!("delegation raw_memory write failed: {e}");
-                }
-            } else if let Err(e) = writer.insert_raw_memory(&raw).await {
-                tracing::warn!("delegation raw_memory write failed: {e}");
-            }
-        });
-    } else {
-        tracing::warn!("no tokio runtime for delegation emit; skipping");
+    if let Some(reg) = registry {
+        let ctx = CaptureCtx {
+            agent_id: parent_agent_id,
+            namespace: NamespaceScope::Owner,
+            session_id: parent_session_id,
+            source_hint: "delegation".into(),
+        };
+        if let Err(e) =
+            insert_with_runtime_capture_filter(&writer, &reg, runtime.as_ref(), &ctx, raw).await
+        {
+            tracing::warn!("delegation raw_memory write failed: {e}");
+        }
+    } else if let Err(e) = writer.insert_raw_memory(&raw).await {
+        tracing::warn!("delegation raw_memory write failed: {e}");
     }
 }
 
@@ -597,10 +622,15 @@ mod spec1_tests {
             "Completed: found 3 key insights",
         );
 
-        emit_delegation_raw_with_registry(writer, &request, &result, "trading-agent-id", None);
-
-        // Fire-and-forget: let the spawned task complete.
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        emit_delegation_raw_with_registry(
+            writer,
+            &request,
+            &result,
+            "trading-agent-id",
+            None,
+            None,
+        )
+        .await;
 
         let captured = fake.0.lock().await;
         assert_eq!(captured.len(), 1, "expected exactly one RawMemory row");
@@ -642,9 +672,7 @@ mod spec1_tests {
             .with_parent_agent("parent-agent-007");
         let result = crate::agents::sub_agents::SubAgentResult::success(request.id.clone(), "Done");
 
-        emit_delegation_raw_with_registry(writer, &request, &result, "child-007", None);
-
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        emit_delegation_raw_with_registry(writer, &request, &result, "child-007", None, None).await;
 
         let captured = fake.0.lock().await;
         assert_eq!(captured.len(), 1);

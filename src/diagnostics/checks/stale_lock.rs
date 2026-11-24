@@ -21,15 +21,13 @@ use crate::diagnostics::check::{settle_probe, unknown_finding, HealthCheck, Post
 use crate::diagnostics::finding::{Finding, RepairOutcome, Severity};
 use crate::utils::instance_lock::{
     diagnose_holder, is_lock_held, remove_holder_record_if_lock_free, StaleRecordRepair,
+    HOLDER_FILENAME,
 };
 
 const ID: &str = "core/instance-lock";
 /// Noun phrase the "unknown" finding is titled with — `"Instance lock
 /// unknown"`. See [`crate::diagnostics::check::unknown_finding`].
 const SUBJECT: &str = "Instance lock";
-/// Only for the arm where the sidecar could not be read at all (so there is
-/// no `HolderDiagnostic` to take the path from) and for the tests' fixtures.
-const HOLDER_FILENAME: &str = "aleph.lock.pid";
 
 pub struct StaleLockCheck {
     data_dir: PathBuf,
@@ -46,10 +44,6 @@ impl StaleLockCheck {
 impl HealthCheck for StaleLockCheck {
     fn id(&self) -> &'static str {
         ID
-    }
-
-    fn title(&self) -> &'static str {
-        "Instance lock"
     }
 
     async fn run(&self, posture: Posture) -> Vec<Finding> {
@@ -98,10 +92,48 @@ impl HealthCheck for StaleLockCheck {
         };
 
         if holder.process_alive {
-            return vec![Finding::ok(
+            let data_dir = self.data_dir.clone();
+            let held = settle_probe(
                 ID,
-                "Server running",
-                format!("aleph.lock held by live PID {}.", holder.pid),
+                SUBJECT,
+                tokio::task::spawn_blocking(move || is_lock_held(&data_dir)).await,
+            );
+            let held = match held {
+                Err(finding) => return vec![finding],
+                Ok(Err(e)) => {
+                    return vec![unknown_finding(
+                        ID,
+                        SUBJECT,
+                        format!(
+                            "the holder record names live PID {}, but the lock itself could not \
+                             be probed: {e}. Treating the singleton as unknown rather than \
+                             running; nothing was changed.",
+                            holder.pid
+                        ),
+                    )];
+                }
+                Ok(Ok(held)) => held,
+            };
+            if held {
+                return vec![Finding::ok(
+                    ID,
+                    "Server running",
+                    format!("aleph.lock held by live PID {}.", holder.pid),
+                )];
+            }
+            return vec![Finding::problem(
+                ID,
+                Severity::Warning,
+                "Holder record stale",
+                format!(
+                    "the holder record names live PID {}, but aleph.lock is free; the \
+                     recorded process is not the running Aleph server.",
+                    holder.pid
+                ),
+            )
+            .with_fix_hint(
+                "Remove the stale holder record only after confirming the PID is unrelated, \
+                 then re-run doctor.",
             )];
         }
 

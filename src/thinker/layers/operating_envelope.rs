@@ -106,8 +106,7 @@ impl PromptLayer for OperatingEnvelopeLayer {
         let network_line = ctx
             .sandbox_summary
             .as_ref()
-            .map(crate::sandbox::SandboxSummary::network_prompt_line)
-            .unwrap_or_default();
+            .and_then(crate::sandbox::SandboxSummary::network_prompt_line);
         let policy_profile_line = ctx
             .sandbox_summary
             .as_ref()

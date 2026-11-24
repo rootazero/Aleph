@@ -96,11 +96,13 @@ pub async fn set(
     let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let mut params = json!({ "content": content });
-    if let Some(name) = file_name {
-        params["file_name"] = json!(name);
-    }
-    if let Some(a) = agent {
-        params["agent_id"] = json!(a);
+    if let Some(map) = params.as_object_mut() {
+        if let Some(name) = file_name {
+            map.insert("file_name".to_string(), json!(name));
+        }
+        if let Some(a) = agent {
+            map.insert("agent_id".to_string(), json!(a));
+        }
     }
     let result: Value = client.call("identity.set", Some(params)).await?;
 

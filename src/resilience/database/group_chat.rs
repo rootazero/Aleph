@@ -19,7 +19,6 @@ pub struct GroupChatTurn {
     pub timestamp: i64,
 }
 
-/// An active session summary.
 impl StateDatabase {
     // =========================================================================
     // Group Chat Sessions CRUD

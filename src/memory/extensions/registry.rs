@@ -203,7 +203,7 @@ impl MemoryExtensionRegistry {
         envelope: &mut MemoryEnvelope,
     ) -> Result<(), AlephError> {
         for ext in self.snapshot() {
-            let name = ext.name().to_string();
+            let name = ext.name();
             match timeout(ON_RETRIEVE_TIMEOUT, ext.on_retrieve(ctx, envelope)).await {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => warn!("memory extension '{name}' on_retrieve failed: {e}"),
@@ -234,7 +234,7 @@ impl MemoryExtensionRegistry {
     ) -> Result<CaptureDecision, AlephError> {
         let mut failures: Vec<String> = Vec::new();
         for ext in self.snapshot() {
-            let name = ext.name().to_string();
+            let name = ext.name();
             match timeout(ON_CAPTURE_TIMEOUT, ext.on_capture(ctx, raw)).await {
                 Ok(Ok(CaptureDecision::Allow)) => continue,
                 Ok(Ok(blk @ CaptureDecision::Block { .. })) => {
@@ -300,7 +300,7 @@ impl MemoryExtensionRegistry {
     /// producer here only if a real session-rotation event is introduced.
     pub async fn dispatch_on_session_switch(&self, ctx: &SessionSwitchCtx) {
         for ext in self.snapshot() {
-            let name = ext.name().to_string();
+            let name = ext.name();
             match timeout(ON_SESSION_SWITCH_TIMEOUT, ext.on_session_switch(ctx)).await {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => warn!("memory extension '{name}' on_session_switch failed: {e}"),
@@ -330,7 +330,7 @@ impl MemoryExtensionRegistry {
         let mut parts: Vec<String> = Vec::new();
         let mut bytes_used = 0usize;
         for ext in self.snapshot() {
-            let name = ext.name().to_string();
+            let name = ext.name();
             match timeout(ON_PRE_COMPRESS_TIMEOUT, ext.on_pre_compress(ctx)).await {
                 Ok(Ok(s)) => {
                     let trimmed = s.trim();
@@ -384,9 +384,36 @@ impl MemoryExtensionRegistry {
     /// Wired at the subagent spawn site (`src/agents/subagent_tool/spawn.rs`):
     /// fired fire-and-forget with a trimmed `result_summary` after the child
     /// run completes (or panics/errors, surfaced as `(error) …`).
+    pub(crate) async fn dispatch_owned_on_delegation(
+        self: &Arc<Self>,
+        runtime: Option<&std::sync::Weak<crate::memory::runtime::MemoryRuntime>>,
+        ctx: DelegationCtx,
+    ) {
+        let Some(runtime) = runtime else {
+            self.dispatch_on_delegation(&ctx).await;
+            return;
+        };
+        let Some(operation) = runtime
+            .upgrade()
+            .and_then(|runtime| runtime.operation().ok())
+        else {
+            return;
+        };
+        let registry = self.clone();
+        if let Err(error) = operation
+            .run(async move {
+                registry.dispatch_on_delegation(&ctx).await;
+                Ok(())
+            })
+            .await
+        {
+            warn!(%error, "owned delegation callback failed");
+        }
+    }
+
     pub async fn dispatch_on_delegation(&self, ctx: &DelegationCtx) {
         for ext in self.snapshot() {
-            let name = ext.name().to_string();
+            let name = ext.name();
             match timeout(ON_DELEGATION_TIMEOUT, ext.on_delegation(ctx)).await {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => warn!("memory extension '{name}' on_delegation failed: {e}"),
@@ -395,6 +422,10 @@ impl MemoryExtensionRegistry {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "delegation_lifecycle_tests.rs"]
+mod lifecycle;
 
 #[cfg(test)]
 mod tests {

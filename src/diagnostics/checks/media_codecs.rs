@@ -171,6 +171,7 @@ async fn element_exists(name: &str) -> Result<bool, std::io::Error> {
     // tokio::time::timeout, and only a genuinely cancellable child honours it.
     // A cold `gst-inspect-1.0` rebuilds the registry and can take seconds.
     let status = tokio::process::Command::new("gst-inspect-1.0")
+        .kill_on_drop(true)
         .arg("--exists")
         .arg(name)
         .stdout(std::process::Stdio::null())
@@ -217,10 +218,6 @@ async fn probe() -> CodecVerdict {
 impl HealthCheck for MediaCodecsCheck {
     fn id(&self) -> &'static str {
         CHECK_ID
-    }
-
-    fn title(&self) -> &'static str {
-        "Media decoders"
     }
 
     #[cfg(target_os = "linux")]

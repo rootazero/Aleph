@@ -56,30 +56,18 @@ impl AcpMemberRef {
     #[must_use]
     pub fn parse(agent_id: &str) -> Option<Self> {
         let rest = agent_id.strip_prefix(ACP_MEMBER_PREFIX)?;
-        if rest.is_empty() {
+        let (harness, session_name) = match rest.split_once('/') {
+            Some((h, "")) => (h, None),
+            Some((h, s)) => (h, Some(s)),
+            None => (rest, None),
+        };
+        if harness.is_empty() || harness.contains(':') {
             return None;
         }
-        // Reject ':' anywhere in the harness segment (everything before the
-        // first '/', or the whole rest when there is no session part).
-        let harness_end = rest.find('/').unwrap_or(rest.len());
-        if rest[..harness_end].contains(':') {
-            return None;
-        }
-        match rest.split_once('/') {
-            None => Some(Self {
-                harness_id: rest.to_string(),
-                session_name: None,
-            }),
-            Some((harness, "")) => Some(Self {
-                harness_id: harness.to_string(),
-                session_name: None,
-            }),
-            Some((harness, name)) if !harness.is_empty() => Some(Self {
-                harness_id: harness.to_string(),
-                session_name: Some(name.to_string()),
-            }),
-            _ => None,
-        }
+        Some(Self {
+            harness_id: harness.to_string(),
+            session_name: session_name.map(str::to_string),
+        })
     }
 }
 

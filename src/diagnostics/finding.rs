@@ -150,6 +150,15 @@ impl Finding {
         self.title = super::redact::redact_secrets(&self.title);
         self.detail = super::redact::redact_secrets(&self.detail);
         self.fix_hint = self.fix_hint.map(|h| super::redact::redact_secrets(&h));
+        // Tags are free-form strings too — a check that puts a path, a URL or
+        // a credential shape into a tag would leak it the same way a title
+        // would. Redacting them costs nothing: every production tag is a
+        // literal label, and a redacted literal is unchanged.
+        self.tags = self
+            .tags
+            .iter()
+            .map(|tag| super::redact::redact_secrets(tag))
+            .collect();
         self.repair_outcome = self.repair_outcome.map(|outcome| match outcome {
             RepairOutcome::Repaired { detail } => RepairOutcome::Repaired {
                 detail: super::redact::redact_secrets(&detail),
@@ -201,6 +210,7 @@ mod tests {
             "server said Bearer eyJhbGciOi",
         )
         .with_fix_hint("retry with ?apikey=abc123")
+        .with_tag("upstream-key-sk-abcdefgh12345678")
         .with_repair(RepairOutcome::Failed {
             error: "auth rejected token=deadbeef".into(),
         })
@@ -209,6 +219,7 @@ mod tests {
         assert_eq!(f.title, "probe failed for ***");
         assert_eq!(f.detail, "server said ***");
         assert_eq!(f.fix_hint.as_deref(), Some("retry with ?***"));
+        assert_eq!(f.tags, vec!["upstream-key-***".to_string()]);
         match f.repair_outcome {
             Some(RepairOutcome::Failed { ref error }) => assert_eq!(error, "auth rejected ***"),
             ref other => panic!("repair outcome not preserved: {other:?}"),

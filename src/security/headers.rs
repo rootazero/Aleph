@@ -54,16 +54,12 @@ fn is_static_asset(path: &str) -> bool {
 /// and treat the source list as the segment between a directive name and
 /// the next `;`.
 fn csp_contains_wildcard_source(csp: &str) -> bool {
-    let mut source_iter = csp.split(';');
-    source_iter.any(|directive| {
+    csp.split(';').any(|directive| {
         // Drop the directive name and inspect only the source list, so a
         // legitimate `frame-ancestors *` (already a permissive policy) is
         // flagged via this same helper. Quoted `'none'` is not a wildcard.
         let mut tokens = directive.split_whitespace();
-        match tokens.next() {
-            Some(_) => tokens.any(|tok| tok == "*"),
-            None => false,
-        }
+        tokens.next().is_some() && tokens.any(|tok| tok == "*")
     })
 }
 
@@ -193,7 +189,13 @@ fn inject_security_headers(headers: &mut http::HeaderMap, is_static: bool) {
         }
     }
 
-    if !is_static {
+    // Keep the explicit private no-store policy of authenticated asset routes.
+    // Every other non-static response still receives the mandatory default.
+    if !is_static
+        && !headers
+            .get(http::header::CACHE_CONTROL)
+            .is_some_and(|value| value == "private, no-store")
+    {
         // SAFETY: "no-store" is a valid static header value
         let v = HeaderValue::from_static(CACHE_CONTROL_NO_STORE_VALUE);
         headers.insert(http::header::CACHE_CONTROL, v);

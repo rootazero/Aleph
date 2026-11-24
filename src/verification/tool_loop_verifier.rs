@@ -176,14 +176,13 @@ impl TurnVerifier for ToolLoopVerifier {
             return VerifierVerdict::Continue;
         }
         let profile = ctx.robustness_profile;
+        let session_key = ctx.session_id.unwrap_or("(no-session)");
         if ctx.recent_tool_calls.len() < profile.repeat_threshold {
             // Not enough history to judge a loop — and arriving here is
             // also a strong signal the model is no longer thrashing on
             // Tier-2 (either the window shrank or the run reset), so we
             // clear any per-session Tier-2 counter we are tracking.
-            if let Some(sid) = ctx.session_id {
-                self.clear_tier2(sid);
-            }
+            self.clear_tier2(session_key);
             return VerifierVerdict::Continue;
         }
         let run = trailing_repeat_run(ctx.recent_tool_calls);
@@ -191,13 +190,15 @@ impl TurnVerifier for ToolLoopVerifier {
         // Tier 1 — identical (name + args_hash) consecutive calls. Fires
         // regardless of narration: an exact-repeat is never productive.
         if run >= profile.repeat_threshold {
-            let tool = &ctx.recent_tool_calls[ctx.recent_tool_calls.len() - 1].name;
+            let tool = ctx
+                .recent_tool_calls
+                .last()
+                .map(|c| c.name.as_str())
+                .unwrap_or("");
             // Tier-1 firing is also a course-correction event for Tier-2;
             // reset the per-session counter so a later Tier-2 burst can be
             // judged on its own merit.
-            if let Some(sid) = ctx.session_id {
-                self.clear_tier2(sid);
-            }
+            self.clear_tier2(session_key);
             if run >= profile.halt_threshold {
                 return VerifierVerdict::Halt {
                     reason: format!(
@@ -234,11 +235,14 @@ impl TurnVerifier for ToolLoopVerifier {
         let distinctness = distinct as f32 / ctx.recent_tool_calls.len() as f32;
         let silent_ok = !profile.silence_required || !has_text;
         if same_name_run >= TOOL_HISTORY_WINDOW && distinctness < profile.novelty_min && silent_ok {
-            let tool = &ctx.recent_tool_calls[ctx.recent_tool_calls.len() - 1].name;
-            let session = ctx.session_id.unwrap_or("(no-session)");
-            let consecutive = self.record_tier2(session);
+            let tool = ctx
+                .recent_tool_calls
+                .last()
+                .map(|c| c.name.as_str())
+                .unwrap_or("");
+            let consecutive = self.record_tier2(session_key);
             if (consecutive as usize) > profile.steer_max {
-                self.clear_tier2(session);
+                self.clear_tier2(session_key);
                 return VerifierVerdict::Halt {
                     reason: format!(
                         "tool '{tool}' stuck in a low-distinctness thrash for \
@@ -260,9 +264,7 @@ impl TurnVerifier for ToolLoopVerifier {
         // No thrash detected this turn — clear the Tier-2 counter so a
         // future wedge is judged on its own streak, not carried-over from
         // an earlier, resolved one.
-        if let Some(sid) = ctx.session_id {
-            self.clear_tier2(sid);
-        }
+        self.clear_tier2(session_key);
         VerifierVerdict::Continue
     }
 }

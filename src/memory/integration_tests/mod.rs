@@ -25,7 +25,6 @@ mod integration_tests {
         assert_eq!(config.max_hops, 3);
         assert_eq!(config.max_facts_per_hop, 5);
         assert_eq!(config.similarity_threshold, 0.7);
-        println!("RippleConfig created: {:?}", config);
     }
 
     #[tokio::test]

@@ -30,7 +30,7 @@ fn truncate_chars(text: &str, max_chars: usize) -> String {
         .char_indices()
         .nth(max_chars)
         .map_or(text.len(), |(idx, _)| idx);
-    format!("{}…", &text[..end])
+    format!("{}…", text.get(..end).unwrap_or(text))
 }
 
 /// List recent persisted trace replays.

@@ -27,7 +27,7 @@ fn test_qq_properties() {
     test_channel_properties(&channel);
 
     assert_eq!(channel.channel_type(), "qq");
-    assert!(channel.capabilities().images);
+    assert!(!channel.capabilities().images);
     assert!(channel.capabilities().replies);
     assert!(!channel.capabilities().editing);
     assert_eq!(channel.capabilities().max_message_length, 4000);

@@ -2,10 +2,6 @@ pub const fn default_enabled() -> bool {
     true
 }
 
-pub fn default_vector_db() -> String {
-    "sqlite-vec".to_string()
-}
-
 pub const fn default_embedding_timeout_ms() -> u64 {
     10000
 }

@@ -169,7 +169,7 @@ proptest! {
             prop_assert_eq!(&a.parameters, &m.parameters);
             prop_assert_eq!(a.requires_confirmation, m.requires_confirmation);
             prop_assert_eq!(a.strict, m.strict);
-            prop_assert_eq!(matches!(a.category, ToolCategory::Builtin), true);
+            prop_assert!(matches!(a.category, ToolCategory::Builtin));
         }
     }
 }

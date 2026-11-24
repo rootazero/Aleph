@@ -195,6 +195,12 @@ struct AgentFm {
     tools: Option<crate::yaml::Value>,
     #[serde(default, rename = "permissionMode")]
     permission_mode: Option<crate::yaml::Value>,
+    /// Presence-only. The plugin agent mode axis is not implemented, so a
+    /// `mode:` key must fail loudly in `parse_single_agent` instead of
+    /// being dropped by the deserializer (mirrors the disk agent loader's
+    /// `ForbiddenSystemField` for `mode`).
+    #[serde(default)]
+    mode: Option<crate::yaml::Value>,
 }
 
 // ============================================================================
@@ -755,6 +761,17 @@ fn parse_single_agent(
     let content = std::fs::read_to_string(md_path)
         .with_context(|| format!("Failed to read {}", md_path.display()))?;
     let (fm, body): (AgentFm, String) = parse_frontmatter(&content, md_path)?;
+    // The mode axis exists for disk agents only: a plugin agent always
+    // registers as `All`. A `mode:` key would otherwise be dropped by the
+    // deserializer and the agent would run with a mode the author never
+    // asked for — fail loudly instead.
+    if fm.mode.is_some() {
+        return Err(anyhow::anyhow!(
+            "agent frontmatter `mode:` is not supported for plugin agents \
+             (the plugin agent mode axis is not implemented): {}",
+            md_path.display()
+        ));
+    }
     let name = fm.name.unwrap_or_else(|| default_name.to_string());
     log_unapplied_permission_mode(fm.permission_mode.as_ref(), &name);
     // An agent's `tools:` only narrows, like a command's `allowed-tools:`:
@@ -821,14 +838,17 @@ pub fn parse_hooks_content(
     base: &Path,
     plugin_id: &str,
 ) -> Result<Vec<CapabilityDeclaration>> {
-    let config: HooksFileConfig = match serde_json::from_str::<HooksFileConfig>(content) {
-        Ok(c) if !c.hooks.is_empty() => c,
-        // Either the wrapper was absent or it was present but empty; trying the
-        // bare shape is safe because an empty map yields no capabilities either
-        // way.
-        _ => HooksFileConfig {
-            hooks: serde_json::from_str(content)?,
-        },
+    // The two shapes are told apart by the PRESENCE of the top-level `hooks`
+    // field, not by whether the parsed map is empty: `{"hooks":{}}` is a
+    // valid, empty configuration, and re-reading it as a bare event map
+    // failed on the type (`hooks` is an object there, not an array).
+    let raw: serde_json::Value = serde_json::from_str(content)?;
+    let config: HooksFileConfig = if raw.get("hooks").is_some() {
+        serde_json::from_value::<HooksFileConfig>(raw)?
+    } else {
+        HooksFileConfig {
+            hooks: serde_json::from_value(raw)?,
+        }
     };
 
     let mut caps = Vec::new();
@@ -858,6 +878,22 @@ pub fn parse_hooks_content(
             // siblings.) Shell commands from plugin manifests still pass
             // through the operator consent gate before first execution.
             for a in &matcher.hooks {
+                // Only a `command` action is a shell command. An action that
+                // declares another type (`http` / `prompt` / `agent`) is a
+                // different kind of hook the user layer runs; it must not be
+                // re-read as a shell command. An action with no type is the
+                // legacy command form and stays.
+                if let Some(kind) = a.kind.as_deref() {
+                    if kind != "command" {
+                        warn!(
+                            plugin = plugin_id,
+                            event = %event_str,
+                            action = kind,
+                            "plugin hooks.json action dropped: declared type is not `command`"
+                        );
+                        continue;
+                    }
+                }
                 let Some(command) = a.command.as_ref().filter(|c| !c.is_empty()) else {
                     // The user layer runs `prompt` / `http` / `agent`
                     // actions from the same shape; a plugin's are not run,
@@ -986,7 +1022,11 @@ pub fn parse_v2_prompt(
         "tool" => PromptScope::Tool,
         "standalone" => PromptScope::Standalone,
         "disabled" => PromptScope::Disabled,
-        _ => PromptScope::System,
+        other => {
+            return Err(anyhow::anyhow!(
+                "unknown prompt scope '{other}': expected one of `system`, `tool`, `standalone`, `disabled`"
+            ));
+        }
     };
 
     Ok(CapabilityDeclaration::Skill(SkillRegistration {
@@ -1489,6 +1529,24 @@ mod tests {
         assert_eq!(reg.model.as_deref(), Some("inherit"));
     }
 
+    #[test]
+    fn plugin_agent_mode_key_is_rejected_loudly() {
+        // The mode axis is disk-agent only; a plugin agent always registers
+        // as `All`. Silently dropping `mode:` would run the agent with a
+        // mode its author never chose.
+        let dir = tempdir().unwrap();
+        write_agent(
+            dir.path(),
+            "primary.md",
+            "---\nname: primary\ndescription: Wants to be primary\nmode: primary\n---\nBody.\n",
+        );
+        let err = parse_agents_dir(dir.path(), "agents", "plug").unwrap_err();
+        assert!(
+            err.to_string().contains("`mode:` is not supported"),
+            "the error must name the rejected key: {err}"
+        );
+    }
+
     /// 24 of 28 marketplace agents write `tools: Read, Grep, Bash` — the comma
     /// scalar. A `Vec<String>` field would have failed those files outright.
     /// `Skill` maps to `skill_read` here as it does for a command.
@@ -1604,7 +1662,6 @@ mod tests {
         let reg = only_agent(dir.path());
         assert_eq!(reg.content, "You are odd.");
         assert!(reg.tools.is_none(), "absent `tools:` declares nothing");
-        assert!(reg.color.is_none(), "Claude Code's colour is not carried");
     }
 
     #[test]

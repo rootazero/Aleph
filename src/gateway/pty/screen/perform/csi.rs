@@ -1,10 +1,27 @@
 //! CSI dispatch -- `\e[ ... <final byte>`, plus the two helpers only CSI
-//! reaches: SGR parameter folding and the alternate-screen swap.
+//! reaches: SGR parameter folding, the alternate-screen swap and DSR.
 
 use super::super::grid::{Attrs, Color, Grid};
-use super::{AltBuffer, Performer};
+use super::{AltBuffer, Performer, MAX_PENDING_REPLY_BYTES};
 
 impl Performer<'_> {
+    /// DSR. Answers the two reports a program may block on: operating status
+    /// (`5`) and cursor position (`6`). Windows ConPTY sends `CSI 6 n` before
+    /// it renders anything, so a terminal that ignored it would show nothing.
+    fn device_status(&mut self, request: u16) {
+        let reply = match request {
+            5 => b"\x1b[0n".to_vec(),
+            6 => {
+                let (row, col) = self.screen.grid.reported_cursor();
+                format!("\x1b[{row};{col}R").into_bytes()
+            }
+            _ => return,
+        };
+        if self.screen.replies.len() + reply.len() <= MAX_PENDING_REPLY_BYTES {
+            self.screen.replies.extend_from_slice(&reply);
+        }
+    }
+
     /// SGR. Consumes the parameter list because 38/48 take trailing
     /// arguments, so this cannot be a per-parameter loop.
     fn sgr(&mut self, params: &[u16]) {
@@ -87,16 +104,25 @@ impl Performer<'_> {
             // No grid becomes current here, so nothing needs marking dirty.
             if self.screen.saved.is_none() {
                 let (rows, cols) = self.screen.grid.dims();
+                // Inherit the scrollback limit that the operator configured
+                // (or that was last set via set_scrollback_limit) so that
+                // entering the alternate screen cannot silently reset it to
+                // the Grid::new default of 1000.
+                let scrollback_limit = self.screen.grid.scrollback_limit();
                 // One alternate buffer, two entry policies. 47/1047 take back
                 // whatever was parked on the last exit; 1049 always starts
                 // blank, which is the whole of the difference between them.
                 let alt = match buffer {
-                    AltBuffer::Legacy => self
-                        .screen
-                        .retained_alt
-                        .take()
-                        .unwrap_or_else(|| Grid::new(rows, cols)),
-                    AltBuffer::Cleared => Grid::new(rows, cols),
+                    AltBuffer::Legacy => self.screen.retained_alt.take().unwrap_or_else(|| {
+                        let mut g = Grid::new(rows, cols);
+                        g.set_scrollback_limit(scrollback_limit);
+                        g
+                    }),
+                    AltBuffer::Cleared => {
+                        let mut g = Grid::new(rows, cols);
+                        g.set_scrollback_limit(scrollback_limit);
+                        g
+                    }
                 };
                 let primary = std::mem::replace(&mut self.screen.grid, alt);
                 self.screen.saved = Some(primary);
@@ -284,6 +310,8 @@ impl Performer<'_> {
                 // DEC: setting the region homes the cursor.
                 self.screen.grid.goto(0, 0);
             }
+            // DSR. `CSI ? 6 n` (DECXCPR) is a different report, hence the guard.
+            'n' if inter.is_empty() => self.device_status(flat.first().copied().unwrap_or(0)),
             'S' if inter.is_empty() => self.screen.grid.scroll_up_n(p(0, 1)),
             'T' if inter.is_empty() => self.screen.grid.scroll_down_n(p(0, 1)),
             // DEC private modes. `?` only ever arrives via `intermediates`,

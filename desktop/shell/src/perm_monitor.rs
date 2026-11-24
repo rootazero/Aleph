@@ -82,7 +82,9 @@ mod macos {
                 tokio::time::sleep(POLL_INTERVAL).await;
 
                 for &kind in RESTART_PERMISSIONS {
-                    let granted = check_permission(kind);
+                    let granted = tokio::task::spawn_blocking(move || check_permission(kind))
+                        .await
+                        .unwrap_or(false);
                     let previous = state.get(kind);
 
                     // First poll: just record the baseline.

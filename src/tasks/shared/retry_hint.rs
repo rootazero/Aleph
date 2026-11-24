@@ -109,43 +109,34 @@ impl Default for RetryHint {
 fn patterns() -> &'static [(RetryCategory, Regex)] {
     static CELL: OnceLock<Vec<(RetryCategory, Regex)>> = OnceLock::new();
     CELL.get_or_init(|| {
-        vec![
-            (
-                RetryCategory::RateLimit,
-                Regex::new(
-                    r"(?i)(rate[_ ]limit|too many requests|429|resource has been exhausted|cloudflare|tokens per day)",
-                )
-                .expect("rate_limit pattern compiles"),
-            ),
-            (
-                RetryCategory::Overloaded,
-                Regex::new(
-                    r"(?i)\b529\b|\boverloaded(?:_error)?\b|high demand|temporar(?:ily|y) overloaded|capacity exceeded",
-                )
-                .expect("overloaded pattern compiles"),
-            ),
-            (
-                RetryCategory::Network,
-                Regex::new(
-                    r"(?i)(network|fetch failed|socket|econnreset|econnrefused|eai_again|ehostunreach|ehostdown|enetreset|enetunreach|epipe)",
-                )
-                .expect("network pattern compiles"),
-            ),
-            (
-                RetryCategory::Timeout,
-                // Matches "timeout", "timed out", "timing out", and the
-                // libc errno `ETIMEDOUT`. The space variant is critical
-                // because `ExecutionError::Timeout`'s Display is
-                // `"Run timed out"` — without it, every cron timeout
-                // would fall through to permanent.
-                Regex::new(r"(?i)(timeout|tim(?:ed|ing) out|etimedout)")
-                    .expect("timeout pattern compiles"),
-            ),
-            (
-                RetryCategory::ServerError,
-                Regex::new(r"\b5\d{2}\b").expect("server_error pattern compiles"),
-            ),
-        ]
+        let mut list = Vec::with_capacity(5);
+        if let Ok(re) = Regex::new(
+            r"(?i)(rate[_ ]limit|too many requests|429|resource has been exhausted|cloudflare|tokens per day)",
+        ) {
+            list.push((RetryCategory::RateLimit, re));
+        }
+        if let Ok(re) = Regex::new(
+            r"(?i)\b529\b|\boverloaded(?:_error)?\b|high demand|temporar(?:ily|y) overloaded|capacity exceeded",
+        ) {
+            list.push((RetryCategory::Overloaded, re));
+        }
+        if let Ok(re) = Regex::new(
+            r"(?i)(network|fetch failed|socket|econnreset|econnrefused|eai_again|ehostunreach|ehostdown|enetreset|enetunreach|epipe)",
+        ) {
+            list.push((RetryCategory::Network, re));
+        }
+        // Matches "timeout", "timed out", "timing out", and the
+        // libc errno `ETIMEDOUT`. The space variant is critical
+        // because `ExecutionError::Timeout`'s Display is
+        // `"Run timed out"` — without it, every cron timeout
+        // would fall through to permanent.
+        if let Ok(re) = Regex::new(r"(?i)(timeout|tim(?:ed|ing) out|etimedout)") {
+            list.push((RetryCategory::Timeout, re));
+        }
+        if let Ok(re) = Regex::new(r"\b5\d{2}\b") {
+            list.push((RetryCategory::ServerError, re));
+        }
+        list
     })
 }
 

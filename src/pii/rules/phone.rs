@@ -18,16 +18,36 @@ use std::sync::OnceLock;
 static PHONE_RE: OnceLock<Regex> = OnceLock::new();
 static TIMESTAMP_CONTEXT_RE: OnceLock<Regex> = OnceLock::new();
 
+/// Bytes of text before a match that are inspected for a timestamp label.
+///
+/// The label has to sit directly in front of the value, so only a short tail
+/// can qualify. The bound keeps the per-match cost constant: scanning the
+/// whole prefix for every phone-shaped number would be quadratic in the
+/// number of such numbers.
+const TIMESTAMP_CONTEXT_WINDOW: usize = 64;
+
 fn phone_regex() -> &'static Regex {
     // rust-doctor-disable-next-line unwrap-in-production
     PHONE_RE.get_or_init(|| Regex::new(r"1[3-9]\d{9}").expect("static phone regex compiles"))
 }
 
+/// Matches a timestamp-ish **label** that is immediately followed by the
+/// value, e.g. `"timestamp": 13891680001`.
+///
+/// The leading `\b` is load-bearing: without it the alternation matched the
+/// tail of every word *ending* in `date`/`time` — `Validate`, `runtime`,
+/// `candidate`, `certificate`, `timeline`, `lifetime` — and the old
+/// ±60-byte context window then suppressed every phone number near such a
+/// word, leaving it in plaintext. The trailing `["']?\s*[:=]\s*$` requires
+/// the label to be adjacent to the value, so only a real `key: value` shape
+/// suppresses a match.
 fn timestamp_context_regex() -> &'static Regex {
     TIMESTAMP_CONTEXT_RE.get_or_init(|| {
-        Regex::new(r"(?i)(timestamp|time|date|created_at|updated_at|expires?_at|modified_at)\b")
-            // rust-doctor-disable-next-line unwrap-in-production
-            .expect("static timestamp context regex compiles")
+        Regex::new(
+            r#"(?i)\b(timestamp|time|date|created_at|updated_at|expires?_at|modified_at)["']?\s*[:=]\s*$"#,
+        )
+        // rust-doctor-disable-next-line unwrap-in-production
+        .expect("static timestamp context regex compiles")
     })
 }
 
@@ -74,20 +94,36 @@ impl PhoneRule {
         false
     }
 
-    /// Check if match is in a timestamp context (surrounding ~120 chars)
+    /// Check whether the value sits directly behind a timestamp label, e.g.
+    /// `"timestamp": 13891680001`.
+    ///
+    /// Only the text **before** the match is inspected: a label that merely
+    /// appears somewhere nearby is not a timestamp context. The old
+    /// ±60-byte window around the match turned every word ending in
+    /// `date`/`time` (`Validate`, `runtime`, `candidate`, …) into one and
+    /// swallowed the phone numbers next to it.
     fn is_timestamp_context(text: &str, start: usize) -> bool {
-        // Snap to valid UTF-8 character boundaries to avoid panicking
-        // on multi-byte characters (e.g. Chinese text).
-        let mut ctx_start = start.saturating_sub(60);
-        while ctx_start > 0 && !text.is_char_boundary(ctx_start) {
-            ctx_start -= 1;
+        // `start` is a char boundary (the phone regex matched there), so the
+        // prefix slice cannot split a multi-byte character.
+        let prefix = &text[..start];
+        // Whitespace between the separator and the value carries no signal.
+        let trimmed = prefix.trim_end();
+        let mut window_start = trimmed.len().saturating_sub(TIMESTAMP_CONTEXT_WINDOW);
+        if window_start > 0 {
+            let prev = trimmed.as_bytes()[window_start - 1];
+            // Keep the preceding byte when it is a word character: the
+            // regex's leading `\b` has to see the real preceding character,
+            // or a window that starts mid-word would fake a word boundary
+            // and make `expire_at` inside `myexpire_at` look like a label.
+            if prev.is_ascii_alphanumeric() || prev == b'_' {
+                window_start -= 1;
+            }
         }
-        let mut ctx_end = (start + 60).min(text.len());
-        while ctx_end < text.len() && !text.is_char_boundary(ctx_end) {
-            ctx_end += 1;
+        // Snap to a char boundary: the window may have cut a multi-byte char.
+        while window_start > 0 && !trimmed.is_char_boundary(window_start) {
+            window_start -= 1;
         }
-        let context = &text[ctx_start..ctx_end];
-        timestamp_context_regex().is_match(context)
+        timestamp_context_regex().is_match(&trimmed[window_start..])
     }
 
     /// Check word boundary: the match should not be part of a longer digit sequence
@@ -263,6 +299,46 @@ mod tests {
     fn test_no_match_created_at_context() {
         let matches = rule().detect("\"created_at\": 13891680001");
         assert_eq!(matches.len(), 0);
+    }
+
+    #[test]
+    fn test_no_match_timestamp_label_with_equals_separator() {
+        let matches = rule().detect("timestamp=13891680001");
+        assert_eq!(
+            matches.len(),
+            0,
+            "a `label=value` timestamp must be suppressed too"
+        );
+    }
+
+    // === Regression: the timestamp guard used to swallow real phone numbers ===
+
+    #[test]
+    fn test_match_phone_after_word_ending_in_date() {
+        // The old guard matched the *tail* of any word ending in `date`/
+        // `time` inside a ±60-byte window, so the number below was never
+        // redacted. Only a label directly in front of the value suppresses a
+        // match.
+        let matches = rule().detect("Validate the record: 13812345678");
+        assert_eq!(
+            matches.len(),
+            1,
+            "a phone behind a non-label word must still be detected"
+        );
+        assert_eq!(matches[0].matched_text, "13812345678");
+    }
+
+    #[test]
+    fn test_match_phone_after_word_ending_in_time() {
+        // Same shape with the `time` family (`runtime`, `timeline`,
+        // `lifetime`).
+        let matches = rule().detect("The candidate runtime value: 13812345678");
+        assert_eq!(
+            matches.len(),
+            1,
+            "a phone behind a non-label word must still be detected"
+        );
+        assert_eq!(matches[0].matched_text, "13812345678");
     }
 
     // === Normal numbers should not match ===

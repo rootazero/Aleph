@@ -375,7 +375,7 @@ fn repair_json_emission_defects(raw: &str) -> Option<String> {
     let mut in_string = false;
     let mut i = 0;
     while i < chars.len() {
-        let c = chars[i];
+        let Some(&c) = chars.get(i) else { break };
         if in_string {
             match c {
                 '"' => {
@@ -428,7 +428,7 @@ fn repair_json_emission_defects(raw: &str) -> Option<String> {
                     // Trailing comma: drop it when the next non-whitespace
                     // character closes the container.
                     let mut j = i + 1;
-                    while j < chars.len() && chars[j].is_whitespace() {
+                    while chars.get(j).is_some_and(|c| c.is_whitespace()) {
                         j += 1;
                     }
                     if matches!(chars.get(j), Some(&'}') | Some(&']')) {
@@ -511,7 +511,7 @@ impl IndexIdTracker {
     #[must_use]
     pub fn ids_in_order(&self) -> Vec<&str> {
         let mut entries: Vec<(&u64, &String)> = self.map.iter().collect();
-        entries.sort_by_key(|(index, _)| **index);
+        entries.sort_unstable_by_key(|(index, _)| **index);
         entries.into_iter().map(|(_, id)| id.as_str()).collect()
     }
 }

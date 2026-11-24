@@ -5,15 +5,18 @@
 
 mod config;
 mod connection;
+mod connection_target;
 mod credential;
 mod credential_store;
 mod error;
 mod gateway_client;
+pub mod local_ipc;
 mod session_resolve;
 mod tls;
 
 pub use config::{CliConfig, ManifestConfig};
 pub use connection::{AlephClient, StreamContinuity, TopicEvent};
+pub use connection_target::ConnectionTarget;
 pub use credential::{DeviceCredential, VerifiedIdentity};
 pub use credential_store::DeviceCredentialStore;
 pub use error::{CliError, CliResult};

@@ -218,7 +218,7 @@ pub async fn handle_marketplace_install(request: JsonRpcRequest) -> JsonRpcRespo
 
     // project_dir is None for now; project/local scope support requires workspace detection
     match manager.install_to_scope(&params.name, params.marketplace.as_deref(), scope, None) {
-        Ok(dest) => {
+        Ok(installed) => {
             // Refresh the live extension set, exactly as the git-clone
             // installer and `plugin.update` do.
             //
@@ -240,7 +240,8 @@ pub async fn handle_marketplace_install(request: JsonRpcRequest) -> JsonRpcRespo
                     "ok": true,
                     "name": params.name,
                     "scope": scope_str,
-                    "installed_at": dest.to_string_lossy(),
+                    "installed_at": installed.path.to_string_lossy(),
+                    "warnings": installed.warnings,
                 }),
             )
         }
@@ -291,13 +292,14 @@ pub async fn handle_update(request: JsonRpcRequest) -> JsonRpcResponse {
     }
 
     let result = match outcome {
-        UpdateOutcome::Updated { from, to } => json!({
+        UpdateOutcome::Updated { from, to, warnings } => json!({
             "ok": true,
             "name": params.name,
             "scope": scope_str,
             "updated": true,
             "from": from,
             "to": to,
+            "warnings": warnings,
         }),
         UpdateOutcome::AlreadyLatest { version } => json!({
             "ok": true,

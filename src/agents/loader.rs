@@ -228,17 +228,16 @@ pub(crate) fn parse_file(path: &Path, source: AgentSource) -> Result<AgentDef, L
         }
     }
 
-    let stem = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .ok_or_else(|| LoaderError::NonUtf8Stem {
-            path: path.to_path_buf(),
-        })?
-        .to_string();
+    let stem =
+        path.file_stem()
+            .and_then(|s| s.to_str())
+            .ok_or_else(|| LoaderError::NonUtf8Stem {
+                path: path.to_path_buf(),
+            })?;
     if stem != fm.id {
         return Err(LoaderError::IdMismatch {
             path: path.to_path_buf(),
-            stem,
+            stem: stem.to_string(),
             id: fm.id.clone(),
         });
     }
@@ -381,9 +380,10 @@ fn insert_with_shadow(
     incoming: AgentDef,
     winner: AgentSource,
 ) {
-    if let Some(prev) = by_id.insert(incoming.id.clone(), incoming.clone()) {
+    let id = incoming.id.clone();
+    if let Some(prev) = by_id.insert(id.clone(), incoming) {
         shadows.push(ShadowEvent {
-            id: incoming.id,
+            id,
             winner_source: winner,
             shadowed_source: prev.source,
         });

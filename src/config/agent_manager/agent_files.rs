@@ -32,13 +32,17 @@ impl AgentManager {
         for entry in entries {
             let entry =
                 entry.map_err(|e| AlephError::IoError(format!("Failed to read dir entry: {e}")))?;
+            let file_type = entry
+                .file_type()
+                .map_err(|e| AlephError::IoError(format!("Failed to read file type: {e}")))?;
+
+            if file_type.is_symlink() || !file_type.is_file() {
+                continue;
+            }
+
             let metadata = entry
                 .metadata()
                 .map_err(|e| AlephError::IoError(format!("Failed to read metadata: {e}")))?;
-
-            if !metadata.is_file() {
-                continue;
-            }
 
             let filename = entry.file_name().to_string_lossy().to_string();
             let modified_at = metadata
@@ -67,6 +71,14 @@ impl AgentManager {
         let agent_dir = self.agents_root.join(agent_id);
         let path = agent_dir.join(filename);
         self.require_contained(&agent_dir, &path)?;
+        if let Ok(symlink_meta) = fs::symlink_metadata(&path) {
+            if symlink_meta.file_type().is_symlink() {
+                return Err(AlephError::invalid_config(format!(
+                    "Symlinks are not allowed in agent directory: {}",
+                    path.display()
+                )));
+            }
+        }
         fs::read_to_string(&path).map_err(|e| {
             AlephError::IoError(format!("Failed to read file '{}': {}", path.display(), e))
         })
@@ -87,9 +99,17 @@ impl AgentManager {
         let agent_dir = self.agents_root.join(agent_id);
         let path = agent_dir.join(filename);
         self.require_contained(&agent_dir, &path)?;
+        if let Ok(symlink_meta) = fs::symlink_metadata(&path) {
+            if symlink_meta.file_type().is_symlink() {
+                return Err(AlephError::invalid_config(format!(
+                    "Symlinks are not allowed in agent directory: {}",
+                    path.display()
+                )));
+            }
+        }
         fs::create_dir_all(&agent_dir)
             .map_err(|e| AlephError::IoError(format!("Failed to create agent dir: {e}")))?;
-        fs::write(&path, content).map_err(|e| {
+        crate::utils::atomic_io::write_atomic(&path, content.as_bytes()).map_err(|e| {
             AlephError::IoError(format!("Failed to write file '{}': {}", path.display(), e))
         })
     }
@@ -108,6 +128,14 @@ impl AgentManager {
         let agent_dir = self.agents_root.join(agent_id);
         let path = agent_dir.join(filename);
         self.require_contained(&agent_dir, &path)?;
+        if let Ok(symlink_meta) = fs::symlink_metadata(&path) {
+            if symlink_meta.file_type().is_symlink() {
+                return Err(AlephError::invalid_config(format!(
+                    "Symlinks are not allowed in agent directory: {}",
+                    path.display()
+                )));
+            }
+        }
         if path.exists() {
             fs::remove_file(&path).map_err(|e| {
                 AlephError::IoError(format!("Failed to delete file '{}': {}", path.display(), e))
@@ -116,9 +144,10 @@ impl AgentManager {
         Ok(())
     }
 
-    /// Ensure `candidate` resolves inside `base` using lexical normalization.
-    /// Catches traversal that survives string-level validation (e.g. symlinks
-    /// resolved by the OS, or crafted relative paths).
+    /// Ensure `candidate` stays lexically inside `base`.
+    ///
+    /// This checks textual `.`/`..` traversal only; it does not resolve
+    /// symlinks. `list_files` separately skips symlinked entries.
     fn require_contained(&self, base: &std::path::Path, candidate: &std::path::Path) -> Result<()> {
         let normalized = normalize_path_lexically(candidate);
         let base_normalized = normalize_path_lexically(base);

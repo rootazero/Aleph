@@ -221,7 +221,7 @@ pub async fn handle_send(
             };
             JsonRpcResponse::success(request.id, json!(response))
         }
-        Err(e) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, e),
+        Err(refusal) => refusal.into_response(request.id),
     }
 }
 
@@ -777,6 +777,25 @@ pub async fn handle_rewind(
             );
         }
     };
+
+    // The `/btw` side session is derived from this conversation and holds a
+    // COPY of its transcript: `btw::seed` copied the messages this rewind just
+    // discarded into the side session's own event log. Retiring only the main
+    // log leaves the side thread holding the discarded messages, so the next
+    // side question can still quote the text the user just rewound away —
+    // from inside the conversation they rewound it in.
+    //
+    // The shared lifecycle operation is what retiring a side session means
+    // (its transcript, its scratchpad, and the seed cursor that would
+    // otherwise keep the copy); it also serialises with an in-flight seed, so
+    // a seed that is already running cannot write the discarded transcript
+    // back after this point.
+    crate::gateway::continuation_lifecycle::retire_side_session_now(
+        &session_key,
+        "chat.rewind",
+        session_manager.as_ref(),
+    )
+    .await;
 
     // Realign the Panel's projection with the shortened log by deleting the
     // rows the retired events produced — matched by their source seq, never by

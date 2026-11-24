@@ -43,12 +43,9 @@ use crate::config::types::profile::SmartRecallConfig;
 use crate::error::Result;
 use crate::memory::context_comptroller::RetrievalResult;
 use crate::memory::note_retrieval::NoteFactRetrieval;
-use crate::memory::notes::NoteIndexer;
 use crate::memory::store::raw_memory::RawMemoryStore;
-use crate::memory::store::MemoryBackend;
 use crate::memory::{
-    ComptrollerConfig, ContextComptroller, EmbeddingProvider, SqliteMemoryBackend, TokenBudget,
-    DEFAULT_AGENT,
+    ComptrollerConfig, ContextComptroller, SqliteMemoryBackend, TokenBudget, DEFAULT_AGENT,
 };
 use crate::tools::AlephTool;
 
@@ -233,6 +230,10 @@ fn cluster_facts_by_path(facts: &[FactResult], threshold: usize) -> Vec<PathClus
 /// which directory they are enumerating: a narrowing computed over one
 /// directory and applied to a listing of another is a filter that silently
 /// admits everything.
+///
+/// Test-only: the production tool receives its note directory from the
+/// factory (`src/builtin_tools/runtime.rs`) and never resolves it here.
+#[cfg(test)]
 fn note_memory_dir() -> std::path::PathBuf {
     crate::utils::paths::get_note_memory_dir().unwrap_or_else(|_| {
         std::env::temp_dir()
@@ -246,6 +247,7 @@ fn note_memory_dir() -> std::path::PathBuf {
 pub struct MemorySearchTool {
     raw_store: Arc<dyn RawMemoryStore>,
     note_retrieval: Arc<NoteFactRetrieval<SqliteMemoryBackend>>,
+    note_memory_dir: std::path::PathBuf,
     comptroller: Arc<ContextComptroller>,
     /// Shared default workspace ID, written per-request by the execution engine
     /// (`execute.rs`) from the session's agent id.
@@ -285,49 +287,42 @@ impl MemorySearchTool {
     // rank-derived FTS scores), which carry no honest "similarity in [0,1]"
     // dimension for such a gate to act on.
 
-    /// Create a new `MemorySearchTool` from config.
+    /// Create a new `MemorySearchTool` from an already-built retrieval.
     ///
-    /// `rerank_config`: when `Some` and enabled, attaches a cross-encoder
-    /// reranker to the long-term recall path. `None` / disabled leaves recall
-    /// behaviour unchanged.
-    ///
-    /// `scoring_config`: when `Some` and active, applies retrieval-time recency
-    /// decay + MMR diversity. `None` / inactive leaves ranking unchanged.
-    pub fn new_with_config(
-        database: MemoryBackend,
+    /// The production wiring lives in `src/builtin_tools/runtime.rs`: the
+    /// rerank / scoring / expansion config is applied to the
+    /// `NoteFactRetrieval` there, and the tool is built from it. A second
+    /// constructor that took the same config was cut: it had no production
+    /// caller, so the two faces of "build a memory search tool" could drift
+    /// without anything noticing.
+    pub(crate) fn from_retrieval(
         raw_store: Arc<dyn RawMemoryStore>,
-        embedder: Arc<dyn EmbeddingProvider>,
-        rerank_config: Option<&crate::memory::rerank::RerankConfig>,
-        scoring_config: Option<&crate::config::types::memory::RetrievalScoringConfig>,
-        expansion_config: Option<&crate::config::types::memory::ExpansionConfig>,
+        note_retrieval: Arc<NoteFactRetrieval<SqliteMemoryBackend>>,
+        note_memory_dir: std::path::PathBuf,
     ) -> Self {
-        // NoteFactRetrieval: used for the primary long-term recall path.
-        let memory_dir = note_memory_dir();
-        let note_indexer = Arc::new(NoteIndexer::new(memory_dir, database.clone()));
-        let mut retrieval = NoteFactRetrieval::new(note_indexer, Arc::clone(&embedder));
-        if let Some(cfg) = rerank_config {
-            retrieval = retrieval.with_rerank_config(cfg);
-        }
-        if let Some(cfg) = scoring_config {
-            retrieval = retrieval.with_scoring_config(cfg);
-        }
-        if let Some(cfg) = expansion_config {
-            retrieval = retrieval.with_expansion_config(cfg);
-        }
-        let note_retrieval = Arc::new(retrieval);
-
         let comptroller_config = ComptrollerConfig::default();
         let comptroller = Arc::new(ContextComptroller::new(comptroller_config));
 
         Self {
             raw_store,
             note_retrieval,
+            note_memory_dir,
             comptroller,
             default_workspace: Arc::new(RwLock::new(DEFAULT_AGENT.to_string())),
             default_session_key: Arc::new(RwLock::new(String::new())),
             smart_recall_config: Arc::new(RwLock::new(std::collections::HashMap::new())),
             project_scoped: false,
         }
+    }
+
+    pub(crate) fn with_runtime_settings(
+        mut self,
+        settings: crate::memory::runtime::MemorySearchSettings,
+    ) -> Self {
+        self.default_workspace = settings.workspace;
+        self.default_session_key = settings.session_key;
+        self.smart_recall_config = settings.smart_recall;
+        self
     }
 
     /// Enable per-project scoping for the `current_session` raw-chunk reads,
@@ -470,7 +465,7 @@ impl MemorySearchTool {
             // Resolved HERE so there is one decision point rather than a second
             // copy of the predicate inside the retrieval fan-out — the property
             // this comment has always claimed, now true of both fan-outs.
-            let all = crate::memory::project_scope::list_note_corpora(&note_memory_dir());
+            let all = crate::memory::project_scope::list_note_corpora(&self.note_memory_dir);
             let kept: Vec<String> = all.iter().filter(|id| admits(id)).cloned().collect();
             filtered_out = all.len() - kept.len();
             AgentEnvFilter::Multiple(kept)
@@ -670,7 +665,7 @@ impl MemorySearchTool {
                         threshold = threshold,
                         "Smart Recall Phase 2 triggered — expanding to all agents"
                     );
-                    let memory_dir = note_memory_dir();
+                    let memory_dir = &self.note_memory_dir;
                     // The SECOND fan-out, and the one the narrowing above never
                     // reached. `retrieve_all_agents` is `list_note_corpora`
                     // over the whole memory directory, so a sparse primary
@@ -689,7 +684,7 @@ impl MemorySearchTool {
                     // `None` actor (cron / A2A / tests) admits everything, so
                     // this is byte-identical to `retrieve_all_agents` there.
                     let visible: Vec<String> =
-                        crate::memory::project_scope::list_note_corpora(&memory_dir)
+                        crate::memory::project_scope::list_note_corpora(memory_dir)
                             .into_iter()
                             .filter(|id| admits(id))
                             .collect();
@@ -771,7 +766,7 @@ impl MemorySearchTool {
                         .note_retrieval
                         .retrieve_multi_agent(
                             &args.query,
-                            &crate::memory::project_scope::list_note_corpora(&note_memory_dir()),
+                            &crate::memory::project_scope::list_note_corpora(&self.note_memory_dir),
                             args.max_results,
                         )
                         .await
@@ -908,6 +903,7 @@ impl Clone for MemorySearchTool {
         Self {
             raw_store: self.raw_store.clone(),
             note_retrieval: self.note_retrieval.clone(),
+            note_memory_dir: self.note_memory_dir.clone(),
             comptroller: self.comptroller.clone(),
             default_workspace: self.default_workspace.clone(),
             default_session_key: self.default_session_key.clone(),
@@ -923,6 +919,10 @@ impl AlephTool for MemorySearchTool {
     const NAME: &'static str = "memory_search";
     const DESCRIPTION: &'static str = Self::DESCRIPTION;
 
+    fn services() -> Vec<aleph_slot_api::capability::Service> {
+        vec![crate::memory::runtime::required_service()]
+    }
+
     type Args = MemorySearchArgs;
     type Output = MemorySearchOutput;
 
@@ -934,7 +934,10 @@ impl AlephTool for MemorySearchTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::memory::notes::NoteIndexer;
     use crate::memory::store::markdown::MarkdownSessionStore;
+    use crate::memory::store::MemoryBackend;
+    use crate::memory::EmbeddingProvider;
 
     /// The flagship reader must compose the session's scope, and its second
     /// fan-out must reuse the narrowing the first one computed.
@@ -993,7 +996,13 @@ mod tests {
                 "mock-model",
             ),
         );
-        MemorySearchTool::new_with_config(db.clone(), raw_store, embedder, None, None, None)
+        // Built the way the production factory builds it
+        // (`src/builtin_tools/runtime.rs`): the retrieval carries the
+        // embedder, the tool is assembled from the retrieval.
+        let memory_dir = note_memory_dir();
+        let note_indexer = Arc::new(NoteIndexer::new(memory_dir.clone(), db.clone()));
+        let retrieval = NoteFactRetrieval::new(note_indexer, embedder);
+        MemorySearchTool::from_retrieval(raw_store, Arc::new(retrieval), memory_dir)
     }
 
     fn default_args(query: &str) -> MemorySearchArgs {

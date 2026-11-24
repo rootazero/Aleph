@@ -28,31 +28,22 @@
 pub mod api;
 pub mod commands;
 pub mod config;
-pub mod draft;
-pub mod group_policy;
 pub mod permissions;
-pub mod reconnect;
-pub mod resolver;
 pub mod security;
-pub mod session_key;
 
 pub use commands::{ComponentId, ComponentKind};
 pub use config::{DiscordConfig, IntentsConfig};
-pub use draft::{DraftChunker, DraftStream};
-pub use reconnect::{CooldownStore, ReconnectCoordinator, ReconnectDecision};
-pub use resolver::{Candidate, ChannelResolutionError, DiscordResolver, ResolvedChannel};
 
 use crate::gateway::channel::{
     Attachment, Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
     ChannelResult, ChannelState, ChannelStatus, ConversationId, InboundMessage,
-    InboundMessageSender, MessageId, MessageMeta, OutboundMessage, SendResult, UserId,
+    InboundMessageSender, MessageId, MessageMeta, OutboundMessage, SendOperation, SendResult,
+    UserId,
 };
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use chrono::{TimeZone, Utc};
 use tokio::sync::{oneshot, RwLock};
-
-use std::collections::HashMap;
 
 use serenity::{
     all::{
@@ -64,44 +55,6 @@ use serenity::{
     Client,
 };
 
-/// Thread binding - links a Discord thread to a conversation
-#[derive(Debug, Clone)]
-pub struct ThreadBinding {
-    /// Discord thread ID
-    pub thread_id: u64,
-    /// Bound conversation ID
-    pub conversation_id: ConversationId,
-    /// Guild ID where the thread exists
-    pub guild_id: u64,
-    /// Parent channel ID
-    pub parent_channel_id: u64,
-    /// Thread name
-    pub name: String,
-    /// When the binding was created
-    pub created_at: chrono::DateTime<Utc>,
-}
-
-impl ThreadBinding {
-    /// Create a new thread binding from thread details
-    #[must_use]
-    pub fn new(
-        thread_id: u64,
-        conversation_id: ConversationId,
-        guild_id: u64,
-        parent_channel_id: u64,
-        name: String,
-    ) -> Self {
-        Self {
-            thread_id,
-            conversation_id,
-            guild_id,
-            parent_channel_id,
-            name,
-            created_at: Utc::now(),
-        }
-    }
-}
-
 /// Discord channel implementation
 pub struct DiscordChannel {
     /// Channel information
@@ -112,6 +65,10 @@ pub struct DiscordChannel {
     channel_state: ChannelState,
     /// Shutdown signal sender
     shutdown_tx: Option<oneshot::Sender<()>>,
+    /// Handle of the running gateway task. `stop()` waits for it to exit:
+    /// its epilogue writes the shared status, so a task that outlives
+    /// `stop()` can overwrite the state of a later start.
+    gateway_task: Option<tokio::task::JoinHandle<()>>,
     /// HTTP client for sending messages (serenity's Http)
     http: Option<Arc<serenity::http::Http>>,
     /// Test mode: skip real gateway connection, return mock results
@@ -123,18 +80,6 @@ pub struct DiscordChannel {
     /// `None` (no enabled provider), and the inbound path then forwards audio
     /// messages untouched so they remain visible to the user.
     stt_source: Option<Arc<crate::gateway::voice::inbound::SttSource>>,
-    /// Reconnect coordinator (T2.5): owns the backoff schedule, presence
-    /// cooldown gate, and `last_event_at` watchdog that feeds the channel
-    /// health monitor's zombie-detection sweep. Always present (constructed
-    /// with defaults in `new()`) so the wiring never silently disappears.
-    ///
-    /// Wrapped in `Arc` so the [`Handler`] cloned into serenity's event
-    /// callback shares the same underlying backoff / cooldown / atomic
-    /// `last_event_nanos` — `mark_event()` called from a serenity gateway
-    /// event must feed the same watchdog the health monitor reads. R2 D6
-    /// wired the mark; the `Arc` is what lets the handler reach it
-    /// without taking a second mutable borrow of the channel.
-    reconnect: Arc<reconnect::ReconnectCoordinator>,
     /// Component dispatch table (R2 D1): owned by the channel and shared
     /// (via Arc) with the Handler so button clicks resolve to typed
     /// DispatchOutcome instead of becoming raw inbound text. Constructed
@@ -160,10 +105,10 @@ impl DiscordChannel {
             config,
             channel_state: ChannelState::new(100),
             shutdown_tx: None,
+            gateway_task: None,
             http: None,
             test_mode: false,
             stt_source: None,
-            reconnect: Arc::new(reconnect::ReconnectCoordinator::with_defaults()),
             registry: Arc::new(commands::CommandRegistry::with_defaults()),
         }
     }
@@ -196,15 +141,6 @@ impl DiscordChannel {
     #[must_use]
     pub fn stt_source(&self) -> Option<&Arc<crate::gateway::voice::inbound::SttSource>> {
         self.stt_source.as_ref()
-    }
-
-    /// Read-only view of the reconnect coordinator. Exposed so the health
-    /// monitor's sweep (which lives in `channel_health_monitor`) and the
-    /// inbound path share the same schedule — every place that touches the
-    /// backoff goes through this handle.
-    #[must_use]
-    pub fn reconnect(&self) -> &reconnect::ReconnectCoordinator {
-        &self.reconnect
     }
 
     /// Get Discord-specific capabilities
@@ -259,6 +195,11 @@ impl DiscordChannel {
                 })?
                 .parse()
                 .map_err(|e| ChannelError::Internal(format!("Invalid user ID: {e}")))?;
+            // Discord snowflakes are 1-based — serenity's `UserId::new`
+            // panics on 0.
+            if user_id == 0 {
+                return Err(ChannelError::Internal("Invalid user ID: 0".to_string()));
+            }
 
             let user = serenity::all::UserId::new(user_id);
             let dm = user
@@ -267,21 +208,43 @@ impl DiscordChannel {
                 .map_err(|e| ChannelError::Internal(format!("Failed to create DM channel: {e}")))?;
             Ok(dm.id)
         } else {
-            conversation_id
+            let channel_id: u64 = conversation_id
                 .as_str()
-                .parse::<u64>()
-                .map(SerenityChannelId::new)
-                .map_err(|e| ChannelError::Internal(format!("Invalid channel ID: {e}")))
+                .parse()
+                .map_err(|e| ChannelError::Internal(format!("Invalid channel ID: {e}")))?;
+            // Discord snowflakes are 1-based — serenity's `ChannelId::new`
+            // panics on 0.
+            if channel_id == 0 {
+                return Err(ChannelError::Internal("Invalid channel ID: 0".to_string()));
+            }
+            Ok(SerenityChannelId::new(channel_id))
         }
     }
 
     /// Parse a `MessageId` string into a `SerenityMessageId`.
     fn parse_message_id(message_id: &MessageId) -> ChannelResult<SerenityMessageId> {
-        message_id
+        let id: u64 = message_id
             .as_str()
-            .parse::<u64>()
-            .map(SerenityMessageId::new)
-            .map_err(|e| ChannelError::Internal(format!("Invalid message ID: {e}")))
+            .parse()
+            .map_err(|e| ChannelError::Internal(format!("Invalid message ID: {e}")))?;
+        // Discord snowflakes are 1-based — serenity's `MessageId::new` panics
+        // on 0.
+        if id == 0 {
+            return Err(ChannelError::Internal("Invalid message ID: 0".to_string()));
+        }
+        Ok(SerenityMessageId::new(id))
+    }
+
+    /// Tear down a half-started gateway: signal the task and wait for it to
+    /// exit so it cannot write the status after `start()` returned.
+    async fn abort_gateway_task(&mut self) {
+        if let Some(shutdown_tx) = self.shutdown_tx.take() {
+            let _ = shutdown_tx.send(());
+        }
+        if let Some(task) = self.gateway_task.take() {
+            let _ = task.await;
+        }
+        self.http = None;
     }
 }
 
@@ -305,9 +268,12 @@ fn button_style_for(callback_data: &str, text: &str) -> CreateButton {
 struct Handler {
     inbound_tx: InboundMessageSender,
     config: DiscordConfig,
+    /// The configured channel instance id (not the hardcoded "discord").
+    /// Every inbound this handler produces carries it, so the router
+    /// addresses the instance the user configured.
+    instance_id: String,
     status: Arc<RwLock<ChannelStatus>>,
     bot_user_id: Arc<RwLock<Option<u64>>>,
-    thread_bindings: Arc<RwLock<HashMap<u64, ThreadBinding>>>,
     /// Signalled once by `ready()` so `start()` can await the actual gateway
     /// handshake instead of guessing with a fixed sleep (a slow network made
     /// the 500ms guess return while the channel still read `Connecting`, and
@@ -319,18 +285,8 @@ struct Handler {
     /// the inbound path then forwards audio messages untouched so they remain
     /// visible to the user, and the agent sees the raw attachment metadata.
     stt_source: Option<Arc<crate::gateway::voice::inbound::SttSource>>,
-    /// Reconnect watchdog (R2 D6): shared `Arc` with the parent
-    /// `DiscordChannel`'s reconnect coordinator. Serenity's gateway events
-    /// stamp the `last_event_nanos` atomic on every observed event so the
-    /// health monitor's `is_zombie()` sweep can distinguish "socket alive"
-    /// from "socket wedged". Without this stamp the coordinator's
-    /// `seconds_since_last_event` is permanently `0`, and every channel
-    /// trips the staleness watchdog the moment it goes idle.
-    reconnect: Arc<reconnect::ReconnectCoordinator>,
     /// Component dispatch table — Arc-shared from the parent
-    /// `DiscordChannel`. Lives alongside the reconnect coordinator so a
-    /// future refactor that consolidates the two Arc-shared fields can
-    /// find them together.
+    /// `DiscordChannel`.
     registry: Arc<commands::CommandRegistry>,
 }
 
@@ -396,7 +352,10 @@ impl Handler {
         );
 
         match action {
-            commands::CommandAction::Forward(inbound) => {
+            commands::CommandAction::Forward(mut inbound) => {
+                // The legacy conversion stamps a placeholder channel id —
+                // replace it with this instance's configured id.
+                inbound.channel_id = ChannelId::new(self.instance_id.clone());
                 if let Err(e) = self.inbound_tx.send(*inbound) {
                     tracing::error!(error = ?e, "Failed to forward Discord button callback");
                 }
@@ -424,11 +383,6 @@ impl Handler {
 #[async_trait]
 impl EventHandler for Handler {
     async fn ready(&self, _ctx: Context, ready: Ready) {
-        // R2 D6: stamp the liveness atomic first so the watchdog's first
-        // `seconds_since_last_event` read returns 0 (sentinel for "never
-        // seen"), not "stale" — the watchdog will see the next gateway
-        // event and tick down from there.
-        self.reconnect.mark_event();
         tracing::info!(
             "Discord bot connected: {}#{} ({})",
             ready.user.name,
@@ -448,17 +402,11 @@ impl EventHandler for Handler {
     }
 
     async fn message(&self, ctx: Context, msg: Message) {
-        // R2 D6: liveness stamp AFTER the self-loop guard so the bot's
-        // own outbound messages don't trivially keep the watchdog fed —
-        // the watchdog wants gateway activity (inbound + outbound),
-        // not "I just spoke". Marking AFTER the early-return makes the
-        // guard the source of truth for "is this the bot itself".
         let bot_self_id = *self.bot_user_id.read().await;
         let is_self = bot_self_id == Some(msg.author.id.get());
         if msg.author.bot && is_self {
             return;
         }
-        self.reconnect.mark_event();
         let is_foreign_bot = msg.author.bot && !is_self;
 
         // Check if this is a DM
@@ -567,7 +515,7 @@ impl EventHandler for Handler {
         // Create inbound message
         let inbound = InboundMessage {
             id: MessageId::new(msg.id.to_string()),
-            channel_id: ChannelId::new("discord"),
+            channel_id: ChannelId::new(self.instance_id.clone()),
             conversation_id,
             sender_id: UserId::new(msg.author.id.to_string()),
             sender_name: Some(msg.author.name.clone()),
@@ -639,13 +587,6 @@ impl EventHandler for Handler {
     }
 
     async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
-        // R2 D6: stamp the liveness atomic first, BEFORE the
-        // component-handler dispatch and the unknown-variant early-return,
-        // because both of those still represent gateway activity the
-        // watchdog should see. Filtering by interaction kind would
-        // reintroduce the "every interaction event is its own decision"
-        // problem the watchdog exists to solve.
-        self.reconnect.mark_event();
         // Button / select-menu clicks (approval UI): forward the callback to the
         // router's approval sink via a cb_-prefixed inbound message, then ACK.
         if let Interaction::Component(component) = &interaction {
@@ -678,12 +619,29 @@ impl EventHandler for Handler {
         }
 
         // Mirror the channel allowlist enforced for regular messages —
-        // slash commands must not bypass `allowed_channels`.
-        if !self.config.is_channel_allowed(command.channel_id.get()) {
+        // slash commands must not bypass `allowed_channels`. Guild-scoped
+        // only: a DM has no guild, so the guild allowlist does not apply
+        // (same rule as the message and component paths).
+        if command.guild_id.is_some() && !self.config.is_channel_allowed(command.channel_id.get()) {
             tracing::debug!(
                 "Slash command from channel {} ignored (not in allowlist)",
                 command.channel_id
             );
+            return;
+        }
+
+        // Acknowledge the interaction BEFORE the command is queued. Discord
+        // requires a response within 3s of the interaction; without one the
+        // user sees "application did not respond" even though the command
+        // ran. A plain channel message cannot replace the ACK — the
+        // inbound carries no interaction token.
+        if let Err(e) = command
+            .create_response(&ctx.http, CreateInteractionResponse::Acknowledge)
+            .await
+        {
+            tracing::error!(error = ?e, "Failed to ACK Discord slash command interaction");
+            // Don't run a command the user was told failed: they would
+            // retry and the command would run twice.
             return;
         }
 
@@ -734,7 +692,7 @@ impl EventHandler for Handler {
 
         let inbound = InboundMessage {
             id: MessageId::new(command.id.to_string()),
-            channel_id: ChannelId::new("discord"),
+            channel_id: ChannelId::new(self.instance_id.clone()),
             conversation_id,
             sender_id: UserId::new(command.user.id.to_string()),
             sender_name: Some(command.user.name.clone()),
@@ -768,19 +726,6 @@ impl EventHandler for Handler {
             channel_id,
             new_channel.parent_id.map_or(0, |p| p.get())
         );
-
-        let binding = ThreadBinding::new(
-            channel_id,
-            ConversationId::new(channel_id.to_string()),
-            new_channel.guild_id.get(),
-            new_channel.parent_id.map_or(0, |p| p.get()),
-            new_channel.name.clone(),
-        );
-
-        self.thread_bindings
-            .write()
-            .await
-            .insert(channel_id, binding);
     }
 
     async fn thread_update(
@@ -793,10 +738,7 @@ impl EventHandler for Handler {
             return;
         }
         let channel_id = new_channel.id.get();
-        if let Some(binding) = self.thread_bindings.write().await.get_mut(&channel_id) {
-            binding.name = new_channel.name.clone();
-            tracing::debug!("Thread updated: {} ({})", channel_id, new_channel.name);
-        }
+        tracing::debug!("Thread updated: {} ({})", channel_id, new_channel.name);
     }
 
     async fn thread_delete(
@@ -809,15 +751,7 @@ impl EventHandler for Handler {
             return;
         }
         let channel_id = channel.id.get();
-        if self
-            .thread_bindings
-            .write()
-            .await
-            .remove(&channel_id)
-            .is_some()
-        {
-            tracing::debug!("Thread deleted: {}", channel_id);
-        }
+        tracing::debug!("Thread deleted: {}", channel_id);
     }
 }
 
@@ -834,6 +768,15 @@ impl Channel for DiscordChannel {
     async fn start(&mut self) -> ChannelResult<()> {
         // Validate configuration
         self.config.validate().map_err(ChannelError::ConfigError)?;
+
+        // A previous gateway generation may still be running: drop its
+        // shutdown sender (which ends its `select!`) and wait for the task
+        // to exit. Its epilogue writes the shared status, so it must not
+        // overlap with this generation.
+        self.shutdown_tx = None;
+        if let Some(task) = self.gateway_task.take() {
+            let _ = task.await;
+        }
 
         self.channel_state
             .set_status(ChannelStatus::Connecting)
@@ -862,24 +805,22 @@ impl Channel for DiscordChannel {
         if self.config.intents.guild_members {
             intents |= GatewayIntents::GUILD_MEMBERS;
         }
+        // Thread events (THREAD_CREATE/UPDATE/DELETE) are only delivered
+        // with the GUILDS intent — without it `thread_create` never runs.
+        if self.config.intents.guild_threads {
+            intents |= GatewayIntents::GUILDS;
+        }
 
         // Create event handler
         let ready_notify = Arc::new(tokio::sync::Notify::new());
         let handler = Handler {
             inbound_tx: self.channel_state.sender(),
             config: self.config.clone(),
+            instance_id: self.info.id.as_str().to_string(),
             status: self.channel_state.status_handle(),
             bot_user_id: Arc::new(RwLock::new(None)),
-            thread_bindings: Arc::new(RwLock::new(HashMap::new())),
             ready_notify: ready_notify.clone(),
             stt_source: self.stt_source.clone(),
-            // R2 D6: share the parent's reconnect coordinator so the
-            // serenity gateway events (ready / message / interaction_create)
-            // stamp the same `last_event_nanos` atomic the health monitor
-            // reads from `seconds_since_last_event`. Without this clone the
-            // watchdog is permanently stale and every idle channel trips
-            // the staleness sweep.
-            reconnect: Arc::clone(&self.reconnect),
             // R2 D1: share the parent's CommandRegistry so component
             // clicks (button / select-menu) resolve to typed
             // DispatchOutcome via `commands::dispatch_component_click`
@@ -898,23 +839,31 @@ impl Channel for DiscordChannel {
         // Store HTTP client for sending messages
         self.http = Some(client.http.clone());
 
-        // Create shutdown channel
+        // Create shutdown channel and status monitor for startup
         let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
         self.shutdown_tx = Some(shutdown_tx);
+        // Startup result: the gateway task reports a failure that happens
+        // BEFORE `ready`, so `start()` fails fast instead of waiting out
+        // the timeout. Sending on a dropped receiver is ignored.
+        let (startup_tx, mut startup_rx) = oneshot::channel::<String>();
 
         let status = self.channel_state.status_handle();
 
         // Start the client in a background task
-        tokio::spawn(async move {
+        let gateway_task = tokio::spawn(async move {
+            let mut startup_error: Option<String> = None;
             tokio::select! {
                 result = client.start() => {
                     match result {
                         Ok(()) => {
                             tracing::info!("Discord client stopped");
+                            startup_error =
+                                Some("Discord gateway stopped before becoming ready".to_string());
                         }
                         Err(e) => {
                             tracing::error!("Discord client error: {}", e);
                             *status.write().await = ChannelStatus::Error;
+                            startup_error = Some(e.to_string());
                         }
                     }
                 }
@@ -922,6 +871,9 @@ impl Channel for DiscordChannel {
                     tracing::info!("Discord channel shutdown requested");
                     client.shard_manager.shutdown_all().await;
                 }
+            }
+            if let Some(e) = startup_error {
+                let _ = startup_tx.send(e);
             }
             // Do NOT clobber `Error`: the unconditional assignment that used to
             // live here erased the failure one line after it was recorded, so a
@@ -935,6 +887,7 @@ impl Channel for DiscordChannel {
                 }
             }
         });
+        self.gateway_task = Some(gateway_task);
 
         // Wait for the gateway `ready` event rather than guessing with a
         // fixed sleep. The previous 500ms delay raced the actual handshake:
@@ -945,25 +898,41 @@ impl Channel for DiscordChannel {
         // blocking start forever; the channel then surfaces the failure via
         // its normal Error/Disconnected transitions instead of a silent hang.
         const READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
-        if tokio::time::timeout(READY_TIMEOUT, ready_notify.notified())
-            .await
-            .is_err()
-        {
-            tracing::warn!(
-                "Discord gateway did not signal ready within {:?}; channel may not be connected yet",
-                READY_TIMEOUT
-            );
+        tokio::select! {
+            _ = ready_notify.notified() => {}
+            startup = &mut startup_rx => {
+                let detail = startup.unwrap_or_else(|_| {
+                    "Discord gateway task ended before becoming ready".to_string()
+                });
+                self.abort_gateway_task().await;
+                self.channel_state.set_status(ChannelStatus::Error).await;
+                return Err(ChannelError::Internal(format!(
+                    "Discord gateway failed to start: {detail}"
+                )));
+            }
+            _ = tokio::time::sleep(READY_TIMEOUT) => {
+                self.abort_gateway_task().await;
+                self.channel_state.set_status(ChannelStatus::Error).await;
+                return Err(ChannelError::Internal(format!(
+                    "Discord gateway did not signal ready within {READY_TIMEOUT:?}"
+                )));
+            }
         }
 
         // R2 D3: per-guild startup audit. Fires after the gateway ready
         // handshake so the rows describe the bot's actual start state, not
-        // a pre-handshake guess. `bot_permissions=0` is the "unverified"
-        // failsafe — a real implementation would fetch the bitfield via
-        // REST per guild, but the post-incident question this row answers
-        // is "did the bot come up at all and announce itself", not "did it
-        // come up with every required permission". `for_config` already
-        // short-circuits when `allowed_guilds` is empty (the spec rule:
-        // no fabrication for guilds we haven't joined yet).
+        // a pre-handshake guess. The verdict comes from a MEASUREMENT: the
+        // bot's effective permission bitfield is fetched per guild over
+        // REST. The previous `bot_permissions=0` was not an "unverified"
+        // failsafe — zero bits mean every required permission is missing,
+        // so every healthy start recorded a `Critical` `ExecBlocked` row
+        // for a violation that never happened. When the bitfield cannot be
+        // fetched we record an UNVERIFIED row instead: "we could not look"
+        // is not "the bot is broken", and a fabricated refusal row is
+        // worse than a missing row.
+        //
+        // `allowed_guilds` empty means no rows at all (the spec rule: no
+        // fabrication for guilds we haven't joined yet).
         //
         // `restart_channel` re-invokes this path, so a wedged channel that
         // comes back through the health monitor will produce a fresh
@@ -971,11 +940,26 @@ impl Channel for DiscordChannel {
         // If that becomes noisy in practice, gate it behind an
         // `AtomicBool` field on `DiscordChannel`.
         if let Some(log) = crate::security::audit::global() {
-            let entries = crate::gateway::interfaces::discord::security::startup_audit::for_config(
-                &self.config,
-                0,
-            );
-            for entry in entries {
+            let http = self.http.clone();
+            for guild_id in self.config.allowed_guilds.iter().copied() {
+                if guild_id == 0 {
+                    tracing::warn!("Discord startup audit: skipping zero guild_id");
+                    continue;
+                }
+                let entry = match http.as_ref() {
+                    Some(http) => match api::audit_guild_permissions(http, guild_id).await {
+                        Ok(audit) => security::startup_audit::for_audit(&audit),
+                        Err(e) => {
+                            tracing::warn!(
+                                guild_id,
+                                error = %e,
+                                "Discord startup audit: permission bitfield unavailable; recording an unverified row"
+                            );
+                            security::startup_audit::unverified(guild_id)
+                        }
+                    },
+                    None => security::startup_audit::unverified(guild_id),
+                };
                 log.log(entry).await;
             }
         }
@@ -990,6 +974,13 @@ impl Channel for DiscordChannel {
             let _ = shutdown_tx.send(());
         }
 
+        // Wait for the gateway task to actually exit: its epilogue writes
+        // the shared status, so a task that outlives `stop()` can overwrite
+        // the state of a later start.
+        if let Some(task) = self.gateway_task.take() {
+            let _ = task.await;
+        }
+
         self.channel_state
             .set_status(ChannelStatus::Disconnected)
             .await;
@@ -999,132 +990,140 @@ impl Channel for DiscordChannel {
         Ok(())
     }
 
-    async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-        if self.test_mode {
-            if self.status() != ChannelStatus::Connected {
-                return Err(ChannelError::NotConnected(
-                    "Discord channel not started".to_string(),
-                ));
+    fn send(&self, message: OutboundMessage) -> SendOperation {
+        let http = self.http.clone();
+        let test_mode = self.test_mode;
+        let channel_state = self.channel_state.clone();
+        Box::pin(async move {
+            if test_mode {
+                if channel_state.status() != ChannelStatus::Connected {
+                    return Err(ChannelError::NotConnected(
+                        "Discord channel not started".to_string(),
+                    ));
+                }
+                return Ok(SendResult {
+                    message_id: MessageId::new("discord-test-msg-id".to_string()),
+                    timestamp: chrono::Utc::now(),
+                });
             }
-            return Ok(SendResult {
-                message_id: MessageId::new("discord-test-msg-id".to_string()),
-                timestamp: chrono::Utc::now(),
-            });
-        }
-        let http = self
-            .http
-            .as_ref()
-            .ok_or_else(|| ChannelError::NotConnected("HTTP client not initialized".to_string()))?;
-
-        // Parse channel ID from conversation_id
-        // Handle both "dm:user_id" and direct channel IDs
-        let channel_id = if message.conversation_id.as_str().starts_with("dm:") {
-            // For DMs, we need to create a DM channel first. Use
-            // `strip_prefix` instead of `[3..]` — see `resolve_channel_id`
-            // for the rationale (non-ASCII bytes straddling index 3 would
-            // otherwise panic).
-            let user_id: u64 = message
-                .conversation_id
-                .as_str()
-                .strip_prefix("dm:")
-                .ok_or_else(|| {
-                    ChannelError::Internal("conversation_id does not start with 'dm:'".to_string())
-                })?
-                .parse()
-                .map_err(|e| ChannelError::SendFailed(format!("Invalid user ID: {e}")))?;
-
-            let user = serenity::all::UserId::new(user_id);
-            let dm_channel = user.create_dm_channel(http).await.map_err(|e| {
-                ChannelError::SendFailed(format!("Failed to create DM channel: {e}"))
+            let http = http.as_ref().ok_or_else(|| {
+                ChannelError::NotConnected("HTTP client not initialized".to_string())
             })?;
 
-            dm_channel.id
-        } else {
-            SerenityChannelId::new(
-                message
-                    .conversation_id
-                    .as_str()
-                    .parse()
-                    .map_err(|e| ChannelError::SendFailed(format!("Invalid channel ID: {e}")))?,
-            )
-        };
+            // Parse channel ID from conversation_id
+            // Handle both "dm:user_id" and direct channel IDs
+            let channel_id =
+                if message.conversation_id.as_str().starts_with("dm:") {
+                    // For DMs, we need to create a DM channel first. Use
+                    // `strip_prefix` instead of `[3..]` — see `resolve_channel_id`
+                    // for the rationale (non-ASCII bytes straddling index 3 would
+                    // otherwise panic).
+                    let user_id: u64 = message
+                        .conversation_id
+                        .as_str()
+                        .strip_prefix("dm:")
+                        .ok_or_else(|| {
+                            ChannelError::Internal(
+                                "conversation_id does not start with 'dm:'".to_string(),
+                            )
+                        })?
+                        .parse()
+                        .map_err(|e| ChannelError::SendFailed(format!("Invalid user ID: {e}")))?;
 
-        // Build message
-        let mut builder = CreateMessage::new().content(&message.text);
+                    let user = serenity::all::UserId::new(user_id);
+                    let dm_channel = user.create_dm_channel(http).await.map_err(|e| {
+                        ChannelError::SendFailed(format!("Failed to create DM channel: {e}"))
+                    })?;
 
-        // Add reply reference if specified
-        if let Some(reply_to) = &message.reply_to {
-            if let Ok(msg_id) = reply_to.as_str().parse::<u64>() {
-                builder = builder.reference_message(serenity::all::MessageReference::from((
-                    channel_id,
-                    serenity::all::MessageId::new(msg_id),
-                )));
+                    dm_channel.id
+                } else {
+                    SerenityChannelId::new(message.conversation_id.as_str().parse().map_err(
+                        |e| ChannelError::SendFailed(format!("Invalid channel ID: {e}")),
+                    )?)
+                };
+
+            // Build message
+            let mut builder = CreateMessage::new().content(&message.text);
+
+            // Add reply reference if specified
+            if let Some(reply_to) = &message.reply_to {
+                if let Ok(msg_id) = reply_to.as_str().parse::<u64>() {
+                    builder = builder.reference_message(serenity::all::MessageReference::from((
+                        channel_id,
+                        serenity::all::MessageId::new(msg_id),
+                    )));
+                }
             }
-        }
 
-        // Add attachments. `data` first, then `path` — the same precedence
-        // telegram and slack use. The `path` arm used to be missing entirely,
-        // which made every path-backed attachment (TTS output, harvested media)
-        // vanish without a word while `ChannelCapabilities::attachments` kept
-        // promising Discord could carry them.
-        for attachment in &message.attachments {
-            let filename = attachment
-                .filename
-                .clone()
-                .unwrap_or_else(|| "attachment".to_string());
-            if let Some(data) = &attachment.data {
-                builder = builder.add_file(CreateAttachment::bytes(data.clone(), filename));
-            } else if let Some(path) = &attachment.path {
-                match CreateAttachment::path(path).await {
-                    Ok(file) => builder = builder.add_file(file),
-                    Err(e) => {
-                        return Err(ChannelError::SendFailed(format!(
-                            "Failed to read attachment {path}: {e}"
-                        )))
+            // Add attachments. `data` first, then `path` — the same precedence
+            // telegram and slack use. The `path` arm used to be missing entirely,
+            // which made every path-backed attachment (TTS output, harvested media)
+            // vanish without a word while `ChannelCapabilities::attachments` kept
+            // promising Discord could carry them.
+            for attachment in &message.attachments {
+                let filename = attachment
+                    .filename
+                    .clone()
+                    .unwrap_or_else(|| "attachment".to_string());
+                if let Some(data) = &attachment.data {
+                    builder = builder.add_file(CreateAttachment::bytes(data.clone(), filename));
+                } else if let Some(path) = &attachment.path {
+                    match CreateAttachment::path(path).await {
+                        Ok(file) => builder = builder.add_file(file),
+                        Err(e) => {
+                            return Err(ChannelError::SendFailed(format!(
+                                "Failed to read attachment {path}: {e}"
+                            )))
+                        }
                     }
                 }
             }
-        }
 
-        // Render inline keyboard (approval UI etc.) as Discord button components.
-        // The button `custom_id` carries the callback_data verbatim; a click comes
-        // back through `interaction_create` → cb_-prefixed inbound → approval sink.
-        // Discord caps action rows at 5 and buttons-per-row at 5.
-        if let Some(keyboard) = &message.inline_keyboard {
-            let rows: Vec<CreateActionRow> = keyboard
-                .rows
-                .iter()
-                .take(5)
-                .filter_map(|row| {
-                    let buttons: Vec<CreateButton> = row
-                        .iter()
-                        .take(5)
-                        .map(|btn| button_style_for(&btn.callback_data, &btn.text))
-                        .collect();
-                    (!buttons.is_empty()).then_some(CreateActionRow::Buttons(buttons))
-                })
-                .collect();
-            if !rows.is_empty() {
-                builder = builder.components(rows);
+            // Render inline keyboard (approval UI etc.) as Discord button components.
+            // The button `custom_id` carries the callback_data verbatim; a click comes
+            // back through `interaction_create` → cb_-prefixed inbound → approval sink.
+            // Discord caps action rows at 5 and buttons-per-row at 5.
+            if let Some(keyboard) = &message.inline_keyboard {
+                let rows: Vec<CreateActionRow> = keyboard
+                    .rows
+                    .iter()
+                    .take(5)
+                    .filter_map(|row| {
+                        let buttons: Vec<CreateButton> = row
+                            .iter()
+                            .take(5)
+                            .map(|btn| button_style_for(&btn.callback_data, &btn.text))
+                            .collect();
+                        (!buttons.is_empty()).then_some(CreateActionRow::Buttons(buttons))
+                    })
+                    .collect();
+                if !rows.is_empty() {
+                    builder = builder.components(rows);
+                }
             }
-        }
 
-        // Send the message
-        let sent = channel_id
-            .send_message(http, builder)
-            .await
-            .map_err(|e| ChannelError::SendFailed(format!("Discord send error: {e}")))?;
+            // Send the message
+            let sent = channel_id
+                .send_message(http, builder)
+                .await
+                .map_err(|e| ChannelError::SendFailed(format!("Discord send error: {e}")))?;
 
-        Ok(SendResult {
-            message_id: MessageId::new(sent.id.to_string()),
-            timestamp: Utc
-                .timestamp_opt(sent.timestamp.unix_timestamp(), 0)
-                .single()
-                .unwrap_or_else(Utc::now),
+            Ok(SendResult {
+                message_id: MessageId::new(sent.id.to_string()),
+                timestamp: Utc
+                    .timestamp_opt(sent.timestamp.unix_timestamp(), 0)
+                    .single()
+                    .unwrap_or_else(Utc::now),
+            })
         })
     }
 
     async fn send_typing(&self, conversation_id: &ConversationId) -> ChannelResult<()> {
+        // The generic reply-emitter typing loop is channel-agnostic, so this
+        // knob can only be honoured here.
+        if !self.config.send_typing {
+            return Ok(());
+        }
         if self.test_mode {
             if self.status() != ChannelStatus::Connected {
                 return Err(ChannelError::NotConnected(
@@ -1147,11 +1146,15 @@ impl Channel for DiscordChannel {
             conversation_id.as_str()
         };
 
-        let channel_id = SerenityChannelId::new(
-            channel_id_str
-                .parse()
-                .map_err(|e| ChannelError::Internal(format!("Invalid channel ID: {e}")))?,
-        );
+        let channel_id: u64 = channel_id_str
+            .parse()
+            .map_err(|e| ChannelError::Internal(format!("Invalid channel ID: {e}")))?;
+        // Discord snowflakes are 1-based — serenity's `ChannelId::new` panics
+        // on 0.
+        if channel_id == 0 {
+            return Err(ChannelError::Internal("Invalid channel ID: 0".to_string()));
+        }
+        let channel_id = SerenityChannelId::new(channel_id);
 
         channel_id
             .broadcast_typing(http)
@@ -1269,12 +1272,20 @@ impl ChannelFactory for DiscordChannelFactory {
     }
 
     async fn create(&self, config: serde_json::Value) -> ChannelResult<Box<dyn Channel>> {
+        self.create_with_id("discord", config).await
+    }
+
+    async fn create_with_id(
+        &self,
+        id: &str,
+        config: serde_json::Value,
+    ) -> ChannelResult<Box<dyn Channel>> {
         let config: DiscordConfig = serde_json::from_value(config)
             .map_err(|e| ChannelError::ConfigError(format!("Invalid Discord config: {e}")))?;
 
         config.validate().map_err(ChannelError::ConfigError)?;
 
-        Ok(Box::new(DiscordChannel::new("discord", config)))
+        Ok(Box::new(DiscordChannel::new(id, config)))
     }
 }
 

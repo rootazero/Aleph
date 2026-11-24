@@ -91,19 +91,22 @@ fn glob_match(pattern: &str, text: &str) -> bool {
         if part.is_empty() {
             continue;
         }
+        let Some(rest) = text.get(pos..) else {
+            return false;
+        };
         if i == 0 {
             // Leading segment is anchored to the start.
-            if !text[pos..].starts_with(part) {
+            if !rest.starts_with(part) {
                 return false;
             }
             pos += part.len();
         } else if i == last {
             // Trailing segment is anchored to the end, and must not overlap
             // the prefix already consumed.
-            return text.len() - pos >= part.len() && text[pos..].ends_with(part);
+            return text.len().saturating_sub(pos) >= part.len() && rest.ends_with(part);
         } else {
             // Interior segment must appear somewhere after `pos`, in order.
-            match text[pos..].find(part) {
+            match rest.find(part) {
                 Some(found) => pos += found + part.len(),
                 None => return false,
             }

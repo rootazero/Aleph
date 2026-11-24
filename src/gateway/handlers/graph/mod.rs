@@ -24,6 +24,7 @@ pub(crate) fn entry_to_dto(entry: &NoteIndexEntry) -> NoteNodeDto {
         id: entry.path.clone(),
         name: entry.filename.clone(),
         path: entry.path.clone(),
+        agent_id: Some(entry.agent_id.clone()),
         category: entry.category.clone(),
         tags: entry.tags.clone(),
         link_count: entry.link_count,
@@ -34,6 +35,9 @@ pub(crate) fn entry_to_dto(entry: &NoteIndexEntry) -> NoteNodeDto {
 
 /// Resolve the note memory directory: `~/.aleph/memory/note/`
 pub(crate) fn notes_dir() -> std::path::PathBuf {
+    if let Some(operation) = crate::memory::runtime::MemoryOperation::current() {
+        return operation.note_memory_dir().to_path_buf();
+    }
     crate::utils::paths::get_note_memory_dir().unwrap_or_else(|_| {
         std::env::temp_dir()
             .join("aleph")

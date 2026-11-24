@@ -5,6 +5,8 @@ use crate::gateway::interfaces::matrix::{
 use crate::sync_primitives::Arc;
 use futures::StreamExt;
 use matrix_sdk::config::SyncSettings;
+use matrix_sdk::ruma::api::client::filter::FilterDefinition;
+use matrix_sdk::ruma::UInt;
 use std::time::Duration;
 use tokio::sync::{watch, RwLock};
 
@@ -17,7 +19,19 @@ pub async fn run_sync_loop(
     deduper: Arc<EventDeduper>,
     mut shutdown_rx: watch::Receiver<bool>,
 ) {
-    let settings = SyncSettings::default().timeout(Duration::from_millis(config.sync_timeout_ms));
+    // `SyncSettings` has no dedicated timeline-limit knob in this SDK version, so
+    // `initial_sync_limit` goes out as a `/sync` filter: it caps the timeline
+    // window of each response. A limit of 0 is sent as "no cap" rather than
+    // asking the server for an empty timeline and silently receiving nothing.
+    let mut filter = FilterDefinition::default();
+    filter.room.timeline.limit = if config.initial_sync_limit == 0 {
+        None
+    } else {
+        UInt::new(config.initial_sync_limit)
+    };
+    let settings = SyncSettings::default()
+        .timeout(Duration::from_millis(config.sync_timeout_ms))
+        .filter(filter.into());
 
     let sdk_client = client.inner().clone();
     let stream = sdk_client.sync_stream(settings).await;
@@ -59,6 +73,10 @@ pub async fn run_sync_loop(
                 continue;
             }
 
+            let is_direct = match client.inner().get_room(&room_id) {
+                Some(room) => room.is_direct().await.ok(),
+                None => None,
+            };
             for raw_event in joined_room.timeline.events {
                 let event_json: serde_json::Value =
                     match serde_json::from_str(raw_event.raw().json().get()) {
@@ -75,7 +93,19 @@ pub async fn run_sync_loop(
                     continue;
                 }
 
-                match deduper.try_insert(room_id_str, &event_id) {
+                let worker = deduper.clone();
+                let dedupe_room = room_id_str.to_owned();
+                let dedupe_result =
+                    tokio::task::spawn_blocking(move || worker.try_insert(&dedupe_room, &event_id))
+                        .await;
+                let dedupe_result = match dedupe_result {
+                    Ok(result) => result,
+                    Err(e) => {
+                        tracing::warn!("Dedupe worker failed: {e}");
+                        continue;
+                    }
+                };
+                match dedupe_result {
                     Ok(true) => {}
                     Ok(false) => continue,
                     Err(e) => {
@@ -84,12 +114,13 @@ pub async fn run_sync_loop(
                     }
                 }
 
-                if let Some(mut inbound) = events::convert_timeline_event(
+                if let Some(mut inbound) = events::convert_timeline_event_in_room(
                     &event_json,
                     room_id_str,
                     &channel_id,
                     &own_user_id,
                     Some(&config),
+                    is_direct,
                 ) {
                     // Inbound media arrives as `mxc://` URLs the HTTP pipeline
                     // cannot resolve; hydrate them into inline bytes here while

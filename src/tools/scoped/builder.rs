@@ -4,7 +4,7 @@
 //! Lives alongside [`super`] so the trait impl in `mod.rs` and the dispatch
 //! body in [`super::dispatch`] can share these inherent helpers.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
 
@@ -28,7 +28,10 @@ impl ScopedToolService {
     pub fn new(inner: Arc<LoopToolRegistry>, allowed: BTreeSet<String>) -> Self {
         Self {
             canonical_registry: inner.canonical_registry(),
+            capability_policy: inner.canonical_facade().map(|facade| facade.policy()),
             canonical_facade: inner.canonical_facade(),
+            capability_activations: BTreeMap::new(),
+            capability_constraint_context: None,
             visible_mcp_servers: inner.visible_mcp_servers(),
             inner,
             allowed,
@@ -63,6 +66,49 @@ impl ScopedToolService {
                         // herdr removal (5dd337df1); the transport itself is still covered
     pub(crate) fn with_structured_rpc_transport(mut self) -> Self {
         self.result_transport = super::ResultTransport::StructuredRpc;
+        self
+    }
+
+    /// Share startup restrictions; this never replaces existing Tool authorization.
+    #[must_use]
+    pub fn with_capability_policy(
+        mut self,
+        policy: Arc<crate::capability::policy::PolicyEngine>,
+    ) -> Self {
+        self.capability_policy = Some(policy);
+        self
+    }
+
+    /// Compatibility opt-in using the same capability activation evaluator.
+    /// Production rules are installed through the shared Policy, not this map.
+    /// Attach a capability-layer activation controller for one canonical tool.
+    ///
+    /// Dispatch invokes this controller immediately before the handler and
+    /// supplies the generation captured by the canonical backend lease. The
+    /// canonical facade has already validated that lease at the same seam.
+    /// Also install [`Self::with_capability_constraint_context`]; without a
+    /// trusted current context this controller's invocations fail closed.
+    pub fn with_capability_activation(
+        mut self,
+        name: impl Into<String>,
+        activation: Arc<dyn crate::capability::activation::CapabilityActivation>,
+    ) -> Self {
+        self.capability_activations.insert(name.into(), activation);
+        self
+    }
+
+    /// Supply current runtime facts from the trusted invocation owner.
+    ///
+    /// The source receives only the canonical tool name, never model/RPC input.
+    /// It must account for other occupied slots (excluding this invocation)
+    /// and provide current conditions on each call. No source is fabricated
+    /// when absent. Services without activation controllers are unchanged.
+    #[must_use]
+    pub fn with_capability_constraint_context(
+        mut self,
+        source: Arc<super::CapabilityConstraintContextSource>,
+    ) -> Self {
+        self.capability_constraint_context = Some(source);
         self
     }
 

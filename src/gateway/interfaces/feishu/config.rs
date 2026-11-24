@@ -20,7 +20,7 @@ fn default_webhook_path() -> String {
     "/feishu/events".to_string()
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct FeishuConfig {
     pub app_id: String,
     pub app_secret: String,
@@ -43,8 +43,6 @@ pub struct FeishuConfig {
     pub render_mode: String,
     #[serde(default = "default_true")]
     pub typing_indicator: bool,
-    #[serde(default = "default_true")]
-    pub reaction_notifications: bool,
     #[serde(default)]
     pub group_session_scope: GroupSessionScope,
     /// Connection mode: "websocket" (default) or "webhook"
@@ -67,6 +65,45 @@ pub struct FeishuConfig {
     pub accounts: Option<std::collections::HashMap<String, FeishuAccountEntry>>,
     #[serde(default)]
     pub default_account: Option<String>,
+}
+
+/// Hand-written so the credentials never reach a log line, a panic message
+/// or a `tracing` field. Every other field is printed as-is.
+impl std::fmt::Debug for FeishuConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FeishuConfig")
+            .field("app_id", &self.app_id)
+            .field("app_secret", &"<redacted>")
+            .field("domain", &self.domain)
+            .field("bot_name", &self.bot_name)
+            .field("dm_allowed", &self.dm_allowed)
+            .field("groups_allowed", &self.groups_allowed)
+            .field("group_policy", &self.group_policy)
+            .field("group_allowlist", &self.group_allowlist)
+            .field("require_mention", &self.require_mention)
+            .field("streaming", &self.streaming)
+            .field("render_mode", &self.render_mode)
+            .field("typing_indicator", &self.typing_indicator)
+            .field("group_session_scope", &self.group_session_scope)
+            .field("connection_mode", &self.connection_mode)
+            .field("webhook_port", &self.webhook_port)
+            .field("webhook_host", &self.webhook_host)
+            .field("webhook_path", &self.webhook_path)
+            .field(
+                "verification_token",
+                &self
+                    .verification_token
+                    .as_ref()
+                    .map(|_| "<redacted>".to_string()),
+            )
+            .field(
+                "encrypt_key",
+                &self.encrypt_key.as_ref().map(|_| "<redacted>".to_string()),
+            )
+            .field("accounts", &self.accounts)
+            .field("default_account", &self.default_account)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
@@ -115,23 +152,80 @@ impl FeishuConfig {
         self.connection_mode == "webhook"
     }
 
-    #[must_use]
-    pub fn is_group_allowed(&self, chat_id: &str) -> bool {
-        if !self.groups_allowed {
-            return false;
+    /// Resolve the one account this process serves, fail-closed.
+    ///
+    /// One `FeishuChannel` runs one transport, so exactly one identity must be
+    /// unambiguous:
+    ///
+    /// - no `[accounts]` table: the top-level `app_id` / `app_secret` identity;
+    /// - `default_account` set: that account, which must exist, be enabled and
+    ///   carry its own credentials;
+    /// - exactly one enabled account: that account;
+    /// - anything else: an error. Picking one silently would answer another
+    ///   tenant's users with the wrong bot identity, which is exactly the
+    ///   multi-account wire this resolver exists to close.
+    pub fn resolve_active_account(&self) -> Result<(String, String, String), ChannelError> {
+        let Some(accounts) = self.accounts.as_ref().filter(|a| !a.is_empty()) else {
+            return Ok((
+                self.resolve_default_account_id(),
+                self.app_id.clone(),
+                self.app_secret.clone(),
+            ));
+        };
+
+        let selected = match self.default_account.as_deref().filter(|id| !id.is_empty()) {
+            Some(id) => id,
+            None => {
+                let mut enabled = accounts
+                    .iter()
+                    .filter(|(_, entry)| entry.enabled != Some(false))
+                    .map(|(id, _)| id.as_str());
+                match (enabled.next(), enabled.next()) {
+                    (Some(only), None) => only,
+                    _ => {
+                        return Err(ChannelError::ConfigError(format!(
+                            "{} Feishu accounts are configured but `default_account` is unset — \
+                             name the account this channel serves, because one transport cannot \
+                             answer every tenant without borrowing another bot's identity",
+                            accounts.len()
+                        )))
+                    }
+                }
+            }
+        };
+
+        let entry = accounts.get(selected).ok_or_else(|| {
+            ChannelError::ConfigError(format!(
+                "default_account {selected:?} is not one of the configured `accounts`"
+            ))
+        })?;
+        if entry.enabled == Some(false) {
+            return Err(ChannelError::ConfigError(format!(
+                "default_account {selected:?} is disabled"
+            )));
         }
-        match self.group_policy.as_str() {
-            "allowlist" => self.group_allowlist.iter().any(|id| id == chat_id),
-            _ => true,
+        let app_id = entry.app_id.as_deref().filter(|id| !id.is_empty());
+        let app_secret = entry.app_secret.as_deref().filter(|s| !s.is_empty());
+        match (app_id, app_secret) {
+            (Some(app_id), Some(app_secret)) => Ok((
+                selected.to_string(),
+                app_id.to_string(),
+                app_secret.to_string(),
+            )),
+            _ => Err(ChannelError::ConfigError(format!(
+                "account {selected:?} must set its own `app_id` and `app_secret`; falling back to \
+                 the top-level credentials would answer its users as the default bot"
+            ))),
         }
     }
 
     /// Validate the config and return an error if required fields are missing.
     pub fn validate(&self) -> Result<(), ChannelError> {
-        if self.app_id.is_empty() {
+        let (_, app_id, app_secret) = self.resolve_active_account()?;
+        if app_id.is_empty() {
             return Err(ChannelError::ConfigError("app_id is required".to_string()));
         }
-        if self.app_secret.is_empty() {
+        if app_secret.is_empty() {
             return Err(ChannelError::ConfigError(
                 "app_secret is required".to_string(),
             ));
@@ -233,7 +327,6 @@ mod tests {
             streaming: true,
             render_mode: "auto".into(),
             typing_indicator: true,
-            reaction_notifications: true,
             group_session_scope: GroupSessionScope::default(),
             connection_mode: "websocket".into(),
             webhook_port: 3000,
@@ -262,7 +355,6 @@ mod tests {
             streaming: true,
             render_mode: "auto".into(),
             typing_indicator: true,
-            reaction_notifications: true,
             group_session_scope: GroupSessionScope::default(),
             connection_mode: "websocket".into(),
             webhook_port: 3000,
@@ -291,7 +383,6 @@ mod tests {
             streaming: true,
             render_mode: "auto".into(),
             typing_indicator: true,
-            reaction_notifications: true,
             group_session_scope: GroupSessionScope::default(),
             connection_mode: "websocket".into(),
             webhook_port: 3000,
@@ -383,7 +474,6 @@ mod tests {
             streaming: true,
             render_mode: "auto".into(),
             typing_indicator: true,
-            reaction_notifications: true,
             group_session_scope: GroupSessionScope::default(),
             connection_mode: "websocket".into(),
             webhook_port: 3000,
@@ -412,7 +502,6 @@ mod tests {
             streaming: true,
             render_mode: "auto".into(),
             typing_indicator: true,
-            reaction_notifications: true,
             group_session_scope: GroupSessionScope::default(),
             connection_mode: "websocket".into(),
             webhook_port: 3000,
@@ -441,7 +530,6 @@ mod tests {
             streaming: true,
             render_mode: "auto".into(),
             typing_indicator: true,
-            reaction_notifications: true,
             group_session_scope: GroupSessionScope::default(),
             connection_mode: "websocket".into(),
             webhook_port: 3000,
@@ -470,7 +558,6 @@ mod tests {
             streaming: true,
             render_mode: "auto".into(),
             typing_indicator: true,
-            reaction_notifications: true,
             group_session_scope: GroupSessionScope::default(),
             connection_mode: "websocket".into(),
             webhook_port: 3000,
@@ -505,7 +592,6 @@ mod tests {
             streaming: true,
             render_mode: "auto".into(),
             typing_indicator: true,
-            reaction_notifications: true,
             group_session_scope: GroupSessionScope::default(),
             connection_mode: "websocket".into(),
             webhook_port: 3000,
@@ -554,7 +640,6 @@ mod tests {
             streaming: true,
             render_mode: "auto".into(),
             typing_indicator: true,
-            reaction_notifications: true,
             group_session_scope: GroupSessionScope::default(),
             connection_mode: "websocket".into(),
             webhook_port: 3000,
@@ -590,7 +675,6 @@ mod tests {
             streaming: true,
             render_mode: "auto".into(),
             typing_indicator: true,
-            reaction_notifications: true,
             group_session_scope: GroupSessionScope::default(),
             connection_mode: "websocket".into(),
             webhook_port: 3000,
@@ -633,7 +717,6 @@ mod tests {
             streaming: true,
             render_mode: "auto".into(),
             typing_indicator: true,
-            reaction_notifications: true,
             group_session_scope: GroupSessionScope::default(),
             connection_mode: "websocket".into(),
             webhook_port: 3000,
@@ -665,5 +748,152 @@ mod tests {
         assert!(config.is_account_enabled(""));
         assert!(config.is_account_enabled("enabled_acc"));
         assert!(!config.is_account_enabled("disabled_acc"));
+    }
+
+    fn config_with_accounts(
+        accounts: Vec<(&str, Option<&str>, Option<&str>, Option<bool>)>,
+        default_account: Option<&str>,
+    ) -> FeishuConfig {
+        FeishuConfig {
+            app_id: "".into(),
+            app_secret: "".into(),
+            domain: "feishu".into(),
+            bot_name: None,
+            dm_allowed: true,
+            groups_allowed: false,
+            group_policy: "open".into(),
+            group_allowlist: vec![],
+            require_mention: true,
+            streaming: true,
+            render_mode: "auto".into(),
+            typing_indicator: true,
+            group_session_scope: GroupSessionScope::default(),
+            connection_mode: "websocket".into(),
+            webhook_port: 3000,
+            webhook_host: "127.0.0.1".into(),
+            webhook_path: "/feishu/events".into(),
+            verification_token: Some("token".into()),
+            encrypt_key: None,
+            accounts: Some(
+                accounts
+                    .into_iter()
+                    .map(|(id, app_id, app_secret, enabled)| {
+                        (
+                            id.to_string(),
+                            FeishuAccountEntry {
+                                app_id: app_id.map(str::to_string),
+                                app_secret: app_secret.map(str::to_string),
+                                enabled,
+                            },
+                        )
+                    })
+                    .collect(),
+            ),
+            default_account: default_account.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn test_resolve_active_account_without_accounts_uses_top_level() {
+        let mut config = config_with_accounts(vec![], None);
+        config.accounts = None;
+        config.app_id = "cli_top".into();
+        config.app_secret = "secret_top".into();
+        assert_eq!(
+            config.resolve_active_account().unwrap(),
+            (
+                "default".to_string(),
+                "cli_top".to_string(),
+                "secret_top".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn test_resolve_active_account_honours_default_account() {
+        let config = config_with_accounts(
+            vec![
+                ("work", Some("cli_work"), Some("secret_work"), Some(true)),
+                (
+                    "personal",
+                    Some("cli_personal"),
+                    Some("secret_personal"),
+                    Some(true),
+                ),
+            ],
+            Some("work"),
+        );
+        assert_eq!(
+            config.resolve_active_account().unwrap(),
+            (
+                "work".to_string(),
+                "cli_work".to_string(),
+                "secret_work".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn test_resolve_active_account_needs_a_choice_when_ambiguous() {
+        // Two tenants, nothing says which one this transport serves: answering
+        // either would hand one tenant the other's bot identity.
+        let config = config_with_accounts(
+            vec![
+                ("work", Some("cli_work"), Some("secret_work"), None),
+                (
+                    "personal",
+                    Some("cli_personal"),
+                    Some("secret_personal"),
+                    None,
+                ),
+            ],
+            None,
+        );
+        let err = config.resolve_active_account().unwrap_err().to_string();
+        assert!(err.contains("default_account"), "unexpected error: {err}");
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_resolve_active_account_rejects_borrowed_credentials() {
+        // A named account without its own credentials would otherwise be served
+        // by the top-level bot.
+        let config = config_with_accounts(vec![("work", None, None, Some(true))], Some("work"));
+        let err = config.resolve_active_account().unwrap_err().to_string();
+        assert!(err.contains("app_id"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn test_resolve_active_account_rejects_disabled_or_unknown_default() {
+        let disabled = config_with_accounts(
+            vec![("work", Some("cli_work"), Some("secret_work"), Some(false))],
+            Some("work"),
+        );
+        assert!(disabled.resolve_active_account().is_err());
+
+        let unknown = config_with_accounts(
+            vec![("work", Some("cli_work"), Some("secret_work"), None)],
+            Some("typo"),
+        );
+        assert!(unknown.resolve_active_account().is_err());
+    }
+
+    #[test]
+    fn test_resolve_active_account_single_enabled_account_needs_no_default() {
+        let config = config_with_accounts(
+            vec![
+                ("work", Some("cli_work"), Some("secret_work"), Some(true)),
+                ("old", None, None, Some(false)),
+            ],
+            None,
+        );
+        assert_eq!(
+            config.resolve_active_account().unwrap(),
+            (
+                "work".to_string(),
+                "cli_work".to_string(),
+                "secret_work".to_string()
+            )
+        );
     }
 }

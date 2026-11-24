@@ -195,6 +195,29 @@ impl IsolatedAlephHome {
     }
 }
 
+/// Isolate every account-scoped discovery root, not just Aleph state.
+/// The combined guard preserves the established ALEPH_HOME-before-HOME lock order.
+#[cfg(test)]
+pub(crate) struct IsolatedDiscoveryHome {
+    _guard: crate::runtimes::post_install::HomeEnvGuards,
+    _dir: tempfile::TempDir,
+}
+
+#[cfg(test)]
+impl IsolatedDiscoveryHome {
+    pub(crate) fn new() -> Self {
+        let dir = tempfile::tempdir().expect("tempdir for isolated discovery HOME");
+        let aleph_home = dir.path().join("aleph");
+        std::fs::create_dir(&aleph_home).expect("isolated Aleph directory");
+        let guard =
+            crate::runtimes::post_install::HomeEnvGuards::acquire_and_set(&aleph_home, dir.path());
+        Self {
+            _guard: guard,
+            _dir: dir,
+        }
+    }
+}
+
 /// The account's home directory from the password database, NOT `$HOME`.
 ///
 /// `$HOME` is exactly what a hermetic test moves, so it cannot tell a
@@ -806,14 +829,17 @@ fn unsafe_agent_id_reason(agent_id: &str) -> Option<&'static str> {
     if agent_id.is_empty() {
         return Some("must not be empty");
     }
+    if agent_id.trim().is_empty() {
+        return Some("must not be blank or whitespace-only");
+    }
     if agent_id.contains('\0') {
         return Some("must not contain null bytes");
     }
     if agent_id.contains('/') || agent_id.contains('\\') {
         return Some("must be a single path component, with no '/' or '\\' separator");
     }
-    if agent_id.contains("..") {
-        return Some("must not contain '..' (path traversal)");
+    if agent_id == "." || agent_id.contains("..") {
+        return Some("must not be '.' or contain '..' (path traversal)");
     }
     if is_windows_reserved_name(agent_id) {
         // Naming the stem rule, not just the device list: the reason an id
@@ -881,7 +907,8 @@ pub(crate) fn is_windows_reserved_name(name: &str) -> bool {
     // Trim AFTER cutting, so `con . txt` reduces to `con` the way Win32 does.
     let stem = name
         .find(['.', ':'])
-        .map_or(name, |i| &name[..i])
+        .and_then(|i| name.get(..i))
+        .unwrap_or(name)
         .trim_end();
     RESERVED.iter().any(|r| stem.eq_ignore_ascii_case(r))
 }
@@ -988,12 +1015,11 @@ fn agent_skills_dir(dirs: &mut Vec<PathBuf>) {
 /// cross-platform home ladder as `~/.aleph` (HOME → USERPROFILE →
 /// HOMEDRIVE+HOMEPATH), so the macOS/Linux/Windows match is inherited.
 pub(crate) fn user_skills_roots() -> Result<(PathBuf, Option<PathBuf>, Option<PathBuf>)> {
-    let global_agents = get_home_dir()
-        .ok()
+    let home = get_home_dir().ok();
+    let global_agents = home
+        .as_ref()
         .map(|home| home.join(".agents").join("skills"));
-    let global_claude = get_home_dir()
-        .ok()
-        .map(|home| home.join(".claude").join("skills"));
+    let global_claude = home.map(|home| home.join(".claude").join("skills"));
     Ok((get_skills_dir()?, global_agents, global_claude))
 }
 
@@ -1274,6 +1300,33 @@ pub fn migrate_legacy_db_files() {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn discovery_fixture_isolates_agents_home_even_when_claude_scanning_is_disabled() {
+        let _home = IsolatedDiscoveryHome::new();
+        let home = get_config_dir().unwrap().parent().unwrap().to_path_buf();
+        assert_eq!(get_home_dir().unwrap(), home);
+        std::fs::create_dir_all(home.join(".agents/skills/phase9-fixture")).unwrap();
+        std::fs::write(
+            home.join(".agents/skills/phase9-fixture/SKILL.md"),
+            "fixture",
+        )
+        .unwrap();
+        let scanner = crate::discovery::DiscoveryManager::new(crate::discovery::DiscoveryConfig {
+            scan_claude_dirs: false,
+            scan_project_dirs: false,
+            ..Default::default()
+        })
+        .unwrap();
+        let skills = scanner.discover_skill_dirs().unwrap();
+        assert!(skills
+            .iter()
+            .any(|skill| skill.path.starts_with(home.join(".agents"))));
+        assert!(skills.iter().all(|skill| skill.path.starts_with(&home)));
+        crate::config::Config::default()
+            .save_to_file(get_config_dir().unwrap().join("config.toml"))
+            .unwrap();
+    }
 
     #[test]
     fn display_string_strips_the_verbatim_prefix_only_where_it_is_reversible() {

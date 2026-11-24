@@ -258,13 +258,12 @@ pub async fn materialize_template(
             .filter_map(|k| key_to_id.get(k).cloned())
             .collect();
 
-        let mut metadata = serde_json::json!({
+        let metadata = serde_json::json!({
             MANAGED_BY_KEY: MANAGED_BY_DISPATCHER,
             "template_name": tpl.name,
             "template_task_key": task.key,
+            "team_id": team.id.clone(),
         });
-        // Convenience pointer to the parent team for downstream consumers.
-        metadata["team_id"] = serde_json::Value::String(team.id.clone());
 
         let coord_task = deps
             .coord_store
@@ -338,12 +337,14 @@ fn topo_sort(tpl: &TeamTemplate) -> Result<Vec<&super::types::TemplateTask>, Tea
         .enumerate()
         .map(|(i, t)| (t.key.as_str(), i))
         .collect();
-    ready.sort_by_key(|k| pos.get(*k).copied().unwrap_or(0));
+    ready.sort_by_key(|k| std::cmp::Reverse(pos.get(*k).copied().unwrap_or(0)));
 
     let mut out: Vec<&super::types::TemplateTask> = Vec::with_capacity(tpl.tasks.len());
     let mut newly_ready: Vec<&str> = Vec::new();
     while let Some(k) = ready.pop() {
-        out.push(by_key[k]);
+        if let Some(&task) = by_key.get(k) {
+            out.push(task);
+        }
         // Decrement in-degree for everyone depending on `k`.
         newly_ready.clear();
         for other in &tpl.tasks {

@@ -13,6 +13,12 @@ pub mod connection;
 mod flood_guard;
 pub(crate) mod handler;
 mod metrics_endpoint;
+#[cfg(test)]
+mod panel_asset_http_tests;
+mod panel_asset_route;
+#[cfg(test)]
+#[path = "panel_asset_route_tests.rs"]
+mod panel_asset_route_tests;
 mod per_client_buffer;
 mod probe;
 
@@ -341,6 +347,8 @@ pub struct GatewayConfig {
     pub tls_key_path: String,
     /// Mirrors `GatewayServerConfig::tls.san`.
     pub tls_san: Vec<String>,
+    /// Mirrors `GatewayServerConfig::panel_web_dir`.
+    pub panel_web_dir: Option<std::path::PathBuf>,
     /// Per-principal RPC rate-limit ceilings. Populated by the binary from
     /// the TOML `[gateway.rate_limit]` block (or the compiled defaults).
     /// RESTART-ONLY: read once here, when the limiter is built.
@@ -357,6 +365,7 @@ impl Default for GatewayConfig {
             idle_timeout_secs: 90,
             allowed_origins: Vec::new(),
             allow_any_origin: false,
+            panel_web_dir: None,
             trusted_proxy_enabled: false,
             trusted_proxy_ips: vec!["127.0.0.1".to_string(), "::1".to_string()],
             allow_insecure_remote: false,
@@ -392,6 +401,7 @@ impl Default for GatewayConfig {
 pub struct GatewayServer {
     addr: SocketAddr,
     config: GatewayConfig,
+    application_config: Option<Arc<RwLock<crate::config::Config>>>,
     handlers: Arc<HandlerRegistry>,
     event_bus: Arc<GatewayEventBus>,
     pub connections: Arc<RwLock<HashMap<String, ConnectionState>>>,
@@ -436,7 +446,7 @@ pub struct GatewayServer {
     /// Provider configs for /v1/models listing
     pub openai_provider_configs: Vec<(String, crate::config::ProviderConfig)>,
     /// Embedding provider for /v1/embeddings
-    pub embedding_provider: Option<Arc<dyn crate::memory::EmbeddingProvider>>,
+    pub memory_runtime: Option<Arc<crate::memory::runtime::MemoryRuntime>>,
     /// Phase 5 Orchestrator (flow composition). Populated at boot after
     /// agent registry + session + tool + provider + sandbox are assembled.
     /// Task 10 (Gateway `run_agent_loop` replacement) consumes this.
@@ -455,12 +465,6 @@ pub struct GatewayServer {
     /// lock instead.
     admin_router: Option<Router>,
 
-    /// Join handle for the background reconciler daemon (event-log \u2194
-    /// notes filesystem divergence scanner). Stored here so a graceful
-    /// shutdown can `.abort()` the task before the StateDatabase it
-    /// reads from is dropped. `None` when `[memory.reconciler]` is
-    /// disabled or no memory handler was wired into AdminApiState.
-    reconciler_handle: Option<tokio::task::JoinHandle<()>>,
     /// Live channel webhook mount table, shared with `ChannelRegistry`.
     ///
     /// `build_router()` always registers the one wildcard route over this
@@ -475,6 +479,11 @@ pub struct GatewayServer {
     /// Device-token manager for bootstrap-ticket / per-device-token auth.
     /// Populated at boot by [`GatewayServer::set_device_token_manager`].
     device_token_mgr: Option<Arc<crate::gateway::security::DeviceTokenManager>>,
+    /// One device selection map shared by RPC discovery and HTTP delivery.
+    panel_projects: Option<Arc<crate::gateway::panel_project_context::PanelProjectSelector>>,
+    /// Optional QA-only after-auth observer for the isolated native project helper.
+    #[cfg(feature = "native-qa")]
+    native_qa_observer: Option<crate::gateway::native_qa::NativeQaRpcObserverHandle>,
     /// Security store handle for the node `last_seen_at` stamping in the
     /// WS connect/disconnect paths. See `GatewaySharedState::security_store`.
     security_store: Option<Arc<crate::gateway::security::SecurityStore>>,
@@ -542,6 +551,8 @@ impl GatewayServer {
         Self {
             addr,
             config: GatewayConfig::default(),
+            panel_projects: None,
+            application_config: None,
             handlers: Arc::new(HandlerRegistry::new()),
             event_bus: Arc::new(GatewayEventBus::new()),
             connections: Arc::new(RwLock::new(HashMap::new())),
@@ -564,14 +575,15 @@ impl GatewayServer {
             openai_agent_registry: None,
             openai_provider_map: Arc::new(HashMap::new()),
             openai_provider_configs: Vec::new(),
-            embedding_provider: None,
+            memory_runtime: None,
             orchestrator: None,
             admin_router: None,
-            reconciler_handle: None,
             webhook_mounts: Arc::new(crate::gateway::webhook_receiver::WebhookMountTable::new()),
             shared_token_mgr: None,
             device_token_mgr: None,
             security_store: None,
+            #[cfg(feature = "native-qa")]
+            native_qa_observer: None,
             canvas_store: None,
             mcp_face: None,
             browser_viewer: None,
@@ -607,6 +619,8 @@ impl GatewayServer {
         Self {
             addr,
             config,
+            panel_projects: None,
+            application_config: None,
             handlers: Arc::new(HandlerRegistry::new()),
             event_bus: Arc::new(GatewayEventBus::new()),
             connections: Arc::new(RwLock::new(HashMap::new())),
@@ -629,14 +643,15 @@ impl GatewayServer {
             openai_agent_registry: None,
             openai_provider_map: Arc::new(HashMap::new()),
             openai_provider_configs: Vec::new(),
-            embedding_provider: None,
+            memory_runtime: None,
             orchestrator: None,
             admin_router: None,
-            reconciler_handle: None,
             webhook_mounts: Arc::new(crate::gateway::webhook_receiver::WebhookMountTable::new()),
             shared_token_mgr: None,
             device_token_mgr: None,
             security_store: None,
+            #[cfg(feature = "native-qa")]
+            native_qa_observer: None,
             canvas_store: None,
             mcp_face: None,
             browser_viewer: None,
@@ -651,6 +666,12 @@ impl GatewayServer {
                 crate::gateway::event_visibility::EventVisibilityIndex::new(),
             ),
         }
+    }
+
+    /// Provide the live application Config used to decide whether Terminal
+    /// runtime effects may be started during router construction.
+    pub fn set_application_config(&mut self, config: Arc<RwLock<crate::config::Config>>) {
+        self.application_config = Some(config);
     }
 
     /// Get a reference to the subscription manager
@@ -703,29 +724,6 @@ impl GatewayServer {
         self.admin_router = Some(router);
     }
 
-    /// Store the `JoinHandle` of the background reconciler daemon so
-    /// graceful shutdown can `.abort()` the task before the
-    /// `StateDatabase` it reads from is dropped. Idempotent — replacing
-    /// the handle aborts the previous one (defensive: in practice the
-    /// daemon is started once at boot).
-    pub fn set_reconciler_handle(&mut self, handle: tokio::task::JoinHandle<()>) {
-        if let Some(prior) = self.reconciler_handle.take() {
-            prior.abort();
-        }
-        self.reconciler_handle = Some(handle);
-    }
-
-    /// Abort the background reconciler daemon if one is running. Called
-    /// from the server's shutdown path before the database is dropped.
-    /// Returns the prior handle (caller may await its completion if it
-    /// cares about draining in-flight scans).
-    #[must_use]
-    pub fn abort_reconciler_daemon(&mut self) -> Option<tokio::task::JoinHandle<()>> {
-        self.reconciler_handle.take().inspect(|h| {
-            h.abort();
-        })
-    }
-
     /// Serve channel webhook ingestion from `table`.
     ///
     /// Idempotent. Call order does not matter: the table is shared state, not
@@ -751,7 +749,24 @@ impl GatewayServer {
         &mut self,
         manager: Arc<crate::gateway::security::DeviceTokenManager>,
     ) {
+        self.panel_projects = Some(Arc::new(
+            crate::gateway::panel_project_context::PanelProjectSelector::new(
+                crate::projects::ProjectStore::shared(),
+                manager.store().clone(),
+            ),
+        ));
         self.device_token_mgr = Some(manager);
+    }
+
+    /// Install the QA-only after-auth observer used by the isolated native
+    /// project acceptance helper. It receives only typed redacted facts after
+    /// normal Gateway authorization and contextual dispatch return.
+    #[cfg(feature = "native-qa")]
+    pub fn set_native_qa_observer(
+        &mut self,
+        observer: crate::gateway::native_qa::NativeQaRpcObserverHandle,
+    ) {
+        self.native_qa_observer = Some(observer);
     }
 
     /// Install the `SecurityStore` so the WS node connect/disconnect paths
@@ -856,7 +871,52 @@ impl GatewayServer {
         &mut self,
         store: Arc<dyn crate::gateway::session_store::SessionStore>,
     ) {
-        self.session_store = Some(store);
+        self.session_store = Some(Arc::clone(&store));
+        self.register_capability_ui_handlers(store);
+    }
+
+    fn register_capability_ui_handlers(
+        &mut self,
+        session_store: Arc<dyn crate::gateway::session_store::SessionStore>,
+    ) {
+        let event_bus = Arc::clone(&self.event_bus);
+        let attach_store = Arc::clone(&session_store);
+        self.handlers_mut().register("capabilities.ui.attach", move |request| {
+            let store = Arc::clone(&attach_store);
+            let bus = Arc::clone(&event_bus);
+            async move { crate::gateway::capability_ui::handle_attach(request, store, bus).await }
+        });
+        // `capabilities.ui.invoke` is the effect half of the capability-UI
+        // surface: after `capabilities.ui.attach` delivered a surface, the
+        // client that holds it calls back here to actuate an affordance. The
+        // expected first-party caller is the UI client bound to that
+        // connection (the Panel's capability-UI host / an ACP client) — the
+        // Rust core never invokes its own gateway RPC. No first-party client
+        // sends this method yet, so the arm below is the contract, not a live
+        // path: authorization is already wired on the server side
+        // (`method_census` Class::Open, `method_visibility` KeyChecked, and the
+        // per-connection lane/idempotency handling in
+        // `server/connection/dispatch.rs` + `acknowledged_effects.rs`), and
+        // the handler fails closed (SERVICE_UNAVAILABLE) when no projection
+        // host is mounted. Keep the registration until that client lands —
+        // deleting it would turn every such call into a bare Method-not-found
+        // and silently drop the capability-UI effect path.
+        self.handlers_mut().register(
+            "capabilities.ui.invoke",
+            crate::gateway::capability_ui::handle_invoke,
+        );
+        self.handlers_mut().register(
+            "capabilities.ui.ack",
+            crate::gateway::capability_ui::handle_ack,
+        );
+        self.handlers_mut().register(
+            "capabilities.ui.submit_input",
+            crate::gateway::capability_ui::handle_submit_input,
+        );
+        self.handlers_mut().register(
+            "capabilities.ui.detach",
+            crate::gateway::capability_ui::handle_detach,
+        );
     }
 
     /// Install the `TeamStore` so the WS event-delivery loop can resolve the
@@ -900,20 +960,46 @@ impl GatewayServer {
     /// Build a unified axum Router with WebSocket + `ControlPlane` UI routes.
     /// WebSocket connections are handled at `/ws`, everything else serves the Panel UI.
     pub fn build_router(&self) -> Router {
+        self.router_from_shared(self.build_shared_state())
+    }
+
+    fn build_shared_state(&self) -> Arc<GatewaySharedState> {
         // Build the middleware chain ONCE here (cloned per connection) rather
         // than per-connection, so the global request-state registry is
         // installed a single time and its counters accumulate across
         // connections instead of resetting on every connect.
         let middleware_chain =
-            MiddlewareChain::new(self.handlers.clone(), self.rate_limiter.clone());
+            MiddlewareChain::new(self.handlers.clone(), self.rate_limiter.clone())
+                .with_panel_projects(self.panel_projects.clone());
+        #[cfg(feature = "native-qa")]
+        let middleware_chain =
+            middleware_chain.with_native_qa_observer(self.native_qa_observer.clone());
 
-        // Wire the embedded-PTY subsystem to this server's event bus so live
-        // terminal output is broadcast on the `pty.screen` / `pty.exit` topics
-        // through the normal subscription path (single fixed port, no second
-        // socket). Idempotent — safe if `build_router` runs more than once.
-        crate::gateway::pty::attach_event_bus(self.event_bus.clone());
+        // Wire the embedded-PTY subsystem only when the live application
+        // policy admits Terminal runtime effects. A missing or locked Config
+        // fails closed and does not initialize the process-global manager.
+        if let Some(config) = self
+            .application_config
+            .as_ref()
+            .and_then(|config| config.try_read().ok())
+        {
+            // Keep the intent read locked until activation commits.
+            if config.policies.terminal.enabled {
+                if let Err(error) = crate::gateway::pty::attach_event_bus(self.event_bus.clone()) {
+                    warn!(%error, "terminal activation failed during gateway boot");
+                } else if let Some(source) = crate::capability::projection_host::projection_host()
+                    .and_then(|host| host.facade().terminal_source())
+                {
+                    if let Err(error) = crate::gateway::pty::manager()
+                        .bind_capability_source(Arc::downgrade(&source))
+                    {
+                        warn!(%error, "terminal capability source binding failed during gateway boot");
+                    }
+                }
+            }
+        }
 
-        let shared = Arc::new(GatewaySharedState {
+        Arc::new(GatewaySharedState {
             handlers: self.handlers.clone(),
             event_bus: self.event_bus.clone(),
             connections: self.connections.clone(),
@@ -953,8 +1039,10 @@ impl GatewayServer {
             session_store: self.session_store.clone(),
             team_store: self.team_store.clone(),
             event_visibility: self.event_visibility.clone(),
-        });
+        })
+    }
 
+    fn router_from_shared(&self, shared: Arc<GatewaySharedState>) -> Router {
         // Strip query strings from the Panel/control-plane fallback before any
         // static-file or SPA handler sees the request. This prevents bootstrap
         // tickets, legacy tokens, or device tokens from appearing in server logs
@@ -984,7 +1072,7 @@ impl GatewayServer {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs(),
-            embedding_provider: self.embedding_provider.clone(),
+            memory_runtime: self.memory_runtime.clone(),
         });
         let openai = openai_routes(openai_state);
 
@@ -1038,6 +1126,10 @@ impl GatewayServer {
                     .session_store
                     .clone()
                     .expect("session store must be installed before attachment routes"),
+                device_tokens: self.device_token_mgr.clone(),
+                shared_token: self.shared_token_mgr.clone(),
+                trusted_proxy_enabled: shared.trusted_proxy_enabled,
+                trusted_proxy_ips: shared.trusted_proxy_ips.clone(),
             }))
         });
 
@@ -1049,6 +1141,22 @@ impl GatewayServer {
             .fallback_service(control_plane)
             .with_state(shared.clone())
             .merge(openai);
+
+        // Panel assets are a separate authenticated HTTP ingress. Mount even
+        // before a Core manager is available; absence refuses instead of SPA HTML.
+        router = router.merge(panel_asset_route::panel_asset_routes(
+            self.device_token_mgr.as_ref().map(|tokens| {
+                panel_asset_route::production_state(
+                    tokens.clone(),
+                    shared.origin_policy.clone(),
+                    shared.trusted_proxy_enabled,
+                    shared.trusted_proxy_ips.clone(),
+                    shared.allow_insecure_remote,
+                    shared.tls_enabled,
+                    self.panel_projects.clone(),
+                )
+            }),
+        ));
 
         if let Some(artifacts) = artifacts {
             router = router.merge(artifacts);
@@ -1245,13 +1353,26 @@ impl GatewayServer {
         Ok(())
     }
 
+    fn native_tls_router(
+        &self,
+        state: Arc<GatewaySharedState>,
+        stop: tokio_util::sync::CancellationToken,
+    ) -> Router {
+        let router = self
+            .router_from_shared(state.clone())
+            .merge(connection::web_v1::routes(state, stop));
+        match &self.config.panel_web_dir {
+            Some(dir) => router.merge(connection::web_v1::panel_routes(dir)),
+            None => router,
+        }
+    }
+
     /// Run the Gateway server
     ///
     /// This method runs indefinitely, accepting new connections and
     /// processing messages. Each connection is handled in its own task.
     pub async fn run(&self) -> Result<(), GatewayError> {
         self.spawn_background_tasks();
-        let router = self.build_router();
         self.check_network_exposure()?;
 
         // Native TLS tiers terminate in-process via axum-server's own listener;
@@ -1280,6 +1401,9 @@ impl GatewayServer {
             let tls = axum_server::tls_rustls::RustlsConfig::from_pem(cert_pem, key_pem)
                 .await
                 .map_err(|e| GatewayError::ConnectionError(format!("rustls config: {e}")))?;
+            let stop = tokio_util::sync::CancellationToken::new();
+            let _stop_on_drop = stop.clone().drop_guard();
+            let router = self.native_tls_router(self.build_shared_state(), stop);
             axum_server::bind_rustls(self.addr, tls)
                 .serve(router.into_make_service_with_connect_info::<SocketAddr>())
                 .await
@@ -1294,6 +1418,7 @@ impl GatewayServer {
                 source: e,
             })?;
         info!("Aleph listening on http://{}", self.addr);
+        let router = self.build_router();
         axum::serve(
             listener,
             router.into_make_service_with_connect_info::<SocketAddr>(),
@@ -1303,15 +1428,88 @@ impl GatewayServer {
         Ok(())
     }
 
+    /// Serve the existing network routes and an explicitly enabled, read-only local endpoint.
+    pub async fn run_with_desktop_ipc(
+        &self,
+        shutdown: tokio::sync::oneshot::Receiver<()>,
+        endpoint: Option<&std::path::Path>,
+    ) -> Result<(), GatewayError> {
+        let Some(endpoint) = endpoint else {
+            return self.run_until_shutdown(shutdown).await;
+        };
+        #[cfg(not(any(unix, windows)))]
+        let _ = endpoint;
+        #[cfg(any(unix, windows))]
+        if aleph_client::local_ipc::AVAILABLE {
+            return self.run_local_endpoint(shutdown, endpoint).await;
+        }
+        Err(GatewayError::ConnectionError(
+            "Desktop IPC is unavailable on this platform".into(),
+        ))
+    }
+
+    #[cfg(any(unix, windows))]
+    async fn run_local_endpoint(
+        &self,
+        mut shutdown: tokio::sync::oneshot::Receiver<()>,
+        endpoint: &std::path::Path,
+    ) -> Result<(), GatewayError> {
+        use connection::local_ipc;
+        self.check_network_exposure()?;
+        let endpoint = local_ipc::bind(endpoint).map_err(|error| {
+            GatewayError::ConnectionError(format!("Desktop IPC bind failed: {error}"))
+        })?;
+        let state = self.build_shared_state();
+        self.spawn_background_tasks();
+
+        let stop = tokio_util::sync::CancellationToken::new();
+        let (stop_network, network_shutdown) = tokio::sync::oneshot::channel();
+        let network = self.run_network(state.clone(), network_shutdown);
+        // The local task owns admitted peers through cleanup. Dropping this
+        // future signals shutdown rather than aborting their cleanup futures.
+        let _stop_on_drop = stop.clone().drop_guard();
+        let mut local = tokio::spawn(local_ipc::serve(endpoint, state, stop.clone()));
+        tokio::pin!(network);
+        let (network_result, local_result) = tokio::select! {
+            _ = &mut shutdown => {
+                stop.cancel();
+                let _ = stop_network.send(());
+                tokio::join!(network, local)
+            }
+            result = &mut network => {
+                stop.cancel();
+                (result, local.await)
+            }
+            result = &mut local => {
+                let _ = stop_network.send(());
+                (network.await, result)
+            }
+        };
+        network_result.and(
+            local_result
+                .map_err(std::io::Error::other)
+                .and_then(|result| result)
+                .map_err(|error| {
+                    GatewayError::ConnectionError(format!("Desktop IPC listener failed: {error}"))
+                }),
+        )
+    }
+
     /// Run the server with graceful shutdown support
     pub async fn run_until_shutdown(
         &self,
         shutdown: tokio::sync::oneshot::Receiver<()>,
     ) -> Result<(), GatewayError> {
         self.spawn_background_tasks();
-        let router = self.build_router();
         self.check_network_exposure()?;
+        self.run_network(self.build_shared_state(), shutdown).await
+    }
 
+    async fn run_network(
+        &self,
+        state: Arc<GatewaySharedState>,
+        shutdown: tokio::sync::oneshot::Receiver<()>,
+    ) -> Result<(), GatewayError> {
         // Native TLS tiers terminate in-process via axum-server's own listener;
         // plaintext binds its own listener below and stays on axum::serve. The
         // bind is deliberately *not* hoisted above this branch — axum-server
@@ -1337,10 +1535,14 @@ impl GatewayServer {
             let tls = axum_server::tls_rustls::RustlsConfig::from_pem(cert_pem, key_pem)
                 .await
                 .map_err(|e| GatewayError::ConnectionError(format!("rustls config: {e}")))?;
+            let stop = tokio_util::sync::CancellationToken::new();
+            let _stop_on_drop = stop.clone().drop_guard();
+            let router = self.native_tls_router(state, stop.clone());
             let handle = axum_server::Handle::new();
             let shutdown_handle = handle.clone();
             tokio::spawn(async move {
                 let _ = shutdown.await;
+                stop.cancel();
                 shutdown_handle.graceful_shutdown(Some(Duration::from_secs(3)));
             });
             axum_server::bind_rustls(self.addr, tls)
@@ -1360,6 +1562,7 @@ impl GatewayServer {
         info!("Aleph listening on http://{}", self.addr);
         info!("  WebSocket: ws://{}/ws", self.addr);
         info!("  Panel UI:  http://{}/", self.addr);
+        let router = self.router_from_shared(state);
         axum::serve(
             listener,
             router.into_make_service_with_connect_info::<SocketAddr>(),
@@ -1472,10 +1675,245 @@ pub enum GatewayError {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    #[serial_test::serial(pty_global_manager)]
+    async fn terminal_disabled_router_does_not_initialize_manager() {
+        // A fresh process makes an untouched OnceLock observable regardless of test order.
+        const CHILD: &str = "ALEPH_TERMINAL_DISABLED_BOOT_PROBE";
+        if std::env::var_os(CHILD).is_none() {
+            let result = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "gateway::server::tests::terminal_disabled_router_does_not_initialize_manager",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "{}{}",
+                String::from_utf8_lossy(&result.stdout),
+                String::from_utf8_lossy(&result.stderr)
+            );
+            return;
+        }
+        assert!(crate::gateway::pty::try_manager().is_none());
+        let unwired = super::GatewayServer::new("127.0.0.1:0".parse().unwrap());
+        let _router = unwired.build_router();
+        assert!(crate::gateway::pty::try_manager().is_none());
+        let mut config = crate::Config::default();
+        config.policies.terminal.enabled = false;
+        let mut server = super::GatewayServer::new("127.0.0.1:0".parse().unwrap());
+        server.set_application_config(crate::sync_primitives::Arc::new(tokio::sync::RwLock::new(
+            config,
+        )));
+        let _router = server.build_router();
+        assert!(
+            crate::gateway::pty::try_manager().is_none(),
+            "disabled router initialized Terminal"
+        );
+        assert!(!crate::gateway::pty::manager::frame_admits(
+            "pty.screen",
+            Some(&serde_json::json!({"provider_generation": 1}))
+        ));
+        let response = crate::gateway::handlers::pty::handle_list(
+            crate::gateway::protocol::JsonRpcRequest::new("pty.list", None, None),
+        )
+        .await;
+        assert!(response.error.is_none());
+        assert!(
+            crate::gateway::pty::try_manager().is_none(),
+            "list initialized Terminal"
+        );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(pty_global_manager)]
+    async fn terminal_enabled_router_uses_live_intent_and_one_driver() {
+        if let Some(manager) = crate::gateway::pty::try_manager()
+            .filter(|manager| manager.lifecycle_snapshot().driver_active)
+        {
+            manager.deactivate().await.unwrap();
+        }
+        let config = Arc::new(RwLock::new(crate::Config::default()));
+        let mut server = GatewayServer::new("127.0.0.1:0".parse().unwrap());
+        server.set_application_config(config.clone());
+        let _router = server.build_router();
+        let manager = crate::gateway::pty::try_manager().expect("enabled boot");
+        let first = manager.ready_generation().unwrap();
+        let _router = server.build_router();
+        assert_eq!(manager.ready_generation().unwrap(), first);
+        let sid = manager
+            .spawn(&crate::gateway::pty::SpawnOptions::default())
+            .unwrap()
+            .session_id;
+
+        config.write().await.policies.terminal.enabled = false;
+        let disabled = config.read().await;
+        let applied = crate::config::live_apply::apply_live_sections(
+            &disabled,
+            &["policies.terminal"],
+            Some(server.event_bus()),
+            None,
+        )
+        .await;
+        assert!(manager.ready_generation().is_err());
+        assert!(manager.write_at(first, &sid, b"refused").is_err());
+        assert!(applied.contains(&"policies.terminal"));
+        assert_eq!(crate::gateway::pty::manager::test_driver_id(manager), None);
+        drop(disabled);
+        let _router = server.build_router();
+        assert_eq!(
+            manager.lifecycle_snapshot().state,
+            crate::capability::provider::ProviderState::Stopped
+        );
+
+        config.write().await.policies.terminal.enabled = true;
+        let enabled = config.read().await;
+        assert!(crate::config::live_apply::apply_live_sections(
+            &enabled,
+            &["policies.terminal"],
+            Some(server.event_bus()),
+            None,
+        )
+        .await
+        .contains(&"policies.terminal"));
+        drop(enabled);
+        assert!(manager.ready_generation().unwrap() > first);
+        config.write().await.policies.terminal.enabled = false;
+        let disabled = config.read().await;
+        assert!(crate::config::live_apply::apply_live_sections(
+            &disabled,
+            &["policies.terminal"],
+            Some(server.event_bus()),
+            None,
+        )
+        .await
+        .contains(&"policies.terminal"));
+        assert_eq!(crate::gateway::pty::manager::test_driver_id(manager), None);
+    }
+
     use super::super::middleware::MiddlewareChain;
     use super::super::protocol::{JsonRpcResponse, PARSE_ERROR};
     use super::*;
     use axum::http::StatusCode;
+
+    #[tokio::test]
+    async fn test_legacy_ws_first_frame_and_rpc_dispatch() {
+        use futures_util::{SinkExt, StreamExt};
+        use serde_json::{json, Value};
+        use tokio_tungstenite::connect_async;
+        use tokio_tungstenite::tungstenite::error::ProtocolError;
+        use tokio_tungstenite::tungstenite::{Error, Message};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let mut gateway = GatewayServer::with_config(addr, GatewayConfig::default());
+        let context = Arc::new(crate::gateway::handlers::connect::ConnectContext {
+            state_versions: Arc::new(crate::gateway::state_version::StateVersionTracker::new()),
+            transport_policy: crate::gateway::handlers::auth::TransportPolicy::defaults(),
+        });
+        gateway.handlers_mut().register("connect", move |request| {
+            Box::pin(crate::gateway::handlers::connect::handle_connect(
+                request,
+                context.clone(),
+            ))
+        });
+        let bus = gateway.event_bus.clone();
+        let app = gateway.build_router();
+        let (stop, stopped) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .with_graceful_shutdown(async {
+                let _ = stopped.await;
+            })
+            .await
+            .unwrap();
+        });
+
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let url = format!("ws://{addr}/ws");
+            let (mut unbound, _) = connect_async(&url).await.unwrap();
+            unbound
+                .send(Message::Text(
+                    r#"{"jsonrpc":"2.0","id":1,"method":"health"}"#.into(),
+                ))
+                .await
+                .unwrap();
+            let frame = unbound.next().await.unwrap().unwrap();
+            let denied: Value = serde_json::from_str(frame.to_text().unwrap()).unwrap();
+            assert_eq!(denied["id"], 1);
+            assert_eq!(
+                denied["error"]["code"],
+                crate::gateway::protocol::AUTH_REQUIRED
+            );
+            assert!(matches!(
+                unbound.next().await,
+                None | Some(Ok(Message::Close(_)))
+                    | Some(Err(Error::Protocol(
+                        ProtocolError::ResetWithoutClosingHandshake
+                    )))
+            ));
+            drop(unbound);
+
+            let (mut bound, _) = connect_async(&url).await.unwrap();
+            for (id, method, params) in [
+                (1, "connect", json!({"channel_kind":"desktop"})),
+                (2, "health", json!({})),
+            ] {
+                let request = json!({"jsonrpc":"2.0","id":id,"method":method,"params":params});
+                bound
+                    .send(Message::Text(request.to_string().into()))
+                    .await
+                    .unwrap();
+                loop {
+                    match bound.next().await.unwrap().unwrap() {
+                        Message::Ping(data) => bound.send(Message::Pong(data)).await.unwrap(),
+                        Message::Text(text) => {
+                            let response: Value = serde_json::from_str(&text).unwrap();
+                            if response["id"] != id {
+                                continue;
+                            }
+                            assert!(response.get("result").is_some(), "{response}");
+                            if method == "health" {
+                                assert_eq!(response["result"]["status"], "healthy");
+                            }
+                            break;
+                        }
+                        other => panic!("unexpected frame: {other:?}"),
+                    }
+                }
+            }
+            // The event arm delivers through the shared admission: a bare
+            // TopicEvent published on the bus arrives wrapped as `event`.
+            let published = json!({"topic": "characterization.global", "data": {"n": 1}});
+            bus.publish(published.to_string());
+            loop {
+                match bound.next().await.unwrap().unwrap() {
+                    Message::Ping(data) => bound.send(Message::Pong(data)).await.unwrap(),
+                    Message::Text(text) => {
+                        let frame: Value = serde_json::from_str(&text).unwrap();
+                        if frame["method"] != "event" {
+                            continue;
+                        }
+                        assert_eq!(frame["params"], published);
+                        break;
+                    }
+                    other => panic!("unexpected frame: {other:?}"),
+                }
+            }
+            bound.close(None).await.unwrap();
+            assert!(connect_async(format!("ws://{addr}/v1/ws")).await.is_err());
+            stop.send(()).unwrap();
+            server.await.unwrap();
+        })
+        .await
+        .expect("legacy ingress fixture must complete");
+    }
 
     /// Every unbounded per-request map the middleware chain writes into needs
     /// a pruner here, or it grows for the whole process lifetime.
@@ -1960,7 +2398,20 @@ mod tests {
         state.set_status(ChannelStatus::Connected).await;
         let _rx = state.inbound_subscribe();
 
-        let table = Arc::new(WebhookMountTable::new());
+        // This test owns the route merge, not publication identity, so it binds
+        // a permissive guard instead of a registry source.
+        struct PermissiveGuard;
+        #[async_trait::async_trait]
+        impl crate::gateway::webhook_receiver::LegacyWebhookGuard for PermissiveGuard {
+            async fn validate_legacy_webhook(
+                &self,
+                _channel_id: &ChannelId,
+                _source_revision: u64,
+            ) -> crate::gateway::channel::ChannelResult<()> {
+                Ok(())
+            }
+        }
+        let table = Arc::new(WebhookMountTable::guarded_by(Arc::new(PermissiveGuard)));
         let addr: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();
         let mut server = GatewayServer::new(addr);
         server.set_webhook_mounts(Arc::clone(&table));
@@ -1973,6 +2424,7 @@ mod tests {
                 inbound: state.sender(),
                 status: state.status_handle(),
                 channel_id: ChannelId::new("probe"),
+                source_revision: 0,
             })
             .await;
 

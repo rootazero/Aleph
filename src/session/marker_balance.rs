@@ -53,12 +53,10 @@ pub fn open_run_after_retire(
     events: &[SessionEventRecord],
     from_seq: EventSeq,
 ) -> Result<Option<String>, SessionError> {
-    let surviving: Vec<SessionEventRecord> = events
-        .iter()
-        .filter(|r| r.seq < from_seq)
-        .cloned()
-        .collect();
-    let reduction = reduce_run(&surviving).map_err(|c| SessionError::Other(c.to_string()))?;
+    crate::session::reduction::validate_slice(events)
+        .map_err(|c| SessionError::Other(c.to_string()))?;
+    let cut = events.partition_point(|r| r.seq < from_seq);
+    let reduction = reduce_run(&events[..cut]).map_err(|c| SessionError::Other(c.to_string()))?;
     Ok(reduction.open_run.map(|o| o.run_id))
 }
 
@@ -103,14 +101,14 @@ pub async fn retire_from_and_close_run(
     } else {
         open_run_after_retire(&events, from_seq)?
     };
-    let closer: Vec<SessionEvent> = closed_run
-        .iter()
-        .map(|run_id| SessionEvent::RunFinished {
+    let closer: Vec<SessionEvent> = match &closed_run {
+        Some(run_id) => vec![SessionEvent::RunFinished {
             run_id: run_id.clone(),
             outcome: RunOutcome::Cancelled,
             at: now_ms(),
-        })
-        .collect();
+        }],
+        None => Vec::new(),
+    };
     // Retire and closer commit together or not at all. A retire-only batch
     // (no closer) is legal: it appends nothing and allocates no seq.
     service

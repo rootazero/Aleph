@@ -246,7 +246,9 @@ impl OllamaProvider {
                         .collect();
                     let mut m = json!({ "role": "user", "content": text });
                     if !images.is_empty() {
-                        m["images"] = json!(images);
+                        if let Some(obj) = m.as_object_mut() {
+                            obj.insert("images".to_string(), json!(images));
+                        }
                     }
                     out.push(m);
                 },
@@ -272,7 +274,9 @@ impl OllamaProvider {
                         .collect();
                     let mut m = json!({ "role": "assistant", "content": text });
                     if !tool_calls.is_empty() {
-                        m["tool_calls"] = json!(tool_calls);
+                        if let Some(obj) = m.as_object_mut() {
+                            obj.insert("tool_calls".to_string(), json!(tool_calls));
+                        }
                     }
                     out.push(m);
                 },
@@ -313,7 +317,9 @@ impl OllamaProvider {
 
         if let Some(opts) = self.build_options() {
             if let Ok(v) = serde_json::to_value(opts) {
-                body["options"] = v;
+                if let Some(obj) = body.as_object_mut() {
+                    obj.insert("options".to_string(), v);
+                }
             }
         }
 
@@ -332,7 +338,9 @@ impl OllamaProvider {
                         })
                     })
                     .collect();
-                body["tools"] = json!(tool_specs);
+                if let Some(obj) = body.as_object_mut() {
+                    obj.insert("tools".to_string(), json!(tool_specs));
+                }
             }
         }
 

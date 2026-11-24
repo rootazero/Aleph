@@ -69,9 +69,13 @@ fn is_header(l: &str) -> bool {
         || l.starts_with("rename ")
         || l.starts_with("copy ")
         || l.starts_with("similarity ")
+        || l.starts_with("dissimilarity ")
         || l.starts_with("old mode")
         || l.starts_with("new mode")
         || l.starts_with("Binary files")
+        || l.starts_with("GIT binary patch")
+        || l.starts_with("literal ")
+        || l.starts_with("delta ")
 }
 
 /// An actual added/removed line. `+++ `/`--- ` are file headers (handled by
@@ -103,8 +107,8 @@ pub(super) fn reduce_diff(lines: &[&str], profile: &Profile) -> Option<Reduction
             continue;
         }
         let lo = i.saturating_sub(MAX_CONTEXT);
-        let hi = (i + MAX_CONTEXT).min(total - 1);
-        if (lo..=hi).any(|j| is_anchor(lines[j])) {
+        let hi = (i + MAX_CONTEXT).min(total.saturating_sub(1));
+        if (lo..=hi).any(|j| lines.get(j).copied().is_some_and(is_anchor)) {
             *keep_i = true;
         }
     }
@@ -141,10 +145,13 @@ pub(super) fn reduce_diff(lines: &[&str], profile: &Profile) -> Option<Reduction
 /// would double every file. When any `diff ` header is present it is the sole
 /// marker; a header-less `diff -u` paste falls back to `--- `.
 fn starts_file(lines: &[&str], i: usize, git_style: bool) -> bool {
+    let Some(&line) = lines.get(i) else {
+        return false;
+    };
     if git_style {
-        lines[i].starts_with("diff ")
+        line.starts_with("diff ")
     } else {
-        lines[i].starts_with("--- ")
+        line.starts_with("--- ")
     }
 }
 
@@ -175,9 +182,9 @@ fn trim_per_file(lines: &[&str], kept: &[usize], max_kept: usize) -> Vec<usize> 
         if runs.is_empty() || starts_file(lines, i, git_style) {
             runs.push(Vec::new());
         }
-        runs.last_mut()
-            .expect("invariant: a run was just pushed")
-            .push(i);
+        if let Some(run) = runs.last_mut() {
+            run.push(i);
+        }
     }
     // `MIN_PER_FILE` is a floor, so on a very wide diff a per-file share would
     // push the total back past `max_kept` (500 files × 4 = 2000 lines, each
@@ -185,7 +192,8 @@ fn trim_per_file(lines: &[&str], kept: &[usize], max_kept: usize) -> Vec<usize> 
     // detail; the rest are reported by the trailing "N more files changed" note,
     // which is the honest answer at that width anyway.
     let max_files = (max_kept / MIN_PER_FILE).max(1);
-    let runs = &runs[..runs.len().min(max_files)];
+    let runs_limit = runs.len().min(max_files);
+    let runs = runs.get(..runs_limit).unwrap_or(&[]);
     let quota = (max_kept / runs.len().max(1)).max(MIN_PER_FILE);
 
     let mut out: Vec<usize> = Vec::new();
@@ -213,16 +221,18 @@ fn trim_per_file(lines: &[&str], kept: &[usize], max_kept: usize) -> Vec<usize> 
                 if n >= tier_ceiling {
                     break;
                 }
-                if picked[pos] {
+                if picked.get(pos).copied().unwrap_or(true) {
                     continue;
                 }
                 let wanted = match tier {
-                    0 => is_header(lines[i]),
-                    1 => is_change(lines[i]),
+                    0 => lines.get(i).copied().is_some_and(is_header),
+                    1 => lines.get(i).copied().is_some_and(is_change),
                     _ => true,
                 };
                 if wanted {
-                    picked[pos] = true;
+                    if let Some(p) = picked.get_mut(pos) {
+                        *p = true;
+                    }
                     n += 1;
                 }
             }
@@ -230,7 +240,7 @@ fn trim_per_file(lines: &[&str], kept: &[usize], max_kept: usize) -> Vec<usize> 
         out.extend(
             run.iter()
                 .enumerate()
-                .filter(|(pos, _)| picked[*pos])
+                .filter(|(pos, _)| picked.get(*pos).copied().unwrap_or(false))
                 .map(|(_, &i)| i),
         );
     }

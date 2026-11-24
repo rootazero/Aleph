@@ -31,6 +31,13 @@
 //!   provider HEALTH failures count — an unparseable verdict is model quality,
 //!   not a provider fault, and never trips the breaker.
 //!
+//! Blind-judge guard: auto-approval requires a parsed command analysis, whose
+//! segments the judge prompt renders IN FULL. The one-line action summary is a
+//! PROJECTION (redacted, capped, and for some tools reduced to a few identity
+//! keys), so "the summary was not truncated" is NOT proof that the judge sees
+//! the whole action. Without a full analysis the request goes straight to the
+//! human, without a judge call at all.
+//!
 //! R7: this is an LLM making the risk judgment — precisely the class of
 //! decision the constitution routes to the model, replacing only the human's
 //! attention, never a rule engine. R10: lives in `src/approval/`, consumed
@@ -60,6 +67,12 @@ const GUARDIAN_BREAKER_THRESHOLD: u32 = 3;
 /// How long the breaker stays open before allowing one probe (HalfOpen).
 const GUARDIAN_BREAKER_COOLDOWN: Duration = Duration::from_secs(300);
 
+/// How long a reserved half-open probe may stay in flight before another
+/// probe is allowed through. The judge call's own hard deadline plus a
+/// margin: long enough for a slow probe, short enough that a probe whose
+/// task died mid-flight cannot wedge the breaker shut forever.
+const GUARDIAN_PROBE_LEASE: Duration = Duration::from_secs(GUARDIAN_TIMEOUT_SECS + 15);
+
 /// Guardian provider-health circuit state. Local (not the failover breaker) to
 /// keep `approval` decoupled from the providers internals — same three-state
 /// shape, threshold, and cooldown.
@@ -74,6 +87,10 @@ struct GuardianBreaker {
     state: BreakerState,
     consecutive_failures: u32,
     opened_at: Option<Instant>,
+    /// When the half-open probe currently in flight was reserved. `Some`
+    /// means a probe is out and nobody else may spend a judge call until it
+    /// reports back (or its lease expires).
+    probe_started_at: Option<Instant>,
 }
 
 impl Default for GuardianBreaker {
@@ -82,24 +99,45 @@ impl Default for GuardianBreaker {
             state: BreakerState::Closed,
             consecutive_failures: 0,
             opened_at: None,
+            probe_started_at: None,
         }
     }
 }
 
 impl GuardianBreaker {
-    /// Whether a judge call is allowed now. `Open` flips to `HalfOpen` (letting
-    /// one probe through) once the cooldown elapses; otherwise it stays shut.
+    /// Whether a judge call is allowed now. `Open` flips to `HalfOpen` once
+    /// the cooldown elapses — and that flip RESERVES the single probe: the
+    /// caller that performs the transition IS the probe, and every other
+    /// caller is refused until the probe reports back (or its lease expires).
+    ///
+    /// Without the reservation the half-open window admitted EVERY concurrent
+    /// approval at once — the provider stampede the breaker exists to prevent,
+    /// arriving exactly when the provider is least able to serve it.
     fn allows(&mut self) -> bool {
         match self.state {
-            BreakerState::Closed | BreakerState::HalfOpen => true,
+            BreakerState::Closed => true,
             BreakerState::Open => {
                 let cooled = self
                     .opened_at
                     .is_none_or(|t| t.elapsed() >= GUARDIAN_BREAKER_COOLDOWN);
-                if cooled {
-                    self.state = BreakerState::HalfOpen;
+                if !cooled {
+                    return false;
                 }
-                cooled
+                self.state = BreakerState::HalfOpen;
+                self.probe_started_at = Some(Instant::now());
+                true
+            }
+            BreakerState::HalfOpen => {
+                // A probe is in flight. Only a probe that never reported back
+                // (dropped task, panic) frees the slot — after its lease.
+                let expired = self
+                    .probe_started_at
+                    .is_none_or(|t| t.elapsed() >= GUARDIAN_PROBE_LEASE);
+                if !expired {
+                    return false;
+                }
+                self.probe_started_at = Some(Instant::now());
+                true
             }
         }
     }
@@ -110,6 +148,7 @@ impl GuardianBreaker {
         self.state = BreakerState::Closed;
         self.consecutive_failures = 0;
         self.opened_at = None;
+        self.probe_started_at = None;
     }
 
     /// A judge call that failed to reach a verdict due to provider error/timeout.
@@ -121,6 +160,7 @@ impl GuardianBreaker {
             self.state = BreakerState::Open;
             self.opened_at = Some(Instant::now());
         }
+        self.probe_started_at = None;
     }
 }
 
@@ -264,16 +304,18 @@ impl GuardianApprovalRequester {
 #[async_trait]
 impl ApprovalRequester for GuardianApprovalRequester {
     async fn request_approval(&self, action: &ApprovalAction) -> ApprovalResponse {
-        // Blind-judge guard: the one-line `summary` is capped at 200 chars and
-        // marked with a trailing '…' when truncated. A malicious command whose
-        // dangerous tail sits past the cap would be invisible to the judge —
-        // which could then auto-approve it. Auto-approval is only sound when
-        // the judge saw the WHOLE action: either the summary was not truncated,
-        // OR a parsed `analysis` carries the full command segments (rendered in
-        // full below). Otherwise skip the LLM and go straight to the human.
+        // Blind-judge guard: auto-approval is only sound when the judge saw
+        // the WHOLE action. The one-line `summary` cannot prove that — it is
+        // a PROJECTION of the call (secret-redacted, length-capped, and for
+        // some tools reduced to a few identity keys), so a dangerous argument
+        // can sit in a key the projection never renders. The one thing that
+        // IS the whole action is a parsed command analysis: its segments are
+        // rendered in full below. Without it the judge would approve an
+        // action it never fully saw, so skip the LLM and go straight to the
+        // human.
         if !can_fully_judge(action) {
             tracing::info!(tool = %action.tool_name,
-                "guardian: action summary truncated with no full analysis; escalating to human (cannot judge blind)");
+                "guardian: no full action analysis; escalating to human (cannot judge blind)");
             return self.fallback.request_approval(action).await;
         }
         // Circuit open (provider unhealthy): skip the doomed judge call and its
@@ -315,16 +357,24 @@ impl ApprovalRequester for GuardianApprovalRequester {
     }
 }
 
-/// Whether the judge can see the WHOLE action (see `request_approval`): the
-/// summary was not truncated, or a parsed command analysis carries the full
-/// segments `render_action` will render. Truncated summary + no analysis =
-/// blind → must not auto-approve.
+/// Whether the judge can see the WHOLE action (see `request_approval`).
+///
+/// The one-line `summary` is a PROJECTION of the call, not the call: it is
+/// secret-redacted, length-capped, and for some tools reduced to a few
+/// identity keys (`file_ops` renders only operation/path/destination,
+/// `loop_graph` only a whitelist of keys). "The summary was not truncated" is
+/// therefore NOT evidence that the judge sees everything the action does — a
+/// dangerous argument can sit in a key the projection never renders.
+///
+/// The only proof is a parsed command analysis: `render_action` prints its
+/// segments IN FULL, so a shell-shaped action is judged on the complete
+/// command. Anything else (a JSON tool call, a route escalation) escalates to
+/// the human.
 fn can_fully_judge(action: &ApprovalAction) -> bool {
     action
         .analysis
         .as_ref()
         .is_some_and(|a| a.ok && !a.segments.is_empty())
-        || !action.summary.ends_with('…')
 }
 
 /// Render the action for the judge. The summary is already secret-redacted
@@ -495,11 +545,37 @@ mod tests {
     }
 
     #[test]
-    fn can_fully_judge_untruncated_summary() {
-        // A short JSON call (no truncation, no analysis) IS fully judgeable.
+    fn an_untruncated_summary_is_not_enough_to_judge() {
+        // A short JSON call has no truncation marker — but its summary is a
+        // PROJECTION (the projection drops keys the action still carries), so
+        // "not truncated" is NOT proof that the judge sees the whole action.
+        // Only a parsed command analysis is.
         let action =
             ApprovalAction::for_tool_call("search", &serde_json::json!({ "q": "rust" }), "ask");
         assert!(!action.summary.ends_with('…'));
+        assert!(
+            action.analysis.is_none(),
+            "precondition: JSON call has no shell analysis"
+        );
+        assert!(!can_fully_judge(&action));
+    }
+
+    #[test]
+    fn a_parsed_command_analysis_is_judgeable() {
+        // The analysis segments are rendered IN FULL, so the judge sees the
+        // whole command even when the summary is capped.
+        let action = ApprovalAction::for_tool_call(
+            "bash",
+            &serde_json::json!({ "command": "ls -la" }),
+            "ask",
+        );
+        assert!(
+            action
+                .analysis
+                .as_ref()
+                .is_some_and(|a| a.ok && !a.segments.is_empty()),
+            "precondition: the shell call has a full analysis"
+        );
         assert!(can_fully_judge(&action));
     }
 
@@ -548,6 +624,64 @@ mod tests {
         // A failed probe immediately reopens (no threshold on half-open).
         b.record_failure();
         assert_eq!(b.state, BreakerState::Open);
+    }
+
+    /// The half-open window admits EXACTLY ONE probe.
+    ///
+    /// Without the reservation every approval that arrived during the
+    /// cooldown window was let through at once — the provider stampede the
+    /// breaker exists to prevent, arriving exactly when the provider is
+    /// least able to serve it.
+    #[test]
+    fn the_half_open_window_admits_only_one_probe() {
+        let mut b = GuardianBreaker::default();
+        for _ in 0..GUARDIAN_BREAKER_THRESHOLD {
+            b.record_failure();
+        }
+        assert_eq!(b.state, BreakerState::Open);
+        // Force the cooldown to have elapsed by back-dating `opened_at`.
+        b.opened_at =
+            Instant::now().checked_sub(GUARDIAN_BREAKER_COOLDOWN + Duration::from_secs(1));
+
+        assert!(
+            b.allows(),
+            "the first caller after the cooldown is the probe"
+        );
+        assert_eq!(b.state, BreakerState::HalfOpen);
+        assert!(
+            !b.allows(),
+            "a second caller must not take a probe slot while the first is in flight"
+        );
+
+        // The probe reports back: the provider is healthy again.
+        b.record_success();
+        assert_eq!(b.state, BreakerState::Closed);
+        assert!(b.allows());
+    }
+
+    /// A probe that never reports back (its task died) must not wedge the
+    /// breaker shut: the lease frees the slot.
+    #[test]
+    fn a_dropped_probe_releases_its_slot_after_the_lease() {
+        let mut b = GuardianBreaker::default();
+        for _ in 0..GUARDIAN_BREAKER_THRESHOLD {
+            b.record_failure();
+        }
+        b.opened_at =
+            Instant::now().checked_sub(GUARDIAN_BREAKER_COOLDOWN + Duration::from_secs(1));
+        assert!(b.allows(), "the probe is admitted");
+        assert!(
+            !b.allows(),
+            "the slot is taken while the probe is in flight"
+        );
+
+        // The probe never came back: back-date the lease.
+        b.probe_started_at =
+            Instant::now().checked_sub(GUARDIAN_PROBE_LEASE + Duration::from_secs(1));
+        assert!(
+            b.allows(),
+            "a probe that never reported back must free its slot"
+        );
     }
 
     /// A provider that always errors, counting how many times it was called —

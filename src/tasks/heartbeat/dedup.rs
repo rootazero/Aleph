@@ -11,6 +11,7 @@ use tokio::sync::Mutex;
 
 use crate::sync_primitives::Arc;
 
+use crate::memory::runtime::MemoryRuntime;
 use crate::memory::EmbeddingProvider;
 use crate::tasks::heartbeat::config::DedupConfig;
 
@@ -26,21 +27,18 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     if a.len() != b.len() {
         return 0.0;
     }
-    let dot: f64 = a
-        .iter()
-        .zip(b)
-        .map(|(x, y)| f64::from(*x) * f64::from(*y))
-        .sum();
-    let norm_a: f64 = a
-        .iter()
-        .map(|x| f64::from(*x) * f64::from(*x))
-        .sum::<f64>()
-        .sqrt();
-    let norm_b: f64 = b
-        .iter()
-        .map(|x| f64::from(*x) * f64::from(*x))
-        .sum::<f64>()
-        .sqrt();
+    let mut dot = 0.0_f64;
+    let mut norm_a = 0.0_f64;
+    let mut norm_b = 0.0_f64;
+    for (&x, &y) in a.iter().zip(b) {
+        let x = f64::from(x);
+        let y = f64::from(y);
+        dot += x * y;
+        norm_a += x * x;
+        norm_b += y * y;
+    }
+    let norm_a = norm_a.sqrt();
+    let norm_b = norm_b.sqrt();
     if norm_a == 0.0 || norm_b == 0.0 || !norm_a.is_finite() || !norm_b.is_finite() {
         return 0.0;
     }
@@ -62,10 +60,43 @@ pub enum DedupVerdict {
     /// Not a duplicate. Carries the embedding computed during the check so
     /// the caller can hand it straight to [`DedupEngine::record_fresh`]
     /// after a successful delivery, avoiding a second embedding call.
-    Fresh(Vec<f32>),
+    Fresh(FreshEmbedding),
     /// Dedup is unavailable (no embedding provider, or embedding failed).
     /// The caller should deliver but must not record.
     Unavailable,
+}
+
+/// A vector and the model that produced it, retained across delivery.
+#[derive(Debug)]
+pub struct FreshEmbedding {
+    embedding: Vec<f32>,
+    model: String,
+}
+
+enum EmbeddingSource {
+    Provider(Arc<dyn EmbeddingProvider>),
+    Memory(Arc<MemoryRuntime>),
+    Unavailable,
+}
+
+impl EmbeddingSource {
+    async fn embed(&self, output: &str) -> Option<FreshEmbedding> {
+        match self {
+            Self::Provider(provider) => {
+                let model = provider.model_name().to_owned();
+                let embedding = provider.embed(output).await.ok()?;
+                Some(FreshEmbedding { embedding, model })
+            }
+            Self::Memory(runtime) => {
+                let batch = runtime.embed_batch(vec![output.to_owned()]).await.ok()??;
+                Some(FreshEmbedding {
+                    embedding: batch.embeddings.into_iter().next()?,
+                    model: batch.model,
+                })
+            }
+            Self::Unavailable => None,
+        }
+    }
 }
 
 // ── DedupEngine ───────────────────────────────────────────────────────────────
@@ -78,7 +109,7 @@ pub enum DedupVerdict {
 pub struct DedupEngine {
     config: DedupConfig,
     conn: Option<Arc<Mutex<Connection>>>,
-    embedding_provider: Option<Arc<dyn EmbeddingProvider>>,
+    embedding_source: EmbeddingSource,
 }
 
 impl DedupEngine {
@@ -94,7 +125,22 @@ impl DedupEngine {
         Self {
             config,
             conn: Some(conn),
-            embedding_provider,
+            embedding_source: embedding_provider
+                .map(EmbeddingSource::Provider)
+                .unwrap_or(EmbeddingSource::Unavailable),
+        }
+    }
+
+    /// Use the current admitted Memory bundle for each embedding request.
+    pub fn from_runtime(
+        config: DedupConfig,
+        conn: Arc<Mutex<Connection>>,
+        runtime: Arc<MemoryRuntime>,
+    ) -> Self {
+        Self {
+            config,
+            conn: Some(conn),
+            embedding_source: EmbeddingSource::Memory(runtime),
         }
     }
 
@@ -107,7 +153,7 @@ impl DedupEngine {
         Self {
             config,
             conn: None,
-            embedding_provider: None,
+            embedding_source: EmbeddingSource::Unavailable,
         }
     }
 
@@ -120,14 +166,9 @@ impl DedupEngine {
     /// - `Fresh(embedding)` otherwise — the embedding is handed back so the
     ///   caller can record it without recomputing.
     pub async fn check(&self, task_id: &str, output: &str) -> DedupVerdict {
-        let provider = match &self.embedding_provider {
-            Some(p) => p,
+        let embedding = match self.embedding_source.embed(output).await {
+            Some(embedding) => embedding,
             None => return DedupVerdict::Unavailable,
-        };
-
-        let embedding = match provider.embed(output).await {
-            Ok(e) => e,
-            Err(_) => return DedupVerdict::Unavailable,
         };
 
         // Load history from DB (lock only for the read, release before compare).
@@ -135,15 +176,25 @@ impl DedupEngine {
             None => return DedupVerdict::Unavailable,
             Some(c) => {
                 let conn = c.lock().await;
-                let cutoff = chrono::Utc::now().timestamp_millis() - self.config.window_ms as i64;
-                let model_name = provider.model_name().to_string();
-                load_dedup_history(&conn, task_id, cutoff, &model_name, self.config.max_history)
-                    .unwrap_or_default()
+                let window_i64 = i64::try_from(self.config.window_ms).unwrap_or(i64::MAX);
+                let cutoff = chrono::Utc::now()
+                    .timestamp_millis()
+                    .saturating_sub(window_i64);
+                load_dedup_history(
+                    &conn,
+                    task_id,
+                    cutoff,
+                    &embedding.model,
+                    self.config.max_history,
+                )
+                .unwrap_or_default()
             }
         };
 
         for (_, hist_embedding) in &history {
-            if cosine_similarity(&embedding, hist_embedding) >= self.config.similarity_threshold {
+            if cosine_similarity(&embedding.embedding, hist_embedding)
+                >= self.config.similarity_threshold
+            {
                 return DedupVerdict::Duplicate;
             }
         }
@@ -157,15 +208,20 @@ impl DedupEngine {
     /// from `check`'s `Fresh` verdict — so a failed delivery stays retryable
     /// and the embedding is computed only once per cycle.
     ///
-    /// No-op when no embedding provider is configured.
-    pub async fn record_fresh(&self, task_id: &str, output: &str, embedding: &[f32]) {
-        let model_name = match &self.embedding_provider {
-            Some(p) => p.model_name().to_string(),
-            None => return,
-        };
+    /// No-op when the engine has no embedding source or database.
+    pub async fn record_fresh(&self, task_id: &str, output: &str, embedding: &FreshEmbedding) {
+        if matches!(&self.embedding_source, EmbeddingSource::Unavailable) {
+            return;
+        }
         let Some(c) = &self.conn else { return };
         let conn = c.lock().await;
-        let _ = insert_dedup_record(&conn, task_id, output, embedding, &model_name);
+        let _ = insert_dedup_record(
+            &conn,
+            task_id,
+            output,
+            &embedding.embedding,
+            &embedding.model,
+        );
         let _ = prune_dedup_records(&conn, task_id, self.config.max_history);
     }
 
@@ -180,7 +236,10 @@ impl DedupEngine {
             return Ok(0);
         };
         let conn = c.lock().await;
-        let cutoff = chrono::Utc::now().timestamp_millis() - retention_ms as i64;
+        let ret_i64 = i64::try_from(retention_ms).unwrap_or(i64::MAX);
+        let cutoff = chrono::Utc::now()
+            .timestamp_millis()
+            .saturating_sub(ret_i64);
         cleanup_dedup_records(&conn, cutoff)
     }
 }
@@ -295,7 +354,11 @@ fn cleanup_dedup_records(conn: &Connection, cutoff_ms: i64) -> Result<usize, Str
 
 /// Serialize a `f32` slice to a little-endian byte vector.
 fn f32_vec_to_bytes(v: &[f32]) -> Vec<u8> {
-    v.iter().flat_map(|f| f.to_le_bytes()).collect()
+    let mut bytes = Vec::with_capacity(v.len() * 4);
+    for &f in v {
+        bytes.extend_from_slice(&f.to_le_bytes());
+    }
+    bytes
 }
 
 /// Deserialize a little-endian byte slice to a `Vec<f32>`.
@@ -306,7 +369,7 @@ fn bytes_to_f32_vec(bytes: &[u8]) -> Vec<f32> {
         .as_chunks::<4>()
         .0
         .iter()
-        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+        .map(|chunk| f32::from_le_bytes(*chunk))
         .collect()
 }
 
@@ -465,6 +528,71 @@ mod tests {
         assert_eq!(history.len(), 1);
     }
 
+    struct SwitchingProvider {
+        switched: crate::sync_primitives::AtomicBool,
+    }
+
+    #[async_trait::async_trait]
+    impl EmbeddingProvider for SwitchingProvider {
+        async fn embed(&self, _text: &str) -> Result<Vec<f32>, crate::error::AlephError> {
+            Ok(vec![1.0, 0.0])
+        }
+
+        async fn embed_batch(
+            &self,
+            texts: &[&str],
+        ) -> Result<Vec<Vec<f32>>, crate::error::AlephError> {
+            Ok(texts.iter().map(|_| vec![1.0, 0.0]).collect())
+        }
+
+        fn dimensions(&self) -> usize {
+            2
+        }
+
+        fn model_name(&self) -> &str {
+            if self.switched.load(crate::sync_primitives::Ordering::SeqCst) {
+                return "after-delivery";
+            }
+            "at-check"
+        }
+
+        fn provider_id(&self) -> &str {
+            "controlled"
+        }
+    }
+
+    #[tokio::test]
+    async fn delivered_embedding_keeps_the_model_captured_before_delivery() {
+        let conn = Arc::new(Mutex::new(Connection::open_in_memory().unwrap()));
+        init_dedup_schema(&*conn.lock().await).unwrap();
+        let provider = Arc::new(SwitchingProvider {
+            switched: crate::sync_primitives::AtomicBool::new(false),
+        });
+        let engine = DedupEngine::new(DedupConfig::default(), conn.clone(), Some(provider.clone()));
+        let DedupVerdict::Fresh(embedding) = engine.check("task", "actual delivered output").await
+        else {
+            panic!("an empty history must allow the actual output");
+        };
+        provider
+            .switched
+            .store(true, crate::sync_primitives::Ordering::SeqCst);
+        engine
+            .record_fresh("task", "actual delivered output", &embedding)
+            .await;
+        let conn = conn.lock().await;
+        let stored: String = conn
+            .query_row(
+                "SELECT model FROM heartbeat_dedup WHERE task_id = 'task'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            stored, "at-check",
+            "delivery must not relabel an already computed vector"
+        );
+    }
+
     #[tokio::test]
     async fn test_noop_engine_never_deduplicates() {
         let engine = DedupEngine::noop(DedupConfig::default());
@@ -472,7 +600,16 @@ mod tests {
             engine.check("task-1", "some output").await,
             DedupVerdict::Unavailable
         ));
-        engine.record_fresh("task-1", "some output", &[1.0]).await;
+        engine
+            .record_fresh(
+                "task-1",
+                "some output",
+                &FreshEmbedding {
+                    embedding: vec![1.0],
+                    model: "unused".into(),
+                },
+            )
+            .await;
         // Still no dedup since embedding provider is not wired.
         assert!(matches!(
             engine.check("task-1", "some output").await,
@@ -493,7 +630,16 @@ mod tests {
             engine.check("task-1", "hello").await,
             DedupVerdict::Unavailable
         ));
-        engine.record_fresh("task-1", "hello", &[1.0]).await;
+        engine
+            .record_fresh(
+                "task-1",
+                "hello",
+                &FreshEmbedding {
+                    embedding: vec![1.0],
+                    model: "unused".into(),
+                },
+            )
+            .await;
         assert!(matches!(
             engine.check("task-1", "hello").await,
             DedupVerdict::Unavailable

@@ -57,6 +57,17 @@ pub struct AgentDeleteOutput {
     /// logs.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub binding_cleanup_warning: Option<String>,
+    /// Whether the agent's workspace (and state directory) were actually
+    /// archived.
+    ///
+    /// `false` means a rename failed and the directories are still on disk —
+    /// the next agent created with the same id would inherit them. The
+    /// `message` says so in words instead of claiming a clean archive.
+    pub workspace_archived: bool,
+    /// Non-empty when an archival rename failed: which directory stayed on
+    /// disk and why.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub archival_warning: Option<String>,
 }
 
 // =============================================================================
@@ -210,6 +221,13 @@ impl AlephTool for AgentDeleteTool {
         // 6. Archive workspace + state dir (rename to .archived) — legacy path
         //    for agents without a TOML entry; the manager already trashed the
         //    dirs otherwise.
+        //
+        //    The renames are best-effort, so their outcomes are tracked: a
+        //    failed rename leaves the directory on disk for the next agent of
+        //    the same id to inherit, and reporting "workspace archived" anyway
+        //    hides that until the inheritance shows up as a mystery.
+        let mut workspace_archived = true;
+        let mut archival_warnings: Vec<String> = Vec::new();
         if !dirs_archived_by_manager {
             if let Some(ref removed) = removed {
                 let workspace = removed.workspace();
@@ -221,6 +239,11 @@ impl AlephTool for AgentDeleteTool {
                             error = %e,
                             "Failed to archive workspace, it will remain on disk"
                         );
+                        workspace_archived = false;
+                        archival_warnings.push(format!(
+                            "workspace {} was not archived: {e}",
+                            workspace.display()
+                        ));
                     } else {
                         info!(
                             agent_id = %args.agent_id,
@@ -247,6 +270,11 @@ impl AlephTool for AgentDeleteTool {
                             error = %e,
                             "Failed to archive agent state directory"
                         );
+                        workspace_archived = false;
+                        archival_warnings.push(format!(
+                            "agent state directory {} was not archived: {e}",
+                            agent_state_dir.display()
+                        ));
                     } else {
                         info!(
                             agent_id = %args.agent_id,
@@ -257,33 +285,47 @@ impl AlephTool for AgentDeleteTool {
                 }
             }
         }
+        let archival_warning =
+            (!archival_warnings.is_empty()).then(|| archival_warnings.join("; "));
 
         // Emit lifecycle event (TopicEvent-wrapped inside `publish`).
         if deleted {
             if let Some(ref bus) = self.event_bus {
                 AgentLifecycleEvent::Deleted {
                     agent_id: args.agent_id.clone(),
-                    workspace_archived: true,
+                    workspace_archived,
                 }
                 .publish(bus);
             }
         }
 
-        let message = if deleted {
-            format!("Agent '{}' deleted and workspace archived.", args.agent_id)
+        let mut message = if deleted {
+            if workspace_archived {
+                format!("Agent '{}' deleted and workspace archived.", args.agent_id)
+            } else {
+                format!(
+                    "Agent '{}' deleted, but its directories could not be archived — they remain on disk.",
+                    args.agent_id
+                )
+            }
         } else {
             format!(
                 "Agent '{}' could not be removed from registry.",
                 args.agent_id
             )
         };
+        if let Some(ref warning) = archival_warning {
+            message.push_str(&format!(" Details: {warning}."));
+        }
 
-        info!(agent_id = %args.agent_id, deleted, "Agent deletion complete");
+        info!(agent_id = %args.agent_id, deleted, workspace_archived, "Agent deletion complete");
 
         Ok(AgentDeleteOutput {
             deleted,
             message,
             binding_cleanup_warning,
+            workspace_archived,
+            archival_warning,
         })
     }
 }
@@ -423,5 +465,76 @@ mod tests {
             .unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("built-in"), "got: {msg}");
+    }
+
+    /// A failed archival must be reported instead of being hidden behind
+    /// "workspace archived". The rename fails deterministically when the
+    /// archive target already exists and is not empty.
+    #[tokio::test]
+    async fn a_failed_workspace_archival_is_reported() {
+        use crate::gateway::agent_instance::AgentInstanceConfig;
+
+        let scratch = tempfile::tempdir().unwrap();
+        let root = scratch.path();
+        let workspace = root.join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        // A non-empty directory already sits at the archive target, so the
+        // rename onto it fails.
+        let blocked_target = workspace.with_extension("archived");
+        std::fs::create_dir_all(&blocked_target).unwrap();
+        std::fs::write(blocked_target.join("keep"), b"x").unwrap();
+
+        let registry = Arc::new(AgentRegistry::new());
+        let (sm, _sm_temp) = test_utils::session_store();
+        registry
+            .register_config(
+                AgentInstanceConfig {
+                    agent_id: "trader".to_string(),
+                    workspace: workspace.clone(),
+                    agent_dir: root.join("state"),
+                    ..Default::default()
+                },
+                sm,
+            )
+            .await;
+
+        // A manager with scratch roots keeps the state directory inside the
+        // temporary tree instead of the real home.
+        let manager = Arc::new(crate::config::agent_manager::AgentManager::new(
+            root.join("config.toml"),
+            root.join("workspaces"),
+            root.join("agents"),
+            root.join("trash"),
+        ));
+        let (wm, _wm_temp) = test_utils::workspace_mgr();
+        let catalog = Arc::new(CatalogRegistry::with_builtins());
+        let tool = AgentDeleteTool::new(Arc::clone(&registry), wm, None, catalog)
+            .with_agent_manager(manager);
+
+        let out = tool
+            .call(AgentDeleteArgs {
+                agent_id: "trader".to_string(),
+            })
+            .await
+            .expect("delete should succeed");
+
+        assert!(out.deleted);
+        assert!(
+            !out.workspace_archived,
+            "a failed rename must not be reported as archived"
+        );
+        assert!(
+            out.archival_warning.is_some(),
+            "the archival failure must be surfaced"
+        );
+        assert!(
+            out.message.contains("could not be archived"),
+            "got: {}",
+            out.message
+        );
+        assert!(
+            workspace.exists(),
+            "the workspace must remain on disk when the rename failed"
+        );
     }
 }

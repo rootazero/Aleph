@@ -16,12 +16,9 @@
 //! From the discord channel's `start()` (line 2 will wire this up):
 //!
 //! ```ignore
-//! let entries = startup_audit::for_config(&self.config);
-//! crate::security::audit::install_global(&audit_log);
-//! for entry in entries {
-//!     if let Some(log) = crate::security::audit::global() {
-//!         log.log(entry).await;
-//!     }
+//! let entry = startup_audit::for_audit(&audit);
+//! if let Some(log) = crate::security::audit::global() {
+//!     log.log(entry).await;
 //! }
 //! ```
 //!
@@ -71,12 +68,47 @@ pub fn for_guild(guild_id: u64, guild_name: &str, bot_permissions: u64) -> Audit
     build_entry(guild_id, guild_name, &audit)
 }
 
+/// Build the audit entry for a guild whose permissions were MEASURED.
+///
+/// Takes the audit the discord REST endpoints produced, so the row
+/// describes the bot's effective permission set instead of an assumed
+/// one. A `Critical` verdict here means a real missing permission — the
+/// refusal shape stays reserved for a measured violation.
+#[must_use]
+pub fn for_audit(audit: &PermissionAudit) -> AuditEntry {
+    build_entry(audit.guild_id, &audit.guild_name, audit)
+}
+
+/// Build the audit entry for a guild whose permissions could NOT be
+/// measured at start.
+///
+/// Deliberately NOT the `ExecBlocked` / `Critical` shape: "we could not
+/// read the bitfield" is not "the bot cannot operate here", and a
+/// fabricated refusal row is worse than a missing row. The per-guild
+/// verdict is deferred to the first permission gate, which measures it
+/// for real.
+#[must_use]
+pub fn unverified(guild_id: u64) -> AuditEntry {
+    AuditEntry {
+        event_type: AuditEventType::AuthorityChange,
+        severity: AuditSeverity::Warn,
+        source_ip: None,
+        session_id: None,
+        actor_user: Some(format!("discord:start:guild_{guild_id}")),
+        detail: format!(
+            "discord.start guild={guild_id} name=unknown unverified | \
+             permission bitfield not fetched at start; per-guild verdict \
+             deferred to the first permission gate"
+        ),
+    }
+}
+
 /// Build the entries for every guild listed in the config's allowlist,
 /// using a single `bot_permissions` value for all of them.
 ///
 /// The bitfield in practice is per-guild; this helper is for tests and
-/// for the "no live gateway" path. Real callers will want
-/// `Self::for_guild` in a loop.
+/// for the "no live gateway" path. Real callers want [`Self::for_audit`]
+/// (measured) or [`Self::unverified`] (not measurable) per guild.
 #[must_use]
 pub fn for_config(config: &DiscordConfig, bot_permissions: u64) -> Vec<AuditEntry> {
     if config.allowed_guilds.is_empty() {
@@ -217,6 +249,32 @@ mod tests {
         assert_eq!(entry.severity, AuditSeverity::Critical);
         assert!(entry.detail.contains("critical"));
         assert!(entry.detail.contains("guild=3"));
+    }
+
+    /// The unmeasured shape must never claim a violation: a start that
+    /// could not fetch the bitfield records a Warn row, never the
+    /// `ExecBlocked` / `Critical` refusal shape.
+    #[test]
+    fn unverified_is_never_critical() {
+        let entry = unverified(55);
+        assert_eq!(entry.event_type, AuditEventType::AuthorityChange);
+        assert_eq!(entry.severity, AuditSeverity::Warn);
+        assert!(entry.detail.contains("guild=55"));
+        assert!(entry.detail.contains("unverified"));
+    }
+
+    /// A measured audit flows through the same verdict mapping as the
+    /// synthetic-bitfield path, and names the guild it measured.
+    #[test]
+    fn for_audit_uses_the_measured_guild() {
+        let mut audit = synthetic_audit(HealthStatus::Healthy, &[]);
+        audit.guild_id = 66;
+        audit.guild_name = "Measured".to_string();
+        let entry = for_audit(&audit);
+        assert_eq!(entry.event_type, AuditEventType::AuthorityChange);
+        assert_eq!(entry.severity, AuditSeverity::Warn);
+        assert!(entry.detail.contains("guild=66"));
+        assert!(entry.detail.contains("Measured"));
     }
 
     #[test]

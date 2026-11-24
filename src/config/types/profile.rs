@@ -90,7 +90,6 @@ pub struct ProfileConfig {
 /// ```toml
 /// [profiles.coding.smart_recall]
 /// enabled = true
-/// score_threshold = 0.60
 /// min_primary_results = 2
 /// max_cross_results = 3
 /// ```
@@ -99,10 +98,6 @@ pub struct SmartRecallConfig {
     /// Enable/disable smart cross-workspace recall
     #[serde(default = "default_true")]
     pub enabled: bool,
-
-    /// Phase 2 triggers when top result score is below this threshold (0.0-1.0)
-    #[serde(default = "default_smart_recall_score_threshold")]
-    pub score_threshold: f32,
 
     /// Phase 2 triggers when primary result count is below this minimum
     #[serde(default = "default_smart_recall_min_primary_results")]
@@ -117,15 +112,10 @@ impl Default for SmartRecallConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            score_threshold: default_smart_recall_score_threshold(),
             min_primary_results: default_smart_recall_min_primary_results(),
             max_cross_results: default_smart_recall_max_cross_results(),
         }
     }
-}
-
-const fn default_smart_recall_score_threshold() -> f32 {
-    0.60
 }
 
 const fn default_smart_recall_min_primary_results() -> usize {
@@ -163,7 +153,6 @@ mod tests {
     fn test_smart_recall_config_defaults() {
         let config = SmartRecallConfig::default();
         assert!(config.enabled);
-        assert!((config.score_threshold - 0.60).abs() < f32::EPSILON);
         assert_eq!(config.min_primary_results, 2);
         assert_eq!(config.max_cross_results, 3);
     }
@@ -175,7 +164,6 @@ mod tests {
 
             [smart_recall]
             enabled = true
-            score_threshold = 0.75
             min_primary_results = 3
             max_cross_results = 5
         "#;
@@ -184,7 +172,6 @@ mod tests {
         assert!(profile.smart_recall.is_some());
         let sr = profile.smart_recall.unwrap();
         assert!(sr.enabled);
-        assert!((sr.score_threshold - 0.75).abs() < f32::EPSILON);
         assert_eq!(sr.min_primary_results, 3);
         assert_eq!(sr.max_cross_results, 5);
     }

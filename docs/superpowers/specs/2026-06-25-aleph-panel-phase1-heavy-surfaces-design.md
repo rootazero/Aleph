@@ -267,4 +267,4 @@ Phase 1 把**剩余重型界面**适配到手机,使一部完整 IA(7 个 PanelM
 
 - **P-⑥ WebGL2 回退**:`GalaxyCanvas` 加 `fallback: RwSignal<bool>`;`Scene::new`(经 `context::from_canvas` 的 `Err`)失败 → 置 true;`CanvasView` watch → `memory_view.set(MemoryView::Table)` + Memory 视图顶部内联 banner「本设备不支持星系视图」。**挂载时检测,永久切 Table**(可在 Memory 工具栏手动再试)(R-16)。
 
-- **P-⑦ bloom/性能信号化**:`bloom_level: RwSignal<f32>` ∈ [0,1](或 `is_mobile` Memo 驱动)传入 `Scene`,每帧读;移动端默认 0(禁)或 0.5(钳制),真机 Pixel 4a / S10 级择定。`MAX_SETTLE_STEPS` 移动端降 200–250 同理经信号(R-19)。
+- **P-⑦ bloom/性能信号化**:`bloom_level: RwSignal<f32>` ∈ [0,1]（或 `is_mobile` Memo 驱动）传入 `Scene`,每帧读;移动端默认 0(禁)或 0.5(钳制),真机 Pixel 4a / S10 级择定。`MAX_SETTLE_STEPS` 移动端降 200–250 同理经信号(R-19)。

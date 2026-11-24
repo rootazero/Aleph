@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
     ChannelResult, ChannelState, ChannelStatus, OutboundDeliveryPolicy, OutboundMessage,
-    SendResult,
+    SendOperation,
 };
 
 use super::config::VoiceCallConfig;
@@ -83,10 +83,12 @@ impl Channel for VoiceCallChannel {
         Ok(())
     }
 
-    async fn send(&self, _message: OutboundMessage) -> ChannelResult<SendResult> {
-        Err(ChannelError::NotConnected(format!(
-            "{RELAY_UNAVAILABLE}; nothing was sent"
-        )))
+    fn send(&self, _message: OutboundMessage) -> SendOperation {
+        Box::pin(async move {
+            Err(ChannelError::NotConnected(format!(
+                "{RELAY_UNAVAILABLE}; nothing was sent"
+            )))
+        })
     }
 }
 
@@ -193,16 +195,11 @@ mod tests {
     }
 
     #[test]
-    fn config_roundtrip_preserves_switches_and_defaults() {
+    fn config_roundtrip_preserves_routing_fields() {
         let defaults: VoiceCallConfig = serde_json::from_value(config()).unwrap();
-        assert!(defaults.inbound_enabled);
-        assert!(defaults.outbound_enabled);
-        let mut disabled = defaults;
-        disabled.inbound_enabled = false;
-        disabled.outbound_enabled = false;
         let restored: VoiceCallConfig =
-            serde_json::from_value(serde_json::to_value(&disabled).unwrap()).unwrap();
-        assert_eq!(restored, disabled);
+            serde_json::from_value(serde_json::to_value(&defaults).unwrap()).unwrap();
+        assert_eq!(restored, defaults);
         restored.validate().unwrap();
     }
 }

@@ -23,6 +23,7 @@
 //! turn_threshold = 15
 //! ```
 
+pub mod capability_constraints;
 pub mod exec_tier;
 pub mod memory;
 pub mod metrics;
@@ -125,6 +126,10 @@ pub struct PoliciesConfig {
     /// Tool permission levels (Allow / Ask / Deny)
     #[serde(default)]
     pub tool_permissions: ToolPermissionsConfig,
+
+    /// Source-owned capability restrictions; applied at startup, not hot-reloaded.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub capability_constraints: capability_constraints::CapabilityConstraintsConfig,
 
     /// Per-principal and machine-total USD spend ceilings.
     ///

@@ -1877,8 +1877,14 @@ impl ResumeCoordinator {
                 return;
             }
             AttemptGate::SettleRefused(reason) => {
-                self.settle_refused(session_id, Abandoned::InterruptedRun, reason, report)
-                    .await;
+                self.settle_refused(
+                    session_id,
+                    Abandoned::InterruptedRun,
+                    reason,
+                    report,
+                    reduction.open_run.as_ref().map(|o| o.run_id.as_str()),
+                )
+                .await;
                 return;
             }
             AttemptGate::CrashLoopCap => {
@@ -2300,8 +2306,14 @@ impl ResumeCoordinator {
                 return;
             }
             AttemptGate::SettleRefused(reason) => {
-                self.settle_refused(session_id, Abandoned::UnansweredMessage, reason, report)
-                    .await;
+                self.settle_refused(
+                    session_id,
+                    Abandoned::UnansweredMessage,
+                    reason,
+                    report,
+                    None,
+                )
+                .await;
                 return;
             }
             AttemptGate::CrashLoopCap => {
@@ -2368,7 +2380,6 @@ impl ResumeCoordinator {
             Ok(row) => crate::gateway::fire_gate::session_may_act(row.as_ref()),
         }
     }
-
     /// [`AttemptGate::HoldUnspent`]: report it, write nothing.
     fn hold_unspent(&self, session_id: &SessionId, reason: String, report: &mut ResumeReport) {
         tracing::warn!(
@@ -2391,6 +2402,7 @@ impl ResumeCoordinator {
         what: Abandoned,
         reason: String,
         report: &mut ResumeReport,
+        closes: Option<&str>,
     ) {
         tracing::warn!(
             session = ?session_id,
@@ -2398,7 +2410,7 @@ impl ResumeCoordinator {
             "resume: fire-time authority refused; settling the candidate (no attempt spent)"
         );
         let notice = record_refused_settle(session_id, &reason, report);
-        self.abandon(session_id, what, None, &notice).await;
+        self.abandon(session_id, what, closes, &notice).await;
     }
 
     /// Terminate an abandoned candidate honestly: emit `RunFinished {
@@ -3370,7 +3382,7 @@ mod tests {
     async fn a_stamped_resume_skips_the_origin_fan_out_and_an_unstamped_one_takes_it() {
         use crate::gateway::channel::{
             Channel, ChannelCapabilities, ChannelId, ChannelInfo, ChannelResult, ChannelState,
-            ChannelStatus, MessageId, OutboundMessage, SendResult,
+            ChannelStatus, MessageId, OutboundMessage, SendOperation, SendResult,
         };
         use crate::gateway::channel_registry::ChannelRegistry;
         use crate::gateway::event_emitter::{CollectingEventEmitter, RunSummary, StreamEvent};
@@ -3395,11 +3407,14 @@ mod tests {
             async fn stop(&mut self) -> ChannelResult<()> {
                 Ok(())
             }
-            async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-                self.seen.lock().await.push(message.text.clone());
-                Ok(SendResult {
-                    message_id: MessageId::new("ok"),
-                    timestamp: chrono::Utc::now(),
+            fn send(&self, message: OutboundMessage) -> SendOperation {
+                let seen = Arc::clone(&self.seen);
+                Box::pin(async move {
+                    seen.lock().await.push(message.text.clone());
+                    Ok(SendResult {
+                        message_id: MessageId::new("ok"),
+                        timestamp: chrono::Utc::now(),
+                    })
                 })
             }
         }

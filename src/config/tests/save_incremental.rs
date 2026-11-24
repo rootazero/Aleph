@@ -35,32 +35,23 @@ rrf_k = 42
 
     fs::write(&config_path, initial_toml).expect("Should write initial config");
 
-    // Load config and test save_incremental
-    let config = Config {
-        behavior: Some(BehaviorConfig::default()),
-        ..Config::default()
-    };
-
-    // Read existing content
-    let existing_content = fs::read_to_string(&config_path).expect("Should read");
-    let mut existing: toml::Value = toml::from_str(&existing_content).expect("Should parse");
-    let current: toml::Value = toml::Value::try_from(&config).expect("Should serialize");
-
-    // Only update behavior section
-    if let (toml::Value::Table(ref mut existing_table), toml::Value::Table(ref current_table)) =
-        (&mut existing, &current)
-    {
-        if let Some(behavior) = current_table.get("behavior") {
-            existing_table.insert("behavior".to_string(), behavior.clone());
-        }
-    }
-
-    // Write back
-    let new_content = toml::to_string_pretty(&existing).expect("Should serialize");
-    fs::write(&config_path, &new_content).expect("Should write");
+    let mut config: Config = toml::from_str(initial_toml).expect("Should parse initial config");
+    config.behavior = Some(BehaviorConfig {
+        output_mode: "instant".into(),
+    });
+    config
+        .save_incremental_to_file(&config_path, &["behavior"])
+        .expect("Should save behavior incrementally");
 
     // Verify: Load the config and check that original sections are preserved
     let final_content = fs::read_to_string(&config_path).expect("Should read final");
+
+    let before: toml::Value = toml::from_str(initial_toml).unwrap();
+    let after: toml::Value = toml::from_str(&final_content).unwrap();
+    for section in ["general", "providers", "rules", "memory"] {
+        assert_eq!(after.get(section), before.get(section), "{section} changed");
+    }
+    assert_eq!(after["behavior"]["output_mode"].as_str(), Some("instant"));
 
     // Verify original provider is preserved
     assert!(

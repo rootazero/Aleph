@@ -329,15 +329,20 @@ mod tests {
     /// (判据 §2: in what case does this go red?). The preset's own existence is
     /// asserted first, or "the preset was empty" and "the merge works" produce
     /// the same green.
+    ///
+    /// The lookup is by the preset's own NAME: a by-type fallback inherits the
+    /// shared endpoint but not a model (a model belongs to the named vendor
+    /// preset), so the merge of both halves is only observable for a named
+    /// preset.
     #[test]
     fn test_build_generation_provider_applies_preset_defaults() {
         let overrides = crate::config::presets_override::GenerationPresetsOverride::default();
         let preset = crate::config::types::generation::presets::get_merged_generation_preset(
-            "dalle_main",
+            "openai-dalle",
             "openai",
             &overrides,
         )
-        .expect("the 'openai' provider type has a builtin preset to merge from");
+        .expect("the 'openai-dalle' preset exists to merge from");
         assert!(
             preset.base_url.is_some() && !preset.default_model.is_empty(),
             "the preset carries nothing to apply, so this test could not fail"
@@ -347,7 +352,7 @@ mod tests {
         assert!(cfg.base_url.is_none() && cfg.models.is_empty());
 
         let persisted =
-            build_generation_provider_for_persistence("dalle_main", cfg, &overrides, None);
+            build_generation_provider_for_persistence("openai-dalle", cfg, &overrides, None);
         assert_eq!(persisted.base_url, preset.base_url);
         assert_eq!(persisted.models, vec![preset.default_model]);
     }

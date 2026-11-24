@@ -29,6 +29,17 @@ impl LineMessagingApi {
 
     /// Send a push message (proactive to user).
     pub async fn push(&self, payload: &LinePushPayload) -> Result<String, String> {
+        // Every LINE push takes the {to, messages:[...]} envelope. The flex
+        // payload carries its recipient in the struct, so its body is
+        // serialized from the struct itself (single source of truth) and
+        // wrapped here.
+        let body = match payload {
+            LinePushPayload::Flex(flex) => {
+                let message = serde_json::to_value(flex.as_ref()).map_err(|e| e.to_string())?;
+                serde_json::json!({ "to": flex.to, "messages": [message] })
+            }
+            _ => serde_json::to_value(payload).map_err(|e| e.to_string())?,
+        };
         let url = format!("{}/v2/bot/message/push", self.api_base);
         let resp = self
             .http
@@ -37,7 +48,7 @@ impl LineMessagingApi {
                 "Authorization",
                 format!("Bearer {}", self.channel_access_token),
             )
-            .json(payload)
+            .json(&body)
             .send()
             .await
             .map_err(|e| format!("HTTP error: {e}"))?;
@@ -54,36 +65,6 @@ impl LineMessagingApi {
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string())
-        } else {
-            Err(format!("LINE API error: {}", resp.status()))
-        }
-    }
-
-    /// Send a reply message (using replyToken).
-    pub async fn reply(
-        &self,
-        reply_token: &str,
-        messages: Vec<ReplyMessage>,
-    ) -> Result<String, String> {
-        let url = format!("{}/v2/bot/message/reply", self.api_base);
-        let payload = ReplyPayload {
-            reply_token: reply_token.to_string(),
-            messages,
-        };
-        let resp = self
-            .http
-            .post(&url)
-            .header(
-                "Authorization",
-                format!("Bearer {}", self.channel_access_token),
-            )
-            .json(&payload)
-            .send()
-            .await
-            .map_err(|e| format!("HTTP error: {e}"))?;
-
-        if resp.status().is_success() {
-            Ok("ok".to_string())
         } else {
             Err(format!("LINE API error: {}", resp.status()))
         }
@@ -135,11 +116,16 @@ impl LineMessagingApi {
     /// Push a Template message.
     pub async fn push_template(
         &self,
-        _to: &str,
-        _alt_text: &str,
-        template: TemplatePayload,
+        to: &str,
+        alt_text: &str,
+        mut template: TemplatePayload,
     ) -> Result<String, String> {
-        let payload = LinePushPayload::Template(template);
+        template.template_type = "template".into();
+        template.alt_text = alt_text.into();
+        let payload = LinePushPayload::Template(TemplatePushPayload {
+            to: to.into(),
+            messages: vec![template],
+        });
         self.push(&payload).await
     }
 
@@ -236,30 +222,6 @@ impl LineMessagingApi {
             Err(format!("LINE API error: {}", resp.status()))
         }
     }
-
-    pub async fn get_profile(&self, user_id: &str) -> Result<LineUserProfile, String> {
-        let url = format!("{}/v2/bot/profile/{}", self.api_base, user_id);
-        let resp = self
-            .http
-            .get(&url)
-            .header(
-                "Authorization",
-                format!("Bearer {}", self.channel_access_token),
-            )
-            .send()
-            .await
-            .map_err(|e| format!("HTTP error: {e}"))?;
-
-        if resp.status().is_success() {
-            let profile: LineUserProfile = resp
-                .json()
-                .await
-                .map_err(|e| format!("Failed to parse profile response: {e}"))?;
-            Ok(profile)
-        } else {
-            Err(format!("LINE API error: {}", resp.status()))
-        }
-    }
 }
 
 // --- Payload types ---
@@ -269,7 +231,7 @@ impl LineMessagingApi {
 pub enum LinePushPayload {
     Text(TextPayload),
     Flex(Box<FlexPayload>),
-    Template(TemplatePayload),
+    Template(TemplatePushPayload),
     Image(ImagePayload),
     Video(VideoPayload),
     Audio(AudioPayload),
@@ -373,6 +335,10 @@ pub struct StickerPushContent {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct FlexPayload {
+    /// The recipient. The LINE push API takes the recipient in the
+    /// `to`/`messages` ENVELOPE, not inside the message object, so this field
+    /// is not part of the serialized message body.
+    #[serde(skip)]
     pub to: String,
     #[serde(rename = "altText")]
     pub alt_text: String,
@@ -538,6 +504,12 @@ impl FlexAction {
 
 // --- Template payloads ---
 
+#[derive(Debug, Clone, Serialize)]
+pub struct TemplatePushPayload {
+    pub to: String,
+    pub messages: Vec<TemplatePayload>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TemplatePayload {
     #[serde(rename = "type")]
@@ -567,7 +539,7 @@ pub struct ButtonsTemplate {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
+#[serde(tag = "type", rename_all = "lowercase")]
 pub enum TemplateContent {
     Confirm(ConfirmTemplate),
     Buttons(Box<ButtonsTemplate>),
@@ -669,6 +641,7 @@ pub struct QuickReply {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", rename = "action")]
 pub struct QuickReplyItem {
     pub action: QuickReplyAction,
 }
@@ -717,52 +690,76 @@ pub struct QuickReplyUriAction {
     pub uri: String,
 }
 
-// --- Reply types ---
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ReplyPayload {
-    pub reply_token: String,
-    pub messages: Vec<ReplyMessage>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(untagged)]
-pub enum ReplyMessage {
-    Text(ReplyTextContent),
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ReplyTextContent {
-    #[serde(rename = "type")]
-    pub msg_type: String,
-    pub text: String,
-}
-
-impl ReplyTextContent {
-    pub fn new(text: impl Into<String>) -> Self {
-        Self {
-            msg_type: "text".to_string(),
-            text: text.into(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct LineUserProfile {
-    #[serde(rename = "displayName")]
-    pub display_name: String,
-    #[serde(rename = "userId")]
-    pub user_id: String,
-    #[serde(rename = "pictureUrl")]
-    pub picture_url: Option<String>,
-    #[serde(rename = "statusMessage")]
-    pub status_message: Option<String>,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn rich_messages_have_valid_http_envelopes() {
+        use axum::{routing::post, Json, Router};
+        let (tx, mut rx) = tokio::sync::mpsc::channel(3);
+        let app = Router::new().route(
+            "/v2/bot/message/push",
+            post(move |Json(body): Json<serde_json::Value>| {
+                let tx = tx.clone();
+                async move {
+                    tx.send(body).await.unwrap();
+                    Json(serde_json::json!({"sentMessages":[{"id":"sent"}]}))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let api = LineMessagingApi::with_base(
+            "token".into(),
+            format!("http://{}", listener.local_addr().unwrap()),
+        );
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        api.push_flex("U1", "flex alt", FlexBubbleContents::new())
+            .await
+            .unwrap();
+        api.push_template(
+            "U2",
+            "template alt",
+            TemplatePayload {
+                template_type: "wrong".into(),
+                text: None,
+                alt_text: "ignored".into(),
+                template: Box::new(TemplateContent::Confirm(ConfirmTemplate {
+                    text: "confirm?".into(),
+                    actions: vec![],
+                })),
+            },
+        )
+        .await
+        .unwrap();
+        api.push_quick_reply(
+            "U3",
+            "choose",
+            vec![QuickReplyAction::Message(QuickReplyMessageAction::new(
+                "yes", "yes",
+            ))],
+        )
+        .await
+        .unwrap();
+        let flex = rx.recv().await.unwrap();
+        assert_eq!(flex["to"], "U1");
+        assert_eq!(flex["messages"][0]["type"], "flex");
+        assert_eq!(flex["messages"][0]["altText"], "flex alt");
+        assert!(flex["messages"][0]["contents"].is_object());
+        let template = rx.recv().await.unwrap();
+        assert_eq!(template["to"], "U2");
+        assert_eq!(template["messages"][0]["type"], "template");
+        assert_eq!(template["messages"][0]["altText"], "template alt");
+        assert_eq!(template["messages"][0]["template"]["type"], "confirm");
+        let quick = rx.recv().await.unwrap();
+        assert_eq!(
+            quick["messages"][0]["quickReply"]["items"][0]["type"],
+            "action"
+        );
+        server.abort();
+    }
 
     #[test]
     fn test_build_text_payload() {
@@ -785,20 +782,5 @@ mod tests {
         let json = serde_json::to_string(&payload).unwrap();
         assert!(json.contains("\"type\":\"flex\""));
         assert!(json.contains("\"altText\":\"Flex message\""));
-    }
-
-    #[test]
-    fn test_deserialize_user_profile() {
-        let json = r#"{
-            "displayName": "John Doe",
-            "userId": "U123456",
-            "pictureUrl": "https://example.com/photo.jpg",
-            "statusMessage": "Hello!"
-        }"#;
-        let profile: LineUserProfile = serde_json::from_str(json).unwrap();
-        assert_eq!(profile.display_name, "John Doe");
-        assert_eq!(profile.user_id, "U123456");
-        assert!(profile.picture_url.is_some());
-        assert_eq!(profile.status_message.as_deref(), Some("Hello!"));
     }
 }

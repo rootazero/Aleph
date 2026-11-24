@@ -13,6 +13,18 @@ pub struct FlowRegistry {
     flows: ArcSwap<FlowSet>,
 }
 
+/// Hand-written so the registry stays printable in a log line without
+/// dumping the whole catalog: the struct name plus the number of flows is
+/// what an operator needs to tell "the catalog is empty" from "the catalog
+/// has entries".
+impl std::fmt::Debug for FlowRegistry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FlowRegistry")
+            .field("flows", &self.len())
+            .finish()
+    }
+}
+
 impl FlowRegistry {
     #[must_use]
     pub fn new(initial: FlowSet) -> Self {

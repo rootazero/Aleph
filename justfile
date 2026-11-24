@@ -8,8 +8,10 @@ release_dir     := "target/release"
 debug_dir       := "target/debug"
 panel_dir       := "interfaces/webchat"
 panel_dist      := "interfaces/webchat/dist"
+panel_tsx_dir   := "interfaces/panel"
 server_bin      := "aleph-server"
 shell_dir       := "desktop/shell"
+memory_gate     := "qa/browser_live/check_memory.py"
 
 # ─── Default ───
 
@@ -184,12 +186,18 @@ wasm:
     (cd {{panel_dir}} && PATH="$main_bin:$PATH" npm run build:css)
     # 2. Compile Rust → WASM (lib only: the cdylib is the shipped artifact and
     #    the vestigial src/main.rs bin breaks under fat LTO)
-    cargo build -p aleph-panel --lib --target wasm32-unknown-unknown --profile wasm-release
+    python {{memory_gate}}
+    extra_features=()
+    if [[ "${ALEPH_PANEL_RUNTIME_QA:-0}" == "1" ]]; then
+        extra_features=(--features runtime-qa)
+    fi
+    cargo build -p aleph-panel --lib --target wasm32-unknown-unknown --profile wasm-release "${extra_features[@]}"
     # Resolve cargo's real target dir instead of hardcoding `target/`. A literal
     # relative path breaks in git worktrees: .cargo/config.toml pins an absolute
     # shared target-dir, so `cargo build` writes there while a cwd-relative
     # `target/` points at a nonexistent dir inside the worktree. `cargo metadata`
     # honors target-dir overrides and CARGO_TARGET_DIR, so it's correct everywhere.
+    python {{memory_gate}}
     target_dir=$(cargo metadata --format-version 1 --no-deps \
         | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>process.stdout.write(JSON.parse(s).target_directory))')
     # 3. Generate JS bindings
@@ -378,6 +386,50 @@ wasm:
     node scripts/check_panel_dist.mjs {{panel_dist}}
     echo "✓ WASM: {{panel_dist}}/"
 
+# Build the opt-in modular Panel candidate into an ignored staging directory.
+# The legacy `dist/` stays the default release artifact and remains guarded by `wasm`.
+wasm-modular:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    staging="{{panel_dir}}/.panel-modular-dist"
+    rm -rf "$staging"
+    (cd {{panel_dir}} && bun run panel:tabs:build -- --output=.panel-modular-dist)
+    (cd {{panel_dir}} && PANEL_TABS_OUTPUT=.panel-modular-dist bun run panel:tabs:report)
+    (cd {{panel_dir}} && PANEL_TABS_OUTPUT=.panel-modular-dist bun run panel:tabs:test)
+
+# The shared TSX Panel (`interfaces/panel`): its Rust model's cargo tests and the
+# TSX tests (`nsh test`), the type check, and the web host's Node tests.
+panel-tsx-test:
+    nsh test {{panel_tsx_dir}}
+    nsh check {{panel_tsx_dir}}
+    node --test {{panel_tsx_dir}}/web/host.test.mjs
+
+# Package the TSX Panel for the Web (`out-web/`; the Gateway serves it at
+# `/v1/panel/` only when `panel_web_dir` points at it). NSH resolves its
+# generated workspace (`.nsh/rust`) on its own: seeding it with the root lock
+# keeps wasm-bindgen at the version the installed CLI and `just wasm` use.
+panel-tsx-web:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    nsh check {{panel_tsx_dir}}
+    cp Cargo.lock {{panel_tsx_dir}}/.nsh/rust/Cargo.lock
+    llvm_ar="$(rustc --print sysroot)/lib/rustlib/$(rustc -vV | sed -n 's/^host: //p')/bin/llvm-ar"
+    if [ -x "$llvm_ar" ]; then export AR_wasm32_unknown_unknown="${AR_wasm32_unknown_unknown:-$llvm_ar}"; fi
+    export CC_wasm32_unknown_unknown="${CC_wasm32_unknown_unknown:-clang}"
+    rm -rf {{panel_tsx_dir}}/out-web
+    nsh package --target web -o {{panel_tsx_dir}}/out-web {{panel_tsx_dir}}
+
+# Build the TSX Panel's JS bundle (`out-bundle/`), which the NSH shell's
+# `tsx-panel` feature compiles in.
+panel-tsx-bundle:
+    nsh check {{panel_tsx_dir}}
+    nsh build {{panel_tsx_dir}} -o {{panel_tsx_dir}}/out-bundle
+
+# Run the NSH shell with the embedded TSX Panel (macOS), talking to an
+# already-running Gateway over its Desktop IPC socket (an absolute path).
+shell-tsx-dev socket: panel-tsx-bundle
+    ALEPH_SHELL_PANEL=tsx ALEPH_SHELL_PANEL_IPC={{socket}} cargo run -p aleph-nsh-shell --features tsx-panel
+
 # Verify the committed panel dist is a matched js+wasm pair (no closure-trampoline
 # drift). Run by `just wasm`, in CI on every dist change, and gating each release.
 check-dist:
@@ -506,7 +558,7 @@ check-phase5:
 # Wiring parity guards: catch "severed wire" drift where both ends exist but the
 # connection is missing. Each is a grep-level diff against a triaged baseline —
 # green now, fails only on a NEW severance. See the 2026-07-15 wire audit.
-check-wiring: check-rpc-wiring check-tool-wiring check-config-wiring
+check-wiring: check-rpc-wiring check-tool-wiring check-config-wiring check-discovery-wiring check-event-wiring check-domain-wiring check-exec-wiring check-executor-wiring check-export-wiring check-seam-wiring check-capability-wiring check-extension-wiring check-fetch-wiring check-gateway-wiring check-doc-wiring
 
 # RPC: no Panel rpc_call / rate-lane classifier may name a method with no handler
 # (→ METHOD_NOT_FOUND / phantom rate-lane guard).
@@ -522,6 +574,82 @@ check-tool-wiring:
 # knob is an inert R10 corpse).
 check-config-wiring:
     python3 scripts/config_wiring_audit.py
+
+# Discovery: the manifest names DISCOVERY advertises, the names the manifest
+# ADAPTERS detect and the names the LOADER advertises must describe the same
+# world; a plugin scan must not swallow a read failure silently.
+check-discovery-wiring:
+    python3 scripts/discovery_wire_audit.py
+
+# Events: every AlephEvent variant must have a producer and a subscriber;
+# repaired transition/boot wires must stay connected.
+check-event-wiring:
+    python3 scripts/event_wire_audit.py
+
+
+# Seams: every public API of the audited protocol/agent modules (src/a2a,
+# src/acp, src/agents) must have a production consumer — a `pub fn` nobody
+# calls is a severed wire the compiler cannot see. Shrink-only baseline.
+check-seam-wiring:
+    python3 scripts/wiring_seams.py
+
+# Capability/canvas/clarification seams: every public item of these modules
+# must have a production consumer — a `pub` declaration nobody reads is a
+# severed wire the compiler cannot see. Shrink-only baseline; the guard is a
+# detector, not a judge (see scripts/capability_wiring_audit.py).
+check-capability-wiring:
+    python3 scripts/capability_wiring_audit.py
+
+# Domain vocabulary: one parser per vocabulary (PromptScope / Os /
+# InstallKind), one source of truth for the source-priority order, and the
+# cuts the 2026-11-21 src/domain audit made stay cut.
+check-domain-wiring:
+    python3 scripts/domain_wire_audit.py
+
+# Exec: the approval record carries no write-only field, the operator's
+# custom-pattern reason reaches the denial and the audit trail, the grants
+# registry never publishes a failed write, and the secret catalogs stay one
+# catalog. Cuts the 2026-11-21 src/exec audit made stay cut.
+check-exec-wiring:
+    python3 scripts/exec_wire_audit.py
+
+# Executor: every registry-only tool has a description in the ONE table, the
+# team tools register under a literal name the census can see, the tool
+# categories stay complete, and the dead registry knobs stay cut.
+check-executor-wiring:
+    python3 scripts/executor_wire_audit.py
+
+# Export: one CSP literal with one owner, the served policy allows
+# downloads, a zero timestamp renders as absent, a budget-dropped figure is
+# reported to the model, and the Panel's export call carries an idempotency
+# key.
+check-export-wiring:
+    python3 scripts/export_wire_audit.py
+
+# Extension: the severed manifest/registry wires stay cut, the plugin agent
+# `mode:` key still fails loudly, and the config-schema budget keeps exactly
+# one owner.
+check-extension-wiring:
+    python3 scripts/extension_wire_audit.py
+
+# Fetch: the section-level routing knobs stay cut (nothing read them) and the
+# boot warn keeps its producer.
+check-fetch-wiring:
+    python3 scripts/fetch_wire_audit.py
+
+# Gateway: the severed config/link/adapter wires stay cut, the pair-loop
+# override stays connected per channel, and the deliberately dark wires stay
+# dark.
+check-gateway-wiring:
+    python3 scripts/gateway_wire_audit.py
+
+# Docs: entry-layer and docs/reference statements must still point at code that
+# exists — a stale path or a half-migrated "the desktop app is X" claim is a
+# severed wire between the docs and the implementation. Baseline-ratcheted:
+# a path already listed in scripts/doc_wiring_audit_baseline.json is known
+# backlog, a NEW missing path fails.
+check-doc-wiring:
+    python3 scripts/doc_wiring_audit.py
 
 # ─── Lint ───
 

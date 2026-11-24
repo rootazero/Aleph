@@ -69,16 +69,39 @@ async fn node_connect(url: &str, device_id: Option<&str>, name: &str) -> Value {
     .await
     .unwrap();
 
-    let reply = ws.next().await.expect("a connect reply").unwrap();
-    let Message::Text(text) = reply else {
-        panic!("connect reply must be text");
-    };
-    let v: Value = serde_json::from_str(text.as_str()).unwrap();
+    let v = read_connect_reply(&mut ws).await;
     // 关掉 socket；本测试只关心握手裁决。
     let _ = ws.close(None).await;
     v.pointer("/result/node")
         .cloned()
         .unwrap_or_else(|| panic!("connect reply carried no `node` block: {v}"))
+}
+
+async fn read_connect_reply(
+    ws: &mut tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+) -> Value {
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            match ws.next().await.expect("a connect reply").unwrap() {
+                Message::Text(text) => {
+                    let value: Value = serde_json::from_str(text.as_str()).unwrap();
+                    if value.get("id") == Some(&json!(1)) {
+                        break value;
+                    }
+                    assert!(
+                        value.get("id").is_none() && value.get("method").is_some(),
+                        "only notifications may precede the correlated connect reply: {value}"
+                    );
+                }
+                Message::Ping(data) => ws.send(Message::Pong(data)).await.unwrap(),
+                other => panic!("unexpected connect frame: {other:?}"),
+            }
+        }
+    })
+    .await
+    .expect("bounded correlated connect reply")
 }
 
 #[tokio::test]
@@ -146,11 +169,7 @@ async fn deregister_tears_down_the_nodes_live_socket() {
     ))
     .await
     .unwrap();
-    let reply = ws.next().await.expect("a connect reply").unwrap();
-    let Message::Text(text) = reply else {
-        panic!("connect reply must be text");
-    };
-    let v: Value = serde_json::from_str(text.as_str()).unwrap();
+    let v = read_connect_reply(&mut ws).await;
     assert_eq!(v.pointer("/result/node/status").unwrap(), "registered");
 
     // 版本握手：中心把节点声明的版本存进会话，舰队视图能看见。

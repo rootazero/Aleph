@@ -1,6 +1,11 @@
 use super::types::DeviceTokenRow;
-use super::{current_timestamp_ms, SecurityStore};
-use rusqlite::{params, Result as SqliteResult};
+use super::{
+    current_timestamp_ms,
+    users::{UserRole, UserStatus},
+    SecurityStore,
+};
+use crate::gateway::security::PANEL_DEVICE_TYPE;
+use rusqlite::{params, OptionalExtension, Result as SqliteResult};
 
 impl SecurityStore {
     // ========== Shared Token (Secret Vault Master Key) Operations ==========
@@ -72,9 +77,19 @@ impl SecurityStore {
     }
 
     /// Load the persisted HMAC secret (if any) from the `shared_token` table.
+    ///
+    /// Ordered exactly like [`Self::get_shared_token_plaintext`] so both
+    /// reads select the SAME row: the secret and the plaintext of a token
+    /// are written together, and a store that still holds several rows
+    /// must not pair the newest plaintext with an unrelated secret (that
+    /// pairing fails HMAC validation and forces a token regeneration).
     pub fn get_shared_token_secret(&self) -> SqliteResult<Option<[u8; 32]>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let mut stmt = conn.prepare("SELECT hmac_secret FROM shared_token LIMIT 1")?;
+        let mut stmt = conn.prepare(
+            "SELECT hmac_secret FROM shared_token
+             ORDER BY created_at DESC, token_hash DESC
+             LIMIT 1",
+        )?;
 
         let result = stmt.query_row([], |row| {
             let blob: Option<Vec<u8>> = row.get(0)?;
@@ -102,9 +117,19 @@ impl SecurityStore {
     /// [`crate::gateway::security::token_readonly::read_current_token_readonly`],
     /// so the admin IPC client and the in-process `SharedTokenManager` agree
     /// on what an absent token looks like.
+    ///
+    /// Rows are ordered by the store's own recency contract (`created_at`,
+    /// refreshed on every token write) with `token_hash` as the tiebreak, so
+    /// a store that still holds several rows (written under the old
+    /// append/upsert bug) yields the NEWEST token instead of an arbitrary
+    /// one — and the CLI's read-only mirror picks the same row.
     pub fn get_shared_token_plaintext(&self) -> SqliteResult<Option<String>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let mut stmt = conn.prepare("SELECT plaintext_token FROM shared_token LIMIT 1")?;
+        let mut stmt = conn.prepare(
+            "SELECT plaintext_token FROM shared_token
+             ORDER BY created_at DESC, token_hash DESC
+             LIMIT 1",
+        )?;
 
         let result = stmt.query_row([], |row| {
             let text: Option<String> = row.get(0)?;
@@ -155,6 +180,20 @@ impl SecurityStore {
         expires_at: i64,
     ) -> SqliteResult<()> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        Self::issue_device_token_on(
+            &conn, token_id, device_id, token_hash, role, scopes, expires_at,
+        )
+    }
+
+    pub(in crate::gateway::security) fn issue_device_token_on(
+        conn: &rusqlite::Connection,
+        token_id: &str,
+        device_id: &str,
+        token_hash: &str,
+        role: &str,
+        scopes: &[String],
+        expires_at: i64,
+    ) -> SqliteResult<()> {
         let scopes_json = serde_json::to_string(scopes).unwrap_or_else(|e| {
             tracing::warn!("Failed to serialize device token scopes: {}", e);
             "[]".to_string()
@@ -214,6 +253,35 @@ impl SecurityStore {
         }
     }
 
+    /// Revalidate a previously authenticated Panel credential, without retaining its secret.
+    /// Read the token, device, and principal in one database snapshot.
+    pub(crate) fn active_device_principal(
+        &self,
+        token_id: &str,
+        device_id: &str,
+    ) -> SqliteResult<Option<(String, UserRole)>> {
+        let conn = self.conn.lock().unwrap_or_else(|error| error.into_inner());
+        let principal: Option<(String, String)> = conn
+            .query_row(
+                "SELECT u.user_id, u.role
+                 FROM tokens t JOIN devices d ON d.device_id = t.device_id
+                 JOIN users u ON u.user_id = d.user_id
+                 WHERE t.token_id = ?1 AND t.device_id = ?2
+                   AND t.revoked_at IS NULL AND t.expires_at > ?3
+                   AND d.revoked_at IS NULL AND d.device_type = ?4 AND u.status = ?5",
+                params![
+                    token_id,
+                    device_id,
+                    current_timestamp_ms(),
+                    PANEL_DEVICE_TYPE,
+                    UserStatus::Active.as_str()
+                ],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        Ok(principal.and_then(|(user, role)| Some((user, UserRole::from_str(&role)?))))
+    }
+
     /// Revoke a single device token by token_id.
     pub fn revoke_device_token(&self, token_id: &str) -> SqliteResult<bool> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
@@ -270,8 +338,8 @@ mod tests {
     }
 
     /// `get_shared_token_secret` and `get_shared_token_plaintext` both read
-    /// `LIMIT 1` with no `ORDER BY`, so "which row" is whatever SQLite hands
-    /// back. That is only safe while there is exactly one row, which makes
+    /// the newest row (`ORDER BY created_at DESC, token_hash DESC`), so
+    /// "which row" is only safe while there is exactly one row, which makes
     /// single-row-ness a property those two readers depend on rather than a
     /// restatement of the revocation test in `shared_token.rs`: a second row
     /// does not merely keep an old token alive, it lets a restart adopt one.

@@ -36,8 +36,6 @@ pub enum RateLimitScope {
     /// pushes one ~200 ms PCM frame per RPC — a steady 5 req/s per active mic —
     /// which would exhaust `RpcDefault` in seconds and kill live transcription.
     RpcRealtime,
-    /// Webhook authentication attempts.
-    WebhookAuth,
 }
 
 impl fmt::Display for RateLimitScope {
@@ -48,7 +46,6 @@ impl fmt::Display for RateLimitScope {
             Self::RpcWrite => write!(f, "rpc_write"),
             Self::RpcHeavy => write!(f, "rpc_heavy"),
             Self::RpcRealtime => write!(f, "rpc_realtime"),
-            Self::WebhookAuth => write!(f, "webhook_auth"),
         }
     }
 }
@@ -64,14 +61,34 @@ pub struct RateLimitKey {
     pub identity: String,
     /// Which rate-limit bucket this key belongs to.
     pub scope: RateLimitScope,
+    /// Whether the caller is on the loopback interface.
+    ///
+    /// This is a fact about the *transport*, never a property of `identity`:
+    /// behind a trusted proxy the identity is the forwarded address, and a
+    /// client chooses what it puts there. The loopback exemption reads this
+    /// bit, so a forged `X-Forwarded-For: 127.0.0.1` no longer buys a caller
+    /// every limit in the box.
+    pub is_loopback: bool,
 }
 
 impl RateLimitKey {
+    /// A key for a caller that is not on the loopback interface.
     #[must_use]
     pub fn new(identity: &str, scope: RateLimitScope) -> Self {
+        Self::for_caller(identity, scope, false)
+    }
+
+    /// A key for a caller whose loopback-ness is known.
+    ///
+    /// `is_loopback` must be a transport fact — the peer address of an
+    /// unproxied connection, or a resolved client's trusted local bit — and
+    /// never an address parsed out of a request header.
+    #[must_use]
+    pub fn for_caller(identity: &str, scope: RateLimitScope, is_loopback: bool) -> Self {
         Self {
             identity: identity.to_owned(),
             scope,
+            is_loopback,
         }
     }
 }
@@ -100,7 +117,7 @@ pub struct RateLimitConfig {
     pub rpc_write: WindowConfig,
     pub rpc_heavy: WindowConfig,
     pub rpc_realtime: WindowConfig,
-    /// If `true`, requests from loopback addresses bypass all limits.
+    /// If `true`, requests from a proven loopback transport bypass all limits.
     pub exempt_loopback: bool,
     /// Hard cap on the number of distinct `(identity, scope)` entries held in
     /// memory. Bounds heap growth against a flood of unique identities
@@ -170,7 +187,7 @@ impl WindowTomlConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RateLimitTomlConfig {
-    /// `[gateway.rate_limit.auth]` — also governs webhook auth attempts.
+    /// `[gateway.rate_limit.auth]` — the authentication (handshake) window.
     pub auth: WindowTomlConfig,
     /// `[gateway.rate_limit.rpc_default]`
     pub rpc_default: WindowTomlConfig,
@@ -246,7 +263,7 @@ impl RateLimitConfig {
     /// Look up the [`WindowConfig`] for a given scope.
     const fn config_for(&self, scope: &RateLimitScope) -> &WindowConfig {
         match scope {
-            RateLimitScope::Auth | RateLimitScope::WebhookAuth => &self.auth,
+            RateLimitScope::Auth => &self.auth,
             RateLimitScope::RpcDefault => &self.rpc_default,
             RateLimitScope::RpcWrite => &self.rpc_write,
             RateLimitScope::RpcHeavy => &self.rpc_heavy,
@@ -390,8 +407,11 @@ impl RateLimiter {
     /// Returns `Ok(())` when the request is permitted, or a
     /// [`RateLimitError`] describing why it was rejected.
     pub fn check_and_record(&self, key: &RateLimitKey) -> Result<(), RateLimitError> {
-        // Loopback exemption
-        if self.config.exempt_loopback && is_loopback(&key.identity) {
+        // Loopback exemption. Keyed on the trusted transport bit, not on the
+        // identity string: behind a trusted proxy the identity is the
+        // forwarded address, so a client that forges `X-Forwarded-For:
+        // 127.0.0.1` would otherwise drop every limit it has.
+        if self.config.exempt_loopback && key.is_loopback {
             return Ok(());
         }
 
@@ -488,16 +508,22 @@ impl RateLimiter {
     /// and that have no active lockout. Call periodically to reclaim memory.
     pub fn prune_stale(&self, max_age: Duration) {
         let now = Instant::now();
-        self.windows.retain(|_key, sw| {
+        self.windows.retain(|key, sw| {
             // Keep if lockout is still active
             if let Some(until) = sw.lockout_until {
                 if now < until {
                     return true;
                 }
             }
-            // Keep if any timestamp is recent enough
+            // Keep if any timestamp is recent enough. The retention age is the
+            // caller's `max_age` **or** the entry's own scope window,
+            // whichever is longer: a caller that reaches the capacity limit
+            // with a short window must not reclaim a record that is still
+            // inside the longer window of the scope it belongs to (G3-01).
+            let scope_window = Duration::from_secs(self.config.config_for(&key.scope).window_secs);
+            let keep_for = max_age.max(scope_window);
             match sw.timestamps.back() {
-                Some(&last) => now.saturating_duration_since(last) < max_age,
+                Some(&last) => now.saturating_duration_since(last) < keep_for,
                 None => false,
             }
         });
@@ -526,7 +552,11 @@ pub fn scope_for_method(method: &str) -> RateLimitScope {
         // so they get the strict write window too.
         "config.patch" | "memory.delete" | "session.compact" | "sessions.delete"
         | "sessions.reset" | "session.truncate" | "plugins.install" | "plugins.uninstall"
-        | "skills.install" | "skills.remove" | "bundled.sync" => RateLimitScope::RpcWrite,
+        | "skills.install" | "skills.remove" | "bundled.sync" | "canvas.delete" => {
+            // canvas.delete removes a document: it is a write lane, not a
+            // read. (2026-11-20 severed-wire audit CAN-04.)
+            RateLimitScope::RpcWrite
+        }
 
         // Resource-intensive operations. `session.export_html` reads the whole
         // transcript plus every inlinable artifact byte and renders a document
@@ -541,22 +571,6 @@ pub fn scope_for_method(method: &str) -> RateLimitScope {
         // Everything else
         _ => RateLimitScope::RpcDefault,
     }
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/// Check whether an identity string represents a loopback address.
-///
-/// Handles both bare IPs ("127.0.0.1") and socket-address strings
-/// that include a port suffix ("127.0.0.1:54321", "[`::1`]:8080").
-fn is_loopback(identity: &str) -> bool {
-    identity == "127.0.0.1"
-        || identity == "::1"
-        || identity == "localhost"
-        || identity.starts_with("127.0.0.1:")
-        || identity.starts_with("[::1]:")
 }
 
 // ---------------------------------------------------------------------------
@@ -666,7 +680,7 @@ mod tests {
 
         // rpc_default limit is 10, but loopback is exempt
         for addr in &["127.0.0.1", "::1", "localhost"] {
-            let key = RateLimitKey::new(addr, RateLimitScope::RpcDefault);
+            let key = RateLimitKey::for_caller(addr, RateLimitScope::RpcDefault, true);
             for i in 0..100 {
                 assert!(
                     limiter.check_and_record(&key).is_ok(),
@@ -674,6 +688,25 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_a_loopback_looking_identity_is_not_exempt() {
+        let limiter = RateLimiter::new(test_config());
+
+        // The identity is the resolved client address: behind a trusted proxy
+        // it is the forwarded one, which the client chose. Reading the
+        // exemption off the identity let a forged `X-Forwarded-For:
+        // 127.0.0.1` drop every limit.
+        let forged = RateLimitKey::new("127.0.0.1", RateLimitScope::RpcDefault);
+        let mut limited = false;
+        for _ in 0..100 {
+            if limiter.check_and_record(&forged).is_err() {
+                limited = true;
+                break;
+            }
+        }
+        assert!(limited, "a forged loopback identity must not be exempt");
     }
 
     #[test]
@@ -785,10 +818,58 @@ mod tests {
         let key = RateLimitKey::new("10.0.0.99", RateLimitScope::RpcDefault);
         limiter.check_and_record(&key).unwrap();
 
-        // With a zero-duration max_age, everything is stale
+        // The retention age is the caller's `max_age` **or** the entry's own
+        // scope window, whichever is longer (G3-01): an rpc_default record is
+        // still inside its 1s window, so a zero-age prune keeps it.
         limiter.prune_stale(Duration::ZERO);
-        // The entry should have been removed — next request starts fresh
+        assert_eq!(
+            limiter.windows.len(),
+            1,
+            "a record inside its own scope window survives the reclaim"
+        );
+
+        // A scope whose own window has passed as well is reclaimed.
+        let zero_window = RateLimitConfig {
+            rpc_default: WindowConfig {
+                max_requests: 10,
+                window_secs: 0,
+                lockout_secs: None,
+            },
+            ..test_config()
+        };
+        let limiter = RateLimiter::new(zero_window);
+        let key = RateLimitKey::new("10.0.0.98", RateLimitScope::RpcDefault);
+        limiter.check_and_record(&key).unwrap();
+        limiter.prune_stale(Duration::ZERO);
         assert!(limiter.windows.is_empty(), "stale entries should be pruned");
+    }
+
+    #[test]
+    fn test_prune_stale_keeps_records_inside_a_longer_scope_window() {
+        // G3-01: the capacity reclaim must not use the *caller's* window as the
+        // retention age of entries that belong to another scope. An auth
+        // record (60s window) must survive a reclaim triggered by a
+        // short-window scope, so the short-window caller stays rejected
+        // instead of riding on the reclaimed capacity.
+        let config = RateLimitConfig {
+            max_entries: 1,
+            ..test_config()
+        };
+        let limiter = RateLimiter::new(config);
+        let auth = RateLimitKey::new("10.0.0.50", RateLimitScope::Auth);
+        assert!(limiter.check_and_record(&auth).is_ok());
+
+        // A *new* rpc_default key reaches the capacity limit and triggers the
+        // reclaim with the rpc_default window (1s).
+        let rpc = RateLimitKey::new("10.0.0.51", RateLimitScope::RpcDefault);
+        assert!(
+            limiter.check_and_record(&rpc).is_err(),
+            "the new key is rejected while the auth record is alive"
+        );
+        assert!(
+            limiter.windows.contains_key(&auth),
+            "the auth record is still inside its 60s window and must not be reclaimed"
+        );
     }
 
     #[test]

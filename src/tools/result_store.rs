@@ -657,21 +657,20 @@ impl ToolResultStore {
     /// **Session-scoped handles must not call this.** A session-scoped
     /// handle (`for_session(...)`) shares the underlying base directory
     /// with every other live session — calling `cleanup()` from one would
-    /// silently delete every other session's offloaded output. This guard
-    /// panics with a pointer to the correct API rather than letting that
-    /// happen at runtime; the boot-time unscoped root is the only safe
-    /// caller, and the deny-breaker's `purge_all` is the per-session
-    /// counterpart.
+    /// silently delete every other session's offloaded output. A
+    /// session-scoped call is therefore refused: it logs the misuse and
+    /// falls back to `purge_all_sync()`, which removes only this session's
+    /// blobs. The boot-time unscoped root is the only safe caller, and the
+    /// deny-breaker's `purge_all` is the per-session counterpart.
     pub fn cleanup(&self) {
         if !self.session.is_empty() {
-            panic!(
-                "ToolResultStore::cleanup called on a session-scoped handle \
-                 (session={:?}); this would delete every other concurrent \
-                 session's offloaded output. Use purge_all() to remove only \
-                 this session's artifacts, or call cleanup() from the \
-                 unscoped root handle created by ToolResultStore::new().",
-                self.session,
+            tracing::error!(
+                session = %self.session,
+                "ToolResultStore::cleanup invoked on session-scoped handle; \
+                 delegating to purge_all_sync() to preserve other concurrent sessions"
             );
+            self.purge_all_sync();
+            return;
         }
         if self.inner.base_dir.exists() {
             if let Err(e) = std::fs::remove_dir_all(&self.inner.base_dir) {
@@ -885,7 +884,7 @@ pub fn extract_persisted_ref(text: &str) -> Option<&str> {
 pub fn extract_persisted_path(text: &str) -> Option<&str> {
     let rest = extract_persisted_ref(text)?.strip_prefix(PERSISTED_REF_PREFIX)?;
     let end = rest.rfind(" (")?;
-    Some(&rest[..end])
+    rest.get(..end)
 }
 
 /// Whether `path`'s file **name begins with** `{sanitize(tool_call_id)}_` —
@@ -1016,7 +1015,9 @@ pub fn stabilize_persisted_ref(text: &str) -> std::borrow::Cow<'_, str> {
             // Keep " (<n> tokens, <tool>)]" — the part that still varies with
             // the content rather than with the dispatch.
             if let Some(tail) = line.rfind(" (") {
-                out.push_str(&line[tail..]);
+                if let Some(suffix) = line.get(tail..) {
+                    out.push_str(suffix);
+                }
             }
         } else {
             out.push_str(line);
@@ -1385,13 +1386,38 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "session-scoped handle")]
-    fn cleanup_on_session_scoped_handle_panics() {
+    fn cleanup_on_session_scoped_handle_keeps_the_shared_base_directory() {
         let (_scratch, base) = crate::utils::scratch::scratch_root();
         std::fs::create_dir_all(&base).unwrap();
         let root = Arc::new(ToolResultStore::with_dir_for_tests(base.clone()));
         let scoped = ToolResultStore::for_session(&root, "agent:main:sess-x");
+        let other = ToolResultStore::for_session(&root, "agent:main:sess-y");
+        let own_blob = marker_path(
+            &scoped
+                .persist_if_large("own-call", "bash", &"x".repeat(1000), 1)
+                .expect("persist own result"),
+        );
+        let other_blob = marker_path(
+            &other
+                .persist_if_large("other-call", "bash", &"y".repeat(1000), 1)
+                .expect("persist other result"),
+        );
         scoped.cleanup();
+        assert!(
+            !own_blob.exists(),
+            "cleanup must purge this session's blobs"
+        );
+        assert_eq!(
+            std::fs::read_to_string(other_blob).unwrap(),
+            "y".repeat(1000)
+        );
+        // A session-scoped handle shares the base directory with every other
+        // live session, so `cleanup()` must NOT remove it — it purges this
+        // session's blobs instead of the shared tree.
+        assert!(
+            base.exists(),
+            "a session-scoped cleanup must not remove the shared base directory"
+        );
     }
 
     #[test]

@@ -47,9 +47,9 @@ fn looks_like_path(p: &str) -> bool {
     let windows_drive = {
         let b = p.as_bytes();
         b.len() >= 3
-            && b[0].is_ascii_alphabetic()
-            && b[1] == b':'
-            && (b[2] == b'\\' || b[2] == b'/')
+            && b.first().is_some_and(u8::is_ascii_alphabetic)
+            && b.get(1) == Some(&b':')
+            && matches!(b.get(2), Some(&b'\\') | Some(&b'/'))
     };
     if !windows_drive && p.chars().any(char::is_whitespace) {
         return false;
@@ -74,28 +74,28 @@ fn match_path(line: &str) -> Option<&str> {
     // Skip a leading Windows drive colon ("C:\" or "C:/") so it isn't taken for
     // the path/line separator.
     let mut i = if bytes.len() >= 3
-        && bytes[0].is_ascii_alphabetic()
-        && bytes[1] == b':'
-        && (bytes[2] == b'\\' || bytes[2] == b'/')
+        && bytes.first().is_some_and(u8::is_ascii_alphabetic)
+        && bytes.get(1) == Some(&b':')
+        && matches!(bytes.get(2), Some(&b'\\') | Some(&b'/'))
     {
         2
     } else {
         0
     };
-    while i < bytes.len() {
-        let c = bytes[i];
+    while let Some(&c) = bytes.get(i) {
         if c == b':' || c == b'-' {
             // Require digits immediately after, then a matching separator:
             // anchors on the line-number marker, so dashed/colon'd filenames
             // before it stay part of the path.
             let mut j = i + 1;
-            while j < bytes.len() && bytes[j].is_ascii_digit() {
+            while bytes.get(j).is_some_and(u8::is_ascii_digit) {
                 j += 1;
             }
-            if j > i + 1 && j < bytes.len() && (bytes[j] == b':' || bytes[j] == b'-') {
-                let path = &line[..i];
-                if !path.is_empty() && looks_like_path(path) {
-                    return Some(path);
+            if j > i + 1 && bytes.get(j).is_some_and(|&b| b == b':' || b == b'-') {
+                if let Some(path) = line.get(..i) {
+                    if !path.is_empty() && looks_like_path(path) {
+                        return Some(path);
+                    }
                 }
             }
         }
@@ -142,7 +142,11 @@ pub(super) fn reduce_search(lines: &[&str], profile: &Profile) -> Option<Reducti
         };
         match index.get(path) {
             Some(&UNGROUPED) => {}
-            Some(&pos) => groups[pos].push(idx),
+            Some(&pos) => {
+                if let Some(grp) = groups.get_mut(pos) {
+                    grp.push(idx);
+                }
+            }
             None => {
                 let pos = if groups.len() < profile.search_files {
                     groups.push(vec![idx]);
@@ -183,7 +187,7 @@ pub(super) fn reduce_search(lines: &[&str], profile: &Profile) -> Option<Reducti
     // above can both drop a group that was admitted.
     let files_shown = kept
         .iter()
-        .filter_map(|&i| match_path(lines[i]))
+        .filter_map(|&i| lines.get(i).and_then(|l| match_path(l)))
         .collect::<std::collections::HashSet<_>>()
         .len();
     if distinct_paths > files_shown {
@@ -209,25 +213,31 @@ fn select_for_file(lines: &[&str], idxs: &[usize], max_per_file: usize) -> Vec<u
     if idxs.len() <= max_per_file {
         return idxs.to_vec();
     }
-    let first = idxs[0];
-    let last = idxs[idxs.len() - 1];
-    // `Profile::FLOOR` keeps this at 2, so the subtraction is saturating rather
-    // than a floor assumption: at the floor a file keeps only its first and last
-    // hit, which is still the shape the doc comment promises.
+    if max_per_file == 0 {
+        return Vec::new();
+    }
+    let Some((&first, rest)) = idxs.split_first() else {
+        return Vec::new();
+    };
+    if max_per_file == 1 {
+        return vec![first];
+    }
+    let Some((&last, middle)) = rest.split_last() else {
+        return vec![first];
+    };
     let budget = max_per_file.saturating_sub(2); // slots between first and last
-    let middle = &idxs[1..idxs.len() - 1];
 
     let mut sel = vec![first];
     let errs: Vec<usize> = middle
         .iter()
         .copied()
-        .filter(|&i| is_error_signal(lines[i]))
+        .filter(|&i| lines.get(i).is_some_and(|l| is_error_signal(l)))
         .collect();
     for &i in errs.iter().take(budget) {
         sel.push(i);
     }
-    if sel.len() - 1 < budget {
-        let remaining = budget - (sel.len() - 1);
+    if sel.len().saturating_sub(1) < budget {
+        let remaining = budget - sel.len().saturating_sub(1);
         // Membership tested once per middle line; a linear scan over `errs`
         // made that quadratic in the per-file hit count.
         let err_set: std::collections::HashSet<usize> = errs.iter().copied().collect();

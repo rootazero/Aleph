@@ -6,7 +6,7 @@
 mod agents_integration;
 mod basic;
 mod channels;
-mod migration;
+mod guide_doc_drift;
 mod save_incremental;
 mod schema_integration;
 mod serialization;

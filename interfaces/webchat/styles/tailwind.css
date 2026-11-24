@@ -3,6 +3,8 @@
 
 /* Scan Leptos Rust source files for class names */
 @source "../src/**/*.rs";
+@source "../tabs/terminal-ui/src/**/*.rs";
+@source "../tabs/terminal/src/**/*.rs";
 @source "../dist/**/*.html";
 
 /* ============================================================

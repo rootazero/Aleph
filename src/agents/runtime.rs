@@ -150,6 +150,7 @@ pub(crate) struct ProviderRouting {
 pub(crate) struct MemoryCapture {
     pub(crate) raw_memory_writer: Option<Arc<dyn RawMemoryStore>>,
     pub(crate) capture_registry: Option<Arc<MemoryExtensionRegistry>>,
+    pub(crate) memory_runtime: Option<std::sync::Weak<crate::memory::runtime::MemoryRuntime>>,
     pub(crate) parent_agent_id: Option<String>,
     pub(crate) parent_session_id: Option<String>,
 }
@@ -250,6 +251,7 @@ impl AgentRuntime {
             memory: MemoryCapture {
                 raw_memory_writer: None,
                 capture_registry: None,
+                memory_runtime: None,
                 parent_agent_id: None,
                 parent_session_id: None,
             },
@@ -432,6 +434,14 @@ impl AgentRuntime {
     }
 
     /// Wire an optional capture-filter registry threaded into the emit.
+    pub fn with_memory_runtime(
+        mut self,
+        runtime: std::sync::Weak<crate::memory::runtime::MemoryRuntime>,
+    ) -> Self {
+        self.memory.memory_runtime = Some(runtime);
+        self
+    }
+
     pub fn with_capture_registry(mut self, registry: Arc<MemoryExtensionRegistry>) -> Self {
         self.memory.capture_registry = Some(registry);
         self
@@ -608,6 +618,7 @@ impl AgentRuntime {
             chain: parent_chain,
             raw_memory_writer: self.memory.raw_memory_writer.clone(),
             capture_registry: self.memory.capture_registry.clone(),
+            memory_runtime: self.memory.memory_runtime.clone(),
             parent_agent_id: self.memory.parent_agent_id.clone(),
             parent_session_id: self.memory.parent_session_id.clone(),
             guardrails: self.policy_inheritance.guardrails.clone(),

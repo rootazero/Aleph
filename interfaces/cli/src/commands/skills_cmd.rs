@@ -41,7 +41,8 @@ pub async fn list(server_url: &str, config: &CliConfig, json: bool) -> CliResult
 /// Install a skill from a git URL, local path, or `.zip` via `skills.install`.
 ///
 /// The server-side handler auto-detects the source type, so the CLI just
-/// forwards the raw source string.
+/// forwards the raw source string. A local *directory* has to live inside the
+/// server's skills directory; a local single file is accepted anywhere.
 pub async fn install(
     server_url: &str,
     config: &CliConfig,

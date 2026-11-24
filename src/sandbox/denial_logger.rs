@@ -112,6 +112,8 @@ impl DenialLogger {
     }
 
     /// Linux/Windows: no equivalent unified log stream — no-op.
+    /// Signature matches macOS `async fn start` for uniform cross-platform calls.
+    #[allow(clippy::unused_async)]
     #[cfg(not(target_os = "macos"))]
     pub async fn start(&self) -> Result<(), String> {
         Ok(())

@@ -126,7 +126,15 @@ fn decide_params(
 fn issue_params(resource_id: &str) -> Result<Value, String> {
     serde_json::to_value(IssueViewerGrantRequest {
         resource_id: resource_id.to_string(),
-        permissions: vec![ViewerPermission::Frames],
+        // The view plus the two control permissions. The issuer filters the
+        // request against its own allow-list, so asking for the control
+        // permissions is what makes the intervention path (take control,
+        // type, navigate) reachable from this client at all.
+        permissions: vec![
+            ViewerPermission::Frames,
+            ViewerPermission::HumanInput,
+            ViewerPermission::Navigate,
+        ],
     })
     .map_err(|_| "Failed to encode browser viewer grant request".to_string())
 }
@@ -304,10 +312,13 @@ mod tests {
     }
 
     #[test]
-    fn issue_params_can_request_frames_only_for_the_opaque_resource() {
+    fn issue_params_request_the_view_and_the_control_permissions_for_the_opaque_resource() {
         assert_eq!(
             issue_params("resource-5").unwrap(),
-            json!({"resource_id": "resource-5", "permissions": ["frames"]})
+            json!({
+                "resource_id": "resource-5",
+                "permissions": ["frames", "human_input", "navigate"]
+            })
         );
         let object = issue_params("resource-5").unwrap();
         assert_eq!(object.as_object().unwrap().len(), 2);

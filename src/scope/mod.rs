@@ -116,10 +116,10 @@ impl ScopeAttribution {
     /// fields present and a parseable, coherent scope, else `None`.
     #[must_use]
     pub fn from_persisted(owner_user_id: Option<&str>, scope_id: Option<&str>) -> Option<Self> {
-        let owner_user_id = owner_user_id?.to_string();
+        let owner_user_id = owner_user_id?;
         let scope = ScopeId::parse(scope_id?)?;
         Some(ScopeAttribution {
-            owner_user_id,
+            owner_user_id: owner_user_id.to_string(),
             scope,
         })
     }
@@ -150,10 +150,7 @@ where
 /// [`with_scope`] scope or when the surrounding scope explicitly set `None`.
 #[must_use]
 pub fn current_scope() -> Option<ScopeAttribution> {
-    CURRENT_ATTRIBUTION
-        .try_with(|attr| attr.clone())
-        .ok()
-        .flatten()
+    CURRENT_ATTRIBUTION.try_with(Clone::clone).ok().flatten()
 }
 
 /// The user the current execution context acts for, across BOTH ambient
@@ -292,11 +289,11 @@ pub fn ambient_room_author() -> Option<String> {
 /// (fail-closed, for legacy compat).
 #[must_use]
 pub fn scope_from_metadata(meta: &HashMap<String, String>) -> Option<ScopeAttribution> {
-    let owner_user_id = meta.get(OWNER_META_KEY)?.clone();
+    let owner_user_id = meta.get(OWNER_META_KEY)?;
     let scope_str = meta.get(SCOPE_META_KEY)?;
     let scope = ScopeId::parse(scope_str)?;
     Some(ScopeAttribution {
-        owner_user_id,
+        owner_user_id: owner_user_id.clone(),
         scope,
     })
 }

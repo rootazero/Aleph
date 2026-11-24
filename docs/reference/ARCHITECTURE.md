@@ -13,8 +13,8 @@
 │                           INTERFACE LAYER (I/O)                               │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐      │
-│  │ macOS    │  │  Tauri   │  │   CLI    │  │ Telegram │  │ Discord  │      │
-│  │  App     │  │   App    │  │          │  │Interface │  │Interface │      │
+│  │ macOS    │  │ Desktop  │  │   CLI    │  │ Telegram │  │ Discord  │      │
+│  │  App     │  │ Host(s)  │  │          │  │Interface │  │Interface │      │
 │  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘      │
 │       │             │             │             │             │             │
 │       └─────────────┴─────────────┴─────────────┴─────────────┘             │
@@ -90,6 +90,8 @@
 
 ## Capability Plane
 
+> Current-state cross-subsystem map: [`FEATURE_LOCATOR.md`](FEATURE_LOCATOR.md#current-state--当前现状). This architecture keeps semantic Capability contracts separate from plugin assembly and preserves the existing authority for each bounded production slice. / 当前现状跨子系统地图：[`FEATURE_LOCATOR.md`](FEATURE_LOCATOR.md#current-state--当前现状)。本架构保持 Capability 语义契约与插件装配分离，并保留各有界生产切片的既有 authority。
+
 Capability is a semantic contract, not another plugin or dependency-injection container. In the first converged slice, a callable Tool is represented by one `ToolCapabilityDescriptor` and one live handler in `ToolHandlerRegistry`. The descriptor is the source for discovery and projection; the handler is the execution implementation. `LoopToolRegistry`, provider metadata, ToolCatalog, MCP bridge, and recovery are consumers of that contract, not parallel registries.
 
 ```text
@@ -101,7 +103,10 @@ Tool registration
   -> recovery ReplayPolicy lookup (fail-closed until call-time revision exists)
 ```
 
-The registry stores descriptor and handler together so a hot replacement cannot produce a mixed-generation projection. `ToolRegistrationScope` disposes registrations in reverse order and uses generation checks to protect replacements. Visibility (what a session may see) remains separate from lifecycle (when a registration is disposed). The process-global slots in `src/capability/mod.rs` remain boot-install diagnostics and are not this runtime registry.
+A capability may also declare orthogonal behavior facets in `CapabilityDescriptor::facets`: `Callable`, `EventSource`, `Subscription`, `ProviderLifecycle`, and `ExternalEffect`. `CapabilityKind` remains a primary classification, while facets describe composable behavior; a future Gateway provider can therefore combine inbound events, outbound calls, lifecycle control, and external effects without masquerading as `Tool` or adding another kind. `Scope::facet` filters discovery, projection, and live change visibility through the same descriptor predicate. Facets are descriptive metadata only: provider instance/generation, owner generation, descriptor revision, leases, effect claims, and durability remain owned by their existing authorities. The current Tool backend declares `Callable` only; Feishu has no descriptor, resolver, or production mount in this change.
+
+能力还可以在 `CapabilityDescriptor::facets` 中声明正交行为 facet：`Callable`、`EventSource`、`Subscription`、`ProviderLifecycle` 与 `ExternalEffect`。`CapabilityKind` 仍是主分类，facet 描述可组合行为；未来 Gateway provider 可以组合入站事件、出站调用、生命周期控制与外部 effect，而不必伪装成 `Tool` 或新增 kind。`Scope::facet` 通过同一个 descriptor predicate 过滤 discovery、projection 与 live change visibility。facet 只是描述性元数据：provider instance/generation、owner generation、descriptor revision、lease、effect claim 与 durability 仍由既有 authority 单独拥有。本次修改中 Tool backend 只声明 `Callable`；Feishu 仍没有 descriptor、resolver 或 production mount。
+
 
 ### B4 plugin authority chain / 插件权限链
 
@@ -149,9 +154,9 @@ B5 历史基线验证：`cargo fmt --all --check` 通过；`cargo check -p aleph
 
 ### B6 Tool/Plugin boot activation / B6 Tool/Plugin 启动激活
 
-B6 connects enabled, eligible tool-only WASM to the real `ExtensionManager::ensure_loaded` path. Discovery remains Cold under `load_guard`; exact owners activate outside that guard; a shared proof checks current owner incarnation, provider `Ready`, row `Loaded`, mount identity, receipt, and effect scope before publishing `cache_state.loaded=true`. `boot_guard` serializes the whole pass, and public `load_all`/`reload` remain discovery-only primitives that are mutually exclusive with boot. Per-plugin failures close admission, leave the provider `Failed`, record the owner/row failure, and allow other owners to settle. Read-side catalog/describe/resolve/`plugins.list`/observer/doctor paths do not activate.
+B6 connects enabled, eligible tool-only WASM to the real `ExtensionManager::ensure_loaded` path. Discovery remains Cold under `load_guard`; exact owners activate outside that guard; a shared proof checks current owner incarnation, provider `Ready`, row `Loaded`, mount identity, receipt, and effect scope before publishing `cache_state.loaded=true`. `boot_guard` serializes the whole pass, and public `load_all`/`reload` remain discovery-only primitives that are mutually exclusive with boot. Per-plugin failures close admission, leave the provider `Failed`, record the owner/row failure, and allow other owners to settle. Read-side catalog/describe/resolve/`plugins.list`/observer/doctor paths do not activate. Stage H makes the distinction explicit: `ensure_discovered()` is declaration-only discovery, while `ensure_loaded()` and explicit enable/reload/control remain activation boundaries. Startup catalog and agent-run paths remain activation boundaries only where they invoke the existing load/activation path; `describe`, `resolve`, `project`, and `ProjectionHost` read-side calls do not start providers.
 
-D-A selects the `ensure_loaded` two-phase entry; D-B is the user-confirmed per-plugin fail-closed policy; D-C lists the remaining legal Cold paths; D-D keeps public load/reload discovery-only. Real WASM tests cover single and concurrent boot ensure effects, while existing B5 lifecycle tests cover publication, revoke, drain/join/dispose, replacement, stale handles, and observer behavior. B6 remains limited to the Tool/Plugin slice; at B6 time channel, terminal, memory, MCP, replay, scheduler, EffectClaim, external exactly-once, and other Capability kinds remained deferred. B7 (below) wires exactly one Gateway provider slice — Feishu — and nothing else. The current validation is recorded in `docs/reference/FEATURE_LOCATOR.md` §3.5f.
+D-A selects the `ensure_loaded` two-phase entry; D-B is the user-confirmed per-plugin fail-closed policy; D-C lists the remaining legal Cold paths; D-D keeps public load/reload discovery-only. Real WASM tests cover single and concurrent boot ensure effects, while existing B5 lifecycle tests cover publication, revoke, drain/join/dispose, replacement, stale handles, and observer behavior. B6 remains limited to the Tool/Plugin slice; the B6 historical scope left channel, terminal, memory, MCP, replay, scheduler, EffectClaim, external exactly-once, and other Capability kinds deferred. The B7 text below is a dated historical record of one Feishu provider slice; it did not wire Feishu into Zahir. Current B8.2 status keeps Feishu → Zahir and the other provider/kind integrations **NO-GO / deferred**. The current validation is recorded in `docs/reference/FEATURE_LOCATOR.md` §3.5f.
 
 B6（Tool/Plugin 启动激活）把 enabled 且 eligible 的 tool-only WASM 接入真实
 `ExtensionManager::ensure_loaded`：discovery 在 `load_guard` 内保持 Cold，exact owner
@@ -160,22 +165,69 @@ B6（Tool/Plugin 启动激活）把 enabled 且 eligible 的 tool-only WASM 接�
 `cache_state.loaded=true`。`boot_guard` 串行化整个 pass；public `load_all`/`reload` 仍是
 与 boot 互斥的 discovery-only 原语。单插件失败会 close admission、使 provider 进入
 `Failed`、记录 owner/row failure，并继续 settle 其他 owner。catalog/describe/resolve/
-`plugins.list`/observer/doctor 等读侧不触发 activation。
+`plugins.list`/observer/doctor 等读侧不触发 activation。Stage H 进一步明确：
+`ensure_discovered()` 只做 declaration-only discovery，而 `ensure_loaded()` 与显式
+enable/reload/control 仍是 activation boundary。startup catalog 与 agent-run 路径只有在
+调用既有 load/activation 路径时才是 activation boundary；`describe` / `resolve` /
+`project` / `ProjectionHost` 的 read-side 调用不会启动 provider。
 
 D-A 选择 `ensure_loaded` 两段式入口；D-B 是用户确认的 per-plugin fail-closed；D-C
 列出仍可见 Cold 的合法路径；D-D 保持 public load/reload discovery-only。真实 WASM 测试
 覆盖单次与并发 boot ensure 的效果，既有 B5 lifecycle 测试覆盖 publication、revoke、
 drain/join/dispose、replacement、stale handle 与 observer。B6 只覆盖 Tool/Plugin slice；
-在 B6 时 channel、terminal、memory、MCP、replay、scheduler、EffectClaim、external exactly-once
-与其他 Capability kinds 均 deferred。B7（见下）只接入 **一条** Gateway provider slice
-——Feishu——别的什么都没接。当前验证见 `docs/reference/FEATURE_LOCATOR.md`
+B6 的历史范围把 channel、terminal、memory、MCP、replay、scheduler、EffectClaim、external exactly-once
+与其他 Capability kinds 留在 deferred。下方 B7 是一条 Feishu provider slice 的带日期历史记录，
+并不表示 Feishu 已接入 Zahir；当前 B8.2 仍将 Feishu → Zahir 与其他 provider/kind 接入标为
+**NO-GO / deferred**。当前验证见 `docs/reference/FEATURE_LOCATOR.md`
 §3.5f。
+
+### Stage H declaration-only plugin reads / Stage H 插件只读声明发现
+
+Stage H keeps the B5/B6 owner and publication authorities while splitting the existing `ExtensionManager` discovery walk into a declaration-only read path. `ensure_discovered()` scans, parses and admits installed extensions, publishes declaration rows, and declares eligible tool-only WASM as `RuntimeOwner(Cold)`; it does not unmount existing owners, clear the owner table, mount deferred providers, read guest bytes, create provider resources, or publish callables. `plugins.list`, plugin-management read actions and Hub installed reconciliation use this path. `ensure_loaded()` and explicit enable/reload/control calls remain the activation boundaries and continue through the existing owner and canonical `ToolHandlerRegistry` path.
+
+The `discovered` bit is a derived cache of completed declaration work. Reload invalidates it; it is not durable enabled state, provider state, a generation map or a second owner authority. Stage H is limited to ExtensionManager-managed tool-only WASM. Channel, PTY, memory, MCP and other provider kinds remain deferred, and this slice makes no claim about RSS, thread, engine/JIT, executable-page or OS-mapping reclamation.
+
+Stage H 在保留 B5/B6 owner 与 publication authority 的前提下，把既有 `ExtensionManager` discovery walk 分成 declaration-only read path。`ensure_discovered()` 扫描、解析并 admission 已安装 extension，发布 declaration row，并将 eligible tool-only WASM 声明为 `RuntimeOwner(Cold)`；它不卸载现有 owner、不清空 owner table、不 mount deferred provider、不读取 guest bytes、不创建 provider resource，也不发布 callable。`plugins.list`、plugin management 的读 action 与 Hub installed reconciliation 使用这条路径；`ensure_loaded()` 与显式 enable/reload/control 仍是 activation boundary，继续走既有 owner 与 canonical `ToolHandlerRegistry` 路径。
+
+`discovered` 只是已完成 declaration work 的派生缓存；reload 会使它失效。它不是 durable enabled state、provider state、generation map 或第二份 owner authority。本 Stage H 只覆盖 ExtensionManager 管理的 tool-only WASM；channel、PTY、memory、MCP 与其他 provider kind 仍 deferred，也不声明 RSS、thread、engine/JIT、executable page 或 OS mapping reclamation。
+
+`Current closure (2026-11-03):` the Stage H declaration read still performs no guest read, provider authentication, or resource creation, but it now publishes metadata-only Cold declarations in the existing canonical Tool registry. An exact permitted canonical Tool call may activate the retained owner through the existing single-flight path; only after Ready publication and identity/generation checks does it re-enter the Ready handler. Read-side `catalog`/`describe`/`resolve`/`project`/ProjectionHost/observer/doctor calls never activate, while transport compatibility remains mounted-only. The dated B5/B6 paragraphs above remain historical evidence where they say that no callable metadata entry is published.
+
+`当前闭合（2026-11-03）：` Stage H 的声明读取仍不读取 guest、不认证 provider、不创建 resource，但现在会在既有 canonical Tool registry 中发布只含 metadata 的 Cold declaration。只有通过权限与 scope 的 exact canonical Tool call 才可能经既有 single-flight 路径激活 retained owner；Ready publication 与 identity/generation 校验完成后，调用才重新进入 Ready handler。`catalog`/`describe`/`resolve`/`project`/ProjectionHost/observer/doctor 等读侧永不激活，transport compatibility 仍保持 mounted-only。上方 B5/B6 日期段落属于历史证据，其中“没有发布 callable metadata entry”的表述不代表当前状态。
+
+### Current bounded Tool ProjectionHost mount / 当前有界 Tool ProjectionHost 挂载（2026-11-03）
+
+The production startup path is now source-backed and effect-verified for the bounded Tool-only slice. `src/bin/aleph-server/commands/start/mod.rs` creates one canonical `ToolHandlerRegistry` and one shared `Arc<OwnershipTree>`, passes them to `ProjectionHost::mount_with_runtime_and_events`, installs the host, awaits `wait_until_ready`, and only then proceeds to diagnostics and later consumers. `src/capability/projection_host.rs` constructs the Memory-backed `ZahirFacade` and subscribes to registry, ownership, and special-capability streams before the initial snapshot, queues that snapshot for the default consumer, and starts the source/applier workers. `src/bin/aleph-server/commands/start/builder/startup_resources.rs` stops Memory before `ProjectionHost::close_and_await`; `src/capability/projection_host.rs` owns the shared cancellation-safe teardown and joins both workers.
+
+The evidence distinguishes static wiring from observable effects. The startup ordering guards passed; real tests observed initial delivery through the default applier followed by fail-closed reads after close, ownership invalidation with unchanged registry revision, Memory Resource discovery with zero fake Tool entries, and lease rejection for custom-principal or foreign-tree authority. Cleanup tests observed Memory/host draining on early errors, preservation of the original startup error, cancellation-safe teardown, both worker joins, and idempotent concurrent close. All 12 named tests selected exactly one test and passed under the required memory gates; the full matrix and command evidence are in [`docs/superpowers/runs/2026-11-03-capability-tool-mount-evidence-run.md`](../superpowers/runs/2026-11-03-capability-tool-mount-evidence-run.md).
+
+This closes only the provider-neutral Tool host and the source-backed Memory Resource composition used by this startup path. `ProjectionHost`/`ZahirFacade` remain derived read/projection/notification surfaces; callable Tool authority remains `ToolHandlerRegistry`, and ownership/provider/generation authorities remain separate. This does not establish universal all-writer Memory stop, native unload, RSS reduction, process isolation, external exactly-once, EffectClaim producer integration, Safe Replay, a universal scheduler, Feishu/channel/Terminal/MCP lazy integration, or mounts for the remaining capability kinds.
+
+当前生产启动路径已经对有界 Tool-only 切片完成源码与效果证据闭合。`src/bin/aleph-server/commands/start/mod.rs` 创建一个 canonical `ToolHandlerRegistry` 与一个共享 `Arc<OwnershipTree>`，将其传入 `ProjectionHost::mount_with_runtime_and_events`，安装 host，等待 `wait_until_ready`，然后才进入 diagnostics 与后续 consumer。`src/capability/projection_host.rs` 构造接入 Memory 的 `ZahirFacade`，在 initial snapshot 前订阅 registry、ownership 与 special-capability stream，把 snapshot 交给 default consumer，再启动 source/applier worker。`src/bin/aleph-server/commands/start/builder/startup_resources.rs` 先停止 Memory，再执行 `ProjectionHost::close_and_await`；`src/capability/projection_host.rs` 持有共享的 cancellation-safe teardown 并 join 两个 worker。
+
+证据明确区分静态接线与可观察效果：启动顺序守卫通过；真实测试观察到 default applier 的 initial delivery、close 后 fail-closed read、registry revision 不变的 ownership invalidation、零 fake Tool entry 的 Memory Resource discovery，以及对 custom-principal/foreign-tree authority 的 lease 拒绝。清理测试观察到 early error 下的 Memory/host 排空、原始 startup error 保留、取消安全 teardown、两个 worker join 与并发 close 幂等。12 个 named test 均实际选中一个测试并通过，且每次 Cargo 前均通过要求的 memory gate；完整矩阵与命令证据见上述 run record。
+
+本段只闭合 provider-neutral Tool host 与该启动路径使用的 source-backed Memory Resource 组合。`ProjectionHost`/`ZahirFacade` 仍是派生 read/projection/notification surface；callable Tool authority 仍是 `ToolHandlerRegistry`，ownership/provider/generation authority 仍各自独立。本段不建立 universal all-writer Memory stop、native unload、RSS reduction、process isolation、external exactly-once、EffectClaim producer、Safe Replay、universal scheduler、Feishu/channel/Terminal/MCP lazy integration，也不表示其余 capability kind 已挂载。
+
+### Current Generic Gateway source-owned capability read/lease slice / 当前 Generic Gateway 源所有 capability read/lease 切片（2026-10-30）
+
+The bounded Generic Gateway implementation now has a source-owned asynchronous read/lease surface over existing `ChannelRegistry` Bound entries. `describe_bound_capabilities`, `list_bound_capabilities`, and `project_bound_capabilities` share one source publication cut. `resolve_bound_capability` captures source evidence, validates provider generation and ownership without holding source locks, then revalidates the source cut before returning `BoundChannelCapture`. This is a derived read model over `ChannelRegistry`, `ProviderHandle`, and `OwnershipTree`; it is not a second registry, descriptor catalog, runtime table, `CapabilityBackend`, or universal `ZahirFacade` mount.
+
+当前有界 Generic Gateway 实现已在既有 `ChannelRegistry` Bound entry 之上提供 source-owned 异步 read/lease surface。`describe_bound_capabilities`、`list_bound_capabilities`、`project_bound_capabilities` 共享一个 source publication cut。`resolve_bound_capability` 捕获 source evidence，在不持有 source lock 的情况下校验 provider generation 与 ownership，再复验 source cut 后返回 `BoundChannelCapture`。这是对 `ChannelRegistry`、`ProviderHandle` 与 `OwnershipTree` 的 derived read model，不是第二 registry、descriptor catalog、runtime table、`CapabilityBackend` 或 universal `ZahirFacade` mount。
+
+Task 1 keeps `source_revision` and descriptor revision independent and serializes all source publication paths with checked exhaustion before the no-await commit section. Task 3 rejects a capture that claims a future source revision. The lower-level `validate_bound_capture` rule preserves a current entry capture across unrelated later publications, while `resolve_bound_capability` deliberately requires its captured source cut to remain unchanged and fails closed if that cut changes. Retirement commit sections validate source/entry identity, retirement marker, active work, and publication revisions; provider generation and ownership binding are validated separately by capability resolution and execution admission. The read surface is proven no-start/no-auth/no-network for cold and disabled declarations: it does not start or authenticate providers/channels, refresh tokens, open listeners, spawn tasks/drivers, or mount webhooks. Provider call admission and ownership binding remain separate use-time fences.
+
+Task 1 保持 `source_revision` 与 descriptor revision 独立，并让所有 source publication path 经过 checked exhaustion 与 no-await commit section。Task 3 拒绝声称 future source revision 的 capture。较低层的 `validate_bound_capture` 保留当前 entry capture 跨越无关后续 publication 的有效性；而 `resolve_bound_capability` 有意要求自身捕获的 source cut 保持不变，发生变化时 fail-closed。Retirement commit section 校验 source/entry identity、retirement marker、active work 与 publication revision；provider generation 与 ownership binding 则由 capability resolve 和 execution admission 分别校验。Cold 与 Disabled declaration 的 read surface 已证明 no-start/no-auth/no-network：不启动或认证 provider/channel、不刷新 token、不打开 listener、不 spawn task/driver、不 mount webhook。Provider call admission 与 ownership binding 仍是独立的 use-time fence。
+
+This closes only the bounded Generic Gateway read/lease contract. It does not close Feishu B8.2-A/B/C/D, production Bound ingress/runtime, Zahir routing, subscriptions, durable/crash recovery, external exactly-once effects, all-channel compatibility, Terminal/Memory/Sandbox migration, EffectClaim production, Safe Replay, universal scheduling, or remaining capability kinds. The current implementation evidence is in `src/gateway/channel_registry/{capability.rs,binding.rs,resource_matrix.rs}`; focused capability/resource/ownership tests and `cargo check -p alephcore --tests` passed. The provider-neutral Tool host remains the only production Zahir/ProjectionHost mount.
+
+本切片只闭合 Generic Gateway 有界 read/lease contract，不闭合 Feishu B8.2-A/B/C/D、production Bound ingress/runtime、Zahir routing、subscription、durable/crash recovery、external exactly-once effects、all-channel compatibility、Terminal/Memory/Sandbox migration、EffectClaim production、Safe Replay、universal scheduling 或其余 capability kind。当前实现证据在 `src/gateway/channel_registry/{capability.rs,binding.rs,resource_matrix.rs}`；定向 capability/resource/ownership tests 与 `cargo check -p alephcore --tests` 已通过。provider-neutral Tool host 仍是唯一 production Zahir/ProjectionHost mount。
 
 ### B8.2 current Feishu lifecycle re-gate / B8.2 当前 Feishu 生命周期复闸（2026-10-25）
 
-The current worktree closes the Feishu **provider lifecycle slice** around Gateway authority; it does not mount Feishu into Zahir. `ChannelRegistry` owns channel instances, desired intent, lifecycle serialization, replacement preflight, and webhook mounts (`src/gateway/channel_registry.rs:187-220,295-433,600-688,1460-1504`). Disabled boot records `Stopped` and is excluded from `start_all`; `create_channel` derives intent from `ChannelConfig.enabled`; restart publishes `Running` only after a complete stop/start/mount refresh.
+The current worktree closes the Feishu **provider lifecycle slice** around Gateway authority; it does not mount Feishu into Zahir. `ChannelRegistry` owns channel instances, desired intent, lifecycle serialization, replacement preflight, and webhook mounts (`src/gateway/channel_registry.rs`). Disabled boot records `Stopped` and is excluded from `start_all`; `create_channel` derives intent from `ChannelConfig.enabled`; restart publishes `Running` only after a complete stop/start/mount refresh.
 
-`FeishuChannel` owns an in-process `ProviderHandle` for state/generation admission, while `api_handle` is a derived, instance/generation-fenced cache (`src/gateway/interfaces/feishu/mod.rs:51-183,334-405`; `src/gateway/interfaces/feishu/api_handle.rs:1-104`). Start commits Ready and derived publication together. Stop revokes first, cleans up refresh/WS/webhook tasks, drains admitted API work, and retains serve/join residuals. `FeishuApi::drain` proves admitted-call and inbound enqueue quiescence; Axum accepted-handler ownership is not independently held, so `HandlersUnjoined` remains a real residual (`src/gateway/interfaces/feishu/feishu_inbound/webhook_server.rs:29-120`).
+`FeishuChannel` owns an in-process `ProviderHandle` for state/generation admission, while `api_handle` is a derived, instance/generation-fenced cache (`src/gateway/interfaces/feishu/mod.rs`; `src/gateway/interfaces/feishu/api_handle.rs`). Start commits Ready and derived publication together. Stop revokes first, cleans up refresh/WS/webhook tasks, drains admitted API work, and retains serve/join residuals. `FeishuApi::drain` proves admitted-call and inbound enqueue quiescence; Axum accepted-handler ownership is not independently held, so `HandlersUnjoined` remains a real residual (`src/gateway/interfaces/feishu/feishu_inbound/webhook_server.rs`).
 
 Source-backed path: boot builder → `ChannelRegistry::register_for_boot` → `start_all` → `start_channel_inner` → `FeishuChannel::start` → runtime → `api_handle::publish` → `ProviderHandle::with_ready_commit`; outbound calls pass `admit_call` → `ProviderHandle::acquire_call` → `FeishuApi::admit`; inbound webhook/WS forwarding uses the same admission boundary. Stop/replacement follows registry serialization → revoke/withdraw → cleanup → API drain → mount removal after successful stop.
 
@@ -205,17 +257,21 @@ B7（2026-10-24，未提交）把已冻结的 provider lifecycle contract 复用
 
 `src/capability/provider.rs` supplies the shared lifecycle contract for an in-process provider and a future Bridge provider. `ProviderLifecycle` is a side-effect-free state machine: `Discovered`, `Cold`, `Disabled`, `Starting`, `Ready`, `Stopping`, `Stopped`, and `Failed`. Every new `Starting` transition increments the provider generation. `ProviderHandle` only publishes committed state and live notifications; it does not start threads, open IPC, load native libraries, or replace `ExtensionManager`.
 
-`ToolHandlerRegistry` owns the shared provider handle for its callable surface. While the provider is not `Ready`, callable snapshots and resolution are empty while the registered state is retained. `BackendLease` records both the ownership generation and provider generation, so a stop or restart makes an old lease fail closed as `StaleProvider`. `ExtensionManager` and `plugin_state.rs` remain the discovery, effect, and durable enabled-state authorities. A future Bridge supervisor may drive the same contract around a sidecar; native Rust dynamic-library unloading is deliberately outside this foundation.
+`ToolHandlerRegistry` owns the shared provider handle for its callable surface. While the provider is not `Ready`, callable snapshots and resolution are empty while the registered state is retained. `BackendLease` records both the ownership generation and provider generation, so a stop or restart makes an old lease fail closed as `StaleProvider`. `ExtensionManager` and `plugin_state.rs` remain the discovery, effect, and durable enabled-state authorities. In the current bounded production slice, `ExtensionManager` / `RuntimeOwner` drive the provider transitions for ExtensionManager-managed tool-only WASM; `ProjectionHost` / `ZahirFacade` remain derived read/projection/notification surfaces and do not own that lifecycle. A future Bridge supervisor may drive the same contract around a sidecar; native Rust dynamic-library unloading is deliberately outside this foundation. This does not imply a general Gateway or all-capability-kind wiring; see the current Stage H and B8.2 sections above.
 
 `src/capability/provider.rs` 为进程内 Provider 与未来 Bridge Provider 提供共享生命周期契约。`ProviderLifecycle` 是无副作用状态机，覆盖 `Discovered`、`Cold`、`Disabled`、`Starting`、`Ready`、`Stopping`、`Stopped`、`Failed`；每次新的 `Starting` 都递增 Provider generation。`ProviderHandle` 只发布已提交状态和 live notification，不启动线程、不建立 IPC、不加载原生动态库，也不替代 `ExtensionManager`。
 
-`ToolHandlerRegistry` 为自己的 callable surface 持有共享 Provider handle。Provider 未处于 `Ready` 时，callable snapshot 和 resolve 为空，但已注册状态保留；`BackendLease` 同时记录 ownership generation 与 provider generation，因此停止或重启会让旧 lease 以 `StaleProvider` fail-closed。发现、效果执行和持久化 enabled 状态仍由 `ExtensionManager` 与 `plugin_state.rs` 负责。未来 Bridge supervisor 可以围绕同一契约驱动 sidecar；原生 Rust 动态库卸载不属于本基础切片。
+`ToolHandlerRegistry` 为自己的 callable surface 持有共享 Provider handle。Provider 未处于 `Ready` 时，callable snapshot 和 resolve 为空，但已注册状态保留；`BackendLease` 同时记录 ownership generation 与 provider generation，因此停止或重启会让旧 lease 以 `StaleProvider` fail-closed。发现、效果执行和持久化 enabled 状态仍由 `ExtensionManager` 与 `plugin_state.rs` 负责。在当前有界生产切片中，`ExtensionManager` / `RuntimeOwner` 驱动 ExtensionManager-managed tool-only WASM 的 provider transition；`ProjectionHost` / `ZahirFacade` 仍是派生的 read/projection/notification surface，不拥有该 lifecycle。未来 Bridge supervisor 可以围绕同一契约驱动 sidecar；原生 Rust 动态库卸载不属于本基础切片。这不表示 Gateway 或所有 capability kind 已统一接线；当前 Stage H 与 B8.2 状态见上文。
+
+Terminal now has a separate bounded source-owned lifecycle in `src/gateway/pty/manager.rs`: the existing `PtyManager` owns sessions, retained owners, bus and one joinable flush driver; one embedded pure `ProviderHandle` fences state/generation/admission. The existing shared `Config::policies.terminal.enabled` controls boot and live apply. Disabled boot does not initialize the manager. Stop revokes admission before checked session cleanup and driver join; failure and cancellation retain source evidence. The central async live-apply executor receives the existing Gateway bus explicitly, allowing cold enable without restart. Disable reports live only after source cleanup and retained driver join; Stopping→enable finishes that stop before starting a new checked generation. Its local five-second async wait budget downgrades timeout/failure to non-live and retains source evidence; missing enable context is also non-live. Identical patches remain no-ops; explicit `config.reload` recovers incomplete application. The latest shared Config is read-locked through application, with no write guard across join. Operations and screen/exit publication and forwarding reject stale generations while preserving `created_by` ownership. This does not mount a Terminal capability backend or change the Tool-only `ZahirFacade`; kill return and driver join do not prove native unload, child/reader-thread/RSS reclamation or process isolation. See [Terminal lifecycle run](../superpowers/runs/2026-10-31-terminal-lifecycle-run.md) and [explicit live-config run](../superpowers/runs/2026-10-31-terminal-live-config-run.md).
+
+Terminal 当前在 `src/gateway/pty/manager.rs` 具有独立的受限 source-owned lifecycle：现有 `PtyManager` 拥有 session、retained owner、bus 与一个可 join 的 flush driver，一个内嵌纯 `ProviderHandle` 负责 state/generation/admission fence。既有 shared `Config::policies.terminal.enabled` 决定 boot 与 live apply；disabled boot 不初始化 manager。Stop 在 checked session cleanup 与 driver join 前撤销 admission，失败与取消保留 source evidence。共享异步 live-apply 显式接收既有 Gateway bus，cold enable 无需重启。Disable 仅在 source cleanup 与 retained driver join 完成后报告 live；Stopping→enable 先完成原 stop，再启动 checked 新 generation。五秒局部异步等待预算对 timeout/失败降级 non-live 并保留 source evidence，enable 缺少显式 context 也不报 live。相同 patch 保持 no-op，未完成应用由 explicit `config.reload` 恢复。最新 shared Config 的 read guard 保持至应用完成，write guard 不跨 join。操作及 screen/exit publication/forwarding 拒绝旧 generation，`created_by` ownership 保持不变。这没有挂载 Terminal capability backend，也不改变 Tool-only `ZahirFacade`；kill 返回与 driver join 不证明 native unload、child/reader-thread/RSS reclamation 或 process isolation。详见上述 run record。
 
 Recovery deliberately does not infer replay safety from a tool name, source, or idempotence flag. `ReplayPolicyLookup` reads the current descriptor. Phase 2A now persists an optional call-time `ToolCallIdentity` on `ToolCallRequested` and carries it through `DanglingCall`; old rows decode to `None`, and unknown nested policy values fail closed. Recovery classifies a call as replay-eligible only when stored and current identities are both `Safe` with equal schema version and a matching nonempty `replay_contract_fingerprint`; `revision` is only a process-local equality/TOCTOU guard, not a cross-restart eligibility criterion. Phase 2A still does not execute eligible tools: it emits the existing unknown-outcome verification event. Safe execution remains a separate Phase 2B decision requiring an executor and external-effect/idempotency contract.
 
 Phase 2B has shipped an inert-restricted replay *preparation* slice (commits `3490103d4` and `7d3bf4a5a` on `feature/capability-phase2-durable`; spec `docs/superpowers/specs/2026-10-04-capability-phase2b-safe-replay-design.md`, plan `docs/superpowers/plans/2026-10-04-capability-phase2b-safe-replay.md`). The shipped surface is: a `replay_contract_fingerprint` carried cross-restart on `ToolCallIdentity`; a private, non-`Copy` `ReplayPermit` produced by a `ReplayPreparer` whose registry-derived handler/descriptor/closed-state are captured from one immutable `ToolHandlerRegistry::snapshot_state()`; the original `call_id`, `tool_name`, `turn_id`, `effective_input`, and stored `ToolCallIdentity` are not registry-derived inputs; a durable expected-head/serialized claim and unanswered-call outcome precondition (`SessionEventStore::claim_replay_call` / `commit_replay_outcome`); and a `ResumeCoordinator::replay_dangling_calls` ordering — prepare/refuse → fresh head/generation fences → claim → invoke → commit → fresh reduction → VerifyOnly. The seam in `src/session/replay.rs` imports no `ToolHandlerRegistry`, `ScopedToolService`, MCP client, or platform API; no second registry, scheduler, ledger, or wire-protocol event is added; the `ReplayInvocation::NoEffect` path that leaked active cursor rows after a successful claim is removed (`7d3bf4a5a`).
 
-Production replay is **inert and VerifyOnly** today. `ToolCallRequested` is emitted before guardrail/sanitization in `src/harness/agent/act.rs:484-509` (serial) and `:821-833` (parallel), so the post-guardrail effective input is not durably captured; `ResumeCoordinator::replay_dangling_calls` keeps `effective_input = None`, and the gate (Option + mandatory `Refused` on `None`) forces every dangling call onto the existing unknown-outcome verification path. **No handler is invoked and no `ToolResult`/`ToolError` is appended in production.** The semantics are restricted at-least-once — original request count, effect invocation count, and durable receipt count are three independent numbers; this is not exactly-once, and the duplicate-effect tradeoff is the Safe registration owner's obligation. Delegated `repair_and_close_abandoned` (team/cron/heartbeat abandonment) remains VerifyOnly with no replay adapter and no permit capability. The post-guardrail durable `ToolCallEffectiveInput` marker, paired with a `release_replay_claim` store operation, is the explicit deferred work that, when landed, will let `effective_input` carry a non-`None` value and unlock actual handler invocation through this seam.
+In the Phase 2B preparation slice, production replay was **inert and VerifyOnly**. Both serial and parallel paths in `src/harness/agent/act.rs` emit `ToolCallRequested` before guardrail/sanitization; at that point the post-guardrail effective input was not yet durably captured; `ResumeCoordinator::replay_dangling_calls` keeps `effective_input = None`, and the gate (Option + mandatory `Refused` on `None`) forces every dangling call onto the existing unknown-outcome verification path. **No handler is invoked and no `ToolResult`/`ToolError` is appended in production.** The semantics are restricted at-least-once — original request count, effect invocation count, and durable receipt count are three independent numbers; this is not exactly-once, and the duplicate-effect tradeoff is the Safe registration owner's obligation. Delegated `repair_and_close_abandoned` (team/cron/heartbeat abandonment) remains VerifyOnly with no replay adapter and no permit capability. The post-guardrail durable `ToolCallEffectiveInput` marker, paired with a `release_replay_claim` store operation, is the explicit deferred work that, when landed, will let `effective_input` carry a non-`None` value and unlock actual handler invocation through this seam.
 
 The two real `ToolCallRequested` producers in `src/harness/agent/act.rs` receive only a read-only lookup through `HarnessDeps`. The startup path passes the existing MCP `ToolHandlerRegistry` explicitly; fixtures and builtin paths without a registry remain `None` and therefore fail closed. This is wiring, not recovery policy: the harness does not decide replay or execute recovery.
 
@@ -371,8 +427,7 @@ pattern.
 | **harness** | `src/harness/` | Think→Act loop, stop-hooks, context budget, compaction |
 | **agents** | `src/agents/` | Agent runtime, subagent spawning, team coordination |
 | **thinker** | `src/thinker/` | LLM interaction, prompt building, streaming |
-| **dispatcher** | `src/dispatcher/` | Task orchestration, tool filtering |
-| **engine** | `src/engine/` | Tool execution engine |
+| **tool_metadata** | `src/tool_metadata/` | Tool metadata and slash-command registry |
 | **providers** | `src/providers/` | AI provider implementations |
 | **tools** | `src/tools/` | AlephTool trait, tool server |
 | **builtin_tools** | `src/builtin_tools/` | Built-in tool implementations |
@@ -388,33 +443,27 @@ pattern.
 | **a2a** | `src/a2a/` | A2A protocol adapter |
 | **acp** | `src/acp/` | ACP protocol implementation |
 | **approval** | `src/approval/` | Approval system |
-| **arena** | `src/arena/` | Arena functionality |
 | **browser** | `src/browser/` | Browser automation |
 | **capability** | `src/capability/` | Capability system |
 | **cluster** | `src/cluster/` | Single-center node federation — reverse RPC, node registry, `node_invoke`/`node_file`, approval routing ([CLUSTER.md](./CLUSTER.md)) |
-| **components** | `src/components/` | Shared components |
-| **compressor** | `src/compressor/` | Context compression |
-| **core** | `src/core/` | Core types and primitives |
+| **context compaction** | `src/context/compact/` | Context compression |
 | **discovery** | `src/discovery/` | Service discovery |
 | **event** | `src/event/` | Event system |
 | **generation** | `src/generation/` | Media generation |
 | **group_chat** | `src/group_chat/` | Group chat management |
 | **hub** | `src/hub/` | Aleph Hub — extension catalog + install pipeline ([ALEPH_HUB.md](./ALEPH_HUB.md)) |
-| **intent** | `src/intent/` | Intent recognition |
 | **logging** | `src/logging/` | Logging infrastructure |
 | **loop_graph** | `src/loop_graph/` | Loop-governance topology (who watches/audits/anchors whom) — scaffolding only, adjudication stays in LLM turns ([GRAPH_LAYER.md](./GRAPH_LAYER.md)) |
 | **markdown** | `src/markdown/` | Markdown processing |
 | **media** | `src/media/` | Media processing |
 | **metrics** | `src/metrics/` | Metrics collection |
-| **permission** | `src/permission/` | Permission system |
 | **pii** | `src/pii/` | PII detection and handling |
-| **prompt** | `src/prompt/` | Prompt management |
+| **prompt builder** | `src/thinker/prompt_builder/` | Prompt assembly |
 | **resilience** | `src/resilience/` | State management (SQLite) |
 | **search** | `src/search/` | Search providers |
 | **secrets** | `src/secrets/` | Secret management |
 | **security** | `src/security/` | Security utilities |
 | **skill** | `src/skill/` | Skill system |
-| **supervisor** | `src/supervisor/` | Execution supervision |
 | **tasks** | `src/tasks/` | Task management |
 | **teams** | `src/teams/` | Team coordination |
 | **tool_output** | `src/tool_output/` | Tool output handling |
@@ -434,9 +483,8 @@ Agent execution's authoritative session state lives in
 persists each event synchronously to the `session_events` table.
 `AgentHarness` reads and writes history exclusively through
 `SessionService`. Gateway `session.*` RPC methods continue to use the
-legacy `SessionManager`. **There is no dual-write shim.** This paragraph
-used to name `src/session/shim.rs`: that file does not exist, and the
-mirroring it described was removed when `session_events` became the SSOT.
+legacy `SessionManager`. **There is no dual-write shim.** Mirroring was removed
+when `session_events` became the SSOT.
 `MessageProjector` (`src/gateway/session_projector.rs`) materialises
 `messages` from `session_events` asynchronously, and since 2026-09-13 it is
 the table's **only production writer**, pinned to the tree by
@@ -581,7 +629,7 @@ ProtocolRegistry.get(name)
 5. Registry updated atomically
 6. New requests use updated protocol
 
-See `docs/PROTOCOL_ADAPTER_USER_GUIDE.md` for user documentation.
+See `src/providers/protocols/definition.rs` for the YAML schema.
 
 ---
 
@@ -601,6 +649,23 @@ test-helpers = []          # 集成测试工具
 ---
 
 ## Platform Architecture
+
+### Desktop Hosts (dual-track)
+
+The Panel is one codebase (`interfaces/webchat` → `aleph-panel`, Leptos/WASM) served by
+`aleph-server` itself on `http://127.0.0.1:18790`. The desktop host is only the WebView
+around it, and the host is mid-migration:
+
+| Host | Location | State (2026-11) |
+|---|---|---|
+| Legacy Tauri host | `desktop/shell` (`aleph-desktop-shell`) | **Still the released build** — the release workflow and `just shell-build` target it; carries the updater, `aleph://` deeplink, macOS menu and service management |
+| NSH host | `desktop/nsh-shell` (`aleph-nsh-shell`) | **Forward form** — window, tray, global shortcut, notification permission and the typed Panel bridge; no updater, deeplink, macOS menu or service control yet, and no release pipeline or build `just` target (only the development entry `just shell-tsx-dev`) |
+
+The host↔Panel contract is typed, not ad-hoc: `shared/protocol/src/panel_shell.rs`
+(the host sends `ShellRequest` and receives `PanelReply`; credential and autostart payloads ride inside them), implemented host-side in
+`desktop/nsh-shell/src/panel_bridge.rs` and consumed Panel-side in
+`interfaces/webchat/src/app/shell_bridge.rs`. The switch is gated by the Phase 11 plan
+([docs/superpowers/plans/2026-11-21-phase11-nsh-cutover.md](../superpowers/plans/2026-11-21-phase11-nsh-cutover.md)).
 
 ### Desktop Bridge
 
@@ -663,6 +728,8 @@ Gateway owns CDP; Panel/TUI are I/O only; opt-in only for an explicit valid `[ga
 ---
 
 ## Identity Context Flow
+
+The guest invitation flow below is historical; see [SECURITY.md](SECURITY.md) for what was removed.
 
 ### Overview
 
@@ -858,12 +925,12 @@ let result2 = executor.execute(&action2, &identity).await;
 |-----------|----------|----------------|
 | **IdentityContext** | `shared/protocol/src/auth.rs` | Immutable identity snapshot |
 | **SessionIdentityMeta** | `src/gateway/session_manager/` | Persistent identity metadata |
-| **PolicyEngine** | `src/gateway/security/policy_engine.rs` | Stateless permission checker |
-| **InvitationManager** | `src/gateway/security/invitation_manager.rs` | Guest invitation lifecycle |
+| **Legacy PolicyEngine** | Removed | Stateless permission checker |
+| **InvitationManager** | Removed | Guest invitation lifecycle |
 | **SessionManager** | `src/gateway/session_manager/` | Identity construction |
 | **Orchestrator** | `src/orchestrator/` | Identity injection into FlowRequest |
 | **AgentHarness** | `src/harness/` | Identity propagation through Think→Act loop |
-| **Engine** | `src/engine/` | Permission enforcement |
+| **Legacy Engine** | Removed | Permission enforcement in the former flow |
 
 ### Security Properties
 
@@ -1033,7 +1100,17 @@ FEATURE_LOCATOR §1.2 for the distinction.
 
 ---
 
-## See Also
+
+
+## Gateway source-owned lifecycle boundary / Gateway source-owned 生命周期边界
+
+For the verified Stage B Generic Webhook/loopback composition, Gateway association remains in the existing `ChannelRegistry` map and entry. Entry-local runtime state records only retirement markers, admitted work, task/forwarder handles, and cleanup residuals. Provider instance/state/generation stays in `ProviderHandle`; owner/lifetime/generation and irreversible binding state stays in `OwnershipTree`. As of 2026-10-30, the bounded source-owned read/lease surface in `src/gateway/channel_registry/capability.rs` derives `describe_bound_capabilities`, `list_bound_capabilities`, `project_bound_capabilities`, and `resolve_bound_capability` from those same authorities. It is an asynchronous source read model, not a production mount or a claim that all externally composable capabilities have already migrated.
+
+对已验证的 Stage B Generic Webhook/loopback 组合，Gateway association 仍由既有 `ChannelRegistry` map 与 entry 持有。entry-local runtime state 只记录 retirement marker、admitted work、task/forwarder handle 与 cleanup residual。provider instance/state/generation 仍由 `ProviderHandle` 持有；owner/lifetime/generation 与不可逆 binding state 仍由 `OwnershipTree` 持有。2026-10-30 起，`src/gateway/channel_registry/capability.rs` 中的有界 source-owned read/lease surface 从这些相同 authority 派生 `describe_bound_capabilities`、`list_bound_capabilities`、`project_bound_capabilities` 与 `resolve_bound_capability`。它是异步 source read model，不是 production mount，也不表示所有 externally composable capability 已迁移。
+
+Retirement uses a short source-gate fence and final publication commit; real channel, transport, stop, close, forwarder, and join I/O stays outside the gate. Revision exhaustion fails closed before destructive retirement or final publication. R1 remains NO-GO/deferred pending the broader resource and compatibility evidence.
+
+retirement 使用短 source-gate fence 与最终 publication commit；真实 channel、transport、stop、close、forwarder 和 join I/O 均在 gate 外执行。revision exhaustion 在 destructive retirement 或最终 publication 前 fail-closed。R1 仍为 NO-GO/deferred，等待更广泛的 resource 与 compatibility 证据。
 
 - [Agent System](AGENT_SYSTEM.md) - Agent loop internals
 - [Gateway](GATEWAY.md) - WebSocket protocol and RPC methods
@@ -1043,6 +1120,6 @@ FEATURE_LOCATOR §1.2 for the distinction.
 - [Extension System](EXTENSION_SYSTEM.md) - Plugin architecture
 - [Security](SECURITY.md) - Exec approval and permissions
 - [Sandbox](SANDBOX.md) - `Sandbox` trait, `WorkspaceSandbox`, capability pipeline
-- [Skill Sandboxing](SKILL_SANDBOXING.md) - OS-native sandboxing for evolved skills
+- [Skill Sandboxing] (historical reference unavailable in the current tree) - OS-native sandboxing for evolved skills
 - [Skill Model Taxonomy](SKILL_MODEL_TAXONOMY.md) - Four-layer skill type map (Phase 1 of unification 2026-05-20)
 - [Markdown Skill Authoring](MARKDOWN_SKILL_AUTHORING.md) - SKILL.md frontmatter + sandbox modes + host-mode contract

@@ -10,7 +10,7 @@ mod tests {
     use super::*;
     use crate::gateway::channel::{
         Channel, ChannelCapabilities, ChannelInfo, ChannelResult, ChannelState, ChannelStatus,
-        MessageId, OutboundMessage, SendResult, StreamProtocol,
+        MessageId, OutboundMessage, SendOperation, SendResult, StreamProtocol,
     };
     use crate::gateway::media::PendingMedia;
 
@@ -37,12 +37,28 @@ mod tests {
         async fn stop(&mut self) -> ChannelResult<()> {
             Ok(())
         }
-        async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-            self.sent.lock().await.push(message);
-            Ok(SendResult {
-                message_id: MessageId::new("ok"),
-                timestamp: chrono::Utc::now(),
+        fn send(&self, message: OutboundMessage) -> SendOperation {
+            let sent = Arc::clone(&self.sent);
+            Box::pin(async move {
+                sent.lock().await.push(message);
+                Ok(SendResult {
+                    message_id: MessageId::new("ok"),
+                    timestamp: chrono::Utc::now(),
+                })
             })
+        }
+        async fn edit(
+            &self,
+            conversation_id: &ConversationId,
+            message_id: &MessageId,
+            text: &str,
+        ) -> ChannelResult<()> {
+            assert_eq!(message_id, &MessageId::new("ok"));
+            self.sent
+                .lock()
+                .await
+                .push(OutboundMessage::text(conversation_id.as_str(), text));
+            Ok(())
         }
     }
 
@@ -73,6 +89,168 @@ mod tests {
             pending,
         );
         (emitter, sent)
+    }
+
+    #[tokio::test]
+    async fn unspeakable_voice_replies_send_text_without_changing_failure_state() {
+        use crate::gateway::voice::VoiceState;
+        let (emitter, sent) =
+            emitter_over_recorder("gx6-voice-skip", PendingMedia::default()).await;
+        let state = VoiceState {
+            enabled: true,
+            consecutive_failures: 2,
+            ..Default::default()
+        };
+        emitter
+            .channel_registry
+            .set_voice_state("rec", state.clone())
+            .await;
+        let emitter = emitter.with_voice(
+            state,
+            Arc::new(crate::generation::GenerationProviderRegistry::new()),
+            Arc::new(tokio::sync::RwLock::new(Default::default())),
+        );
+        let text = "```rust\nlet x = 1;\n```";
+        for _ in 0..3 {
+            emitter.send_as_voice(text).await;
+        }
+        let state = emitter.channel_registry.get_voice_state("rec").await;
+        assert!(state.enabled);
+        assert_eq!(
+            state.consecutive_failures, 2,
+            "skips neither reset nor increment strikes"
+        );
+        let messages = sent.lock().await;
+        assert_eq!(messages.len(), 3);
+        assert!(messages
+            .iter()
+            .all(|message| message.text.contains(text) && message.attachments.is_empty()));
+        drop(messages);
+        // A speakable reply with no configured provider remains a real failure.
+        emitter.send_as_voice("hello").await;
+        assert!(
+            !emitter
+                .channel_registry
+                .get_voice_state("rec")
+                .await
+                .enabled
+        );
+    }
+
+    async fn response_chunk(emitter: &ReplyEmitter, delta: &str, intermediate: bool) {
+        emitter
+            .emit(crate::gateway::event_emitter::StreamEvent::ResponseChunk {
+                run_id: "run".into(),
+                seq: 0,
+                delta: delta.into(),
+                full_text: delta.into(),
+                chunk_index: 0,
+                is_final: false,
+                is_intermediate: intermediate,
+            })
+            .await
+            .unwrap();
+    }
+
+    async fn complete_run(
+        emitter: &ReplyEmitter,
+        summary: crate::gateway::event_emitter::RunSummary,
+    ) {
+        emitter
+            .emit(crate::gateway::event_emitter::StreamEvent::RunComplete {
+                run_id: "run".into(),
+                seq: 1,
+                summary,
+                total_duration_ms: 0,
+            })
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn terminal_notice_reaches_the_stream_tail_without_repeating_overflow() {
+        for threshold in [1, 100] {
+            let (mut emitter, sent) = emitter_over_recorder("run", PendingMedia::default()).await;
+            emitter.config.stream_enabled = true;
+            emitter.config.locale = crate::gateway::i18n::Locale::En;
+            emitter.config.max_message_length = if threshold == 1 { 320 } else { 0 };
+            *emitter.streaming.lock().await = crate::gateway::streaming::StreamingController::new(
+                crate::gateway::streaming::StreamingConfig {
+                    enabled: true,
+                    min_initial_chars: threshold,
+                    debounce_interval: std::time::Duration::ZERO,
+                },
+            );
+            response_chunk(&emitter, "abcdefghijklmnopqrst", false).await;
+            response_chunk(&emitter, "uvwxyz", false).await;
+            complete_run(
+                &emitter,
+                crate::gateway::event_emitter::RunSummary {
+                    terminate_reason: Some("failed".into()),
+                    ..Default::default()
+                },
+            )
+            .await;
+            let messages = sent.lock().await;
+            let last = &messages.last().unwrap().text;
+            assert!(last.contains("failed"), "{last:?}");
+            assert!(!last.contains('▍'));
+            if threshold == 1 {
+                assert!(last.starts_with("uvwxyz"), "{last:?}");
+                assert!(!last.contains("abcdefghijklmnopqrst"));
+            } else {
+                assert!(last.starts_with("abcdefghijklmnopqrstuvwxyz"), "{last:?}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn instant_summary_body_is_selected_before_terminal_notice() {
+        for body in ["", "chunked answer"] {
+            let (emitter, sent) = emitter_over_recorder("run", PendingMedia::default()).await;
+            response_chunk(&emitter, body, false).await;
+            complete_run(
+                &emitter,
+                crate::gateway::event_emitter::RunSummary {
+                    final_response: Some("the answer".into()),
+                    terminate_reason: Some("failed".into()),
+                    ..Default::default()
+                },
+            )
+            .await;
+            let messages = sent.lock().await;
+            assert_eq!(messages.len(), 1);
+            let expected = if body.is_empty() { "the answer" } else { body };
+            assert!(messages[0].text.starts_with(&format!("{expected}\n\n")));
+            if !body.is_empty() {
+                assert!(!messages[0].text.contains("the answer"));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn unchanged_stream_is_settled_at_final_and_iteration_boundary() {
+        for intermediate in [false, true] {
+            let (mut emitter, sent) = emitter_over_recorder("run", PendingMedia::default()).await;
+            emitter.config.stream_enabled = true;
+            *emitter.streaming.lock().await = crate::gateway::streaming::StreamingController::new(
+                crate::gateway::streaming::StreamingConfig {
+                    enabled: true,
+                    min_initial_chars: 1,
+                    ..Default::default()
+                },
+            );
+            response_chunk(&emitter, "answer", false).await;
+            if intermediate {
+                response_chunk(&emitter, "", true).await;
+            } else {
+                complete_run(&emitter, Default::default()).await;
+            }
+            let messages = sent.lock().await;
+            assert_eq!(messages.len(), 2, "one send and one settling edit");
+            assert!(messages[0].text.contains('▍'));
+            assert_eq!(messages[1].text, "answer");
+        }
     }
 
     /// One buffer entry, already resolved — which is what the delivery buffer
@@ -536,8 +714,8 @@ mod outbound_chunking_tests {
     use super::*;
     use crate::gateway::channel::{
         Channel, ChannelCapabilities, ChannelError, ChannelInfo, ChannelResult, ChannelState,
-        ChannelStatus, MessageId, OutboundDeliveryPolicy, OutboundMessage, SendResult,
-        StreamProtocol,
+        ChannelStatus, MessageId, OutboundDeliveryPolicy, OutboundMessage, SendOperation,
+        SendResult, StreamProtocol,
     };
     use crate::gateway::delivery_queue::{DeliveryQueueConfig, DeliveryStore};
     use crate::gateway::media::PendingMedia;
@@ -573,15 +751,20 @@ mod outbound_chunking_tests {
         async fn stop(&mut self) -> ChannelResult<()> {
             Ok(())
         }
-        async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
+        fn send(&self, message: OutboundMessage) -> SendOperation {
             let n = self.attempts.fetch_add(1, Ordering::SeqCst);
-            self.seen.lock().await.push(message.text.clone());
-            if n + 1 >= self.fail_from {
-                return Err((self.err_from)("stub".to_string()));
-            }
-            Ok(SendResult {
-                message_id: MessageId::new("ok"),
-                timestamp: chrono::Utc::now(),
+            let seen = Arc::clone(&self.seen);
+            let fail_from = self.fail_from;
+            let err_from = self.err_from;
+            Box::pin(async move {
+                seen.lock().await.push(message.text.clone());
+                if n + 1 >= fail_from {
+                    return Err((err_from)("stub".to_string()));
+                }
+                Ok(SendResult {
+                    message_id: MessageId::new("ok"),
+                    timestamp: chrono::Utc::now(),
+                })
             })
         }
     }
@@ -853,6 +1036,14 @@ mod outbound_chunking_tests {
                 assert!(queued[0].message.text.starts_with('a'));
                 assert!(queued[1].message.text.starts_with('b'));
                 assert!(queued[2].message.text.starts_with('c'));
+                assert!(queued.iter().all(|record| record.attempts == 0));
+                assert_eq!(
+                    store
+                        .reconcile_inflight(crate::gateway::delivery_queue::now_secs())
+                        .unwrap(),
+                    0,
+                    "reported 429 refusals must not leave unknown-outcome stamps"
+                );
             }
         }
     }
@@ -905,7 +1096,7 @@ mod media_cleanup_tests {
     use super::*;
     use crate::gateway::channel::{
         Attachment, Channel, ChannelError, ChannelInfo, ChannelResult, ChannelState, ChannelStatus,
-        MessageId, OutboundDeliveryPolicy, OutboundMessage, SendResult,
+        MessageId, OutboundDeliveryPolicy, OutboundMessage, SendOperation, SendResult,
     };
     use crate::media::cache::MediaCache;
 
@@ -934,14 +1125,18 @@ mod media_cleanup_tests {
         async fn stop(&mut self) -> ChannelResult<()> {
             Ok(())
         }
-        async fn send(&self, _message: OutboundMessage) -> ChannelResult<SendResult> {
-            if self.ok {
-                return Ok(SendResult {
-                    message_id: MessageId::new("ok"),
-                    timestamp: chrono::Utc::now(),
-                });
-            }
-            Err((self.err)("stub".to_string()))
+        fn send(&self, _message: OutboundMessage) -> SendOperation {
+            let ok = self.ok;
+            let err = self.err;
+            Box::pin(async move {
+                if ok {
+                    return Ok(SendResult {
+                        message_id: MessageId::new("ok"),
+                        timestamp: chrono::Utc::now(),
+                    });
+                }
+                Err((err)("stub".to_string()))
+            })
         }
     }
 

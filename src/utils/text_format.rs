@@ -45,7 +45,10 @@ pub use aleph_slot_api::text::truncate_text;
 pub fn truncate_with_marker(text: &str, max_chars: usize, marker: &str) -> String {
     match text.char_indices().nth(max_chars) {
         None => text.to_string(),
-        Some((idx, _)) => format!("{}{marker}", &text[..idx]),
+        Some((idx, _)) => {
+            let prefix = text.get(..idx).unwrap_or(text);
+            format!("{prefix}{marker}")
+        }
     }
 }
 
@@ -59,7 +62,7 @@ pub fn truncate_with_marker(text: &str, max_chars: usize, marker: &str) -> Strin
 pub fn truncate_chars(text: &str, max_chars: usize) -> &str {
     match text.char_indices().nth(max_chars) {
         None => text,
-        Some((idx, _)) => &text[..idx],
+        Some((idx, _)) => text.get(..idx).unwrap_or(text),
     }
 }
 
@@ -98,7 +101,7 @@ pub fn truncate_bytes(text: &str, max_bytes: usize) -> &str {
     while end > 0 && !text.is_char_boundary(end) {
         end -= 1;
     }
-    &text[..end]
+    text.get(..end).unwrap_or("")
 }
 
 #[cfg(test)]

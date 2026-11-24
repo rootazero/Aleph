@@ -8,8 +8,9 @@
 //! # Protocol
 //!
 //! - **NIP-01**: Basic protocol flow. Events, subscriptions, relay messages.
-//! - **NIP-04**: Encrypted direct messages (kind 4). Currently plaintext only;
-//!   encryption is documented as a future enhancement.
+//! - **NIP-04**: Encrypted direct messages (kind 4) are *not* supported: the
+//!   channel has no AES-256-CBC layer, so kind 4 is not subscribed to and any
+//!   kind-4 event a relay pushes is dropped as ciphertext.
 //! - **Schnorr signatures (BIP-340)**: Events signed with secp256k1 Schnorr.
 //!
 //! # Usage
@@ -24,7 +25,7 @@
 //! private_key = "hex-encoded-32-byte-private-key"
 //! relays = ["wss://relay.damus.io", "wss://nos.lol"]
 //! allowed_pubkeys = []
-//! subscription_kinds = [1, 4]
+//! subscription_kinds = [1]
 //! ```
 
 pub mod config;
@@ -36,7 +37,7 @@ pub use message_ops::{NostrEvent, NostrMessageOps};
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
     ChannelResult, ChannelState, ChannelStatus, ConversationId, MessageId, OutboundMessage,
-    SendResult,
+    SendOperation, SendResult,
 };
 use async_trait::async_trait;
 use tokio::sync::{mpsc, watch};
@@ -49,8 +50,8 @@ pub struct NostrChannel {
     config: NostrConfig,
     /// Shared mutable state (status + inbound channel)
     channel_state: ChannelState,
-    /// Outbound write command sender (sends raw JSON to relay)
-    write_tx: Option<mpsc::Sender<String>>,
+    /// Outbound publish attempts with relay acceptance results.
+    write_tx: Option<mpsc::Sender<message_ops::PublishCommand>>,
     /// Shutdown signal sender
     shutdown_tx: Option<watch::Sender<bool>>,
     /// Our own public key (derived from private key)
@@ -93,6 +94,33 @@ impl NostrChannel {
         Self::with_mode(id, config, true)
     }
 
+    async fn publish_event(
+        write_tx: &mpsc::Sender<message_ops::PublishCommand>,
+        event: &NostrEvent,
+    ) -> ChannelResult<()> {
+        // Includes queue admission: an offline relay must not leave sends waiting forever.
+        tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            let (result, completion) = tokio::sync::oneshot::channel();
+            write_tx
+                .send(message_ops::PublishCommand {
+                    event_id: event.id.clone(),
+                    raw: message_ops::build_event_message(event),
+                    result,
+                })
+                .await
+                .map_err(|_| ChannelError::SendFailed("Nostr write channel closed".into()))?;
+            completion.await.map_err(|_| {
+                ChannelError::SendFailed("Nostr publish interrupted; delivery unknown".into())
+            })?
+        })
+        .await
+        .map_err(|_| {
+            ChannelError::SendFailed(
+                "Nostr relay acknowledgement timed out; delivery unknown".into(),
+            )
+        })?
+    }
+
     /// Get Nostr-specific capabilities
     fn capabilities() -> ChannelCapabilities {
         ChannelCapabilities {
@@ -101,7 +129,9 @@ impl NostrChannel {
             audio: false,
             video: false,
             reactions: true, // NIP-25: reactions (kind 7)
-            replies: true,   // Via "e" tags
+            // Inbound notes carry `["e", ...]` tags and are surfaced as
+            // `reply_to`, but outbound notes are never threaded.
+            replies: false,
             editing: false,  // Nostr events are immutable
             deletion: false, // NIP-09 exists but relays may ignore
             typing_indicator: false,
@@ -212,65 +242,57 @@ impl Channel for NostrChannel {
             .await;
         Ok(())
     }
+    fn send(&self, message: OutboundMessage) -> SendOperation {
+        let write_tx = self.write_tx.clone();
+        let test_mode = self.test_mode;
+        let own_pubkey = self.own_pubkey.clone();
+        let private_key = self.config.private_key.clone();
+        Box::pin(async move {
+            if test_mode {
+                // Matches the production path: direct messages are refused, so
+                // every event this channel builds is a public text note.
+                let mut event = message_ops::build_text_note(&message.text, &own_pubkey);
 
-    async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-        if self.test_mode {
-            let _recipient_pubkey = if message.conversation_id.as_str() != "public" {
-                Some(message.conversation_id.as_str().to_string())
-            } else {
-                None
-            };
+                message_ops::sign_event(&mut event, &private_key)
+                    .map_err(|e| ChannelError::SendFailed(format!("failed to sign event: {e}")))?;
 
-            let mut event = if let Some(ref recipient) = _recipient_pubkey {
-                message_ops::build_dm(&message.text, &self.own_pubkey, recipient)
-            } else {
-                message_ops::build_text_note(&message.text, &self.own_pubkey)
-            };
+                return Ok(SendResult {
+                    message_id: MessageId::new(event.id),
+                    timestamp: chrono::Utc::now(),
+                });
+            }
 
-            message_ops::sign_event(&mut event, &self.config.private_key)
+            let write_tx = write_tx.as_ref().ok_or_else(|| {
+                ChannelError::NotConnected("Nostr channel not started".to_string())
+            })?;
+
+            // A Nostr direct message is private only when it is ENCRYPTED
+            // (NIP-04). This channel has no encryption layer, so publishing a
+            // kind-4 event would hand the plaintext to every relay that
+            // indexes it. Refuse the send instead of leaking it.
+            if message.conversation_id.as_str() != "public" {
+                return Err(ChannelError::UnsupportedFeature(
+                    "Nostr direct messages are not supported: the channel has no NIP-04 \
+                     encryption, so a DM would be readable by every relay that indexes it"
+                        .to_string(),
+                ));
+            }
+
+            // Build the event
+            let mut event = message_ops::build_text_note(&message.text, &own_pubkey);
+
+            // Sign the event
+            message_ops::sign_event(&mut event, &private_key)
                 .map_err(|e| ChannelError::SendFailed(format!("failed to sign event: {e}")))?;
 
-            return Ok(SendResult {
-                message_id: MessageId::new(event.id),
+            let event_id = event.id.clone();
+
+            Self::publish_event(write_tx, &event).await?;
+
+            Ok(SendResult {
+                message_id: MessageId::new(event_id),
                 timestamp: chrono::Utc::now(),
-            });
-        }
-
-        let write_tx = self
-            .write_tx
-            .as_ref()
-            .ok_or_else(|| ChannelError::NotConnected("Nostr channel not started".to_string()))?;
-
-        // Determine if this is a DM or public note based on conversation_id
-        let recipient_pubkey = if message.conversation_id.as_str() != "public" {
-            Some(message.conversation_id.as_str().to_string())
-        } else {
-            None
-        };
-
-        // Build the event
-        let mut event = if let Some(ref recipient) = recipient_pubkey {
-            message_ops::build_dm(&message.text, &self.own_pubkey, recipient)
-        } else {
-            message_ops::build_text_note(&message.text, &self.own_pubkey)
-        };
-
-        // Sign the event
-        message_ops::sign_event(&mut event, &self.config.private_key)
-            .map_err(|e| ChannelError::SendFailed(format!("failed to sign event: {e}")))?;
-
-        let event_id = event.id.clone();
-
-        // Build and send the EVENT message
-        let event_msg = message_ops::build_event_message(&event);
-        write_tx
-            .send(event_msg)
-            .await
-            .map_err(|e| ChannelError::SendFailed(format!("write channel closed: {e}")))?;
-
-        Ok(SendResult {
-            message_id: MessageId::new(event_id),
-            timestamp: chrono::Utc::now(),
+            })
         })
     }
 
@@ -299,13 +321,7 @@ impl Channel for NostrChannel {
         message_ops::sign_event(&mut event, &self.config.private_key)
             .map_err(|e| ChannelError::SendFailed(format!("failed to sign reaction: {e}")))?;
 
-        let event_msg = message_ops::build_event_message(&event);
-        write_tx
-            .send(event_msg)
-            .await
-            .map_err(|e| ChannelError::SendFailed(format!("write channel closed: {e}")))?;
-
-        Ok(())
+        Self::publish_event(write_tx, &event).await
     }
 }
 
@@ -319,12 +335,20 @@ impl ChannelFactory for NostrChannelFactory {
     }
 
     async fn create(&self, config: serde_json::Value) -> ChannelResult<Box<dyn Channel>> {
+        self.create_with_id("nostr", config).await
+    }
+
+    async fn create_with_id(
+        &self,
+        id: &str,
+        config: serde_json::Value,
+    ) -> ChannelResult<Box<dyn Channel>> {
         let config: NostrConfig = serde_json::from_value(config)
             .map_err(|e| ChannelError::ConfigError(format!("Invalid Nostr config: {e}")))?;
 
         config.validate().map_err(ChannelError::ConfigError)?;
 
-        Ok(Box::new(NostrChannel::new("nostr", config)))
+        Ok(Box::new(NostrChannel::new(id, config)))
     }
 }
 
@@ -343,7 +367,7 @@ mod tests {
         assert!(!caps.audio);
         assert!(!caps.video);
         assert!(caps.reactions);
-        assert!(caps.replies);
+        assert!(!caps.replies);
         assert!(!caps.editing);
         assert!(!caps.deletion);
         assert!(!caps.typing_indicator);

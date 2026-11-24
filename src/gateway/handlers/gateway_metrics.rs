@@ -386,7 +386,6 @@ mod tests {
             )),
             Arc::new(EmptyToolRegistry),
             Vec::new(),
-            None,
         );
         let execution_adapter: Arc<dyn ExecutionAdapter> = Arc::new(engine);
         Arc::new(AgentRunManager::new(

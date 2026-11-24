@@ -1,0 +1,55 @@
+{
+  "kind": "canonically_built_default_restored_after_qa",
+  "recursive_files": [
+    {
+      "path": "interfaces/webchat/dist/aleph_panel.js",
+      "bytes": 120139,
+      "sha256": "70984b761985f0cbe437bacc5fb88d3566b478b83b998ad126b6e208080e73ac"
+    },
+    {
+      "path": "interfaces/webchat/dist/aleph_panel.js.br",
+      "bytes": 14425,
+      "sha256": "7f800919668228b97e381432264ca4d36bf8d5cd1789b28caaeaca39b42fba4a"
+    },
+    {
+      "path": "interfaces/webchat/dist/aleph_panel_bg.wasm",
+      "bytes": 70929245,
+      "sha256": "9f708c647e481cb1e1a53947ec8a6c0694895d6f10f9409ba46732e8db367cb8"
+    },
+    {
+      "path": "interfaces/webchat/dist/aleph_panel_bg.wasm.br",
+      "bytes": 3760907,
+      "sha256": "4bd5916127710de390c7811cd1fd748dc686da54850dda0e653a29ef1b22d9ad"
+    },
+    {
+      "path": "interfaces/webchat/dist/index.html",
+      "bytes": 7425,
+      "sha256": "01ba38ba50b53babbd3a48d42cf51d47f9102b729deb36c64e2a7be60c6b8d43"
+    },
+    {
+      "path": "interfaces/webchat/dist/index.html.br",
+      "bytes": 2575,
+      "sha256": "592703426e6d493d424eb6b99b985a2af12af3d457a03ee6d9e8ab32ab299059"
+    },
+    {
+      "path": "interfaces/webchat/dist/snippets/aleph-panel-4f6e070d4bce8856/inline0.js",
+      "bytes": 5109,
+      "sha256": "6b729d2c4a33ef2283b46dacdda18ce896352c10df3f4ad650cad0b993a30967"
+    },
+    {
+      "path": "interfaces/webchat/dist/tailwind.css",
+      "bytes": 146900,
+      "sha256": "3ede8d53cbb11d0707f68c53653103749ca33026a82e497b389db328e4cde9e7"
+    },
+    {
+      "path": "interfaces/webchat/dist/tailwind.css.br",
+      "bytes": 19565,
+      "sha256": "0f5ed19f316a4ed7ef0ef5c5a9b1d31a862fbd02ad23a5a0ddfa20a2d69af972"
+    }
+  ],
+  "qa_seams_absent": [
+    "__alephPanelQaIngress",
+    "__alephPanelQaOnReconnecting",
+    "__alephPanelQaHistoryApplied"
+  ]
+}

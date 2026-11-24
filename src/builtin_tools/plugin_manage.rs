@@ -210,8 +210,20 @@ impl PluginManageTool {
         manager: &crate::extension::ExtensionManager,
         args: PluginManageArgs,
     ) -> Result<PluginManageOutput> {
-        if let Err(e) = manager.ensure_loaded().await {
-            tracing::warn!(error = %e, "plugin_manage: failed to load extensions");
+        if matches!(
+            &args.action,
+            PluginAction::List
+                | PluginAction::Show
+                | PluginAction::ContextStatus
+                | PluginAction::Enable
+                | PluginAction::Disable
+                | PluginAction::Reload
+                | PluginAction::ConfigGet
+                | PluginAction::TrustStatus
+        ) {
+            if let Err(e) = manager.ensure_discovered().await {
+                tracing::warn!(error = %e, "plugin_manage: failed to discover extensions");
+            }
         }
 
         match args.action {
@@ -267,7 +279,14 @@ impl PluginManageTool {
                     .collect();
                 Ok(PluginManageOutput {
                     summary: format!("{} mounted context capability declaration(s)", states.len()),
-                    data: serde_json::json!({"capabilities": states, "stats": registry.context_stats()}),
+                    data: serde_json::json!({
+                        "capabilities": states,
+                        "stats": registry.context_stats(),
+                        // The grant decisions themselves (allowed and refused),
+                        // not just their counts: the ring is bounded, so this is
+                        // the retained tail, not the full history.
+                        "audit": registry.context_audit(),
+                    }),
                 })
             }
             PluginAction::Enable | PluginAction::Disable => {

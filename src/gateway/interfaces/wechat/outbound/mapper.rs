@@ -2,8 +2,6 @@
 //!
 //! Maps `OutboundMessage` to iLink format.
 
-use crate::gateway::channel::OutboundMessage;
-
 use crate::gateway::interfaces::wechat::types::{
     OutboundItem, OutboundMsg, SendMessagePayload, TextItemContent, ITEM_TEXT, MSG_STATE_FINISH,
     MSG_TYPE_BOT,
@@ -33,24 +31,6 @@ pub fn build_send_payload(
             context_token: context_token.map(String::from),
         },
     }
-}
-
-/// Map `OutboundMessage` to iLink send payload.
-#[must_use]
-pub fn map_outbound_to_payload(
-    outbound: &OutboundMessage,
-    from_user_id: &str,
-    to_user_id: &str,
-    client_id: &str,
-    context_token: Option<&str>,
-) -> SendMessagePayload {
-    build_send_payload(
-        from_user_id,
-        to_user_id,
-        client_id,
-        &outbound.text,
-        context_token,
-    )
 }
 
 #[cfg(test)]

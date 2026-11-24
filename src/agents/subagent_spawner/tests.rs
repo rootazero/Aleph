@@ -231,6 +231,7 @@ mod tests {
             chain: ChainContext::new(),
             raw_memory_writer: None,
             capture_registry: None,
+            memory_runtime: None,
             parent_agent_id: None,
             parent_session_id: None,
             guardrails: None,
@@ -1502,6 +1503,7 @@ mod tests {
             "child-agent",
             &ephemeral_for("child-agent", None),
             CancellationToken::new(),
+            None,
         );
         let compactor = compactor.expect("a context budget config arms the child's compactor");
         let _ = compactor

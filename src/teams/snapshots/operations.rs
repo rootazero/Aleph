@@ -23,9 +23,9 @@ use crate::teams::TeamStore;
 /// borrow `tasks` mutably-or-not freely.
 pub(super) fn topo_sort_and_count_edges(tasks: &[CoordTask]) -> Result<(Vec<usize>, usize)> {
     let n = tasks.len();
-    let mut id_to_idx: HashMap<String, usize> = HashMap::with_capacity(n);
+    let mut id_to_idx: HashMap<&str, usize> = HashMap::with_capacity(n);
     for (i, t) in tasks.iter().enumerate() {
-        if id_to_idx.insert(t.id.clone(), i).is_some() {
+        if id_to_idx.insert(t.id.as_str(), i).is_some() {
             return Err(AlephError::ConfigError {
                 message: format!("snapshot task graph has duplicate id: '{}'", t.id),
                 suggestion: None,
@@ -38,20 +38,30 @@ pub(super) fn topo_sort_and_count_edges(tasks: &[CoordTask]) -> Result<(Vec<usiz
     for (i, t) in tasks.iter().enumerate() {
         for dep in &t.dependencies {
             if let Some(&j) = id_to_idx.get(dep.as_str()) {
-                in_degree[i] += 1;
-                children[j].push(i);
+                if let Some(deg) = in_degree.get_mut(i) {
+                    *deg += 1;
+                }
+                if let Some(child_list) = children.get_mut(j) {
+                    child_list.push(i);
+                }
                 edge_count += 1;
             }
         }
     }
-    let mut queue: VecDeque<usize> = (0..n).filter(|&i| in_degree[i] == 0).collect();
+    let mut queue: VecDeque<usize> = (0..n)
+        .filter(|&i| in_degree.get(i).copied() == Some(0))
+        .collect();
     let mut order: Vec<usize> = Vec::with_capacity(n);
     while let Some(i) = queue.pop_front() {
         order.push(i);
-        for &c in &children[i] {
-            in_degree[c] -= 1;
-            if in_degree[c] == 0 {
-                queue.push_back(c);
+        if let Some(child_list) = children.get(i) {
+            for &c in child_list {
+                if let Some(deg) = in_degree.get_mut(c) {
+                    *deg = deg.saturating_sub(1);
+                    if *deg == 0 {
+                        queue.push_back(c);
+                    }
+                }
             }
         }
     }
@@ -184,16 +194,17 @@ pub async fn restore_snapshot(
     // --- Task diff ---------------------------------------------------------
     // Live tasks keyed by (subject, owner) — that's the "logical identity"
     // we restore against, since snapshot ids won't match.
-    let live_key = |t: &CoordTask| (t.subject.clone(), t.owner.clone());
-    let live_by_key: HashMap<(String, Option<String>), &CoordTask> =
-        live_tasks.iter().map(|t| (live_key(t), t)).collect();
+    let live_by_key: HashMap<(&str, Option<&str>), &CoordTask> = live_tasks
+        .iter()
+        .map(|t| ((t.subject.as_str(), t.owner.as_deref()), t))
+        .collect();
 
     let mut tasks_to_add: Vec<String> = Vec::new();
     let mut tasks_to_update: Vec<String> = Vec::new();
     let mut tasks_to_skip_active: Vec<String> = Vec::new();
 
     for snap in &payload.tasks {
-        let k = live_key(snap);
+        let k = (snap.subject.as_str(), snap.owner.as_deref());
         match live_by_key.get(&k) {
             Some(live) if live.status == CoordTaskStatus::InProgress => {
                 tasks_to_skip_active.push(snap.subject.clone());
@@ -327,14 +338,16 @@ pub async fn restore_snapshot(
     //    restore will (or did) actually re-attach.
     let mut id_map: HashMap<String, String> = HashMap::new();
     for snap in &payload.tasks {
-        let k = live_key(snap);
+        let k = (snap.subject.as_str(), snap.owner.as_deref());
         if let Some(live) = live_by_key.get(&k) {
             id_map.insert(snap.id.clone(), live.id.clone());
         }
     }
 
     for idx in topo_order {
-        let snap = &payload.tasks[idx];
+        let Some(snap) = payload.tasks.get(idx) else {
+            continue;
+        };
         if id_map.contains_key(&snap.id) {
             continue; // already live; we don't mutate live tasks
         }

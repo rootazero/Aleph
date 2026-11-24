@@ -16,7 +16,7 @@
 
 | 维度 | buzz | Aleph（第四轮后，2026-08-04） | 取舍 |
 |---|---|---|---|
-| 身份载体 | secp256k1 keypair 即身份，`Keys::generate()` 单点铸造 | Ed25519 keypair，`AgentKeystore::mint_key` 单点铸造 | **映射**。曲线不同无实质差异；Ed25519 的原语（`gateway/security/crypto.rs`）Aleph 早已有，只是**零生产消费者**——本轮是它的第一个真实调用方 |
+| 身份载体 | secp256k1 keypair 即身份，`Keys::generate()` 单点铸造 | Ed25519 keypair，`AgentKeystore::mint_key` 单点铸造 | **映射**。曲线不同无实质差异；Ed25519 的原语（`src/gateway/security/crypto.rs`）Aleph 早已有，只是**零生产消费者**——本轮是它的第一个真实调用方 |
 | 私钥托管 | OS keyring / `0600` 文件 / env，best-effort scrub（自认 allocator 可能残留） | 既有 `SecretVault`：AES-256-GCM + 每条 HKDF salt + `Zeroizing` + `VaultIo` fcntl 原子写 | **Aleph 更强**。零新基建 |
 | 密钥轮转 | **不存在**（撤销＝不再签发 attestation） | `rotate_identity` 保留旧钥（`retired_at`）以便旧记录仍可验，**不重置链锚** | **超越** |
 | 轮转的原子性 | 无对位 | 铸钥 → 上链声明 → 绑定为活跃钥，**整个序列在单写者里**，调用方 await 结果 | **超越**（第四轮补）。两步协议的第二步一旦丢失就永久破链，而工具已经报了成功 |
@@ -43,7 +43,7 @@
 | **记录里的"谁"** | 无（无签名，更无 principal） | `agent_id`（哪个身份在动）+ `principal`（哪个人在驱动），**两者都在 preimage 内** | **超越**（第五轮）。只记 agent 时，非否认对 agent 成立、对**人**不成立——共用一个 agent 的两个人在链上无法区分 |
 | agent vs human | 只差**配额**不差权限 | 两条正交轴都在：exec tier（这次调用能做什么）× `allowed_users`（这个人能扮演谁） | **超越**（第五轮起） |
 | owner attestation | NIP-OA：owner 签名证明"谁授权了这个 agent"，**作者身份不可改写** | 无 owner 密钥概念；委派的**事实**落在父链的 `ToolCall(target="subagent")` 上 | **刻意不移植**（见 §6 已知边界④：凭空造 owner 层＝零消费者抽象） |
-| git 提交签名 | `git-sign-nostr`（O_NOFOLLOW/fstat/mode 检查/Zeroizing 全套，OA 委托折进签名原语） | **原语层已映射**（第八轮）：`identity/artifact.rs` 通用工件签名（`sign`/`verify-sig`/`verify-artifact`），签名事件自入链（`ArtifactSigned`）；git 钩子外挂仍不移植——独立二进制 + `gpg.x509.program` 钩子，按 R3 属 Skill/MCP 而非进 core | **部分移植** |
+| git 提交签名 | `git-sign-nostr`（O_NOFOLLOW/fstat/mode 检查/Zeroizing 全套，OA 委托折进签名原语） | **原语层已映射**（第八轮）：`src/identity/artifact.rs` 通用工件签名（`sign`/`verify-sig`/`verify-artifact`），签名事件自入链（`ArtifactSigned`）；git 钩子外挂仍不移植——独立二进制 + `gpg.x509.program` 钩子，按 R3 属 Skill/MCP 而非进 core | **部分移植** |
 | 导出件自签名 | relay 自签 kind:30618 ref-state（带 pusher 的 `p` tag） | `ChainExport.signature`（第八轮）：agent 活跃钥签「去 signature 键的规范 JSON」，离站验证器验签；无签名旧文档仍可验但必须显可见 | **映射**。买到出境后防改；不替代离站钉值（造文档的机器握着私钥） |
 | 审计覆盖诚实度 | 11 个 `AuditAction` 变体**只接线 2 个**（EventCreated/MediaUploaded）；枚举存在、生产者不存在 | `LedgerAction` 8 变体**全部有生产者**；第八轮补掉两个同型盲区：子代理 allowlist 拒绝、sandbox 提权审批 | **超越**。buzz 的稀疏覆盖正是 `record.rs`「每个变体都要有真生产者」纪律的镜像教训 |
 | Nostr wire / relay 联邦 | 核心 | 无 | **刻意不移植**：Aleph 信任边界是网络边界（loopback + device tier），不是公开 relay |
@@ -218,18 +218,18 @@ SHA256( "aleph-agent-ledger-v1"
 - ~~删掉 `agent_identities` 一行即可让整条链退出验证~~ → 已修（第三轮：`verify_all` 枚举并集 + `IdentityMissing`）。
 - ~~删身份行后 agent 再动作一次即静默换钥续链、验链干净~~ → 已修（第三轮：`UndeclaredSigner`）。
 - ~~两条无审批通道的 fail-closed 拒绝零记录~~ → 已修（第三轮：`record_gate_refusal`）。
-- ~~"公钥可导出、导出的链可被不信任本机的人验证"三处有声称、零实现~~ → 已修（第三轮：`identity/export.rs` + 工具 `export` + `identity verify --input --pin`）。
+- ~~"公钥可导出、导出的链可被不信任本机的人验证"三处有声称、零实现~~ → 已修（第三轮：`src/identity/export.rs` + 工具 `export` + `identity verify --input --pin`）。
 
 ## 7. 红线合规
 
 - **第五轮补充**：**R10** `src/harness/` 仍零改动（五轮皆是）；**R3/P6** 零新依赖（五轮皆是）；**Spec C** schema **v16**（`agent_ledger.principal`），迁移用「先探列再 ALTER」——与 v15 同形状同理由：从零建库的实例在更早的臂里已经跑过 `IDENTITY_SCHEMA`，而那份 batch 现在带着 `principal`，无条件 ALTER 会在**每一次首启**上撞 `duplicate column name`；**R8** 工具注册点零变化（`agent_identity` 一个 action 都没加，`agent_update` 只加了一个参数），但 `agent_update` 与 `agent_unbind` **进了 `OPERATOR_TOOLS`**——前者现在写的正是 run-start 闸读的那张表，闸必须覆盖能把闸拿掉的那个动词；**R7** 新增判定没有一个是推理（`agent_admits_user` 是集合成员判断，`principal` 是一次 task-local 读取）。
-- **R10**：`src/harness/` **零改动**（三轮都是）。账本挂在 `tools/scoped/`，身份注入挂在 `agents/allowlist_tool_service.rs`；harness 只经 `Arc<dyn ToolService>` 多态调用，从不点名任何一个。棘轮以 `budget.rs::CEILING` 为准，本轮不动它。
+- **R10**：`src/harness/` **零改动**（三轮都是）。账本挂在 `src/tools/scoped/`，身份注入挂在 `src/agents/allowlist_tool_service.rs`；harness 只经 `Arc<dyn ToolService>` 多态调用，从不点名任何一个。棘轮以 `budget.rs::CEILING` 为准，本轮不动它。
 - **R3 / P6**：**零新依赖**（三轮都是）。`ed25519-dalek` / `sha2` / `hex` / `zeroize` 早已是直接依赖，Ed25519 原语早已存在且此前**零生产消费者**；导出格式用的 `serde` / `serde_json` 同理。
 - **R8**：第三轮只给 `agent_identity` **加了一个 action**（`export`），第四轮一个 action 都没加 —— 所以下面那 6 个注册点两轮都不用动。⚠️ **但第 7 个登记面是第四轮才发现的**：`BUILTIN_TOOL_DEFINITIONS` 的 `description` 字段。写成字面量就**整体遮蔽** `AlephTool::DESCRIPTION`（`agent_init` 只追加目录里没有的名字），于是往 DESCRIPTION 里写的任何东西模型一个字都收不到。判据：**往 `DESCRIPTION` 里写模型必须看到的内容之前，先确认目录条目指向常量**——这条对全仓 156 个工具都成立，见 CLAUDE.md R9 前置条件段。
 - **R7**：第四轮新增的判定没有一个是推理：`HeadPin` 是三路哈希比较，`revoked_per_chain` 是取链上最后一条生命周期记录，`revocation_disagrees` 是两个布尔比大小。账本仍然只**记录**，不评分、不分类、不选恢复策略。
 - **R4**：`src/gateway/security/store/identity.rs` 纯 SQL I/O（对齐 `devices.rs`/`tokens.rs`），全部摘要/哈希/签名在 `src/identity/`。
 - **R7**：账本**记录**，不**评分**、不分类、不选恢复策略。"是否变更类"读工具**自己声明**的 `is_idempotent` 元数据（与 exec tier 同一个 `tool_facts` 缝），不猜意图、不查名单。
-- **R8**：能力经 `agent_identity` 工具对话式可达，`OPERATOR_TOOLS` 门控。**6 个注册点**（改工具时别漏）：`builtin_tools/mod.rs` · `builtin_registry/definitions.rs`（表项 + `create_tool_boxed`）· `builtin_registry/groups.rs`（**唯一有测试强制的一处**）· `builder/core_tools.rs`（元数据/schema）· `registry/tool_registry_impl.rs`（**真正的执行分派臂**）· `method_authz.rs::OPERATOR_TOOLS`。漏掉后两者中任何一个 ＝ 工具被通告给模型却在调用时报错或越权。
+- **R8**：能力经 `agent_identity` 工具对话式可达，`OPERATOR_TOOLS` 门控。**6 个注册点**（改工具时别漏）：`src/builtin_tools/mod.rs` · `src/executor/builtin_registry/definitions.rs`（表项 + `create_tool_boxed`）· `src/executor/builtin_registry/groups.rs`（**唯一有测试强制的一处**）· `src/executor/builtin_registry/builder/core_tools.rs`（元数据/schema）· `src/executor/builtin_registry/registry/tool_registry_impl.rs`（**真正的执行分派臂**）· `method_authz.rs::OPERATOR_TOOLS`。漏掉后两者中任何一个 ＝ 工具被通告给模型却在调用时报错或越权。
 - **Spec C**：走 `SecurityStore`（`open_sqlite_safe`：WAL / busy_timeout），不新开数据库文件。schema **v13** 的迁移臂直接重跑 `IDENTITY_SCHEMA`（全是 `CREATE ... IF NOT EXISTS`），这样表结构只有**一份**定义，而不是在迁移里放第二份会漂移的副本。
 
 ## 8. 使用
@@ -289,7 +289,7 @@ aleph-server identity verify --input chain.json \
 
 本轮没有删生产代码；熵减体现在**盲区闭合**与**没有生出第二份**：
 
-- **两处"枚举存在、生产者不存在"的同型盲区被闭合**，而不是各自长一条旁路：子代理 allowlist 拒绝复用 `tools/scoped/ledger.rs` 的同一指纹/脱敏管线（`record_allowlist_refusal` 与 `commit_refusal` 同一形状）；sandbox 提权审批挂在 `ApprovalGate` 共享咽喉上（`record_gate_decision`），与 unattended tax 同处——现在与将来的调用方都继承，不需要第三个接线的调用点。buzz 侧的教训正是这个形状的反面：11 个 `AuditAction` 只接线 2 个。
+- **两处"枚举存在、生产者不存在"的同型盲区被闭合**，而不是各自长一条旁路：子代理 allowlist 拒绝复用 `src/tools/scoped/ledger.rs` 的同一指纹/脱敏管线（`record_allowlist_refusal` 与 `commit_refusal` 同一形状）；sandbox 提权审批挂在 `ApprovalGate` 共享咽喉上（`record_gate_decision`），与 unattended tax 同处——现在与将来的调用方都继承，不需要第三个接线的调用点。buzz 侧的教训正是这个形状的反面：11 个 `AuditAction` 只接线 2 个。
 - **验签仍然只有一处原语**。导出信封验签走 `ExportKeyring`（`SignerSource` 的既有第二个实现）；工件验签直取 `security.db` 公钥——两条路共用 `gateway/security/crypto.rs::verify_signature`，没有新增第二个"轻量校验器"。
 - **`export_chain` 的错误类型从 `KeyError` 收敛进 `ExportError`**（新增 `Key(#[from])` 变体）：签名需要序列化文档，`KeyError` 没有合适变体；三个调用方（工具/CLI/测试）同步适配。
 - **修正一段会误导后人的测试注释**：`a_denied_call_scopes_no_actor` 旧注释声称 allowlist 拒绝"由父 chokepoint 记录"——父 chokepoint 从没见过那次调用。注释现在描述真实行为。
@@ -320,7 +320,7 @@ aleph-server identity verify --input chain.json \
 
 - **一套链走查，两个公钥来源**。离站验证本可以自成一个"轻量校验器"——那就是第二份安全检查，也正是本模块删掉 `AgentKeystore::verify` 的同一个理由。改为把 `verify_chain` 的循环抽成 `walk_chain(rows, anchor, &mut dyn SignerSource)`，`Keyring`（读 `security.db`）与 `ExportKeyring`（读文档内嵌公钥）各实现一次 `check`。验签原语只在 `check_against` 一处调用，所以"有效"在两条路上是同一个意思。
 - **`ExportedRecord` 单独定义，不给 `LedgerRecord` 加 `Deserialize`**。理由与 `NewRecord` 那道溯源栅栏相同：能被追加的类型不该有反序列化入口。附带好处是导出行**不带 `agent_id`**（文档只声明一次 agent，每行按它重建），于是从别人链里搬过来的行在到达时就哈希不上——不需要为它新造一个 fault。
-- **顺手修好主分支上先前存在的编译损坏**：`src/config/tests/mod.rs` 引用已删除的 `dispatcher` 模块、`src/config/tests/serialization.rs` 有一段重复粘贴的括号残片（来自 `54a12d89b` 的 cut）。二者让**整个 lib 测试目标编译不过**。⚠️ 仍有 47 个同型错误散在 6 个无关子系统（`config/ui_hints` / `a2a/adapter/client/pool` / `browser/{manager,profile}` / `tool_metadata/registry/tests` / `context/retrieval/content_index` / `agents/swarm/tasks/store/tests` / `tests/tool_scheduling.rs`）——全是**测试代码引用已被裁剪掉的生产 API**。本轮不碰（跨 6 个子系统＝失控重构），但因此**本轮新增测试全部落在 `tests/`**，那里编译且真的跑得起来。
+- **顺手修好主分支上先前存在的编译损坏**：`src/config/tests/mod.rs` 引用已删除的 `dispatcher` 模块、`src/config/tests/serialization.rs` 有一段重复粘贴的括号残片（来自 `54a12d89b` 的 cut）。二者让**整个 lib 测试目标编译不过**。⚠️ 仍有 47 个同型错误散在 6 个无关子系统（`src/config/ui_hints` / `a2a/adapter/client/pool` / `browser/{manager,profile}` / `tool_metadata/registry/tests` / `context/retrieval/content_index` / `agents/swarm/tasks/store/tests` / tests/tool_scheduling.rs（2026-08-02 随冗余 target 一并删除，覆盖迁至 `src/tool_metadata/registry/health.rs`））——全是**测试代码引用已被裁剪掉的生产 API**。本轮不碰（跨 6 个子系统＝失控重构），但因此**本轮新增测试全部落在 `tests/`**，那里编译且真的跑得起来。
 
 ### 第二轮删除
 

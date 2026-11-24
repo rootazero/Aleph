@@ -15,7 +15,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::error::{AlephError, Result};
 
-use super::loader::SkillLoader;
+use super::loader::{is_skill_file_name, SkillLoader};
 use super::registry_owner::markdown_skill_registry_owner;
 use super::tool_adapter::MarkdownCliTool;
 
@@ -120,7 +120,15 @@ impl SkillWatcher {
     ///
     /// This is a blocking async function that processes file events
     /// and invokes the reload callback when skills change.
-    pub async fn run(mut self, skills_dir: PathBuf, reload_callback: ReloadCallback) -> Result<()> {
+    ///
+    /// `_skills_dir` is kept for API compatibility: the watcher already
+    /// watches the directory it was built with, and the event handling below
+    /// derives the affected skill directories from the event paths themselves.
+    pub async fn run(
+        mut self,
+        _skills_dir: PathBuf,
+        reload_callback: ReloadCallback,
+    ) -> Result<()> {
         info!("Skill watcher event loop started");
 
         while let Some(event) = self.event_rx.recv().await {
@@ -134,9 +142,7 @@ impl SkillWatcher {
             }
 
             // Reload affected skills
-            if let Err(e) =
-                Self::handle_skill_events(&skills_dir, &skill_events, &reload_callback).await
-            {
+            if let Err(e) = Self::handle_skill_events(&skill_events, &reload_callback).await {
                 error!(error = %e, "Failed to handle skill events");
             }
         }
@@ -175,14 +181,11 @@ impl SkillWatcher {
     fn is_skill_file(path: &Path) -> bool {
         path.file_name()
             .and_then(|n| n.to_str())
-            .is_some_and(|name| {
-                name.eq_ignore_ascii_case("SKILL.md") || name.to_lowercase().ends_with(".skill.md")
-            })
+            .is_some_and(is_skill_file_name)
     }
 
     /// Handle skill reload events
     async fn handle_skill_events(
-        _skills_dir: &Path,
         events: &[SkillEvent],
         reload_callback: &ReloadCallback,
     ) -> Result<()> {
@@ -207,7 +210,7 @@ impl SkillWatcher {
                         Some(name) => {
                             let removed = markdown_skill_registry_owner()
                                 .lock()
-                                .unwrap()
+                                .unwrap_or_else(|e| e.into_inner())
                                 .remove(&name);
                             if removed {
                                 info!(name = %name, "Unregistered deleted markdown skill");
@@ -282,9 +285,15 @@ fn skill_name_from_path(path: &Path) -> Option<String> {
             .and_then(|n| n.to_str())
             .map(str::to_string);
     }
-    if file_name.to_lowercase().ends_with(".skill.md") {
-        let stem_len = file_name.len().saturating_sub(".skill.md".len());
-        return Some(file_name[..stem_len].to_string());
+    let suffix_len = ".skill.md".len();
+    if file_name.len() >= suffix_len {
+        let split_pos = file_name.len() - suffix_len;
+        if file_name.is_char_boundary(split_pos) {
+            let (stem, suffix) = file_name.split_at(split_pos);
+            if suffix.eq_ignore_ascii_case(".skill.md") {
+                return Some(stem.to_string());
+            }
+        }
     }
     None
 }

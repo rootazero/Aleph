@@ -492,7 +492,17 @@ where
         // a slot — and the busy lane folds a follow-up only into a run on the
         // same model (`slash_command_body::pin_model`).
         super::slash_command_body::pin_model(&mut request).await;
-        let _run_slot = match self.admit_run(&request, &run_id, &agent, cancel_tx).await? {
+        let _run_slot = match self
+            .admit_run(
+                &request,
+                &run_id,
+                &agent,
+                cancel_tx,
+                &mut cancel_rx,
+                cancel_token.clone(),
+            )
+            .await?
+        {
             GateOutcome::Admitted(slot) => slot,
             GateOutcome::HandledInline => return Ok(()),
         };
@@ -512,13 +522,46 @@ where
         // Ensure session exists in memory + SQLite before adding messages.
         // Scoped: the CREATE branch stamps `owner_user_id`/`scope_id` from the
         // ambient scope, which no producer still has by here (they all spawn).
-        // See `run_loop::ensure_session_under_request_scope`.
-        super::run_loop::ensure_session_under_request_scope(&agent, &request).await;
-
+        // See `run_loop::prepare_session_for_run`.
+        let session_preparation = super::run_loop::prepare_session_for_run(&agent, &request).await;
+        if let Err(error) = session_preparation {
+            let error =
+                ExecutionError::Failed(format!("session metadata preparation failed: {error}"));
+            self.emit_pre_admission_run_error(
+                emitter.as_ref(),
+                &run_id,
+                btw_main_session.as_ref().unwrap_or(&request.session_key),
+                &request,
+                &error,
+            )
+            .await;
+            {
+                let mut runs = self.active_runs.write().await;
+                if let Some(run) = runs.get_mut(&run_id) {
+                    run.state = RunState::Failed {
+                        error: error.to_string(),
+                    };
+                    run.completed_at = Some(chrono::Utc::now());
+                    run.cancel_tx = None;
+                }
+            }
+            if trace_task_persisted {
+                self.persist_run_task_status(&run_id, TaskStatus::Failed)
+                    .await;
+            }
+            let runs_clone = self.active_runs.clone();
+            let run_id_clone = run_id.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                runs_clone.write().await.remove(&run_id_clone);
+            });
+            return Err(error);
+        }
         // Carry whatever has settled on the main conversation into the side
         // session, so a side question is asked *about* the thing the user is
         // looking at rather than into an empty room. After the scope step
         // above (the side row is opened under the run's attribution, which
+        // EE1-04: seed failure now routes through terminal cleanup
         // `ensure_seeded` re-establishes from the same metadata) and before
         // dispatch, because the harness reads history further down.
         if let Some(main) = btw_main_session.as_ref() {
@@ -544,6 +587,30 @@ where
                 // frame emitted before admission must carry its own scope.)
                 self.emit_pre_admission_run_error(emitter.as_ref(), &run_id, main, &request, &e)
                     .await;
+
+                // Settle the registered run and persisted task before returning.
+                // The slot drops (releasing claim + permit) on function exit.
+                {
+                    let mut runs = self.active_runs.write().await;
+                    if let Some(run) = runs.get_mut(&run_id) {
+                        run.state = RunState::Failed {
+                            error: e.to_string(),
+                        };
+                        run.completed_at = Some(chrono::Utc::now());
+                        run.cancel_tx = None;
+                    }
+                }
+                if trace_task_persisted {
+                    self.persist_run_task_status(&run_id, TaskStatus::Failed)
+                        .await;
+                }
+                // Schedule delayed removal like normal completion path
+                let runs_clone = self.active_runs.clone();
+                let run_id_clone = run_id.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                    runs_clone.write().await.remove(&run_id_clone);
+                });
                 return Err(e);
             }
         }
@@ -779,16 +846,21 @@ where
 
             match fast_result {
                 Ok(response) => {
-                    return self
-                        .finalize_fast_path_success(
-                            &run_id,
-                            &request,
-                            &agent,
-                            &emitter,
-                            response,
-                            trace_task_persisted,
-                        )
+                    self.finalize_fast_path_success(
+                        &run_id,
+                        &request,
+                        &agent,
+                        &emitter,
+                        response,
+                        trace_task_persisted,
+                    )
+                    .await?;
+                    // Same post-run steering rescue as the normal completion
+                    // path: a side question steered into this command was
+                    // acknowledged into the log but never answered.
+                    self.post_run_steering_rescue(&request, &agent, &emitter)
                         .await;
+                    return Ok(());
                 }
                 Err(ExecutionError::Fallthrough { ref reason }) => {
                     // Skills/custom commands need LLM processing — fall through
@@ -885,7 +957,7 @@ where
                 Some(Arc::new(crate::gateway::session_store::hook_transcripts::StoreTranscripts::new(
                     agent.session_store(),
                 ))),
-                self.run_agent_loop(
+                Box::pin(self.run_agent_loop(
                     &run_id,
                     &request,
                     agent.clone(),
@@ -894,7 +966,7 @@ where
                     trace_task_persisted.then(|| run_id.clone()),
                     cancel_token.clone(),
                     occupancy_out.clone(),
-                ),
+                )),
             ) => result,
 
             _ = cancel_rx.recv() => {
@@ -1005,8 +1077,8 @@ where
                 // Record conversation turn for compression scheduling. Content-blind:
                 // the turn-threshold cadence only. "Was this a correction worth
                 // remembering?" is the model's call, via flag_user_correction (R7).
-                if let Some(ref cs) = self.compression_service {
-                    cs.record_turn_and_maybe_compress();
+                if let Some(runtime) = &self.memory_runtime {
+                    runtime.record_turn().await;
                 }
 
                 // Async session compaction (hierarchical summarization).
@@ -1174,35 +1246,56 @@ where
         // user asked the agent to stop, so pending messages wait for the next
         // interaction instead of restarting the loop they just killed.
         if matches!(final_state, RunState::Completed) {
-            if let Some(rescue) =
-                super::steering::build_steering_rescue_request(self.orchestrator.as_ref(), &request)
-                    .await
-            {
-                info!(
-                    session = %request.session_key.to_key_string(),
-                    rescue_run = %rescue.run_id,
-                    "post-run steering rescue: unanswered steering burst detected; re-driving loop",
-                );
-                // The rescue's outcome must NOT replace the original run's
-                // result: the original message was already answered, and
-                // propagating e.g. a rescue `AgentBusy` (another run grabbed
-                // the freed slot — it reads the same log and covers the
-                // burst) would make the inbound router's busy/retry loop
-                // re-execute the already-answered original message. Log and
-                // swallow; the burst is never dropped — at worst it defers to
-                // the next interaction. Box::pin breaks the infinitely-sized
-                // recursive future.
-                if let Err(e) = Box::pin(self.execute(rescue, agent, emitter)).await {
-                    warn!(
-                        session = %request.session_key.to_key_string(),
-                        error = %e,
-                        "post-run steering rescue run failed; burst defers to next interaction",
-                    );
-                }
-            }
+            self.post_run_steering_rescue(&request, &agent, &emitter)
+                .await;
         }
 
         final_result
+    }
+    /// Post-run steering rescue: when a steering burst landed after the
+    /// harness's final follow-up check — but before this run's state flipped
+    /// out of `Running` — it was acknowledged into the session log yet has no
+    /// live loop left to answer it. One bounded re-read closes that race: if
+    /// an unanswered burst remains, re-drive the loop over the existing log
+    /// via the resume flow, reusing this run's emitter so the answer reaches
+    /// the same client.
+    ///
+    /// Shared by the normal completion path and the slash fast-path
+    /// completion: the fast path used to skip it, so a side question steered
+    /// into a direct-tool slash command stayed unanswered until the next
+    /// unrelated turn.
+    ///
+    /// The rescue's outcome never replaces the original run's result: the
+    /// original message was already answered, and propagating e.g. a rescue
+    /// `AgentBusy` (another run grabbed the freed slot — it reads the same log
+    /// and covers the burst) would make the inbound router's busy/retry loop
+    /// re-execute the already-answered original message. Log and swallow; the
+    /// burst is never dropped — at worst it defers to the next interaction.
+    /// Box::pin breaks the infinitely-sized recursive future.
+    async fn post_run_steering_rescue<E: EventEmitter + Send + Sync + 'static>(
+        &self,
+        request: &RunRequest,
+        agent: &Arc<AgentInstance>,
+        emitter: &Arc<E>,
+    ) {
+        let Some(rescue) =
+            super::steering::build_steering_rescue_request(self.orchestrator.as_ref(), request)
+                .await
+        else {
+            return;
+        };
+        info!(
+            session = %request.session_key.to_key_string(),
+            rescue_run = %rescue.run_id,
+            "post-run steering rescue: unanswered steering burst detected; re-driving loop",
+        );
+        if let Err(e) = Box::pin(self.execute(rescue, agent.clone(), emitter.clone())).await {
+            warn!(
+                session = %request.session_key.to_key_string(),
+                error = %e,
+                "post-run steering rescue run failed; burst defers to next interaction",
+            );
+        }
     }
 }
 

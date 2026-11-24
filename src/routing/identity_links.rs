@@ -50,16 +50,14 @@ pub fn validate_identity_links(
         }
     }
 
-    // Sort the (id, canonicals) pairs for deterministic error selection so
-    // tests don't depend on HashMap iteration order.
-    let mut pairs: Vec<(String, Vec<String>)> = id_to_canonicals.into_iter().collect();
-    pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
-
-    for (id, mut canonicals) in pairs {
-        if canonicals.len() > 1 {
-            canonicals.sort();
-            return Err(DuplicateIdentityLinkError { id, canonicals });
-        }
+    // Find the lexicographically earliest ID with duplicate canonicals for deterministic errors.
+    if let Some((id, mut canonicals)) = id_to_canonicals
+        .into_iter()
+        .filter(|(_, c)| c.len() > 1)
+        .min_by(|(a, _), (b, _)| a.cmp(b))
+    {
+        canonicals.sort();
+        return Err(DuplicateIdentityLinkError { id, canonicals });
     }
 
     Ok(())

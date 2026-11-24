@@ -1,7 +1,6 @@
 //! Compatibility types — bridges between v2 skill system and legacy consumers.
 
 use crate::domain::skill::{PromptScope, SkillManifest};
-use crate::domain::Entity;
 use serde::{Deserialize, Serialize};
 
 /// Simplified skill info for tool registry and UI display.
@@ -61,17 +60,15 @@ pub struct SkillInfo {
     pub plugin_id: Option<String>,
 }
 
-impl From<SkillManifest> for SkillInfo {
-    fn from(manifest: SkillManifest) -> Self {
+impl From<&SkillManifest> for SkillInfo {
+    fn from(manifest: &SkillManifest) -> Self {
         Self {
             id: manifest.id().as_str().to_string(),
             name: manifest.name().to_string(),
             description: manifest.description().to_string(),
             scope: manifest.scope().clone(),
             version: manifest.version().map(str::to_string),
-            allowed_tools: manifest
-                .allowed_tools()
-                .map(|tools| tools.iter().map(String::clone).collect()),
+            allowed_tools: manifest.allowed_tools().map(|tools| tools.to_vec()),
             argument_hint: None,
             plugin_id: match manifest.source() {
                 crate::domain::skill::SkillSource::Plugin(id) => Some(id.as_str().to_string()),
@@ -81,9 +78,9 @@ impl From<SkillManifest> for SkillInfo {
     }
 }
 
-impl From<&SkillManifest> for SkillInfo {
-    fn from(manifest: &SkillManifest) -> Self {
-        Self::from(manifest.clone())
+impl From<SkillManifest> for SkillInfo {
+    fn from(manifest: SkillManifest) -> Self {
+        Self::from(&manifest)
     }
 }
 

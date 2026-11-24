@@ -13,10 +13,10 @@ WhatsApp channel uses `whatsapp-rust` crate (wacore) directly — **no Go bridge
 - `PairingState` (pairing.rs) — **single source of truth** for status; `to_channel_status()` is the only path to `Channel::status()`
 - `WaAuthManager` (wa_auth/) — persists creds in `SecretVault` (production) or injected vault (tests, via `with_vault_and_crypto`)
 - `WhatsAppConfig` (config.rs) — flat config with sub-structs (`AccessConfig`, `DeliveryConfig`, `ReactionConfig`)
-- `InboundPolicy` (wa_inbound/) — DM/Group allow + pairing gate
+- `InboundPolicy` (wa_inbound/) — DM/Group allow + pairing gate; with `dm_policy = "pairing"` only numbers listed in `WhatsAppConfig::paired_numbers` reach the agent, every other DM is dropped with a warning
 - `OutboundAdapter` (wa_outbound/) — text chunking + media + reactions + typing/read
 - `WhatsAppConfig::reactions` (config.rs) — consumed in event loop via `ReactionHandler`
-- `WhatsAppConfig::history` (config.rs) — `GroupHistoryBuffer` filled by mapper (downstream context injection: R2)
+- `WhatsAppConfig::history` (config.rs) — `GroupHistoryBuffer::absorb` runs in the event loop on every policy-accepted group message, so earlier unanswered group messages are prepended to the next inbound
 - `FakeWaRuntime` (wa_runtime/fake.rs) — test double for `trait WaRuntime`; 4 end-to-end scenarios
 
 ## Architecture
@@ -59,11 +59,11 @@ WhatsApp channel uses `whatsapp-rust` crate (wacore) directly — **no Go bridge
 | `mod.rs` | `WhatsAppChannel`, event loop, `status()`, factory, plugin registration |
 | `config.rs` | `WhatsAppConfig` + sub-configs |
 | `pairing.rs` | 9-variant FSM (`Idle/Initializing/WaitingQr/QrExpired/Scanned/Syncing/Connected/Disconnected/Failed`) + `to_channel_status()` |
-| `wa_runtime/traits.rs` | `trait WaRuntime` |
-| `wa_runtime/client.rs` | `RealWaRuntime` (wacore-backed) |
-| `wa_runtime/fake.rs` | `FakeWaRuntime` (test-only, 4 scenarios) |
-| `wa_runtime/event_loop.rs` | Event dispatch + `PairingState` driver |
-| `wa_runtime/state.rs` | **removed in R1** (was `ConnectionState`) |
+| `src/gateway/interfaces/whatsapp/wa_runtime/traits.rs` | `trait WaRuntime` |
+| `src/gateway/interfaces/whatsapp/wa_runtime/client.rs` | `RealWaRuntime` (wacore-backed) |
+| `src/gateway/interfaces/whatsapp/wa_runtime/fake.rs` | `FakeWaRuntime` (test-only, 4 scenarios) |
+| `src/gateway/interfaces/whatsapp/wa_runtime/event_loop.rs` | Event dispatch + `PairingState` driver |
+| `src/gateway/interfaces/whatsapp/wa_runtime/state.rs` | **removed in R1** (was `ConnectionState`) |
 | `wa_auth/` | `WaAuthManager` + `vault_store` (TempDir-isolated tests) |
 | `wa_inbound/` | `mapper` + `InboundPolicy` |
 | `wa_outbound/` | `sender` + `media` (conservative R1) |
@@ -79,9 +79,8 @@ WhatsApp channel uses `whatsapp-rust` crate (wacore) directly — **no Go bridge
 
 - Multi-account routing (`chat_id` → `account_id`) — see spec §6 design draft
 - `Event::QrScannedWithoutMultidevice` → `PairingState::Scanned` adapter (currently skipped; wacore 0.5.0 limitation)
-- Downstream `GroupHistoryBuffer::get_context` injection into LLM prompt (currently only `add` is wired)
 - `image` crate for actual JPEG/PNG re-encoding (currently conservative size-check only)
-- `should_agent_react` wiring (currently `Off`/`Ack`/`Minimal`/`Extensive` level field is parsed but agent-initiated reactions are not triggered)
+- Agent-initiated reactions: `reactions.level` currently drives ack reactions only — there is no surface yet for the agent to choose its own emoji (that needs a per-turn reaction hook, not another `ReactionHandler` predicate)
 - e2e QA via `qa/channels/run.sh` (whatsapp not yet in script)
 
 ## References

@@ -1,0 +1,6 @@
+
+running 1 test
+test builtin_tools::runtime_manage::tests::install_chromiums_real_subprocess_output_reaches_poll_through_the_tee ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 22421 filtered out; finished in 0.53s
+

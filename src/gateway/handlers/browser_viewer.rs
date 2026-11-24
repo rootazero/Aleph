@@ -346,7 +346,29 @@ mod tests {
             serde_json::from_value(response.result.unwrap()).unwrap();
         assert_eq!(
             f.grants.grant_info(&issued.grant_id).unwrap().permissions,
-            vec![aleph_protocol::browser_live::ViewerPermission::Frames]
+            [
+                aleph_protocol::browser_live::ViewerPermission::Frames,
+                aleph_protocol::browser_live::ViewerPermission::HumanInput,
+                aleph_protocol::browser_live::ViewerPermission::Navigate,
+            ]
+        );
+        let frames_only = rpc(
+            &registry,
+            Some(USER),
+            "member",
+            "browser.viewer.grant.issue",
+            json!({"resource_id":f.resource.resource_id,"permissions":["frames"]}),
+        )
+        .await;
+        assert!(frames_only.error.is_none(), "{:?}", frames_only.error);
+        let frames_only: aleph_protocol::browser_live::IssueViewerGrantResponse =
+            serde_json::from_value(frames_only.result.unwrap()).unwrap();
+        assert_eq!(
+            f.grants
+                .grant_info(&frames_only.grant_id)
+                .unwrap()
+                .permissions,
+            [aleph_protocol::browser_live::ViewerPermission::Frames]
         );
         let revoke = json!({"grant_id":issued.grant_id});
         let foreign = rpc(

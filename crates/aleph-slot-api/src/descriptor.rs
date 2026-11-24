@@ -272,6 +272,8 @@ pub struct ToolCapabilityDescriptor {
     pub description: String,
     pub input_schema: serde_json::Value,
     pub source: ToolSource,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub services: Vec<crate::capability::Service>,
     #[serde(default)]
     pub replay_policy: ReplayPolicy,
     #[serde(default)]
@@ -307,6 +309,7 @@ impl ToolCapabilityDescriptor {
             description: definition.description.clone(),
             input_schema: definition.input_schema.clone(),
             source: definition.source.clone(),
+            services: definition.metadata.services.clone(),
             replay_policy: ReplayPolicy::Unsafe,
             requires_confirmation: definition.metadata.requires_approval,
             idempotent: definition.metadata.idempotent,
@@ -332,6 +335,7 @@ impl ToolCapabilityDescriptor {
             description: self.description.clone(),
             parameters: self.input_schema.clone(),
             requires_confirmation: self.requires_confirmation,
+            services: self.services.clone(),
             category,
             strict: false,
         }
@@ -353,6 +357,7 @@ impl ToolCapabilityDescriptor {
         };
         crate::metadata::UnifiedTool::new(id, self.name.clone(), self.description.clone(), source)
             .with_parameters_schema(self.input_schema.clone())
+            .with_services(self.services.clone())
             .populate_safety_profile(self.idempotent, self.requires_confirmation)
     }
 
@@ -416,6 +421,7 @@ impl ToolCapabilityDescriptor {
     pub fn matches_definition(&self, definition: &ToolDefinition) -> bool {
         self.name == definition.name
             && self.source == definition.source
+            && self.services == definition.metadata.services
             && self.description == definition.description
             && self.input_schema == definition.input_schema
             && self.requires_confirmation == definition.metadata.requires_approval
@@ -488,7 +494,40 @@ fn canonical_replay_contract_preimage(
     }
     push_len_prefixed(&mut out, contract.id.as_bytes());
     push_len_prefixed(&mut out, contract.version.as_bytes());
+    canonicalize_services(&descriptor.services, &mut out);
     out
+}
+
+/// Append versioned service relations only when present, preserving legacy fingerprints.
+#[doc(hidden)]
+pub fn canonicalize_services(services: &[crate::capability::Service], out: &mut Vec<u8>) {
+    if services.is_empty() {
+        return;
+    }
+    let mut edges = services
+        .iter()
+        .map(|service| {
+            let mut bytes = Vec::new();
+            push_len_prefixed(
+                &mut bytes,
+                match service.relation {
+                    crate::capability::ServiceRelation::Requires => b"requires",
+                    crate::capability::ServiceRelation::Provides => b"provides",
+                    crate::capability::ServiceRelation::Conflicts => b"conflicts",
+                },
+            );
+            push_len_prefixed(&mut bytes, service.target.namespace.as_bytes());
+            push_len_prefixed(&mut bytes, service.target.name.as_bytes());
+            bytes
+        })
+        .collect::<Vec<_>>();
+    edges.sort();
+    edges.dedup();
+    push_len_prefixed(out, b"aleph-services-v1");
+    out.extend_from_slice(&(edges.len() as u64).to_be_bytes());
+    for edge in edges {
+        push_len_prefixed(out, &edge);
+    }
 }
 
 fn push_len_prefixed(out: &mut Vec<u8>, bytes: &[u8]) {
@@ -563,6 +602,7 @@ mod tests {
             description: "test".to_string(),
             input_schema: schema,
             source: ToolSource::Builtin,
+            services: Vec::new(),
             replay_policy: ReplayPolicy::Unsafe,
             requires_confirmation: false,
             idempotent: false,
@@ -578,6 +618,80 @@ mod tests {
             source,
             ..descriptor_with("test_tool", json!({"type": "object"}))
         }
+    }
+
+    #[test]
+    fn required_resource_roundtrips_canonical_metadata() {
+        let dependency = json!([{
+            "relation": "requires",
+            "target": {"namespace": "aleph/resources", "name": "memory.runtime"}
+        }]);
+        let mut wire =
+            serde_json::to_value(definition("memory_search", ToolSource::Builtin)).unwrap();
+        wire["metadata"]["services"] = dependency.clone();
+        let definition: ToolDefinition = serde_json::from_value(wire).unwrap();
+        let descriptor = ToolCapabilityDescriptor::from_definition(&definition, 1);
+        assert_eq!(
+            serde_json::to_value(&descriptor).unwrap()["services"],
+            dependency
+        );
+        let projected = ToolDefinition::from_descriptor(&descriptor);
+        assert_eq!(
+            serde_json::to_value(&projected).unwrap()["metadata"]["services"],
+            dependency
+        );
+        assert!(descriptor.matches_definition(&projected));
+        let mut without = serde_json::to_value(projected).unwrap();
+        without["metadata"]["services"] = json!([]);
+        assert!(!descriptor.matches_definition(&serde_json::from_value(without).unwrap()));
+    }
+
+    #[test]
+    fn legacy_empty_services_preserve_fingerprint() {
+        let mut legacy = descriptor_with("safe", json!({"type": "object"}));
+        legacy.replay_policy = ReplayPolicy::Safe;
+        legacy.implementation_contract = Some(ImplementationContract {
+            id: "builtin:safe".into(),
+            version: "7".into(),
+        });
+        assert_eq!(
+            legacy
+                .replay_contract_fingerprint()
+                .unwrap()
+                .to_wire_string(),
+            "v1:edd6e4cc00a1799d85564aea9d924ae5fc7284684666260d2cbed0d2f8309ac7"
+        );
+        let legacy_wire = serde_json::to_value(&legacy).unwrap();
+        assert!(legacy_wire.get("services").is_none());
+        let mut with_empty = legacy_wire.clone();
+        with_empty["services"] = json!([]);
+        let empty: ToolCapabilityDescriptor = serde_json::from_value(with_empty).unwrap();
+        assert_eq!(serde_json::to_value(&empty).unwrap(), legacy_wire);
+        assert_eq!(
+            empty.replay_contract_fingerprint(),
+            legacy.replay_contract_fingerprint()
+        );
+        let mut with_required = legacy_wire;
+        with_required["services"] = json!([{
+            "relation": "requires", "target": {"namespace": "aleph/resources", "name": "memory.runtime"}
+        }]);
+        let required: ToolCapabilityDescriptor = serde_json::from_value(with_required).unwrap();
+        assert_ne!(
+            required.replay_contract_fingerprint(),
+            legacy.replay_contract_fingerprint()
+        );
+        let mut multiple = required.clone();
+        multiple.services.push(crate::capability::Service {
+            relation: crate::capability::ServiceRelation::Provides,
+            target: crate::capability::CapabilityId {
+                namespace: "aleph/resources".into(),
+                name: "other".into(),
+            },
+        });
+        let fingerprint = multiple.replay_contract_fingerprint();
+        assert_ne!(fingerprint, required.replay_contract_fingerprint());
+        multiple.services.reverse();
+        assert_eq!(multiple.replay_contract_fingerprint(), fingerprint);
     }
 
     #[test]

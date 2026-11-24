@@ -166,8 +166,10 @@ mod tests {
             Ok(())
         }
 
-        async fn send(&self, _message: OutboundMessage) -> ChannelResult<SendResult> {
-            panic!("private SMS denial must not fall back to ordinary send")
+        fn send(&self, _message: OutboundMessage) -> SendOperation {
+            Box::pin(
+                async move { panic!("private SMS denial must not fall back to ordinary send") },
+            )
         }
     }
 
@@ -196,8 +198,10 @@ mod tests {
             Ok(())
         }
 
-        async fn send(&self, _message: OutboundMessage) -> ChannelResult<SendResult> {
-            panic!("private SMS denial must not fall back to ordinary send")
+        fn send(&self, _message: OutboundMessage) -> SendOperation {
+            Box::pin(
+                async move { panic!("private SMS denial must not fall back to ordinary send") },
+            )
         }
     }
 

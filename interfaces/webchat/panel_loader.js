@@ -1,0 +1,151 @@
+// Same-origin trusted/verified modules only; this ABI is not a sandbox.
+const failure = (code, cause) => Object.assign(new Error(code, { cause }), { code });
+const requireSync = (value) => {
+    if (!value || typeof value.then !== 'function') return;
+    // This ABI is synchronous after initialization. Observe rejected promises
+    // even when rejecting the result so malformed modules cannot leak rejections.
+    Promise.resolve(value).catch(() => {});
+    throw Error('async ABI result');
+};
+
+/** @type {WeakMap<object, Promise<void>>} */
+const initializingModules = new WeakMap();
+
+/**
+ * Share only an in-flight initializer for this exact ESM namespace.
+ * Successful and failed settlements both retain the existing later-call contract.
+ * @param {{ default?: unknown }} module
+ * @returns {Promise<void>}
+ */
+const initializeModule = async (module) => {
+    const initialize = module.default;
+    if (typeof initialize !== 'function') return;
+    let pending = initializingModules.get(module);
+    if (!pending) {
+        // Publish before invoking user initialization, including synchronous reentry.
+        pending = Promise.resolve().then(async () => {
+            try {
+                await initialize.call(module);
+            } finally {
+                initializingModules.delete(module);
+            }
+        });
+        initializingModules.set(module, pending);
+    }
+    await pending;
+};
+
+const parseIntegrity = (integrity) => {
+    const match = /^sha256-([A-Za-z0-9+/]{43}=)$/.exec(integrity);
+    if (!match) throw failure('InvalidAssetIntegrity');
+    try {
+        const bytes = Uint8Array.from(atob(match[1]), (character) => character.charCodeAt(0));
+        if (bytes.length !== 32) throw Error('invalid SHA-256 length');
+        return bytes;
+    } catch (cause) {
+        throw failure('InvalidAssetIntegrity', cause);
+    }
+};
+
+const sameBytes = (left, right) =>
+    left.length === right.length && left.every((value, index) => value === right[index]);
+
+const importVerifiedModule = async (entry, integrity, credential) => {
+    const expected = parseIntegrity(integrity);
+    const url = new URL(entry, import.meta.url);
+    let response;
+    try {
+        const headers = {};
+        if (credential !== null) {
+            const gateway = new URL(credential.gateway_url);
+            gateway.protocol = gateway.protocol === 'wss:' ? 'https:' : gateway.protocol === 'ws:' ? 'http:' : gateway.protocol;
+            if (!['http:', 'https:'].includes(gateway.protocol)
+                || url.origin !== gateway.origin || url.origin !== globalThis.location?.origin
+                || typeof credential.token !== 'string' || !credential.token || /\s/.test(credential.token)
+                || (credential.current && !credential.current())) throw Error('invalid host binding');
+            headers.Authorization = `Bearer ${credential.token}`;
+        }
+        response = await fetch(url.href, { credentials: 'same-origin', redirect: 'error', cache: 'no-store', headers });
+    } catch (cause) {
+        throw failure('AssetFetchFailed', cause);
+    }
+    if (!response.ok) throw failure('AssetFetchFailed', Error(`HTTP ${response.status}`));
+    if (credential !== null && (typeof credential.project_generation !== 'string'
+        || response.headers.get('x-aleph-panel-project-generation') !== credential.project_generation)) {
+        throw failure('AssetFetchFailed', Error('project context changed'));
+    }
+
+    let bytes;
+    try {
+        bytes = new Uint8Array(await response.arrayBuffer());
+    } catch (cause) {
+        throw failure('AssetFetchFailed', cause);
+    }
+    const actual = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+    if (!sameBytes(actual, expected)) throw failure('IntegrityMismatch');
+    if (credential?.current && !credential.current()) throw failure('AssetFetchFailed');
+
+    const blobUrl = URL.createObjectURL(new Blob([bytes], { type: 'text/javascript' }));
+    try {
+        const module = await import(blobUrl);
+        await initializeModule(module);
+        return module;
+    } finally {
+        URL.revokeObjectURL(blobUrl);
+    }
+};
+
+export async function loadPanelModule(entry, integrity = null, credential = null) {
+    let module;
+    try {
+        module = integrity === null ? await import(new URL(entry, import.meta.url).href) : await importVerifiedModule(entry, integrity, credential);
+        if (integrity === null) await initializeModule(module);
+    } catch (cause) {
+        if (cause?.code === 'AssetFetchFailed' || cause?.code === 'InvalidAssetIntegrity' || cause?.code === 'IntegrityMismatch') throw cause;
+        throw failure('ImportFailed', cause);
+    }
+
+    let descriptorJson;
+    try {
+        if (typeof module.describe !== 'function' || typeof module.mount !== 'function') throw Error('missing ABI');
+        const descriptor = module.describe();
+        requireSync(descriptor);
+        if (!descriptor || typeof descriptor !== 'object' || Array.isArray(descriptor)) throw Error('invalid descriptor');
+        descriptorJson = JSON.stringify(descriptor);
+        if (typeof descriptorJson !== 'string') throw Error('invalid descriptor JSON');
+    } catch (cause) {
+        throw failure('InvalidDescriptor', cause);
+    }
+
+    return {
+        descriptorJson,
+        mount(sidebarRoot, contentRoot, sdk) {
+            let handle;
+            try {
+                handle = module.mount(sidebarRoot, contentRoot, sdk);
+            } catch (cause) {
+                throw failure('MountFailed', cause);
+            }
+            let unmount;
+            try {
+                requireSync(handle);
+                unmount = handle?.unmount;
+                if (typeof unmount !== 'function') throw Error('invalid mounted handle');
+            } catch (cause) {
+                throw failure('InvalidDescriptor', cause);
+            }
+            let disposed = false;
+            return {
+                unmount() {
+                    if (disposed) return;
+                    disposed = true;
+                    try {
+                        requireSync(unmount.call(handle));
+                    } catch (cause) {
+                        throw failure('UnmountFailed', cause);
+                    }
+                },
+            };
+        },
+    };
+}

@@ -58,6 +58,37 @@ impl MemoryProducerScheduler {
         })
     }
 
+    pub(crate) fn spawn_owned(
+        self: Arc<Self>,
+        runtime: Arc<crate::memory::runtime::MemoryRuntime>,
+        mut stop: tokio::sync::watch::Receiver<bool>,
+    ) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            let mut ticks = interval(self.tick_duration);
+            ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            ticks.tick().await;
+            loop {
+                if *stop.borrow() {
+                    return;
+                }
+                tokio::select! {
+                    biased;
+                    _ = stop.changed() => return,
+                    _ = ticks.tick() => {}
+                }
+                let operation = match runtime.operation() {
+                    Ok(operation) => operation,
+                    Err(_) => return,
+                };
+                // This retained worker owns the whole admitted tick. A stop
+                // suppresses its successor without cancelling capture or insert.
+                if let Err(error) = operation.scope(self.run_once()).await {
+                    warn!("memory producer scheduler tick errored: {error}");
+                }
+            }
+        })
+    }
+
     /// Run a single tick. Exposed for integration testing.
     pub async fn run_once(&self) -> Result<(), crate::error::AlephError> {
         let tick = self.tick_counter.fetch_add(1, Ordering::Relaxed);
@@ -225,6 +256,10 @@ mod tests {
         assert_eq!(scheduler.tick_counter.load(Ordering::Relaxed), 2);
     }
 }
+
+#[cfg(test)]
+#[path = "scheduler_lifecycle_tests.rs"]
+mod lifecycle_tests;
 
 #[cfg(test)]
 mod agent_id_unification_tests {

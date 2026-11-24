@@ -1,0 +1,141 @@
+{
+  "artifact": "phase11_windows_native_probe_and_aleph_build",
+  "status": "PARTIAL / NOT PHASE11 ACCEPTANCE",
+  "baseline_commit": "3334bdfb8138e1bd8616fe617a8f9d4384320340",
+  "required_ancestor": "a9a5aff6ba5f1c035f4117e8306157b769e7cd2e",
+  "source_identity": {
+    "tree_under_test": "baseline_commit plus the manifest and lock blobs below",
+    "desktop/nsh-shell/Cargo.toml": {
+      "baseline_git_blob": "58c93f113cca213b017fce1b455407e1c80f8f37",
+      "tested_git_blob": "fb46f19fc77ba327045fa435b59e644ed10ca58b"
+    },
+    "Cargo.lock": {
+      "baseline_git_blob": "53b8ca0280ef36a37046376442c68f51c93f381a",
+      "baseline_sha256": "fcee57eba791c491bc4a74027b0a89bb56f30ee9faa42e30193a34bf1a5a0a2d",
+      "tested_git_blob": "88d38cefe4facc878b0363f02556f55243da4e66",
+      "tested_sha256": "5174b9924666711e516bc4fdcc72ef85e1feda008deead9334e530890b864488"
+    },
+    "desktop/nsh-shell/src/main.rs": "97596dba9287e772d4f87189a0a75df248834b7125a91370950f47ac321da597",
+    "desktop/nsh-shell/src/platform.rs": "439305e4fefe532a4816a17e89e567975f435379649fb3772ec1edb93851ba39",
+    "desktop/nsh-shell/src/autostart.rs": "e29fc53335ce158b938350eb0d1890bb5bf5e46f4d669ac3caa63c5b5120e980",
+    "desktop/host/src/local_server.rs": "1876199111acebe1757c998ac48444297f30ac29db3e06cbbfd37c299b32989f",
+    ".github/workflows/aleph-app-release.yml": "955f8b5d5b3fc85ffdd6805a2790ef5dba076f4c2a0ae27ef13af6f0950eaf2a",
+    "runner_prompt_at_probe_start_sha256": "303e5fa95a9303e747f6ed1dc719c025aae9732ba32934bf3874c36a00faa831",
+    "runner_prompt_with_local_qa_clarification_sha256": "94f0a0db543cd8cb841182e628f9fdd84acb0bf477cd893f7b6dfb5d1358bd7a"
+  },
+  "platform": {
+    "os": "Windows 11 Pro 10.0.28000",
+    "computer": "QEMU; Intel Core i9-13900H reported by guest",
+    "rustc": "1.99.1",
+    "rust_host": "x86_64-pc-windows-msvc",
+    "webview2": "157.0.4341.60",
+    "protoc": "36.2",
+    "interactive": "RDP; WTS active session 2; 1512x949",
+    "local_host_qa_authorized": true,
+    "default_port_listener_at_preflight": false,
+    "exclusive_default_gateway_environment_confirmed": false
+  },
+  "official_toolkit": {
+    "crate": "nsh-platform-windows =0.6.0",
+    "archive_sha256": "6a3ad71007bf7456f58dbb9511421e1c9a2fccb97094c3fff44792a5a497e591",
+    "published_git": "554163758e30d2f62f814096a6327937dcb4fe49",
+    "published_lock_sha256": "5a13e774e8672f518edd930e1fc7400e5e14a04e539db7c1241f65c1e927a3d0",
+    "official_source_files_matching_archive": 57,
+    "official_source_files_total": 57,
+    "src/app.rs_sha256": "d0ae99f3d227b5ffeeaf75a65c808f7d70c0ae53c2a3470d4dbb40ad624c5a05",
+    "src/linking.rs_sha256": "97ac99d08d15ebc97711d2c4258151fcfbbd04be54969429672895dfb6e7c4ae",
+    "probe_source_sha256": "4c6e00556d409e2bb67c9dc8d593ec0652834ee04dfbcbc080ee8321d5907c00",
+    "collector_sha256": "16ba74a14c197675e654a2615ce69771fb82830585a34090621e32fe3ba0a154"
+  },
+  "native_probe": {
+    "with_webview": {
+      "status": "PASS",
+      "binary_sha256": "2d3d3e1df561a958c269275e808226d428b37d014aa96048b05783e57c9f8759",
+      "stdout_sha256": "9e21369d4895055d8c209bc9fe62101b4ec92af9b8a306e8be5d7de14ab02f6a",
+      "collector_receipt_sha256": "dd2a25113ea130da423f407fb2dabdab70ad1e6d60fe104e43569dbd0adc93ed",
+      "owned_visible_window": true,
+      "color_samples_rgb": [[27, 191, 173], [27, 191, 173], [27, 191, 173]],
+      "webview2_processes_observed": 6,
+      "fixed_ipc": {"document": 11, "request": 1, "request_reply_and_rendered_ack": true},
+      "owned_close": "WM_CLOSE",
+      "process_exit": 0,
+      "window_gone": true,
+      "webview2_processes_gone": true,
+      "private_profile_removed": true
+    },
+    "without_webview": {
+      "status": "FAIL",
+      "expected_negative_control": true,
+      "binary_sha256": "2ba9c1c9dc21dd12b6fff131680ec127396c96b74cfe4e46b3f76bd2a90c8970",
+      "stdout_sha256": "ffcf58690a2d8c4f87c680bd631ba253582c8a639a4d7411e9ecd7b181452d79",
+      "collector_receipt_sha256": "90cb706ca4bfda4210317d15d0fb165ce28c14a7e45d6ce1c72b8fe42f12335a",
+      "owned_visible_window": true,
+      "color_samples_rgb": [[255, 255, 255], [255, 255, 255], [255, 255, 255]],
+      "webview2_processes_observed": 0,
+      "rendered_ack": false,
+      "collector_exit": 1,
+      "graceful_cleanup_exit": 0,
+      "webview2_processes_gone": true,
+      "private_profile_removed": true
+    },
+    "rust_continuation_after_run_app": {
+      "status": "FAIL",
+      "observed_marker": false,
+      "explanation": "Windows run_app exits the process directly after the UI loop (official src/app.rs:638–641). Normal process exit is proven; continuation in the caller is not supported. The bare probe does not test Aleph bridge cleanup."
+    }
+  },
+  "build": {
+    "memory_gate": "python qa/browser_live/check_memory.py --required-bytes 4294967296",
+    "lite_command": "cargo +1.99.1 build -p aleph-nsh-shell --offline --locked --jobs 1",
+    "initial_private_cache_blocker": {"status": "FAIL", "exit": 101, "message": "failed to download `wuff v0.2.9` offline", "mitigation": "Populate private scratch Cargo cache with lock-checksummed registry archives, then retry locked and offline."},
+    "lite_baseline": {"status": "PASS", "exit": 0, "binary_sha256": "c36c77f5d6930fb1b76a817594b52218aecb1e775521a255546bc76f18d77bc1", "raw_build_sha256": "3c46a4aa1f1dbd7d8148add933732b08fb20267cc935df97ac2b1f2a6c9de509"},
+    "lite_feature_without_lock_edge": {"status": "FAIL", "exit": 101, "memory_available_bytes": 13583343616, "message": "cannot update the lock file because --locked was passed to prevent this", "raw_build_sha256": "ced625f414903cc48c6ee9f890e704cdf183f289b81c260d657a4fb2e88103fc"},
+    "lite_feature_with_lock_edge": {"status": "PASS", "exit": 0, "memory_available_bytes": 13744668672, "binary_sha256": "22fb0dbf1907f8f4123d68883a162eda17276777fa82c2d0dd629ae1e3c2d6a6", "raw_build_sha256": "426f1e469dc667da826e19085a54f75b5889068684ea9b8d01d9cf17afcae1b4", "raw_cli_receipt_sha256": "e201d11997ca1b590362b2752ae406abc4e9b07ab5c4ffca362e66504909a30e"},
+    "full": {"status": "PASS", "scope": "Debug shell with embedded-core only; no sibling server or installer built or started.", "command": "cargo +1.99.1 build -p aleph-nsh-shell --features embedded-core --offline --locked --jobs 1", "exit": 0, "memory_available_bytes": 13459214336, "binary_sha256": "a5c4a8887fe6f5344fdcb727cd8baace942b24679718ad7fe131a895d89e748a", "raw_build_sha256": "f9774841ad727405c92938a560e58d349e397b50f06d9066d3060a62bede553b", "raw_cli_receipt_sha256": "b99646efc5603a862fa18887293c8e37cbe98fe9f3c0b61f9462991e2c96788a"}
+  },
+  "production_gateway_build": {
+    "status": "PASS_BUILD_ONLY",
+    "command": "cargo +1.99.1 build -p alephcore --bin aleph-server --offline --locked --jobs 1",
+    "memory_gate_verdict": "ALLOW",
+    "exit": 0,
+    "raw_build_log_sha256": "75cd47602659b37dd58f40ec633bd37b559b9d6aa818324654fe8e75a6510f3e",
+    "binary_sha256": "8c5f1a9795f14ee667e18b303fa67e5de6d6239afc05ecbc0ef82adb2e365398"
+  },
+  "scoped_real_panel": {
+    "status": "PASS",
+    "scope": "Actual Windows debug lite and full binaries with qa-service, real shared Panel served by the compiled production Gateway, pre-existing Panel dist bytes captured before and after. Separate random QA profiles and credential namespaces; external, nondefault loopback Gateway. This does not exercise the full default acquisition path or a packaged release.",
+    "first_attempt": {"status": "FAIL", "exit": 1, "reason": "Gateway reported ready; netstat did not report its loopback listener. No Panel opened; the owned fixture was removed after forced cleanup. A separate known listener reproduced the measurement gap.", "raw_receipt_sha256": "8ebc764a25ae025dfb6a388086c32da5cba01ab6941983fa82e1dea718c7b7aa", "gateway_log_sha256": "d45267b66df02b65a340dd4e819c02997252b688a3d7e9ce7d37340caadc8190"},
+    "corrected_run": {"exit": 0, "owner_measurement": "Windows GetExtendedTcpTable matched the established server-side socket and PID for each /health and /ready request; this is not a listener-table acceptance test.", "raw_receipt_sha256": "63c72e82f98175c7fa3af583e665f9266f308136fd4ac1ab536c86d5158c3bab", "collector_sha256": "45bd42ce7c38cc3fbf8d1c8130a94265cecb49dabd1a5c6f82809621ebb4f943", "gateway_log_sha256": "6d5d707410c0e328a3210b5a27aed8de6591eefb599fe69c4ef89742609758dc", "model_log_sha256": "f39e57f8849ec0419348d2412a16f36c868144effc5f3d7f5220ef9b37953ed4", "shells_stderr_sha256": "4d5dcc2766833e713f632301841c14e1a098c134ffb7a803cbe87fce34fcf4da"},
+    "assets_unchanged": true,
+    "assets": {
+      "index.html": {"bytes": 7425, "sha256": "01ba38ba50b53babbd3a48d42cf51d47f9102b729deb36c64e2a7be60c6b8d43"},
+      "aleph_panel.js": {"bytes": 121199, "sha256": "53be3d5177e308f419c34cfa0e2950df347bdd7a262547229e72863e8a4eea9c"},
+      "aleph_panel_bg.wasm": {"bytes": 70967315, "sha256": "72953ab0e1b76226d44cae5e3ad8c3afd451320fa0fe6a6bfcbdf925cf05437e"},
+      "tailwind.css": {"bytes": 146900, "sha256": "3ede8d53cbb11d0707f68c53653103749ca33026a82e497b389db328e4cde9e7"}
+    },
+    "lite": {"binary_sha256": "4a829bff1212bbb3b71e779c79be9626a9587c7b41872ab7c855e3888f2aa310", "build_log_sha256": "b88ef6832eb63f79b02f3d452ccff85337ac33e9707e0f25932cb1469bd03e9e", "stdout_sha256": "158a60c51c7e5806769bab12d969591202c3cbc3d08b4d999396bce765f77b69", "pid": 11388, "owned_visible_hwnd": 26018724, "owned_webview_processes": 5, "exit": 0, "forced": false},
+    "full": {"binary_sha256": "80fedccccaaeaec92b3df8b72ab8beea3e7c2df95673c050de9a01150aedc8d5", "build_log_sha256": "3334fd9d0df2259105e21837aefc6ae720ee6c4babb7b67ef5348a8dc067b2e7", "stdout_sha256": "21628d3bf489520ebcd80f275c654e3212eec9e81433bb8c177cc680cad2ea52", "pid": 4048, "owned_visible_hwnd": 26149796, "owned_webview_processes": 6, "exit": 0, "forced": false},
+    "both_observed": ["native marker", "empty isolated credential read", "Gateway connect without credential", "same document for native replies", "visible settings status", "correct unavailable and read-only text", "no write toggle", "fixture-requested native close", "owned WebView processes and profiles removed"],
+    "gateway_before_and_after_each_shell_exit": {"pid": 6132, "instance_id": "6ebef5d7-b543-4fd3-b93a-bcf16cccc8d4", "started_at_unix": 1795355707, "version": "26.9.1", "ready": true},
+    "owned_fixture_cleanup": {"gateway_exit_after_ctrl_c": 0, "model_fixture_exit_after_ctrl_c": 3221225786, "forced_termination": false, "all_fixture_files_removed": true}
+  },
+  "aleph_windows": {
+    "actual_full_lite_panel_render_and_typed_ipc": {"status": "PASS", "scope": "Debug QA canonical Panel status and empty credential read; not a packaged run."},
+    "actual_full_lite_native_close_and_quit": {"status": "PASS", "scope": "Fixture-requested native close and process exit; not ordinary tray Quit."},
+    "sibling_binary_cold_start_reuse_conflict_listener_ownership": {"status": "NOT RUN", "source_only": "desktop/host/src/local_server.rs:244–251 restricts the bundled path to the executable's sibling aleph-server.exe on Windows."},
+    "lite_and_remote_never_start_or_stop_gateway": {"status": "NOT RUN", "limitation": "Both debug QA launches preserved the independently started Gateway; explicit production remote launch and default lite entry were not exercised."},
+    "ordinary_quit_preserves_same_gateway_instance": {"status": "NOT RUN", "limitation": "Same process and instance after QA bridge close is measured separately; the tray menu was not used."},
+    "explicit_quit_and_stop_recovery_target_switch": {"status": "NOT RUN", "limitation": "No production handler established. Manual termination would not be evidence."},
+    "owned_credential_save_reload_delete": {"status": "NOT RUN", "limitation": "Only an empty isolated credential read was exercised; no credential was written."},
+    "tray_menu_hotkey": {"status": "NOT RUN", "limitation": "The product defines its tray menu at desktop/nsh-shell/src/main.rs:164–177. The QA fixture deliberately disabled the global hotkey."},
+    "url_scheme_and_second_instance_delivery": {"status": "NOT RUN", "source_only": "The Rust Root declares URL schemes at desktop/nsh-shell/src/main.rs:260; the official Windows backend registers them from AppOptions at src/app.rs:701–706, whose defaults are an empty scheme list and single_instance=false (src/app.rs:249–253)."},
+    "notifications_permissions_external_links": {"status": "NOT RUN"},
+    "app_login_item_status": {"status": "FAIL", "scope": "Both debug CLIs exit 0 and report unavailable/unsupported_platform, not OS state. Not a Gateway task check.", "raw_stdout_sha256": "b3c2cf2a8822dbb107d2d077dde15ab9eb1ff10131a6c418a3b7fe94b69499af"},
+    "full_lite_installer_layout_and_helper_runtime": {"status": "NOT RUN", "source_only": "Existing Windows packaging remains in .github/workflows/aleph-app-release.yml; debug executables are not installer evidence."},
+    "updater_trust_feed_and_rollback": {"status": "NOT RUN", "unchanged": true}
+  },
+  "reviews": {"spec": "OK for Windows-only feature enablement", "quality_initial": "BLOCK for missing lock dependency edge", "quality_after_lock_edge": "OK for patch only"},
+  "disposition": {"issue_12_windows": "OPEN", "P11-A": "OPEN", "P11-B": "OPEN", "dual_track_started": false},
+  "local_commit": {"status": "FAIL", "exit": 1, "command": "git commit -m 'fix(nsh): enable Windows WebView2 backend'", "blocker": "Existing pre-commit hook stopped at cargo fmt --check on unchanged Rust files, including tests/spec_c_invariants.rs. Clippy did not run. The hook was not bypassed; HEAD remains at baseline_commit."},
+  "evidence_retention": "Raw binary, build, CLI and collector evidence retained in the runner's local private scratch directory. This portable receipt copies digests and measured effects, not machine paths, profiles or credential values."
+}

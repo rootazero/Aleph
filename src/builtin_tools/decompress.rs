@@ -307,7 +307,9 @@ pub(crate) async fn decompress_fold_span(
     // progress, or the continuation coordinate would loop.
     let cap = args
         .max_tokens
-        .unwrap_or_else(crate::tools::result_processing::read_backstop_tokens);
+        .unwrap_or_else(crate::tools::result_processing::read_backstop_tokens)
+        .min(crate::tools::result_processing::read_backstop_tokens())
+        .max(1);
     let mut used = 0usize;
     let mut page: Vec<&str> = Vec::new();
     let mut next_from_seq = None;

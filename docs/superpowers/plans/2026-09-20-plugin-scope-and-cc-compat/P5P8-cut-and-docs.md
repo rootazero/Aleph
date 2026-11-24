@@ -1232,7 +1232,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 Current line (quoted): `| **clawhub** | \`src/clawhub/\` | ClawHub integration |`
 
 - [ ] **Step 1: Pre-condition** — `ls src/clawhub` → `No such file or directory`; `rg -n 'src/clawhub' docs/reference/ARCHITECTURE.md` → exactly `:261`.
-- [ ] **Step 2: Delete `:261`.** No replacement row: the Hub is already listed as `hub` (`src/hub/`, verify with `rg -n '\*\*hub\*\*' docs/reference/ARCHITECTURE.md` — if absent, add `| **hub** | \`src/hub/\` | Aleph Hub — extension catalog + install pipeline ([ALEPH_HUB.md](./ALEPH_HUB.md)) |` in alphabetical position after `group_chat`).
+- [ ] **Step 2: Delete `:261`.** No replacement row: the Hub is already listed as `hub` (`src/hub/`, verify with `rg -n '\*\*hub\*\*' docs/reference/ARCHITECTURE.md` — if absent, add `| **hub** | \`src/hub/\` | Aleph Hub — extension catalog + install pipeline ([ALEPH_HUB.md](../../../reference/ALEPH_HUB.md)) |` in alphabetical position after `group_chat`).
 - [ ] **Step 3: Post-condition** — `rg -n 'clawhub' docs/reference/ARCHITECTURE.md` → 0.
 - [ ] **Step 4: Commit**
 
@@ -1838,7 +1838,7 @@ Before `:124` (the `src/mcp/ · src/hub/` row) insert:
 | `src/extension/` | [EXTENSION_SYSTEM.md](docs/reference/EXTENSION_SYSTEM.md) · [PLUGIN_SYSTEM.md](docs/reference/PLUGIN_SYSTEM.md) · FL §3.10 §5.27 | E.0 E.3 E.9 | `qa/plugins/run.sh {scope,visibility,command,exit2,cc-cache}`（前六个阶段与每阶段证明什么见 [`qa/README.md`](qa/README.md)） |
 ```
 
-`:124` → `| \`src/mcp/\` · \`src/hub/\` | FL §5.20 §5.24 · [ALEPH_HUB.md](docs/reference/ALEPH_HUB.md) FL §5.21 | E.9 | \`qa/plugins/run.sh\`（Hub 走 \`browse\` / \`marketplaces\`；阶段清单见 [\`qa/README.md\`](qa/README.md)） |`
+`:124` → `| \`src/mcp/\` · \`src/hub/\` | FL §5.20 §5.24 · [ALEPH_HUB.md](../../../reference/ALEPH_HUB.md) FL §5.21 | E.9 | \`qa/plugins/run.sh\`（Hub 走 \`browse\` / \`marketplaces\`；阶段清单见 [\`qa/README.md\`](../../../../qa/README.md)） |`
 
 - [ ] **Step 3: Post-condition** — `rg -n 'mcp_face' CLAUDE.md | wc -l` → 2 lines (the disallow bullet; the routing row, which names it twice); `rg -n 'E.4 E.9' CLAUDE.md` → the new row (E.4 because of D.0.199's approval trigger); `rg -c 'src/extension/' CLAUDE.md` → 1; the 形状名索引 (`:78-97`) is byte-identical (`git diff CLAUDE.md | grep -E '^[-+]\| \*\*[0-9]+\*\*'` → empty).
 

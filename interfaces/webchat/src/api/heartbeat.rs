@@ -89,7 +89,7 @@ fn form_to_trigger_condition(s: &str) -> Value {
     }
     let gt = t.strip_prefix('>').or_else(|| {
         let lower = t.to_lowercase();
-        lower.strip_prefix("gt:").map(|_| &t[3..])
+        lower.strip_prefix("gt:").and_then(|_| t.get(3..))
     });
     if let Some(rest) = gt {
         if let Ok(n) = rest.trim().parse::<f64>() {

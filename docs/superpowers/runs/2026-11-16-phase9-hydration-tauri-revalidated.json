@@ -1,0 +1,18 @@
+{
+  "status": "PASS",
+  "reason": null,
+  "resource_complete": false,
+  "evidence_scope": "schema_and_marker_correlations_plus_direct_child_exit",
+  "qa_run_id": "a7f20f951c504daf984aaf62ae878a4a",
+  "surface": "tauri",
+  "metrics": {
+    "first_frame_ms": 5719.735375023447,
+    "route_ms": 75.40758402319625,
+    "input_ms": 2010.725292027928,
+    "reconnect_ms": 958.6541670141742,
+    "close_ms": 4.731082997750491,
+    "rss_mb": 152.109375,
+    "threads": 21
+  },
+  "schema_sha256": "05cd5638ebe655e6d5c4cc4716b69077bd5ce9c3a983bd793852df08b33f2bbe"
+}

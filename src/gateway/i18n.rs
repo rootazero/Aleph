@@ -167,6 +167,10 @@ pub enum Msg<'a> {
     // --- /stop command ---
     RunStopped,
     NoActiveRun,
+    /// The cancellation itself FAILED — the run is still going. Distinct from
+    /// [`Self::NoActiveRun`]: that one says "there was nothing to stop", this
+    /// one says "stopping did not work, and the work continues".
+    StopFailed,
 
     // --- execution errors (single bucket set, see `ReceiptKind`) ---
     ErrReceipt(ReceiptKind),
@@ -385,6 +389,10 @@ pub fn t(msg: Msg<'_>, locale: Locale) -> String {
         (Msg::RunStopped, Locale::En) => "⏹ Stopped the current task.".into(),
         (Msg::NoActiveRun, Locale::Zh) => "当前没有正在执行的任务。".into(),
         (Msg::NoActiveRun, Locale::En) => "No task is currently running.".into(),
+        (Msg::StopFailed, Locale::Zh) => "⏹ 停止失败：当前任务可能仍在运行。".into(),
+        (Msg::StopFailed, Locale::En) => {
+            "⏹ Failed to stop the current task — it may still be running.".into()
+        }
 
         // ============================================================
         // Execution errors

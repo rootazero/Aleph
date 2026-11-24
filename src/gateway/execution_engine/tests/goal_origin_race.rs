@@ -189,28 +189,6 @@ impl SessionStore for ReplaceOnTokenRead {
     ) -> Result<store_types::SessionPreview, SessionStoreError> {
         self.inner.get_session_preview(key, message_limit).await
     }
-    async fn count_by_state(
-        &self,
-        state: crate::gateway::session_manager::SessionState,
-    ) -> Result<usize, SessionStoreError> {
-        self.inner.count_by_state(state).await
-    }
-    async fn list_by_state(
-        &self,
-        state: crate::gateway::session_manager::SessionState,
-    ) -> Result<Vec<store_types::SessionMetadata>, SessionStoreError> {
-        self.inner.list_by_state(state).await
-    }
-    async fn set_error(
-        &self,
-        key: &SessionKey,
-        error_msg: Option<&str>,
-    ) -> Result<(), SessionStoreError> {
-        self.inner.set_error(key, error_msg).await
-    }
-    async fn stop(&self, key: &SessionKey) -> Result<(), SessionStoreError> {
-        self.inner.stop(key).await
-    }
     async fn set_idle(&self, key: &SessionKey) -> Result<(), SessionStoreError> {
         self.inner.set_idle(key).await
     }

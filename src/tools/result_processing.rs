@@ -535,8 +535,13 @@ fn own_marker_at(tool_call_id: &str, tool_name: &str, text: &str) -> Option<usiz
     let (slash, backslash) = (named('/'), named('\\'));
     text.match_indices(PERSISTED_REF_PREFIX)
         .filter(|(at, _)| {
-            let rest = &text[at + PERSISTED_REF_PREFIX.len()..];
-            let marker = &rest[..rest.find(")]").unwrap_or(rest.len())];
+            let Some(rest) = text.get(at.saturating_add(PERSISTED_REF_PREFIX.len())..) else {
+                return false;
+            };
+            let marker_end = rest.find(")]").unwrap_or(rest.len());
+            let Some(marker) = rest.get(..marker_end) else {
+                return false;
+            };
             marker.contains(&slash) || marker.contains(&backslash)
         })
         .map(|(at, _)| at)
@@ -547,12 +552,16 @@ fn own_marker_at(tool_call_id: &str, tool_name: &str, text: &str) -> Option<usiz
 /// closing `)]`, plus the hint line right under it when there is one (the
 /// break may be a real newline or, inside flattened JSON, an escaped one).
 fn own_footer_span(text: &str, at: usize) -> std::ops::Range<usize> {
-    let rest = &text[at..];
+    let Some(rest) = text.get(at..) else {
+        return at..text.len();
+    };
     let Some(close) = rest.find(")]") else {
         return at..text.len();
     };
-    let marker_end = close + ")]".len();
-    let after = &rest[marker_end..];
+    let marker_end = close.saturating_add(")]".len());
+    let Some(after) = rest.get(marker_end..) else {
+        return at..at.saturating_add(marker_end).min(text.len());
+    };
     let sep = if after.starts_with('\n') {
         1
     } else if after.starts_with("\\n") {
@@ -560,25 +569,34 @@ fn own_footer_span(text: &str, at: usize) -> std::ops::Range<usize> {
     } else {
         0
     };
-    let hint = &after[sep..];
+    let Some(hint) = after.get(sep..) else {
+        return at..at.saturating_add(marker_end).min(text.len());
+    };
     let is_hint = sep > 0 && (hint.starts_with("[Indexed ") || hint.starts_with(FILE_READ_HINT));
     if !is_hint {
-        return at..at + marker_end;
+        return at..at.saturating_add(marker_end).min(text.len());
     }
     let hint_end = [hint.find('\n'), hint.find("\\n")]
         .into_iter()
         .flatten()
         .min()
         .unwrap_or(hint.len());
-    at..at + marker_end + sep + hint_end
+    let total_end = at
+        .saturating_add(marker_end)
+        .saturating_add(sep)
+        .saturating_add(hint_end)
+        .min(text.len());
+    at..total_end
 }
 
 /// `text` bounded by `budget` with the footer at `span` kept whole: the text
 /// around it (before and after) is joined and head/tail cut into the room the
 /// footer leaves, halving that room until the total fits.
 fn bounded_around_footer(text: &str, span: std::ops::Range<usize>, budget: usize) -> String {
-    let footer = &text[span.clone()];
-    let rest = format!("{}{}", &text[..span.start], &text[span.end..]);
+    let footer = text.get(span.clone()).unwrap_or("");
+    let before = text.get(..span.start).unwrap_or("");
+    let after = text.get(span.end..).unwrap_or("");
+    let rest = format!("{before}{after}");
     let mut room = budget.saturating_sub(estimate_tokens_smart(footer) + 1);
     loop {
         let body = if room == 0 {

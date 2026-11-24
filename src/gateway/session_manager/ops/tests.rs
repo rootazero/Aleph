@@ -64,8 +64,8 @@ mod spec1_tests {
             SessionEndReason::Disconnect,
             None,
             None,
-        );
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        )
+        .await;
         let captured = fake.0.lock().unwrap_or_else(|e| e.into_inner());
         assert_eq!(captured.len(), 1);
         assert_eq!(captured[0].agent_id, "agent-x");
@@ -90,8 +90,8 @@ mod spec1_tests {
             SessionEndReason::Disconnect,
             None,
             None,
-        );
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        )
+        .await;
         assert!(fake.0.lock().unwrap_or_else(|e| e.into_inner()).is_empty());
     }
 }

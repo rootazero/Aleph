@@ -122,6 +122,7 @@ async fn subagent_base_carries_4_p1_fields() {
         chain: ChainContext::new(),
         raw_memory_writer: None,
         capture_registry: None,
+        memory_runtime: None,
         parent_agent_id: None,
         parent_session_id: None,
         guardrails: None,

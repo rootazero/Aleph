@@ -89,9 +89,10 @@ pub(crate) fn effective_fallback_names(
             .collect();
     }
     let live: std::collections::HashSet<&str> = live_names.iter().map(String::as_str).collect();
-    configured_minus_primary()
-        .into_iter()
-        .filter(|n| live.contains(n.as_str()))
+    configured_names
+        .iter()
+        .filter(|n| n.as_str() != primary_name && live.contains(n.as_str()))
+        .cloned()
         .collect()
 }
 
@@ -285,7 +286,7 @@ impl FailoverProvider {
     }
 
     /// Build the ordered candidate list for one request in explicit order.
-    async fn candidates(&self) -> CandidatePlan {
+    fn candidates(&self) -> CandidatePlan {
         let primary = self.primary.current();
         let primary_name = primary.name().to_string();
         let primary_models = self
@@ -374,7 +375,11 @@ impl FailoverProvider {
     /// Record a successful call — close the circuit and reset the cooldown.
     async fn mark_healthy(&self, name: &str) {
         let mut map = self.health.0.write().await;
-        let st = map.entry(name.to_string()).or_default();
+        let st = if let Some(st) = map.get_mut(name) {
+            st
+        } else {
+            map.entry(name.to_string()).or_default()
+        };
         st.circuit = CircuitState::Closed;
         st.failure_count = 0;
         st.last_error = None;
@@ -502,7 +507,7 @@ impl FailoverProvider {
             RequestRequirements::from_request(messages, tools.is_some_and(|t| !t.is_empty()));
 
         Box::pin(async move {
-            let mut plan = self.candidates().await;
+            let mut plan = self.candidates();
             let total = plan.candidates.len();
             let mut last_error: Option<AlephError> = None;
             // The route witness's `session_id`, read once: the same

@@ -2,7 +2,7 @@ use super::{CompressResult, SessionCompactor};
 use crate::error::AlephError;
 use crate::gateway::agent_instance::AgentInstance;
 use crate::gateway::router::SessionKey;
-use crate::memory::extensions::insert_with_capture_filter;
+use crate::memory::extensions::insert_helper::insert_with_runtime_capture_filter;
 use crate::memory::extensions::types::CaptureCtx;
 use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
 use crate::sync_primitives::Arc;
@@ -24,6 +24,7 @@ const MAX_INFLIGHT_PRECOMPRESS: usize = 8;
 async fn write_precompress_raw(
     writer: Arc<dyn RawMemoryStore>,
     registry: Option<Arc<crate::memory::extensions::MemoryExtensionRegistry>>,
+    runtime: Option<std::sync::Weak<crate::memory::runtime::MemoryRuntime>>,
     raw: RawMemory,
 ) {
     if let Some(registry) = registry {
@@ -37,7 +38,10 @@ async fn write_precompress_raw(
             session_id: raw.session_id.clone(),
             source_hint: "pre_compress".into(),
         };
-        if let Err(e) = insert_with_capture_filter(&writer, &registry, &ctx, raw).await {
+        if let Err(e) =
+            insert_with_runtime_capture_filter(&writer, &registry, runtime.as_ref(), &ctx, raw)
+                .await
+        {
             tracing::warn!("pre_compress raw_memory write failed: {e}");
         }
     } else if let Err(e) = writer.insert_raw_memory(&raw).await {
@@ -97,6 +101,9 @@ impl SessionCompactor {
         let ratio = self.config.token_estimate_ratio;
 
         let raw_messages = agent.get_history(session_key, None).await;
+        if raw_messages.len() <= self.config.fresh_tail_count {
+            return Ok(CompressResult::default());
+        }
 
         let pairs: Vec<(String, String)> = raw_messages
             .iter()
@@ -107,7 +114,6 @@ impl SessionCompactor {
                     crate::gateway::agent_instance::MessageRole::System => "system",
                     crate::gateway::agent_instance::MessageRole::Tool => "tool",
                 };
-                // rust-doctor-disable-next-line excessive-clone
                 (role.to_string(), m.content.clone())
             })
             .collect();
@@ -167,14 +173,21 @@ impl SessionCompactor {
                 continue;
             }
 
+            let raw_content: String = {
+                use std::fmt::Write as _;
+                let mut buf = String::new();
+                for (i, (role, text)) in chunk.iter().enumerate() {
+                    if i > 0 {
+                        buf.push_str("\n\n");
+                    }
+                    let _ = write!(buf, "[{role}]: {text}");
+                }
+                buf
+            };
+
             if let Some(ref writer) = self.raw_memory_writer {
-                let raw_text: String = chunk
-                    .iter()
-                    .map(|(role, text)| format!("[{role}]: {text}"))
-                    .collect::<Vec<_>>()
-                    .join("\n\n");
-                if !raw_text.is_empty() {
-                    let raw = RawMemory::new(raw_text, RawMemorySource::PreCompress)
+                if !raw_content.is_empty() {
+                    let raw = RawMemory::new(raw_content.clone(), RawMemorySource::PreCompress)
                         .with_agent(&agent_id)
                         .with_session(&session_id);
                     // rust-doctor-disable-next-line excessive-clone
@@ -189,7 +202,12 @@ impl SessionCompactor {
                         // same "there is room now" the await is here for.
                         let _ = precompress_set.join_next().await;
                     }
-                    precompress_set.spawn(write_precompress_raw(writer, registry_opt, raw));
+                    precompress_set.spawn(write_precompress_raw(
+                        writer,
+                        registry_opt,
+                        self.memory_runtime.clone(),
+                        raw,
+                    ));
                 }
             }
 
@@ -216,9 +234,6 @@ impl SessionCompactor {
                 // rust-doctor-disable-next-line excessive-clone
                 .with_path(fact.path.clone());
             let insert_ok = if let Some(ref registry) = self.capture_registry {
-                let store: Arc<dyn crate::memory::store::raw_memory::RawMemoryStore> =
-                    // rust-doctor-disable-next-line excessive-clone
-                    self.database.clone();
                 let ctx = CaptureCtx {
                     // rust-doctor-disable-next-line excessive-clone
                     agent_id: agent_id.clone(),
@@ -227,7 +242,15 @@ impl SessionCompactor {
                     session_id: Some(session_id.clone()),
                     source_hint: "session_compressed".into(),
                 };
-                match insert_with_capture_filter(&store, registry, &ctx, raw).await {
+                match insert_with_runtime_capture_filter(
+                    &self.database,
+                    registry,
+                    self.memory_runtime.as_ref(),
+                    &ctx,
+                    raw,
+                )
+                .await
+                {
                     Ok(_) => true,
                     Err(e) => {
                         warn!(
@@ -256,11 +279,6 @@ impl SessionCompactor {
             if insert_ok {
                 d0_created += 1;
 
-                let raw_content: String = chunk
-                    .iter()
-                    .map(|(role, text)| format!("[{role}]: {text}"))
-                    .collect::<Vec<_>>()
-                    .join("\n\n");
                 self.store_raw_chunk(&session_id, &agent_id, next_seq as usize, &raw_content)
                     .await?;
 

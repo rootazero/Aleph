@@ -41,11 +41,24 @@ pub struct Screen {
     last_sent_cursor_visible: Option<bool>,
     last_sent_bracketed_paste: Option<bool>,
     last_sent_cwd: Option<String>,
+    /// Cursor position we last wrote to the client, so an unchanged cursor
+    /// is not re-sent as a redundant edit.
+    last_sent_cursor_pos: Option<(u16, u16)>,
     /// What `ESC 7` (DECSC) stashed, for `ESC 8` to put back. One slot, not
     /// one per screen buffer: DECSC/DECRC in a shell prompt are always
     /// paired inside one buffer, and a second slot would have no producer.
     saved_cursor: Option<SavedCursor>,
+    /// Bytes the program asked the TERMINAL to send back (DSR/CPR replies),
+    /// awaiting the session's writer. Kept outside `ScreenState` so a soft
+    /// reset later in the same chunk cannot drop an answer a program is
+    /// blocked on: Windows ConPTY emits `CSI 6 n` at startup and renders
+    /// nothing until it gets one. Bounded by `MAX_PENDING_REPLY_BYTES`.
+    replies: Vec<u8>,
 }
+
+/// A flood of status requests with nobody draining replies cannot grow
+/// server memory without bound; a request past this is dropped unanswered.
+pub(super) const MAX_PENDING_REPLY_BYTES: usize = 4096;
 
 /// DECSC's slot. Position and style are one value because `ESC 7` saves
 /// both — splitting them invites a restore that returns the column and
@@ -118,7 +131,9 @@ impl Screen {
             last_sent_cursor_visible: None,
             last_sent_bracketed_paste: None,
             last_sent_cwd: None,
+            last_sent_cursor_pos: None,
             saved_cursor: None,
+            replies: Vec::new(),
         }
     }
 
@@ -182,6 +197,12 @@ impl Screen {
         std::mem::take(&mut self.state.bell)
     }
 
+    /// Takes the terminal replies queued by the last `feed` calls. The
+    /// session writes them to the child's input, as a real terminal would.
+    pub fn take_replies(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.replies)
+    }
+
     /// True while the alternate screen buffer (`\e[?1049h`) is active —
     /// e.g. while `vim`, `htop`, or a pager is running in the shell.
     #[must_use]
@@ -232,7 +253,6 @@ impl Screen {
             parked.set_scrollback_limit(lines);
         }
     }
-
     /// The scrollback ceiling currently in effect on the visible grid.
     #[must_use]
     pub fn scrollback_limit(&self) -> usize {
@@ -253,10 +273,12 @@ impl Screen {
         let bracketed_paste = self.state.bracketed_paste;
         let bracketed_paste_changed = Some(bracketed_paste) != self.last_sent_bracketed_paste;
         let cwd_changed = self.state.cwd != self.last_sent_cwd;
+        let cursor = self.grid.cursor();
+        let cursor_changed = Some(cursor) != self.last_sent_cursor_pos;
 
         let patch = super::diff::ScreenPatch {
             rows: super::diff::patch_rows(&self.grid, dirty),
-            cursor: Some(self.grid.cursor()),
+            cursor: Some(cursor),
             alt_screen: alt_changed.then_some(alt),
             title: published_clear(title_changed, &self.state.title),
             cursor_visible: cursor_visible_changed.then_some(cursor_visible),
@@ -277,6 +299,7 @@ impl Screen {
             && !cursor_visible_changed
             && !bracketed_paste_changed
             && !cwd_changed
+            && !cursor_changed
         {
             return None;
         }
@@ -285,6 +308,7 @@ impl Screen {
         self.last_sent_cursor_visible = Some(cursor_visible);
         self.last_sent_bracketed_paste = Some(bracketed_paste);
         self.last_sent_cwd.clone_from(&self.state.cwd);
+        self.last_sent_cursor_pos = Some(cursor);
         Some(patch)
     }
 

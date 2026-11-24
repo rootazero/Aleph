@@ -73,9 +73,9 @@ impl Gatherer {
             self.project_scoped,
             crate::projects::current_project_root().as_deref(),
         );
-        let (notes, snapshot, raws, profile, feedback_floor, daily_insight) = tokio::join!(
+        let snapshot = self.fetch_snapshot(&input.agent_id, input.session_id.as_deref());
+        let (notes, raws, profile, feedback_floor, daily_insight) = tokio::join!(
             self.fetch_notes(&input.query, &input.agent_id, input.pool_limit),
-            self.fetch_snapshot(&input.agent_id, input.session_id.as_deref()),
             self.fetch_raws(&input.agent_id, input.session_id.as_deref(), &input.filter),
             async {
                 match user_floor_id.as_deref() {
@@ -174,25 +174,23 @@ impl Gatherer {
                     let category = sf.fact.note_type.to_category_dir().to_string();
                     // MemoryFact.path is the note://category/filename form when
                     // produced by NoteSearchResult::to_memory_fact. Normalise.
-                    // rust-doctor-disable-next-line excessive-clone
                     let display_id = if sf.fact.path.starts_with("note://") {
-                        // rust-doctor-disable-next-line excessive-clone
-                        sf.fact.path.clone()
+                        sf.fact.path
                     } else {
                         format!("note://{}", sf.fact.path)
                     };
-                    let path_no_scheme = display_id.trim_start_matches("note://").to_string();
+                    let path_no_scheme = display_id.trim_start_matches("note://");
                     let title = path_no_scheme
                         .rsplit('/')
                         .next()
-                        .unwrap_or(&path_no_scheme)
+                        .unwrap_or(path_no_scheme)
                         .to_string();
-                    let slot_hint = slot_hint_for_path(&path_no_scheme);
+                    let slot_hint = slot_hint_for_path(path_no_scheme);
+                    let path_no_scheme = path_no_scheme.to_string();
                     Candidate {
                         id: display_id,
                         title,
-                        // rust-doctor-disable-next-line excessive-clone
-                        full_content: sf.fact.content.clone(),
+                        full_content: sf.fact.content,
                         source: ItemSource::Note {
                             path: path_no_scheme,
                             category,
@@ -211,7 +209,7 @@ impl Gatherer {
         }
     }
 
-    async fn fetch_snapshot(&self, agent_id: &str, session_id: Option<&str>) -> Vec<Candidate> {
+    fn fetch_snapshot(&self, agent_id: &str, session_id: Option<&str>) -> Vec<Candidate> {
         // The snapshot is partitioned like every other source this function's
         // siblings gather: notes go through `session_read_ids`, the profile
         // floor through `profile_floor_id`, and the snapshot through

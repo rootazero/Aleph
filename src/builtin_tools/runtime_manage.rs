@@ -207,7 +207,7 @@ impl RuntimeManageTool {
                     ok: false,
                     message: format!("Cannot read the runtime ledger: {e}"),
                     runtimes: Vec::new(),
-                }
+                };
             }
         };
         let guard = ledger.read().await;
@@ -304,6 +304,19 @@ impl RuntimeManageTool {
                     installable_names().join(", ")
                 ),
                 runtimes: Vec::new(),
+            };
+        }
+        if let Some((job_id, _)) = running_install_jobs()
+            .into_iter()
+            .find(|(_, command)| command == &format!("{INSTALL_JOB_PREFIX}{name}"))
+        {
+            return RuntimeManageOutput {
+                ok: true,
+                message: format!(
+                    "Already installing {name} as job {job_id}; poll it with \
+                     `bash{{process_action:\"wait\", process_id:{job_id}}}`."
+                ),
+                runtimes: Self::list(locator).await.runtimes,
             };
         }
         match spawner.spawn(name) {
@@ -657,7 +670,7 @@ async fn obscura_row() -> RuntimeRow {
                 version: None,
                 purpose: Some(OBSCURA_PURPOSE.to_string()),
                 supported_here: supported,
-            }
+            };
         }
     };
     let (status, path, version) = match pinned {
@@ -675,26 +688,19 @@ async fn obscura_row() -> RuntimeRow {
             None,
         ),
         None => {
-            let probe =
-                tokio::task::spawn_blocking(|| crate::runtimes::probe::probe(OBSCURA_RUNTIME))
-                    .await;
-            match probe {
-                Ok(r) if r.found => (
+            let probe = crate::runtimes::probe::probe(OBSCURA_RUNTIME).await;
+            if probe.found {
+                (
                     format!("Ready (ledger {OBSCURA_TAG})"),
-                    r.bin_path.map(|p| p.display().to_string()),
-                    r.version,
-                ),
-                Ok(_) => (
+                    probe.bin_path.map(|p| p.display().to_string()),
+                    probe.version,
+                )
+            } else {
+                (
                     "Missing (no obscura on PATH or in the ledger)".to_string(),
                     None,
                     None,
-                ),
-                // A probe that did not run is not an absent binary.
-                Err(e) => (
-                    format!("Unknown (the probe did not complete: {e})"),
-                    None,
-                    None,
-                ),
+                )
             }
         }
     };
@@ -1037,11 +1043,14 @@ mod tests {
             spawner.clone(),
         );
         let started = std::time::Instant::now();
-        let out = tool
-            .call(RuntimeManageArgs {
-                action: RuntimeAction::Install,
-                capability: Some("chromium".into()),
-            })
+        let out = crate::sandbox::context::SESSION_ID
+            .scope(
+                crate::routing::session_key::SessionKey::ephemeral("runtime-install-immediate"),
+                tool.call(RuntimeManageArgs {
+                    action: RuntimeAction::Install,
+                    capability: Some("chromium".into()),
+                }),
+            )
             .await
             .expect("tool answers");
         assert!(out.ok, "{}", out.message);
@@ -1105,13 +1114,18 @@ mod tests {
         let _guard = crate::runtimes::post_install::HomeEnvGuards::acquire_and_clear();
 
         let spawner = StubSpawner::ok(99);
-        let out = tool(spawner.clone())
-            .call(RuntimeManageArgs {
-                action: RuntimeAction::Install,
-                capability: Some("chromium".into()),
-            })
+        // A caller-less test can deduplicate against another test's live job.
+        let out = crate::sandbox::context::SESSION_ID
+            .scope(
+                crate::routing::session_key::SessionKey::ephemeral("runtime-ledger-failure-spawn"),
+                tool(spawner.clone()).call(RuntimeManageArgs {
+                    action: RuntimeAction::Install,
+                    capability: Some("chromium".into()),
+                }),
+            )
             .await
             .expect("tool answers");
+        assert_eq!(spawner.started(), vec!["chromium".to_string()]);
 
         assert!(
             out.ok,
@@ -1422,24 +1436,19 @@ mod tests {
         let tmp = tempfile::TempDir::new().expect("tempdir");
         let cli = tmp.path().join("fake-playwright-cli");
         const MARKER: &str = "AlephI1TeeMarker-c3f1a9";
-        // The `sleep` is load-bearing: without it the script exits before the
-        // test's poll loop ever runs, and the marker would only ever be
-        // observable through the FINISHED result — which proves nothing about
-        // the tee, since `stderr_buf` reaches the final message regardless of
-        // whether `live.push` is ever called. The sleep holds the job
-        // `Running` long enough that the ONLY way to see the marker in that
-        // window is through the live tail the tee writes into.
+        // The child exits only after the test observes the live tee (or its
+        // deadline). A fixed sleep races cold startup before the first byte.
         std::fs::write(
             &cli,
             format!(
-                "#!/bin/sh\necho '{MARKER} stdout'\necho '{MARKER} stderr' >&2\nsleep 1\nexit 1\n"
+                "#!/bin/sh\necho '{MARKER} stdout'\necho '{MARKER} stderr' >&2\nwhile [ ! -f \"$0.release\" ]; do /bin/sleep 0.01; done\nexit 1\n"
             ),
         )
         .expect("write fake cli");
         std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755))
             .expect("chmod fake cli");
 
-        let spawner = RegistrySpawner::with_cli_locator(Arc::new(FixedCliLocator(cli)));
+        let spawner = RegistrySpawner::with_cli_locator(Arc::new(FixedCliLocator(cli.clone())));
         let job_id = spawner
             .spawn(CHROMIUM)
             .expect("the registry had a free slot");
@@ -1450,43 +1459,45 @@ mod tests {
         // regardless of whether `live.push` was ever called (it is built from
         // the same accumulated buffer, not from the tail), so treating it as
         // a satisfying answer would let a deleted tee still pass.
-        let mut saw_marker_while_running = false;
-        let mut finished_without_ever_seeing_it = false;
-        for _ in 0..400 {
-            match process_registry().poll(job_id, None) {
-                PollOutcome::Running {
-                    partial: Some(p), ..
-                } => {
-                    let text = format!(
-                        "{}{}",
-                        String::from_utf8_lossy(&p.stdout),
-                        String::from_utf8_lossy(&p.stderr)
-                    );
-                    if text.contains(MARKER) {
-                        saw_marker_while_running = true;
-                        break;
+        let observation = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                match process_registry().poll(job_id, None) {
+                    PollOutcome::Running {
+                        partial: Some(p), ..
+                    } => {
+                        let text = format!(
+                            "{}{}",
+                            String::from_utf8_lossy(&p.stdout),
+                            String::from_utf8_lossy(&p.stderr)
+                        );
+                        if text.contains(MARKER) {
+                            return true;
+                        }
                     }
+                    PollOutcome::Done(_) => return false,
+                    _ => {}
                 }
-                PollOutcome::Done(_) => {
-                    finished_without_ever_seeing_it = true;
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await;
+        // Release and join on the timeout/failure path too.
+        std::fs::write(cli.with_extension("release"), b"release\n").expect("release fake cli");
+        // Keep the live-tail assertion above, then join the job so it cannot
+        // leave a running install in the process-global registry for later tests.
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if matches!(process_registry().poll(job_id, None), PollOutcome::Done(_)) {
                     break;
                 }
-                _ => {}
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
             }
-            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-        }
+        })
+        .await
+        .expect("the fake install must finish");
         assert!(
-            !finished_without_ever_seeing_it,
-            "the job finished before the live tail ever showed the marker — \
-             the 1s sleep in the fake CLI should have made that impossible \
-             unless the tee itself never ran"
-        );
-        assert!(
-            saw_marker_while_running,
-            "poll never showed the fake CLI's own output through the live \
-             tail while the job was still running — the tee inside \
-             install_chromium did not reach it, or the wrong live tail was \
-             attached"
+            matches!(observation, Ok(true)),
+            "poll must show the CLI's own marker while it is still running, before release: {observation:?}"
         );
     }
 

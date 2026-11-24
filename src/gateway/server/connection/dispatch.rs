@@ -1,21 +1,15 @@
 //! Dispatch phase — JSON-RPC request parsing + middleware invocation.
 //!
-//! Two functions live here, called by both dispatch stations inside the
-//! `handle_connection` `tokio::select!` loop:
-//!
-//! - `dispatch_with_caller_context`: scopes the four caller-identity task-
-//!   locals (role / user / is-loopback / conn-id) plus a P1 personal-scope
-//!   attribution around `process_request`. Single source of truth so the two
-//!   stations cannot drift apart.
-//! - `process_request`: parses the JSON-RPC envelope, applies the
-//!   per-method admin gate, runs the W3C `traceparent` instrumentation, then
-//!   delegates to the `MiddlewareChain`.
+//! The ordinary executor revalidates a live peer here before using a handler
+//! or returning a cached result. `dispatch_snapshot` then installs caller
+//! scope and delegates through the existing middleware chain.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use tokio::sync::RwLock;
 
 use crate::gateway::middleware::MiddlewareChain;
+use crate::gateway::panel_project_context::{PanelCallerContext, PanelRequestContext};
 use crate::gateway::protocol::{
     JsonRpcRequest, JsonRpcResponse, ADMIN_REQUIRED_MESSAGE, AUTH_REQUIRED, PARSE_ERROR,
     PERMISSION_DENIED,
@@ -24,11 +18,9 @@ use crate::gateway::server::ConnectionState;
 
 /// Scope `process_request` with the caller-identity task-locals + P1 scope
 /// attribution that must surround every dispatched request. Single source of
-/// truth shared by both dispatch stations (`do_lane_dispatch`'s closure and
-/// the idempotency `Proceed` arm) so the two call sites cannot drift apart —
-/// see `src/gateway/CLAUDE.md`'s note that `CALLER_ROLE`/`CALLER_USER`/
-/// `CALLER_IS_LOOPBACK`/`CALLER_CONN_ID` must be scoped around
-/// `process_request` at both sites. `scope::with_scope` is the outermost
+/// truth shared by ordinary dispatch and compatibility callers. See
+/// `src/gateway/CLAUDE.md` for the required caller scope around
+/// `process_request`. `scope::with_scope` is the outermost
 /// (4th) layer: a `caller_user` seeds a personal-scope attribution,
 /// observable via `scope::current_scope` for the lifetime of this dispatch
 /// (spec P1 §5).
@@ -44,13 +36,39 @@ pub async fn dispatch_with_caller_context(
     caller_conn_id: Option<String>,
     caller_verified_user: Option<String>,
 ) -> String {
-    crate::gateway::caller_identity::with_verified_caller_identity(
-        caller_role,
-        caller_user,
+    dispatch_snapshot(
+        text,
+        mc,
+        CallerSnapshot {
+            role: caller_role,
+            user: caller_user,
+            verified_user: caller_verified_user,
+            device_id: None,
+        },
         caller_is_loopback,
         caller_conn_id,
-        caller_verified_user,
-        process_request(text, mc),
+    )
+    .await
+}
+
+async fn dispatch_snapshot(
+    text: &str,
+    mc: &MiddlewareChain,
+    snapshot: CallerSnapshot,
+    caller_is_loopback: bool,
+    caller_conn_id: Option<String>,
+) -> String {
+    let context = mc.panel_context(PanelCallerContext::authenticated(
+        viewer_principal(&snapshot),
+        snapshot.device_id.clone(),
+    ));
+    crate::gateway::caller_identity::with_verified_caller_identity(
+        snapshot.role.clone(),
+        snapshot.user.clone(),
+        caller_is_loopback,
+        caller_conn_id,
+        snapshot.verified_user.clone(),
+        process_request_with_panel_context(text, mc, context, Some(&snapshot)),
     )
     .await
 }
@@ -62,9 +80,19 @@ pub struct CallerSnapshot {
     pub role: Option<String>,
     pub user: Option<String>,
     pub verified_user: Option<String>,
+    pub device_id: Option<String>,
 }
 
 impl CallerSnapshot {
+    fn from_state(state: &ConnectionState) -> Self {
+        Self {
+            role: Some(state.caller_role.clone()),
+            user: state.caller_user.clone(),
+            verified_user: state.verified_user.clone(),
+            device_id: state.device_id.clone(),
+        }
+    }
+
     /// Read the live connection state. A missing entry (pre-handshake, probe
     /// or already torn down) defaults by network position exactly as the old
     /// per-field reads did -- loopback operator/owner, remote guest -- and
@@ -76,18 +104,185 @@ impl CallerSnapshot {
     ) -> Self {
         let conns = connections.read().await;
         match conns.get(conn_id) {
-            Some(s) => Self {
-                role: Some(s.caller_role.clone()),
-                user: s.caller_user.clone(),
-                verified_user: s.verified_user.clone(),
-            },
+            Some(state) => Self::from_state(state),
             None => Self {
                 role: Some(if client_is_local { "operator" } else { "guest" }.to_string()),
                 user: client_is_local
                     .then(|| crate::gateway::security::store::OWNER_USER_ID.to_string()),
                 verified_user: None,
+                device_id: None,
             },
         }
+    }
+}
+
+type ConnectionTable = RwLock<HashMap<String, ConnectionState>>;
+
+#[derive(Clone)]
+pub(super) struct DispatchPeer {
+    pub(super) connections: Arc<ConnectionTable>,
+    pub(super) conn_id: String,
+    legacy_loopback: bool,
+    bound: Option<BoundPeer>,
+}
+
+#[derive(Clone)]
+struct BoundPeer {
+    expected: CallerSnapshot,
+    authority: BoundAuthority,
+}
+
+#[derive(Clone)]
+enum BoundAuthority {
+    Web(super::web_v1::WebBinding),
+    #[cfg(any(unix, windows))]
+    Desktop(Arc<crate::gateway::security::SecurityStore>),
+    #[cfg(test)]
+    Fixture,
+}
+
+#[cfg(any(unix, windows))]
+pub(super) fn active_desktop_owner(
+    store: &crate::gateway::security::SecurityStore,
+) -> Option<&'static str> {
+    use crate::gateway::security::store::{UserStatus, OWNER_USER_ID};
+    let owner = store.get_user(OWNER_USER_ID).ok()??;
+    (owner.status == UserStatus::Active).then(|| owner.role.wire_role())
+}
+
+impl DispatchPeer {
+    pub(super) fn legacy(
+        connections: Arc<ConnectionTable>,
+        conn_id: String,
+        legacy_loopback: bool,
+    ) -> Self {
+        Self {
+            connections,
+            conn_id,
+            legacy_loopback,
+            bound: None,
+        }
+    }
+
+    pub(super) fn web(
+        connections: Arc<ConnectionTable>,
+        conn_id: String,
+        expected: CallerSnapshot,
+        binding: super::web_v1::WebBinding,
+    ) -> Self {
+        Self {
+            bound: Some(BoundPeer {
+                expected,
+                authority: BoundAuthority::Web(binding),
+            }),
+            ..Self::legacy(connections, conn_id, false)
+        }
+    }
+
+    #[cfg(any(unix, windows))]
+    pub(super) fn desktop(
+        connections: Arc<ConnectionTable>,
+        conn_id: String,
+        owner_store: Arc<crate::gateway::security::SecurityStore>,
+    ) -> Self {
+        Self {
+            bound: Some(BoundPeer {
+                expected: CallerSnapshot {
+                    role: None,
+                    user: Some(crate::gateway::security::store::OWNER_USER_ID.to_owned()),
+                    verified_user: None,
+                    device_id: None,
+                },
+                authority: BoundAuthority::Desktop(owner_store),
+            }),
+            ..Self::legacy(connections, conn_id, false)
+        }
+    }
+
+    // Test fixture for a generic established peer, not an IPC admission path.
+    #[cfg(test)]
+    pub(super) fn bound(
+        connections: Arc<ConnectionTable>,
+        conn_id: String,
+        expected: CallerSnapshot,
+    ) -> Self {
+        Self {
+            bound: Some(BoundPeer {
+                expected,
+                authority: BoundAuthority::Fixture,
+            }),
+            ..Self::legacy(connections, conn_id, false)
+        }
+    }
+
+    pub(super) async fn snapshot(&self) -> Option<CallerSnapshot> {
+        self.view().snapshot().await
+    }
+
+    fn view(&self) -> PeerView<'_> {
+        PeerView {
+            connections: &self.connections,
+            conn_id: &self.conn_id,
+            legacy_loopback: self.legacy_loopback,
+            bound: self.bound.as_ref(),
+        }
+    }
+}
+
+struct PeerView<'a> {
+    connections: &'a ConnectionTable,
+    conn_id: &'a str,
+    legacy_loopback: bool,
+    bound: Option<&'a BoundPeer>,
+}
+
+impl<'a> PeerView<'a> {
+    fn legacy(connections: &'a ConnectionTable, conn_id: &'a str, legacy_loopback: bool) -> Self {
+        Self {
+            connections,
+            conn_id,
+            legacy_loopback,
+            bound: None,
+        }
+    }
+
+    async fn snapshot(&self) -> Option<CallerSnapshot> {
+        if let Some(bound) = self.bound {
+            let live = {
+                let table = self.connections.read().await;
+                let state = table.get(self.conn_id)?;
+                if state.first_message
+                    || !matches!(state.caller_role.as_str(), "member" | "operator")
+                {
+                    return None;
+                }
+                CallerSnapshot::from_state(state)
+            };
+            // Role remains live for the existing admin gate. The bound user,
+            // verified user and device cannot drift within a connection.
+            if !live
+                .user
+                .as_deref()
+                .is_some_and(|user| !user.trim().is_empty())
+                || live.user != bound.expected.user
+                || live.verified_user != bound.expected.verified_user
+                || live.device_id != bound.expected.device_id
+            {
+                return None;
+            }
+            let role = match &bound.authority {
+                BoundAuthority::Web(binding) => binding.current_role()?,
+                #[cfg(any(unix, windows))]
+                BoundAuthority::Desktop(store) => active_desktop_owner(store)?,
+                #[cfg(test)]
+                BoundAuthority::Fixture => return Some(live),
+            };
+            return Some(CallerSnapshot {
+                role: Some(role.to_owned()),
+                ..live
+            });
+        }
+        Some(CallerSnapshot::read(self.connections, self.conn_id, self.legacy_loopback).await)
     }
 }
 
@@ -119,21 +314,33 @@ pub fn viewer_principal(snapshot: &CallerSnapshot) -> Option<String> {
     )
 }
 
-/// Generic denial -- no credential, user or reason echoed.
+/// Generic denial -- no credential, user or reason echoed
 #[must_use]
 pub fn viewer_denied_response(id: Option<serde_json::Value>) -> String {
     serde_json::to_string(&JsonRpcResponse::error(id, PERMISSION_DENIED, "denied"))
         .unwrap_or_default()
 }
+/// Canonical login/admin denial under the currently scoped caller identity.
+fn authorization_error(method: &str, id: Option<serde_json::Value>) -> Option<String> {
+    let role = crate::gateway::caller_identity::current_caller_role();
+    let message = if !super::auth::wall_admits(role.as_deref(), method) {
+        super::auth::LOGIN_WALL_MESSAGE
+    } else if crate::gateway::method_admin::method_requires_admin(method)
+        && crate::gateway::caller_identity::caller_is_member()
+    {
+        ADMIN_REQUIRED_MESSAGE
+    } else {
+        return None;
+    };
+    Some(
+        serde_json::to_string(&JsonRpcResponse::error(id, AUTH_REQUIRED, message))
+            .unwrap_or_default(),
+    )
+}
 
-/// Re-validate a viewer request against the LIVE connection state.
-///
-/// Non-viewer methods pass through with the request-start snapshot untouched.
-/// For a viewer method the request-start snapshot must already hold a viewer
-/// principal, and the live state must still hold the SAME principal; the live
-/// snapshot is returned so the caller dispatches with a fresh identity (not the
-/// stale one read before queueing). Used before any cached/waiting result is
-/// returned and again after a lane permit is granted.
+/// Re-validate login, admin authority and identity against LIVE connection state.
+/// Used before cached/waiting results return and after a lane permit is granted.
+/// Viewer methods additionally require the same handshake-verified principal.
 pub async fn revalidate_for_dispatch(
     connections: &RwLock<HashMap<String, ConnectionState>>,
     conn_id: &str,
@@ -141,18 +348,87 @@ pub async fn revalidate_for_dispatch(
     method: &str,
     start: &CallerSnapshot,
 ) -> Option<CallerSnapshot> {
-    if !is_browser_viewer_method(method) {
-        return Some(start.clone());
-    }
-    let expected = viewer_principal(start)?;
-    let live = CallerSnapshot::read(connections, conn_id, client_is_local).await;
-    (viewer_principal(&live).as_deref() == Some(expected.as_str())).then_some(live)
+    validate_live(
+        &PeerView::legacy(connections, conn_id, client_is_local),
+        method,
+        start,
+        None,
+    )
+    .await
+    .ok()
 }
 
-/// Dispatch one request for a connection: revalidate (viewer methods), then
-/// run `dispatch_with_caller_context` with the resulting snapshot. Single
-/// helper shared by `do_lane_dispatch` and the idempotency `Proceed` arm so
-/// both real dispatch paths gate and scope identically.
+pub(super) async fn revalidate_peer(
+    peer: &DispatchPeer,
+    method: &str,
+    start: &CallerSnapshot,
+) -> bool {
+    validate_live(&peer.view(), method, start, None)
+        .await
+        .is_ok()
+}
+
+async fn validate_live(
+    peer: &PeerView<'_>,
+    method: &str,
+    start: &CallerSnapshot,
+    id: Option<serde_json::Value>,
+) -> Result<CallerSnapshot, String> {
+    let Some(live) = peer.snapshot().await else {
+        return Err(viewer_denied_response(id));
+    };
+    let viewer_method = is_browser_viewer_method(method);
+    let denial = crate::gateway::caller_identity::with_caller_identity(
+        live.role.clone(),
+        live.user.clone(),
+        peer.legacy_loopback,
+        Some(peer.conn_id.to_owned()),
+        async { authorization_error(method, id.clone()) },
+    )
+    .await;
+    if let Some(denial) = denial {
+        // Viewer denials deliberately do not reveal wall or admin details.
+        return Err(if viewer_method {
+            viewer_denied_response(id)
+        } else {
+            denial
+        });
+    }
+    let same_authority = if crate::gateway::handlers::panel_capabilities::is_context_method(method)
+    {
+        viewer_principal(&live) == viewer_principal(start) && live.device_id == start.device_id
+    } else if viewer_method {
+        viewer_principal(start)
+            .is_some_and(|expected| viewer_principal(&live).as_deref() == Some(expected.as_str()))
+    } else {
+        true
+    };
+    if live.user != start.user || !same_authority {
+        return Err(viewer_denied_response(id));
+    }
+    Ok(live)
+}
+
+/// UI effects may wait outside the connection loop. Never use the loopback
+/// fallback for a missing/closed connection, nor execute under a changed login.
+/// The record and its identity are read under one lock after queue/permit waits.
+pub(super) async fn live_ui_caller(
+    connections: &RwLock<HashMap<String, ConnectionState>>,
+    conn_id: &str,
+    start: &CallerSnapshot,
+) -> Option<CallerSnapshot> {
+    let connections = connections.read().await;
+    let state = connections.get(conn_id)?;
+    if state.first_message
+        || !super::auth::wall_admits(Some(&state.caller_role), "capabilities.ui.invoke")
+    {
+        return None;
+    }
+    let live = CallerSnapshot::from_state(state);
+    (live.user.as_deref().is_some_and(|user| !user.is_empty()) && &live == start).then_some(live)
+}
+
+/// Legacy entry point, including the separately scheduled UI effect path.
 #[allow(clippy::too_many_arguments)]
 pub async fn dispatch_for_connection(
     text: &str,
@@ -164,41 +440,56 @@ pub async fn dispatch_for_connection(
     req_id: Option<serde_json::Value>,
     start: &CallerSnapshot,
 ) -> String {
-    // Off-loop RPCs (Task #56 D3) can wait behind a queue and a lane permit
-    // for a long time while the connection loop keeps processing `connect`
-    // and `restamp_live_connections` demotions. Their authority must be the
-    // LIVE one at dispatch, not the arrival snapshot: re-run the login wall
-    // with its canonical predicate, then dispatch under the live role so the
-    // admin gate in `process_request` sees a demotion too.
-    let live;
-    let start = if super::off_loop::dispatches_off_loop(method) {
-        live = CallerSnapshot::read(connections, conn_id, client_is_local).await;
-        if !super::auth::wall_admits(live.role.as_deref(), method) {
-            return serde_json::to_string(&JsonRpcResponse::error(
-                req_id,
-                AUTH_REQUIRED,
-                super::auth::LOGIN_WALL_MESSAGE.to_string(),
-            ))
-            .unwrap_or_default();
-        }
-        &live
-    } else {
-        start
-    };
-    match revalidate_for_dispatch(connections, conn_id, client_is_local, method, start).await {
-        Some(snap) => {
-            dispatch_with_caller_context(
+    if method == "capabilities.ui.invoke" {
+        return match live_ui_caller(connections, conn_id, start).await {
+            Some(live) => {
+                dispatch_snapshot(text, mc, live, client_is_local, Some(conn_id.to_owned())).await
+            }
+            None => viewer_denied_response(req_id),
+        };
+    }
+    dispatch_ordinary(
+        text,
+        mc,
+        &PeerView::legacy(connections, conn_id, client_is_local),
+        method,
+        req_id,
+        start,
+    )
+    .await
+}
+
+pub(super) async fn dispatch_for_peer(
+    text: &str,
+    mc: &MiddlewareChain,
+    peer: &DispatchPeer,
+    method: &str,
+    req_id: Option<serde_json::Value>,
+    start: &CallerSnapshot,
+) -> String {
+    dispatch_ordinary(text, mc, &peer.view(), method, req_id, start).await
+}
+
+async fn dispatch_ordinary(
+    text: &str,
+    mc: &MiddlewareChain,
+    peer: &PeerView<'_>,
+    method: &str,
+    id: Option<serde_json::Value>,
+    start: &CallerSnapshot,
+) -> String {
+    match validate_live(peer, method, start, id).await {
+        Ok(live) => {
+            dispatch_snapshot(
                 text,
                 mc,
-                snap.role,
-                snap.user,
-                client_is_local,
-                Some(conn_id.to_string()),
-                snap.verified_user,
+                live,
+                peer.legacy_loopback,
+                Some(peer.conn_id.to_owned()),
             )
             .await
         }
-        None => viewer_denied_response(req_id),
+        Err(denial) => denial,
     }
 }
 
@@ -218,6 +509,15 @@ pub fn idempotency_principal(method: &str, snapshot: &CallerSnapshot) -> String 
 
 /// Process a JSON-RPC request string
 pub async fn process_request(text: &str, middleware_chain: &MiddlewareChain) -> String {
+    process_request_with_panel_context(text, middleware_chain, None, None).await
+}
+
+pub(crate) async fn process_request_with_panel_context(
+    text: &str,
+    middleware_chain: &MiddlewareChain,
+    panel_context: Option<PanelRequestContext>,
+    caller: Option<&CallerSnapshot>,
+) -> String {
     // Parse the request
     let request: JsonRpcRequest = match serde_json::from_str(text) {
         Ok(req) => req,
@@ -264,11 +564,28 @@ pub async fn process_request(text: &str, middleware_chain: &MiddlewareChain) -> 
         method = %request.method,
     );
 
-    // Dispatch to middleware chain inside the trace span.
+    #[cfg(feature = "native-qa")]
+    let request_for_observer = request.clone();
     let response = {
         use tracing::Instrument;
-        middleware_chain.serve(request).instrument(span).await
+        middleware_chain
+            .serve_with_panel_context(request, panel_context)
+            .instrument(span)
+            .await
     };
+
+    #[cfg(not(feature = "native-qa"))]
+    let _ = caller;
+
+    #[cfg(feature = "native-qa")]
+    if let Some(caller) = caller {
+        crate::gateway::native_qa::observe_rpc(
+            &middleware_chain.native_qa_observer(),
+            caller,
+            &request_for_observer,
+            &response,
+        );
+    }
 
     // Echo the trace context back so the caller / a downstream hop can continue
     // the trace (naming our span as the parent). `traceparent` is a non-standard

@@ -1,0 +1,242 @@
+    Checking alephcore v26.9.1 (/home/zou/data/workspace/Aleph-wt-fix-extfx)
+warning: unused variable: `ch`
+   --> src/gateway/interfaces/telegram/delivery.rs:330:15
+    |
+330 |     for (idx, ch) in text.char_indices() {
+    |               ^^ help: if this is intentional, prefix it with an underscore: `_ch`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `sanitize_segment` is never used
+   --> src/extension/hooks/output_budget.rs:150:4
+    |
+150 | fn sanitize_segment(session_id: &str) -> String {
+    |    ^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `read_workspace_file` is never used
+   --> src/extension/runtime/wasm/host_functions.rs:384:4
+    |
+384 | fn read_workspace_file(state: &HostState, relative_path: &str) -> Result<Vec<u8>, String> {
+    |    ^^^^^^^^^^^^^^^^^^^
+
+warning: field `panel_snapshot` is never read
+   --> src/extension/projection.rs:143:16
+    |
+127 | pub(crate) struct PluginProjection {
+    |                   ---------------- field in this struct
+...
+143 |     pub(crate) panel_snapshot: aleph_protocol::panel::PanelUiCapabilitySnapshot,
+    |                ^^^^^^^^^^^^^^
+    |
+    = note: `PluginProjection` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: methods `provider` and `worker_stop` are never used
+   --> src/memory/runtime/mod.rs:209:19
+    |
+ 87 | impl MemoryRuntime {
+    | ------------------ methods in this implementation
+...
+209 |     pub(crate) fn provider(&self) -> ProviderHandle {
+    |                   ^^^^^^^^
+...
+310 |     pub(crate) fn worker_stop(&self) -> Result<tokio::sync::watch::Receiver<bool>, AlephError> {
+    |                   ^^^^^^^^^^^
+
+warning: method `validate_capture` is never used
+   --> src/tools/registry.rs:294:19
+    |
+222 | impl CanonicalEntryLease {
+    | ------------------------ method in this implementation
+...
+294 |     pub(crate) fn validate_capture(&self, current: &Self) -> bool {
+    |                   ^^^^^^^^^^^^^^^^
+
+warning: method `publish_plugin_batch_with_ready_commit` is never used
+    --> src/tools/registry.rs:1336:19
+     |
+1122 | impl ToolHandlerRegistry {
+     | ------------------------ method in this implementation
+...
+1336 |     pub(crate) fn publish_plugin_batch_with_ready_commit(
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `completed_here` is never used
+   --> src/gateway/btw/promote.rs:103:4
+    |
+103 | fn completed_here(span: &[SessionEventRecord]) -> bool {
+    |    ^^^^^^^^^^^^^^
+
+warning: method `generate_session_topic` is never used
+   --> src/gateway/inbound_router/command_handler.rs:555:25
+    |
+218 | impl InboundMessageRouter {
+    | ------------------------- method in this implementation
+...
+555 |     pub(super) async fn generate_session_topic(&self, session_key: &SessionKey) -> Option<String> {
+    |                         ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `MAX_MESSAGE_LENGTH` is never used
+ --> src/gateway/interfaces/wechat/outbound/markdown.rs:1:7
+  |
+1 | const MAX_MESSAGE_LENGTH: usize = 4000;
+  |       ^^^^^^^^^^^^^^^^^^
+
+warning: function `truncate` is never used
+  --> src/gateway/interfaces/wechat/outbound/markdown.rs:90:4
+   |
+90 | fn truncate(text: &str) -> String {
+   |    ^^^^^^^^
+
+warning: constant `MAX_STANZA_SIZE` is never used
+  --> src/gateway/interfaces/xmpp/message_ops/ops.rs:25:7
+   |
+25 | const MAX_STANZA_SIZE: usize = 1_048_576;
+   |       ^^^^^^^^^^^^^^^
+
+warning: field `sequence_number` is never read
+  --> src/gateway/openai_api/responses/sse.rs:49:5
+   |
+39 | struct StreamState {
+   |        ----------- field in this struct
+...
+49 |     sequence_number: u64,
+   |     ^^^^^^^^^^^^^^^
+
+warning: `alephcore` (lib) generated 13 warnings (run `cargo fix --lib -p alephcore` to apply 1 suggestion)
+warning: struct `PanelRequestContext` is never constructed
+  --> tests/../src/gateway/panel_project_context.rs:31:19
+   |
+31 | pub(crate) struct PanelRequestContext {
+   |                   ^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `alephcore` (test "panel_project_context") generated 1 warning
+warning: variable does not need to be mutable
+   --> src/gateway/telecom/sms_inbox.rs:908:13
+    |
+908 |         let mut empty_account = envelope("", "message-1", "body", now);
+    |             ----^^^^^^^^^^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `provider` is never used
+   --> src/memory/runtime/mod.rs:209:19
+    |
+ 87 | impl MemoryRuntime {
+    | ------------------ method in this implementation
+...
+209 |     pub(crate) fn provider(&self) -> ProviderHandle {
+    |                   ^^^^^^^^
+
+warning: `alephcore` (lib test) generated 8 warnings (6 duplicates) (run `cargo fix --lib -p alephcore --tests` to apply 1 suggestion)
+warning: function `string_literals_in_fn` is never used
+   --> tests/../src/utils/source_scan.rs:989:15
+    |
+989 | pub(crate) fn string_literals_in_fn(code: &str, signature: &str) -> (String, Vec<String>) {
+    |               ^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `rust_sources_under_root` is never used
+    --> tests/../src/utils/source_scan.rs:1050:8
+     |
+1050 | pub fn rust_sources_under_root(
+     |        ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `alephcore` (test "gateway_method_census") generated 2 warnings
+warning: value assigned to `default_prov` is never read
+   --> src/bin/aleph-server/commands/start/builder/agent_init/mod.rs:742:9
+    |
+742 |         default_prov = Some(provider_registry.default_provider());
+    |         ^^^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: value assigned to `channel_reg_cell` is never read
+   --> src/bin/aleph-server/commands/start/builder/agent_init/mod.rs:206:9
+    |
+206 |     > = None;
+    |         ^^^^ this value is reassigned later and never used
+...
+739 |         channel_reg_cell = Some(tool_registry.channel_registry_cell());
+    |         ---------------- `channel_reg_cell` is overwritten here before the previous value is read
+
+warning: value assigned to `clar_mgr_cell` is never read
+   --> src/bin/aleph-server/commands/start/builder/agent_init/mod.rs:209:9
+    |
+209 |     > = None;
+    |         ^^^^ this value is reassigned later and never used
+...
+740 |         clar_mgr_cell = Some(tool_registry.clarification_manager_cell());
+    |         ------------- `clar_mgr_cell` is overwritten here before the previous value is read
+
+warning: value assigned to `tool_reg_out` is never read
+    --> src/bin/aleph-server/commands/start/builder/agent_init/mod.rs:210:62
+     |
+ 210 |     let mut tool_reg_out: Option<Arc<BuiltinToolRegistry>> = None;
+     |                                                              ^^^^ this value is reassigned later and never used
+...
+1171 |         tool_reg_out = Some(tool_registry_for_heartbeat);
+     |         ------------ `tool_reg_out` is overwritten here before the previous value is read
+
+warning: function `init_memory_context_provider` is never used
+   --> src/bin/aleph-server/commands/start/builder/handlers/memory.rs:157:35
+    |
+157 | pub(in crate::commands::start) fn init_memory_context_provider(
+    |                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `init_memory_context_provider_with_extensions` is never used
+   --> src/bin/aleph-server/commands/start/builder/handlers/memory.rs:190:35
+    |
+190 | pub(in crate::commands::start) fn init_memory_context_provider_with_extensions(
+    |                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `drain_note_vault_watcher` is never used
+  --> src/bin/aleph-server/commands/start/builder/subsystems.rs:38:41
+   |
+38 | pub(in crate::commands::start) async fn drain_note_vault_watcher(
+   |                                         ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `spawn_note_orientation_bootstrap` is never used
+  --> src/bin/aleph-server/commands/start/builder/subsystems.rs:50:35
+   |
+50 | pub(in crate::commands::start) fn spawn_note_orientation_bootstrap(
+   |                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `spawn_note_index_rebuild` is never used
+  --> src/bin/aleph-server/commands/start/builder/subsystems.rs:62:35
+   |
+62 | pub(in crate::commands::start) fn spawn_note_index_rebuild(
+   |                                   ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `NoteMaintenanceOwner` is never constructed
+   --> src/bin/aleph-server/commands/start/builder/subsystems.rs:104:39
+    |
+104 | pub(in crate::commands::start) struct NoteMaintenanceOwner {
+    |                                       ^^^^^^^^^^^^^^^^^^^^
+
+warning: associated function `new` is never used
+   --> src/bin/aleph-server/commands/start/builder/subsystems.rs:111:39
+    |
+110 | impl NoteMaintenanceOwner {
+    | ------------------------- associated function in this implementation
+111 |     pub(in crate::commands::start) fn new(
+    |                                       ^^^
+
+warning: function `drain_note_maintenance` is never used
+   --> src/bin/aleph-server/commands/start/builder/subsystems.rs:126:41
+    |
+126 | pub(in crate::commands::start) async fn drain_note_maintenance(
+    |                                         ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `alephcore` (bin "aleph-server") generated 12 warnings
+    Finished `dev` profile [unoptimized] target(s) in 14m 48s
+CARGO_EXIT=0

@@ -129,16 +129,46 @@ impl ChannelApprovalCapability for TelegramChannelApprovalCapability {
     async fn resolve_approval(
         &self,
         pending: &PendingApproval,
-        _action: ApprovalAction,
+        action: ApprovalAction,
     ) -> ChannelResult<()> {
-        if let Some(msg_id) = &pending.message_id {
-            let text = match _action {
-                ApprovalAction::Approve => "✅ Approval granted.",
-                ApprovalAction::Deny => "❌ Approval denied.",
-            };
-            let update = OutboundMessage::text(pending.conversation_id.as_str(), text);
-            let _ = self.channel.send(update).await;
-            let _ = msg_id;
+        let Some(msg_id) = pending.message_id.as_deref() else {
+            return Ok(());
+        };
+        // The trait contract asks the channel to clean up the card's state.
+        // Leaving the buttons live would let a second click re-resolve an
+        // already-decided approval, so the resolving edit both retires the
+        // keyboard and turns the card into a terminal message.
+        let text = match action {
+            ApprovalAction::Approve => "✅ Approval granted.",
+            ApprovalAction::Deny => "❌ Approval denied.",
+        };
+        let delivery = match self.channel.delivery_for(&pending.conversation_id) {
+            Ok(delivery) => delivery,
+            Err(error) => {
+                tracing::debug!(
+                    approval_id = %pending.approval_id,
+                    error = %error,
+                    "approval card cleanup skipped: no live transport for the conversation"
+                );
+                return Ok(());
+            }
+        };
+        // Best-effort: the decision is already taken upstream, so a failed
+        // edit (message deleted, too old to edit) must not fail the resolve.
+        if let Err(error) = crate::gateway::interfaces::telegram::delivery::edit_message(
+            &delivery.bot,
+            pending.conversation_id.as_str(),
+            &crate::gateway::channel::MessageId::new(msg_id.to_string()),
+            Some(text),
+            None,
+        )
+        .await
+        {
+            tracing::debug!(
+                approval_id = %pending.approval_id,
+                error = %error,
+                "approval card cleanup failed"
+            );
         }
         Ok(())
     }

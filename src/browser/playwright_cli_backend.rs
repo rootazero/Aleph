@@ -558,7 +558,7 @@ impl BrowserBackend for PlaywrightCliBackend {
                 });
                 let Some(ref_id) = ref_id else {
                     return Err(BrowserError::ActionFailed(
-                        "no file chooser is open and no element ref was given to open one;                          pass the ref_id of the <input type=file> element"
+                        "no file chooser is open and no element ref was given to open one; pass the ref_id of the <input type=file> element"
                             .into(),
                     ));
                 };

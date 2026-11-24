@@ -2371,7 +2371,7 @@ git commit -m "tools: moa preset CRUD happy-path test via real ConfigPatcher (R4
 
 - [ ] **Step 3: 第一轮 spec 头部加链接**
 
-状态行下加一行：`- **第二轮修订**: [2026-07-05-moa-round2-optimization-design.md](2026-07-05-moa-round2-optimization-design.md)（8 修复 / 3 连线 / 3 增强 / 重构与测试补齐）`。
+状态行下加一行：`- **第二轮修订**: [2026-07-05-moa-round2-optimization-design.md](../specs/2026-07-05-moa-round2-optimization-design.md)（8 修复 / 3 连线 / 3 增强 / 重构与测试补齐）`。
 
 - [ ] **Step 4: Commit**
 

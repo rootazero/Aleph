@@ -1,6 +1,4 @@
-use super::{
-    config_handlers, workspace_handlers, AgentEnvStore, Arc, GatewayServer, MemoryBackend,
-};
+use super::{config_handlers, workspace_handlers, AgentEnvStore, Arc, GatewayServer};
 use alephcore::gateway::AgentRegistry;
 
 pub(in crate::commands::start) fn register_workspace_handlers(
@@ -11,7 +9,6 @@ pub(in crate::commands::start) fn register_workspace_handlers(
     agent_registry: Option<&Arc<AgentRegistry>>,
     // Event bus for Bound/Unbound lifecycle events (Panel cross-surface sync).
     event_bus: &Arc<alephcore::gateway::event_bus::GatewayEventBus>,
-    _memory_db: &MemoryBackend,
     daemon: bool,
 ) {
     register_handler!(
@@ -364,6 +361,7 @@ pub(in crate::commands::start) fn register_config_handlers(
     use alephcore::gateway::handlers::search_config;
     use alephcore::gateway::handlers::security_config;
     use alephcore::gateway::handlers::voice;
+    use alephcore::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, SERVICE_UNAVAILABLE};
 
     // Config CRUD
     register_handler!(
@@ -913,65 +911,99 @@ pub(in crate::commands::start) fn register_config_handlers(
         event_bus
     );
 
-    // ACP harness config (only if ACP manager is available)
-    if let Some(ref acp) = acp_manager {
+    // ACP harness config. The manager-dependent verbs are registered even when
+    // the manager is absent: with `[acp] enabled = false` this deployment must
+    // answer the typed `SERVICE_UNAVAILABLE` contract, not `-32601`, so a client
+    // that switches on the error code can tell "feature off on this deployment"
+    // from "server built wrong" — the split `memory.curated.*` already makes.
+    {
         use alephcore::gateway::handlers::acp_config;
 
-        register_handler!(server, "acp.list", acp_config::handle_list, acp, config);
-        register_handler!(server, "acp.get", acp_config::handle_get, acp, config);
-        register_handler!(
-            server,
-            "acp.create",
-            acp_config::handle_create,
-            acp,
-            config,
-            event_bus
-        );
-        register_handler!(
-            server,
-            "acp.update",
-            acp_config::handle_update,
-            acp,
-            config,
-            event_bus
-        );
-        register_handler!(
-            server,
-            "acp.delete",
-            acp_config::handle_delete,
-            acp,
-            config,
-            event_bus
-        );
-        register_handler!(server, "acp.test", acp_config::handle_test, acp);
-        register_handler!(
-            server,
-            "acp.set_enabled",
-            acp_config::handle_set_enabled,
-            acp,
-            config,
-            event_bus
-        );
+        // Stateless verbs: they need no manager, so they are available either way.
         register_handler!(server, "acp.presets", acp_config::handle_presets);
         register_handler!(server, "acp.presets_meta", acp_config::handle_presets_meta);
-        register_handler!(
-            server,
-            "acp.sessions.list",
-            acp_config::handle_sessions_list,
-            acp
-        );
-        register_handler!(
-            server,
-            "acp.sessions.cancel",
-            acp_config::handle_sessions_cancel,
-            acp
-        );
-        register_handler!(
-            server,
-            "acp.sessions.shutdown",
-            acp_config::handle_sessions_shutdown,
-            acp
-        );
+
+        if let Some(ref acp) = acp_manager {
+            register_handler!(server, "acp.list", acp_config::handle_list, acp, config);
+            register_handler!(server, "acp.get", acp_config::handle_get, acp, config);
+            register_handler!(
+                server,
+                "acp.create",
+                acp_config::handle_create,
+                acp,
+                config,
+                event_bus
+            );
+            register_handler!(
+                server,
+                "acp.update",
+                acp_config::handle_update,
+                acp,
+                config,
+                event_bus
+            );
+            register_handler!(
+                server,
+                "acp.delete",
+                acp_config::handle_delete,
+                acp,
+                config,
+                event_bus
+            );
+            register_handler!(server, "acp.test", acp_config::handle_test, acp);
+            register_handler!(
+                server,
+                "acp.set_enabled",
+                acp_config::handle_set_enabled,
+                acp,
+                config,
+                event_bus
+            );
+            register_handler!(
+                server,
+                "acp.sessions.list",
+                acp_config::handle_sessions_list,
+                acp
+            );
+            register_handler!(
+                server,
+                "acp.sessions.cancel",
+                acp_config::handle_sessions_cancel,
+                acp
+            );
+            register_handler!(
+                server,
+                "acp.sessions.shutdown",
+                acp_config::handle_sessions_shutdown,
+                acp
+            );
+        } else {
+            let unavailable = |request: JsonRpcRequest| async move {
+                JsonRpcResponse::error(
+                    request.id,
+                    SERVICE_UNAVAILABLE,
+                    "acp_unavailable".to_owned(),
+                )
+            };
+            server.handlers_mut().register("acp.list", unavailable);
+            server.handlers_mut().register("acp.get", unavailable);
+            server.handlers_mut().register("acp.create", unavailable);
+            server.handlers_mut().register("acp.update", unavailable);
+            server.handlers_mut().register("acp.delete", unavailable);
+            server.handlers_mut().register("acp.test", unavailable);
+            server
+                .handlers_mut()
+                .register("acp.set_enabled", unavailable);
+            server
+                .handlers_mut()
+                .register("acp.sessions.list", unavailable);
+            server
+                .handlers_mut()
+                .register("acp.sessions.cancel", unavailable);
+            server
+                .handlers_mut()
+                .register("acp.sessions.shutdown", unavailable);
+        }
     }
 
     // Hand the patcher back to the caller so it can late-bind `self_config`
@@ -1002,6 +1034,7 @@ pub(in crate::commands::start) fn register_voice_capability_handlers(
     >,
 ) {
     use alephcore::gateway::handlers::voice;
+    use alephcore::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, SERVICE_UNAVAILABLE};
 
     // A fresh platform handle — cheap, and mirrors how the presence / mic-level
     // reporters and the builtin tool registry each construct their own.
@@ -1033,14 +1066,29 @@ pub(in crate::commands::start) fn register_voice_capability_handlers(
         platform
     );
 
-    if let Some(gen_reg) = generation_registry {
-        register_handler!(
+    // Registered unconditionally: a boot path that resolves no generation
+    // provider must answer the typed `SERVICE_UNAVAILABLE` contract instead of
+    // `-32601`, for the same reason the ACP verbs above are.
+    match generation_registry {
+        Some(gen_reg) => register_handler!(
             server,
             "voice.synthesize",
             voice::handle_synthesize,
             config,
             gen_reg
-        );
+        ),
+        None => {
+            let unavailable = |request: JsonRpcRequest| async move {
+                JsonRpcResponse::error(
+                    request.id,
+                    SERVICE_UNAVAILABLE,
+                    "voice_synthesize_unavailable".to_owned(),
+                )
+            };
+            server
+                .handlers_mut()
+                .register("voice.synthesize", unavailable);
+        }
     }
 }
 

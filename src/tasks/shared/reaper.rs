@@ -93,9 +93,7 @@ impl ReaperConfig {
     pub fn clamped(mut self) -> Self {
         self.interval_secs = self.interval_secs.clamp(60, 86_400);
         // Dedup retention must be at least one hour or comparison loses meaning.
-        if self.dedup_retention_secs < 3600 {
-            self.dedup_retention_secs = 3600;
-        }
+        self.dedup_retention_secs = self.dedup_retention_secs.max(3600);
         self
     }
 }

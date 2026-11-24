@@ -18,11 +18,15 @@ impl TrustLevel {
     /// NOTE (reverse proxy): this reads the raw socket peer and does **not**
     /// resolve `X-Forwarded-For`, unlike the main gateway WS path
     /// ([`crate::gateway::trusted_proxy`]). A2A is opt-in (`[a2a] enabled` is
-    /// off by default) and defaults to loopback-only; if you both enable A2A
-    /// and front it with a **same-host** reverse proxy, every proxied caller's
-    /// peer is `127.0.0.1` and would be classed `Local`. In that deployment set
-    /// `[a2a.server.security] local_bypass = false` so `Local` still requires
-    /// credentials. Full trusted-proxy resolution for A2A is a tracked
+    /// off by default) and defaults to loopback-only. The authenticator
+    /// therefore refuses to classify a request as `Local` when it carries a
+    /// forwarding header: behind a **same-host** reverse proxy every proxied
+    /// caller's peer is `127.0.0.1`, and the proxy is not the caller. The
+    /// local bypass is additionally **off by default**
+    /// (`[a2a.server.security] local_bypass`), so an unauthenticated peer
+    /// never reaches the administrative A2A actions out of the box; set it to
+    /// `true` explicitly when the deployment really is a single-operator
+    /// loopback. Full trusted-proxy resolution for A2A is a tracked
     /// follow-up (see SECURITY.md).
     #[must_use]
     pub fn infer_from_addr(addr: &std::net::SocketAddr) -> Self {

@@ -7,7 +7,7 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
-use reqwest::header::{HeaderMap, LOCATION};
+use reqwest::header::{HeaderMap, CONTENT_LENGTH, CONTENT_TYPE, LOCATION, TRANSFER_ENCODING};
 use reqwest::{Method, StatusCode};
 use url::Url;
 
@@ -24,12 +24,18 @@ pub struct SafeFetchRequest {
     pub headers: HeaderMap,
     pub body: Option<Vec<u8>>,
     pub timeout: Duration,
-    /// Optional response-body byte cap. `None` reads the body unbounded (legacy
-    /// behavior); `Some(n)` streams and aborts once `n` bytes are exceeded so a
+    /// Optional response-body byte cap. The [`get`](Self::get) /
+    /// [`post`](Self::post) constructors default to
+    /// [`DEFAULT_MAX_BODY_BYTES`]; `None` (only by explicit field assignment)
+    /// reads the body unbounded; `Some(n)` streams and aborts once `n` bytes are exceeded so a
     /// hostile/oversized upstream cannot OOM the process before a downstream
     /// size check runs.
     pub max_body_bytes: Option<usize>,
 }
+
+/// Default response-body cap (16 MiB) applied by the request constructors so a
+/// hostile upstream cannot exhaust memory.
+pub const DEFAULT_MAX_BODY_BYTES: usize = 16 * 1024 * 1024;
 
 impl SafeFetchRequest {
     /// Creates a GET request with the given timeout.
@@ -40,7 +46,7 @@ impl SafeFetchRequest {
             headers: HeaderMap::new(),
             body: None,
             timeout,
-            max_body_bytes: None,
+            max_body_bytes: Some(DEFAULT_MAX_BODY_BYTES),
         }
     }
 
@@ -52,7 +58,7 @@ impl SafeFetchRequest {
             headers: HeaderMap::new(),
             body: Some(body),
             timeout,
-            max_body_bytes: None,
+            max_body_bytes: Some(DEFAULT_MAX_BODY_BYTES),
         }
     }
 
@@ -66,7 +72,7 @@ impl SafeFetchRequest {
     /// Caps how many response-body bytes are read. A declared `Content-Length`
     /// over the cap fails fast; otherwise the body is streamed and aborted once
     /// the cap is exceeded — bounding memory against a hostile/oversized
-    /// upstream. `None` (default) preserves the unbounded read.
+    /// upstream. Overrides the [`DEFAULT_MAX_BODY_BYTES`] default.
     #[must_use]
     pub fn with_max_body_bytes(mut self, max: usize) -> Self {
         self.max_body_bytes = Some(max);
@@ -125,7 +131,13 @@ async fn validate_url_full_inner(
 
     validate_scheme(&url)?;
 
-    let host = url.host_str().ok_or(SsrfError::NoHost)?;
+    let raw_host = url.host_str().ok_or(SsrfError::NoHost)?;
+    // IPv6 literals keep their brackets in `host_str()`; strip one matching
+    // pair so the literal is classified as an IP rather than a hostname.
+    let host = raw_host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(raw_host);
 
     // Legacy IP literal detection (hex, octal, decimal, short-form)
     if is_legacy_ip_literal(host) {
@@ -148,9 +160,7 @@ async fn validate_url_full_inner(
     // 127.0.0.1 / 169.254.169.254. (Previously this used `SsrfPolicy::disabled()`,
     // which waived all IP checks and was a DNS-rebinding SSRF bypass.)
     if is_allowlisted(host, &policy.allowed_hosts) {
-        let port = url
-            .port_or_known_default()
-            .expect("validate_scheme already restricted to http/https with known defaults");
+        let port = url.port_or_known_default().ok_or(SsrfError::NoHost)?;
         let pinned = resolve_and_validate(host, port, &SsrfPolicy::for_allowlisted_host()).await?;
         return Ok((url, pinned));
     }
@@ -168,9 +178,7 @@ async fn validate_url_full_inner(
     }
 
     // DNS resolution + IP validation
-    let port = url
-        .port_or_known_default()
-        .expect("validate_scheme already restricted to http/https with known defaults");
+    let port = url.port_or_known_default().ok_or(SsrfError::NoHost)?;
     let pinned = resolve_and_validate(host, port, policy).await?;
 
     Ok((url, pinned))
@@ -219,15 +227,18 @@ pub async fn safe_fetch(
         return bypass_fetch(url, request).await;
     }
 
-    // Full validation of the initial URL
-    let (mut current_url, pinned_addr) = validate_url_full(url, policy).await?;
+    // Full validation of the initial URL, bounded by the request timeout so a
+    // slow resolver cannot stall the call (see `validate_with_timeout`).
+    let (mut current_url, pinned_addr) =
+        validate_with_timeout(url, policy, request.timeout).await?;
 
     // Build client with redirect disabled and DNS pinning
     let host = current_url.host_str().ok_or(SsrfError::NoHost)?.to_string();
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .resolve(&host, pinned_addr)
-        .timeout(request.timeout)
+        .timeout(request.timeout);
+    let client = apply_proxy_policy(client, policy)
         .build()
         .map_err(|e| SsrfError::FetchFailed(e.to_string()))?;
 
@@ -253,6 +264,9 @@ pub async fn safe_fetch(
     let mut redirect_count: u16 = 0;
     let mut current_method = request.method;
     let mut current_headers = request.headers;
+    // The body actually sent on the most recent hop. Once dropped it is never
+    // resurrected by a later 307/308.
+    let mut current_body = request.body;
 
     while response.status().is_redirection() {
         redirect_count += 1;
@@ -283,7 +297,8 @@ pub async fn safe_fetch(
         visited.insert(next_url.clone());
 
         // Validate the redirect target
-        let (next_url, next_pinned) = validate_url_full(next_url.as_str(), policy).await?;
+        let (next_url, next_pinned) =
+            validate_with_timeout(next_url.as_str(), policy, request.timeout).await?;
 
         // Cross-origin detection → strip auth headers
         if policy.strip_auth_on_cross_origin && is_cross_origin(&current_url, &next_url) {
@@ -302,14 +317,13 @@ pub async fn safe_fetch(
         // a `303` redirect from a legitimate PUT endpoint to one that
         // re-uses the body in a destructive way.
         let status = response.status();
-        let drop_body = matches!(
-            status,
-            StatusCode::MOVED_PERMANENTLY | StatusCode::FOUND | StatusCode::SEE_OTHER
-        );
-        let method_becomes_get =
-            drop_body && (current_method == Method::POST || status == StatusCode::SEE_OTHER);
-        if method_becomes_get {
-            current_method = Method::GET;
+        let (next_method, drop_body) = redirect_method_and_body(status, &current_method);
+        current_method = next_method;
+        if drop_body {
+            current_body = None;
+            for name in [CONTENT_LENGTH, CONTENT_TYPE, TRANSFER_ENCODING] {
+                current_headers.remove(name);
+            }
         }
 
         // Build new client with pinned address for the redirect target
@@ -317,7 +331,8 @@ pub async fn safe_fetch(
         let redirect_client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .resolve(&next_host, next_pinned)
-            .timeout(request.timeout)
+            .timeout(request.timeout);
+        let redirect_client = apply_proxy_policy(redirect_client, policy)
             .build()
             .map_err(|e| SsrfError::FetchFailed(e.to_string()))?;
 
@@ -325,17 +340,11 @@ pub async fn safe_fetch(
         let mut req_builder = redirect_client.request(current_method.clone(), next_url.as_str());
         // rust-doctor-disable-next-line excessive-clone
         req_builder = req_builder.headers(current_headers.clone());
-        // Forward body unless the redirect status code required it to be
-        // dropped. 307/308 always preserve; 301/302 with non-POST methods
-        // also preserve (the method is unchanged). 303 always drops the
-        // body regardless of the original method (See Other means "do
-        // not repeat this request"). 301/302 with POST drop the body as
-        // a side-effect of method becoming GET.
-        if !drop_body {
-            if let Some(body) = &request.body {
-                // rust-doctor-disable-next-line excessive-clone
-                req_builder = req_builder.body(body.clone());
-            }
+        // Forward the CURRENT body (already cleared above when this or an
+        // earlier hop required dropping it).
+        if let Some(body) = &current_body {
+            // rust-doctor-disable-next-line excessive-clone
+            req_builder = req_builder.body(body.clone());
         }
 
         response = req_builder
@@ -357,6 +366,47 @@ pub async fn safe_fetch(
         headers,
         body,
     })
+}
+
+/// Decides the method for the next redirect hop and whether the body must be
+/// dropped (RFC 9110 §15.4): 303 → GET (HEAD stays HEAD), body dropped;
+/// 301/302 → POST becomes GET with the body dropped, other methods keep method
+/// and body; 307/308 (and anything else) keep method and body.
+fn redirect_method_and_body(status: StatusCode, method: &Method) -> (Method, bool) {
+    match status {
+        StatusCode::SEE_OTHER if *method == Method::HEAD => (Method::HEAD, true),
+        StatusCode::SEE_OTHER => (Method::GET, true),
+        StatusCode::MOVED_PERMANENTLY | StatusCode::FOUND if *method == Method::POST => {
+            (Method::GET, true)
+        }
+        // rust-doctor-disable-next-line excessive-clone
+        _ => (method.clone(), false),
+    }
+}
+
+/// Disables the system proxy unless the policy explicitly opts in: a proxy
+/// resolves the target itself, which would bypass the DNS-pinned address.
+fn apply_proxy_policy(
+    builder: reqwest::ClientBuilder,
+    policy: &SsrfPolicy,
+) -> reqwest::ClientBuilder {
+    if policy.use_system_proxy {
+        return builder;
+    }
+    builder.no_proxy()
+}
+
+/// Runs `validate_url_full` bounded by `timeout`. Cancelling the wait does not
+/// abort an OS resolution already running on the blocking pool; it only stops
+/// this request from waiting on it.
+async fn validate_with_timeout(
+    url: &str,
+    policy: &SsrfPolicy,
+    timeout: Duration,
+) -> Result<(Url, std::net::SocketAddr), SsrfError> {
+    tokio::time::timeout(timeout, validate_url_full(url, policy))
+        .await
+        .map_err(|_| SsrfError::FetchFailed("DNS validation timed out".to_string()))?
 }
 
 /// Normal fetch without SSRF validation (used when policy.enabled is false).
@@ -523,6 +573,55 @@ mod tests {
         assert!(req.headers.is_empty());
         assert!(req.body.is_none());
         assert_eq!(req.timeout, Duration::from_secs(30));
+    }
+
+    #[test]
+    fn constructors_default_to_bounded_body_cap() {
+        let get = SafeFetchRequest::get(Duration::from_secs(1));
+        assert_eq!(get.max_body_bytes, Some(DEFAULT_MAX_BODY_BYTES));
+        let post = SafeFetchRequest::post(Vec::new(), Duration::from_secs(1));
+        assert_eq!(post.max_body_bytes, Some(DEFAULT_MAX_BODY_BYTES));
+        let custom = SafeFetchRequest::get(Duration::from_secs(1)).with_max_body_bytes(8);
+        assert_eq!(custom.max_body_bytes, Some(8));
+    }
+
+    #[test]
+    fn redirect_post_303_then_307_does_not_resurrect_body() {
+        // POST A(secret) -> 303 B -> 307 C must send GET C without a body.
+        let (m1, drop1) = redirect_method_and_body(StatusCode::SEE_OTHER, &Method::POST);
+        assert_eq!(m1, Method::GET);
+        assert!(drop1);
+        let (m2, drop2) = redirect_method_and_body(StatusCode::TEMPORARY_REDIRECT, &m1);
+        assert_eq!(m2, Method::GET);
+        assert!(!drop2, "307 keeps the CURRENT (already empty) body");
+    }
+
+    #[test]
+    fn redirect_put_patch_301_302_keep_method_and_body() {
+        for status in [StatusCode::MOVED_PERMANENTLY, StatusCode::FOUND] {
+            for method in [Method::PUT, Method::PATCH] {
+                let (m, drop) = redirect_method_and_body(status, &method);
+                assert_eq!(m, method);
+                assert!(!drop);
+            }
+            let (m, drop) = redirect_method_and_body(status, &Method::POST);
+            assert_eq!(m, Method::GET);
+            assert!(drop);
+        }
+        let (m, drop) = redirect_method_and_body(StatusCode::SEE_OTHER, &Method::HEAD);
+        assert_eq!(m, Method::HEAD);
+        assert!(drop);
+    }
+
+    #[tokio::test]
+    async fn bracketed_ipv6_literal_is_validated_as_ip() {
+        let policy = SsrfPolicy::default();
+        let err = validate_url_full("http://[::1]:8080/", &policy).await;
+        assert!(matches!(err, Err(SsrfError::BlockedAddress(_))));
+        let (_, addr) = validate_url_full("https://[2606:4700:4700::1111]/", &policy)
+            .await
+            .unwrap();
+        assert_eq!(addr.port(), 443);
     }
 
     #[test]

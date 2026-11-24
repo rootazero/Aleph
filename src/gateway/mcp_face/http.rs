@@ -208,11 +208,12 @@ fn charge_remote_post(state: &McpRouteState, admitted: &Admitted) -> Result<(), 
 fn session_from_header(
     state: &McpRouteState,
     headers: &HeaderMap,
+    caller: &McpCaller,
 ) -> Result<SessionView, Response> {
     let Some(id) = headers.get(SESSION_HEADER).and_then(|v| v.to_str().ok()) else {
         return Err((StatusCode::BAD_REQUEST, "Mcp-Session-Id header required").into_response());
     };
-    state.face.sessions().touch(id).ok_or_else(|| {
+    state.face.sessions().touch(caller, id).ok_or_else(|| {
         (
             StatusCode::NOT_FOUND,
             "unknown or expired Mcp-Session-Id; send initialize again",
@@ -280,7 +281,7 @@ async fn handle_post(
             Err(_) => return bad_request(INVALID_REQUEST, "not a JSON-RPC 2.0 message"),
         };
         if requires_session(&msg.method) && session.is_none() {
-            match session_from_header(&state, &headers) {
+            match session_from_header(&state, &headers, &caller) {
                 Ok(s) => session = Some(s),
                 Err(refused) => return refused,
             }
@@ -317,14 +318,15 @@ async fn handle_get(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(refused) = admit(&state, peer, &headers) {
-        return refused;
-    }
-    let session = match session_from_header(&state, &headers) {
+    let caller = match admit(&state, peer, &headers) {
+        Ok(admitted) => admitted.caller,
+        Err(refused) => return refused,
+    };
+    let session = match session_from_header(&state, &headers, &caller) {
         Ok(s) => s,
         Err(refused) => return refused,
     };
-    let Some(rx) = state.face.sessions().attach_stream(&session.id) else {
+    let Some(rx) = state.face.sessions().attach_stream(&caller, &session.id) else {
         return (StatusCode::NOT_FOUND, "session vanished").into_response();
     };
     let stream =
@@ -340,13 +342,15 @@ async fn handle_delete(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(refused) = admit(&state, peer, &headers) {
-        return refused;
-    }
-    let Some(id) = headers.get(SESSION_HEADER).and_then(|v| v.to_str().ok()) else {
-        return (StatusCode::BAD_REQUEST, "Mcp-Session-Id header required").into_response();
+    let caller = match admit(&state, peer, &headers) {
+        Ok(admitted) => admitted.caller,
+        Err(refused) => return refused,
     };
-    if state.face.sessions().remove(id) {
+    let session = match session_from_header(&state, &headers, &caller) {
+        Ok(session) => session,
+        Err(refused) => return refused,
+    };
+    if state.face.sessions().remove(&caller, &session.id) {
         StatusCode::OK.into_response()
     } else {
         (StatusCode::NOT_FOUND, "unknown Mcp-Session-Id").into_response()
@@ -463,13 +467,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn admitted_caller_cannot_use_another_principals_session_on_any_http_verb() {
+        let fx = fixture();
+        let mut owner = operator();
+        owner.user = Some("another-user".into());
+        let session = fx.face.sessions().create(
+            &owner,
+            super::super::session::McpClient {
+                client_name: "owner".into(),
+                client_version: "1".into(),
+            },
+            "2025-03-26",
+        );
+        let mut stream = fx
+            .face
+            .sessions()
+            .attach_stream(&owner, &session.id)
+            .unwrap();
+        for method in [Method::POST, Method::GET, Method::DELETE] {
+            let body =
+                (method == Method::POST).then(|| json!({"jsonrpc":"2.0","id":1,"method":"ping"}));
+            let response = fx
+                .app
+                .clone()
+                .oneshot(request(
+                    method,
+                    LOCAL,
+                    &[(SESSION_HEADER, &session.id)],
+                    body,
+                ))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        }
+        assert!(fx.face.sessions().touch(&owner, &session.id).is_some());
+        fx.face.notify_tools_list_changed();
+        assert!(
+            stream.try_recv().is_ok(),
+            "denied GET did not replace the owner's notifier"
+        );
+    }
+
+    #[tokio::test]
     async fn loopback_initialize_needs_no_bearer_and_assigns_a_session() {
         let fx = fixture();
         let (status, sid, body) = initialize(&fx, LOCAL, &[]).await;
         assert_eq!(status, StatusCode::OK);
         assert!(sid.is_some());
         assert_eq!(body["result"]["protocolVersion"], "2025-03-26");
-        assert!(fx.face.sessions().touch(sid.as_deref().unwrap()).is_some());
+        assert!(fx
+            .face
+            .sessions()
+            .touch(&operator(), sid.as_deref().unwrap())
+            .is_some());
     }
 
     #[tokio::test]
@@ -647,7 +697,13 @@ mod tests {
         assert_eq!(r.status(), StatusCode::ACCEPTED);
         let bytes = axum::body::to_bytes(r.into_body(), 1024).await.unwrap();
         assert!(bytes.is_empty());
-        assert!(fx.face.sessions().touch(&sid).unwrap().initialized);
+        assert!(
+            fx.face
+                .sessions()
+                .touch(&operator(), &sid)
+                .unwrap()
+                .initialized
+        );
     }
 
     #[tokio::test]

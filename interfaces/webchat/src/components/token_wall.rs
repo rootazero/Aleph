@@ -1,6 +1,6 @@
 //! Native first-connection welcome and the existing remote login wall.
 //!
-//! A successful credentialless native connection may show a one-time welcome.
+//! A credentialless native client may show a one-time welcome for a local Gateway.
 //! Dismissing it acknowledges an already-authorized connection; it never bypasses
 //! Gateway authentication. Only the nonsecret endpoint acknowledgement is stored
 //! in localStorage. Device credentials continue to use the native keyring.
@@ -31,12 +31,11 @@ fn welcome_endpoint(gateway_url: &str) -> Option<String> {
 
 fn welcome_visible(
     native: bool,
-    connected: bool,
     protected: bool,
     acknowledged: bool,
     local_endpoint: bool,
 ) -> bool {
-    native && connected && !protected && !acknowledged && local_endpoint
+    native && !protected && !acknowledged && local_endpoint
 }
 
 fn read_acknowledgements() -> Vec<String> {
@@ -80,7 +79,6 @@ pub fn TokenWall() -> impl IntoView {
         let endpoint = endpoint.get();
         welcome_visible(
             native,
-            state.is_connected.get(),
             state.protected_user.get().is_some(),
             endpoint
                 .as_ref()
@@ -212,13 +210,12 @@ mod tests {
     use super::{welcome_endpoint, welcome_visible};
 
     #[test]
-    fn welcome_requires_a_successful_unpaired_native_local_connection() {
-        assert!(welcome_visible(true, true, false, false, true));
-        assert!(!welcome_visible(false, true, false, false, true));
-        assert!(!welcome_visible(true, false, false, false, true));
-        assert!(!welcome_visible(true, true, true, false, true));
-        assert!(!welcome_visible(true, true, false, true, true));
-        assert!(!welcome_visible(true, true, false, false, false));
+    fn welcome_requires_an_unpaired_native_local_endpoint() {
+        assert!(welcome_visible(true, false, false, true));
+        assert!(!welcome_visible(false, false, false, true));
+        assert!(!welcome_visible(true, true, false, true));
+        assert!(!welcome_visible(true, false, true, true));
+        assert!(!welcome_visible(true, false, false, false));
     }
 
     #[test]

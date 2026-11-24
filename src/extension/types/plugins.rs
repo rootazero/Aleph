@@ -402,6 +402,9 @@ pub struct PluginRecord {
     pub origin: PluginOrigin,
     /// Current status
     pub status: PluginStatus,
+    /// Explicit Panel UI declaration, if the manifest opted in.
+    #[serde(default)]
+    pub panel: Option<crate::extension::manifest::PanelUiManifest>,
     /// Human-readable detail for a non-`Loaded` status: the parse error, the
     /// path that shadowed this plugin, or the policy that refused it.
     ///
@@ -452,6 +455,7 @@ impl PluginRecord {
             origin,
             status: PluginStatus::Loaded,
             error: None,
+            panel: None,
             root_dir: PathBuf::new(),
             scope_key: crate::extension::visibility::ScopeKey::Global,
             tool_names: Vec::new(),
@@ -515,6 +519,7 @@ impl PluginRecord {
             origin: output.source.origin,
             status: PluginStatus::Loaded,
             error: None,
+            panel: None,
             root_dir,
             scope_key: crate::extension::visibility::ScopeKey::Global,
             tool_names,

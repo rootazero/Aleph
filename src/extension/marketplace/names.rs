@@ -21,12 +21,20 @@
 /// vocabularies.
 ///
 /// # Errors
-/// A human-readable refusal when `value` is empty, contains `/` or `\`, or
-/// contains `..`.
+/// A human-readable refusal when `value` is empty, is `.`, contains `/` or `\`,
+/// or contains `..`.
 pub fn reject_unsafe_segment(kind: &str, value: &str) -> Result<(), String> {
-    if value.is_empty() || value.contains('/') || value.contains('\\') || value.contains("..") {
+    // `.` is refused for the same reason `..` is: it is not a child of the
+    // directory it gets joined onto. `cache_dir.join(".")` is the cache root
+    // itself, so a removal that took it would wipe every marketplace.
+    if value.is_empty()
+        || value == "."
+        || value.contains('/')
+        || value.contains('\\')
+        || value.contains("..")
+    {
         return Err(format!(
-            "Invalid {kind} '{value}': must not be empty or contain path separators or '..'."
+            "Invalid {kind} '{value}': must not be empty, be '.', or contain path separators or '..'."
         ));
     }
     Ok(())
@@ -44,7 +52,7 @@ mod tests {
 
     #[test]
     fn every_escape_shape_is_refused_and_says_which_value() {
-        for bad in ["", "a/b", "a\\b", "..", "../../etc", "x..y"] {
+        for bad in ["", ".", "a/b", "a\\b", "..", "../../etc", "x..y"] {
             let err = reject_unsafe_segment("marketplace name", bad)
                 .expect_err(&format!("{bad:?} must be refused"));
             assert!(

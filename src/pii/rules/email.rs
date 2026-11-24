@@ -14,6 +14,11 @@ fn email_regex() -> &'static Regex {
         // malformed inputs (the engine is linear-time, but the greedy
         // `[A-Za-z0-9.\-]+` plus unanchored `{2,}` can still exhibit quadratic
         // degradation on pathological text). Real TLDs never approach this.
+        //
+        // The local-part class must keep `_` (RFC 5322 `atext`): without it
+        // the match of `john_doe@example.com` started at `doe`, and the
+        // engine's `replace_range` then redacted only that part — the
+        // `john_` prefix stayed in plaintext.
         Regex::new(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,63}")
             // rust-doctor-disable-next-line unwrap-in-production
             .expect("static email regex compiles")
@@ -116,6 +121,17 @@ mod tests {
         let matches = rule().detect("Contact user@example.com1z");
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].matched_text, "user@example.com");
+    }
+
+    #[test]
+    fn test_match_email_with_underscore_in_local_part() {
+        // RFC 5322's `atext` includes `_`, so `john_doe@example.com` must be
+        // matched in full. A local-part class without `_` made the match
+        // start at `doe`, and the engine's `replace_range` then redacted
+        // only that part — leaking the `john_` prefix in plaintext.
+        let matches = rule().detect("Contact john_doe@example.com for help");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].matched_text, "john_doe@example.com");
     }
 
     #[test]

@@ -67,7 +67,11 @@ impl WhisperTranscription {
         let client = reqwest::Client::builder()
             .timeout(TRANSCRIPTION_TIMEOUT)
             .build()
-            .expect("reqwest client with 120s timeout must build");
+            .map_err(|e| TranscriptionConfigError {
+                provider: provider_name.to_string(),
+                field: "client",
+                detail: format!("failed to build HTTP client: {e}"),
+            })?;
 
         let base_url = base_url.unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
         Self::check_base_url(provider_name, &base_url)?;
@@ -175,8 +179,8 @@ impl TranscriptionService for WhisperTranscription {
             .local_path
             .file_name()
             .and_then(|n| n.to_str())
-            .unwrap_or("audio.bin")
-            .to_string();
+            .map(str::to_string)
+            .unwrap_or_else(|| "audio.bin".to_string());
 
         let file_part = multipart::Part::bytes(file_bytes)
             .file_name(file_name)

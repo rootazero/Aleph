@@ -1,3 +1,5 @@
+//! lock-policy: none
+//!
 //! `aleph-server node` — cluster node (execution arm) outbound runtime.
 //!
 //! Dials the hub WS, declares capabilities, serves `tool.call` in an inbound
@@ -25,9 +27,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use alephcore::cluster::{
-    ApprovalSlot, CenterApprovalRequester, CommandDescriptor, CommandTable, ReverseRpcChannel,
+    ApprovalSlot, CenterApprovalRequester, CommandDeclaration, CommandTable, ReverseRpcChannel,
 };
 use alephcore::gateway::protocol::JsonRpcResponse;
+use alephcore::gateway::server::connection::parse_response_frame;
 use alephcore::routing::session_key::SessionKey;
 use alephcore::sandbox::config::SandboxConfig;
 use alephcore::sandbox::exec_approval::gate::ApprovalGate;
@@ -104,14 +107,120 @@ fn write_identity(path: &Path, id: &NodeIdentity) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Forget the persisted node identity. The identity file IS the node's
+/// credential under LAN trust, and a revoked credential is refused by the
+/// center forever — so removing the file is the only way back: the next
+/// `connect` is a FIRST BOOT (no `device_id`), and the center re-uses the row
+/// an operator re-enrolled for this name, or mints a new one.
+///
+/// Returns whether a file was actually removed.
+fn reset_identity_file(path: &Path) -> std::io::Result<bool> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(true),
+        // Nothing to forget is not an error: the operator asked for a state
+        // the node is already in.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+
+/// `aleph-server node --reset-identity` — the executable form of "delete the
+/// identity file". The operator runs it ON the node machine; the next
+/// `aleph-server node --center <URL>` re-enrols the node.
+pub fn reset_identity(name: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let path = identity_path(name)
+        .ok_or_else(|| format!("Invalid node name (path traversal not allowed): {name}"))?;
+    if reset_identity_file(&path)? {
+        println!(
+            "removed the node identity file {}\n\
+             The next `aleph-server node --center <URL> --name {name}` connects as a FIRST \
+             BOOT: the center re-uses the row an operator re-enrolled for this name, or \
+             mints a new one.",
+            path.display()
+        );
+    } else {
+        println!(
+            "no node identity file at {} — nothing to reset.",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
 /// The center's verdict, carried in the `connect` reply under `result.node`.
 enum ConnectVerdict {
     /// Registered. `node_id` is authoritative; persist it when `persist` is set
     /// (first boot, or the center adopted an operator's pre-enrolled row).
     Registered { node_id: String, persist: bool },
-    /// The center revoked this node's device record (`cluster.deregister`).
+    /// The center refused this node outright: its device record was revoked
+    /// (`cluster.deregister`), or the name is shared by several enrolled nodes
+    /// and only an operator can repair it.
     /// Terminal: retrying cannot help until an operator re-enrolls it.
-    Deregistered,
+    /// `reason` is the center's human-readable explanation — absent when the
+    /// center is older and does not send one.
+    Deregistered {
+        reason: Option<String>,
+        code: RefusalCode,
+    },
+}
+
+/// The CASE a refusal is about. The center sends a stable machine-readable
+/// code next to the human-readable `reason`; the code is what selects the
+/// operator's recovery step, so the two never have to be parsed out of prose.
+/// An older center sends neither → `Unknown` → the generic message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RefusalCode {
+    /// The node's device record was revoked (`cluster.deregister`). Its
+    /// identity is dead; only a fresh enrolment brings it back.
+    Revoked,
+    /// Several enrolled nodes share this name — an operator must deregister
+    /// the duplicates by id. The node's own identity is fine.
+    AmbiguousName,
+    /// The id the node presented belongs to a paired Panel or operator
+    /// device, not to an enrolled node.
+    IdentityConflict,
+    /// An older center, or a code this client does not know.
+    Unknown,
+}
+
+impl RefusalCode {
+    fn from_wire(code: Option<&str>) -> Self {
+        match code {
+            Some("revoked") => Self::Revoked,
+            Some("ambiguous_name") => Self::AmbiguousName,
+            Some("identity_conflict") => Self::IdentityConflict,
+            _ => Self::Unknown,
+        }
+    }
+
+    /// The operator step this case needs, or `None` for a case we cannot
+    /// classify (an older center) — the caller then keeps the generic
+    /// message. The steps live HERE, next to the code, so a renamed flag or
+    /// a moved recovery step cannot leave the two apart.
+    fn recovery_hint(&self, name: &str, id_path: &Path) -> Option<String> {
+        match self {
+            Self::Revoked => Some(format!(
+                "its identity file ({}) is dead — the center refuses that credential \
+                 forever. Re-enrol the name at the center (`cluster.enroll`), then \
+                 forget the dead credential on the node \
+                 (`aleph-server node --reset-identity --name {name}`) and restart it.",
+                id_path.display()
+            )),
+            Self::AmbiguousName => Some(
+                "several enrolled nodes share this name — an operator must deregister \
+                 the duplicates by id at the center. The node's own identity is fine; \
+                 restart the node afterwards."
+                    .to_string(),
+            ),
+            Self::IdentityConflict => Some(
+                "the id it presented belongs to another device (a paired Panel or an \
+                 operator device) — an operator must free that id before this node can \
+                 join."
+                    .to_string(),
+            ),
+            Self::Unknown => None,
+        }
+    }
 }
 
 /// Parse the center's `connect` reply. `None` = the center answered but said
@@ -119,7 +228,13 @@ enum ConnectVerdict {
 fn parse_connect_verdict(resp: &Value) -> Option<ConnectVerdict> {
     let node = resp.pointer("/result/node")?;
     if node.get("status").and_then(|v| v.as_str()) == Some("deregistered") {
-        return Some(ConnectVerdict::Deregistered);
+        // The reason is optional: an older center sends the status alone.
+        let reason = node
+            .get("reason")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let code = RefusalCode::from_wire(node.get("reason_code").and_then(|v| v.as_str()));
+        return Some(ConnectVerdict::Deregistered { reason, code });
     }
     let node_id = node.get("node_id").and_then(|v| v.as_str())?.to_string();
     let persist = node
@@ -138,11 +253,21 @@ const HEALTHY_SESSION_MS: u128 = 30_000;
 /// Deregistration is terminal, so it needs its own error identity to break the
 /// reconnect loop.
 #[derive(Debug)]
-struct Deregistered;
+struct Deregistered {
+    /// The center's explanation, when it sent one. `None` = an older center
+    /// (or a plain revocation) — the generic message is then correct.
+    reason: Option<String>,
+    /// The case the refusal is about. `Unknown` = an older center that sends
+    /// no code, or a code this client does not know.
+    code: RefusalCode,
+}
 
 impl std::fmt::Display for Deregistered {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("node was deregistered by the center")
+        match &self.reason {
+            Some(reason) => write!(f, "node was refused by the center: {reason}"),
+            None => f.write_str("node was deregistered by the center"),
+        }
     }
 }
 
@@ -159,7 +284,7 @@ pub async fn handle_node(
     // confirmation, no refusal, no reconnect diagnostics.
     init_node_tracing();
 
-    let (table, approval_slot) = build_command_table(&name);
+    let (table, approval_slot) = build_command_table(&name).await?;
     let table = Arc::new(table);
     let declared = table.descriptors();
     let url = format!("{}/ws", center.trim_end_matches('/'));
@@ -186,18 +311,25 @@ pub async fn handle_node(
         // row this whole flow exists to prevent.
         let persisted = std::sync::Mutex::new(node_id.clone());
         let on_identity = |id: &str, persist: bool| {
-            let mut cur = persisted.lock().unwrap_or_else(|e| e.into_inner());
-            if persist && cur.as_deref() != Some(id) {
-                persist_identity(
-                    Some(&id_path),
-                    &NodeIdentity {
-                        node_id: id.to_string(),
-                        center: center.clone(),
-                    },
-                );
-                tracing::info!("node '{name}' enrolled as {id}");
+            let id = id.to_string();
+            let identity = NodeIdentity {
+                node_id: id.clone(),
+                center: center.clone(),
+            };
+            let should_persist = {
+                let mut cur = persisted.lock().unwrap_or_else(|e| e.into_inner());
+                let should_persist = persist && cur.as_deref() != Some(id.as_str());
+                *cur = Some(id.clone());
+                should_persist
+            };
+            let id_path = &id_path;
+            let name = &name;
+            async move {
+                if should_persist {
+                    persist_identity(Some(id_path), &identity).await;
+                    tracing::info!("node '{name}' enrolled as {id}");
+                }
             }
-            *cur = Some(id.to_string());
         };
 
         let outcome = run_session(
@@ -220,12 +352,32 @@ pub async fn handle_node(
         match outcome {
             Ok(()) => tracing::warn!("node session ended cleanly; reconnecting"),
             Err(e) if e.is::<Deregistered>() => {
-                tracing::error!(
-                    "node '{name}' was deregistered by the center. Its identity file \
-                     ({}) is now dead — an operator must re-enroll this node (delete the \
-                     file to join as a new node). Exiting.",
-                    id_path.display()
-                );
+                // An older center sends neither a reason nor a code: keep the
+                // generic message then. A center that does send them gets an
+                // accurate one — the refusals (revoked identity, an ambiguous
+                // name, an id that belongs to another device) need DIFFERENT
+                // operator actions, so the case selects the recovery step.
+                let (reason, code) = match e.downcast_ref::<Deregistered>() {
+                    Some(d) => (d.reason.clone(), d.code),
+                    None => (None, RefusalCode::Unknown),
+                };
+                let detail = match reason {
+                    Some(reason) => format!("the center refused it: {reason}"),
+                    None => "the center refused it".to_string(),
+                };
+                match code.recovery_hint(&name, &id_path) {
+                    Some(hint) => tracing::error!(
+                        "node '{name}' was refused by the center — {detail}. Recovery: {hint} \
+                         Exiting."
+                    ),
+                    None => tracing::error!(
+                        "node '{name}' was refused by the center — {detail}. The center sent no \
+                         refusal code (it is an older center), so the case is unknown: check the \
+                         center's log. Deleting the node's identity file ({}) only helps when the \
+                         CREDENTIAL was revoked — it makes the node join as a NEW node. Exiting.",
+                        id_path.display()
+                    ),
+                }
                 return Err(e);
             }
             Err(e) => tracing::error!("node session error: {e}; retrying in {backoff}ms"),
@@ -266,11 +418,16 @@ fn with_jitter(backoff_ms: u64) -> u64 {
 
 /// Best-effort persist; a write failure warns but does not abort the node
 /// (it will re-enroll on next restart).
-fn persist_identity(path: Option<&Path>, id: &NodeIdentity) {
-    if let Some(p) = path {
-        if let Err(e) = write_identity(p, id) {
-            tracing::warn!("failed to persist node identity: {e}");
-        }
+async fn persist_identity(path: Option<&Path>, id: &NodeIdentity) {
+    let Some(path) = path else {
+        return;
+    };
+    let path = path.to_path_buf();
+    let id = id.clone();
+    match tokio::task::spawn_blocking(move || write_identity(&path, &id)).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => tracing::warn!("failed to persist node identity: {e}"),
+        Err(e) => tracing::warn!("node identity persistence task failed: {e}"),
     }
 }
 
@@ -278,7 +435,9 @@ fn persist_identity(path: Option<&Path>, id: &NodeIdentity) {
 /// `CenterApprovalRequester` whose channel slot is filled per-connection by
 /// `run_session`; until a connection is live the slot is `None` and escalations
 /// fail-closed (same as the old headless `None` requester).
-fn build_command_table(name: &str) -> (CommandTable, ApprovalSlot) {
+async fn build_command_table(
+    name: &str,
+) -> Result<(CommandTable, ApprovalSlot), Box<dyn std::error::Error>> {
     let cfg = SandboxConfig::default();
     let driver = create_platform_driver_from_config(&cfg);
     let slot: ApprovalSlot = Arc::new(RwLock::new(None));
@@ -293,13 +452,46 @@ fn build_command_table(name: &str) -> (CommandTable, ApprovalSlot) {
     );
     let bash = alephcore::builtin_tools::BashExecTool::new().with_sandbox(sandbox);
     let session = SessionKey::ephemeral(format!("node-{name}"));
-    // file.read/file.write jail to the SAME per-session workspace dir bash uses,
-    // so a pushed script can be bash-run and a bash-produced artifact pulled.
-    let workspace_dir =
-        alephcore::sandbox::workspace::session_workspace_dir(&cfg.workspace_root, &session);
-    let mut table = CommandTable::with_bash(bash, session);
-    table.register_file_commands(workspace_dir);
-    (table, slot)
+    let mut table = CommandTable::with_bash(bash, session.clone());
+    setup_file_commands(&mut table, &cfg.workspace_root, &session).await?;
+    Ok((table, slot))
+}
+
+/// Register the node's file commands and make sure their jail root exists.
+///
+/// `file.read`/`file.write` jail to the per-session workspace directory — the
+/// SAME directory the node's bash sandbox runs in, derived from the same
+/// session key — so a pushed script can be bash-run and a bash-produced
+/// artifact pulled. Deriving both from one session key (instead of passing
+/// two independent directories) is what keeps them from drifting apart: a
+/// drifted pair writes into one directory while bash executes in another, and
+/// both report success.
+///
+/// The jail root is created HERE, once, during the node's setup: the file
+/// commands refuse a root that does not exist ("workspace root unresolved"),
+/// and the only other creator was the bash sandbox, which creates the
+/// directory lazily on its first execution. A node that had not yet run a bash
+/// command therefore failed EVERY `file.read`/`file.write` while still
+/// advertising both commands in its declared catalog — so the center's
+/// "command not declared by node" check passed and the user only saw a broken
+/// tool.
+async fn setup_file_commands(
+    table: &mut CommandTable,
+    workspace_root: &Path,
+    session: &SessionKey,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let jail_root = alephcore::sandbox::workspace::session_workspace_dir(workspace_root, session);
+    tokio::fs::create_dir_all(&jail_root).await.map_err(|e| {
+        format!(
+            "failed to create node workspace dir {}: {e}",
+            jail_root.display()
+        )
+    })?;
+    // The jail root the commands are registered with comes from the SAME
+    // (workspace_root, session) pair as the directory created above — one
+    // derivation, two consumers, so they cannot diverge.
+    table.register_file_commands_for_session(workspace_root, session);
+    Ok(())
 }
 
 /// Run one connected session.
@@ -310,16 +502,20 @@ fn build_command_table(name: &str) -> (CommandTable, ApprovalSlot) {
 ///
 /// Errors carry [`Deregistered`] when the center refused this node outright;
 /// the caller treats that as terminal rather than backing off forever.
-async fn run_session(
+async fn run_session<F, Fut>(
     url: &str,
     node_id: Option<&str>,
     name: &str,
-    declared: &[CommandDescriptor],
+    declared: &[CommandDeclaration],
     tags: &[String],
     table: &Arc<CommandTable>,
     approval_slot: &ApprovalSlot,
-    on_identity: &(dyn Fn(&str, bool) + Send + Sync),
-) -> Result<(), Box<dyn std::error::Error>> {
+    on_identity: &F,
+) -> Result<(), Box<dyn std::error::Error>>
+where
+    F: Fn(&str, bool) -> Fut + Send + Sync,
+    Fut: std::future::Future<Output = ()> + Send,
+{
     let (ws, _resp) = tokio_tungstenite::connect_async(url).await?;
     let (mut write, mut read) = ws.split();
 
@@ -361,8 +557,12 @@ async fn run_session(
         return Err(format!("center refused connect: {err}").into());
     }
     match parse_connect_verdict(&reply) {
-        Some(ConnectVerdict::Deregistered) => return Err(Box::new(Deregistered)),
-        Some(ConnectVerdict::Registered { node_id, persist }) => on_identity(&node_id, persist),
+        Some(ConnectVerdict::Deregistered { reason, code }) => {
+            return Err(Box::new(Deregistered { reason, code }));
+        }
+        Some(ConnectVerdict::Registered { node_id, persist }) => {
+            on_identity(&node_id, persist).await;
+        }
         // A center that says nothing about nodes accepted the socket but did not
         // register us — surface it instead of silently idling as a zombie.
         None => {
@@ -377,7 +577,16 @@ async fn run_session(
     // read loop — dispatch runs on spawned tasks while the read loop keeps
     // pumping frames.
     let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<String>(64);
-    let channel = ReverseRpcChannel::new(out_tx.clone());
+    // The node binds the SAME close signal the center does. When the center
+    // stops draining our frames, `ReverseRpcChannel::call` reports
+    // `OutboundWedged` and asks the owning connection to tear itself down.
+    // Without it the node's own wedge was invisible to the node: the socket
+    // stayed half-open, the center kept the node in its ONLINE registry, and
+    // every command to it timed out until the center's inbound watchdog
+    // reaped it — and that watchdog watches INBOUND activity, so it cannot
+    // see a write wedge at all.
+    let close = Arc::new(tokio::sync::Notify::new());
+    let channel = ReverseRpcChannel::with_close(out_tx.clone(), Arc::clone(&close));
     let pending = channel.pending();
     *approval_slot
         .write()
@@ -401,18 +610,37 @@ async fn run_session(
     // approval slot + stop the writer) runs on EVERY exit path — including a WS
     // error early-return via `?`, not just the normal loop fall-through.
     let loop_result: Result<(), Box<dyn std::error::Error>> = async {
-        while let Some(msg) = read.next().await {
+        loop {
+            // The close signal is polled FIRST: a wedged outbound must tear the
+            // session down NOW, not after the next inbound frame — which may
+            // never come, because the peer is the one that stopped reading.
+            let msg = tokio::select! {
+                biased;
+                () = close.notified() => {
+                    tracing::warn!(
+                        "node: outbound reverse-RPC channel is wedged (the center stopped reading \
+                         our frames); tearing down the session so the node can reconnect"
+                    );
+                    break;
+                }
+                msg = read.next() => match msg {
+                    Some(msg) => msg,
+                    None => break,
+                },
+            };
             let Message::Text(text) = msg? else { continue };
             let text = text.to_string();
 
             // Center → node RESPONSE: resolve a node-initiated reverse-RPC call.
-            if let Ok(resp) = serde_json::from_str::<JsonRpcResponse>(&text) {
-                if resp.id.is_some() && (resp.result.is_some() || resp.error.is_some()) {
-                    if let Some(id) = resp.id.clone() {
-                        pending.resolve(&id, resp);
-                    }
-                    continue;
+            // Same discriminator as the center's own demux
+            // (`gateway::server::connection::parse_response_frame`): one rule
+            // for both ends of the wire, so a frame can never be a response on
+            // one side and a request on the other.
+            if let Some(resp) = parse_response_frame(&text) {
+                if let Some(id) = resp.id.clone() {
+                    pending.resolve(&id, resp);
                 }
+                continue;
             }
 
             // Center → node REQUEST (tool.call): dispatch on a spawned task so a
@@ -521,6 +749,74 @@ mod tests {
         assert!(handle_frame(&table, &frame).await.is_none());
     }
 
+    /// A center answer of `"result": null` HAS answered. serde maps a JSON
+    /// `null` to `None`, so a value-presence test classified that frame as a
+    /// REQUEST and the pending reverse-RPC call waited out its full timeout
+    /// even though the peer had completed. The node demux must use the shared
+    /// shape discriminator.
+    #[tokio::test]
+    async fn a_null_result_response_resolves_the_pending_call() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(8);
+        let channel = ReverseRpcChannel::new(tx);
+        let caller = tokio::spawn({
+            let channel = channel.clone();
+            async move { channel.call("tool.call", json!({}), 2_000).await }
+        });
+
+        // The outbound request frame carries the id the call is waiting on.
+        let frame = rx.recv().await.expect("outbound request frame");
+        let id: Value =
+            serde_json::from_str::<Value>(&frame).expect("request frame is JSON")["id"].clone();
+
+        // The center answers with a null result.
+        let reply = format!(r#"{{"jsonrpc":"2.0","id":{id},"result":null}}"#);
+        let resp = parse_response_frame(&reply).expect("a null result is a completed response");
+        assert_eq!(resp.id, Some(id.clone()));
+        channel.pending().resolve(&id, resp);
+
+        let answered = caller
+            .await
+            .expect("call task")
+            .expect("resolved, not timed out");
+        assert!(answered.result.is_none());
+    }
+
+    /// A center REQUEST carries a `method` — it must never be mistaken for
+    /// the answer to a node-initiated call, or the request would be swallowed
+    /// by the pending table instead of reaching the node's request path.
+    #[tokio::test]
+    async fn a_center_request_frame_is_not_a_response() {
+        let frame = json!({
+            "jsonrpc": "2.0", "id": "rpc-7", "method": "tool.call",
+            "params": {"tool": "bash", "args": {"cmd": "echo hi"}}
+        })
+        .to_string();
+        assert!(parse_response_frame(&frame).is_none());
+    }
+
+    /// The file commands jail to the per-session workspace dir and refuse a
+    /// root that does not exist ("workspace root unresolved"). The node
+    /// creates it during setup, so `file.read`/`file.write` work on a node
+    /// that has not run a bash command yet.
+    #[tokio::test]
+    async fn setup_creates_the_file_command_jail_root() {
+        let scratch = tempfile::tempdir().unwrap();
+        let session = SessionKey::ephemeral("node-workspace-test");
+        let sandbox = Arc::new(CannedSandbox(SandboxOutput::default()));
+        let bash = alephcore::builtin_tools::BashExecTool::new().with_sandbox(sandbox);
+        let mut table = CommandTable::with_bash(bash, session.clone());
+        setup_file_commands(&mut table, scratch.path(), &session)
+            .await
+            .expect("file command setup");
+        let jail_root =
+            alephcore::sandbox::workspace::session_workspace_dir(scratch.path(), &session);
+        assert!(
+            jail_root.is_dir(),
+            "the file commands' jail root must exist before they run: {}",
+            jail_root.display()
+        );
+    }
+
     #[test]
     fn node_identity_round_trips_through_disk() {
         let id = NodeIdentity {
@@ -563,7 +859,7 @@ mod tests {
                 assert_eq!(node_id, "uuid-123");
                 assert!(persist);
             }
-            ConnectVerdict::Deregistered => panic!("must be registered"),
+            ConnectVerdict::Deregistered { .. } => panic!("must be registered"),
         }
 
         // Reconnect: same id echoed back, nothing new to write to disk.
@@ -576,17 +872,103 @@ mod tests {
                     "an unchanged id must not rewrite the identity file"
                 );
             }
-            ConnectVerdict::Deregistered => panic!("must be registered"),
+            ConnectVerdict::Deregistered { .. } => panic!("must be registered"),
         }
     }
 
     #[test]
     fn connect_verdict_detects_deregistration() {
         let kicked = json!({"result": {"node": {"node_id": "uuid-123", "status": "deregistered"}}});
+        // An old center sends the status alone — no reason, so the node keeps
+        // its generic "deregistered by the center" message.
         assert!(matches!(
             parse_connect_verdict(&kicked),
-            Some(ConnectVerdict::Deregistered)
+            Some(ConnectVerdict::Deregistered { reason: None, .. })
         ));
+    }
+
+    #[test]
+    fn connect_verdict_carries_the_centers_refusal_reason() {
+        // A new center explains WHY the node was refused (e.g. the name is
+        // shared by several enrolled nodes). The reason must survive the parse
+        // so the node can print an accurate, actionable message.
+        let refused = json!({"result": {"node": {"status": "deregistered",
+            "reason": "3 enrolled nodes share the name 'worker-3'; an operator must deregister the duplicates by id"}}});
+        match parse_connect_verdict(&refused).expect("a verdict") {
+            ConnectVerdict::Deregistered { reason, code } => {
+                let reason = reason.expect("the reason must be carried");
+                assert!(reason.contains("share the name"), "{reason}");
+                // No code in the reply: the case stays unknown, so the node
+                // keeps its generic message rather than guessing.
+                assert_eq!(code, RefusalCode::Unknown);
+            }
+            ConnectVerdict::Registered { .. } => panic!("must be refused"),
+        }
+    }
+
+    #[test]
+    fn connect_verdict_carries_the_refusal_code() {
+        // The code names the CASE; the reason carries the center-side detail.
+        // The node picks the operator's recovery step from the code, so a
+        // revoked identity and an ambiguous name must not read alike.
+        let refused = json!({"result": {"node": {"status": "deregistered",
+            "reason_code": "revoked",
+            "reason": "this node's device record was revoked by cluster.deregister"}}});
+        match parse_connect_verdict(&refused).expect("a verdict") {
+            ConnectVerdict::Deregistered { reason, code } => {
+                assert_eq!(code, RefusalCode::Revoked);
+                assert!(reason
+                    .expect("the reason must be carried")
+                    .contains("revoked"));
+            }
+            ConnectVerdict::Registered { .. } => panic!("must be refused"),
+        }
+    }
+
+    #[test]
+    fn refusal_codes_map_to_their_recovery_step() {
+        // Each known code must carry an operator step; an unknown code must
+        // not guess one (the node falls back to the generic message).
+        assert!(RefusalCode::Revoked
+            .recovery_hint("worker-1", Path::new("/tmp/worker-1.json"))
+            .expect("the revoked case needs a step")
+            .contains("--reset-identity"));
+        assert!(RefusalCode::AmbiguousName
+            .recovery_hint("worker-1", Path::new("/tmp/worker-1.json"))
+            .expect("the ambiguous case needs a step")
+            .contains("deregister"));
+        assert!(RefusalCode::IdentityConflict
+            .recovery_hint("worker-1", Path::new("/tmp/worker-1.json"))
+            .expect("the collision case needs a step")
+            .contains("another device"));
+        assert!(RefusalCode::Unknown
+            .recovery_hint("worker-1", Path::new("/tmp/worker-1.json"))
+            .is_none());
+    }
+
+    #[test]
+    fn reset_identity_file_removes_the_credential_and_is_idempotent() {
+        let dir =
+            std::env::temp_dir().join(format!("aleph-node-identity-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("worker-1.json");
+        std::fs::write(
+            &path,
+            r#"{"node_id":"uuid-123","center":"ws://127.0.0.1:18790"}"#,
+        )
+        .expect("seed the identity file");
+
+        assert!(
+            reset_identity_file(&path).expect("remove"),
+            "the file must go"
+        );
+        assert!(!path.exists(), "the credential must be gone");
+        // A second reset is not an error: the node is already in the wanted state.
+        assert!(
+            !reset_identity_file(&path).expect("reset again"),
+            "a missing file is not a removal"
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

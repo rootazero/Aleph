@@ -161,11 +161,15 @@ fn strip_injection_markers_once(value: &str) -> String {
     let mut removals: Vec<(usize, usize)> = Vec::new();
     for marker in CI_MARKERS {
         let mut pos = 0;
-        while let Some(found) = lower[pos..].find(*marker) {
-            let start = pos + found;
-            let end = start + marker.len();
-            removals.push((start, end));
-            pos = end;
+        while let Some(slice) = lower.get(pos..) {
+            if let Some(found) = slice.find(*marker) {
+                let start = pos + found;
+                let end = start + marker.len();
+                removals.push((start, end));
+                pos = end;
+            } else {
+                break;
+            }
         }
     }
 
@@ -182,8 +186,14 @@ fn strip_injection_markers_once(value: &str) -> String {
         }
         merged.push((s, e));
     }
-    for (start, end) in merged.iter().rev() {
-        result.replace_range(*start..*end, "");
+    for &(start, end) in merged.iter().rev() {
+        if start <= end
+            && end <= result.len()
+            && result.is_char_boundary(start)
+            && result.is_char_boundary(end)
+        {
+            result.replace_range(start..end, "");
+        }
     }
 
     // Case-sensitive removal

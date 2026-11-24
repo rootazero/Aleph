@@ -40,8 +40,9 @@ pub enum ReloadImpact {
     Inert,
 }
 
-/// Top-level sections applied live (effective on the next conversation turn)
-/// without a daemon restart.
+/// Top-level live-apply targets. `execution` is an apply target for its
+/// concurrency fields only; [`live_target_for`] restricts which paths qualify.
+/// Other entries apply live as a whole without a daemon restart.
 ///
 /// Why each one qualifies:
 /// - `behavior` — `output_mode` is re-read fresh from the shared config on
@@ -49,8 +50,9 @@ pub enum ReloadImpact {
 ///   executor, and the `agent` handler's `resolved_output_mode`), so the
 ///   typewriter/instant switch takes effect on the next turn. Its liveness is
 ///   a property of the READER — no hot-swap call exists or is needed.
-/// - `execution` — `[execution] max_runs_*` are pushed to the live
-///   `ConcurrencyLimiter`; new caps bind on the next admission.
+/// - `execution` — only `max_runs_global`, `max_runs_per_agent`, and
+///   `max_concurrent_subagents` have live consumers. The shared apply arm is
+///   named `execution`; a whole-section edit or any other leaf needs restart.
 /// - `search` — the `search` tool reads its provider registry through a
 ///   boot-installed [`crate::search::SearchHandle`]'s `ArcSwap` on every
 ///   call, so rebuilding from the patched config and storing into it is what
@@ -98,12 +100,14 @@ pub(crate) const LIVE_SECTIONS: &[&str] = &["behavior", "execution", "search"];
 ///   here: a number in a comment is a list that rots. `PoliciesConfig` has
 ///   ten fields today; `terminal` is the only one this change added, so the
 ///   previous "six" was already wrong before it arrived.)
-/// - `policies.terminal` — declared live because each of its three fields is
-///   either applied at apply time or applies to work started afterwards, and
-///   NONE of them silently requires a restart:
-///   * `enabled` — read fresh from the live config on every `pty.spawn`, and
-///     turning it off runs `PtyManager::close_all`, so the change is
-///     complete when the patch returns.
+/// - `policies.terminal` — supports explicit live application. Declaration
+///   alone is not completion: `classify_verified` requires the matching
+///   `live_applied` target and downgrades missing context, timeout or failure:
+///   * `enabled` — read fresh from shared Config at spawn. Explicit enable
+///     requires the existing Gateway bus; disable reports live only after
+///     source cleanup and retained flush-driver join complete. Persistence
+///     alone is not live evidence; identical patches remain no-ops, with
+///     incomplete application recoverable through explicit `config.reload`.
 ///   * `max_sessions` — read fresh at spawn time (deliberately NOT a
 ///     `const`; a bare constant would make the key inert while this list
 ///     advertised it as live).
@@ -165,6 +169,17 @@ pub(crate) fn dotted_prefix_matches(prefix: &str, path: &str) -> bool {
 /// the invariant this function exists to fix in place, not a reaction to a
 /// conflict that currently exists.
 pub(crate) fn live_target_for(config_path: &str) -> Option<&'static str> {
+    // Keep the existing shared apply target without endorsing startup-captured
+    // fields merely because the concurrency update succeeded.
+    if dotted_prefix_matches("execution", config_path) {
+        return matches!(
+            config_path,
+            "execution.max_runs_global"
+                | "execution.max_runs_per_agent"
+                | "execution.max_concurrent_subagents"
+        )
+        .then_some("execution");
+    }
     LIVE_SUBSECTIONS
         .iter()
         .chain(LIVE_SECTIONS.iter())
@@ -189,6 +204,39 @@ pub(crate) fn live_targets() -> Vec<&'static str> {
 }
 
 impl ReloadImpact {
+    /// The single wire shape for a reload verdict.
+    ///
+    /// Every surface that reports *when* a config change takes effect sends
+    /// `{"kind": …, "hint": …}` under the `reload_impact` key. The hint is
+    /// audience-specific prose (the agent gets [`ReloadImpact::agent_hint`], a
+    /// Panel user gets [`ReloadImpact::user_hint_zh`]); the *shape* is not
+    /// audience-specific, and it used to be: the same key travelled as a bare
+    /// verdict string on some RPCs, as `{kind, hint}` on others, and as a
+    /// per-field verdict map on the browser RPC.
+    pub fn wire(self, hint: &str) -> serde_json::Value {
+        serde_json::json!({ "kind": self, "hint": hint })
+    }
+
+    /// The strongest requirement in a set: `Restart` wins over `Live`, and
+    /// `Live` wins over `Inert`.
+    ///
+    /// Used when one change touches several sub-systems with different
+    /// verdicts: the overall answer has to be the one that demands the most
+    /// of the operator.
+    pub fn strongest(impacts: impl IntoIterator<Item = ReloadImpact>) -> ReloadImpact {
+        impacts
+            .into_iter()
+            .fold(ReloadImpact::Inert, |verdict, impact| {
+                match (verdict, impact) {
+                    (ReloadImpact::Restart, _) | (_, ReloadImpact::Restart) => {
+                        ReloadImpact::Restart
+                    }
+                    (ReloadImpact::Live, _) | (_, ReloadImpact::Live) => ReloadImpact::Live,
+                    _ => ReloadImpact::Inert,
+                }
+            })
+    }
+
     /// Classify a dot-path config target (e.g. `"providers.openai"`,
     /// `"behavior.output_mode"`, `"generation"`, `"policies.spend.per_user_usd"`) by
     /// the most specific declared live target that covers it — see
@@ -242,12 +290,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn execution_is_live() {
-        assert_eq!(ReloadImpact::classify("execution"), ReloadImpact::Live);
-        assert_eq!(
-            ReloadImpact::classify("execution.max_runs_global"),
-            ReloadImpact::Live
-        );
+    fn only_execution_concurrency_fields_are_live() {
+        for path in [
+            "execution",
+            "execution.max_iterations",
+            "execution.prompt_mode",
+            "execution.default_timeout_secs",
+            "execution.mid_turn_steering",
+            "execution.progress_push",
+            "execution.max_pending_steering",
+        ] {
+            assert_eq!(
+                ReloadImpact::classify(path),
+                ReloadImpact::Restart,
+                "{path}"
+            );
+            assert_eq!(
+                crate::config::live_apply::classify_verified(path, &["execution"]),
+                ReloadImpact::Restart,
+                "{path} must not inherit a successful concurrency update"
+            );
+        }
+        for path in [
+            "execution.max_runs_global",
+            "execution.max_runs_per_agent",
+            "execution.max_concurrent_subagents",
+        ] {
+            assert_eq!(ReloadImpact::classify(path), ReloadImpact::Live, "{path}");
+        }
     }
 
     /// The retired `[route]` table is not a live section.
@@ -320,6 +390,8 @@ mod tests {
             // fields too. See `LIVE_SUBSECTIONS`'s doc.
             "policies",
             "policies.tool_permissions",
+            "policies.capability_constraints",
+            "policies.capability_constraints.aleph/tools/ui.resource.max_active",
         ] {
             assert_eq!(
                 ReloadImpact::classify(s),

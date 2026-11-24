@@ -26,7 +26,7 @@ const fn default_true() -> bool {
 }
 
 /// Email channel configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct EmailConfig {
     /// IMAP server host (e.g., "imap.gmail.com")
     pub imap_host: String,
@@ -64,8 +64,31 @@ pub struct EmailConfig {
     pub allowed_senders: Vec<String>,
 
     /// Use TLS for connections (default: true)
+    ///
+    /// Only `true` is accepted: `validate()` rejects cleartext IMAP/SMTP so
+    /// the account password is never sent over the wire unencrypted.
     #[serde(default = "default_true")]
     pub use_tls: bool,
+}
+
+/// Hand-written so the IMAP/SMTP password never reaches a log line, a panic
+/// message or a `tracing` field. Every other field is printed as-is.
+impl std::fmt::Debug for EmailConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EmailConfig")
+            .field("imap_host", &self.imap_host)
+            .field("imap_port", &self.imap_port)
+            .field("smtp_host", &self.smtp_host)
+            .field("smtp_port", &self.smtp_port)
+            .field("username", &self.username)
+            .field("password", &"<redacted>")
+            .field("from_address", &self.from_address)
+            .field("poll_interval_secs", &self.poll_interval_secs)
+            .field("folders", &self.folders)
+            .field("allowed_senders", &self.allowed_senders)
+            .field("use_tls", &self.use_tls)
+            .finish()
+    }
 }
 
 impl Default for EmailConfig {
@@ -132,6 +155,15 @@ impl EmailConfig {
         if self.folders.is_empty() {
             return Err("at least one folder must be specified".to_string());
         }
+        if !self.use_tls {
+            // Both protocols (IMAP and SMTP) authenticate with the same
+            // password, so a cleartext connection would leak it twice.
+            return Err(
+                "use_tls=false is not supported: IMAP and SMTP must use TLS so credentials are \
+                 never sent in cleartext"
+                    .to_string(),
+            );
+        }
         Ok(())
     }
 
@@ -141,9 +173,16 @@ impl EmailConfig {
         if self.allowed_senders.is_empty() {
             true
         } else {
-            self.allowed_senders
-                .iter()
-                .any(|allowed| sender.contains(allowed))
+            self.allowed_senders.iter().any(|allowed| {
+                if allowed.starts_with('@') {
+                    sender
+                        .split('@')
+                        .nth(1)
+                        .is_some_and(|domain| domain == &allowed[1..])
+                } else {
+                    sender == allowed
+                }
+            })
         }
     }
 }
@@ -167,7 +206,6 @@ mod tests {
         assert!(config.allowed_senders.is_empty());
         assert!(config.use_tls);
     }
-
     #[test]
     fn test_validate_empty_imap_host() {
         let config = EmailConfig::default();
@@ -248,6 +286,21 @@ mod tests {
         };
         let err = config.validate().unwrap_err();
         assert!(err.contains("poll_interval_secs"));
+    }
+
+    #[test]
+    fn test_validate_rejects_cleartext_tls() {
+        let config = EmailConfig {
+            imap_host: "imap.example.com".to_string(),
+            smtp_host: "smtp.example.com".to_string(),
+            username: "user@example.com".to_string(),
+            password: "secret".to_string(),
+            from_address: "aleph@example.com".to_string(),
+            use_tls: false,
+            ..Default::default()
+        };
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("use_tls"));
     }
 
     #[test]

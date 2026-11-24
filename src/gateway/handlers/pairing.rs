@@ -179,8 +179,8 @@ pub async fn handle_approve(
     }
 
     debug!(
-        "Handling pairing.approve for {}:{} (user: {:?})",
-        channel, code, user_id
+        "Handling pairing.approve for {} (user: {:?})",
+        channel, user_id
     );
 
     match store.approve(channel, code, user_id.as_deref()).await {
@@ -253,7 +253,7 @@ pub async fn handle_reject(
         }
     };
 
-    debug!("Handling pairing.reject for {}:{}", channel, code);
+    debug!("Handling pairing.reject for {}", channel);
 
     match store.reject(channel, code).await {
         Ok(()) => JsonRpcResponse::success(

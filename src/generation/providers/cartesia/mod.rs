@@ -192,7 +192,11 @@ impl CartesiaProvider {
 /// normal 1.0 mean "fastest" and a 2.0 fall outside the valid range, so we
 /// subtract the 1.0 baseline and clamp into Cartesia's window.
 fn map_speed_to_cartesia(multiplier: f32) -> f32 {
-    (multiplier - 1.0).clamp(-1.0, 1.0)
+    if !multiplier.is_finite() {
+        0.0
+    } else {
+        (multiplier - 1.0).clamp(-1.0, 1.0)
+    }
 }
 
 impl GenerationProvider for CartesiaProvider {
@@ -260,12 +264,12 @@ impl GenerationProvider for CartesiaProvider {
             };
 
             let body = types::CartesiaTtsRequest {
-                transcript: request.prompt.clone(),
+                transcript: request.prompt,
                 model_id: model.clone(),
                 voice: types::CartesiaVoiceSelector::Id {
                     id: voice_id.clone(),
                 },
-                language: Some(language.clone()),
+                language: Some(language),
                 output_format: types::CartesiaOutputFormat {
                     container: container.to_string(),
                     encoding: encoding.to_string(),

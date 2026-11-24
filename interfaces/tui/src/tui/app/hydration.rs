@@ -115,10 +115,12 @@ pub fn build_completed_history(
                 if used_trace {
                     // Persisted trace rows can omit the final text (older
                     // records, failed runs). The history answer then wins.
-                    let has_answer =
-                        transcript.entries()[before..]
-                            .iter()
-                            .any(|entry| match entry {
+                    let has_answer = transcript
+                        .entries()
+                        .get(before..)
+                        .unwrap_or(&[])
+                        .iter()
+                        .any(|entry| match entry {
                                 TranscriptEntry::AssistantText { .. } => true,
                                 TranscriptEntry::Step(step) => step
                                     .text

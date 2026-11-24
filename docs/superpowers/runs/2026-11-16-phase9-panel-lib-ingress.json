@@ -1,0 +1,32 @@
+{
+  "name": "panel-lib-ingress",
+  "command": {
+    "argv": [
+      "cargo",
+      "test",
+      "-p",
+      "aleph-panel",
+      "--lib"
+    ],
+    "cwd": "/Volumes/TBU4/Workspace/Aleph",
+    "env_overrides": {
+      "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+      "PATH": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/cargo-gated-runtime-qa:/opt/homebrew/bin:/opt/homebrew/opt/rustup/bin:/Users/zouguojun/.bun/bin:/Users/zouguojun/.local/state/fnm_multishells/1488_1794447693947/bin:/opt/homebrew/opt/go/libexec/bin:/Users/zouguojun/.go/bin:/Users/zouguojun/.cargo/bin:/Users/zouguojun/.uv/.venv/bin:/Users/zouguojun/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/Users/zouguojun/.local/bin:/Users/zouguojun/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/Library/Frameworks/Python.framework/Versions/3.10/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/pkg/env/global/bin:/Library/Apple/usr/bin:/opt/homebrew/bin:/Users/zouguojun/.cargo/bin",
+      "RUST_BACKTRACE": "1"
+    },
+    "exit_code": 101,
+    "timed_out": false,
+    "pid": 5455,
+    "cleanup_error": null,
+    "group_probe": null,
+    "unjoined_descendants": false,
+    "elapsed_seconds": 45.87878529098816,
+    "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/panel-lib-ingress.stdout.log",
+    "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/panel-lib-ingress.stderr.log",
+    "output": "available_bytes=9950986240 required_bytes=4294967296 ALLOW\n   Compiling aleph-panel v0.2.0 (/Volumes/TBU4/Workspace/Aleph/interfaces/webchat)\nerror[E0599]: no method named `set` found for struct `leptos::prelude::RwSignal<T, S>` in the current scope\n    --> interfaces/webchat/src/context.rs:4060:30\n     |\n4060 |             dash.gateway_url.set(\"ws://127.0.0.1:18790/ws\".to_string());\n     |                              ^^^\n     |\n    ::: /Users/zouguojun/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/reactive_graph-0.2.16/src/traits.rs:531:8\n     |\n 531 |     fn set(&self, value: Self::Value);\n     |        --- the method is available for `leptos::prelude::RwSignal<std::string::String>` here\n     |\n     = help: items from traits can only be used if the trait is in scope\nhelp: there is a method `get` with a similar name, but with different arguments\n    --> /Users/zouguojun/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/reactive_graph-0.2.16/src/traits.rs:393:5\n     |\n 393 |     fn get(&self) -> Self::Value {\n     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nhelp: trait `Set` which provides `set` is implemented but not in scope; perhaps you want to import it\n     |\n3133 +     use leptos::prelude::Set;\n     |\n\nFor more information about this error, try `rustc --explain E0599`.\nerror: could not compile `aleph-panel` (lib test) due to 1 previous error\n"
+  },
+  "lock_sha256": "12300967333b45f8a0fa1f401cf13a559b5b8a881ee95550b1bbf1a8d42e21f5",
+  "lock_unchanged": true,
+  "cargo_wrapper_sha256": "84fdfa565a8abcd4dfd40a8f9b78b3be0e127c2aad4a97ca4bf8c89506b0f461",
+  "status": "FAIL"
+}

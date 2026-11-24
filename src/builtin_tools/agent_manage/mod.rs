@@ -3,12 +3,8 @@
 //!
 //! Module layout:
 //! - `error` — typed [`AgentManageError`]; single reason per failure mode.
-//! - `validation` — agent-ID grammar + slug-from-name generator (shared by
-//!   `agent_create` and `AgentManager` so the LLM-side and TOML-side errors
-//!   agree byte-for-byte).
-//! - `context` — [`AgentManageContext`] builder; the construction-time seam
-//!   that owns the optional dependencies (event bus, TOML manager, raw-memory
-//!   writer) so each tool only sees what it actually uses.
+//! - `validation` — agent-ID grammar + slug-from-name generator (the runtime
+//!   grammar; see that module for how it relates to the TOML grammar).
 //! - `test_utils` — shared fixtures; `#[cfg(test)]` only.
 //! - `create` / `delete` / `list` / `info` / `switch` / `unbind` / `update`
 //!   — the actual `AlephTool` implementations.
@@ -17,7 +13,6 @@
 //! the tools here are its callers. Single-source lifecycle event publishing
 //! lives in `crate::gateway::agent_lifecycle::AgentLifecycleEvent::publish`.
 
-pub mod context;
 pub mod create;
 pub mod delete;
 pub mod error;
@@ -34,7 +29,6 @@ pub(crate) mod test_utils;
 use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 
-pub use context::AgentManageContext;
 pub use create::{AgentCreateArgs, AgentCreateOutput, AgentCreateTool};
 pub use delete::{AgentDeleteArgs, AgentDeleteOutput, AgentDeleteTool};
 pub use error::AgentManageError;

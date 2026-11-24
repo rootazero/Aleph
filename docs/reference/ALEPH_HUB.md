@@ -16,7 +16,7 @@
 Aleph 本地**不混源**。2026-06-20 曾把它做成多源联邦（`SourceProvider` trait +
 `ProviderRegistry` + 跨源去重），**当天即撤回**为单源消费者：本地混源意味着本地要做
 策展，而策展是产品判断而非运行时职责（R3 核心轻量化 / R10 删掉零消费者抽象）。撤回
-后 `src/hub/provider/`、`dedup.rs`、`display.rs`、`categorize.rs` 整体删除。
+后 src/hub/provider/、`dedup.rs`、`display.rs`、`categorize.rs` 整体删除。
 
 **推论**：想让一个扩展出现在用户的 Hub 里，改的是 Aleph-Hub 仓，不是本仓。本仓只有
 一个 HTTP 消费者与一个 URL 常量（`catalog_client.rs::ALEPH_HUB_URL`）。
@@ -195,8 +195,8 @@ entry_id  kind  source_id  via  version  spec_digest  local_ref  installed_at
 `collect_installed` 与 `mark_installed_state` 在 `src/hub/reconcile.rs`——它们有**两个**
 调用者（`extensions.*` RPC 与 `hub_catalog_search` 工具），谁都不拥有它。放在 handler 里
 会让工具去 import interface 层（违 R4），或者更糟：让工具写第二份 reconcile，于是"卡片说
-已安装、工具说没装"。同一轮把 skill 系统的 **init 闩**从 `gateway/handlers/skills.rs`
-搬到 `skill/shared.rs`（`ensure_shared_skill_system_initialized`）——闩要和它初始化的
+已安装、工具说没装"。同一轮把 skill 系统的 **init 闩**从 `src/gateway/handlers/skills.rs`
+搬到 `src/skill/shared.rs`（`ensure_shared_skill_system_initialized`）——闩要和它初始化的
 单例住一起，否则每个消费者各持一个 `OnceCell`，正是 `shared.rs` 头注释说它要防的那种分裂
 再上一层。
 
@@ -218,8 +218,8 @@ entry_id  kind  source_id  via  version  spec_digest  local_ref  installed_at
 | `hub_install_verify` | 复查健康 | 与 RPC 路径**同一个** `hub::verify` |
 | `hub_fetch_docs` | 读扩展自己的 README/manifest | SSRF 拦私网、64 KiB 上限、返回前注入扫描 |
 
-**加工具要动五处登记**：`builtin_tools/hub/mod.rs`、`builtin_registry/definitions.rs`、
-`builtin_registry/groups.rs`、`builder/constructor/mod.rs`（**构造段和 schema 段两处**）、
+**加工具要动五处登记**：`src/builtin_tools/hub/mod.rs`、`src/executor/builtin_registry/definitions.rs`、
+`src/executor/builtin_registry/groups.rs`、`src/executor/builtin_registry/builder/constructor/mod.rs`（**构造段和 schema 段两处**）、
 `registry/{struct_def.rs,tool_registry_impl.rs}`。漏 schema 段 = 注册了但模型看不见；
 漏 dispatch = 看得见但调不到。另外 `verify` 子代理按**精确名**拒绝整个 hub 家族
 （`denied_tools` 无 glob），新工具不进那张表就会被它的 `*` 放行——

@@ -7,7 +7,10 @@ use tokio_util::sync::CancellationToken;
 use crate::capability::backend::TOOL_NAMESPACE;
 use crate::capability::descriptor::CapabilityId;
 use crate::capability::facade::{BackendLease, Reference, Zahir};
-use crate::capability::ownership::VisibilityScope;
+use crate::capability::ownership::{OwnerRef, RunId, VisibilityScope};
+use crate::capability::policy_runtime::{
+    CapabilityCallContext, PolicyAttachment, ResourceUse, RunningCapabilityCall,
+};
 use crate::extension::hooks::{
     budget_hook_contexts, HookContext, HookExecutor, PermissionDecision,
 };
@@ -17,7 +20,7 @@ use crate::sandbox::exec_approval::{denial_ledger, grants, ApprovalAction, Grant
 use crate::session::events::ToolOutput;
 use crate::sync_primitives::Arc;
 use crate::tools::descriptor::{ReplayPolicy, ToolCallIdentity, ToolCapabilityDescriptor};
-use crate::tools::registry::{CanonicalEntryLease, RegistryEntry};
+use crate::tools::registry::{CanonicalEntryLease, RegistryEntry, ToolHandlerRegistry};
 use crate::tools::runtime::LoopTool;
 use crate::tools::service::{RefusedBy, ToolError};
 
@@ -40,6 +43,64 @@ fn ingress_failed_outcome() -> crate::tool_output::ingress::IngressOutcome {
         reductions: Vec::new(),
         compressed: false,
     }
+}
+
+fn rebind_cold_plugin_capture(
+    registry: &ToolHandlerRegistry,
+    facade: &crate::capability::zahir_facade::ZahirFacade,
+    name: &str,
+    original: &CanonicalEntryLease,
+    backend_lease: &BackendLease,
+) -> Result<(CanonicalEntryLease, BackendLease), ToolError> {
+    let (plugin_id, owner_generation) =
+        original
+            .cold_owner()
+            .ok_or_else(|| ToolError::PermissionDenied {
+                name: name.to_owned(),
+                reason: "Cold plugin capture lost its declaration identity".into(),
+            })?;
+    let lease = registry
+        .capture_entry(name)
+        .ok_or_else(|| ToolError::NotFound {
+            name: name.to_owned(),
+        })?;
+    if !lease.matches_plugin_owner(plugin_id, owner_generation) {
+        return Err(ToolError::PermissionDenied {
+            name: name.to_owned(),
+            reason: "canonical plugin owner was replaced during activation".into(),
+        });
+    }
+    if lease.is_cold_declaration() {
+        return Err(ToolError::PermissionDenied {
+            name: name.to_owned(),
+            reason: "Cold plugin activation completed without a Ready publication".into(),
+        });
+    }
+    let backend = facade
+        .resolve_with_capture(
+            Reference {
+                id: CapabilityId {
+                    namespace: TOOL_NAMESPACE.into(),
+                    name: name.to_owned(),
+                },
+                visibility: backend_lease.descriptor.visibility.clone(),
+            },
+            lease.clone(),
+        )
+        .map_err(|error| ToolError::PermissionDenied {
+            name: name.to_owned(),
+            reason: format!("canonical capability lease cannot be rebound: {error:?}"),
+        })?;
+    if backend.owner_generation != backend_lease.owner_generation
+        || backend.owner != backend_lease.owner
+        || backend.tool_provider_generation() != backend_lease.tool_provider_generation()
+    {
+        return Err(ToolError::PermissionDenied {
+            name: name.to_owned(),
+            reason: "canonical provider or ownership authority changed during activation".into(),
+        });
+    }
+    Ok((lease, backend))
 }
 
 /// Render the ingress reductions summary carried by the `ToolResultPersist`
@@ -86,8 +147,44 @@ fn ingress_reductions_summary(
 /// context is unchanged. Mirrors the fence-escaping in
 /// [`crate::security::content_sanitizer::wrap_external_content`].
 fn escape_reminder_boundary(s: &str) -> String {
-    s.replace("</system-reminder>", "&lt;/system-reminder&gt;")
-        .replace("<system-reminder>", "&lt;system-reminder&gt;")
+    const OPEN_FENCE: &str = "<system-reminder";
+    const CLOSE_FENCE: &str = "</system-reminder";
+
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(idx) = rest.find('<') {
+        out.push_str(&rest[..idx]);
+        let candidate = &rest[idx..];
+        let lower = candidate.to_ascii_lowercase();
+        let fence = if lower.starts_with(CLOSE_FENCE) {
+            Some(CLOSE_FENCE)
+        } else if lower.starts_with(OPEN_FENCE) {
+            Some(OPEN_FENCE)
+        } else {
+            None
+        };
+        let Some(fence) = fence else {
+            out.push('<');
+            rest = &candidate[1..];
+            continue;
+        };
+        // The fence token's OWN name is copied verbatim (case preserved); only
+        // its angle brackets are escaped, so `</system-reminder>` becomes
+        // `&lt;/system-reminder&gt;` and cannot close the wrapper's fence.
+        let name_len = fence.len() - 1;
+        out.push_str("&lt;");
+        out.push_str(&candidate[1..=name_len]);
+        let tail = &candidate[name_len + 1..];
+        match tail.strip_prefix('>') {
+            Some(after_bracket) => {
+                out.push_str("&gt;");
+                rest = after_bracket;
+            }
+            None => rest = tail,
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Wrap a tool result `Value` with `<system-reminder>` blocks for each
@@ -196,7 +293,12 @@ impl ConfirmDenial {
 #[allow(clippy::large_enum_variant)]
 #[derive(Clone)]
 enum RoutingTarget {
-    Canonical(RegistryEntry, CanonicalEntryLease, BackendLease),
+    Canonical(
+        RegistryEntry,
+        CanonicalEntryLease,
+        BackendLease,
+        Option<Arc<PolicyAttachment>>,
+    ),
     Subagent,
     Inner,
     Missing,
@@ -357,7 +459,7 @@ impl ScopedToolService {
                             reason: "canonical capability facade is not mounted".into(),
                         })?;
                 let backend_lease = facade
-                    .resolve_with_capture(
+                    .resolve_with_capture_for_call(
                         Reference {
                             id: CapabilityId {
                                 namespace: TOOL_NAMESPACE.into(),
@@ -366,6 +468,7 @@ impl ScopedToolService {
                             visibility: VisibilityScope::default(),
                         },
                         lease,
+                        &Self::capability_call_context(&format!("{name}/resolve")),
                     )
                     .map_err(|error| ToolError::PermissionDenied {
                         name: name.into(),
@@ -380,6 +483,33 @@ impl ScopedToolService {
             // Projection-only fixture construction has no live store. Production
             // run_loop refuses a missing store before either service is built.
             None
+        };
+        // Bind the source BEFORE any approval wait. The final guard consumes
+        // this exact attachment and reads fresh facts; it cannot silently mint
+        // a replacement after withdrawal while the approval was outstanding.
+        let policy_attachment = match (&self.capability_policy, &captured_backend_lease) {
+            (Some(policy), Some(lease))
+                if policy.is_configured(&lease.descriptor.id)
+                    && !captured
+                        .as_ref()
+                        .is_some_and(|entry| entry.domain_policy.is_some()) =>
+            {
+                Some(Arc::new(
+                    self.canonical_facade
+                        .as_ref()
+                        .expect("captured facade")
+                        .prepare_tool_policy_for_call(
+                            policy,
+                            lease,
+                            &Self::capability_call_context(&format!("{name}/prepare")),
+                        )
+                        .map_err(|error| ToolError::PermissionDenied {
+                            name: name.into(),
+                            reason: format!("capability policy attachment unavailable: {error}"),
+                        })?,
+                ))
+            }
+            _ => None,
         };
         // Usage provenance is derived after canonical capture. A captured
         // entry owns the handler that actually runs; only descriptorless
@@ -424,56 +554,18 @@ impl ScopedToolService {
         // The reason names the entry that denied it (`deny_rule`), so the model
         // relays something the user can act on instead of "the policy says no".
         if let Some(rule) = self.deny_rule_for_descriptor(name, descriptor) {
-            // The per-CALL half of the read-only verdicts. `ExecTier::Plan::rule_for` only
-            // sees a tool's NAME-level facts, so a read/write multiplexer —
-            // `file_ops` above all, whose `list`/`search`/`stats` arms are the
-            // repo-exploration a plan is built out of — comes back denied
-            // wholesale. Here we hold the arguments, so we can ask the ONE
-            // per-call read classifier this repo already maintains:
-            // `LoopTool::concurrency_claim(input) == Shared`, which is
-            // `Exclusive { Global }` by default (fail-closed for anything that
-            // declares nothing) and is resolved per-argument by the same
-            // adapter that resolves it for parallel dispatch.
-            //
-            // Keyed on the PROPERTY the re-admission needs — "the only thing
-            // denying this is a Plan-shaped, name-level verdict" — not on which
-            // rule happens to be reporting it. Two rules produce that verdict:
-            // `PlanMode` and `SideQuestion`, the latter because a side question
-            // composes to `Plan` and then reports itself (`deny_rule` checks it
-            // first, correctly: the repairs `PlanMode` and `PolicyDeny` name —
-            // approve the plan, edit the policy — genuinely do not apply to a
-            // side question). Reading the rule NAME instead made a side question
-            // miss this arm entirely, so `file_ops list/search/stats`, `doctor`,
-            // `note_schema read`, `a2a_agents list` and `inbox_read peek` — the
-            // exploration a side question is mostly made of — were refused by a
-            // sentence that says "it can read and search", with "do not retry"
-            // attached. `GateRule::SideQuestion::reason` is a promise the code
-            // has to keep, and this is where it keeps it.
-            //
-            // `denied_only_by_plan` stays in the condition and does the scoping:
-            // an operator's `deny` entry, a `default = "deny"` install, every
-            // other tier's verdict, and the side-question floor on
-            // `scratchpad`/`subagent` (rung -1 of `permission_for`, which
-            // `denied_only_by_plan` does not consult, so it reports `false` for
-            // those two) all stay refused. For the `PlanMode` arm it is
-            // true by construction — that is how `deny_rule` produced the
-            // variant — so this is a no-op there and a real bound here.
-            if matches!(rule, GateRule::PlanMode | GateRule::SideQuestion)
-                && self.denied_only_by_plan_for_descriptor(name, descriptor)
-                && self.dispatch_concurrency_claim(name, &input, captured.as_ref(), descriptor)
-                    == crate::tools::concurrency::ConcurrencyClaim::Shared
-            {
-                // Falls through to the rest of the pipeline — this call reads.
-            } else {
-                let explanation = rule.reason(name);
-                if let Some(ref l) = ledger {
-                    l.commit_refusal(&input, &explanation).await;
-                }
-                return Err(ToolError::PermissionDenied {
-                    name: name.to_string(),
-                    reason: format!("{explanation}{}", rule.deny_advice()),
-                });
-            }
+            // The per-CALL read-only re-admission lives in `refuse_denied_call`
+            // — shared with the post-rewrite re-check below, which must apply
+            // the identical verdict to the effective bytes.
+            self.refuse_denied_call(
+                name,
+                &input,
+                captured.as_ref(),
+                descriptor,
+                ledger.as_ref(),
+                rule,
+            )
+            .await?;
         }
 
         // Config-tier authorization gate — suspended for live operator approval.
@@ -501,7 +593,7 @@ impl ScopedToolService {
         // rewrite the tool input via `update_input:`. Inert when no executor
         // is wired or when no hooks match the event. Runs BEFORE routing so a
         // blocked call never reaches the retry pipeline.
-        let (effective_input, mut pre_hook_contexts, hook_authorized) = match self
+        let (effective_input, mut pre_hook_contexts, _hook_authorized) = match self
             .run_before_tool_hooks(name, input.clone(), authorized)
             .await
         {
@@ -529,30 +621,24 @@ impl ScopedToolService {
         // policy/tier, operator and confirmation gates on the effective tuple.
         if effective_input != input {
             if let Some(rule) = self.deny_rule_for_descriptor(name, descriptor) {
-                if !(matches!(rule, GateRule::PlanMode | GateRule::SideQuestion)
-                    && self.denied_only_by_plan_for_descriptor(name, descriptor)
-                    && self.dispatch_concurrency_claim(
-                        name,
-                        &effective_input,
-                        captured.as_ref(),
-                        descriptor,
-                    ) == crate::tools::concurrency::ConcurrencyClaim::Shared)
-                {
-                    let explanation = rule.reason(name);
-                    if let Some(ref l) = ledger {
-                        l.commit_refusal(&effective_input, &explanation).await;
-                    }
-                    return Err(ToolError::PermissionDenied {
-                        name: name.into(),
-                        reason: format!("{explanation}{}", rule.deny_advice()),
-                    });
-                }
+                self.refuse_denied_call(
+                    name,
+                    &effective_input,
+                    captured.as_ref(),
+                    descriptor,
+                    ledger.as_ref(),
+                    rule,
+                )
+                .await?;
             }
             approved_by_operator_gate = self.check_operator_gate(name, &effective_input).await?;
+            // A hook's prior question does not authorize rewritten arguments against
+            // system safety floors or destructive-argument confirmation gates.
+            // Only true operator authorization can bypass confirmation.
             self.check_confirmation_gate(
                 name,
                 &effective_input,
-                approved_by_operator_gate || hook_authorized,
+                approved_by_operator_gate,
                 descriptor,
             )
             .await?;
@@ -584,13 +670,16 @@ impl ScopedToolService {
         // Route to subagent tool if name matches; otherwise route into the
         // inner LoopToolRegistry. Both paths share the retry/Layer 2/sanitize
         // pipeline below.
-        let routing = if let Some(entry) = captured.as_ref() {
+        let routing = if let (Some(entry), Some(lease), Some(backend_lease)) = (
+            captured.as_ref(),
+            captured_lease.as_ref(),
+            captured_backend_lease.as_ref(),
+        ) {
             RoutingTarget::Canonical(
                 entry.clone(),
-                captured_lease.clone().expect("captured lease"),
-                captured_backend_lease
-                    .clone()
-                    .expect("captured backend lease"),
+                lease.clone(),
+                backend_lease.clone(),
+                policy_attachment,
             )
         } else if self
             .subagent_tool
@@ -619,7 +708,7 @@ impl ScopedToolService {
         // declaration → the builtin table → the default), read straight off the
         // tool so the clock we enforce and the budget we advertise cannot drift.
         let declared_ms = match &routing {
-            RoutingTarget::Canonical(entry, _, _) => entry.descriptor.max_duration_ms,
+            RoutingTarget::Canonical(entry, _, _, _) => entry.descriptor.max_duration_ms,
             RoutingTarget::Subagent => self
                 .subagent_tool
                 .as_ref()
@@ -644,13 +733,17 @@ impl ScopedToolService {
         // input. A call that never reaches this line (gate denial, hook
         // refusal, post-rewrite re-check) leaves `capture` at `None`.
         if captured.is_some() && crate::approval::current_tool_call_id().is_none() {
+            let reason = "canonical dispatch has no call identity";
+            if let Some(ref l) = ledger {
+                l.commit_refusal(&effective_input, reason).await;
+            }
             return Err(ToolError::PermissionDenied {
                 name: name.into(),
-                reason: "canonical dispatch has no call identity".into(),
+                reason: reason.into(),
             });
         }
         *capture = Some(effective_input.clone());
-        let admission = GateAdmissionToken::new(approved_by_operator_gate);
+        let admission = Arc::new(GateAdmissionToken::new(approved_by_operator_gate));
 
         let mut result = match tokio::time::timeout(
             budget,
@@ -661,7 +754,7 @@ impl ScopedToolService {
                 cancel,
                 deadline,
                 descriptor,
-                &admission,
+                admission,
             ),
         )
         .await
@@ -706,6 +799,76 @@ impl ScopedToolService {
         }
 
         result
+    }
+
+    /// The per-CALL half of the deny gate's read-only verdicts — shared by the
+    /// original argument check and the post-rewrite re-check, which must never
+    /// diverge: a call the first check admits must be admitted by the re-check
+    /// on the effective bytes, and a refusal either check emits must name the
+    /// same rule and reach the same ledger.
+    ///
+    /// `ExecTier::Plan::rule_for` only sees a tool's NAME-level facts, so a
+    /// read/write multiplexer — `file_ops` above all, whose
+    /// `list`/`search`/`stats` arms are the repo-exploration a plan is built
+    /// out of — comes back denied wholesale. Here we hold the arguments, so
+    /// we can ask the ONE per-call read classifier this repo already
+    /// maintains: `LoopTool::concurrency_claim(input) == Shared`, which is
+    /// `Exclusive { Global }` by default (fail-closed for anything that
+    /// declares nothing) and is resolved per-argument by the same adapter
+    /// that resolves it for parallel dispatch.
+    ///
+    /// Keyed on the PROPERTY the re-admission needs — "the only thing denying
+    /// this is a Plan-shaped, name-level verdict" — not on which rule happens
+    /// to be reporting it. Two rules produce that verdict: `PlanMode` and
+    /// `SideQuestion`, the latter because a side question composes to `Plan`
+    /// and then reports itself (`deny_rule` checks it first, correctly: the
+    /// repairs `PlanMode` and `PolicyDeny` name — approve the plan, edit the
+    /// policy — genuinely do not apply to a side question). Reading the rule
+    /// NAME instead made a side question miss this arm entirely, so
+    /// `file_ops list/search/stats`, `doctor`, `note_schema read`,
+    /// `a2a_agents list` and `inbox_read peek` — the exploration a side
+    /// question is mostly made of — were refused by a sentence that says "it
+    /// can read and search", with "do not retry" attached.
+    /// `GateRule::SideQuestion::reason` is a promise the code has to keep, and
+    /// this is where it keeps it.
+    ///
+    /// `denied_only_by_plan` stays in the condition and does the scoping: an
+    /// operator's `deny` entry, a `default = "deny"` install, every other
+    /// tier's verdict, and the side-question floor on `scratchpad`/`subagent`
+    /// (rung -1 of `permission_for`, which `denied_only_by_plan` does not
+    /// consult, so it reports `false` for those two) all stay refused. For
+    /// the `PlanMode` arm it is true by construction — that is how
+    /// `deny_rule` produced the variant — so this is a no-op there and a real
+    /// bound here.
+    ///
+    /// Returns `Ok(())` when the call is re-admitted as read-only (it falls
+    /// through to the rest of the pipeline); otherwise commits the refusal to
+    /// the ledger and returns the `PermissionDenied` naming the entry that
+    /// denied it, so the model relays something the user can act on.
+    async fn refuse_denied_call(
+        &self,
+        name: &str,
+        input: &Value,
+        captured: Option<&RegistryEntry>,
+        descriptor: Option<&ToolCapabilityDescriptor>,
+        ledger: Option<&super::ledger::LedgerIntent>,
+        rule: GateRule<'_>,
+    ) -> Result<(), ToolError> {
+        let read_only = matches!(rule, GateRule::PlanMode | GateRule::SideQuestion)
+            && self.denied_only_by_plan_for_descriptor(name, descriptor)
+            && self.dispatch_concurrency_claim(name, input, captured, descriptor)
+                == crate::tools::concurrency::ConcurrencyClaim::Shared;
+        if read_only {
+            return Ok(());
+        }
+        let explanation = rule.reason(name);
+        if let Some(l) = ledger {
+            l.commit_refusal(input, &explanation).await;
+        }
+        Err(ToolError::PermissionDenied {
+            name: name.into(),
+            reason: format!("{explanation}{}", rule.deny_advice()),
+        })
     }
 
     /// The captured handler decides argument-level Plan/side-question admission.
@@ -921,15 +1084,15 @@ impl ScopedToolService {
     ///
     /// Split out of [`Self::execute_gated`] so the wall clock can wrap exactly
     /// this and nothing above it. Everything above it can block on a person.
-    async fn route_and_execute<'call>(
-        &'call self,
+    async fn route_and_execute(
+        &self,
         routing: RoutingTarget,
         name: &str,
         effective_input: &Value,
         cancel: CancellationToken,
         deadline: std::time::Instant,
         descriptor: Option<&ToolCapabilityDescriptor>,
-        admission: &'call GateAdmissionToken,
+        admission: Arc<GateAdmissionToken>,
     ) -> Result<ToolOutput, ToolError> {
         match routing {
             RoutingTarget::Missing => Err(ToolError::NotFound {
@@ -940,7 +1103,7 @@ impl ScopedToolService {
                 // will be invoked. Canonical `None` is authoritative and must
                 // not fall back to a stale request-local projection hint.
                 let explicit = match &target {
-                    RoutingTarget::Canonical(entry, _, _) => entry.max_result_tokens,
+                    RoutingTarget::Canonical(entry, _, _, _) => entry.max_result_tokens,
                     _ => self.inner.max_result_tokens_for(name),
                 };
 
@@ -978,7 +1141,7 @@ impl ScopedToolService {
                         attempt_name.clone(),
                         attempt_input.clone(),
                         cancel.clone(),
-                        admission,
+                        admission.clone(),
                     )
                 };
                 let raw_outcome =
@@ -1029,13 +1192,13 @@ impl ScopedToolService {
     }
 
     /// One attempt with owned captured data and a single sealed-token lifetime.
-    async fn invoke_admitted_target<'call>(
-        &'call self,
+    async fn invoke_admitted_target(
+        &self,
         target: RoutingTarget,
         name: String,
         input: Value,
         cancel: CancellationToken,
-        admission: &'call GateAdmissionToken,
+        admission: Arc<GateAdmissionToken>,
     ) -> Result<ToolOutput, ToolError> {
         if matches!(&target, RoutingTarget::Inner)
             && self
@@ -1052,7 +1215,7 @@ impl ScopedToolService {
                 reason: "plugin activation requires an exact canonical admission".into(),
             });
         }
-        if let RoutingTarget::Canonical(entry, lease, _) = &target {
+        if let RoutingTarget::Canonical(entry, lease, backend_lease, policy_attachment) = &target {
             self.validate_plugin_lease(lease)?;
             let call_id = crate::approval::current_tool_call_id().ok_or_else(|| {
                 ToolError::PermissionDenied {
@@ -1064,17 +1227,230 @@ impl ScopedToolService {
             let proof_input = input.clone();
             let proof_name = name.clone();
             let actor = crate::identity::current_actor();
-            crate::tools::dispatch_verdict::with_gate_admission(
-                admission,
-                call_id,
-                proof_name,
-                identity,
-                proof_input,
-                actor,
-                self.invoke_target(target, name, input, cancel),
-            )
-            .await
+            let facade =
+                self.canonical_facade
+                    .as_ref()
+                    .ok_or_else(|| ToolError::PermissionDenied {
+                        name: name.clone(),
+                        reason: "canonical capability facade is not mounted".into(),
+                    })?;
+            // Both ordinary and Memory-owned canonical invocations cross this
+            // seam before admission/spawn. Do not gate only invoke_target:
+            // admitted Memory work deliberately owns a separate handler task.
+            facade
+                .validate_lease(backend_lease)
+                .map_err(|error| ToolError::PermissionDenied {
+                    name: name.clone(),
+                    reason: format!("canonical capability lease is stale: {error:?}"),
+                })?;
+            let (running_call, observation) = self.admit_capability_runtime(
+                &name,
+                backend_lease,
+                policy_attachment.as_deref(),
+                &call_id,
+                entry.domain_policy,
+            )?;
+            let operation = facade.admit_memory(backend_lease).map_err(|error| {
+                ToolError::PermissionDenied {
+                    name: name.clone(),
+                    reason: format!("canonical memory admission is stale: {error:?}"),
+                }
+            })?;
+            if let Some(operation) = operation {
+                let entry = entry.clone();
+                let lease = lease.clone();
+                let backend_lease = backend_lease.clone();
+                let facade = facade.clone();
+                let registry = self.canonical_registry.clone();
+                let recovery = crate::tools::result_processing::dispatch_recovery_tools()
+                    .map_or(self.recovery_tools(), |outer| {
+                        outer.intersect(self.recovery_tools())
+                    });
+                let (sender, receiver) = tokio::sync::oneshot::channel();
+                let owned = crate::memory::runtime::carry(async move {
+                    // The caller's oneshot may disappear while this owned task
+                    // keeps running. Only actual owned completion frees the slot.
+                    let _running_call = running_call;
+                    let result = crate::tools::dispatch_verdict::with_gate_admission(
+                        &admission,
+                        call_id,
+                        proof_name,
+                        identity,
+                        proof_input,
+                        actor,
+                        async move {
+                            Self::validate_plugin_capture(registry.as_deref(), &lease)?;
+                            let result = crate::tools::result_processing::with_recovery_tools(
+                                recovery,
+                                crate::tools::adapters::mcp_adapter::invoke_handler(
+                                    &entry.handler,
+                                    &entry.descriptor,
+                                    input,
+                                    cancel,
+                                ),
+                            )
+                            .await;
+                            let result = result?;
+                            Self::validate_plugin_capture(registry.as_deref(), &lease)?;
+                            let (validation_lease, validation_backend) =
+                                if lease.is_cold_declaration() {
+                                    rebind_cold_plugin_capture(
+                                        registry.as_deref().ok_or_else(|| {
+                                            ToolError::PermissionDenied {
+                                                name: entry.descriptor.name.clone(),
+                                                reason: "canonical plugin registry is not mounted"
+                                                    .into(),
+                                            }
+                                        })?,
+                                        &facade,
+                                        &entry.descriptor.name,
+                                        &lease,
+                                        &backend_lease,
+                                    )?
+                                } else {
+                                    (lease.clone(), backend_lease.clone())
+                                };
+                            Self::validate_plugin_capture(registry.as_deref(), &validation_lease)?;
+                            facade
+                                .validate_completion(&validation_backend)
+                                .map_err(|error| ToolError::PermissionDenied {
+                                    name: entry.descriptor.name.clone(),
+                                    reason: format!(
+                                        "canonical capability lease became stale: {error:?}"
+                                    ),
+                                })?;
+                            Ok(result)
+                        },
+                    )
+                    .await;
+                    Self::observe_tool_completion(observation.as_ref(), &result);
+                    let _ = sender.send(result);
+                });
+                operation
+                    .spawn(owned)
+                    .map_err(|error| ToolError::Execution {
+                        name: name.clone(),
+                        cause: error.to_string(),
+                    })?;
+                return receiver.await.map_err(|_| ToolError::Execution {
+                    name,
+                    cause: "owned memory handler ended without a result".into(),
+                })?;
+            }
+            let entry = entry.clone();
+            let lease = lease.clone();
+            let backend_lease = backend_lease.clone();
+            let facade = facade.clone();
+            let registry = self.canonical_registry.clone();
+            let recovery = self.recovery_tools();
+            let (sender, receiver) = tokio::sync::oneshot::channel();
+            // Keep the original cancellation ancestry. Waiter drop cancels this
+            // child before start; after the handler start checkpoint only the
+            // waiter is cancellable, not the effect's owned settlement future.
+            let settlement_cancel = cancel.child_token();
+            let domain_call =
+                entry
+                    .domain_policy
+                    .map(|_| crate::capability::special_dispatch::DomainToolCall {
+                        context: Self::capability_call_context(&call_id),
+                        owner_actor: crate::gateway::visibility::ambient_principal().or_else(
+                            || {
+                                crate::tools::turn_context::current_agent_id()
+                                    .filter(|id| !id.is_empty())
+                            },
+                        ),
+                        cancel: settlement_cancel.clone(),
+                    });
+            let _caller_interest = settlement_cancel.clone().drop_guard();
+            let owned = crate::memory::runtime::carry(async move {
+                let _running_call = running_call;
+                let result = crate::tools::dispatch_verdict::with_gate_admission(
+                    &admission,
+                    call_id,
+                    proof_name,
+                    identity,
+                    proof_input,
+                    actor,
+                    async move {
+                        Self::validate_plugin_capture(registry.as_deref(), &lease)?;
+                        let invocation = crate::tools::result_processing::with_recovery_tools(
+                            recovery,
+                            crate::tools::adapters::mcp_adapter::invoke_handler_to_settlement(
+                                &entry.handler,
+                                &entry.descriptor,
+                                input,
+                                settlement_cancel,
+                            ),
+                        );
+                        let result = match domain_call {
+                            Some(call) => {
+                                crate::capability::special_dispatch::DOMAIN_TOOL_CALL
+                                    .scope(call, invocation)
+                                    .await
+                            }
+                            None => invocation.await,
+                        };
+                        let result = result?;
+                        let (validation_lease, validation_backend) = if lease.is_cold_declaration()
+                        {
+                            rebind_cold_plugin_capture(
+                                registry
+                                    .as_deref()
+                                    .ok_or_else(|| ToolError::PermissionDenied {
+                                        name: entry.descriptor.name.clone(),
+                                        reason: "canonical plugin registry is not mounted".into(),
+                                    })?,
+                                &facade,
+                                &entry.descriptor.name,
+                                &lease,
+                                &backend_lease,
+                            )?
+                        } else {
+                            (lease.clone(), backend_lease.clone())
+                        };
+                        Self::validate_plugin_capture(registry.as_deref(), &validation_lease)?;
+                        facade
+                            .validate_lease(&validation_backend)
+                            .map_err(|error| ToolError::PermissionDenied {
+                                name: entry.descriptor.name.clone(),
+                                reason: format!(
+                                    "canonical capability lease became stale: {error:?}"
+                                ),
+                            })?;
+                        Ok(result)
+                    },
+                )
+                .await;
+                // The task owns the actual handler future and its captured
+                // proof/context through settlement. Observe before releasing
+                // the reservation even if the response waiter has disappeared.
+                Self::observe_tool_completion(observation.as_ref(), &result);
+                let _ = sender.send(result);
+            });
+            // Dropping the waiter's JoinHandle never aborts this effect owner.
+            // Policy's retained reservation is the shutdown drain authority.
+            let _owner = tokio::spawn(owned);
+            tokio::select! {
+                biased;
+                _ = cancel.cancelled() => Err(ToolError::Cancelled { name }),
+                result = receiver => result.map_err(|_| ToolError::Execution {
+                    name,
+                    cause: "owned canonical handler ended without a result".into(),
+                })?,
+            }
         } else {
+            if self.capability_policy.as_ref().is_some_and(|policy| {
+                policy.is_configured(&CapabilityId {
+                    namespace: TOOL_NAMESPACE.into(),
+                    name: name.clone(),
+                })
+            }) {
+                return Err(ToolError::PermissionDenied {
+                    name,
+                    reason: "configured capability requires an exact canonical policy attachment"
+                        .into(),
+                });
+            }
             self.invoke_target(target, name, input, cancel).await
         }
     }
@@ -1082,11 +1458,112 @@ impl ScopedToolService {
     /// Legacy builtin/MCP/static captures keep their cached-call semantics.
     /// A Ready plugin publication must still be the exact producer lease.
     fn validate_plugin_lease(&self, lease: &CanonicalEntryLease) -> Result<(), ToolError> {
+        Self::validate_plugin_capture(self.canonical_registry.as_deref(), lease)
+    }
+
+    fn observe_tool_completion(
+        observation: Option<&crate::capability::events::InvocationObservation>,
+        result: &Result<ToolOutput, ToolError>,
+    ) {
+        if let Some(observation) = observation {
+            observation.complete(if result.is_ok() {
+                crate::capability::events::HandlerResult::Success
+            } else {
+                crate::capability::events::HandlerResult::ExecutionFailed
+            });
+        }
+    }
+
+    /// The shared final runtime gate for ordinary and Memory-owned effects.
+    fn admit_capability_runtime(
+        &self,
+        name: &str,
+        lease: &BackendLease,
+        attachment: Option<&PolicyAttachment>,
+        call_id: &str,
+        domain_policy: Option<crate::tools::registry::DomainPolicyPlacement>,
+    ) -> Result<
+        (
+            Option<RunningCapabilityCall>,
+            Option<crate::capability::events::InvocationObservation>,
+        ),
+        ToolError,
+    > {
+        self.validate_compatibility_activation(name, lease.owner_generation)?;
+        // Only the immutable Core registration owns the typed domain policy seam.
+        // Approval, compatibility, canonical capture and lease checks stay here.
+        if domain_policy.is_some() {
+            return Ok((None, None));
+        }
+        let Some(policy) = &self.capability_policy else {
+            return Ok((None, None));
+        };
+        let context = Self::capability_call_context(call_id);
+        let running = policy
+            .admit_runtime(lease, attachment, &context, ResourceUse::Allocate)
+            .map_err(|error| ToolError::PermissionDenied {
+                name: name.into(),
+                reason: format!("capability policy denied invocation: {error}"),
+            })?;
+        let observation = policy.invocation_observation(lease, &context, &running);
+        Ok((Some(running), observation))
+    }
+
+    fn capability_call_context(call_id: &str) -> CapabilityCallContext {
+        let turn = crate::tools::turn_context::current_turn_context();
+        // Routing sessions and agent actors never stand in for human identity.
+        let actor = turn
+            .as_ref()
+            .filter(|turn| !turn.run_id.is_empty())
+            .map_or(OwnerRef::Runtime, |turn| {
+                OwnerRef::Run(RunId(turn.run_id.clone()))
+            });
+        CapabilityCallContext::from_trusted_parts(
+            actor,
+            crate::gateway::visibility::ambient_principal(),
+            turn.as_ref().map(|turn| turn.session_key.to_key_string()),
+            None,
+            crate::gateway::caller_identity::current_caller_conn_id(),
+            call_id.into(),
+        )
+    }
+
+    /// Preserve the old opt-in API through the same activation evaluator used
+    /// by PolicyRuntime. Production does not install a per-name policy here.
+    fn validate_compatibility_activation(
+        &self,
+        name: &str,
+        current_generation: crate::capability::ownership::OwnerGeneration,
+    ) -> Result<(), ToolError> {
+        let Some(activation) = self.capability_activations.get(name) else {
+            return Ok(());
+        };
+        let source = self.capability_constraint_context.as_ref().ok_or_else(|| {
+            ToolError::PermissionDenied {
+                name: name.to_string(),
+                reason:
+                    "capability runtime restriction requires an invocation-owner context source"
+                        .into(),
+            }
+        })?;
+        let context = source(name).map_err(|error| ToolError::PermissionDenied {
+            name: name.to_string(),
+            reason: format!("capability runtime context unavailable: {error}"),
+        })?;
+        activation
+            .validate_runtime(current_generation, &context)
+            .map_err(|error| ToolError::PermissionDenied {
+                name: name.to_string(),
+                reason: format!("capability runtime restriction denied invocation: {error}"),
+            })
+    }
+
+    fn validate_plugin_capture(
+        registry: Option<&ToolHandlerRegistry>,
+        lease: &CanonicalEntryLease,
+    ) -> Result<(), ToolError> {
         if lease.is_plugin_publication()
-            && !self
-                .canonical_registry
-                .as_ref()
-                .is_some_and(|registry| lease.validate(&registry.canonical_publication()))
+            && !registry.is_some_and(|registry| lease.validate(&registry.canonical_publication()))
         {
             return Err(ToolError::PermissionDenied {
                 name: lease.entry().descriptor.name.clone(),
@@ -1105,7 +1582,7 @@ impl ScopedToolService {
         cancel: CancellationToken,
     ) -> Result<ToolOutput, ToolError> {
         let raw = match target {
-            RoutingTarget::Canonical(entry, lease, backend_lease) => {
+            RoutingTarget::Canonical(entry, lease, backend_lease, _) => {
                 self.validate_plugin_lease(&lease)?;
                 let facade =
                     self.canonical_facade
@@ -1114,12 +1591,6 @@ impl ScopedToolService {
                             name: entry.descriptor.name.clone(),
                             reason: "canonical capability facade is not mounted".into(),
                         })?;
-                facade.validate_lease(&backend_lease).map_err(|error| {
-                    ToolError::PermissionDenied {
-                        name: entry.descriptor.name.clone(),
-                        reason: format!("canonical capability lease is stale: {error:?}"),
-                    }
-                })?;
                 let result = crate::tools::result_processing::with_recovery_tools(
                     self.recovery_tools(),
                     crate::tools::adapters::mcp_adapter::invoke_handler(
@@ -1130,19 +1601,31 @@ impl ScopedToolService {
                     ),
                 )
                 .await;
-                // The plugin lease is the primary withdrawal guard: a withdrawn
-                // plugin publication must report its own reason instead of the
-                // generic capability one. The capability lease stays the last
-                // gate before the result leaves the dispatch, so a lease that
-                // went stale while the effect ran still fails closed.
-                self.validate_plugin_lease(&lease)?;
-                facade.validate_lease(&backend_lease).map_err(|error| {
-                    ToolError::PermissionDenied {
+                let result = result?;
+                let (validation_lease, validation_backend) = if lease.is_cold_declaration() {
+                    rebind_cold_plugin_capture(
+                        self.canonical_registry.as_deref().ok_or_else(|| {
+                            ToolError::PermissionDenied {
+                                name: entry.descriptor.name.clone(),
+                                reason: "canonical plugin registry is not mounted".into(),
+                            }
+                        })?,
+                        facade,
+                        &entry.descriptor.name,
+                        &lease,
+                        &backend_lease,
+                    )?
+                } else {
+                    (lease.clone(), backend_lease.clone())
+                };
+                self.validate_plugin_lease(&validation_lease)?;
+                facade
+                    .validate_lease(&validation_backend)
+                    .map_err(|error| ToolError::PermissionDenied {
                         name: entry.descriptor.name.clone(),
                         reason: format!("canonical capability lease became stale: {error:?}"),
-                    }
-                })?;
-                return result;
+                    })?;
+                return Ok(result);
             }
             RoutingTarget::Subagent => {
                 let st = self
@@ -1996,7 +2479,7 @@ impl ScopedToolService {
         // and the run's channel-delivery buffer while the value is still
         // structured — the lines below flatten it to text and truncate it to
         // the result budget, after which the items are gone.
-        let media_failures = super::artifact_harvest::harvest_outbound_media(
+        let media = super::artifact_harvest::harvest_outbound_media(
             name,
             &out.value,
             self.turn_context.as_ref(),
@@ -2008,7 +2491,13 @@ impl ScopedToolService {
         // ended, so this is the last point at which the model can still pick a
         // different URL or re-encode the payload. Absent failures write
         // nothing, so the success path stays byte-identical.
-        super::artifact_harvest::annotate_media_failures(&mut out.value, &media_failures);
+        super::artifact_harvest::annotate_media_failures(&mut out.value, &media.failures);
+        // The other half of the same report: the ids of the artifacts the
+        // store lane just created. A model that was never told the id cannot
+        // name the artifact it produced — and `artifact_publish`'s `figures`
+        // takes exactly those ids, so without them the Figures section of a
+        // deliverable stays dark.
+        super::artifact_harvest::annotate_media_stored(&mut out.value, &media.stored);
 
         // An RPC caller consumes the structured value itself, not a prompt
         // rendering of it. Model-ingress hygiene, the result-token budget,
@@ -2358,15 +2847,12 @@ fn bound_error_body(body: &str) -> std::borrow::Cow<'_, str> {
         .map_or(body.len(), |(i, _)| i);
     let tail_start = body
         .char_indices()
-        .nth(total - ERROR_BODY_TAIL_CHARS)
+        .nth(total.saturating_sub(ERROR_BODY_TAIL_CHARS))
         .map_or(0, |(i, _)| i);
-    let elided = total - ERROR_BODY_HEAD_CHARS - ERROR_BODY_TAIL_CHARS;
-    std::borrow::Cow::Owned(format!(
-        "{}\n…[{} chars elided]…\n{}",
-        &body[..head_end],
-        elided,
-        &body[tail_start..]
-    ))
+    let elided = total.saturating_sub(ERROR_BODY_HEAD_CHARS + ERROR_BODY_TAIL_CHARS);
+    let head = body.get(..head_end).unwrap_or(body);
+    let tail = body.get(tail_start..).unwrap_or("");
+    std::borrow::Cow::Owned(format!("{head}\n…[{elided} chars elided]…\n{tail}"))
 }
 
 /// True iff `cause` reads as the tool reporting its own mid-execution

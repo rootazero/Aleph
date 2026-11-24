@@ -88,7 +88,9 @@ impl ToolOutputView {
         while !page.text.is_char_boundary(keep) {
             keep -= 1;
         }
-        self.text.push_str(&page.text[..keep]);
+        if let Some(slice) = page.text.get(..keep) {
+            self.text.push_str(slice);
+        }
         self.next_offset = page.offset.saturating_add(keep as u64);
         // Expired means the stored original is gone, not that another request
         // can recover it. Never poll on `truncated` alone.

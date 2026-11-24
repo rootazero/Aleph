@@ -22,10 +22,11 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
+use thiserror::Error;
 use tracing::{debug, warn};
 
 use super::paths::{
-    validate_path_component, PLUGINS_DIR, PLUGIN_MANIFEST_DIR, PLUGIN_MANIFEST_FILE,
+    is_valid_path_component, PLUGINS_DIR, PLUGIN_MANIFEST_DIR, PLUGIN_MANIFEST_FILE,
 };
 use super::scanner::is_existing_dir_no_follow;
 use super::types::{DiscoveredPath, GlobalRoot};
@@ -74,18 +75,35 @@ struct InstalledPlugins {
     plugins: BTreeMap<String, Vec<Value>>,
 }
 
+/// Why the index could not be read as an index.
+///
+/// The two failures have different remedies — a file this reader cannot
+/// parse is a file to fix, an unknown schema version is a newer Claude Code
+/// than this reader knows — so they are not flattened into one opaque
+/// string.
+#[derive(Debug, Error)]
+pub(crate) enum ClaudeCacheIndexError {
+    #[error("installed_plugins.json could not be parsed: {source}")]
+    Json {
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("installed_plugins.json schema version {found} (this reader knows {SUPPORTED_SCHEMA_VERSION})")]
+    SchemaVersion { found: u64 },
+}
+
 /// Parse the file's text. `Err` = not a shape this reader understands (the
-/// caller skips the whole source with one warn). A key that is not
-/// `<name>@<marketplace>`, an install that is not `user`-scoped, a key with
-/// more than one `user` install, and a segment that is not exactly one path
-/// component are each skipped on their own.
-pub(crate) fn parse_installed_plugins(json: &str) -> Result<Vec<CachedPlugin>, String> {
-    let doc: InstalledPlugins = serde_json::from_str(json).map_err(|e| e.to_string())?;
+/// caller skips the whole source with one warn that carries the reason). A
+/// key that is not `<name>@<marketplace>`, an install that is not
+/// `user`-scoped, a key with more than one `user` install, and a segment
+/// that is not exactly one path component are each skipped on their own.
+pub(crate) fn parse_installed_plugins(
+    json: &str,
+) -> Result<Vec<CachedPlugin>, ClaudeCacheIndexError> {
+    let doc: InstalledPlugins =
+        serde_json::from_str(json).map_err(|source| ClaudeCacheIndexError::Json { source })?;
     if doc.version != SUPPORTED_SCHEMA_VERSION {
-        return Err(format!(
-            "installed_plugins.json schema version {} (this reader knows {SUPPORTED_SCHEMA_VERSION})",
-            doc.version
-        ));
+        return Err(ClaudeCacheIndexError::SchemaVersion { found: doc.version });
     }
     let mut out = Vec::new();
     for (key, entries) in &doc.plugins {
@@ -96,22 +114,23 @@ pub(crate) fn parse_installed_plugins(json: &str) -> Result<Vec<CachedPlugin>, S
             );
             continue;
         };
-        let users: Vec<&Value> = entries.iter().filter(|e| is_user_install(key, e)).collect();
-        let [entry] = users.as_slice() else {
-            if !users.is_empty() {
-                // Nothing says which of them Claude Code runs.
-                warn!(
-                    key,
-                    installs = users.len(),
-                    "Claude Code lists more than one user install; skipped"
-                );
-            }
+        let mut user_installs = entries.iter().filter(|e| is_user_install(key, e));
+        let Some(entry) = user_installs.next() else {
             continue;
         };
+        if user_installs.next().is_some() {
+            let total_users = 2 + user_installs.count();
+            warn!(
+                key,
+                installs = total_users,
+                "Claude Code lists more than one user install; skipped"
+            );
+            continue;
+        }
         let Some(version) = entry
             .get("version")
             .and_then(Value::as_str)
-            .filter(|v| validate_path_component(v).is_ok())
+            .filter(|v| is_valid_path_component(v))
         else {
             warn!(key, "Claude Code install has no usable version; skipped");
             continue;
@@ -130,30 +149,55 @@ pub(crate) fn parse_installed_plugins(json: &str) -> Result<Vec<CachedPlugin>, S
 /// `@` makes the split a guess, so it is refused.
 fn split_key(key: &str) -> Option<(&str, &str)> {
     let (name, marketplace) = key.split_once('@')?;
-    let one_component = |s: &str| validate_path_component(s).is_ok();
+    let one_component = |s: &str| is_valid_path_component(s);
     (!marketplace.contains('@') && one_component(name) && one_component(marketplace))
         .then_some((name, marketplace))
 }
 
 /// Controller ruling 1: `user` only; every other scope — and none — is
 /// skipped loudly, never mapped to `Global`.
+///
+/// An entry that is not a JSON object is an unknown SHAPE, not a
+/// project-scoped install: the two failures have opposite remedies (a shape
+/// to learn vs. an install to bind to a project), so each gets its own
+/// diagnosis.
 fn is_user_install(key: &str, entry: &Value) -> bool {
-    let scope = entry.get("scope").and_then(Value::as_str);
-    if scope == Some(USER_SCOPE) {
+    if !entry.is_object() {
+        warn!(
+            key,
+            "Claude Code install entry has a shape this reader does not know (not a JSON object); skipped"
+        );
+        return false;
+    }
+    let Some(scope) = entry.get("scope") else {
+        warn!(key, "Claude Code install names no scope; skipped");
+        return false;
+    };
+    let Some(scope) = scope.as_str() else {
+        warn!(key, "Claude Code install scope is not a string; skipped");
+        return false;
+    };
+    if scope == USER_SCOPE {
         return true;
     }
     warn!(
         key,
-        scope = scope.unwrap_or("<none>"),
-        "Claude Code install is not user-scoped; not discovered (it belongs to one project)"
+        scope, "Claude Code install is not user-scoped; not discovered (it belongs to one project)"
     );
     false
 }
 
-/// Every cache dir named by the file that exists, is not itself a symlink
-/// (the version dir is checked no-follow; the `<marketplace>` / `<name>`
-/// dirs above it are followed like any path), and carries
+/// Every cache dir named by the file that exists, is not itself a symlink,
+/// and whose `<name>` parent is not a symlink either (the version dir AND
+/// the plugin dir are checked no-follow), and carries
 /// `.claude-plugin/plugin.json`.
+///
+/// The `<marketplace>` level MAY be a symlink — a team cache shared across
+/// machines is a legitimate install — and is still followed; the `<name>`
+/// level may NOT, because a symlink there would root the plugin physically
+/// outside the cache root while it is still labelled
+/// `GlobalRoot::ClaudeCache`, the origin the trust policy reads as the
+/// user's own install.
 ///
 /// Missing file → `Ok` and nothing (there is no source). A file that exists
 /// but is unreadable or of a shape this reader does not know → one `warn!`
@@ -165,9 +209,26 @@ fn is_user_install(key: &str, entry: &Value) -> bool {
 /// fallback names a plugin after its directory — here the VERSION, which
 /// many plugins share.
 pub(crate) fn discover_claude_cache(claude_home: &Path) -> Result<Vec<DiscoveredPath>, PathBuf> {
+    const MAX_INDEX_BYTES: u64 = 10 * 1024 * 1024; // 10MB upper bound
     let file = claude_home.join(PLUGINS_DIR).join(INSTALLED_PLUGINS_FILE);
     #[cfg(test)]
     crate::utils::paths::assert_not_real_claude_home(&file, "discover_claude_cache");
+    match std::fs::metadata(&file) {
+        Ok(meta) if meta.len() > MAX_INDEX_BYTES => {
+            warn!(
+                path = %file.display(),
+                size = meta.len(),
+                "Claude Code's installed_plugins.json exceeds 10MB limit; source unknown this load"
+            );
+            return Err(file);
+        }
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => {
+            warn!(path = %file.display(), error = %e, "cannot read Claude Code's installed_plugins.json; source unknown this load");
+            return Err(file);
+        }
+    }
     let text = match std::fs::read_to_string(&file) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -188,6 +249,15 @@ pub(crate) fn discover_claude_cache(claude_home: &Path) -> Result<Vec<Discovered
         let dir = plugin.cache_dir(claude_home);
         if !is_existing_dir_no_follow(&dir) {
             debug!(key = %plugin.key, dir = %dir.display(), "cache dir absent or a symlink; skipped");
+            continue;
+        }
+        // The `<name>` level must be a real directory too: a symlink there
+        // roots the plugin physically outside the cache root while it is
+        // still labelled `GlobalRoot::ClaudeCache`. The `<marketplace>`
+        // level above it may be a symlink (a shared team cache), so that
+        // one is still followed.
+        if !dir.parent().is_some_and(is_existing_dir_no_follow) {
+            debug!(key = %plugin.key, dir = %dir.display(), "plugin dir's parent is absent or a symlink; skipped");
             continue;
         }
         if !dir
@@ -290,6 +360,7 @@ mod tests {
           "ok@../../escape": [{"scope": "user", "version": "1.0.0"}],
           "a\\b@m": [{"scope": "user", "version": "1.0.0"}],
           "ver@m": [{"scope": "user", "version": ".."}],
+          "dot@m": [{"scope": "user", "version": "."}],
           "slash@m": [{"scope": "user", "version": "1/2"}],
           "two@at@m": [{"scope": "user", "version": "1.0.0"}],
           "@m": [{"scope": "user", "version": "1.0.0"}],
@@ -406,6 +477,65 @@ mod tests {
         std::fs::create_dir_all(plugins.join("cache/m/linked")).unwrap();
         std::os::unix::fs::symlink(elsewhere.path(), plugins.join("cache/m/linked/1.0.0")).unwrap();
         assert!(discover_claude_cache(home.path()).unwrap().is_empty());
+    }
+
+    /// A symlink at the `<name>` level would root the plugin physically
+    /// outside the cache root while it is still labelled
+    /// `GlobalRoot::ClaudeCache` — the origin the trust policy reads as the
+    /// user's own install. The `<marketplace>` level may be a symlink (a
+    /// shared team cache), so only the plugin level is screened.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_plugin_level_is_not_followed() {
+        let home = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        plant_manifest(&elsewhere.path().join("1.0.0"), "linked");
+        let plugins = write_index(
+            home.path(),
+            r#"{"version": 2, "plugins": {"linked@m": [{"scope": "user", "version": "1.0.0"}]}}"#,
+        );
+        std::fs::create_dir_all(plugins.join("cache/m")).unwrap();
+        std::os::unix::fs::symlink(elsewhere.path(), plugins.join("cache/m/linked")).unwrap();
+        assert!(discover_claude_cache(home.path()).unwrap().is_empty());
+    }
+
+    /// An entry this reader cannot read (not a JSON object) is an unknown
+    /// SHAPE, not a project-scoped install — the two have opposite
+    /// remedies, so each is skipped with its own diagnosis.
+    #[test]
+    fn an_entry_of_an_unknown_shape_is_skipped() {
+        let home = tempfile::tempdir().unwrap();
+        let plugins = write_index(
+            home.path(),
+            r#"{"version": 2, "plugins": {
+              "weird@m": ["not an object"],
+              "mine@m": [{"scope": "user", "version": "1.0.0"}]
+            }}"#,
+        );
+        plant_manifest(&plugins.join("cache/m/weird/1.0.0"), "weird");
+        plant_manifest(&plugins.join("cache/m/mine/1.0.0"), "mine");
+        let found = discover_claude_cache(home.path()).unwrap();
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].path.ends_with("cache/m/mine/1.0.0"));
+    }
+
+    /// The index's failure modes stay distinguishable: an unknown schema
+    /// version is its own error, and its message names both the version
+    /// found and the one this reader knows.
+    #[test]
+    fn an_unknown_schema_version_is_its_own_typed_error() {
+        let err = parse_installed_plugins(r#"{"version": 3, "plugins": {}}"#).unwrap_err();
+        let message = err.to_string();
+        assert!(matches!(
+            err,
+            ClaudeCacheIndexError::SchemaVersion { found: 3 }
+        ));
+        assert_eq!(
+            message,
+            "installed_plugins.json schema version 3 (this reader knows 2)"
+        );
+        let err = parse_installed_plugins("{not json").unwrap_err();
+        assert!(matches!(err, ClaudeCacheIndexError::Json { .. }));
     }
 
     #[test]

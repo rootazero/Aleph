@@ -141,7 +141,7 @@ impl InboxContextProvider for TeamInboxContextProvider {
                 match ss.list_active_sessions(&team.id).await {
                     Ok(sessions) => {
                         for s in sessions {
-                            if s.participants.contains(&agent_id.to_string()) {
+                            if s.participants.iter().any(|p| p == agent_id) {
                                 active_sessions.push(s.id);
                             }
                         }

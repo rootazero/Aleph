@@ -36,7 +36,7 @@
 //!    by its own precedence (agent > project > user > plugin), not the
 //!    `SkillSystem` registry's — so the candidates judged are
 //!    `skill_read`'s own, for this run's project and agent
-//!    (`ReadSkillTool::load_candidates`). Each must sit in a user-level root
+//!    (`ReadSkillTool::skill_dirs` + `scan_skill_dirs`). Each must sit in a user-level root
 //!    (`utils::paths::user_skills_roots`) or an active plugin's published
 //!    skills dir whose key is `ScopeKey::Global` — and must be denied to the model's file tools
 //!    (`file_ops::get_denied_paths`, which denies every
@@ -178,30 +178,104 @@ async fn pregrant(skill_id: &str, request: &RunRequest, agent_id: &str) -> Optio
     }
     let project = request.workspace_override.clone();
     let id = skill_id.to_string();
+    let log_skill = skill_id.to_string();
+    // Everything below is filesystem work: the candidate scan (read_dir +
+    // canonicalize + parsing every sibling SKILL.md), the ownership
+    // judgement (canonicalize + the denied-path census) and the manifest
+    // parse. On a Tokio worker that stalls every other task scheduled on
+    // it, so it runs on a blocking thread (EE3-02).
+    //
     // The agent-id task-local is what `skill_read` sees inside the run
     // (`run_loop` scopes it); without it the agent-level dir would be missing
-    // from the candidates judged here.
-    let candidates = crate::agents::with_agent_id(Some(agent_id.to_string()), async move {
-        ReadSkillTool::load_candidates(project.as_deref(), &id)
+    // from the candidates judged here. A task-local does NOT cross into
+    // `spawn_blocking`, so the skill roots — which depend on it — are
+    // resolved here, on this thread, and the scan is handed the resolved
+    // roots.
+    let allowed_tools = crate::agents::with_agent_id(Some(agent_id.to_string()), async move {
+        let dirs = ReadSkillTool::skill_dirs(project.as_deref());
+        tokio::task::spawn_blocking(move || {
+            // `skill_id` is the name the log lines below inline-capture.
+            let skill_id = log_skill.as_str();
+            let candidates = ReadSkillTool::scan_skill_dirs(dirs, &id);
+            let loaded = candidates.first()?;
+            for dir in &candidates {
+                if let Err(origin) = operator_owned(dir) {
+                    info!(
+                        skill = %skill_id,
+                        dir = %dir.display(),
+                        origin,
+                        "`/{skill_id}` pre-grants nothing: a {origin} skill does not pre-grant its \
+                         allowed-tools"
+                    );
+                    return None;
+                }
+                // The candidate's `SKILL.md` must resolve INSIDE the candidate
+                // directory and live in a root the file tools may not write: the
+                // scanner skips symlinked manifest files, so a symlink pointing at a
+                // writable project file would otherwise let the model rewrite the
+                // declaration that this pre-grant is about to trust.
+                let skill_md_path = dir.join("SKILL.md");
+                let canonical_skill_md = match std::fs::canonicalize(&skill_md_path) {
+                    Ok(path) => path,
+                    Err(_) => {
+                        info!(
+                            skill = %skill_id,
+                            dir = %dir.display(),
+                            "`/{skill_id}` pre-grants nothing: SKILL.md does not resolve"
+                        );
+                        return None;
+                    }
+                };
+                let canonical_dir = match std::fs::canonicalize(dir) {
+                    Ok(path) => path,
+                    Err(_) => {
+                        info!(
+                            skill = %skill_id,
+                            dir = %dir.display(),
+                            "`/{skill_id}` pre-grants nothing: the skill directory does not resolve"
+                        );
+                        return None;
+                    }
+                };
+                if !canonical_skill_md.starts_with(&canonical_dir) {
+                    info!(
+                        skill = %skill_id,
+                        dir = %dir.display(),
+                        "`/{skill_id}` pre-grants nothing: SKILL.md escapes the skill directory"
+                    );
+                    return None;
+                }
+                // A symlinked SKILL.md is not the file `parse_skill_file` reads
+                // below: the manifest scan follows the link, so the pre-grant would
+                // authorise whatever the link points at. The canonical-path check
+                // above only proves the *resolved* target is inside the skill
+                // directory, so the link itself has to be rejected here.
+                let skill_md_path = loaded.join("SKILL.md");
+                if std::fs::symlink_metadata(&skill_md_path)
+                    .map(|m| m.file_type().is_symlink())
+                    .unwrap_or(false)
+                {
+                    info!(
+                        skill = %skill_id,
+                        dir = %dir.display(),
+                        "`/{skill_id}` pre-grants nothing: SKILL.md is a symlink"
+                    );
+                    return None;
+                }
+            }
+            let manifest = crate::skill::parse_skill_file(
+                loaded.join("SKILL.md"),
+                crate::skill::guess_source(loaded),
+            )
+            .ok()?;
+            manifest.allowed_tools().map(<[String]>::to_vec)
+        })
+        .await
+        .ok()
+        .flatten()
     })
     .await;
-    let loaded = candidates.first()?;
-    for dir in &candidates {
-        if let Err(origin) = operator_owned(dir) {
-            info!(
-                skill = %skill_id,
-                dir = %dir.display(),
-                origin,
-                "`/{skill_id}` pre-grants nothing: a {origin} skill does not pre-grant its \
-                 allowed-tools"
-            );
-            return None;
-        }
-    }
-    let manifest =
-        crate::skill::parse_skill_file(loaded.join("SKILL.md"), crate::skill::guess_source(loaded))
-            .ok()?;
-    manifest.allowed_tools().map(<[String]>::to_vec)
+    allowed_tools
 }
 
 /// `Ok` when the skill directory `skill_dir` sits in an operator-owned root

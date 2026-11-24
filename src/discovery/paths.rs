@@ -4,8 +4,17 @@ use super::{DiscoveryError, DiscoveryResult};
 use std::path::{Path, PathBuf};
 
 // =============================================================================
-// Path Constants (internal — scanner-only; not re-exported)
+// Path Constants (crate-internal)
 // =============================================================================
+//
+// These constants are `pub(crate)`, so the `pub use paths::*;` glob in
+// `mod.rs` keeps them crate-scoped: they are not part of the public API of
+// this crate.
+//
+// NOTE: the FUNCTIONS further down are a different story — the `pub` ones
+// (`aleph_home_dir`, `aleph_agents_dir`, `aleph_plugins_dir`) ARE re-exported
+// by that same glob and are public API (`crate::discovery::aleph_home_dir()`);
+// the `pub(crate)` ones are not. This module is not "internal only".
 
 pub(crate) const ALEPH_HOME_DIR: &str = ".aleph";
 pub(crate) const CLAUDE_HOME_DIR: &str = ".claude";
@@ -23,10 +32,14 @@ pub(crate) const MCP_CONFIG_FILE: &str = ".mcp.json";
 // =============================================================================
 
 /// Get the user's home directory. Used by `claude_home_dir` (scanner-internal).
+///
+/// A failure here is a USER home failure (`HOME` / `USERPROFILE`), not an
+/// Aleph home failure (`~/.aleph`, `ALEPH_HOME`) — hence its own error
+/// variant, so the reader is not sent to look at the wrong directory.
 pub(crate) fn home_dir() -> DiscoveryResult<PathBuf> {
     // Preserve the structured AlephError (with its actionable "set HOME"
     // message) instead of flattening it into InvalidPath's string.
-    crate::utils::paths::get_home_dir().map_err(DiscoveryError::HomeDir)
+    crate::utils::paths::get_home_dir().map_err(DiscoveryError::UserHome)
 }
 
 /// Get the Aleph home directory (~/.aleph/)
@@ -84,22 +97,18 @@ where
     F: Fn(&Path) -> bool,
 {
     let mut results = Vec::new();
-    let mut current = start.to_path_buf();
+    let current_canonical = start.canonicalize().ok();
+    let mut current = current_canonical
+        .as_ref()
+        .cloned()
+        .unwrap_or_else(|| start.to_path_buf());
     let mut depth = 0;
 
-    let current_canonicalized = current.canonicalize().ok();
-    if let Some(ref canonical) = current_canonicalized {
-        current = canonical.clone();
-    }
-
-    let stop_raw = stop.map(|p| p.to_path_buf());
-    let stop = stop.map(|p| {
-        if current_canonicalized.is_some() {
-            p.canonicalize().unwrap_or_else(|_| p.to_path_buf())
-        } else {
-            p.to_path_buf()
-        }
-    });
+    let stop_canonical = if current_canonical.is_some() {
+        stop.map(|p| p.canonicalize().unwrap_or_else(|_| p.to_path_buf()))
+    } else {
+        stop.map(|p| p.to_path_buf())
+    };
 
     loop {
         if depth >= max_depth {
@@ -110,8 +119,8 @@ where
             results.push(current.clone());
         }
 
-        if stop.as_ref().is_some_and(|sp| &current == sp)
-            || stop_raw.as_ref().is_some_and(|sr| &current == sr)
+        if stop_canonical.as_ref().is_some_and(|sp| &current == sp)
+            || stop.is_some_and(|sr| current == sr)
         {
             break;
         }
@@ -119,11 +128,6 @@ where
         match current.parent() {
             Some(parent) => {
                 current = parent.to_path_buf();
-                if current_canonicalized.is_some() {
-                    if let Ok(canonical) = current.canonicalize() {
-                        current = canonical;
-                    }
-                }
                 depth += 1;
             }
             None => break,
@@ -131,6 +135,25 @@ where
     }
 
     results
+}
+
+/// Validate whether a path component is non-empty, contains no nulls/separators,
+/// and is not a directory or traversal reference.
+#[must_use]
+pub(crate) fn is_valid_path_component(name: &str) -> bool {
+    if name.is_empty()
+        || name.contains('\0')
+        || name.contains('/')
+        || name.contains('\\')
+        || name == ".."
+        || name == "."
+    {
+        return false;
+    }
+    if cfg!(windows) && name.contains(':') {
+        return false;
+    }
+    true
 }
 
 /// Validate that a path component does not contain traversal or separators.
@@ -155,9 +178,28 @@ pub(crate) fn validate_path_component(name: &str) -> DiscoveryResult<()> {
     // already known to contain no separators is the same as `name == ".."`
     // (the only traversal component that can actually escape after the
     // separator check above). Tighten to the traversal case only.
+    //
+    // Both self-reference components are refused, because both move the
+    // resolved path away from where the caller named it: `..` escapes to
+    // the parent, and `.` resolves back to the directory itself — so a `.`
+    // component roots the path one level ABOVE the name it was given.
     if name == ".." {
         return Err(DiscoveryError::InvalidPath(format!(
             "path component cannot be parent directory reference: {name}"
+        )));
+    }
+    if name == "." {
+        return Err(DiscoveryError::InvalidPath(
+            "path component cannot be a directory reference: .".to_string(),
+        ));
+    }
+    // Windows only: `PathBuf::push` REPLACES the base path when the pushed
+    // path carries a drive prefix and no root, so a component like `C:`
+    // would take the joined path out of the tree entirely. `:` is a legal
+    // character in a Unix file name, so Unix behavior must not change.
+    if cfg!(windows) && name.contains(':') {
+        return Err(DiscoveryError::InvalidPath(format!(
+            "path component cannot contain a drive prefix: {name}"
         )));
     }
     Ok(())

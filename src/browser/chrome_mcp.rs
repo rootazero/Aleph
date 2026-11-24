@@ -3,7 +3,7 @@
 //! Spawns `chrome-devtools-mcp` as a stdio MCP server per profile.
 //! Sessions are lazily created on first tool call and cached by profile name.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
@@ -22,6 +22,38 @@ use crate::utils::no_window::NoWindow;
 /// A running Chrome `DevTools` MCP session.
 struct ChromeMcpSession {
     client: McpClient,
+    /// The tool names the server advertised at connect time.
+    ///
+    /// The server is pinned to `chrome-devtools-mcp@latest`, so its tool set
+    /// can change under us between releases. Without this snapshot an upstream
+    /// rename reaches the user as an opaque "unknown tool" at the moment they
+    /// click; with it, the driver says which tools the server actually offers.
+    /// `None` when the server advertised nothing — an empty list must not be
+    /// read as "the server offers no tools".
+    advertised_tools: Option<Arc<HashSet<String>>>,
+}
+
+/// The unqualified tool names the server advertises.
+///
+/// `McpClient::list_tools` returns server-qualified names ("chrome-mcp-x:click");
+/// the driver calls tools by their bare name, so the prefix is stripped here.
+async fn advertised_tool_names(
+    client: &McpClient,
+    server_name: &str,
+) -> Option<Arc<HashSet<String>>> {
+    let names: HashSet<String> = client
+        .list_tools()
+        .await
+        .into_iter()
+        .map(|tool| match tool.name.strip_prefix(server_name) {
+            Some(rest) => rest.strip_prefix(':').unwrap_or(&tool.name).to_string(),
+            None => tool.name.clone(),
+        })
+        .collect();
+    if names.is_empty() {
+        return None;
+    }
+    Some(Arc::new(names))
 }
 
 /// Build the argument vector for `chrome --remote-debugging-port=0`.
@@ -328,7 +360,7 @@ fn read_proc_starttime(pid: u32) -> std::io::Result<u64> {
     let after = &stat[close + 1..];
     let field = after
         .split_whitespace()
-        .nth(20) // 0-indexed: field 22 -> index 21
+        .nth(19) // post-comm field 22 (starttime) is index 19
         .ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -387,6 +419,20 @@ impl ChromeMcpDriver {
         // MCP tools are namespaced with server prefix: "chrome-mcp-{profile}:{tool}"
         let server_name = format!("chrome-mcp-{profile_name}");
         let full_tool_name = format!("{server_name}:{tool_name}");
+        // An upstream rename (the server is pinned to `@latest`) reaches us
+        // here first, with the server's own tool list attached — not as an
+        // opaque "unknown tool" error at the moment the user clicks.
+        if let Some(advertised) = session.advertised_tools.as_ref() {
+            if !advertised.contains(tool_name) {
+                let mut offered: Vec<&str> = advertised.iter().map(String::as_str).collect();
+                offered.sort_unstable();
+                return Err(BrowserError::ChromeMcpError(format!(
+                    "the chrome-devtools-mcp server does not offer the tool '{tool_name}'; \
+                     it offers: {}",
+                    offered.join(", ")
+                )));
+            }
+        }
         // Two error shapes, kept apart deliberately. A failure of the *call*
         // (the client never got an answer) is a transport failure; a failure
         // reported *inside* a successful answer is the tool's own verdict about
@@ -500,7 +546,10 @@ impl ChromeMcpDriver {
                      Any local process can access browser data (cookies, passwords) via the debug port. \
                      This is Chrome's standard debugging interface (same as DevTools)."
                 );
-                Ok(ChromeMcpSession { client })
+                Ok(ChromeMcpSession {
+                    advertised_tools: advertised_tool_names(&client, &server_name).await,
+                    client,
+                })
             }
             Err(e) => {
                 tracing::info!(
@@ -513,7 +562,7 @@ impl ChromeMcpDriver {
 
                 // Retry after Chrome launch
                 let retry_config = ExternalServerConfig {
-                    name: server_name,
+                    name: server_name.clone(),
                     command: self.config.command.clone(),
                     args: self.config.args.clone(),
                     env: HashMap::new(),
@@ -533,6 +582,7 @@ impl ChromeMcpDriver {
                     })?;
 
                 Ok(ChromeMcpSession {
+                    advertised_tools: advertised_tool_names(&retry_client, &server_name).await,
                     client: retry_client,
                 })
             }

@@ -10,7 +10,7 @@ use axum::http::HeaderMap;
 use axum::response::Response;
 use axum::Json;
 
-use super::auth::{extract_bearer_token, ApiError};
+use super::auth::{authorize, ApiError};
 use super::state::OpenAiApiState;
 use super::types::ChatCompletionRequest;
 
@@ -20,17 +20,7 @@ pub async fn handle(
     Json(req): Json<ChatCompletionRequest>,
 ) -> Result<Response, ApiError> {
     // Auth check
-    let auth_header = headers
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    let token = extract_bearer_token(auth_header)
-        .ok_or_else(|| ApiError::Unauthorized("Missing or invalid Authorization header".into()))?;
-    if let Some(expected) = (state.api_token)() {
-        if !crate::security::secret_equal(Some(token), Some(expected.as_str())) {
-            return Err(ApiError::Unauthorized("Invalid API key".into()));
-        }
-    }
+    authorize(&state, &headers)?;
 
     // Validate
     if req.model.is_empty() {

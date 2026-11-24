@@ -40,20 +40,25 @@ impl DefaultGroupChatCommandParser {
 
         let after = trimmed.strip_prefix("/groupchat")?.trim();
 
-        if after == "start" || after.starts_with("start ") {
-            let args = after.strip_prefix("start")?.trim();
-            parse_start_command(args)
-        } else if after == "continue" || after.starts_with("continue ") {
-            let args = after.strip_prefix("continue")?.trim();
-            parse_continue_command(args)
-        } else if after == "mention" || after.starts_with("mention ") {
-            let args = after.strip_prefix("mention")?.trim();
-            parse_mention_command(args)
-        } else if after == "end" || after.starts_with("end ") {
-            let session_id = after.strip_prefix("end")?.trim().to_string();
-            Some(GroupChatRequest::End { session_id })
-        } else {
-            None
+        let (verb, args) = match after.split_once(char::is_whitespace) {
+            Some((v, a)) => (v, a.trim()),
+            None => (after, ""),
+        };
+
+        match verb {
+            "start" => parse_start_command(args),
+            "continue" => parse_continue_command(args),
+            "mention" => parse_mention_command(args),
+            "end" => {
+                if args.is_empty() {
+                    None
+                } else {
+                    Some(GroupChatRequest::End {
+                        session_id: args.to_string(),
+                    })
+                }
+            }
+            _ => None,
         }
     }
 }
@@ -128,16 +133,16 @@ fn parse_start_command(args: &str) -> Option<GroupChatRequest> {
     let mut personas: Vec<PersonaSource> = Vec::new();
     let mut topic = String::new();
     let mut message_parts: Vec<String> = Vec::new();
-    let mut i = 0;
+    let mut iter = tokens.into_iter();
 
-    while i < tokens.len() {
-        match tokens[i].as_str() {
+    while let Some(tok) = iter.next() {
+        match tok.as_str() {
             "--preset" => {
-                i += 1;
-                if i >= tokens.len() {
+                let val = iter.next()?;
+                if val.starts_with("--") {
                     return None;
                 }
-                for id in tokens[i].split(',') {
+                for id in val.split(',') {
                     let id = id.trim();
                     if !id.is_empty() {
                         personas.push(PersonaSource::Preset(id.to_string()));
@@ -145,35 +150,28 @@ fn parse_start_command(args: &str) -> Option<GroupChatRequest> {
                 }
             }
             "--role" => {
-                i += 1;
-                if i >= tokens.len() {
-                    return None;
-                }
+                let val = iter.next()?;
                 // Refuse to swallow another flag as a role spec — a typo like
                 // `--role --topic "x"` used to silently turn `--topic` into
                 // the role spec. Treat "saw a flag" as a missing value.
-                if tokens[i].starts_with("--") {
+                if val.starts_with("--") {
                     return None;
                 }
-                let persona = parse_inline_role(&tokens[i])?;
+                let persona = parse_inline_role(&val)?;
                 personas.push(PersonaSource::Inline(persona));
             }
             "--topic" => {
-                i += 1;
-                if i >= tokens.len() {
-                    return None;
-                }
+                let val = iter.next()?;
                 // Same defense as `--role`: refuse to eat a flag-looking value.
-                if tokens[i].starts_with("--") {
+                if val.starts_with("--") {
                     return None;
                 }
-                topic = tokens[i].clone();
+                topic = val;
             }
             _ => {
-                message_parts.push(tokens[i].clone());
+                message_parts.push(tok);
             }
         }
-        i += 1;
     }
 
     let initial_message = message_parts.join(" ");
@@ -220,12 +218,23 @@ fn parse_inline_role(spec: &str) -> Option<Persona> {
 /// Quoted segments (both `"..."` and `'...'`) are returned as single tokens
 /// with the quotes stripped. Unquoted words are split on whitespace.
 fn tokenize(input: &str) -> Vec<String> {
+    const MAX_COMMAND_INPUT_LEN: usize = 8192;
+    const MAX_TOKENS: usize = 128;
+
+    let input = match input.char_indices().nth(MAX_COMMAND_INPUT_LEN) {
+        Some((idx, _)) => input.get(..idx).unwrap_or(input),
+        None => input,
+    };
+
     let mut tokens = Vec::new();
     let mut chars = input.chars().peekable();
     let mut current = String::new();
     let mut quoted = String::new();
 
     while let Some(&ch) = chars.peek() {
+        if tokens.len() >= MAX_TOKENS {
+            break;
+        }
         match ch {
             '"' | '\'' => {
                 if !current.is_empty() {
@@ -280,7 +289,7 @@ fn tokenize(input: &str) -> Vec<String> {
         }
     }
 
-    if !current.is_empty() {
+    if !current.is_empty() && tokens.len() < MAX_TOKENS {
         tokens.push(current);
     }
 

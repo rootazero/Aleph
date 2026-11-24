@@ -1256,7 +1256,7 @@ cargo run --bin aleph-rebuild-indexes -- \
 - [Storage Survey](../investigation/2026-10-18-storage-architecture-survey.md)
 - [MEMORY_SYSTEM.md](../reference/MEMORY_SYSTEM.md)
 - [REDLINES.md](../reference/REDLINES.md)
-- [Pi Memory README](~/.pi/agent/npm/node_modules/pi-memory/README.md)
+- Pi Memory README (local installation path varies by machine and is not a repository link)
 
 ---
 

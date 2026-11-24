@@ -12,9 +12,11 @@ Singleton 强制由 OS 级 `flock` 保证（Spec C, 2026-05-02 起改为结构�
   服务不在时，CLI 自己拿锁本地写入。两条路径都不会与服务竞争。
 - OS 在进程退出（正常、panic、SIGKILL）时自动释放 `flock`。`kill -9 <pid>`
   之后**无需 sleep**，可立即 `aleph-server start`。
-- 反向回归脚本 `scripts/spec_c_regression.sh` 锁住四条不变量：
-  SQLite 走 `open_sqlite_safe`、vault/acp 走 `vault_io`/`atomic_io`、
-  每个 CLI 子命令显式声明 policy、`acquire_instance_lock` 不再有遗留 caller。
+- 反向回归门禁在 `tests/spec_c_invariants.rs`（`scripts/spec_c_regression.sh`
+  只是它的薄包装，CI 直接跑这个测试）：四条不变量按 **语法树** 判定——
+  SQLite 走 `open_sqlite_safe`、vault/acp 只能经 `vault_io`/`atomic_io`
+  写入、每个 CLI 子命令的 `//! lock-policy:` 声明必须与代码一致、单例锁
+  只有一个持有者。因为按 AST 判定，`#[cfg(test)]` 里的代码不算违规。
 
 启动时任何 `Another Aleph instance holds the lock …` 都意味着**锁此刻确实
 被某个活进程握着**（OS 报了争用；持有者一退出 OS 就释放）。三种措辞只是
@@ -56,7 +58,7 @@ Aleph 自己 spawn 浏览器（2026-09-05 起 Chromium，2026-09-06 起还有 ob
     于是让目标的记录在启动那一刻覆盖掉源的（整个迁移期间那个活 obscura 不可回收），然后源的
     `stop_launched` 又把同一个文件删掉（目标从此对清扫不可见）。**判据 §19**：**键必须和它所寻址的
     世界一样细**——这正是 §19 的旗舰实例（2026-09-06 新增的那个形状），**不是 §12**：这个键只有一个
-    作者，数它得 1 而那个 1 是**对的**，坏的是粒度。⚠️ `engine/process.rs` 的模块 doc 在同一件事上
+    作者，数它得 1 而那个 1 是**对的**，坏的是粒度。⚠️ `src/browser/engine/process.rs` 的模块 doc 在同一件事上
     仍写着「判据 §12」——那是本轮之前写下的，在 `src/` 里，本轮（文档轮）不改，记在
     [FEATURE_LOCATOR §3.12](FEATURE_LOCATOR.md) 第八轮 ㉑⑬。
   记录放在**一个注册表目录**而不是各自的 profile 目录里——一个 profile 可以把 `user_data_dir` /
@@ -73,8 +75,8 @@ Aleph 自己 spawn 浏览器（2026-09-05 起 Chromium，2026-09-06 起还有 ob
   收尸）→ 删记录；**`Unreadable` → 什么都不做、记录留着**（Windows 上读不到 argv 是常态，而「读不出来」
   不是「不在了」，判据 §8）。清扫**按记录迭代**，所以它的作用域是注册表：一个从没被记下来的浏览器不会被
   检查，也就永远不是这条守卫的控制组。
-- **退出时杀**：挂在**两个** daemon 退出点——有序停机（`start/mod.rs` 的 `run_until_shutdown` 返回处）与
-  卡死兜底（`start/helpers.rs` 的 `std::process::exit(0)` 之前）。只挂前者的话，负载中的
+- **退出时杀**：挂在**两个** daemon 退出点——有序停机（`src/bin/aleph-server/commands/start/mod.rs` 的 `run_until_shutdown` 返回处）与
+  卡死兜底（`src/bin/aleph-server/commands/start/helpers.rs` 的 `std::process::exit(0)` 之前）。只挂前者的话，负载中的
   `aleph-server stop` 照样漏浏览器，而 `SHUTDOWN_FAILSAFE = 5 s` 正是为那种停机设的；有序那条路拿到的
   预算是 `ORDERLY_BROWSER_STOP_BUDGET = SHUTDOWN_FAILSAFE / 2`，取一半是因为停引擎只是有序拆卸的**一
   步**，后面每一件事还要在同一个 5 s 里跑完。这段代码是在和花掉 failsafe 的那个看门狗**赛跑**——一个早先

@@ -1,9 +1,11 @@
 //! Export module: SQLite → JSON
 
+use alephcore::utils::sqlite_open::open_sqlite_safe;
 use anyhow::{Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -83,7 +85,7 @@ pub fn run_export(
         );
     }
 
-    let conn = rusqlite::Connection::open(&db_path).context("Failed to open SQLite database")?;
+    let conn = open_sqlite_safe(&db_path).context("Failed to open SQLite database")?;
     let columns = table_columns(&conn, "raw_memories")?;
     if !columns.contains("session_id")
         || !columns.contains("agent_id")
@@ -124,8 +126,10 @@ pub fn run_export(
         params.push(Box::new(parse_date(start)?));
     }
     if let Some(ref end) = end_date {
-        query.push_str(&format!(" AND {timestamp_column} <= ?"));
-        params.push(Box::new(parse_date(end)?));
+        // The end day is included in full, so the bound is exclusive and
+        // points at the next day's midnight.
+        query.push_str(&format!(" AND {timestamp_column} < ?"));
+        params.push(Box::new(parse_end_date_exclusive(end)?));
     }
     if let Some(ref status) = compression_status {
         if !columns.contains("compression_status") {
@@ -146,7 +150,7 @@ pub fn run_export(
             session_id,
             agent_id,
             row.get::<_, Option<String>>(2)?,
-            row.get::<_, i64>(3)?,
+            row.get::<_, Option<i64>>(3)?,
             row.get::<_, Option<i64>>(4)?,
             row.get::<_, String>(5)?,
             row.get::<_, Option<String>>(6)?,
@@ -159,6 +163,10 @@ pub fn run_export(
         let (session_id, agent, workspace_id, created_at, ended_at, content, status, tags) = row?;
         let Some(session_id) = session_id else {
             log::warn!("Skipping raw memory row without session_id");
+            continue;
+        };
+        let Some(created_at) = created_at else {
+            log::warn!("Skipping raw memory row without timestamp");
             continue;
         };
         let agent_id = agent.unwrap_or_else(|| "unknown".to_string());
@@ -201,8 +209,23 @@ pub fn run_export(
         sessions: export_sessions,
     };
 
-    let file = std::fs::File::create(&output_path).context("Failed to create output file")?;
-    serde_json::to_writer_pretty(file, &export_data).context("Failed to write JSON")?;
+    let output_parent = output_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let mut temp = tempfile::Builder::new()
+        .prefix(".aleph-migrate-export-")
+        .tempfile_in(output_parent)
+        .context("Failed to create temporary output file")?;
+    serde_json::to_writer_pretty(&mut temp, &export_data).context("Failed to write JSON")?;
+    temp.as_file_mut()
+        .flush()
+        .context("Failed to flush output file")?;
+    temp.as_file_mut()
+        .sync_all()
+        .context("Failed to sync output file")?;
+    let temp_path = temp.into_temp_path();
+    std::fs::rename(&temp_path, &output_path).context("Failed to replace output file")?;
     log::info!("✓ Export completed successfully");
     Ok(())
 }
@@ -238,6 +261,14 @@ pub fn session_dir_name(session_id: &str) -> Result<String> {
     Ok(encoded)
 }
 
+fn table_exists(conn: &rusqlite::Connection, table: &str) -> Result<bool> {
+    Ok(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type IN ('table', 'view') AND name = ?1)",
+        [table],
+        |row| row.get(0),
+    )?)
+}
+
 fn table_columns(conn: &rusqlite::Connection, table: &str) -> Result<HashSet<String>> {
     let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
     let columns = stmt
@@ -269,10 +300,25 @@ fn parse_tags(value: &str) -> Vec<String> {
 }
 
 fn parse_date(date_str: &str) -> Result<i64> {
+    Ok(midnight_utc(parse_naive_date(date_str)?))
+}
+
+/// Exclusive upper bound for the end filter: the named day is included in
+/// full, so the bound points at the next day's midnight.
+fn parse_end_date_exclusive(date_str: &str) -> Result<i64> {
+    let next_day = parse_naive_date(date_str)?
+        .succ_opt()
+        .context("Date is out of range")?;
+    Ok(midnight_utc(next_day))
+}
+
+fn parse_naive_date(date_str: &str) -> Result<chrono::NaiveDate> {
     use chrono::NaiveDate;
-    let date = NaiveDate::parse_from_str(date_str, "%Y-%m-%d")
-        .context("Invalid date format. Use YYYY-MM-DD")?;
-    Ok(date.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp())
+    NaiveDate::parse_from_str(date_str, "%Y-%m-%d").context("Invalid date format. Use YYYY-MM-DD")
+}
+
+fn midnight_utc(date: chrono::NaiveDate) -> i64 {
+    date.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp()
 }
 
 fn parse_messages_from_content(content: &str, timestamp: i64) -> Result<Vec<ExportMessage>> {
@@ -296,10 +342,11 @@ fn load_attachments(
     db_path: &Path,
     session_id: &str,
 ) -> Result<Vec<ExportAttachment>> {
-    let columns = match table_columns(conn, "attachments") {
-        Ok(columns) => columns,
-        Err(_) => return Ok(vec![]),
-    };
+    if !table_exists(conn, "attachments").context("Failed to check for attachments table")? {
+        return Ok(vec![]);
+    }
+    let columns =
+        table_columns(conn, "attachments").context("Failed to inspect attachments table")?;
     for required in ["attachment_id", "mime_type", "size_bytes"] {
         if !columns.contains(required) {
             anyhow::bail!("attachments is missing required column: {required}");

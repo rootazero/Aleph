@@ -10,16 +10,63 @@ use tokio::sync::Mutex;
 use crate::error::AlephError;
 use crate::memory::store::session::*;
 use crate::memory::store::sqlite::schema::session_ddl;
+use crate::utils::sqlite_open::open_sqlite_safe;
 
 use super::utils::{
     append_markdown, atomic_write_markdown, compute_sha256, format_timestamp,
     format_timestamp_full, hash_prefix,
 };
 
+/// The shared WHERE clause and parameters of the session listing filters.
+///
+/// `list_sessions` and `count_sessions` must agree on the predicate set: one
+/// of them answers "which rows", the other "how many rows". Two copies of
+/// this list would let the count drift from the page (H5-17).
+fn session_filter_clause(
+    agent_id: Option<&str>,
+    workspace_id: Option<&str>,
+    start_date: Option<i64>,
+    end_date: Option<i64>,
+    compression_status: Option<&str>,
+) -> (String, Vec<Box<dyn rusqlite::ToSql>>) {
+    let mut clause = String::new();
+    let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+
+    if let Some(aid) = agent_id {
+        clause.push_str(" AND agent_id = ?");
+        params.push(Box::new(aid.to_string()));
+    }
+
+    if let Some(wid) = workspace_id {
+        clause.push_str(" AND workspace_id = ?");
+        params.push(Box::new(wid.to_string()));
+    }
+
+    if let Some(start) = start_date {
+        clause.push_str(" AND started_at >= ?");
+        params.push(Box::new(start));
+    }
+
+    if let Some(end) = end_date {
+        clause.push_str(" AND started_at <= ?");
+        params.push(Box::new(end));
+    }
+
+    if let Some(status) = compression_status {
+        clause.push_str(" AND compression_status = ?");
+        params.push(Box::new(status.to_string()));
+    }
+
+    (clause, params)
+}
+
 /// Markdown-based session storage implementation.
 pub struct MarkdownSessionStore {
     pub(super) base_dir: PathBuf,
     pub(super) db: Arc<Mutex<Connection>>,
+    // Serialize metadata read/modify/write across raw-session writers, without
+    // holding the SQLite mutex during filesystem I/O.
+    metadata_writes: Mutex<()>,
 }
 
 impl MarkdownSessionStore {
@@ -59,7 +106,7 @@ impl MarkdownSessionStore {
             .map_err(|e| AlephError::other(format!("Failed to create archive directory: {}", e)))?;
 
         // Open database connection
-        let conn = Connection::open(&db_path).map_err(|e| {
+        let conn = open_sqlite_safe(&db_path).map_err(|e| {
             AlephError::other(format!("Failed to open database {:?}: {}", db_path, e))
         })?;
 
@@ -69,6 +116,7 @@ impl MarkdownSessionStore {
         let store = Self {
             base_dir: base_dir.to_path_buf(),
             db: Arc::new(Mutex::new(conn)),
+            metadata_writes: Mutex::new(()),
         };
         store.recover_raw_deletions().await?;
         Ok(store)
@@ -128,6 +176,7 @@ impl MarkdownSessionStore {
 #[async_trait]
 impl RawSessionStore for MarkdownSessionStore {
     async fn create_session(&self, mut metadata: SessionMetadata) -> Result<(), AlephError> {
+        let _write = self.metadata_writes.lock().await;
         let session_key = session_directory_key(&metadata.session_id);
         let session_dir = self.session_dir(&metadata.session_id);
         let metadata_path = session_dir.join("metadata.json");
@@ -292,9 +341,7 @@ impl RawSessionStore for MarkdownSessionStore {
         role: MessageRole,
         content: &str,
     ) -> Result<(), AlephError> {
-        // Serialize the file append, metadata read/modify/write, and index refresh.
-        // The projector has one worker, but direct store callers can overlap.
-        let mut db = self.db.lock().await;
+        let _write = self.metadata_writes.lock().await;
         let mut metadata = self.read_metadata(session_id).await?;
         let transcript_path = self.session_dir(session_id).join("transcript.md");
 
@@ -310,8 +357,9 @@ impl RawSessionStore for MarkdownSessionStore {
         let transcript = self.read_transcript(session_id).await?;
 
         // Keep the SQLite count and full-transcript FTS replacement atomic.
-        // Do not hold a rusqlite transaction across an await.
+        // Scope the lock tightly around SQLite mutations only.
         let (message_count, tool_call_count) = {
+            let mut db = self.db.lock().await;
             let tx = db.transaction().map_err(|e| {
                 AlephError::other(format!("Failed to start transcript update: {}", e))
             })?;
@@ -352,7 +400,7 @@ impl RawSessionStore for MarkdownSessionStore {
         args: &str,
         result: &ToolResult,
     ) -> Result<(), AlephError> {
-        let db = self.db.lock().await;
+        let _write = self.metadata_writes.lock().await;
         let mut metadata = self.read_metadata(session_id).await?;
         let tool_outputs_path = self.session_dir(session_id).join("tool_outputs.md");
 
@@ -369,14 +417,16 @@ impl RawSessionStore for MarkdownSessionStore {
 
         append_markdown(&tool_outputs_path, &entry).await?;
 
-        let (message_count, tool_call_count): (i64, i64) = db
-            .query_row(
+        let (message_count, tool_call_count): (i64, i64) = {
+            let db = self.db.lock().await;
+            db.query_row(
                 "UPDATE sessions SET tool_call_count = tool_call_count + 1, updated_at = ? WHERE session_id = ? \
                  RETURNING message_count, tool_call_count",
                 rusqlite::params![timestamp, session_id],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
-            .map_err(|e| AlephError::other(format!("Failed to update tool call count: {}", e)))?;
+            .map_err(|e| AlephError::other(format!("Failed to update tool call count: {}", e)))?
+        };
 
         metadata.message_count = message_count;
         metadata.tool_call_count = tool_call_count;
@@ -453,15 +503,12 @@ impl RawSessionStore for MarkdownSessionStore {
     }
 
     async fn finalize_session(&self, session_id: &str, ended_at: i64) -> Result<(), AlephError> {
-        // Serialize with appends so finalization cannot overwrite newer counts.
-        let db = self.db.lock().await;
+        let _write = self.metadata_writes.lock().await;
         let mut metadata = self.read_metadata(session_id).await?;
 
         // Update metadata
         metadata.ended_at = Some(ended_at);
-        if let Some(started) = Some(metadata.started_at) {
-            metadata.duration_seconds = Some(ended_at - started);
-        }
+        metadata.duration_seconds = Some(ended_at - metadata.started_at);
 
         // Compute content hash
         let transcript = self.read_transcript(session_id).await?;
@@ -471,6 +518,7 @@ impl RawSessionStore for MarkdownSessionStore {
         self.update_metadata(&metadata).await?;
 
         // Update database
+        let db = self.db.lock().await;
         db.execute(
             "UPDATE sessions SET ended_at = ?, duration_seconds = ?, content_hash = ?, updated_at = ? WHERE session_id = ?",
             rusqlite::params![
@@ -524,32 +572,14 @@ impl RawSessionStore for MarkdownSessionStore {
                          transcript_path, tool_outputs_path, message_count, tool_call_count, content_hash, \
                          compression_status, tags FROM sessions WHERE 1=1".to_string();
 
-        let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-
-        if let Some(aid) = agent_id {
-            query.push_str(" AND agent_id = ?");
-            params.push(Box::new(aid.to_string()));
-        }
-
-        if let Some(wid) = workspace_id {
-            query.push_str(" AND workspace_id = ?");
-            params.push(Box::new(wid.to_string()));
-        }
-
-        if let Some(start) = start_date {
-            query.push_str(" AND started_at >= ?");
-            params.push(Box::new(start));
-        }
-
-        if let Some(end) = end_date {
-            query.push_str(" AND started_at <= ?");
-            params.push(Box::new(end));
-        }
-
-        if let Some(status) = compression_status {
-            query.push_str(" AND compression_status = ?");
-            params.push(Box::new(status.to_string()));
-        }
+        let (clause, mut params) = session_filter_clause(
+            agent_id,
+            workspace_id,
+            start_date,
+            end_date,
+            compression_status,
+        );
+        query.push_str(&clause);
 
         query.push_str(" ORDER BY started_at DESC LIMIT ? OFFSET ?");
         params.push(Box::new(limit as i64));
@@ -586,6 +616,37 @@ impl RawSessionStore for MarkdownSessionStore {
 
         let sessions: Result<Vec<_>, _> = rows.collect();
         sessions.map_err(|e| AlephError::other(format!("Failed to collect sessions: {}", e)))
+    }
+
+    async fn count_sessions(
+        &self,
+        agent_id: Option<&str>,
+        workspace_id: Option<&str>,
+        start_date: Option<i64>,
+        end_date: Option<i64>,
+        compression_status: Option<&str>,
+    ) -> Result<usize, AlephError> {
+        let db = self.db.lock().await;
+
+        let mut query = "SELECT COUNT(*) FROM sessions WHERE 1=1".to_string();
+        let (clause, params) = session_filter_clause(
+            agent_id,
+            workspace_id,
+            start_date,
+            end_date,
+            compression_status,
+        );
+        query.push_str(&clause);
+
+        let mut stmt = db
+            .prepare(&query)
+            .map_err(|e| AlephError::other(format!("Failed to prepare count query: {}", e)))?;
+
+        let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+        let count: i64 = stmt
+            .query_row(&param_refs[..], |row| row.get(0))
+            .map_err(|e| AlephError::other(format!("Failed to count sessions: {}", e)))?;
+        Ok(count.max(0) as usize)
     }
 
     async fn get_session_metadata(&self, session_id: &str) -> Result<SessionMetadata, AlephError> {

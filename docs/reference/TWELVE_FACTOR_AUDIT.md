@@ -29,7 +29,7 @@
 
 ### F5 · Unify Execution & Business State — ⚠️（→ 采纳 A3，与 F12 合并）
 - 原则：执行状态与业务状态统一、可从单一源（理想为 context window）推断。
-- 现状：harness `TurnState` 为逐轮执行态；业务态分散——`looping/` 纯内存（重启即丢）、`goal/` 持久、`tasks/store/` 持久。**无单一 event-log 状态源**。
+- 现状：harness `TurnState` 为逐轮执行态；业务态分散——`src/looping/` 纯内存（重启即丢）、`src/goal/` 持久、`tasks/store/` 持久。**无单一 event-log 状态源**。
 - 锚点：`src/harness/trait_def.rs::TurnState`、`src/looping/`、`src/goal/store.rs`、`src/agents/swarm/tasks/store/`。
 - 缺口：架构性，最深。落地需评估（B §P2-1），预判很可能 YAGNI。
 

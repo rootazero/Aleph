@@ -19,7 +19,7 @@
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_notification::NotificationExt;
 use tokio_tungstenite::tungstenite::Message;

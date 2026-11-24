@@ -142,11 +142,14 @@ impl MediaPipeline {
             // Surface every provider's failure in the final error so
             // operator UI / logging can name them all without reaching
             // back through the WARN-level trace above.
-            let summary = attempts
-                .iter()
-                .map(|(n, e)| format!("{n}: {e}"))
-                .collect::<Vec<_>>()
-                .join("; ");
+            use std::fmt::Write as _;
+            let mut summary = String::new();
+            for (i, (n, e)) in attempts.iter().enumerate() {
+                if i > 0 {
+                    summary.push_str("; ");
+                }
+                let _ = write!(summary, "{n}: {e}");
+            }
             return Err(MediaError::ProviderError {
                 provider: "all".to_string(),
                 message: format!("all {} providers failed: {summary}", attempts.len()),

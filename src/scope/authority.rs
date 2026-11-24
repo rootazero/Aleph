@@ -162,11 +162,10 @@ impl FireAuthority {
 /// can never be a different person from the one refused.
 #[must_use]
 pub fn checked_person<'a>(subject: &FireSubject<'a>) -> Option<(&'a str, bool)> {
-    let author = subject.author.filter(|s| !s.is_empty());
-    let owner = subject.owner.filter(|s| !s.is_empty());
-    match author {
-        Some(a) => Some((a, true)),
-        None => owner.map(|o| (o, false)),
+    if let Some(author) = subject.author.filter(|s| !s.is_empty()) {
+        Some((author, true))
+    } else {
+        subject.owner.filter(|s| !s.is_empty()).map(|o| (o, false))
     }
 }
 
@@ -198,8 +197,7 @@ pub(crate) fn resolve_with_users(
     users: UsersAuthority<'_>,
     subject: &FireSubject<'_>,
 ) -> FireAuthority {
-    let author = subject.author.filter(|s| !s.is_empty());
-    let Some((person, _)) = checked_person(subject) else {
+    let Some((person, is_author)) = checked_person(subject) else {
         return FireAuthority::Legacy;
     };
     let users = match users {
@@ -226,8 +224,8 @@ pub(crate) fn resolve_with_users(
                 scope: ScopeAttribution::from_persisted(subject.owner, subject.scope),
                 // The FILTERED author: an empty `AUTHOR_USER_KEY` was read as
                 // absent above, so it must not be stamped back as `""`.
-                author: author.map(str::to_string),
-                role_ceiling: capped.then(|| UserRole::Member.wire_role()),
+                author: is_author.then(|| person.to_string()),
+                role_ceiling: capped.then_some(UserRole::Member.wire_role()),
                 carried_role: subject.carried_role.map(str::to_string),
             })
         }

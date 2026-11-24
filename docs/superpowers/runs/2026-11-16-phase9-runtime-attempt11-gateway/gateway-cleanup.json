@@ -1,0 +1,21 @@
+{
+  "status": "STARTING",
+  "children": [
+    {
+      "name": "model",
+      "argv": [
+        "/Users/zouguojun/.cache/uv/builds-v0/.tmpYcqOTF/bin/python",
+        "/Volumes/TBU4/Workspace/Aleph/qa/nsh_panel_provider.py",
+        "--port",
+        "55186",
+        "--record",
+        "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/2026-11-16-phase9-runtime-attempt11-gateway/model-requests.jsonl"
+      ],
+      "pid": 82688,
+      "cwd": "/tmp/p9-gateway-b91jn034",
+      "exit_code": -15,
+      "forced": false
+    }
+  ],
+  "fixture_removed": true
+}

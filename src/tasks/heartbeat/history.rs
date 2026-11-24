@@ -143,7 +143,8 @@ pub fn prune_old_records(conn: &Connection, retention_days: u32) -> Result<usize
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|e| format!("system time before Unix epoch: {e}"))?
         .as_millis() as i64;
-    let cutoff_ms = now_ms - i64::from(retention_days) * 86_400_000;
+    let retention_ms = i64::from(retention_days).saturating_mul(86_400_000);
+    let cutoff_ms = now_ms.saturating_sub(retention_ms);
     let deleted = conn
         .execute(
             "DELETE FROM heartbeat_runs WHERE created_at < ?1",

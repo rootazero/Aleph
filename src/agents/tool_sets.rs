@@ -8,6 +8,17 @@
 //! Tool names match those registered in `src/builtin_tools/` (see
 //! `crate::builtin_tools::register_*`). This file's 3 constants are the only
 //! place tool sets are defined; `AgentDef.allowed_tool_sets` references them by name.
+//!
+//! Gap (documented here, not fixed here): these sets are tool-NAME
+//! allowlists, and `file_ops` bundles inspection and mutating operations
+//! (`move`/`copy`/`delete`/`mkdir`/`organize`) into ONE tool. A set that
+//! admits `file_ops` therefore admits its mutating operations as well: the
+//! agent-level `denied_tools` list denies by tool name and only names
+//! `file_write`/`file_edit` (different tools), so it does not stop them, and
+//! the sandbox's `denied_paths` only limits WHERE they may act, never
+//! WHETHER they may. Splitting the mutating operations into their own tool
+//! is the only real fix, but that changes the builtin tool catalog and the
+//! agents that rely on it — out of scope for this file.
 
 // Tool names below MUST match the names registered in
 // `src/builtin_tools/` (see each tool's `AlephTool::NAME`). Earlier values
@@ -22,21 +33,32 @@
 //   web_fetch   — remote URL fetch
 //   subagent    — sub-agent spawn (gated for SubAgent mode by Stage B guard)
 
-/// Pure read-only filesystem inspection tools.
+/// Filesystem inspection tools.
+///
+/// `file_ops` is admitted as a whole tool, so its mutating operations
+/// (`move`/`copy`/`delete`/`mkdir`/`organize`) are admitted with it — see the
+/// gap note in the module docs. Only the sandbox's path-level `denied_paths`
+/// limits where those operations may land.
 pub const READ_ONLY: &[&str] = &["file_read", "file_ops"];
 
 /// `READ_ONLY` ∪ remote read tools ∪ subagent (Primary-only via Stage B guard).
 /// SubAgent-mode agents that include INVESTIGATION still cannot spawn subagent
 /// (Stage B `is_tool_allowed` mode-aware deny).
 ///
-/// Note: `file_ops` is admitted for its `list`/`search`/`read` operations.
-/// Its write-side operations are gated separately by the agent's
-/// `denied_tools` and the sandbox's `denied_paths` policy.
+/// Note: `file_ops` is admitted as a whole tool. Its mutating operations
+/// (`move`/`copy`/`delete`/`mkdir`/`organize`) are NOT gated by the agent's
+/// `denied_tools` — that list denies by tool name and only names
+/// `file_write`/`file_edit`, which are different tools. The sandbox's
+/// `denied_paths` policy is path-level, so it limits where a mutating
+/// operation may land, not whether it may run at all.
 pub const INVESTIGATION: &[&str] = &["file_read", "file_ops", "search", "web_fetch", "subagent"];
 
 /// Subset of INVESTIGATION safe for autonomous background execution: no
 /// exfiltration risk (no `web_fetch`). Excludes subagent to defend against
 /// background recursion misuse beyond Stage B guarantees.
+///
+/// `file_ops` is admitted as a whole tool here too, mutating operations
+/// included — see the gap note in the module docs.
 pub const ASYNC_SAFE: &[&str] = &["file_read", "file_ops", "search"];
 
 /// Resolve a set name to its tool list. Returns None for unknown names so

@@ -31,7 +31,7 @@ pub struct FetchBackendDto {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_seconds: Option<u64>,
     /// Inbound only (never echoed). Stored to vault on update.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing)]
     pub api_key: Option<String>,
     #[serde(default)]
     pub has_api_key: bool,
@@ -44,8 +44,10 @@ pub struct FetchBackendDto {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FetchConfigDto {
-    pub enabled: bool,
-    pub default_provider: String,
+    /// The configured fetch backends. There is deliberately no `enabled` /
+    /// `default_provider` field: `web_fetch` never routes through a fetch
+    /// provider (BT-D-R4-22), so a routing knob here would only ever be an
+    /// operator-visible lie.
     #[serde(default)]
     pub backends: Vec<FetchBackendDto>,
 }
@@ -167,16 +169,10 @@ pub async fn handle_get(
                 }
             })
             .collect();
-        FetchConfigDto {
-            enabled: fetch.enabled,
-            default_provider: fetch.default_provider.clone(),
-            backends,
-        }
+        FetchConfigDto { backends }
     } else {
         // No fetch config present — return a sensible empty default.
         FetchConfigDto {
-            enabled: false,
-            default_provider: String::new(),
             backends: Vec::new(),
         }
     };
@@ -238,18 +234,12 @@ pub async fn handle_update(
         // Create fetch config if it doesn't exist
         if cfg.fetch.is_none() {
             cfg.fetch = Some(FetchConfigInternal {
-                enabled: false,
-                default_provider: String::new(),
-                fallback_providers: None,
                 backends: std::collections::HashMap::new(),
                 verified_shared: std::collections::HashMap::new(),
             });
         }
 
         if let Some(fetch) = &mut cfg.fetch {
-            fetch.enabled = dto.enabled;
-            fetch.default_provider = dto.default_provider.clone();
-
             for backend_dto in &dto.backends {
                 // Strategy V: firecrawl shares the [search] config and the
                 // `search:firecrawl` vault key. It is never persisted as a
@@ -303,10 +293,23 @@ pub async fn handle_update(
         }
     }
 
-    // Broadcast config change event
+    // Broadcast config change event — strip api_key fields before serializing
+    // so that inbound secrets are never echoed into the event bus payload.
+    let mut event_value = serde_json::to_value(&dto).unwrap_or(Value::Null);
+    if let Some(backends) = event_value
+        .as_object_mut()
+        .and_then(|o| o.get_mut("backends"))
+        .and_then(|b| b.as_array_mut())
+    {
+        for backend in backends.iter_mut() {
+            if let Some(obj) = backend.as_object_mut() {
+                obj.remove("api_key");
+            }
+        }
+    }
     let event = GatewayEvent::ConfigChanged(ConfigChangedEvent {
         section: Some("fetch".to_string()),
-        value: serde_json::to_value(&dto).unwrap_or(Value::Null),
+        value: event_value,
         timestamp: chrono::Utc::now().timestamp_millis(),
     });
     let _ = event_bus.publish_gateway_event(&event);
@@ -454,7 +457,11 @@ pub async fn handle_test(
                 );
             };
 
-            match FirecrawlFetchProvider::new(base_url, api_key) {
+            match FirecrawlFetchProvider::new_with_timeout(
+                base_url,
+                api_key,
+                params.timeout_seconds,
+            ) {
                 Ok(provider) => match provider.fetch("https://example.com").await {
                     Ok(_) => FetchTestResult {
                         success: true,
@@ -516,6 +523,20 @@ pub async fn handle_test(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn firecrawl_connection_test_passes_configured_timeout() {
+        let source = crate::utils::source_scan::production_prefix(include_str!("fetch_config.rs"));
+        let handler = source.split("pub async fn handle_test(").nth(1).unwrap();
+        let compact = handler
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect::<String>();
+        assert!(compact.contains(
+            "FirecrawlFetchProvider::new_with_timeout(base_url,api_key,params.timeout_seconds"
+        ));
+        assert!(!compact.contains("FirecrawlFetchProvider::new(base_url,api_key)"));
+    }
 
     #[test]
     fn backend_dto_never_serializes_token_and_round_trips() {
@@ -643,7 +664,7 @@ mod tests {
     // Strategy V defense-in-depth: even if a client includes a firecrawl entry
     // in the update payload, handle_update must NOT persist it as a [fetch]
     // backend nor write a fetch:firecrawl vault key (firecrawl shares [search]).
-    // Other backends (crawl4ai) and default_provider still round-trip.
+    // Other backends (crawl4ai) still round-trip.
     #[tokio::test]
     async fn handle_update_never_persists_firecrawl_backend() {
         // Single-source ALEPH_HOME isolation: hold the crate-wide guard for the
@@ -663,9 +684,6 @@ mod tests {
 
         let base = Config {
             fetch: Some(FetchConfigInternal {
-                enabled: false,
-                default_provider: String::new(),
-                fallback_providers: None,
                 backends: std::collections::HashMap::new(),
                 verified_shared: std::collections::HashMap::new(),
             }),
@@ -681,6 +699,8 @@ mod tests {
         let _ = vault.generate_token();
 
         // A hostile/legacy client sends firecrawl alongside crawl4ai.
+        // `enabled` / `default_provider` are legacy routing knobs: the DTO
+        // ignores them, so a legacy client cannot resurrect them.
         let params = serde_json::json!({
             "enabled": true,
             "default_provider": "firecrawl",
@@ -697,10 +717,6 @@ mod tests {
         {
             let cfg = config.read().await;
             let fetch = cfg.fetch.as_ref().unwrap();
-            assert_eq!(
-                fetch.default_provider, "firecrawl",
-                "default_provider round-trips even without a firecrawl backend entry"
-            );
             assert!(
                 fetch.backends.contains_key("crawl4ai"),
                 "crawl4ai persisted"

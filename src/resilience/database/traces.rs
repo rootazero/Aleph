@@ -73,9 +73,9 @@ impl AgentUsageTotal {
 /// Construct `TaskTrace` from a rusqlite row.
 /// Expected column order: id, `task_id`, `step_index`, `event_kind`, `event_json`, timestamp
 fn task_trace_from_row(row: &rusqlite::Row) -> rusqlite::Result<TaskTrace> {
-    let event_kind: String = row.get(3)?;
-    let event_json: String = row.get(4)?;
-    let event = serde_json::from_str::<AgentTraceEvent>(&event_json)
+    let event_kind = row.get_ref(3)?.as_str()?;
+    let event_json = row.get_ref(4)?.as_str()?;
+    let event = serde_json::from_str::<AgentTraceEvent>(event_json)
         .map_err(|err| rusqlite::Error::FromSqlConversionFailure(4, Type::Text, Box::new(err)))?;
 
     if event.kind() != event_kind {
@@ -120,22 +120,20 @@ impl StateDatabase {
 
     /// Insert a single trace entry
     pub async fn insert_trace(&self, trace: &TaskTrace) -> Result<i64, AlephError> {
-        let trace = trace.clone();
+        let event_json = serde_json::to_string(&trace.event)
+            .map_err(|e| AlephError::config(format!("Failed to serialize trace event: {e}")))?;
+        let task_id = trace.task_id.clone();
+        let step_index = trace.step_index;
+        let event_kind = trace.event_kind();
+        let timestamp = trace.timestamp;
+
         self.with_conn(move |conn| {
-            let event_json = serde_json::to_string(&trace.event)
-                .map_err(|e| AlephError::config(format!("Failed to serialize trace event: {e}")))?;
             conn.execute(
                 r#"
                 INSERT INTO task_traces (task_id, step_index, event_kind, event_json, timestamp)
                 VALUES (?1, ?2, ?3, ?4, ?5)
                 "#,
-                params![
-                    trace.task_id,
-                    trace.step_index,
-                    trace.event_kind(),
-                    event_json,
-                    trace.timestamp,
-                ],
+                params![task_id, step_index, event_kind, event_json, timestamp],
             )
             .map_err(|e| AlephError::config(format!("Failed to insert trace: {e}")))?;
 
@@ -354,16 +352,11 @@ impl StateDatabase {
 
             // Combine agent_id text params + optional timestamp ints into a single
             // params_from_iter sequence in positional order.
-            let id_values: Vec<rusqlite::types::Value> = agent_ids
-                .iter()
-                .map(|s| rusqlite::types::Value::Text(s.clone()))
-                .collect();
-            let ts_values: Vec<rusqlite::types::Value> = bind_extras
+            let all_values: Vec<rusqlite::types::Value> = agent_ids
                 .into_iter()
-                .map(rusqlite::types::Value::Integer)
+                .map(rusqlite::types::Value::Text)
+                .chain(bind_extras.into_iter().map(rusqlite::types::Value::Integer))
                 .collect();
-            let all_values: Vec<rusqlite::types::Value> =
-                id_values.into_iter().chain(ts_values).collect();
 
             let rows = stmt
                 .query_map(rusqlite::params_from_iter(all_values), |row| {

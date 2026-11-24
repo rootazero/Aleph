@@ -15,17 +15,19 @@ Aleph 插件系统实现了 **单向兼容 + 超集** 策略：
 
 ## Provider lifecycle foundation / Provider 生命周期基础（2026-10-21）
 
+> Cross-subsystem current-state entry: [`FEATURE_LOCATOR.md`](FEATURE_LOCATOR.md#current-state--当前现状). This document owns plugin discovery and activation semantics; the locator owns the compact cross-subsystem map. / 跨子系统当前现状入口：[`FEATURE_LOCATOR.md`](FEATURE_LOCATOR.md#current-state--当前现状)。本文档拥有插件 discovery 与 activation 语义；locator 拥有紧凑的跨子系统地图。
+
 `src/capability/provider.rs` adds a pure state machine and shared handle for `InProcess` and future `Bridge` providers. It publishes lifecycle transitions and increments a generation for each restart. `ToolHandlerRegistry::new_with_provider` connects that handle to the canonical Tool registry: when the provider is not `Ready`, callable snapshots and resolution fail closed while registration data remains retained. `BackendLease.provider_generation` and `ResolveError::StaleProvider` fence old leases after stop or restart.
 
-The lifecycle contract does not create a second plugin manager. `src/extension/lifecycle.rs::ExtensionManager` still owns discovery, mount/unmount effects, and reload; `src/extension/plugin_state.rs` remains the durable enabled configuration. The Provider handle is the Core boundary those owners can drive later. This slice does not start sidecars, load dynamic libraries, or wire ExtensionManager side effects into the state machine.
+The lifecycle contract does not create a second plugin manager. At this 2026-10-21 pre-Stage-F/G/H baseline, `src/extension/lifecycle.rs::ExtensionManager` still owned discovery, mount/unmount effects, and reload; `src/extension/plugin_state.rs` remained the durable enabled configuration. The Provider handle was the Core boundary reserved for later owner-driven integration at that historical point. This dated baseline did not start sidecars, load dynamic libraries, or wire ExtensionManager side effects into the state machine. The current bounded production wiring is recorded below: `ExtensionManager` / `RuntimeOwner` drive ProviderLifecycle transitions only for ExtensionManager-managed tool-only WASM.
 
 `src/capability/provider.rs` 为 `InProcess` 以及未来的 `Bridge` Provider 增加纯状态机和共享 handle。它发布生命周期 transition，并为每次重启递增 generation。`ToolHandlerRegistry::new_with_provider` 将该 handle 接到 canonical Tool registry：Provider 未处于 `Ready` 时，callable snapshot 和 resolve fail-closed，但注册数据保留；`BackendLease.provider_generation` 与 `ResolveError::StaleProvider` 会在停止或重启后隔离旧 lease。
 
-该生命周期契约不会新建第二个插件管理器。`src/extension/lifecycle.rs::ExtensionManager` 仍负责发现、mount/unmount effect 和 reload；`src/extension/plugin_state.rs` 仍是持久化 enabled 配置的事实源。Provider handle 是未来由这些 owner 驱动的 Core 边界。本切片尚未启动 sidecar、加载动态库，也未把 ExtensionManager 的副作用直接接入状态机。
+该生命周期契约不会新建第二个插件管理器。在 2026-10-21、Stage F/G/H 之前的历史基线中，`src/extension/lifecycle.rs::ExtensionManager` 仍负责发现、mount/unmount effect 和 reload；`src/extension/plugin_state.rs` 仍是持久化 enabled 配置的事实源。Provider handle 在当时是预留给后续 owner 驱动接入的 Core 边界。本段历史基线尚未启动 sidecar、加载动态库，也未把 ExtensionManager 的副作用直接接入状态机。当前有界生产接线见下文：`ExtensionManager` / `RuntimeOwner` 仅为 ExtensionManager-managed tool-only WASM 驱动 ProviderLifecycle transition。
 
-三态基线（已实现 / 本阶段 / Deferred）、四条明确边界（不做 Rust dylib 热卸载、不做 sidecar supervisor、不引入第二 registry、不让 catalog / diagnostic / MCP projection 隐式启动 disabled provider）与具体验证入口见 `docs/reference/FEATURE_LOCATOR.md` §3.5d 的「三态基线」条目与 `docs/research/aleph_modularization_plan.md` §0.4。接线实况：生产路径没有一处驱动 provider transition，`ToolHandlerRegistry::new_with_provider` 尚无生产调用点，因此本节的 fail-closed 闸门目前是 dormant 的——插件侧要启动 provider，仍须经 `ExtensionManager` 与 `plugin_state.rs` 这条唯一权威链。
+三态基线（已实现 / 本阶段 / Deferred）、四条明确边界（不做 Rust dylib 热卸载、不做 sidecar supervisor、不引入第二 registry、不让 catalog / diagnostic / MCP projection 隐式启动 disabled provider）与具体验证入口见 `docs/reference/FEATURE_LOCATOR.md` §3.5d 的「三态基线」条目与 `docs/research/aleph_modularization_plan.md` §0.4。当前生产接线由 `ExtensionManager`/`RuntimeOwner` 驱动 bounded tool-only WASM 的 provider transition；`ToolHandlerRegistry::new_with_provider` 仍是 builtin compatibility provider 的构造入口，并非插件 lifecycle authority。插件 activation 仍须经 `ExtensionManager`、`plugin_state.rs` 与既有 canonical per-plugin publication 链。
 
-The tri-state baseline (implemented / this phase / deferred), the four explicit non-goals, and the verification entry points live in `docs/reference/FEATURE_LOCATOR.md` §3.5d and `docs/research/aleph_modularization_plan.md` §0.4. Wiring reality: no production call site drives a provider transition and `ToolHandlerRegistry::new_with_provider` has no production caller, so the fail-closed gate is dormant today; starting a provider from the plugin side still has to go through `ExtensionManager` and `plugin_state.rs`.
+The tri-state baseline (implemented / this phase / deferred), the four explicit non-goals, and the verification entry points live in `docs/reference/FEATURE_LOCATOR.md` §3.5d and `docs/research/aleph_modularization_plan.md` §0.4. Current production wiring lets `ExtensionManager`/`RuntimeOwner` drive provider transitions for the bounded tool-only WASM slice. `ToolHandlerRegistry::new_with_provider` remains the builtin compatibility-provider constructor rather than a plugin lifecycle authority; plugin activation still goes through `ExtensionManager`, `plugin_state.rs`, and the existing canonical per-plugin publication path.
 
 ---
 
@@ -83,7 +85,7 @@ Fold ownership is recorded atomically with the existing compaction events. Legac
 3. `aleph.plugin.toml` — **已废弃**（加载时打印 deprecation warning）
 4. `aleph.plugin.json` — **已废弃**
 5. `package.json` with `aleph` field — **已废弃**
-6. 无 manifest — **自动发现模式**（扫描 `skills/`、`agents/`、`commands/`、`hooks/`、`.mcp.json`）
+6. 无 manifest — **自动发现模式**（扫描 `skills/`、`src/agents/`、`commands/`、`hooks/`、`.mcp.json`）
 
 ### plugin.toml 超集 Schema
 
@@ -152,7 +154,7 @@ sensitive = true
 > adapter 里 `if let Some(ref tools) = manifest.tools_v2` 那两条分支不可达，
 > `validation.rs` 的 config-schema 检查与 UI-hint 报告全部空转，
 > `loader.rs::register_memory_extension_if_declared` 从不触发。内置的
-> `plugins/memory-analytics` 从 WASM 导出 `memory_stats` / `memory_timeline`
+> plugins/memory-analytics (example, not actual file) 从 WASM 导出 `memory_stats` / `memory_timeline`
 > 却带着 `.claude-plugin/plugin.toml`，整个工具面因此不可达。
 > Claude Code 会忽略未知顶层键，所以带超集的 manifest 在两个宿主里都能加载。
 
@@ -214,6 +216,30 @@ sensitive = true
 | `"mcp"` | Mcp | 读取 `.mcp.json`，通过 MCP 协议 | Node.js、Python 等 |
 | `"wasm"` | Wasm | Extism 沙箱直接加载 | 高性能安全插件 |
 
+### WASM code-loading boundary / WASM 代码加载边界（Stage E，2026-10-28）
+
+The bounded WASM path reads the guest file explicitly with `std::fs::read`, then passes the bytes to Extism through `Wasm::data` and the existing `PluginBuilder`. Discovery and cold projections read manifest metadata only; they do not read guest bytes, construct the WASM runtime, or create an Extism instance. Explicit activation creates the instance and publishes the existing tool surface through the normal lifecycle path.
+
+有界 WASM 路径显式用 `std::fs::read` 读取 guest 文件，再通过 `Wasm::data` 和既有 `PluginBuilder` 交给 Extism。发现与 cold projection 只读取 manifest metadata，不读取 guest bytes、不构造 WASM runtime、不创建 Extism instance。显式激活才创建 instance，并通过既有 lifecycle 路径发布 tool surface。
+
+Reload/unmount keeps the existing generation, identity and binding fences. A stale canonical entry or `WasmBinding` is rejected; the exact `LoadedWasmPlugin` incarnation is observed as dropped only after the retained owner, entry and binding `Arc` holders are released. The test-only receipts prove this Extism instance boundary. They do not prove engine-wide JIT unloading, anonymous mapping reclamation, executable-page reclamation, thread shutdown or RSS reduction. Native dylib loading/unloading and production channel dynamic code loading remain outside this slice.
+
+Reload/unmount 继续使用既有 generation、identity 和 binding fences。stale canonical entry 或 `WasmBinding` 会被拒绝；只有释放 retained owner、entry 与 binding 的 `Arc` holders 后，才能观察到具体 `LoadedWasmPlugin` incarnation drop。test-only receipt 证明的是这一 Extism instance boundary，不能证明 engine-wide JIT unloading、anonymous mapping 回收、executable page 回收、线程退出或 RSS 降低。native dylib 加载/卸载与生产 channel 动态代码加载仍不在本阶段范围内。
+
+### Stage H declaration-only reads / Stage H 只读声明发现（bounded tool-only WASM）
+
+`ExtensionManager::ensure_discovered()` is the read boundary for the bounded tool-only WASM slice. It scans, parses and applies the existing admission policy, publishes the existing declaration rows, and creates an eligible `RuntimeOwner` in `Cold`. It does not call `mount_parsed`, read guest bytes, construct an Extism instance, open provider resources, or publish callable tools. `plugins.list`, installed-plugin Hub reconciliation, and the read actions of `plugin_manage` use this path; a read after activation observes the existing owner and canonical publication without remounting it. The `discovered` flag is only a derived cache of completed work, and explicit reload invalidates it.
+
+`ensure_loaded()` and explicit enable/reload/control operations remain activation boundaries. They use the existing owner, generation, admission, disposer and `ToolHandlerRegistry` publication path; no projection, snapshot or new registry becomes an activation authority. This Stage H boundary covers ExtensionManager-managed tool-only WASM only. Channel, PTY, memory, MCP and other provider kinds remain deferred, as do claims about RSS, thread, engine/JIT, executable-page or OS-mapping reclamation.
+
+`ExtensionManager::ensure_discovered()` 是本阶段有界 tool-only WASM 的读边界。它扫描、解析并应用既有 admission policy，发布既有 declaration row，并为 eligible plugin 创建 `Cold` 状态的 `RuntimeOwner`。它不会调用 `mount_parsed`、读取 guest bytes、构造 Extism instance、打开 provider resource，也不会发布 callable tool。`plugins.list`、Hub 的 installed-plugin reconciliation 以及 `plugin_manage` 的读 action 都使用这条路径；激活后的读取仍观察既有 owner 与 canonical publication，不会重新 mount。`discovered` 只是已完成工作的派生缓存，显式 reload 会使它失效。
+
+`ensure_loaded()` 与显式 enable/reload/control 操作仍是 activation boundary，继续使用既有 owner、generation、admission、disposer 和 `ToolHandlerRegistry` publication 路径；projection、snapshot 或新 registry 都不是 activation authority。本 Stage H 只覆盖 ExtensionManager 管理的 tool-only WASM；channel、PTY、memory、MCP 与其他 provider kind 仍 deferred，也不声明 RSS、thread、engine/JIT、executable page 或 OS mapping reclamation。
+
+`Current closure (2026-11-03):` discovery still performs no guest read or provider authentication, but it now publishes metadata-only Cold tool declarations in the existing canonical registry. An exact permitted canonical Tool call may activate that retained owner through the existing single-flight path; it rebinds to the Ready publication before guest execution. Read-side catalog/describe/resolve/project/observer/doctor calls never activate, and transport compatibility remains mounted-only. The dated Stage H paragraphs above are historical boundary evidence where they say that no callable metadata entry exists.
+
+`当前闭合（2026-11-03）：` discovery 仍不读取 guest 或认证 provider，但现在会在既有 canonical registry 中发布只含 metadata 的 Cold tool declaration。只有通过权限与 scope 的 exact canonical Tool call 才可能经既有 single-flight 路径激活 retained owner，并在 guest 执行前重新绑定到 Ready publication。catalog/describe/resolve/project/observer/doctor 等读侧永不激活，transport compatibility 仍保持 mounted-only。上方 Stage H 的日期段落属于历史边界证据，其中“没有 callable metadata entry”的表述不代表当前状态。
+
 Runtime 与 **origin** 是两个轴。origin（`PluginOrigin`）多了一个值：`ClaudeCache`——`~/.claude/plugins/`
 里 Claude Code 已装的插件（读 `installed_plugins.json`，解析到 `cache/<marketplace>/<plugin>/<version>/`）。
 **只读发现**：Aleph 永不写 `~/.claude/`，不读 `settings.json`；这一 origin 的插件**默认 disabled**
@@ -238,7 +264,7 @@ Runtime 与 **origin** 是两个轴。origin（`PluginOrigin`）多了一个值�
 - 跨 marketplace 同名：`name@marketplace` 区分
 
 **实现：** 命名空间是**按面各自解析**的，没有统一的 `ComponentId` 类型——
-此前本文档点名的 `src/extension/component_id.rs` 从未存在。真实锚点：
+此前本文档点名的 `src/extension/types/mod.rs` 从未存在。真实锚点：
 工具走 `ExtensionManager::resolve_active_plugin_tool`（接受短名或 `plugin_id:name`），
 skills/commands 走 `SkillRegistration` 的 `skill_type` 分流，
 MCP server id 由 `mcp_config.rs` 组成 `plugin:<id>/<server>`。
@@ -385,7 +411,7 @@ version = "0.1.0"
 | `agent-level` | `~/.aleph/agents/<id>/plugins/` | `Global` |
 | `local` | `<project>/.aleph/plugins.local/` | `Project(root)` |
 | `project` | `<project>/.aleph/plugins/`、`<project>/.claude/` | `Project(root)` |
-| `user` | `~/.aleph/plugins/installed/` | `Global` |
+| `user` | `~/.aleph/(relocated to ~/.aleph/extensions/)` | `Global` |
 | `claude-cache` | `~/.claude/plugins/cache/…`（只读） | `Global` |
 | `bundled` | 编译期嵌入 | `Global` |
 
@@ -428,7 +454,7 @@ al plugin list
 
 | CC 组件 | Aleph 支持 | 说明 |
 |---------|-----------|------|
-| `skills/*/SKILL.md` | ✅ 完全支持 | 通过 SkillSystem 加载 |
+| skills/*/SKILL.md (pattern) | ✅ 完全支持 | 通过 SkillSystem 加载 |
 | `agents/*.md` | ✅ 完全支持 | frontmatter → `AgentDef`，**正文 → `AgentDef.system_prompt`**（2026-09-20 起；此前正文丢弃）。`permissionMode` **解析但不应用**（见下方 DEVIATION 3）；`color` 忽略 |
 | `commands/*.md` | ✅ 完全支持 | slash 条目随 mount/unmount 注册/撤销；`/cmd args` 时**正文经 `SkillTemplate` 展开后注入本轮**（`$ARGUMENTS` / `$1..$N` / `${N:-d}` / `@file` 经沙箱读 / `` !`cmd` `` 经 shell 同意闸）——展开后的正文**瞬时投递**，转录里持久化的是原始 `/cmd args`（U-c）。`argument-hint` 进列表；`allowed-tools` 作本轮静态 retain；`model` 走请求级 pin；`disable-model-invocation` 只留人类入口 |
 | `hooks/hooks.json` `timeout` | ⚠️ 偏离 | Claude Code 默认 600 s；Aleph 默认 **300 s** 且上限 **300 s**（`MAX_HOOK_TIMEOUT_SECS`，`src/extension/hooks/mod.rs`）——hook 在工具派发内运行，本就受 180 s tool budget 约束，更长的值会被钳到 300 并记一条 warn。写 `timeout: 600` 不报错，只是拿不到 600。 |
@@ -442,7 +468,7 @@ al plugin list
 **DEVIATION（有意与 Claude Code 不同；验收表 `scan-cc-plugin-format.md` 70 项里标 DEVIATION 的就是这几条）：**
 
 1. **hook `timeout` 默认 300 s、上限 300 s**（CC 600 s）——见上表那一行；理由：hook 跑在工具派发内，受 tool budget 约束。
-2. **skills 的 CC 专属字段**：`skills/*/SKILL.md` Claude-Code-only fields (`when_to_use`, `argument-hint`, `arguments`, `disallowed-tools`, `model`, `effort`, `context: fork`, `agent`, `background`, `hooks`, `paths`, `shell`) parse without error and are NOT honoured, except `disable-model-invocation`, `user-invocable`, `allowed-tools` (pre-grant) and `when_to_use` (read). A skill relying on `context: fork` runs inline; one relying on skill-scoped `hooks` gets none.
+2. **skills 的 CC 专属字段**：skills/*/SKILL.md (pattern) Claude-Code-only fields (`when_to_use`, `argument-hint`, `arguments`, `disallowed-tools`, `model`, `effort`, `context: fork`, `agent`, `background`, `hooks`, `paths`, `shell`) parse without error and are NOT honoured, except `disable-model-invocation`, `user-invocable`, `allowed-tools` (pre-grant) and `when_to_use` (read). A skill relying on `context: fork` runs inline; one relying on skill-scoped `hooks` gets none.
 3. **agent `permissionMode` 不应用**：sub-agent 跑在父的 `ScopedToolService` 上，没有自己的执行档；值被解析并以 `debug!` 记下它本会映射到的档，偏离可见于日志而不是静默。
 4. **不读 `~/.claude/settings.json`**：启用态由 `plugins.toml` 决定（U6）。
 5. **用户级 hooks 文件在 `~/.aleph/hooks.json`**，不是 `~/.claude/settings.json` 的 `hooks` 键。
@@ -520,24 +546,24 @@ id + 插件的可见性键；其它 skill——**用户自己写的也算**—�
 ### Manifest 解析
 | 文件 | 职责 |
 |------|------|
-| `manifest/cc_plugin_toml.rs` | 解析 `.claude-plugin/plugin.toml` |
-| `manifest/cc_plugin_json.rs` | 解析 `.claude-plugin/plugin.json` |
-| `manifest/adapters/auto_discover.rs` | 无 manifest 时自动发现组件 |
-| `manifest/mod.rs` | 统一入口，优先级调度 |
-| `manifest/types.rs` | `PluginManifest`、`AlephExtensions`、`AlephRuntime` |
-| `manifest/declared_sections.rs` | **三个方言共用的**「声明的 section → capability」翻译（`[[tools]]`/`[[hooks]]`/`[[commands]]`/`[[services]]`/`[prompt]`） |
-| `manifest/component_source.rs` | 组件字段的 path / 数组 / 内联三形态，以及内联分支的真消费者 |
+| `src/extension/manifest/cc_plugin_toml.rs` | 解析 `.claude-plugin/plugin.toml` |
+| `src/extension/manifest/cc_plugin_json.rs` | 解析 `.claude-plugin/plugin.json` |
+| `src/extension/manifest/adapters/auto_discover.rs` | 无 manifest 时自动发现组件 |
+| `src/extension/manifest/mod.rs` | 统一入口，优先级调度 |
+| `src/extension/manifest/types.rs` | `PluginManifest`、`AlephExtensions`、`AlephRuntime` |
+| `src/extension/manifest/declared_sections.rs` | **三个方言共用的**「声明的 section → capability」翻译（`[[tools]]`/`[[hooks]]`/`[[commands]]`/`[[services]]`/`[prompt]`） |
+| `src/extension/manifest/component_source.rs` | 组件字段的 path / 数组 / 内联三形态，以及内联分支的真消费者 |
 | `plugin_vars.rs` | 四个 `${*_PLUGIN_ROOT}`/`${*_PLUGIN_DATA}` 的**唯一**展开器 + 配置→环境变量的唯一翻译 |
 
 ### Marketplace
 | 文件 | 职责 |
 |------|------|
-| `marketplace/mod.rs` | `MarketplaceManager` 编排 |
-| `marketplace/types.rs` | `MarketplaceManifest`、`MarketplaceConfig` |
-| `marketplace/manifest.rs` | 解析 `marketplace.toml` / `.json` |
-| `marketplace/github_source.rs` | GitHub git clone/pull |
-| `marketplace/local_source.rs` | 本地路径解析 |
-| `marketplace/installer.rs` | 复制插件到安装目录 |
+| `src/extension/marketplace/mod.rs` | `MarketplaceManager` 编排 |
+| `src/extension/marketplace/types.rs` | `MarketplaceManifest`、`MarketplaceConfig` |
+| `src/extension/marketplace/manifest.rs` | 解析 `marketplace.toml` / `.json` |
+| `src/extension/marketplace/github_source.rs` | GitHub git clone/pull |
+| `src/extension/marketplace/local_source.rs` | 本地路径解析 |
+| `src/extension/marketplace/installer.rs` | 复制插件到安装目录 |
 
 ### 其他
 | 文件 | 职责 |
@@ -547,7 +573,7 @@ id + 插件的可见性键；其它 skill——**用户自己写的也算**—�
 | `scope.rs` | Scope 路径解析 |
 | `mcp_config.rs` | 读取 `.mcp.json`，环境变量替换 |
 | `loader.rs` | 运行时加载（MCP/WASM/Static）|
-| `types/plugins.rs` | `PluginKind`、`PluginScope`、`PluginRecord` |
+| `src/extension/types/plugins.rs` | `PluginKind`、`PluginScope`、`PluginRecord` |
 
 ### CLI
 | 文件 | 职责 |
@@ -561,8 +587,8 @@ id + 插件的可见性键；其它 skill——**用户自己写的也算**—�
 ### Gateway
 | 文件 | 职责 |
 |------|------|
-| `gateway/handlers/plugins/handlers.rs` | RPC handlers（`plugin.*` + `plugin.marketplace.*`） |
-| `gateway/handlers/mod.rs` | RPC 方法注册 |
+| `src/gateway/handlers/plugins/handlers.rs` | RPC handlers（`plugin.*` + `plugin.marketplace.*`） |
+| `src/gateway/handlers/mod.rs` | RPC 方法注册 |
 
 ---
 
@@ -611,7 +637,7 @@ App 用户要进 .app bundle 翻出内嵌的 `aleph-server` 才能加一个第�
 ### source 分类只有一个答案（2026-08-20）
 
 `add` 的两个面各写过一份启发式，在**四种输入上分歧**：`C:\dir\mk`（RPC 判 github、
-名字 `c:\dir\mk`；子命令判 local、名字 `mk`）· `./foo/bar`（RPC local ✓；子命令
+名字 `c:\dir\mk`；子命令判 local、名字 `mk`）· `(example path, not real)`（RPC local ✓；子命令
 github ✗）· `myrepo` 裸名（RPC github；子命令 local）· `/abs/My Dir`（名字大小写两个
 答案）。外加**两边都错的一条**：`~/foo` 双方都判 github，而 `local_source::expand_tilde`
 正是为这个形式写的——一个只有 resolver 支持、没有任何生产者产得出来的分支。
@@ -647,7 +673,7 @@ marketplace 仓」「manifest 坏了」，只有第一种值得继续敲字。�
 
 **marketplace 条目的 `source` 对象也只有一个读者（2026-09-20）**：判别键在磁盘上拼作 `source.source`
 （`claude-plugins-official` 当天的 310 条里 258 条对象形全是这个拼法，0 条 `type`），在官方文档里拼作
-`source.type`。两种拼法都进 `MarketplacePluginSource::external_kind()`（`marketplace/types.rs`）——先读
+`source.type`。两种拼法都进 `MarketplacePluginSource::external_kind()`（`src/extension/marketplace/types.rs`）——先读
 `source` 再读 `type`——而不是各建一个 serde 字段：对象形本来就不逐字段建模（五个无消费者的 struct，R10），
 拒绝消息引用的那个词才是唯一要读的东西。
 
@@ -745,7 +771,7 @@ manifest 缓存的 key 覆盖 kind 的每个输入（含插件根的 `.mcp.json`
 需要：从 WASM 模块导出函数列表中发现并注册 tools。
 
 ### Aleph-plugins 仓库
-当前状态：目录结构已迁移到 CC 兼容格式（`.claude-plugin/plugin.toml`），Node.js 插件标记为 `runtime = "mcp"` 但 `src/index.js` 仍是旧 IPC 格式——那个格式（`method === "plugin.call"`）从来没有宿主，例：`plugins/media-office/src/index.js:349`；其 `:264 onPostToolUse` 是无人能调的 JS hook handler。本仓 2026-09-20 删掉了同形状的 `examples/plugins/media-video`。
+当前状态：目录结构已迁移到 CC 兼容格式（`.claude-plugin/plugin.toml`），Node.js 插件标记为 `runtime = "mcp"` 但 `(no longer exists; MCP plugins use .mcp.json)` 仍是旧 IPC 格式——那个格式（`method === "plugin.call"`）从来没有宿主，例：`plugins/media-office/(no longer exists; MCP plugins use .mcp.json):349`；其 `:264 onPostToolUse` 是无人能调的 JS hook handler。本仓 2026-09-20 删掉了同形状的 `(example; actual plugins in ~/.aleph/extensions/)`。
 需要：将每个 Node.js 插件的入口文件改为 MCP Server SDK 实现（兄弟仓 Aleph-plugins 的 follow-up）。
 
 ---
@@ -781,7 +807,7 @@ manifest 原样喂给它 —— 真 resolver 一装，`[capabilities.http.creden
 
 `plugins.toml` 是明文，所以 `config_ui_hints` 标 `sensitive` 的值以
 `{{secret:NAME}}` 引用形式存放。**解析只发生在运行时那条边上**
-（`extension/plugin_secrets.rs`）：
+（`src/extension/plugin_secrets.rs`）：
 
 | 消费者 | 形态 | 为什么 |
 |--------|------|--------|
@@ -791,7 +817,7 @@ manifest 原样喂给它 —— 真 resolver 一装，`[capabilities.http.creden
 
 在 `plugin_settings` 里解析是一行，代价是把每个配置好的密钥灌进转录和设置页 ——
 所以运行时形态是另一个函数（`plugin_settings_for_runtime`），名字说明它站在哪一边。
-守卫是整目录规则（`builtin_tools/` 与 `gateway/handlers/` 不得读解析形态）。
+守卫是整目录规则（`src/builtin_tools/` 与 `src/gateway/handlers/` 不得读解析形态）。
 解析不了的引用**丢弃这个键**而不是透传占位符：读不到设置的插件走自己的默认值，
 而拿到 `{{secret:...}}` 的插件会把那个字面量当凭据发给远端。
 
@@ -812,7 +838,7 @@ in-place 编辑都会改变 key tuple，cache 自然 miss。key 里带 `dev`/`in
 块**不被任何 adapter 读取**，写了等于没写。
 
 曾经有过一个从参考实现的 activation planner 移植来的 Rust 版
-（`src/extension/activation.rs` 的 `ActivationPlanner` / `ActivationHints` /
+（`src/extension/lifecycle.rs` 的 `ActivationPlanner` / `ActivationHints` /
 `ActivationTrigger` / `ActivationPlan` / `CapabilityKind` / `tier_kinds`，约 600 行），
 本轮按 R10 YAGNI 整体删除。删的理由比「planner 没有生产调用者」更深一层：
 `PluginManifest.activation` **从来没有非 `None` 过**——三个 manifest adapter
@@ -876,7 +902,7 @@ enabled = true          # 与 trusted 正交，见下
 **`Bundled` / `Config` 至今没有生产者，这是有意的**。随包插件被解压进 marketplace
 cache（`plugins/cache/aleph-official/<id>`），scanner 只从 plugin parent 下降一层
 而那条路径是两层，所以它们不是「被豁免」而是**根本没被发现**；它们只有被安装进
-`plugins/installed/` 才可加载，那时就是货真价实的 `Global`。所以 enforce 的含义没有
+`(relocated to ~/.aleph/extensions/)` 才可加载，那时就是货真价实的 `Global`。所以 enforce 的含义没有
 星号：每个插件都需要一次显式 vouch，被拒的那些按 id 列出来，好让人有东西可 vouch。
 
 `PluginOrigin` 本身在同一轮才有了真生产者：六个 manifest adapter 全部在构造点硬
@@ -899,7 +925,7 @@ R8/R9 的自我改进条款）。给它加 allowlist，要么自动放行模型�
 没拦住，因为「有东西写了一个目录」正是要拦的那件事），要么打断那个循环。而按上文
 `[trust] enforce` 自己的论证，默认还必须是关的——于是交付的是一个旋钮，不是一道控制。
 
-**真正存在的不对称在别处，且已修**：`skill/guard.rs` 的威胁扫描挂在**安装**路径
+**真正存在的不对称在别处，且已修**：`src/skill/guard.rs` 的威胁扫描挂在**安装**路径
 （`skill_manage` 两处 + markdown 上传），手工放进目录的技能绕过它；而 `skill_read`
 把正文**不加围栏**交给模型——这是对的，技能就是指令，加围栏会废掉这个机制——只是
 模型无从知道这段字是随包发的、是某天出现在技能目录里的、还是跟着刚 clone 的仓库
@@ -927,7 +953,7 @@ R8/R9 的自我改进条款）。给它加 allowlist，要么自动放行模型�
 | step 标签 | 注册 ↔ 逆 |
 |---|---|
 | `registry_row` | `PluginRegistry::register_plugin` ↔ `unregister_plugin` |
-| `wasm_module` | `PluginLoader` load ↔ unload |
+| `wasm_module` | `PluginLoader` load ↔ unload; the bounded load is `std::fs::read` → `Wasm::data` → existing Extism `PluginBuilder`; exact instance drop is observed only after lifecycle unmount and release of retained `Arc` holders (test-only receipt) |
 | `mcp_server` | `McpManagerHandle::add_transient_server` ↔ `remove_transient_server` |
 | `service` | `service_manager` start ↔ stop |
 | `memory_extension` | `MemoryExtensionRegistry::register*` ↔ `unregister(plugin_id)`（**2026-09-20 新增**——此前 disable 后 `[memory]` 扩展仍挂着） |
@@ -942,7 +968,7 @@ R8/R9 的自我改进条款）。给它加 allowlist，要么自动放行模型�
 迁移在既有的 `load_guard` 上串行。`set_plugin_enabled(true/false)`、watcher、`plugin.reload` / `hooks.reload` RPC
 都只调这四个原语——没有第五条改激活态的路。插件 id 就是 `String`（无 newtype）。
 
-守卫：G1 census（`registrar/` `service_ops.rs` `src/extension/loader.rs` `memory/extensions/` 里产生运行时副作用的
+守卫：G1 census（`registrar/` `service_ops.rs` `src/extension/loader.rs` `src/memory/extensions/` 里产生运行时副作用的
 `pub fn` 必须返回 `Disposer`）· G2 往返（夹具插件覆盖六种效果，`mount` → 六面快照 → `unmount` → 快照 == mount 前）·
 G3（`publishing_plugin_projections_has_exactly_one_author` 改钉 `lifecycle.rs` 里的那个调用点）。
 

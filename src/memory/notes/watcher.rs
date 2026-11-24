@@ -48,6 +48,7 @@
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+use std::sync::Weak;
 use std::time::Duration;
 
 use notify::{RecommendedWatcher, RecursiveMode};
@@ -73,7 +74,11 @@ const MAX_PATHS_PER_BATCH: usize = 128;
 /// Must be held for as long as the vault should stay reconciled — the debouncer
 /// owns the platform watch handle and the background thread that feeds it.
 pub struct NoteVaultWatcher {
-    _debouncer: Debouncer<RecommendedWatcher, RecommendedCache>,
+    root: PathBuf,
+    debouncer: Option<Debouncer<RecommendedWatcher, RecommendedCache>>,
+    consumer_handle: Option<tokio::task::JoinHandle<()>>,
+    stop_handle: Option<tokio::task::JoinHandle<()>>,
+    shutdown_failure: Option<String>,
 }
 
 /// Where a changed file sits in the note layout.
@@ -114,17 +119,17 @@ fn classify(root: &Path, path: &Path) -> Option<NoteKey> {
         return None;
     }
     let rel = path.strip_prefix(root).ok()?;
-    let parts: Vec<&str> = rel
-        .components()
-        .map(|c| c.as_os_str().to_str())
-        .collect::<Option<Vec<_>>>()?;
-    let [agent_id, category, _file] = parts.as_slice() else {
+    let mut comps = rel.components();
+    let agent_id = comps.next()?.as_os_str().to_str()?;
+    let category = comps.next()?.as_os_str().to_str()?;
+    let _file = comps.next()?.as_os_str().to_str()?;
+    if comps.next().is_some() {
         return None;
-    };
+    }
     if agent_id.is_empty() || agent_id.starts_with('.') {
         return None;
     }
-    if !CATEGORY_DIRS.contains(category) {
+    if !CATEGORY_DIRS.contains(&category) {
         return None;
     }
     let title = path.file_stem().and_then(|s| s.to_str())?;
@@ -132,8 +137,8 @@ fn classify(root: &Path, path: &Path) -> Option<NoteKey> {
         return None;
     }
     Some(NoteKey {
-        agent_id: (*agent_id).to_string(),
-        category: (*category).to_string(),
+        agent_id: agent_id.to_string(),
+        category: category.to_string(),
         title: title.to_string(),
     })
 }
@@ -148,6 +153,30 @@ fn classify(root: &Path, path: &Path) -> Option<NoteKey> {
 /// its own thread and hands work to a task on the current runtime.
 pub fn spawn_note_vault_watcher<S>(
     indexer: Arc<NoteIndexer<S>>,
+) -> Result<NoteVaultWatcher, AlephError>
+where
+    S: NoteStore + Send + Sync + 'static,
+{
+    let mut watcher = prepare_note_vault_watcher(indexer, None)?;
+    watcher.start_watching()?;
+    Ok(watcher)
+}
+
+/// Return the native owner before fallible watch registration. The source
+/// installs this value in its bundle before calling `start_watching`.
+pub(crate) fn prepare_owned_note_vault_watcher<S>(
+    indexer: Arc<NoteIndexer<S>>,
+    runtime: Weak<crate::memory::runtime::MemoryRuntime>,
+) -> Result<NoteVaultWatcher, AlephError>
+where
+    S: NoteStore + Send + Sync + 'static,
+{
+    prepare_note_vault_watcher(indexer, Some(runtime))
+}
+
+fn prepare_note_vault_watcher<S>(
+    indexer: Arc<NoteIndexer<S>>,
+    runtime: Option<Weak<crate::memory::runtime::MemoryRuntime>>,
 ) -> Result<NoteVaultWatcher, AlephError>
 where
     S: NoteStore + Send + Sync + 'static,
@@ -176,7 +205,7 @@ where
     // debounce window: at most one message per DEBOUNCE_MS, each carrying the
     // paths that settled in it. The size a batch can reach is bounded instead —
     // see MAX_PATHS_PER_BATCH.
-    let mut debouncer = new_debouncer(
+    let debouncer = new_debouncer(
         Duration::from_millis(DEBOUNCE_MS),
         None,
         move |result: DebounceEventResult| match result {
@@ -239,23 +268,110 @@ where
     )
     .map_err(|e| AlephError::config(format!("note vault watcher: {e}")))?;
 
-    debouncer
-        .watch(&root, RecursiveMode::Recursive)
-        .map_err(|e| {
-            AlephError::config(format!("note vault watcher: watch {}: {e}", root.display()))
-        })?;
-
     let watch_root = root.clone();
-    handle.spawn(async move {
+    let consumer_handle = handle.spawn(async move {
         while let Some(paths) = rx.recv().await {
-            reconcile_batch(&indexer, &watch_root, paths).await;
+            let work = reconcile_batch(&indexer, &watch_root, paths);
+            if let Some(runtime) = &runtime {
+                let Some(runtime) = runtime.upgrade() else {
+                    break;
+                };
+                let Ok(operation) = runtime.operation() else {
+                    continue;
+                };
+                operation.scope(work).await;
+                continue;
+            }
+            work.await;
         }
     });
 
-    tracing::info!(root = %root.display(), "Watching note vault for external edits");
     Ok(NoteVaultWatcher {
-        _debouncer: debouncer,
+        root,
+        debouncer: Some(debouncer),
+        consumer_handle: Some(consumer_handle),
+        stop_handle: None,
+        shutdown_failure: None,
     })
+}
+
+impl NoteVaultWatcher {
+    pub(crate) fn start_watching(&mut self) -> Result<(), AlephError> {
+        let debouncer = self
+            .debouncer
+            .as_mut()
+            .ok_or_else(|| AlephError::other("note vault watcher is already stopping"))?;
+        debouncer
+            .watch(&self.root, RecursiveMode::Recursive)
+            .map_err(|error| {
+                AlephError::config(format!(
+                    "note vault watcher: watch {}: {error}",
+                    self.root.display()
+                ))
+            })?;
+        tracing::info!(root = %self.root.display(), "Watching note vault for external edits");
+        Ok(())
+    }
+
+    /// Stop the producer and drain every batch already accepted by its consumer.
+    ///
+    /// The debouncer stop runs in one retained blocking task because the
+    /// dependency waits for its native event thread. Both task handles stay
+    /// owned by this watcher if the caller drops this future while it is
+    /// waiting, so a later call observes the same completion.
+    pub async fn shutdown(&mut self) -> Result<(), AlephError> {
+        if self.stop_handle.is_none() {
+            if let Some(debouncer) = self.debouncer.take() {
+                self.stop_handle = Some(tokio::task::spawn_blocking(move || {
+                    debouncer.stop();
+                }));
+            }
+        }
+
+        if let Some(stop_handle) = &mut self.stop_handle {
+            match (&mut *stop_handle).await {
+                Ok(()) => {}
+                Err(error) => {
+                    self.shutdown_failure.get_or_insert_with(|| {
+                        format!("note vault watcher producer stop task failed: {error}")
+                    });
+                }
+            }
+            self.stop_handle = None;
+        }
+
+        if let Some(consumer_handle) = &mut self.consumer_handle {
+            match (&mut *consumer_handle).await {
+                Ok(()) => {}
+                Err(error) => {
+                    self.shutdown_failure.get_or_insert_with(|| {
+                        format!("note vault watcher consumer task failed: {error}")
+                    });
+                }
+            }
+            self.consumer_handle = None;
+        }
+
+        match &self.shutdown_failure {
+            Some(error) => Err(AlephError::other(error.clone())),
+            None => Ok(()),
+        }
+    }
+}
+
+impl Drop for NoteVaultWatcher {
+    fn drop(&mut self) {
+        if let Some(debouncer) = self.debouncer.take() {
+            debouncer.stop_nonblocking();
+            tracing::warn!(
+                "note vault watcher dropped before explicit shutdown; producer stop and consumer drain are unobserved"
+            );
+        } else if self.stop_handle.is_some() || self.consumer_handle.is_some() {
+            tracing::warn!(
+                "note vault watcher dropped before explicit shutdown completed; pending cleanup is unobserved"
+            );
+        }
+    }
 }
 
 /// Reconcile one settled batch of changed paths.
@@ -375,6 +491,9 @@ where
         }
     }
 }
+
+#[cfg(test)]
+mod lifecycle_tests;
 
 #[cfg(test)]
 mod tests {

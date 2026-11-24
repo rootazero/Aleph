@@ -43,26 +43,48 @@ pub enum RetryVerdict {
 /// read as a day-of-month: the digits were right there, nobody checked what
 /// they were attached to.
 ///
+fn format_u16_stack(buf: &mut [u8; 5], mut n: u16) -> &str {
+    if n == 0 {
+        return "0";
+    }
+    let mut i = buf.len();
+    while n > 0 && i > 0 {
+        i -= 1;
+        buf[i] = b'0' + (n % 10) as u8;
+        n /= 10;
+    }
+    // Safety: only ASCII digits written
+    std::str::from_utf8(&buf[i..]).unwrap_or("")
+}
+
 /// The test is deliberately narrow — the neighbouring characters must not be
 /// ASCII digits. Everything a real message puts around a status code (spaces,
 /// `(`, `:`, `=`, `,`, `/`, end of string) still matches, so no genuine
 /// classification is lost.
 #[must_use]
 pub fn has_status_code(msg: &str, code: u16) -> bool {
-    let needle = code.to_string();
+    let mut buf = [0u8; 5];
+    let needle = format_u16_stack(&mut buf, code);
     let bytes = msg.as_bytes();
     let mut from = 0usize;
-    while let Some(rel) = msg[from..].find(&needle) {
+    while let Some(rel) = msg.get(from..).and_then(|slice| slice.find(needle)) {
         let start = from + rel;
         let end = start + needle.len();
-        let left_ok = start == 0 || !bytes[start - 1].is_ascii_digit();
-        let right_ok = end == bytes.len() || !bytes[end].is_ascii_digit();
+        let left_ok = start == 0
+            || bytes
+                .get(start.saturating_sub(1))
+                .is_some_and(|b| !b.is_ascii_digit());
+        let right_ok = bytes.get(end).is_none_or(|b| !b.is_ascii_digit());
         if left_ok && right_ok {
             return true;
         }
-        // Overlapping matches are impossible for a fixed-width numeric needle,
-        // but advancing by one keeps the scan correct for any future needle.
-        from = start + 1;
+        // Overlapping matches are impossible for a fixed-width numeric needle;
+        // advance by the character at `start` to preserve UTF-8 boundary correctness.
+        let step = msg
+            .get(start..)
+            .and_then(|s| s.chars().next())
+            .map_or(1, |c| c.len_utf8());
+        from = start + step;
     }
     false
 }
@@ -80,24 +102,20 @@ pub fn parse_token_gap_str(msg: &str) -> Option<usize> {
     // `msg` with it could panic on a provider-supplied error string. The
     // digits we extract are ASCII and identical in both strings.
     let tokens_idx = lower.find("tokens")?;
-    let before_tokens = lower[..tokens_idx].trim_end();
+    let before_tokens = lower.get(..tokens_idx)?.trim_end();
     let actual_str = before_tokens.rsplit(|c: char| !c.is_ascii_digit()).next()?;
     if actual_str.is_empty() {
         return None;
     }
     let actual: usize = actual_str.parse().ok()?;
 
-    let after_tokens = &lower[tokens_idx..];
+    let after_tokens = lower.get(tokens_idx..)?;
     let gt_idx = after_tokens.find('>')?;
-    let after_gt = after_tokens[gt_idx + 1..].trim_start();
-    let limit_str: String = after_gt
-        .chars()
-        .take_while(|c| c.is_ascii_digit())
-        .collect();
-    if limit_str.is_empty() {
-        return None;
-    }
-    let limit: usize = limit_str.parse().ok()?;
+    let after_gt = after_tokens.get(gt_idx + 1..)?.trim_start();
+    let limit_end = after_gt
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(after_gt.len());
+    let limit: usize = after_gt.get(..limit_end)?.parse().ok()?;
 
     Some(actual.saturating_sub(limit))
 }
@@ -218,12 +236,12 @@ pub fn extract_retry_after_str(raw: &str) -> Option<Duration> {
     let after_idx = msg
         .find("retry after ")
         .or_else(|| msg.find("retry-after: "))?;
-    let start = msg[after_idx..].find(|c: char| c.is_ascii_digit())? + after_idx;
-    let num_str: String = msg[start..]
-        .chars()
-        .take_while(|c| c.is_ascii_digit())
-        .collect();
-    let secs: u64 = num_str.parse().ok()?;
+    let start = msg.get(after_idx..)?.find(|c: char| c.is_ascii_digit())? + after_idx;
+    let rest = msg.get(start..)?;
+    let end = rest
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(rest.len());
+    let secs: u64 = rest.get(..end)?.parse().ok()?;
     Some(Duration::from_secs(secs))
 }
 

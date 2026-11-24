@@ -87,7 +87,7 @@ impl crate::tools::service::ToolService for AlwaysOkTools {
     }
 
     fn metadata_schema(&self) -> Arc<[crate::tool_metadata::ToolDefinition]> {
-        Arc::from(vec![])
+        Arc::default()
     }
 }
 

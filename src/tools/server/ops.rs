@@ -7,18 +7,32 @@
 //! **Projection-only boundary:** `list_tools_arc_impl` exposes a view of the
 //! live tool map. The returned list is not a second registry or authorization
 //! source.
+//!
+//! Both operations are synchronous: the registry is a plain
+//! `Mutex<HashMap<..>>` and neither path has anything to await.
+//! `AlephToolServer`'s public methods stay `async` because their live
+//! callers already await them.
 
 use super::ToolMap;
 use crate::sync_primitives::Arc;
 use crate::tools::traits::AlephToolDyn;
 use crate::tools::types::ToolUpdateInfo;
 
-pub(super) async fn replace_tool_arc_impl(
+pub(super) fn replace_tool_arc_impl(
     tools: &ToolMap,
     tool: Arc<dyn AlephToolDyn>,
 ) -> ToolUpdateInfo {
-    let name = tool.name().to_string();
+    let name = tool.name().trim().to_string();
     let new_description = tool.definition().description;
+
+    if name.is_empty() {
+        tracing::warn!("Ignoring attempt to register tool with empty name");
+        return ToolUpdateInfo {
+            tool_name: String::new(),
+            was_replaced: false,
+            new_description,
+        };
+    }
 
     let mut guard = tools.lock().unwrap_or_else(|e| e.into_inner());
     let was_replaced = guard.insert(name.clone(), tool).is_some();
@@ -30,7 +44,7 @@ pub(super) async fn replace_tool_arc_impl(
     }
 }
 
-pub(super) async fn list_tools_arc_impl(tools: &ToolMap) -> Vec<Arc<dyn AlephToolDyn>> {
+pub(super) fn list_tools_arc_impl(tools: &ToolMap) -> Vec<Arc<dyn AlephToolDyn>> {
     let guard = tools.lock().unwrap_or_else(|e| e.into_inner());
     guard.values().cloned().collect()
 }

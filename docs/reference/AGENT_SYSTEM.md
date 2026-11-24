@@ -37,8 +37,8 @@ the gateway creates it so its `agent_trace` mirror publishes
 the field's doc; why one channel → [TRANSCRIPT_RENDERING §7](TRANSCRIPT_RENDERING.md).
 
 > **Note**: SubagentTool (in-tool agent spawning) was migrated to Harness in
-> Phase 7 (2026-04-21). The legacy `AgentLoop` path in `src/agent_loop/` has
-> been deleted. All agent execution now routes through Orchestrator → Harness.
+> Phase 7 (2026-04-21). The legacy `AgentLoop` has been deleted. All agent
+> execution now routes through Orchestrator → Harness.
 
 The inner loop inside `AgentHarness`:
 
@@ -97,21 +97,21 @@ pub struct AgentHarness {
 | `AgentHarness` | `src/harness/` | Think→Act loop controller |
 | `HarnessConfig` | `src/harness/` | Configuration options |
 | `TurnState` | `src/harness/` | State machine enum |
-| `ToolPipeline` | `src/harness/tool_pipeline.rs` | 7-stage tool execution pipeline |
-| `ToolOrchestrator` | `src/harness/tool_orchestrator.rs` | Tool batch orchestration |
-| `ToolExecutionContext` | `src/harness/tool_execution_context.rs` | Per-tool cancel/progress context |
-| `ContextBudget` | `src/harness/context_budget/` | Pressure sensing + directives |
-| `PreflightPipeline` | `src/harness/context_budget/preflight.rs` | Pre-flight async context prep |
-| `CompactionPipeline` | `src/harness/context_budget/pipeline.rs` | Emergency compaction stages |
-| `StreamingBridge` | `src/harness/streaming_bridge.rs` | Streaming + delta management |
-| `SafetyGuard` | `src/harness/safety.rs` | Permission enforcement |
-| `StopHookHandler` | `src/harness/stop_hooks.rs` | Stop hook execution |
-| `TruncationRecovery` | `src/harness/truncation_recovery.rs` | MaxTokens escalation recovery |
+| Tool execution | `src/harness/agent/act.rs` | Tool-call execution |
+| Tool batch orchestration | `src/harness/agent/act.rs` | Serial and parallel tool calls |
+| Per-tool execution | `src/tools/service.rs` | Cancellable tool execution contract |
+| `ContextBudget` | `src/context/budget/mod.rs` | Pressure sensing + directives |
+| `PreflightPipeline` | `src/context/budget/preflight.rs` | Pre-flight async context prep |
+| `ContextCompactor` | `src/context/compact/compactor.rs` | Emergency context compaction |
+| `DeltaCollector` | `src/providers/delta.rs` | Streaming delta accumulation |
+| Tool admission | `src/tools/scoped/gate_chain.rs` | Permission enforcement |
+| `StopHookHandler` | `src/verification/stop_hooks.rs` | Stop hook execution |
+| Truncation recovery | `src/harness/agent/think.rs` | MaxTokens escalation recovery |
 | `Orchestrator` | `src/orchestrator/` | AgentDef resolution + Harness construction |
 | `AgentRuntime` | `src/agents/runtime.rs` | Runtime context + model resolution |
 | `ToolService` | `src/tools/service.rs` | Tool definitions registry + execution |
 
-> **Migration complete**: The legacy `src/agent_loop/` directory was deleted in
+> **Migration complete**: The legacy `AgentLoop` module was deleted in
 > Phase 7 (2026-04-21). All agent execution — including SubagentTool — now routes
 > through Orchestrator → Harness.
 
@@ -184,7 +184,7 @@ pub enum LoopEvent {
 ### Busy-Input Modes (message arrives mid-run)
 
 When a message reaches a session whose Think→Act loop is **already running**, the
-gateway's busy branch (`execution_engine/execute.rs`) chooses one of two policies,
+gateway's busy branch (`src/gateway/execution_engine/execute.rs`) chooses one of two policies,
 selected **explicitly per channel** (R7 — never inferred from message content) via
 `ChannelPolicyConfig.busy_input_mode`, stamped into run metadata
 (`BUSY_INPUT_MODE_KEY`). Absent on Panel/CLI paths → `Steer`.
@@ -192,7 +192,7 @@ selected **explicitly per channel** (R7 — never inferred from message content)
 | Mode | Behaviour | Mechanism (all reused — R10, no new dispatch) |
 |------|-----------|-----------------------------------------------|
 | `Steer` (**default**) | Inject the message into the live event log; the running loop consumes it at its next turn boundary and course-corrects without losing progress. | `steering::try_inject_steering` + watermark final-turn catch + `MAX_PENDING_STEERING=16` backpressure + reconcile-preamble coalescing. |
-| `Interrupt` | Cancel the running sibling on this session; the message then restarts as a **fresh run** (via the inbound router's existing `AgentBusy` busy/retry back-off) that reads the interrupted task's full context from the session log plus the new instruction. | `find_steering_target_id` → `ExecutionEngine::cancel` (`cancel_tx` → `CancellationToken` → `ExecutionError::Cancelled`) → existing retry loop in `inbound_router/executor.rs`. |
+| `Interrupt` | Cancel the running sibling on this session; the message then restarts as a **fresh run** (via the inbound router's existing `AgentBusy` busy/retry back-off) that reads the interrupted task's full context from the session log plus the new instruction. | `find_steering_target_id` → `ExecutionEngine::cancel` (`cancel_tx` → `CancellationToken` → `ExecutionError::Cancelled`) → existing retry loop in `src/gateway/inbound_router/executor.rs`. |
 
 Reference parity: hermes `HERMES_GATEWAY_BUSY_INPUT_MODE`, openclaw `QueueMode`,
 Pi `streamingBehavior` — all expose this as explicit policy; Aleph previously
@@ -523,16 +523,14 @@ daemon's boot agent) — the same files `self_config` writes.
 
 ## Reasoning Content
 
-Aleph does not parse reasoning into structured steps (there is no `src/thinker/thinking.rs`): provider reasoning is kept as opaque text plus its signature on the assistant turn (`ProviderDelta::ThinkingDelta` → `SessionEvent::AssistantMessage`). `src/harness/agent/prompt.rs::reconstruct_assistant_blocks` rebuilds every persisted thinking block as facts (text, signature, `earlier_turn`); **which target receives which reasoning is decided at the wire**, after failover picks the target, by `src/providers/reasoning_replay.rs::ReasoningReplay` through `message::transform_messages` — see [MODEL_CATALOG.md §11](MODEL_CATALOG.md). Summaries read `UnifiedMessage::transcript_text`, which carries no reasoning. Live reasoning reaches clients as `StreamEvent::Reasoning` on the `stream.reasoning` topic (`aleph_protocol::STREAM_REASONING_TOPIC`); a client that does not render it subscribes with the `except` carve-out. The structured `ReasoningBlock` event was cut (it had no production producer); `UncertaintySignal` in `shared/protocol/src/events.rs` still has consumers but no production producer.
+Aleph does not parse reasoning into structured steps: provider reasoning is kept as opaque text plus its signature on the assistant turn (`ProviderDelta::ThinkingDelta` → `SessionEvent::AssistantMessage`). `src/harness/agent/prompt.rs::reconstruct_assistant_blocks` rebuilds every persisted thinking block as facts (text, signature, `earlier_turn`); **which target receives which reasoning is decided at the wire**, after failover picks the target, by `src/providers/reasoning_replay.rs::ReasoningReplay` through `message::transform_messages` — see [MODEL_CATALOG.md §11](MODEL_CATALOG.md). Summaries read `UnifiedMessage::transcript_text`, which carries no reasoning. Live reasoning reaches clients as `StreamEvent::Reasoning` on the `stream.reasoning` topic (`aleph_protocol::STREAM_REASONING_TOPIC`); a client that does not render it subscribes with the `except` carve-out. The structured `ReasoningBlock` event was cut (it had no production producer); `UncertaintySignal` in `shared/protocol/src/events.rs` still has consumers but no production producer.
 Aleph 不把推理解析成结构化步骤：推理作为不透明文本 + 签名存在 assistant 轮上；harness 只重建事实，**给哪个目标回放哪段推理在线上决定**（`ReasoningReplay`，见 MODEL_CATALOG §11）；不渲染推理的客户端用 `except` 把 `stream.reasoning` 排除在订阅之外。
 
 ---
 
 ## Dispatcher
 
-**Location**: `src/dispatcher/`
-
-The Dispatcher orchestrates complex multi-step tasks using DAG-based scheduling.
+The legacy Dispatcher described below is no longer present. Current flow dispatch lives in `src/orchestrator/dispatch.rs`.
 
 ### Architecture
 
@@ -616,9 +614,7 @@ pub struct SmartFilter {
 
 ## Guards
 
-**Location**: `src/harness/guards.rs`
-
-Safety checks before each loop iteration.
+The standalone loop-guard interface described below is no longer present. The harness loop and its iteration limit live in `src/harness/agent.rs`.
 
 | Guard | Purpose |
 |-------|---------|
@@ -686,7 +682,7 @@ impl LoopCallback for CliCallback {
 
 The main agent can spawn sub-agents for specialized tasks via the `SubagentTool`.
 Sub-agent spawning was migrated to Harness in Phase 7 (2026-04-21). The legacy
-`src/agent_loop/` directory has been deleted. All agent execution now routes
+`AgentLoop` module has been deleted. All agent execution now routes
 through Orchestrator → AgentHarness.
 
 ```

@@ -63,7 +63,7 @@ pub use tool_call::{
     current_call_identity, current_tool_call_id, with_call_identity, CallIdentity,
 };
 
-pub use config::{matches_glob, ConfigApprovalPolicy, PolicyConfig, PolicyRule};
+pub use config::{matches_glob, try_matches_glob, ConfigApprovalPolicy, PolicyConfig, PolicyRule};
 pub use policy::ApprovalPolicy;
 pub use types::{ActionRequest, ActionType, ApprovalDecision, DefaultDecision};
 
@@ -113,7 +113,8 @@ pub fn lift_ask(decision: ApprovalDecision, action_type: ActionType) -> Approval
     // Ruling 1: Full tier answers every ask.
     if crate::tools::turn_context::current_exec_tier() == Some(ExecTier::Full) {
         tracing::info!(
-            prompt = %prompt,
+            action = %action_type,
+            prompt = %log_prompt(prompt),
             "Approval Ask lifted to Allow: conversation runs under the Full exec tier"
         );
         return ApprovalDecision::Allow;
@@ -130,13 +131,25 @@ pub fn lift_ask(decision: ApprovalDecision, action_type: ActionType) -> Approval
             .is_some_and(|t| t.caller_is_operator() && !t.unattended)
     {
         tracing::info!(
-            prompt = %prompt,
+            action = %action_type,
+            prompt = %log_prompt(prompt),
             "Approval Ask lifted to Allow: DesktopLaunchApp is unrestricted for the operator"
         );
         return ApprovalDecision::Allow;
     }
 
     decision
+}
+
+/// Render an approval prompt for a log line: secrets masked, length capped.
+///
+/// The prompt embeds the raw action target, so it goes through the secret
+/// masker before it reaches the log — a masked prompt keeps the diagnostic
+/// value ("what was asked") without carrying the credentials the target may
+/// hold. The cap keeps a long target from flooding the log line.
+fn log_prompt(prompt: &str) -> String {
+    let masked = crate::exec::masker::SecretMasker::new().mask(prompt);
+    crate::utils::text_format::truncate_with_marker(&masked, 256, "…")
 }
 
 /// The approval timeout for the turn currently executing a tool.
@@ -206,9 +219,11 @@ pub fn reminder_schedule(
     if timeout.is_some() {
         return None;
     }
-    let last = *APPROVAL_REMINDER_BACKOFF_SECS
-        .last()
-        .expect("APPROVAL_REMINDER_BACKOFF_SECS is a non-empty literal");
+    // The last entry repeats forever. The schedule is a non-empty literal, so
+    // this cannot fail; an EMPTY schedule yields NO reminders at all rather
+    // than a zero-length repeat that would spin — a total function, with no
+    // `expect` on a production path.
+    let last = *APPROVAL_REMINDER_BACKOFF_SECS.last()?;
     Some(
         APPROVAL_REMINDER_BACKOFF_SECS
             .iter()

@@ -81,8 +81,10 @@ impl SkillsConfig {
     }
 
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
+        static SAVE_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let content = toml::to_string_pretty(self).map_err(std::io::Error::other)?;
-        let tmp_path = path.with_extension("toml.tmp");
+        let count = SAVE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tmp_path = path.with_extension(format!("toml.tmp.{}.{}", std::process::id(), count));
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }

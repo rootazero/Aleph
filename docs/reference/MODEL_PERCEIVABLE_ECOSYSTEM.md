@@ -173,7 +173,7 @@ Use `agent_info(agent_id)` to get detailed capabilities before delegating.
 | Modes | Full only |
 | Paths | Basic, Hydration, Soul, Context, Cached |
 
-### New File: `src/thinker/layers/mcp_tool_index.rs`
+### Removed File: the MCP tool-index prompt layer
 
 ### Data Types
 
@@ -261,7 +261,7 @@ When no MCP servers are connected or all servers have zero tools, the layer prod
 
 ### 4b. `mcp_tool_schema` Tool
 
-**Location**: `src/builtin_tools/mcp_discover/mod.rs`
+**Location**: Removed; replaced by the MCP list→read resource/prompt flow described above.
 
 **Parameters**:
 ```json
@@ -338,9 +338,9 @@ McpClient.list_tools()               // has internal cache
 | File | Type | Description |
 |------|------|-------------|
 | `src/thinker/layers/agent_catalog.rs` | Layer | AgentCatalogLayer implementation + tests |
-| `src/thinker/layers/mcp_tool_index.rs` | Layer | McpToolIndexLayer implementation + tests |
+| Removed MCP tool-index layer | Layer | Removed as dead code; no prompt-layer replacement |
 | `src/builtin_tools/agent_manage/info.rs` | Tool | agent_info tool implementation |
-| `src/builtin_tools/mcp_discover/mod.rs` | Tool | mcp_tool_schema tool implementation |
+| Removed MCP discovery tool | Tool | Replaced by the MCP list→read resource/prompt flow |
 
 ### Modified Files (7)
 

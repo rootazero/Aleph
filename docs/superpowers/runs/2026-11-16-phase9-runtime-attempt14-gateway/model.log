@@ -1,0 +1,45 @@
+127.0.0.1 - - [16/Nov/2026 22:07:44] "POST /v1/messages HTTP/1.1" 200 -
+127.0.0.1 - - [16/Nov/2026 22:07:44] "POST /v1/messages HTTP/1.1" 200 -
+127.0.0.1 - - [16/Nov/2026 22:07:44] "POST /v1/messages HTTP/1.1" 200 -
+127.0.0.1 - - [16/Nov/2026 22:07:44] "POST /v1/messages HTTP/1.1" 200 -
+127.0.0.1 - - [16/Nov/2026 22:07:44] "POST /v1/messages HTTP/1.1" 200 -
+127.0.0.1 - - [16/Nov/2026 22:07:44] "POST /v1/messages HTTP/1.1" 200 -
+127.0.0.1 - - [16/Nov/2026 22:07:44] "POST /v1/messages HTTP/1.1" 200 -
+127.0.0.1 - - [16/Nov/2026 22:07:44] "POST /v1/messages HTTP/1.1" 200 -
+127.0.0.1 - - [16/Nov/2026 22:07:45] "POST /v1/messages HTTP/1.1" 200 -
+127.0.0.1 - - [16/Nov/2026 22:07:45] "POST /v1/messages HTTP/1.1" 200 -
+127.0.0.1 - - [16/Nov/2026 22:07:45] "POST /v1/messages HTTP/1.1" 200 -
+127.0.0.1 - - [16/Nov/2026 22:07:55] "POST /v1/messages HTTP/1.1" 200 -
+127.0.0.1 - - [16/Nov/2026 22:07:55] "POST /v1/messages HTTP/1.1" 200 -
+----------------------------------------
+Exception occurred during processing of request from ('127.0.0.1', 56654)
+Traceback (most recent call last):
+  File "/Users/zouguojun/.local/share/uv/python/cpython-3.14.2-macos-aarch64-none/lib/python3.14/socketserver.py", line 697, in process_request_thread
+    self.finish_request(request, client_address)
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/zouguojun/.local/share/uv/python/cpython-3.14.2-macos-aarch64-none/lib/python3.14/socketserver.py", line 362, in finish_request
+    self.RequestHandlerClass(request, client_address, self)
+    ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/zouguojun/.local/share/uv/python/cpython-3.14.2-macos-aarch64-none/lib/python3.14/socketserver.py", line 766, in __init__
+    self.handle()
+    ~~~~~~~~~~~^^
+  File "/Users/zouguojun/.local/share/uv/python/cpython-3.14.2-macos-aarch64-none/lib/python3.14/http/server.py", line 498, in handle
+    self.handle_one_request()
+    ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/Users/zouguojun/.local/share/uv/python/cpython-3.14.2-macos-aarch64-none/lib/python3.14/http/server.py", line 464, in handle_one_request
+    self.raw_requestline = self.rfile.readline(65537)
+                           ~~~~~~~~~~~~~~~~~~~^^^^^^^
+  File "/Users/zouguojun/.local/share/uv/python/cpython-3.14.2-macos-aarch64-none/lib/python3.14/socket.py", line 725, in readinto
+    return self._sock.recv_into(b)
+           ~~~~~~~~~~~~~~~~~~~~^^^
+ConnectionResetError: [Errno 54] Connection reset by peer
+----------------------------------------
+127.0.0.1 - - [16/Nov/2026 22:07:55] "POST /v1/messages HTTP/1.1" 200 -
+127.0.0.1 - - [16/Nov/2026 22:07:55] "POST /v1/messages HTTP/1.1" 200 -
+127.0.0.1 - - [16/Nov/2026 22:07:55] "POST /v1/messages HTTP/1.1" 200 -
+127.0.0.1 - - [16/Nov/2026 22:07:55] "POST /v1/messages HTTP/1.1" 200 -
+127.0.0.1 - - [16/Nov/2026 22:07:55] "POST /v1/messages HTTP/1.1" 200 -
+127.0.0.1 - - [16/Nov/2026 22:07:55] "POST /v1/messages HTTP/1.1" 200 -
+127.0.0.1 - - [16/Nov/2026 22:07:55] "POST /v1/messages HTTP/1.1" 200 -
+127.0.0.1 - - [16/Nov/2026 22:07:55] "POST /v1/messages HTTP/1.1" 200 -
+127.0.0.1 - - [16/Nov/2026 22:07:55] "POST /v1/messages HTTP/1.1" 200 -

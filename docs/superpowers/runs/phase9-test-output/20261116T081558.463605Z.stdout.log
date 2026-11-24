@@ -1,0 +1,6 @@
+
+running 1 test
+test extension::claude_cache_tests::the_rpc_face_enables_and_disables_a_claude_cache_row ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 22421 filtered out; finished in 0.04s
+

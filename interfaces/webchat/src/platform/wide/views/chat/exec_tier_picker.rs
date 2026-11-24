@@ -26,7 +26,7 @@
 //! because the write paths were member-open all along: gating only the READ left
 //! the door open and the menu locked.
 //!
-//! The `refused` state below is therefore no longer a member's normal case, and
+//! The `Refused` catalogue state below is no longer a member's normal case, and
 //! it is deliberately kept: it is what an unauthorized or downgraded connection
 //! renders, and the alternative — an empty option list — is indistinguishable
 //! from "this product has one choice". Saying nothing at all is how the only
@@ -49,6 +49,7 @@ use crate::api::tool_permissions::{TierPreset, ToolPermissionsApi};
 use crate::components::exec_tier_labels::{tier_desc, tier_label, FULL_TIER};
 use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n};
+use crate::views::chat::exec_tier_picker_state::{CatalogState, PickerState, SaveState, Selection};
 use crate::views::chat::state::ChatState;
 
 #[component]
@@ -61,101 +62,131 @@ pub fn ExecTierPicker() -> impl IntoView {
     let open = RwSignal::new(false);
     let tiers: RwSignal<Vec<TierPreset>> = RwSignal::new(Vec::new());
     let global_tier = RwSignal::new(String::new());
-    // Tier id currently armed for the "are you sure" second click (Full only).
-    let confirming: RwSignal<Option<String>> = RwSignal::new(None);
-    // The read came back refused for lack of operator privilege. Distinct from
-    // "no tiers exist": an empty list rendered as a popover holding nothing but
-    // a blank-labelled "follow global" row, which reads as a broken control
-    // rather than a withheld one.
-    let refused = RwSignal::new(false);
+    let picker = RwSignal::new(PickerState::new(chat.session_key.get_untracked()));
+    let save_refused = RwSignal::new(false);
 
-    // The global tier + the selectable ids.
-    //
-    // This call succeeds for a member (see the module doc). It did not until
-    // 2026-08-08, and the refusal was swallowed into a `console.warn`, leaving
-    // `tiers` empty and the popover showing a single "follow global" entry. The
-    // dial did not become unavailable, only invisible: the write paths
-    // (`sessions.patch` and `chat.send`'s `exec_tier`) are member-open, so the
-    // member kept the capability and lost the control. The refusal is now a
-    // state the popover renders rather than a warning nobody reads.
     let load = move || {
+        let mut state = picker.get_untracked();
+        state.switch_session(chat.session_key.get_untracked());
+        let request = state.begin_load();
+        picker.set(state);
         spawn_local(async move {
-            match ToolPermissionsApi::get_global(&dashboard).await {
-                Ok(cfg) => {
-                    refused.set(false);
-                    // The SESSION list (install tiers + `plan`): this pill sets
-                    // a per-conversation posture, and `plan` only exists as
-                    // one. Settings → Policies keeps reading `tiers`, the list
-                    // an install may sit at.
-                    tiers.set(cfg.session_tier_presets().to_vec());
-                    global_tier.set(cfg.exec_tier);
-                }
-                Err(e) => {
-                    refused.set(crate::components::admin_refusal::is_admin_refusal(&e));
-                    web_sys::console::warn_1(&format!("Failed to load exec tiers: {e}").into());
-                }
+            let result = ToolPermissionsApi::get_global(&dashboard).await;
+            // try_get also rejects a disposed component. Check the live session
+            // before any write, even if its reset Effect has not run yet.
+            if chat.session_key.try_get_untracked() != Some(request.session_key.clone()) {
+                return;
             }
+            let Some(mut state) = picker.try_get_untracked() else {
+                return;
+            };
+            let catalog = match &result {
+                Ok(cfg) if cfg.session_tier_presets().is_empty() => CatalogState::Empty,
+                Ok(_) => CatalogState::Ready,
+                Err(error) if crate::components::admin_refusal::is_admin_refusal(error) => {
+                    CatalogState::Refused
+                }
+                Err(_) => CatalogState::Failed,
+            };
+            if !state.finish_load(&request, catalog) {
+                return;
+            }
+            if let Ok(cfg) = result {
+                tiers.set(cfg.session_tier_presets().to_vec());
+                global_tier.set(cfg.exec_tier);
+            }
+            picker.set(state);
         });
     };
 
-    // Initial fetch, gated on the socket being up: a bare fetch on mount races
-    // the WebSocket handshake, loses, and leaves the popover permanently empty —
-    // there is no second chance to ask. Re-runs when `is_connected` flips, so a
-    // reconnect also refreshes.
     Effect::new(move |_| {
-        if !dashboard.is_connected.get() {
-            return;
+        let session_key = chat.session_key.get();
+        let connected = dashboard.is_connected.get();
+        let mut state = picker.get_untracked();
+        state.switch_session(session_key);
+        picker.set(state);
+        save_refused.set(false);
+        open.set(false);
+        if connected {
+            load();
         }
-        load();
     });
 
-    // Effective tier: the session override wins over the global tier.
     let effective = Memo::new(move |_| {
         chat.session_exec_tier
             .get()
             .unwrap_or_else(|| global_tier.get())
     });
 
-    let persist = move |session_key: String, tier: Option<String>| {
-        spawn_local(async move {
-            if let Err(e) = set_exec_tier(&dashboard, &session_key, tier.as_deref()).await {
-                web_sys::console::warn_1(&format!("Failed to persist session tier: {e}").into());
-            }
-        });
+    let apply_selection = move |selection: Selection| match selection {
+        Selection::Ignored | Selection::Confirm => {}
+        Selection::Commit(tier) => {
+            chat.session_exec_tier.set(tier);
+            save_refused.set(false);
+            open.set(false);
+        }
+        Selection::Persist { request, tier } => {
+            save_refused.set(false);
+            spawn_local(async move {
+                let Some(session_key) = request.session_key.as_deref() else {
+                    return;
+                };
+                let result = set_exec_tier(&dashboard, session_key, tier.as_deref()).await;
+                if chat.session_key.try_get_untracked() != Some(request.session_key.clone()) {
+                    return;
+                }
+                let Some(mut state) = picker.try_get_untracked() else {
+                    return;
+                };
+                if !state.accepts_save(&request) {
+                    return;
+                }
+                let committed = state.complete_save(&request, result.is_ok());
+                save_refused.set(result.as_ref().err().is_some_and(|error| {
+                    crate::components::admin_refusal::is_admin_refusal(error)
+                }));
+                picker.set(state);
+                if let Some(tier) = committed {
+                    chat.session_exec_tier.set(tier);
+                    open.set(false);
+                } else {
+                    open.set(true);
+                }
+            });
+        }
     };
 
     let select = move |id: Option<String>| {
-        chat.session_exec_tier.set(id.clone());
-        // A live session is written through immediately. A conversation with no
-        // session key yet needs no bookkeeping here: the composer carries the
-        // tier on the send itself (`ChatApi::send`), and the server stamps it
-        // onto the session it creates. Parking the choice client-side could
-        // never have governed the first turn anyway — the run resolves its tier
-        // when it starts, and by then the parked value has not been written.
-        if let Some(session_key) = chat.session_key.get_untracked() {
-            persist(session_key, id);
-        }
-        confirming.set(None);
-        open.set(false);
+        let mut state = picker.get_untracked();
+        state.switch_session(chat.session_key.get_untracked());
+        let needs_confirmation = id.as_deref() == Some(FULL_TIER);
+        let selection = state.choose(id, needs_confirmation);
+        picker.set(state);
+        apply_selection(selection);
     };
 
-    // Full never asks again — the same explicit confirmation the settings page
-    // requires. (The sandbox command-policy floor still holds; see the popover
-    // footer.)
-    let on_tier_click = move |id: String| {
-        if id == FULL_TIER && confirming.get_untracked().as_deref() != Some(FULL_TIER) {
-            confirming.set(Some(id));
-            return;
-        }
-        select(Some(id));
+    let retry_save = move || {
+        let mut state = picker.get_untracked();
+        state.switch_session(chat.session_key.get_untracked());
+        let selection = state.retry();
+        picker.set(state);
+        save_refused.set(false);
+        apply_selection(selection);
     };
 
-    // Reset the arming state whenever the popover closes, so it never reopens
-    // one click away from Full.
     Effect::new(move |_| {
         if !open.get() {
-            confirming.set(None);
+            picker.update(|state| state.close());
         }
+    });
+
+    let saving = Memo::new(move |_| picker.get().save == SaveState::Saving);
+    let can_follow = Memo::new(move |_| {
+        !saving.get()
+            && matches!(
+                picker.get().catalog,
+                CatalogState::Ready | CatalogState::Empty
+            )
     });
 
     view! {
@@ -188,10 +219,15 @@ pub fn ExecTierPicker() -> impl IntoView {
                 // An unresolved tier renders as a dash, not as nothing: an
                 // empty span left the pill looking like a control whose label
                 // failed to paint.
-                <span>{move || {
-                    let id = effective.get();
-                    if id.is_empty() { "—".to_string() } else { tier_label(i18n, &id) }
-                }}</span>
+                <Show when=move || saving.get()>
+                    <span role="status" class="text-text-tertiary">{t!(i18n, settings.policies.exec_tier_saving)}</span>
+                </Show>
+                <Show when=move || !saving.get()>
+                    <span>{move || {
+                        let id = effective.get();
+                        if id.is_empty() { "—".to_string() } else { tier_label(i18n, &id) }
+                    }}</span>
+                </Show>
                 // A session override is a deliberate deviation from the global
                 // policy — mark it so it can't be mistaken for the default.
                 <Show when=move || chat.session_exec_tier.get().is_some()>
@@ -220,18 +256,38 @@ pub fn ExecTierPicker() -> impl IntoView {
                             p-2 space-y-1"
                     on:mouseleave=move |_| open.set(false)>
 
-                    // Why the list below is empty, when it is empty because the
-                    // server refused rather than because there is nothing to
-                    // show. Without this the popover was a silent degradation:
-                    // one row, no label, no explanation.
-                    <Show when=move || refused.get()>
-                        <div class="px-2.5 py-2 text-[11px] leading-snug text-text-tertiary">
-                            {t!(i18n, settings.admin_refusal.read_tiers)}
+                    <div role="status" aria-live="polite" class="px-2.5 text-[11px] leading-snug text-text-secondary">
+                        {move || match picker.get().catalog {
+                            CatalogState::Loading => t_string!(i18n, settings.policies.exec_tier_loading).to_string(),
+                            CatalogState::Ready => String::new(),
+                            CatalogState::Empty => t_string!(i18n, settings.policies.exec_tier_empty).to_string(),
+                            CatalogState::Refused => t_string!(i18n, settings.admin_refusal.read_tiers).to_string(),
+                            CatalogState::Failed => t_string!(i18n, settings.policies.exec_tier_load_failed).to_string(),
+                        }}
+                    </div>
+                    <Show when=move || matches!(picker.get().catalog, CatalogState::Empty | CatalogState::Refused | CatalogState::Failed)>
+                        <button type="button" on:click=move |_| load()
+                            class="px-2.5 py-2 text-xs text-primary hover:bg-surface-sunken rounded-md">
+                            {t!(i18n, settings.policies.exec_tier_retry)}
+                        </button>
+                    </Show>
+                    <Show when=move || picker.get().save == SaveState::Failed>
+                        <div role="alert" class="px-2.5 py-2 text-xs text-danger">
+                            {move || if save_refused.get() {
+                                t_string!(i18n, settings.policies.exec_tier_save_refused).to_string()
+                            } else {
+                                t_string!(i18n, settings.policies.exec_tier_save_failed).to_string()
+                            }}
+                            <button type="button" on:click=move |_| retry_save()
+                                class="block py-1 text-primary hover:underline">
+                                {t!(i18n, settings.policies.exec_tier_retry)}
+                            </button>
                         </div>
                     </Show>
 
                     // Follow-global row — clears the session override.
                     <button
+                        disabled=move || !can_follow.get()
                         on:click=move |_| select(None)
                         class=move || {
                             let base = "w-full text-left px-2.5 py-2 rounded-md text-xs \
@@ -252,7 +308,7 @@ pub fn ExecTierPicker() -> impl IntoView {
                     </button>
 
                     <For
-                        each=move || tiers.get()
+                        each=move || if picker.get().catalog == CatalogState::Ready { tiers.get() } else { Vec::new() }
                         key=|t: &TierPreset| t.id.clone()
                         children=move |tier: TierPreset| {
                             let id_for_click = tier.id.clone();
@@ -264,11 +320,12 @@ pub fn ExecTierPicker() -> impl IntoView {
                             // Memo (not a bare closure) so both the class fn and
                             // the <Show> below can read it — a closure would move.
                             let is_confirming = Memo::new(move |_| {
-                                confirming.get().as_deref() == Some(id_for_confirm.as_str())
+                                picker.get().confirming.as_deref() == Some(id_for_confirm.as_str())
                             });
                             view! {
                                 <button
-                                    on:click=move |_| on_tier_click(id_for_click.clone())
+                                    disabled=move || saving.get()
+                                    on:click=move |_| select(Some(id_for_click.clone()))
                                     class=move || {
                                         let base = "w-full text-left px-2.5 py-2 rounded-md \
                                                     transition-colors border";

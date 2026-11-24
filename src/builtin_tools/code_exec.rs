@@ -133,9 +133,20 @@ pub struct CodeExecArgs {
     /// Must live under the session workspace — paths outside are denied.
     #[serde(default)]
     pub working_dir: Option<String>,
-    /// Timeout in seconds (optional, defaults to 60). Accepts the legacy
-    /// `timeout` spelling.
+    // The wire name is `timeout` — the spelling the description teaches —
+    // because schemars is blind to serde aliases, so a schema naming
+    // `timeout_seconds` would contradict the prose the model reads. Serde
+    // keeps accepting the canonical `timeout_seconds` spelling too, so saved
+    // calls written against either name still parse.
+    //
+    // A plain comment, not a doc comment: schemars renders doc comments into
+    // the parameter schema's `description`, and that text ships to the model
+    // on every request. This rationale is for the maintainer of this file,
+    // not for the model — the model needs the field NAME, which the rename
+    // below provides, and nothing about serde aliases.
+    /// Timeout in seconds (optional, defaults to 60).
     #[serde(default, alias = "timeout")]
+    #[schemars(rename = "timeout")]
     pub timeout_seconds: Option<u64>,
     /// Request elevated network access for this call. Triggers a single
     /// capability-approval dialog via `ApprovalGate` on first use in a session;
@@ -1104,6 +1115,26 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(b.timeout_seconds, Some(30));
+    }
+
+    /// The description teaches `timeout`, so the schema the model is shown
+    /// must declare that name: a schema naming a different spelling hands the
+    /// model a surface its own instructions never mention. Schemars is blind
+    /// to serde aliases, so the rename lives on the schema side.
+    #[test]
+    fn code_exec_schema_declares_the_timeout_spelling_the_description_teaches() {
+        let schema = serde_json::to_value(schemars::schema_for!(CodeExecArgs)).unwrap();
+        let props = schema["properties"]
+            .as_object()
+            .expect("CodeExecArgs must render an object schema");
+        assert!(
+            props.contains_key("timeout"),
+            "the schema must declare the `timeout` parameter the description teaches"
+        );
+        assert!(
+            !props.contains_key("timeout_seconds"),
+            "the schema must not declare `timeout_seconds`: the description never names it"
+        );
     }
 
     #[test]

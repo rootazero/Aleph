@@ -16,12 +16,23 @@ use super::types::{ActionRequest, ApprovalDecision};
 #[async_trait]
 pub trait ApprovalPolicy: Send + Sync {
     /// Evaluate whether the given action request should be allowed.
+    ///
+    /// The returned decision is the one the caller acts on. A decision is NOT
+    /// audited by this call: the caller decides what to do with it and then
+    /// records the FINAL decision through [`Self::record`].
     async fn check(&self, request: &ActionRequest) -> ApprovalDecision;
 
     /// Record that a decision was made for an action request.
     ///
-    /// This is called after a decision has been finalized (including after
-    /// user confirmation for `Ask` decisions). Implementations can use this
-    /// for audit logging or learning.
+    /// This is called with the FINAL decision the caller acted on — `Allow`
+    /// or `Deny` — after an ask (if any) was resolved. Implementations can
+    /// use this for audit logging or learning.
+    ///
+    /// An `Ask` decision is recorded by the policy implementation that
+    /// PRODUCED it, inside [`Self::check`]: the caller of an ask may resolve
+    /// it in several ways (lift it, refuse it, put it to a human), and the
+    /// refusal path records no final decision at all — so an ask that never
+    /// produced an `Allow`/`Deny` would leave no trace unless the ask itself
+    /// is audited.
     async fn record(&self, request: &ActionRequest, decision: &ApprovalDecision);
 }

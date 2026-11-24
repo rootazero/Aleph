@@ -21,7 +21,7 @@ pub(crate) mod xml_helpers;
 mod tests;
 
 // Re-export public API (preserves all original exports)
-pub use ops::XmppMessageOps;
+pub use ops::{WriteCommand, XmppMessageOps};
 pub use stanza::{
     build_auth_stanza, build_bind_stanza, build_message_stanza, build_muc_join_stanza,
     build_pong_stanza, build_presence_stanza, build_session_stanza, build_stream_close,

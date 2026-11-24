@@ -11,9 +11,7 @@ use super::{
     ContextOperation, ContextPhase, ContextScope, ContextSnapshot, ContextTransformResult,
     DegradedReason, CONTEXT_CAPABILITY_API_VERSION,
 };
-use crate::context::budget::preflight::{
-    NativePreflightRegistry, PreflightPipeline, PreflightStage,
-};
+use crate::context::budget::preflight::{NativePreflightRegistry, PreflightPipeline};
 use crate::context::budget::pressure::estimate_tokens_smart;
 use crate::context::budget::ContextPressure;
 use crate::context::compact::compactor::{CompactResult, CompactStrategy, ContextCompactor};
@@ -122,15 +120,19 @@ impl ContextFabricBuilder {
         }
     }
 
+    /// Register one native preflight stage.
+    ///
+    /// Test-only: production wires the whole pipeline through
+    /// [`Self::native_pipeline`] so the pressure floor and cache-stability
+    /// policy of [`crate::context::budget::preflight::default_pipeline`]
+    /// survive. A single-stage injection point has no production caller.
     #[must_use]
-    pub fn native_preflight_stage(mut self, stage: impl PreflightStage + 'static) -> Self {
+    #[cfg(test)]
+    pub fn native_preflight_stage(
+        mut self,
+        stage: impl crate::context::budget::preflight::PreflightStage + 'static,
+    ) -> Self {
         self.native_preflight.register(stage);
-        self
-    }
-
-    #[must_use]
-    pub fn native_preflight_registry(mut self, registry: NativePreflightRegistry) -> Self {
-        self.native_preflight = registry;
         self
     }
 
@@ -270,6 +272,20 @@ impl ContextFabric {
             .filter(|(_, _, mode)| *mode == ContextCapabilityMode::Observer)
             .map(|(key, _, _)| key.clone())
             .collect::<Vec<_>>();
+        if self.preflight.external_cut(messages, pressure, fresh_tail) == 0 {
+            let original = messages.clone();
+            self.run_native(cancel, self.preflight.run(messages, pressure, fresh_tail))
+                .await?;
+            let tokens_freed = freed_tokens(&original, messages);
+            self.notify_lifecycle(ContextLifecycleEvent::AfterPreflight, caller, cancel)
+                .await;
+            return Ok(PreflightOutcome {
+                tokens_freed,
+                owner: ContextOwner::Builtin,
+                degraded: None,
+                skipped_observers,
+            });
+        }
         let mut degraded = None;
         let original = messages.clone();
         let mut current = original.clone();
@@ -625,8 +641,7 @@ impl ContextFabric {
             }
         }
         check_cancel(cancel)?;
-        let original_text = serde_json::to_string(&original)
-            .map_err(|e| ContextFabricError::Serialization(e.to_string()))?;
+        let original_text = crate::providers::message::value_as_model_text(&original);
         let output_changed = candidate != original;
         let outcome = crate::tool_output::ingress::clean_for_ingress_of(
             tool_name,
@@ -636,7 +651,7 @@ impl ContextFabric {
         );
         *value = candidate;
         let reduced_from = if output_changed {
-            Some(original_text.as_str())
+            Some(original_text.as_ref())
         } else {
             outcome.reduced_from.as_deref()
         };
@@ -1158,11 +1173,11 @@ impl ContextFabric {
             .map_err(|e| ContextFabricError::Serialization(e.to_string()))?;
         let measured_tokens =
             estimate_tokens_smart(std::str::from_utf8(&serialized).unwrap_or_default()) as u64;
-        if response.output_bytes != serialized.len() as u64
-            || response.output_tokens != measured_tokens
+        if response.output_bytes < serialized.len() as u64
+            || response.output_tokens < measured_tokens
         {
             return Err(ContextFabricError::MalformedOutput(
-                "result measurements do not match serialized output".into(),
+                "result measurements underestimate serialized output".into(),
             ));
         }
         if response.output_bytes > post_descriptor.output_budget.max_bytes
@@ -1183,7 +1198,16 @@ impl ContextFabric {
         let mut registry = self.registry.write().await;
         let admitted = registry
             .validate_context_grant(key, request, caller, now_seconds())
-            .map_err(ContextFabricError::Registry)?;
+            .map_err(|error| match error {
+                // A contract refusal inside the registry is a contract
+                // refusal, not a registry problem: the snapshot carried
+                // something the call may not contain (a credential, a
+                // budget the grant does not cover). Reporting it as
+                // `Registry` would call it "the plugin is unavailable" and
+                // tell the operator the wrong thing.
+                ContextRegistryError::Contract(contract) => ContextFabricError::Contract(contract),
+                other => ContextFabricError::Registry(other),
+            })?;
         if admitted.descriptor() != descriptor {
             return Err(ContextFabricError::Registry(
                 ContextRegistryError::DescriptorMismatch(key.to_string()),

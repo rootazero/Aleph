@@ -15,6 +15,7 @@ impl SessionCompactor {
             config,
             indexer: None,
             capture_registry: None,
+            memory_runtime: None,
             project_scoped: false,
             compress_locks: tokio::sync::Mutex::new(HashMap::new()),
         }
@@ -41,9 +42,7 @@ impl SessionCompactor {
     /// vectors.
     #[must_use]
     pub fn with_transcript_indexing(mut self) -> Self {
-        self.indexer = Some(crate::memory::transcript_indexer::TranscriptIndexer::new(
-            self.database.clone(),
-        ));
+        self.indexer = Some(self.transcript_indexer(self.database.clone()));
         self
     }
 
@@ -54,15 +53,7 @@ impl SessionCompactor {
     ) -> Self {
         self.database = writer.clone();
         if self.indexer.is_some() {
-            self.indexer = Some(crate::memory::transcript_indexer::TranscriptIndexer::new(
-                writer.clone(),
-            ));
-            if let Some(registry) = self.capture_registry.clone() {
-                self.indexer = self
-                    .indexer
-                    .take()
-                    .map(|i| i.with_capture_registry(registry));
-            }
+            self.indexer = Some(self.transcript_indexer(writer.clone()));
         }
         self.raw_memory_writer = Some(writer);
         self
@@ -78,6 +69,33 @@ impl SessionCompactor {
         }
         self.capture_registry = Some(registry);
         self
+    }
+
+    /// Keep raw compaction available while admitting derived callbacks separately.
+    pub fn with_memory_runtime(
+        mut self,
+        runtime: std::sync::Weak<crate::memory::runtime::MemoryRuntime>,
+    ) -> Self {
+        if let Some(indexer) = self.indexer.take() {
+            self.indexer = Some(indexer.with_memory_runtime(runtime.clone()));
+        }
+        self.memory_runtime = Some(runtime);
+        self
+    }
+
+    fn transcript_indexer(
+        &self,
+        writer: Arc<dyn RawMemoryStore>,
+    ) -> crate::memory::transcript_indexer::TranscriptIndexer {
+        let indexer = crate::memory::transcript_indexer::TranscriptIndexer::new(writer);
+        let indexer = match &self.capture_registry {
+            Some(registry) => indexer.with_capture_registry(registry.clone()),
+            None => indexer,
+        };
+        match &self.memory_runtime {
+            Some(runtime) => indexer.with_memory_runtime(runtime.clone()),
+            None => indexer,
+        }
     }
 
     /// Return a reference to the compactor configuration.

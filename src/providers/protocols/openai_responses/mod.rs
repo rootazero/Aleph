@@ -180,8 +180,9 @@ impl OpenAiResponsesProtocol {
         let stop = config.stop_sequences.as_ref().and_then(|raw| {
             let v: Vec<String> = raw
                 .split(',')
-                .map(|s| s.trim().to_string())
+                .map(str::trim)
                 .filter(|s| !s.is_empty())
+                .map(str::to_string)
                 .collect();
             if v.is_empty() {
                 None
@@ -473,7 +474,10 @@ impl ProtocolAdapter for OpenAiResponsesProtocol {
                 // Complete lines (up to \n) are safe to decode as UTF-8 since
                 // SSE data lines are always complete JSON terminated by newline.
                 if let Some(pos) = state.line_buf.iter().position(|&b| b == b'\n') {
-                    let line_bytes = state.line_buf[..pos].to_vec();
+                    let line_bytes = state
+                        .line_buf
+                        .get(..pos)
+                        .map_or_else(Vec::new, <[u8]>::to_vec);
                     state.line_buf.drain(..=pos);
 
                     let line = String::from_utf8(line_bytes)

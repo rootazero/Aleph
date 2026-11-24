@@ -37,19 +37,20 @@ impl ProtocolToken {
     #[must_use]
     pub fn parse(raw: &str) -> Option<Self> {
         let trimmed = raw.trim();
-        match trimmed {
-            Self::HEARTBEAT_OK => Some(Self::HeartbeatOk),
-            Self::SILENT_COMPLETE => Some(Self::SilentComplete),
-            Self::NO_REPLY => Some(Self::NoReply),
-            s if s.starts_with(Self::NEEDS_ATTENTION_PREFIX) => {
-                let msg = s[Self::NEEDS_ATTENTION_PREFIX.len()..].trim().to_string();
-                if msg.is_empty() {
-                    None
-                } else {
-                    Some(Self::NeedsAttention(msg))
-                }
+        if let Some(rest) = trimmed.strip_prefix(Self::NEEDS_ATTENTION_PREFIX) {
+            let msg = rest.trim().to_string();
+            if msg.is_empty() {
+                None
+            } else {
+                Some(Self::NeedsAttention(msg))
             }
-            _ => None,
+        } else {
+            match trimmed {
+                Self::HEARTBEAT_OK => Some(Self::HeartbeatOk),
+                Self::SILENT_COMPLETE => Some(Self::SilentComplete),
+                Self::NO_REPLY => Some(Self::NoReply),
+                _ => None,
+            }
         }
     }
 

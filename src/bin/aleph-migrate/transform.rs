@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use crate::export::{session_dir_name, ExportData, ExportSession};
@@ -20,6 +21,10 @@ pub fn run_transform(
     log::info!("  Output sessions: {}", output_dir.display());
     log::info!("  Attachments: {}", attachments_dir.display());
     log::info!("  Parallel workers: {}", parallel);
+
+    let output_dir = absolutize(&output_dir).context("Failed to resolve sessions directory")?;
+    let attachments_dir =
+        absolutize(&attachments_dir).context("Failed to resolve attachments directory")?;
 
     // Read JSON export
     log::info!("Reading export data...");
@@ -108,27 +113,21 @@ fn transform_session(
 ) -> Result<()> {
     let session_dir = output_dir.join(session_dir_name(&session.session_id)?);
     let existed = session_dir.exists();
+    if existed && !overwrite {
+        anyhow::bail!(
+            "Session directory already exists: {}. Use --overwrite to replace.",
+            session_dir.display()
+        );
+    }
 
-    let result = (|| {
-        // Check if session exists
-        if existed && !overwrite {
-            anyhow::bail!(
-                "Session directory already exists: {}. Use --overwrite to replace.",
-                session_dir.display()
-            );
-        }
-
-        // Create session directory
-        fs::create_dir_all(&session_dir)?;
-
-        // Write transcript.md
-        write_transcript(&session_dir, session)?;
-
-        // Write tool_outputs.md
-        write_tool_outputs(&session_dir, session)?;
-
-        // Write metadata.json
-        write_metadata(&session_dir, session)?;
+    let staging = tempfile::Builder::new()
+        .prefix(".session-staging-")
+        .tempdir_in(output_dir)
+        .context("Failed to create temporary session directory")?;
+    let result: Result<()> = (|| {
+        write_transcript(staging.path(), session)?;
+        write_tool_outputs(staging.path(), session)?;
+        write_metadata(staging.path(), session)?;
 
         // Store attachments and persist a manifest so the indexer can reconstruct
         // attachment rows without reopening the legacy database.
@@ -140,14 +139,43 @@ fn transform_session(
                 migration_root,
             )?);
         }
-        write_attachment_manifest(&session_dir, &attachment_manifest)?;
+        write_attachment_manifest(staging.path(), &attachment_manifest)?;
         Ok(())
     })();
+    result?;
 
-    if result.is_err() && !existed {
-        let _ = fs::remove_dir_all(&session_dir);
+    if !existed {
+        fs::rename(staging.path(), &session_dir)
+            .context("Failed to publish transformed session")?;
+        return Ok(());
     }
-    result
+
+    let backup = tempfile::Builder::new()
+        .prefix(".session-backup-")
+        .tempdir_in(output_dir)
+        .context("Failed to create session backup directory")?;
+    let backup_path = backup.path().join("previous");
+    fs::rename(&session_dir, &backup_path).context("Failed to back up existing session")?;
+    if let Err(error) = fs::rename(staging.path(), &session_dir) {
+        if let Err(restore_error) = fs::rename(&backup_path, &session_dir) {
+            let retained_backup = backup.keep();
+            anyhow::bail!(
+                "Failed to publish transformed session: {error}; \
+                 failed to restore previous session: {restore_error}; backup retained at {}",
+                retained_backup.display()
+            );
+        }
+        return Err(error)
+            .context("Failed to publish transformed session; previous session restored");
+    }
+    Ok(())
+}
+
+fn absolutize(path: &Path) -> Result<PathBuf> {
+    if path.is_absolute() {
+        return Ok(path.to_path_buf());
+    }
+    Ok(std::env::current_dir()?.join(path))
 }
 
 fn migration_root(output_dir: &Path) -> Result<PathBuf> {
@@ -193,7 +221,12 @@ fn write_transcript(session_dir: &Path, session: &ExportSession) -> Result<()> {
     content.push_str(&format!("# Session {}\n\n", session.session_id));
     content.push_str(&format!(
         "Started: {}\n\n",
-        format_timestamp(session.started_at)
+        format_timestamp(session.started_at).with_context(|| {
+            format!(
+                "Invalid started_at timestamp for session {}",
+                session.session_id
+            )
+        })?
     ));
 
     // Messages
@@ -201,7 +234,12 @@ fn write_transcript(session_dir: &Path, session: &ExportSession) -> Result<()> {
         content.push_str(&format!(
             "## {} - {}\n\n",
             capitalize(&msg.role),
-            format_timestamp(msg.timestamp)
+            format_timestamp(msg.timestamp).with_context(|| {
+                format!(
+                    "Invalid message timestamp for session {}",
+                    session.session_id
+                )
+            })?
         ));
         content.push_str(&msg.content);
         content.push_str("\n\n");
@@ -225,7 +263,12 @@ fn write_tool_outputs(session_dir: &Path, session: &ExportSession) -> Result<()>
         content.push_str(&format!(
             "## {} - {}\n\n",
             output.tool_name,
-            format_timestamp(output.timestamp)
+            format_timestamp(output.timestamp).with_context(|| {
+                format!(
+                    "Invalid tool output timestamp for session {}",
+                    session.session_id
+                )
+            })?
         ));
 
         content.push_str(&format!("**Args**: `{}`\n\n", output.args));
@@ -345,20 +388,41 @@ fn store_attachment(
     let filename = format!("{}.{}", hash_prefix, ext);
     let target_path = target_dir.join(&filename);
 
-    // Skip if already exists (content-addressed deduplication)
     if target_path.exists() {
-        let canonical_target =
-            fs::canonicalize(&target_path).context("Failed to resolve existing attachment file")?;
+        validate_existing_attachment(&target_path, attachments_dir, data.len(), &hash)?;
+    } else {
+        // Verify the parent before staging, then publish without clobbering a
+        // file another session may have completed concurrently.
+        let canonical_dir =
+            fs::canonicalize(&target_dir).context("Failed to resolve attachments subdirectory")?;
         let canonical_attachments =
             fs::canonicalize(attachments_dir).context("Failed to resolve attachments directory")?;
-        if !canonical_target.starts_with(&canonical_attachments) {
+        if !canonical_dir.starts_with(&canonical_attachments) {
             anyhow::bail!(
-                "existing attachment path resolves outside attachments directory: {}",
-                target_path.display()
+                "attachments subdirectory resolves outside attachments directory: {}",
+                target_dir.display()
             );
         }
-    } else {
-        fs::write(&target_path, &data).context("Failed to write attachment file")?;
+        let mut temp = tempfile::Builder::new()
+            .prefix(".attachment-staging-")
+            .tempfile_in(&target_dir)
+            .context("Failed to create temporary attachment file")?;
+        temp.write_all(&data)
+            .context("Failed to write attachment file")?;
+        temp.as_file_mut()
+            .sync_all()
+            .context("Failed to sync attachment file")?;
+        verify_attachment_contents(temp.path(), data.len(), &hash)?;
+        match temp.persist_noclobber(&target_path) {
+            Ok(_) => {}
+            Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
+                drop(error.file);
+                validate_existing_attachment(&target_path, attachments_dir, data.len(), &hash)?;
+            }
+            Err(error) => {
+                return Err(error.error).context("Failed to publish attachment file");
+            }
+        }
     }
 
     Ok(TransformedAttachment {
@@ -374,10 +438,67 @@ fn store_attachment(
     })
 }
 
-fn format_timestamp(ts: i64) -> String {
+fn validate_existing_attachment(
+    target_path: &Path,
+    attachments_dir: &Path,
+    expected_size: usize,
+    expected_hash: &str,
+) -> Result<()> {
+    let canonical_target =
+        fs::canonicalize(target_path).context("Failed to resolve existing attachment file")?;
+    let canonical_attachments =
+        fs::canonicalize(attachments_dir).context("Failed to resolve attachments directory")?;
+    if !canonical_target.starts_with(&canonical_attachments) {
+        anyhow::bail!(
+            "existing attachment path resolves outside attachments directory: {}",
+            target_path.display()
+        );
+    }
+    verify_attachment_contents(target_path, expected_size, expected_hash)
+}
+
+fn verify_attachment_contents(
+    path: &Path,
+    expected_size: usize,
+    expected_hash: &str,
+) -> Result<()> {
+    let mut file = fs::File::open(path).context("Failed to open attachment for verification")?;
+    let actual_size = file
+        .metadata()
+        .context("Failed to inspect attachment for verification")?
+        .len();
+    if actual_size != expected_size as u64 {
+        anyhow::bail!(
+            "Attachment {} size mismatch: expected {}, found {}",
+            path.display(),
+            expected_size,
+            actual_size
+        );
+    }
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    let mut buffer = [0; 64 * 1024];
+    loop {
+        let bytes_read = file
+            .read(&mut buffer)
+            .context("Failed to read attachment for verification")?;
+        if bytes_read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..bytes_read]);
+    }
+    let actual_hash = hex::encode(hasher.finalize());
+    if actual_hash != expected_hash {
+        anyhow::bail!("Attachment {} hash mismatch", path.display());
+    }
+    Ok(())
+}
+
+fn format_timestamp(ts: i64) -> Result<String> {
     use chrono::{DateTime, Utc};
-    let dt: DateTime<Utc> = DateTime::from_timestamp(ts, 0).unwrap_or_else(Utc::now);
-    dt.format("%Y-%m-%dT%H:%M:%SZ").to_string()
+    let dt: DateTime<Utc> = DateTime::from_timestamp(ts, 0)
+        .with_context(|| format!("Timestamp is out of range: {ts}"))?;
+    Ok(dt.format("%Y-%m-%dT%H:%M:%SZ").to_string())
 }
 
 fn capitalize(s: &str) -> String {

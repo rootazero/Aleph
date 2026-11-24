@@ -148,14 +148,12 @@ pub async fn gather_related<S: NoteStore + Send + Sync + 'static>(
         let full = seeds
             .iter()
             .find(|s| s.path == path)
-            // rust-doctor-disable-next-line excessive-clone
-            .map(|s| s.content.clone())
-            .unwrap_or_default();
+            .map_or("", |s| s.content.as_str());
         preview.clear();
         if !full.is_empty() {
             preview.extend(full.chars().take(budget.preview_char_cap));
         }
-        let summary_first_bullet = first_body_bullet(&full).unwrap_or_default();
+        let summary_first_bullet = first_body_bullet(full).unwrap_or_default();
 
         let rp_bytes = preview.len() + entry.path.len() + summary_first_bullet.len() + 64;
         if running_bytes + rp_bytes > budget.total_byte_cap {
@@ -184,7 +182,7 @@ pub async fn gather_related<S: NoteStore + Send + Sync + 'static>(
 fn first_body_bullet(raw: &str) -> Option<String> {
     let body = if let Some(rest) = raw.strip_prefix("---\n") {
         if let Some(end) = rest.find("\n---") {
-            &rest[end + 4..]
+            rest.get(end + 4..).unwrap_or("")
         } else {
             rest
         }

@@ -4,8 +4,8 @@
 
 > **状态：已删除（2026-06-13），本文为重启路线的设计存档。**
 > 完整实现保留在 git 历史（删除 commit `414e9ec42`，完整树在 `414e9ec42^`）；
-> 完整 15-Task 伪代码在 [plans/2026-06-12-aleph-voice-local-sidecar.md](../../superpowers/plans/2026-06-12-aleph-voice-local-sidecar.md)；
-> spike 实测全文在 [spikes/2026-06-12-aleph-voice-spike.md](../../superpowers/spikes/2026-06-12-aleph-voice-spike.md)。
+> Complete 15-task pseudocode: historical file unavailable in the current tree; the deletion commit is `414e9ec42`.
+> Spike measurements: historical file unavailable in the current tree; the deletion commit is `414e9ec42`.
 > 本文是三者的**精炼索引 + 设计结晶**，供将来重启自建路线时直接续作。
 
 ---

@@ -22,6 +22,7 @@ pub fn build_install_command(spec: &InstallSpec) -> Option<String> {
     // intended install directory.
     fn is_safe_shell_arg(s: &str) -> bool {
         !s.is_empty()
+            && !s.starts_with('-')
             && s.chars()
                 .all(|c| c.is_ascii_alphanumeric() || "-_./:@+=~".contains(c))
     }
@@ -30,9 +31,12 @@ pub fn build_install_command(spec: &InstallSpec) -> Option<String> {
         if !is_safe_shell_arg(s) {
             return false;
         }
-        // Reject any `..` segment — naive path-segment scanning is enough for
-        // an output-path allowlist; this isn't a full canonical-path check.
-        s.split(['/', '\\']).all(|seg| seg != "..")
+        // Reject absolute paths, home dir expansion, and drive colons
+        if s.starts_with('/') || s.starts_with('\\') || s.starts_with('~') || s.contains(':') {
+            return false;
+        }
+        // Reject any `..` or `~` path segment
+        s.split(['/', '\\']).all(|seg| seg != ".." && seg != "~")
     }
 
     if !is_safe_shell_arg(&spec.package) {
@@ -208,21 +212,27 @@ const fn install_kind_index(kind: &InstallKind) -> usize {
     }
 }
 
-// Rank tables for `select_best_install`. Lower values are preferred.
+// Rank mapping for `select_best_install`. Lower values are preferred.
 // Scoop and Winget are the Windows system managers, ranked alongside Brew
 // (the macOS system manager): high when system managers are preferred, just
 // after Brew otherwise. Scoop outranks Winget because it targets CLI/dev
 // tools (Winget leans toward desktop apps). OS filtering runs before ranking,
 // so these only compete on Windows in practice.
-const PREFER_BREW_RANKS: [u8; 8] = [0, 1, 2, 3, 4, 5, 6, 7];
-const PREFER_UV_RANKS: [u8; 8] = [2, 3, 4, 0, 1, 5, 6, 7];
-
 const fn install_kind_rank(kind: &InstallKind, prefer_brew: bool) -> u8 {
     let idx = install_kind_index(kind);
     if prefer_brew {
-        PREFER_BREW_RANKS[idx]
+        idx as u8
     } else {
-        PREFER_UV_RANKS[idx]
+        match kind {
+            InstallKind::Uv => 0,
+            InstallKind::Npm => 1,
+            InstallKind::Brew => 2,
+            InstallKind::Scoop => 3,
+            InstallKind::Winget => 4,
+            InstallKind::Go => 5,
+            InstallKind::Apt => 6,
+            InstallKind::Download => 7,
+        }
     }
 }
 
@@ -232,9 +242,14 @@ pub fn select_best_install<'a>(
     specs: &'a [InstallSpec],
     prefs: &InstallPreferences,
 ) -> Option<&'a InstallSpec> {
-    let mut candidates = filter_install_specs_for_current_os(specs);
-    candidates.sort_by_key(|spec| install_kind_rank(&spec.kind, prefs.prefer_brew));
-    candidates.into_iter().next()
+    let current = current_os();
+    specs
+        .iter()
+        .filter(|spec| match &spec.os {
+            None => true,
+            Some(os_list) => os_list.contains(&current),
+        })
+        .min_by_key(|spec| install_kind_rank(&spec.kind, prefs.prefer_brew))
 }
 
 /// Build the shell [`Command`](tokio::process::Command) used to run an install
@@ -407,16 +422,35 @@ mod tests {
         let spec = InstallSpec {
             id: "tool".to_string(),
             kind: InstallKind::Download,
-            package: "/usr/local/bin/tool".to_string(),
+            // The download destination is RELATIVE to the install directory:
+            // it is interpolated unquoted as curl's `-o` target, so an
+            // absolute path or a `..` segment would let a manifest write
+            // outside the install directory.
+            package: "bin/tool".to_string(),
             bins: vec!["tool".to_string()],
             os: None,
             url: Some("https://example.com/tool".to_string()),
         };
         let cmd = build_install_command(&spec).unwrap();
-        assert_eq!(
-            cmd,
-            "curl -fsSL -o /usr/local/bin/tool 'https://example.com/tool'"
-        );
+        assert_eq!(cmd, "curl -fsSL -o bin/tool 'https://example.com/tool'");
+    }
+
+    #[test]
+    fn download_command_rejects_a_destination_outside_the_install_directory() {
+        for package in ["/usr/local/bin/tool", "../escape/tool", "~/tool"] {
+            let spec = InstallSpec {
+                id: "tool".to_string(),
+                kind: InstallKind::Download,
+                package: package.to_string(),
+                bins: vec!["tool".to_string()],
+                os: None,
+                url: Some("https://example.com/tool".to_string()),
+            };
+            assert!(
+                build_install_command(&spec).is_none(),
+                "{package} must be refused as a download destination"
+            );
+        }
     }
 
     #[test]

@@ -313,6 +313,23 @@ pub struct ChannelInstanceConfig {
     pub config: serde_json::Value,
 }
 
+impl ChannelInstanceConfig {
+    pub fn declared_type<'a>(id: &'a str, config: &'a serde_json::Value) -> Option<&'a str> {
+        config
+            .get("type")
+            .and_then(|value| value.as_str())
+            .or_else(|| {
+                aleph_protocol::channels::CONFIGURABLE_CHANNEL_TYPES
+                    .contains(&id)
+                    .then_some(id)
+            })
+    }
+
+    pub fn is_explicitly_disabled(config: &serde_json::Value) -> bool {
+        config.get("enabled").and_then(|value| value.as_bool()) == Some(false)
+    }
+}
+
 impl Config {
     /// The `[context_budget]` section in force, or `None` when mid-run context
     /// management is switched off. The one derivation of that decision: every
@@ -350,11 +367,7 @@ impl Config {
     pub fn resolved_channels(&self) -> Vec<ChannelInstanceConfig> {
         let mut instances = Vec::new();
         for (key, value) in &self.channels {
-            let channel_type = if let Some(t) = value.get("type").and_then(|v| v.as_str()) {
-                t.to_string()
-            } else if aleph_protocol::channels::CONFIGURABLE_CHANNEL_TYPES.contains(&key.as_str()) {
-                key.clone()
-            } else {
+            let Some(channel_type) = ChannelInstanceConfig::declared_type(key, value) else {
                 tracing::warn!(
                     "Channel '{}' has no 'type' field and is not a known platform name, skipping",
                     key
@@ -373,7 +386,7 @@ impl Config {
 
             instances.push(ChannelInstanceConfig {
                 id: key.clone(),
-                channel_type,
+                channel_type: channel_type.to_owned(),
                 config,
             });
         }
@@ -449,12 +462,6 @@ impl Default for Config {
 // =============================================================================
 
 impl Config {
-    /// Create a new config with default values
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Convenience accessor for the local voice (BYO endpoint) config.
     #[must_use]
     pub fn local_voice(&self) -> &VoiceLocalConfig {
@@ -487,9 +494,6 @@ impl Config {
             },
         );
         self.fetch = Some(crate::config::types::FetchConfigInternal {
-            enabled: c4.enabled,
-            default_provider: "crawl4ai".into(),
-            fallback_providers: None,
             backends,
             verified_shared: std::collections::HashMap::new(),
         });
@@ -533,6 +537,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn session_store_default_does_not_depend_on_general_table() {
+        assert_eq!(Config::default().general.session_store_backend, "file");
+        for source in ["", "[general]\n"] {
+            let cfg: Config = toml::from_str(source).unwrap();
+            assert_eq!(cfg.general.session_store_backend, "file", "{source:?}");
+        }
+    }
+
+    #[test]
+    fn explicit_session_store_backend_is_retained() {
+        for backend in ["sqlite", ""] {
+            let cfg: Config =
+                toml::from_str(&format!("[general]\nsession_store_backend = {backend:?}")).unwrap();
+            assert_eq!(cfg.general.session_store_backend, backend);
+        }
+    }
+
+    #[test]
     fn legacy_crawl4ai_migrates_into_fetch_section() {
         let mut cfg = Config::default();
         cfg.policies.web_fetch.crawl4ai.enabled = true;
@@ -543,8 +565,6 @@ mod tests {
         cfg.migrate_fetch();
 
         let f = cfg.fetch.expect("fetch populated");
-        assert!(f.enabled);
-        assert_eq!(f.default_provider, "crawl4ai");
         let b = &f.backends["crawl4ai"];
         assert_eq!(b.provider_type, "crawl4ai");
         assert_eq!(b.base_url.as_deref(), Some("http://10.10.10.3:11235"));

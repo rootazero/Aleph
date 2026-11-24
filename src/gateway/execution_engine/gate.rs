@@ -91,6 +91,8 @@ where
         run_id: &str,
         agent: &Arc<AgentInstance>,
         cancel_tx: mpsc::Sender<()>,
+        cancel_rx: &mut mpsc::Receiver<()>,
+        cancel_token: tokio_util::sync::CancellationToken,
     ) -> Result<GateOutcome, ExecutionError> {
         // Reserve the SESSION's run slot first (per-session mutual exclusion —
         // INV-SEQ / audit 4.2: exactly one run may be `Running` per session at
@@ -339,6 +341,7 @@ where
                     steps_completed: 0,
                     current_tool: None,
                     cancel_tx: Some(cancel_tx),
+                    cancel_token: cancel_token.clone(),
                     seq_counter: crate::sync_primitives::AtomicU64::new(0),
                     chunk_counter: crate::sync_primitives::AtomicU32::new(0),
                 },
@@ -350,13 +353,36 @@ where
         // rather than fail the run (audit 1.2). The wait is visible via
         // `ConcurrencySnapshot::waiting`; if this future is dropped while
         // parked here, `slot` drops → the session claim is released (no leak).
-        // A cancel arriving during the wait is buffered by the capacity-1
-        // `cancel_tx` and consumed by the run loop's `cancel_rx` arm as soon as
-        // the permit lands.
+        // While parked we also select on the run's cancellation channel so
+        // that a `/stop` request is honoured without waiting for an unrelated
+        // run to release its permit.
         let agent_id = request.session_key.agent_id().to_string();
         slot._permit = Some(match self.concurrency.try_acquire(&agent_id) {
             Some(p) => p,
-            None => self.concurrency.acquire(&agent_id).await,
+            None => {
+                tokio::select! {
+                    biased;
+                    // Cancellation arrives before a permit is available. The
+                    // token is consumed here on purpose: this run never
+                    // starts (its registration is removed and its session
+                    // claim released below), so the run loop will not read
+                    // it.
+                    _ = cancel_rx.recv() => {
+                        // Remove the run registration we inserted above so the
+                        // session is not left in a permanently-Running state.
+                        {
+                            let mut runs = self.active_runs.write().await;
+                            runs.remove(run_id);
+                        }
+                        // Drop slot here so the session claim is released
+                        // before we return the error.
+                        drop(slot);
+                        return Err(ExecutionError::Cancelled);
+                    }
+                    // A permit became available — proceed normally.
+                    p = self.concurrency.acquire(&agent_id) => p,
+                }
+            }
         });
 
         Ok(GateOutcome::Admitted(slot))

@@ -11,7 +11,8 @@ pub use config::{QQAccountConfig, QQConfig, QQDmPolicy, QQGroupPolicy};
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
-    ChannelResult, ChannelState, ChannelStatus, MessageId, OutboundMessage, SendResult,
+    ChannelResult, ChannelState, ChannelStatus, MessageId, OutboundMessage, SendOperation,
+    SendResult,
 };
 use crate::gateway::interfaces::qq::types::QQEvent;
 use crate::sync_primitives::Arc;
@@ -62,8 +63,8 @@ impl QQChannel {
 
     const fn capabilities() -> ChannelCapabilities {
         ChannelCapabilities {
-            attachments: true,
-            images: true,
+            attachments: false,
+            images: false,
             audio: false,
             video: false,
             reactions: false,
@@ -139,20 +140,19 @@ impl Channel for QQChannel {
             account.client_secret.clone(),
         ));
 
-        let token = api
-            .get_access_token()
+        api.get_access_token()
             .await
             .map_err(|e| ChannelError::AuthFailed(format!("QQ auth failed: {e}")))?;
 
         tracing::info!("QQ bot authenticated for account {}", account.id);
-        self.api_client = Some(api);
+        self.api_client = Some(api.clone());
 
         let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<QQEvent>(100);
         let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
         let gateway_ctx = gateway::GatewayContext {
             channel_id: self.info.id.clone(),
-            token,
+            api,
             event_tx,
             shutdown_rx,
         };
@@ -211,22 +211,40 @@ impl Channel for QQChannel {
         Ok(())
     }
 
-    async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-        if self.test_mode {
-            return Ok(SendResult {
-                message_id: MessageId::new(format!(
-                    "qq-test-{}",
-                    chrono::Utc::now().timestamp_millis()
-                )),
-                timestamp: chrono::Utc::now(),
-            });
-        }
+    fn send(&self, message: OutboundMessage) -> SendOperation {
+        let api = self.api_client.clone();
+        let test_mode = self.test_mode;
+        let reply_tracker = self.reply_tracker.clone();
+        Box::pin(async move {
+            // Fail closed: the delivery path sends text (and quoted replies)
+            // only, so an attachment or button request must error out instead
+            // of being dropped.
+            if !message.attachments.is_empty() {
+                return Err(ChannelError::UnsupportedFeature(
+                    "QQ does not support attachments".to_string(),
+                ));
+            }
+            if message.inline_keyboard.is_some() {
+                return Err(ChannelError::UnsupportedFeature(
+                    "QQ does not support buttons".to_string(),
+                ));
+            }
 
-        let api = self
-            .api_client
-            .as_ref()
-            .ok_or_else(|| ChannelError::NotConnected("QQ API not initialized".to_string()))?;
-        delivery::deliver_message(api, &message, &self.reply_tracker).await
+            if test_mode {
+                return Ok(SendResult {
+                    message_id: MessageId::new(format!(
+                        "qq-test-{}",
+                        chrono::Utc::now().timestamp_millis()
+                    )),
+                    timestamp: chrono::Utc::now(),
+                });
+            }
+
+            let api = api
+                .as_ref()
+                .ok_or_else(|| ChannelError::NotConnected("QQ API not initialized".to_string()))?;
+            delivery::deliver_message(api, &message, &reply_tracker).await
+        })
     }
 }
 
@@ -239,10 +257,18 @@ impl ChannelFactory for QQChannelFactory {
     }
 
     async fn create(&self, config: serde_json::Value) -> ChannelResult<Box<dyn Channel>> {
+        self.create_with_id("qq", config).await
+    }
+
+    async fn create_with_id(
+        &self,
+        id: &str,
+        config: serde_json::Value,
+    ) -> ChannelResult<Box<dyn Channel>> {
         // `from_wire` is the one place the two accepted `[channels.qq]`
         // spellings collapse into `accounts`; see its docs.
         let qq_config = QQConfig::from_wire(config).map_err(ChannelError::ConfigError)?;
-        Ok(Box::new(QQChannel::new("qq", qq_config)))
+        Ok(Box::new(QQChannel::new(id, qq_config)))
     }
 }
 
@@ -263,7 +289,7 @@ mod tests {
     #[test]
     fn test_capabilities() {
         let caps = QQChannel::capabilities();
-        assert!(caps.images);
+        assert!(!caps.images);
         assert_eq!(caps.max_message_length, 4000);
     }
 }

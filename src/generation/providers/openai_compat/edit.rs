@@ -19,6 +19,7 @@ use super::types::{ImageGenerationResponse, DEFAULT_TIMEOUT_SECS};
 /// around 25 MB; we mirror the cap on the fetch side so a hostile upstream
 /// cannot OOM the process before the multipart upload is built.
 const OPENAI_IMAGE_MAX_DOWNLOAD_BYTES: usize = 25 * 1024 * 1024;
+const MAX_BASE64_IMAGE_BYTES: usize = OPENAI_IMAGE_MAX_DOWNLOAD_BYTES * 4 / 3 + 4;
 
 /// Implementation of image editing for OpenAI-compatible API
 pub(crate) async fn edit_image_impl(
@@ -49,7 +50,6 @@ pub(crate) async fn edit_image_impl(
     })?;
 
     let start_time = Instant::now();
-    let request_id = request.request_id.clone();
 
     debug!(
         provider = %provider.name,
@@ -73,8 +73,13 @@ pub(crate) async fn edit_image_impl(
     form = form.text("prompt", request.prompt.clone());
 
     // Add image - handle URL, data URI, or raw base64
-    let lower_ref = reference_image.to_lowercase();
-    if lower_ref.starts_with("http://") || lower_ref.starts_with("https://") {
+    let is_http = reference_image
+        .get(..7)
+        .is_some_and(|s| s.eq_ignore_ascii_case("http://"))
+        || reference_image
+            .get(..8)
+            .is_some_and(|s| s.eq_ignore_ascii_case("https://"));
+    if is_http {
         // SSRF guard: `reference_image` is an LLM-controlled string and the
         // bytes are forwarded to a third-party multipart upload. A crafted
         // URL pointing at `169.254.169.254`, `localhost:<admin-port>`, or
@@ -103,10 +108,10 @@ pub(crate) async fn edit_image_impl(
         form = form.part("image", part);
     } else {
         // Extract base64 from data URI or assume raw base64
-        let base64_data = if let Some(idx) = reference_image.find(",") {
+        let base64_data = if let Some(idx) = reference_image.find(',') {
             if reference_image
                 .get(..idx)
-                .is_some_and(|s| s.to_lowercase().starts_with("data:"))
+                .is_some_and(|s| s.get(..5).is_some_and(|d| d.eq_ignore_ascii_case("data:")))
             {
                 reference_image.get(idx + 1..).unwrap_or(reference_image)
             } else {
@@ -115,6 +120,16 @@ pub(crate) async fn edit_image_impl(
         } else {
             reference_image
         };
+
+        if base64_data.len() > MAX_BASE64_IMAGE_BYTES {
+            return Err(GenerationError::invalid_parameters(
+                format!(
+                    "Base64 image data exceeds maximum size limit ({} bytes)",
+                    OPENAI_IMAGE_MAX_DOWNLOAD_BYTES
+                ),
+                Some("reference_image".to_string()),
+            ));
+        }
 
         let image_bytes = base64::engine::general_purpose::STANDARD
             .decode(base64_data)
@@ -135,6 +150,16 @@ pub(crate) async fn edit_image_impl(
     // Add optional mask if provided via extra params
     if let Some(mask_value) = request.params.extra.get("mask") {
         if let Some(mask_str) = mask_value.as_str() {
+            if mask_str.len() > MAX_BASE64_IMAGE_BYTES {
+                return Err(GenerationError::invalid_parameters(
+                    format!(
+                        "Base64 mask data exceeds maximum size limit ({} bytes)",
+                        OPENAI_IMAGE_MAX_DOWNLOAD_BYTES
+                    ),
+                    Some("mask".to_string()),
+                ));
+            }
+
             let mask_bytes = base64::engine::general_purpose::STANDARD
                 .decode(mask_str)
                 .map_err(|e| {
@@ -219,84 +244,14 @@ pub(crate) async fn edit_image_impl(
             GenerationError::serialization(format!("Failed to parse response: {e}"))
         })?;
 
-    // Extract first image
-    let first_image = api_response
-        .data
-        .first()
-        .ok_or_else(|| GenerationError::provider("No images in response", None, &provider.name))?;
-
-    // Convert to GenerationData
-    let data = if let Some(url) = &first_image.url {
-        GenerationData::url(url.clone())
-    } else if let Some(b64) = &first_image.b64_json {
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(b64)
-            .map_err(|e| GenerationError::serialization(format!("Failed to decode base64: {e}")))?;
-        GenerationData::bytes(bytes)
-    } else {
-        return Err(GenerationError::provider(
-            "Response contains neither URL nor base64 data",
-            None,
-            &provider.name,
-        ));
-    };
-
-    // Build metadata
-    let duration = start_time.elapsed();
-    let mut metadata = GenerationMetadata::new()
-        .with_provider(&provider.name)
-        .with_model(model)
-        .with_duration(duration);
-
-    if let Some(revised) = &first_image.revised_prompt {
-        metadata = metadata.with_revised_prompt(revised.clone());
-    }
-
-    if let (Some(w), Some(h)) = (request.params.width, request.params.height) {
-        metadata = metadata.with_dimensions(w, h);
-    }
-
-    info!(
-        provider = %provider.name,
-        duration_ms = duration.as_millis(),
-        "OpenAI-compatible image editing completed"
-    );
-
-    let mut output = GenerationOutput::new(request.generation_type, data).with_metadata(metadata);
-
-    if let Some(id) = request_id {
-        output = output.with_request_id(id);
-    }
-
-    // Handle additional images
-    if api_response.data.len() > 1 {
-        let additional: Vec<GenerationData> = api_response
-            .data
-            .iter()
-            .skip(1)
-            .filter_map(|img| {
-                if let Some(url) = &img.url {
-                    Some(GenerationData::url(url.clone()))
-                } else if let Some(b64) = &img.b64_json {
-                    match base64::engine::general_purpose::STANDARD.decode(b64) {
-                        Ok(bytes) => Some(GenerationData::bytes(bytes)),
-                        Err(e) => {
-                            error!(error = %e, "Failed to decode base64 for additional image");
-                            None
-                        }
-                    }
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        if !additional.is_empty() {
-            output = output.with_additional_outputs(additional);
-        }
-    }
-
-    Ok(output)
+    build_edit_output(
+        api_response,
+        &provider.name,
+        model,
+        start_time,
+        &request,
+        "OpenAI-compatible image editing",
+    )
 }
 
 /// Volcengine Ark image-to-image / inpainting.
@@ -317,7 +272,6 @@ async fn ark_edit_image_impl(
     })?;
 
     let start_time = Instant::now();
-    let request_id = request.request_id.clone();
     let model = request
         .params
         .model
@@ -395,71 +349,89 @@ async fn ark_edit_image_impl(
             GenerationError::serialization(format!("Failed to parse response: {e}"))
         })?;
 
-    let first_image = api_response
-        .data
-        .first()
-        .ok_or_else(|| GenerationError::provider("No images in response", None, &provider.name))?;
+    build_edit_output(
+        api_response,
+        &provider.name,
+        model,
+        start_time,
+        &request,
+        "Ark image-to-image",
+    )
+}
 
-    let data = if let Some(url) = &first_image.url {
-        GenerationData::url(url.clone())
-    } else if let Some(b64) = &first_image.b64_json {
+/// Common helper to assemble GenerationOutput from an ImageGenerationResponse
+fn build_edit_output(
+    api_response: ImageGenerationResponse,
+    provider_name: &str,
+    model: String,
+    start_time: Instant,
+    request: &GenerationRequest,
+    log_label: &str,
+) -> GenerationResult<GenerationOutput> {
+    let mut data_iter = api_response.data.into_iter();
+    let first_image = data_iter
+        .next()
+        .ok_or_else(|| GenerationError::provider("No images in response", None, provider_name))?;
+
+    let data = if let Some(url) = first_image.url {
+        GenerationData::url(url)
+    } else if let Some(b64) = first_image.b64_json {
         let bytes = base64::engine::general_purpose::STANDARD
-            .decode(b64)
+            .decode(&b64)
             .map_err(|e| GenerationError::serialization(format!("Failed to decode base64: {e}")))?;
         GenerationData::bytes(bytes)
     } else {
         return Err(GenerationError::provider(
             "Response contains neither URL nor base64 data",
             None,
-            &provider.name,
+            provider_name,
         ));
     };
 
     let duration = start_time.elapsed();
     let mut metadata = GenerationMetadata::new()
-        .with_provider(&provider.name)
+        .with_provider(provider_name)
         .with_model(model)
         .with_duration(duration);
-    if let Some(revised) = &first_image.revised_prompt {
-        metadata = metadata.with_revised_prompt(revised.clone());
+
+    if let Some(revised) = first_image.revised_prompt {
+        metadata = metadata.with_revised_prompt(revised);
     }
+
     if let (Some(w), Some(h)) = (request.params.width, request.params.height) {
         metadata = metadata.with_dimensions(w, h);
     }
 
     info!(
-        provider = %provider.name,
+        provider = %provider_name,
         duration_ms = duration.as_millis(),
-        "Ark image-to-image completed"
+        "{log_label} completed"
     );
 
     let mut output = GenerationOutput::new(request.generation_type, data).with_metadata(metadata);
-    if let Some(id) = request_id {
-        output = output.with_request_id(id);
+
+    if let Some(ref id) = request.request_id {
+        output = output.with_request_id(id.clone());
     }
 
-    // Additional images (multi-output / sequential generation).
-    if api_response.data.len() > 1 {
-        let additional: Vec<GenerationData> = api_response
-            .data
-            .iter()
-            .skip(1)
-            .filter_map(|img| {
-                if let Some(url) = &img.url {
-                    Some(GenerationData::url(url.clone()))
-                } else if let Some(b64) = &img.b64_json {
-                    base64::engine::general_purpose::STANDARD
-                        .decode(b64)
-                        .ok()
-                        .map(GenerationData::bytes)
-                } else {
-                    None
-                }
-            })
-            .collect();
-        if !additional.is_empty() {
-            output = output.with_additional_outputs(additional);
-        }
+    // Additional images (multi-output / sequential generation) without cloning.
+    let additional: Vec<GenerationData> = data_iter
+        .filter_map(|img| {
+            if let Some(url) = img.url {
+                Some(GenerationData::url(url))
+            } else if let Some(b64) = img.b64_json {
+                base64::engine::general_purpose::STANDARD
+                    .decode(&b64)
+                    .ok()
+                    .map(GenerationData::bytes)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    if !additional.is_empty() {
+        output = output.with_additional_outputs(additional);
     }
 
     Ok(output)

@@ -298,34 +298,12 @@ mod tests {
 
     #[test]
     fn test_scope_install_dir_user() {
-        // This asserts on the *ambient* `ALEPH_HOME` (unset → `~/.aleph`), and
-        // `ALEPH_HOME` is process-global: ~27 sibling tests point it at a
-        // tempdir for their duration via `IsolatedAlephHome`. The guard only
-        // excludes the tests that hold it, so a reader that skips it observes
-        // whichever tempdir happened to be installed and fails on `.aleph`.
-        // Join the regime rather than take an isolated home — an isolated one
-        // would have no `.aleph` component and defeat the assertion.
-        let _home_guard = crate::utils::paths::ALEPH_HOME_TEST_GUARD
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-
-        // User scope should resolve to ~/.aleph/plugins/installed
-        let result = scope_install_dir(PluginScope::User, None);
-        assert!(
-            result.is_ok(),
-            "User scope should succeed: {:?}",
-            result.err()
-        );
-        let path = result.unwrap();
-        assert!(
-            path.to_string_lossy().contains("plugins/installed"),
-            "User scope path should contain 'plugins/installed', got: {}",
-            path.display()
-        );
-        assert!(
-            path.to_string_lossy().contains(".aleph"),
-            "User scope path should contain '.aleph', got: {}",
-            path.display()
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let root = crate::utils::paths::get_config_dir().unwrap();
+        // ALEPH_HOME may be relocated to a path without a literal `.aleph` component.
+        assert_eq!(
+            scope_install_dir(PluginScope::User, None).unwrap(),
+            root.join("plugins/installed")
         );
     }
 
@@ -492,12 +470,20 @@ mod tests {
 
     #[test]
     fn from_discovery_yields_project_only_for_project_scopes() {
-        use crate::discovery::{DiscoveredPath, DiscoverySource, GlobalRoot};
+        use crate::discovery::{DiscoveredPath, DiscoveryScope, DiscoverySource, GlobalRoot};
         let root = tempdir().unwrap();
         let plugin_dir = root.path().join(".aleph/plugins/x");
 
-        let in_project =
-            DiscoveredPath::in_project(plugin_dir.clone(), root.path().to_path_buf(), 20);
+        // `DiscoveredPath::in_project` was cut on 2026-11-21 (the discovery
+        // audit): production never called it. The project scope is still
+        // exercised here, assembled the way production assembles it.
+        let in_project = DiscoveredPath {
+            path: plugin_dir.clone(),
+            priority: 20,
+            scope: DiscoveryScope::Project {
+                root: root.path().to_path_buf(),
+            },
+        };
         assert_eq!(in_project.source(), DiscoverySource::Project);
         assert_eq!(
             ScopeKey::from_discovery(&in_project),

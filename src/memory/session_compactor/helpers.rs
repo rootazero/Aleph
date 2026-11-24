@@ -1,11 +1,10 @@
 use super::SessionCompactor;
 use crate::error::AlephError;
-use crate::memory::extensions::insert_with_capture_filter;
+use crate::memory::extensions::insert_helper::insert_with_runtime_capture_filter;
 use crate::memory::extensions::types::CaptureCtx;
 use crate::memory::store::raw_memory::{RawMemory, RawMemorySource};
 use crate::providers::adapter::RequestPayload;
 use crate::providers::message::UnifiedMessage;
-use crate::sync_primitives::Arc;
 use tracing::{info, warn};
 
 impl SessionCompactor {
@@ -151,16 +150,21 @@ impl SessionCompactor {
             .with_session(session_id)
             .with_path(path);
         if let Some(ref registry) = self.capture_registry {
-            let store: Arc<dyn crate::memory::store::raw_memory::RawMemoryStore> =
-                // rust-doctor-disable-next-line excessive-clone
-                self.database.clone();
             let ctx = CaptureCtx {
                 agent_id: agent_id.to_string(),
                 namespace: crate::memory::namespace::NamespaceScope::Owner,
                 session_id: Some(session_id.to_string()),
                 source_hint: "session_compressed".into(),
             };
-            if let Err(e) = insert_with_capture_filter(&store, registry, &ctx, raw).await {
+            if let Err(e) = insert_with_runtime_capture_filter(
+                &self.database,
+                registry,
+                self.memory_runtime.as_ref(),
+                &ctx,
+                raw,
+            )
+            .await
+            {
                 warn!(error = %e, session = %session_id, seq, "Failed to store raw chunk to raw_memories");
             }
         } else if let Err(e) = self.database.insert_raw_memory(&raw).await {
@@ -239,23 +243,25 @@ impl SessionCompactor {
             agent_id,
         );
 
-        // rust-doctor-disable-next-line excessive-clone
-        let raw = RawMemory::new(fact.content.clone(), RawMemorySource::SessionCompressed)
+        let raw = RawMemory::new(fact.content, RawMemorySource::SessionCompressed)
             .with_agent(agent_id)
             .with_session(session_id)
-            // rust-doctor-disable-next-line excessive-clone
-            .with_path(fact.path.clone());
+            .with_path(fact.path);
         if let Some(ref registry) = self.capture_registry {
-            let store: Arc<dyn crate::memory::store::raw_memory::RawMemoryStore> =
-                // rust-doctor-disable-next-line excessive-clone
-                self.database.clone();
             let ctx = CaptureCtx {
                 agent_id: agent_id.to_string(),
                 namespace: crate::memory::namespace::NamespaceScope::Owner,
                 session_id: Some(session_id.to_string()),
                 source_hint: "session_compressed".into(),
             };
-            insert_with_capture_filter(&store, registry, &ctx, raw).await?;
+            insert_with_runtime_capture_filter(
+                &self.database,
+                registry,
+                self.memory_runtime.as_ref(),
+                &ctx,
+                raw,
+            )
+            .await?;
         } else {
             self.database.insert_raw_memory(&raw).await?;
         }

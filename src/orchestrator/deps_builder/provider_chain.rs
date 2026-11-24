@@ -73,6 +73,17 @@ pub fn build_failover_chain(
     // Shared circuit-breaker health: the global chain and every per-hint
     // override see the same provider-outage picture.
     let health = FailoverHealth::default();
+    // The slot is install-ONCE: the first chain to register owns the
+    // process-global breaker state. A second chain built in the same
+    // process (a reload, or a second `build_provider_chain` call) silently
+    // diverges from it — its own `health` is never the one the gateway
+    // reads. Say so instead of dropping the result on the floor.
+    if crate::providers::failover::global_health().is_some() {
+        tracing::warn!(
+            "failover chain: the process-global circuit-breaker health is already registered; \
+             this chain's own health will NOT be the one the gateway reads"
+        );
+    }
     crate::providers::failover::register_global_health(health.clone());
 
     // Shared per-model rate-limit cooldown: a model-specific 429 sidelines that
@@ -250,12 +261,12 @@ fn assemble_fallbacks(
     // endpoint) has to convert the request shape, and some OpenAI-compat Claude
     // shims reject the conversion outright (the -10003 "bad parameter" gap). A
     // homogeneous chain sends the same format the primary already proved valid.
-    let protocol_of = |name: &str| -> Option<String> {
+    let protocol_of = |name: &str| -> Option<&str> {
         config
             .providers
             .iter()
             .find(|(n, _)| n.eq_ignore_ascii_case(name))
-            .map(|(_, pc)| pc.protocol())
+            .map(|(_, pc)| pc.protocol.as_deref().unwrap_or("openai"))
     };
     let primary_protocol = protocol_of(primary_provider_key);
 
@@ -294,7 +305,17 @@ fn assemble_fallbacks(
             tracing::warn!(provider = %name, "failover chain: entry matches primary; skipping");
             continue;
         }
-        let Some(provider) = built.get(&name) else {
+        // The provider keys under `[providers]` are matched
+        // case-insensitively everywhere else in this file (the primary
+        // comparison above, `protocol_of` below), but the `built` map is
+        // keyed by the EXACT `[providers]` key. A chain entry whose case
+        // differs from the key was therefore dropped with "not defined under
+        // [providers]" — and the operator's chain was silently replaced by
+        // the auto-derived one. Look the entry up case-insensitively.
+        let Some((built_key, provider)) = built
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(name.as_str()))
+        else {
             tracing::error!(
                 provider = %name,
                 "failover chain: '{name}' is not defined under [providers] (or failed to \
@@ -317,7 +338,10 @@ fn assemble_fallbacks(
                 );
             }
         }
-        fallbacks.push(node_for(&name, provider));
+        // The node's NAME is the `[providers]` key (the one the built map is
+        // keyed by), not the chain entry's spelling — so the chain reports
+        // the provider the way the config declares it.
+        fallbacks.push(node_for(built_key, provider));
     }
 
     // Self-heal: a primary with no usable configured fallback still gets one,

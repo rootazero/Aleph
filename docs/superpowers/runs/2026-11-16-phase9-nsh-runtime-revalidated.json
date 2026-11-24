@@ -1,0 +1,18 @@
+{
+  "status": "PASS",
+  "reason": null,
+  "resource_complete": false,
+  "evidence_scope": "schema_and_marker_correlations_plus_direct_child_exit",
+  "qa_run_id": "09a8f565aec9438f9d13da15eaf3509f",
+  "surface": "nsh",
+  "metrics": {
+    "first_frame_ms": 5029.229958017822,
+    "route_ms": 81.90674998331815,
+    "input_ms": 218.29604101367295,
+    "reconnect_ms": 1019.6535830036737,
+    "close_ms": 17.852582968771458,
+    "rss_mb": 117.296875,
+    "threads": 18.0
+  },
+  "schema_sha256": "05cd5638ebe655e6d5c4cc4716b69077bd5ce9c3a983bd793852df08b33f2bbe"
+}

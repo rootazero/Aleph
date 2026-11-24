@@ -63,7 +63,7 @@ This keeps the new code to a schema + a file store + a deterministic compiler
 
 ## LLM surface (R8 — everything is a tool)
 
-The `workflow` builtin tool (`builtin_tools/workflow_tool.rs`) exposes
+The `workflow` builtin tool (`src/builtin_tools/workflow_tool.rs`) exposes
 `save` / `list` / `describe` / `delete` / `run` / `status` / `runs` /
 `rerun_failed` / `cancel` / `pause` / `resume` / `export` / `import` and the
 proposal family. `run` loads a saved template, materialises it onto a team,

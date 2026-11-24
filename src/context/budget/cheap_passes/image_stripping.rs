@@ -1,13 +1,15 @@
 //! `HistoricalImageStrippingStage` — drop images from all messages preceding
-//! the newest image-bearing turn (beyond the fresh tail), saving ~1500
+//! the newest image-bearing turn (beyond the fresh tail), saving ~1490
 //! tokens per image.
 //!
 //! Hermes-borrowed heuristic: the most recent screenshot/image is "live"
 //! context; older ones are historical and can be summarised as a text
-//! placeholder. The 1500-token estimate matches Anthropic's image pricing
-//! and Hermes' constant.
+//! placeholder. The image charge is Anthropic's image pricing (the same
+//! constant the pressure estimator uses); the *reported* saving is the net
+//! difference the shared estimator sees, because the placeholder text the
+//! strip leaves behind is charged too.
 
-use crate::context::budget::pressure::IMAGE_TOKENS_ESTIMATE;
+use crate::context::budget::pressure::{estimate_message_tokens_aware, DEFAULT_PROSE_RATIO};
 use crate::context::budget::ContextPressure;
 use crate::providers::message::{ContentBlock, UnifiedMessage};
 use async_trait::async_trait;
@@ -42,7 +44,7 @@ impl crate::context::budget::preflight::PreflightStage for HistoricalImageStripp
 #[async_trait]
 impl crate::context::budget::preflight::PreflightStage for HistoricalUserImageStrippingStage {
     fn name(&self) -> &'static str {
-        "historical_image_stripping"
+        "historical_user_image_stripping"
     }
 
     async fn prepare(
@@ -62,12 +64,15 @@ fn strip_history(
     fresh_tail_count: usize,
     tool_results: bool,
 ) -> usize {
-    // Locate the newest image-bearing message — that one stays intact.
+    // Locate the newest image-bearing message for the matching category — that one stays intact.
     let newest_image_idx = messages
         .iter()
         .enumerate()
         .rev()
-        .find(|(_, m)| message_has_image(m))
+        .find(|(_, m)| {
+            (tool_results || !matches!(m, UnifiedMessage::ToolResult { .. }))
+                && message_has_image(m)
+        })
         .map(|(i, _)| i);
     let Some(newest_image_idx) = newest_image_idx else {
         return 0; // no images in history
@@ -82,8 +87,19 @@ fn strip_history(
         if !tool_results && matches!(msg, UnifiedMessage::ToolResult { .. }) {
             continue;
         }
+        if !message_has_image(msg) {
+            continue;
+        }
+        // The saving is the *net* difference the shared estimator sees: the
+        // placeholder the strip leaves behind is itself charged, so the gross
+        // per-image constant over-reports by the placeholder's own cost.
+        let before = estimate_message_tokens_aware(msg, DEFAULT_PROSE_RATIO);
         let stripped = strip_images_in_place(msg);
-        total_freed += stripped * IMAGE_TOKENS_ESTIMATE;
+        if stripped == 0 {
+            continue;
+        }
+        let after = estimate_message_tokens_aware(msg, DEFAULT_PROSE_RATIO);
+        total_freed += before.saturating_sub(after);
     }
     total_freed
 }
@@ -115,6 +131,7 @@ fn strip_images_in_place(msg: &mut UnifiedMessage) -> usize {
 mod tests {
     use super::*;
     use crate::context::budget::preflight::PreflightStage;
+    use crate::context::budget::pressure::IMAGE_TOKENS_ESTIMATE;
 
     fn pressure() -> ContextPressure {
         ContextPressure {
@@ -150,9 +167,10 @@ mod tests {
         ];
         let stage = HistoricalImageStrippingStage;
         let freed = stage.prepare(&mut messages, &pressure(), 2).await;
-        assert_eq!(
-            freed, IMAGE_TOKENS_ESTIMATE,
-            "should strip exactly one image (the oldest), got {freed}"
+        assert!(freed > 0, "should strip the oldest image, got {freed}");
+        assert!(
+            freed < IMAGE_TOKENS_ESTIMATE,
+            "the reported saving is net: the placeholder text left behind is charged too, got {freed}"
         );
         // Oldest image gone:
         assert!(!message_has_image(&messages[0]));
@@ -210,6 +228,13 @@ mod tests {
         ];
         let stage = HistoricalImageStrippingStage;
         let freed = stage.prepare(&mut messages, &pressure(), 2).await;
-        assert_eq!(freed, 3 * IMAGE_TOKENS_ESTIMATE);
+        assert!(
+            freed > 2 * IMAGE_TOKENS_ESTIMATE,
+            "three images must free more than two image charges, got {freed}"
+        );
+        assert!(
+            freed < 3 * IMAGE_TOKENS_ESTIMATE,
+            "the reported saving is net: the placeholder text left behind is charged too, got {freed}"
+        );
     }
 }

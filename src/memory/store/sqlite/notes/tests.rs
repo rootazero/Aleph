@@ -398,7 +398,8 @@ mod tests {
         backend.index_note(&other, AGENT, "wiki").await.unwrap();
 
         {
-            let conn = backend.conn().lock().unwrap();
+            let connection = backend.conn().lock().unwrap();
+            let conn = connection.as_ref().unwrap();
             let dangling: i64 = conn
                 .query_row(
                     "SELECT COUNT(*) FROM notes_links \
@@ -431,7 +432,8 @@ mod tests {
             "one deduped edge for the colliding pair + one independent edge"
         );
 
-        let conn = backend.conn().lock().unwrap();
+        let connection = backend.conn().lock().unwrap();
+        let conn = connection.as_ref().unwrap();
 
         // Exactly one active edge remains for the deduped pair.
         let active_count: i64 = conn
@@ -520,7 +522,8 @@ mod tests {
 
         // Exactly one row remains for the (from, to) pair — no duplicate, no
         // leftover dangling remnant.
-        let conn = backend.conn().lock().unwrap();
+        let connection = backend.conn().lock().unwrap();
+        let conn = connection.as_ref().unwrap();
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM notes_links \
@@ -764,7 +767,8 @@ mod tests {
         backend.index_note(&alice, AGENT, "entity").await.unwrap();
 
         // Read the relation column directly via the test conn accessor.
-        let conn = backend.conn().lock().unwrap();
+        let connection = backend.conn().lock().unwrap();
+        let conn = connection.as_ref().unwrap();
         let relation: Option<String> = conn
             .query_row(
                 "SELECT relation FROM notes_links \
@@ -1352,7 +1356,8 @@ mod tests {
         }
         // Backdate one row past the window.
         {
-            let conn = backend.conn().lock().unwrap_or_else(|e| e.into_inner());
+            let connection = backend.conn().lock().unwrap_or_else(|e| e.into_inner());
+            let conn = connection.as_ref().unwrap();
             conn.execute(
                 "UPDATE notes_review_archive SET archived_at = archived_at - 1000 \
                  WHERE candidate_json LIKE '%old%'",

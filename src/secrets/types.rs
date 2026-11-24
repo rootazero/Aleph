@@ -122,6 +122,9 @@ pub enum SecretError {
     #[error("Vault I/O error: {0}")]
     Io(#[from] std::io::Error),
 
+    #[error("Vault version {0} is newer than supported; please upgrade Aleph")]
+    UnsupportedVersion(u32),
+
     #[error("Vault serialization error: {0}")]
     Serialization(String),
 

@@ -1,5 +1,9 @@
 # Self-Growth Module Redesign
 
+> **状态：历史文档（point-in-time）** — 本文记录的是 2026-04-10 当时的设计，不代表当前架构。
+> 当前状态以代码为准（记忆检索现居 `src/memory/`，技能模型分类见 `docs/reference/SKILL_MODEL_TAXONOMY.md`）。
+> 三层文档契约 → `docs/reference/EVIDENCE_LAYER.md`。
+
 **Date**: 2026-04-10
 **Status**: Approved (Rev.2 — Skill-as-Fact integration)
 **Inspired by**: hermes-agent skill extraction mechanism
@@ -224,10 +228,10 @@ pub struct SkillManageArgs {
 ```
 
 Operations:
-- **create**: validate name → generate embedding → persist to [raw memory](../memory/RAW_MEMORY.md) → synthesize to [notes](../memory/NOTES.md)
+- **create**: validate name → generate embedding → persist to [raw memory](memory/RAW_MEMORY.md) → synthesize to [notes](memory/NOTES.md)
 - **patch**: find by VFS path → update content → regenerate embedding → persist and resynthessize
-- **delete**: mark as deleted in [raw memory](../memory/RAW_MEMORY.md)
-- **list**: query [raw memory](../memory/RAW_MEMORY.md) with category=Skill filter → return name + description list
+- **delete**: mark as deleted in [raw memory](memory/RAW_MEMORY.md)
+- **list**: query [raw memory](memory/RAW_MEMORY.md) with category=Skill filter → return name + description list
 - **export**: dump skill content to SKILL.md file on disk
 
 ### skill_search Tool

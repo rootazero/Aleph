@@ -193,7 +193,7 @@ npm run build:css
 **配置文件**：
 - `tailwind.config.js`: 配置内容扫描路径（Rust 源文件 + HTML）
 - `styles/tailwind.css`: 源 CSS 文件（包含 @tailwind 指令）
-- `dist/tailwind.css`: 编译后的 CSS（嵌入到二进制）
+- `interfaces/webchat/dist/tailwind.css`: 编译后的 CSS（嵌入到二进制）
 
 **关键特性**：
 - 本地编译：无需 CDN，完全离线可用
@@ -201,9 +201,9 @@ npm run build:css
 - 生产优化：minified，仅包含使用的类
 - 嵌入二进制：通过 rust-embed 打包进可执行文件
 
-### Desktop App (Tauri shell)
+### Desktop Hosts (Tauri shell today, NSH forward)
 
-The desktop app lives in `desktop/shell/` (Tauri); build it via `just`:
+The released desktop app lives in `desktop/shell/` (the legacy Tauri host); build it via `just`:
 
 ```bash
 # Run the desktop app in dev mode (rebuilds WASM first)
@@ -215,6 +215,10 @@ just shell-build
 # Build Panel-only shell installers (connects to a LAN server, no bundled server)
 just shell-build-lite
 ```
+
+The forward host is `desktop/nsh-shell/` (`aleph-nsh-shell`, NSH 0.6.0). It hosts the same
+Panel and has no `just` recipe or release pipeline yet — see
+[Phase 11 cutover](../superpowers/plans/2026-11-21-phase11-nsh-cutover.md).
 
 ### Server-Only Build (no desktop app)
 

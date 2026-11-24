@@ -202,30 +202,6 @@ pub fn ask_user_frame(
     }
 }
 
-/// Publish the next question's `AskUser` frame after an advance.
-///
-/// Skipped when the producer carried no run id: an `AskUser` frame with an
-/// empty `run_id` cannot be correlated by any client, and
-/// `EventVisibilityIndex` would have nothing to seed from.
-fn publish_advance(entry: &PendingEntry, session_key: &str) {
-    if entry.run_id.is_empty() {
-        return;
-    }
-    let Some(bus) = crate::gateway::event_emitter::gateway_event_bus() else {
-        return;
-    };
-    let frame = ask_user_frame(
-        &entry.run_id,
-        session_key,
-        &entry.request_id,
-        &entry.request,
-        entry.answers.len(),
-    );
-    if let Err(e) = bus.publish_frame(&frame) {
-        tracing::debug!(error = %e, "failed to publish the next AskUser question");
-    }
-}
-
 /// Per-session registry of pending clarifications.
 ///
 /// Keyed by channel session key. At most one clarification is pending per
@@ -422,6 +398,26 @@ impl ClarificationManager {
         expected_request_id: Option<&str>,
         expected_question_id: Option<&str>,
     ) -> ResolveOutcome {
+        self.resolve_many_expected_before_send(
+            session_key,
+            replies,
+            expected_request_id,
+            expected_question_id,
+            || {},
+        )
+        .await
+    }
+
+    // Production supplies a no-op. Tests can close the real receiver after
+    // the liveness check without racing timers or exposing a public hook.
+    async fn resolve_many_expected_before_send(
+        &self,
+        session_key: &str,
+        replies: &[&str],
+        expected_request_id: Option<&str>,
+        expected_question_id: Option<&str>,
+        before_send: impl FnOnce(),
+    ) -> ResolveOutcome {
         /// What the write-locked inspection decided, so the acting half runs
         /// with no outstanding borrow of the map.
         enum Step {
@@ -432,7 +428,7 @@ impl ClarificationManager {
             /// Waiter gone (run cancelled): retire the zombie card.
             Abandoned,
             /// Answers recorded, questions remain.
-            More(Box<RenderedQuestion>, usize),
+            More(Box<RenderedQuestion>, usize, Option<Box<GatewayEventFrame>>),
             /// Answers recorded, none remain.
             Complete,
         }
@@ -465,8 +461,16 @@ impl ClarificationManager {
                 match entry.current() {
                     Some(question) => {
                         let rendered = render::render(question, cursor, total);
-                        publish_advance(entry, session_key);
-                        Step::More(Box::new(rendered), total - cursor)
+                        let frame = (!entry.run_id.is_empty()).then(|| {
+                            ask_user_frame(
+                                &entry.run_id,
+                                session_key,
+                                &entry.request_id,
+                                &entry.request,
+                                entry.answers.len(),
+                            )
+                        });
+                        Step::More(Box::new(rendered), total - cursor, frame.map(Box::new))
                     }
                     None => Step::Complete,
                 }
@@ -501,14 +505,25 @@ impl ClarificationManager {
                 );
                 ResolveOutcome::Stale
             }
-            // The entry stays parked; the caller owns the transport and delivers.
-            Step::More(next, remaining) => ResolveOutcome::More { next, remaining },
+            // The entry stays parked; publish only after releasing the global lock.
+            Step::More(next, remaining, frame) => {
+                drop(pending);
+                if let Some(frame) = frame {
+                    if let Some(bus) = crate::gateway::event_emitter::gateway_event_bus() {
+                        if let Err(e) = bus.publish_frame(&frame) {
+                            tracing::debug!(error = %e, "failed to publish the next AskUser question");
+                        }
+                    }
+                }
+                ResolveOutcome::More { next, remaining }
+            }
             Step::Complete => {
                 let mut entry = pending
                     .remove(session_key)
                     .expect("invariant: observed under this same write lock");
                 let request_id = entry.request_id.clone();
                 let answers = std::mem::take(&mut entry.answers);
+                before_send();
                 let delivered = match entry.sender.take() {
                     Some(sender) => sender.send(ClarificationResult::answered(answers)).is_ok(),
                     None => false,
@@ -520,7 +535,14 @@ impl ClarificationManager {
                 } else {
                     // The waiter vanished between the liveness check and the
                     // send. The answer reached nobody, so the message was not
-                    // consumed.
+                    // consumed and the reply is not ours to keep.
+                    //
+                    // The question is over either way, so the terminal frame
+                    // goes out: without it the card of the face that asked
+                    // survives until the request deadline, waiting for a reply
+                    // that can no longer arrive. `Cancelled`, not `Resolved`:
+                    // nobody received the answer.
+                    publish_ended(session_key, &request_id, ClarificationOutcome::Cancelled);
                     ResolveOutcome::Stale
                 }
             }
@@ -529,6 +551,11 @@ impl ClarificationManager {
 
     /// Cancel the pending clarification for `session_key`, if any, unblocking
     /// its waiter with [`ClarificationResult::cancelled`].
+    /// Test-only: cancels whatever is pending for the session, with NO
+    /// request identity. Production must use [`Self::cancel_if_request`] —
+    /// an identity-less cancel can drop a newer question (2026-11-20
+    /// severed-wire audit, SW-CLAR-02).
+    #[cfg(test)]
     pub async fn cancel(&self, session_key: &str) -> bool {
         self.cancel_if_request(session_key, None).await
     }
@@ -568,6 +595,9 @@ impl ClarificationManager {
     /// key: a fresh sibling question is live, so it is never touched.
     ///
     /// Returns whether an entry was retired.
+    /// Test-only: see [`Self::cancel`]. Production uses
+    /// [`Self::cancel_abandoned_if_request`].
+    #[cfg(test)]
     pub async fn cancel_abandoned(&self, session_key: &str) -> bool {
         self.cancel_abandoned_if_request(session_key, None).await
     }
@@ -709,17 +739,19 @@ fn normalize(reply: &str) -> &str {
 /// the caller to opt into.
 fn match_option(question: &ClarificationQuestion, token: &str) -> Option<u32> {
     let token = token.trim();
-    if let Ok(n) = token.parse::<usize>() {
-        if n >= 1 && n <= question.options.len() {
-            return u32::try_from(n - 1).ok();
-        }
-    }
     let lower = token.to_lowercase();
-    question
+    if let Some(index) = question
         .options
         .iter()
         .position(|opt| opt.value.to_lowercase() == lower || opt.label.to_lowercase() == lower)
-        .and_then(|i| u32::try_from(i).ok())
+    {
+        return u32::try_from(index).ok();
+    }
+    token
+        .parse::<usize>()
+        .ok()
+        .filter(|n| *n >= 1 && *n <= question.options.len())
+        .and_then(|n| u32::try_from(n - 1).ok())
 }
 
 /// Map a user's free-text reply onto a [`ClarificationAnswer`] for `question`.
@@ -1409,5 +1441,73 @@ mod tests {
             );
         }
         assert!(mgr.has_pending("sess-fresh").await);
+    }
+
+    /// A vanished waiter still ends the request.
+    ///
+    /// The waiter disappears when its parked run is cancelled: the receiver is
+    /// dropped. When that lands between the liveness check and the send, the
+    /// answer reaches nobody — the reply is not consumed — but the question is
+    /// over, so the face that asked must be told. Without the terminal frame
+    /// its card survives until the request deadline, waiting for a reply that
+    /// can no longer arrive.
+    ///
+    /// Close the real receiver at the final send boundary, after the entry
+    /// has passed the liveness check, rather than betting on worker timing.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[serial_test::serial(gateway_event_bus)]
+    async fn a_vanished_waiter_still_ends_the_request_with_a_cancelled_frame() {
+        use crate::gateway::event_bus::GatewayEventBus;
+        use crate::gateway::event_emitter::team_fanout::set_team_event_bus;
+
+        let bus = Arc::new(GatewayEventBus::new());
+        set_team_event_bus(bus.clone());
+        let mut frames = bus.subscribe_typed();
+        let request = ClarificationRequest::new(vec![ClarificationQuestion::select(
+            "q0",
+            "Where?",
+            vec![ClarificationOption::new("v0", "option 0")],
+        )])
+        .expect("non-empty request");
+        let mgr = ClarificationManager::new();
+        let session_key = "sess-vanished-before-send";
+        let rx = mgr
+            .register(session_key.to_owned(), request, DEFAULT_CLARIFY_TIMEOUT, "")
+            .await;
+        let mut reached_send = false;
+        let outcome = mgr
+            .resolve_many_expected_before_send(session_key, &["1"], None, None, || {
+                reached_send = true;
+                drop(rx);
+            })
+            .await;
+
+        assert!(
+            reached_send,
+            "the live entry must reach the final send boundary"
+        );
+        assert_eq!(outcome, ResolveOutcome::Stale);
+        assert!(
+            !outcome.consumed(),
+            "a vanished waiter must not consume the reply"
+        );
+        let mut ended = Vec::new();
+        loop {
+            match frames.try_recv() {
+                Ok(GatewayEventFrame::ClarificationEnded {
+                    session_key: key,
+                    outcome: frame_outcome,
+                    ..
+                }) if key == session_key => ended.push(frame_outcome),
+                Ok(_) => {}
+                Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
+                Err(_) => break,
+            }
+        }
+        assert_eq!(
+            ended,
+            vec![ClarificationOutcome::Cancelled],
+            "a vanished waiter must end exactly once with a Cancelled frame"
+        );
     }
 }

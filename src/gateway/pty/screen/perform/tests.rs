@@ -653,6 +653,8 @@ fn every_csi_verb_the_dispatcher_claims_actually_reaches_the_grid() {
         // SU and SD.
         (b'S', b"a\r\nb\x1b[1S"),
         (b'T', b"a\r\nb\x1b[1T"),
+        // DSR changes no cell; its effect is the reply `observable` reads.
+        (b'n', b"ab\x1b[6n"),
     ];
     // `~` is a legal CSI final byte no arm claims.
     each_probe_reaches_the_grid("CSI", probes, b'~', 3, 8);
@@ -662,6 +664,30 @@ fn every_csi_verb_the_dispatcher_claims_actually_reaches_the_grid() {
         probes,
     );
     assert_forwarding_body_claims_nothing("csi_dispatch");
+}
+
+/// ConPTY blocks its first render on `CSI 6 n`, so the reply has to name
+/// the real cursor, and requests that are not DSR must stay unanswered.
+#[test]
+fn device_status_requests_queue_the_terminal_replies() {
+    let reply = |bytes: &[u8]| {
+        let mut s = Screen::new(3, 8);
+        s.feed(bytes);
+        s.take_replies()
+    };
+    assert_eq!(reply(b"ab\x1b[6n"), b"\x1b[1;3R");
+    // Pending wrap after the last column reports that column.
+    assert_eq!(reply(b"\x1b[2;8Hx\x1b[6n"), b"\x1b[2;8R");
+    assert_eq!(reply(b"\x1b[2;3r\x1b[?6h\x1b[2;4H\x1b[6n"), b"\x1b[2;4R");
+    assert_eq!(reply(b"\x1b[5n"), b"\x1b[0n");
+    assert!(reply(b"\x1b[?6n\x1b[3n").is_empty());
+
+    let mut s = Screen::new(3, 8);
+    s.feed(b"\x1b[6n");
+    assert_eq!(s.take_replies(), b"\x1b[1;1R");
+    assert!(s.take_replies().is_empty(), "a reply is delivered once");
+    s.feed(&b"\x1b[6n".repeat(2000));
+    assert!(s.take_replies().len() <= super::MAX_PENDING_REPLY_BYTES);
 }
 
 /// The C0 table is the same shape as the CSI one and had the same
@@ -932,15 +958,15 @@ fn claimed_byte_literals(code: &str) -> std::collections::BTreeSet<u8> {
     out
 }
 
-/// Everything a `Perform` method can change: the cells, the cursor and
-/// the bell. Cells alone would call a cursor-only arm (BS, HT) or a
-/// flag-only arm (BEL) "no change" and pass against an arm that was
-/// never wired.
-fn observable(bytes: &[u8], rows: u16, cols: u16) -> (Vec<Vec<Cell>>, (u16, u16), bool) {
+/// Everything a `Perform` method can change: the cells, the cursor, the
+/// bell and the replies owed to the program. Cells alone would call a
+/// cursor-only arm (BS, HT), a flag-only arm (BEL) or a reply-only arm
+/// (DSR) "no change" and pass against an arm that was never wired.
+fn observable(bytes: &[u8], rows: u16, cols: u16) -> (Vec<Vec<Cell>>, (u16, u16), bool, Vec<u8>) {
     let mut s = Screen::new(rows, cols);
     s.feed(bytes);
     let cells: Vec<Vec<Cell>> = (0..rows).map(|r| s.grid.row_cells(r).to_vec()).collect();
-    (cells, s.grid.cursor(), s.take_bell())
+    (cells, s.grid.cursor(), s.take_bell(), s.take_replies())
 }
 
 /// Feed each probe, then feed it again with the byte it claims swapped

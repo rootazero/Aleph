@@ -49,9 +49,15 @@ pub const MAX_RETRIES_CEILING: u32 = 20;
 ///
 /// Absent → the task is eligible immediately (no pending backoff). This is
 /// transient *runtime* state living in the same metadata channel as the
-/// per-task config keys ([`MAX_RETRIES_METADATA_KEY`], `managed_by`, …) — a
-/// past value is harmless (the gate is `> now`) and the next failure overwrites
-/// it, so it never needs explicit clearing.
+/// per-task config keys ([`MAX_RETRIES_METADATA_KEY`], `managed_by`, …).
+///
+/// A PAST value is harmless (the gate is `> now`) and the next failure
+/// overwrites it. A FUTURE value, however, is NOT harmless for a manual
+/// re-arm: the scheduler skips every Pending task whose deadline is still in
+/// the future, with no exemption for operator-initiated retries. A deliberate
+/// re-arm therefore MUST clear the deadline — that is what
+/// [`with_retry_budget_reset_at`] does (it drops the deadline key in the same
+/// write that installs the budget anchor).
 pub const RETRY_NOT_BEFORE_METADATA_KEY: &str = "retry_not_before";
 
 /// Metadata key under which an **operator hard-retry** re-arms the retry
@@ -92,6 +98,19 @@ pub fn read_retry_budget_reset_at(metadata: &Value) -> Option<u64> {
 /// set to `reset_at`, preserving every other key. Mirrors
 /// [`with_retry_not_before`]: a non-object input is promoted to an empty
 /// object, and the original is left untouched (immutability).
+///
+/// **A deliberate re-arm clears the pending backoff deadline too**
+/// ([`RETRY_NOT_BEFORE_METADATA_KEY`]). The two halves of "re-arm the ladder"
+/// must agree: the budget anchor says "count only failures from here on", and
+/// the time gate says "not before <deadline>". Re-arming only the first half
+/// leaves a deadline installed by the previous failure, and the scheduler
+/// (which applies the time gate to EVERY Pending task, with no exemption for
+/// operator-initiated retries) would silently defer the operator's retry — the
+/// task would sit Pending with an empty result and no visible reason, for up
+/// to the whole backoff window.
+///
+/// Automatic retries are unaffected: they install their own deadline through
+/// [`with_retry_not_before`] on the dispatcher's failure path.
 #[must_use]
 pub fn with_retry_budget_reset_at(metadata: Value, reset_at: u64) -> Value {
     let mut value = match metadata {
@@ -103,6 +122,7 @@ pub fn with_retry_budget_reset_at(metadata: Value, reset_at: u64) -> Value {
             RETRY_BUDGET_RESET_AT_METADATA_KEY.to_string(),
             Value::Number(reset_at.into()),
         );
+        obj.remove(RETRY_NOT_BEFORE_METADATA_KEY);
     }
     value
 }
@@ -115,6 +135,12 @@ pub fn with_retry_budget_reset_at(metadata: Value, reset_at: u64) -> Value {
 /// directly in tests without a live dispatcher. Orphan reclaims leave a
 /// `Running` row that never finished, so they never consume budget; only
 /// clean `Failed`/`Timeout` attempts do (unchanged from the pre-anchor rule).
+///
+/// This is the ONLY retry-budget counter: it is anchored, so a task that was
+/// manually re-armed has a FRESH budget. Anything that reports "how much of
+/// the retry budget is left" must call this with the anchor — a lifetime
+/// count (ignoring the anchor) would report an exhausted budget for a task
+/// that was just re-armed.
 #[must_use]
 pub fn budget_failures_since(runs: &[super::CoordTaskRun], reset_at: Option<u64>) -> u32 {
     let anchor = reset_at.unwrap_or(0);
@@ -188,11 +214,7 @@ pub fn read_max_retries(metadata: &Value) -> Option<u32> {
     metadata
         .get(MAX_RETRIES_METADATA_KEY)
         .and_then(Value::as_u64)
-        .map(|n| {
-            u32::try_from(n)
-                .unwrap_or(MAX_RETRIES_CEILING)
-                .min(MAX_RETRIES_CEILING)
-        })
+        .map(|n| n.min(MAX_RETRIES_CEILING as u64) as u32)
 }
 
 /// Return a new metadata value with `max_retries` merged in under
@@ -331,6 +353,20 @@ pub fn read_retry_not_before(metadata: &Value) -> Option<u64> {
 /// `not_before`, preserving every other key. Mirrors [`with_max_retries`]: a
 /// non-object input is promoted to an empty object, and the original is left
 /// untouched (immutability).
+///
+/// ## Lost-update window (known, documented)
+///
+/// The metadata column is replaced WHOLESALE by the store's update path (see
+/// `CoordTaskUpdate::metadata`), so this helper is only safe when the caller
+/// re-reads the row immediately before writing it back. A caller that read
+/// the row earlier and writes this value over it erases every key written in
+/// between — notably an operator's `retry_budget_reset_at` anchor, which
+/// would leave the retry budget NOT re-armed and kill the task terminally on
+/// its first new failure.
+///
+/// Stamp the deadline onto the row AS READ AT WRITE TIME to avoid that
+/// window — the store replaces the whole metadata blob, so a deadline
+/// stamped onto a stale snapshot erases whatever was written in between.
 #[must_use]
 pub fn with_retry_not_before(metadata: Value, not_before: u64) -> Value {
     let mut value = match metadata {
@@ -344,24 +380,6 @@ pub fn with_retry_not_before(metadata: Value, not_before: u64) -> Value {
         );
     }
     value
-}
-
-/// Count the budget-consuming attempts in a task's run history: clean
-/// `Failed`/`Timeout` rows only. `Abandoned` (crash orphans) and `Running`
-/// rows are deliberately excluded — an interrupted attempt is not the task's
-/// fault. Single source of truth shared by the dispatcher's failure path.
-#[must_use]
-pub fn count_failed_attempts(runs: &[super::CoordTaskRun]) -> u32 {
-    let n = runs
-        .iter()
-        .filter(|r| {
-            matches!(
-                r.status,
-                super::TaskRunStatus::Failed | super::TaskRunStatus::Timeout
-            )
-        })
-        .count();
-    u32::try_from(n).unwrap_or(u32::MAX)
 }
 
 /// Whether a task may be (re-)dispatched at `now_epoch` given any pending
@@ -632,7 +650,7 @@ mod tests {
     }
 
     #[test]
-    fn count_failed_attempts_excludes_interrupted_rows() {
+    fn budget_failures_since_excludes_interrupted_rows() {
         use crate::agents::swarm::tasks::{CoordTaskRun, TaskRunStatus};
         let run = |status: TaskRunStatus| CoordTaskRun {
             id: String::new(),
@@ -654,7 +672,7 @@ mod tests {
             run(TaskRunStatus::Running),
             run(TaskRunStatus::Abandoned), // crash orphan — not the task's fault
         ];
-        assert_eq!(count_failed_attempts(&runs), 2);
+        assert_eq!(budget_failures_since(&runs, None), 2);
     }
 
     #[test]
@@ -667,5 +685,35 @@ mod tests {
         // At or past the deadline → eligible.
         assert!(is_retry_eligible(&pending, 100));
         assert!(is_retry_eligible(&pending, 101));
+    }
+
+    /// A manual re-arm re-arms BOTH halves of the ladder: the budget anchor
+    /// AND the time gate. Leaving a future deadline behind would defer the
+    /// operator's retry with no visible reason.
+    #[test]
+    fn a_manual_retry_clears_the_pending_backoff_deadline() {
+        let pending = with_retry_not_before(json!({ MAX_RETRIES_METADATA_KEY: 2 }), 1_700_000_000);
+        assert!(!is_retry_eligible(&pending, 1_699_999_999));
+        let rearmed = with_retry_budget_reset_at(pending, 1_700_000_001);
+        assert_eq!(read_retry_not_before(&rearmed), None);
+        assert!(is_retry_eligible(&rearmed, 1_700_000_001));
+        // The anchor and the sibling key survive the re-arm.
+        assert_eq!(read_retry_budget_reset_at(&rearmed), Some(1_700_000_001));
+        assert_eq!(read_max_retries(&rearmed), Some(2));
+    }
+
+    /// Stamping the deadline onto the row as read at write time preserves
+    /// every key written since the caller read it — the whole-blob
+    /// replacement would erase an operator's anchor.
+    #[test]
+    fn stamping_the_deadline_preserves_concurrent_keys() {
+        let current = json!({
+            RETRY_BUDGET_RESET_AT_METADATA_KEY: 1_700_000_000,
+            MAX_RETRIES_METADATA_KEY: 2,
+        });
+        let stamped = with_retry_not_before(current, 1_700_000_500);
+        assert_eq!(read_retry_not_before(&stamped), Some(1_700_000_500));
+        assert_eq!(read_retry_budget_reset_at(&stamped), Some(1_700_000_000));
+        assert_eq!(read_max_retries(&stamped), Some(2));
     }
 }

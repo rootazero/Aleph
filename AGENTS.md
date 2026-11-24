@@ -36,7 +36,7 @@
 | # | 红线 | 一句话 |
 |---|------|--------|
 | **R1** | 大脑与四肢绝对分离 | Core 不调平台 API；走 Bridge IPC |
-| **R2** | UI 逻辑唯一源 | 复杂业务 UI 在 Leptos/WASM；Bridge 只做 API 桥接 |
+| **R2** | UI 逻辑唯一源 | 复杂业务 UI 使用唯一共享呈现源；宿主/Bridge 仅做平台与协议适配，Core 是唯一业务事实与授权权威 |
 | **R3** | 核心轻量化 | 不为非核心功能引入重三方库；优先 Skill/MCP |
 | **R4** | Interface 层禁止业务逻辑 | Channel/Bot/CLI/Panel 纯 I/O |
 | **R5** | AI 主动到达 | 通过用户已有工作通道主动送达 |
@@ -50,9 +50,31 @@
 
 ## 🛠 Tech Stack & Do NOT introduce
 
-**核心栈**: Rust Core (tokio + serde) · 记忆 SQLite + sqlite-vec · 接口 JSON Schema (schemars) · Panel Leptos/WASM · 桌面壳 Tauri。
+**核心栈 / Core stack**: Rust Core (tokio + serde) · 记忆 SQLite + sqlite-vec · 接口 JSON Schema (schemars)。当前 Panel 为 Leptos/WASM，桌面宿主双轨（见下节）。迁移目标是 Desktop/Web 共享 TSX、Native Components 与 Web fallback；尚未切换默认。 / See [current and target mounts](docs/reference/DESKTOP_SHELL.md#nsh-panel-migration--panel-迁移).
 
 **Do NOT introduce**（基于 R1/R3/R7 推导，违者不得合入）→ [REDLINES.md](docs/reference/REDLINES.md)
+
+---
+
+## 🖥 桌面宿主：双轨现状（2026-11）
+
+> **一个 Panel，两个宿主。** Panel 代码只有一份（`interfaces/webchat` → `aleph-panel`，Leptos 0.8 CSR/WASM），
+> 由 `aleph-server` 内嵌资源（`rust_embed`）在 `http://127.0.0.1:18790` 提供；宿主只是 WebView 外壳。
+
+| 宿主 | 位置 | 现状（2026-11-23） |
+|---|---|---|
+| 遗留 Tauri 宿主 | `desktop/shell`（`aleph-desktop-shell`，Tauri v2） | **仍在发版**：CI `aleph-app-release.yml` 与 `just shell-build` 走它；自带 updater / `aleph://` deeplink / macOS 菜单 / 服务管理 |
+| NSH 宿主 | `desktop/nsh-shell`（`aleph-nsh-shell`，nsh 0.6.0） | **目标形态**：窗口 + 托盘 + 全局快捷键 + 通知授权 + 面板桥；尚无 updater / deeplink / macOS 菜单 / 服务控制，**尚无 release 流水线与构建 `just` 目标**（仅有开发入口 `just shell-tsx-dev`） |
+
+- **宿主↔Panel 走类型化契约**：`shared/protocol/src/panel_shell.rs`（宿主发 `ShellRequest`、收 `PanelReply`；凭据与自启动状态以 `CredentialCall` / `CredentialReply` / `AutostartStatus` 嵌在其中）。
+  宿主侧实现 `desktop/nsh-shell/src/panel_bridge.rs`，Panel 侧消费 `interfaces/webchat/src/app/shell_bridge.rs`。
+  旧的 `__TAURI_INTERNALS__` 只剩两处未迁移消费者：`interfaces/webchat/src/api/native_credentials.rs`、
+  `interfaces/webchat/src/platform/wide/views/voice/audio.rs`。
+- **迁移门禁**：Phase 11（P11-A…P11-H）要求三平台证据 + ≥14 天双轨并行运行；Tauri 宿主的去留由门禁决定，不由文档决定。
+  计划与证据 → `docs/superpowers/plans/2026-11-21-phase11-nsh-cutover.md`。
+- **文档纪律**：证据层（`docs/superpowers/`、`docs/reports/`、`docs/engineering-reports/`、`docs/research/`）是时点记录，
+  **不是当前架构**；证据与代码冲突时以代码为准。规则与路线图 → `docs/superpowers/plans/2026-11-23-doc-architecture-realignment.md`。
+  文档地图 → [docs/README.md](docs/README.md)；三层契约 → [EVIDENCE_LAYER.md](docs/reference/EVIDENCE_LAYER.md)。
 
 ---
 
@@ -149,7 +171,7 @@
 
 [FEATURE_LOCATOR.md](docs/reference/FEATURE_LOCATOR.md) 是所有「我应该读哪个 doc」的入口。常用 reference：
 
-- [ARCHITECTURE.md](docs/reference/ARCHITECTURE.md) · [CODE_ORGANIZATION.md](docs/reference/CODE_ORGANIZATION.md) · [DESIGN_PATTERNS.md](docs/reference/DESIGN_PATTERNS.md)
+- [文档地图 docs/README.md](docs/README.md) · [EVIDENCE_LAYER.md](docs/reference/EVIDENCE_LAYER.md) · [ARCHITECTURE.md](docs/reference/ARCHITECTURE.md) · [CODE_ORGANIZATION.md](docs/reference/CODE_ORGANIZATION.md) · [DESIGN_PATTERNS.md](docs/reference/DESIGN_PATTERNS.md)
 - [HARNESS_PHILOSOPHY.md](docs/reference/HARNESS_PHILOSOPHY.md) · [SANDBOX.md](docs/reference/SANDBOX.md) · [SECURITY.md](docs/reference/SECURITY.md)
 - [PRODUCT_TOPOLOGY.md](docs/reference/PRODUCT_TOPOLOGY.md) · [RELEASE.md](docs/reference/RELEASE.md) · [WINDOWS_RUNTIME.md](docs/reference/WINDOWS_RUNTIME.md)
 - [MEMORY_SYSTEM.md](docs/reference/MEMORY_SYSTEM.md) · [TOOL_SYSTEM.md](docs/reference/TOOL_SYSTEM.md) · [SESSION_KNOBS.md](docs/reference/SESSION_KNOBS.md)
@@ -159,12 +181,12 @@
 ## 🧩 Capability Phase 4 入口
 
 - 契约与事实源：`src/capability/{descriptor,facade,backend,ownership,effect_claim}.rs`（9 类 `CapabilityKind`、`ResolveError` 闭集、`validate_lease` 三道 fail-closed 判据、`Scope.visibility` / `Reference.visibility`、`BackendLease { descriptor, owner_generation }`、`OwnershipTree::generation(&CapabilityId, &VisibilityScope) -> Option<OwnerGeneration>` 只读 accessor、`to_descriptor` sha2 canonical fingerprint）。
-- Concrete host（committed）：`src/capability/zahir_facade.rs::ZahirFacade` 组合 `ToolBackendAdapter` + `Arc<OwnershipTree>`，`describe / resolve / validate_lease / subscribe / project` 全部落地，无第二份 descriptor/handler/owner map；`ToolBackendAdapter::snapshot_capabilities()`（`src/capability/backend.rs`）单次 `snapshot_state()` 读 `(Vec<CapabilityDescriptor>, revision)`，`describe / subscribe / project` 同代。`reconcile_registry_bindings` 现走 `OwnershipTree::register_if_absent`（crate-private，单 mutex 下 `entry.or_insert_with`），observe + insert 同锁，incumbent owner / lifetime / generation / claims 保留；public `register` 仍是无条件 replacement；同 Revoked / Disposed guard fail-closed，命中即 no-op——TOCTOU 关窗，无第二份 owner map；**不**等价于 host 已 runtime mount / EffectClaim producer 已完备。**全仓无生产 `ZahirFacade::new` 构造/挂载调用点**（grep 确认仅 `src/capability/mod.rs` 模块声明）；runtime mount **未完成**，生产挂载需下一次独立 architecture approval。
+- Concrete host (committed and mounted in production): `src/capability/zahir_facade.rs::ZahirFacade` composes `ToolBackendAdapter` + `Arc<OwnershipTree>`, `describe / resolve / validate_lease / subscribe / project` are implemented, and no second descriptor/handler/owner map exists; `ToolBackendAdapter::snapshot_capabilities()` (`src/capability/backend.rs`) reads `(Vec<CapabilityDescriptor>, revision)` from one `snapshot_state()`, so `describe / subscribe / project` remain same-generation views. `reconcile_registry_bindings` uses `OwnershipTree::register_if_absent` (crate-private, one mutex, incumbent owner/lifetime/generation/claims preserved); public `register` remains unconditional replacement; Revoked / Disposed guards fail closed with no-op on a hit, closing the TOCTOU window without a second owner map. Production startup creates one canonical `ToolHandlerRegistry` and one shared `Arc<OwnershipTree>` in `src/bin/aleph-server/commands/start/mod.rs`, calls `ProjectionHost::mount_with_memory`, installs the host, and awaits `wait_until_ready`; `src/capability/projection_host.rs::mount_sources` constructs `ZahirFacade::new_with_memory`, subscribes before the initial snapshot, and starts the source/applier workers. `StartupResources::cleanup` stops Memory before `ProjectionHost::close_and_await`, which joins the owned workers. This is the bounded Tool-only production mount and Memory Resource composition; it does **not** mean every capability kind is mounted, nor that EffectClaim producers, Safe Replay, external-effect exactly-once, or a universal scheduler are complete. Evidence: [2026-11-03 capability Tool mount run](docs/superpowers/runs/2026-11-03-capability-tool-mount-evidence-run.md).
 - 恢复与原子边界：reducer fail-closed pinned（`src/capability/effect_claim.rs`：`duplicate_claim_and_illegal_migration_remain_fail_closed`）+ `SessionService::emit_batch` 默认 `Err`、唯一生产 override `InProcessActorSessionService` + `SessionEventStore::append_batch` 单事务（已审计，committed）。`StateDatabase` / ACP JSON / MCP 类型与工具视图是 projection-only，`GlobalBus` 是 notification-only。
 - `CapabilityBackend::generation()` 与 `CapabilityDescriptor.owner_generation` 已删去（旧权威回收）；generation 权威只在 `BackendLease.owner_generation` + `OwnershipTree::generation()`。
 - 订阅接真实 broadcast（committed）：`ZahirFacade::subscribe` 先 `ToolHandlerRegistry::subscribe()` 再 `describe`，drain 进纯值 `CapabilityChangeStream`；broadcast 是 live notification（256 槽、lag 可丢），**不是** durable recovery source；durable recovery 只认 `SessionEventStore`。`subscribe` 的 caller cursor 被**忽略**（同步 snapshot-anchored API 无 replay，不是去重/过滤 hint），cursor 超过 snapshot 时 fail-closed 锚定到 snapshot revision，不伪造逐条恢复。
-- `to_metadata_form`（`src/tools/service.rs:453`）仍是旧 Tool compatibility wrapper。**EffectClaim producer integration** deferred（无生产 `SessionEvent::EffectClaim*` 构造点，下期独立 approval）；automatic Safe Replay、external-effect exactly-once、universal durable scheduler、完整 ACP server gate、其余 kind backend 均 deferred。详情见 [FEATURE_LOCATOR §3.5d](docs/reference/FEATURE_LOCATOR.md)。
+- `to_metadata_form`（定义在 `crates/aleph-slot-api/src/tool.rs:423`，经 `src/tools/service.rs` 再导出）仍是旧 Tool compatibility wrapper。**EffectClaim producer integration** deferred（无生产 `SessionEvent::EffectClaim*` 构造点，下期独立 approval）；automatic Safe Replay、external-effect exactly-once、universal durable scheduler、完整 ACP server gate、其余 kind backend 均 deferred。详情见 [FEATURE_LOCATOR §3.5d](docs/reference/FEATURE_LOCATOR.md)。
 
 ---
 
-*Last updated: 2026-10-24*
+*Last updated: 2026-11-23*

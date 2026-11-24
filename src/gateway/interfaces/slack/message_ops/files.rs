@@ -93,8 +93,9 @@ pub(crate) async fn fetch_attachments(
     for file in files {
         let data = match &file.url_private {
             // size == 0 means Slack omitted it — attempt the download and let
-            // the post-fetch byte check enforce the cap.
-            Some(url) if file.size <= max_bytes => {
+            // the post-fetch byte check enforce the cap. Known sizes over the cap
+            // are rejected immediately.
+            Some(url) if file.size == 0 || file.size <= max_bytes => {
                 download_one(client, bot_token, url, max_bytes).await
             }
             Some(_) => {
@@ -141,29 +142,39 @@ async fn download_one(
             tracing::warn!("Slack file download failed: HTTP {}", resp.status());
             return None;
         }
-        resp.bytes().await.ok()
-    };
-
-    let bytes = match tokio::time::timeout(FILE_DOWNLOAD_TIMEOUT, fetch).await {
-        Ok(Some(b)) => b,
-        Ok(None) => return None,
-        Err(_elapsed) => {
-            tracing::warn!("Slack file download timed out after {FILE_DOWNLOAD_TIMEOUT:?}");
-            return None;
+        // Bounded read: an over-budget Content-Length is refused before a
+        // chunk is read, and the body is cut off before it crosses the cap.
+        // `resp.bytes()` would buffer the whole body first — the size check
+        // that used to follow it could only fire after the allocation.
+        match crate::utils::reqwest_limit::bytes_with_limit(
+            resp,
+            usize::try_from(max_bytes).unwrap_or(usize::MAX),
+        )
+        .await
+        {
+            Ok(Some(bytes)) => Some(bytes),
+            Ok(None) => {
+                tracing::warn!(
+                    "Slack file body exceeds cap {} bytes, dropping bytes",
+                    max_bytes
+                );
+                None
+            }
+            Err(e) => {
+                tracing::warn!("Slack file download failed: {e}");
+                None
+            }
         }
     };
 
-    // Guard against Slack lying about (or omitting) the size.
-    if bytes.len() as u64 > max_bytes {
-        tracing::warn!(
-            "Slack file body {} bytes exceeds cap {} bytes, dropping bytes",
-            bytes.len(),
-            max_bytes
-        );
-        return None;
+    match tokio::time::timeout(FILE_DOWNLOAD_TIMEOUT, fetch).await {
+        Ok(Some(b)) => Some(b),
+        Ok(None) => None,
+        Err(_elapsed) => {
+            tracing::warn!("Slack file download timed out after {FILE_DOWNLOAD_TIMEOUT:?}");
+            None
+        }
     }
-
-    Some(bytes.to_vec())
 }
 
 #[cfg(test)]
@@ -304,5 +315,36 @@ mod tests {
         assert_eq!(out[0].data, None);
         assert_eq!(out[0].url, None);
         assert_eq!(out[0].mime_type, "text/plain");
+    }
+
+    /// A file whose *advertised* size is under the cap but whose body is not
+    /// degrades to metadata-only.
+    ///
+    /// The advertised size is what Slack tells us; the body is what the
+    /// upstream actually serves. Before the bounded read, the body was
+    /// buffered whole and only checked afterwards, so an upstream that
+    /// understates the size could make the limb allocate whatever it liked.
+    #[tokio::test]
+    async fn fetch_attachments_lying_size_is_metadata_only() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::any())
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_bytes(vec![b'x'; 4096]))
+            .mount(&server)
+            .await;
+
+        let client = reqwest::Client::new();
+        let files = vec![SlackFile {
+            id: "F3".to_string(),
+            name: "liar.bin".to_string(),
+            mimetype: "application/octet-stream".to_string(),
+            // Advertised under the cap — the body is not.
+            size: 10,
+            url_private: Some(server.uri()),
+        }];
+        let out = fetch_attachments(&client, "xoxb-test", files, 1024).await;
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].id, "F3");
+        assert_eq!(out[0].data, None, "an over-budget body must not be kept");
+        assert_eq!(out[0].url, None);
     }
 }

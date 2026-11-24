@@ -621,6 +621,36 @@ impl ProviderConfig {
 mod tests {
     use super::*;
 
+    #[test]
+    fn provider_typos_are_reported_by_the_config_loader() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let path = temp_dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            r#"
+[providers.example]
+model = "gpt-4o"
+stream_idle_timeout_sec = 7
+cache_retentionn = "long"
+"#,
+        )
+        .unwrap();
+        let (config, dead_keys) =
+            crate::config::Config::load_from_file_reporting_dead_keys(&path).unwrap();
+        assert_eq!(
+            dead_keys,
+            vec![
+                "providers.example.cache_retentionn".to_string(),
+                "providers.example.stream_idle_timeout_sec".to_string(),
+            ]
+        );
+        assert!(config.providers["example"]
+            .stream_idle_timeout_secs
+            .is_none());
+        assert!(config.providers["example"].cache_retention.is_none());
+    }
+
     /// The published schema describes both written forms the loader accepts
     /// — a schema that said "object" alone would reject the bare flag a
     /// config tool validates against it.

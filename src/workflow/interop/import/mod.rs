@@ -64,7 +64,7 @@ pub struct ImportOutcome {
 /// `.workflow.js` could otherwise hold 4–5 GiB resident. 16 MiB is comfortably
 /// above the largest realistic workflow (the documented engineering format
 /// keeps the whole declarative surface under a few hundred KiB).
-pub(crate) const MAX_IMPORT_BYTES: usize = 16 * 1024 * 1024;
+const MAX_IMPORT_BYTES: usize = 16 * 1024 * 1024;
 
 /// Parse `src` into a manifest. See module docs for the three paths.
 pub fn parse_workflow_js(src: &str) -> Result<ImportOutcome> {
@@ -93,7 +93,7 @@ pub fn parse_workflow_js(src: &str) -> Result<ImportOutcome> {
 
     // Path 1: embedded lossless block.
     if let Some(json) = extract_embedded(src) {
-        let manifest: WorkflowManifest = serde_json::from_str(&json).map_err(|e| {
+        let manifest: WorkflowManifest = serde_json::from_str(json).map_err(|e| {
             // The embed scanner does not parse string literals — it looks for
             // the literal byte sequence `*/` to close the block. A hand-written
             // prompt that contains `*/` inside a string (`description: "use
@@ -128,11 +128,90 @@ pub fn parse_workflow_js(src: &str) -> Result<ImportOutcome> {
 
 /// Extract the JSON between the first `EMBED_PREFIX` and the matching
 /// `EMBED_SUFFIX` that follows it.  Only the first embed block is considered.
-fn extract_embedded(src: &str) -> Option<String> {
+fn extract_embedded(src: &str) -> Option<&str> {
     let start = src.find(EMBED_PREFIX)? + EMBED_PREFIX.len();
-    let rest = &src[start..];
+    let rest = src.get(start..)?;
     let end = rest.find(EMBED_SUFFIX)?;
-    Some(rest[..end].trim().to_string())
+    Some(rest.get(..end)?.trim())
+}
+
+/// The manifest id of the step at 0-based `index`.
+///
+/// A step's own id and the dependency edges pointing at it are the same
+/// string, so both are derived here instead of being formatted twice.
+fn step_id(index: usize) -> String {
+    format!("step_{}", index + 1)
+}
+
+/// The DAG layers the bare scan reconstructs while it walks the body.
+///
+/// Dependency reconstruction tracks the previous DAG "layer" so a
+/// `parallel([...])` block re-imports as sibling steps that fan out from the
+/// layer before it and fan into the step after it. A sequential step is a
+/// singleton layer (a plain chain). This recovers the parallelisation /
+/// orchestrator-workers DAG shape a flat scan would otherwise linearise, so
+/// re-imported siblings stay independent `Pending` tasks the dispatcher runs
+/// concurrently.
+///
+/// NOT the exact inverse of `export`'s topo-layers → `parallel(...)`
+/// rendering — this comment used to claim that, and it was only true for
+/// adjacent layers that are complete-bipartite in the original DAG. "Depend
+/// on every step of the preceding layer" WIDENS a partial fan-in: `a`, `b`
+/// independent and `c` depending on `a` alone round-trips into `c` depending
+/// on `a` AND `b`, so a failing `b` makes `c` `Unsatisfiable` where the
+/// original template ran it. The layer shape simply does not carry the edge
+/// set, so nothing here can recover it; the loss is disclosed on the far end
+/// instead — `export::partial_fan_in_disclosure` writes a `//` note into any
+/// rendered file whose DAG this rule cannot reproduce, and the embedded
+/// `@aleph-workflow` header (read before this scan ever runs) is what makes a
+/// round trip lossless.
+#[derive(Default)]
+struct Layers {
+    /// The layer the next step depends on (the fan-in edges).
+    prev: Vec<usize>,
+    /// The siblings accumulated inside the `parallel([...])` block that is
+    /// currently open.
+    group: Vec<usize>,
+    /// How many `parallel([...])` blocks are open.
+    depth: u32,
+}
+
+impl Layers {
+    /// The dependency edges of a step that follows the current layer: one for a
+    /// sequential predecessor, N for a fan-in after a parallel block.
+    fn depends_on(&self) -> Vec<String> {
+        self.prev.iter().map(|&p| step_id(p)).collect()
+    }
+
+    /// A `parallel([...])` block opened. Only the outermost block defines a
+    /// layer; nested parallels just keep accumulating into the same sibling
+    /// group (all concurrent).
+    fn begin_parallel(&mut self) {
+        if self.depth == 0 {
+            self.group.clear();
+        }
+        self.depth += 1;
+    }
+
+    /// The innermost `parallel([...])` block closed. Closing the outermost one
+    /// makes its members the layer the next sequential step fans in from.
+    fn end_parallel(&mut self) {
+        self.depth = self.depth.saturating_sub(1);
+        if self.depth == 0 && !self.group.is_empty() {
+            self.prev = std::mem::take(&mut self.group);
+        }
+    }
+
+    /// The step at 0-based `index` joined the DAG: a sibling inside a parallel
+    /// block extends the current group; a sequential step becomes the next
+    /// singleton layer.
+    fn push_step(&mut self, index: usize) {
+        if self.depth > 0 {
+            self.group.push(index);
+        } else {
+            self.prev = vec![index];
+        }
+    }
 }
 
 /// Light-weight scan of a hand-written `.workflow.js`.
@@ -253,29 +332,8 @@ fn scan_bare(raw: &str) -> Result<ImportOutcome> {
     let mut steps: Vec<WorkflowManifestStep> = Vec::new();
     let mut phase_titles: Vec<String> = Vec::new();
     let mut current_phase: Option<String> = None;
-    // Dependency reconstruction tracks the previous DAG "layer" so a
-    // `parallel([...])` block re-imports as sibling steps that fan out from the
-    // layer before it and fan into the step after it. A sequential step is a
-    // singleton layer (a plain chain). This recovers the parallelisation /
-    // orchestrator-workers DAG shape a flat scan would otherwise linearise, so
-    // re-imported siblings stay independent `Pending` tasks the dispatcher runs
-    // concurrently.
-    //
-    // NOT the exact inverse of `export`'s topo-layers → `parallel(...)`
-    // rendering — this comment used to claim that, and it was only true for
-    // adjacent layers that are complete-bipartite in the original DAG. "Depend
-    // on every step of the preceding layer" WIDENS a partial fan-in: `a`, `b`
-    // independent and `c` depending on `a` alone round-trips into `c` depending
-    // on `a` AND `b`, so a failing `b` makes `c` `Unsatisfiable` where the
-    // original template ran it. The layer shape simply does not carry the edge
-    // set, so nothing here can recover it; the loss is disclosed on the far end
-    // instead — `export::partial_fan_in_disclosure` writes a `//` note into any
-    // rendered file whose DAG this rule cannot reproduce, and the embedded
-    // `@aleph-workflow` header (read before this scan ever runs) is what makes a
-    // round trip lossless.
-    let mut prev_layer: Vec<usize> = Vec::new();
-    let mut parallel_depth: u32 = 0;
-    let mut parallel_group: Vec<usize> = Vec::new();
+    // The DAG layers the walk reconstructs; see [`Layers`] for the rules.
+    let mut layers = Layers::default();
     // Count of `agent()`/`clarify()` calls skipped for a dynamic (non-literal)
     // prompt — reported in `dropped` after the walk so the loss is never silent.
     let mut dynamic_prompts: usize = 0;
@@ -288,22 +346,8 @@ fn scan_bare(raw: &str) -> Result<ImportOutcome> {
                 }
                 current_phase = Some(title);
             }
-            ScanEvent::ParallelStart => {
-                // Only the outermost block defines a layer; nested parallels just
-                // keep accumulating into the same sibling group (all concurrent).
-                if parallel_depth == 0 {
-                    parallel_group.clear();
-                }
-                parallel_depth += 1;
-            }
-            ScanEvent::ParallelEnd => {
-                parallel_depth = parallel_depth.saturating_sub(1);
-                // Closing the outermost block: its members become the layer the
-                // next sequential step fans in from.
-                if parallel_depth == 0 && !parallel_group.is_empty() {
-                    prev_layer = std::mem::take(&mut parallel_group);
-                }
-            }
+            ScanEvent::ParallelStart => layers.begin_parallel(),
+            ScanEvent::ParallelEnd => layers.end_parallel(),
             ScanEvent::Agent(call) => {
                 let call = *call;
                 let i = steps.len();
@@ -318,14 +362,9 @@ fn scan_bare(raw: &str) -> Result<ImportOutcome> {
                     }
                 }
                 let phase = call.opts.phase.or_else(|| current_phase.clone());
-                // Depend on every step in the preceding layer: one for a
-                // sequential predecessor, N for a fan-in after a parallel block.
-                let depends_on: Vec<String> = prev_layer
-                    .iter()
-                    .map(|&p| format!("step_{}", p + 1))
-                    .collect();
+                let depends_on: Vec<String> = layers.depends_on();
                 steps.push(WorkflowManifestStep {
-                    id: format!("step_{}", i + 1),
+                    id: step_id(i),
                     agent: "agent".to_string(),
                     prompt: call.prompt,
                     depends_on,
@@ -359,13 +398,7 @@ fn scan_bare(raw: &str) -> Result<ImportOutcome> {
                 if let Some(note) = call.opts.opts_abandoned {
                     dropped.push(note);
                 }
-                // A sibling inside a parallel block extends the current group; a
-                // sequential step becomes the next singleton layer.
-                if parallel_depth > 0 {
-                    parallel_group.push(i);
-                } else {
-                    prev_layer = vec![i];
-                }
+                layers.push_step(i);
             }
             ScanEvent::Clarify(call) => {
                 // A `clarify("q", [choices])` step is the exact inverse of
@@ -375,12 +408,9 @@ fn scan_bare(raw: &str) -> Result<ImportOutcome> {
                 // It joins the DAG with the same layer logic as an agent step:
                 // it can follow the prior layer and be depended on by the next.
                 let i = steps.len();
-                let depends_on: Vec<String> = prev_layer
-                    .iter()
-                    .map(|&p| format!("step_{}", p + 1))
-                    .collect();
+                let depends_on: Vec<String> = layers.depends_on();
                 steps.push(WorkflowManifestStep {
-                    id: format!("step_{}", i + 1),
+                    id: step_id(i),
                     // A clarify step is owned by the sentinel, not a team member,
                     // so its `agent` is intentionally empty (matches `from_def`).
                     agent: String::new(), // rust-doctor-disable-line unnecessary-allocation
@@ -406,11 +436,7 @@ fn scan_bare(raw: &str) -> Result<ImportOutcome> {
                     collect_from: Vec::new(),
                     reduce: None,
                 });
-                if parallel_depth > 0 {
-                    parallel_group.push(i);
-                } else {
-                    prev_layer = vec![i];
-                }
+                layers.push_step(i);
             }
         }
     }
@@ -531,7 +557,8 @@ fn phase_plan(
 fn scan_meta_field(src: &str, field: &str) -> Option<String> {
     let key = format!("{field}:");
     let pos = src.find(&key)? + key.len();
-    read_first_string_literal(&src[pos..])
+    let rest = src.get(pos..)?;
+    read_first_string_literal(rest)
 }
 
 #[cfg(test)]

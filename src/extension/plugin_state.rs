@@ -256,35 +256,44 @@ impl PluginsConfig {
         Ok(crate::utils::paths::get_data_dir()?.join(PLUGINS_CONFIG_FILE))
     }
 
-    /// Read the config, degrading to defaults on any read/parse failure.
+    /// Read the config.
     ///
-    /// A corrupt file must not make every plugin vanish, so the failure
-    /// direction is "no preferences recorded" (every plugin falls back to its
-    /// origin's default: Aleph installs load, Claude Code installs stay off),
-    /// and it is `warn!`-loud rather than silent — an unreadable config that
-    /// silently re-enables what the operator disabled is exactly the kind of
-    /// thing that must not happen quietly.
-    #[must_use]
-    pub fn load(path: &Path) -> Self {
+    /// Defaults are returned for exactly one case: the file does not exist.
+    /// A file that exists but cannot be read or parsed is an ERROR, never
+    /// "no preferences recorded" — that direction silently switched owner
+    /// trust enforcement OFF (the default document has `enforce = false`)
+    /// and re-enabled every plugin the operator had refused, which is the
+    /// one way a trust decision may not fail.
+    ///
+    /// The caller decides what an unreadable document means for the run (see
+    /// [`Self::restricted_until_repaired`]); the loader only refuses to
+    /// invent a document the operator did not write.
+    pub fn load(path: &Path) -> crate::error::Result<Self> {
         match std::fs::read_to_string(path) {
-            Ok(content) => match toml::from_str(&content) {
-                Ok(cfg) => cfg,
-                Err(e) => {
-                    tracing::warn!(
-                        error = %e, path = %path.display(),
-                        "plugins config parse failed; every plugin falls back to its origin default"
-                    );
-                    Self::default()
-                }
-            },
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Self::default(),
-            Err(e) => {
-                tracing::warn!(
-                    error = %e, path = %path.display(),
-                    "plugins config read failed; every plugin falls back to its origin default"
-                );
-                Self::default()
-            }
+            Ok(content) => toml::from_str(&content).map_err(|e| {
+                crate::error::AlephError::config(format!("parse {}: {e}", path.display()))
+            }),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
+            Err(e) => Err(crate::error::AlephError::config(format!(
+                "read {}: {e}",
+                path.display()
+            ))),
+        }
+    }
+
+    /// The stand-in document for a `plugins.toml` that could not be read.
+    ///
+    /// Enforcement ON with an empty allowlist: `Bundled` and `Config`
+    /// plugins still load (the operator put them there), and every
+    /// workspace / global / Claude Cache plugin is refused until the
+    /// operator repairs the file. The default document would be the wrong
+    /// stand-in: it has `enforce = false`, i.e. "load everything", which is
+    /// exactly the posture an unreadable trust document must not produce.
+    #[must_use]
+    pub fn restricted_until_repaired() -> Self {
+        Self {
+            entries: BTreeMap::new(),
+            trust: PluginTrustConfig { enforce: true },
         }
     }
 
@@ -477,7 +486,19 @@ pub async fn forget_plugin_sidecars(plugin_id: &str) {
     let Ok(path) = PluginsConfig::default_path() else {
         return;
     };
-    let mut config = PluginsConfig::load(&path);
+    let mut config = match PluginsConfig::load(&path) {
+        Ok(config) => config,
+        Err(e) => {
+            // The document exists but cannot be read or parsed. Saving now
+            // would overwrite the operator's trust decisions with a fresh
+            // default document, so leave the file alone and say why.
+            tracing::warn!(
+                plugin_id, error = %e,
+                "plugins config unreadable; leaving it untouched instead of dropping the preference"
+            );
+            return;
+        }
+    };
     if config.forget(plugin_id) {
         if let Err(e) = config.save(&path).await {
             tracing::warn!(plugin_id, error = %e, "failed to drop plugin preference on uninstall");
@@ -567,33 +588,53 @@ mod tests {
         cfg.set_enabled("beta", true);
         cfg.save(&path).await.unwrap();
 
-        let loaded = PluginsConfig::load(&path);
+        let loaded = PluginsConfig::load(&path).unwrap();
         assert_eq!(loaded, cfg);
         assert!(!loaded.is_enabled_for("alpha", PluginOrigin::Global));
         assert!(loaded.is_enabled_for("beta", PluginOrigin::Global));
     }
 
+    /// A corrupt document is an ERROR, not "no preferences recorded".
+    ///
+    /// Degrading to the defaults used to be the documented behaviour, and it
+    /// was the bug: the default document has `enforce = false`, so an
+    /// unreadable trust document silently switched owner-trust enforcement
+    /// OFF and re-enabled every plugin the operator had refused — the one
+    /// direction a trust decision may not fail in.
     #[test]
-    fn a_corrupt_file_degrades_to_the_origin_defaults() {
+    fn a_corrupt_file_is_an_error_not_a_degradation() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(PLUGINS_CONFIG_FILE);
         std::fs::write(&path, "this is not toml {{{").unwrap();
 
-        let loaded = PluginsConfig::load(&path);
         assert!(
-            loaded.is_enabled_for("anything", PluginOrigin::Global),
-            "an unreadable config must not disable plugins Aleph installed"
+            PluginsConfig::load(&path).is_err(),
+            "a corrupt config must not be read as 'no preferences recorded'"
         );
-        assert!(
-            !loaded.is_enabled_for("anything", PluginOrigin::ClaudeCache),
-            "nor enable one Claude Code installed: no preference is not an opt-in"
-        );
+    }
+
+    /// The stand-in the manager runs with while the document is unreadable:
+    /// enforcement ON with an empty allowlist.
+    ///
+    /// The default document would be the wrong stand-in — `enforce = false`
+    /// is "load everything", which is exactly what an unreadable trust
+    /// document must not produce.
+    #[test]
+    fn the_restricted_stand_in_refuses_unvouched_plugins() {
+        let policy = PluginsConfig::restricted_until_repaired().owner_trust_policy();
+        assert!(!policy.allows("stray", PluginOrigin::Global));
+        assert!(!policy.allows("stray", PluginOrigin::Workspace));
+        assert!(!policy.allows("stray", PluginOrigin::ClaudeCache));
+        // Bundled and Config plugins are there because the operator put them
+        // there; enforcement is about directories anyone can drop a tree into.
+        assert!(policy.allows("bundled", PluginOrigin::Bundled));
+        assert!(policy.allows("configured", PluginOrigin::Config));
     }
 
     #[test]
     fn a_missing_file_is_not_an_error() {
         let dir = tempfile::tempdir().unwrap();
-        let loaded = PluginsConfig::load(&dir.path().join("absent.toml"));
+        let loaded = PluginsConfig::load(&dir.path().join("absent.toml")).unwrap();
         assert_eq!(loaded, PluginsConfig::default());
     }
 
@@ -668,7 +709,7 @@ mod tests {
         cfg.set_trusted("vouched", true);
         cfg.save(&path).await.unwrap();
 
-        let loaded = PluginsConfig::load(&path);
+        let loaded = PluginsConfig::load(&path).unwrap();
         let policy = loaded.owner_trust_policy();
         assert!(policy.allows("vouched", PluginOrigin::Global));
         assert!(!policy.allows("stray", PluginOrigin::Global));

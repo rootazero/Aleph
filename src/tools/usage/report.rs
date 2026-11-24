@@ -588,16 +588,29 @@ pub(crate) async fn add_extension_inventory(
         .collect();
 }
 
-/// Drop the report's orphan rows from `store`; returns how many.
+/// Drop the report's orphan rows from `store`; returns how many were
+/// actually removed.
 ///
 /// The ONE place `tool_usage(forget_orphans)` deletes history, so what it
 /// deletes is exactly `report.orphans` — which is empty whenever any kind was
 /// `unavailable` (`build_report`).
-pub(crate) fn forget_orphans(report: &ExtensionUsageReport, store: &ToolUsageStore) -> usize {
-    for key in &report.orphans {
+///
+/// The returned count is VERIFIED, not assumed: a row that was already gone,
+/// or whose removal did not stick, is not counted. The tool used to report
+/// the orphan count as "deleted", so a missing sidecar or a failed write
+/// still claimed success.
+pub(crate) fn forget_orphans(orphans: &[String], store: &ToolUsageStore) -> usize {
+    let mut removed = 0;
+    for key in orphans {
+        if store.get(key).is_none() {
+            continue;
+        }
         store.forget(key);
+        if store.get(key).is_none() {
+            removed += 1;
+        }
     }
-    report.orphans.len()
+    removed
 }
 
 /// Collect the inventory and join it with the sidecar in one call — what the

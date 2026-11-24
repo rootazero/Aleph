@@ -12,6 +12,7 @@ use crate::config::backup::ConfigBackup;
 use crate::config::schema::generate_config_schema;
 use crate::config::Config;
 use crate::error::{AlephError, Result};
+use crate::gateway::event_bus::GatewayEventBus;
 use crate::sync_primitives::Arc;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -176,6 +177,10 @@ pub struct ConfigPatcher {
     /// verification. Absent in tests / offline construction — a requested
     /// health check then reports `Skipped` rather than failing.
     vault: Option<Arc<crate::gateway::security::SharedTokenManager>>,
+    /// Existing Gateway bus; wiring this context does not initialize Terminal.
+    event_bus: Option<Arc<GatewayEventBus>>,
+    /// Existing terminal source; wiring this context does not initialize it.
+    terminal_source: Option<Arc<crate::capability::tool_adapters::TerminalCapabilitySource>>,
 }
 
 impl ConfigPatcher {
@@ -187,6 +192,8 @@ impl ConfigPatcher {
             backup,
             last_known_mtime: Mutex::new(None),
             vault: None,
+            event_bus: None,
+            terminal_source: None,
         }
     }
 
@@ -197,6 +204,23 @@ impl ConfigPatcher {
     #[must_use]
     pub fn with_vault(mut self, vault: Arc<crate::gateway::security::SharedTokenManager>) -> Self {
         self.vault = Some(vault);
+        self
+    }
+
+    /// Supply the existing Gateway bus without initializing Terminal.
+    #[must_use]
+    pub fn with_event_bus(mut self, event_bus: Arc<GatewayEventBus>) -> Self {
+        self.event_bus = Some(event_bus);
+        self
+    }
+
+    /// Supply the existing terminal capability source for live enable/disable.
+    #[must_use]
+    pub fn with_terminal_capability_source(
+        mut self,
+        source: Arc<crate::capability::tool_adapters::TerminalCapabilitySource>,
+    ) -> Self {
+        self.terminal_source = Some(source);
         self
     }
 
@@ -356,7 +380,11 @@ impl ConfigPatcher {
         // concurrent changes to other sections.
         self.commit_patch(&request, &top_section).await?;
 
-        // 12b. Hot-apply onto the running runtime.
+        // Record our persisted write before the cancellable lifecycle wait,
+        // so a cancelled caller does not later conflict with its own write.
+        self.record_mtime().await;
+
+        // 13. Hot-apply onto the running runtime.
         //
         // This lives in the patcher — the single write chokepoint — and NOT in
         // each calling surface, because that is exactly how it went wrong
@@ -366,12 +394,15 @@ impl ConfigPatcher {
         // present and future consumer of the patcher now gets the behaviour
         // its own response already promises.
         let live_applied = {
-            let cfg = self.config.read().await;
-            crate::config::live_apply::apply_live_sections(&cfg, &[top_section.as_str()])
+            let cfg = self.config.read().await.clone();
+            crate::config::live_apply::apply_live_sections(
+                &cfg,
+                &[top_section.as_str()],
+                self.event_bus.as_ref(),
+                self.terminal_source.as_ref(),
+            )
+            .await
         };
-
-        // 13. Update mtime
-        self.record_mtime().await;
 
         // 14. Optional post-patch verification — probe the affected provider(s)
         // so a credential/endpoint change can be confirmed reachable in the same
@@ -403,9 +434,8 @@ impl ConfigPatcher {
     }
 
     /// Validate a candidate config document: JSON Schema → deserialize →
-    /// normalize → `Config::validate()`. Shared by the preview path in
-    /// `apply` and the write-lock commit path (which must re-validate the
-    /// value actually being committed).
+    /// `Config::validate()`. Patch validation only applies voice-local's
+    /// explicit normalization and never rewrites `general.default_provider`.
     fn validate_candidate(&self, candidate: serde_json::Value) -> Result<Config> {
         self.validate_schema(&candidate)?;
         let mut config: Config = serde_json::from_value(candidate).map_err(|e| {
@@ -414,7 +444,6 @@ impl ConfigPatcher {
         // Normalize before validation (mirrors Config::load ordering) so
         // validation sees the same config a fresh boot would produce.
         crate::config::types::voice_local::normalize_voice_local(&mut config);
-        crate::config::validate::normalize_default_provider(&mut config);
         config.validate()?;
         Ok(config)
     }
@@ -534,7 +563,7 @@ impl ConfigPatcher {
         }
     }
 
-    /// Validate a JSON value against the Config JSON Schema.
+    /// Validate a config JSON value against the generated Config JSON Schema.
     pub(crate) fn validate_schema(&self, config_json: &serde_json::Value) -> Result<()> {
         let validator = cached_config_validator();
 
@@ -653,6 +682,9 @@ impl ConfigPatcher {
             }
         }
 
+        // The restored file is ours even if live application is cancelled.
+        self.record_mtime().await;
+
         // 7b. Hot-apply. A snapshot can differ in ANY live target — section
         // or subsection — so every one of them is pushed, not just the one
         // the operator happens to be thinking about. Undoing a route change
@@ -662,15 +694,27 @@ impl ConfigPatcher {
         // `live_targets()`, which also carries `LIVE_SUBSECTIONS`) would
         // reintroduce the same gap for `policies.spend` today.
         let live_applied = {
-            let cfg = self.config.read().await;
-            crate::config::live_apply::apply_live_sections(
+            let cfg = self.config.read().await.clone();
+            let live_targets = crate::config::reload_impact::live_targets();
+            let live_applied = crate::config::live_apply::apply_live_sections(
                 &cfg,
-                &crate::config::reload_impact::live_targets(),
+                &live_targets,
+                self.event_bus.as_ref(),
+                self.terminal_source.as_ref(),
             )
+            .await;
+            let complete = live_targets
+                .iter()
+                .all(|target| live_applied.contains(target));
+            if !complete {
+                warnings.push(
+                    "Rollback persisted, but not every live target accepted the restored config; \
+                     restart or reconcile the runtime before relying on live settings."
+                        .to_string(),
+                );
+            }
+            live_applied
         };
-
-        // 8. Refresh the mtime baseline so the next patch's conflict check passes.
-        self.record_mtime().await;
 
         info!(
             restored_from = %entry.timestamp,
@@ -680,6 +724,16 @@ impl ConfigPatcher {
         );
 
         Ok(RollbackResult {
+            // `success` means "the rollback was applied" — the snapshot is
+            // restored on disk and in memory. Whether every live target
+            // accepted the restored config is a different fact, and it is
+            // reported where it belongs: `live_applied` names the sections
+            // that landed and `warnings` says what did not. Folding the
+            // hot-apply completeness into `success` would report a
+            // persisted rollback as a failure whenever one section could
+            // not bind (an `execution` cap needs a live engine), and the
+            // caller uses `success` to decide whether to tell the Panels
+            // that the config changed at all.
             success: true,
             restored_from: entry.timestamp,
             diff,
@@ -803,10 +857,12 @@ pub(crate) fn deep_merge(target: &mut serde_json::Value, source: &serde_json::Va
                 }
                 if let Some(target_val) = target_obj.get_mut(key) {
                     deep_merge(target_val, source_val);
-                } else {
-                    let mut new_val = serde_json::Value::Null;
+                } else if source_val.is_object() {
+                    let mut new_val = serde_json::Value::Object(serde_json::Map::new());
                     deep_merge(&mut new_val, source_val);
                     target_obj.insert(key.clone(), new_val);
+                } else {
+                    target_obj.insert(key.clone(), source_val.clone());
                 }
             }
         }

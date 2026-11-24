@@ -107,12 +107,17 @@ impl SecretsCrypto {
         let cipher =
             Aes256Gcm::new_from_slice(key.as_slice()).map_err(|_| SecretError::DecryptionFailed)?;
         let nonce = Nonce::try_from(nonce_bytes.as_slice()).expect("fixed-size nonce");
-        let plaintext = cipher
-            .decrypt(&nonce, ciphertext)
-            .map_err(|_| SecretError::DecryptionFailed)?;
+        let plaintext = Zeroizing::new(
+            cipher
+                .decrypt(&nonce, ciphertext)
+                .map_err(|_| SecretError::DecryptionFailed)?,
+        );
 
-        // `key` is `Zeroizing` and wipes itself on drop on every path.
-        String::from_utf8(plaintext).map_err(|_| SecretError::InvalidUtf8)
+        // Validate before allocating the caller-owned string. The temporary
+        // plaintext is wiped on both success and invalid-UTF-8 error paths.
+        std::str::from_utf8(plaintext.as_slice())
+            .map(str::to_owned)
+            .map_err(|_| SecretError::InvalidUtf8)
     }
 }
 

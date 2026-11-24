@@ -8,10 +8,53 @@ use crate::gateway::channel::{InlineButton, InlineKeyboard};
 
 use super::socket::ApprovalDecisionType;
 
+/// The wire tokens of the `approve:<id>:<decision>` vocabulary — the only
+/// place these four strings are spelled.
+///
+/// The callback data is a public surface: anyone with access to the bot can
+/// craft one. So the tokens have exactly one writer — the keyboard builds
+/// them, [`ApprovalBridge::parse_callback`] reads them back, and the Discord
+/// command parser asks for the token of the tier its button means.
+mod token {
+    pub(super) const ONCE: &str = "once";
+    pub(super) const SESSION: &str = "session";
+    pub(super) const ALWAYS: &str = "always";
+    pub(super) const DENY: &str = "deny";
+}
+
 /// Bridge utilities for approval message handling
 pub struct ApprovalBridge;
 
 impl ApprovalBridge {
+    /// The wire token of a decision tier — the `<decision>` half of the
+    /// `approve:<id>:<decision>` callback.
+    ///
+    /// One writer for the wire contract: the keyboard builds the token, the
+    /// parser reads it back ([`Self::parse_callback`]), and the Discord
+    /// command parser asks for the token of the tier its button means.
+    #[must_use]
+    pub fn decision_token(decision: &ApprovalDecisionType) -> &'static str {
+        match decision {
+            ApprovalDecisionType::AllowOnce => token::ONCE,
+            ApprovalDecisionType::AllowSession => token::SESSION,
+            ApprovalDecisionType::AllowAlways => token::ALWAYS,
+            ApprovalDecisionType::Deny => token::DENY,
+        }
+    }
+
+    /// The decision tier a wire token names — `None` when the token is not
+    /// part of the vocabulary.
+    #[must_use]
+    pub fn decision_from_token(raw: &str) -> Option<ApprovalDecisionType> {
+        match raw {
+            token::ONCE => Some(ApprovalDecisionType::AllowOnce),
+            token::SESSION => Some(ApprovalDecisionType::AllowSession),
+            token::ALWAYS => Some(ApprovalDecisionType::AllowAlways),
+            token::DENY => Some(ApprovalDecisionType::Deny),
+            _ => None,
+        }
+    }
+
     /// Build inline keyboard for an approval request, rendering only the
     /// decisions the request permits.
     ///
@@ -34,33 +77,31 @@ impl ApprovalBridge {
         approval_id: &str,
         allowed: &[ApprovalDecisionType],
     ) -> InlineKeyboard {
-        let mut allow_row = Vec::new();
-        if allowed.contains(&ApprovalDecisionType::AllowOnce) {
-            allow_row.push(InlineButton {
-                text: "✅ Allow Once".into(),
-                callback_data: format!("approve:{approval_id}:once"),
-            });
-        }
-        if allowed.contains(&ApprovalDecisionType::AllowSession) {
-            allow_row.push(InlineButton {
-                text: "✅ Allow Session".into(),
-                callback_data: format!("approve:{approval_id}:session"),
-            });
-        }
-
-        if allowed.contains(&ApprovalDecisionType::AllowAlways) {
-            allow_row.push(InlineButton {
-                text: "♾️ Allow Always".into(),
-                callback_data: format!("approve:{approval_id}:always"),
-            });
-        }
+        let allow_row = [
+            (ApprovalDecisionType::AllowOnce, "✅ Allow Once"),
+            (ApprovalDecisionType::AllowSession, "✅ Allow Session"),
+            (ApprovalDecisionType::AllowAlways, "♾️ Allow Always"),
+        ]
+        .into_iter()
+        .filter(|(decision, _)| allowed.contains(decision))
+        .map(|(decision, label)| InlineButton {
+            text: label.into(),
+            callback_data: format!("approve:{approval_id}:{}", Self::decision_token(&decision)),
+        })
+        .collect::<Vec<_>>();
 
         let mut keyboard = InlineKeyboard::new();
         if !allow_row.is_empty() {
             keyboard = keyboard.row(allow_row);
         }
         if allowed.contains(&ApprovalDecisionType::Deny) {
-            keyboard = keyboard.button("❌ Deny", format!("approve:{approval_id}:deny"));
+            keyboard = keyboard.button(
+                "❌ Deny",
+                format!(
+                    "approve:{approval_id}:{}",
+                    Self::decision_token(&ApprovalDecisionType::Deny)
+                ),
+            );
         }
         keyboard
     }
@@ -81,6 +122,11 @@ impl ApprovalBridge {
         // public surface (any user with access to the bot can craft a
         // callback), so the parser is the only line of defence against
         // spoofed callbacks.
+        //
+        // A fourth field cannot be detected here: `splitn(3, ':')` yields at
+        // most three items, so the remainder arrives glued to the decision
+        // token (`approve:id:once:junk` → `"once:junk"`) and is rejected by
+        // the token lookup below, which knows no such token.
         let mut parts = data.splitn(3, ':');
         let prefix = parts.next()?;
         if prefix != "approve" {
@@ -91,18 +137,9 @@ impl ApprovalBridge {
         if id.is_empty() {
             return None;
         }
-        if parts.next().is_some() {
-            return None; // trailing junk — the format is fixed-width
-        }
 
         let approval_id = id.to_string();
-        let decision = match decision_str {
-            "once" => ApprovalDecisionType::AllowOnce,
-            "session" => ApprovalDecisionType::AllowSession,
-            "always" => ApprovalDecisionType::AllowAlways,
-            "deny" => ApprovalDecisionType::Deny,
-            _ => return None,
-        };
+        let decision = Self::decision_from_token(decision_str)?;
 
         Some((approval_id, decision))
     }

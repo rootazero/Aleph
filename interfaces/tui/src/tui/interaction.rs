@@ -322,8 +322,8 @@ impl InteractionController {
             matches!(card.owner(), ModalOwner::Clarification { session_key, .. }
                 if session_key == &pending.session_key)
         }) {
-            let Card::Question(existing) = &mut self.cards[index] else {
-                unreachable!("clarification owner must have a question card")
+            let Some(Card::Question(existing)) = self.cards.get_mut(index) else {
+                return;
             };
             if existing.owner == owner {
                 if pending.answered < existing.answered {
@@ -353,15 +353,17 @@ impl InteractionController {
                 // The old card's secret draft is dropped by replacement.
             }
             self.next_nonce = self.next_nonce.wrapping_add(1);
-            self.cards[index] = Card::Question(QuestionCard::new(
-                owner,
-                pending.run_id,
-                pending.answered,
-                question_id,
-                dialog,
-                superseded,
-                self.next_nonce,
-            ));
+            if let Some(slot) = self.cards.get_mut(index) {
+                *slot = Card::Question(QuestionCard::new(
+                    owner,
+                    pending.run_id,
+                    pending.answered,
+                    question_id,
+                    dialog,
+                    superseded,
+                    self.next_nonce,
+                ));
+            }
         } else {
             self.next_nonce = self.next_nonce.wrapping_add(1);
             self.cards.push_back(Card::Question(QuestionCard::new(
@@ -521,7 +523,7 @@ impl InteractionController {
             request_id,
         } = &q.owner
         else {
-            unreachable!()
+            return None;
         };
         Some(Submission {
             params: ClarificationResolveParams {

@@ -264,9 +264,12 @@ pub fn provider_deltas_to_sse(
                                 }
                                 ProviderDelta::Usage(u) => {
                                     let converted = Usage {
-                                        prompt_tokens: u.input_tokens,
+                                        prompt_tokens: u.input_tokens
+                                            + u.cache_read_tokens.unwrap_or(0),
                                         completion_tokens: u.output_tokens,
-                                        total_tokens: u.input_tokens + u.output_tokens,
+                                        total_tokens: u.input_tokens
+                                            + u.cache_read_tokens.unwrap_or(0)
+                                            + u.output_tokens,
                                     };
                                     usage_acc = Some(converted.clone());
                                     // Trailing Usage: some OpenAI-compatible

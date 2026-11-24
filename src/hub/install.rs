@@ -87,6 +87,42 @@ pub enum InstallOutcome {
     Skill { path: String },
 }
 
+/// The install-registry row for the skill installed at `path`.
+///
+/// The registry is the one place that knows where a skill came from — the
+/// bundled release, a GitHub URL, or a hand-placed directory — and until now
+/// nothing read those rows back: they were written on install and never
+/// looked at again, so a caller learned a path and nothing else.
+pub fn skill_registry_entry(
+    skills_dir: &std::path::Path,
+    path: &str,
+) -> Option<crate::bundled::manifest::SkillEntry> {
+    let name = std::path::Path::new(path).file_name()?.to_str()?;
+    let manifest = crate::bundled::manifest::InstallRegistry::load(skills_dir)?;
+    manifest.skills.get(name).cloned()
+}
+
+/// The JSON a caller gets for a skill install: what was installed, and where it came from.
+///
+/// `skills_dir` is `None` when the install root cannot be resolved; the
+/// provenance is then simply absent — a missing registry row must not make
+/// the install itself look like it failed.
+pub fn skill_outcome_json(skills_dir: Option<&std::path::Path>, path: &str) -> serde_json::Value {
+    let mut out = serde_json::json!({ "kind": "skill", "path": path });
+    if let Some(entry) = skills_dir.and_then(|dir| skill_registry_entry(dir, path)) {
+        if let Ok(source) = serde_json::to_value(&entry.source) {
+            out["source"] = source;
+        }
+        if let Some(version) = entry.version {
+            out["version"] = serde_json::Value::String(version);
+        }
+        if let Some(url) = entry.url {
+            out["url"] = serde_json::Value::String(url);
+        }
+    }
+    out
+}
+
 /// Inputs the install router needs from the handler layer.
 pub struct InstallContext<'a> {
     pub entry: &'a ExtensionEntry,
@@ -118,6 +154,9 @@ pub(crate) fn mcp_server_id(entry_id: &str) -> String {
         } else {
             out.push('_');
         }
+    }
+    if out.trim_matches('_').is_empty() {
+        return "default_server".to_string();
     }
     out
 }
@@ -157,15 +196,48 @@ pub(crate) fn install_git_skill(
     // Reject traversal in the SOURCE path too (not just the destination name):
     // `leaf` is joined onto the checkout to pick the copy source, so a `..`
     // segment from a crafted catalog entry could read outside the clone.
-    if leaf
-        .split(['/', '\\'])
-        .any(|seg| seg == "." || seg == ".." || seg.is_empty())
+    if leaf.contains(':')
+        || std::path::Path::new(&leaf).is_absolute()
+        || leaf
+            .split(['/', '\\'])
+            .any(|seg| seg == "." || seg == ".." || seg.is_empty())
     {
         return Err(format!("unsafe skill subdir '{leaf}'"));
     }
     // Last path segment is the on-disk skill name; the guard above guarantees it
     // is non-empty and free of `..`.
     let safe_name = leaf.rsplit(['/', '\\']).next().unwrap_or(&leaf).to_string();
+    if safe_name.contains(':')
+        || safe_name.starts_with('.')
+        || safe_name.chars().any(|c| c.is_control())
+        || matches!(
+            safe_name.to_ascii_uppercase().as_str(),
+            "CON"
+                | "PRN"
+                | "AUX"
+                | "NUL"
+                | "COM1"
+                | "COM2"
+                | "COM3"
+                | "COM4"
+                | "COM5"
+                | "COM6"
+                | "COM7"
+                | "COM8"
+                | "COM9"
+                | "LPT1"
+                | "LPT2"
+                | "LPT3"
+                | "LPT4"
+                | "LPT5"
+                | "LPT6"
+                | "LPT7"
+                | "LPT8"
+                | "LPT9"
+        )
+    {
+        return Err(format!("unsafe skill name '{safe_name}'"));
+    }
     // Restrict accepted git URL schemes to HTTPS (`https://`). SCP-style SSH
     // (`git@host:…`) used to be accepted for compatibility but opens SSH
     // Trust-On-First-Use — a catalog entry that declared `git_url: "git@…"`
@@ -194,9 +266,29 @@ pub(crate) fn install_git_skill(
         return Err(e.to_string());
     }
     let src_leaf = checkout.join(&leaf);
-    if !src_leaf.is_dir() {
+    let checkout_canon = match checkout.canonicalize() {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&checkout);
+            return Err(format!("failed to canonicalize checkout path: {e}"));
+        }
+    };
+    let src_leaf_canon = match src_leaf.canonicalize() {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&checkout);
+            return Err(format!("subdir '{leaf}' not found in {git_url}: {e}"));
+        }
+    };
+    if src_leaf.is_symlink() || !src_leaf_canon.starts_with(&checkout_canon) {
         let _ = std::fs::remove_dir_all(&checkout);
-        return Err(format!("subdir '{leaf}' not found in {git_url}"));
+        return Err(format!(
+            "subdir '{leaf}' escapes checkout root (symlink breakout)"
+        ));
+    }
+    if !src_leaf_canon.is_dir() {
+        let _ = std::fs::remove_dir_all(&checkout);
+        return Err(format!("subdir '{leaf}' is not a directory in {git_url}"));
     }
     // Enforce the content pin before the first write.
     if let Err(e) = crate::extension::marketplace::installer::verify_plugin_integrity(
@@ -239,9 +331,44 @@ pub(crate) fn install_git_skill(
             "staged skill failed post-copy integrity re-check (cache may have been tampered with): {e}"
         ));
     }
+    if target.is_symlink() {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(format!(
+            "destination '{safe_name}' is a symlink; refusing install"
+        ));
+    }
+    let had_existing = target.exists();
+    let backup = skills_dir.join(".staging").join(format!(
+        "{}-{nonce}-backup",
+        safe_name,
+        nonce = mcp_server_id(&entry.id)
+    ));
+    if had_existing {
+        let _ = std::fs::remove_dir_all(&backup);
+        if let Err(e) = std::fs::rename(&target, &backup) {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(format!(
+                "Failed to back up existing skill '{safe_name}': {e}"
+            ));
+        }
+    }
+
     if let Err(e) = std::fs::rename(&staging, &target) {
         let _ = std::fs::remove_dir_all(&staging);
+        if had_existing {
+            if let Err(rollback_err) = std::fs::rename(&backup, &target) {
+                tracing::error!(
+                    %safe_name,
+                    error = %rollback_err,
+                    "failed to restore skill backup during install rollback"
+                );
+            }
+        }
         return Err(e.to_string());
+    }
+
+    if had_existing {
+        let _ = std::fs::remove_dir_all(&backup);
     }
 
     // Stamp manifest as Github so official sync skips it.
@@ -391,14 +518,12 @@ pub async fn run_install(
     ctx: &InstallContext<'_>,
 ) -> Result<InstallOutcome, String> {
     match spec {
+        InstallSpec::McpStdio { command, .. } if !command_available(command) => {
+            Err(format!(
+                "required command '{command}' not found on PATH — install its runtime (e.g. node/python) and retry"
+            ))
+        }
         InstallSpec::McpStdio { .. } | InstallSpec::McpRemote { .. } => {
-            if let InstallSpec::McpStdio { command, .. } = spec {
-                if !command_available(command) {
-                    return Err(format!(
-                        "required command '{command}' not found on PATH — install its runtime (e.g. node/python) and retry"
-                    ));
-                }
-            }
             let mcp = ctx.mcp.ok_or("MCP manager unavailable")?;
             let id = mcp_server_id(&ctx.entry.id);
             let cfg = mcp_config_from_spec(
@@ -441,14 +566,17 @@ pub async fn run_install(
                 // Plugin install via the marketplace path (SHA-256 + atomic copy).
                 let marketplace = ctx.marketplace.ok_or("marketplace unavailable")?;
                 let marketplace_name = plugin_marketplace_name(&ctx.entry.source_id);
-                let path = marketplace.install_to_scope(
+                let installed = marketplace.install_to_scope(
                     &ctx.entry.name,
                     marketplace_name,
                     PluginScope::User,
                     None,
                 )?;
+                for warning in &installed.warnings {
+                    tracing::warn!(plugin = ctx.entry.name, "{}", warning);
+                }
                 Ok(InstallOutcome::Plugin {
-                    path: path.display().to_string(),
+                    path: installed.path.display().to_string(),
                 })
             }
         }
@@ -459,6 +587,45 @@ pub async fn run_install(
 mod tests {
     use super::*;
     use crate::hub::types::{EnvDecl, HeaderDecl};
+
+    /// The install registry is the one place that knows where a skill came
+    /// from. Its rows used to be written and never read, so the install
+    /// outcome carried a path and nothing else.
+    #[test]
+    fn skill_outcome_carries_the_registry_provenance() {
+        let tmp = tempfile::tempdir().unwrap();
+        let skills_dir = tmp.path().join("skills");
+        std::fs::create_dir_all(skills_dir.join("my-skill")).unwrap();
+        let mut manifest = crate::bundled::manifest::InstallRegistry::new("1.0.0");
+        manifest.skills.insert(
+            "my-skill".to_string(),
+            crate::bundled::manifest::SkillEntry {
+                source: crate::bundled::manifest::SkillOrigin::Github,
+                version: Some("1.2.3".to_string()),
+                url: Some("https://github.com/example/my-skill".to_string()),
+            },
+        );
+        manifest.save(&skills_dir).unwrap();
+        let path = skills_dir.join("my-skill");
+        let out = skill_outcome_json(Some(&skills_dir), path.to_str().unwrap());
+        assert_eq!(out["kind"], "skill");
+        assert_eq!(out["source"], "github");
+        assert_eq!(out["version"], "1.2.3");
+        assert_eq!(out["url"], "https://github.com/example/my-skill");
+    }
+
+    /// A skill with no registry row is still an installed skill: the absent
+    /// provenance must not make the install look like it failed.
+    #[test]
+    fn skill_outcome_without_a_registry_row_still_reports_the_install() {
+        let tmp = tempfile::tempdir().unwrap();
+        let out = skill_outcome_json(Some(tmp.path()), "/nowhere/ghost-skill");
+        assert_eq!(out["kind"], "skill");
+        assert_eq!(out["path"], "/nowhere/ghost-skill");
+        assert!(out.get("source").is_none());
+        assert!(out.get("version").is_none());
+        assert!(out.get("url").is_none());
+    }
 
     fn remote(transport: McpTransport, headers: Vec<HeaderDecl>) -> InstallSpec {
         InstallSpec::McpRemote {
@@ -808,5 +975,68 @@ mod tests {
         assert_eq!(plugin_marketplace_name("aleph-hub"), Some("aleph-official"));
         assert_eq!(plugin_marketplace_name("local"), None);
         assert_eq!(plugin_marketplace_name("peer-market"), Some("peer-market"));
+    }
+
+    #[test]
+    fn install_git_skill_rejects_unsafe_subdir_colon_and_absolute() {
+        let _allow = AllowLocalGitUrl::set();
+        let tmp = tempfile::tempdir().unwrap();
+        let (url, skills_dir, entry) = git_skill_fixture(tmp.path());
+        let spec_colon = InstallSpec::GitDir {
+            git_url: url.clone(),
+            subdir: Some("C:bad".into()),
+            git_ref: Some("main".into()),
+            sha256: None,
+        };
+        let err = install_git_skill(&entry, &spec_colon, &skills_dir).unwrap_err();
+        assert!(err.contains("unsafe skill subdir"), "{err}");
+
+        let spec_abs = InstallSpec::GitDir {
+            git_url: url,
+            subdir: Some("/etc/passwd".into()),
+            git_ref: Some("main".into()),
+            sha256: None,
+        };
+        let err = install_git_skill(&entry, &spec_abs, &skills_dir).unwrap_err();
+        assert!(err.contains("unsafe skill subdir"), "{err}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn install_git_skill_rejects_symlink_breakout() {
+        let _allow = AllowLocalGitUrl::set();
+        let tmp = tempfile::tempdir().unwrap();
+        let (url, skills_dir, entry) = git_skill_fixture(tmp.path());
+        let src_path = std::path::PathBuf::from(&url);
+        let outside = tmp.path().join("outside_secret");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("SKILL.md"), b"# secret").unwrap();
+        std::os::unix::fs::symlink(&outside, src_path.join("escaped-skill")).unwrap();
+        let repo = git2::Repository::open(&src_path).unwrap();
+        let mut idx = repo.index().unwrap();
+        idx.add_all(["escaped-skill"], git2::IndexAddOption::DEFAULT, None)
+            .unwrap();
+        idx.write().unwrap();
+        let tree = repo.find_tree(idx.write_tree().unwrap()).unwrap();
+        let sig = git2::Signature::now("t", "t@t").unwrap();
+        let parent = repo.head().unwrap().peel_to_commit().unwrap();
+        repo.commit(
+            Some("refs/heads/main"),
+            &sig,
+            &sig,
+            "add symlink",
+            &tree,
+            &[&parent],
+        )
+        .unwrap();
+
+        let spec = InstallSpec::GitDir {
+            git_url: url,
+            subdir: Some("escaped-skill".into()),
+            git_ref: Some("main".into()),
+            sha256: None,
+        };
+        let err = install_git_skill(&entry, &spec, &skills_dir).unwrap_err();
+        assert!(err.contains("symlink breakout"), "{err}");
     }
 }

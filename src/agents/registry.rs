@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 use tracing::warn;
 
-use crate::agents::types::{AgentDef, AgentMode, ContextMode};
+use crate::agents::types::{AgentDef, AgentMode, AgentSource, ContextMode};
 
 /// One plugin-shipped sub-agent with the visibility key of the plugin that
 /// shipped it. `AgentDef` carries no plugin id (its `id` is the agent name),
@@ -75,6 +75,23 @@ pub struct AgentRegistry {
     agents: RwLock<HashMap<String, AgentDef>>,
 }
 
+/// Precedence of one agent source when two definitions claim the same id.
+///
+/// Mirrors the loader's tier order (project > user > builtin — see
+/// `crate::agents::loader`) and the resolution order of
+/// [`AgentRegistry::resolve`] (a plugin definition is consulted last and
+/// never enters this registry at all, so it ranks with the lowest tier).
+/// The registry decides a duplicate id by this order rather than by whoever
+/// called `register` last, so the outcome does not depend on registration
+/// timing.
+fn source_rank(source: AgentSource) -> u8 {
+    match source {
+        AgentSource::Project => 2,
+        AgentSource::User => 1,
+        AgentSource::Builtin | AgentSource::Plugin => 0,
+    }
+}
+
 impl Default for AgentRegistry {
     fn default() -> Self {
         Self::new()
@@ -112,13 +129,40 @@ impl AgentRegistry {
         registry
     }
 
-    /// Register an agent definition
+    /// Register an agent definition.
+    ///
+    /// A duplicate id is NOT silently swallowed: the tier that wins (see
+    /// [`source_rank`]) decides which definition is in force, and the
+    /// collision is reported through `tracing::warn!`. An unconditional
+    /// insert made the outcome depend on registration order — a user-tier
+    /// definition could take over a builtin id (or the reverse) with nothing
+    /// in the log to say which definition is now in force.
     pub fn register(&self, agent: AgentDef) {
         // Recover from poisoned lock — the data is still valid after a panic
         let mut agents = self.agents.write().unwrap_or_else(|e| {
             warn!("AgentRegistry lock poisoned during register, recovering");
             e.into_inner()
         });
+        let incoming_rank = source_rank(agent.source);
+        if let Some(existing) = agents.get(&agent.id) {
+            if incoming_rank < source_rank(existing.source) {
+                warn!(
+                    id = %agent.id,
+                    incoming_source = ?agent.source,
+                    kept_source = ?existing.source,
+                    "AgentRegistry::register: duplicate agent id — the registered definition has \
+                     higher precedence and is kept; the incoming definition is ignored"
+                );
+                return;
+            }
+            warn!(
+                id = %agent.id,
+                incoming_source = ?agent.source,
+                shadowed_source = ?existing.source,
+                "AgentRegistry::register: duplicate agent id — the incoming definition replaces \
+                 the registered one"
+            );
+        }
         agents.insert(agent.id.clone(), agent);
     }
 
@@ -351,28 +395,19 @@ impl AgentRegistry {
 /// Only built-in ids are aliased; project/user-defined agents are matched
 /// exactly in the first resolution pass and never routed through this table.
 fn normalize_agent_alias(raw: &str) -> Option<&'static str> {
-    // Lowercase once so both passes are case-insensitive — a model emitting the
+    // Lowercase once so resolution is case-insensitive — a model emitting the
     // Claude Code convention (`Explore`, `PLAN`, `Verify`) must still resolve to
     // the canonical built-in id. Arms return the `'static` spelling, never the
     // borrowed input (which is tied to the caller's `raw`).
     let lowered = raw.trim().to_ascii_lowercase();
     match lowered.as_str() {
-        "default" => return Some("default"),
-        "explore" => return Some("explore"),
-        "plan" => return Some("plan"),
-        "verify" => return Some("verify"),
-        "researcher" => return Some("researcher"),
-        "coder" => return Some("coder"),
-        "main" => return Some("main"),
-        _ => {}
-    }
-    match lowered.as_str() {
-        "general" | "general-purpose" | "general_purpose" | "gp" => Some("default"),
-        "explorer" | "exploration" => Some("explore"),
-        "planner" | "planning" => Some("plan"),
-        "verifier" | "verification" => Some("verify"),
-        "research" => Some("researcher"),
-        "code" | "coding" => Some("coder"),
+        "default" | "general" | "general-purpose" | "general_purpose" | "gp" => Some("default"),
+        "explore" | "explorer" | "exploration" => Some("explore"),
+        "plan" | "planner" | "planning" => Some("plan"),
+        "verify" | "verifier" | "verification" => Some("verify"),
+        "researcher" | "research" => Some("researcher"),
+        "coder" | "code" | "coding" => Some("coder"),
+        "main" => Some("main"),
         _ => None,
     }
 }

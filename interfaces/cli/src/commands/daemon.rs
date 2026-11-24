@@ -43,14 +43,14 @@ fn remove_pid_file() {
 /// Check if a process with the given PID is running
 #[cfg(unix)]
 fn is_process_running(pid: u32) -> bool {
-    // SAFETY: `kill(pid_i32, 0)` is a permission/existence probe; it sends no
-    // signal. `pid_i32` must be positive so the kernel does not interpret it
-    // as a process-group ID (which would silently target the wrong group when
-    // PIDs exceed `i32::MAX`). Mirror `send_signal`'s try_into discipline.
     let pid_i32 = match i32::try_from(pid) {
         Ok(p) => p,
         Err(_) => return false,
     };
+    // SAFETY: `kill(pid_i32, 0)` is a permission/existence probe; it sends no
+    // signal. `pid_i32` is positive so the kernel does not interpret it
+    // as a process-group ID (which would silently target the wrong group when
+    // PIDs exceed `i32::MAX`).
     unsafe { libc::kill(pid_i32, 0) == 0 }
 }
 
@@ -77,12 +77,12 @@ fn pid_belongs_to_server(pid: u32) -> bool {
 /// Send a signal to a process (Unix only)
 #[cfg(unix)]
 fn send_signal(pid: u32, signal: i32) -> bool {
-    // SAFETY: `pid` is a positive `u32` that fits in `i32`. The caller is
-    // Unix-gated and `signal` is a valid Unix signal constant.
     let pid_i32: i32 = match pid.try_into() {
         Ok(pid) => pid,
         Err(_) => return false,
     };
+    // SAFETY: `pid_i32` is positive, validated via `try_into`. The caller is
+    // Unix-gated and `signal` is a valid Unix signal constant.
     unsafe { libc::kill(pid_i32, signal) == 0 }
 }
 
@@ -478,7 +478,9 @@ fn read_log_entries(log_dir: &std::path::Path, lines: usize, level: Option<&str>
     let all_lines: Vec<&str> = content.lines().collect();
     let start = all_lines.len().saturating_sub(lines);
 
-    all_lines[start..]
+    all_lines
+        .get(start..)
+        .unwrap_or(&[])
         .iter()
         .filter(|line| {
             if let Some(lvl) = level {

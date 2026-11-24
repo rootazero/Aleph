@@ -361,7 +361,7 @@ cargo test -p alephcore --lib test_name          # Single test
 
 ## Sources & References
 
-- **Origin document:** [docs/brainstorms/2026-04-05-tower-style-handler-middleware-requirements.md](docs/brainstorms/2026-04-05-tower-style-handler-middleware-requirements.md)
+- **Origin document:** [docs/brainstorms/2026-04-05-tower-style-handler-middleware-requirements.md](../brainstorms/2026-04-05-tower-style-handler-middleware-requirements.md)
 - **Existing Tower Layer example:** `src/security/headers.rs` — `SecurityHeadersLayer`, `SecurityHeadersService`
 - **HandlerRegistry:** `src/gateway/handlers/mod.rs` — `HandlerFn`, `HandlerRegistry::handle`
 - **Gateway server:** `src/gateway/server/handler.rs` — `process_request`, the injection point

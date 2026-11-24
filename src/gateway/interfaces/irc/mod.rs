@@ -11,19 +11,30 @@
 //! - **Auth:** NICK/USER registration, optional `NickServ` IDENTIFY
 //! - **Keepalive:** PING/PONG automatic response
 //!
+//! The connection is plaintext: the adapter has no TLS support, so a config
+//! that sets `use_tls` is rejected. Run the connection through a TLS tunnel
+//! when the transport must be encrypted.
+//!
+//! Attachments are not part of the protocol and are neither sent nor extracted;
+//! an inbound line carries text only.
+//!
 //! # Usage
 //!
-//! ```toml
-//! [[channels]]
-//! id = "irc"
-//! channel_type = "irc"
-//! enabled = true
+//! `Config.channels` is a MAP keyed by instance id, so the table header carries
+//! the id and the keys are flat. The `[[channels]]` array-of-tables form this
+//! example used until 2026-11-22 does not parse at all — the server refuses to
+//! boot with `invalid type: sequence, expected a map`.
 //!
-//! [channels.config]
+//! ```toml
+//! [channels.irc]
+//! type = "irc"
+//! enabled = true
 //! server = "irc.libera.chat"
 //! port = 6667
 //! nick = "alephbot"
 //! channels = ["#aleph", "#test"]
+//! allowed_users = ["alice"]   # empty = every sender is allowed
+//! require_mention = false     # only accept channel messages addressing the bot
 //! ```
 
 pub mod config;
@@ -34,7 +45,8 @@ pub use message_ops::IrcMessageOps;
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
-    ChannelResult, ChannelState, ChannelStatus, MessageId, OutboundMessage, SendResult,
+    ChannelResult, ChannelState, ChannelStatus, MessageId, OutboundMessage, SendOperation,
+    SendResult,
 };
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
@@ -121,6 +133,13 @@ impl Channel for IrcChannel {
         // Validate configuration
         self.config.validate().map_err(ChannelError::ConfigError)?;
 
+        if self.config.password.is_some() {
+            tracing::warn!(
+                "IRC NickServ password will be sent in cleartext: this adapter connects in \
+                 plaintext (run the connection through a TLS tunnel to protect it)"
+            );
+        }
+
         self.channel_state
             .set_status(ChannelStatus::Connecting)
             .await;
@@ -200,25 +219,45 @@ impl Channel for IrcChannel {
         Ok(())
     }
 
-    async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-        let write_tx = self.write_tx.read().await;
-        let write_tx = write_tx.as_ref().ok_or_else(|| {
-            ChannelError::NotConnected("IRC adapter not started - call start() first".to_string())
-        })?;
+    fn send(&self, message: OutboundMessage) -> SendOperation {
+        let write_tx = self.write_tx.clone();
+        let test_mode = self.test_mode;
+        Box::pin(async move {
+            // Fail closed: an IRC line carries text only, so an attachment or
+            // button request must error out instead of being dropped.
+            if !message.attachments.is_empty() {
+                return Err(ChannelError::UnsupportedFeature(
+                    "IRC does not support attachments".to_string(),
+                ));
+            }
+            if message.inline_keyboard.is_some() {
+                return Err(ChannelError::UnsupportedFeature(
+                    "IRC does not support buttons".to_string(),
+                ));
+            }
 
-        if self.test_mode {
-            // In test mode, verify the channel exists but don't actually send
-            let _ = write_tx;
-            return Ok(SendResult {
-                message_id: MessageId::new(format!(
-                    "irc-sent-{}",
-                    chrono::Utc::now().timestamp_millis()
-                )),
-                timestamp: chrono::Utc::now(),
-            });
-        }
+            let write_tx = write_tx.read().await;
+            let write_tx = write_tx.as_ref().ok_or_else(|| {
+                ChannelError::NotConnected(
+                    "IRC adapter not started - call start() first".to_string(),
+                )
+            })?;
 
-        IrcMessageOps::send_message(write_tx, message.conversation_id.as_str(), &message.text).await
+            if test_mode {
+                // In test mode, verify the channel exists but don't actually send
+                let _ = write_tx;
+                return Ok(SendResult {
+                    message_id: MessageId::new(format!(
+                        "irc-sent-{}",
+                        chrono::Utc::now().timestamp_millis()
+                    )),
+                    timestamp: chrono::Utc::now(),
+                });
+            }
+
+            IrcMessageOps::send_message(write_tx, message.conversation_id.as_str(), &message.text)
+                .await
+        })
     }
 }
 
@@ -232,12 +271,20 @@ impl ChannelFactory for IrcChannelFactory {
     }
 
     async fn create(&self, config: serde_json::Value) -> ChannelResult<Box<dyn Channel>> {
+        self.create_with_id("irc", config).await
+    }
+
+    async fn create_with_id(
+        &self,
+        id: &str,
+        config: serde_json::Value,
+    ) -> ChannelResult<Box<dyn Channel>> {
         let config: IrcConfig = serde_json::from_value(config)
             .map_err(|e| ChannelError::ConfigError(format!("Invalid IRC config: {e}")))?;
 
         config.validate().map_err(ChannelError::ConfigError)?;
 
-        Ok(Box::new(IrcChannel::new("irc", config)))
+        Ok(Box::new(IrcChannel::new(id, config)))
     }
 }
 
@@ -354,16 +401,31 @@ mod tests {
 
         let config = serde_json::json!({
             "server": "irc.libera.chat",
-            "port": 6697,
+            "port": 6667,
             "nick": "alephbot",
             "password": "secret",
             "channels": ["#aleph", "#test"],
-            "use_tls": true,
+            "use_tls": false,
             "realname": "Aleph IRC Bot"
         });
 
         let result = factory.create(config).await;
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_factory_create_rejects_tls() {
+        let factory = IrcChannelFactory;
+
+        let config = serde_json::json!({
+            "server": "irc.libera.chat",
+            "nick": "alephbot",
+            "channels": ["#aleph"],
+            "use_tls": true
+        });
+
+        let result = factory.create(config).await;
+        assert!(result.is_err());
     }
 
     #[tokio::test]

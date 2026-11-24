@@ -71,7 +71,7 @@ impl CollectTaskMeta {
     /// exactly one place.
     #[must_use]
     pub fn to_value(&self) -> Value {
-        serde_json::to_value(self).expect("CollectTaskMeta is serialisable")
+        serde_json::to_value(self).unwrap_or(Value::Null)
     }
 }
 

@@ -11,6 +11,7 @@ use serde::Deserialize;
 use serde_json::Value as JsonValue;
 
 use crate::extension::error::{ExtensionError, ExtensionResult};
+use crate::extension::manifest::cc_plugin_json::KIND_SIDECAR;
 use crate::extension::manifest::component_source::{self, ComponentSource};
 use crate::extension::manifest::declared_sections::AlephSuperset;
 use crate::extension::manifest::toml_types::{
@@ -18,7 +19,7 @@ use crate::extension::manifest::toml_types::{
     PromptSection, ServiceSection, ToolSection,
 };
 use crate::extension::manifest::types::{
-    AlephExtensions, AlephRuntime, AuthorInfo, ConfigUiHint, PluginManifest,
+    AlephExtensions, AlephRuntime, ConfigUiHint, PluginManifest,
 };
 use crate::extension::manifest::{sanitize_plugin_id, validate_plugin_id};
 use crate::extension::types::PluginKind;
@@ -42,27 +43,19 @@ pub struct CcPluginToml {
     /// Plugin name (required — used as plugin ID source)
     pub name: Option<String>,
 
+    /// Explicit Panel UI declaration, independent of plugin runtime kind.
+    pub panel: Option<super::types::PanelUiManifest>,
+
     /// Plugin version (semver)
     pub version: Option<String>,
 
     /// Plugin description
     pub description: Option<String>,
 
-    /// License identifier (SPDX)
-    pub license: Option<String>,
-
-    /// Keywords for search
-    pub keywords: Option<Vec<String>>,
-
-    /// Homepage URL
-    pub homepage: Option<String>,
-
-    /// Repository URL
-    pub repository: Option<String>,
-
-    /// Author section
-    #[serde(rename = "author")]
-    pub author: Option<CcPluginAuthorToml>,
+    // Display-only metadata (`author`, `homepage`, `repository`, `license`,
+    // `keywords`) is deliberately NOT declared: serde ignores the unknown keys,
+    // so CC manifests that carry them still parse, and nothing here pretends to
+    // carry them into `PluginManifest` where no reader would see them.
 
     // Flat component fields (CC-native). Each accepts a path, an array of
     // paths, or an inlined table — see `component_source`.
@@ -84,32 +77,6 @@ pub struct CcPluginToml {
 
     /// Aleph-specific extensions (optional, ignored by Claude Code)
     pub aleph: Option<AlephExtensionsToml>,
-}
-
-/// Author section in CC plugin.toml
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-pub enum CcPluginAuthorToml {
-    /// Simple string format: "Name `&lt;email&gt;`"
-    String(String),
-    /// Object format with optional fields
-    Object {
-        #[serde(default)]
-        name: Option<String>,
-        #[serde(default)]
-        email: Option<String>,
-        #[serde(default)]
-        url: Option<String>,
-    },
-}
-
-impl From<CcPluginAuthorToml> for AuthorInfo {
-    fn from(author: CcPluginAuthorToml) -> Self {
-        match author {
-            CcPluginAuthorToml::String(s) => Self::from(s.as_str()),
-            CcPluginAuthorToml::Object { name, email, url } => Self { name, email, url },
-        }
-    }
 }
 
 /// Aleph-specific extensions inside \[aleph\] section
@@ -151,7 +118,6 @@ pub struct AlephExtensionsToml {
     /// Handler-backed tools plus their instruction files.
     #[serde(default)]
     pub tools: Vec<ToolSection>,
-
     /// Event hooks declared inline (as opposed to a `hooks/hooks.json` file).
     #[serde(default)]
     pub hooks: Vec<HookSection>,
@@ -176,25 +142,37 @@ pub struct AlephExtensionsToml {
     #[serde(default)]
     pub memory: Option<MemoryManifestSection>,
 }
-
 // =============================================================================
 // Runtime → PluginKind mapping
 // =============================================================================
 
-fn runtime_to_kind(runtime: &str) -> PluginKind {
+fn runtime_to_kind(runtime: &str) -> Result<PluginKind, ExtensionError> {
     match runtime {
-        "wasm" => PluginKind::Wasm,
-        "mcp" => PluginKind::Mcp,
-        "static" => PluginKind::Static,
-        _ => PluginKind::Static,
+        "wasm" => Ok(PluginKind::Wasm),
+        "mcp" => Ok(PluginKind::Mcp),
+        "static" => Ok(PluginKind::Static),
+        other => Err(ExtensionError::invalid_manifest(
+            format!(
+                "unknown runtime {:?}: expected one of \"wasm\", \"mcp\", \"static\"",
+                other
+            ),
+            other,
+        )),
     }
 }
 
-fn runtime_to_aleph_runtime(runtime: &str) -> AlephRuntime {
+fn runtime_to_aleph_runtime(runtime: &str) -> Result<AlephRuntime, ExtensionError> {
     match runtime {
-        "wasm" => AlephRuntime::Wasm,
-        "mcp" => AlephRuntime::Mcp,
-        _ => AlephRuntime::Static,
+        "wasm" => Ok(AlephRuntime::Wasm),
+        "mcp" => Ok(AlephRuntime::Mcp),
+        "static" => Ok(AlephRuntime::Static),
+        other => Err(ExtensionError::invalid_manifest(
+            format!(
+                "unknown runtime {:?}: expected one of \"wasm\", \"mcp\", \"static\"",
+                other
+            ),
+            other,
+        )),
     }
 }
 
@@ -238,13 +216,29 @@ pub fn parse_cc_plugin_toml_content(
     validate_plugin_id(&plugin_id)
         .map_err(|reason| ExtensionError::invalid_plugin_name(&raw_name, reason))?;
 
+    // Read before `toml.aleph` is moved out below.
+    let declares_servers = toml.mcp_servers.is_some() || plugin_dir.join(KIND_SIDECAR).is_file();
+
     // Determine kind and entry from [aleph] section
     let mut superset = AlephSuperset::default();
     let (kind, entry, aleph_extensions) = if let Some(aleph) = toml.aleph {
         let runtime_str = aleph.runtime.as_deref().unwrap_or("static");
-        let kind = runtime_to_kind(runtime_str);
-        let entry = aleph.entry.unwrap_or_else(|| default_entry_for_kind(kind));
+        // An explicit runtime the platform does not have is a manifest error,
+        // not a request for the static runtime.
+        if !matches!(runtime_str, "wasm" | "mcp" | "static") {
+            return Err(ExtensionError::invalid_manifest(
+                &manifest_path,
+                format!(
+                    "unknown [aleph] runtime '{runtime_str}': expected one of `wasm`, `mcp`, `static`"
+                ),
+            ));
+        }
+        let kind = runtime_to_kind(runtime_str)
+            .map_err(|e| ExtensionError::invalid_manifest(&manifest_path, e.to_string()))?;
         let permissions = convert_permissions(&aleph.permissions);
+        let entry = aleph
+            .entry
+            .unwrap_or_else(|| default_entry_for_kind(kind).to_owned());
 
         superset = AlephSuperset {
             tools: aleph.tools,
@@ -257,7 +251,7 @@ pub fn parse_cc_plugin_toml_content(
         };
 
         let aleph_ext = AlephExtensions {
-            runtime: runtime_to_aleph_runtime(runtime_str),
+            runtime: runtime_to_aleph_runtime(runtime_str)?,
             entry: Some(entry.clone()),
             services: aleph.services,
             contexts: aleph.contexts,
@@ -284,9 +278,26 @@ pub fn parse_cc_plugin_toml_content(
 
         (kind, entry, Some((aleph_ext, permissions)))
     } else {
-        (PluginKind::Static, ".".to_string(), None)
+        if declares_servers {
+            // A Claude Code MCP plugin declares no `[aleph]` block — its servers
+            // ARE its runtime. Without this inference the manifest parsed as
+            // `Static` and `lifecycle::mount` never started a single server (the
+            // `mcp_server` effect keys on `kind == Mcp`). Which servers, from
+            // which source (inline object, path, or `.mcp.json`), is the
+            // adapter's one reader's answer — `component_source::resolve_mcp_servers`;
+            // this line only decides the kind. The JSON dialect
+            // (`parse_cc_plugin_json_content`) has carried the same inference
+            // since it was written; the TOML dialect never did, so the
+            // *documented-preferred* manifest could not be an MCP plugin at all.
+            (
+                PluginKind::Mcp,
+                default_entry_for_kind(PluginKind::Mcp).to_string(),
+                None::<(_, _)>,
+            )
+        } else {
+            (PluginKind::Static, ".".to_string(), None::<(_, _)>)
+        }
     };
-
     let (aleph_ext, permissions) =
         aleph_extensions.map_or((None, Vec::new()), |(ext, perms)| (Some(ext), perms));
     let wasm_capabilities = aleph_ext
@@ -294,6 +305,21 @@ pub fn parse_cc_plugin_toml_content(
         .and_then(|ext| ext.capabilities.as_ref())
         .and_then(crate::extension::manifest::toml_types::convert_wasm_capabilities);
 
+    if let Some(panel) = &toml.panel {
+        if toml
+            .version
+            .as_deref()
+            .is_none_or(|version| version.trim().is_empty())
+        {
+            return Err(ExtensionError::invalid_manifest(
+                plugin_dir,
+                "panel.missing_version",
+            ));
+        }
+        panel
+            .validate()
+            .map_err(|reason| ExtensionError::invalid_manifest(plugin_dir, reason))?;
+    }
     let manifest = PluginManifest {
         id: plugin_id,
         name: raw_name,
@@ -305,12 +331,6 @@ pub fn parse_cc_plugin_toml_content(
         config_schema: superset.config_schema,
         config_ui_hints: superset.config_ui_hints,
         permissions,
-        author: toml.author.map(AuthorInfo::from),
-        homepage: toml.homepage,
-        repository: toml.repository,
-        license: toml.license,
-        keywords: toml.keywords.unwrap_or_default(),
-        extensions: Vec::new(),
         // Superset sections, carried in `[aleph]` (which Claude Code ignores).
         // `services_v2` stays `None` because services already round-trip
         // through `aleph_extensions.services` — a second copy would be a
@@ -326,6 +346,7 @@ pub fn parse_cc_plugin_toml_content(
         // CC-compat extensions
         aleph_extensions: aleph_ext,
         memory_manifest: superset.memory,
+        panel: toml.panel,
     };
 
     Ok(manifest)
@@ -592,15 +613,21 @@ name = "no-aleph"
     }
 
     #[test]
-    fn test_parse_cc_toml_author_string() {
+    fn test_parse_cc_toml_display_metadata_keys_are_ignored() {
+        // `author`, `homepage`, `repository`, `license`, `keywords` are CC
+        // metadata with no reader on the Aleph side. They are not declared on
+        // the input struct, so serde must skip them instead of rejecting the
+        // manifest — third-party plugins keep shipping them.
         let content = r#"
-name = "author-test"
+name = "metadata-ignored"
 author = "Alice <alice@example.com>"
+homepage = "https://alice.dev"
+repository = "https://github.com/user/repo"
+license = "MIT"
+keywords = ["one", "two"]
 "#;
         let manifest = parse_cc_plugin_toml_content(content, &test_dir()).unwrap();
-        let author = manifest.author.unwrap();
-        assert_eq!(author.name, Some("Alice".to_string()));
-        assert_eq!(author.email, Some("alice@example.com".to_string()));
+        assert_eq!(manifest.name, "metadata-ignored");
     }
 
     #[test]
@@ -623,6 +650,40 @@ runtime = "wasm"
 "#;
         let manifest = parse_cc_plugin_toml_content(content, &test_dir()).unwrap();
         assert_eq!(manifest.entry, PathBuf::from("plugin.wasm"));
+    }
+
+    /// The TOML dialect must infer the MCP runtime the way the JSON dialect
+    /// does. A Claude Code MCP plugin declares no `[aleph]` block — its
+    /// servers ARE its runtime — so without the inference the manifest
+    /// parsed as `Static` and `lifecycle::mount` never started a server.
+    #[test]
+    fn cc_toml_infers_the_mcp_kind_from_declared_servers() {
+        let dir = tempfile::tempdir().unwrap();
+        let declared = parse_cc_plugin_toml_content(
+            r#"
+name = "mcp-plugin"
+version = "0.1.0"
+
+mcp-servers = "./servers.json"
+"#,
+            dir.path(),
+        )
+        .unwrap();
+        assert_eq!(declared.kind, PluginKind::Mcp);
+        assert_eq!(declared.entry, PathBuf::from(".mcp.json"));
+
+        // The sidecar form: no `mcp-servers` key, a `.mcp.json` next to the
+        // manifest.
+        std::fs::write(dir.path().join(".mcp.json"), r#"{"mcpServers":{}}"#).unwrap();
+        let sidecar = parse_cc_plugin_toml_content(
+            r#"
+name = "sidecar-plugin"
+version = "0.1.0"
+"#,
+            dir.path(),
+        )
+        .unwrap();
+        assert_eq!(sidecar.kind, PluginKind::Mcp);
     }
 
     #[test]

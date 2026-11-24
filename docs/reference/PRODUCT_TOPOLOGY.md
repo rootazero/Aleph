@@ -1,5 +1,15 @@
 # PRODUCT_TOPOLOGY.md — 产品形态与分发拓扑
 
+> **NSH Phase10 (2026-11-21):** `desktop/nsh-shell/` 使用官方 NSH 0.6.0
+> 托管同一 Leptos/WASM Panel，通过既有 Gateway 提供业务能力；不是第四种发布产物，
+> 不创建第二个 Core，不接管独立 Gateway 的生命周期。
+> [本机收尾](../superpowers/runs/2026-11-21-phase10-closeout.md) 按用户明确批准的
+> Quit median/p95 ≤ 1.30× 修订门槛验收，多屏物理拓扑仍延期未测。
+> Tauri 保留，默认桌面、分发形态和下述 daemon supervisor 权责未切换。
+> / Official NSH is an alternative local macOS Panel host, not a new distribution
+> topology or a Tauri-removal/default-switch approval.
+
+
 > 一套源码，三种打包。本文澄清「panel / core / shell」三个维护单元如何排列组合成
 > 三个发布产物，以及每个产物对应的真实部署场景。与 [ARCHITECTURE.md](./ARCHITECTURE.md)、
 > [GATEWAY.md](./GATEWAY.md)、[SECURITY.md](./SECURITY.md) 互补。
@@ -28,10 +38,14 @@ panel（Leptos/WASM UI）编译出 `interfaces/webchat/dist/*` 后，**通过 `r
 |---|---|---|
 | **Panel** | `interfaces/webchat/`（Leptos/WASM） | 全部业务 UI。编译进 core，不单独分发 |
 | **Core** | `alephcore` → `aleph-server` | 大脑（Think→Act 循环）+ HTTP/WS Gateway + `rust_embed` 内置 panel + Memory/Tool/Provider… |
-| **Shell** | `desktop/shell/`（Tauri） | 薄原生外壳：开窗口、`navigate` 到某个 core 的 `:18790`、托盘/菜单/通知/deep-link。R1/R2：纯 I/O，**不含业务逻辑** |
+| **Shell（遗留，仍在发版）** | `desktop/shell/`（Tauri v2） | 薄原生外壳：开窗口、`navigate` 到某个 core 的 `:18790`、托盘/菜单/通知/deep-link、updater、服务管理。R1/R2：纯 I/O，**不含业务逻辑** |
+| **Shell（目标形态）** | `desktop/nsh-shell/`（NSH 0.6.0） | 薄原生外壳：窗口 + 托盘 + 全局快捷键 + 通知授权 + 类型化面板桥（`shared/protocol/src/panel_shell.rs`）。同样是纯 I/O；暂无 updater / deeplink / macOS 菜单 / 服务控制，也暂无发版流水线 |
 
 > Shell 靠一个 feature flag（`embedded-core`）切两种形态，本身不重复维护业务逻辑。
 > 「一套 panel + 一套 core」是核心；shell 是薄薄的第三件。
+> 两个 shell 宿主共用同一份 panel 与同一个 core；宿主↔panel 的交互走类型化契约
+> （`shared/protocol/src/panel_shell.rs`），不是 `__TAURI_INTERNALS__`。
+> 切换由 Phase 11 门禁控制（[计划](../superpowers/plans/2026-11-21-phase11-nsh-cutover.md)）。
 
 ---
 
@@ -132,6 +146,7 @@ Linux NAS 或云主机 `curl … install.sh | bash` 装独立 `aleph-server`，�
 | **panel 源码**（`interfaces/webchat/`） | 完整 App、独立 core（凡内嵌 panel 者）。**纯壳 App 不用重出**——它不含 panel，连上新 core 自然就新 |
 | **core 源码**（`alephcore`） | 完整 App、独立 core。纯壳 App 不用 |
 | **shell 源码**（`desktop/shell/`） | 完整 App、纯壳 App。独立 core 不用 |
+| **NSH shell 源码**（`desktop/nsh-shell/`） | 暂无发版产物；待 Phase 11 门禁放行后接管完整 App |
 
 本地部署完整 App 的标准链：`just wasm` → `cargo build --release -p alephcore --bin aleph-server`
 （让 rust_embed 重嵌）→ 替换 `/Applications/Aleph.app/Contents/MacOS/aleph-server` → 重启 daemon。

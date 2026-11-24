@@ -1,0 +1,91 @@
+{
+  "artifact": "phase11_linux_native_wayland_runner_smoke",
+  "status": "PASS_SCOPED_RUNNER / NOT_PHASE11_ACCEPTANCE",
+  "scope": "Existing local QEMU guest, interactive native Wayland; no additional VM or nested display server. Rust-hosted NSH smoke with a loopback HTML fixture, not the Leptos/WASM Panel. / 当前本机 QEMU 来宾的原生 Wayland 窗口；未另开 VM，没有用 HTML 夹具代替生产 Panel 验收。",
+  "preceding_preflight": "docs/superpowers/runs/2026-11-22-phase11-linux-native-preflight-receipt.json",
+  "source": {
+    "start_commit": "0766ca0f4ba0b4f25d671677ef040ba0707ae77c",
+    "runner_build_commit": "89582ac5374fe5e77e47297f605387176763c447",
+    "end_source_commit_excluding_receipt": "a35454ccbe484a22096cdb8fb24ad8fde959dc3c",
+    "lockfile_git_blob": "53b8ca0280ef36a37046376442c68f51c93f381a",
+    "lockfile_sha256": "fcee57eba791c491bc4a74027b0a89bb56f30ee9faa42e30193a34bf1a5a0a2d",
+    "linux_platform_rs_sha256": "f08ae497a8dcdb8a14e73415669a78e669d822bae665627cc667c1d9fb20bfcc",
+    "dependency_script_sha256": "041822de631257e2bec821fb341e067c4bfa31c7912684e5818a1e4e1cb80b2e",
+    "registry_crate": "nsh-platform-linux=0.6.0; webview enabled in desktop/nsh-shell/Cargo.toml",
+    "registry_archive_sha256_verified_against_lock": "895f4e360ed53f838f27a85220957594be5726e4c6f01e80711acef423b31f3e"
+  },
+  "host": {
+    "distribution": "Arch Linux (rolling)",
+    "virtualization": "qemu",
+    "arch": "x86_64",
+    "kernel": "7.2.9-arch1-1",
+    "rustc": "1.99.1 (58cf8f9c3 2026-10-13)",
+    "desktop": "Hyprland 0.57.1-1",
+    "xdg_session_type": "wayland",
+    "gtk4": "4.24.1",
+    "webkitgtk_6_0": "2.54.2",
+    "portal": "xdg-desktop-portal 1.22.1-2; xdg-desktop-portal-hyprland 1.5.0-1",
+    "secret_service": "gnome-keyring 1:51.1-1",
+    "user_dbus_names_owned": ["org.freedesktop.DBus", "org.freedesktop.portal.Desktop", "org.freedesktop.secrets"],
+    "service_probe_limit": "Name ownership only; portal requests and OS credentials NOT RUN. / 只确认总线名称有 owner，未调用 portal 或 OS 凭据服务。"
+  },
+  "preparation": {
+    "pkg_config_webkitgtk_6_0_before": "exit 1: Package 'webkitgtk-6.0' not found",
+    "pacman_sync_install": "exit 1: both mirrors returned HTTP 404 for webkitgtk-6.0-2.54.2-1-x86_64.pkg.tar.zst; no installed packages changed",
+    "arch_archive": "same approved official package, signature verified via pacman-key; pacman -U exit 0",
+    "arch_archive_sha256": "38806dbdad248fb6f4bc6e609b3b5bac49f2ac250c2b0514b0595fba2fee0e80",
+    "offline_metadata_initial": "exit 101: failed to download `cairo-rs v0.22.11`; attempting to make an HTTP request, but --offline was specified",
+    "offline_metadata_final": "exit 0 after checksum-verified crates.io cache hydration; no pin or lockfile changes",
+    "cargo_policy": "Each Cargo invocation preceded by qa/browser_live/check_memory.py --required-bytes 4294967296 (ALLOW); offline locked, build/test serial --jobs 1, no overlap with native runtime QA"
+  },
+  "results": {
+    "official_nsh_run_app_through_aleph_host": "PASS_SCOPED",
+    "x11": "NOT RUN (only the Wayland login was used; no XWayland or Xvfb substitute)",
+    "wayland_runner": "PASS_SCOPED (Hyprland reported a mapped host-PID window with xwayland=false; GDK_BACKEND=wayland)",
+    "document_request_reply": "PASS_SCOPED (local HTML acknowledged the native probe with the actual request and document ID; the real bridge returned structured unavailable/identity_mismatch to a read-only autostart request through WebKit)",
+    "native_loop_return": "PASS_SCOPED (close-requested, closed/owned_drained=true, host exit 0; not a tray-menu click)",
+    "aleph_production_panel": "NOT RUN",
+    "credentials_storage_tray_hotkey_notifications_portal_external_links": "NOT RUN",
+    "linux_product_bundle_service_lifecycle_protocol_single_instance_updater_rollback": "NOT RUN",
+    "installer": "15 regression cases passed; real Arch loader check and already-satisfied --install exit 0; actual missing-dependency install via new script, Debian/Ubuntu/Fedora and arm64 hardware NOT RUN"
+  },
+  "commands": {
+    "build_red": "cargo build -p aleph-nsh-shell --offline --locked --jobs 1: exit 101; two E0308 errors at main.rs:285 and :291, glib::ExitCode vs std::process::ExitCode",
+    "build_green": "same command, exit 0, one unused_mut warning",
+    "test": "cargo test -p aleph-nsh-shell --offline --locked --jobs 1: exit 0; 27 passed, 0 failed",
+    "installer_regression": "python3 -m unittest discover -s qa -p test_install_desktop_deps.py: exit 0; 15 passed"
+  },
+  "binary_sha256": {
+    "target/debug/aleph-nsh-shell": "6cb849ff6f1d25714dfee69a5114e7b8c8fcd31a034f027b0f2dc8164ad202e6"
+  },
+  "aleph_package_sha256": null,
+  "raw_evidence_dir_local_only": ".phase10-evidence/phase11-linux-native-2026-11-23",
+  "raw_sha256": {
+    "build.log": "9b423d6b3ad2d0d35287fede45c82e3964ef1183d33d6b5bab5b3189039fb880",
+    "build-green.log": "0b1db4698915aaaacfc6dc1b719654e96b30d8839955e6f767dbd8e65322416e",
+    "hydrate.log": "14a4b41f882ae59f0890255fc9223954a33f3b68829167b276807d58d17d1842",
+    "test.log": "951e319454ebee3d276074d1c63241fb49b79baf14e9b84a0494d1cda1e8bfa3",
+    "native-smoke.py": "c14f14434908e82bbcc93db1eecf65b79764aa6de64c9d1282dab1ff31f0d944",
+    "native.json": "1b9e86368898c025b36dfea02ded37a370467eced8571125b652152789ab84f2",
+    "native.stdout": "17c82170958d258c0fab7e2502e072c44c0f0c1cb97c0757f16b19d347e96615",
+    "native.stderr": "4d5dcc2766833e713f632301841c14e1a098c134ffb7a803cbe87fce34fcf4da",
+    "native-endpoint-red.json": "e7550d1c7ecdab0ccbe703af05bb5aae11890b542d08929d87b6b2b144a020d1",
+    "native-endpoint-red.stdout": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "native-endpoint-red.stderr": "7799156cd5f078b4839260c4d01a03d8fce8d76b273277bb9f297b286b6601ee",
+    "native-no-probe-red.json": "b82b57ba1a11c5883147fa60c3e58d03dfc6356ac09b901606a8bc0159343c4f",
+    "native-no-probe-red.stdout": "9779e5c8db936bb9e99cc809d3d1a0110b14714e8af8983b934a68539266ecb1",
+    "native-no-probe-red.stderr": "4d5dcc2766833e713f632301841c14e1a098c134ffb7a803cbe87fce34fcf4da",
+    "pacman.log": "a519fca6b1cdc5c31e690d3bf604fd7a62b0f9cf6b05bb47c463587756d81776",
+    "pacman-key.log": "b9ed16cfea977b75a2b10db44df6bd5c6fb3caf634902a93373a42f29909c116",
+    "pacman-archive.log": "0fc8af50cad26d0265dd41dff20f6a1fc8dbed2876e450534eb0c5da2f60ef1c",
+    "installer-red.log": "703a588a0a941cc4f3d833271a49c14bb7bc28dcde3e6a6158875e3a996b6857",
+    "installer-green.log": "2548ecb2bb29ba1607b89cdbbf9327c0fe3e5f8845fc8260f78997f4f39d6f36"
+  },
+  "cleanup": "The owned HTTP fixture shut down and joined; the owned host exited 0 without a signal and no NSH shell process remained. XDG config/data/cache/state were isolated, with no credential requests, no external connection and no Gateway started or stopped. Signed WebKitGTK and cached official crates were left installed. / 仅退出自有夹具；不读写凭据或管理 Gateway。",
+  "review": "Scoped SPEC and QUALITY author verification; independent reviewer attempts timed out, no independent approval claimed. / 作者核对，独立审核超时，未取得批准。",
+  "acceptance": {
+    "task_12_linux": "OPEN / SCOPED_RUNNER_ONLY",
+    "p11_a": "OPEN",
+    "p11_b": "OPEN"
+  }
+}

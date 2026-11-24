@@ -318,6 +318,8 @@ pub(crate) fn call_guest_raw(runtime: &WasmRuntime, plugin_id: &str) -> Result<V
     let instance = runtime.plugins.get(plugin_id).ok_or("missing guest")?;
     let mut plugin = instance.plugin.lock().unwrap();
     plugin
+        .as_mut()
+        .ok_or("missing guest instance")?
         .call::<_, Vec<u8>>(HANDLER, "")
         .map_err(|error| format!("{error:#}"))
 }

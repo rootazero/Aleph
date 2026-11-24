@@ -28,7 +28,16 @@ use crate::verification::turn_verifier::{
 /// and a `bash` call made after an edit counts as evidence even if that bash
 /// call was itself a mutation. The trigger stays name-only mechanical (R7) —
 /// do not "fix" either case by inspecting tool arguments or output content.
-const MUTATION_TOOLS: &[&str] = &["file_write", "file_edit", "apply_patch"];
+const MUTATION_TOOLS: &[&str] = &[
+    "file_write",
+    "file_edit",
+    "apply_patch",
+    "write_file",
+    "edit_file",
+    "Write",
+    "Edit",
+    "file_ops",
+];
 /// Tools whose presence AFTER the last mutation counts as verification
 /// evidence (mechanical proxy: something was executed/observed post-edit).
 const EVIDENCE_TOOLS: &[&str] = &["bash", "code_exec", "code_check"];
@@ -59,8 +68,10 @@ impl TurnVerifier for MutationEvidenceVerifier {
         let Some(mut_idx) = last_mutation else {
             return VerifierVerdict::Continue;
         };
-        let evidence_after = ctx.recent_tool_calls[mut_idx + 1..]
+        let evidence_after = ctx
+            .recent_tool_calls
             .iter()
+            .skip(mut_idx.saturating_add(1))
             .any(|c| EVIDENCE_TOOLS.contains(&c.name.as_str()));
         if evidence_after {
             return VerifierVerdict::Continue;

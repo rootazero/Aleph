@@ -7,6 +7,56 @@ use super::helpers::{db_err, now_epoch};
 use super::SqliteCoordTaskStore;
 use crate::agents::swarm::tasks::{CoordTaskRun, ReviewVerdict, ReviewerKind, TaskRunStatus};
 
+/// Maximum number of run rows one `list_task_runs` call may materialise.
+///
+/// `coord_task_runs` grows one row per dispatch attempt and nothing prunes
+/// it, so a single long-lived task could force an unbounded read (every row
+/// with its summary and error text) while holding the connection mutex.
+/// The window keeps the NEWEST attempts — the ones the recovery budget, the
+/// retry ladder and the handoff recovery section reason about — and returns
+/// them in ascending order, so `runs.last()` still is the latest attempt and
+/// the failure counters still see the recent history.
+const RUN_HISTORY_ROW_CAP: usize = 200;
+
+/// Read an optional TEXT column while keeping the three failure shapes apart.
+///
+/// `row.get(idx).ok()` collapses "the column is NULL", "the column holds a
+/// non-TEXT value" and "the column does not exist" into a single `None`, so
+/// a verdict written by a newer build (or stored with another type) read
+/// back as "never reviewed" — silently, on the very audit trail whose
+/// purpose is to say what was reviewed. `get_ref` tells them apart: NULL is
+/// a genuine "not set", a wrong value type is logged and treated as unset,
+/// and a missing column is an error that propagates instead of quietly
+/// blanking the record.
+fn read_optional_text_column(
+    row: &rusqlite::Row<'_>,
+    index: usize,
+    column: &str,
+) -> rusqlite::Result<Option<String>> {
+    match row.get_ref(index)? {
+        rusqlite::types::ValueRef::Null => Ok(None),
+        rusqlite::types::ValueRef::Text(bytes) => match std::str::from_utf8(bytes) {
+            Ok(text) => Ok(Some(text.to_string())),
+            Err(e) => {
+                tracing::warn!(
+                    column,
+                    error = %e,
+                    "coord_task_runs: review column is not valid UTF-8, treating as unset"
+                );
+                Ok(None)
+            }
+        },
+        other => {
+            tracing::warn!(
+                column,
+                value = ?other,
+                "coord_task_runs: review column is not TEXT, treating as unset"
+            );
+            Ok(None)
+        }
+    }
+}
+
 pub(super) async fn start_task_run(
     store: &SqliteCoordTaskStore,
     task_id: &str,
@@ -113,7 +163,7 @@ pub(super) async fn stamp_abandoned_run_summary(
                 WHERE task_id = ?2
                   AND status IN ('running', 'abandoned')
                   AND (summary IS NULL OR summary = '')
-                ORDER BY started_at DESC
+                ORDER BY started_at DESC, rowid DESC
                 LIMIT 1
             )
             "#,
@@ -128,15 +178,32 @@ pub(super) async fn list_task_runs(
     task_id: &str,
 ) -> crate::error::Result<Vec<CoordTaskRun>> {
     let conn = store.conn.lock().await;
+    // `started_at` has whole-second granularity, so two attempts of the same
+    // task started in the same second tie — `rowid` (insertion order) is the
+    // deterministic tiebreak that makes "the latest attempt" and the listing
+    // order unambiguous instead of SQLite's scan order.
+    //
+    // The window keeps the newest `RUN_HISTORY_ROW_CAP` attempts (bounded
+    // read) and returns them ascending, so `runs.last()` is still the latest
+    // attempt.
+    let cap = RUN_HISTORY_ROW_CAP as i64;
     let mut stmt = conn
         .prepare_cached(
             "SELECT id, task_id, agent_id, started_at, ended_at, status, summary, error, \
                     review_verdict, reviewer_kind, reviewer_id \
-             FROM coord_task_runs WHERE task_id = ?1 ORDER BY started_at ASC",
+             FROM coord_task_runs \
+             WHERE task_id = ?1 \
+               AND rowid IN ( \
+                   SELECT rowid FROM coord_task_runs \
+                   WHERE task_id = ?1 \
+                   ORDER BY started_at DESC, rowid DESC \
+                   LIMIT ?2 \
+               ) \
+             ORDER BY started_at ASC, rowid ASC",
         )
         .map_err(db_err)?;
     let rows = stmt
-        .query_map(params![task_id], |row| {
+        .query_map(params![task_id, cap], |row| {
             let status_str: String = row.get(5)?;
             let status = TaskRunStatus::from_stored(&status_str).ok_or_else(|| {
                 rusqlite::Error::FromSqlConversionFailure(
@@ -148,8 +215,9 @@ pub(super) async fn list_task_runs(
                     )),
                 )
             })?;
-            let review_verdict: Option<String> = row.get(8).ok();
-            let reviewer_kind: Option<String> = row.get(9).ok();
+            let review_verdict_text = read_optional_text_column(row, 8, "review_verdict")?;
+            let reviewer_kind_text = read_optional_text_column(row, 9, "reviewer_kind")?;
+            let reviewer_id = read_optional_text_column(row, 10, "reviewer_id")?;
             Ok(CoordTaskRun {
                 id: row.get(0)?,
                 task_id: row.get(1)?,
@@ -159,11 +227,35 @@ pub(super) async fn list_task_runs(
                 status,
                 summary: row.get(6)?,
                 error: row.get(7)?,
-                review_verdict: review_verdict
-                    .as_deref()
-                    .and_then(ReviewVerdict::from_stored),
-                reviewer_kind: reviewer_kind.as_deref().and_then(ReviewerKind::from_stored),
-                reviewer_id: row.get(10).ok(),
+                review_verdict: match review_verdict_text {
+                    Some(text) => match ReviewVerdict::from_stored(&text) {
+                        Some(verdict) => Some(verdict),
+                        None => {
+                            tracing::warn!(
+                                task_id,
+                                verdict = %text,
+                                "coord_task_runs: unknown review verdict, treating as unreviewed"
+                            );
+                            None
+                        }
+                    },
+                    None => None,
+                },
+                reviewer_kind: match reviewer_kind_text {
+                    Some(text) => match ReviewerKind::from_stored(&text) {
+                        Some(kind) => Some(kind),
+                        None => {
+                            tracing::warn!(
+                                task_id,
+                                reviewer_kind = %text,
+                                "coord_task_runs: unknown reviewer kind, treating as unset"
+                            );
+                            None
+                        }
+                    },
+                    None => None,
+                },
+                reviewer_id,
             })
         })
         .map_err(db_err)?;
@@ -195,7 +287,7 @@ pub(super) async fn record_run_review(
             WHERE id = (
                 SELECT id FROM coord_task_runs
                 WHERE task_id = ?4 AND ended_at IS NOT NULL
-                ORDER BY started_at DESC
+                ORDER BY started_at DESC, rowid DESC
                 LIMIT 1
             )
             "#,

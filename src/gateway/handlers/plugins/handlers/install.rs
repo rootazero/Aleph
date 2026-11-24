@@ -62,89 +62,102 @@ pub async fn handle_install(request: JsonRpcRequest) -> JsonRpcResponse {
         );
     }
 
-    match git2::Repository::clone(&params.url, &dest_path) {
-        Ok(_) => {
-            // Catch clones whose destination resolved outside the
-            // authoritative plugins root (e.g. via a symlinked parent that
-            // was missed at install time).
-            if let Err(reason) =
-                crate::extension::ensure_plugin_root_within_authoritative(&plugins_dir, &dest_path)
-            {
-                let _ = std::fs::remove_dir_all(&dest_path);
-                return JsonRpcResponse::error(request.id, INTERNAL_ERROR, reason);
-            }
-            // Validate the installed plugin via AdapterRegistry
-            let registry = AdapterRegistry::with_defaults();
-            match registry.parse_dir(&dest_path) {
-                Ok(output) => {
-                    if let Ok(manager) = get_extension_manager() {
-                        if let Err(e) = manager.reload().await {
-                            tracing::warn!("Failed to refresh extensions after install: {}", e);
-                        }
-                    }
-                    // Count declared capabilities by kind so the install
-                    // response mirrors what `plugins.list` reports (the old
-                    // code reported every capability as a "skill").
-                    let count_kind = |kind: &str| -> u32 {
-                        output
-                            .capabilities
-                            .iter()
-                            .filter(|c| c.kind_name() == kind)
-                            .count() as u32
-                    };
-                    // `AdapterOutput` carries capabilities, not the runtime
-                    // kind — that lives in the manifest, which is where
-                    // `load_all` reads it from too. An unparseable manifest
-                    // here would already have failed `parse_dir`, so the
-                    // fallback is only for a manifest-less auto-discovered
-                    // plugin, which is `Static` by definition.
-                    let kind = crate::extension::manifest::parse_manifest_from_dir_sync(&dest_path)
-                        .map(|m| m.kind)
-                        .unwrap_or(crate::extension::PluginKind::Static);
-                    let info = PluginRow {
-                        name: output.name.unwrap_or_else(|| output.plugin_id.clone()),
-                        version: output.version.unwrap_or_default(),
-                        description: output.description.unwrap_or_default(),
-                        enabled: true,
-                        path: dest_path.to_string_lossy().to_string(),
-                        kind: kind.as_str().to_string(),
-                        // `default_plugins_dir()` is `~/.aleph/plugins/installed`:
-                        // the scanner classifies what it finds there as Global.
-                        origin: crate::extension::PluginOrigin::Global.label().to_string(),
-                        status: PluginRuntimeStatus::Loaded,
-                        status_detail: None,
-                        skills_count: count_kind("skill"),
-                        commands_count: count_kind("command"),
-                        agents_count: count_kind("agent"),
-                        hooks_count: count_kind("hook"),
-                        mcp_servers_count: count_kind("mcp_server"),
-                        tools_count: count_kind("tool"),
-                        // A plugin installed one millisecond ago has no usage
-                        // record and never will have one yet. `None` here says
-                        // "unknown", which is the truth; `Some(calls: 0)` would
-                        // say "known never used" about something that has not
-                        // had the chance.
-                        usage: None,
-                    };
-                    JsonRpcResponse::success(request.id, json!({ "plugin": info }))
-                }
-                Err(e) => {
-                    // Cleanup on failure
-                    let _ = std::fs::remove_dir_all(&dest_path);
-                    JsonRpcResponse::error(
-                        request.id,
-                        INTERNAL_ERROR,
-                        format!("Failed to load installed plugin: {e}"),
-                    )
-                }
+    // The clone reaches the network and the manifest scan reads the
+    // filesystem — both block, so they run off the async runtime's threads.
+    // Every failure below was an `INTERNAL_ERROR` already, so the error
+    // channel is unchanged.
+    let url = params.url.clone();
+    let dest = dest_path.clone();
+    let plugins = plugins_dir.clone();
+    let installed = tokio::task::spawn_blocking(move || {
+        git2::Repository::clone(&url, &dest)
+            .map_err(|e| format!("Failed to clone repository: {e}"))?;
+        // Catch clones whose destination resolved outside the
+        // authoritative plugins root (e.g. via a symlinked parent that
+        // was missed at install time).
+        if let Err(reason) =
+            crate::extension::ensure_plugin_root_within_authoritative(&plugins, &dest)
+        {
+            let _ = std::fs::remove_dir_all(&dest);
+            return Err(reason);
+        }
+        // Validate the installed plugin via AdapterRegistry
+        let registry = AdapterRegistry::with_defaults();
+        match registry.parse_dir(&dest) {
+            Ok(output) => Ok(output),
+            Err(e) => {
+                // Cleanup on failure
+                let _ = std::fs::remove_dir_all(&dest);
+                Err(format!("Failed to load installed plugin: {e}"))
             }
         }
-        Err(e) => JsonRpcResponse::error(
-            request.id,
-            INTERNAL_ERROR,
-            format!("Failed to clone repository: {e}"),
-        ),
+    })
+    .await;
+
+    let output = match installed {
+        Ok(Ok(output)) => output,
+        Ok(Err(reason)) => {
+            return JsonRpcResponse::error(request.id, INTERNAL_ERROR, reason);
+        }
+        Err(e) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("Failed to install plugin: {e}"),
+            );
+        }
+    };
+
+    if let Ok(manager) = get_extension_manager() {
+        if let Err(e) = manager.reload().await {
+            tracing::warn!("Failed to refresh extensions after install: {}", e);
+        }
     }
+    // Count declared capabilities by kind so the install
+    // response mirrors what `plugins.list` reports (the old
+    // code reported every capability as a "skill").
+    let count_kind = |kind: &str| -> u32 {
+        output
+            .capabilities
+            .iter()
+            .filter(|c| c.kind_name() == kind)
+            .count() as u32
+    };
+    // `AdapterOutput` carries capabilities, not the runtime
+    // kind — that lives in the manifest, which is where
+    // `load_all` reads it from too. An unparseable manifest
+    // here would already have failed `parse_dir`, so the
+    // fallback is only for a manifest-less auto-discovered
+    // plugin, which is `Static` by definition.
+    let kind = crate::extension::manifest::parse_manifest_from_dir_sync(&dest_path)
+        .map(|m| m.kind)
+        .unwrap_or(crate::extension::PluginKind::Static);
+    let info = PluginRow {
+        name: output.name.unwrap_or_else(|| output.plugin_id.clone()),
+        version: output.version.unwrap_or_default(),
+        description: output.description.unwrap_or_default(),
+        enabled: true,
+        path: dest_path.to_string_lossy().to_string(),
+        kind: kind.as_str().to_string(),
+        // `default_plugins_dir()` is `~/.aleph/plugins/installed`:
+        // the scanner classifies what it finds there as Global.
+        origin: crate::extension::PluginOrigin::Global.label().to_string(),
+        status: PluginRuntimeStatus::Loaded,
+        status_detail: None,
+        skills_count: count_kind("skill"),
+        commands_count: count_kind("command"),
+        agents_count: count_kind("agent"),
+        hooks_count: count_kind("hook"),
+        mcp_servers_count: count_kind("mcp_server"),
+        tools_count: count_kind("tool"),
+        // A plugin installed one millisecond ago has no usage
+        // record and never will have one yet. `None` here says
+        // "unknown", which is the truth; `Some(calls: 0)` would
+        // say "known never used" about something that has not
+        // had the chance.
+        usage: None,
+    };
+    JsonRpcResponse::success(request.id, json!({ "plugin": info }))
 }
 
 /// How the daemon should install a raw `source` string. This is the R4-owned

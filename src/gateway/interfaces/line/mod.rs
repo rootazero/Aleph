@@ -2,6 +2,12 @@
 //!
 //! Integrates with LINE Messaging API using webhook-based inbound
 //! and HTTP API outbound.
+//!
+//! Outbound always uses the metered *push* API: the free reply API needs the
+//! `replyToken` of the message being answered and expires after ~30s, which the
+//! asynchronous reply pipeline cannot guarantee. Replies therefore consume the
+//! channel's monthly push quota, and `OutboundMessage.reply_to` is not used to
+//! thread to the triggering message.
 
 pub mod config;
 pub mod message_ops;
@@ -14,7 +20,7 @@ use async_trait::async_trait;
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
     ChannelResult, ChannelState, ChannelStatus, ConversationId, MessageId, OutboundMessage,
-    PairingData, SendResult,
+    PairingData, SendOperation, SendResult,
 };
 
 pub use config::{LineConfig, LineDmPolicy, LineGroupPolicy};
@@ -33,7 +39,11 @@ pub struct LineChannel {
 }
 
 impl LineChannel {
-    pub fn new(id: impl Into<String>, config: LineConfig) -> Self {
+    pub fn new(id: impl Into<String>, mut config: LineConfig) -> Self {
+        // Normalize legacy slashless paths once at the configuration boundary.
+        if !config.webhook_path.starts_with('/') {
+            config.webhook_path.insert(0, '/');
+        }
         let info = ChannelInfo {
             id: ChannelId::new(id),
             name: "LINE".to_string(),
@@ -65,15 +75,20 @@ impl LineChannel {
 
     const fn capabilities() -> ChannelCapabilities {
         ChannelCapabilities {
-            attachments: true,
-            images: true,
-            audio: true,
-            video: true,
+            // Generic outbound attachments are not supported; metadata-based
+            // LINE media extensions remain available to explicit callers.
+            attachments: false,
+            images: false,
+            audio: false,
+            video: false,
             reactions: true,
             replies: true,
             editing: false,
             deletion: true,
-            typing_indicator: true,
+            // LINE exposes no typing endpoint; `send_typing` keeps the trait
+            // default, which rejects the call instead of reporting a no-op
+            // success.
+            typing_indicator: false,
             read_receipts: false,
             rich_text: true,
             polls: false,
@@ -136,7 +151,6 @@ impl Channel for LineChannel {
                 sender: self.channel_state.sender(),
                 status_handle: self.channel_state.status_handle(),
             };
-
             self.webhook_handle = Some(tokio::spawn(webhook::run_webhook_server(webhook_ctx)));
 
             tracing::info!(
@@ -166,188 +180,203 @@ impl Channel for LineChannel {
         Ok(())
     }
 
-    async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-        let api = self
-            .api
-            .as_ref()
-            .ok_or_else(|| ChannelError::NotConnected("API not initialized".to_string()))?;
+    fn send(&self, message: OutboundMessage) -> SendOperation {
+        let api = self.api.clone();
+        Box::pin(async move {
+            if !message.attachments.is_empty() {
+                return Err(ChannelError::UnsupportedFeature(
+                    "LINE generic attachments are unsupported; use explicit LINE media metadata"
+                        .into(),
+                ));
+            }
+            let api = api
+                .as_ref()
+                .ok_or_else(|| ChannelError::NotConnected("API not initialized".to_string()))?;
 
-        let chat_id = message.conversation_id.as_str();
+            let chat_id = message.conversation_id.as_str();
 
-        let msg_id = match message
-            .metadata
-            .get("line::message_type")
-            .map(|s| s.as_str())
-        {
-            Some("flex") => {
-                let alt_text = message
-                    .metadata
-                    .get("line::flex_alt_text")
-                    .cloned()
-                    .unwrap_or_else(|| "Flex message".to_string());
-                let contents_json =
-                    message.metadata.get("line::flex_contents").ok_or_else(|| {
-                        ChannelError::ConfigError(
-                            "flex_contents required for flex messages".to_string(),
-                        )
-                    })?;
-                let contents: message_ops::FlexBubbleContents = serde_json::from_str(contents_json)
-                    .map_err(|e| {
-                        ChannelError::ConfigError(format!("Invalid flex_contents: {e}"))
-                    })?;
-                api.push_flex(chat_id, &alt_text, contents)
-                    .await
-                    .map_err(ChannelError::SendFailed)?
-            }
-            Some("template") => {
-                let alt_text = message
-                    .metadata
-                    .get("line::template_alt_text")
-                    .cloned()
-                    .unwrap_or_else(|| "Template message".to_string());
-                let template_json = message.metadata.get("line::template").ok_or_else(|| {
-                    ChannelError::ConfigError("template required for template messages".to_string())
-                })?;
-                let template: message_ops::TemplatePayload = serde_json::from_str(template_json)
-                    .map_err(|e| ChannelError::ConfigError(format!("Invalid template: {e}")))?;
-                api.push_template(chat_id, &alt_text, template)
-                    .await
-                    .map_err(ChannelError::SendFailed)?
-            }
-            Some("image") => {
-                let original_url = message
-                    .metadata
-                    .get("line::image_url")
-                    .ok_or_else(|| {
-                        ChannelError::ConfigError(
-                            "image_url required for image messages".to_string(),
-                        )
-                    })?
-                    .clone();
-                let preview_url = message
-                    .metadata
-                    .get("line::preview_url")
-                    .cloned()
-                    .unwrap_or_else(|| original_url.clone());
-                api.push_image(chat_id, &original_url, &preview_url)
-                    .await
-                    .map_err(ChannelError::SendFailed)?
-            }
-            Some("video") => {
-                let video_url = message
-                    .metadata
-                    .get("line::video_url")
-                    .ok_or_else(|| {
-                        ChannelError::ConfigError(
-                            "video_url required for video messages".to_string(),
-                        )
-                    })?
-                    .clone();
-                let preview_url = message
-                    .metadata
-                    .get("line::preview_url")
-                    .ok_or_else(|| {
-                        ChannelError::ConfigError(
-                            "preview_url required for video messages".to_string(),
-                        )
-                    })?
-                    .clone();
-                let duration = message
-                    .metadata
-                    .get("line::duration")
-                    .and_then(|s| s.parse::<u64>().ok());
-                api.push_video(chat_id, &video_url, &preview_url, duration)
-                    .await
-                    .map_err(ChannelError::SendFailed)?
-            }
-            Some("audio") => {
-                let audio_url = message
-                    .metadata
-                    .get("line::audio_url")
-                    .ok_or_else(|| {
-                        ChannelError::ConfigError(
-                            "audio_url required for audio messages".to_string(),
-                        )
-                    })?
-                    .clone();
-                let duration = message
-                    .metadata
-                    .get("line::duration")
-                    .ok_or_else(|| {
-                        ChannelError::ConfigError(
-                            "duration required for audio messages".to_string(),
-                        )
-                    })?
-                    .parse::<u64>()
-                    .map_err(|e| ChannelError::ConfigError(format!("Invalid duration: {e}")))?;
-                api.push_audio(chat_id, &audio_url, duration)
-                    .await
-                    .map_err(ChannelError::SendFailed)?
-            }
-            Some("location") => {
-                let title = message
-                    .metadata
-                    .get("line::location_title")
-                    .cloned()
-                    .unwrap_or_default();
-                let address = message
-                    .metadata
-                    .get("line::location_address")
-                    .ok_or_else(|| {
-                        ChannelError::ConfigError(
-                            "location_address required for location messages".to_string(),
-                        )
-                    })?
-                    .clone();
-                let latitude: f64 = message
-                    .metadata
-                    .get("line::latitude")
-                    .ok_or_else(|| {
-                        ChannelError::ConfigError(
-                            "latitude required for location messages".to_string(),
-                        )
-                    })?
-                    .parse()
-                    .map_err(|e| ChannelError::ConfigError(format!("Invalid latitude: {e}")))?;
-                let longitude: f64 = message
-                    .metadata
-                    .get("line::longitude")
-                    .ok_or_else(|| {
-                        ChannelError::ConfigError(
-                            "longitude required for location messages".to_string(),
-                        )
-                    })?
-                    .parse()
-                    .map_err(|e| ChannelError::ConfigError(format!("Invalid longitude: {e}")))?;
-                api.push_location(chat_id, &title, &address, latitude, longitude)
-                    .await
-                    .map_err(ChannelError::SendFailed)?
-            }
-            _ => {
-                if let Some(quick_reply_json) = message.metadata.get("line::quick_reply_actions") {
-                    let actions: Vec<message_ops::QuickReplyAction> =
-                        serde_json::from_str(quick_reply_json).map_err(|e| {
-                            ChannelError::ConfigError(format!("Invalid quick_reply_actions: {e}"))
+            let msg_id = match message
+                .metadata
+                .get("line::message_type")
+                .map(|s| s.as_str())
+            {
+                Some("flex") => {
+                    let alt_text = message
+                        .metadata
+                        .get("line::flex_alt_text")
+                        .cloned()
+                        .unwrap_or_else(|| "Flex message".to_string());
+                    let contents_json =
+                        message.metadata.get("line::flex_contents").ok_or_else(|| {
+                            ChannelError::ConfigError(
+                                "flex_contents required for flex messages".to_string(),
+                            )
                         })?;
-                    api.push_quick_reply(chat_id, &message.text, actions)
-                        .await
-                        .map_err(ChannelError::SendFailed)?
-                } else {
-                    api.push_text(chat_id, &message.text)
+                    let contents: message_ops::FlexBubbleContents =
+                        serde_json::from_str(contents_json).map_err(|e| {
+                            ChannelError::ConfigError(format!("Invalid flex_contents: {e}"))
+                        })?;
+                    api.push_flex(chat_id, &alt_text, contents)
                         .await
                         .map_err(ChannelError::SendFailed)?
                 }
-            }
-        };
+                Some("template") => {
+                    let alt_text = message
+                        .metadata
+                        .get("line::template_alt_text")
+                        .cloned()
+                        .unwrap_or_else(|| "Template message".to_string());
+                    let template_json =
+                        message.metadata.get("line::template").ok_or_else(|| {
+                            ChannelError::ConfigError(
+                                "template required for template messages".to_string(),
+                            )
+                        })?;
+                    let template: message_ops::TemplatePayload =
+                        serde_json::from_str(template_json).map_err(|e| {
+                            ChannelError::ConfigError(format!("Invalid template: {e}"))
+                        })?;
+                    api.push_template(chat_id, &alt_text, template)
+                        .await
+                        .map_err(ChannelError::SendFailed)?
+                }
+                Some("image") => {
+                    let original_url = message
+                        .metadata
+                        .get("line::image_url")
+                        .ok_or_else(|| {
+                            ChannelError::ConfigError(
+                                "image_url required for image messages".to_string(),
+                            )
+                        })?
+                        .clone();
+                    let preview_url = message
+                        .metadata
+                        .get("line::preview_url")
+                        .cloned()
+                        .unwrap_or_else(|| original_url.clone());
+                    api.push_image(chat_id, &original_url, &preview_url)
+                        .await
+                        .map_err(ChannelError::SendFailed)?
+                }
+                Some("video") => {
+                    let video_url = message
+                        .metadata
+                        .get("line::video_url")
+                        .ok_or_else(|| {
+                            ChannelError::ConfigError(
+                                "video_url required for video messages".to_string(),
+                            )
+                        })?
+                        .clone();
+                    let preview_url = message
+                        .metadata
+                        .get("line::preview_url")
+                        .ok_or_else(|| {
+                            ChannelError::ConfigError(
+                                "preview_url required for video messages".to_string(),
+                            )
+                        })?
+                        .clone();
+                    let duration = message
+                        .metadata
+                        .get("line::duration")
+                        .and_then(|s| s.parse::<u64>().ok());
+                    api.push_video(chat_id, &video_url, &preview_url, duration)
+                        .await
+                        .map_err(ChannelError::SendFailed)?
+                }
+                Some("audio") => {
+                    let audio_url = message
+                        .metadata
+                        .get("line::audio_url")
+                        .ok_or_else(|| {
+                            ChannelError::ConfigError(
+                                "audio_url required for audio messages".to_string(),
+                            )
+                        })?
+                        .clone();
+                    let duration = message
+                        .metadata
+                        .get("line::duration")
+                        .ok_or_else(|| {
+                            ChannelError::ConfigError(
+                                "duration required for audio messages".to_string(),
+                            )
+                        })?
+                        .parse::<u64>()
+                        .map_err(|e| ChannelError::ConfigError(format!("Invalid duration: {e}")))?;
+                    api.push_audio(chat_id, &audio_url, duration)
+                        .await
+                        .map_err(ChannelError::SendFailed)?
+                }
+                Some("location") => {
+                    let title = message
+                        .metadata
+                        .get("line::location_title")
+                        .cloned()
+                        .unwrap_or_default();
+                    let address = message
+                        .metadata
+                        .get("line::location_address")
+                        .ok_or_else(|| {
+                            ChannelError::ConfigError(
+                                "location_address required for location messages".to_string(),
+                            )
+                        })?
+                        .clone();
+                    let latitude: f64 = message
+                        .metadata
+                        .get("line::latitude")
+                        .ok_or_else(|| {
+                            ChannelError::ConfigError(
+                                "latitude required for location messages".to_string(),
+                            )
+                        })?
+                        .parse()
+                        .map_err(|e| ChannelError::ConfigError(format!("Invalid latitude: {e}")))?;
+                    let longitude: f64 = message
+                        .metadata
+                        .get("line::longitude")
+                        .ok_or_else(|| {
+                            ChannelError::ConfigError(
+                                "longitude required for location messages".to_string(),
+                            )
+                        })?
+                        .parse()
+                        .map_err(|e| {
+                            ChannelError::ConfigError(format!("Invalid longitude: {e}"))
+                        })?;
+                    api.push_location(chat_id, &title, &address, latitude, longitude)
+                        .await
+                        .map_err(ChannelError::SendFailed)?
+                }
+                _ => {
+                    if let Some(quick_reply_json) =
+                        message.metadata.get("line::quick_reply_actions")
+                    {
+                        let actions: Vec<message_ops::QuickReplyAction> =
+                            serde_json::from_str(quick_reply_json).map_err(|e| {
+                                ChannelError::ConfigError(format!(
+                                    "Invalid quick_reply_actions: {e}"
+                                ))
+                            })?;
+                        api.push_quick_reply(chat_id, &message.text, actions)
+                            .await
+                            .map_err(ChannelError::SendFailed)?
+                    } else {
+                        api.push_text(chat_id, &message.text)
+                            .await
+                            .map_err(ChannelError::SendFailed)?
+                    }
+                }
+            };
 
-        Ok(SendResult {
-            message_id: MessageId::new(msg_id),
-            timestamp: chrono::Utc::now(),
+            Ok(SendResult {
+                message_id: MessageId::new(msg_id),
+                timestamp: chrono::Utc::now(),
+            })
         })
-    }
-
-    async fn send_typing(&self, _conversation_id: &ConversationId) -> ChannelResult<()> {
-        Ok(())
     }
 
     async fn react(
@@ -399,12 +428,20 @@ impl ChannelFactory for LineChannelFactory {
     }
 
     async fn create(&self, config: serde_json::Value) -> ChannelResult<Box<dyn Channel>> {
+        self.create_with_id("line", config).await
+    }
+
+    async fn create_with_id(
+        &self,
+        id: &str,
+        config: serde_json::Value,
+    ) -> ChannelResult<Box<dyn Channel>> {
         let config: LineConfig = serde_json::from_value(config)
             .map_err(|e| ChannelError::ConfigError(format!("Invalid LINE config: {e}")))?;
 
         config.validate().map_err(ChannelError::ConfigError)?;
 
-        Ok(Box::new(LineChannel::new("line", config)))
+        Ok(Box::new(LineChannel::new(id, config)))
     }
 }
 
@@ -425,15 +462,15 @@ mod tests {
     #[test]
     fn test_channel_capabilities() {
         let caps = LineChannel::capabilities();
-        assert!(caps.attachments);
-        assert!(caps.images);
-        assert!(caps.audio);
-        assert!(caps.video);
+        assert!(!caps.attachments);
+        assert!(!caps.images);
+        assert!(!caps.audio);
+        assert!(!caps.video);
         assert!(caps.reactions);
         assert!(caps.replies);
         assert!(!caps.editing);
         assert!(caps.deletion);
-        assert!(caps.typing_indicator);
+        assert!(!caps.typing_indicator);
         assert!(!caps.read_receipts);
         assert!(caps.rich_text);
         assert_eq!(caps.max_message_length, 5000);
@@ -449,6 +486,32 @@ mod tests {
         let channel = LineChannel::new("line-test", config);
         assert_eq!(channel.info().id.as_str(), "line-test");
         assert_eq!(channel.info().channel_type, "line");
+    }
+
+    #[tokio::test]
+    async fn generic_attachment_is_rejected_before_connection_or_send() {
+        let channel = LineChannel::new("line", LineConfig::default());
+        let mut message = OutboundMessage::text("U1", "do not silently drop attachment");
+        message.attachments.push(
+            serde_json::from_value(serde_json::json!({"id":"a", "mime_type":"image/png"})).unwrap(),
+        );
+        assert!(matches!(
+            channel.send(message).await,
+            Err(ChannelError::UnsupportedFeature(_))
+        ));
+    }
+
+    #[test]
+    fn legacy_webhook_path_normalizes_once() {
+        let channel = LineChannel::new(
+            "line",
+            LineConfig {
+                webhook_path: "line/webhook".into(),
+                ..Default::default()
+            },
+        );
+        assert_eq!(channel.config.webhook_path, "/line/webhook");
+        assert_eq!(LineConfig::default().webhook_path, "/line/webhook");
     }
 
     #[test]

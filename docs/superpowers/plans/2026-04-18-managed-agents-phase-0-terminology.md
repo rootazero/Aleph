@@ -532,7 +532,7 @@ git commit -m "config: preserve old [[harnesses]] TOML key via serde alias"
 Run: `grep -n -i 'harness' docs/reference/ARCHITECTURE.md`
 Expected: a small list. For each hit, decide:
 - If the text describes ACP external-CLI integration → change to "adapter" or "ACP adapter"
-- If the text describes the Think→Act loop (Anthropic meaning) → leave as "Harness" with a capital H, and add a `[harness](./GLOSSARY.md#harness)` link on first occurrence
+- If the text describes the Think→Act loop (Anthropic meaning) → leave as "Harness" with a capital H, and add a `[harness](../../reference/GLOSSARY.md#harness)` link on first occurrence
 - If the text is a code reference (`AcpHarness`, `src/acp/harness.rs`, etc.) → update to the renamed form
 
 - [ ] **Step 11.2: Apply the edits**

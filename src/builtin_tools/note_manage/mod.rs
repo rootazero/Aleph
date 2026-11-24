@@ -75,7 +75,15 @@ impl NoteManageTool {
     }
 
     /// Attach an embedding provider so `query` runs hybrid (vector + FTS)
-    /// search instead of FTS-only. Wired from the registry's `config.embedder`.
+    /// search instead of FTS-only.
+    ///
+    /// NOT wired by the tool registry: the registry's construction path
+    /// (`NoteManageTool::new`, used by `tool_registry_impl`) leaves the
+    /// provider unset, so a registry-constructed tool searches FTS-only. The
+    /// Memory runtime's own path wires the runtime's active provider
+    /// (`MemoryToolFactory::for_operation` in `builtin_tools/runtime.rs`).
+    /// There is no `config.embedder` to read from — the registry never had
+    /// one, and setting the field it used to carry was silently ignored.
     ///
     /// The provider is also pushed into the indexer, so embed-on-write is owned
     /// by the one shared write chokepoint (`NoteIndexer::finalize_write` and
@@ -240,10 +248,15 @@ impl AlephTool for NoteManageTool {
          did not happen — say in one short sentence that it was not saved, or say nothing \
          about memory at all.";
 
+    fn services() -> Vec<aleph_slot_api::capability::Service> {
+        vec![crate::memory::runtime::required_service()]
+    }
+
     type Args = NoteManageArgs;
     type Output = NoteManageResult;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        self.indexer.store().ensure_available()?;
         let result = match args.action {
             NoteManageAction::Create => self.handle_create(&args).await,
             NoteManageAction::Update => self.handle_update(&args).await,

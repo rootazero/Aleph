@@ -1,5 +1,7 @@
 use crate::error::{AlephError, Result};
-use crate::search::providers::base::{build_client, parse_json, retain_usable, send};
+use crate::search::providers::base::{
+    build_client, parse_json, redact, retain_usable, send, validate_request_url,
+};
 use crate::search::{SearchCapabilities, SearchOptions, SearchProvider, SearchResult};
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
@@ -18,6 +20,7 @@ const DEFAULT_BASE_URL: &str = "https://api.firecrawl.dev";
 pub struct FirecrawlProvider {
     api_key: Arc<str>,
     base_url: String,
+    allow_private_network: bool,
     client: Client,
 }
 
@@ -44,8 +47,18 @@ struct ScrapeOptions {
 
 #[derive(Deserialize, Default)]
 struct FirecrawlResponse {
+    #[serde(default = "default_true")]
+    success: bool,
+    #[serde(default)]
+    error: Option<String>,
+    #[serde(default)]
+    message: Option<String>,
     #[serde(default)]
     data: FirecrawlData,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Deserialize, Default)]
@@ -81,9 +94,12 @@ impl FirecrawlProvider {
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
         let trimmed = base_url.trim_end_matches('/').to_string();
-        if !(trimmed.len() >= 7
-            && (trimmed[..7].eq_ignore_ascii_case("http://")
-                || (trimmed.len() >= 8 && trimmed[..8].eq_ignore_ascii_case("https://"))))
+        if !(trimmed
+            .get(..7)
+            .is_some_and(|p| p.eq_ignore_ascii_case("http://"))
+            || trimmed
+                .get(..8)
+                .is_some_and(|p| p.eq_ignore_ascii_case("https://")))
         {
             return Err(AlephError::invalid_config(
                 "Firecrawl base URL must use http:// or https:// scheme",
@@ -110,6 +126,7 @@ impl FirecrawlProvider {
         Ok(Self {
             api_key: Arc::from(api_key.into_boxed_str()),
             base_url: trimmed,
+            allow_private_network,
             client: build_client()?,
         })
     }
@@ -154,9 +171,11 @@ impl SearchProvider for FirecrawlProvider {
         };
 
         let secret = Some(self.api_key.as_ref());
+        let endpoint = format!("{}/v2/search", self.base_url);
+        validate_request_url(&endpoint, NAME, self.allow_private_network).await?;
         let response = send(
             self.client
-                .post(format!("{}/v2/search", self.base_url))
+                .post(endpoint)
                 .bearer_auth(self.api_key.as_ref())
                 .json(&request_body)
                 .timeout(std::time::Duration::from_secs(options.validated_timeout())),
@@ -165,6 +184,16 @@ impl SearchProvider for FirecrawlProvider {
         )
         .await?;
         let firecrawl_response: FirecrawlResponse = parse_json(response, NAME, secret).await?;
+        if !firecrawl_response.success {
+            let detail = firecrawl_response
+                .error
+                .or(firecrawl_response.message)
+                .unwrap_or_else(|| "unknown Firecrawl error".to_string());
+            return Err(AlephError::provider(redact(
+                format!("Firecrawl API error: {detail}"),
+                secret,
+            )));
+        }
 
         Ok(retain_usable(
             NAME,

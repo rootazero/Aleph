@@ -48,10 +48,10 @@ pub(super) enum TargetHost {
 }
 
 impl TargetHost {
-    fn as_lookup_str(&self) -> String {
+    fn as_lookup_cow(&self) -> std::borrow::Cow<'_, str> {
         match self {
-            Self::Ip(ip) => ip.to_string(),
-            Self::Domain(d) => d.clone(),
+            Self::Ip(ip) => std::borrow::Cow::Owned(ip.to_string()),
+            Self::Domain(d) => std::borrow::Cow::Borrowed(d.as_str()),
         }
     }
 }
@@ -81,8 +81,9 @@ pub(super) async fn handle(inbound: TcpStream, allowlist: AllowList) -> Result<(
         // avoid unnecessary allocation from a malformed or malicious greeting.
         return Ok(());
     }
-    let mut methods = vec![0u8; nmethods];
-    rd.read_exact(&mut methods).await?;
+    let mut methods = [0u8; 16];
+    let methods = &mut methods[..nmethods];
+    rd.read_exact(methods).await?;
     if !methods.contains(&NO_AUTH) {
         wr.write_all(&[VER, NO_ACCEPTABLE]).await?;
         return Ok(());
@@ -108,7 +109,7 @@ pub(super) async fn handle(inbound: TcpStream, allowlist: AllowList) -> Result<(
         }
     };
 
-    let host_for_log = req.target.as_lookup_str();
+    let host_for_log = req.target.as_lookup_cow();
     if !allowlist.permits(&host_for_log) {
         tracing::debug!(
             target = "sandbox.proxy",
@@ -163,9 +164,7 @@ pub(super) async fn handle(inbound: TcpStream, allowlist: AllowList) -> Result<(
     // outbound binding when the client doesn't need it for FTP-style flows).
     write_reply(&mut wr, REP_SUCCEEDED).await?;
 
-    let mut inbound = rd
-        .reunite(wr)
-        .map_err(|e| std::io::Error::other(format!("{e}")))?;
+    let mut inbound = rd.reunite(wr).map_err(std::io::Error::other)?;
     let mut upstream = upstream;
     let _ = tokio::io::copy_bidirectional(&mut inbound, &mut upstream).await;
     Ok(())
@@ -190,10 +189,22 @@ async fn parse_target(
             let mut len_buf = [0u8; 1];
             rd.read_exact(&mut len_buf).await?;
             let len = len_buf[0] as usize;
+            if len == 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "empty domain",
+                ));
+            }
             let mut name = vec![0u8; len];
             rd.read_exact(&mut name).await?;
             let domain = String::from_utf8(name)
                 .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "bad domain"))?;
+            if domain.contains('\0') {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "domain contains NUL",
+                ));
+            }
             TargetHost::Domain(domain)
         }
         _ => return Ok(None),
@@ -249,11 +260,11 @@ mod tests {
     #[test]
     fn target_host_lookup_str() {
         assert_eq!(
-            TargetHost::Ip(IpAddr::V4(Ipv4Addr::new(1, 2, 3, 4))).as_lookup_str(),
+            TargetHost::Ip(IpAddr::V4(Ipv4Addr::new(1, 2, 3, 4))).as_lookup_cow(),
             "1.2.3.4"
         );
         assert_eq!(
-            TargetHost::Domain("example.com".into()).as_lookup_str(),
+            TargetHost::Domain("example.com".into()).as_lookup_cow(),
             "example.com"
         );
     }

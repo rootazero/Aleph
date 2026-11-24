@@ -80,8 +80,12 @@ than guessing.\n",
             // `prompt_contract::CONDITIONALLY_SILENT` — the per-layer byte
             // ratchet measures it as 0 B, so the bound lives here where the
             // layer builds its own text.
-            let terms = crate::utils::text_format::truncate_reserving(
+            let sanitized_terms = crate::thinker::prompt_sanitizer::sanitize_for_prompt(
                 terms,
+                crate::thinker::prompt_sanitizer::SanitizeLevel::Moderate,
+            );
+            let terms = crate::utils::text_format::truncate_reserving(
+                &sanitized_terms,
                 VOICE_VOCABULARY_MAX_CHARS,
                 "…",
             );

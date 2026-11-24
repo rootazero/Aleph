@@ -10,6 +10,9 @@
 //! - **Outbound**: POSTs JSON to a configured `callback_url` with the same
 //!   `X-Webhook-Signature` header.
 //!
+//! The outbound payload has no `attachments` or `inline_keyboard` field, so an
+//! outbound request carrying either is rejected instead of silently losing it.
+//!
 //! # Usage
 //!
 //! `Config.channels` is a MAP keyed by instance id, so the table header carries
@@ -45,7 +48,7 @@ pub use message_ops::WebhookMessageOps;
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
-    ChannelResult, ChannelState, ChannelStatus, InboundMessage, OutboundMessage, SendResult,
+    ChannelResult, ChannelState, ChannelStatus, InboundMessage, OutboundMessage, SendOperation,
 };
 use crate::gateway::webhook_receiver::{WebhookHandler, WebhookReceiver};
 use crate::sync_primitives::Arc;
@@ -82,7 +85,10 @@ pub struct WebhookChannel {
     /// Shared mutable state (status + inbound channel)
     channel_state: ChannelState,
     /// HTTP client for outbound requests
-    client: reqwest::Client,
+    client: Option<reqwest::Client>,
+    injected_client: bool,
+    #[cfg(test)]
+    probe: Option<crate::gateway::channel_registry::test_support::ResourceProbe>,
     /// The webhook handler (created on start, shared with `WebhookReceiver`)
     handler: Option<Arc<GenericWebhookHandler>>,
 }
@@ -90,6 +96,28 @@ pub struct WebhookChannel {
 impl WebhookChannel {
     /// Create a new generic webhook channel
     pub fn new(id: impl Into<String>, config: WebhookChannelConfig) -> Self {
+        Self::construct(
+            id.into(),
+            config,
+            #[cfg(test)]
+            None,
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn observed(
+        id: &str,
+        config: WebhookChannelConfig,
+        probe: crate::gateway::channel_registry::test_support::ResourceProbe,
+    ) -> Self {
+        Self::construct(id.into(), config, Some(probe))
+    }
+
+    fn construct(
+        id: String,
+        config: WebhookChannelConfig,
+        #[cfg(test)] probe: Option<crate::gateway::channel_registry::test_support::ResourceProbe>,
+    ) -> Self {
         let info = ChannelInfo {
             id: ChannelId::new(id),
             name: "Webhook".to_string(),
@@ -102,7 +130,10 @@ impl WebhookChannel {
             info,
             config,
             channel_state: ChannelState::new(100),
-            client: reqwest::Client::new(),
+            client: None,
+            injected_client: false,
+            #[cfg(test)]
+            probe,
             handler: None,
         }
     }
@@ -113,7 +144,8 @@ impl WebhookChannel {
         client: reqwest::Client,
     ) -> Self {
         let mut channel = Self::new(id, config);
-        channel.client = client;
+        channel.client = Some(client);
+        channel.injected_client = true;
         channel
     }
 
@@ -143,9 +175,27 @@ impl WebhookChannel {
         }
     }
 
+    fn take_client(&mut self) -> bool {
+        if self.injected_client {
+            return false;
+        }
+        self.client.take().is_some()
+    }
+
     /// Update internal status
     async fn set_status(&self, status: ChannelStatus) {
         self.channel_state.set_status(status).await;
+    }
+}
+
+#[cfg(test)]
+impl Drop for WebhookChannel {
+    fn drop(&mut self) {
+        if self.take_client() {
+            if let Some(probe) = &self.probe {
+                probe.record("client_drop");
+            }
+        }
     }
 }
 
@@ -163,6 +213,21 @@ impl Channel for WebhookChannel {
         // Validate configuration
         self.config.validate().map_err(ChannelError::ConfigError)?;
 
+        if self.client.is_none() {
+            #[cfg(test)]
+            if let Some(probe) = &self.probe {
+                probe.record("client_build_attempt");
+            }
+            self.client = Some(
+                reqwest::Client::builder()
+                    .build()
+                    .map_err(|error| ChannelError::ConfigError(error.to_string()))?,
+            );
+            #[cfg(test)]
+            if let Some(probe) = &self.probe {
+                probe.record("client_built");
+            }
+        }
         self.set_status(ChannelStatus::Connecting).await;
         tracing::info!(
             "Starting Webhook channel (path={}, callback_url={})...",
@@ -189,6 +254,15 @@ impl Channel for WebhookChannel {
     async fn stop(&mut self) -> ChannelResult<()> {
         tracing::info!("Stopping Webhook channel...");
         self.handler = None;
+        let existed = self.take_client();
+        #[cfg(test)]
+        if existed {
+            if let Some(probe) = &self.probe {
+                probe.record("client_drop");
+            }
+        }
+        #[cfg(not(test))]
+        let _ = existed;
         self.set_status(ChannelStatus::Disconnected).await;
         Ok(())
     }
@@ -197,14 +271,41 @@ impl Channel for WebhookChannel {
         self.handler.clone().map(|h| h as Arc<dyn WebhookHandler>)
     }
 
-    async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-        WebhookMessageOps::send_outbound(
-            &self.client,
-            &self.config.callback_url,
-            &self.config.secret,
-            &message,
-        )
-        .await
+    fn send(&self, message: OutboundMessage) -> SendOperation {
+        let client = self.client.clone();
+        #[cfg(test)]
+        let probe = self.probe.clone();
+        let callback_url = self.config.callback_url.clone();
+        let secret = self.config.secret.clone();
+        Box::pin(async move {
+            // Fail closed: the outbound payload has no field for these, so
+            // rejecting is the only way to keep the request honest.
+            if !message.attachments.is_empty() {
+                return Err(ChannelError::UnsupportedFeature(
+                    "Webhook does not support attachments".to_string(),
+                ));
+            }
+            if message.inline_keyboard.is_some() {
+                return Err(ChannelError::UnsupportedFeature(
+                    "Webhook does not support buttons".to_string(),
+                ));
+            }
+
+            let client = client.ok_or_else(|| {
+                ChannelError::NotConnected("Webhook channel has not been activated".into())
+            })?;
+            #[cfg(test)]
+            if let Some(probe) = &probe {
+                probe.record("request_attempt");
+            }
+            let result =
+                WebhookMessageOps::send_outbound(&client, &callback_url, &secret, &message).await;
+            #[cfg(test)]
+            if let Some(probe) = &probe {
+                probe.record("request_ended");
+            }
+            result
+        })
     }
 }
 
@@ -268,12 +369,7 @@ impl ChannelFactory for WebhookChannelFactory {
     }
 
     async fn create(&self, config: serde_json::Value) -> ChannelResult<Box<dyn Channel>> {
-        let config: WebhookChannelConfig = serde_json::from_value(config)
-            .map_err(|e| ChannelError::ConfigError(format!("Invalid Webhook config: {e}")))?;
-
-        config.validate().map_err(ChannelError::ConfigError)?;
-
-        Ok(Box::new(WebhookChannel::new("webhook", config)))
+        self.create_with_id("webhook", config).await
     }
 
     /// The webhook channel's runtime id IS the configured instance id —

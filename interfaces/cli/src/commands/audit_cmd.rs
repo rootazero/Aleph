@@ -35,10 +35,10 @@ pub fn parse_since(spec: &str) -> Result<i64, String> {
         return Err("empty --since".to_string());
     }
     let (digits, mult) = match spec.chars().last() {
-        Some('s') => (&spec[..spec.len() - 1], 1),
-        Some('m') => (&spec[..spec.len() - 1], 60),
-        Some('h') => (&spec[..spec.len() - 1], 3600),
-        Some('d') => (&spec[..spec.len() - 1], 86_400),
+        Some('s') => (spec.get(..spec.len().saturating_sub(1)).unwrap_or(""), 1),
+        Some('m') => (spec.get(..spec.len().saturating_sub(1)).unwrap_or(""), 60),
+        Some('h') => (spec.get(..spec.len().saturating_sub(1)).unwrap_or(""), 3600),
+        Some('d') => (spec.get(..spec.len().saturating_sub(1)).unwrap_or(""), 86_400),
         Some(c) if c.is_ascii_digit() => (spec, 1),
         _ => {
             return Err(format!(

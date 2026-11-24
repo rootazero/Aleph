@@ -25,7 +25,8 @@
 //!
 //! Sessions are isolated *structurally*: a session's artifacts only exist under
 //! the directory its key encodes to, and [`encode_session_key`] is injective
-//! (`%` is itself encoded), so no two distinct keys can collide on one
+//! (`%` is itself encoded, and the empty key maps to a reserved name the
+//! encoder can never produce), so no two distinct keys can collide on one
 //! directory. A reader holding session A's key cannot name a path into session
 //! B's directory.
 
@@ -35,6 +36,9 @@ pub use store::{ArtifactStore, MAX_ARTIFACTS_PER_SESSION, MAX_ARTIFACT_BYTES};
 
 use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use serde::{Deserialize, Serialize};
+
+#[cfg(windows)]
+use crate::utils::paths::is_windows_reserved_name;
 
 /// Percent-encode set for turning a session key into one path component.
 ///
@@ -47,24 +51,47 @@ use serde::{Deserialize, Serialize};
 /// * **Traversal-safe.** `.` is encoded, so the result can never be `.` or
 ///   `..`, and no separator survives.
 /// * **Injective.** `%` is encoded, so distinct keys always encode distinctly.
+///   The empty key is the one key the encoding alone cannot distinguish: it
+///   maps to a reserved directory name (see [`EMPTY_SESSION_DIR`]) that no
+///   encoded key can produce, so it cannot collide with a real key either.
 const SESSION_KEY_ENCODE_SET: &AsciiSet = &NON_ALPHANUMERIC.remove(b'-').remove(b'_');
 
-/// Directory name used when a session key encodes to nothing (empty key).
-const EMPTY_SESSION_DIR: &str = "_";
+/// Directory name used when a session key encodes to nothing (the empty key).
+///
+/// Must be unreachable through the encoder: `_` is not, because `_` is one of
+/// the characters the encode set leaves alone, so `encode_session_key("_")`
+/// would collide with the empty key. A name holding a bare `%` is unreachable,
+/// because the encoder escapes `%` itself and never emits one.
+///
+/// Renaming this renames the directory of an already-stored empty-key
+/// session: its artifacts stay under the previous name and are no longer
+/// listed. Keys that are not empty keep their encoding, so every other
+/// session's directory is unaffected.
+const EMPTY_SESSION_DIR: &str = "%empty";
 
 /// Encode a raw session key (e.g. `agent:main:main`) into a single, portable
 /// path component.
 ///
 /// Shared with the media cache so both agree on where a session's files live —
 /// see `SESSION_KEY_ENCODE_SET` for the guarantees this provides.
+///
+/// On Windows, a key that encodes to a device name (`CON`, `NUL`, `COM1`, …)
+/// gets a leading `%`: Win32 resolves such a component to the device rather
+/// than a directory, so it could not hold a session's artifacts at all. `%` is
+/// a spelling the encoder never emits (it escapes `%` itself), so the mapping
+/// stays injective. Other platforms keep the original encoding, preserving
+/// access to existing directories whose names are valid there.
 #[must_use]
 pub fn encode_session_key(session_key: &str) -> String {
     let encoded = utf8_percent_encode(session_key, SESSION_KEY_ENCODE_SET).to_string();
     if encoded.is_empty() {
-        EMPTY_SESSION_DIR.to_string()
-    } else {
-        encoded
+        return EMPTY_SESSION_DIR.to_string();
     }
+    #[cfg(windows)]
+    if is_windows_reserved_name(&encoded) {
+        return format!("%{encoded}");
+    }
+    encoded
 }
 
 /// Where an artifact came from.
@@ -169,11 +196,48 @@ mod tests {
         // does not collide with it.
         assert_ne!(encode_session_key("a:b"), encode_session_key("a%3Ab"));
         assert_eq!(encode_session_key("a%3Ab"), "a%253Ab");
+        // The empty key maps to a reserved name the encoder cannot produce,
+        // so it shares its directory with no other key — not with "_", which
+        // the encode set leaves untouched.
+        assert_ne!(encode_session_key(""), encode_session_key("_"));
+        assert_ne!(encode_session_key(""), encode_session_key("%empty"));
+        assert_ne!(encode_session_key("_"), encode_session_key("%empty"));
     }
 
     #[test]
     fn encode_session_key_handles_empty_key() {
         assert_eq!(encode_session_key(""), EMPTY_SESSION_DIR);
+    }
+
+    /// Win32 resolves a bare device name (case-insensitively) to the device
+    /// even as a directory component, so the encoder must never hand one back
+    /// verbatim: `create_dir_all` would fail or address the device.
+    #[cfg(windows)]
+    #[test]
+    fn encode_session_key_avoids_windows_device_names() {
+        for key in ["CON", "con", "NUL", "PRN", "COM1", "LPT9"] {
+            let encoded = encode_session_key(key);
+            assert!(
+                !is_windows_reserved_name(&encoded),
+                "{key:?} -> {encoded:?}"
+            );
+            assert_eq!(encoded, format!("%{key}"));
+        }
+        // Prefixing keeps the mapping injective: no other key encodes to the
+        // same name, because the encoder escapes `%`.
+        assert_ne!(encode_session_key("CON"), encode_session_key("%CON"));
+        // Names the device rule does not match keep their encoding.
+        assert_eq!(encode_session_key("console"), "console");
+        assert_eq!(encode_session_key("agent:main:main"), "agent%3Amain%3Amain");
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn encode_session_key_preserves_non_windows_device_names() {
+        for key in ["CON", "con", "NUL", "PRN", "COM1", "LPT9"] {
+            assert_eq!(encode_session_key(key), key);
+        }
+        assert_eq!(encode_session_key("%CON"), "%25CON");
     }
 
     /// Drift guard against the shared wire vocabulary.

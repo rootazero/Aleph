@@ -585,38 +585,37 @@ impl ProtocolAdapter for AnthropicProtocol {
 
         // Add tool_choice if specified
         if let Some(ref choice) = payload.tool_choice {
-            use crate::providers::adapter::ToolChoice;
-            match choice {
-                ToolChoice::Auto => {
-                    body["tool_choice"] = serde_json::json!({"type": "auto"});
-                }
-                ToolChoice::Required => {
-                    body["tool_choice"] = serde_json::json!({"type": "any"});
-                }
-                ToolChoice::Specific(name) => {
-                    body["tool_choice"] = serde_json::json!({"type": "tool", "name": name});
-                }
-                ToolChoice::None => {
-                    // Keep the tools array and say "don't use them". Removing it
-                    // disables tool use just as well, but Anthropic builds its
-                    // prompt-cache prefix as tools → system → messages, so a
-                    // request that drops the array shares NO prefix with the
-                    // conversation's other calls: the caller pays
-                    // `cache_creation` on the entire history for a turn whose
-                    // only job was to say something.
-                    //
-                    // A strict Anthropic-compatible proxy that predates
-                    // `{"type": "none"}` will reject this where deleting the
-                    // array would have been accepted. Two callers, both able to
-                    // take that: the boundary grace turn is fail-soft (it falls
-                    // through to the short-circuit as it does on any provider
-                    // error), and the OpenAI-compat ingress
-                    // (`openai_api::completions::passthrough`) is relaying a
-                    // client's own `tool_choice: "none"`, so a backend that
-                    // cannot honour it should say so rather than have the
-                    // request silently reshaped.
-                    body["tool_choice"] = serde_json::json!({"type": "none"});
-                }
+            if let Some(body_obj) = body.as_object_mut() {
+                use crate::providers::adapter::ToolChoice;
+                let choice_json = match choice {
+                    ToolChoice::Auto => serde_json::json!({"type": "auto"}),
+                    ToolChoice::Required => serde_json::json!({"type": "any"}),
+                    ToolChoice::Specific(name) => {
+                        serde_json::json!({"type": "tool", "name": name})
+                    }
+                    ToolChoice::None => {
+                        // Keep the tools array and say "don't use them". Removing it
+                        // disables tool use just as well, but Anthropic builds its
+                        // prompt-cache prefix as tools → system → messages, so a
+                        // request that drops the array shares NO prefix with the
+                        // conversation's other calls: the caller pays
+                        // `cache_creation` on the entire history for a turn whose
+                        // only job was to say something.
+                        //
+                        // A strict Anthropic-compatible proxy that predates
+                        // `{"type": "none"}` will reject this where deleting the
+                        // array would have been accepted. Two callers, both able to
+                        // take that: the boundary grace turn is fail-soft (it falls
+                        // through to the short-circuit as it does on any provider
+                        // error), and the OpenAI-compat ingress
+                        // (`openai_api::completions::passthrough`) is relaying a
+                        // client's own `tool_choice: "none"`, so a backend that
+                        // cannot honour it should say so rather than have the
+                        // request silently reshaped.
+                        serde_json::json!({"type": "none"})
+                    }
+                };
+                body_obj.insert("tool_choice".to_string(), choice_json);
             }
         }
 
@@ -624,8 +623,12 @@ impl ProtocolAdapter for AnthropicProtocol {
         // defaults (trigger, keep) apply rather than a second copy of them.
         let context_editing = Self::server_context_editing_applies(config, &policy.capabilities);
         if context_editing {
-            body["context_management"] =
-                serde_json::json!({"edits": [{"type": "clear_tool_uses_20250919"}]});
+            if let Some(body_obj) = body.as_object_mut() {
+                body_obj.insert(
+                    "context_management".to_string(),
+                    serde_json::json!({"edits": [{"type": "clear_tool_uses_20250919"}]}),
+                );
+            }
         }
 
         // Resolve prompt-cache retention for this request. An endpoint that
@@ -838,7 +841,10 @@ impl ProtocolAdapter for AnthropicProtocol {
                 // Complete lines (up to \n) are safe to decode as UTF-8 since
                 // SSE data lines are always complete JSON terminated by newline.
                 if let Some(pos) = state.line_buf.iter().position(|&b| b == b'\n') {
-                    let line_bytes = state.line_buf[..pos].to_vec();
+                    let line_bytes = state
+                        .line_buf
+                        .get(..pos)
+                        .map_or_else(Vec::new, <[u8]>::to_vec);
                     state.line_buf.drain(..=pos);
 
                     let line = String::from_utf8(line_bytes)

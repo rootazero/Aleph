@@ -21,6 +21,11 @@
 //! event bus instead. Replace these stubs with direct `event_bus.emit(...)`
 //! calls if a real consumer ever reappears.
 
+pub(crate) mod runtime;
+
+#[cfg(test)]
+mod memory_runtime_tests;
+
 pub mod a2a_tools;
 pub mod acp_tools;
 pub mod acting_agent;
@@ -108,6 +113,7 @@ pub mod project_manage;
 pub mod recall_context;
 pub mod recall_events;
 pub mod remember;
+pub mod runtime_control;
 pub mod runtime_manage;
 pub mod scratchpad;
 pub mod scratchpad_registry;
@@ -147,9 +153,8 @@ pub use agent_manage::{
     generate_agent_id_from_name, validate_agent_id, AgentCreateArgs, AgentCreateOutput,
     AgentCreateTool, AgentDeleteArgs, AgentDeleteOutput, AgentDeleteTool, AgentInfoArgs,
     AgentInfoOutput, AgentInfoTool, AgentListArgs, AgentListInfo, AgentListOutput, AgentListTool,
-    AgentManageContext, AgentManageError, AgentSwitchArgs, AgentSwitchOutput, AgentSwitchTool,
-    AgentUnbindArgs, AgentUnbindOutput, AgentUnbindTool, AgentUpdateArgs, AgentUpdateOutput,
-    AgentUpdateTool,
+    AgentManageError, AgentSwitchArgs, AgentSwitchOutput, AgentSwitchTool, AgentUnbindArgs,
+    AgentUnbindOutput, AgentUnbindTool, AgentUpdateArgs, AgentUpdateOutput, AgentUpdateTool,
 };
 pub use automation_tool::{AutomationArgs, AutomationOutput, AutomationTool};
 pub use bash_exec::{BashExecArgs, BashExecTool};

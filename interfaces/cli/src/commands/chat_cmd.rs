@@ -22,14 +22,16 @@ pub async fn send(
     let (client, mut events) = AlephClient::connect(server_url, config).await?;
 
     let mut params = serde_json::json!({ "message": message });
-    if let Some(s) = session {
-        params["session_key"] = Value::String(s.to_string());
-    }
-    if stream {
-        params["stream"] = Value::Bool(true);
-    }
-    if let Some(t) = thinking {
-        params["thinking"] = Value::String(t.to_string());
+    if let Some(map) = params.as_object_mut() {
+        if let Some(s) = session {
+            map.insert("session_key".to_string(), Value::String(s.to_string()));
+        }
+        if stream {
+            map.insert("stream".to_string(), Value::Bool(true));
+        }
+        if let Some(t) = thinking {
+            map.insert("thinking".to_string(), Value::String(t.to_string()));
+        }
     }
 
     let verbose = std::env::var("ALEPH_VERBOSE").is_ok();
@@ -131,7 +133,9 @@ pub async fn history(
 
     let mut params = serde_json::json!({ "session_key": session_key });
     if let Some(l) = limit {
-        params["limit"] = serde_json::json!(l);
+        if let Some(map) = params.as_object_mut() {
+            map.insert("limit".to_string(), serde_json::json!(l));
+        }
     }
 
     let result: Value = client.call("chat.history", Some(params)).await?;
@@ -267,7 +271,9 @@ pub async fn clear(
 
     let mut params = serde_json::json!({ "session_key": session_key });
     if keep_system {
-        params["keep_system"] = Value::Bool(true);
+        if let Some(map) = params.as_object_mut() {
+            map.insert("keep_system".to_string(), Value::Bool(true));
+        }
     }
 
     let result: Value = client.call("chat.clear", Some(params)).await?;

@@ -1756,7 +1756,9 @@ async fn execute_compress(state: &mut AppState, client: &AlephClient, args: &str
     let instructions = args.trim();
     let mut params = json!({ "session_key": state.session_key });
     if !instructions.is_empty() {
-        params["instructions"] = json!(instructions);
+        if let Some(map) = params.as_object_mut() {
+            map.insert("instructions".to_string(), json!(instructions));
+        }
     }
     match client
         .call::<_, CompactReply>("session.compact", Some(params))
@@ -2090,7 +2092,7 @@ fn truncate_text(text: &str, max_chars: usize) -> String {
         .char_indices()
         .nth(max_chars)
         .map_or(text.len(), |(idx, _)| idx);
-    format!("{}...", &text[..end])
+    format!("{}...", text.get(..end).unwrap_or(text))
 }
 
 // ---------------------------------------------------------------------------

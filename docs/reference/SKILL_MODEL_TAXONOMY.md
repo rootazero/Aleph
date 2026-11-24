@@ -66,7 +66,7 @@ A second SKILL.md frontmatter parser for Markdown CLI tools. It overlaps with La
 
 **Status:** Deprecated as of 2026-05-20. New code MUST NOT use `AlephSkillSpec`. The conversion `impl From<&AlephSkillSpec> for SkillManifest` exists in `markdown_skill::spec` as the migration seam; lossy by design until Phase 2 absorbs the CLI-tool-specific fields onto `SkillManifest`.
 
-The `#![allow(deprecated)]` at `markdown_skill/mod.rs` scope-limits the resulting warnings to the only legitimate consumer module.
+The `#![allow(deprecated)]` at `src/tools/markdown_skill/mod.rs` scope-limits the resulting warnings to the only legitimate consumer module.
 
 ### Layer 0 — `NoteType::Skill` (the tag)
 
@@ -110,7 +110,7 @@ Phase 2 — the destructive absorption that deletes `AlephSkillSpec` — was gat
 (two weeks after Phase 1; no regression against `project_skill_system_wiring_shipped`). Both were met by
 **2026-06-03**. It did not happen. As of **2026-09-20** the module is 3.5 months past that date, still
 `#[deprecated(since = "26.5.20")]`, still the only parser of `metadata.aleph.input_hints` and still
-**live** (`run_loop/inner.rs join_markdown_skills`, boot `start/mod.rs`).
+**live** (`run_loop/inner.rs join_markdown_skills`, boot `src/bin/aleph-server/commands/start/mod.rs`).
 
 **Status: overdue, not scheduled.** The 2026-09-20 plugin-scope round only CUT the unread
 upstream-dialect DTO out of it (see Layer 3 above); absorbing `input_hints` / `security` / `docker` /
@@ -133,5 +133,5 @@ section states a date that passed, not a date that is coming. Task list for when
 - `docs/superpowers/specs/2026-05-20-skill-data-model-unification-design.md` — the full design spec
 - `docs/superpowers/specs/2026-05-19-skill-system-wiring-design.md` — the v2 wiring this builds on
 - `docs/reference/AGENT_SYSTEM.md` — how `SkillManifest` flows into the agent loop
-- `.claude/memory/project_skill_system_wiring_shipped.md` — what shipped in the 2026-05-20 wiring merge
-- `.claude/memory/project_skill_model_phase2_pending.md` *(written by Phase 1)* — Phase 2 trigger date and checklist — the trigger date passed; see "Phase 2 status" above
+- project_skill_system_wiring_shipped.md — what shipped in the 2026-05-20 wiring merge (local working note, never committed; the durable record is the skill-system-wiring spec above)
+- project_skill_model_phase2_pending.md *(written by Phase 1)* — Phase 2 trigger date and checklist — the trigger date passed; see "Phase 2 status" above (local working note, never committed; the durable record is the skill-data-model-unification spec §4.2 above)

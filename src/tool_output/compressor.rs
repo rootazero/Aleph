@@ -265,7 +265,8 @@ fn compress_screenshot(output: &str) -> String {
     // the bounded preview; the snapshot arm applies cap_line at line 333.
     let lines: Vec<&str> = output.lines().collect();
     let total = lines.len();
-    let kept_raw = &lines[..total.min(5)];
+    let kept_limit = total.min(5);
+    let kept_raw = lines.get(..kept_limit).unwrap_or(&[]);
     let kept: Vec<String> = kept_raw.iter().map(|l| cap_line(l)).collect();
     let mut result = kept.join("\n");
     if total > 5 {
@@ -338,7 +339,12 @@ fn compress_snapshot(output: &str) -> String {
         // No interactive elements found — keep first 20 lines as structural summary
         // rather than a raw byte truncation so element types are still visible.
         let summary_lines = lines.len().min(20);
-        let capped: Vec<String> = lines[..summary_lines].iter().map(|l| cap_line(l)).collect();
+        let capped: Vec<String> = lines
+            .get(..summary_lines)
+            .unwrap_or(&[])
+            .iter()
+            .map(|l| cap_line(l))
+            .collect();
         let mut result = capped.join("\n");
         if lines.len() > summary_lines {
             result.push_str(&format!(
@@ -423,7 +429,8 @@ fn compress_console_messages(output: &str, budget_tokens: Option<usize>) -> Stri
         return output.to_owned();
     }
 
-    let kept = &lines[total - limit..];
+    let start_idx = total.saturating_sub(limit);
+    let kept = lines.get(start_idx..).unwrap_or(&[]);
     format!(
         "[... showing last {} of {} total console messages]\n{}",
         limit,
@@ -458,7 +465,7 @@ fn compress_generic(output: &str, max_bytes: usize) -> String {
         end -= 1;
     }
 
-    let mut result = output[..end].to_owned();
+    let mut result = output.get(..end).unwrap_or(output).to_owned();
     result.push_str(&format!(
         "\n[... output truncated, showing first {end} bytes of {total} total]",
     ));

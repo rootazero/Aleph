@@ -333,7 +333,7 @@ impl GenerationProvider for VolcengineTtsProvider {
                     msg = %parsed.best_message(),
                     "Volcengine TTS logical failure (HTTP 200, code != 3000)"
                 );
-                return Err(self.parse_error(status, &text));
+                return Err(map_code(parsed.code, parsed.best_message()));
             }
 
             let audio_b64 = parsed
@@ -367,6 +367,7 @@ impl GenerationProvider for VolcengineTtsProvider {
 
             let metadata = GenerationMetadata::new()
                 .with_provider("volcengine-tts")
+                .with_model(voice.clone())
                 .with_duration(started_at.elapsed())
                 .with_content_type(content_type_for_format(encoding))
                 .with_size_bytes(u64::try_from(audio_bytes.len()).unwrap_or(u64::MAX));
@@ -479,7 +480,11 @@ fn build_request(
 
 /// Clamp a requested speaking rate into Volcengine's accepted `[0.2, 3.0]`.
 fn clamp_speed(speed: f32) -> f32 {
-    speed.clamp(SPEED_MIN, SPEED_MAX)
+    if !speed.is_finite() {
+        1.0
+    } else {
+        speed.clamp(SPEED_MIN, SPEED_MAX)
+    }
 }
 
 /// Validate and resolve the requested audio format. Defaults to `mp3`.

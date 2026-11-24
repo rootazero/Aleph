@@ -73,9 +73,13 @@ mod tests {
         };
         let config = Arc::new(RwLock::new(base));
         let store = Arc::new(SecurityStore::in_memory().unwrap());
+        // The vault lives in its OWN directory: `SecretVault::prepare_parent`
+        // tightens the parent to 0700, which a shared `/tmp` does not allow
+        // for a non-root user (EPERM).
+        let vault_dir = tempfile::tempdir().unwrap();
         let vault = Arc::new(SharedTokenManager::new(
             store,
-            "/tmp/test_search_haskey.vault",
+            vault_dir.path().join("test_search_haskey.vault"),
         ));
         let _ = vault.generate_token();
         vault

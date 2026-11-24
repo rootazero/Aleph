@@ -153,14 +153,14 @@ src/harness/                  # 笨循环编排核心 (Thin Core)
 真实 baseline 从来不是 5077（见上方警告），而是 ~5997。四轮棘轮：5997 → 5863 → 5739 → 5593 → 5037 →（+6 `agent.rs`，见 `budget.rs` 批四注）**5043**。第四轮的两次搬迁（−556）搬走的是**依赖**而非仅仅行数：
 
 - **−221 `trace.rs`**：六个 `From<LoopTrace*> for aleph_protocol::AgentTrace*` DTO 转换迁往 `src/gateway/trace_protocol.rs`。战利品不是行数——`rg aleph_protocol src/harness/` 现在返回空，**循环不再依赖 gateway 线协议**。
-- **−335 `agent/think.rs`**：反应式压缩救援簇迁往 `src/context/compact/rescue.rs`，缝是 context 层定义、harness 实现的 `RescueHost` / `RescueCx`（P4 依赖倒置；`rg "crate::harness" src/context/` 返回空）。
+- **−335 `src/harness/agent/think.rs`**：反应式压缩救援簇迁往 `src/context/compact/rescue.rs`，缝是 context 层定义、harness 实现的 `RescueHost` / `RescueCx`（P4 依赖倒置；`rg "crate::harness" src/context/` 返回空）。
 
 **Task 8 当年判定此簇 BLOCKED（"依赖读写私有 harness 状态的 `&self` 方法，不是可参数化的 `self.deps.X` 字段"）——这个判断是错的。** 真正需要的把手只有 5 个（LLM 调用 / 救援 CAS 槽 / token 记账 / trace / 终止原因），装进一个 52 行适配器即可；CAS 槽本身留在 `agent.rs` 未动。**教训：「依赖私有状态」不等于不可下沉。先数把手，再宣布 BLOCKED。**
 
 若要进一步瘦身，单文件气味线（~800 行）以上的候选（按价值排序，均未验证；注意这已是**可选优化**，不再是"欠 4900 的债"）：
 1. `agent.rs`（1037 行）——四轮以来从未被审计过，是现在最大的未探区域。
-2. `agent/act.rs`（1120 行）——第三轮已取走墙钟，剩余并行调度机件是否全属脚手架待查。
-3. `agent/think.rs` 的 `fire_boundary_grace_turn` 及残余 nudge 管线——预期收益较小。
+2. `src/harness/agent/act.rs`（1120 行）——第三轮已取走墙钟，剩余并行调度机件是否全属脚手架待查。
+3. `src/harness/agent/think.rs` 的 `fire_boundary_grace_turn` 及残余 nudge 管线——预期收益较小。
 
 **下沉目的地（新增代码先看这里，而不是塞回 harness）**：
 - Nudge / 护栏文案 → [`src/thinker/nudges.rs`](../../src/thinker/nudges.rs)（6 个 `GRACE_NUDGE_*` + `SOFT_FAILURE_WARNING` + `MUTATION_EVIDENCE_NUDGE`）——R9「智慧在 prompt 中」的具体落地：面向模型的文案是 prompt 内容，不是调度逻辑。
@@ -177,29 +177,29 @@ src/harness/                  # 笨循环编排核心 (Thin Core)
 | 3 | Memory | `src/memory/` | 不动（最干净的一块） |
 | 4 | Context Management | `src/context/{budget,compact}/` | 5 处合并到 1 处 |
 | 5 | Prompt Assembly | `src/thinker/` | 历史名保留，不强行改名 |
-| 6 | Tool Calling / Structured Output | `src/tools/calling/` + `src/providers/bridge.rs` | |
+| 6 | Tool Calling / Structured Output | `src/harness/agent/act.rs` + `src/providers/protocols/` | |
 | 7 | State & Checkpointing | `src/session/` | `SessionEventStore` + `replay()` 已是事件溯源框架 |
 | 8 | Error Handling | `HarnessError` + 各域 typed error | 跨模块，无单一容身处 |
 | 9 | Guardrails | `src/{security,sandbox,approval,pii}/` | 4 域分立，不强搞 facade |
 | 10 | Verification & Feedback | `src/verification/` | 新建，吸收 stop_hooks |
 | 11 | Subagent Orchestration | `src/{agents,teams,orchestrator,group_chat}/` | 4 域职责正交，不合并 |
-| 12 | Initialization & Environment | `src/init_unified/` + `src/bin/aleph-server/commands/start/` | 装配顺序见 [BOOT_ASSEMBLY.md](BOOT_ASSEMBLY.md) |
+| 12 | Initialization & Environment | `src/bin/aleph-server/commands/start/` | 装配顺序见 [BOOT_ASSEMBLY.md](BOOT_ASSEMBLY.md) |
 
 ### 4.3 关键的"不归位" — YAGNI 撤回 (Retraction Pattern)
 
 dissolution 过程中识别并删除了 **~5,200 行无消费者的死代码**，并撤回了多项原计划：
 
-- ❌ `src/prompt/` (747 行) — 删除（消费链全死）
-- ❌ `src/payload/` (~1,700 行) — 删除（test-only 闭环）
+- ❌ 旧 `prompt` 模块 (747 行) — 删除（消费链全死）
+- ❌ 旧 `payload` 模块 (~1,700 行) — 删除（test-only 闭环）
 - ❌ `src/capability/` (~2,500 行) — 删除（test-only 闭环）
-- ❌ `src/prompt_assembly/` (289 行) — 删除（P0 临时占位，无消费者）
-- ❌ `src/permission/` — 删除（孤儿代码，零消费者）
+- ❌ 旧 `prompt_assembly` 模块 (289 行) — 删除（P0 临时占位，无消费者）
+- ❌ 旧 `permission` 模块 — 删除（孤儿代码，零消费者）
 - ❌ `VerifyStopHook` (194 行) — 删除（孤儿代码，零生产实例化）
-- ❌ `src/compressor/` — 删除（已证实死代码）
+- ❌ 旧 `compressor` 模块 — 删除（已证实死代码）
 - ❌ `PromptAssembler` / `Section` / `PromptLayer` trait — 撤回（与现有 PromptLayer/PromptPipeline 重复）
 - ❌ `SubagentOrchestrator` trait + Fork/Handoff/Graph 模式 — 撤回（零消费者，违反 R3）
-- ❌ `src/session/checkpoint/` Git 风格 trait — 撤回（事件溯源已覆盖）
-- ❌ `src/runtime/boot.rs` — 撤回（实际 boot 在 `aleph-server/commands/start/` 6,194 行，无重写动机）
+- ❌ 拟议的 session checkpoint Git 风格 trait — 撤回（事件溯源已覆盖）
+- ❌ 拟议的 runtime boot 模块 — 撤回（实际 boot 在 `src/bin/aleph-server/commands/start/` 6,194 行，无重写动机）
 
 **通用模式**：每发现一个"零现有消费者"的抽象，就删除/撤回，绝不"为未来留口"。
 
@@ -337,7 +337,7 @@ prune-the-prompt 是 R7（LLM 主权）/ R9（智慧在 Prompt）/ R10（薄 Har
 
 **第四课：一个"长跑 harness"的清单，落点全在循环之外（2026-08-07）**。本轮拿 Mastra Code 的《解剖 harness》八项能力（线程持久化 / 实时任务列表 / 中断-排队-转向 / 会停下来等人的工具 / 计划→构建交接 / 审批链 / 子代理 / 崩溃恢复多端）逐条对照 Aleph，20 条缺陷通过对抗式验证。**`src/harness/` 增删 0 行，`budget.rs::CEILING` 不动。**
 
-这不是巧合，是薄 harness 的可证结论。逐条看这些缺陷住在哪：WS 订阅台账在 Panel、崩溃恢复的 emitter 在 gateway、脱敏在 `event_emitter/`、正文去重与工具对账在 TUI、下标寻址在 scratchpad 与 verifier、缓存温度在 `thinker/layers/`、摘要器可观测性在 `context/compact/`。**一个能连续跑数小时的 agent，它的失效面几乎全在"外壳"上——上下文怎么取舍、事件怎么投影、审批怎么裁决、状态怎么被看见** —— 而循环本身只该继续做 Think→Act 调度。如果一份"让 agent 跑得更久"的清单**需要**往笨循环里加行，那基本是把某种认知误当成了脚手架（§5 Q1）。
+这不是巧合，是薄 harness 的可证结论。逐条看这些缺陷住在哪：WS 订阅台账在 Panel、崩溃恢复的 emitter 在 gateway、脱敏在 `event_emitter/`、正文去重与工具对账在 TUI、下标寻址在 scratchpad 与 verifier、缓存温度在 `src/thinker/layers/`、摘要器可观测性在 `src/context/compact/`。**一个能连续跑数小时的 agent，它的失效面几乎全在"外壳"上——上下文怎么取舍、事件怎么投影、审批怎么裁决、状态怎么被看见** —— 而循环本身只该继续做 Think→Act 调度。如果一份"让 agent 跑得更久"的清单**需要**往笨循环里加行，那基本是把某种认知误当成了脚手架（§5 Q1）。
 
 同轮另有两条与本文档主旨同源的观察：
 
@@ -350,7 +350,7 @@ prune-the-prompt 是 R7（LLM 主权）/ R9（智慧在 Prompt）/ R10（薄 Har
 
 **第五课补注（2026-09-20，插件宿主作用域化轮）：那条「架构本身不移植」的裁定被收窄了一次，收窄的是一句话，不是立场。** 三轮（08-15 / 08-16 / 08-19）都裁「对照 Cordis 但不引 fiber」，代码侧的表述在 `projection.rs:14-24`：「等价保证更便宜——一个函数从 registry 派生整套投影，每条改激活态的路径都调它」。守卫 `publishing_plugin_projections_has_exactly_one_author` 一直是绿的，而它证明的是**调用**不是**覆盖**：派生列举了三个面，三个月里在派生之外漏了四处（memory extension 无 unregister、slash 只在 boot 注册、MCP disable→enable 不重挂、`reload_plugin` 窄孪生——FEATURE_LOCATOR 附录 D.0.196）。本轮**采的只是 dsh 的那一条所有权规则**：每个进运行时的注册返回一个 `Disposer`，由注册方持有的 `EffectScope` 逆序执行；在 Rust 里它是一个返回值类型，不是运行时。**仍然不采**：DI 容器、Proxy 上下文、级联重启、HMR、插件依赖声明与 host API 版本闸（用户 2026-08-19 裁定继续 defer）。落点：`src/extension/effects/` + `lifecycle.rs`——**`src/harness/` 增删 0 行，本轮亦然**（`budget.rs::CEILING` 不动；**第几次刻意不数**——第六课已经说了那是结论不是目标，而一个计数会在下一轮安静地变错）。教训与第六课同源：**一条守卫绿着，先问它变红的条件里包不包括「多了一个它不认识的面」**；不包括，它守的是产地不是覆盖。
 
-**第六课：连续五次「零增删」之后，第六次净增 99 行——而真正的教训是关于闸，不是关于行数（2026-08-23，harness 自查轮）**。前五轮的共同形状是「拿一个参考 harness 的能力清单逐条对照，落点全在循环之外」；本轮**没有参考项目**（deepseek-harness 本机不可达，且 Round 8 的不移植裁定仍然成立），改用本仓自己的判据清单扫 12 文件及其接缝。差别是结构性的：**对照轮找到的是"我们缺什么能力"，而能力几乎总能装在循环之外；自查轮找到的是"脚手架自己坏在哪"，而脚手架的缺陷只能在脚手架里修**。四笔增长（`agent/guardrails.rs` +44 守卫 Block 的终局记账收敛 · `agent.rs` +37 退出臂不再让失败冒充取消、并给续跑闸加上"这个 Done 是谁选的" · `trace.rs` +9 新增 `Failed` 变体 · `agent/act.rs` +9 把一份自相矛盾的 doc 标成历史）逐条过了 R10 三问，**逐文件账目以 `budget.rs::CEILING` 为准，这里只是它的索引**。
+**第六课：连续五次「零增删」之后，第六次净增 99 行——而真正的教训是关于闸，不是关于行数（2026-08-23，harness 自查轮）**。前五轮的共同形状是「拿一个参考 harness 的能力清单逐条对照，落点全在循环之外」；本轮**没有参考项目**（deepseek-harness 本机不可达，且 Round 8 的不移植裁定仍然成立），改用本仓自己的判据清单扫 12 文件及其接缝。差别是结构性的：**对照轮找到的是"我们缺什么能力"，而能力几乎总能装在循环之外；自查轮找到的是"脚手架自己坏在哪"，而脚手架的缺陷只能在脚手架里修**。四笔增长（`src/harness/agent/guardrails.rs` +44 守卫 Block 的终局记账收敛 · `agent.rs` +37 退出臂不再让失败冒充取消、并给续跑闸加上"这个 Done 是谁选的" · `trace.rs` +9 新增 `Failed` 变体 · `src/harness/agent/act.rs` +9 把一份自相矛盾的 doc 标成历史）逐条过了 R10 三问，**逐文件账目以 `budget.rs::CEILING` 为准，这里只是它的索引**。
 
 所以「`src/harness/` 增删 0 行」从来不是目标，它是**结论**——把它当目标就会开始把该在循环里的修复挤到别处去，那正是 R10 第 1 问要防的反面。真正该记住的是同轮 ① 那件事：`CEILING` 在前一天被设成 `实测 + 1024`，理由写着"给下一个 PR 留点余量"。**那一天起，「零增删」这句话本身也不再是可证的**——闸离开实测值之后就不会红，于是它对 1018 行以内的任何增长都说不出话。一条只减不增的红线，它的健康度不是"有没有被触发过"，是"它离实测值有多远"。
 
@@ -358,7 +358,7 @@ prune-the-prompt 是 R7（LLM 主权）/ R9（智慧在 Prompt）/ R10（薄 Har
 
 ## 9. 参考文献
 
-- 行业原文：`../Agent-Harness.md`（12 模块框架，中文）
+- 行业原文：《Agent Harness》（12 模块框架，中文；原文未收录在仓库中）
 - Anthropic Managed Agents 工程博客：https://www.anthropic.com/engineering/managed-agents
 - Beren Millidge, *AI 的脚手架* (2023) — 把 Agent Harness 类比为冯·诺依曼架构
 - Aleph 重构原始 spec：[2026-04-24-harness-dissolution-roadmap.md](../superpowers/specs/2026-04-24-harness-dissolution-roadmap.md)

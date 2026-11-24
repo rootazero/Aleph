@@ -33,9 +33,10 @@ fn test_schema_json_structure() {
     assert!(json.is_object());
 
     // Should have a type
-    if let Some(type_val) = json.get("type") {
-        assert_eq!(type_val.as_str(), Some("object"));
-    }
+    assert_eq!(
+        json.get("type").and_then(serde_json::Value::as_str),
+        Some("object")
+    );
 
     // Should have properties
     assert!(

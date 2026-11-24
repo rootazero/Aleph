@@ -33,25 +33,125 @@ use crate::gateway::handlers::events::{
 use crate::gateway::lane::{ChannelClass, LaneManager};
 use crate::gateway::middleware::MiddlewareChain;
 use crate::gateway::presence::{PresenceEntry, PresenceTracker};
-use crate::gateway::protocol::{
-    JsonRpcRequest, JsonRpcResponse, AUTH_REQUIRED, IDEMPOTENCY_KEY_REQUIRED, INTERNAL_ERROR,
-    PARSE_ERROR, RATE_LIMITED,
-};
-use crate::gateway::rate_limiter::{
-    scope_for_method, RateLimitError, RateLimitKey, RateLimitScope, RateLimiter,
-};
+use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, AUTH_REQUIRED, PARSE_ERROR};
+use crate::gateway::rate_limiter::RateLimiter;
 use crate::gateway::state_version::StateVersionTracker;
 
 use super::per_client_buffer::PerClientBuffer;
 use super::ConnectionState;
 use crate::gateway::security::SecurityStore;
+use event_admission::EventVerdict;
 
+/// UI display events are delivered only to the connection that owns the surface.
+/// The event bus itself is process-wide, so this check belongs at the transport
+/// boundary rather than relying on a Panel-side surface-id check.
+#[must_use]
+fn ui_display_admits_connection(
+    topic: &str,
+    event_data: Option<&serde_json::Value>,
+    connection_id: &str,
+) -> bool {
+    if topic != "capabilities.ui.display" {
+        return true;
+    }
+    let host = crate::capability::projection_host::projection_host();
+    ui_display_admits_connection_at_host(
+        topic,
+        event_data,
+        connection_id,
+        host.map(|host| host.as_ref()),
+    )
+}
+
+fn ui_display_admits_connection_at_host(
+    topic: &str,
+    event_data: Option<&serde_json::Value>,
+    connection_id: &str,
+    host: Option<&crate::capability::projection_host::ProjectionHost>,
+) -> bool {
+    topic != "capabilities.ui.display"
+        || event_data.is_some_and(|data| {
+            data.get("connection_id")
+                .and_then(serde_json::Value::as_str)
+                == Some(connection_id)
+                && host.is_some_and(|host| {
+                    crate::gateway::capability_ui::display_mount_is_current(
+                        data,
+                        connection_id,
+                        host,
+                    )
+                })
+        })
+}
+
+mod acknowledged_effects;
 pub mod auth;
 pub mod cleanup;
 pub mod dispatch;
+mod event_admission;
 pub mod forward;
+#[cfg(any(unix, windows))]
+pub(super) mod local_ipc;
 pub mod off_loop;
+mod rpc;
 pub mod upgrade;
+pub(super) mod web_v1;
+
+/// The methods both v1 entries (Desktop IPC and Web `/v1/ws`) mount. One
+/// list so the two entries cannot drift apart; everything else is rejected
+/// with `METHOD_NOT_FOUND` before it reaches Core. The `chat.*` trio is the
+/// S3 chat slice: each runs through the same dispatch, ownership check and
+/// idempotency cache as on legacy `/ws`. Other mutating methods such as
+/// `panel.project.select` stay off until a later stage approves them.
+pub(super) const V1_METHODS: &[&str] = &[
+    "health",
+    "sessions.list",
+    aleph_protocol::panel::PANEL_UI_CAPABILITY_SNAPSHOT_METHOD,
+    aleph_protocol::memory_graph::GRAPH_QUERY_METHOD,
+    aleph_protocol::memory_graph::GRAPH_SEARCH_METHOD,
+    aleph_protocol::memory_graph::GRAPH_NODE_DETAIL_METHOD,
+    "chat.history",
+    "chat.send",
+    "chat.abort",
+];
+
+pub(super) fn v1_mounted(method: &str) -> bool {
+    V1_METHODS.contains(&method)
+}
+
+/// The optional `system.hello` features both v1 entries implement. Granted
+/// only when the client also requests them; see
+/// [`event_admission::V1EventFeed`] for what `live_events` delivers.
+pub(super) const V1_FEATURES: &[aleph_protocol::system_hello::Feature] =
+    &[aleph_protocol::system_hello::Feature::LiveEvents];
+
+/// The event topics a v1 connection may receive once it negotiated
+/// `live_events`. This list only NARROWS: a frame must first pass the shared
+/// [`event_admission::admit_event`] decision (identity, scope, ownership,
+/// projection) and then name one of these topics. It is the chat slice's
+/// run lifecycle plus the overflow warning; widening it is a contract change
+/// for every v1 client, not a filter tweak.
+pub(super) const V1_EVENT_TOPICS: &[&str] = &[
+    "stream.run_accepted",
+    "stream.response_chunk",
+    "stream.run_complete",
+    "stream.run_error",
+    "connection.warning",
+];
+
+/// Whether an already-admitted wire frame (the exact bytes [`admit_event`]
+/// returned) names a v1 topic. Reads the topic from the frame as sent, with
+/// the same [`extract_topic_and_data`] every admission term uses, so a
+/// wrapped `event` notification and a bare `stream.*` notification are both
+/// judged by their real topic. An unparsable frame is refused: v1 sends
+/// nothing it cannot name.
+///
+/// [`admit_event`]: event_admission::admit_event
+pub(super) fn v1_event_admitted(wire: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(wire)
+        .ok()
+        .is_some_and(|frame| V1_EVENT_TOPICS.contains(&extract_topic_and_data(&frame).0))
+}
 
 // Bring every helper used by the orchestrator into this module's scope.
 // (The test module in `handler.rs` reaches them via the re-exports
@@ -75,6 +175,43 @@ pub use forward::{
 pub use upgrade::{parse_trusted_ips, refuse_insecure_remote, ws_upgrade_handler};
 
 // `cleanup::run_cleanup` is invoked by name only, no import needed.
+
+/// Classify an inbound JSON-RPC frame by SHAPE and parse it as a response.
+///
+/// A frame is a **response** iff it
+///
+/// 1. carries an `id` that is not `null`,
+/// 2. carries NO `method` key, and
+/// 3. carries a `result` OR an `error` KEY.
+///
+/// Key *presence* — not the parsed value — is what decides. `JsonRpcResponse`
+/// stores `result` as an `Option<Value>`, and serde maps a JSON `null` to
+/// `None`, so a peer that answered `{"jsonrpc":"2.0","id":"rpc-0",
+/// "result":null}` was NOT response-shaped under a value-presence test: the
+/// frame fell through to the request path, failed on the missing `method`,
+/// and the pending call waited out its full timeout even though the peer had
+/// answered.
+///
+/// `None` means "not a response": requests and notifications (no `id`, or a
+/// `method` key) and malformed frames keep their existing handling — the
+/// caller falls through to the request path, whose parse-error reply is
+/// unchanged.
+///
+/// Shared by the center's connection demux and the node's frame handler
+/// (`aleph-server node`) so the two ends of one wire cannot classify the
+/// same frame differently.
+#[must_use]
+pub fn parse_response_frame(text: &str) -> Option<JsonRpcResponse> {
+    let frame: serde_json::Value = serde_json::from_str(text).ok()?;
+    let object = frame.as_object()?;
+    let has_id = object.get("id").is_some_and(|id| !id.is_null());
+    let has_method = object.contains_key("method");
+    let has_payload = object.contains_key("result") || object.contains_key("error");
+    if !has_id || has_method || !has_payload {
+        return None;
+    }
+    serde_json::from_str::<JsonRpcResponse>(text).ok()
+}
 
 /// Shared context for handling a WebSocket connection.
 pub struct ConnectionContext {
@@ -108,7 +245,7 @@ pub struct ConnectionContext {
     idle_timeout_secs: u64,
     /// When true, every mutating RPC (Execute / Mutate / System lane)
     /// MUST carry an `idempotency_key` or it is rejected before lane
-    /// dispatch with [`IDEMPOTENCY_KEY_REQUIRED`].
+    /// dispatch with [`IDEMPOTENCY_KEY_REQUIRED`](crate::gateway::protocol::IDEMPOTENCY_KEY_REQUIRED).
     require_idempotency_key: bool,
     /// Security store handle. Used by the cluster node connect/disconnect
     /// paths to stamp the enrolled device's `last_seen_at` so the offline
@@ -154,6 +291,42 @@ pub struct ConnectionContext {
     /// Process-shared run→session / session→owner cache backing the filter.
     /// See `crate::gateway::event_visibility`.
     event_visibility: Arc<crate::gateway::event_visibility::EventVisibilityIndex>,
+}
+
+impl ConnectionContext {
+    fn from_shared(
+        state: &super::GatewaySharedState,
+        channel_class: ChannelClass,
+        client_ip: IpAddr,
+        client_is_local: bool,
+    ) -> Self {
+        Self {
+            middleware_chain: state.middleware_chain.clone(),
+            event_bus: state.event_bus.clone(),
+            connections: state.connections.clone(),
+            subscription_manager: state.subscription_manager.clone(),
+            presence: state.presence.clone(),
+            state_versions: state.state_versions.clone(),
+            rate_limiter: state.rate_limiter.clone(),
+            lane_manager: state.lane_manager.clone(),
+            idempotency_guard: state.idempotency_guard.clone(),
+            event_scope_guard: state.event_scope_guard.clone(),
+            channel_class,
+            ping_interval_secs: state.ping_interval_secs,
+            idle_timeout_secs: state.idle_timeout_secs,
+            require_idempotency_key: state.require_idempotency_key,
+            security_store: state.security_store.clone(),
+            device_token_mgr: state.device_token_mgr.clone(),
+            client_ip,
+            client_is_local,
+            node_registry: state.node_registry.clone(),
+            exec_approval_manager: state.exec_approval_manager.clone(),
+            audit_log: state.audit_log.clone(),
+            session_store: state.session_store.clone(),
+            team_store: state.team_store.clone(),
+            event_visibility: state.event_visibility.clone(),
+        }
+    }
 }
 
 pub async fn handle_connection(
@@ -239,6 +412,27 @@ pub async fn handle_connection(
     // work, aborts active tasks and waits at most `OFF_LOOP_SHUTDOWN_GRACE` for
     // them before the connection cleanup runs (see the end of this function).
     let mut off_loop_rpcs = off_loop::OffLoopRpcs::new();
+    let rpc_executor = rpc::RpcExecutor {
+        middleware: ctx.middleware_chain.clone(),
+        lanes: ctx.lane_manager.clone(),
+        idempotency: ctx.idempotency_guard.clone(),
+        class: ctx.channel_class,
+    };
+    let rpc_peer = dispatch::DispatchPeer::legacy(
+        ctx.connections.clone(),
+        conn_id.clone(),
+        ctx.client_is_local,
+    );
+    let mut ui_effects = acknowledged_effects::AcknowledgedEffects::new();
+    let ui_dispatch = acknowledged_effects::EffectDispatch {
+        middleware: ctx.middleware_chain.clone(),
+        connections: ctx.connections.clone(),
+        lanes: ctx.lane_manager.clone(),
+        idempotency: ctx.idempotency_guard.clone(),
+        conn_id: conn_id.clone(),
+        class: ctx.channel_class,
+        client_is_local: ctx.client_is_local,
+    };
 
     loop {
         tokio::select! {
@@ -249,26 +443,24 @@ pub async fn handle_connection(
                 }
                 match msg {
                     Some(Ok(WsMessage::Text(text))) => {
-                        let preview_end = text.char_indices().take_while(|(i, _)| *i < 200).last().map_or(text.len(), |(i, c)| i + c.len_utf8());
-                        debug!("WS recv from {}: {}", conn_id, &text[..preview_end]);
+                        debug!("WS recv from {}: {} bytes", conn_id, text.len());
 
                         // Reverse-RPC response interception: a frame that is a
-                        // JSON-RPC *response* (has `id` + `result`/`error`, no
-                        // `method`) is the reply to a server-initiated request.
-                        // Route it to the pending table and stop — do NOT treat
-                        // it as a client request (it would fail JsonRpcRequest
-                        // parsing, which requires `method`).
-                        if let Ok(maybe_resp) =
-                            serde_json::from_str::<JsonRpcResponse>(&text)
-                        {
-                            let looks_like_response = maybe_resp.id.is_some()
-                                && (maybe_resp.result.is_some() || maybe_resp.error.is_some());
-                            if looks_like_response {
-                                if let Some(id) = maybe_resp.id.clone() {
-                                    rpc_pending.resolve(&id, maybe_resp);
-                                }
-                                continue;
+                        // JSON-RPC *response* (has `id`, no `method`, and a
+                        // `result`/`error` key) is the reply to a
+                        // server-initiated request. Route it to the pending
+                        // table and stop — do NOT treat it as a client request
+                        // (it would fail JsonRpcRequest parsing, which
+                        // requires `method`).
+                        //
+                        // The discriminator is the shared
+                        // `parse_response_frame`, the same one the node uses
+                        // on its side: one rule, one wire.
+                        if let Some(maybe_resp) = parse_response_frame(&text) {
+                            if let Some(id) = maybe_resp.id.clone() {
+                                rpc_pending.resolve(&id, maybe_resp);
                             }
+                            continue;
                         }
 
                         // Node-initiated reverse request (cluster ③): a
@@ -393,64 +585,17 @@ pub async fn handle_connection(
                                     // Dispatch path. LAN-trust treats every
                                     // connection as an implicit operator.
 
-                                    // --- Rate limit check ---
-                                    // Loopback exemption is based on network origin
-                                    // (the resolved client IP, so a reverse proxy
-                                    // running on loopback never exempts the remote
-                                    // clients behind it), not identity (device_id).
-                                    //
-                                    // This layer keys on the CLIENT IP — it is the
-                                    // network-origin isolator (the principal-axis
-                                    // check lives in middleware/rate_limit.rs).
-                                    // `connect` would otherwise map to the strict
-                                    // Auth scope (10/min + 5-min lockout): every
-                                    // user behind one NAT / reverse-proxy egress
-                                    // shares that single IP bucket, so one client
-                                    // retrying a stale token locked every other
-                                    // user at that address out of the handshake
-                                    // for the full lockout. Remap to the
-                                    // lockout-free default bucket instead — the
-                                    // same remap middleware/rate_limit.rs performs
-                                    // on the pooled "rpc" identity — so a token
-                                    // storm only exhausts the offending origin's
-                                    // own window, which recovers as the window
-                                    // slides.
-                                    if !ctx.client_is_local {
-                                    let rl_identity = ctx.client_ip.to_string();
-                                    let rl_scope_raw = scope_for_method(&req.method);
-                                    let rl_scope = if matches!(rl_scope_raw, RateLimitScope::Auth) {
-                                        RateLimitScope::RpcDefault
-                                    } else {
-                                        rl_scope_raw
-                                    };
-                                    let rl_key = RateLimitKey::new(&rl_identity, rl_scope);
-                                    if let Err(e) = ctx.rate_limiter.check_and_record(&rl_key) {
-                                        let rl_response = match e {
-                                            RateLimitError::Exceeded { retry_after_ms, .. } => {
-                                                JsonRpcResponse::error_with_data(
-                                                    req.id.clone(),
-                                                    RATE_LIMITED,
-                                                    "Rate limit exceeded",
-                                                    serde_json::json!({"retry_after_ms": retry_after_ms}),
-                                                )
-                                            }
-                                            RateLimitError::LockedOut { lockout_remaining_ms, .. } => {
-                                                JsonRpcResponse::error_with_data(
-                                                    req.id.clone(),
-                                                    RATE_LIMITED,
-                                                    "Rate limit lockout",
-                                                    serde_json::json!({"lockout_remaining_ms": lockout_remaining_ms}),
-                                                )
-                                            }
-                                        };
-                                        let rl_resp_str = serde_json::to_string(&rl_response).unwrap_or_default();
-                                        if let Err(e) = write.send(WsMessage::Text(rl_resp_str.into())).await {
-                                            error!("Failed to send rate limit response to {}: {}", conn_id, e);
+                                    // Use the resolved origin, not the TCP peer behind a proxy or
+                                    // an identity from request params. Middleware limits principals separately.
+                                    let origin = (!ctx.client_is_local).then_some(ctx.client_ip);
+                                    if let Err(response) = rpc::check_origin_rate(&ctx.rate_limiter, origin, req) {
+                                        let response = serde_json::to_string(&response).unwrap_or_default();
+                                        if let Err(error) = write.send(WsMessage::Text(response.into())).await {
+                                            error!(%error, %conn_id, "failed origin rate limit response");
                                             break;
                                         }
                                         continue;
                                     }
-                                    } // end loopback exemption
 
                                     // Originating-connection role for the login
                                     // wall. Resolved at the `connect` handshake
@@ -550,221 +695,53 @@ pub async fn handle_connection(
                                         let resp = handle_events_list(req.clone(), &conn_id, ctx.subscription_manager.clone()).await;
                                         serde_json::to_string(&resp).unwrap_or_default()
                                     } else {
-                                        // --- Idempotency + Lane concurrency control ---
-                                        debug!("RPC dispatch: method={}", req.method);
-
-                                        // Extract idempotency_key from params (optional).
-                                        //
-                                        // **Namespaced slot**: the raw caller-supplied string is
-                                        // NEVER the cache key by itself. The slot is scoped to
-                                        // (principal, method, key) — without the first two
-                                        // components a replay crosses identities and methods:
-                                        //   * cross-method: a `config.patch` result cached under
-                                        //     bare "1" would be served to any later
-                                        //     `tools.invoke` reusing "1" within the TTL;
-                                        //   * cross-principal / gate bypass: `method_requires_admin`
-                                        //     and `method_visibility` run INSIDE `process_request`,
-                                        //     but the Cached/Waiting arms return before it — a
-                                        //     response computed for an operator would be replayed
-                                        //     to a member unfiltered.
-                                        // `caller_user` / `caller_role` are resolved ABOVE this
-                                        // block (login-wall section), so they are already in
-                                        // scope here.
-                                        const IDEM_NS_SEP: char = '\u{1f}';
-                                        let raw_idem_key = req.params
-                                            .as_ref()
-                                            .and_then(|p| p.get("idempotency_key"))
-                                            .and_then(|v| v.as_str());
-
-                                        // A caller-supplied key containing the namespace
-                                        // separator could forge the (principal, method)
-                                        // prefix of another slot — reject it outright.
-                                        if let Some(k) = raw_idem_key {
-                                            if k.contains(IDEM_NS_SEP) {
-                                                let resp = JsonRpcResponse::error(
-                                                    req.id.clone(),
-                                                    -32602, // JSON-RPC invalid params
-                                                    "idempotency_key contains a reserved separator character",
-                                                );
-                                                let resp_str = serde_json::to_string(&resp).unwrap_or_default();
-                                                if let Err(e) = write.send(WsMessage::Text(resp_str.into())).await {
-                                                    error!("Failed to send idempotency-key error to {}: {}", conn_id, e);
+                                        debug!(method = %req.method, "RPC dispatch");
+                                        let plan = match rpc::prepare(req, &caller_snapshot, ctx.require_idempotency_key) {
+                                            Ok(plan) => plan,
+                                            Err(response) => {
+                                                let response = serde_json::to_string(&response).unwrap_or_default();
+                                                if let Err(error) = write.send(WsMessage::Text(response.into())).await {
+                                                    error!(%error, %conn_id, "failed idempotency-key response");
                                                     break;
                                                 }
                                                 continue;
                                             }
-                                        }
-
-                                        let idempotency_key = raw_idem_key.map(|k| {
-                                            let composed = format!(
-                                                "{}{}{}{}{}",
-                                                dispatch::idempotency_principal(&req.method, &caller_snapshot),
-                                                IDEM_NS_SEP,
-                                                req.method,
-                                                IDEM_NS_SEP,
-                                                k
-                                            );
-                                            debug_assert!(
-                                                composed.matches(IDEM_NS_SEP).count() == 2,
-                                                "namespaced idempotency key must carry exactly two separators"
-                                            );
-                                            composed
-                                        });
-
-                                        let lane = crate::gateway::lane::Lane::for_method(&req.method);
-
-                                        // Hard-require idempotency_key when the operator opted in
-                                        // (require_idempotency_key=true). Read-only Query-lane RPCs
-                                        // are exempt — they can never double-execute mutations.
-                                        if ctx.require_idempotency_key
-                                            && lane.needs_idempotency()
-                                            && idempotency_key.is_none()
-                                        {
-                                            warn!(
-                                                method = %req.method,
-                                                lane = %lane,
-                                                "Rejecting mutating RPC without idempotency_key (require_idempotency_key=true)"
-                                            );
-                                            let resp = JsonRpcResponse::error_with_data(
-                                                req.id.clone(),
-                                                IDEMPOTENCY_KEY_REQUIRED,
-                                                "idempotency_key required for mutating RPCs",
-                                                serde_json::json!({
-                                                    "method": req.method,
-                                                    "lane": lane.to_string(),
-                                                    "hint": "include a stable per-attempt idempotency_key (UUID v4) in params",
-                                                }),
-                                            );
-                                            let resp_str = serde_json::to_string(&resp).unwrap_or_default();
-                                            if let Err(e) = write.send(WsMessage::Text(resp_str.into())).await {
-                                                error!("Failed to send idempotency-required response to {}: {}", conn_id, e);
-                                                break;
-                                            }
-                                            continue;
-                                        }
-
-                                        // Helper closure: standard lane dispatch (no idempotency)
-                                        let do_lane_dispatch = |text: String, lm: Arc<LaneManager>, mc: MiddlewareChain, method: String, req_id: Option<serde_json::Value>, class: ChannelClass, connections: Arc<RwLock<HashMap<String, ConnectionState>>>, conn_id: String, client_is_local: bool, start: dispatch::CallerSnapshot| async move {
-                                            let lane_result = lm.acquire(&method, class).await;
-                                            match lane_result {
-                                                // Identity is re-read AFTER the permit is granted
-                                                // (viewer methods revalidate against live state).
-                                                Ok(_permit) => dispatch::dispatch_for_connection(&text, &mc, &connections, &conn_id, client_is_local, &method, req_id, &start).await,
-                                                Err(_) => serde_json::to_string(&JsonRpcResponse::error(
-                                                    req_id,
-                                                    INTERNAL_ERROR,
-                                                    "Service congested, try again later",
-                                                )).unwrap_or_default()
-                                            }
                                         };
 
-                                        // Read-only RPCs leave the select loop so a slow one
-                                        // (e.g. a cold `extensions.catalog`) cannot freeze event
-                                        // forwarding or later requests on this connection; the
-                                        // `off_loop_rpcs` arm below writes the response. Only an
-                                        // audited allowlist leaves the loop, and the per-connection
-                                        // set is bounded (running + queue).
-                                        // See `off_loop` module docs (Task #56).
-                                        let off_loop_response = if off_loop::dispatches_off_loop(&req.method) {
-                                            let dispatch = do_lane_dispatch(text.to_string(), ctx.lane_manager.clone(), ctx.middleware_chain.clone(), req.method.clone(), req.id.clone(), ctx.channel_class, ctx.connections.clone(), conn_id.clone(), ctx.client_is_local, caller_snapshot.clone());
-                                            match off_loop_rpcs.submit(req.id.clone(), dispatch) {
+                                        // Acknowledged UI effects must not wait inline for their
+                                        // own event/ack, Execute permit, or duplicate producer.
+                                        // Ack/input/detach stay in their unchanged Mutate lane.
+                                        if req.method == "capabilities.ui.invoke" {
+                                            match ui_dispatch.submit(&mut ui_effects, text.to_string(), req.id.clone(), caller_snapshot.clone(), plan.key.clone()).await {
                                                 Ok(()) => continue,
-                                                // Saturated (running + queue full): an immediate
-                                                // JSON-RPC error for this id, never an inline await.
-                                                Err(busy_response) => Some(busy_response),
-                                            }
-                                        } else {
-                                            None
-                                        };
-
-                                        // Check idempotency guard (only for non-Query lanes with a key)
-                                        let mut response = if let Some(r) = off_loop_response {
-                                            r
-                                        } else if let Some(ref key) = idempotency_key {
-                                            if lane.needs_idempotency() {
-                                                use crate::gateway::idempotency::AcquireResult;
-                                                match ctx.idempotency_guard.try_acquire(key) {
-                                                    AcquireResult::Cached(cached) => {
-                                                        debug!("Idempotency hit: key={}", key);
-                                                        // Viewer payloads are only returnable while the
-                                                        // LIVE connection still holds the same principal.
-                                                        if dispatch::revalidate_for_dispatch(&ctx.connections, &conn_id, ctx.client_is_local, &req.method, &caller_snapshot).await.is_some() {
-                                                            let resp = JsonRpcResponse::success(req.id.clone(), cached);
-                                                            serde_json::to_string(&resp).unwrap_or_default()
-                                                        } else {
-                                                            dispatch::viewer_denied_response(req.id.clone())
-                                                        }
+                                                Err(response) => {
+                                                    if let Err(error) = write.send(WsMessage::Text(response.into())).await {
+                                                        error!(%error, %conn_id, "failed UI effect response");
+                                                        break;
                                                     }
-                                                    AcquireResult::Waiting(mut rx) => {
-                                                        debug!("Idempotency: awaiting in-flight key={}", key);
-                                                        let result = tokio::time::timeout(
-                                                            std::time::Duration::from_secs(30),
-                                                            async {
-                                                                let _ = rx.changed().await;
-                                                                rx.borrow().clone()
-                                                            }
-                                                        ).await;
-                                                        match result {
-                                                            Ok(Some(val)) => {
-                                                                // Re-check after the wait: the connection may have
-                                                                // been invalidated or switched user meanwhile.
-                                                                if dispatch::revalidate_for_dispatch(&ctx.connections, &conn_id, ctx.client_is_local, &req.method, &caller_snapshot).await.is_some() {
-                                                                    let resp = JsonRpcResponse::success(req.id.clone(), val);
-                                                                    serde_json::to_string(&resp).unwrap_or_default()
-                                                                } else {
-                                                                    dispatch::viewer_denied_response(req.id.clone())
-                                                                }
-                                                            }
-                                                            _ => {
-                                                                serde_json::to_string(&JsonRpcResponse::error(
-                                                                    req.id.clone(),
-                                                                    INTERNAL_ERROR,
-                                                                    "Request timed out waiting for in-flight duplicate",
-                                                                )).unwrap_or_default()
-                                                            }
-                                                        }
-                                                    }
-                                                    AcquireResult::Proceed(slot) => {
-                                                        // First request — slot auto-discards on panic (RAII)
-                                                        let lane_result = ctx.lane_manager.acquire(&req.method, ctx.channel_class).await;
-                                                        match lane_result {
-                                                            Ok(_permit) => {
-                                                                let resp = dispatch::dispatch_for_connection(&text, &ctx.middleware_chain, &ctx.connections, &conn_id, ctx.client_is_local, &req.method, req.id.clone(), &caller_snapshot).await;
-                                                                if let Ok(parsed) = serde_json::from_str::<JsonRpcResponse>(&resp) {
-                                                                    if parsed.is_success() {
-                                                                        if let Some(result) = parsed.result {
-                                                                            slot.complete(result);
-                                                                        } else {
-                                                                            slot.discard();
-                                                                        }
-                                                                    } else {
-                                                                        slot.discard(); // Error — let next request retry
-                                                                    }
-                                                                } else {
-                                                                    slot.discard();
-                                                                }
-                                                                resp
-                                                            }
-                                                            Err(_) => {
-                                                                slot.discard();
-                                                                serde_json::to_string(&JsonRpcResponse::error(
-                                                                    req.id.clone(),
-                                                                    INTERNAL_ERROR,
-                                                                    "Service congested, try again later",
-                                                                )).unwrap_or_default()
-                                                            }
-                                                        }
-                                                    }
+                                                    continue;
                                                 }
-                                            } else {
-                                                // Query lane — skip idempotency
-                                                do_lane_dispatch(text.to_string(), ctx.lane_manager.clone(), ctx.middleware_chain.clone(), req.method.clone(), req.id.clone(), ctx.channel_class, ctx.connections.clone(), conn_id.clone(), ctx.client_is_local, caller_snapshot.clone()).await
+                                            }
+                                        }
+
+                                        // Only audited reads leave the loop. The bounded scheduler owns
+                                        // queueing, cancellation and writes of those responses.
+                                        let mut response = if off_loop::dispatches_off_loop(&req.method) {
+                                            let rpc = rpc_executor.clone();
+                                            let peer = rpc_peer.clone();
+                                            let request = req.clone();
+                                            let text = text.to_string();
+                                            let start = caller_snapshot.clone();
+                                            let work = async move {
+                                                rpc.execute(&text, &request, plan.without_cache(), &peer, &start).await
+                                            };
+                                            match off_loop_rpcs.submit(req.id.clone(), work) {
+                                                Ok(()) => continue,
+                                                Err(busy_response) => busy_response,
                                             }
                                         } else {
-                                            // No idempotency key — standard lane dispatch
-                                            do_lane_dispatch(text.to_string(), ctx.lane_manager.clone(), ctx.middleware_chain.clone(), req.method.clone(), req.id.clone(), ctx.channel_class, ctx.connections.clone(), conn_id.clone(), ctx.client_is_local, caller_snapshot.clone()).await
+                                            rpc_executor.execute(&text, req, plan, &rpc_peer, &caller_snapshot).await
                                         };
-                                        // --- End idempotency + lane block ---
 
                                         // Establish session state from a successful connect
                                         // handshake. LAN-trust: no auth, but the handshake
@@ -843,12 +820,22 @@ pub async fn handle_connection(
                                                     // paired device's `last_seen_at`, so the Paired-devices roster
                                                     // reflects real activity, not the pairing date. Token
                                                     // validation alone only touches the token row's `last_used_at`.
+                                                    // The write is offloaded to the blocking-storage boundary so a
+                                                    // slow SQLite UPDATE / contended mutex never stalls this async
+                                                    // worker; best-effort, same as before.
                                                     if let (Some(store), Some(did)) =
                                                         (ctx.security_store.as_ref(), authed_device_id.as_deref())
                                                     {
-                                                        if let Err(e) = store.touch_device(did) {
-                                                            tracing::debug!("touch_device on connect failed: {e}");
-                                                        }
+                                                        let store = store.clone();
+                                                        let did = did.to_string();
+                                                        let _ = tokio::task::spawn_blocking(move || {
+                                                            if let Err(e) = store.touch_device(&did) {
+                                                                tracing::warn!(
+                                                                    "touch_device({did}) failed: {e}"
+                                                                );
+                                                            }
+                                                        })
+                                                        .await;
                                                     }
                                                     // Forensic trail: a remote connection that
                                                     // failed the Gateway-token login wall. Bounded
@@ -1016,15 +1003,51 @@ pub async fn handle_connection(
                                                     // name, and REFUSES a node whose device record was
                                                     // revoked by `cluster.deregister` (otherwise the
                                                     // node just resurrects itself on its next backoff).
-                                                    let node_result = node_connect_claim(
+                                                    let node_result = match node_connect_claim(
                                                         req.params.as_ref(),
-                                                    )
-                                                    .map(|claim| {
-                                                        let admission = ctx
-                                                            .security_store
-                                                            .as_ref()
-                                                            .map_or_else(
-                                                                || {
+                                                    ) {
+                                                        Some(claim) => {
+                                                            // The admission path touches SQLite (a
+                                                            // read, maybe a write) and takes the
+                                                            // process-wide name lock — a `std` mutex held
+                                                            // across that I/O. Running it on a Tokio
+                                                            // worker would block the whole runtime behind
+                                                            // it, so the WHOLE read-then-write sequence
+                                                            // (lock included) runs on a blocking thread.
+                                                            // Nothing is held across the await: the
+                                                            // connection guard was released above.
+                                                            let admission = match ctx.security_store.clone() {
+                                                                Some(store) => {
+                                                                    let presented_id = claim.presented_id.clone();
+                                                                    let device_name = claim.device_name.clone();
+                                                                    match tokio::task::spawn_blocking(move || {
+                                                                        crate::cluster::admit_node(
+                                                                            &store,
+                                                                            presented_id.as_deref(),
+                                                                            &device_name,
+                                                                        )
+                                                                    })
+                                                                    .await
+                                                                    {
+                                                                        Ok(admission) => admission,
+                                                                        Err(e) => {
+                                                                            // The blocking task could not be run to
+                                                                            // completion. Treat it exactly like a
+                                                                            // store outage: retryable, never an
+                                                                            // admission.
+                                                                            warn!(
+                                                                                error = %e,
+                                                                                "node admission task failed; the node will retry"
+                                                                            );
+                                                                            crate::cluster::NodeAdmission::StoreUnavailable {
+                                                                                detail: format!(
+                                                                                    "the node admission task did not complete ({e})"
+                                                                                ),
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
+                                                                None => {
                                                                     // No store wired (probe/test server):
                                                                     // LAN-trust degrade — keep the node usable.
                                                                     crate::cluster::NodeAdmission::Admitted {
@@ -1034,17 +1057,12 @@ pub async fn handle_connection(
                                                                             .unwrap_or_else(|| conn_id.clone()),
                                                                         minted: false,
                                                                     }
-                                                                },
-                                                                |store| {
-                                                                    crate::cluster::admit_node(
-                                                                        store,
-                                                                        claim.presented_id.as_deref(),
-                                                                        &claim.device_name,
-                                                                    )
-                                                                },
-                                                            );
-                                                        (claim, admission)
-                                                    });
+                                                                }
+                                                            };
+                                                            Some((claim, admission))
+                                                        }
+                                                        None => None,
+                                                    };
 
                                                     let node_payload = match &node_result {
                                                         Some((
@@ -1062,9 +1080,22 @@ pub async fn handle_connection(
                                                                 req.params.as_ref(),
                                                                 &rpc_channel_for_node,
                                                             ) {
+                                                                // Publish the name the REGISTRY stored, not
+                                                                // the raw string from the connect frame. The
+                                                                // registry bounds it (≤128 bytes) and both
+                                                                // `node.disconnected` arms publish that
+                                                                // bounded name, so publishing the raw peer
+                                                                // string here made the two events disagree —
+                                                                // and a peer could fan a multi-megabyte name
+                                                                // out to every admin subscriber of `node.**`.
+                                                                let registered_name = ctx
+                                                                    .node_registry
+                                                                    .node_identity_by_conn(&conn_id)
+                                                                    .map(|(_, name)| name)
+                                                                    .unwrap_or_else(|| claim.device_name.clone());
                                                                 if let Err(e) = ctx.event_bus.publish_json(&TopicEvent::new(
                                                                     "node.connected",
-                                                                    serde_json::json!({"node_id": node_id, "name": &claim.device_name, "conn_id": &conn_id}),
+                                                                    serde_json::json!({"node_id": node_id, "name": registered_name, "conn_id": &conn_id}),
                                                                 )) {
                                                                 tracing::warn!(
                                                                     error = %e,
@@ -1076,9 +1107,7 @@ pub async fn handle_connection(
                                                                 // Stamp last_seen so the offline half of
                                                                 // environments.list stays honest.
                                                                 if let Some(store) = ctx.security_store.as_ref() {
-                                                                    if let Err(e) = store.touch_device(node_id) {
-                                                                        debug!("failed to stamp node last_seen on connect for {}: {}", node_id, e);
-                                                                    }
+                                                                    cleanup::touch_device_last_seen(store.clone(), node_id.clone()).await;
                                                                 }
                                                             }
                                                             Some(serde_json::json!({
@@ -1099,9 +1128,20 @@ pub async fn handle_connection(
                                                                 "Refusing node {}: device record was revoked by cluster.deregister",
                                                                 node_id
                                                             );
+                                                            // `reason_code` names the CASE: the node client
+                                                            // picks the operator's recovery step from it, so a
+                                                            // revoked credential and an ambiguous name cannot
+                                                            // read alike. `reason` carries the center-side
+                                                            // detail. Both are additive — an older node
+                                                            // client ignores them and keeps its generic
+                                                            // message.
                                                             Some(serde_json::json!({
                                                                 "node_id": node_id,
                                                                 "status": "deregistered",
+                                                                "reason_code": "revoked",
+                                                                "reason": "this node's device record was revoked \
+                                                                           by cluster.deregister; its identity is dead \
+                                                                           and the center will refuse it forever",
                                                             }))
                                                         }
                                                         Some((
@@ -1111,7 +1151,9 @@ pub async fn handle_connection(
                                                             },
                                                         )) => {
                                                             warn!(
-                                                                "Refusing node {}: that id already belongs to a paired Panel device",
+                                                                "Refusing node {}: that id already belongs to a \
+                                                                 non-node device row (a paired Panel or an \
+                                                                 operator device), not an enrolled node",
                                                                 node_id
                                                             );
                                                             // Same terminal wire status as a deregistration:
@@ -1120,10 +1162,59 @@ pub async fn handle_connection(
                                                             // right for an id collision. Keeping one status
                                                             // avoids rippling a new verdict into the node
                                                             // client for a case only an operator can fix.
+                                                            // `reason_code` tells the client WHICH operator
+                                                            // step applies (an id collision is not a revoked
+                                                            // credential — the node's own file is fine).
                                                             Some(serde_json::json!({
                                                                 "node_id": node_id,
                                                                 "status": "deregistered",
+                                                                "reason_code": "identity_conflict",
+                                                                "reason": "that id already belongs to a non-node \
+                                                                           device (a paired Panel or an operator \
+                                                                           device), not to an enrolled node",
                                                             }))
+                                                        }
+                                                        Some((
+                                                            _,
+                                                            crate::cluster::NodeAdmission::Ambiguous {
+                                                                name,
+                                                                count,
+                                                            },
+                                                        )) => {
+                                                            warn!(
+                                                                "Refusing node '{}': {count} enrolled nodes share this name",
+                                                                name
+                                                            );
+                                                            // Same terminal wire status as a
+                                                            // deregistration: only an operator can repair the
+                                                            // duplicates, so the node must stop retrying.
+                                                            // The `reason` field carries the specificity —
+                                                            // no new status vocabulary, and an older node
+                                                            // client ignores the extra field.
+                                                            Some(serde_json::json!({
+                                                                "status": "deregistered",
+                                                                "reason_code": "ambiguous_name",
+                                                                "reason": format!(
+                                                                    "{count} enrolled nodes share the name '{name}'; an operator must deregister the duplicates by id"
+                                                                ),
+                                                            }))
+                                                        }
+                                                        Some((
+                                                            _,
+                                                            crate::cluster::NodeAdmission::StoreUnavailable {
+                                                                detail,
+                                                            },
+                                                        )) => {
+                                                            warn!(
+                                                                "Cannot admit node: {detail}; the node will retry"
+                                                            );
+                                                            // NO node payload at all: the node client treats
+                                                            // a reply without `result.node` as "the center did
+                                                            // not register this node" and retries with backoff.
+                                                            // A payload here would either register a node the
+                                                            // center cannot see or make the refusal terminal —
+                                                            // both wrong for a transient store outage.
+                                                            None
                                                         }
                                                         None => None,
                                                     };
@@ -1218,6 +1309,28 @@ pub async fn handle_connection(
                                             }
                                         }
 
+                                        #[cfg(feature = "native-qa")]
+                                        if req.method == "connect" {
+                                            let snapshot = dispatch::CallerSnapshot::read(
+                                                &ctx.connections,
+                                                &conn_id,
+                                                ctx.client_is_local,
+                                            )
+                                            .await;
+                                            let observer = ctx.middleware_chain.native_qa_observer();
+                                            let authorized = serde_json::from_str::<serde_json::Value>(&response)
+                                                .ok()
+                                                .and_then(|value| value.get("result").cloned())
+                                                .and_then(|result| result.get("authorized").and_then(serde_json::Value::as_bool))
+                                                .unwrap_or(false);
+                                            crate::gateway::native_qa::observe_connect(
+                                                &observer,
+                                                snapshot.verified_user,
+                                                snapshot.device_id,
+                                                authorized,
+                                            );
+                                        }
+
                                         response
                                     }
                                 }
@@ -1269,180 +1382,30 @@ pub async fn handle_connection(
             event = client_event_rx.recv() => {
                 match event {
                     Ok(event_json) => {
-                        // Token rotation kick: close remote (token-authorized)
-                        // sessions so they re-authenticate; never forward this
-                        // frame to clients verbatim, and never close loopback.
-                        if rotated_should_close_remote(&event_json, ctx.client_is_local) {
-                            info!("token rotated — closing remote session {}", conn_id);
-                            let _ = write
-                                .send(WsMessage::Close(Some(CloseFrame {
-                                    code: 4001,
-                                    reason: "token_rotated".into(),
-                                })))
-                                .await;
-                            break;
-                        }
-                        // Loopback receives token_rotated: swallow silently, do not forward.
-                        if is_token_rotated_frame(&event_json) {
-                            continue;
-                        }
-                        // Per-device revocation kick: close only the sessions bound
-                        // to the revoked device. `gateway.devices.revoke` already
-                        // downgraded this connection to the login wall synchronously
-                        // (`invalidate_device_sessions`), so anything pipelined ahead
-                        // of this frame is refused rather than served; this closes the
-                        // socket so the client stops holding a dead session open.
-                        if device_revoked_should_close(&event_json, session_device_id.as_deref()) {
-                            info!("device revoked — closing session {}", conn_id);
-                            let _ = write
-                                .send(WsMessage::Close(Some(CloseFrame {
-                                    code: 4001,
-                                    reason: "device_revoked".into(),
-                                })))
-                                .await;
-                            break;
-                        }
-                        // Everyone else: the revocation names another device (or none
-                        // of ours). Never forwarded — it carries a device id and no
-                        // client renders it.
-                        if device_revoked_id(&event_json).is_some() {
-                            continue;
-                        }
-                        // Parse ONCE. This value is what the filter chain reads
-                        // and what the wire-form step below rewrites/wraps —
-                        // it used to be parsed a second time purely to decide
-                        // whether to wrap, which is what paid for the payload
-                        // projection now folded in here.
-                        let parsed = serde_json::from_str::<serde_json::Value>(&event_json).ok();
-                        // Try to extract topic from event for filtering
-                        let (should_forward, projected_payload) = if let Some(event_obj) = parsed.as_ref() {
-                            let (topic, event_data) = extract_topic_and_data(event_obj);
-
-                            // The login wall + permission-based scope guard check +
-                            // surface audience + caller identity for the owner-scoped
-                            // event filter (P1, spec §5.4). All four read the same
-                            // ConnectionState under one lock — extend the tuple, don't
-                            // take the lock twice.
-                            let (
-                                wall_ok,
-                                scope_allowed,
-                                channel_kind,
-                                event_caller_user,
-                                event_caller_role,
-                            ) = {
-                                let conns = ctx.connections.read().await;
-                                match conns.get(&conn_id) {
-                                    Some(s) => (
-                                        // 0th term: the login wall, the same predicate
-                                        // and the same `caller_role` field the request
-                                        // arm evaluates at the top of the dispatch loop
-                                        // — so a live demotion through
-                                        // `restamp_live_connections` closes the event
-                                        // plane in the same instant it closes the RPC
-                                        // plane. The method argument is `""`: there is
-                                        // no `connect` exemption to grant here, because
-                                        // an event is never the frame that authorizes a
-                                        // connection.
-                                        wall_admits(Some(s.caller_role.as_str()), ""),
-                                        ctx.event_scope_guard.can_receive(topic, &s.permissions),
-                                        s.channel_kind,
-                                        s.caller_user.clone(),
-                                        // The 5th term reads the role too: a
-                                        // fleet-scoped frame has no owner to
-                                        // compare against, and the topic-prefix
-                                        // term above cannot tell it apart from
-                                        // its session-scoped siblings.
-                                        s.caller_role.clone(),
-                                    ),
-                                    None => (false, false, None, None, String::new()),
+                        // One shared admission decision for every connection kind;
+                        // see `event_admission::admit_event`.
+                        match event_admission::admit_event(
+                            &ctx,
+                            &conn_id,
+                            session_device_id.as_deref(),
+                            event_json,
+                        )
+                        .await
+                        {
+                            EventVerdict::Skip => continue,
+                            EventVerdict::Send(wire_json) => {
+                                if let Err(e) = write.send(WsMessage::Text(wire_json.into())).await {
+                                    error!("Failed to send event to {}: {}", conn_id, e);
+                                    break;
                                 }
-                            };
-
-                            // The owner-scoped filter needs the frame's OWN fields
-                            // (run_id/session_key), which for stream.* notifications
-                            // live directly under `.params` — `event_data` above only
-                            // resolves for the TopicEvent `.data` and the
-                            // double-wrapped `TopicEvent::to_notification()`
-                            // `.params.data` shapes (both handled by
-                            // `extract_topic_and_data`), not the bare stream-form
-                            // `.params` (no `GatewayEventFrame` stream.* variant
-                            // nests a second `.data` inside it), so fall back to the
-                            // raw `.params` object for that one remaining case.
-                            let visibility_payload =
-                                event_data.or_else(|| event_obj.get("params"));
-
-                            // `note_frame` runs unconditionally, before the filter —
-                            // every connection's loop keeps the shared, process-wide
-                            // index warm (first writer wins) regardless of whether
-                            // THIS connection ends up receiving the frame.
-                            ctx.event_visibility
-                                .note_frame(topic, visibility_payload)
-                                .await;
-
-                            let admits = wall_ok
-                                && scope_allowed
-                                && crate::gateway::surface::delivery::audience_allows(
-                                    event_data,
-                                    channel_kind,
-                                )
-                                && ctx.subscription_manager.should_receive(&conn_id, topic, event_data).await
-                                && match ctx.session_store.as_ref() {
-                                    Some(store) => {
-                                        ctx.event_visibility
-                                            .event_admits_for(
-                                                topic,
-                                                visibility_payload,
-                                                event_caller_user.as_deref(),
-                                                Some(event_caller_role.as_str()),
-                                                store,
-                                                ctx.team_store.as_ref(),
-                                            )
-                                            .await
-                                    }
-                                    // No store wired (probe/legacy wiring): skip the
-                                    // 4th term entirely — zero-change guarantee, see
-                                    // `GatewaySharedState::session_store`.
-                                    None => true,
-                                };
-
-                            // 5th term, and the only one that is not pass/fail:
-                            // one frame (`stream.running_set_changed`) carries a
-                            // set spanning every user, so it is admitted whole and
-                            // its ARRAY is narrowed for this connection instead.
-                            // `None` for every other topic — see
-                            // `EventVisibilityIndex::project_for`, including why a
-                            // narrowed-to-empty frame must still be SENT.
-                            let projected = match (admits, ctx.session_store.as_ref()) {
-                                (true, Some(store)) => {
-                                    ctx.event_visibility
-                                        .project_for(
-                                            topic,
-                                            visibility_payload,
-                                            event_caller_user.as_deref(),
-                                            store,
-                                        )
-                                        .await
-                                }
-                                _ => None,
-                            };
-                            (admits, projected)
-                        } else {
-                            // Can't parse event, forward by default
-                            (true, None)
-                        };
-
-                        if should_forward {
-                            debug!("Forwarding event to {}", conn_id);
-                            // Apply the projection (if any) and wrap the bare
-                            // TopicEvent form — see `event_wire_form`.
-                            let wire_json = match parsed {
-                                Some(event_obj) => {
-                                    event_wire_form(event_obj, projected_payload, event_json)
-                                }
-                                None => event_json,
-                            };
-                            if let Err(e) = write.send(WsMessage::Text(wire_json.into())).await {
-                                error!("Failed to send event to {}: {}", conn_id, e);
+                            }
+                            EventVerdict::Close(reason) => {
+                                let _ = write
+                                    .send(WsMessage::Close(Some(CloseFrame {
+                                        code: 4001,
+                                        reason: reason.into(),
+                                    })))
+                                    .await;
                                 break;
                             }
                         }
@@ -1480,6 +1443,12 @@ pub async fn handle_connection(
             Some(response) = off_loop_rpcs.next_response(), if !off_loop_rpcs.is_empty() => {
                 if let Err(e) = write.send(WsMessage::Text(response.into())).await {
                     error!("Failed to send response to {}: {}", conn_id, e);
+                    break;
+                }
+            }
+            Some(response) = ui_effects.next_response(), if !ui_effects.is_empty() => {
+                if let Err(error) = write.send(WsMessage::Text(response.into())).await {
+                    error!(%error, %conn_id, "failed UI effect completion response");
                     break;
                 }
             }
@@ -1568,7 +1537,269 @@ pub async fn handle_connection(
     // Drop queued and abort active off-loop RPCs BEFORE cleanup, waiting at most
     // `off_loop::OFF_LOOP_SHUTDOWN_GRACE`: a task stuck in a sync section must
     // not hold teardown hostage (it is cancelled at its next yield point).
+    ui_effects.stop();
+    crate::gateway::capability_ui::close_connection_surfaces(&conn_id).await;
+    ui_effects.join().await;
     off_loop_rpcs.shutdown().await;
     cleanup::run_cleanup(&conn_id, &ctx, &rpc_pending).await;
     Ok(())
+}
+
+#[cfg(test)]
+mod response_frame_tests {
+    use super::*;
+
+    /// A peer that answers `"result": null` HAS answered: the frame must be
+    /// recognised as a response, otherwise the pending reverse-RPC call waits
+    /// out its full timeout even though the peer completed. serde maps JSON
+    /// `null` to `None`, so only the KEY's presence tells the two apart.
+    #[tokio::test]
+    async fn ui_display_is_admitted_only_to_its_owner_connection() {
+        use crate::capability::descriptor::CapabilityId;
+        use crate::capability::ownership::{
+            LifetimeScope, OwnerRef, OwnershipTree, VisibilityScope,
+        };
+        use crate::capability::policy_runtime::CapabilityCallContext;
+        use crate::capability::projection_host::ProjectionHost;
+        use crate::capability::provider::{
+            ProviderHandle, ProviderId, ProviderLifecycle, ProviderTransport,
+        };
+        use crate::capability::special::{CapabilityHandlerRegistry, SpecialRegistration};
+        use crate::capability::ui_surface::UiSurface;
+        let root = tempfile::tempdir().unwrap();
+        let tree = Arc::new(OwnershipTree::new());
+        let memory = crate::memory::runtime::MemoryRuntime::new(
+            crate::memory::runtime::MemoryRuntimeConfig {
+                metadata_path: root.path().join("memory.db"),
+                note_memory_dir: root.path().join("notes"),
+                retrieval_tuning: Default::default(),
+            },
+            tree.clone(),
+        );
+        let policy = crate::capability::production_init::build_capability_policy(
+            &crate::Config::default(),
+            tree.clone(),
+        )
+        .unwrap();
+        let specials = CapabilityHandlerRegistry::new();
+        let host = ProjectionHost::mount_with_runtime_and_events(
+            crate::tools::registry::ToolHandlerRegistry::new(),
+            tree,
+            memory,
+            specials.clone(),
+            policy,
+            Arc::new(crate::capability::events::InMemoryEventStream::default()),
+            false,
+        );
+        assert!(host.wait_until_ready().await);
+        // Never install a process-global host: both the production gate and this
+        // isolated fixture use the same concrete host/source lookup below.
+        let surface_id = format!("current-mount-{}", uuid::Uuid::new_v4());
+        let id = CapabilityId {
+            namespace: "aleph/ui".into(),
+            name: surface_id.clone(),
+        };
+        let mount = |generation| {
+            let call = CapabilityCallContext::from_trusted_parts(
+                OwnerRef::Runtime,
+                Some("alice".into()),
+                None,
+                None,
+                Some("conn-a".into()),
+                "current-mount-fixture".into(),
+            );
+            let surface = Arc::new(UiSurface::new(
+                aleph_protocol::capability::UiAttachment {
+                    surface_id: surface_id.clone(),
+                    mount_generation: generation,
+                },
+                call,
+                Arc::new(|_| Ok(())),
+            ));
+            let mut descriptor = crate::capability::ui::descriptor();
+            descriptor.id = id.clone();
+            descriptor.lifetime = LifetimeScope::Session;
+            descriptor.visibility = VisibilityScope {
+                principal: Some("alice".into()),
+                ..Default::default()
+            };
+            let _ = host
+                .facade()
+                .bind_terminal_session(id.clone(), descriptor.visibility.clone())
+                .unwrap();
+            let provider = ProviderHandle::new(ProviderLifecycle::ready(
+                ProviderId::new(format!("fixture/{surface_id}/{generation}")).unwrap(),
+                ProviderTransport::InProcess,
+            ));
+            let registration = specials
+                .register_with_handle(
+                    SpecialRegistration::new(
+                        descriptor,
+                        crate::capability::ui::schema(),
+                        surface.clone(),
+                        provider,
+                    )
+                    .with_ui_surface(surface.clone()),
+                )
+                .unwrap();
+            (surface, registration)
+        };
+        let (first_surface, first_mount) = mount(7);
+        let event = serde_json::json!({"connection_id":"conn-a", "surface_id":surface_id, "mount_generation":7});
+        let admitted = |data: Option<&serde_json::Value>, connection: &str| {
+            ui_display_admits_connection_at_host(
+                "capabilities.ui.display",
+                data,
+                connection,
+                Some(host.as_ref()),
+            )
+        };
+        let mut facts = vec![
+            ("real own current mount", admitted(Some(&event), "conn-a")),
+            ("foreign connection", !admitted(Some(&event), "conn-b")),
+            ("missing frame", !admitted(None, "conn-a")),
+            (
+                "missing actual host",
+                !ui_display_admits_connection_at_host(
+                    "capabilities.ui.display",
+                    Some(&event),
+                    "conn-a",
+                    None,
+                ),
+            ),
+        ];
+        for invalid in [
+            serde_json::json!({"connection_id":"conn-a"}),
+            serde_json::json!({"connection_id":"conn-a", "surface_id":surface_id}),
+            serde_json::json!({"connection_id":"conn-a", "surface_id":surface_id, "mount_generation":"7"}),
+            serde_json::json!({"connection_id":"conn-a", "surface_id":surface_id, "mount_generation":-1}),
+            serde_json::json!({"connection_id":"conn-a", "surface_id":surface_id, "mount_generation":6}),
+            serde_json::json!({"connection_id":"conn-a", "surface_id":"missing-surface", "mount_generation":7}),
+            serde_json::json!({"connection_id":"conn-b", "surface_id":surface_id, "mount_generation":7}),
+        ] {
+            facts.push((
+                "missing/malformed/stale/forged attachment",
+                !admitted(Some(&invalid), invalid["connection_id"].as_str().unwrap()),
+            ));
+        }
+        first_surface.close().await.unwrap();
+        facts.push(("closed current surface", !admitted(Some(&event), "conn-a")));
+        let _ = first_mount.dispose();
+        facts.push(("withdrawn mount", !admitted(Some(&event), "conn-a")));
+        let (replacement_surface, replacement_mount) = mount(8);
+        let replacement = serde_json::json!({"connection_id":"conn-a", "surface_id":surface_id, "mount_generation":8});
+        facts.push((
+            "old mount cannot inherit replacement",
+            !admitted(Some(&event), "conn-a"),
+        ));
+        facts.push((
+            "real replacement own positive",
+            admitted(Some(&replacement), "conn-a"),
+        ));
+        facts.push((
+            "unrelated topic compatibility",
+            ui_display_admits_connection_at_host("session.created", Some(&event), "conn-b", None),
+        ));
+        replacement_surface.close().await.unwrap();
+        let _ = replacement_mount.dispose();
+        facts.push((
+            "replacement withdrawn",
+            !admitted(Some(&replacement), "conn-a"),
+        ));
+        // Close all fixture-owned workers before asserting the observed facts.
+        let closed = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            host.clone().close_and_await(),
+        )
+        .await
+        .unwrap();
+        assert!(closed.source_joined && closed.applier_joined);
+        for (scenario, observed) in facts {
+            assert!(observed, "current mount gate: {scenario}");
+        }
+    }
+
+    #[test]
+    fn unrelated_events_and_legacy_ui_frames_remain_admitted() {
+        let event = serde_json::json!({"connection_id": "conn-a"});
+        assert!(ui_display_admits_connection(
+            "session.created",
+            Some(&event),
+            "conn-b"
+        ));
+        assert!(!ui_display_admits_connection(
+            "capabilities.ui.display",
+            None,
+            "conn-b"
+        ));
+    }
+
+    #[test]
+    fn a_null_result_frame_is_a_response() {
+        let resp = parse_response_frame(r#"{"jsonrpc":"2.0","id":"rpc-0","result":null}"#)
+            .expect("a null result is still a completed response");
+        assert_eq!(resp.id, Some(serde_json::json!("rpc-0")));
+        assert!(resp.result.is_none());
+        assert!(resp.error.is_none());
+    }
+
+    #[test]
+    fn a_result_frame_is_a_response() {
+        let resp = parse_response_frame(r#"{"jsonrpc":"2.0","id":7,"result":{"ok":true}}"#)
+            .expect("a result frame is a response");
+        assert_eq!(resp.id, Some(serde_json::json!(7)));
+    }
+
+    #[test]
+    fn an_error_frame_is_a_response() {
+        let resp = parse_response_frame(
+            r#"{"jsonrpc":"2.0","id":"rpc-1","error":{"code":-32000,"message":"boom"}}"#,
+        )
+        .expect("an error frame is a response");
+        assert_eq!(resp.id, Some(serde_json::json!("rpc-1")));
+        assert!(resp.error.is_some());
+    }
+
+    /// A request carries a `method` — it is never a response, whatever else it
+    /// carries. (The node's `tool.call` request and the center's
+    /// `node.approval.request` both land here.)
+    #[test]
+    fn a_request_frame_is_not_a_response() {
+        assert!(parse_response_frame(
+            r#"{"jsonrpc":"2.0","id":"rpc-2","method":"tool.call","params":{"tool":"bash"}}"#
+        )
+        .is_none());
+    }
+
+    /// No `id` ⇒ notification, not a response.
+    #[test]
+    fn a_notification_frame_is_not_a_response() {
+        assert!(
+            parse_response_frame(r#"{"jsonrpc":"2.0","method":"connect","params":{}}"#).is_none()
+        );
+    }
+
+    /// An `id` with neither a `result` nor an `error` key is not a response —
+    /// it stays on the request path (and its parse-error reply is unchanged).
+    #[test]
+    fn a_frame_without_result_or_error_is_not_a_response() {
+        assert!(parse_response_frame(r#"{"jsonrpc":"2.0","id":"rpc-3"}"#).is_none());
+    }
+
+    /// A `null` id is not an id: serde maps it to `None`, so the frame cannot
+    /// be routed to a pending call.
+    #[test]
+    fn a_null_id_frame_is_not_a_response() {
+        assert!(
+            parse_response_frame(r#"{"jsonrpc":"2.0","id":null,"result":{"ok":true}}"#).is_none()
+        );
+    }
+
+    /// Malformed input is not a response — the caller falls through to the
+    /// request path, which answers with the parse error.
+    #[test]
+    fn a_malformed_frame_is_not_a_response() {
+        assert!(parse_response_frame("not json").is_none());
+        assert!(parse_response_frame("[]").is_none());
+    }
 }

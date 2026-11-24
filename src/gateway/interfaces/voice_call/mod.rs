@@ -12,9 +12,10 @@ pub mod transport;
 
 pub use channel::{VoiceCallChannel, VoiceCallChannelFactory};
 pub use config::VoiceCallConfig;
+#[cfg(test)]
+pub use coordinator::run_public_voice_call;
 pub use coordinator::{
-    run_public_voice_call, run_public_voice_call_controlled, PublicVoiceWiring, VoiceCallReport,
-    VoiceCallTermination,
+    run_public_voice_call_controlled, PublicVoiceWiring, VoiceCallReport, VoiceCallTermination,
 };
 pub use relay::{
     AdmittedVoiceCall, AuthenticatedVoiceFacts, AuthenticatedVoiceHangup, VoiceBindingPolicy,

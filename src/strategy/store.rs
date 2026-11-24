@@ -14,6 +14,7 @@ use anyhow::Context;
 
 use crate::error::AlephError;
 use crate::strategy::types::Strategy;
+use crate::strategy::{goal_key, loop_key, session_key, team_key};
 
 pub struct StrategyStore {
     conn: std::sync::Mutex<rusqlite::Connection>,
@@ -99,19 +100,20 @@ impl StrategyStore {
             )
             .optional()
             .map_err(|e| AlephError::other(format!("strategy get: {e}")))?;
-        Ok(
-            row.and_then(|j| match serde_json::from_str::<Strategy>(&j) {
-                Ok(s) => Some(s),
-                Err(e) => {
-                    tracing::warn!(
-                        key = %key,
-                        error = %e,
-                        "strategy store: corrupt row, returning None (consider delete + repair)"
-                    );
-                    None
-                }
-            }),
-        )
+        let Some(json) = row else {
+            return Ok(None);
+        };
+        match serde_json::from_str::<Strategy>(&json) {
+            Ok(s) => Ok(Some(s)),
+            Err(e) => {
+                tracing::warn!(
+                    key = %key,
+                    error = %e,
+                    "strategy store: corrupt row, returning None (consider delete + repair)"
+                );
+                Ok(None)
+            }
+        }
     }
 
     /// Remove the strategy for `key` (no-op if absent).
@@ -138,23 +140,17 @@ impl StrategyStore {
     /// when the team itself is torn down.
     pub fn delete_for_session(&self, session_id: &str) -> anyhow::Result<usize> {
         let conn = self.lock();
-        let tx = conn
-            .unchecked_transaction()
+        let rows = conn
+            .execute(
+                "DELETE FROM strategies WHERE key IN (?1, ?2, ?3)",
+                rusqlite::params![
+                    goal_key(session_id),
+                    loop_key(session_id),
+                    session_key(session_id),
+                ],
+            )
             .map_err(|e| AlephError::other(format!("strategy delete_for_session: {e}")))?;
-        let mut total = 0usize;
-        for prefix in ["goal:", "loop:", "session:"] {
-            let key = format!("{prefix}{session_id}");
-            let rows = tx
-                .execute(
-                    "DELETE FROM strategies WHERE key = ?1",
-                    rusqlite::params![key],
-                )
-                .map_err(|e| AlephError::other(format!("strategy delete_for_session: {e}")))?;
-            total += rows;
-        }
-        tx.commit()
-            .map_err(|e| AlephError::other(format!("strategy delete_for_session commit: {e}")))?;
-        Ok(total)
+        Ok(rows)
     }
 
     /// Remove the team-scoped row (`team_key`). Team-scoped strategies
@@ -162,7 +158,7 @@ impl StrategyStore {
     /// the row must be torn down with the team itself rather than at any
     /// individual member's session end. Returns the row count deleted.
     pub fn delete_for_team(&self, team_id: &str) -> anyhow::Result<usize> {
-        let key = format!("team:{team_id}");
+        let key = team_key(team_id);
         let rows = self
             .lock()
             .execute(

@@ -44,7 +44,9 @@ pub fn truncate_description(description: &str) -> String {
     // `floor_char_boundary` walks back to the nearest valid boundary.
     let cut = description.floor_char_boundary(MAX_DESCRIPTION_BYTES);
     let mut s = String::with_capacity(cut + 64);
-    s.push_str(&description[..cut]);
+    if let Some(prefix) = description.get(..cut) {
+        s.push_str(prefix);
+    }
     s.push_str("… [truncated]");
     s
 }

@@ -84,6 +84,10 @@ fn the_catalog_has_exactly_one_composer() {
 
     // Every caller outside loader.rs must go through it. `load_presets` alone
     // is what boot used to call, and that call is exactly the bug.
+    //
+    // A file that cannot be read is a hard failure, not a skip: skipping it
+    // leaves the guard reporting "no offenders" while having checked nothing,
+    // which is the same green light a broken guard gives.
     let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut offenders = Vec::new();
     for rel in [
@@ -91,9 +95,8 @@ fn the_catalog_has_exactly_one_composer() {
         "src/gateway/handlers/flow_admin.rs",
     ] {
         let path = repo_root.join(rel);
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            continue;
-        };
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("could not read {rel} ({}): {e}", path.display()));
         let code = crate::utils::source_scan::strip_comment_lines(
             &crate::utils::source_scan::production_prefix(&text),
         );

@@ -130,6 +130,7 @@ impl StdioTransport {
     /// * `args` - Command arguments
     /// * `env` - Environment variables
     /// * `cwd` - Working directory (optional)
+    #[allow(clippy::unused_async)]
     pub async fn spawn(
         name: impl Into<String>,
         command: impl AsRef<str>,
@@ -397,6 +398,9 @@ impl StdioTransport {
                 error = %e,
                 "Failed to kill MCP server process"
             );
+        } else {
+            // Reap child process to prevent zombie/defunct processes
+            let _ = tokio::time::timeout(Duration::from_millis(500), child.wait()).await;
         }
 
         // Mark the reader as aborted; the Drop impl drives the actual

@@ -110,7 +110,7 @@ impl MemoryContextProvider {
         };
 
         // Open loops from the previous session (Batch 2 open-loop tracking).
-        // Opt-in via `set_open_loop_inject`. `SessionReflector` writes
+        // Opt-in on this provider's activation snapshot. `SessionReflector` writes
         // `OPEN_LOOPS.md` beside MEMORY.md on session end.
         //
         // Review fix round 2: this read is DELIBERATELY NOT `agent_id` (the
@@ -137,7 +137,7 @@ impl MemoryContextProvider {
         // "helpfully" widen just the read side again.
         let open_loops_id =
             crate::memory::project_scope::session_write_id(base_agent_id, false, None);
-        let open_loops_block = if super::helpers::open_loop_inject() {
+        let open_loops_block = if self.open_loop_inject {
             self.adopt_owner_curated_file(&open_loops_id, "OPEN_LOOPS.md")
                 .await;
             let path = self
@@ -457,8 +457,6 @@ mod tests {
     /// empty for every project-scoped session.
     #[tokio::test]
     async fn project_scoped_open_loops_read_matches_the_bare_writer_while_memory_stays_scoped() {
-        crate::thinker::memory_context_provider::set_open_loop_inject(true);
-
         let dir = tempfile::tempdir().unwrap();
         let project_root = dir.path().join("myproject");
         tokio::fs::create_dir_all(&project_root).await.unwrap();
@@ -498,7 +496,9 @@ mod tests {
         .await
         .unwrap();
 
-        let provider = provider_rooted_at(dir.path()).with_project_scoped(true);
+        let provider = provider_rooted_at(dir.path())
+            .with_project_scoped(true)
+            .with_open_loop_injection(true);
 
         let msg = crate::projects::with_project_root(
             Some(project_root),
@@ -531,7 +531,6 @@ mod tests {
     #[tokio::test]
     async fn a_stale_open_loops_capture_never_reaches_the_envelope() {
         use crate::memory::curated::snapshot::open_loops_capture_header;
-        crate::thinker::memory_context_provider::set_open_loop_inject(true);
 
         let dir = tempfile::tempdir().unwrap();
         let agent_dir = dir.path().join("agent-stale");
@@ -556,6 +555,7 @@ mod tests {
         // Default ceiling (14 days) → the 90-day-old capture is dropped, while
         // the rest of the envelope is unaffected.
         let msg = provider_rooted_at(dir.path())
+            .with_open_loop_injection(true)
             .build_curated_message("agent-stale", "ses-1")
             .await
             .unwrap();
@@ -568,14 +568,14 @@ mod tests {
 
         // Ceiling off → the same file is injected, proving the knob (not some
         // unrelated read failure) is what suppressed it above.
-        let no_ceiling = provider_rooted_at(dir.path()).with_curated_config(
-            crate::memory::curated::CuratedConfig {
+        let no_ceiling = provider_rooted_at(dir.path())
+            .with_open_loop_injection(true)
+            .with_curated_config(crate::memory::curated::CuratedConfig {
                 memory_char_limit: 200,
                 user_char_limit: 200,
                 open_loops_max_age_days: 0,
                 ..crate::memory::curated::CuratedConfig::default()
-            },
-        );
+            });
         let msg = no_ceiling
             .build_curated_message("agent-stale", "ses-2")
             .await

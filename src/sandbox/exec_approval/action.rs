@@ -383,7 +383,10 @@ pub fn redact_and_cap(s: &str) -> String {
     // Collapse newlines: a multi-line script must still render as one card line.
     let flat = masked.split_whitespace().collect::<Vec<_>>().join(" ");
     match flat.char_indices().nth(MAX_SUMMARY_CHARS) {
-        Some((idx, _)) => format!("{}…", &flat[..idx]),
+        Some((idx, _)) => {
+            let prefix = flat.get(..idx).unwrap_or(&flat);
+            format!("{prefix}…")
+        }
         None => flat,
     }
 }

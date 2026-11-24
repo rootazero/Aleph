@@ -1,0 +1,19 @@
+{
+  "scope": "Revalidation of actual runtime16 captures, not new native runs or performance acceptance",
+  "results": [
+    {
+      "surface": "tauri",
+      "exit_code": 0,
+      "status": "PASS",
+      "resource_complete": false,
+      "receipt": "docs/superpowers/runs/2026-11-16-phase9-hydration-tauri-revalidated.json"
+    },
+    {
+      "surface": "nsh",
+      "exit_code": 0,
+      "status": "PASS",
+      "resource_complete": false,
+      "receipt": "docs/superpowers/runs/2026-11-16-phase9-hydration-nsh-revalidated.json"
+    }
+  ]
+}

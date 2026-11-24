@@ -72,10 +72,8 @@
 //! </system-reminder>
 //! ```
 
-use std::collections::HashMap;
-
-use crate::harness::agent::canonical_json_string;
-use crate::session::events::{SessionEvent, SessionEventRecord};
+use crate::session::events::SessionEventRecord;
+use crate::tools::no_progress::aggregate_identical_repeats;
 use crate::tools::retry::is_idempotent_builtin_name;
 
 /// Number of identical `(tool, args)` calls returning the byte-identical result
@@ -98,95 +96,25 @@ pub struct RedundantCallGroup {
     pub count: usize,
 }
 
-/// Mutable tally accumulated per `(tool, canonical_args)` key while walking the
-/// event window. Mirrors [`no_progress`](crate::tools::no_progress)'s tally.
-struct Tally {
-    count: usize,
-    /// Canonical fingerprint of the first result seen for this key.
-    fingerprint: Option<String>,
-    /// `true` while every result for this key has matched `fingerprint`.
-    all_identical: bool,
-}
-
-impl Tally {
-    const fn new() -> Self {
-        Self {
-            count: 0,
-            fingerprint: None,
-            all_identical: true,
-        }
-    }
-}
-
 /// Walk `events` and surface **non-idempotent** `(tool, args)` keys whose
 /// successful result repeated, byte-identical, at least
 /// [`REDUNDANT_CALL_THRESHOLD`] times.
 ///
-/// Tool/args resolution mirrors
-/// [`no_progress::aggregate_no_progress`](crate::tools::no_progress::aggregate_no_progress):
-/// walk backwards from each `ToolResult` to the most recent `ToolCallRequested`
-/// with a matching `call_id`. A result whose request is no longer in the visible
-/// window (truncated tail) is skipped — we cannot key it.
-///
 /// Idempotent read tools are skipped here on purpose: they are
 /// [`no_progress`](crate::tools::no_progress)'s territory, so the two notices
-/// never double-fire on the same key.
+/// never double-fire on the same key. The tally itself is shared with
+/// [`no_progress`](crate::tools::no_progress) so both notices agree on what
+/// "the same call returning the same bytes" means.
 ///
 /// Returns rows sorted by `count` descending, then `tool` ascending, so the
 /// render is deterministic for snapshot tests.
 pub fn aggregate_redundant_calls(events: &[SessionEventRecord]) -> Vec<RedundantCallGroup> {
-    let mut tallies: HashMap<(String, String), Tally> = HashMap::new();
-
-    for (idx, record) in events.iter().enumerate() {
-        let SessionEvent::ToolResult {
-            call_id, output, ..
-        } = &record.event
-        else {
-            continue;
-        };
-        let Some((name, input)) = resolve_request(events, idx, call_id) else {
-            continue;
-        };
-        // Complement of no_progress: idempotent reads are handled there.
-        if is_idempotent_builtin_name(name) {
-            continue;
-        }
-        let args_key = canonical_json_string(input);
-        // Fingerprint the model-facing text with the offload path folded out:
-        // an over-budget result is replaced by a marker whose file name is
-        // unique per dispatch, which would make every repeat of a byte-identical
-        // large result compare *different* and silently disable the whole
-        // detector for exactly the expensive loops it exists to catch.
-        let fingerprint = match output.value.as_str() {
-            Some(text) => crate::tools::result_store::stabilize_persisted_ref(text).into_owned(),
-            None => canonical_json_string(&output.value),
-        };
-
-        let tally = tallies
-            .entry((name.to_string(), args_key))
-            .or_insert_with(Tally::new);
-        tally.count += 1;
-        match &tally.fingerprint {
-            None => tally.fingerprint = Some(fingerprint),
-            Some(prev) => {
-                if *prev != fingerprint {
-                    tally.all_identical = false;
-                }
-            }
-        }
-    }
-
-    let mut groups: Vec<RedundantCallGroup> = tallies
-        .into_iter()
-        .filter(|(_, t)| t.count >= REDUNDANT_CALL_THRESHOLD && t.all_identical)
-        .map(|((tool, _args), t)| RedundantCallGroup {
-            tool,
-            count: t.count,
-        })
-        .collect();
-
-    groups.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.tool.cmp(&b.tool)));
-    groups
+    aggregate_identical_repeats(events, REDUNDANT_CALL_THRESHOLD, |name| {
+        !is_idempotent_builtin_name(name)
+    })
+    .into_iter()
+    .map(|(tool, count)| RedundantCallGroup { tool, count })
+    .collect()
 }
 
 /// Render the redundant-call nudge, or `None` when no non-idempotent key has
@@ -229,27 +157,6 @@ pub fn render_redundant_call_notice(events: &[SessionEventRecord]) -> Option<Str
 fn push_usize(out: &mut String, n: usize) {
     use std::fmt::Write;
     let _ = write!(out, "{n}");
-}
-
-/// Walk backwards from `result_idx` to the most recent `ToolCallRequested`
-/// whose `call_id` matches, returning its `(name, input)`. O(n) per result but
-/// n is the tail-slice length, not the whole session log. Mirrors
-/// [`no_progress`](crate::tools::no_progress)'s resolver.
-fn resolve_request<'a>(
-    events: &'a [SessionEventRecord],
-    result_idx: usize,
-    call_id: &str,
-) -> Option<(&'a str, &'a serde_json::Value)> {
-    let upper = result_idx.min(events.len());
-    events[..upper].iter().rev().find_map(|r| match &r.event {
-        SessionEvent::ToolCallRequested {
-            call_id: id,
-            name,
-            input,
-            ..
-        } if id == call_id => Some((name.as_str(), input)),
-        _ => None,
-    })
 }
 
 #[cfg(test)]

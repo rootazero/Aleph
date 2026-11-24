@@ -2,16 +2,84 @@
 //!
 //! [`Zahir`] is the read/query face every consumer (UI, MCP projection, ACP
 //! JSON projection) goes through. It never invokes a capability directly; it
-//! describes, resolves (into a lease), subscribes to change, and projects.
+//! describes, resolves (into a lease), subscribes to change, and projects —
+//! plus [`Zahir::activate`], the one entry point that runs a provider's
+//! activation hook instead of reading state.
 //!
 //! Task 1 establishes the trait and the pure transport types. The immutable
 //! snapshot / lease-invalidation semantics are documented here and implemented
 //! in Task 2 (lease staleness) and Task 4 (subscription state machine).
 
 use crate::capability::descriptor::{
-    CapabilityDescriptor, CapabilityId, CapabilityKind, CapabilityRevision, ProjectionMetadata,
+    CapabilityDescriptor, CapabilityFacet, CapabilityId, CapabilityKind, CapabilityRevision,
+    ProjectionMetadata,
 };
-use crate::capability::ownership::{OwnerGeneration, VisibilityScope};
+use crate::capability::ownership::{OwnerGeneration, OwnerRef, VisibilityScope};
+use crate::capability::provider::ProviderId;
+use crate::capability::provider_registry::ActivationError;
+use crate::capability::special::CapturedSpecialEntry;
+use crate::memory::runtime::MemoryRuntime;
+use crate::sync_primitives::Weak;
+
+/// Source identity is kind-specific; Resources never manufacture Tool entries.
+#[derive(Debug, Clone)]
+pub enum BackendSourceEvidence {
+    Tool {
+        canonical_entry: crate::tools::registry::CanonicalEntryLease,
+        provider_generation: u64,
+    },
+    Provider {
+        provider_id: ProviderId,
+        provider_generation: u64,
+    },
+    MemoryResource(Weak<MemoryRuntime>),
+    /// A special capability capture from the canonical special registry.
+    Special {
+        capture: CapturedSpecialEntry,
+        provider_generation: u64,
+    },
+}
+
+impl PartialEq for BackendSourceEvidence {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                Self::Tool {
+                    canonical_entry: a,
+                    provider_generation: ag,
+                },
+                Self::Tool {
+                    canonical_entry: b,
+                    provider_generation: bg,
+                },
+            ) => a == b && ag == bg,
+            (
+                Self::Provider {
+                    provider_id: a_id,
+                    provider_generation: a_generation,
+                },
+                Self::Provider {
+                    provider_id: b_id,
+                    provider_generation: b_generation,
+                },
+            ) => a_id == b_id && a_generation == b_generation,
+            (Self::MemoryResource(a), Self::MemoryResource(b)) => Weak::ptr_eq(a, b),
+            (
+                Self::Special {
+                    capture: a,
+                    provider_generation: ag,
+                },
+                Self::Special {
+                    capture: b,
+                    provider_generation: bg,
+                },
+            ) => a == b && ag == bg,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for BackendSourceEvidence {}
 
 /// A scope selecting which capabilities a facade operation targets.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -20,6 +88,8 @@ pub struct Scope {
     pub kind: Option<CapabilityKind>,
     /// Restrict to a namespace prefix; `None` = all namespaces.
     pub namespace: Option<String>,
+    /// Restrict to one behavior facet; `None` = all facets.
+    pub facet: Option<CapabilityFacet>,
     /// The visibility envelope to describe/project/subscribe under.
     /// `VisibilityScope::default()` = unrestricted.
     pub visibility: VisibilityScope,
@@ -60,14 +130,30 @@ pub struct CapabilitySnapshot {
 pub struct BackendLease {
     pub descriptor: CapabilityDescriptor,
     pub owner_generation: OwnerGeneration,
-    /// Generation of the provider instance that resolved this lease. A
-    /// provider restart invalidates the lease even when the tool descriptor
-    /// itself has not changed.
-    pub provider_generation: u64,
-    /// Captured by the canonical registry read boundary, including the producer
-    /// owner tuple when present. Visibility ownership still belongs to the tree;
-    /// this capture is not a transport authority.
-    pub(crate) canonical_entry: crate::tools::registry::CanonicalEntryLease,
+    /// The owner the binding had when the lease was minted.
+    ///
+    /// The generation alone cannot tell an ownership TRANSFER apart from an
+    /// unchanged binding: `OwnershipTree::register` may replace the owner
+    /// without moving the tree epoch. The captured owner is what makes such a
+    /// transfer fail closed at `validate_lease` time.
+    pub owner: OwnerRef,
+    pub source: BackendSourceEvidence,
+    /// Fixed dependencies captured before approval; never resolved again at use.
+    pub(crate) required_resources: Vec<BackendLease>,
+}
+
+impl BackendLease {
+    pub(crate) fn tool_provider_generation(&self) -> Option<u64> {
+        match &self.source {
+            BackendSourceEvidence::Tool {
+                provider_generation,
+                ..
+            } => Some(*provider_generation),
+            BackendSourceEvidence::Provider { .. }
+            | BackendSourceEvidence::MemoryResource(_)
+            | BackendSourceEvidence::Special { .. } => None,
+        }
+    }
 }
 
 /// Closed error set for `Zahir::resolve` / `Zahir::validate_lease`.
@@ -120,9 +206,9 @@ pub enum CapabilityChange {
 ///
 /// **Pure value semantics.** This struct holds no store, registry, or
 /// subscription wiring. It is a state machine over `(cursor, changes)` and
-/// nothing else — owner-generation verification lives in the future concrete
-/// facade (`lease` / `future` impls). Dedup uses `(id, revision)` only; the
-/// owner-generation check belongs at the backend boundary, not here.
+/// nothing else — owner-generation verification lives in the concrete facade.
+/// Dedup uses exact lifecycle-change equality. History retains the latest 256
+/// changes.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CapabilityChangeStream {
     pub committed_cursor: Cursor,
@@ -153,6 +239,7 @@ impl CapabilityChangeStream {
         }
         self.committed_cursor = cursor;
         self.changes.push(change);
+        self.trim_history();
         true
     }
 
@@ -167,6 +254,7 @@ impl CapabilityChangeStream {
         }
         self.changes.extend(changes);
         self.committed_cursor = cursor;
+        self.trim_history();
         true
     }
 
@@ -177,14 +265,14 @@ impl CapabilityChangeStream {
     ///
     /// 1. Snapshot `committed_cursor` as `old`.
     /// 2. Drop delta entries with `cursor <= old` (stale tail).
-    /// 3. Drop surviving entries whose `(id, revision)` already appears in
-    ///    `self.changes` — the subscriber has already seen them. Dedup also
-    ///    collapses duplicates within the accepted tail.
+    /// 3. Drop surviving entries exactly equal to a change in `self.changes`
+    ///    — the subscriber has already seen them. Dedup also collapses exact
+    ///    duplicates within the accepted tail.
     /// 4. Push one `Invalidated` followed by the surviving delta in input
     ///    order.
     /// 5. Advance `committed_cursor` to
     ///    `max(old, snapshot.committed_cursor, accepted cursors)`. The cursor
-    ///    never regresses; the stream's history is preserved, never zeroed.
+    ///    never regresses; history retains only its most recent 256 changes.
     ///
     /// Returns `false` **only** when `snapshot.committed_cursor < old` — a
     /// resync source that lags behind the subscriber. On failure the stream is
@@ -205,16 +293,14 @@ impl CapabilityChangeStream {
             if cursor <= old {
                 continue;
             }
-            if let Some((id, rev)) = id_rev_of(&change) {
-                let already = self.changes.iter().chain(accepted.iter()).any(|existing| {
-                    match id_rev_of(existing) {
-                        Some((eid, erev)) => eid == id && erev == rev,
-                        None => false,
-                    }
-                });
-                if already {
-                    continue;
-                }
+            if !matches!(change, CapabilityChange::Invalidated)
+                && self
+                    .changes
+                    .iter()
+                    .chain(accepted.iter())
+                    .any(|existing| existing == &change)
+            {
+                continue;
             }
             new_cursor = new_cursor.max(cursor);
             accepted.push(change);
@@ -223,21 +309,15 @@ impl CapabilityChangeStream {
         self.changes.push(CapabilityChange::Invalidated);
         self.changes.extend(accepted);
         self.committed_cursor = new_cursor;
+        self.trim_history();
         true
     }
-}
 
-/// Extract the `(id, revision)` payload of a change, if it has one.
-///
-/// [`CapabilityChange::Invalidated`] carries no per-capability identity and
-/// returns `None` so dedup can skip it; multiple `Invalidated` entries (one
-/// per resync call) are therefore preserved verbatim.
-fn id_rev_of(change: &CapabilityChange) -> Option<(&CapabilityId, CapabilityRevision)> {
-    match change {
-        CapabilityChange::Registered { id, revision }
-        | CapabilityChange::Replaced { id, revision }
-        | CapabilityChange::Unregistered { id, revision } => Some((id, *revision)),
-        CapabilityChange::Invalidated => None,
+    fn trim_history(&mut self) {
+        const HISTORY_LIMIT: usize = 256;
+        if self.changes.len() > HISTORY_LIMIT {
+            self.changes.drain(..self.changes.len() - HISTORY_LIMIT);
+        }
     }
 }
 
@@ -257,7 +337,8 @@ pub struct Projection {
     pub capabilities: Vec<CapabilityId>,
 }
 
-/// The read/query face of the capability layer.
+/// The read/query face of the capability layer, plus the one activation entry
+/// point.
 ///
 /// [`Zahir::resolve`] returns `Result<`[`BackendLease`]`, `[`ResolveError`]`>`,
 /// never a live handler: the lease names its owner generation so a consumer can
@@ -267,9 +348,64 @@ pub struct Projection {
 /// subscription state machine.
 pub trait Zahir {
     fn describe(&self, scope: Scope) -> CapabilitySnapshot;
+
+    /// Load only the requested descriptor without activating its provider.
+    /// Existing facades retain scoped discovery semantics by default.
+    fn lookup_descriptor(&self, reference: &Reference) -> Option<CapabilityDescriptor> {
+        self.describe(Scope {
+            namespace: Some(reference.id.namespace.clone()),
+            visibility: reference.visibility.clone(),
+            ..Scope::default()
+        })
+        .capabilities
+        .into_iter()
+        .find(|descriptor| descriptor.id == reference.id)
+    }
+
+    /// Load metadata and its cache eligibility from the same producing source.
+    ///
+    /// `cacheable=true` guarantees this descriptor's revision belongs to the
+    /// same canonical source/domain as descriptor_revision and cannot be reused
+    /// for different metadata. Derive the flag from the actual selected source,
+    /// never an earlier probe or public kind/revision equality. Unsupported
+    /// sources conservatively preserve the existing lookup contract uncached.
+    fn lookup_descriptor_for_cache(
+        &self,
+        reference: &Reference,
+    ) -> Option<(CapabilityDescriptor, bool)> {
+        self.lookup_descriptor(reference)
+            .map(|descriptor| (descriptor, false))
+    }
+
+    /// A live metadata freshness hint, never an authorization decision.
+    ///
+    /// Return Some only when the exact visibility is currently valid and this
+    /// source's descriptor revision cannot be reused for different metadata.
+    /// Provider closure/revocation must suppress the hint. None conservatively
+    /// reloads via lookup_descriptor_for_cache; notifications cannot supply this proof.
+    fn descriptor_revision(&self, _reference: &Reference) -> Option<CapabilityRevision> {
+        None
+    }
+
     fn resolve(&self, reference: Reference) -> Result<BackendLease, ResolveError>;
     fn validate_lease(&self, lease: &BackendLease) -> Result<(), ResolveError>;
+    /// Activate the provider behind `reference` and mint a lease for it.
+    ///
+    /// The one non-read operation on this trait: it runs the provider's
+    /// activation hook before returning the lease.
+    fn activate(&self, reference: Reference) -> Result<BackendLease, ActivationError>;
     fn subscribe(&self, scope: Scope, cursor: Cursor) -> CapabilityChangeStream;
+    /// Independent, live-only observations. Filters cannot supply authorization.
+    fn subscribe_events(
+        &self,
+        _scope: crate::capability::event_audience::TrustedEventScope,
+        _filter: crate::capability::events::EventFilter,
+    ) -> Result<
+        crate::capability::events::ScopedEventSubscription,
+        crate::capability::events::EventError,
+    > {
+        Err(crate::capability::events::EventError::Unsupported)
+    }
     fn project(&self, target: TransportTarget, scope: Scope) -> Projection;
 }
 
@@ -378,33 +514,35 @@ mod tests {
     }
 
     #[test]
-    fn invalidate_and_resync_dedups_by_id_and_revision() {
+    fn invalidate_and_resync_dedups_exact_changes_only() {
         let mut stream = CapabilityChangeStream::from_snapshot(empty_snapshot(1));
         // Pre-existing change that the delta will echo.
         stream.changes.push(registered("ns", "x", 2));
         stream.committed_cursor = Cursor(1);
 
         let delta = vec![
-            // Same (id, revision) as the existing change — must be dropped.
+            // Exact duplicate — must be dropped.
             (Cursor(2), registered("ns", "x", 2)),
-            // Brand new (id, revision) — must be kept.
-            (Cursor(3), registered("ns", "y", 1)),
+            // Same id/revision but a distinct lifecycle event — must survive.
+            (Cursor(3), replaced("ns", "x", 2)),
+            (Cursor(4), registered("ns", "y", 1)),
         ];
         assert!(stream.invalidate_and_resync(empty_snapshot(4), delta));
 
-        // 1 pre-existing + 1 Invalidated + 1 surviving delta entry.
-        assert_eq!(stream.changes.len(), 3);
+        // 1 pre-existing + 1 Invalidated + 2 distinct delta entries.
+        assert_eq!(stream.changes.len(), 4);
         assert_eq!(stream.committed_cursor, Cursor(4));
         assert!(matches!(
             stream.changes[0],
             CapabilityChange::Registered { .. }
         ));
         assert!(matches!(stream.changes[1], CapabilityChange::Invalidated));
-        assert!(matches!(
-            stream.changes[2],
-            CapabilityChange::Registered { ref id, revision: CapabilityRevision(1) }
-                if id == &cap_id("ns", "y")
-        ));
+        assert!(
+            matches!(stream.changes[2], CapabilityChange::Replaced { ref id, revision: CapabilityRevision(2) } if id == &cap_id("ns", "x"))
+        );
+        assert!(
+            matches!(stream.changes[3], CapabilityChange::Registered { ref id, revision: CapabilityRevision(1) } if id == &cap_id("ns", "y"))
+        );
     }
 
     #[test]

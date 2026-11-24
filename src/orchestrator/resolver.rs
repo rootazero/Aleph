@@ -30,12 +30,11 @@ pub const DEFAULT_AGENT_FLOW_ID: &str = "default-agent";
 /// Called at every dispatch (see design §7).
 pub const fn depth_guard(depth: u8) -> Result<(), FlowError> {
     if depth > MAX_FLOW_DEPTH {
-        Err(FlowError::RecursionLimit {
+        return Err(FlowError::RecursionLimit {
             max: MAX_FLOW_DEPTH,
-        })
-    } else {
-        Ok(())
+        });
     }
+    Ok(())
 }
 
 /// Map `agent_id` → `flow_id` through the default routing table.
@@ -107,20 +106,22 @@ pub fn resolve_session(input: SessionResolveInput) -> Result<SessionResolution, 
             // fresh session rather than InvalidConfig, which would make every
             // dispatch to the flow fail. The parent link, when present, is
             // still carried.
-            let Some(parent) = parent else {
-                tracing::debug!(
+            //
+            // The fallback is indistinguishable from a genuine Fresh
+            // resolution (both yield `parent_session_key: None`), so the
+            // loss of the session lineage is reported at `warn!` — an
+            // operator reading the logs has to be able to see it.
+            if parent.is_none() {
+                tracing::warn!(
                     strategy = "Child",
-                    "resolve_session: Child strategy with no runtime parent — falling back to Fresh"
+                    "resolve_session: Child strategy with no runtime parent — falling back \
+                     to Fresh; the session lineage is lost (the resolved session carries no \
+                     parent link)"
                 );
-                return Ok(SessionResolution {
-                    session_key: (input.fresh_key_fn)(),
-                    parent_session_key: None,
-                    is_new: true,
-                });
-            };
+            }
             Ok(SessionResolution {
                 session_key: (input.fresh_key_fn)(),
-                parent_session_key: Some(parent),
+                parent_session_key: parent,
                 is_new: true,
             })
         }

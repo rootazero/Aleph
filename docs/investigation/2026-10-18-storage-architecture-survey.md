@@ -474,7 +474,7 @@ attachment_text TEXT,  -- 当前：附件文本直接存 SQLite
 
 3. **相对路径引用**
    - ❌ 当前：`attachment_text` TEXT 列
-   - ✅ 目标：Markdown 中 `![](../../attachments/images/abc123.png)`
+   - ✅ 目标：Markdown 中示例路径 `../../attachments/images/abc123.png`（附件目录未纳入当前仓库）
 
 4. **ID 管理**
    - ⚠️ 当前：`agent_id`, `session_id` 在各表中
@@ -628,7 +628,7 @@ src/memory/store/sqlite/notes/store_impl.rs:89
 ### C. 参考文档
 
 - [MEMORY_SYSTEM.md](../reference/MEMORY_SYSTEM.md)
-- [Pi Memory Extension README](~/.pi/agent/npm/node_modules/pi-memory/README.md)
+- Pi Memory Extension README (local installation path varies by machine and is not a repository link)
 - [Aleph AGENTS.md](../../AGENTS.md) — Redlines R1, R3, R10
 
 ---

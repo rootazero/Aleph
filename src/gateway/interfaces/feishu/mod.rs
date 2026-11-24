@@ -21,7 +21,7 @@ use tokio::sync::watch;
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
     ChannelResult, ChannelState, ChannelStatus, ConversationId, MessageId, OutboundMessage,
-    SendResult,
+    SendOperation, SendResult,
 };
 
 use api::FeishuApi;
@@ -185,9 +185,9 @@ impl FeishuChannel {
         })
     }
 
-    fn admit_call(&self) -> ChannelResult<()> {
-        self.provider
-            .acquire_call(self.provider.generation())
+    fn admit_call(provider: &ProviderHandle) -> ChannelResult<()> {
+        provider
+            .acquire_call(provider.generation())
             .map_err(|e| ChannelError::NotConnected(e.to_string()))
     }
     async fn start_runtime(&mut self, generation: u64) -> ChannelResult<()> {
@@ -202,9 +202,15 @@ impl FeishuChannel {
         let http = reqwest::Client::new();
         let base_url = self.config.base_url();
 
+        // One transport serves exactly one account. Resolve it fail-closed so a
+        // multi-account config can never answer a tenant with another bot's
+        // identity (see `FeishuConfig::resolve_active_account`).
+        let (account_id, app_id, app_secret) = self.config.resolve_active_account()?;
+        tracing::info!(account = %account_id, "Feishu account resolved");
+
         let auth = Arc::new(TokenManager::new(
-            &self.config.app_id,
-            &self.config.app_secret,
+            &app_id,
+            &app_secret,
             &base_url,
             http.clone(),
         ));
@@ -255,7 +261,7 @@ impl FeishuChannel {
                 api: api.clone(),
                 user_cache: Arc::new(UserProfileCache::new()),
                 dedup: Arc::new(StdMutex::new(MessageDedup::new())),
-                policy: Arc::new(InboundPolicy::new(self.config.clone(), bot_open_id)),
+                policy: Arc::new(InboundPolicy::new(self.config.clone())),
             };
             self.webhook_handle = Some(tokio::spawn(run_webhook_server(
                 webhook_state,
@@ -265,10 +271,7 @@ impl FeishuChannel {
         } else {
             let mut runtime = FeishuRuntime::new(api.clone(), self.config.clone(), bot_open_id);
             runtime
-                .start(
-                    ChannelId::new(&self.config.app_id),
-                    self.channel_state.sender(),
-                )
+                .start(self.info.id.clone(), self.channel_state.sender())
                 .await?;
             self.runtime = Some(runtime);
         }
@@ -405,23 +408,28 @@ impl Channel for FeishuChannel {
         Ok(())
     }
 
-    async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-        self.admit_call()?;
-        if self.test_mode {
-            return Ok(SendResult {
-                message_id: MessageId::new(format!(
-                    "feishu-test-{}",
-                    chrono::Utc::now().timestamp_millis()
-                )),
-                timestamp: chrono::Utc::now(),
-            });
-        }
+    fn send(&self, message: OutboundMessage) -> SendOperation {
+        let provider = self.provider.clone();
+        let test_mode = self.test_mode;
+        let api = self.api.clone();
+        let config = self.config.clone();
+        Box::pin(async move {
+            Self::admit_call(&provider)?;
+            if test_mode {
+                return Ok(SendResult {
+                    message_id: MessageId::new(format!(
+                        "feishu-test-{}",
+                        chrono::Utc::now().timestamp_millis()
+                    )),
+                    timestamp: chrono::Utc::now(),
+                });
+            }
 
-        let api = self
-            .api
-            .as_ref()
-            .ok_or_else(|| ChannelError::NotConnected("API not initialized".to_string()))?;
-        FeishuSender::send_message(api, message, &self.config).await
+            let api = api
+                .as_ref()
+                .ok_or_else(|| ChannelError::NotConnected("API not initialized".to_string()))?;
+            FeishuSender::send_message(api, message, &config).await
+        })
     }
 
     async fn react(
@@ -430,7 +438,7 @@ impl Channel for FeishuChannel {
         _message_id: &MessageId,
         _reaction: &str,
     ) -> ChannelResult<()> {
-        self.admit_call()?;
+        Self::admit_call(&self.provider)?;
         if self.test_mode {
             return Ok(());
         }
@@ -448,7 +456,7 @@ impl Channel for FeishuChannel {
         message_id: &MessageId,
         new_text: &str,
     ) -> ChannelResult<()> {
-        self.admit_call()?;
+        Self::admit_call(&self.provider)?;
         if self.test_mode {
             return Ok(());
         }
@@ -465,7 +473,7 @@ impl Channel for FeishuChannel {
         conversation_id: &ConversationId,
         message_id: &MessageId,
     ) -> ChannelResult<()> {
-        self.admit_call()?;
+        Self::admit_call(&self.provider)?;
         if self.test_mode {
             return Ok(());
         }
@@ -501,10 +509,18 @@ impl ChannelFactory for FeishuChannelFactory {
     }
 
     async fn create(&self, config: serde_json::Value) -> ChannelResult<Box<dyn Channel>> {
+        self.create_with_id("feishu", config).await
+    }
+
+    async fn create_with_id(
+        &self,
+        id: &str,
+        config: serde_json::Value,
+    ) -> ChannelResult<Box<dyn Channel>> {
         let config: FeishuConfig = serde_json::from_value(config)
             .map_err(|e| ChannelError::ConfigError(format!("Invalid Feishu config: {e}")))?;
 
-        Ok(Box::new(FeishuChannel::new("feishu", config)?))
+        Ok(Box::new(FeishuChannel::new(id, config)?))
     }
 }
 
@@ -567,7 +583,7 @@ mod lifecycle_tests {
                 api: api.clone(),
                 user_cache: Arc::new(UserProfileCache::new()),
                 dedup: Arc::new(StdMutex::new(MessageDedup::new())),
-                policy: Arc::new(InboundPolicy::new(channel.config.clone(), "bot".into())),
+                policy: Arc::new(InboundPolicy::new(channel.config.clone())),
             },
             listener,
             rx,
@@ -591,11 +607,16 @@ mod lifecycle_tests {
         let provider = old.provider.clone();
         let generation = provider.generation();
         let path = old.config.webhook_path.clone();
+        let (headers, body) = feishu_inbound::crypto::test_support::signed_event(
+            old.config.encrypt_key.as_deref().unwrap(),
+            r#"{"token":"token","challenge":"ready"}"#,
+        );
         registry.register(Box::new(old)).await;
         let old_handle = registry.get(&ChannelId::new(id)).await.unwrap();
         let response = reqwest::Client::new()
             .post(format!("http://{address}{path}"))
-            .json(&serde_json::json!({"token": "token", "challenge": "ready"}))
+            .headers(headers)
+            .body(body)
             .send()
             .await
             .unwrap();

@@ -1,0 +1,125 @@
+{
+  "artifact": "phase11-foundation-verification",
+  "version": "2026-11-21.1",
+  "status": "PASS_TARGETED_FOUNDATION_CHECKS / NOT_PHASE11_ACCEPTANCE",
+  "branch": "main",
+  "baseline_head": "b5eb67d812d00b0435970e4dbe7c96f6d237eadb",
+  "contract": "docs/superpowers/specs/2026-11-21-phase11-nsh-cutover.md",
+  "inventory": "docs/superpowers/runs/2026-11-21-phase11-nsh-inventory.json",
+  "source_sha256": {
+    "Cargo.lock": "560e54c15812a2be88029b9e5480041c4670f6b3125d30e79fb80038d73f8239",
+    "desktop/nsh-shell/Cargo.toml": "fb399aa0bfe17f42d0726475d82ef0066df2192ecbe1526fd5c461e506a9acda",
+    "desktop/nsh-shell/src/main.rs": "4b54c1502c0b6b9d363415b0b6101fdf4c6fbb6035596f76a2608e9d4a6f7d53",
+    "desktop/nsh-shell/src/platform.rs": "439305e4fefe532a4816a17e89e567975f435379649fb3772ec1edb93851ba39",
+    "desktop/nsh-shell/src/credentials.rs": "6863caaab0dc86b92ce31db60f30fb6ebbd7f02ee1bff6e8bcfc5d6ae3078c99",
+    "desktop/nsh-shell/src/panel_bridge.rs": "c70279efe9b730778d2a52c005716fd9c6771b295610fe9cc6b3fe9195cebb63",
+    "desktop/nsh-shell/src/panel_bridge.js": "437e37c43e7e160c37ed6453b847e224d822d9e750aeb05d0aa5f1d3a25ad976",
+    "desktop/nsh-shell/tests/panel_bridge.test.mjs": "c9b7b2796da5dd138404449d3cbe81d54a4ceae8f8fe5d8ad17edf20ecfe51d4",
+    "shared/protocol/src/panel_shell.rs": "c22a717da6ba8be9593a5293b5c6159ade0e31ff35160f2dce6adc84bad1e5a4",
+    "interfaces/webchat/src/api/native_credentials.rs": "9ad125beb9f951a31f88c1e094c7cd73cb8e0b35d4a91bcc0551bcee6996fee4",
+    "interfaces/webchat/src/context.rs": "feb42ca4c55a40d3d16f255a29ad06e5aa33f3a45d63002cb369e390c8175a57"
+  },
+  "phase10_matrix_sha256": "fbf5f1272be769ae554ba53df065ef171badb6bbe942bb90e254168664e5f7c2",
+  "checks": [
+    {
+      "command": "cargo test -p aleph-protocol --offline --locked --jobs 1",
+      "passed": 426,
+      "ignored_doctests": 2
+    },
+    {
+      "command": "cargo test -p aleph-nsh-shell --offline --locked --jobs 1",
+      "passed": 13
+    },
+    {
+      "command": "cargo test -p aleph-nsh-shell --features qa-service --offline --locked --jobs 1",
+      "passed": 13,
+      "ignored": 1
+    },
+    {
+      "command": "cargo test -p aleph-nsh-shell --features qa-service --offline --locked --jobs 1 isolated_os_store_roundtrip_and_revoked_lease -- --ignored --test-threads=1",
+      "passed": 1,
+      "scope": "real macOS OS-store unique random QA namespace; no production namespace or WebView delivery"
+    },
+    {
+      "command": "cargo test -p aleph-panel --lib native_credentials --offline --locked --jobs 1",
+      "passed": 24
+    },
+    {
+      "command": "cargo check -p aleph-panel --target wasm32-unknown-unknown --offline --locked --jobs 1",
+      "status": "PASS",
+      "warnings": "existing PtyTopicLease::epoch/PtyCoverageWork::Acquire/acquire_pty_topic dead code"
+    },
+    {
+      "command": "cargo clippy -p aleph-nsh-shell --all-targets --features qa-service --offline --locked --jobs 1 -- -D warnings",
+      "status": "PASS"
+    },
+    {
+      "command": "node --test --test-reporter=tap desktop/nsh-shell/tests/panel_bridge.test.mjs",
+      "passed": 8
+    },
+    {
+      "check": "rustfmt --edition 2021 --check for changed Rust modules except localized context.rs substitutions",
+      "status": "PASS"
+    },
+    {
+      "check": "git diff --check",
+      "status": "PASS"
+    },
+    {
+      "check": "scoped links using qa/docs/check_markdown_links.py classification",
+      "links": 3,
+      "invalid": 0
+    },
+    {
+      "check": "command caller/owner file+line anchor existence",
+      "anchors": 31,
+      "invalid": 0
+    },
+    {
+      "check": "locked package identity comparison to baseline",
+      "added": 33,
+      "removed": 0
+    },
+    {
+      "check": "Phase10 commit ancestor and original matrix SHA256",
+      "status": "PASS_UNCHANGED"
+    }
+  ],
+  "cargo_discipline": {
+    "gate": "python3 qa/browser_live/check_memory.py --required-bytes 4294967296",
+    "every_cargo_gate": "ALLOW",
+    "parallel_cargo": false,
+    "offline": true,
+    "lock_generation_exception": "manifest changes required offline lock regeneration earlier; subsequent checks used --locked",
+    "metadata_jobs_exception": "cargo metadata does not accept --jobs; no --jobs for metadata"
+  },
+  "not_verified": [
+    "full P11-A frozen contract review acceptance",
+    "changed host native WebView credential E2E",
+    "Windows native compile/launch",
+    "Linux native compile/launch; offline check blocked by missing cairo-rs 0.22.11",
+    "Tauri full/lite rebuild/rollback package",
+    "full desktop or capability regression",
+    "release profile",
+    "three-platform performance/new timing",
+    "physical multi-display",
+    "notification feature-disable/zero-resource semantics",
+    "updater/feed/key/install compatibility",
+    "default switch and rollback rehearsal",
+    "real 14-day common dual-track operation",
+    "Tauri deletion and post-removal regression",
+    "external documentation URLs not re-fetched"
+  ],
+  "review": {
+    "self_spec_then_quality": "limited implemented slice; see inventory findings",
+    "independent": "NOT PERFORMED",
+    "ordering_deviation": "exploratory credential boundary preceded complete per-call contract review; not retroactively approved"
+  },
+  "git_operations": {
+    "local_commit": "receipt belongs to the containing foundation commit; no circular commit hash field",
+    "push": false,
+    "tag": false,
+    "release": false
+  },
+  "completion": "FOUNDATION_ONLY; P11-A-H remain OPEN"
+}

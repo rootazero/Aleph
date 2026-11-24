@@ -192,7 +192,9 @@ fn render_run_summary(name: &str, run_id: &str, team_id: &str, tasks: &[&CoordTa
             .unwrap_or(&task.subject);
         let err = task.result.as_deref().unwrap_or("").trim();
         let err_bounded = match err.char_indices().nth(160) {
-            Some((idx, _)) => format!("{}…", &err[..idx]),
+            Some((idx, _)) => err
+                .get(..idx)
+                .map_or_else(|| err.to_string(), |s| format!("{s}…")),
             None => err.to_string(),
         };
         out.push_str(&format!("\n- step '{step}' failed: {err_bounded}"));
@@ -312,20 +314,18 @@ impl TeamDispatcher {
         // Prune the in-process claim set to runs still live and unnotified so
         // it stays bounded (stamped runs are filtered by the durable marker
         // before ever reaching the set again).
+        let mut ready_candidates = Vec::new();
         {
             let mut claimed = self.notified_workflow_runs.lock().await;
             claimed.retain(|rid| live_unnotified.contains(rid));
-        }
-
-        for (rid, run_tasks) in candidates {
-            // In-process claim: exactly one tick wins the send window.
-            {
-                let mut claimed = self.notified_workflow_runs.lock().await;
-                if !claimed.insert(rid.clone()) {
-                    continue; // already attempted this daemon lifetime
+            for (rid, run_tasks) in candidates {
+                if claimed.insert(rid.clone()) {
+                    ready_candidates.push((rid, run_tasks));
                 }
             }
+        }
 
+        for (rid, run_tasks) in ready_candidates {
             let Some((channel_id, conversation_id)) =
                 run_tasks.iter().find_map(|t| workflow_origin(&t.metadata))
             else {

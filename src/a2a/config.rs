@@ -53,28 +53,20 @@ pub struct A2AServerConfig {
 }
 
 /// A2A security settings
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 pub struct A2ASecurityConfig {
-    /// Allow unauthenticated access from localhost
-    #[serde(default = "default_true")]
+    /// Allow unauthenticated access from localhost.
+    ///
+    /// Defaults to `false`: the Local tier carries administrative permissions,
+    /// so leaving the bypass on by default would hand admin rights to every
+    /// unauthenticated peer that can reach the listener as loopback (which
+    /// includes anything routed through a same-host reverse proxy).
+    #[serde(default)]
     pub local_bypass: bool,
 
     /// API tokens for trusted-level authentication
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tokens: Vec<String>,
-}
-
-impl Default for A2ASecurityConfig {
-    fn default() -> Self {
-        Self {
-            local_bypass: true,
-            tokens: Vec::new(),
-        }
-    }
-}
-
-const fn default_true() -> bool {
-    true
 }
 
 /// A pre-registered remote A2A agent entry

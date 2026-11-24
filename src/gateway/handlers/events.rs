@@ -575,22 +575,36 @@ mod tests {
         // by the resolver; each is read here by its constant, and a new one
         // turns this red rather than falling out of the scan.
         let by_constant: Vec<&str> = frame_src
-            .match_indices("=> aleph_protocol::")
-            .map(|(at, needle)| {
-                let tail = &frame_src[at + needle.len()..];
+            .split("=>")
+            .skip(1)
+            .filter_map(|arm| {
+                let body = arm.trim_start();
+                let expression = body.strip_prefix('{').unwrap_or(body).trim_start();
+                let tail = expression.strip_prefix("aleph_protocol::")?;
                 let end = tail
                     .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == ':'))
                     .unwrap_or(tail.len());
-                &tail[..end]
+                Some(&tail[..end])
             })
             .collect();
+        let constant_topics = [
+            ("canvas::TOPIC", aleph_protocol::canvas::TOPIC),
+            (
+                "browser_live::RESOURCE_TOPIC",
+                aleph_protocol::browser_live::RESOURCE_TOPIC,
+            ),
+            (
+                "browser_live::CLOSED_TOPIC",
+                aleph_protocol::browser_live::CLOSED_TOPIC,
+            ),
+            (
+                "browser_live::INTERVENTION_TOPIC",
+                aleph_protocol::browser_live::INTERVENTION_TOPIC,
+            ),
+        ];
         assert_eq!(
             by_constant,
-            [
-                "canvas::TOPIC",
-                "browser_live::RESOURCE_TOPIC",
-                "browser_live::CLOSED_TOPIC"
-            ],
+            constant_topics.map(|(name, _)| name),
             "frame.rs names a topic through a constant this test does not read"
         );
         let mut names: Vec<String> = frame_src
@@ -604,9 +618,7 @@ mod tests {
             })
             .map(str::to_string)
             .collect();
-        names.push(aleph_protocol::canvas::TOPIC.to_string());
-        names.push(aleph_protocol::browser_live::RESOURCE_TOPIC.to_string());
-        names.push(aleph_protocol::browser_live::CLOSED_TOPIC.to_string());
+        names.extend(constant_topics.map(|(_, topic)| topic.to_owned()));
         names.sort();
         names.dedup();
         assert!(

@@ -1,8 +1,59 @@
 //! Core-only immutable publication primitive for versioned state.
 
-use crate::sync_primitives::Arc;
+use std::cell::RefCell;
+
+use crate::sync_primitives::{Arc, Mutex, PoisonError};
 use arc_swap::ArcSwap;
 use tokio::sync::{broadcast, Notify};
+
+thread_local! {
+    /// Registries whose `transact` / `close` is currently running on this
+    /// thread, identified by the address of the registry itself.
+    ///
+    /// The mutation lock is NOT reentrant: a nested call on the same registry
+    /// would wait for a lock its own thread already holds, and that wait can
+    /// never be cancelled. Tracking the active registries lets the nested
+    /// call fail fast instead of hanging the thread.
+    static ACTIVE_REGISTRIES: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Fail-fast guard against re-entering one registry on one thread.
+///
+/// Entering the guard aborts the call when this thread is already inside the
+/// same registry. The aborted call publishes nothing and leaves the outer
+/// transaction's state untouched; the panic unwinds through the outer
+/// closure, and the poisoned mutation lock is recovered by the same
+/// `PoisonError::into_inner` path every other panic uses, so the registry
+/// stays usable afterwards.
+struct ReentrancyGuard {
+    registry: usize,
+}
+
+impl ReentrancyGuard {
+    fn enter(registry: usize) -> Self {
+        ACTIVE_REGISTRIES.with(|active| {
+            let already_active = active.borrow().contains(&registry);
+            assert!(
+                !already_active,
+                "versioned registry re-entrancy: a transaction closure must not call transact() \
+                 or close() on the same registry (the mutation lock is not reentrant)"
+            );
+            active.borrow_mut().push(registry);
+        });
+        Self { registry }
+    }
+}
+
+impl Drop for ReentrancyGuard {
+    fn drop(&mut self) {
+        ACTIVE_REGISTRIES.with(|active| {
+            let mut active = active.borrow_mut();
+            if let Some(position) = active.iter().rposition(|entry| *entry == self.registry) {
+                active.remove(position);
+            }
+        });
+    }
+}
 
 /// One immutable state generation.
 #[derive(Clone)]
@@ -13,6 +64,18 @@ pub(crate) struct VersionedSnapshot<T> {
 }
 
 /// Atomic snapshots plus ordered, notification-only publication.
+///
+/// # Re-entrancy
+///
+/// `transact` and `close` serialise every mutation through ONE non-reentrant
+/// mutex, and both run caller code while that mutex is held. A transaction
+/// closure MUST NOT call `transact` or `close` on the SAME registry: the
+/// nested call would wait for a lock its own thread already holds, and that
+/// wait can never be cancelled. The registry detects the re-entry and aborts
+/// the nested call immediately instead of deadlocking; the aborted call
+/// publishes nothing and the registry stays usable afterwards. Transacting a
+/// DIFFERENT registry from inside a closure is allowed (each registry owns
+/// its own lock), but the caller owns the lock ordering between the two.
 pub(crate) struct VersionedRegistry<T, E = (), L = ()>
 where
     E: Clone,
@@ -22,7 +85,7 @@ where
     events: broadcast::Sender<E>,
     projected_events: broadcast::Sender<L>,
     project: fn(&E) -> Vec<L>,
-    mutation_lock: std::sync::Mutex<()>,
+    mutation_lock: Mutex<()>,
     close_signal: Arc<Notify>,
 }
 
@@ -72,7 +135,7 @@ where
             events,
             projected_events,
             project,
-            mutation_lock: std::sync::Mutex::new(()),
+            mutation_lock: Mutex::new(()),
             close_signal: Arc::new(Notify::new()),
         }
     }
@@ -80,6 +143,16 @@ where
     #[must_use]
     pub(crate) fn snapshot(&self) -> Arc<VersionedSnapshot<T>> {
         self.snapshot.load_full()
+    }
+
+    /// Observe a snapshot while publication is excluded through callback return.
+    pub(crate) fn with_current<R>(&self, read: impl FnOnce(&VersionedSnapshot<T>) -> R) -> R {
+        let _reentrancy = ReentrancyGuard::enter(std::ptr::from_ref(self) as usize);
+        let _guard = self
+            .mutation_lock
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        read(&self.snapshot.load_full())
     }
 
     #[must_use]
@@ -112,16 +185,36 @@ where
     /// stay under the same lock so event order equals revision order. Poison
     /// recovery is safe because the mutex guards only a unit token, never mutable
     /// state.
+    ///
+    /// # Re-entrancy
+    ///
+    /// `f` runs while the (non-reentrant) mutation lock is held, so `f` MUST
+    /// NOT call `transact` or `close` on THIS registry: the nested call would
+    /// wait for a lock its own thread already holds and hang the thread
+    /// forever. Such a call is refused immediately (it aborts with a clear
+    /// message instead of deadlocking), publishes nothing, and leaves the
+    /// outer transaction's state untouched.
+    ///
+    /// # Revision exhaustion
+    ///
+    /// The revision counter is checked: when it cannot advance, the call
+    /// aborts instead of silently reusing an already-published revision.
     pub(crate) fn transact<R, Err>(
         &self,
         f: impl FnOnce(&VersionedSnapshot<T>, u64) -> Result<Option<(T, E, R)>, Err>,
     ) -> Result<Option<R>, Err> {
+        let _reentrancy = ReentrancyGuard::enter(std::ptr::from_ref(self) as usize);
         let _guard = self
             .mutation_lock
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         let current = self.snapshot.load_full();
-        let next_revision = current.revision + 1;
+        let Some(next_revision) = current.revision.checked_add(1) else {
+            panic!(
+                "versioned registry revision counter exhausted: the sequence cannot continue past \
+                 u64::MAX without reusing an already-published revision"
+            );
+        };
         let Some((value, event, result)) = f(&current, next_revision)? else {
             return Ok(None);
         };
@@ -142,14 +235,28 @@ where
     /// Observers create `notified()` before checking `is_closed()` to avoid a
     /// missed wake. Close carries no event on either stream and does not reject
     /// transactions: each shell retains its own teardown and admission rules.
+    ///
+    /// # Re-entrancy
+    ///
+    /// `close` takes the same non-reentrant mutation lock as `transact`, so it
+    /// MUST NOT be called from inside a `transact` closure on this registry:
+    /// the nested call would wait for a lock its own thread already holds. The
+    /// re-entry is refused immediately instead of deadlocking.
+    ///
+    /// The closed bit lives INSIDE the published snapshot, so publishing it
+    /// re-publishes the value (`T: Clone`): closing a registry that holds a
+    /// large catalog copies that catalog once. A consumer that captured
+    /// `snapshot()` before the close keeps observing that older snapshot
+    /// (`closed == false`); `is_closed()` is the registry-level answer.
     pub(crate) fn close(&self)
     where
         T: Clone,
     {
+        let _reentrancy = ReentrancyGuard::enter(std::ptr::from_ref(self) as usize);
         let _guard = self
             .mutation_lock
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         let current = self.snapshot.load_full();
         if !current.closed {
             self.snapshot.store(Arc::new(VersionedSnapshot {
@@ -165,8 +272,40 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use crate::sync_primitives::{AtomicBool, AtomicUsize, Barrier, Ordering};
     use std::thread;
+
+    #[test]
+    fn readonly_gate_holds_publication_without_mutation_or_events() {
+        let registry = VersionedRegistry::<u64, u64>::new(7);
+        let before = registry.snapshot();
+        let mut events = registry.subscribe();
+        let mut projected = registry.subscribe_projected();
+        let calls = std::cell::Cell::new(0);
+        assert_eq!(
+            registry.with_current(|current| {
+                assert!(
+                    registry.mutation_lock.try_lock().is_err(),
+                    "read callback must hold the real mutation mutex"
+                );
+                calls.set(calls.get() + 1);
+                assert_eq!(current.value, 7);
+                current.revision
+            }),
+            0
+        );
+        assert_eq!(calls.get(), 1);
+        assert!(Arc::ptr_eq(&before, &registry.snapshot()));
+        assert!(events.try_recv().is_err());
+        assert!(projected.try_recv().is_err());
+    }
+
+    #[test]
+    #[should_panic(expected = "versioned registry re-entrancy")]
+    fn readonly_gate_rejects_same_registry_mutation() {
+        let registry = VersionedRegistry::<u64, u64>::new(7);
+        registry.with_current(|_| registry.close());
+    }
 
     #[derive(Clone, Debug, PartialEq, Eq)]
     struct ProjectionEvent {
@@ -342,7 +481,7 @@ mod tests {
         );
         let mut primary = registry.subscribe();
         let mut projected = registry.subscribe_projected();
-        let barrier = Arc::new(std::sync::Barrier::new(16));
+        let barrier = Arc::new(Barrier::new(16));
         let threads: Vec<_> = (0..16)
             .map(|_| {
                 let registry = Arc::clone(&registry);
@@ -499,7 +638,7 @@ mod tests {
     fn concurrent_transactions_keep_all_values_and_order_events() {
         let registry = Arc::new(VersionedRegistry::<Vec<u64>, u64>::new(Vec::new()));
         let mut events = registry.subscribe();
-        let barrier = Arc::new(std::sync::Barrier::new(16));
+        let barrier = Arc::new(Barrier::new(16));
         let calls = Arc::new(AtomicUsize::new(0));
         let threads: Vec<_> = (0..16)
             .map(|_| {
@@ -633,5 +772,84 @@ mod tests {
         ));
         assert_eq!(registry.snapshot().value, 257);
         assert_eq!(registry.revision(), 257);
+    }
+
+    #[test]
+    fn reentrant_transact_and_close_abort_instead_of_deadlocking() {
+        let registry = Arc::new(VersionedRegistry::<u32, u64>::new(0));
+
+        // A nested `transact` on the same registry must abort rather than wait
+        // for the mutation lock this thread already holds.
+        let clone = Arc::clone(&registry);
+        let nested_transact = thread::spawn(move || {
+            let _ = clone.transact::<(), ()>(|_, _| {
+                let _ = clone.transact::<(), ()>(|_, _| Ok::<_, ()>(None));
+                Ok::<_, ()>(None)
+            });
+        })
+        .join();
+        assert!(nested_transact.is_err());
+
+        // A nested `close` on the same registry must abort the same way.
+        let clone = Arc::clone(&registry);
+        let nested_close = thread::spawn(move || {
+            let _ = clone.transact::<(), ()>(|_, _| {
+                clone.close();
+                Ok::<_, ()>(None)
+            });
+        })
+        .join();
+        assert!(nested_close.is_err());
+
+        // Neither aborted call published anything, and the registry stays
+        // usable because the mutation lock recovers from poisoning.
+        assert_eq!(registry.snapshot().value, 0);
+        assert_eq!(registry.revision(), 0);
+        assert!(!registry.is_closed());
+        assert_eq!(
+            registry.transact(|current, revision| {
+                Ok::<_, ()>(Some((current.value + 1, revision, revision)))
+            }),
+            Ok(Some(1))
+        );
+        assert_eq!(registry.snapshot().value, 1);
+        registry.close();
+        assert!(registry.is_closed());
+    }
+
+    #[test]
+    fn revision_exhaustion_aborts_instead_of_reusing_a_published_revision() {
+        let registry = Arc::new(VersionedRegistry::<u32, u64>::from_snapshot(
+            VersionedSnapshot {
+                value: 7,
+                revision: u64::MAX,
+                closed: false,
+            },
+        ));
+
+        let clone = Arc::clone(&registry);
+        let exhausted = thread::spawn(move || {
+            let _ = clone.transact::<(), ()>(|_, _| Ok::<_, ()>(Some((1, 1, ()))));
+        })
+        .join();
+        let payload = exhausted.expect_err("an exhausted revision counter must abort");
+        let message = payload
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| {
+                payload
+                    .downcast_ref::<&str>()
+                    .map(|text| (*text).to_string())
+            })
+            .unwrap_or_default();
+        assert!(
+            message.contains("revision counter exhausted"),
+            "unexpected abort message: {message}"
+        );
+
+        // The aborted transaction published nothing: the last published
+        // revision and value are untouched.
+        assert_eq!(registry.revision(), u64::MAX);
+        assert_eq!(registry.snapshot().value, 7);
     }
 }

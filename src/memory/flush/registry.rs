@@ -73,13 +73,20 @@ impl FlushRegistry {
     /// flush to finish.
     pub fn begin(&self, agent: &str) -> FlushGuard {
         let mut map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        let entry = map.entry(agent.to_string()).or_insert_with(|| Entry {
-            notify: Arc::new(Notify::new()),
-            in_flight: 0,
-        });
-        entry.in_flight += 1;
-        // rust-doctor-disable-next-line excessive-clone
-        let notify = entry.notify.clone();
+        let notify = if let Some(entry) = map.get_mut(agent) {
+            entry.in_flight += 1;
+            entry.notify.clone()
+        } else {
+            let notify = Arc::new(Notify::new());
+            map.insert(
+                agent.to_string(),
+                Entry {
+                    notify: notify.clone(),
+                    in_flight: 1,
+                },
+            );
+            notify
+        };
         drop(map);
 
         FlushGuard {

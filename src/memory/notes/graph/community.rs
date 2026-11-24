@@ -196,26 +196,38 @@ pub(crate) fn refine_connected(g: &GraphIndex, comm: &[usize]) -> Vec<usize> {
 
 /// Intra-edge density per community over the *base* graph.
 fn cohesion_per_community(g: &GraphIndex, of_node: &[usize], k: usize) -> Vec<f32> {
-    let mut size = vec![0usize; k];
+    let real_k = k.max(of_node.iter().copied().max().map_or(0, |m| m + 1));
+    let mut size = vec![0usize; real_k];
     for &c in of_node {
-        size[c] += 1;
+        if let Some(slot) = size.get_mut(c) {
+            *slot += 1;
+        }
     }
-    let mut intra = vec![0usize; k];
+    let mut intra = vec![0usize; real_k];
     for i in 0..g.len() {
-        for &j in &g.adj[i] {
-            if i < j && of_node[i] == of_node[j] {
-                intra[of_node[i]] += 1;
+        if let Some(nbrs) = g.adj.get(i) {
+            for &j in nbrs {
+                if i < j {
+                    if let (Some(&ci), Some(&cj)) = (of_node.get(i), of_node.get(j)) {
+                        if ci == cj {
+                            if let Some(slot) = intra.get_mut(ci) {
+                                *slot += 1;
+                            }
+                        }
+                    }
+                }
             }
         }
     }
     (0..k)
         .map(|c| {
-            let s = size[c];
+            let s = size.get(c).copied().unwrap_or(0);
             if s < 2 {
                 return 0.0;
             }
             let possible = s * (s - 1) / 2;
-            intra[c] as f32 / possible as f32
+            let int_cnt = intra.get(c).copied().unwrap_or(0);
+            int_cnt as f32 / possible as f32
         })
         .collect()
 }

@@ -12,6 +12,10 @@ use crate::gateway::channel::{
 };
 use crate::gateway::formatter::{MarkupFormat, MessageFormatter};
 use chrono::Utc;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, MutexGuard, OnceLock};
+use tokio::sync::oneshot;
 
 use super::config::IrcConfig;
 use crate::gateway::restart_backoff::RestartBackoff;
@@ -19,6 +23,141 @@ use crate::gateway::restart_backoff::RestartBackoff;
 /// Maximum length for a single PRIVMSG payload, accounting for the
 /// `:nick!user@host PRIVMSG #channel :` prefix overhead (~80 chars conservative).
 pub(crate) const MAX_PRIVMSG_PAYLOAD: usize = 400;
+
+/// Maximum length of a single inbound IRC frame.
+///
+/// RFC 2812 caps a message at 512 bytes; servers routinely send longer frames
+/// with extensions, so the limit stays generous but finite: a peer that never
+/// terminates a line must not be able to grow the read buffer without bound.
+const MAX_IRC_LINE: usize = 8192;
+
+/// Monotonic counter behind the inbound message ID.
+///
+/// The millisecond timestamp alone is not unique: two messages from the same
+/// sender handled within the same millisecond collide, and the Core dedup
+/// (`channel_id:message_id`) then drops the second one.
+static INBOUND_SEQ: AtomicU64 = AtomicU64::new(0);
+
+// ---------------------------------------------------------------------------
+// Queued write completion
+// ---------------------------------------------------------------------------
+
+/// Separator between the completion token and the raw command inside a queued
+/// write payload. Payloads are internal: the write worker strips the envelope
+/// before the command reaches the socket.
+const WRITE_TOKEN_SEP: char = '\u{1f}';
+
+/// Completion slots for queued writes: token -> waiter.
+type WriteCompletions = HashMap<u64, oneshot::Sender<Result<(), String>>>;
+
+static WRITE_COMPLETIONS: OnceLock<Mutex<WriteCompletions>> = OnceLock::new();
+static WRITE_TOKEN_SEQ: AtomicU64 = AtomicU64::new(0);
+
+fn write_completions() -> MutexGuard<'static, WriteCompletions> {
+    WRITE_COMPLETIONS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+}
+
+/// Drops the completion slot of a write whose waiter went away (cancelled
+/// send), so the registry does not grow without bound.
+struct WriteCompletionGuard(u64);
+
+impl Drop for WriteCompletionGuard {
+    fn drop(&mut self) {
+        write_completions().remove(&self.0);
+    }
+}
+
+/// Register a completion slot for one queued write.
+fn register_write() -> (u64, oneshot::Receiver<Result<(), String>>) {
+    let token = WRITE_TOKEN_SEQ.fetch_add(1, Ordering::Relaxed);
+    let (tx, rx) = oneshot::channel();
+    write_completions().insert(token, tx);
+    (token, rx)
+}
+
+/// Hand the local write result back to the sender that queued the command.
+fn complete_write(token: u64, result: Result<(), String>) {
+    if let Some(tx) = write_completions().remove(&token) {
+        let _ = tx.send(result);
+    }
+}
+
+/// Wrap a raw command into the internal queued-write envelope.
+fn encode_write(token: u64, raw: &str) -> String {
+    format!("{token}{WRITE_TOKEN_SEP}{raw}")
+}
+
+/// Split a queued payload back into its completion token and raw command. A
+/// payload without an envelope is treated as a raw command.
+fn decode_write(payload: &str) -> (Option<u64>, &str) {
+    match payload.split_once(WRITE_TOKEN_SEP) {
+        Some((token, raw)) => (token.parse().ok(), raw),
+        None => (None, payload),
+    }
+}
+
+/// Fail every queued write that is still waiting for its completion.
+///
+/// The writer stops on a broken connection, so the callers waiting on those
+/// writes must learn about it instead of waiting for a completion that can no
+/// longer arrive.
+fn fail_pending_writes(reason: &str) {
+    let mut completions = write_completions();
+    for (_, tx) in completions.drain() {
+        let _ = tx.send(Err(reason.to_string()));
+    }
+}
+
+/// Read inbound frames from the IRC socket.
+///
+/// The server is a remote peer: a frame without a terminating newline would
+/// grow the read buffer without bound, so the buffer is capped and an
+/// oversized frame is dropped instead of being accumulated.
+async fn read_bounded_lines(
+    reader: tokio::net::tcp::OwnedReadHalf,
+    tx: tokio::sync::mpsc::Sender<String>,
+) {
+    use tokio::io::AsyncReadExt;
+
+    let mut reader = tokio::io::BufReader::new(reader);
+    let mut buf: Vec<u8> = Vec::new();
+    let mut chunk = [0u8; 2048];
+    let mut overflow = false;
+
+    loop {
+        let read = match reader.read(&mut chunk).await {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) => {
+                tracing::warn!("IRC read error: {e}");
+                break;
+            }
+        };
+        for &byte in &chunk[..read] {
+            if byte == b'\n' {
+                if overflow {
+                    tracing::warn!("IRC frame longer than {MAX_IRC_LINE} bytes dropped");
+                } else {
+                    let line = String::from_utf8_lossy(&buf)
+                        .trim_end_matches('\r')
+                        .to_string();
+                    if tx.send(line).await.is_err() {
+                        return;
+                    }
+                }
+                buf.clear();
+                overflow = false;
+            } else if buf.len() < MAX_IRC_LINE {
+                buf.push(byte);
+            } else {
+                overflow = true;
+            }
+        }
+    }
+}
 
 /// Parsed IRC protocol line.
 ///
@@ -89,6 +228,24 @@ pub fn nick_from_prefix(prefix: &str) -> &str {
     prefix.split('!').next().unwrap_or(prefix)
 }
 
+/// Whether a message text addresses the bot by its nick.
+///
+/// The text must start with the bot's nick followed by a separator (`:`, `,`
+/// or whitespace), so `alephbot: hi` addresses the bot while `alephbotica`
+/// does not.
+#[must_use]
+fn addresses_bot(text: &str, own_nick: &str) -> bool {
+    let text = text.trim_start();
+    let Some(prefix) = text.get(..own_nick.len()) else {
+        return false;
+    };
+    if !prefix.eq_ignore_ascii_case(own_nick) {
+        return false;
+    }
+    let rest = &text[own_nick.len()..];
+    rest.starts_with(':') || rest.starts_with(',') || rest.starts_with(char::is_whitespace)
+}
+
 /// Convert an IRC PRIVMSG to an `InboundMessage`.
 ///
 /// Returns `None` if:
@@ -96,12 +253,14 @@ pub fn nick_from_prefix(prefix: &str) -> &str {
 /// - The message is from the bot itself (case-insensitive comparison)
 /// - The message body is empty
 /// - No prefix (sender info) is present
+/// - The sender is outside `IrcConfig::allowed_users`
+/// - A channel message does not address the bot and `require_mention` is set
 #[must_use]
 pub fn convert_privmsg(
     parsed: &IrcLine,
     channel_id: &ChannelId,
     own_nick: &str,
-    _config: &IrcConfig,
+    config: &IrcConfig,
 ) -> Option<InboundMessage> {
     if parsed.command != "PRIVMSG" {
         return None;
@@ -115,6 +274,12 @@ pub fn convert_privmsg(
         return None;
     }
 
+    // Senders outside the allowlist never reach the bot (an empty allowlist
+    // allows everyone, which is the pre-existing behaviour).
+    if !config.is_user_allowed(sender_nick) {
+        return None;
+    }
+
     let target = parsed.params.first()?;
     let text = parsed.trailing.as_deref().unwrap_or("");
     if text.is_empty() {
@@ -123,6 +288,12 @@ pub fn convert_privmsg(
 
     // Determine if this is a channel message (group) or a DM
     let is_group = target.starts_with('#') || target.starts_with('&');
+
+    // In a channel, only messages that address the bot are accepted when a
+    // mention is required — a direct message is addressed by construction.
+    if is_group && config.require_mention && !addresses_bot(text, own_nick) {
+        return None;
+    }
 
     // For group messages, conversation_id is the channel name.
     // For DMs, conversation_id is the sender's nick (so replies go back to them).
@@ -134,9 +305,10 @@ pub fn convert_privmsg(
 
     Some(InboundMessage {
         id: MessageId::new(format!(
-            "irc-{}-{}",
+            "irc-{}-{}-{}",
             sender_nick,
-            Utc::now().timestamp_millis()
+            Utc::now().timestamp_millis(),
+            INBOUND_SEQ.fetch_add(1, Ordering::Relaxed)
         )),
         channel_id: channel_id.clone(),
         conversation_id: ConversationId::new(conversation_id),
@@ -195,9 +367,27 @@ impl IrcMessageOps {
                     continue;
                 }
                 let raw = format!("PRIVMSG {target} :{line}\r\n");
-                write_tx.send(raw).await.map_err(|e| {
-                    ChannelError::SendFailed(format!("IRC write channel closed: {e}"))
-                })?;
+                let (token, completion) = register_write();
+                // The guard drops the slot when this call is cancelled before
+                // the completion arrives.
+                let _guard = WriteCompletionGuard(token);
+                write_tx
+                    .send(encode_write(token, &raw))
+                    .await
+                    .map_err(|e| {
+                        ChannelError::SendFailed(format!("IRC write channel closed: {e}"))
+                    })?;
+                match completion.await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => {
+                        return Err(ChannelError::SendFailed(format!("IRC write failed: {e}")));
+                    }
+                    Err(_) => {
+                        return Err(ChannelError::SendFailed(
+                            "IRC writer stopped before the command was written".to_string(),
+                        ));
+                    }
+                }
             }
         }
 
@@ -225,7 +415,7 @@ impl IrcMessageOps {
         mut write_cmd_rx: tokio::sync::mpsc::Receiver<String>,
         mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
     ) {
-        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        use tokio::io::AsyncWriteExt;
         use tokio::net::TcpStream;
 
         let mut backoff = RestartBackoff::with_defaults();
@@ -253,7 +443,10 @@ impl IrcMessageOps {
             tracing::info!("IRC connected to {addr}");
 
             let (reader, mut writer) = stream.into_split();
-            let mut lines = BufReader::new(reader).lines();
+            let (line_tx, mut line_rx) = tokio::sync::mpsc::channel::<String>(64);
+            let reader_task = tokio::spawn(async move {
+                read_bounded_lines(reader, line_tx).await;
+            });
 
             // Send registration: NICK + USER
             let mut registration = String::new();
@@ -271,22 +464,18 @@ impl IrcMessageOps {
                 continue;
             }
 
-            let nick = config.nick.clone();
+            let mut nick = config.nick.clone();
             let channels_to_join = config.channels.clone();
             let mut joined = false;
 
             // Inner message loop - returns true if we should reconnect
             let should_reconnect = 'inner: loop {
                 tokio::select! {
-                    line_result = lines.next_line() => {
+                    line_result = line_rx.recv() => {
                         let line = match line_result {
-                            Ok(Some(l)) => l,
-                            Ok(None) => {
+                            Some(l) => l,
+                            None => {
                                 tracing::info!("IRC connection closed");
-                                break 'inner true;
-                            }
-                            Err(e) => {
-                                tracing::warn!("IRC read error: {e}");
                                 break 'inner true;
                             }
                         };
@@ -349,10 +538,20 @@ impl IrcMessageOps {
 
                             // ERR_NICKNAMEINUSE (433) - nickname taken, try alternative
                             "433" => {
-                                tracing::warn!("IRC: nickname '{nick}' is already in use");
+                                // The nickname is taken: move to the next
+                                // candidate and keep it as the bot's identity,
+                                // otherwise the self-filter and the mention
+                                // check keep using the stale name.
                                 let alt_nick = format!("{nick}_");
+                                tracing::warn!(
+                                    "IRC: nickname '{nick}' is already in use, trying '{alt_nick}'"
+                                );
                                 let cmd = format!("NICK {alt_nick}\r\n");
-                                let _ = writer.write_all(cmd.as_bytes()).await;
+                                if let Err(e) = writer.write_all(cmd.as_bytes()).await {
+                                    tracing::warn!("IRC nickname change failed: {e}");
+                                    break 'inner true;
+                                }
+                                nick = alt_nick;
                             }
 
                             // PRIVMSG - incoming message
@@ -394,10 +593,18 @@ impl IrcMessageOps {
                     }
 
                     // Outbound message requests from send()
-                    Some(raw_cmd) = write_cmd_rx.recv() => {
+                    Some(payload) = write_cmd_rx.recv() => {
+                        let (token, raw_cmd) = decode_write(&payload);
                         if let Err(e) = writer.write_all(raw_cmd.as_bytes()).await {
                             tracing::warn!("IRC write failed: {e}");
+                            if let Some(token) = token {
+                                complete_write(token, Err(e.to_string()));
+                            }
+                            fail_pending_writes("IRC write failed");
                             break 'inner true;
+                        }
+                        if let Some(token) = token {
+                            complete_write(token, Ok(()));
                         }
                     }
 
@@ -407,11 +614,17 @@ impl IrcMessageOps {
                             let _ = writer
                                 .write_all(b"QUIT :Aleph shutting down\r\n")
                                 .await;
+                            fail_pending_writes("IRC adapter shutting down");
+                            reader_task.abort();
                             return;
                         }
                     }
                 }
             };
+
+            // The reader task owns the socket half; it must not outlive the
+            // connection it reads from.
+            reader_task.abort();
 
             if !should_reconnect || *shutdown_rx.borrow() {
                 break;
@@ -807,5 +1020,117 @@ mod tests {
         let config = make_config();
         let msg = convert_privmsg(&parsed, &channel_id, "alephbot", &config);
         assert!(msg.is_none()); // No target means no valid message
+    }
+
+    // ==================== Allowlist and Mention Tests ====================
+
+    fn privmsg(sender: &str, target: &str, text: &str) -> IrcLine {
+        IrcLine {
+            prefix: Some(format!("{sender}!{sender}@host")),
+            command: "PRIVMSG".to_string(),
+            params: vec![target.to_string()],
+            trailing: Some(text.to_string()),
+        }
+    }
+
+    #[test]
+    fn test_sender_outside_the_allowlist_is_dropped() {
+        let parsed = privmsg("mallory", "#test", "hello");
+        let channel_id = ChannelId::new("irc");
+        let config = IrcConfig {
+            allowed_users: vec!["alice".to_string()],
+            ..make_config()
+        };
+
+        let msg = convert_privmsg(&parsed, &channel_id, "alephbot", &config);
+        assert!(msg.is_none());
+    }
+
+    #[test]
+    fn test_sender_inside_the_allowlist_is_accepted() {
+        let parsed = privmsg("alice", "#test", "hello");
+        let channel_id = ChannelId::new("irc");
+        let config = IrcConfig {
+            allowed_users: vec!["Alice".to_string()],
+            ..make_config()
+        };
+
+        let msg = convert_privmsg(&parsed, &channel_id, "alephbot", &config).unwrap();
+        assert_eq!(msg.sender_id.as_str(), "alice");
+    }
+
+    #[test]
+    fn test_a_dm_from_an_unknown_nick_is_dropped() {
+        let parsed = privmsg("mallory", "alephbot", "hello");
+        let channel_id = ChannelId::new("irc");
+        let config = IrcConfig {
+            allowed_users: vec!["alice".to_string()],
+            ..make_config()
+        };
+
+        let msg = convert_privmsg(&parsed, &channel_id, "alephbot", &config);
+        assert!(msg.is_none());
+    }
+
+    #[test]
+    fn test_a_channel_message_without_a_mention_is_dropped() {
+        let parsed = privmsg("alice", "#test", "just chatting");
+        let channel_id = ChannelId::new("irc");
+        let config = IrcConfig {
+            require_mention: true,
+            ..make_config()
+        };
+
+        let msg = convert_privmsg(&parsed, &channel_id, "alephbot", &config);
+        assert!(msg.is_none());
+    }
+
+    #[test]
+    fn test_a_channel_message_addressing_the_bot_is_accepted() {
+        let parsed = privmsg("alice", "#test", "alephbot: hello there");
+        let channel_id = ChannelId::new("irc");
+        let config = IrcConfig {
+            require_mention: true,
+            ..make_config()
+        };
+
+        let msg = convert_privmsg(&parsed, &channel_id, "alephbot", &config).unwrap();
+        assert_eq!(msg.text, "alephbot: hello there");
+    }
+
+    #[test]
+    fn test_a_nick_prefix_is_not_a_mention() {
+        let parsed = privmsg("alice", "#test", "alephbotica hello");
+        let channel_id = ChannelId::new("irc");
+        let config = IrcConfig {
+            require_mention: true,
+            ..make_config()
+        };
+
+        let msg = convert_privmsg(&parsed, &channel_id, "alephbot", &config);
+        assert!(msg.is_none());
+    }
+
+    #[test]
+    fn test_a_direct_message_needs_no_mention() {
+        let parsed = privmsg("alice", "alephbot", "hello");
+        let channel_id = ChannelId::new("irc");
+        let config = IrcConfig {
+            require_mention: true,
+            ..make_config()
+        };
+
+        let msg = convert_privmsg(&parsed, &channel_id, "alephbot", &config).unwrap();
+        assert!(!msg.is_group);
+    }
+
+    #[test]
+    fn test_an_empty_allowlist_allows_every_sender() {
+        let parsed = privmsg("mallory", "#test", "hello");
+        let channel_id = ChannelId::new("irc");
+        let config = make_config();
+
+        let msg = convert_privmsg(&parsed, &channel_id, "alephbot", &config).unwrap();
+        assert_eq!(msg.sender_id.as_str(), "mallory");
     }
 }

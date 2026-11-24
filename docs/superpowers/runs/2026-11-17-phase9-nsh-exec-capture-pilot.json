@@ -1,0 +1,278 @@
+{
+  "baseline_default_assets": {
+    "interfaces/webchat/dist/aleph_panel.js": {
+      "sha256": "70984b761985f0cbe437bacc5fb88d3566b478b83b998ad126b6e208080e73ac",
+      "bytes": 120139
+    },
+    "interfaces/webchat/dist/aleph_panel.js.br": {
+      "sha256": "7f800919668228b97e381432264ca4d36bf8d5cd1789b28caaeaca39b42fba4a",
+      "bytes": 14425
+    },
+    "interfaces/webchat/dist/aleph_panel_bg.wasm": {
+      "sha256": "2a208e2aa4f5de4f13d6f250442d7a1b0535a2398a15a119cd8f957f26ac2719",
+      "bytes": 70928671
+    },
+    "interfaces/webchat/dist/aleph_panel_bg.wasm.br": {
+      "sha256": "4c39c5f17d3e5e6b982b172b1787f520c00d9733df75d5b299c95f4c3f07b0b4",
+      "bytes": 3762411
+    },
+    "interfaces/webchat/dist/index.html": {
+      "sha256": "01ba38ba50b53babbd3a48d42cf51d47f9102b729deb36c64e2a7be60c6b8d43",
+      "bytes": 7425
+    },
+    "interfaces/webchat/dist/index.html.br": {
+      "sha256": "592703426e6d493d424eb6b99b985a2af12af3d457a03ee6d9e8ab32ab299059",
+      "bytes": 2575
+    },
+    "interfaces/webchat/dist/snippets/aleph-panel-4f6e070d4bce8856/inline0.js": {
+      "sha256": "6b729d2c4a33ef2283b46dacdda18ce896352c10df3f4ad650cad0b993a30967",
+      "bytes": 5109
+    },
+    "interfaces/webchat/dist/tailwind.css": {
+      "sha256": "3ede8d53cbb11d0707f68c53653103749ca33026a82e497b389db328e4cde9e7",
+      "bytes": 146900
+    },
+    "interfaces/webchat/dist/tailwind.css.br": {
+      "sha256": "0f5ed19f316a4ed7ef0ef5c5a9b1d31a862fbd02ad23a5a0ddfa20a2d69af972",
+      "bytes": 19565
+    }
+  },
+  "lock_sha256": "12300967333b45f8a0fa1f401cf13a559b5b8a881ee95550b1bbf1a8d42e21f5",
+  "commands": {
+    "qa_wasm": {
+      "argv": [
+        "just",
+        "wasm"
+      ],
+      "cwd": "/Volumes/TBU4/Workspace/Aleph",
+      "env_overrides": {
+        "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+        "PATH": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/cargo-gated-runtime-qa:/Users/zouguojun/.pi/agent/bin:/opt/homebrew/bin:/opt/homebrew/opt/rustup/bin:/Users/zouguojun/.bun/bin:/Users/zouguojun/.local/state/fnm_multishells/1488_1794447693947/bin:/opt/homebrew/opt/go/libexec/bin:/Users/zouguojun/.go/bin:/Users/zouguojun/.cargo/bin:/Users/zouguojun/.uv/.venv/bin:/Users/zouguojun/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/Users/zouguojun/.local/bin:/Users/zouguojun/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/Library/Frameworks/Python.framework/Versions/3.10/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/pkg/env/global/bin:/Library/Apple/usr/bin:/opt/homebrew/bin:/Users/zouguojun/.cargo/bin",
+        "RUST_BACKTRACE": "1",
+        "ALEPH_PANEL_RUNTIME_QA": "1"
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "pid": 85148,
+      "cleanup_error": null,
+      "group_probe": null,
+      "unjoined_descendants": false,
+      "elapsed_seconds": 261.00148608296877,
+      "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/full-closure/qa-gateway-exec-capture/qa-wasm.stdout.log",
+      "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/full-closure/qa-gateway-exec-capture/qa-wasm.stderr.log"
+    }
+  },
+  "qa_assets": {
+    "interfaces/webchat/dist/aleph_panel.js": {
+      "sha256": "54e23c229879dcfb0453aeba0a0272d5610a7745ceb9ff841701f4923bf2aad1",
+      "bytes": 121503
+    },
+    "interfaces/webchat/dist/aleph_panel.js.br": {
+      "sha256": "956fc79f84b80263509f2b4e10321325829c810c20b714c352c59dee55c0f977",
+      "bytes": 14531
+    },
+    "interfaces/webchat/dist/aleph_panel_bg.wasm": {
+      "sha256": "ddd5384a498d14cb84e1af4dedbf704f046c7d98352c0c212e5dc38847227d3d",
+      "bytes": 70931724
+    },
+    "interfaces/webchat/dist/aleph_panel_bg.wasm.br": {
+      "sha256": "2cc199a9117e918a5e290c280d1be9b6da98b4944a87d9afc60d4cb00f69565b",
+      "bytes": 3761826
+    },
+    "interfaces/webchat/dist/index.html": {
+      "sha256": "01ba38ba50b53babbd3a48d42cf51d47f9102b729deb36c64e2a7be60c6b8d43",
+      "bytes": 7425
+    },
+    "interfaces/webchat/dist/index.html.br": {
+      "sha256": "592703426e6d493d424eb6b99b985a2af12af3d457a03ee6d9e8ab32ab299059",
+      "bytes": 2575
+    },
+    "interfaces/webchat/dist/snippets/aleph-panel-4f6e070d4bce8856/inline0.js": {
+      "sha256": "6b729d2c4a33ef2283b46dacdda18ce896352c10df3f4ad650cad0b993a30967",
+      "bytes": 5109
+    },
+    "interfaces/webchat/dist/tailwind.css": {
+      "sha256": "3ede8d53cbb11d0707f68c53653103749ca33026a82e497b389db328e4cde9e7",
+      "bytes": 146900
+    },
+    "interfaces/webchat/dist/tailwind.css.br": {
+      "sha256": "0f5ed19f316a4ed7ef0ef5c5a9b1d31a862fbd02ad23a5a0ddfa20a2d69af972",
+      "bytes": 19565
+    }
+  },
+  "qa_gateway": {
+    "gate": {
+      "argv": [
+        "python3",
+        "qa/browser_live/check_memory.py",
+        "--required-bytes",
+        "4294967296"
+      ],
+      "cwd": "/Volumes/TBU4/Workspace/Aleph",
+      "env_overrides": {},
+      "exit_code": 0,
+      "timed_out": false,
+      "pid": 87479,
+      "cleanup_error": null,
+      "group_probe": null,
+      "unjoined_descendants": false,
+      "elapsed_seconds": 0.030568042013328522,
+      "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/full-closure/qa-gateway-exec-capture/qa-gateway-memory.stdout.log",
+      "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/full-closure/qa-gateway-exec-capture/qa-gateway-memory.stderr.log"
+    },
+    "command": {
+      "argv": [
+        "cargo",
+        "build",
+        "-p",
+        "alephcore",
+        "--bin",
+        "aleph-server"
+      ],
+      "cwd": "/Volumes/TBU4/Workspace/Aleph",
+      "env_overrides": {
+        "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+        "PATH": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/cargo-gated-stderr:/Users/zouguojun/.pi/agent/bin:/opt/homebrew/bin:/opt/homebrew/opt/rustup/bin:/Users/zouguojun/.bun/bin:/Users/zouguojun/.local/state/fnm_multishells/1488_1794447693947/bin:/opt/homebrew/opt/go/libexec/bin:/Users/zouguojun/.go/bin:/Users/zouguojun/.cargo/bin:/Users/zouguojun/.uv/.venv/bin:/Users/zouguojun/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/Users/zouguojun/.local/bin:/Users/zouguojun/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/Library/Frameworks/Python.framework/Versions/3.10/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/pkg/env/global/bin:/Library/Apple/usr/bin:/opt/homebrew/bin:/Users/zouguojun/.cargo/bin",
+        "RUST_BACKTRACE": "1"
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "pid": 87481,
+      "cleanup_error": null,
+      "group_probe": null,
+      "unjoined_descendants": false,
+      "elapsed_seconds": 296.2188455410069,
+      "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/full-closure/qa-gateway-exec-capture/qa-gateway.stdout.log",
+      "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/full-closure/qa-gateway-exec-capture/qa-gateway.stderr.log"
+    },
+    "status": "PASS",
+    "binary": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/full-closure/qa-embedded/aleph-server",
+    "binary_sha256": "3d97a101b0eff154d59e8e3f552c4dae42804ee8c73ac653c68027928947bd2b",
+    "binary_bytes": 776033200
+  },
+  "pilot": {
+    "exit_code": 0,
+    "stdout": "{\"receipt\": \"/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/full-closure/exec-capture-pilot/receipt.json\", \"launch\": {\"bundle_id\": \"org.aleph.phase9.nsh.capturepilot\", \"bundle_url\": \"/Users/zouguojun/.phase9-native-launchers/aleph-nsh-probe.app\", \"executable_url\": \"/Volumes/TBU4/Workspace/Aleph/.phase9-target/debug/aleph-nsh-shell\", \"launch_date\": 1794886242.214188, \"pid\": 90202}, \"helper_exit\": 1, \"marker_count\": 79, \"event_kinds\": [\"ready\", \"hello\", \"qa-diagnostic\", \"rpc-error\", \"rpc-error\", \"rpc-error\", \"qa-diagnostic\", \"rpc-error\", \"rendered\", \"route-requested\", \"rpc-error\", \"rpc-error\", \"route-ready\", \"input\", \"qa-diagnostic\", \"qa-diagnostic\", \"qa-diagnostic\", \"accepted\", \"qa-diagnostic\", \"qa-diagnostic\", \"streamed\", \"qa-diagnostic\", \"qa-diagnostic\", \"qa-diagnostic\", \"streamed\", \"qa-diagnostic\", \"qa-diagnostic\", \"qa-diagnostic\", \"qa-diagnostic\", \"qa-diagnostic\", \"streamed\", \"qa-diagnostic\", \"qa-diagnostic\", \"qa-diagnostic\", \"qa-diagnostic\", \"streamed\", \"qa-diagnostic\", \"qa-diagnostic\", \"qa-diagnostic\", \"qa-diagnostic\", \"streamed\", \"qa-diagnostic\", \"streamed\", \"qa-diagnostic\", \"qa-diagnostic\", \"qa-diagnostic\", \"streamed\", \"qa-diagnostic\", \"qa-diagnostic\", \"qa-diagnostic\", \"streamed\", \"qa-diagnostic\", \"qa-diagnostic\", \"complete\", \"artifact-refreshed\", \"qa-diagnostic\", \"qa-diagnostic\", \"qa-diagnostic\", \"qa-diagnostic\", \"qa-diagnostic\", \"qa-diagnostic\", \"disconnected\", \"hello\", \"qa-diagnostic\", \"rpc-error\", \"rpc-error\", \"rpc-error\", \"qa-diagnostic\", \"artifact-refreshed\", \"qa-diagnostic\", \"qa-diagnostic\", \"snapshot\", \"reconnected\", \"rejected\", \"rejected\", \"rejected\", \"rejected\", \"close-requested\", \"closed\"], \"raw_output_bytes\": 69463}\n",
+    "stderr": "",
+    "receipt": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/full-closure/exec-capture-pilot/receipt.json",
+    "ordered_runtime_complete": true,
+    "rejections": [
+      "duplicate",
+      "malformed_topic",
+      "old_epoch",
+      "wrong_session"
+    ],
+    "qa_wasm_matches_gateway": true,
+    "status": "FAIL"
+  },
+  "restore": {
+    "argv": [
+      "just",
+      "wasm"
+    ],
+    "cwd": "/Volumes/TBU4/Workspace/Aleph",
+    "env_overrides": {
+      "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+      "PATH": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/cargo-gated-stderr:/Users/zouguojun/.pi/agent/bin:/opt/homebrew/bin:/opt/homebrew/opt/rustup/bin:/Users/zouguojun/.bun/bin:/Users/zouguojun/.local/state/fnm_multishells/1488_1794447693947/bin:/opt/homebrew/opt/go/libexec/bin:/Users/zouguojun/.go/bin:/Users/zouguojun/.cargo/bin:/Users/zouguojun/.uv/.venv/bin:/Users/zouguojun/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/Users/zouguojun/.local/bin:/Users/zouguojun/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/Library/Frameworks/Python.framework/Versions/3.10/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/pkg/env/global/bin:/Library/Apple/usr/bin:/opt/homebrew/bin:/Users/zouguojun/.cargo/bin",
+      "RUST_BACKTRACE": "1",
+      "ALEPH_PANEL_RUNTIME_QA": "0"
+    },
+    "exit_code": 0,
+    "timed_out": false,
+    "pid": 90456,
+    "cleanup_error": null,
+    "group_probe": null,
+    "unjoined_descendants": false,
+    "elapsed_seconds": 263.34451991599053,
+    "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/full-closure/qa-gateway-exec-capture/restore-default-wasm.stdout.log",
+    "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/full-closure/qa-gateway-exec-capture/restore-default-wasm.stderr.log"
+  },
+  "default_gateway": {
+    "gate": {
+      "argv": [
+        "python3",
+        "qa/browser_live/check_memory.py",
+        "--required-bytes",
+        "4294967296"
+      ],
+      "cwd": "/Volumes/TBU4/Workspace/Aleph",
+      "env_overrides": {},
+      "exit_code": 0,
+      "timed_out": false,
+      "pid": 92832,
+      "cleanup_error": null,
+      "group_probe": null,
+      "unjoined_descendants": false,
+      "elapsed_seconds": 0.030300417041871697,
+      "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/full-closure/qa-gateway-exec-capture/default-gateway-memory.stdout.log",
+      "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/full-closure/qa-gateway-exec-capture/default-gateway-memory.stderr.log"
+    },
+    "command": {
+      "argv": [
+        "cargo",
+        "build",
+        "-p",
+        "alephcore",
+        "--bin",
+        "aleph-server"
+      ],
+      "cwd": "/Volumes/TBU4/Workspace/Aleph",
+      "env_overrides": {
+        "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+        "PATH": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/cargo-gated-stderr:/Users/zouguojun/.pi/agent/bin:/opt/homebrew/bin:/opt/homebrew/opt/rustup/bin:/Users/zouguojun/.bun/bin:/Users/zouguojun/.local/state/fnm_multishells/1488_1794447693947/bin:/opt/homebrew/opt/go/libexec/bin:/Users/zouguojun/.go/bin:/Users/zouguojun/.cargo/bin:/Users/zouguojun/.uv/.venv/bin:/Users/zouguojun/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/Users/zouguojun/.local/bin:/Users/zouguojun/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/Library/Frameworks/Python.framework/Versions/3.10/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/pkg/env/global/bin:/Library/Apple/usr/bin:/opt/homebrew/bin:/Users/zouguojun/.cargo/bin",
+        "RUST_BACKTRACE": "1"
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "pid": 92834,
+      "cleanup_error": null,
+      "group_probe": null,
+      "unjoined_descendants": false,
+      "elapsed_seconds": 295.7808330419939,
+      "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/full-closure/qa-gateway-exec-capture/default-gateway.stdout.log",
+      "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/full-closure/qa-gateway-exec-capture/default-gateway.stderr.log"
+    },
+    "status": "PASS"
+  },
+  "status": "FAIL",
+  "restored_assets": {
+    "interfaces/webchat/dist/aleph_panel.js": {
+      "sha256": "70984b761985f0cbe437bacc5fb88d3566b478b83b998ad126b6e208080e73ac",
+      "bytes": 120139
+    },
+    "interfaces/webchat/dist/aleph_panel.js.br": {
+      "sha256": "7f800919668228b97e381432264ca4d36bf8d5cd1789b28caaeaca39b42fba4a",
+      "bytes": 14425
+    },
+    "interfaces/webchat/dist/aleph_panel_bg.wasm": {
+      "sha256": "2a208e2aa4f5de4f13d6f250442d7a1b0535a2398a15a119cd8f957f26ac2719",
+      "bytes": 70928671
+    },
+    "interfaces/webchat/dist/aleph_panel_bg.wasm.br": {
+      "sha256": "4c39c5f17d3e5e6b982b172b1787f520c00d9733df75d5b299c95f4c3f07b0b4",
+      "bytes": 3762411
+    },
+    "interfaces/webchat/dist/index.html": {
+      "sha256": "01ba38ba50b53babbd3a48d42cf51d47f9102b729deb36c64e2a7be60c6b8d43",
+      "bytes": 7425
+    },
+    "interfaces/webchat/dist/index.html.br": {
+      "sha256": "592703426e6d493d424eb6b99b985a2af12af3d457a03ee6d9e8ab32ab299059",
+      "bytes": 2575
+    },
+    "interfaces/webchat/dist/snippets/aleph-panel-4f6e070d4bce8856/inline0.js": {
+      "sha256": "6b729d2c4a33ef2283b46dacdda18ce896352c10df3f4ad650cad0b993a30967",
+      "bytes": 5109
+    },
+    "interfaces/webchat/dist/tailwind.css": {
+      "sha256": "3ede8d53cbb11d0707f68c53653103749ca33026a82e497b389db328e4cde9e7",
+      "bytes": 146900
+    },
+    "interfaces/webchat/dist/tailwind.css.br": {
+      "sha256": "0f5ed19f316a4ed7ef0ef5c5a9b1d31a862fbd02ad23a5a0ddfa20a2d69af972",
+      "bytes": 19565
+    }
+  },
+  "default_assets_exactly_restored": true,
+  "lock_unchanged": true
+}

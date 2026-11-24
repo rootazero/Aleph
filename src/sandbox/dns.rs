@@ -31,11 +31,8 @@ const DNS_TIMEOUT: Duration = Duration::from_secs(5);
 pub(crate) async fn resolve_hosts_in_capabilities(
     caps: &mut SandboxCapabilities,
 ) -> Result<(), SandboxError> {
-    let hosts = match &mut caps.network {
-        NetworkPolicy::None | NetworkPolicy::AllowAll | NetworkPolicy::LoopbackPorts { .. } => {
-            return Ok(())
-        }
-        NetworkPolicy::AllowHosts { hosts } => hosts,
+    let NetworkPolicy::AllowHosts { hosts } = &mut caps.network else {
+        return Ok(());
     };
     if hosts.is_empty() {
         return Ok(());
@@ -95,8 +92,8 @@ fn is_ip_literal(host: &str) -> bool {
         return true;
     }
     if let Some(rest) = host.strip_prefix('[') {
-        if let Some(end) = rest.find(']') {
-            return IpAddr::from_str(&rest[..end]).is_ok();
+        if let Some((addr, _suffix)) = rest.split_once(']') {
+            return IpAddr::from_str(addr).is_ok();
         }
         return false;
     }

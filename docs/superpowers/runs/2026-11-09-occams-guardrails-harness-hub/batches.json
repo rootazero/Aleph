@@ -1,0 +1,114 @@
+{
+  "run_id": "2026-11-09-occams-guardrails-harness-hub",
+  "created_at": "2026-11-09T16:17:00+08:00",
+  "target_modules": [
+    "src/guardrails",
+    "src/harness",
+    "src/hub"
+  ],
+  "worktree_path": "/home/zou/data/workspace/Aleph-wt-occams-guard-harness-hub",
+  "batches": [
+    {
+      "id": "GUARD1",
+      "name": "Guardrails Core & Registry & Rules",
+      "module": "src/guardrails",
+      "files": [
+        "src/guardrails/mod.rs",
+        "src/guardrails/traits.rs",
+        "src/guardrails/decision.rs",
+        "src/guardrails/pii_secrets.rs",
+        "src/guardrails/registry.rs",
+        "src/guardrails/tests/bench.rs",
+        "src/guardrails/tests/input.rs",
+        "src/guardrails/tests/output.rs",
+        "src/guardrails/tests/registry.rs"
+      ],
+      "file_count": 9,
+      "loc": 2057
+    },
+    {
+      "id": "HARN1",
+      "name": "Harness Core Infrastructure & Agent Struct",
+      "module": "src/harness",
+      "files": [
+        "src/harness/mod.rs",
+        "src/harness/deps.rs",
+        "src/harness/trait_def.rs",
+        "src/harness/callback.rs",
+        "src/harness/chain_context.rs",
+        "src/harness/trace.rs",
+        "src/harness/trace_sink.rs",
+        "src/harness/agent.rs",
+        "src/harness/tests/agent.rs",
+        "src/harness/tests/harness_ext.rs",
+        "src/harness/tests/tools_surface.rs",
+        "src/harness/tests/stability.rs",
+        "src/harness/tests/budget.rs"
+      ],
+      "file_count": 13,
+      "loc": 6300
+    },
+    {
+      "id": "HARN2",
+      "name": "Harness Agent Loop - Think & Prompt",
+      "module": "src/harness",
+      "files": [
+        "src/harness/agent/think.rs",
+        "src/harness/agent/prompt.rs",
+        "src/harness/tests/think.rs",
+        "src/harness/tests/prompt.rs",
+        "src/harness/tests/reactive_compaction.rs"
+      ],
+      "file_count": 5,
+      "loc": 6216
+    },
+    {
+      "id": "HARN3",
+      "name": "Harness Agent Loop - Act & Guardrails & Task10 Wiring",
+      "module": "src/harness",
+      "files": [
+        "src/harness/agent/act.rs",
+        "src/harness/agent/guardrails.rs",
+        "src/harness/tests/act.rs",
+        "src/harness/tests/guardrails.rs",
+        "src/harness/tests/task10_wiring/mod.rs",
+        "src/harness/tests/task10_wiring/extras.rs"
+      ],
+      "file_count": 6,
+      "loc": 9260
+    },
+    {
+      "id": "HUB1",
+      "name": "Hub Foundations - Types, Origin, Trust, Secrets, Verify, Catalog Client",
+      "module": "src/hub",
+      "files": [
+        "src/hub/mod.rs",
+        "src/hub/types.rs",
+        "src/hub/origin.rs",
+        "src/hub/trust.rs",
+        "src/hub/secrets.rs",
+        "src/hub/verify.rs",
+        "src/hub/catalog_client.rs",
+        "src/hub/primer.rs"
+      ],
+      "file_count": 8,
+      "loc": 2106
+    },
+    {
+      "id": "HUB2",
+      "name": "Hub Operations - Catalog, Install, Cache, Reconcile, Official Extensions",
+      "module": "src/hub",
+      "files": [
+        "src/hub/hub_catalog.rs",
+        "src/hub/install.rs",
+        "src/hub/cache.rs",
+        "src/hub/reconcile.rs",
+        "src/hub/official_mcp.rs",
+        "src/hub/official_plugins.rs",
+        "src/hub/official_skills.rs"
+      ],
+      "file_count": 7,
+      "loc": 2858
+    }
+  ]
+}

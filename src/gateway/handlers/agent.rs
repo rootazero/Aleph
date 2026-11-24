@@ -161,6 +161,29 @@ pub struct RunState {
     pub input: String,
 }
 
+/// How many finished runs the manager keeps as recent history.
+const MAX_TERMINAL_RUNS: usize = 128;
+
+/// Evict the oldest terminal entries so the run map stays bounded by recent
+/// history instead of growing with every request forever. Active runs
+/// (`Running` / `Cancelled`) are never evicted.
+fn retain_terminal_runs_bounded(runs: &mut HashMap<String, RunState>) {
+    let mut finished: Vec<(std::time::Instant, String)> = runs
+        .iter()
+        .filter_map(|(id, r)| match r.status {
+            RunStatus::Completed | RunStatus::Failed(_) => Some((r.started_at, id.clone())),
+            _ => None,
+        })
+        .collect();
+    if finished.len() > MAX_TERMINAL_RUNS {
+        finished.sort_by_key(|(t, _)| *t);
+        let excess = finished.len() - MAX_TERMINAL_RUNS;
+        for (_, id) in finished.into_iter().take(excess) {
+            runs.remove(&id);
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunStatus {
     Running,
@@ -181,6 +204,40 @@ pub struct AgentRunManager {
     /// `None` for test/host-only constructions → falls back to typewriter,
     /// matching the inbound channel path (`inbound_router::executor`).
     app_config: Option<Arc<RwLock<crate::Config>>>,
+    /// Session store for the P1 visibility chokepoint and run attribution,
+    /// the same store the real-engine handlers in `server_init` consult.
+    /// `None` only for test/host-only constructions.
+    sessions: Option<Arc<dyn crate::gateway::session_store::SessionStore>>,
+}
+
+/// Why [`AgentRunManager::start_run`] refused before admitting a run.
+#[derive(Debug)]
+pub enum StartRunError {
+    /// The caller-supplied session already belongs to someone else. Answered
+    /// as `visibility::not_found_response`, byte-identical to a key that was
+    /// never created.
+    SessionNotVisible,
+    /// Any other refusal, surfaced as the message string.
+    Refused(String),
+}
+
+impl std::fmt::Display for StartRunError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StartRunError::SessionNotVisible => f.write_str("session not found"),
+            StartRunError::Refused(message) => f.write_str(message),
+        }
+    }
+}
+
+impl StartRunError {
+    /// The JSON-RPC answer for this refusal.
+    pub(crate) fn into_response(self, id: Option<serde_json::Value>) -> JsonRpcResponse {
+        match self {
+            StartRunError::SessionNotVisible => crate::gateway::visibility::not_found_response(id),
+            StartRunError::Refused(message) => JsonRpcResponse::error(id, INTERNAL_ERROR, message),
+        }
+    }
 }
 
 impl AgentRunManager {
@@ -197,7 +254,19 @@ impl AgentRunManager {
             agent_registry,
             execution_adapter,
             app_config: None,
+            sessions: None,
         }
+    }
+
+    /// Inject the session store so a caller-supplied `session_key` that
+    /// belongs to someone else is refused before a run starts, exactly as on
+    /// the real-engine path (`server_init::handle_chat_send_with_engine`).
+    pub fn with_session_store(
+        mut self,
+        sessions: Arc<dyn crate::gateway::session_store::SessionStore>,
+    ) -> Self {
+        self.sessions = Some(sessions);
+        self
     }
 
     /// Inject the live application config so Panel runs honor the global
@@ -227,7 +296,7 @@ impl AgentRunManager {
     }
 
     /// Start a new agent run
-    pub async fn start_run(&self, params: AgentRunParams) -> Result<AgentRunResult, String> {
+    pub async fn start_run(&self, params: AgentRunParams) -> Result<AgentRunResult, StartRunError> {
         // Generate run ID
         let run_id = uuid::Uuid::new_v4().to_string();
 
@@ -245,13 +314,59 @@ impl AgentRunManager {
         let session_key_str = session_key.to_key_string();
         let accepted_at = chrono::Utc::now().to_rfc3339();
 
+        // P1 visibility chokepoint — same placement and predicate as the
+        // real-engine handlers (immediately after `router.route`, before any
+        // agent resolution): an existing session owned by someone else is
+        // refused; a brand-new key is not a denial.
+        if let Some(sessions) = self.sessions.as_ref() {
+            if !crate::gateway::visibility::existing_session_is_visible(
+                sessions.as_ref(),
+                &session_key,
+            )
+            .await
+            {
+                return Err(StartRunError::SessionNotVisible);
+            }
+        }
+
+        // Admission comes after validation: a request that fails the agent
+        // lookup or the request builder is refused before it is registered
+        // as Running and before `run_accepted` is published — a refused
+        // request must not read as an admitted run.
+        let agent_id = session_key.agent_id();
+        let agent = match self.agent_registry.get(agent_id).await {
+            Some(a) => a,
+            None => {
+                error!("Agent not found: {}", agent_id);
+                return Err(StartRunError::Refused(format!(
+                    "Agent not found: {agent_id}"
+                )));
+            }
+        };
+
+        let stream = params.stream;
+        let input = params.input.clone();
+
+        // Build errors are surfaced as strings on this path; the real-engine
+        // handlers keep the typed variants.
+        let request = build_run_request(
+            run_id.clone(),
+            &session_key,
+            params,
+            self.app_config.as_ref(),
+            self.sessions.as_ref(),
+            agent.config(),
+        )
+        .await
+        .map_err(|e| StartRunError::Refused(e.to_string()))?;
+
         // Create run state
         let run_state = RunState {
             run_id: run_id.clone(),
             session_key: session_key.clone(),
             started_at: Instant::now(),
             status: RunStatus::Running,
-            input: params.input.clone(),
+            input,
         };
 
         // Store in active runs
@@ -263,7 +378,7 @@ impl AgentRunManager {
         info!("Started run {} for session {}", run_id, session_key_str);
 
         // Emit run accepted event
-        if params.stream {
+        if stream {
             let event = StreamEvent::RunAccepted {
                 run_id: run_id.clone(),
                 session_key: session_key_str.clone(),
@@ -280,34 +395,6 @@ impl AgentRunManager {
                 }
             }
         }
-
-        let agent_id = session_key.agent_id();
-        let agent = match self.agent_registry.get(agent_id).await {
-            Some(a) => a,
-            None => {
-                error!("Agent not found: {}", agent_id);
-                let mut runs = self.active_runs.write().await;
-                if let Some(run) = runs.get_mut(&run_id) {
-                    run.status = RunStatus::Failed(format!("Agent not found: {agent_id}"));
-                }
-                return Err(format!("Agent not found: {agent_id}"));
-            }
-        };
-
-        // `sessions: None` — the Simulated-execution fallback has no
-        // `SessionStore` (see this type's doc and `method_visibility.rs`'s
-        // carve-out for the same reason). Errors are surfaced as strings on
-        // this path; the real-engine handlers keep the typed variants.
-        let request = build_run_request(
-            run_id.clone(),
-            &session_key,
-            params,
-            self.app_config.as_ref(),
-            None,
-            agent.config(),
-        )
-        .await
-        .map_err(|e| e.to_string())?;
 
         // Capture the originating surface before `request` is moved into the
         // spawn — used below to decide cross-surface reply fan-out.
@@ -327,7 +414,6 @@ impl AgentRunManager {
         let base_emitter: Arc<dyn EventEmitter + Send + Sync> = Arc::new(
             GatewayEventEmitter::with_output_mode(self.event_bus.clone(), output_mode),
         );
-
         // Sub-gap (b): if this gateway/Panel run continues a session that
         // originated on an *external* channel (Telegram, ...), wrap the emitter
         // so the final reply is also delivered back to that origin channel —
@@ -367,6 +453,11 @@ impl AgentRunManager {
                     Err(e) => RunStatus::Failed(e.to_string()),
                 };
             }
+            // Reclaim memory from finished runs: evict the oldest terminal
+            // entries so the map stays bounded by recent history instead of
+            // growing with every request forever. Active runs are never
+            // evicted.
+            retain_terminal_runs_bounded(&mut runs);
         });
 
         Ok(AgentRunResult {
@@ -379,6 +470,32 @@ impl AgentRunManager {
     /// Get status of a run
     pub async fn get_run_status(&self, run_id: &str) -> Option<RunState> {
         self.active_runs.read().await.get(run_id).cloned()
+    }
+
+    /// The session that owns `run_id`, from whichever table holds it.
+    ///
+    /// Three places know a run's owner and the manager holds only one of
+    /// them: its own `active_runs` (Panel-started runs), the execution
+    /// engine (channel / CLI / cron / team runs it admitted), and the busy
+    /// queue (a run still waiting for its lane — it has a run id but no
+    /// engine entry yet). Resolving from the manager's table alone saw the
+    /// first kind and was blind to the other two, which is how a member
+    /// could cancel another member's engine run by quoting its id.
+    pub async fn session_key_of_run(&self, run_id: &str) -> Option<SessionKey> {
+        let managed = self
+            .active_runs
+            .read()
+            .await
+            .get(run_id)
+            .map(|state| state.session_key.clone());
+        if let Some(session_key) = managed {
+            return Some(session_key);
+        }
+        if let Some(session_key) = self.execution_adapter.session_of_run(run_id).await {
+            return Some(session_key);
+        }
+        crate::gateway::busy_queue::session_of_queued_run(run_id)
+            .and_then(|key| SessionKey::from_key_string(&key))
     }
 
     /// Cancel an active run
@@ -542,10 +659,10 @@ impl std::fmt::Display for BuildRunError {
 /// caller), matching `SessionMetadata`'s adoption-by-absence rule rather than
 /// retro-stamping a row nobody asked to move.
 ///
-/// `sessions: None` (the Simulated-execution fallback, which has no store)
-/// cannot distinguish the two paths and takes path 2 for every turn. That is
-/// the documented carve-out, not an oversight: without a store there is no
-/// stored scope to honor.
+/// `sessions: None` (test / host-only constructions with no store) cannot
+/// distinguish the two paths and takes path 2 for every turn: without a store
+/// there is no stored scope to honor. Production run-start paths, including
+/// the Simulated-execution fallback, always pass a store.
 async fn resolve_attribution(
     sessions: Option<&Arc<dyn crate::gateway::session_store::SessionStore>>,
     session_key: &SessionKey,
@@ -758,11 +875,9 @@ fn bound_workspace_of(
 /// `app_config` is `None` for test / host-only constructions: the locale and
 /// the `[voice]` model pin are then skipped rather than guessed.
 ///
-/// `sessions` is `None` on the Simulated-execution fallback path, which has no
-/// `SessionStore` at all — the SAME carve-out `method_visibility.rs` already
-/// records for `chat.send` / `agent.run`. Without a store this cannot tell an
-/// existing session from a new one, so it treats every turn as new; see
-/// `resolve_attribution`.
+/// `sessions` is `None` only for test / host-only constructions. Without a
+/// store this cannot tell an existing session from a new one, so it treats
+/// every turn as new; see `resolve_attribution`.
 ///
 /// Callers map [`BuildRunError`] to their transport's error shape, and the
 /// variants must NOT be flattened into one another: a bad-params complaint, a
@@ -1119,7 +1234,7 @@ pub async fn handle_run(
     // Start the run
     match run_manager.start_run(params).await {
         Ok(result) => JsonRpcResponse::success(request.id, json!(result)),
-        Err(e) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, e),
+        Err(refusal) => refusal.into_response(request.id),
     }
 }
 
@@ -1147,19 +1262,32 @@ struct RunIdParams {
 /// response it already returned for an unknown run id, byte-for-byte, so this
 /// gate opens no existence oracle of its own.
 ///
-/// A run the manager has no record of resolves to `None` — the caller then
-/// answers as it always has for an unknown id.
+/// The run → session step consults every table that knows a run's owner
+/// (the manager's own runs, the execution engine's, the busy queue's), not
+/// just the manager's: a run the manager never started is still someone's
+/// run, and "this table has no record of it" is not evidence that nobody
+/// owns it.
+///
+/// A run no table knows resolves to `None` — the caller then answers as it
+/// always has for an unknown id.
 pub(crate) async fn caller_may_address_run(
     run_id: &str,
     run_manager: &AgentRunManager,
     session_store: &dyn crate::gateway::session_store::SessionStore,
 ) -> bool {
-    let Some(state) = run_manager.get_run_status(run_id).await else {
+    // Resolve the run to the session that OWNS it before deciding anything.
+    // The manager's own table only holds the runs it started: a channel,
+    // CLI, cron or team run lives in the execution engine, and a run still
+    // waiting for its busy lane lives in the queue. Resolving from the
+    // manager's table alone made every foreign engine run look like an
+    // unknown id — and "unknown" was answered with permission, so quoting
+    // someone else's run id was enough to cancel it.
+    let Some(session_key) = run_manager.session_key_of_run(run_id).await else {
         // Unknown run: nothing to protect, and the caller's existing
         // "not found" answer is the correct one either way.
         return true;
     };
-    match session_store.get_metadata(&state.session_key).await {
+    match session_store.get_metadata(&session_key).await {
         Ok(Some(meta)) => crate::gateway::visibility::session_visible(&meta),
         // No row yet: a run is accepted before `ensure_session` writes its row,
         // so this is the ordinary first-turn window, not a foreign session.
@@ -2051,6 +2179,65 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn finished_run_history_is_bounded_without_evicting_in_flight_runs() {
+        let router = Arc::new(AgentRouter::new());
+        let session_key = router.route(None, None, None, None).await;
+        let (agent_registry, _tmp) = registry_with_main_agent().await;
+        let manager = AgentRunManager::new(
+            router,
+            Arc::new(GatewayEventBus::new()),
+            agent_registry,
+            Arc::new(MockExecutionAdapter),
+        );
+        let oldest = Instant::now() - std::time::Duration::from_secs(256);
+        {
+            let mut runs = manager.active_runs.write().await;
+            for i in 0..=MAX_TERMINAL_RUNS {
+                let run_id = format!("history-{i}");
+                runs.insert(
+                    run_id.clone(),
+                    super::RunState {
+                        run_id,
+                        session_key: session_key.clone(),
+                        started_at: oldest + std::time::Duration::from_secs(i as u64),
+                        status: match i % 2 {
+                            0 => RunStatus::Completed,
+                            _ => RunStatus::Failed("failed".into()),
+                        },
+                        input: String::new(),
+                    },
+                );
+            }
+            runs.insert(
+                "running".into(),
+                super::RunState {
+                    run_id: "running".into(),
+                    session_key: session_key.clone(),
+                    started_at: oldest,
+                    status: RunStatus::Running,
+                    input: "in-flight input".into(),
+                },
+            );
+            retain_terminal_runs_bounded(&mut runs);
+        }
+        // The bound holds and the oldest terminal entry is the one evicted.
+        assert!(manager.get_run_status("history-0").await.is_none());
+        assert!(manager.get_run_status("history-1").await.is_some());
+        assert_eq!(
+            manager.active_runs.read().await.len(),
+            MAX_TERMINAL_RUNS + 1
+        );
+        // The in-flight run survives with its payload and its session key.
+        let running = manager.get_run_status("running").await.unwrap();
+        assert_eq!(running.status, RunStatus::Running);
+        assert_eq!(running.input, "in-flight input");
+        assert_eq!(
+            manager.session_key_of_run("running").await,
+            Some(session_key.clone())
+        );
+    }
+
+    #[tokio::test]
     async fn test_run_status() {
         let router = Arc::new(AgentRouter::new());
         let event_bus = Arc::new(GatewayEventBus::new());
@@ -2081,6 +2268,90 @@ mod tests {
         // Should be able to get status
         let status = manager.get_run_status(&result.run_id).await;
         assert!(status.is_some());
+    }
+
+    /// The Simulated-execution fallback answers `chat.send` / `agent.run` for
+    /// a session owned by someone else with the same not-found refusal as the
+    /// real-engine path, and starts no run; the owner and a brand-new key
+    /// proceed.
+    #[tokio::test]
+    async fn simulated_run_refuses_a_session_owned_by_someone_else() {
+        use crate::gateway::caller_identity::CALLER_USER;
+        use crate::gateway::protocol::RESOURCE_NOT_FOUND;
+
+        let (agent_registry, tmp) = registry_with_main_agent().await;
+        let sessions: Arc<dyn SessionStore> = Arc::new(
+            FileSessionStore::new(FileSessionStoreConfig {
+                base_dir: tmp.path().join("visibility"),
+                ..FileSessionStoreConfig::default()
+            })
+            .unwrap(),
+        );
+        let owned = SessionKey::main("main");
+        crate::scope::with_scope(
+            Some(crate::scope::ScopeAttribution::personal("u-alice")),
+            sessions.get_or_create(&owned),
+        )
+        .await
+        .unwrap();
+        let manager = Arc::new(
+            AgentRunManager::new(
+                Arc::new(AgentRouter::new()),
+                Arc::new(GatewayEventBus::new()),
+                agent_registry,
+                Arc::new(MockExecutionAdapter),
+            )
+            .with_session_store(sessions),
+        );
+        let send = |session_key: Option<String>| {
+            JsonRpcRequest::with_id(
+                "chat.send",
+                Some(json!({"message": "hi", "session_key": session_key})),
+                json!(1),
+            )
+        };
+
+        for request in [
+            send(Some(owned.to_key_string())),
+            JsonRpcRequest::with_id(
+                "agent.run",
+                Some(json!({"input": "hi", "session_key": owned.to_key_string()})),
+                json!(2),
+            ),
+        ] {
+            let manager = manager.clone();
+            let response = CALLER_USER
+                .scope(Some("u-bob".to_string()), async move {
+                    if request.method == "chat.send" {
+                        super::super::chat::handle_send(request, manager).await
+                    } else {
+                        handle_run(request, manager).await
+                    }
+                })
+                .await;
+            assert_eq!(response.error.expect("refused").code, RESOURCE_NOT_FOUND);
+        }
+        assert!(
+            manager.active_runs.read().await.is_empty(),
+            "no run may start"
+        );
+
+        for (caller, key) in [
+            ("u-alice", Some(owned.to_key_string())),
+            (
+                "u-bob",
+                Some(SessionKey::peer("main", "bob-fresh").to_key_string()),
+            ),
+        ] {
+            let manager = manager.clone();
+            let request = send(key);
+            let response = CALLER_USER
+                .scope(Some(caller.to_string()), async move {
+                    super::super::chat::handle_send(request, manager).await
+                })
+                .await;
+            assert!(response.error.is_none(), "{caller}: {:?}", response.error);
+        }
     }
 
     /// Layer-2 gate: a chat-tier ("guest") connection may converse but must not
@@ -2119,7 +2390,10 @@ mod tests {
             .scope(Some("guest".to_string()), manager.start_run(params))
             .await;
         let err = result.expect_err("chat-tier project_root override must be rejected");
-        assert!(err.contains("config-tier"), "unexpected error: {err}");
+        assert!(
+            err.to_string().contains("config-tier"),
+            "unexpected error: {err}"
+        );
     }
 
     /// Config-tier ("operator") callers may choose a working directory. Does
@@ -3137,9 +3411,9 @@ mod tests {
             );
         }
 
-        /// The Simulated-execution carve-out, stated as a test rather than only
-        /// as a doc comment: with no store there is no stored scope to honor,
-        /// so every turn takes the new-session path.
+        /// A store-less construction (tests, host-only), stated as a test
+        /// rather than only as a doc comment: with no store there is no stored
+        /// scope to honor, so every turn takes the new-session path.
         #[tokio::test]
         async fn without_a_session_store_every_turn_takes_the_new_session_path() {
             let (_store, pid, _tmp, _guard) = room();

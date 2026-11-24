@@ -1,0 +1,8 @@
+# Linux NSH desktop dependency bootstrap / Linux NSH 桌面依赖引导
+
+Approved scope / 已批准范围: a standalone preflight for the Linux NSH desktop candidate, not the Aleph server installer or a default desktop cutover. The dynamic loader can reject a binary before Rust runs, so the entry point must not be inside the desktop binary. / 动态加载器可能在 Rust 启动前拒绝二进制，因此在二进制外引导；不接入服务端安装器，不切默认。
+
+- `bash scripts/install-desktop-deps.sh` defaults to check-only; `--check` is equivalent, `--install` explicitly requests package-manager installation. Detect the GTK4 and WebKitGTK 6 runtime SONAMEs for the host architecture through the glibc loader cache (no development headers). Report probe errors separately from missing libraries. / 默认只检查运行库，不依赖开发头文件；明确区分探测错误和缺库。
+- Map explicit `/etc/os-release` IDs: `arch` → `gtk4 webkitgtk-6.0`; `debian` or `ubuntu` → `libgtk-4-1 libwebkitgtk-6.0-4`; `fedora` → `gtk4 webkitgtk6.0`. Let the distro manager resolve dependencies. Preserve interactive confirmation, use root directly or `sudo`, never update system indexes, add repositories, install from archives automatically or modify signature trust. / 只映射列出的发行版；不自动更新索引、添加源或改变签名信任。
+- Already satisfied means no manager or privilege invocation. For a failed manager, unsupported distro, missing manager/privilege, or libraries still missing after installation, exit nonzero and tell the user what failed. / 依赖齐全不调用包管理器；失败返回非零并说明原因。
+- Explicit SONAME aliases and package names will need maintenance as supported platforms evolve. This does not validate a desktop session, automatically install Aleph, provide DEB/RPM/AppImage, or change Tauri/release/server defaults. / 包名和 SONAME 需维护；不代表已有 NSH 安装包、桌面会话验收或默认分发切换。

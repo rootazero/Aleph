@@ -621,10 +621,13 @@ pub struct ModelHint {
 
 /// Stop reason for sampling response
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub enum StopReason {
+    #[serde(alias = "end_turn")]
     EndTurn,
+    #[serde(alias = "stop_sequence")]
     StopSequence,
+    #[serde(alias = "max_tokens")]
     MaxTokens,
 }
 

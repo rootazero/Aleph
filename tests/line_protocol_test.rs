@@ -119,13 +119,22 @@ async fn test_line_send_not_started_fails() {
 }
 
 #[tokio::test]
-async fn test_line_send_typing_noop() {
+async fn test_line_send_typing_unsupported() {
     let mut channel = LineChannel::for_test("test-line", test_line_config(), "https://mock.local");
     channel.start().await.unwrap();
 
+    // LINE has no typing indicator API; the channel advertises
+    // `typing_indicator = false` and the trait default rejects the call instead
+    // of reporting a no-op success.
     let result = channel.send_typing(&ConversationId::new("U123")).await;
 
-    assert!(result.is_ok(), "send_typing() should return Ok for LINE");
+    assert!(
+        matches!(
+            result,
+            Err(alephcore::gateway::channel::ChannelError::UnsupportedFeature(_))
+        ),
+        "LINE should not claim to have sent a typing indicator"
+    );
 
     let _ = channel.stop().await;
 }

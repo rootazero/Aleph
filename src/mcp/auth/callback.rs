@@ -24,7 +24,7 @@ pub const DEFAULT_CALLBACK_PORT: u16 = 19877;
 pub const DEFAULT_CALLBACK_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// OAuth callback result
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct CallbackResult {
     /// The authorization server's issuer identifier, when it sent one.
     ///
@@ -35,6 +35,16 @@ pub struct CallbackResult {
     pub code: String,
     /// State parameter (for CSRF verification)
     pub state: String,
+}
+
+impl std::fmt::Debug for CallbackResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CallbackResult")
+            .field("iss", &self.iss)
+            .field("code", &"[REDACTED]")
+            .field("state", &"[REDACTED]")
+            .finish()
+    }
 }
 
 /// OAuth callback server
@@ -156,27 +166,27 @@ async fn handle_connection(mut stream: tokio::net::TcpStream) -> Option<Callback
 
     // Parse the request line (GET /callback?code=xxx&state=yyy HTTP/1.1)
     let parts: Vec<&str> = request_line.split_whitespace().collect();
-    if parts.len() < 2 || parts[0] != "GET" {
-        send_error_response(&mut stream, 400, "Bad Request").await;
-        return None;
-    }
+    let (_, path) = match parts.as_slice() {
+        [m, p, ..] if *m == "GET" => (*m, *p),
+        _ => {
+            send_error_response(&mut stream, 400, "Bad Request").await;
+            return None;
+        }
+    };
 
-    let path = parts[1];
     if !path.starts_with("/callback") {
         send_error_response(&mut stream, 404, "Not Found").await;
         return None;
     }
 
     // Parse query parameters
-    let query_start = match path.find('?') {
-        Some(idx) => idx,
+    let query = match path.split_once('?') {
+        Some((_, q)) => q,
         None => {
             send_error_response(&mut stream, 400, "Missing query parameters").await;
             return None;
         }
     };
-
-    let query = &path[query_start + 1..];
     let params: std::collections::HashMap<&str, &str> = query
         .split('&')
         .filter_map(|p| {
@@ -262,62 +272,38 @@ fn is_valid_state(state: &str) -> bool {
 /// Correctly handles multi-byte UTF-8 sequences by collecting consecutive
 /// percent-encoded bytes and decoding them as a UTF-8 sequence.
 fn url_decode(s: &str) -> String {
-    let mut result = String::with_capacity(s.len());
+    let mut decoded = Vec::with_capacity(s.len());
     let mut bytes = s.as_bytes().iter().copied();
-    let mut encoded_buf = Vec::new();
 
     while let Some(b) = bytes.next() {
-        if b == b'%' {
-            // Collect percent-encoded byte
-            let h1 = bytes.next();
-            let h2 = bytes.next();
-            if let (Some(h1), Some(h2)) = (h1, h2) {
-                let hex = [h1, h2];
-                if let Ok(s) = std::str::from_utf8(&hex) {
-                    if let Ok(byte) = u8::from_str_radix(s, 16) {
-                        encoded_buf.push(byte);
-                        continue;
+        match b {
+            b'%' => {
+                let h1 = bytes.next();
+                let h2 = bytes.next();
+                if let (Some(h1), Some(h2)) = (h1, h2) {
+                    let hex = [h1, h2];
+                    if let Ok(hex_str) = std::str::from_utf8(&hex) {
+                        if let Ok(byte) = u8::from_str_radix(hex_str, 16) {
+                            decoded.push(byte);
+                            continue;
+                        }
+                    }
+                    decoded.push(b'%');
+                    decoded.push(h1);
+                    decoded.push(h2);
+                } else {
+                    decoded.push(b'%');
+                    if let Some(h) = h1 {
+                        decoded.push(h);
                     }
                 }
-                // Invalid hex digits — flush and emit as literal
-                if !encoded_buf.is_empty() {
-                    result.push_str(&String::from_utf8_lossy(&encoded_buf));
-                    encoded_buf.clear();
-                }
-                result.push('%');
-                result.push(char::from_u32(h1.into()).unwrap_or('\u{FFFD}'));
-                result.push(char::from_u32(h2.into()).unwrap_or('\u{FFFD}'));
-            } else {
-                // Truncated sequence at end of input
-                if !encoded_buf.is_empty() {
-                    result.push_str(&String::from_utf8_lossy(&encoded_buf));
-                    encoded_buf.clear();
-                }
-                result.push('%');
-                if let Some(h) = h1 {
-                    result.push(char::from_u32(h.into()).unwrap_or('\u{FFFD}'));
-                }
             }
-        } else {
-            // Flush any pending encoded bytes
-            if !encoded_buf.is_empty() {
-                result.push_str(&String::from_utf8_lossy(&encoded_buf));
-                encoded_buf.clear();
-            }
-            if b == b'+' {
-                result.push(' ');
-            } else {
-                result.push(char::from_u32(b.into()).unwrap_or('\u{FFFD}'));
-            }
+            b'+' => decoded.push(b' '),
+            other => decoded.push(other),
         }
     }
 
-    // Flush remaining encoded bytes
-    if !encoded_buf.is_empty() {
-        result.push_str(&String::from_utf8_lossy(&encoded_buf));
-    }
-
-    result
+    String::from_utf8_lossy(&decoded).into_owned()
 }
 
 fn html_escape(s: &str) -> String {

@@ -1,0 +1,17 @@
+................................127.0.0.1 - - [16/Nov/2026 22:54:29] "GET /index.html HTTP/1.1" 200 -
+127.0.0.1 - - [16/Nov/2026 22:54:29] "GET /aleph_panel.js HTTP/1.1" 200 -
+127.0.0.1 - - [16/Nov/2026 22:54:29] "GET /aleph_panel_bg.wasm HTTP/1.1" 200 -
+127.0.0.1 - - [16/Nov/2026 22:54:29] "GET /tailwind.css HTTP/1.1" 200 -
+127.0.0.1 - - [16/Nov/2026 22:54:29] "GET /index.html HTTP/1.1" 200 -
+127.0.0.1 - - [16/Nov/2026 22:54:29] "GET /aleph_panel.js HTTP/1.1" 200 -
+127.0.0.1 - - [16/Nov/2026 22:54:29] "GET /aleph_panel_bg.wasm HTTP/1.1" 200 -
+127.0.0.1 - - [16/Nov/2026 22:54:29] "GET /tailwind.css HTTP/1.1" 200 -
+127.0.0.1 - - [16/Nov/2026 22:54:29] "GET /index.html HTTP/1.1" 200 -
+127.0.0.1 - - [16/Nov/2026 22:54:29] "GET /aleph_panel.js HTTP/1.1" 200 -
+127.0.0.1 - - [16/Nov/2026 22:54:29] "GET /aleph_panel_bg.wasm HTTP/1.1" 200 -
+127.0.0.1 - - [16/Nov/2026 22:54:29] "GET /tailwind.css HTTP/1.1" 200 -
+..
+----------------------------------------------------------------------
+Ran 34 tests in 1.779s
+
+OK

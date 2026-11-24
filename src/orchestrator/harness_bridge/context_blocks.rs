@@ -62,13 +62,13 @@ pub async fn live_deadline_status(session_key: &str) -> Option<String> {
     // describe the same instant (and match the deadline check the autonomous
     // loop's `should_continue` performs).
     let now_ms = u64::try_from(chrono::Utc::now().timestamp_millis()).unwrap_or(0);
-    let mut lines = Vec::new();
+    let mut lines = Vec::with_capacity(2);
 
     if let Some(goal) = crate::goal::global()
         .and_then(|store| store.get(session_key).ok().flatten())
         .filter(crate::goal::Goal::is_active)
     {
-        let mut parts = Vec::new();
+        let mut parts = Vec::with_capacity(2);
         if let Some(deadline) = goal.deadline_ms {
             parts.push(render_deadline(deadline, now_ms));
         }
@@ -148,7 +148,7 @@ pub async fn active_strategy(session_key: &str) -> Option<crate::strategy::Strat
 /// disk — a resume gets it back, unlike deleting it — while it stops steering.
 /// No goal row at all → the tier is live (a plan welded without a goal, or one
 /// awaiting the gate, behaves exactly as before).
-fn goal_tier_live(session_key: &str) -> bool {
+pub(crate) fn goal_tier_live(session_key: &str) -> bool {
     let Some(store) = crate::goal::global() else {
         return true;
     };
@@ -179,7 +179,7 @@ fn goal_tier_live(session_key: &str) -> bool {
 /// live, the held loop's plan would keep steering every ordinary turn of a
 /// session whose watch the user explicitly put down. Registry uninitialized (host
 /// tests, early boot) → fail open, matching `goal_tier_live`.
-fn loop_tier_live(session_key: &str) -> bool {
+pub(crate) fn loop_tier_live(session_key: &str) -> bool {
     match crate::looping::global() {
         Some(reg) => reg.get(session_key).is_some_and(|l| !l.is_paused()),
         None => true,
@@ -199,42 +199,20 @@ fn resolve_active_strategy(
     goal_tier_live: bool,
     loop_tier_live: bool,
 ) -> Option<crate::strategy::Strategy> {
-    if goal_tier_live {
-        if let Some(s) = store
-            .get(&crate::strategy::goal_key(session_key))
-            .ok()
-            .flatten()
-        {
-            return Some(s);
-        }
-    }
-    if loop_tier_live {
-        if let Some(s) = store
-            .get(&crate::strategy::loop_key(session_key))
-            .ok()
-            .flatten()
-        {
-            return Some(s);
-        }
-    }
-    if let Some(crate::routing::session_key::SessionKey::Task {
-        task_type, task_id, ..
-    }) = crate::routing::session_key::SessionKey::parse(session_key)
-    {
-        if task_type == crate::teams::run_mode::TEAM_CHAT_TASK_TYPE {
-            if let Some(s) = store
-                .get(&crate::strategy::team_key(&task_id))
-                .ok()
-                .flatten()
-            {
-                return Some(s);
-            }
-        }
-    }
-    store
-        .get(&crate::strategy::session_key(session_key))
-        .ok()
-        .flatten()
+    // One ladder, one place: `crate::strategy::resolve_active_key` walks
+    // goal → loop → team → session. This function used to carry its own copy
+    // of that order (and the tool side carried another), so the two faces of
+    // one verb could drift apart.
+    let team_id = crate::strategy::team_id_for_session(session_key);
+    let key = crate::strategy::resolve_active_key(
+        store,
+        session_key,
+        goal_tier_live,
+        loop_tier_live,
+        team_id.as_deref(),
+    )
+    .ok()?;
+    store.get(key.as_deref()?).ok().flatten()
 }
 
 /// Format the active-goal summary line injected as `<standing_goal>`. Pure and
@@ -252,50 +230,44 @@ fn resolve_active_strategy(
 /// The counters (`continuations_used`) do change between runs, but only when the
 /// goal actually advances — a real state change that should re-key the prefix.
 pub(crate) fn render_goal_summary(goal: &crate::goal::Goal) -> String {
-    let budget = match goal.token_budget {
-        Some(b) => format!(", budget={b}"),
-        None => String::new(),
-    };
-    let deadline = match goal.deadline_ms {
-        Some(_) => ", deadline set",
-        None => "",
-    };
-    let pursuit = match goal.pursuit {
-        crate::goal::PursuitMode::Active { max_iterations } => {
-            format!(
-                ", autonomous iteration {}/{}",
-                goal.continuations_used, max_iterations
-            )
-        }
-        crate::goal::PursuitMode::Passive => String::new(),
-    };
+    use std::fmt::Write;
+    let mut out = String::with_capacity(128);
+    let objective = crate::utils::text_format::truncate_reserving(goal.objective.trim(), 400, "…");
+    let _ = write!(out, "{objective} (status=active");
+    if let Some(b) = goal.token_budget {
+        let _ = write!(out, ", budget={b}");
+    }
+    if goal.deadline_ms.is_some() {
+        out.push_str(", deadline set");
+    }
+    if let crate::goal::PursuitMode::Active { max_iterations } = goal.pursuit {
+        let _ = write!(
+            out,
+            ", autonomous iteration {}/{}",
+            goal.continuations_used, max_iterations
+        );
+    }
     // The parked FACT (stable for the whole park) belongs here; the parked
     // COUNTDOWN is clock-derived and rides `live_deadline_status` on the far
     // side of the cache breakpoint. Without this the model reads a parked
     // pursuit as actively running every single turn — the tool's own `get`
     // and `list` renders both say it, and this is the one injected per turn.
-    let parked = match (
+    match (
         goal.waiting_on_task.as_deref(),
         goal.waiting_until_ms.is_some(),
     ) {
-        (Some(task_id), _) => format!(
-            ", parked (waiting on task '{}')",
-            crate::utils::text_format::truncate_reserving(task_id, 100, "…")
-        ),
-        (None, true) => ", parked (waiting)".to_string(),
-        (None, false) => String::new(),
-    };
-    // `objective` is user-authored free text and this render lands in the
-    // per-turn DYNAMIC system block via `StandingGoalLayer` — a pass-through
-    // layer in `prompt_contract::CONDITIONALLY_SILENT`, so the per-layer byte
-    // ratchet measures it as 0 B and the bound must live here, in the
-    // producer (the same rule `render_progress_bounded` documents). 400
-    // chars mirrors `PROMPT_PLAN_LIMITS.max_objective_chars`.
-    let objective = crate::utils::text_format::truncate_reserving(goal.objective.trim(), 400, "…");
-    format!(
-        "{} (status=active{budget}{deadline}{pursuit}{parked})",
-        objective
-    )
+        (Some(task_id), _) => {
+            let _ = write!(
+                out,
+                ", parked (waiting on task '{}')",
+                crate::utils::text_format::truncate_reserving(task_id, 100, "…")
+            );
+        }
+        (None, true) => out.push_str(", parked (waiting)"),
+        (None, false) => {}
+    }
+    out.push(')');
+    out
 }
 
 /// Render a wall-clock deadline (absolute Unix epoch ms) as a compact
@@ -413,7 +385,7 @@ pub fn compute_runtime_state_blocks(
             let label = match tools.as_slice() {
                 [] => String::new(),
                 [single] => (*single).to_string(),
-                many => format!("{} (+{} more)", many[0], many.len() - 1),
+                [first, rest @ ..] => format!("{first} (+{} more)", rest.len()),
             };
             crate::tools::runtime_state::RuntimeStateFragment::unavailable(label, reason)
         })

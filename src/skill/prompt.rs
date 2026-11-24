@@ -27,7 +27,7 @@ fn content_version(skill: &SkillManifest) -> String {
     let digest = Sha256::digest(skill.content().as_str().as_bytes());
     let mut tag = String::with_capacity("sha256:".len() + 8);
     tag.push_str("sha256:");
-    for byte in &digest[..4] {
+    for byte in digest.get(..4).unwrap_or(&digest) {
         let _ = write!(tag, "{byte:02x}");
     }
     tag
@@ -247,10 +247,12 @@ pub fn build_skills_prompt_xml_with_budget(
     // so higher-value skills keep full detail. Stable on ties via name.
     let mut order: Vec<usize> = (0..skills.len()).collect();
     order.sort_by(|&a, &b| {
-        skills[b]
-            .priority()
-            .cmp(&skills[a].priority())
-            .then_with(|| skills[a].name().cmp(skills[b].name()))
+        let (Some(sa), Some(sb)) = (skills.get(a), skills.get(b)) else {
+            return std::cmp::Ordering::Equal;
+        };
+        sb.priority()
+            .cmp(&sa.priority())
+            .then_with(|| sa.name().cmp(sb.name()))
     });
 
     let cap_skills = if budget.max_skills == 0 {
@@ -272,7 +274,9 @@ pub fn build_skills_prompt_xml_with_budget(
         if selected.len() >= cap_skills {
             break;
         }
-        let full = fragments[idx].as_str();
+        let Some(full) = fragments.get(idx).map(|f| f.as_str()) else {
+            continue;
+        };
         // Tier 1 — full fragment, bounded by the char budget. Always admit the
         // first entry even if it alone exceeds the cap. A shorter lower-priority
         // entry may still render full after a longer one was compacted.
@@ -286,7 +290,9 @@ pub fn build_skills_prompt_xml_with_budget(
         // skill still appears in cheap name-only form so it stays discoverable.
         // Dropping these is exactly what made large `~/.claude/skills` libraries
         // invisible to the model; the `max_skills` count bounds this tail.
-        selected.push(Cow::Owned(render_skill_fragment_compact(skills[idx])));
+        if let Some(skill) = skills.get(idx) {
+            selected.push(Cow::Owned(render_skill_fragment_compact(skill)));
+        }
     }
 
     let omitted = skills.len() - selected.len();

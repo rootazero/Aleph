@@ -346,6 +346,22 @@ impl LoopToolRegistry {
         self.tools.get(name).map(|b| b.as_ref())
     }
 
+    /// The dot/underscore-swapped spelling of `name`, or `None` when `name`
+    /// contains neither separator.
+    ///
+    /// One derivation for both the exact-then-alias lookup ([`Self::resolve`])
+    /// and the dispatch path ([`Self::execute`]): the alias rule is a fact
+    /// about tool names, not about the call that looks them up.
+    fn alias_spelling(name: &str) -> Option<String> {
+        if name.contains('.') {
+            Some(name.replace('.', "_"))
+        } else if name.contains('_') {
+            Some(name.replace('_', "."))
+        } else {
+            None
+        }
+    }
+
     /// Resolve a tool by name with dot/underscore alias fallback.
     ///
     /// Same resolution logic as `execute()`, but returns the tool reference
@@ -355,14 +371,7 @@ impl LoopToolRegistry {
         if let Some(tool) = self.get(name) {
             return Some(tool);
         }
-        let alt = if name.contains('.') {
-            name.replace('.', "_")
-        } else if name.contains('_') {
-            name.replace('_', ".")
-        } else {
-            return None;
-        };
-        self.get(&alt)
+        self.get(&Self::alias_spelling(name)?)
     }
 
     /// Number of registered tools.
@@ -390,11 +399,7 @@ impl LoopToolRegistry {
         }
 
         // Fallback: try swapping dots ↔ underscores
-        let alt = if name.contains('.') {
-            name.replace('.', "_")
-        } else if name.contains('_') {
-            name.replace('_', ".")
-        } else {
+        let Some(alt) = Self::alias_spelling(name) else {
             return ToolResult::Error {
                 error: format!("unknown tool: {name}"),
                 retryable: false,

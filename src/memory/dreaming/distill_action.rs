@@ -136,13 +136,13 @@ impl DistillActionRecord {
         outcome: DistillOutcome,
         error: Option<String>,
     ) -> Self {
-        let severity_str = |s: Severity| -> String {
-            // Use serde's lowercase serialization to stay aligned with the
-            // on-disk note frontmatter spelling.
-            serde_json::to_value(s)
-                .ok()
-                .and_then(|v| v.as_str().map(str::to_string))
-                .unwrap_or_else(|| "low".to_string())
+        let severity_str = |s: Severity| -> &'static str {
+            match s {
+                Severity::Low => "low",
+                Severity::Med => "med",
+                Severity::High => "high",
+                Severity::Critical => "critical",
+            }
         };
 
         match action {
@@ -158,7 +158,7 @@ impl DistillActionRecord {
                 // rust-doctor-disable-next-line excessive-clone
                 title: Some(title.clone()),
                 confidence: Some(*confidence),
-                severity: Some(severity_str(*severity)),
+                severity: Some(severity_str(*severity).to_string()),
                 outcome,
                 error,
             },
@@ -189,7 +189,7 @@ impl DistillActionRecord {
                 // rust-doctor-disable-next-line excessive-clone
                 title: Some(title.clone()),
                 confidence: Some(*confidence),
-                severity: Some(severity_str(*severity)),
+                severity: Some(severity_str(*severity).to_string()),
                 outcome,
                 error,
             },

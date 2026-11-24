@@ -153,6 +153,8 @@ pub struct PtySession {
     killer: crate::sync_primitives::Mutex<Box<dyn ChildKiller + Send + Sync>>,
     /// Flipped once the child exits or the session is closed.
     closed: AtomicBool,
+    /// Successful wait() evidence, independent of a requested or failed kill.
+    child_exited: AtomicBool,
     /// The server-held screen. Fed by the reader thread, drained by the flush
     /// task. A `Mutex` rather than a channel because both halves want the
     /// latest state, not every intermediate one.
@@ -170,6 +172,8 @@ pub struct PtySession {
     shell_pid: Option<u32>,
 }
 
+pub(crate) type ExitSink = Arc<dyn Fn(&PtySession, Option<u32>) + Send + Sync>;
+
 impl PtySession {
     /// Spawn `opts` behind a fresh PTY and start streaming its output to `bus`
     /// (when attached). Returns the shared session handle; the reader thread
@@ -178,6 +182,23 @@ impl PtySession {
         id: String,
         opts: &SpawnOptions,
         bus: Option<Arc<GatewayEventBus>>,
+    ) -> Result<Arc<Self>, String> {
+        Self::spawn_inner(id, opts, bus, None)
+    }
+
+    pub(crate) fn spawn_with_sink(
+        id: String,
+        opts: &SpawnOptions,
+        sink: ExitSink,
+    ) -> Result<Arc<Self>, String> {
+        Self::spawn_inner(id, opts, None, Some(sink))
+    }
+
+    fn spawn_inner(
+        id: String,
+        opts: &SpawnOptions,
+        bus: Option<Arc<GatewayEventBus>>,
+        sink: Option<ExitSink>,
     ) -> Result<Arc<Self>, String> {
         let rows = if opts.rows == 0 { 24 } else { opts.rows };
         let cols = if opts.cols == 0 { 80 } else { opts.cols };
@@ -233,6 +254,16 @@ impl PtySession {
         cmd.env("TERM", "xterm-256color");
 
         let portable_pty::PtyPair { master, slave } = pair;
+
+        // Clone reader and take writer BEFORE spawning to avoid orphaning child
+        // if these operations fail (e.g., fd exhaustion).
+        let reader = master
+            .try_clone_reader()
+            .map_err(|e| format!("clone_reader failed: {e}"))?;
+        let writer = master
+            .take_writer()
+            .map_err(|e| format!("take_writer failed: {e}"))?;
+
         let child = slave
             .spawn_command(cmd)
             .map_err(|e| format!("spawn_command failed: {e}"))?;
@@ -244,15 +275,22 @@ impl PtySession {
         // once the child closes its descriptors.
         drop(slave);
 
+        #[cfg(windows)]
+        let killer: Box<dyn ChildKiller + Send + Sync> =
+            match WindowsProcessKiller::for_child(child.as_ref()) {
+                Ok(killer) => Box::new(killer),
+                Err(error) => {
+                    // Nothing owns the child yet; do not leave it running.
+                    let mut child = child;
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!("PTY process handle unavailable: {error}"));
+                }
+            };
+        #[cfg(not(windows))]
         let killer = child.clone_killer();
         // Read BEFORE `spawn_reader` moves the child onto the reader thread.
         let shell_pid = child.process_id();
-        let reader = master
-            .try_clone_reader()
-            .map_err(|e| format!("clone_reader failed: {e}"))?;
-        let writer = master
-            .take_writer()
-            .map_err(|e| format!("take_writer failed: {e}"))?;
 
         // Built and bounded BEFORE `spawn_reader` below, so the ceiling is in
         // force for the child's very first byte. See `SpawnOptions::scrollback_lines`.
@@ -271,12 +309,13 @@ impl PtySession {
             master: crate::sync_primitives::Mutex::new(Some(master)),
             killer: crate::sync_primitives::Mutex::new(killer),
             closed: AtomicBool::new(false),
+            child_exited: AtomicBool::new(false),
             screen: crate::sync_primitives::Mutex::new(screen),
             seq: crate::sync_primitives::Mutex::new(0),
             shell_pid,
         });
 
-        spawn_reader(session.clone(), reader, child, bus);
+        spawn_reader(session.clone(), reader, child, bus, sink)?;
         Ok(session)
     }
 
@@ -316,9 +355,31 @@ impl PtySession {
     /// Terminate the child process. Idempotent — the reader thread also marks
     /// the session closed on EOF.
     pub fn kill(&self) {
+        let _ = self.try_kill();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn replace_killer_for_test(
+        &self,
+        replacement: Box<dyn portable_pty::ChildKiller + Send + Sync>,
+    ) -> Box<dyn portable_pty::ChildKiller + Send + Sync> {
+        std::mem::replace(
+            &mut *self.killer.lock().unwrap_or_else(|e| e.into_inner()),
+            replacement,
+        )
+    }
+
+    pub(crate) fn try_kill(&self) -> Result<(), String> {
+        // Failed kills remain retryable even though input was already revoked.
         self.closed.store(true, Ordering::SeqCst);
-        let mut k = self.killer.lock().unwrap_or_else(|e| e.into_inner());
-        let _ = k.kill();
+        if self.child_exited.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        match self.killer.lock().unwrap_or_else(|e| e.into_inner()).kill() {
+            Ok(()) => Ok(()),
+            Err(_) if self.child_exited.load(Ordering::SeqCst) => Ok(()),
+            Err(error) => Err(format!("kill failed for {}: {error}", self.id)),
+        }
     }
 
     /// Whether the child has exited or the session was closed.
@@ -417,6 +478,59 @@ impl PtySession {
 /// blocks inside one item rather than two `#[cfg]`-gated items so this doc
 /// comment governs both: split into two items, the Windows one carries the
 /// contract and the Unix one silently has none.
+/// Terminates a Windows PTY child through Aleph's own duplicate of its
+/// process handle.
+///
+/// `portable-pty` 0.9.0's Windows killer inverts `TerminateProcess`'s
+/// result: a successful kill reports whatever stale `GetLastError` value the
+/// thread held (observed: `os error 0` and `6`), and a failed one reports
+/// `Ok`. Close paths that require a confirmed kill then retained residuals
+/// for children that were already gone.
+#[cfg(windows)]
+#[derive(Debug)]
+struct WindowsProcessKiller(std::os::windows::io::OwnedHandle);
+
+#[cfg(windows)]
+impl WindowsProcessKiller {
+    fn for_child(child: &(dyn Child + Send + Sync)) -> std::io::Result<Self> {
+        let raw = child
+            .as_raw_handle()
+            .ok_or_else(|| std::io::Error::other("PTY child has no process handle"))?;
+        // SAFETY: `child` owns this open handle for the duration of the borrow;
+        // the duplicate below is independent of it.
+        let borrowed = unsafe { std::os::windows::io::BorrowedHandle::borrow_raw(raw) };
+        borrowed.try_clone_to_owned().map(Self)
+    }
+}
+
+#[cfg(windows)]
+impl ChildKiller for WindowsProcessKiller {
+    fn kill(&mut self) -> std::io::Result<()> {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
+        use windows_sys::Win32::System::Threading::{TerminateProcess, WaitForSingleObject};
+        let process = self.0.as_raw_handle();
+        // SAFETY: `process` is our open duplicate of the child's handle.
+        if unsafe { TerminateProcess(process, 1) } != 0 {
+            return Ok(());
+        }
+        let error = std::io::Error::last_os_error();
+        // Terminating a process that already exited fails; that is the goal.
+        // SAFETY: as above; a zero timeout only polls the handle's state.
+        if unsafe { WaitForSingleObject(process, 0) } == WAIT_OBJECT_0 {
+            return Ok(());
+        }
+        Err(error)
+    }
+
+    fn clone_killer(&self) -> Box<dyn ChildKiller + Send + Sync> {
+        // The trait cannot report failure; `portable-pty` unwraps here too.
+        Box::new(Self(
+            self.0.try_clone().expect("duplicate PTY process handle"),
+        ))
+    }
+}
+
 fn default_shell_command() -> (CommandBuilder, String) {
     #[cfg(windows)]
     {
@@ -519,49 +633,126 @@ fn default_shell_command() -> (CommandBuilder, String) {
 /// The cost is one extra OS thread per session, parked in `child.wait()` and
 /// gone the moment the child is. Named because it is a real cost: PTY
 /// sessions are terminals a person opened, not a pool.
+fn spawn_worker(name: String, task: impl FnOnce() + Send + 'static) -> std::io::Result<()> {
+    #[cfg(test)]
+    if tests::FAIL_WORKER
+        .with(|failure| failure.get().is_some_and(|prefix| name.starts_with(prefix)))
+    {
+        return Err(std::io::Error::other(format!(
+            "injected {name} spawn failure"
+        )));
+    }
+    std::thread::Builder::new()
+        .name(name)
+        .spawn(task)
+        .map(|_| ())
+}
+
+fn abort_start(
+    session: &PtySession,
+    mut child: Box<dyn Child + Send + Sync>,
+    error: String,
+) -> String {
+    session.closed.store(true, Ordering::SeqCst);
+    let killed = child.kill();
+    let reaped = child.wait();
+    let master = session
+        .master
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take();
+    drop(master);
+    match (killed, reaped) {
+        (_, Ok(_)) => error,
+        (kill, Err(wait)) => format!("{error}; child cleanup failed: kill={kill:?}, wait={wait}"),
+    }
+}
+
 fn spawn_reader(
     session: Arc<PtySession>,
     mut reader: Box<dyn Read + Send>,
-    mut child: Box<dyn Child + Send + Sync>,
+    child: Box<dyn Child + Send + Sync>,
     bus: Option<Arc<GatewayEventBus>>,
-) {
-    // Never sent on — the reader's exit is signalled by DROPPING the sender,
-    // so the waiter's `recv_timeout` tells "reader gone" (`Disconnected`)
-    // from "reader still parked" (`Timeout`) without either side polling.
+    sink: Option<ExitSink>,
+) -> Result<(), String> {
+    // Do not start I/O or transfer child ownership until every thread exists.
+    // Dropping the start senders rolls back a partially constructed worker set.
+    let (reader_start, reader_ready) = std::sync::mpsc::channel::<()>();
+    let (child_start, child_ready) = std::sync::mpsc::channel::<Box<dyn Child + Send + Sync>>();
     let (reader_done, reader_gone) = std::sync::mpsc::channel::<()>();
     let reading = Arc::clone(&session);
-    std::thread::Builder::new()
-        .name(format!("pty-reader-{}", session.id))
-        .spawn(move || {
+    let waiting = Arc::clone(&session);
+    let started = (|| -> std::io::Result<()> {
+        spawn_worker(format!("pty-reader-{}", session.id), move || {
             let _reader_done = reader_done;
+            if reader_ready.recv().is_err() {
+                return;
+            }
             let mut buf = [0u8; READ_CHUNK];
             loop {
                 match reader.read(&mut buf) {
-                    Ok(0) => break, // EOF: the terminal is gone
+                    Ok(0) => break,
                     Ok(n) => {
-                        reading
-                            .screen
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner())
-                            .feed(&buf[..n]);
+                        let replies = {
+                            let mut screen =
+                                reading.screen.lock().unwrap_or_else(|e| e.into_inner());
+                            screen.feed(&buf[..n]);
+                            screen.take_replies()
+                        };
+                        // Answer as a terminal would, after releasing the
+                        // screen lock. A closed session has nobody to answer.
+                        if !replies.is_empty() {
+                            let _ = reading.write_input(&replies);
+                        }
                     }
                     Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
                     Err(_) => break,
                 }
             }
-        })
-        .ok();
-
-    std::thread::Builder::new()
-        .name(format!("pty-waiter-{}", session.id))
-        .spawn(move || {
-            // A `wait()` that errors has no exit code to report — `None`, not
-            // `0`: an `Err` may only say "I do not know" (criterion #8), and
-            // the journal row below is durable.
-            let exit_code = child.wait().ok().map(|s| s.exit_code());
-            settle_exit(&session, exit_code, bus.as_ref(), &reader_gone);
-        })
-        .ok();
+        })?;
+        spawn_worker(format!("pty-waiter-{}", session.id), move || {
+            let Ok(mut child) = child_ready.recv() else {
+                return;
+            };
+            let exit_code = child.wait().ok().map(|status| {
+                waiting.child_exited.store(true, Ordering::SeqCst);
+                status.exit_code()
+            });
+            settle_exit(
+                &waiting,
+                exit_code,
+                bus.as_ref(),
+                &reader_gone,
+                sink.as_ref(),
+            );
+        })?;
+        Ok(())
+    })();
+    if let Err(error) = started {
+        drop(reader_start);
+        drop(child_start);
+        return Err(abort_start(
+            &session,
+            child,
+            format!("PTY worker start failed: {error}"),
+        ));
+    }
+    if reader_start.send(()).is_err() {
+        drop(child_start);
+        return Err(abort_start(
+            &session,
+            child,
+            "PTY worker stopped during startup".into(),
+        ));
+    }
+    if let Err(error) = child_start.send(child) {
+        return Err(abort_start(
+            &session,
+            error.0,
+            "PTY waiter stopped during startup".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// How long a settling session waits for its reader to drain and end BEFORE
@@ -620,6 +811,7 @@ fn settle_exit(
     exit_code: Option<u32>,
     bus: Option<&Arc<GatewayEventBus>>,
     reader_gone: &std::sync::mpsc::Receiver<()>,
+    sink: Option<&ExitSink>,
 ) {
     use std::sync::mpsc::RecvTimeoutError;
 
@@ -643,6 +835,11 @@ fn settle_exit(
             .take();
         drop(taken);
         let _ = reader_gone.recv_timeout(READER_UNBLOCK_GRACE);
+    }
+    // Managed settlement takes admission before recording the verdict, just like close.
+    if let Some(sink) = sink {
+        sink(session, exit_code);
+        return;
     }
     // Read after the drain above, so the screen holds the child's last
     // output. The exit code is `portable-pty`'s `u32` reinterpreted the way
@@ -672,12 +869,33 @@ fn settle_exit(
         );
         let _ = bus.publish(serde_json::to_string(&ev).unwrap_or_default());
     }
-    super::manager().remove(&session.id);
+    // Standalone sessions have no manager to mutate; managed sessions use the captured sink.
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    std::thread_local! {
+        pub(super) static FAIL_WORKER: std::cell::Cell<Option<&'static str>> = const { std::cell::Cell::new(None) };
+    }
+
+    #[test]
+    fn every_worker_start_failure_is_reported_as_a_spawn_failure() {
+        for worker in ["pty-reader-", "pty-waiter-"] {
+            FAIL_WORKER.with(|failure| failure.set(Some(worker)));
+            let result = PtySession::spawn("start-failure".into(), &SpawnOptions::default(), None);
+            FAIL_WORKER.with(|failure| failure.set(None));
+            let error = match result {
+                Ok(session) => {
+                    session.kill();
+                    panic!("failed worker reported success")
+                }
+                Err(error) => error,
+            };
+            assert!(error.contains(worker), "{error}");
+        }
+    }
 
     /// A child that exits must settle the session — on a platform whose
     /// terminal never reports EOF.
@@ -812,7 +1030,7 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::channel::<()>();
         drop(tx);
         let t0 = std::time::Instant::now();
-        settle_exit(&session, Some(0), None, &rx);
+        settle_exit(&session, Some(0), None, &rx, None);
         let took = t0.elapsed();
 
         let master_kept = session

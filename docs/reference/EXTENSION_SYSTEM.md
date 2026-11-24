@@ -158,10 +158,10 @@ static files), not `PreToolUse` / `PostToolUse` handlers. A plugin's hooks are `
 actions (its `prompt` / `http` / `agent` actions are dropped with a warning,
 `src/extension/manifest/parsers.rs`; only user-settings hooks run all four) or WASM exports.
 
-> Until 2026-09-20 this section described a `NodejsRuntime` at `src/extension/runtime/nodejs/` and an
+> Until 2026-09-20 this section described a `NodejsRuntime` at src/extension/runtime/nodejs/ and an
 > `@aleph/plugin-sdk` npm package (`packages/plugin-sdk/`, 906 lines of TypeScript with no host).
 > Both were doc-only; both are gone. The sibling repo still carries the phantom dialect:
-> `plugins/media-office/src/index.js:349` (`method === "plugin.call"`) and `:264` (`onPostToolUse`) —
+> plugins/media-office/src/index.js:349 (`method === "plugin.call"`) and :264 (`onPostToolUse`) —
 > follow-up in Aleph-plugins, not here.
 
 ---
@@ -198,7 +198,7 @@ pub struct DisposeReport { pub plugin_id: PluginId, pub steps: Vec<(&'static str
 
 **The one rule — has an inverse → effect; recomputable from the registry → view.** Every registrar
 function that puts something into the running process (`registrar/`, `service_manager.rs`,
-`src/extension/loader.rs`, `memory/extensions/`) returns `#[must_use] Disposer`; the caller
+`src/extension/loader.rs`, `src/memory/extensions/`) returns `#[must_use] Disposer`; the caller
 (`lifecycle.rs::mount`) pushes it into the plugin's `EffectScope` under one of six fixed step labels,
 in this order: `registry_row`, `wasm_module`, `mcp_server`, `service`, `memory_extension`,
 `slash_command`. `unmount` disposes in reverse, so the registry row is the last thing to go and every
@@ -210,7 +210,7 @@ This is the ownership rule from DeepSeek Harness / Cordis (`scan-dsh-cordis.md` 
 signatures. It is **not** a fiber runtime: no DI container, no Proxy context, no cascade restart, no
 HMR (the three earlier rounds' rulings stand — HARNESS_PHILOSOPHY.md §8 第五课, narrowed 2026-09-20).
 Guard: `effects::census::every_crate_visible_registration_returns_a_disposer` (source-level census, G1;
-mutation: an extra `pub fn register_extra` in `registrar/api.rs` goes red by name) and the six-effect
+mutation: an extra `pub fn register_extra` in `src/extension/registrar/api.rs` goes red by name) and the six-effect
 round-trip (G2, `tests/plugin_lifecycle_roundtrip.rs` + the two fixtures in P1.13).
 
 ---
@@ -243,7 +243,10 @@ discovery was the union of every project and every session saw everything.
 
 ## Plugin Discovery
 
-**Location**: `src/extension/discovery/`
+**Location**: `src/discovery/types.rs` (the `PluginDiscovery` struct; the scanning
+entry points live in `src/discovery/scanner.rs`). The former
+src/extension/discovery/ copy was **cut on 2026-08-09** as a duplicate of
+`crate::discovery`, so the shape shown below is the pre-cut one.
 
 ```rust
 pub struct PluginDiscovery {

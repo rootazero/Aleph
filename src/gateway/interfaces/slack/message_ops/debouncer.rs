@@ -44,8 +44,50 @@ impl SlackDebouncer {
         let deadline = tokio::time::Instant::now() + Duration::from_millis(self.debounce_ms);
 
         if let Some(entry) = self.entries.get_mut(&key) {
-            entry.messages.push(msg);
-            entry.deadline = deadline;
+            const MAX_MESSAGES: usize = 100;
+            const MAX_BYTES: usize = 10 * 1024 * 1024;
+            const MAX_RESIDENCE_MS: u64 = 30_000;
+
+            let msg_bytes = msg.text.len()
+                + msg
+                    .attachments
+                    .iter()
+                    .map(|a| a.data.as_ref().map(|d| d.len()).unwrap_or(0))
+                    .sum::<usize>();
+            let current_bytes: usize = entry
+                .messages
+                .iter()
+                .map(|m| {
+                    m.text.len()
+                        + m.attachments
+                            .iter()
+                            .map(|a| a.data.as_ref().map(|d| d.len()).unwrap_or(0))
+                            .sum::<usize>()
+                })
+                .sum();
+
+            let first_arrival = entry.deadline - Duration::from_millis(self.debounce_ms);
+            let residence = tokio::time::Instant::now().saturating_duration_since(first_arrival);
+
+            if entry.messages.len() >= MAX_MESSAGES
+                || current_bytes + msg_bytes > MAX_BYTES
+                || residence >= Duration::from_millis(MAX_RESIDENCE_MS)
+            {
+                let old_entry = self.entries.remove(&key).unwrap();
+                if self.flush_entry(old_entry).await {
+                    return true;
+                }
+                self.entries.insert(
+                    key,
+                    DebounceEntry {
+                        messages: vec![msg],
+                        deadline,
+                    },
+                );
+            } else {
+                entry.messages.push(msg);
+                entry.deadline = deadline;
+            }
         } else {
             self.entries.insert(
                 key,
@@ -58,7 +100,7 @@ impl SlackDebouncer {
         false
     }
 
-    pub async fn flush_expired(&mut self) {
+    pub async fn flush_expired(&mut self) -> bool {
         let now = tokio::time::Instant::now();
         let keys_to_flush: Vec<String> = self
             .entries
@@ -67,22 +109,41 @@ impl SlackDebouncer {
             .map(|(k, _)| k.clone())
             .collect();
 
+        let mut failed = false;
         for key in keys_to_flush {
             if let Some(entry) = self.entries.remove(&key) {
-                self.flush_entry(entry).await;
+                failed |= self.flush_entry(entry).await;
             }
         }
+        failed
+    }
+
+    pub async fn drain(&mut self) -> bool {
+        let entries = std::mem::take(&mut self.entries);
+        let mut failed = false;
+        for entry in entries.into_values() {
+            failed |= self.flush_entry(entry).await;
+        }
+        failed
     }
 
     pub async fn send_immediate(&self, msg: InboundMessage) -> bool {
         // Returns true only when the inbound channel is closed (send failed),
         // matching the socket loop's "true => channel closed, stop" contract.
-        self.inbound_tx.send(msg).is_err()
+        if let Err(msg) = self.inbound_tx.send(msg) {
+            tracing::error!(
+                conversation = %msg.conversation_id.as_str(),
+                message_id = %msg.id.as_str(),
+                "Slack: failed to forward accepted message: inbound channel closed"
+            );
+            return true;
+        }
+        false
     }
 
-    pub async fn flush_entry(&self, entry: DebounceEntry) {
+    pub async fn flush_entry(&self, entry: DebounceEntry) -> bool {
         if entry.messages.is_empty() {
-            return;
+            return false;
         }
 
         let combined = if entry.messages.len() == 1 {
@@ -126,6 +187,6 @@ impl SlackDebouncer {
             }
         };
 
-        let _ = self.inbound_tx.send(combined);
+        self.send_immediate(combined).await
     }
 }

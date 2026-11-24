@@ -3,7 +3,6 @@
 //! Persists the `get_updates_buf` for incremental sync across restarts.
 
 use std::path::Path;
-
 const SYNC_FILE_SUFFIX: &str = ".sync.json";
 
 fn sync_path(hermes_home: &str, account_id: &str) -> std::path::PathBuf {
@@ -12,38 +11,49 @@ fn sync_path(hermes_home: &str, account_id: &str) -> std::path::PathBuf {
 }
 
 /// Load sync buffer for an account.
-pub async fn load_sync_buf(hermes_home: &str, account_id: &str) -> String {
+///
+/// A missing file is not an error (the account simply has no cursor yet);
+/// a read failure IS reported — swallowing it would silently restart the
+/// sync from the beginning and re-deliver every message.
+pub async fn load_sync_buf(hermes_home: &str, account_id: &str) -> Result<String, std::io::Error> {
     let path = sync_path(hermes_home, account_id);
     if !path.exists() {
-        return String::new();
+        return Ok(String::new());
     }
-    match tokio::fs::read_to_string(&path).await {
-        Ok(content) => {
-            if let Ok(data) = serde_json::from_str::<serde_json::Value>(&content) {
-                data.get("get_updates_buf")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string()
-            } else {
-                String::new()
-            }
-        }
-        Err(_) => String::new(),
-    }
+    let content = tokio::fs::read_to_string(&path).await?;
+    Ok(serde_json::from_str::<serde_json::Value>(&content)
+        .ok()
+        .and_then(|data| {
+            data.get("get_updates_buf")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        })
+        .unwrap_or_default())
 }
 
 /// Save sync buffer for an account.
-pub async fn save_sync_buf(hermes_home: &str, account_id: &str, sync_buf: &str) {
+///
+/// The error is returned, not logged away: the caller advances the live
+/// cursor in memory, so a lost write means the persisted cursor lags behind
+/// and the next start re-reads that window. The operator has to see it.
+pub async fn save_sync_buf(
+    hermes_home: &str,
+    account_id: &str,
+    sync_buf: &str,
+) -> Result<(), std::io::Error> {
     let path = sync_path(hermes_home, account_id);
     if let Some(parent) = path.parent() {
-        let _ = tokio::fs::create_dir_all(parent).await;
+        tokio::fs::create_dir_all(parent).await?;
     }
     let data = serde_json::json!({ "get_updates_buf": sync_buf });
+    let json = data.to_string();
     let tmp_path = path.with_extension("tmp");
-    if let Ok(json) = serde_json::to_string_pretty(&data) {
-        let _ = tokio::fs::write(&tmp_path, json).await;
-        let _ = tokio::fs::rename(&tmp_path, &path).await;
+    tokio::fs::write(&tmp_path, json).await?;
+    if let Err(e) = tokio::fs::rename(&tmp_path, &path).await {
+        let _ = tokio::fs::remove_file(&tmp_path).await;
+        return Err(e);
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -55,8 +65,10 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let path = temp_dir.path().to_str().unwrap();
 
-        save_sync_buf(path, "account1", "sync_buf_abc").await;
-        let loaded = load_sync_buf(path, "account1").await;
+        save_sync_buf(path, "account1", "sync_buf_abc")
+            .await
+            .unwrap();
+        let loaded = load_sync_buf(path, "account1").await.unwrap();
         assert_eq!(loaded, "sync_buf_abc");
     }
 
@@ -64,7 +76,34 @@ mod tests {
     async fn test_load_nonexistent() {
         let temp_dir = tempfile::tempdir().unwrap();
         let path = temp_dir.path().to_str().unwrap();
-        let loaded = load_sync_buf(path, "nonexistent").await;
+        let loaded = load_sync_buf(path, "nonexistent").await.unwrap();
         assert!(loaded.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_failing_persistence_is_reported() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().to_str().unwrap();
+        // "wechat/accounts" is a FILE, so the directory creation fails.
+        std::fs::create_dir_all(temp_dir.path().join("wechat")).unwrap();
+        std::fs::write(
+            temp_dir.path().join("wechat").join("accounts"),
+            b"not a directory",
+        )
+        .unwrap();
+        assert!(
+            save_sync_buf(path, "account1", "buf").await.is_err(),
+            "a failed save must be reported, not swallowed"
+        );
+
+        // A cursor path that is a directory makes the read fail.
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().to_str().unwrap();
+        std::fs::create_dir_all(temp_dir.path().join("wechat/accounts/account1.sync.json"))
+            .unwrap();
+        assert!(
+            load_sync_buf(path, "account1").await.is_err(),
+            "a failed load must be reported, not swallowed"
+        );
     }
 }

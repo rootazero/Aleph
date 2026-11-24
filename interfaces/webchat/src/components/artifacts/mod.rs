@@ -230,8 +230,15 @@ pub fn ArtifactsSurface() -> impl IntoView {
             items.set(Vec::new());
             return;
         };
+        let epoch = dash.connection_epoch.get_untracked();
         spawn_local(async move {
-            match ArtifactsApi::list(&dash, &key).await {
+            let result = ArtifactsApi::list(&dash, &key).await;
+            if dash.connection_epoch.try_get_untracked() != Some(epoch)
+                || chat.session_key.try_get_untracked().flatten().as_deref() != Some(key.as_str())
+            {
+                return;
+            }
+            match result {
                 Ok(rows) => settle(rows),
                 // A session that has never stored anything is an empty list,
                 // not an error — so anything that lands here is worth showing.
@@ -249,6 +256,10 @@ pub fn ArtifactsSurface() -> impl IntoView {
     // stale lightbox and the seen-set: both point at the previous session.
     Effect::new(move |_| {
         let _ = chat.session_key.get();
+        let _ = dash.connection_epoch.get();
+        if !dash.is_connected.get() {
+            return;
+        }
         preview.set(None);
         reveal_older.set(false);
         blocked.set(None);

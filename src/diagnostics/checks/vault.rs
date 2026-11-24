@@ -51,10 +51,6 @@ impl HealthCheck for VaultCheck {
         ID
     }
 
-    fn title(&self) -> &'static str {
-        "Secret vault"
-    }
-
     async fn run(&self, _posture: Posture) -> Vec<Finding> {
         let display = self.vault_path.display().to_string();
 

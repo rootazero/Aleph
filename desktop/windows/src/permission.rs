@@ -272,6 +272,7 @@ fn status_for(kind: PermissionKind) -> PermissionStatus {
 
 /// Open the Settings page for a kind via `cmd /C start`. Returns whether the
 /// launch was dispatched.
+#[allow(clippy::unused_async)]
 async fn open_settings_uri(kind: PermissionKind) -> bool {
     #[cfg(windows)]
     {

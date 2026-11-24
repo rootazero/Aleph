@@ -1,0 +1,34 @@
+{
+  "status": "READY",
+  "children": [
+    {
+      "name": "model",
+      "argv": [
+        "/Users/zouguojun/.cache/uv/builds-v0/.tmpAu6ipn/bin/python",
+        "/Volumes/TBU4/Workspace/Aleph/qa/nsh_panel_provider.py",
+        "--port",
+        "56334",
+        "--record",
+        "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/2026-11-16-phase9-runtime-attempt13-gateway/model-requests.jsonl"
+      ],
+      "pid": 14329,
+      "cwd": "/tmp/p9-gateway-7gbozjdw",
+      "exit_code": -15,
+      "forced": false
+    },
+    {
+      "name": "gateway",
+      "argv": [
+        "/Volumes/TBU4/Workspace/Aleph/.phase9-target/debug/aleph-server",
+        "--port",
+        "56333",
+        "start"
+      ],
+      "pid": 14330,
+      "cwd": "/tmp/p9-gateway-7gbozjdw",
+      "exit_code": 0,
+      "forced": false
+    }
+  ],
+  "fixture_removed": true
+}

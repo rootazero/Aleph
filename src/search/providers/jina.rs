@@ -1,5 +1,5 @@
 use crate::error::{AlephError, Result};
-use crate::search::providers::base::{build_client, parse_json, retain_usable, send};
+use crate::search::providers::base::{build_client, parse_json, redact, retain_usable, send};
 use crate::search::{SearchOptions, SearchProvider, SearchResult};
 use async_trait::async_trait;
 use reqwest::Client;
@@ -91,25 +91,17 @@ impl SearchProvider for JinaProvider {
 
         let data = jina_response.data.unwrap_or_default();
         if data.is_empty() {
-            // Surface Jina's own error message when present — quota /
-            // rate-limit envelopes return `data: null` with a `message`
-            // field. Treating these as `Ok(vec![])` would silently waste
-            // LLM iterations exactly like the SearXNG dead-engine case.
-            if let Some(msg) = jina_response.message {
-                // The envelope's `code` is structured data, so the kind can
-                // come from it rather than from sniffing the free-text
-                // message: a quota error reads as quota, not as a generic
-                // transient failure that "retry later" undersells (a free
-                // tier's lever is the plan, not the clock).
-                return Err(match jina_response.code {
-                    Some(429) => AlephError::rate_limit(format!("Jina returned 0 results — {msg}")),
-                    Some(401 | 403) => {
-                        AlephError::authentication(NAME, format!("Jina returned 0 results — {msg}"))
-                    }
-                    _ => AlephError::provider(format!("Jina returned 0 results — {msg}")),
-                });
-            }
-            return Ok(Vec::new());
+            let message = jina_response
+                .message
+                .map(|msg| redact(msg, secret))
+                .unwrap_or_else(|| "Jina returned an error without a message".to_string());
+            return Err(match jina_response.code {
+                Some(429) => AlephError::rate_limit(format!("Jina returned 0 results — {message}")),
+                Some(401 | 403) => {
+                    AlephError::authentication(NAME, format!("Jina returned 0 results — {message}"))
+                }
+                _ => AlephError::provider(format!("Jina returned 0 results — {message}")),
+            });
         }
 
         let results = data

@@ -152,7 +152,7 @@ impl AlephTool for ReadConfigGuideTool {
     type Output = ReadConfigGuideOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        let topic_name = format!("{:?}", args.topic).to_lowercase();
+        let topic_name = args.topic.id().to_string();
         notify_tool_start(Self::NAME, &topic_name);
 
         let file_path = self.guides_dir.join(args.topic.filename());

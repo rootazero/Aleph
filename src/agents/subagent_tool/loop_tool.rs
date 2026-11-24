@@ -1274,14 +1274,21 @@ impl SubagentTool {
                 retryable: false,
             });
         }
+        // The fallback goes through the SAME spawnability predicate as the
+        // explicit path (`resolve_spawnable`), not the raw overlay lookup: a
+        // Primary-mode "default" definition must not be spawnable as a
+        // sub-agent, and the two faces of one verb must share a predicate
+        // (the explicit branch above already uses it).
         match self
             .agent_resolution
             .agent_registry
-            .lookup_with_overlay("default", project_root_ref)
+            .resolve_spawnable("default", project_root_ref)
         {
             Some(def) => Ok(def),
             None => Err(ToolResult::Error {
-                error: format!("{error_prefix}No default agent registered in AgentRegistry"),
+                error: format!(
+                    "{error_prefix}No spawnable default agent registered in AgentRegistry"
+                ),
                 retryable: false,
             }),
         }
@@ -1635,10 +1642,7 @@ fn error_with_trail(err: &str, progress: &[SubagentProgress]) -> String {
     let steps = progress.iter().map(|p| p.step).max().unwrap_or(0);
     let start = progress.len().saturating_sub(TRAIL_LINES);
     let mut out = format!("{head}\nTrajectory before failure ({steps} steps):");
-    for p in progress
-        .get(start..)
-        .expect("invariant: start is within progress bounds")
-    {
+    for p in progress.get(start..).unwrap_or_default() {
         let activity = crate::agents::background_tracker::progress_activity(p.kind);
         match &p.tool_name {
             Some(tool) => out.push_str(&format!("\n  step {}: {activity} {tool}", p.step)),

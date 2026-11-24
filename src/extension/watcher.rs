@@ -334,6 +334,14 @@ impl ExtensionWatcher {
     /// operation. They are not extension sources, so letting their events
     /// through triggers a full (expensive) extension reload — and a
     /// `tools.changed` broadcast to every connected client — on the hot path.
+    ///
+    /// The plugin persistent-data root belongs here too: a plugin's own state
+    /// files under `${ALEPH_PLUGIN_DATA}` are written by the plugin while it
+    /// runs, and every write used to reload every extension. The root comes
+    /// from the same path helper as `plugin_data_dir`, so the exclusion and
+    /// the variable expansion cannot drift apart. Plugin manifests and
+    /// commands live under `<plugins_root>/installed/`, outside this root,
+    /// and stay watched.
     fn default_runtime_data_dirs() -> Vec<PathBuf> {
         [
             crate::utils::paths::get_data_dir().ok(),
@@ -342,6 +350,7 @@ impl ExtensionWatcher {
                 .ok()
                 .and_then(|p| p.parent().map(PathBuf::from)),
             crate::logging::file_appender::get_log_directory().ok(),
+            Some(crate::extension::plugin_data_root()),
         ]
         .into_iter()
         .flatten()
@@ -701,6 +710,34 @@ mod tests {
              configured exclusion is spelled through a symlink;\n  event = {}\n  \
              exclusions = {dirs:?}",
             event.display()
+        );
+    }
+
+    /// A plugin's own persistent state lives under `${ALEPH_PLUGIN_DATA}`
+    /// (`<plugins_root>/data/<plugin_id>/`), inside the watched `~/.aleph`
+    /// tree. Every write there used to reload every extension. The data root
+    /// is excluded; the plugin's own manifest is not.
+    #[test]
+    fn plugin_data_writes_are_runtime_data_and_manifests_are_not() {
+        let watcher = ExtensionWatcher::new_with_dirs(vec![], |_| {});
+        let dirs = watcher.effective_runtime_data_dirs();
+
+        let data_root = canonicalize_best_effort(&crate::extension::plugin_data_root());
+        let state = data_root.join("some-plugin").join("state.json");
+        assert!(
+            ExtensionWatcher::is_runtime_data_path(&state, &dirs),
+            "a plugin data write must not trigger an extension reload;\n  path = {}\n  \
+             exclusions = {dirs:?}",
+            state.display()
+        );
+
+        let manifest = canonicalize_best_effort(
+            &crate::extension::default_plugins_dir().join("some-plugin/aleph.plugin.toml"),
+        );
+        assert!(
+            !ExtensionWatcher::is_runtime_data_path(&manifest, &dirs),
+            "a plugin manifest must stay watched;\n  path = {}\n  exclusions = {dirs:?}",
+            manifest.display()
         );
     }
 

@@ -35,29 +35,38 @@ pub struct GraphInsights {
 
 #[must_use]
 pub fn detect(g: &GraphIndex, c: &Communities) -> GraphInsights {
+    if c.of_node.len() < g.len() {
+        return GraphInsights::default();
+    }
+
     // Isolated: degree <= 1.
     let isolated = (0..g.len())
         .filter(|&i| g.degree(i) <= 1)
-        // rust-doctor-disable-next-line excessive-clone
-        .map(|i| g.nodes[i].path.clone())
+        .filter_map(|i| g.nodes.get(i).map(|n| n.path.clone()))
         .collect();
 
     // Sparse communities: cohesion below threshold with >= 3 members.
-    let mut size = vec![0usize; c.cohesion.len()];
+    let num_comms = c
+        .cohesion
+        .len()
+        .max(c.of_node.iter().copied().max().map_or(0, |m| m + 1));
+    let mut size = vec![0usize; num_comms];
     for &cid in &c.of_node {
-        size[cid] += 1;
+        if let Some(slot) = size.get_mut(cid) {
+            *slot += 1;
+        }
     }
     let mut sparse = Vec::new();
     for (cid, &cohesion) in c.cohesion.iter().enumerate() {
-        if size[cid] >= SPARSE_MIN_SIZE && cohesion < SPARSE_COHESION_MAX {
+        let comm_size = size.get(cid).copied().unwrap_or(0);
+        if comm_size >= SPARSE_MIN_SIZE && cohesion < SPARSE_COHESION_MAX {
             let exemplar = (0..g.len())
-                .find(|&i| c.of_node[i] == cid)
-                // rust-doctor-disable-next-line excessive-clone
-                .map(|i| g.nodes[i].path.clone())
+                .find(|&i| c.of_node.get(i).copied() == Some(cid))
+                .and_then(|i| g.nodes.get(i).map(|n| n.path.clone()))
                 .unwrap_or_default();
             sparse.push(SparseCommunity {
                 community_id: cid,
-                size: size[cid],
+                size: comm_size,
                 cohesion,
                 exemplar,
             });
@@ -68,37 +77,52 @@ pub fn detect(g: &GraphIndex, c: &Communities) -> GraphInsights {
     let mut bridges = Vec::new();
     for i in 0..g.len() {
         let mut comms: HashSet<usize> = HashSet::new();
-        comms.insert(c.of_node[i]);
-        for &nb in &g.adj[i] {
-            comms.insert(c.of_node[nb]);
+        if let Some(&ci) = c.of_node.get(i) {
+            comms.insert(ci);
+        }
+        if let Some(nbrs) = g.adj.get(i) {
+            for &nb in nbrs {
+                if let Some(&cnb) = c.of_node.get(nb) {
+                    comms.insert(cnb);
+                }
+            }
         }
         if comms.len() >= BRIDGE_MIN_COMMUNITIES {
-            // rust-doctor-disable-next-line excessive-clone
-            bridges.push(g.nodes[i].path.clone());
+            if let Some(node) = g.nodes.get(i) {
+                bridges.push(node.path.clone());
+            }
         }
     }
 
     // Surprising: cross-community or cross-type edges; peripheral endpoints more surprising.
     let mut surprising = Vec::new();
     for i in 0..g.len() {
-        for &j in &g.adj[i] {
-            if i >= j {
-                continue;
-            }
-            let cross_comm = c.of_node[i] != c.of_node[j];
-            let cross_type = g.nodes[i].category != g.nodes[j].category;
-            if cross_comm || cross_type {
-                let di = g.degree(i).max(1) as f32;
-                let dj = g.degree(j).max(1) as f32;
-                let base = if cross_comm { 1.0 } else { 0.0 } + if cross_type { 0.5 } else { 0.0 };
-                let score = base * (1.0 / di + 1.0 / dj);
-                surprising.push(SurprisingEdge {
-                    // rust-doctor-disable-next-line excessive-clone
-                    from: g.nodes[i].path.clone(),
-                    // rust-doctor-disable-next-line excessive-clone
-                    to: g.nodes[j].path.clone(),
-                    score,
-                });
+        if let Some(nbrs) = g.adj.get(i) {
+            for &j in nbrs {
+                if i >= j {
+                    continue;
+                }
+                let ci = c.of_node.get(i).copied();
+                let cj = c.of_node.get(j).copied();
+                let cross_comm = ci != cj;
+                let cross_type = match (g.nodes.get(i), g.nodes.get(j)) {
+                    (Some(ni), Some(nj)) => ni.category != nj.category,
+                    _ => false,
+                };
+                if cross_comm || cross_type {
+                    let di = g.degree(i).max(1) as f32;
+                    let dj = g.degree(j).max(1) as f32;
+                    let base =
+                        if cross_comm { 1.0 } else { 0.0 } + if cross_type { 0.5 } else { 0.0 };
+                    let score = base * (1.0 / di + 1.0 / dj);
+                    if let (Some(ni), Some(nj)) = (g.nodes.get(i), g.nodes.get(j)) {
+                        surprising.push(SurprisingEdge {
+                            from: ni.path.clone(),
+                            to: nj.path.clone(),
+                            score,
+                        });
+                    }
+                }
             }
         }
     }

@@ -51,11 +51,12 @@ fn a_workspace_builder_failure_surfaces_as_sandbox_provision_failed() {
 #[test]
 fn the_factory_has_no_per_flow_selector() {
     let src = include_str!("../sandbox_factory.rs");
-    let code: String = src
-        .lines()
-        .filter(|l| !l.trim_start().starts_with("//"))
-        .collect::<Vec<_>>()
-        .join("\n");
+    // The shared scanner, not a hand-rolled line filter. A filter that only
+    // drops lines STARTING with `//` keeps the text of a block comment and
+    // the tail of a `code // note` line, so prose can satisfy — or defeat —
+    // this guard. `code_text` is one lexer pass: comments gone, literal
+    // payloads blanked.
+    let code = crate::utils::source_scan::code_text(src);
     assert!(
         !code.contains("SandboxKind"),
         "a per-flow sandbox selector is back in sandbox_factory.rs. Enforcement \

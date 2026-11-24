@@ -93,6 +93,10 @@ pub struct McpReadResourceOutput {
     pub content_type: String,
     /// MIME type if available
     pub mime_type: Option<String>,
+    /// True when the resource exceeded the inline byte limit.
+    pub truncated: bool,
+    /// Original resource size in bytes before truncation.
+    pub total_bytes: usize,
 }
 
 /// Tool for reading MCP resources
@@ -174,17 +178,37 @@ impl AlephToolDyn for McpReadResourceTool {
             let content = client.read_resource(resource_uri).await?;
 
             let output = match content {
-                ResourceContent::Text(text) => McpReadResourceOutput {
-                    content: text,
-                    content_type: "text".to_string(),
-                    mime_type: Some("text/plain".to_string()),
-                },
+                ResourceContent::Text(text) => {
+                    let total_bytes = text.len();
+                    let truncated = total_bytes > MAX_RESOURCE_TEXT_BYTES;
+                    let content = if truncated {
+                        let mut end = MAX_RESOURCE_TEXT_BYTES;
+                        while !text.is_char_boundary(end) {
+                            end -= 1;
+                        }
+                        text[..end].to_string()
+                    } else {
+                        text
+                    };
+                    McpReadResourceOutput {
+                        content,
+                        content_type: "text".to_string(),
+                        mime_type: Some("text/plain".to_string()),
+                        truncated,
+                        total_bytes,
+                    }
+                }
                 ResourceContent::Binary { data, mime_type } => {
                     use base64::Engine;
+                    let total_bytes = data.len();
+                    let truncated = total_bytes > MAX_RESOURCE_BINARY_BYTES;
                     McpReadResourceOutput {
-                        content: base64::engine::general_purpose::STANDARD.encode(&data),
+                        content: base64::engine::general_purpose::STANDARD
+                            .encode(&data[..total_bytes.min(MAX_RESOURCE_BINARY_BYTES)]),
                         content_type: "binary".to_string(),
                         mime_type: Some(mime_type),
+                        truncated,
+                        total_bytes,
                     }
                 }
             };
@@ -193,6 +217,11 @@ impl AlephToolDyn for McpReadResourceTool {
         })
     }
 }
+
+/// Byte limits for resource bodies returned inline to the model. Binary output
+/// is base64-encoded, so its raw limit is lower to keep the encoded body bounded.
+const MAX_RESOURCE_TEXT_BYTES: usize = 64 * 1024;
+const MAX_RESOURCE_BINARY_BYTES: usize = 48 * 1024;
 
 /// Upper bound on entries returned by a single `mcp_list_resources` call.
 /// Resources are typically few, but a misbehaving server could advertise

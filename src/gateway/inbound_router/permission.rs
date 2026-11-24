@@ -30,6 +30,39 @@ fn message_pre_validated_mention(message: &crate::gateway::channel::InboundMessa
         .any(|m| matches!(m, MessageMeta::AppMention))
 }
 
+/// Strip the punctuation that clings to a mention token — `"@aleph,"`,
+/// `"aleph."`, `"（aleph）"` — so the comparison sees the name itself.
+///
+/// The leading `@` is KEPT: it is what separates an explicitly addressed
+/// handle from a bare word, and the bare word is not a mention unless the
+/// channel configured the bot's name.
+fn mention_token(token: &str) -> &str {
+    token.trim_matches(|c: char| !c.is_alphanumeric() && c != '@')
+}
+
+/// Whether `tokens` contains `name`'s word sequence as a contiguous run of
+/// whole tokens — the whole-word form of `text.contains(name)`.
+///
+/// A configured name may carry its own `@` prefix (`"@aleph"`); it is
+/// stripped here so the comparison sees the name itself, exactly like the
+/// tokens do.
+fn contains_word_sequence(tokens: &[&str], name: &str) -> bool {
+    let name_words: Vec<&str> = name
+        .split_whitespace()
+        .map(mention_token)
+        .map(|word| word.strip_prefix('@').unwrap_or(word))
+        .collect();
+    if name_words.is_empty() || name_words.len() > tokens.len() {
+        return false;
+    }
+    tokens.windows(name_words.len()).any(|window| {
+        window
+            .iter()
+            .zip(&name_words)
+            .all(|(token, word)| token.eq_ignore_ascii_case(word))
+    })
+}
+
 impl InboundMessageRouter {
     /// Check if message is permitted
     pub(super) async fn check_permission(
@@ -37,11 +70,34 @@ impl InboundMessageRouter {
         mut ctx: InboundContext,
     ) -> Result<InboundContext, RoutingError> {
         let channel_id = ctx.message.channel_id.as_str();
-        let channel_config = self
-            .channel_configs
-            .get(channel_id)
-            .cloned()
-            .unwrap_or_default();
+        let mut channel_config = self.channel_policy.get(channel_id).unwrap_or_default();
+        let mut telegram_chat_id = None;
+        if let Some(handle) = self.channel_registry.get(&ctx.message.channel_id).await {
+            let channel = handle.read().await;
+            if let Some(telegram) = channel.as_any().and_then(|channel| {
+                channel.downcast_ref::<crate::gateway::interfaces::telegram::TelegramChannel>()
+            }) {
+                let config = telegram
+                    .inbound_config(&ctx.message)
+                    .map_err(|error| RoutingError::PermissionDenied(error.to_string()))?;
+                let effective = ChannelConfig::from(config);
+                channel_config.dm_policy = effective.dm_policy;
+                channel_config.group_policy = effective.group_policy;
+                channel_config.allow_from = effective.allow_from;
+                channel_config.group_allow_from = effective.group_allow_from;
+                channel_config.bot_name = effective.bot_name;
+                channel_config.require_mention = telegram.require_mention(&config.account_id);
+                telegram_chat_id = Some(
+                    crate::gateway::interfaces::telegram::delivery::parse_conversation_id(
+                        ctx.message.conversation_id.as_str(),
+                    )
+                    .map_err(|error| RoutingError::PermissionDenied(error.to_string()))?
+                    .0
+                     .0
+                    .to_string(),
+                );
+            }
+        }
 
         if ctx.message.is_group {
             // Group message permission check
@@ -52,7 +108,9 @@ impl InboundMessageRouter {
                     ));
                 }
                 GroupPolicy::Allowlist => {
-                    let chat_id = ctx.message.conversation_id.as_str();
+                    let chat_id = telegram_chat_id
+                        .as_deref()
+                        .unwrap_or(ctx.message.conversation_id.as_str());
                     if !channel_config.group_allow_from.iter().any(|a| a == chat_id) {
                         return Err(RoutingError::PermissionDenied(
                             "Group not in allowlist".to_string(),
@@ -61,7 +119,12 @@ impl InboundMessageRouter {
                 }
                 GroupPolicy::Open => {
                     // Check mention requirement
-                    if channel_config.require_mention {
+                    if channel_config
+                        .room_require_mention
+                        .get(ctx.message.conversation_id.as_str())
+                        .copied()
+                        .unwrap_or(channel_config.require_mention)
+                    {
                         // A channel adapter that already validated the mention
                         // with platform-native signals (real @username,
                         // reply-to-bot, command targeting) tags the message with
@@ -143,19 +206,40 @@ impl InboundMessageRouter {
     }
 
     /// Check if bot was mentioned in message
+    ///
+    /// A mention is a WHOLE TOKEN, never a substring: "the aleph roadmap"
+    /// mentions nobody. The default pattern list used to hold the bare
+    /// string `"aleph"`, so `require_mention` was satisfied by any group
+    /// message containing those five letters — for every channel that never
+    /// configured a `bot_name` the group gate was a no-op.
+    ///
+    /// What counts as a mention:
+    /// - a configured `bot_name`, matched as a whole word (its `@` prefix is
+    ///   optional). Naming the bot is opt-in per channel, so only an operator
+    ///   who configured it gets the bare name as a trigger.
+    /// - otherwise an explicitly addressed handle — `"@aleph"` / `"@bot"` —
+    ///   which still needs the `@`.
     pub(super) fn check_mention(&self, text: &str, config: &ChannelConfig) -> bool {
-        let text_lower = text.to_lowercase();
+        let tokens: Vec<&str> = text.split_whitespace().map(mention_token).collect();
+        let cores: Vec<&str> = tokens
+            .iter()
+            .copied()
+            .map(|t| t.strip_prefix('@').unwrap_or(t))
+            .collect();
 
-        // Check bot name
+        // Check bot name — whole word, so "alphabet" is not "aleph".
         if let Some(bot_name) = &config.bot_name {
-            if text_lower.contains(&bot_name.to_lowercase()) {
+            if contains_word_sequence(&cores, bot_name) {
                 return true;
             }
         }
 
-        // Check common patterns
-        let patterns = ["@aleph", "@bot", "aleph"];
-        patterns.iter().any(|p| text_lower.contains(p))
+        // Check common patterns — these apply to every channel, so they stay
+        // explicitly addressed.
+        tokens.iter().zip(&cores).any(|(token, core)| {
+            token.starts_with('@')
+                && (core.eq_ignore_ascii_case("aleph") || core.eq_ignore_ascii_case("bot"))
+        })
     }
 
     /// Send pairing request to unknown sender
@@ -181,9 +265,12 @@ impl InboundMessageRouter {
             .await?;
 
         if created {
+            // The pairing code IS the credential: anyone who can read the log
+            // stream can approve themselves. It belongs in the outbound
+            // message to the owner only — never in the log.
             info!(
-                "Created new pairing request for {}:{} with code {}",
-                channel_id, sender_id, code
+                "Created new pairing request for {}:{} (code redacted)",
+                channel_id, sender_id
             );
         } else {
             info!(
@@ -214,7 +301,10 @@ impl InboundMessageRouter {
                 channel_id, sender_id, e
             );
         } else {
-            info!("Sent pairing code {} to {}:{}", code, channel_id, sender_id);
+            info!(
+                "Sent pairing code (redacted) to {}:{}",
+                channel_id, sender_id
+            );
         }
 
         Ok(())

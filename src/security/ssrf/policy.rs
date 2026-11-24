@@ -32,6 +32,15 @@ pub struct SsrfPolicy {
     /// Strip Authorization/Cookie headers on cross-origin redirects.
     #[serde(default = "default_strip_auth")]
     pub strip_auth_on_cross_origin: bool,
+    /// Route guarded requests through the system proxy (`HTTP(S)_PROXY`).
+    ///
+    /// When `false` (the default) guarded requests always connect directly,
+    /// so the DNS-pinned, validated address is the one actually connected.
+    /// When `true` the operator opts back into the system proxy; the proxy
+    /// then resolves the target itself and the pinning guarantee no longer
+    /// holds.
+    #[serde(default)]
+    pub use_system_proxy: bool,
 }
 
 const fn default_enabled() -> bool {
@@ -55,6 +64,7 @@ impl Default for SsrfPolicy {
             blocked_hosts: Vec::new(),
             max_redirects: 5,
             strip_auth_on_cross_origin: true,
+            use_system_proxy: false,
         }
     }
 }
@@ -102,6 +112,7 @@ mod tests {
         assert!(policy.blocked_hosts.is_empty());
         assert_eq!(policy.max_redirects, 5);
         assert!(policy.strip_auth_on_cross_origin);
+        assert!(!policy.use_system_proxy);
     }
 
     #[test]
@@ -131,11 +142,19 @@ mod tests {
             blocked_hosts: vec!["evil.com".to_string()],
             max_redirects: 3,
             strip_auth_on_cross_origin: false,
+            use_system_proxy: true,
         };
         let json = serde_json::to_string(&policy).unwrap();
         let restored: SsrfPolicy = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.max_redirects, 3);
         assert!(restored.allow_private_network);
         assert!(!restored.strip_auth_on_cross_origin);
+        assert!(restored.use_system_proxy);
+    }
+
+    #[test]
+    fn use_system_proxy_defaults_false_when_missing() {
+        let restored: SsrfPolicy = serde_json::from_str("{}").unwrap();
+        assert!(!restored.use_system_proxy);
     }
 }

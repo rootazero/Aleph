@@ -14,6 +14,7 @@ use async_trait::async_trait;
 
 use crate::diagnostics::check::{HealthCheck, Posture, Presence};
 use crate::diagnostics::finding::{Finding, Severity};
+use crate::utils::sqlite_open::open_sqlite_readonly;
 
 const ID: &str = "core/cache-health";
 const DB_FILENAME: &str = "state.db";
@@ -41,16 +42,16 @@ impl CacheHealthCheck {
     }
 
     /// `(scope, streak, reads, writes, timestamp)` for every
-    /// `cache_health_degraded` event inside the window, most recent first.
+    /// `cache_health_degraded` event inside the window, most recent first,
+    /// plus the number of rows whose payload could not be parsed.
+    ///
+    /// A malformed row is counted rather than dropped: an unreadable row is
+    /// missing evidence, and the caller must not read "no alarms" out of it.
     ///
     /// Blocking (rusqlite is synchronous) — callers must keep it off the
     /// async executor (`spawn_blocking`).
-    fn recent_alarms(db_path: &Path) -> Result<Vec<(String, u32, u64, u64, i64)>, String> {
-        let conn = rusqlite::Connection::open_with_flags(
-            db_path,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-        )
-        .map_err(|e| format!("{e}"))?;
+    fn recent_alarms(db_path: &Path) -> Result<(Vec<(String, u32, u64, u64, i64)>, usize), String> {
+        let conn = open_sqlite_readonly(db_path).map_err(|e| format!("{e}"))?;
         let table_exists: bool = conn
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='task_traces'",
@@ -60,7 +61,7 @@ impl CacheHealthCheck {
             .map_err(|e| format!("{e}"))?
             > 0;
         if !table_exists {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), 0));
         }
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -80,11 +81,15 @@ impl CacheHealthCheck {
             })
             .map_err(|e| format!("{e}"))?;
         let mut alarms = Vec::new();
+        let mut malformed = 0usize;
         for row in rows {
             let (json, ts) = row.map_err(|e| format!("{e}"))?;
             // Tolerate a malformed row rather than fail the whole check — a
-            // doctor sensor must not become the outage it reports on.
+            // doctor sensor must not become the outage it reports on. But
+            // count it: the row is evidence we could not read, so the caller
+            // must not conclude "no alarms" from it.
             let Ok(v) = serde_json::from_str::<serde_json::Value>(&json) else {
+                malformed += 1;
                 continue;
             };
             alarms.push((
@@ -95,7 +100,7 @@ impl CacheHealthCheck {
                 ts,
             ));
         }
-        Ok(alarms)
+        Ok((alarms, malformed))
     }
 }
 
@@ -103,10 +108,6 @@ impl CacheHealthCheck {
 impl HealthCheck for CacheHealthCheck {
     fn id(&self) -> &'static str {
         ID
-    }
-
-    fn title(&self) -> &'static str {
-        "Prompt cache health"
     }
 
     async fn run(&self, _posture: Posture) -> Vec<Finding> {
@@ -125,30 +126,44 @@ impl HealthCheck for CacheHealthCheck {
         }
         // rusqlite is synchronous — keep the query off the async executor.
         let db = self.db_path.clone();
-        let alarms = match tokio::task::spawn_blocking(move || Self::recent_alarms(&db)).await {
-            Ok(Ok(a)) => a,
-            Ok(Err(e)) => {
-                return vec![Finding::problem(
-                    ID,
-                    Severity::Warning,
-                    "Trace DB unreadable",
-                    format!("could not read cache-health alarms from state.db: {e}"),
-                )];
-            }
-            Err(e) => {
-                return vec![Finding::problem(
-                    ID,
-                    Severity::Warning,
-                    "Trace DB unreadable",
-                    format!("the cache-health alarm read task failed to run: {e}"),
-                )];
-            }
-        };
+        let (alarms, malformed) =
+            match tokio::task::spawn_blocking(move || Self::recent_alarms(&db)).await {
+                Ok(Ok(a)) => a,
+                Ok(Err(e)) => {
+                    return vec![Finding::problem(
+                        ID,
+                        Severity::Warning,
+                        "Trace DB unreadable",
+                        format!("could not read cache-health alarms from state.db: {e}"),
+                    )];
+                }
+                Err(e) => {
+                    return vec![Finding::problem(
+                        ID,
+                        Severity::Warning,
+                        "Trace DB unreadable",
+                        format!("the cache-health alarm read task failed to run: {e}"),
+                    )];
+                }
+            };
         if alarms.is_empty() {
-            return vec![Finding::ok(
+            if malformed == 0 {
+                return vec![Finding::ok(
+                    ID,
+                    "No cache degradation alarms",
+                    "no cache_health_degraded events in the last 24h.",
+                )];
+            }
+            // Unreadable evidence is not absent evidence: the alarm state is
+            // unknown, so the healthy conclusion must not be reported.
+            return vec![Finding::problem(
                 ID,
-                "No cache degradation alarms",
-                "no cache_health_degraded events in the last 24h.",
+                Severity::Warning,
+                "Cache-health alarms unreadable",
+                format!(
+                    "{malformed} cache_health_degraded row(s) in the last 24h could not be \
+                     parsed; the alarm state is unknown, not empty."
+                ),
             )];
         }
         let scopes: std::collections::BTreeSet<&str> =
@@ -161,6 +176,11 @@ impl HealthCheck for CacheHealthCheck {
             })
             .collect::<Vec<_>>()
             .join("; ");
+        let malformed_note = if malformed == 0 {
+            String::new()
+        } else {
+            format!("{malformed} further alarm row(s) could not be parsed. ")
+        };
         vec![Finding::problem(
             ID,
             Severity::Warning,
@@ -172,7 +192,7 @@ impl HealthCheck for CacheHealthCheck {
             format!(
                 "the watchdog saw consecutive cache re-creation instead of reads; \
                  a prefix ahead of the message breakpoints is churning, or the \
-                 stable prefix changed. Recent: {listed}. \
+                 stable prefix changed. Recent: {listed}. {malformed_note}\
                  Fix: find what rewrites bytes ahead of the cache breakpoints \
                  (prompt layers, per-turn facts), or reset expectations after a \
                  deliberate prompt change."

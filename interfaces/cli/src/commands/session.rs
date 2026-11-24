@@ -250,7 +250,9 @@ pub async fn compact(
 
     let mut params = serde_json::json!({ "session_key": key });
     if let Some(text) = instructions.map(str::trim).filter(|s| !s.is_empty()) {
-        params["instructions"] = serde_json::json!(text);
+        if let Some(map) = params.as_object_mut() {
+            map.insert("instructions".to_string(), serde_json::json!(text));
+        }
     }
     let result: serde_json::Value = client.call("session.compact", Some(params)).await?;
 

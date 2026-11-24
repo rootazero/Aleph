@@ -28,24 +28,23 @@ use alephcore::diagnostics::checks::DiscordChannelHealthCheck;
 #[tokio::test]
 async fn healthy_config_yields_discord_ok_tag() {
     let mut tmp = tempfile::NamedTempFile::new().unwrap();
-    let payload = serde_json::json!({
-        "channels": [{
-            "channel_type": "discord",
-            "config": {
-                "bot_token": "x".repeat(60),
-                "application_id": 999,
-                "slash_commands_enabled": true,
-                "intents": {
-                    "guild_messages": true,
-                    "message_content": true,
-                    "direct_messages": true,
-                },
-                "max_message_length": 2000,
-            }
-        }]
-    });
-    tmp.write_all(serde_json::to_vec(&payload).unwrap().as_slice())
-        .unwrap();
+    // The doctor reads the real config file format: TOML, with one
+    // `[channels.<id>]` table per channel and the channel's own settings
+    // inline.
+    let payload = format!(
+        r#"[channels.discord]
+type = "discord"
+bot_token = "{}"
+max_message_length = 2000
+
+[channels.discord.intents]
+guild_messages = true
+message_content = true
+direct_messages = true
+"#,
+        "x".repeat(60)
+    );
+    tmp.write_all(payload.as_bytes()).unwrap();
 
     let check = DiscordChannelHealthCheck::new(tmp.path().to_path_buf());
     let findings = check.run(Posture::Inspect).await;
@@ -64,28 +63,23 @@ async fn healthy_config_yields_discord_ok_tag() {
     assert!(!findings[0].is_problem());
 }
 
-/// A config that has both an `intents_misaligned` violation and an
-/// `application_id_missing` violation must surface BOTH in the
-/// single `Misconfigured` finding, not just the first one.
+/// An `intents_misaligned` violation is reported with the operator-facing
+/// explanation in the finding detail.
 #[tokio::test]
-async fn misaligned_intents_and_missing_application_id_both_surfaced() {
+async fn misaligned_intents_are_reported() {
     let mut tmp = tempfile::NamedTempFile::new().unwrap();
-    let payload = serde_json::json!({
-        "channels": [{
-            "channel_type": "discord",
-            "config": {
-                "bot_token": "x".repeat(60),
-                "slash_commands_enabled": true,
-                "application_id": null,
-                "intents": {
-                    "guild_messages": true,
-                    "message_content": false,
-                }
-            }
-        }]
-    });
-    tmp.write_all(serde_json::to_vec(&payload).unwrap().as_slice())
-        .unwrap();
+    let payload = format!(
+        r#"[channels.discord]
+type = "discord"
+bot_token = "{}"
+
+[channels.discord.intents]
+guild_messages = true
+message_content = false
+"#,
+        "x".repeat(60)
+    );
+    tmp.write_all(payload.as_bytes()).unwrap();
 
     let check = DiscordChannelHealthCheck::new(tmp.path().to_path_buf());
     let findings = check.run(Posture::Inspect).await;
@@ -97,47 +91,40 @@ async fn misaligned_intents_and_missing_application_id_both_surfaced() {
         "{:?}",
         findings[0]
     );
-    assert!(
-        findings[0].detail.contains("application_id"),
-        "{:?}",
-        findings[0]
-    );
 }
 
-/// A config file that doesn't exist surfaces as a single
-/// `Unknown`-tagged finding — never as `Ok`. This is the third state
-/// the check maintains; severity alone (`Info`) cannot distinguish
-/// "config is fine" from "config could not be read".
+/// Missing configuration means no Discord channel is configured.
+/// Existing but malformed or unreadable configuration still reports Unknown.
 #[tokio::test]
-async fn missing_file_yields_unknown_tag() {
+async fn missing_file_is_unconfigured_with_ok_tag() {
     let check = DiscordChannelHealthCheck::new(std::path::PathBuf::from(
         "/nonexistent/path/discord-config.toml",
     ));
     let findings = check.run(Posture::Inspect).await;
     assert_eq!(findings.len(), 1);
-    assert!(findings[0].detail.contains("Could not load"));
-    // The tag must be `discord-unknown`, NOT `discord-ok`, otherwise a
-    // future CI consumer would misread "I don't know" as "it's fine".
     assert!(
-        findings[0].has_tag("discord-unknown"),
-        "tag absent: {:?}",
+        findings[0].has_tag("discord-ok"),
+        "unconfigured: {:?}",
         findings[0]
     );
     assert!(
-        !findings[0].has_tag("discord-ok"),
-        "tag false-positive: {:?}",
+        !findings[0].has_tag("discord-unknown"),
+        "not an I/O failure: {:?}",
         findings[0]
     );
 }
 
-/// `id()` and `title()` are part of the `HealthCheck` contract —
-/// confirm they match the strings the engine's `--json` output and
-/// the doctor tool render verbatim.
+/// `id()` is part of the `HealthCheck` contract — confirm it matches the
+/// string the engine's `--json` output and the doctor tool render verbatim.
+///
+/// The check has no `title()` method any more (2026-11-20 wire audit): the
+/// renderer prints the *finding's* own title, so a second name for the same
+/// check could only drift away from it. The finding title is asserted in the
+/// module's own unit tests.
 #[test]
 fn check_metadata_matches_documented_strings() {
-    let check = DiscordChannelHealthCheck::default();
+    let check = DiscordChannelHealthCheck::from_default_path();
     assert_eq!(check.id(), "core/discord-channel-health");
-    assert_eq!(check.title(), "Discord channel config");
 }
 
 /// A config file that does NOT mention discord at all should produce
@@ -147,14 +134,11 @@ fn check_metadata_matches_documented_strings() {
 #[tokio::test]
 async fn a_config_without_discord_is_ok_not_misconfigured() {
     let mut tmp = tempfile::NamedTempFile::new().unwrap();
-    let payload = serde_json::json!({
-        "channels": [{
-            "channel_type": "telegram",
-            "config": {"token": "y"}
-        }]
-    });
-    tmp.write_all(serde_json::to_vec(&payload).unwrap().as_slice())
-        .unwrap();
+    let payload = r#"[channels.telegram]
+type = "telegram"
+token = "y"
+"#;
+    tmp.write_all(payload.as_bytes()).unwrap();
 
     let check = DiscordChannelHealthCheck::new(tmp.path().to_path_buf());
     let findings = check.run(Posture::Inspect).await;

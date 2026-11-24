@@ -353,7 +353,7 @@ Server log (warn):  full serde error with Rust type path
 
 ## Sources & References
 
-- **Origin document:** [docs/brainstorms/2026-04-04-protocol-versioning-schema-requirements.md](docs/brainstorms/2026-04-04-protocol-versioning-schema-requirements.md)
+- **Origin document:** [docs/brainstorms/2026-04-04-protocol-versioning-schema-requirements.md](../brainstorms/2026-04-04-protocol-versioning-schema-requirements.md)
 - Related code: `src/gateway/handlers/mod.rs` (HandlerRegistry, parse_params, HandlerFn)
 - Related code: `src/gateway/protocol.rs` (gateway-local JsonRpcRequest)
 - Related ideation: `docs/ideation/2026-04-04-gateway-openclaw-comparison-ideation.md` (#9 RPC Schema Registry — future work)

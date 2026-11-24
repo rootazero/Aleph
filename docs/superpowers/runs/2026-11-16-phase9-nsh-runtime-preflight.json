@@ -1,0 +1,5 @@
+{
+  "status": "BLOCKED",
+  "reason": "isolated_gateway_receipt_missing",
+  "path": "/Volumes/TBU4/Workspace/Aleph/qa/fixtures/nsh-panel-parity/gateway.json"
+}

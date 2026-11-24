@@ -187,7 +187,18 @@ async fn run_all_checks(server_url: &str, config: &CliConfig) -> Vec<DoctorCheck
     }
 
     // 4. Sandbox (independent of daemon — uses sibling binary directly)
-    checks.push(check_sandbox_summary());
+    let sandbox_check = tokio::task::spawn_blocking(check_sandbox_summary)
+        .await
+        .unwrap_or_else(|e| {
+            DoctorCheck::fail(
+                "sandbox",
+                "profile",
+                "Active sandbox summary (aleph-server sandbox-debug)",
+                false,
+                format!("failed to run sandbox check task: {e}"),
+            )
+        });
+    checks.push(sandbox_check);
     checks
 }
 
@@ -716,10 +727,32 @@ struct FindingRow {
 /// problem finding (info findings are noise — every healthy check emits one);
 /// a single summary row when the whole battery is green.
 fn report_to_checks(report: &Value) -> Vec<DoctorCheck> {
-    let findings: Vec<FindingRow> = report
-        .get("findings")
-        .and_then(|v| serde_json::from_value(v.clone()).ok())
-        .unwrap_or_default();
+    let findings = match report.get("findings") {
+        Some(value) => match serde_json::from_value::<Vec<FindingRow>>(value.clone()) {
+            Ok(findings) => findings,
+            Err(error) => {
+                // A malformed payload is not an empty one. Reporting "N checks
+                // passed" over findings we could not read hides every problem
+                // the daemon reported.
+                return vec![DoctorCheck::fail(
+                    "engine",
+                    "diagnostics",
+                    "Daemon diagnostic engine",
+                    false,
+                    format!("could not parse the daemon's findings payload: {error}"),
+                )];
+            }
+        },
+        None => {
+            return vec![DoctorCheck::fail(
+                "engine",
+                "diagnostics",
+                "Daemon diagnostic engine",
+                false,
+                "the daemon's diagnostics report has no `findings` field",
+            )];
+        }
+    };
     let problems: Vec<DoctorCheck> = findings
         .iter()
         .filter(|f| f.severity != "info")
@@ -900,9 +933,9 @@ mod tests {
     #[test]
     fn finding_warning_fails_non_required() {
         let row: FindingRow = serde_json::from_value(json!({
-            "check_id": "core/stale-lock",
+            "check_id": "core/instance-lock",
             "severity": "warning",
-            "title": "Stale lock",
+            "title": "Instance lock",
             "detail": "gateway.lock is 3 days old",
             "fix_hint": "delete the stale lock file",
             "repairable": true

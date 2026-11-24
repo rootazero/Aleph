@@ -214,7 +214,9 @@ impl<'a> Walk<'a> {
         let root = cache.get(root_path)?;
 
         let mut out = vec![SkeletonNode::new(root_path.to_owned(), root, 0)];
-        let mut charged = usize::from(!out[0].is_wrapper());
+        let mut charged = out
+            .first()
+            .map_or(0, |node| usize::from(!node.is_wrapper()));
         // Absolute ceiling on the *vector* (wrappers included): free wrappers
         // must not mean unbounded memory on a pathological tree. Hitting it is
         // a budget cut like any other and is reported as truncation.
@@ -225,7 +227,10 @@ impl<'a> Walk<'a> {
             if charged >= self.max_nodes {
                 break;
             }
-            let (path, level) = (out[cursor].path.clone(), out[cursor].level);
+            let Some(curr) = out.get(cursor) else {
+                break;
+            };
+            let (path, level) = (curr.path.clone(), curr.level);
             cursor += 1;
             if level >= depth {
                 continue;
@@ -242,7 +247,9 @@ impl<'a> Walk<'a> {
                     continue;
                 };
                 let index = out.len();
-                out[cursor - 1].children.push(index);
+                if let Some(parent) = out.get_mut(cursor - 1) {
+                    parent.children.push(index);
+                }
                 let node = SkeletonNode::new(child_path.clone(), item, level + 1);
                 if !node.is_wrapper() {
                     charged += 1;
@@ -566,14 +573,23 @@ async fn enrich(
 /// higher index than its parent.
 fn assemble(mut nodes: Vec<AxElement>, skeleton: &[SkeletonNode]) -> AxElement {
     for index in (0..nodes.len()).rev() {
-        let children: Vec<AxElement> = skeleton[index]
+        let Some(skel_node) = skeleton.get(index) else {
+            continue;
+        };
+        let children: Vec<AxElement> = skel_node
             .children
             .iter()
-            .map(|&child| std::mem::take(&mut nodes[child]))
+            .filter_map(|&child| nodes.get_mut(child).map(std::mem::take))
             .collect();
-        nodes[index].children = children;
+        if let Some(node) = nodes.get_mut(index) {
+            node.children = children;
+        }
     }
-    nodes.swap_remove(0)
+    if !nodes.is_empty() {
+        nodes.swap_remove(0)
+    } else {
+        AxElement::default()
+    }
 }
 
 /// Whether an element masks its content — see [`Walk::secure_of`].
@@ -759,7 +775,7 @@ const MAX_ACTIONS: i32 = 8;
 /// Truncate to at most `max` characters without splitting one.
 fn truncate_chars(s: &str, max: usize) -> String {
     match s.char_indices().nth(max) {
-        Some((idx, _)) => s[..idx].to_string(),
+        Some((idx, _)) => s.get(..idx).unwrap_or(s).to_string(),
         None => s.to_string(),
     }
 }

@@ -31,6 +31,7 @@ use crate::session::events::{SessionEvent, SessionEventRecord};
 use crate::session::observer::SessionEventObserver;
 use crate::session::service::SessionId;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -183,9 +184,7 @@ async fn persist_image_blocks(
 
     // Backward-compatible fallback for events that only carry Image blocks.
     for block in blocks {
-        if let Ok(ContentBlock::Image { data, mime_type }) =
-            serde_json::from_value::<ContentBlock>(block.clone())
-        {
+        if let Ok(ContentBlock::Image { data, mime_type }) = ContentBlock::deserialize(block) {
             store
                 .store_attachment(
                     session_id,

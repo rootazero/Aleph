@@ -17,12 +17,9 @@
 pub(crate) mod control;
 pub(crate) mod grant;
 pub(crate) mod issuer;
-#[allow(dead_code)] // consumed by the browser-live producer; boot wiring pending
 pub(crate) mod lifecycle;
 pub(crate) mod navigation_gate;
-#[allow(dead_code)] // Task20 infrastructure only; no production composition yet
 pub(crate) mod owner_registry;
-#[allow(dead_code)] // consumed by the Task 6 issuer/producer wiring
 pub(crate) mod resource;
 pub(crate) mod session;
 pub mod stream_hub;
@@ -168,7 +165,6 @@ struct State {
     attachments: HashMap<String, AttachmentRefs>,
     next_epoch: u64,
     ended: bool,
-    routing_retired: bool,
     destroyed: std::collections::HashSet<String>,
     streams: HashMap<String, TargetStream>,
     fetch: HashMap<String, FetchSlot>,
@@ -407,7 +403,6 @@ impl LiveProfileOwner {
         let st = self.state();
         !target_id.is_empty()
             && !st.ended
-            && !st.routing_retired
             && !st.destroyed.contains(target_id)
             && self.conn.closed().borrow().is_none()
     }
@@ -415,8 +410,8 @@ impl LiveProfileOwner {
     /// Why a route to `target_id` on this owner is unavailable, for closing a
     /// resource published against it. Owner ended / connection closed is
     /// `EngineExited` (same as the terminal sinks' owner-end notification);
-    /// an exact destroyed target is `TargetClosed`. Undeterminable (e.g. routing
-    /// retired without either) conservatively reports `TargetClosed`.
+    /// an exact destroyed target is `TargetClosed`. Undeterminable (neither)
+    /// conservatively reports `TargetClosed`.
     pub(crate) fn route_close_reason(&self, target_id: &str) -> ClosedReason {
         let st = self.state();
         if st.ended || self.conn.closed().borrow().is_some() {
@@ -426,10 +421,6 @@ impl LiveProfileOwner {
             let _destroyed = st.destroyed.contains(target_id);
             ClosedReason::TargetClosed
         }
-    }
-
-    pub(crate) fn retire_routing(&self) {
-        self.state().routing_retired = true;
     }
 
     /// Install an internal control capability for an ALREADY attached exact
@@ -591,8 +582,8 @@ impl LiveProfileOwner {
         let was_attached = {
             let st = self.state();
             // Same liveness predicate as route lease validation
-            // (`route_available`): a retired owner accepts no new attachment.
-            if st.ended || st.routing_retired || st.destroyed.contains(&binding.target_id) {
+            // (`route_available`): an ended owner accepts no new attachment.
+            if st.ended || st.destroyed.contains(&binding.target_id) {
                 return Err(BrowserError::TabNotFound(binding.target_id));
             }
             st.streams
@@ -666,7 +657,7 @@ impl LiveProfileOwner {
         let life = self.lifecycle.clone().lock_owned().await;
         {
             let st = self.state();
-            if st.ended || st.routing_retired || st.destroyed.contains(&binding.target_id) {
+            if st.ended || st.destroyed.contains(&binding.target_id) {
                 return Err(BrowserError::TabNotFound(binding.target_id));
             }
         }

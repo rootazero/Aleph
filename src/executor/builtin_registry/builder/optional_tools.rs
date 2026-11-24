@@ -17,42 +17,49 @@ impl BuiltinToolRegistry {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn register_optional_tools(
         tools: &mut HashMap<String, UnifiedTool>,
-        memory_search_tool: &Option<MemorySearchTool>,
-        memory_browse_tool: &Option<MemoryBrowseTool>,
-        memory_explore_tool: &Option<MemoryExploreTool>,
+        memory_search_tool: &Option<crate::builtin_tools::runtime::RuntimeTool<MemorySearchTool>>,
+        memory_browse_tool: &Option<crate::builtin_tools::runtime::RuntimeTool<MemoryBrowseTool>>,
+        memory_explore_tool: &Option<crate::builtin_tools::runtime::RuntimeTool<MemoryExploreTool>>,
         memory_timeline_tool: &Option<crate::builtin_tools::MemoryTimelineTool>,
         image_generate_tool: &Option<ImageGenerateTool>,
         vault_store_tool: &Option<VaultStoreTool>,
         config: &BuiltinToolConfig,
-        injection_mode: crate::config::types::memory::MemoryInjectionMode,
-        note_orient_tool: &Option<crate::builtin_tools::note_orient::NoteOrientTool>,
-        note_schema_tool: &Option<crate::builtin_tools::note_schema::NoteSchemaTool>,
-        user_profile_tool: &Option<crate::builtin_tools::user_profile::UserProfileTool>,
+        note_orient_tool: &Option<
+            crate::builtin_tools::runtime::RuntimeTool<
+                crate::builtin_tools::note_orient::NoteOrientTool,
+            >,
+        >,
+        note_schema_tool: &Option<
+            crate::builtin_tools::runtime::RuntimeTool<
+                crate::builtin_tools::note_schema::NoteSchemaTool,
+            >,
+        >,
+        user_profile_tool: &Option<
+            crate::builtin_tools::runtime::RuntimeTool<
+                crate::builtin_tools::user_profile::UserProfileTool,
+            >,
+        >,
     ) {
-        fn schema<T: schemars::JsonSchema>(name: &str) -> serde_json::Value {
-            serde_json::to_value(schemars::schema_for!(T)).unwrap_or_else(|e| {
-                tracing::warn!("Failed to serialize schema for {}: {}", name, e);
-                serde_json::Value::Object(Default::default())
-            })
-        }
-
         // Helper: register tool with schema from schemars
-        fn reg(
-            tools: &mut HashMap<String, UnifiedTool>,
+        fn reg<'a>(
+            tools: &'a mut HashMap<String, UnifiedTool>,
             name: &str,
             desc: &str,
             schema: serde_json::Value,
-        ) {
+        ) -> &'a mut UnifiedTool {
             let mut ut =
                 UnifiedTool::new(format!("builtin:{name}"), name, desc, ToolSource::Builtin);
             ut.parameters_schema = Some(schema);
-            tools.insert(name.to_string(), ut);
+            tools.entry(name.to_owned()).insert_entry(ut).into_mut()
         }
 
         // Memory retrieval tools — only exposed in Tools / Hybrid mode.
         // In Context mode the LLM receives memory via auto-injected context messages instead.
+        // The mode is read from the config, the single source of truth for it: a
+        // separate parameter could disagree with the config the rest of the
+        // system reads, and the gate would then use a different value.
         let expose_retrieval_tools = matches!(
-            injection_mode,
+            config.injection_mode,
             crate::config::types::memory::MemoryInjectionMode::Tools
                 | crate::config::types::memory::MemoryInjectionMode::Hybrid,
         );
@@ -63,10 +70,11 @@ impl BuiltinToolRegistry {
                     tools,
                     "memory_search",
                     MemorySearchTool::DESCRIPTION,
-                    schema::<crate::builtin_tools::memory_search::MemorySearchArgs>(
-                        "memory_search",
-                    ),
-                );
+                    super::core_tools::tool_schema::<
+                        crate::builtin_tools::memory_search::MemorySearchArgs,
+                    >("memory_search"),
+                )
+                .services = MemorySearchTool::services();
                 info!("Registered memory_search tool in BuiltinToolRegistry");
             }
             if memory_browse_tool.is_some() {
@@ -74,10 +82,11 @@ impl BuiltinToolRegistry {
                     tools,
                     "memory_browse",
                     MemoryBrowseTool::DESCRIPTION,
-                    schema::<crate::builtin_tools::memory_browse::MemoryBrowseArgs>(
-                        "memory_browse",
-                    ),
-                );
+                    super::core_tools::tool_schema::<
+                        crate::builtin_tools::memory_browse::MemoryBrowseArgs,
+                    >("memory_browse"),
+                )
+                .services = MemoryBrowseTool::services();
                 info!("Registered memory.browse tool in BuiltinToolRegistry");
             }
             if memory_explore_tool.is_some() {
@@ -85,10 +94,11 @@ impl BuiltinToolRegistry {
                     tools,
                     "memory_explore",
                     MemoryExploreTool::DESCRIPTION,
-                    schema::<crate::builtin_tools::memory_explore::MemoryExploreArgs>(
-                        "memory_explore",
-                    ),
-                );
+                    super::core_tools::tool_schema::<
+                        crate::builtin_tools::memory_explore::MemoryExploreArgs,
+                    >("memory_explore"),
+                )
+                .services = MemoryExploreTool::services();
                 info!("Registered memory_explore tool in BuiltinToolRegistry");
             }
             if memory_timeline_tool.is_some() {
@@ -96,41 +106,63 @@ impl BuiltinToolRegistry {
                     tools,
                     "memory_timeline",
                     crate::builtin_tools::MemoryTimelineTool::DESCRIPTION,
-                    schema::<crate::builtin_tools::memory_timeline::MemoryTimelineArgs>(
-                        "memory_timeline",
-                    ),
-                );
+                    super::core_tools::tool_schema::<
+                        crate::builtin_tools::memory_timeline::MemoryTimelineArgs,
+                    >("memory_timeline"),
+                )
+                .services = crate::builtin_tools::MemoryTimelineTool::services();
                 info!("Registered memory_timeline tool in BuiltinToolRegistry");
             }
         }
 
-        // Phase 3 Task 19 — flag_user_correction is exposed whenever a
-        // memory backend exists (independent of retrieval policy: this is
-        // a write-only signal, not a retrieval surface).
-        if config.memory_db.is_some() {
+        // Stable descriptors remain discoverable while the source is Off.
+        // Each invocation resolves raw and derived storage from its admitted bundle.
+        if config.memory_runtime.is_some() {
+            reg(
+                tools,
+                "memory_runtime_status",
+                crate::builtin_tools::runtime_control::MemoryRuntimeStatusTool::DESCRIPTION,
+                super::core_tools::tool_schema::<
+                    crate::builtin_tools::runtime_control::RuntimeControlArgs,
+                >("memory_runtime_status"),
+            );
+            reg(
+                tools,
+                "memory_runtime_start",
+                crate::builtin_tools::runtime_control::MemoryRuntimeStartTool::DESCRIPTION,
+                super::core_tools::tool_schema::<
+                    crate::builtin_tools::runtime_control::RuntimeControlArgs,
+                >("memory_runtime_start"),
+            );
+            reg(
+                tools,
+                "memory_runtime_stop",
+                crate::builtin_tools::runtime_control::MemoryRuntimeStopTool::DESCRIPTION,
+                super::core_tools::tool_schema::<
+                    crate::builtin_tools::runtime_control::RuntimeControlArgs,
+                >("memory_runtime_stop"),
+            );
             reg(
                 tools,
                 "flag_user_correction",
                 crate::builtin_tools::FlagUserCorrectionTool::DESCRIPTION,
-                schema::<crate::builtin_tools::flag_user_correction::FlagUserCorrectionArgs>(
-                    "flag_user_correction",
-                ),
-            );
+                super::core_tools::tool_schema::<
+                    crate::builtin_tools::flag_user_correction::FlagUserCorrectionArgs,
+                >("flag_user_correction"),
+            )
+            .services = crate::builtin_tools::FlagUserCorrectionTool::services();
             info!("Registered flag_user_correction tool in BuiltinToolRegistry");
 
-            // governance_metrics — read-only audit reality probe. Exposed
-            // whenever a memory backend exists (independent of retrieval policy,
-            // like flag_user_correction): the loop-governance audit ring runs in
-            // a headless cron session and must reach it regardless of injection
-            // mode.
+            // Governance remains independent of retrieval injection policy.
             reg(
                 tools,
                 "governance_metrics",
                 crate::builtin_tools::governance_metrics::GovernanceMetricsTool::DESCRIPTION,
-                schema::<crate::builtin_tools::governance_metrics::GovernanceMetricsArgs>(
-                    "governance_metrics",
-                ),
-            );
+                super::core_tools::tool_schema::<
+                    crate::builtin_tools::governance_metrics::GovernanceMetricsArgs,
+                >("governance_metrics"),
+            )
+            .services = crate::builtin_tools::governance_metrics::GovernanceMetricsTool::services();
             info!("Registered governance_metrics tool in BuiltinToolRegistry");
         }
 
@@ -142,8 +174,11 @@ impl BuiltinToolRegistry {
             tools,
             "remember",
             crate::builtin_tools::RememberTool::DESCRIPTION,
-            schema::<crate::builtin_tools::remember::RememberArgs>("remember"),
-        );
+            super::core_tools::tool_schema::<crate::builtin_tools::remember::RememberArgs>(
+                "remember",
+            ),
+        )
+        .services = crate::builtin_tools::RememberTool::services();
         info!("Registered remember tool in BuiltinToolRegistry");
 
         // node_list — cluster discovery (the read half of node_invoke). Always
@@ -152,7 +187,9 @@ impl BuiltinToolRegistry {
             tools,
             "node_list",
             crate::builtin_tools::NodeListTool::DESCRIPTION,
-            schema::<crate::builtin_tools::node_list::NodeListArgs>("node_list"),
+            super::core_tools::tool_schema::<crate::builtin_tools::node_list::NodeListArgs>(
+                "node_list",
+            ),
         );
         info!("Registered node_list tool in BuiltinToolRegistry");
 
@@ -163,7 +200,9 @@ impl BuiltinToolRegistry {
             tools,
             "node_invoke",
             crate::builtin_tools::NodeInvokeTool::DESCRIPTION,
-            schema::<crate::builtin_tools::node_invoke::NodeInvokeArgs>("node_invoke"),
+            super::core_tools::tool_schema::<crate::builtin_tools::node_invoke::NodeInvokeArgs>(
+                "node_invoke",
+            ),
         );
         info!("Registered node_invoke tool in BuiltinToolRegistry");
 
@@ -172,7 +211,9 @@ impl BuiltinToolRegistry {
             tools,
             "node_file",
             crate::builtin_tools::NodeFileTool::DESCRIPTION,
-            schema::<crate::builtin_tools::node_file::NodeFileArgs>("node_file"),
+            super::core_tools::tool_schema::<crate::builtin_tools::node_file::NodeFileArgs>(
+                "node_file",
+            ),
         );
         info!("Registered node_file tool in BuiltinToolRegistry");
 
@@ -181,9 +222,9 @@ impl BuiltinToolRegistry {
             tools,
             "node_invoke_many",
             crate::builtin_tools::NodeInvokeManyTool::DESCRIPTION,
-            schema::<crate::builtin_tools::node_invoke_many::NodeInvokeManyArgs>(
-                "node_invoke_many",
-            ),
+            super::core_tools::tool_schema::<
+                crate::builtin_tools::node_invoke_many::NodeInvokeManyArgs,
+            >("node_invoke_many"),
         );
         info!("Registered node_invoke_many tool in BuiltinToolRegistry");
 
@@ -194,7 +235,9 @@ impl BuiltinToolRegistry {
             tools,
             "node_manage",
             crate::builtin_tools::NodeManageTool::DESCRIPTION,
-            schema::<crate::builtin_tools::node_manage::NodeManageArgs>("node_manage"),
+            super::core_tools::tool_schema::<crate::builtin_tools::node_manage::NodeManageArgs>(
+                "node_manage",
+            ),
         );
         info!("Registered node_manage tool in BuiltinToolRegistry");
 
@@ -208,9 +251,9 @@ impl BuiltinToolRegistry {
                 tools,
                 "workspace_manage",
                 crate::builtin_tools::WorkspaceManageTool::DESCRIPTION,
-                schema::<crate::builtin_tools::workspace_manage::WorkspaceManageArgs>(
-                    "workspace_manage",
-                ),
+                super::core_tools::tool_schema::<
+                    crate::builtin_tools::workspace_manage::WorkspaceManageArgs,
+                >("workspace_manage"),
             );
             info!("Registered workspace_manage tool in BuiltinToolRegistry");
         }
@@ -223,7 +266,9 @@ impl BuiltinToolRegistry {
                 tools,
                 "canvas",
                 crate::builtin_tools::CanvasTool::DESCRIPTION,
-                schema::<crate::builtin_tools::canvas::CanvasToolArgs>("canvas"),
+                super::core_tools::tool_schema::<crate::builtin_tools::canvas::CanvasToolArgs>(
+                    "canvas",
+                ),
             );
             info!("Registered canvas tool in BuiltinToolRegistry");
         }
@@ -234,7 +279,9 @@ impl BuiltinToolRegistry {
                 tools,
                 "vault_store",
                 VaultStoreTool::DESCRIPTION,
-                schema::<crate::builtin_tools::vault_store::VaultStoreArgs>("vault_store"),
+                super::core_tools::tool_schema::<crate::builtin_tools::vault_store::VaultStoreArgs>(
+                    "vault_store",
+                ),
             );
             info!("Registered vault.store tool in BuiltinToolRegistry");
         }
@@ -256,7 +303,9 @@ impl BuiltinToolRegistry {
                         tools,
                         "image_generate",
                         ImageGenerateTool::DESCRIPTION,
-                        schema::<crate::builtin_tools::ImageGenerateArgs>("image_generate"),
+                        super::core_tools::tool_schema::<crate::builtin_tools::ImageGenerateArgs>(
+                            "image_generate",
+                        ),
                     );
                     info!("Registered image.generate tool in BuiltinToolRegistry");
                 }
@@ -266,9 +315,9 @@ impl BuiltinToolRegistry {
                         tools,
                         "video_generate",
                         crate::builtin_tools::generation::VideoGenerateTool::DESCRIPTION,
-                        schema::<crate::builtin_tools::generation::VideoGenerateArgs>(
-                            "video_generate",
-                        ),
+                        super::core_tools::tool_schema::<
+                            crate::builtin_tools::generation::VideoGenerateArgs,
+                        >("video_generate"),
                     );
                     info!("Registered video_generate tool in BuiltinToolRegistry");
                 }
@@ -278,9 +327,9 @@ impl BuiltinToolRegistry {
                         tools,
                         "audio_generate",
                         crate::builtin_tools::generation::AudioGenerateTool::DESCRIPTION,
-                        schema::<crate::builtin_tools::generation::AudioGenerateArgs>(
-                            "audio_generate",
-                        ),
+                        super::core_tools::tool_schema::<
+                            crate::builtin_tools::generation::AudioGenerateArgs,
+                        >("audio_generate"),
                     );
                     info!("Registered audio_generate tool in BuiltinToolRegistry");
                 }
@@ -290,9 +339,9 @@ impl BuiltinToolRegistry {
                         tools,
                         "speech_generate",
                         crate::builtin_tools::generation::SpeechGenerateTool::DESCRIPTION,
-                        schema::<crate::builtin_tools::generation::SpeechGenerateArgs>(
-                            "speech_generate",
-                        ),
+                        super::core_tools::tool_schema::<
+                            crate::builtin_tools::generation::SpeechGenerateArgs,
+                        >("speech_generate"),
                     );
                     info!("Registered speech_generate tool in BuiltinToolRegistry");
                 }
@@ -316,8 +365,8 @@ impl BuiltinToolRegistry {
         // Heartbeat management tools (require SharedHeartbeatService)
         if let Some(ref hb_svc) = config.heartbeat_service {
             use crate::builtin_tools::heartbeat_manage::{
-                HeartbeatCreateTool, HeartbeatDeleteTool, HeartbeatListTool, HeartbeatReportTool,
-                HeartbeatToggleTool, HeartbeatUpdateTool,
+                HeartbeatCreateTool, HeartbeatDeleteTool, HeartbeatListTool, HeartbeatToggleTool,
+                HeartbeatUpdateTool,
             };
             let list_tool = HeartbeatListTool::new(Arc::clone(hb_svc));
             let def = AlephTool::definition(&list_tool);
@@ -365,19 +414,13 @@ impl BuiltinToolRegistry {
             );
 
             info!("Registered heartbeat management tools in BuiltinToolRegistry");
+        }
 
-            // heartbeat_report is always registered (L2 output tool — no service dependency)
-            let report_tool = HeartbeatReportTool;
-            let def = AlephTool::definition(&report_tool);
-            reg(
-                tools,
-                "heartbeat_report",
-                HeartbeatReportTool::DESCRIPTION,
-                def.parameters.clone(),
-            );
-            info!("Registered heartbeat_report tool in BuiltinToolRegistry");
-        } else {
-            // Register heartbeat_report even without the heartbeat service
+        // heartbeat_report is always registered (L2 output tool — no service
+        // dependency). It is registered once, outside the service block: the
+        // two branches used to register it twice, so the second registration
+        // silently overwrote the first.
+        {
             use crate::builtin_tools::heartbeat_manage::HeartbeatReportTool;
             let report_tool = HeartbeatReportTool;
             let def = AlephTool::definition(&report_tool);
@@ -387,7 +430,7 @@ impl BuiltinToolRegistry {
                 HeartbeatReportTool::DESCRIPTION,
                 def.parameters.clone(),
             );
-            info!("Registered heartbeat_report tool (standalone) in BuiltinToolRegistry");
+            info!("Registered heartbeat_report tool in BuiltinToolRegistry");
         }
 
         // Session tools (require SessionManager — from gateway_context or direct session_manager)
@@ -441,14 +484,22 @@ impl BuiltinToolRegistry {
                 def.parameters.clone(),
             );
             info!("Registered session.set_mode tool in BuiltinToolRegistry");
+        }
 
-            // session_search — metadata only; tool is constructed on-the-fly from GatewayContext
+        // session_search — metadata only; tool is constructed on-the-fly from
+        // the GatewayContext. The handler needs that context, so the tool is
+        // registered only when one exists: otherwise it was advertised with a
+        // full schema and every call failed with
+        // "GatewayContext not yet injected".
+        if config.gateway_context.is_some() {
             use crate::builtin_tools::SessionSearchTool;
             reg(
                 tools,
                 "session_search",
                 SessionSearchTool::DESCRIPTION,
-                schema::<crate::builtin_tools::session_search::SessionSearchArgs>("session_search"),
+                super::core_tools::tool_schema::<
+                    crate::builtin_tools::session_search::SessionSearchArgs,
+                >("session_search"),
             );
             info!("Registered session_search tool in BuiltinToolRegistry");
         }
@@ -461,9 +512,9 @@ impl BuiltinToolRegistry {
                 tools,
                 "channel_pairing",
                 ChannelPairingTool::DESCRIPTION,
-                schema::<crate::builtin_tools::channel_manage::ChannelPairingArgs>(
-                    "channel_pairing",
-                ),
+                super::core_tools::tool_schema::<
+                    crate::builtin_tools::channel_manage::ChannelPairingArgs,
+                >("channel_pairing"),
             );
             info!("Registered channel_pairing tool in BuiltinToolRegistry");
         }
@@ -476,9 +527,9 @@ impl BuiltinToolRegistry {
                 tools,
                 "channel_message",
                 ChannelMessageTool::DESCRIPTION,
-                schema::<crate::builtin_tools::channel_message::ChannelMessageArgs>(
-                    "channel_message",
-                ),
+                super::core_tools::tool_schema::<
+                    crate::builtin_tools::channel_message::ChannelMessageArgs,
+                >("channel_message"),
             );
             info!("Registered channel_message tool in BuiltinToolRegistry");
         }
@@ -491,9 +542,9 @@ impl BuiltinToolRegistry {
                 tools,
                 "channel_directory",
                 ChannelDirectoryTool::DESCRIPTION,
-                schema::<crate::builtin_tools::channel_directory::ChannelDirectoryArgs>(
-                    "channel_directory",
-                ),
+                super::core_tools::tool_schema::<
+                    crate::builtin_tools::channel_directory::ChannelDirectoryArgs,
+                >("channel_directory"),
             );
             info!("Registered channel_directory tool in BuiltinToolRegistry");
         }
@@ -507,7 +558,9 @@ impl BuiltinToolRegistry {
                 tools,
                 "channel_outbox",
                 ChannelOutboxTool::DESCRIPTION,
-                schema::<crate::builtin_tools::channel_outbox::ChannelOutboxArgs>("channel_outbox"),
+                super::core_tools::tool_schema::<
+                    crate::builtin_tools::channel_outbox::ChannelOutboxArgs,
+                >("channel_outbox"),
             );
             info!("Registered channel_outbox tool in BuiltinToolRegistry");
         }
@@ -521,7 +574,9 @@ impl BuiltinToolRegistry {
                 tools,
                 "ask_user",
                 AskUserTool::DESCRIPTION,
-                schema::<crate::builtin_tools::ask_user::AskUserArgs>("ask_user"),
+                super::core_tools::tool_schema::<crate::builtin_tools::ask_user::AskUserArgs>(
+                    "ask_user",
+                ),
             );
             info!("Registered ask_user tool in BuiltinToolRegistry");
         }
@@ -533,13 +588,17 @@ impl BuiltinToolRegistry {
             tools,
             "session_list",
             SessionsListTool::DESCRIPTION,
-            schema::<crate::builtin_tools::sessions::SessionsListArgs>("session_list"),
+            super::core_tools::tool_schema::<crate::builtin_tools::sessions::SessionsListArgs>(
+                "session_list",
+            ),
         );
         reg(
             tools,
             "session_send",
             SessionsSendTool::DESCRIPTION,
-            schema::<crate::builtin_tools::sessions::SessionsSendArgs>("session_send"),
+            super::core_tools::tool_schema::<crate::builtin_tools::sessions::SessionsSendArgs>(
+                "session_send",
+            ),
         );
         info!("Registered session.list + session.send in BuiltinToolRegistry");
 
@@ -548,18 +607,27 @@ impl BuiltinToolRegistry {
             tools,
             "voice_mode_set",
             crate::builtin_tools::voice_tools::VoiceModeSetTool::DESCRIPTION,
-            schema::<crate::builtin_tools::voice_tools::VoiceModeSetArgs>("voice_mode_set"),
+            super::core_tools::tool_schema::<crate::builtin_tools::voice_tools::VoiceModeSetArgs>(
+                "voice_mode_set",
+            ),
         );
         info!("Registered voice_mode_set tool in BuiltinToolRegistry");
 
-        // Local voice endpoint tool — status probe for the BYO STT/TTS server (R8)
-        reg(
-            tools,
-            "local_voice",
-            crate::builtin_tools::voice_tools::LocalVoiceTool::DESCRIPTION,
-            schema::<crate::builtin_tools::voice_tools::LocalVoiceArgs>("local_voice"),
-        );
-        info!("Registered local_voice tool in BuiltinToolRegistry");
+        // Local voice endpoint tool — status probe for the BYO STT/TTS server (R8).
+        // The handler needs the live Config handle, so the tool is registered
+        // only when one is configured — the same rule the sibling
+        // `config_audit` tool follows.
+        if config.config.is_some() {
+            reg(
+                tools,
+                "local_voice",
+                crate::builtin_tools::voice_tools::LocalVoiceTool::DESCRIPTION,
+                super::core_tools::tool_schema::<crate::builtin_tools::voice_tools::LocalVoiceArgs>(
+                    "local_voice",
+                ),
+            );
+            info!("Registered local_voice tool in BuiltinToolRegistry");
+        }
 
         // Wiki orientation tools (Spec 5 Task 12).
         // `note_schema` is always registered when a memory dir is available (LLM can always
@@ -570,8 +638,11 @@ impl BuiltinToolRegistry {
                 tools,
                 "note_schema",
                 crate::builtin_tools::note_schema::NoteSchemaTool::DESCRIPTION,
-                schema::<crate::builtin_tools::note_schema::NoteSchemaArgs>("note_schema"),
-            );
+                super::core_tools::tool_schema::<crate::builtin_tools::note_schema::NoteSchemaArgs>(
+                    "note_schema",
+                ),
+            )
+            .services = crate::builtin_tools::note_schema::NoteSchemaTool::services();
             info!("Registered note_schema tool in BuiltinToolRegistry");
         }
 
@@ -580,8 +651,11 @@ impl BuiltinToolRegistry {
                 tools,
                 "note_orient",
                 crate::builtin_tools::note_orient::NoteOrientTool::DESCRIPTION,
-                schema::<crate::builtin_tools::note_orient::NoteOrientArgs>("note_orient"),
-            );
+                super::core_tools::tool_schema::<crate::builtin_tools::note_orient::NoteOrientArgs>(
+                    "note_orient",
+                ),
+            )
+            .services = crate::builtin_tools::note_orient::NoteOrientTool::services();
             info!("Registered note_orient tool in BuiltinToolRegistry");
         }
 
@@ -591,9 +665,277 @@ impl BuiltinToolRegistry {
                 tools,
                 "user_profile",
                 crate::builtin_tools::user_profile::UserProfileTool::DESCRIPTION,
-                schema::<crate::builtin_tools::user_profile::UserProfileArgs>("user_profile"),
-            );
+                super::core_tools::tool_schema::<crate::builtin_tools::user_profile::UserProfileArgs>(
+                    "user_profile",
+                ),
+            ).services = crate::builtin_tools::user_profile::UserProfileTool::services();
             info!("Registered user_profile tool in BuiltinToolRegistry");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::{BuiltinToolConfig, BuiltinToolRegistry};
+    use crate::memory::store::raw_memory::RawMemoryStore;
+    use crate::sync_primitives::Arc;
+
+    fn memory_backend(dir: &std::path::Path) -> crate::memory::store::MemoryBackend {
+        Arc::new(crate::memory::store::SqliteMemoryBackend::new(dir).unwrap())
+    }
+
+    async fn raw_memory_store(dir: &std::path::Path) -> Arc<dyn RawMemoryStore> {
+        Arc::new(
+            crate::memory::store::markdown::MarkdownSessionStore::new(dir)
+                .await
+                .unwrap(),
+        )
+    }
+
+    /// Raw and derived handles supplied outside the runtime cannot enable these tools.
+    #[tokio::test]
+    async fn flag_user_correction_and_governance_metrics_require_the_runtime() {
+        let tmp = tempfile::tempdir().unwrap();
+        let backend = memory_backend(tmp.path());
+        let raw_store = raw_memory_store(tmp.path()).await;
+
+        let mut without_raw_store = HashMap::new();
+        BuiltinToolRegistry::register_optional_tools(
+            &mut without_raw_store,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &BuiltinToolConfig {
+                memory_db: Some(backend.clone()),
+                raw_memory_store: None,
+                ..Default::default()
+            },
+            &None,
+            &None,
+            &None,
+        );
+        assert!(!without_raw_store.contains_key("flag_user_correction"));
+        assert!(!without_raw_store.contains_key("governance_metrics"));
+
+        let mut with_raw_store = HashMap::new();
+        BuiltinToolRegistry::register_optional_tools(
+            &mut with_raw_store,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &BuiltinToolConfig {
+                memory_db: Some(backend),
+                raw_memory_store: Some(raw_store),
+                ..Default::default()
+            },
+            &None,
+            &None,
+            &None,
+        );
+        assert!(!with_raw_store.contains_key("flag_user_correction"));
+        assert!(!with_raw_store.contains_key("governance_metrics"));
+        assert!(!with_raw_store.contains_key("memory_runtime_status"));
+        assert!(!with_raw_store.contains_key("memory_runtime_start"));
+        assert!(!with_raw_store.contains_key("memory_runtime_stop"));
+
+        let mut with_runtime = HashMap::new();
+        BuiltinToolRegistry::register_optional_tools(
+            &mut with_runtime,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &BuiltinToolConfig {
+                memory_runtime: Some(crate::memory::runtime::MemoryRuntime::new(
+                    crate::memory::runtime::MemoryRuntimeConfig {
+                        metadata_path: tmp.path().join("runtime.db"),
+                        note_memory_dir: tmp.path().join("notes"),
+                        retrieval_tuning: Default::default(),
+                    },
+                    Arc::new(crate::capability::ownership::OwnershipTree::new()),
+                )),
+                ..Default::default()
+            },
+            &None,
+            &None,
+            &None,
+        );
+        assert!(with_runtime.contains_key("flag_user_correction"));
+        assert!(with_runtime.contains_key("governance_metrics"));
+    }
+
+    /// The local_voice handler reads the live Config handle, so without that
+    /// handle every call fails. The tool must not be advertised in that case
+    /// — the sibling `config_audit` tool already follows that rule.
+    #[test]
+    fn local_voice_requires_the_config_handle() {
+        let mut tools = HashMap::new();
+        BuiltinToolRegistry::register_optional_tools(
+            &mut tools,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &BuiltinToolConfig::default(),
+            &None,
+            &None,
+            &None,
+        );
+        assert!(!tools.contains_key("local_voice"));
+        BuiltinToolRegistry::register_optional_tools(
+            &mut tools,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &BuiltinToolConfig {
+                config: Some(Arc::new(tokio::sync::RwLock::new(crate::Config::default()))),
+                ..Default::default()
+            },
+            &None,
+            &None,
+            &None,
+        );
+        assert!(tools
+            .get("local_voice")
+            .unwrap()
+            .parameters_schema
+            .is_some());
+    }
+
+    /// The other half of the gate: with the Config handle wired, the tool IS
+    /// advertised AND carries a schema.
+    ///
+    /// The negative test above pins the gate; this one pins what the gate
+    /// costs. `local_voice` is class (b) in
+    /// `tools_without_an_unconditional_schema_are_pinned` — it registers only
+    /// once a live dependency is present, so the deterministic map this
+    /// count is measured against cannot reach it and
+    /// `registry_schema_bytes_ratchet` does not bound its bytes. That is a
+    /// statement about what a session-less test can build, not about what
+    /// production ships: the schema DOES ship in every deployment that has
+    /// a Config handle, which is every deployment. Without this test the
+    /// residue would be indistinguishable from a tool that lost its schema.
+    #[test]
+    fn local_voice_registers_with_a_schema_when_the_config_handle_is_live() {
+        let mut tools = HashMap::new();
+        BuiltinToolRegistry::register_optional_tools(
+            &mut tools,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &BuiltinToolConfig {
+                config: Some(Arc::new(tokio::sync::RwLock::new(
+                    crate::config::Config::default(),
+                ))),
+                ..Default::default()
+            },
+            &None,
+            &None,
+            &None,
+        );
+        let tool = tools
+            .get("local_voice")
+            .expect("local_voice must register once the Config handle is live");
+        assert!(
+            tool.parameters_schema.is_some(),
+            "local_voice must carry a schema when the Config handle is live — the tool is \
+             advertised to the model, so a missing schema hands it a surface it cannot fill"
+        );
+    }
+
+    /// The session_search handler is built from the GatewayContext. A session
+    /// store alone is not enough, and advertising the tool anyway produced a
+    /// fully-schemaed tool whose every call failed with
+    /// "GatewayContext not yet injected".
+    #[tokio::test]
+    async fn session_search_requires_the_gateway_context() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let session_manager: Arc<dyn crate::gateway::session_store::SessionStore> =
+            Arc::new(crate::gateway::SessionManager::with_defaults().unwrap());
+
+        let mut tools = HashMap::new();
+        BuiltinToolRegistry::register_optional_tools(
+            &mut tools,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &BuiltinToolConfig {
+                session_manager: Some(session_manager),
+                ..Default::default()
+            },
+            &None,
+            &None,
+            &None,
+        );
+        assert!(tools.contains_key("session_new"));
+        assert!(!tools.contains_key("session_search"));
+    }
+
+    /// Context mode injects memory as context messages instead of exposing
+    /// retrieval tools. The tools must not exist at all there: a constructed
+    /// tool still answers dispatch calls, which would serve retrieval the
+    /// model was never given a schema for.
+    #[tokio::test]
+    async fn context_mode_does_not_build_the_retrieval_tools() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let runtime = crate::memory::runtime::MemoryRuntime::new(
+            crate::memory::runtime::MemoryRuntimeConfig {
+                metadata_path: tmp.path().join("metadata.db"),
+                note_memory_dir: tmp.path().join("notes"),
+                retrieval_tuning: Default::default(),
+            },
+            Arc::new(crate::capability::ownership::OwnershipTree::new()),
+        );
+
+        let context_registry = BuiltinToolRegistry::with_config(BuiltinToolConfig {
+            memory_runtime: Some(runtime.clone()),
+            injection_mode: crate::config::types::memory::MemoryInjectionMode::Context,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+        assert!(!context_registry.has_tool("memory_search"));
+        assert!(!context_registry.has_tool("memory_browse"));
+        assert!(!context_registry.has_tool("memory_explore"));
+        assert!(!context_registry.has_tool("memory_timeline"));
+
+        let tools_registry = BuiltinToolRegistry::with_config(BuiltinToolConfig {
+            memory_runtime: Some(runtime.clone()),
+            injection_mode: crate::config::types::memory::MemoryInjectionMode::Tools,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+        assert!(tools_registry.has_tool("memory_search"));
+        assert!(tools_registry.has_tool("memory_browse"));
+        assert!(tools_registry.has_tool("memory_explore"));
+        assert_eq!(
+            runtime.status().state,
+            crate::memory::runtime::MemoryState::Off,
+        );
     }
 }

@@ -791,7 +791,7 @@ async fn tier_b_double_click_refuses_there_is_no_background_multi_click() {
     .await;
 
     // A refusal that still moved app state would be its own lie.
-    std::thread::sleep(Duration::from_millis(300));
+    tokio::time::sleep(Duration::from_millis(300)).await;
     let after = fixture.state();
     assert_eq!(
         after.last_event().kind,
@@ -833,7 +833,7 @@ async fn tier_b_coordinate_click_with_no_ax_rung_refuses_rather_than_lying() {
         "the click refusal should route the model to the element rail: {msg}"
     );
 
-    std::thread::sleep(Duration::from_millis(300));
+    tokio::time::sleep(Duration::from_millis(300)).await;
     let after = fixture.state();
     assert_eq!(
         after.last_event().kind,

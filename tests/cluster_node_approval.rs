@@ -114,9 +114,14 @@ async fn approve_once_round_trip() {
 
 #[tokio::test]
 async fn approve_session_round_trip() {
+    // A cluster node never receives a standing grant: the node's allowed
+    // decisions are once-only (`allowed_decisions::once_only()` in
+    // src/exec/allowed_decisions.rs), so `AllowSession` is clamped down to
+    // `Approved` before it reaches the outcome. The clamp is the rule; the
+    // requester does not degrade it.
     run_case(
         Some(ApprovalDecisionType::AllowSession),
-        ApprovalOutcome::ApprovedForSession,
+        ApprovalOutcome::Approved,
     )
     .await;
 }

@@ -1074,5 +1074,8 @@ static CANONICAL_ID: Lazy<HashMap<&'static str, &'static str>> = Lazy::new(|| {
 /// (the `codex` → `chatgpt` special case in `set_default_provider`) were a
 /// second truth that drifted the moment an alias was added here.
 pub fn canonical_preset_id(name: &str) -> Option<&'static str> {
+    if let Some(id) = CANONICAL_ID.get(name) {
+        return Some(*id);
+    }
     CANONICAL_ID.get(name.to_lowercase().as_str()).copied()
 }

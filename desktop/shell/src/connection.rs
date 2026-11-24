@@ -13,9 +13,6 @@ use std::sync::OnceLock;
 use tokio::sync::watch;
 use url::Url;
 
-/// Default Gateway port when the user omits one.
-const DEFAULT_PORT: u16 = 18790;
-
 /// Filename prefix for this build's shell-state markers under `~/.aleph/`.
 /// The full app and the panel-only (lite) shell keep *independent* connection +
 /// autostart state so both can run on one machine without clobbering each other
@@ -266,180 +263,8 @@ fn remove_gateway_token() -> Result<(), String> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ConnectionTarget {
-    /// Launch + supervise the local daemon; webview → 127.0.0.1:18790.
-    Local,
-    /// Connect to a remote Gateway by origin; never touch the local daemon.
-    Remote(Url),
-}
-
-impl ConnectionTarget {
-    /// Parse a persisted/user-entered target string. `"local"` (any case) or
-    /// empty → Local. Otherwise normalise to a `Remote(Url)`:
-    /// accept `host`, `host:port`, `http://host`, `https://host:port`;
-    /// default scheme `http`, default port per [`default_port_for`].
-    pub fn parse(raw: &str) -> Result<Self, String> {
-        let t = raw.trim();
-        if t.is_empty() || t.eq_ignore_ascii_case("local") {
-            return Ok(Self::Local);
-        }
-        let with_scheme = if t.contains("://") {
-            t.to_string()
-        } else {
-            format!("http://{t}")
-        };
-        let mut url = Url::parse(&with_scheme).map_err(|e| format!("invalid target URL: {e}"))?;
-        match url.scheme() {
-            "http" | "https" => {}
-            other => return Err(format!("unsupported scheme: {other}")),
-        }
-        if url.host().is_none() {
-            return Err("target URL has no host".to_string());
-        }
-        // Apply the default port only when the user did not supply one explicitly.
-        // `url::Url::port()` returns None both for "no port written" and for "port
-        // equals the scheme default" (e.g. https:443, http:80) — the two cases are
-        // indistinguishable after parsing.  We therefore inspect the pre-parse
-        // string: if it already contains ":<digits>" after the host, the user made
-        // an explicit choice and we honour it; otherwise we pick the default that
-        // matches what the user actually wrote (see [`default_port_for`]).
-        let has_explicit_port = has_explicit_port_in_input(t);
-        if !has_explicit_port {
-            // set_port only errors when the URL cannot have a port (it can here)
-            let _ = url.set_port(Some(default_port_for(t, url.scheme())));
-        }
-        Ok(Self::Remote(url))
-    }
-
-    /// Serialise for persistence. Local → `"local"`; Remote → the URL origin
-    /// with an explicit port (so that `load_target` round-trips correctly even
-    /// when the port equals the scheme default and would otherwise be elided by
-    /// the `url` crate's normalisation).
-    pub fn to_persisted(&self) -> String {
-        match self {
-            Self::Local => "local".to_string(),
-            Self::Remote(url) => {
-                let scheme = url.scheme();
-                let host = url.host_str().unwrap_or("127.0.0.1");
-                // `url::Url::port()` returns None for scheme-default ports (443 for
-                // https, 80 for http); use `port_or_known_default()` to recover them.
-                let port = url.port_or_known_default().unwrap_or(DEFAULT_PORT);
-                format!("{scheme}://{host}:{port}")
-            }
-        }
-    }
-
-    /// Whether `url` sits on the exact origin (scheme + host + port) the Panel
-    /// is served from for this target — the loopback default for Local, the
-    /// configured URL for Remote. The update sentinel guard
-    /// (`update::control_action`) honours shell-control navigations only from
-    /// this origin, so a foreign page cannot drive shell actions.
-    pub fn serves_origin(&self, url: &Url) -> bool {
-        match self {
-            // `crate::PANEL_URL` is already exactly the loopback origin's
-            // serialization (http scheme, non-default port), so a string
-            // compare is a parsed-origin compare without parsing a constant.
-            Self::Local => url.origin().unicode_serialization() == crate::PANEL_URL,
-            Self::Remote(target) => url.origin() == target.origin(),
-        }
-    }
-}
-
-/// The port to assume when the user wrote none. Two different questions, two
-/// different answers:
-///
-///   * A bare `host` / `host/path` means *"an aleph-server lives there"*, whose
-///     default listener is [`DEFAULT_PORT`] — the LAN case, unchanged.
-///   * An explicitly written `http://` / `https://` means *"this URL"*, whose
-///     default port is the scheme's own (80 / 443). TLS on the gateway is off by
-///     default and `gateway::tls` states outright that public issuance is
-///     Caddy's / certbot's job, so a typed `https://` almost always names a
-///     reverse proxy or CDN on 443.
-///
-/// Injecting [`DEFAULT_PORT`] into a typed `https://host` made every
-/// reverse-proxied deployment structurally unreachable: the shell rewrote a
-/// working `https://gw.example.com` into `https://gw.example.com:18790`, which
-/// no proxy serves. No persisted target regresses, because [`to_persisted`]
-/// always writes an explicit port and `has_explicit_port_in_input` then honours
-/// it — the rule only reinterprets *freshly typed* input.
-///
-/// [`to_persisted`]: ConnectionTarget::to_persisted
-///
-/// **Mirrored on iOS.** `mobile/ios/…/Models/PairingTarget.swift` ports this
-/// rule verbatim and pins it with its own tests, because the two shells
-/// promise one onboarding format — an address that works on the desktop must
-/// work on the phone. That promise is written down only on the iOS side, and
-/// nothing here can fail when it is broken: the halves are built by different
-/// toolchains (`cargo` never compiles the Swift, `xcodebuild` never compiles
-/// this), so changing the rule below is green in CI while silently splitting
-/// the two shells apart. Change one, change both.
-fn default_port_for(raw: &str, scheme: &str) -> u16 {
-    if !raw.contains("://") {
-        return DEFAULT_PORT;
-    }
-    match scheme {
-        "https" => 443,
-        _ => 80,
-    }
-}
-
-/// True iff `tail` (the bytes immediately following a `host:` colon) is a
-/// sequence of ASCII digits terminated by `/`, `?`, `#`, or end-of-string.
-/// Anything else — `host:abc`, `host:443abc`, `host:80abc` — is not a port.
-///
-/// `host:80?bt=...` is therefore an explicit port 80 followed by a query
-/// string, not a port labelled `80?bt=...`. The older split('/').next()
-/// form returned `false` for this input because `split` reached end-of-string
-/// without finding a separator and handed the whole `80?bt=...` back, then
-/// `is_ascii_digit()` rejected the `?`.
-fn port_tail_is_explicit(tail: &str) -> bool {
-    match tail.find(|c: char| !c.is_ascii_digit()) {
-        Some(end) => {
-            let after = &tail[end..];
-            after.is_empty()
-                || after.starts_with('/')
-                || after.starts_with('?')
-                || after.starts_with('#')
-        }
-        // All digits until end of string — still an explicit port (it may
-        // happen to equal the scheme default; the user wrote it explicitly
-        // and we honour the literal).
-        None => !tail.is_empty(),
-    }
-}
-
-/// Detect whether the raw user input already contains an explicit port number.
-/// Handles forms: `host:port`, `http://host:port`, `https://host:port`,
-/// including IPv6 (`[::1]:port`).  Returns false when only a scheme default
-/// would apply (e.g. `https://host` with no written port).
-fn has_explicit_port_in_input(raw: &str) -> bool {
-    // Strip scheme if present so we work on `[host]/path` or `host:port/path`.
-    let after_scheme = if let Some(pos) = raw.find("://") {
-        &raw[pos + 3..]
-    } else {
-        raw
-    };
-    // For IPv6 addresses the host is wrapped in brackets: `[::1]:port`.
-    let host_end = if after_scheme.starts_with('[') {
-        after_scheme.find(']').map(|i| i + 1)
-    } else {
-        // Plain hostname or IPv4 — find the first `:`.
-        after_scheme.find(':')
-    };
-    match host_end {
-        // IPv6: `idx` is already one past `]` (i.e. pointing at `:` when a
-        // port is present), so check for `:` directly at `idx`.
-        Some(idx) if after_scheme.starts_with('[') => {
-            after_scheme[idx..].starts_with(':') && port_tail_is_explicit(&after_scheme[idx + 1..])
-        }
-        // Plain host:port — digits after the `:`, terminated by `/`, `?`,
-        // `#`, or end-of-string. `host:80?bt=...` is an explicit port 80
-        // followed by a query string, not a port labelled `80?bt=...`.
-        Some(colon) => port_tail_is_explicit(&after_scheme[colon + 1..]),
-        None => false,
-    }
-}
+// Shared parser only; this module still owns persistence and target transactions.
+pub use aleph_client::ConnectionTarget;
 
 /// Whether a target has ever been chosen (the marker file exists). Unlike
 /// [`load_target`], which collapses "no marker" and "marker says local" into
@@ -710,7 +535,9 @@ where
 /// this re-routes to the previous, still-consistent target.
 pub(crate) async fn reroute_current_target(app: tauri::AppHandle) {
     serialize_target_switch(|| async move {
-        let target = load_target();
+        let target = tokio::task::spawn_blocking(load_target)
+            .await
+            .unwrap_or(ConnectionTarget::Local);
         crate::reroute_for_target(&app, target).await;
     })
     .await
@@ -1400,7 +1227,10 @@ mod tests {
         let body = &src[start..];
         let body = &body[..body.find("\n}\n").unwrap()];
         let gate = body.find("serialize_target_switch(").expect("not gated");
-        let load = body.find("load_target()").expect("does not reload target");
+        // The blocking read was moved off the async thread by
+        // `tokio::task::spawn_blocking(load_target)`; the pin names the
+        // function, not the old direct call syntax.
+        let load = body.find("load_target").expect("does not reload target");
         let nav = body.find("reroute_for_target(").expect("does not reroute");
         assert!(gate < load && load < nav, "target must be read inside gate");
     }

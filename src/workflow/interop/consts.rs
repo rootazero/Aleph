@@ -41,7 +41,9 @@ pub(crate) fn collect_consts(src: &str) -> ConstTable {
     let mut table = ConstTable::new();
     let mut i = 0;
     while i < n {
-        let c = chars[i];
+        let Some(&c) = chars.get(i) else {
+            break;
+        };
         // Skip string-literal bodies so a `const` mentioned inside a prompt does
         // not register as a declaration.
         if c == '\'' || c == '"' || c == '`' {
@@ -50,10 +52,12 @@ pub(crate) fn collect_consts(src: &str) -> ConstTable {
         }
         if c.is_alphabetic() || c == '_' {
             let start = i;
-            while i < n && is_ident_char(chars[i]) {
+            while i < n && chars.get(i).copied().is_some_and(is_ident_char) {
                 i += 1;
             }
-            if chars[start..i].iter().collect::<String>() == "const" {
+            // The identifier is exactly `const` — `matches_keyword_at` must end
+            // where the identifier ends, so `constants` does not match.
+            if matches_keyword_at(&chars, start, "const") == Some(i) {
                 if let Some((name, val)) = read_const_decl(&chars, i) {
                     table.entry(name).or_insert(val);
                 }
@@ -70,13 +74,16 @@ pub(crate) fn collect_consts(src: &str) -> ConstTable {
 fn read_const_decl(chars: &[char], after_const: usize) -> Option<(String, Value)> {
     let mut i = first_non_ws(chars, after_const);
     let name_start = i;
-    while i < chars.len() && is_ident_char(chars[i]) {
+    while i < chars.len() && chars.get(i).copied().is_some_and(is_ident_char) {
         i += 1;
     }
     if i == name_start {
         return None;
     }
-    let name: String = chars[name_start..i].iter().collect();
+    let name: String = chars
+        .get(name_start..i)
+        .map(|s| s.iter().collect())
+        .unwrap_or_default();
     i = first_non_ws(chars, i);
     // Require a single `=`; `==` / `=>` are not a const initialiser.
     if chars.get(i) != Some(&'=') || matches!(chars.get(i + 1), Some('=' | '>')) {
@@ -140,10 +147,13 @@ fn parse_object(chars: &[char], start: usize, depth: u32) -> Option<(Value, usiz
             }
             c if c.is_alphabetic() || *c == '_' || *c == '$' => {
                 let ks = i;
-                while i < n && is_ident_char(chars[i]) {
+                while i < n && chars.get(i).copied().is_some_and(is_ident_char) {
                     i += 1;
                 }
-                chars[ks..i].iter().collect()
+                chars
+                    .get(ks..i)
+                    .map(|s| s.iter().collect())
+                    .unwrap_or_default()
             }
             _ => return None,
         };
@@ -201,7 +211,9 @@ fn read_string(chars: &[char], start: usize) -> Option<(String, usize)> {
     let mut i = start + 1;
     let mut out = String::new();
     while i < chars.len() {
-        let c = chars[i];
+        let Some(&c) = chars.get(i) else {
+            break;
+        };
         if c == '\\' {
             let esc = *chars.get(i + 1)?;
             out.push(match esc {
@@ -231,16 +243,24 @@ fn parse_bool(chars: &[char], start: usize) -> Option<(Value, usize)> {
     parse_keyword(chars, start, "false").map(|next| (Value::Bool(false), next))
 }
 
+/// Match the literal keyword `kw` starting exactly at `chars[start]`, returning
+/// the index just past it. Comparing chars in place keeps keyword detection
+/// allocation-free — the identifier being tested is already a char slice.
+fn matches_keyword_at(chars: &[char], start: usize, kw: &str) -> Option<usize> {
+    let mut i = start;
+    for expected in kw.chars() {
+        if chars.get(i) != Some(&expected) {
+            return None;
+        }
+        i += 1;
+    }
+    Some(i)
+}
+
 /// Match the exact keyword `kw` at `start`, requiring it not run into a longer
 /// identifier (`trueish` must not match `true`). Returns the index past it.
 fn parse_keyword(chars: &[char], start: usize, kw: &str) -> Option<usize> {
-    let kw: Vec<char> = kw.chars().collect();
-    for (k, &ch) in kw.iter().enumerate() {
-        if chars.get(start + k) != Some(&ch) {
-            return None;
-        }
-    }
-    let after = start + kw.len();
+    let after = matches_keyword_at(chars, start, kw)?;
     match chars.get(after) {
         Some(c) if is_ident_char(*c) => None,
         _ => Some(after),
@@ -255,13 +275,21 @@ fn parse_number(chars: &[char], start: usize) -> Option<(Value, usize)> {
         i += 1;
     }
     let digits_start = i;
-    while i < n && (chars[i].is_ascii_digit() || matches!(chars[i], '.' | 'e' | 'E' | '+' | '-')) {
+    while i < n
+        && chars
+            .get(i)
+            .copied()
+            .is_some_and(|c| c.is_ascii_digit() || matches!(c, '.' | 'e' | 'E' | '+' | '-'))
+    {
         i += 1;
     }
     if i == digits_start {
         return None;
     }
-    let raw: String = chars[start..i].iter().collect();
+    let raw: String = chars
+        .get(start..i)
+        .map(|s| s.iter().collect())
+        .unwrap_or_default();
     // Prefer exact integer representations (i64 then u64) so a large unsigned
     // schema value keeps full precision, matching `serde_json`'s number model;
     // fall back to f64 only for fractional / exponent forms.
@@ -277,11 +305,15 @@ fn parse_number(chars: &[char], start: usize) -> Option<(Value, usize)> {
 /// Advance past a string literal beginning at `chars[start]` (a quote of any
 /// JS kind). Returns the index just past the close; unterminated → end of input.
 fn skip_string(chars: &[char], start: usize) -> usize {
-    let quote = chars[start];
+    let Some(&quote) = chars.get(start) else {
+        return start;
+    };
     let n = chars.len();
     let mut i = start + 1;
     while i < n {
-        let c = chars[i];
+        let Some(&c) = chars.get(i) else {
+            break;
+        };
         if c == '\\' {
             i += 2;
             continue;
@@ -297,7 +329,7 @@ fn skip_string(chars: &[char], start: usize) -> usize {
 /// Index of the first non-whitespace char at or after `start` (clamped to len).
 fn first_non_ws(chars: &[char], start: usize) -> usize {
     let mut i = start;
-    while i < chars.len() && chars[i].is_whitespace() {
+    while chars.get(i).copied().is_some_and(char::is_whitespace) {
         i += 1;
     }
     i

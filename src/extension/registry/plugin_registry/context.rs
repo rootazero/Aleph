@@ -1,9 +1,11 @@
 //! Context registrations share the extension registry and its lifecycle lock.
 
 use super::PluginRegistry;
+#[cfg(test)]
+use crate::context::fabric::ContextCapabilityDescriptor;
 use crate::context::fabric::{
-    AdmittedContextCall, AuthenticatedCaller, ContextCapabilityDescriptor, ContextCapabilityMode,
-    ContextCapabilityRequest, ContextNamespace, ContextOperation,
+    AdmittedContextCall, AuthenticatedCaller, ContextCapabilityMode, ContextCapabilityRequest,
+    ContextNamespace, ContextOperation,
 };
 use crate::extension::capability::{ContextGrant, ContextGrantAudit, ContextGrantError};
 use crate::extension::registry::{
@@ -73,6 +75,11 @@ impl PluginRegistry {
         Ok(())
     }
 
+    /// Register a single context registration.
+    ///
+    /// Test-only: production registers through
+    /// [`Self::register_context_bundle`] (one bundle = one grant decision).
+    #[cfg(test)]
     pub fn register_context(
         &mut self,
         registration: ContextRegistration,
@@ -212,6 +219,12 @@ impl PluginRegistry {
         Ok(())
     }
 
+    /// Drop a whole context bundle.
+    ///
+    /// Test-only: production revokes individual grants through
+    /// [`Self::revoke_context_grants`]; bundle expiry (the `expires_at`
+    /// deadline) is what ends a bundle's life in production.
+    #[cfg(test)]
     pub fn unregister_context_bundle(
         &mut self,
         plugin_id: &str,
@@ -230,6 +243,10 @@ impl PluginRegistry {
 
     /// Revoke one session's grants while retaining the shared descriptor and
     /// grants belonging to other sessions.
+    ///
+    /// Test-only: production revokes individual grants through
+    /// [`Self::revoke_context_grants`].
+    #[cfg(test)]
     pub fn unregister_context_bundle_for_session(
         &mut self,
         plugin_id: &str,
@@ -322,6 +339,11 @@ impl PluginRegistry {
         keys
     }
 
+    /// List the descriptors of the currently active context registrations.
+    ///
+    /// Test-only: production reads the registered contexts through the
+    /// capability/grant paths, not through this listing.
+    #[cfg(test)]
     #[must_use]
     pub fn list_context_descriptors(&self) -> Vec<&ContextCapabilityDescriptor> {
         let mut registrations: Vec<_> = self

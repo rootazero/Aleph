@@ -68,7 +68,7 @@ pub struct SearchHandle {
 
 impl SearchHandle {
     /// Seed a handle from the registry boot resolved for the tool face —
-    /// i.e. the output of the configured/`from_env_only`/empty decision,
+    /// i.e. the output of the configured/`from_tavily_key`/empty decision,
     /// so the very first snapshot matches what the tool would have captured
     /// before this handle existed.
     #[must_use]
@@ -154,7 +154,9 @@ fn rebuild_registry(
             None => {
                 let tavily_key = search
                     .as_ref()
+                    .filter(|s| s.enabled)
                     .and_then(|s| s.backends.get(&s.default_provider))
+                    .filter(|b| b.provider_type == "tavily")
                     .and_then(|b| b.api_key.clone());
                 SearchRegistry::for_tool(None, tavily_key.as_deref())
             }

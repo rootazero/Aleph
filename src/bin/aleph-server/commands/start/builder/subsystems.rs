@@ -10,10 +10,13 @@
 //! - Channel registration
 //! - Inbound message routing
 
-use std::path::PathBuf;
-
+#[cfg(test)]
+use alephcore::memory::notes::watcher::NoteVaultWatcher;
 use alephcore::sync_primitives::{Arc, RwLock};
 
+use alephcore::gateway::channel_policy::{
+    install_channel_policy_projection, ChannelPolicyProjection,
+};
 use alephcore::gateway::handlers::auth as auth_handlers;
 use alephcore::gateway::interfaces::telegram::offset::OffsetTracker;
 use alephcore::gateway::interfaces::telegram::parse_telegram_channel_config;
@@ -24,8 +27,119 @@ use alephcore::gateway::interfaces::TelegramChannel;
 use alephcore::gateway::telecom::operator_control::OperatorControl;
 use alephcore::gateway::GatewayServer;
 use alephcore::gateway::{AgentRegistry, ChannelRegistry, InboundMessageRouter, RoutingConfig};
+use alephcore::ChannelInstanceConfig;
 
 use super::register_channel_handlers;
+
+// Test-only wrappers for note lifecycle behavior. Production task ownership lives in MemoryBundle.
+
+/// Drain the real watcher owner in place for a focused lifecycle test.
+#[cfg(test)]
+pub(in crate::commands::start) async fn drain_note_vault_watcher(
+    watcher: &mut Option<NoteVaultWatcher>,
+) -> Result<(), alephcore::error::AlephError> {
+    let Some(watcher) = watcher.as_mut() else {
+        return Ok(());
+    };
+    watcher.shutdown().await
+}
+
+// ── Note maintenance test helpers ──────────────────────────────────────────
+
+/// Exercise the continue-on-failure orientation bootstrap used by MemoryBundle.
+#[cfg(test)]
+pub(in crate::commands::start) fn spawn_note_orientation_bootstrap(
+    wiki_clone: Arc<dyn alephcore::memory::notes::orientation::NoteOrientation>,
+    agent_id: String,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        if let Err(e) = wiki_clone.bootstrap(&agent_id).await {
+            tracing::warn!(error = %e, "Wiki orientation bootstrap failed; continuing without it");
+        }
+    })
+}
+
+/// Exercise index rebuild reporting without creating a production task owner.
+#[cfg(test)]
+pub(in crate::commands::start) fn spawn_note_index_rebuild(
+    indexer: Arc<
+        alephcore::memory::notes::NoteIndexer<alephcore::memory::store::SqliteMemoryBackend>,
+    >,
+    agent_id: String,
+    tx_residue_max_age: u64,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        tracing::info!(agent = %agent_id, "Reconciling note index with disk");
+        let stats = indexer
+            .full_rebuild_all(&agent_id, tx_residue_max_age)
+            .await;
+        tracing::info!(
+            corpora = stats.corpora,
+            indexed = stats.total.indexed,
+            skipped = stats.total.skipped,
+            errors = stats.total.errors,
+            pruned = stats.total.pruned,
+            // Keep the fixture summary aligned with MemoryBundle's startup
+            // report so stale vectors and transaction residue stay visible.            stale_vectors = stats.total.stale_vectors,
+            tx_residue_removed = stats.tx_residue_removed,
+            "Note index rebuild complete"
+        );
+        for (corpus, error) in &stats.failed {
+            tracing::warn!(%corpus, %error, "Note corpus left unreconciled at startup");
+        }
+    })
+}
+
+/// Test fixture that owns both note-maintenance task handles.
+#[cfg(test)]
+pub(in crate::commands::start) struct NoteMaintenanceOwner {
+    orientation: Option<tokio::task::JoinHandle<()>>,
+    rebuild: Option<tokio::task::JoinHandle<()>>,
+    failure: Option<String>,
+}
+
+#[cfg(test)]
+impl NoteMaintenanceOwner {
+    pub(in crate::commands::start) fn new(
+        orientation: tokio::task::JoinHandle<()>,
+        rebuild: tokio::task::JoinHandle<()>,
+    ) -> Self {
+        Self {
+            orientation: Some(orientation),
+            rebuild: Some(rebuild),
+            failure: None,
+        }
+    }
+}
+
+/// Observe both test tasks without surrendering pending handles on cancellation.
+///
+/// A terminal join failure remains sticky, but never skips the sibling task.
+#[cfg(test)]
+pub(in crate::commands::start) async fn drain_note_maintenance(
+    owner: &mut NoteMaintenanceOwner,
+) -> Result<(), alephcore::error::AlephError> {
+    if let Some(handle) = owner.orientation.as_mut() {
+        if let Err(error) = handle.await {
+            owner
+                .failure
+                .get_or_insert_with(|| format!("note orientation task failed: {error}"));
+        }
+        owner.orientation = None;
+    }
+    if let Some(handle) = owner.rebuild.as_mut() {
+        if let Err(error) = handle.await {
+            owner
+                .failure
+                .get_or_insert_with(|| format!("note rebuild task failed: {error}"));
+        }
+        owner.rebuild = None;
+    }
+    match owner.failure.as_ref() {
+        Some(error) => Err(alephcore::error::AlephError::other(error.clone())),
+        None => Ok(()),
+    }
+}
 
 // ── Security store + vault ──────────────────────────────────────────────────
 
@@ -53,20 +167,16 @@ pub(in crate::commands::start) struct VaultBundle {
 pub(in crate::commands::start) fn initialize_vault(
     port: u16,
     node_registry: Arc<alephcore::cluster::NodeRegistry>,
-) -> VaultBundle {
+    event_bus: Arc<alephcore::gateway::GatewayEventBus>,
+) -> Result<VaultBundle, Box<dyn std::error::Error>> {
     use alephcore::utils::paths;
     use tracing::{info, warn};
 
-    let security_store_path =
-        paths::get_security_db_path().unwrap_or_else(|_| PathBuf::from("/tmp/aleph_security.db"));
-    // Three-layer fallback: on-disk store → in-memory store → bail.
-    // `SecurityStore::in_memory` allocates a fresh SQLite `:memory:` connection,
-    // which only fails when the process is out of file descriptors or memory —
-    // a condition no Aleph code path is expected to recover from, so we treat
-    // it as a design-by-contract invariant and surface the message rather than
-    // a generic panic. `expect` keeps the diagnostic exact (which fallback
-    // failed and why); a wrapped panic would still propagate to the same
-    // `start_server` error path.
+    let security_store_path = paths::get_security_db_path()
+        .map_err(|e| format!("Cannot resolve security database path (set HOME/ALEPH_HOME): {e}"))?;
+    // Two-layer fallback: on-disk store → in-memory store → bail.
+    // On-disk path resolution failure is non-recoverable (HOME/ALEPH_HOME unset).
+    // In-memory fallback only occurs on open failure (permissions, corruption, etc.).
     let mut security_store_fallback: Option<String> = None;
     let security_store = Arc::new(
         alephcore::gateway::security::SecurityStore::open(&security_store_path)
@@ -98,67 +208,66 @@ pub(in crate::commands::start) fn initialize_vault(
         }
     };
 
-    // Vault file path — resolve through the authoritative resolver (honours
-    // ALEPH_HOME / $HOME) so the vault shares the SAME ~/.aleph/data as config
-    // and the singleton lock. dirs::home_dir() ignored $HOME on macOS, which is
-    // how an isolated test server ended up writing the real secrets vault.
-    let data_dir = alephcore::utils::paths::get_data_dir()
-        .unwrap_or_else(|_| std::path::PathBuf::from("/tmp/.aleph/data"));
-    let vault_path = data_dir.join("secrets.vault");
-    let shared_token_mgr = Arc::new(alephcore::gateway::security::SharedTokenManager::new(
-        security_store.clone(),
-        vault_path,
-    ));
+    let vault_bundle = {
+        let data_dir = paths::get_data_dir()
+            .map_err(|e| format!("Cannot resolve data directory (set HOME/ALEPH_HOME): {e}"))?;
+        let vault_path = data_dir.join("secrets.vault");
+        let shared_token_mgr = Arc::new(alephcore::gateway::security::SharedTokenManager::new(
+            security_store.clone(),
+            vault_path,
+        ));
 
-    // Clean up legacy token file (token is now stored in SQLite)
-    let legacy_token_file = data_dir.join(".shared_token");
-    if legacy_token_file.exists() {
-        if let Err(e) = std::fs::remove_file(&legacy_token_file) {
-            warn!("Failed to remove legacy token file: {}", e);
-        } else {
-            info!("Removed legacy token file (token is now in DB)");
-        }
-    }
-
-    // Load (or first-start provision) the shared token. Device auth is gone,
-    // but the token is still the vault master key — without it in memory every
-    // `get_secret`/`store_secret` fails — and the `/v1/admin` IPC bearer the
-    // CLI reads via `read_current_token_readonly`.
-    match shared_token_mgr.try_load_token_from_db() {
-        Some(_) => {
-            info!("vault master token ready (loaded from DB)");
-        }
-        None => match shared_token_mgr.generate_token() {
-            Ok(_) => {
-                info!("vault master token provisioned (first start)");
+        // Clean up legacy token file (token is now stored in SQLite)
+        let legacy_token_file = data_dir.join(".shared_token");
+        if legacy_token_file.exists() {
+            if let Err(e) = std::fs::remove_file(&legacy_token_file) {
+                warn!("Failed to remove legacy token file: {}", e);
+            } else {
+                info!("Removed legacy token file (token is now in DB)");
             }
-            Err(e) => {
-                warn!("Failed to generate shared token: {}", e);
+        }
+
+        // Load (or first-start provision) the shared token. Device auth is gone,
+        // but the token is still the vault master key — without it in memory every
+        // `get_secret`/`store_secret` fails — and the `/v1/admin` IPC bearer the
+        // CLI reads via `read_current_token_readonly`.
+        match shared_token_mgr.try_load_token_from_db() {
+            Some(_) => {
+                info!("vault master token ready (loaded from DB)");
             }
-        },
-    }
+            None => match shared_token_mgr.generate_token() {
+                Ok(_) => {
+                    info!("vault master token provisioned (first start)");
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to generate shared token: {} — token-gated surfaces (/v1, /v1/admin) will reject every request",
+                        e
+                    );
+                }
+            },
+        }
 
-    let auth_ctx = Arc::new(auth_handlers::AuthContext {
-        shared_token_mgr,
-        security_store: security_store.clone(),
-        node_registry,
-        // The cluster RPC handlers (e.g. `cluster.deregister`) emit
-        // `node.disconnected` into this bus so operator-initiated takedowns
-        // are observable in the same event stream the WebSocket drop arm uses.
-        // `initialize_vault` does not own an event bus (its only callers do
-        // not thread one in today); wired through this seam by adding the
-        // parameter here once the boot path passes it in. The publish is
-        // best-effort and gated by `Some(bus)` in `cluster::deregister_node`,
-        // so leaving this None is a silent no-op rather than a wrong emit.
-        event_bus: None,
-    });
-
-    VaultBundle {
-        security_store,
-        security_store_fallback,
-        auth_ctx,
-        mdns_broadcaster,
-    }
+        let auth_security_store = security_store.clone();
+        VaultBundle {
+            security_store,
+            security_store_fallback,
+            auth_ctx: Arc::new(auth_handlers::AuthContext {
+                shared_token_mgr,
+                security_store: auth_security_store,
+                node_registry,
+                // The cluster RPC handlers publish `node.disconnected` on the
+                // gateway bus. Handing them the SAME bus the gateway server
+                // publishes on is what makes the operator-initiated
+                // deregistration observable: with `None` the event was produced
+                // and dropped, and the Panel kept showing the node as online
+                // until a hard refresh.
+                event_bus: Some(event_bus),
+            }),
+            mdns_broadcaster,
+        }
+    };
+    Ok(vault_bundle)
 }
 
 // ── load_app_config ──────────────────────────────────────────────────────────
@@ -179,8 +288,7 @@ pub(in crate::commands::start) fn load_app_config(
 
 // ── initialize_channels ──────────────────────────────────────────────────────
 
-/// Register all messaging channels (iMessage, Telegram, Discord, `WhatsApp`)
-/// and the `LinkManager` for external bridge plugins.
+/// Register all messaging channels (iMessage, Telegram, Discord, `WhatsApp`).
 /// Returns the populated `ChannelRegistry`.
 pub(in crate::commands::start) async fn initialize_channels(
     server: &mut GatewayServer,
@@ -191,6 +299,7 @@ pub(in crate::commands::start) async fn initialize_channels(
     vault: Arc<alephcore::gateway::security::SharedTokenManager>,
     delivery_cfg: alephcore::gateway::delivery_queue::DeliveryQueueConfig,
     send_retry: alephcore::gateway::channel_registry::SendRetryPolicy,
+    policy: &Arc<ChannelPolicyProjection>,
 ) -> Arc<ChannelRegistry> {
     use alephcore::gateway::handlers::channel::{
         create_channel_from_config, inject_channel_secrets,
@@ -366,8 +475,11 @@ pub(in crate::commands::start) async fn initialize_channels(
         );
     }
 
-    // Create and register all channel instances
+    // Disabled declarations remain in Config without allocating an adapter.
     for inst in &instances {
+        if ChannelInstanceConfig::is_explicitly_disabled(&inst.config) {
+            continue;
+        }
         if inst.channel_type == "imessage" {
             match serde_json::from_value::<IMessageConfig>(inst.config.clone()) {
                 Ok(imessage_config) => {
@@ -469,8 +581,6 @@ pub(in crate::commands::start) async fn initialize_channels(
                             // Wire offset tracker for persistent polling resume
                             let tracker = OffsetTracker::new(db.clone(), inst.id.clone()).await;
                             tg_channel.set_offset_tracker(Arc::new(tracker));
-                            // Wire state database for pairing persistence
-                            tg_channel.set_state_database(db.clone());
                         }
                         channel = Box::new(tg_channel);
                     }
@@ -550,22 +660,7 @@ pub(in crate::commands::start) async fn initialize_channels(
                 }
             }
 
-            // `enabled` is a boot request owned by the registry. An explicit
-            // false leaves the channel registered but prevents `Channel::start`;
-            // token requests, listener/WS/emitter runtime, webhook mounts, and
-            // API-handle publication therefore remain absent until explicit
-            // lifecycle activation.
-            let boot_enabled = if inst.channel_type == "feishu" {
-                config_with_secrets
-                    .get("enabled")
-                    .and_then(serde_json::Value::as_bool)
-                    .unwrap_or(true)
-            } else {
-                true
-            };
-            let channel_id = channel_registry
-                .register_for_boot(channel, boot_enabled)
-                .await;
+            let channel_id = channel_registry.register_for_boot(channel, true).await;
             if !daemon {
                 println!("Registered channel: {} ({})", channel_id, inst.channel_type);
             }
@@ -578,7 +673,7 @@ pub(in crate::commands::start) async fn initialize_channels(
         }
     }
 
-    register_channel_handlers(server, &channel_registry, app_config_arc, &vault);
+    register_channel_handlers(server, &channel_registry, app_config_arc, &vault, policy);
 
     // Auto-start all registered channels
     let start_results = channel_registry.start_all().await;
@@ -603,21 +698,6 @@ pub(in crate::commands::start) async fn initialize_channels(
         println!("  - channel.create  : Create a new channel");
         println!("  - channel.delete  : Delete a channel");
         println!();
-    }
-
-    // Start external bridge plugins via LinkManager
-    {
-        use alephcore::gateway::link::LinkManager;
-        let base_dir =
-            alephcore::utils::paths::get_config_dir().unwrap_or_else(|_| PathBuf::from(".aleph"));
-        let link_manager = LinkManager::new(base_dir);
-        if let Err(e) = link_manager.start().await {
-            tracing::warn!("LinkManager startup encountered errors: {}", e);
-        }
-        if !daemon {
-            println!("LinkManager started (external bridge plugins)");
-            println!();
-        }
     }
 
     // Hand the registry's live webhook mount table to the HTTP surface.
@@ -646,6 +726,7 @@ pub(in crate::commands::start) async fn initialize_channels(
 #[allow(clippy::too_many_arguments)]
 pub(in crate::commands::start) async fn initialize_inbound_router(
     channel_registry: Arc<ChannelRegistry>,
+    policy: Arc<ChannelPolicyProjection>,
     execution_adapter: Option<Arc<dyn alephcore::gateway::ExecutionAdapter>>,
     agent_registry: Option<Arc<AgentRegistry>>,
     pairing_store: Arc<dyn alephcore::gateway::pairing_store::PairingStore>,
@@ -710,7 +791,8 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
             pairing_store.clone(),
             routing_config,
         )
-    };
+    }
+    .with_channel_policy(policy.clone());
 
     // Wire approval-button callback dispatch (Telegram approve/deny)
     if let Some(sink) = approval_callback_sink {
@@ -756,6 +838,7 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
             let cfg = cfg_arc.read().await;
             cfg.channels
                 .iter()
+                .filter(|(_, val)| !ChannelInstanceConfig::is_explicitly_disabled(val))
                 .find_map(|(_, val)| {
                     parse_telegram_channel_config(val.clone())
                         .ok()
@@ -768,6 +851,20 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
         inbound_router = inbound_router.with_coalescer(coalescing_config);
         if !daemon {
             println!("  Inbound router: message coalescing enabled");
+        }
+    }
+
+    let instances = if let Some(cfg) = &app_config {
+        cfg.read().await.resolved_channels()
+    } else {
+        Vec::new()
+    };
+    let mut boot_instances = Vec::new();
+    for inst in instances {
+        if ChannelInstanceConfig::is_explicitly_disabled(&inst.config) {
+            policy.project_cold_declaration(&inst.id, &inst.config);
+        } else {
+            boot_instances.push(inst);
         }
     }
 
@@ -785,9 +882,8 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
     // require-mention/slash-admin gating — the `From<&IMessageConfig>` conversion
     // is already cross-platform (a local-only transport simply never registers a
     // live "imessage" channel off-macOS, so its gating config is a harmless no-op).
-    if let Some(ref cfg_arc) = app_config {
-        let cfg = cfg_arc.read().await;
-        for inst in cfg.resolved_channels() {
+    {
+        for inst in &boot_instances {
             if inst.channel_type != "imessage" {
                 continue;
             }
@@ -851,9 +947,8 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
     // authoritative pairing flow. Previously the router fell back to
     // `ChannelConfig::default()` (Pairing / Open) for Telegram, ignoring the
     // operator's configured access policy.
-    if let Some(ref cfg_arc) = app_config {
-        let cfg = cfg_arc.read().await;
-        for inst in cfg.resolved_channels() {
+    {
+        for inst in &boot_instances {
             if inst.channel_type != "telegram" {
                 continue;
             }
@@ -902,9 +997,8 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
     // `groups_allowed`, `group_policy`, `group_allowlist` and `require_mention`
     // and the router decided with `ChannelConfig::default()` instead. See the
     // `From<&FeishuConfig>` impl for why every arm of that mapping narrows.
-    if let Some(ref cfg_arc) = app_config {
-        let cfg = cfg_arc.read().await;
-        for inst in cfg.resolved_channels() {
+    {
+        for inst in &boot_instances {
             if inst.channel_type != "feishu" {
                 continue;
             }
@@ -927,11 +1021,17 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
                     channel_config.default_workspace = policy.default_workspace;
                     channel_config.busy_input_mode = policy.busy_input_mode;
                     channel_config.tool_permissions = policy.tool_permissions;
-                    inbound_router.register_channel_config(&inst.id, channel_config);
+                    // Registered under the id the live channel reports, not the
+                    // config instance id — the feishu factory hardcodes its
+                    // runtime id to the channel type, so an instance id that
+                    // differs from it would key a policy nothing reads.
+                    let runtime_id =
+                        runtime_channel_id(&channel_registry, &inst.id, &inst.channel_type).await;
+                    inbound_router.register_channel_config(&runtime_id, channel_config);
                     if !daemon {
                         println!(
                             "  Inbound router: Feishu gating config registered for '{}'",
-                            inst.id
+                            runtime_id
                         );
                     }
                 }
@@ -946,6 +1046,35 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
         }
     }
 
+    // Wire the per-channel pair-loop-guard override.
+    //
+    // The operator key is `bot_loop_protection` inside the channel's `access`
+    // block (or flat at the channel root). It is registered under the same
+    // runtime channel id the executor looks the channel policy up by, so the
+    // guard applies the override of the message's OWN channel and every other
+    // channel keeps the router-wide default. Before this wiring the key was
+    // parsed and never read, so an operator could not widen or disable the
+    // hard-coded 20-per-60s budget for a single noisy channel.
+    {
+        for inst in &boot_instances {
+            let Some(override_config) =
+                alephcore::gateway::pair_loop_guard::PairLoopGuardConfig::from_channel_config(
+                    &inst.config,
+                )
+            else {
+                continue;
+            };
+            let runtime_id =
+                runtime_channel_id(&channel_registry, &inst.id, &inst.channel_type).await;
+            inbound_router.register_pair_loop_override(&runtime_id, override_config);
+            if !daemon {
+                println!(
+                    "  Inbound router: pair-loop override registered for '{}'",
+                    runtime_id
+                );
+            }
+        }
+    }
     // Wire slash-command access tiering for every *other* channel type.
     //
     // The `slash_command_gate` infrastructure (admin / per-command allowlists,
@@ -954,30 +1083,31 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
     // `channel_configs.get(channel_id) == None` → gating skipped → any group
     // member could invoke any slash command. This reads the same flat
     // `allow_admin_from` / `user_allowed_commands` / group-scoped keys from each
-    // channel instance config and registers them under the channel's *instance*
+    // channel instance config and registers them under the channel's *runtime*
     // id.
     //
-    // ⚠️ That is NOT always the channel's runtime id, though this comment
-    // claimed it was until 2026-08-11. `register_plain_channel!`'s generated
-    // creator takes `_config: ChannelConfig` and discards it, and each factory
-    // then hardcodes its runtime id to the channel TYPE
+    // ⚠️ The runtime id is NOT always the config instance id, though this
+    // comment claimed it was until 2026-08-11. `register_plain_channel!`'s
+    // generated creator takes `_config: ChannelConfig` and discards it, and
+    // each factory then hardcodes its runtime id to the channel TYPE
     // (`WebhookChannel::new("webhook", ..)`, `DiscordChannel::new("discord", ..)`,
     // ...). The executor looks the config up by the runtime id
     // (`channel_run_identity(.., ctx.message.channel_id)`), so an instance named
     // anything other than its type registers a policy nothing will ever read:
     // tier, workspace, busy-input mode and tool-permission overrides all
     // silently revert to defaults. Verified end to end 2026-08-11 (qa/README.md).
-    // Fixing it means threading the instance id through `ChannelFactory::create`,
-    // which changes a trait every channel implements — deliberately left as a
-    // decision rather than done in passing.
+    // The registration below therefore asks the registry which id the live
+    // channel reports (`runtime_channel_id`) instead of assuming the config
+    // instance id — the alternative, threading the instance id through
+    // `ChannelFactory::create`, changes a trait every channel implements and
+    // was deliberately left as a decision rather than done in passing.
     //
     // Backward-compat: a channel that configures no admins yields an empty
     // `SlashAccessConfig`; we skip registration entirely so `channel_configs`
     // stays empty for it and `permission.rs` keeps its allow-all default —
     // byte-identical to pre-tiering behavior. Gating only activates on opt-in.
-    if let Some(ref cfg_arc) = app_config {
-        let cfg = cfg_arc.read().await;
-        for inst in cfg.resolved_channels() {
+    {
+        for inst in &boot_instances {
             if matches!(
                 inst.channel_type.as_str(),
                 "imessage" | "telegram" | "feishu"
@@ -1007,9 +1137,32 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
             // nor a non-default tier adds nothing over the safe Chat default —
             // skip registration so `channel_configs` stays minimal (the executor
             // still defaults unregistered channels to Chat tier).
-            if slash_access.is_empty() && policy.is_default() {
+            let has_platform_policy = matches!(inst.channel_type.as_str(), "line" | "matrix");
+            if !has_platform_policy && slash_access.is_empty() && policy.is_default() {
                 continue;
             }
+            use alephcore::gateway::{
+                inbound_router::ChannelConfig,
+                interfaces::{line::LineConfig, matrix::MatrixConfig},
+            };
+            let platform_config = match inst.channel_type.as_str() {
+                "line" => serde_json::from_value::<LineConfig>(inst.config.clone())
+                    .map(|cfg| ChannelConfig::from(&cfg)),
+                "matrix" => serde_json::from_value::<MatrixConfig>(inst.config.clone())
+                    .map(|cfg| ChannelConfig::from(&cfg)),
+                _ => Ok(ChannelConfig::default()),
+            }
+            .unwrap_or_else(|error| {
+                tracing::error!(
+                    "Channel '{}' inbound policy invalid; disabling ingress: {error}",
+                    inst.id
+                );
+                ChannelConfig {
+                    dm_policy: alephcore::gateway::inbound_router::DmPolicy::Disabled,
+                    group_policy: alephcore::gateway::inbound_router::GroupPolicy::Disabled,
+                    ..Default::default()
+                }
+            });
 
             let channel_config = alephcore::gateway::inbound_router::ChannelConfig {
                 slash_access,
@@ -1017,14 +1170,20 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
                 default_workspace: policy.default_workspace,
                 busy_input_mode: policy.busy_input_mode,
                 tool_permissions: policy.tool_permissions,
-                ..Default::default()
+                ..platform_config
             };
             let tier_label = channel_config.caller_role_str();
-            inbound_router.register_channel_config(&inst.id, channel_config);
+            // Registered under the id the live channel reports (see
+            // `runtime_channel_id`): the executor looks the policy up by the
+            // message's channel id, which is the channel *type* for every
+            // factory that hardcodes it.
+            let runtime_id =
+                runtime_channel_id(&channel_registry, &inst.id, &inst.channel_type).await;
+            inbound_router.register_channel_config(&runtime_id, channel_config);
             if !daemon {
                 println!(
                     "  Inbound router: access tiering registered for '{}' ({}) [tier={}]",
-                    inst.id, inst.channel_type, tier_label,
+                    runtime_id, inst.channel_type, tier_label,
                 );
             }
         }
@@ -1156,14 +1315,8 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
         inbound_router = inbound_router.with_workflow_clarify(store, signal);
     }
 
-    // Publish the boot channel-config snapshot now that every
-    // `register_channel_config` above has run — this is the ONLY source
-    // system-initiated continuations (goal wait-barrier wake / boot resume) can
-    // read the per-channel deny layer from (the live map is private to this
-    // router). Set before the router is sealed; the map is immutable hereafter.
-    alephcore::gateway::channel_policy::set_channel_config_snapshot(
-        inbound_router.channel_configs_snapshot(),
-    );
+    // Continuations and live ingress consult the same policy projection.
+    install_channel_policy_projection(policy);
 
     let inbound_router = Arc::new(inbound_router);
 
@@ -1171,5 +1324,378 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
     if !daemon {
         println!("Inbound message router started");
         println!();
+    }
+}
+
+/// Resolve the runtime channel id an inbound message carries for a configured
+/// channel instance.
+///
+/// The executor looks a channel policy up by the id the *channel* reports
+/// (`ctx.message.channel_id`), not by the config instance id. Factories that
+/// hardcode their runtime id (`discord`, `slack`, `feishu`, …) report the
+/// channel *type*, so a policy registered under the config instance id is
+/// never read — tier, workspace, busy-input mode and tool-permission
+/// overrides all silently revert to the defaults. Factories whose channel is
+/// rebuilt with the instance id (`telegram`, `qq`, `whatsapp`, `webhook`)
+/// report the instance id, and those policies must stay on that key.
+///
+/// The registry is the authority on which id a live channel reports, so ask it
+/// instead of re-deriving the rule here: an instance whose own id is a
+/// registered channel id keeps it, otherwise the single registered channel of
+/// that type owns the instance's policy. An unregistered channel (creation
+/// failed) keeps the instance id — the same key the policy used before.
+async fn runtime_channel_id(
+    channel_registry: &ChannelRegistry,
+    instance_id: &str,
+    channel_type: &str,
+) -> String {
+    let registered = channel_registry
+        .list_by_type(channel_type)
+        .await
+        .into_iter()
+        .map(|info| info.id.0)
+        .collect::<Vec<_>>();
+    if registered.iter().any(|id| id.as_str() == instance_id) {
+        return instance_id.to_string();
+    }
+    match registered.as_slice() {
+        [only] => only.clone(),
+        _ => {
+            if registered.len() > 1 {
+                tracing::warn!(
+                    channel_type = %channel_type,
+                    instance_id = %instance_id,
+                    live_count = registered.len(),
+                    "multiple live channels of same type — policies cannot be separated by instance"
+                );
+            }
+            instance_id.to_string()
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        drain_note_maintenance, drain_note_vault_watcher, spawn_note_index_rebuild,
+        spawn_note_orientation_bootstrap, NoteMaintenanceOwner,
+    };
+    use alephcore::memory::notes::store::NoteStore;
+    use alephcore::memory::notes::watcher::spawn_note_vault_watcher;
+    use alephcore::memory::notes::NoteIndexer;
+    use alephcore::memory::store::SqliteMemoryBackend;
+    use alephcore::sync_primitives::{Arc, Mutex};
+    use std::future::Future;
+    use std::task::{Context, Waker};
+    use tokio::sync::oneshot;
+
+    struct CapturedLogs(Arc<Mutex<Vec<u8>>>);
+
+    impl std::io::Write for CapturedLogs {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn note_maintenance_test_tasks_preserve_nonfatal_errors_and_logs() {
+        use alephcore::memory::notes::orientation::FsNoteOrientation;
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("note");
+        tokio::fs::create_dir_all(root.join("main")).await.unwrap();
+        tokio::fs::write(root.join("main/preference"), "blocked category")
+            .await
+            .unwrap();
+        tokio::fs::write(root.join("blocked"), "blocked orientation root")
+            .await
+            .unwrap();
+        tokio::fs::create_dir_all(root.join("other/reference"))
+            .await
+            .unwrap();
+        tokio::fs::write(
+            root.join("other/reference/good.md"),
+            "---\ncategory: reference\ntags: []\n---\n\n- sibling corpus survives\n",
+        )
+        .await
+        .unwrap();
+        let store = Arc::new(SqliteMemoryBackend::new(&dir.path().join("memory.db")).unwrap());
+        let logs = Arc::new(Mutex::new(Vec::new()));
+        let captured = logs.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_writer(move || CapturedLogs(captured.clone()))
+            .finish();
+        // Current-thread runtime keeps the subscriber local, including spawned wrappers.
+        let _subscriber = tracing::subscriber::set_default(subscriber);
+        let mut owner = NoteMaintenanceOwner::new(
+            spawn_note_orientation_bootstrap(
+                Arc::new(FsNoteOrientation::new(root.join("blocked"), store.clone())),
+                "main".to_string(),
+            ),
+            spawn_note_index_rebuild(
+                Arc::new(NoteIndexer::new(root, store.clone())),
+                "main".to_string(),
+                3600,
+            ),
+        );
+        drain_note_maintenance(&mut owner).await.unwrap();
+        assert!(owner.failure.is_none());
+        assert_eq!(store.list_notes("other").await.unwrap().len(), 1);
+        let logs = String::from_utf8(logs.lock().unwrap().clone()).unwrap();
+        assert!(
+            logs.contains("Wiki orientation bootstrap failed; continuing without it"),
+            "{logs}"
+        );
+        assert!(logs.contains("full_rebuild_all: corpus failed"), "{logs}");
+        assert!(
+            logs.contains("Note corpus left unreconciled at startup"),
+            "{logs}"
+        );
+        assert!(logs.contains("Note index rebuild complete"), "{logs}");
+        for field in [
+            "corpora=2",
+            "indexed=1",
+            "skipped=0",
+            "errors=0",
+            "pruned=0",
+            "tx_residue_removed=0",
+        ] {
+            assert!(logs.contains(field), "missing {field}: {logs}");
+        }
+    }
+
+    #[tokio::test]
+    async fn note_maintenance_cancelled_drain_retains_same_task_ids() {
+        let (release_orientation, orientation_gate) = oneshot::channel();
+        let (release_rebuild, rebuild_gate) = oneshot::channel();
+        let mut owner = NoteMaintenanceOwner::new(
+            tokio::spawn(async { orientation_gate.await.unwrap() }),
+            tokio::spawn(async { rebuild_gate.await.unwrap() }),
+        );
+        let orientation_id = owner.orientation.as_ref().unwrap().id();
+        let rebuild_id = owner.rebuild.as_ref().unwrap().id();
+        {
+            let mut drain = std::pin::pin!(drain_note_maintenance(&mut owner));
+            assert!(drain
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_pending());
+        }
+        assert_eq!(owner.orientation.as_ref().unwrap().id(), orientation_id);
+        assert_eq!(owner.rebuild.as_ref().unwrap().id(), rebuild_id);
+
+        release_orientation.send(()).unwrap();
+        // Repeatedly cancel a pending drain until orientation has been observed.
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while owner.orientation.is_some() {
+                {
+                    let mut drain = std::pin::pin!(drain_note_maintenance(&mut owner));
+                    assert!(drain
+                        .as_mut()
+                        .poll(&mut Context::from_waker(Waker::noop()))
+                        .is_pending());
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("orientation completion was never observed");
+        assert_eq!(owner.rebuild.as_ref().unwrap().id(), rebuild_id);
+        release_rebuild.send(()).unwrap();
+        drain_note_maintenance(&mut owner).await.unwrap();
+        assert!(owner.orientation.is_none());
+        assert!(owner.rebuild.is_none());
+        drain_note_maintenance(&mut owner).await.unwrap();
+        assert!(owner.orientation.is_none() && owner.rebuild.is_none());
+    }
+
+    #[tokio::test]
+    async fn note_maintenance_drain_waits_for_real_bootstrap_and_rebuild_effects() {
+        use alephcore::memory::notes::orientation::{FsNoteOrientation, NoteOrientation};
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("note");
+        tokio::fs::create_dir_all(root.join("main/reference"))
+            .await
+            .unwrap();
+        tokio::fs::write(
+            root.join("main/reference/owned.md"),
+            "---\ncategory: reference\ntags: [lifecycle]\n---\n\n- retained startup task\n",
+        )
+        .await
+        .unwrap();
+        let store = Arc::new(SqliteMemoryBackend::new(&dir.path().join("memory.db")).unwrap());
+        let orientation = FsNoteOrientation::new(root.clone(), store.clone());
+        let indexer = NoteIndexer::new(root.clone(), store.clone());
+        let (release_orientation, orientation_gate) = oneshot::channel();
+        let (release_rebuild, rebuild_gate) = oneshot::channel();
+        let mut owner = NoteMaintenanceOwner::new(
+            tokio::spawn(async move {
+                orientation_gate.await.unwrap();
+                orientation.bootstrap("main").await.unwrap();
+            }),
+            tokio::spawn(async move {
+                rebuild_gate.await.unwrap();
+                let stats = indexer.full_rebuild_all("main", 3600).await;
+                assert_eq!(stats.total.indexed, 1);
+                assert!(stats.failed.is_empty());
+            }),
+        );
+        {
+            let mut drain = std::pin::pin!(drain_note_maintenance(&mut owner));
+            assert!(drain
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_pending());
+        }
+        assert!(!root.join("main/SCHEMA.md").exists());
+        assert!(store.list_notes("main").await.unwrap().is_empty());
+        release_orientation.send(()).unwrap();
+        release_rebuild.send(()).unwrap();
+        drain_note_maintenance(&mut owner).await.unwrap();
+        assert!(tokio::fs::read_to_string(root.join("main/SCHEMA.md"))
+            .await
+            .unwrap()
+            .contains("# Memory Schema"));
+        assert!(root.join("main/index.md").is_file());
+        let log = tokio::fs::read_to_string(root.join("main/log.md"))
+            .await
+            .unwrap();
+        assert!(log.contains("wiki orientation bootstrapped for agent=main"));
+        let rows = store.list_notes("main").await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].path, "reference/owned");
+        assert_eq!(rows[0].tags, vec!["lifecycle"]);
+        drain_note_maintenance(&mut owner).await.unwrap();
+        assert_eq!(
+            tokio::fs::read_to_string(root.join("main/log.md"))
+                .await
+                .unwrap(),
+            log
+        );
+        assert_eq!(store.list_notes("main").await.unwrap().len(), 1);
+        assert!(owner.orientation.is_none() && owner.rebuild.is_none());
+    }
+
+    #[tokio::test]
+    async fn note_maintenance_cancelled_after_failure_keeps_first_error() {
+        let (panicked, ready) = oneshot::channel();
+        let (release, gate) = oneshot::channel();
+        let mut owner = NoteMaintenanceOwner::new(
+            tokio::spawn(async move {
+                panicked.send(()).unwrap();
+                panic!("first orientation failure");
+            }),
+            tokio::spawn(async move {
+                gate.await.unwrap();
+                panic!("later rebuild failure");
+            }),
+        );
+        ready.await.unwrap();
+        let rebuild_id = owner.rebuild.as_ref().unwrap().id();
+        {
+            let mut drain = std::pin::pin!(drain_note_maintenance(&mut owner));
+            assert!(drain
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_pending());
+        }
+        assert!(owner.orientation.is_none());
+        let failure = owner
+            .failure
+            .clone()
+            .expect("first failure must survive cancellation");
+        assert!(failure.contains("first orientation failure"));
+        assert_eq!(owner.rebuild.as_ref().unwrap().id(), rebuild_id);
+        release.send(()).unwrap();
+        let error = drain_note_maintenance(&mut owner)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(&failure));
+        assert!(!error.contains("later rebuild failure"));
+        assert_eq!(
+            drain_note_maintenance(&mut owner)
+                .await
+                .unwrap_err()
+                .to_string(),
+            error
+        );
+        assert!(owner.orientation.is_none() && owner.rebuild.is_none());
+    }
+
+    #[tokio::test]
+    async fn note_maintenance_either_join_failure_observes_sibling_and_stays_failed() {
+        for orientation_panics in [true, false] {
+            let (release, gate) = oneshot::channel();
+            let (observed, done) = oneshot::channel();
+            let panics = tokio::spawn(async { panic!("note maintenance test panic") });
+            let sibling = tokio::spawn(async {
+                gate.await.unwrap();
+                observed.send(()).unwrap();
+            });
+            let mut owner = if orientation_panics {
+                NoteMaintenanceOwner::new(panics, sibling)
+            } else {
+                NoteMaintenanceOwner::new(sibling, panics)
+            };
+            {
+                let mut drain = std::pin::pin!(drain_note_maintenance(&mut owner));
+                assert!(drain
+                    .as_mut()
+                    .poll(&mut Context::from_waker(Waker::noop()))
+                    .is_pending());
+            }
+            release.send(()).unwrap();
+            let error = drain_note_maintenance(&mut owner)
+                .await
+                .unwrap_err()
+                .to_string();
+            done.await.unwrap();
+            assert!(owner.orientation.is_none() && owner.rebuild.is_none());
+            assert!(error.contains(if orientation_panics {
+                "orientation"
+            } else {
+                "rebuild"
+            }));
+            assert_eq!(
+                drain_note_maintenance(&mut owner)
+                    .await
+                    .unwrap_err()
+                    .to_string(),
+                error
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn note_watcher_drain_is_in_place_and_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("note");
+        tokio::fs::create_dir_all(root.join("main/reference"))
+            .await
+            .unwrap();
+        let store = Arc::new(SqliteMemoryBackend::new(&dir.path().join("memory.db")).unwrap());
+        let indexer = Arc::new(NoteIndexer::new(root, store.clone()));
+        let mut watcher = Some(spawn_note_vault_watcher(indexer).unwrap());
+
+        drain_note_vault_watcher(&mut watcher).await.unwrap();
+        drain_note_vault_watcher(&mut watcher).await.unwrap();
+        assert!(store.list_notes("main").await.unwrap().is_empty());
+        assert!(watcher.is_some());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn note_watcher_drain_accepts_absent_startup_watcher() {
+        let mut watcher = None;
+        drain_note_vault_watcher(&mut watcher).await.unwrap();
+        assert!(watcher.is_none());
     }
 }

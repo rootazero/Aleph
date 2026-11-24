@@ -22,6 +22,9 @@
 //! - **Feishu**: Feishu/Lark Bot WebSocket + REST API integration
 //! - **LINE**: LINE Messaging API webhook + REST API integration
 //! - **`WeChat`**: `WeChat` iLink Bot API integration
+//! - **QQ**: QQ Bot API integration
+//! - **`WhatsApp`**: `WhatsApp` Web multi-device integration via `whatsapp-rust`
+//! - **Voice call**: voice-call channel over an injected transport (`voice_call` plugin family)
 //! - **SMS**: SMS through the thin telecom Relay (unavailable until a Relay transport is attached)
 
 pub mod cli;
@@ -51,6 +54,24 @@ pub mod telegram;
 pub mod webhook;
 pub mod whatsapp;
 pub mod xmpp;
+
+/// Append a note that inbound attachments were not delivered.
+///
+/// Adapters without an inbound attachment path used to hand the model text
+/// that silently omitted a file the user sent, so the model answered as if no
+/// file existed. They call this instead, which keeps the drop visible.
+#[must_use]
+pub fn with_attachment_note(text: String, attachment_count: usize) -> String {
+    if attachment_count == 0 {
+        return text;
+    }
+    let note = format!("[{attachment_count} attachment(s) not supported on this channel]");
+    if text.is_empty() {
+        note
+    } else {
+        format!("{text}\n\n{note}")
+    }
+}
 
 pub use cli::{CliChannel, CliChannelConfig, CliChannelFactory};
 
@@ -138,6 +159,173 @@ pub fn register_channel_plugins() {
     register_plain_channel!("voice_call", VoiceCallChannelFactory);
     register_plain_channel!("webhook", WebhookChannelFactory);
     register_plain_channel!("xmpp", XmppChannelFactory);
+}
+
+#[cfg(test)]
+mod instance_id_tests {
+    //! The configured instance id is what routes a reply back to the right
+    //! instance, so a factory must not fall back to the adapter name when more
+    //! than one instance of the same type is configured.
+    //!
+    //! `ChannelFactory::create_with_id` has a default implementation that
+    //! ignores the id and calls `create`. A factory that does not override it
+    //! therefore registers every instance under the adapter name, and two
+    //! instances of the same type collide.
+
+    use crate::gateway::channel::ChannelFactory;
+
+    #[tokio::test]
+    async fn a_factory_registers_the_channel_under_the_configured_instance_id() {
+        use super::{EmailChannelFactory, MattermostChannelFactory, SignalChannelFactory};
+
+        let email = EmailChannelFactory
+            .create_with_id(
+                "email-work",
+                serde_json::json!({
+                    "imap_host": "imap.example.test",
+                    "smtp_host": "smtp.example.test",
+                    "username": "bot@example.test",
+                    "password": "secret",
+                    "from_address": "bot@example.test",
+                }),
+            )
+            .await
+            .expect("email instance is created");
+        assert_eq!(email.id().as_str(), "email-work");
+
+        let signal = SignalChannelFactory
+            .create_with_id(
+                "signal-main",
+                serde_json::json!({
+                    "phone_number": "+15550000000",
+                    "api_url": "http://127.0.0.1:8080",
+                }),
+            )
+            .await
+            .expect("signal instance is created");
+        assert_eq!(signal.id().as_str(), "signal-main");
+
+        let mattermost = MattermostChannelFactory
+            .create_with_id(
+                "mattermost-ops",
+                serde_json::json!({
+                    "server_url": "https://mm.example.test",
+                    "bot_token": "secret",
+                }),
+            )
+            .await
+            .expect("mattermost instance is created");
+        assert_eq!(mattermost.id().as_str(), "mattermost-ops");
+    }
+}
+
+#[cfg(test)]
+mod credential_debug_tests {
+    //! A channel config is a credential container. `format!("{cfg:?}")` is the
+    //! shortest path a secret can take to a log line, a panic message or a
+    //! `tracing` field, so every config that carries a credential prints it
+    //! redacted.
+    //!
+    //! The tripwire is the secret VALUE, not the field name: a derived `Debug`
+    //! prints the value, and a hand-written one that merely renamed the field
+    //! would still leak it.
+
+    const SECRET: &str = "s3cr3t-value-that-must-not-be-printed";
+
+    fn assert_redacted(label: &str, debug: &str) {
+        assert!(
+            !debug.contains(SECRET),
+            "{label} printed its credential: {debug}"
+        );
+    }
+
+    #[test]
+    fn channel_config_debug_output_never_contains_the_credential() {
+        use super::email::config::EmailConfig;
+        use super::feishu::config::FeishuConfig;
+        use super::irc::config::IrcConfig;
+        use super::matrix::config::MatrixConfig;
+        use super::mattermost::config::MattermostConfig;
+        use super::telegram::config::TelegramConfig;
+        use super::telegram::config_v2::TelegramAccountConfig;
+        use super::xmpp::config::XmppConfig;
+
+        let irc = IrcConfig {
+            password: Some(SECRET.to_string()),
+            ..IrcConfig::default()
+        };
+        assert_redacted("IrcConfig", &format!("{irc:?}"));
+
+        let mattermost = MattermostConfig {
+            bot_token: SECRET.to_string(),
+            ..MattermostConfig::default()
+        };
+        assert_redacted("MattermostConfig", &format!("{mattermost:?}"));
+
+        let email = EmailConfig {
+            password: SECRET.to_string(),
+            ..EmailConfig::default()
+        };
+        assert_redacted("EmailConfig", &format!("{email:?}"));
+
+        let matrix = MatrixConfig {
+            access_token: SECRET.to_string(),
+            ..MatrixConfig::default()
+        };
+        assert_redacted("MatrixConfig", &format!("{matrix:?}"));
+
+        let feishu: FeishuConfig = serde_json::from_value(serde_json::json!({
+            "app_id": "cli_test",
+            "app_secret": SECRET,
+            "domain": "example.test",
+            "verification_token": SECRET,
+            "encrypt_key": SECRET,
+        }))
+        .expect("feishu config deserializes");
+        assert_redacted("FeishuConfig", &format!("{feishu:?}"));
+
+        let telegram = TelegramConfig {
+            bot_token: SECRET.to_string(),
+            ..TelegramConfig::default()
+        };
+        assert_redacted("TelegramConfig", &format!("{telegram:?}"));
+
+        let account = TelegramAccountConfig {
+            bot_token: SECRET.to_string(),
+            ..TelegramAccountConfig::default()
+        };
+        assert_redacted("TelegramAccountConfig", &format!("{account:?}"));
+
+        let xmpp = XmppConfig {
+            password: SECRET.to_string(),
+            ..XmppConfig::default()
+        };
+        assert_redacted("XmppConfig", &format!("{xmpp:?}"));
+    }
+}
+
+#[cfg(test)]
+mod attachment_note_tests {
+    #[test]
+    fn zero_attachments_leaves_the_text_untouched() {
+        assert_eq!(super::with_attachment_note("hi".to_string(), 0), "hi");
+    }
+
+    #[test]
+    fn attachments_are_named_in_the_text() {
+        assert_eq!(
+            super::with_attachment_note("hi".to_string(), 2),
+            "hi\n\n[2 attachment(s) not supported on this channel]"
+        );
+    }
+
+    #[test]
+    fn attachment_only_message_keeps_the_note() {
+        assert_eq!(
+            super::with_attachment_note(String::new(), 1),
+            "[1 attachment(s) not supported on this channel]"
+        );
+    }
 }
 
 #[cfg(test)]

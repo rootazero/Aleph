@@ -5,6 +5,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+pub mod runtime;
+
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR};
 use super::parse_params;
 use crate::memory::store::raw_memory::RawMemoryStore;
@@ -445,11 +447,9 @@ pub async fn handle_stats(
         None => db.count_all_notes().await.unwrap_or(0),
     };
 
-    // The galaxy is the one surface that cannot represent a union — its
-    // `NoteNodeDto` carries no `agent_id`, so two partitions holding the same
-    // `category/filename` would collide into one node. These two counts label
-    // THAT graph, so they must be scoped exactly as `graph.query` is, or the
-    // stat card would describe a picture the galaxy never draws.
+    // These counts describe the same single-partition graph as `graph.query`.
+    // Note addresses carry a partition for follow-up calls, but graph edges
+    // and insights still identify their endpoints by path within that window.
     let graph_partition = agent
         .as_deref()
         .map(super::memory_scope::primary_read_partition);
@@ -600,6 +600,11 @@ pub async fn handle_list_corrections(
             }
         }
     }
+    // Apply per-partition distilled filtering before global truncation to
+    // preserve pending corrections that would otherwise be dropped.
+    if !include_distilled {
+        rows.retain(|(r, watermark)| r.created_at > *watermark);
+    }
     // Merge into one newest-first ordering and cap once. Each partition was
     // fetched to the full `limit` rather than a share of it, so a union whose
     // corrections all live in one partition returns exactly what a
@@ -609,7 +614,6 @@ pub async fn handle_list_corrections(
 
     let corrections: Vec<_> = rows
         .into_iter()
-        .filter(|(r, watermark)| include_distilled || r.created_at > *watermark)
         .map(|(r, watermark)| {
             let (severity, suggested_rule) = match &r.source {
                 RawMemorySource::Correction {
@@ -635,7 +639,6 @@ pub async fn handle_list_corrections(
 // ============================================================================
 // Trace (evidence-chain walk)
 // ============================================================================
-
 /// Walk a memory claim down to ground-truth evidence.
 ///
 /// Read-only; R4-compliant (I/O only). Forwards to
@@ -667,7 +670,9 @@ pub async fn handle_trace(
     request: JsonRpcRequest,
     raw_store: Arc<dyn RawMemoryStore>,
     db: MemoryBackend,
-    mcp: Option<crate::sync_primitives::Arc<crate::thinker::MemoryContextProvider>>,
+    mcp: Option<
+        crate::sync_primitives::Arc<crate::thinker::memory_context_provider::RuntimeMemoryContext>,
+    >,
 ) -> JsonRpcResponse {
     use crate::builtin_tools::memory_trace::{MemoryTraceArgs, MemoryTraceTool, TraceKind};
 
@@ -711,15 +716,18 @@ pub async fn handle_trace(
         );
     }
 
-    let note_memory_dir = match crate::utils::paths::get_note_memory_dir() {
-        Ok(d) => d,
-        Err(e) => {
-            return JsonRpcResponse::error(
-                request.id,
-                INTERNAL_ERROR,
-                format!("memory.trace: note dir: {e}"),
-            )
-        }
+    let note_memory_dir = match crate::memory::runtime::MemoryOperation::current() {
+        Some(operation) => operation.note_memory_dir().to_path_buf(),
+        None => match crate::utils::paths::get_note_memory_dir() {
+            Ok(directory) => directory,
+            Err(error) => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INTERNAL_ERROR,
+                    format!("memory.trace: note dir: {error}"),
+                )
+            }
+        },
     };
 
     // Composed AFTER the visibility gate, which judges the base id the caller
@@ -747,12 +755,20 @@ use crate::gateway::event_bus::{GatewayEventBus, TopicEvent};
 use crate::memory::EmbeddingProvider;
 use crate::sync_primitives::{AtomicBool, Ordering};
 
+#[cfg(test)]
+#[path = "reembed_lifecycle_tests.rs"]
+mod reembed_lifecycle_tests;
+
 /// Shared state for the reembed background task.
 pub struct ReembedState {
     /// True while a reembed task is running.
     pub running: Arc<AtomicBool>,
     /// Set to true to cancel the current task.
     pub cancel: Arc<AtomicBool>,
+    #[cfg(test)]
+    migration_gate: Option<Arc<(tokio::sync::Notify, tokio::sync::Notify, AtomicBool)>>,
+    #[cfg(test)]
+    progress_gate: Option<Arc<(tokio::sync::Notify, tokio::sync::Notify, AtomicBool)>>,
 }
 
 impl Default for ReembedState {
@@ -767,6 +783,10 @@ impl ReembedState {
         Self {
             running: Arc::new(AtomicBool::new(false)),
             cancel: Arc::new(AtomicBool::new(false)),
+            #[cfg(test)]
+            migration_gate: None,
+            #[cfg(test)]
+            progress_gate: None,
         }
     }
 }
@@ -788,14 +808,34 @@ pub struct ReembedParams {
     pub target_dim: Option<usize>,
 }
 
+pub(crate) async fn handle_owned_reembed(
+    request: JsonRpcRequest,
+    operation: crate::memory::runtime::MemoryOperation,
+    memory_dir: std::path::PathBuf,
+    embedder: Arc<dyn EmbeddingProvider>,
+    event_bus: Arc<GatewayEventBus>,
+    reembed_state: Arc<ReembedState>,
+) -> JsonRpcResponse {
+    start_reembed(
+        request,
+        operation.backend().clone(),
+        memory_dir,
+        embedder,
+        event_bus,
+        reembed_state,
+        Some(operation),
+    )
+}
+
 /// Start a background reembed migration.
-pub async fn handle_reembed(
+fn start_reembed(
     request: JsonRpcRequest,
     db: MemoryBackend,
     memory_dir: std::path::PathBuf,
     embedder: Arc<dyn EmbeddingProvider>,
     event_bus: Arc<GatewayEventBus>,
     reembed_state: Arc<ReembedState>,
+    operation: Option<crate::memory::runtime::MemoryOperation>,
 ) -> JsonRpcResponse {
     // Re-entrancy guard
     if reembed_state
@@ -810,6 +850,7 @@ pub async fn handle_reembed(
         );
     }
 
+    let guard = RunningGuard(reembed_state.running.clone());
     let params: ReembedParams = request
         .params
         .as_ref()
@@ -836,9 +877,20 @@ pub async fn handle_reembed(
     // Spawn progress forwarder
     let eb_progress = Arc::clone(&event_bus);
     let tid_progress = task_id.clone();
-    tokio::spawn(async move {
+    #[cfg(test)]
+    let progress_gate = reembed_state.progress_gate.clone();
+    let forwarder = async move {
         while progress_rx.changed().await.is_ok() {
             let p = progress_rx.borrow().clone();
+            #[cfg(test)]
+            if let Some(gate) = &progress_gate {
+                gate.2.store(
+                    crate::memory::runtime::MemoryOperation::current().is_some(),
+                    Ordering::SeqCst,
+                );
+                gate.0.notify_one();
+                gate.1.notified().await;
+            }
             let _ = eb_progress.publish_json(&TopicEvent::new(
                 "memory.reembed.progress",
                 serde_json::json!({
@@ -850,12 +902,32 @@ pub async fn handle_reembed(
                 }),
             ));
         }
-    });
+    };
+    match &operation {
+        Some(operation) => {
+            if let Err(error) = operation.spawn(crate::memory::runtime::carry(forwarder)) {
+                return JsonRpcResponse::error(request.id, INTERNAL_ERROR, error.to_string());
+            }
+        }
+        None => {
+            tokio::spawn(forwarder);
+        }
+    }
 
     // Spawn background reembed task
-    let state_ref = Arc::clone(&reembed_state);
-    tokio::spawn(async move {
-        let _guard = RunningGuard(Arc::clone(&state_ref.running));
+    #[cfg(test)]
+    let migration_gate = reembed_state.migration_gate.clone();
+    let migration = async move {
+        let _guard = guard;
+        #[cfg(test)]
+        if let Some(gate) = &migration_gate {
+            gate.2.store(
+                crate::memory::runtime::MemoryOperation::current().is_some(),
+                Ordering::SeqCst,
+            );
+            gate.0.notify_one();
+            gate.1.notified().await;
+        }
 
         let result = crate::memory::reembed::reembed_all(
             &db,
@@ -891,7 +963,17 @@ pub async fn handle_reembed(
                 ));
             }
         }
-    });
+    };
+    match &operation {
+        Some(operation) => {
+            if let Err(error) = operation.spawn(crate::memory::runtime::carry(migration)) {
+                return JsonRpcResponse::error(request.id, INTERNAL_ERROR, error.to_string());
+            }
+        }
+        None => {
+            tokio::spawn(migration);
+        }
+    }
 
     JsonRpcResponse::success(
         request.id,
@@ -1312,11 +1394,18 @@ mod trace_tests {
         )
         .unwrap();
 
-        let mcp = Arc::new(crate::thinker::MemoryContextProvider::new(
-            db.clone(),
-            raw_store.clone(),
-            None,
-        ));
+        let mcp = Arc::new(
+            crate::thinker::memory_context_provider::RuntimeMemoryContext::new(
+                crate::memory::runtime::MemoryRuntime::new(
+                    crate::memory::runtime::MemoryRuntimeConfig {
+                        metadata_path: dir.path().join("unused-runtime.db"),
+                        note_memory_dir: dir.path().join("unused-note"),
+                        retrieval_tuning: Default::default(),
+                    },
+                    Arc::new(crate::capability::ownership::OwnershipTree::new()),
+                ),
+            ),
+        );
         let req = JsonRpcRequest::with_id(
             "memory.trace",
             Some(json!({

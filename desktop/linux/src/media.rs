@@ -235,7 +235,9 @@ async fn run_ffmpeg(args: &[String], deadline: Duration) -> Result<()> {
 impl MediaCapability for LinuxMedia {
     async fn camera_snap(&self, config: CameraSnapConfig) -> Result<CameraSnapResult> {
         let config = config.clamped();
-        let device = camera_device();
+        let device = tokio::task::spawn_blocking(camera_device)
+            .await
+            .unwrap_or_else(|_| DEFAULT_CAMERA_DEVICE.to_string());
         let out = temp_path("jpg");
         let out_str = out.to_string_lossy().to_string();
         let qv = quality_to_qv(config.quality);
@@ -280,7 +282,9 @@ impl MediaCapability for LinuxMedia {
 
     async fn camera_clip(&self, config: CameraClipConfig) -> Result<CameraClipResult> {
         let config = config.clamped();
-        let device = camera_device();
+        let device = tokio::task::spawn_blocking(camera_device)
+            .await
+            .unwrap_or_else(|_| DEFAULT_CAMERA_DEVICE.to_string());
         let out = temp_path("mp4");
         let out_str = out.to_string_lossy().to_string();
 
@@ -430,10 +434,10 @@ fn parse_pactl_sources(stdout: &str, default_name: Option<&str>) -> Vec<AudioDev
     let mut devices = Vec::new();
     for line in stdout.lines() {
         let fields: Vec<&str> = line.split('\t').collect();
-        if fields.len() < 2 {
+        let Some(raw_name) = fields.get(1) else {
             continue;
-        }
-        let name = fields[1].trim();
+        };
+        let name = raw_name.trim();
         if name.is_empty() || name.ends_with(".monitor") {
             continue;
         }

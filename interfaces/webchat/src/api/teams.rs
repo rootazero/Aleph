@@ -178,7 +178,9 @@ impl TeamsApi {
             "team_name": team_name,
         });
         if let Some(g) = goal.filter(|s| !s.is_empty()) {
-            args["goal"] = Value::String(g.to_string());
+            if let Some(map) = args.as_object_mut() {
+                map.insert("goal".to_string(), Value::String(g.to_string()));
+            }
         }
         let result = state
             .rpc_call(

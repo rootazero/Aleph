@@ -99,6 +99,7 @@ pub(super) struct BackgroundConfig {
 pub(super) struct MemoryCapture {
     pub(super) raw_memory_writer: Option<Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>>,
     pub(super) capture_registry: Option<Arc<crate::memory::extensions::MemoryExtensionRegistry>>,
+    pub(super) memory_runtime: Option<std::sync::Weak<crate::memory::runtime::MemoryRuntime>>,
     pub(super) parent_session_id: Option<String>,
 }
 
@@ -214,6 +215,7 @@ impl SubagentTool {
             memory: MemoryCapture {
                 raw_memory_writer: None,
                 capture_registry: None,
+                memory_runtime: None,
                 parent_session_id: None,
             },
             tools: ToolingContext {
@@ -407,6 +409,14 @@ impl SubagentTool {
         registry: Arc<crate::memory::extensions::MemoryExtensionRegistry>,
     ) -> Self {
         self.memory.capture_registry = Some(registry);
+        self
+    }
+
+    pub fn with_memory_runtime(
+        mut self,
+        runtime: std::sync::Weak<crate::memory::runtime::MemoryRuntime>,
+    ) -> Self {
+        self.memory.memory_runtime = Some(runtime);
         self
     }
 

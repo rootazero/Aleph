@@ -1,13 +1,9 @@
-use crate::sync_primitives::Arc;
-
 use crate::a2a::domain::security::{Credentials, SecurityScheme, TrustLevel};
 use crate::a2a::domain::A2AError;
 use crate::a2a::port::authenticator::{
     A2AAction, A2AAuthContext, A2AAuthPrincipal, A2AAuthenticator,
 };
 use crate::a2a::port::A2AResult;
-
-use crate::sync_primitives::AsyncRwLock;
 
 use super::token_store::TokenStore;
 
@@ -20,7 +16,7 @@ use super::token_store::TokenStore;
 /// - **Reject**: No valid credentials results in Unauthorized error
 pub struct TieredAuthenticator {
     local_bypass: bool,
-    token_store: Arc<AsyncRwLock<TokenStore>>,
+    token_store: TokenStore,
     local_permissions: Vec<String>,
     trusted_permissions: Vec<String>,
     public_permissions: Vec<String>,
@@ -31,25 +27,11 @@ impl TieredAuthenticator {
     pub fn new(local_bypass: bool, tokens: Vec<String>) -> Self {
         Self {
             local_bypass,
-            token_store: Arc::new(AsyncRwLock::new(TokenStore::new(tokens))),
+            token_store: TokenStore::new(tokens),
             local_permissions: vec!["*".to_string()],
             trusted_permissions: vec!["*".to_string()],
             public_permissions: vec!["read".to_string()],
         }
-    }
-
-    /// Configure per-level permissions
-    #[must_use]
-    pub fn with_permissions(
-        mut self,
-        local: Vec<String>,
-        trusted: Vec<String>,
-        public: Vec<String>,
-    ) -> Self {
-        self.local_permissions = local;
-        self.trusted_permissions = trusted;
-        self.public_permissions = public;
-        self
     }
 
     fn permissions_for(&self, level: &TrustLevel) -> Vec<String> {
@@ -61,11 +43,31 @@ impl TieredAuthenticator {
     }
 }
 
+/// Headers set by reverse proxies when they relay a request.
+const FORWARDING_HEADERS: [&str; 3] = ["x-forwarded-for", "x-forwarded-host", "forwarded"];
+
+/// Returns `true` when the request carries a reverse-proxy forwarding header.
+///
+/// A relayed request reaches the listener from the proxy's own loopback
+/// socket, so the peer address alone no longer proves the caller is local.
+fn is_forwarded(context: &A2AAuthContext) -> bool {
+    context.headers.keys().any(|name| {
+        FORWARDING_HEADERS
+            .iter()
+            .any(|header| name.eq_ignore_ascii_case(header))
+    })
+}
+
 #[async_trait::async_trait]
 impl A2AAuthenticator for TieredAuthenticator {
     async fn authenticate(&self, context: &A2AAuthContext) -> A2AResult<A2AAuthPrincipal> {
-        // Tier 1: localhost bypass
-        if self.local_bypass && context.remote_addr.ip().is_loopback() {
+        // Tier 1: localhost bypass.
+        //
+        // Only unproxied requests qualify: behind a reverse proxy every caller
+        // reaches the listener from the proxy's loopback address, so trusting
+        // the peer address would hand the Local tier (which carries admin
+        // permissions) to remote callers.
+        if self.local_bypass && context.remote_addr.ip().is_loopback() && !is_forwarded(context) {
             return Ok(A2AAuthPrincipal {
                 agent_id: None,
                 trust_level: TrustLevel::Local,
@@ -76,8 +78,7 @@ impl A2AAuthenticator for TieredAuthenticator {
         // Tier 2-3: credential-based authentication
         match &context.credentials {
             Credentials::BearerToken(token) | Credentials::ApiKey(token) => {
-                let store = self.token_store.read().await;
-                if store.is_valid(token) {
+                if self.token_store.is_valid(token) {
                     return Ok(A2AAuthPrincipal {
                         agent_id: None,
                         trust_level: TrustLevel::Trusted,
@@ -149,6 +150,31 @@ mod tests {
         let principal = auth.authenticate(&ctx).await.unwrap();
         assert_eq!(principal.trust_level, TrustLevel::Local);
         assert!(principal.permissions.contains(&"*".to_string()));
+    }
+
+    #[tokio::test]
+    async fn forwarded_loopback_request_is_not_local() {
+        // A reverse proxy relays the call from its own loopback socket, so the
+        // peer address must not be treated as proof of a local caller.
+        let auth = TieredAuthenticator::new(true, vec![]);
+        let mut ctx = make_context(localhost_addr(), Credentials::None);
+        ctx.headers
+            .insert("x-forwarded-for".to_string(), "203.0.113.7".to_string());
+        let result = auth.authenticate(&ctx).await;
+        assert!(matches!(result.unwrap_err(), A2AError::Unauthorized));
+    }
+
+    #[tokio::test]
+    async fn forwarded_loopback_request_with_token_is_trusted() {
+        let auth = TieredAuthenticator::new(true, vec!["my-token".to_string()]);
+        let mut ctx = make_context(
+            localhost_addr(),
+            Credentials::BearerToken("my-token".to_string()),
+        );
+        ctx.headers
+            .insert("forwarded".to_string(), "for=203.0.113.7".to_string());
+        let principal = auth.authenticate(&ctx).await.unwrap();
+        assert_eq!(principal.trust_level, TrustLevel::Trusted);
     }
 
     #[tokio::test]
@@ -309,22 +335,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn custom_permissions_applied() {
-        let auth = TieredAuthenticator::new(true, vec!["tok".to_string()]).with_permissions(
-            vec!["admin".to_string()],
-            vec!["read".to_string(), "write".to_string()],
-            vec!["read".to_string()],
-        );
+    async fn default_permissions_per_tier() {
+        let auth = TieredAuthenticator::new(true, vec!["tok".to_string()]);
 
         // Local
         let ctx = make_context(localhost_addr(), Credentials::None);
         let p = auth.authenticate(&ctx).await.unwrap();
-        assert_eq!(p.permissions, vec!["admin".to_string()]);
+        assert_eq!(p.permissions, vec!["*".to_string()]);
 
         // Trusted
         let ctx = make_context(remote_addr(), Credentials::BearerToken("tok".to_string()));
         let p = auth.authenticate(&ctx).await.unwrap();
-        assert_eq!(p.permissions, vec!["read".to_string(), "write".to_string()]);
+        assert_eq!(p.permissions, vec!["*".to_string()]);
 
         // Public (OAuth2 rejected until JWKS implemented)
         let ctx = make_context(remote_addr(), Credentials::OAuth2Token("x".to_string()));

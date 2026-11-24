@@ -164,11 +164,19 @@ pub async fn handle_ticket_create(
         .params
         .as_ref()
         .and_then(|p| p.get("ttl_seconds").and_then(serde_json::Value::as_u64));
-    let user_id: Option<String> = request
-        .params
-        .as_ref()
-        .and_then(|p| p.get("user_id").and_then(serde_json::Value::as_str))
-        .map(String::from);
+    let user_id: Option<String> = match request.params.as_ref().and_then(|p| p.get("user_id")) {
+        None | Some(serde_json::Value::Null) => None,
+        Some(value) => match value.as_str() {
+            Some(uid) => Some(uid.to_string()),
+            None => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    "user_id must be a string or null".to_string(),
+                );
+            }
+        },
+    };
 
     // Same question `pair --user` asks, against the same table `connect`
     // resolves against — reached through the manager's own store rather than a
@@ -490,6 +498,33 @@ mod tests {
             pairing_urls(&hosts, 3033, false, "t").len(),
             MAX_PAIRING_URLS
         );
+    }
+
+    #[tokio::test]
+    async fn invalid_user_binding_never_mints_an_unbound_ticket() {
+        let manager = mgr();
+        let ctx = Arc::new(TicketHandlerContext {
+            device_token_mgr: manager.clone(),
+            bind_host: "127.0.0.1".into(),
+            port: 3033,
+            tls_enabled: false,
+        });
+        for user_id in [json!(42), json!(false), json!({}), json!([])] {
+            let req = JsonRpcRequest::with_id(
+                "gateway.ticket.create",
+                Some(json!({ "user_id": user_id })),
+                json!(1),
+            );
+            let response = handle_ticket_create(req, ctx.clone()).await;
+            assert_eq!(response.error.unwrap().code, INVALID_PARAMS);
+            assert!(manager.store().list_bootstrap_tickets().unwrap().is_empty());
+        }
+        let req = JsonRpcRequest::with_id(
+            "gateway.ticket.create",
+            Some(json!({ "user_id": null })),
+            json!(1),
+        );
+        assert!(handle_ticket_create(req, ctx).await.is_success());
     }
 
     #[tokio::test]

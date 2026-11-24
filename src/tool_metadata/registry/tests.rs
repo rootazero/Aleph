@@ -235,7 +235,7 @@ async fn a_command_rule_registers_with_its_prompt_as_description_and_routing() {
     assert_eq!(
         tool.routing_system_prompt.as_deref(),
         Some("You are a translator."),
-        "the prompt must also reach CommandContext::Custom.system_prompt"
+        "the tool must carry the whole prompt, not just the truncated description"
     );
     assert_eq!(
         tool.routing_regex.as_deref(),

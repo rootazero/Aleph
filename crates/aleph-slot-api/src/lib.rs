@@ -154,6 +154,7 @@ pub mod ai_response;
 pub mod approval;
 pub mod browser;
 pub mod cancellation;
+pub mod capability;
 pub mod channel;
 pub mod concurrency;
 pub mod descriptor;

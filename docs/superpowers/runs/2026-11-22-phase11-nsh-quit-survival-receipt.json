@@ -1,0 +1,86 @@
+{
+  "artifact": "phase11_macos_external_gateway_survives_native_quit",
+  "version": "2026-11-22.17",
+  "status": "PASS_SCOPED_EXTERNAL_GATEWAY_SURVIVES_QUIT / NOT_PHASE11_ACCEPTANCE",
+  "parent": "d630a9fde73bc5916ee7434ca99176a523ff2f7d",
+  "source_sha256": {
+    "docs/superpowers/runs/2026-11-21-phase11-nsh-inventory.json": "dd06265fa197e9049c44ba9eceefe07c4a1872e1bcfc9eab74f5924ec445026f",
+    "docs/superpowers/specs/2026-11-21-phase11-nsh-cutover.md": "ec6eba27e6cbb9357764559a442a0a9606b32977b86b9dd2f0cffe2752d4f96d",
+    "qa/nsh_panel_gateway.py": "e9124e26b52659c5102008805a96ecf0a517343928f63d0c96b0afb3d3585d30",
+    "qa/phase11_nsh_panel_status.md": "bace78a59cfa164e7edc9111200b819ff498fe021b9bd74f3da88c8cb547334d",
+    "qa/phase11_nsh_panel_status.py": "18d3de21c7ede901521626c661b54cb9aee5e1e05f5d1f5020448987205c4c0c",
+    "qa/test_phase11_nsh_panel_status.py": "8ab3ee3d0efac48e521b8bdf5a92e385ac03cd8a93e489990dcd51986d34ed57",
+    "qa/phase11_nsh_panel_status.js": "04ca0694c2058a2d6e3c4ce219c18b0f0815a231426c67890e2615617149eb42",
+    "desktop/nsh-shell/src/main.rs": "97596dba9287e772d4f87189a0a75df248834b7125a91370950f47ac321da597",
+    "shared/protocol/src/gateway_probe.rs": "accc3986626b027711833e17ebbafc0d091c5c93abd04cea54046dd707909fa7"
+  },
+  "raw_sha256": {
+    ".phase10-evidence/phase11-nsh-quit-survival.kJEfFv/native-quit.json": "86037e01db509292a1df7ba3c2283fce02fc04d0761cf90e5bc3cc5c097702c8",
+    ".phase10-evidence/phase11-nsh-quit-survival.kJEfFv/native-quit.stdout": "ebe08b36f87f6757a5f9428ff44cd35ebb2faeab62a210b4e7dc0c6bfa5d9cdc",
+    ".phase10-evidence/phase11-nsh-quit-survival.kJEfFv/native-quit.stderr": "4d5dcc2766833e713f632301841c14e1a098c134ffb7a803cbe87fce34fcf4da",
+    ".phase10-evidence/phase11-nsh-quit-survival.kJEfFv/quit-red.log": "4bea96cf2561ea91e61b4ede4c70847bfe488fa5f702c77f399457edab3eff82",
+    ".phase10-evidence/phase11-nsh-quit-survival.kJEfFv/malformed-red.log": "20b9a54b7cf757ec42967fcf7c51417f5d4958f6cfeca2b6873e5365280865b9",
+    ".phase10-evidence/phase11-nsh-quit-survival.kJEfFv/qa-green.log": "09783f50bbf7ef86f8bc74be3c6b247a0277b81752de46715d0bdc6f403667ca",
+    ".phase10-evidence/phase11-nsh-quit-survival.kJEfFv/host-build.log": "4b41dd209d25141c17dc7c340147066816ac67e4f114289c42ba059446bc12b3",
+    ".phase10-evidence/phase11-nsh-quit-survival.kJEfFv/native-quit-gateway/gateway-cleanup.json": "ed98fec2bf8801b841d535cf14e2ea623fe6345f556be1e95e4950dabeac6aef"
+  },
+  "binary_sha256": {
+    ".phase10-evidence/phase11-nsh-quit-survival.kJEfFv/aleph-nsh-shell": "fdf3c6540fd46812eafe43d95ae23076bb66d094f8e32ebfae95a7b079312363",
+    ".phase10-evidence/phase11-bundled-only/Aleph-NSH-Cancellable-Probe.app/Contents/MacOS/aleph-server": "b22b84e93b55b5a5c72e7470d6bf8aebf511f8fcfa7166933b6c49992c6c4d23"
+  },
+  "phase10_original_matrix": {
+    ".phase10-evidence/g7-official-matrix.Ji0duOcq/matrix.json": "fbf5f1272be769ae554ba53df065ef171badb6bbe942bb90e254168664e5f7c2"
+  },
+  "observed": {
+    "native_effects": {
+      "component_visible": true,
+      "connect_authorized_without_credential": true,
+      "credential_load_empty": true,
+      "document_bound": true,
+      "native_marker": true,
+      "readonly_text_correct": true,
+      "status_text_correct": true,
+      "toggle_absent": true
+    },
+    "native_exit_code": 0,
+    "engine_owned_drained": true,
+    "same_original_sole_listener_pid": true,
+    "same_ready_instance_start_and_version": true,
+    "fixture_cleanup_after_quit": true,
+    "served_http_assets_unchanged": true,
+    "children": [
+      {
+        "owner": "model",
+        "exit_code": -15,
+        "forced": false
+      },
+      {
+        "owner": "gateway",
+        "exit_code": 0,
+        "forced": false
+      }
+    ]
+  },
+  "verification": {
+    "qa_top_level_tests": 102,
+    "real_macos_native_run": 1,
+    "cargo": "4 GiB memory gate ALLOW, serial offline locked build with embedded-core and qa-service; native run after build",
+    "negative_controls": "evaluator RED for wrong PID; malformed scalar rejected after a failing test; strict owner/identity/readiness and native/fixture cleanup required"
+  },
+  "limits": [
+    "fixed QA external target using the same native quit() as the tray action; not an actual tray click",
+    "not production canonical-local admission or detached startup",
+    "no explicit stop, restart recovery, target switching, packaged app acceptance, Windows/Linux execution or service installation",
+    "no default switch, shared fourteen-day dual operation, Tauri removal, release or Phase11 acceptance"
+  ],
+  "gates": {
+    "P11-A": "OPEN",
+    "P11-B": "OPEN",
+    "P11-C": "OPEN",
+    "P11-D": "OPEN",
+    "P11-E": "OPEN",
+    "P11-F": "OPEN",
+    "P11-G": "OPEN",
+    "P11-H": "OPEN"
+  }
+}

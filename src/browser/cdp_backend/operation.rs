@@ -10,19 +10,18 @@ use std::sync::Arc;
 
 use aleph_protocol::browser_live::BrowserTargetBinding;
 
-use crate::browser::engine::{Engine, EngineHandle};
+use crate::browser::engine::EngineHandle;
 use crate::browser::live::LiveProfileOwner;
-use crate::browser::types::HistoryNav;
-
-/// Which successful verb produced a [`BrowserOperationRecord`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum BrowserOperationKind {
-    Open,
-    Navigate,
-    History(HistoryNav),
-}
 
 /// Attestation that one CDP mutation succeeded on an exact live owner + target.
+///
+/// **The receipt holds what is read and nothing else.** It used to also carry
+/// the verb that produced it (`BrowserOperationKind`), the engine and the
+/// engine's pid — and no production code read any of the three: the only
+/// reader was the `Debug` impl, which production never renders. A field
+/// nobody reads is a promise the type does not keep (判据 §11), so the
+/// receipt is now exactly the attestation it claims to be: the pinned owner,
+/// the handle that stayed alive for the operation, and the target it acted on.
 #[derive(Clone)]
 pub(crate) struct BrowserOperationRecord {
     owner: Arc<LiveProfileOwner>,
@@ -30,9 +29,6 @@ pub(crate) struct BrowserOperationRecord {
     // handle alive without creating an owner -> handle reference cycle.
     _handle: Arc<EngineHandle>,
     target_id: String,
-    kind: BrowserOperationKind,
-    engine: Engine,
-    engine_pid: u32,
 }
 
 impl BrowserOperationRecord {
@@ -42,15 +38,11 @@ impl BrowserOperationRecord {
         owner: &Arc<LiveProfileOwner>,
         handle: &Arc<EngineHandle>,
         target_id: String,
-        kind: BrowserOperationKind,
     ) -> Self {
         Self {
             owner: Arc::clone(owner),
             _handle: Arc::clone(handle),
             target_id,
-            kind,
-            engine: handle.engine,
-            engine_pid: handle.launched.pid,
         }
     }
 
@@ -59,9 +51,8 @@ impl BrowserOperationRecord {
         owner: &Arc<LiveProfileOwner>,
         handle: &Arc<EngineHandle>,
         target_id: String,
-        kind: BrowserOperationKind,
     ) -> Self {
-        Self::capture(owner, handle, target_id, kind)
+        Self::capture(owner, handle, target_id)
     }
 
     pub(crate) fn owner(&self) -> &Arc<LiveProfileOwner> {
@@ -71,21 +62,6 @@ impl BrowserOperationRecord {
     #[cfg(test)] // only tests read this; production has no caller
     pub(crate) fn target_id(&self) -> &str {
         &self.target_id
-    }
-
-    #[cfg(test)] // only tests read this; production has no caller
-    pub(crate) fn kind(&self) -> BrowserOperationKind {
-        self.kind
-    }
-
-    #[cfg(test)] // only tests read this; production has no caller
-    pub(crate) fn engine(&self) -> Engine {
-        self.engine
-    }
-
-    #[cfg(test)] // only tests read this; production has no caller
-    pub(crate) fn engine_pid(&self) -> u32 {
-        self.engine_pid
     }
 
     /// The exact (profile, browser session, target) the operation touched.
@@ -104,9 +80,6 @@ impl std::fmt::Debug for BrowserOperationRecord {
             .field("profile", &self.owner.profile())
             .field("browser_session_id", &self.owner.browser_session_id())
             .field("target_id", &self.target_id)
-            .field("kind", &self.kind)
-            .field("engine", &self.engine)
-            .field("engine_pid", &self.engine_pid)
             .finish()
     }
 }
@@ -116,11 +89,10 @@ mod tests {
     use aleph_cdp::testkit::{FakeCdpServer, Responder};
     use serde_json::json;
 
-    use super::{BrowserOperationKind, BrowserOperationRecord};
+    use super::BrowserOperationRecord;
     use crate::browser::cdp_backend::test_support::*;
     use crate::browser::engine::Engine;
     use crate::browser::error::BrowserError;
-    use crate::browser::types::HistoryNav;
 
     /// The receipt carries exactly the pinned owner's identity: profile and a
     /// real UUID browser session, plus the target it was handed — nothing is
@@ -133,12 +105,7 @@ mod tests {
         let handle = backend.handle().await.expect("pre-seeded handle");
         let owner = handle.live_owner();
 
-        let record = BrowserOperationRecord::capture(
-            &owner,
-            &handle,
-            "T-7".to_owned(),
-            BrowserOperationKind::Navigate,
-        );
+        let record = BrowserOperationRecord::capture(&owner, &handle, "T-7".to_owned());
         let binding = record.target_binding();
 
         assert_eq!(binding.profile, "default");
@@ -151,21 +118,9 @@ mod tests {
         );
         assert_eq!(binding.target_id, "T-7");
         assert_eq!(record.target_id(), "T-7");
-        assert_eq!(record.kind(), BrowserOperationKind::Navigate);
-        assert_eq!(record.engine(), Engine::Chromium);
-        assert_eq!(record.engine_pid(), handle.launched.pid);
         assert!(std::sync::Arc::ptr_eq(record.owner(), &owner));
 
-        let history = BrowserOperationRecord::capture(
-            &owner,
-            &handle,
-            "T-7".to_owned(),
-            BrowserOperationKind::History(HistoryNav::Back),
-        );
-        assert_eq!(
-            history.kind(),
-            BrowserOperationKind::History(HistoryNav::Back)
-        );
+        let history = BrowserOperationRecord::capture(&owner, &handle, "T-7".to_owned());
         assert_eq!(history.target_binding().target_id, "T-7");
     }
 
@@ -179,8 +134,8 @@ mod tests {
         let (_rb, b) = backend_with(&server_b, Engine::Chromium, open_guard()).await;
         let (ha, hb) = (a.handle().await.unwrap(), b.handle().await.unwrap());
         let (oa, ob) = (ha.live_owner(), hb.live_owner());
-        let ra = BrowserOperationRecord::capture(&oa, &ha, "T".into(), BrowserOperationKind::Open);
-        let rb = BrowserOperationRecord::capture(&ob, &hb, "T".into(), BrowserOperationKind::Open);
+        let ra = BrowserOperationRecord::capture(&oa, &ha, "T".into());
+        let rb = BrowserOperationRecord::capture(&ob, &hb, "T".into());
         assert_ne!(
             ra.target_binding().browser_session_id,
             rb.target_binding().browser_session_id
@@ -231,7 +186,6 @@ mod tests {
         emitter.await.expect("emitter must not panic");
 
         assert_eq!(record.target_id(), "T1");
-        assert_eq!(record.kind(), BrowserOperationKind::Navigate);
         let owner = handle.live_owner();
         assert_eq!(
             record.target_binding().browser_session_id,
@@ -304,6 +258,5 @@ mod tests {
 
         assert_eq!(tab, "T-NEW");
         assert_eq!(record.target_id(), "T-NEW");
-        assert_eq!(record.kind(), BrowserOperationKind::Open);
     }
 }

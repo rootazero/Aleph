@@ -12,29 +12,29 @@ use std::collections::HashMap;
 #[must_use]
 pub fn substitute(input: &str, vars: &HashMap<&str, &str>) -> String {
     let mut out = String::with_capacity(input.len());
-    let bytes = input.as_bytes();
     let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'{' {
-            if let Some(end_rel) = bytes[i + 1..].iter().position(|&b| b == b'}') {
-                let end = i + 1 + end_rel;
-                let key = &input[i + 1..end];
-                if let Some(value) = vars.get(key) {
-                    out.push_str(value);
-                    i = end + 1;
-                    continue;
-                }
-            }
-        }
-        // SAFETY: byte index `i` always lies on a UTF-8 char boundary because
-        // we only advance past whole `{...}` segments (ASCII) above, otherwise
-        // we copy one char at a time below.
-        let ch = match input[i..].chars().next() {
-            Some(c) => c,
-            None => break,
+    while i < input.len() {
+        let Some(rel_open) = input[i..].find('{') else {
+            out.push_str(&input[i..]);
+            break;
         };
-        out.push(ch);
-        i += ch.len_utf8();
+        let open = i + rel_open;
+        out.push_str(&input[i..open]);
+
+        let Some(rel_close) = input[open + 1..].find('}') else {
+            out.push_str(&input[open..]);
+            break;
+        };
+        let close = open + 1 + rel_close;
+        let key = &input[open + 1..close];
+
+        if let Some(value) = vars.get(key) {
+            out.push_str(value);
+            i = close + 1;
+        } else {
+            out.push('{');
+            i = open + 1;
+        }
     }
     out
 }

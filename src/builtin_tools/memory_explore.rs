@@ -304,6 +304,10 @@ impl AlephTool for MemoryExploreTool {
          Use when you need deeper context about a topic — discovers related facts across \
          multiple hops of similarity.";
 
+    fn services() -> Vec<aleph_slot_api::capability::Service> {
+        vec![crate::memory::runtime::required_service()]
+    }
+
     type Args = MemoryExploreArgs;
     type Output = MemoryExploreOutput;
 

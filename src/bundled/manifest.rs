@@ -5,7 +5,7 @@
 use serde::{Deserialize, Serialize};
 use std::cell::Cell;
 use std::collections::{BTreeMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{debug, warn};
 
@@ -30,8 +30,23 @@ pub struct InstallRegistry {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum SkillOrigin {
-    /// Bundled with the binary, extracted on startup.
+    /// Shipped with the binary: extracted on startup from the embedded
+    /// snapshot, owned by the bundle.
+    ///
+    /// Owned by `extractor::extract_skills` alone. Only this origin is
+    /// refreshed when the binary is upgraded.
     Official,
+    /// Installed by the network sync (`bundled.sync` / the sync button) from
+    /// the official skills repository.
+    ///
+    /// Owned by `extractor::extract_skill_tree_from_dir` alone. It is a
+    /// DISTINCT origin from [`SkillOrigin::Official`] on purpose: the two
+    /// producers write into the same skills directory, and when they both
+    /// claim the same name they must not keep restoring each other's copy.
+    /// The network copy is the fresher one (the user asked for it), so it
+    /// takes ownership of the name; the bundle then leaves that name alone
+    /// instead of reverting it on the next binary upgrade.
+    Synced,
     /// Installed from a GitHub URL.
     Github,
     /// Manually placed in the skills directory.
@@ -48,6 +63,24 @@ pub struct SkillEntry {
     /// Source URL (for github-installed skills).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+}
+
+impl SkillEntry {
+    /// Shipped with the binary. Owned by `extractor::extract_skills` alone.
+    #[must_use]
+    pub fn is_official(&self) -> bool {
+        self.source == SkillOrigin::Official
+    }
+
+    /// Owned by the system — the bundle or the network sync — rather than by
+    /// the user or a third party.
+    ///
+    /// A system-owned name may be overwritten by whichever system producer
+    /// owns it; a user-owned one is never overwritten by either.
+    #[must_use]
+    pub fn is_system_owned(&self) -> bool {
+        matches!(self.source, SkillOrigin::Official | SkillOrigin::Synced)
+    }
 }
 
 impl InstallRegistry {
@@ -76,7 +109,9 @@ impl InstallRegistry {
     /// parallel writers cannot collide on the tmp path, then atomically rename
     /// onto the destination. On Windows the rename of an existing file is
     /// rejected (`AlreadyExists`); the trailing remove-then-rename covers that
-    /// case. POSIX rename replaces atomically, so the retry never fires there.
+    /// case and restores the previous manifest if that rename fails, so a
+    /// failed swap can never leave the manifest permanently missing. POSIX
+    /// rename replaces atomically, so the retry never fires there.
     pub fn save(&self, skills_dir: &Path) -> std::io::Result<()> {
         use std::io::Write;
         let path = skills_dir.join("manifest.json");
@@ -87,15 +122,7 @@ impl InstallRegistry {
         // (a previous crash leaves a fixed tmp name on disk, blocking all
         // future saves). Each save now picks its own atomic-counter+nanos
         // tmp name, eliminating both surfaces.
-        let tmp_path = skills_dir.join(format!(
-            ".manifest.tmp.{}.{}.{}",
-            std::process::id(),
-            SAVE_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        ));
+        let tmp_path = unique_tmp_path(skills_dir, "manifest.tmp");
         // On any error below, drop the staging file so the next save does not
         // find a half-written one (create_new(true) would block on it).
         let cleanup_tmp = |e: std::io::Error| -> std::io::Result<()> {
@@ -113,15 +140,32 @@ impl InstallRegistry {
         if let Err(e) = f.write_all(content.as_bytes()) {
             return cleanup_tmp(e);
         }
+        drop(f);
         match std::fs::rename(&tmp_path, &path) {
             Ok(()) => {}
             // BUNDLED-R4-07: Windows' rename refuses on an existing target.
             // POSIX rename replaces atomically, so the retry never fires there.
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                // B41-7: keep the previous manifest recoverable before the
+                // destination is unlinked. If the fallback rename fails, the
+                // manifest must be put back: a missing manifest is read as a
+                // first run, which reclassifies every official skill as Local
+                // and drops its provenance permanently.
+                let previous = match std::fs::read(&path) {
+                    Ok(bytes) => bytes,
+                    Err(read_err) => return cleanup_tmp(read_err),
+                };
                 if let Err(rm) = std::fs::remove_file(&path) {
                     return cleanup_tmp(rm);
                 }
                 if let Err(rn) = std::fs::rename(&tmp_path, &path) {
+                    if let Err(restore_err) = restore_manifest(skills_dir, &path, &previous) {
+                        warn!(
+                            error = %restore_err,
+                            path = %path.display(),
+                            "Failed to restore previous skills manifest after fallback rename failed"
+                        );
+                    }
                     return cleanup_tmp(rn);
                 }
             }
@@ -187,6 +231,7 @@ impl InstallRegistry {
                 }
             })
             .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|name| !name.starts_with('.'))
             .collect();
         let skipped = skip_count.get();
         if skipped > 0 {
@@ -230,12 +275,49 @@ impl InstallRegistry {
         Ok(())
     }
 
-    /// Check if a skill is official.
+    /// Check if a skill is official (shipped with the binary).
     #[must_use]
     pub fn is_official(&self, name: &str) -> bool {
-        self.skills
-            .get(name)
-            .is_some_and(|e| e.source == SkillOrigin::Official)
+        self.skills.get(name).is_some_and(SkillEntry::is_official)
+    }
+}
+
+/// Build a process-unique temp path inside `skills_dir`.
+///
+/// The (pid, counter, nanos) triple is unique-by-construction so a
+/// concurrent writer in the same process, or a crash-leftover from a prior
+/// save, cannot collide with the returned path.
+fn unique_tmp_path(skills_dir: &Path, tag: &str) -> PathBuf {
+    skills_dir.join(format!(
+        ".{tag}.{}.{}.{}",
+        std::process::id(),
+        SAVE_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ))
+}
+
+/// Write `content` to `path` through a fresh unique temp file and rename it
+/// into place, so the restored manifest is never observed half-written.
+fn restore_manifest(skills_dir: &Path, path: &Path, content: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let restore_tmp = unique_tmp_path(skills_dir, "manifest.restore.tmp");
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&restore_tmp)?;
+    if let Err(e) = f.write_all(content) {
+        let _ = std::fs::remove_file(&restore_tmp);
+        return Err(e);
+    }
+    match std::fs::rename(&restore_tmp, path) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            let _ = std::fs::remove_file(&restore_tmp);
+            Err(e)
+        }
     }
 }
 
@@ -312,6 +394,34 @@ mod tests {
 
         // Still official — reconcile must not downgrade tracked official skills.
         assert!(m.is_official("off"));
+    }
+
+    #[test]
+    fn restore_manifest_writes_previous_content_back() {
+        // The Windows fallback path unlinks the destination before retrying the
+        // rename; if that rename fails the previous manifest must be restored
+        // so provenance is not lost.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("manifest.json");
+        std::fs::write(&path, b"{\"bundled_version\":\"1.0.0\"}").unwrap();
+        // The fallback path unlinks the destination before the retry, so the
+        // restore runs against a missing destination.
+        std::fs::remove_file(&path).unwrap();
+
+        restore_manifest(dir.path(), &path, b"{\"bundled_version\":\"1.0.0\"}").unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "{\"bundled_version\":\"1.0.0\"}"
+        );
+        // The staging file used for the restore must not be left behind.
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|name| name.starts_with(".manifest.restore.tmp."))
+            .collect();
+        assert!(leftovers.is_empty(), "unexpected leftovers: {leftovers:?}");
     }
 
     #[test]

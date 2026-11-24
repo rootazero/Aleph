@@ -49,6 +49,13 @@ impl NetworkAccess {
             Self::Localhost
         }
     }
+
+    /// Returns true if `addr` already maps to this variant, meaning no mode
+    /// change has occurred and the original address should be preserved.
+    #[must_use]
+    pub fn matches_bind_address(&self, addr: &str) -> bool {
+        Self::from_bind_address(addr) == *self
+    }
 }
 
 // Shell Security Configuration
@@ -289,7 +296,15 @@ pub async fn handle_update(
     // Check current host to determine if restart is needed
     let current_host = toml_io::read_gateway_host_from_config(&config_patcher);
 
-    let new_host = security_config.network_access.to_bind_address().to_string();
+    // Preserve custom addresses when the two-value network mode is unchanged.
+    let new_host = if security_config
+        .network_access
+        .matches_bind_address(&current_host)
+    {
+        current_host.clone()
+    } else {
+        security_config.network_access.to_bind_address().to_string()
+    };
     // The bind address is read once at boot, so a change requires a restart.
     let host_changed = current_host != new_host;
 
@@ -425,6 +440,73 @@ mod tests {
 
     fn cfg_from(json: serde_json::Value) -> SecurityConfig {
         serde_json::from_value(json).expect("valid SecurityConfig json")
+    }
+
+    #[tokio::test]
+    async fn update_preserves_bind_address_until_network_mode_changes() {
+        use crate::config::{backup::ConfigBackup, Config};
+        use crate::utils::paths::AlephHomeEnvGuard;
+
+        let home = tempfile::tempdir().unwrap();
+        let _home_guard = AlephHomeEnvGuard::acquire_and_set(home.path());
+        let config_path = Config::effective_path();
+        std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+        let patcher = Arc::new(ConfigPatcher::new(
+            Arc::new(tokio::sync::RwLock::new(Config::default())),
+            config_path.clone(),
+            ConfigBackup::new(home.path().join("backups"), 1),
+        ));
+        let event_bus = Arc::new(GatewayEventBus::new());
+
+        for host in ["192.168.1.20", "::", "::1", "127.0.0.1", "0.0.0.0"] {
+            std::fs::write(&config_path, format!("[gateway]\nhost = \"{host}\"\n")).unwrap();
+            let response = handle_get(
+                JsonRpcRequest::new("security_config.get", None, None),
+                patcher.clone(),
+            )
+            .await;
+            let mut params = response.result.unwrap();
+            params["ssrf_max_redirects"] = serde_json::json!(6);
+
+            for expected_restart in [true, false] {
+                let response = handle_update(
+                    JsonRpcRequest::new("security_config.update", Some(params.clone()), None),
+                    patcher.clone(),
+                    event_bus.clone(),
+                )
+                .await;
+                assert!(response.is_success(), "{response:?}");
+                assert_eq!(response.result.unwrap()["needs_restart"], expected_restart);
+                let saved: toml::Table = std::fs::read_to_string(&config_path)
+                    .unwrap()
+                    .parse()
+                    .unwrap();
+                assert_eq!(saved["gateway"]["host"].as_str(), Some(host));
+                assert_eq!(saved["ssrf"]["max_redirects"].as_integer(), Some(6));
+            }
+
+            let switched_mode = match NetworkAccess::from_bind_address(host) {
+                NetworkAccess::Localhost => NetworkAccess::AllNetworks,
+                NetworkAccess::AllNetworks => NetworkAccess::Localhost,
+            };
+            params["network_access"] = serde_json::to_value(&switched_mode).unwrap();
+            let response = handle_update(
+                JsonRpcRequest::new("security_config.update", Some(params), None),
+                patcher.clone(),
+                event_bus.clone(),
+            )
+            .await;
+            assert!(response.is_success(), "{response:?}");
+            assert_eq!(response.result.unwrap()["needs_restart"], true);
+            let saved: toml::Table = std::fs::read_to_string(&config_path)
+                .unwrap()
+                .parse()
+                .unwrap();
+            assert_eq!(
+                saved["gateway"]["host"].as_str(),
+                Some(switched_mode.to_bind_address())
+            );
+        }
     }
 
     #[test]

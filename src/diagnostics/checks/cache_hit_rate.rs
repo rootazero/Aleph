@@ -19,6 +19,7 @@ use async_trait::async_trait;
 
 use crate::diagnostics::check::{HealthCheck, Posture, Presence};
 use crate::diagnostics::finding::{Finding, Severity};
+use crate::utils::sqlite_open::open_sqlite_readonly;
 
 const ID: &str = "core/cache-hit-rate";
 const DB_FILENAME: &str = "state.db";
@@ -56,11 +57,7 @@ impl CacheHitRateCheck {
     /// Blocking (rusqlite is synchronous) — callers must keep it off the
     /// async executor (`spawn_blocking`).
     fn rollup(db_path: &Path) -> Result<(u64, u64, u64), String> {
-        let conn = rusqlite::Connection::open_with_flags(
-            db_path,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-        )
-        .map_err(|e| format!("{e}"))?;
+        let conn = open_sqlite_readonly(db_path).map_err(|e| format!("{e}"))?;
         let table_exists: bool = conn
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='task_traces'",
@@ -103,10 +100,6 @@ impl CacheHitRateCheck {
 impl HealthCheck for CacheHitRateCheck {
     fn id(&self) -> &'static str {
         ID
-    }
-
-    fn title(&self) -> &'static str {
-        "Prompt cache hit rate"
     }
 
     async fn run(&self, _posture: Posture) -> Vec<Finding> {
@@ -189,6 +182,7 @@ impl HealthCheck for CacheHitRateCheck {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aleph_protocol::AgentTraceEvent;
 
     /// Minimal state.db with `task_traces` holding `provider_usage` rows:
     /// `(input, cache_read, cache_creation, timestamp)`.
@@ -207,16 +201,19 @@ mod tests {
         )
         .expect("create table");
         for (input, read, creation, ts) in rows {
-            let json = serde_json::json!({
-                "kind": "provider_usage",
-                "agent_id": "a",
-                "input_tokens": input,
-                "output_tokens": 1,
-                "cache_read_tokens": read,
-                "cache_creation_tokens": creation,
-                "thinking_tokens": null
+            let json = serde_json::to_string(&AgentTraceEvent::ProviderUsage {
+                agent_id: "a".to_string(),
+                input_tokens: u32::try_from(*input).expect("input token count fits protocol"),
+                output_tokens: 1,
+                cache_read_tokens: Some(
+                    u32::try_from(*read).expect("cache read count fits protocol"),
+                ),
+                cache_creation_tokens: Some(
+                    u32::try_from(*creation).expect("cache creation count fits protocol"),
+                ),
+                thinking_tokens: None,
             })
-            .to_string();
+            .expect("serialize provider usage event");
             conn.execute(
                 "INSERT INTO task_traces (task_id, step_index, event_kind, event_json, timestamp) \
                  VALUES ('t', 0, 'provider_usage', ?1, ?2)",

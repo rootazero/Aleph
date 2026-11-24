@@ -609,16 +609,16 @@ pub async fn reinject_survivors(
                     None => base,
                 }
             };
-        // Same arrival-path rule as every other surface: the ticket is taken
+        // Same ordering rule as every other surface: the ticket is taken
         // synchronously, before the spawn. A lane that is somehow already full
         // at boot keeps the record queued for the next boot rather than
         // dropping the message.
-        let ticket = super::register_run(
-            &session_key,
-            &request.metadata,
-            cfg.max_per_session,
-            &payload.run_id,
-        );
+        //
+        // The lane is the one the record was admitted to, read back from the
+        // record instead of derived again here: the derivation rule may move,
+        // and a queued message must not follow it onto another session.
+        let ticket =
+            super::register_run_in_lane(&payload.lane_key, cfg.max_per_session, &payload.run_id);
         let Some(ticket) = ticket else {
             tracing::warn!(run_id = %run_id,
                 "busy-queue reinject: lane already full at boot; leaving record queued");

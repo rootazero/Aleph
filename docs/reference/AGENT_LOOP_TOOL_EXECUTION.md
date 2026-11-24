@@ -1,4 +1,5 @@
 # Agent Loop Tool Execution
+> **状态：历史文档（point-in-time）** — 本文记录的是 2026-04-19 Phase 4 审计当时的结论，不代表当前架构。当前状态以代码为准。
 
 > Tool execution context, progress tracking, and pipeline architecture.
 

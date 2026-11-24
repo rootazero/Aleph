@@ -47,6 +47,7 @@
 //! loading required.
 
 use crate::sync_primitives::Mutex;
+use crate::utils::sqlite_open::open_sqlite_safe;
 use crate::utils::text_format::truncate_with_marker;
 use std::path::Path;
 
@@ -67,6 +68,12 @@ pub(crate) const MAX_TITLE_CHARS: usize = 100;
 pub enum IndexError {
     #[error("sqlite error: {0}")]
     Sqlite(#[from] rusqlite::Error),
+    #[error("indexed input exceeds the {limit} byte limit")]
+    InputTooLarge { limit: usize },
+    #[error("indexed section count exceeds the {limit} section limit")]
+    TooManySections { limit: usize },
+    #[error("session index quota exceeded: at most {limit} indexed bytes")]
+    SessionQuotaExceeded { limit: usize },
 }
 
 /// Result of indexing one blob of text.
@@ -118,12 +125,14 @@ pub struct ContentIndex {
 impl ContentIndex {
     /// Open (creating if absent) an index at `db_path` and ensure the schema.
     pub fn open(db_path: &Path) -> Result<Self, IndexError> {
-        let conn = Connection::open(db_path)?;
+        let conn = open_sqlite_safe(db_path)?;
         Self::from_conn(conn)
     }
 
-    /// Open an ephemeral in-memory index. Used by tests and by callers that
-    /// want indexing without touching disk.
+    /// Open an ephemeral in-memory index.
+    ///
+    /// Test-only: production opens the on-disk index through [`Self::open`].
+    #[cfg(test)]
     pub fn open_in_memory() -> Result<Self, IndexError> {
         let conn = Connection::open_in_memory()?;
         Self::from_conn(conn)
@@ -189,9 +198,48 @@ impl ContentIndex {
         title_hint: &str,
         text: &str,
     ) -> Result<IndexOutcome, IndexError> {
+        if text.len() > MAX_INPUT_BYTES {
+            return Err(IndexError::InputTooLarge {
+                limit: MAX_INPUT_BYTES,
+            });
+        }
+        if text.lines().count() > MAX_SECTIONS * DEFAULT_CHUNK_LINES {
+            return Err(IndexError::TooManySections {
+                limit: MAX_SECTIONS,
+            });
+        }
         let chunks = chunk_lines(text, DEFAULT_CHUNK_LINES);
+        if chunks.len() > MAX_SECTIONS {
+            return Err(IndexError::TooManySections {
+                limit: MAX_SECTIONS,
+            });
+        }
 
         let mut conn = self.lock();
+        let existing_source_bytes: usize = conn
+            .query_row(
+                "SELECT COALESCE(SUM(length(body)), 0) FROM chunks WHERE source = ?1 AND session_id = ?2",
+                params![source, session_id],
+                |row| row.get::<_, i64>(0),
+            )?
+            .try_into()
+            .unwrap_or(usize::MAX);
+        let existing_session_bytes: usize = conn
+            .query_row(
+                "SELECT COALESCE(SUM(length(body)), 0) FROM chunks WHERE session_id = ?1",
+                params![session_id],
+                |row| row.get::<_, i64>(0),
+            )?
+            .try_into()
+            .unwrap_or(usize::MAX);
+        let new_bytes = chunks.iter().map(String::len).sum::<usize>();
+        let retained_bytes = existing_session_bytes.saturating_sub(existing_source_bytes);
+        if retained_bytes.saturating_add(new_bytes).saturating_mul(2) > MAX_SESSION_INDEX_BYTES {
+            return Err(IndexError::SessionQuotaExceeded {
+                limit: MAX_SESSION_INDEX_BYTES,
+            });
+        }
+
         let tx = conn.transaction()?;
         let mut previews = Vec::new();
         {
@@ -279,6 +327,7 @@ impl ContentIndex {
     /// near-ties without letting proximity override a decisive RRF lead.
     /// Single-term queries skip the pass entirely, leaving RRF order byte-for-
     /// byte unchanged.
+    #[cfg(test)]
     pub fn search(
         &self,
         session_id: &str,
@@ -297,7 +346,7 @@ impl ContentIndex {
     /// base session key. Callers own the trust boundary — every id passed
     /// must belong to one trust domain (epochs of one key do; two different
     /// agents' keys do not). An empty set matches nothing, never everything.
-    pub fn search_sessions(
+    pub(crate) fn search_sessions(
         &self,
         session_ids: &[&str],
         query: &str,
@@ -311,7 +360,7 @@ impl ContentIndex {
     /// the query, not a filter over the pooled top hits: a page's own sections
     /// are never crowded out of the result by better-ranked chunks of the
     /// session's other outputs.
-    pub fn search_source(
+    pub(crate) fn search_source(
         &self,
         session_ids: &[&str],
         source: &str,
@@ -357,10 +406,13 @@ impl ContentIndex {
         Ok(finalize(fused, limit))
     }
 
-    /// Number of chunks indexed by `session_id`, across all its sources. Cheap;
-    /// used by the `ctx_search` tool to tell the model whether anything of *its
-    /// own* is indexed yet — a global count would leak the existence of other
-    /// sessions' output.
+    /// Number of chunks indexed by `session_id`, across all its sources.
+    ///
+    /// Test-only: production counts through [`Self::len_sessions`] — the
+    /// `ctx_search` tool asks the result store, which scopes the count to the
+    /// session's own key set (a global count would leak the existence of other
+    /// sessions' output).
+    #[cfg(test)]
     pub fn len(&self, session_id: &str) -> Result<usize, IndexError> {
         self.len_sessions(&[session_id])
     }
@@ -368,7 +420,7 @@ impl ContentIndex {
     /// Number of chunks indexed across the given session ids (see
     /// [`Self::search_sessions`] for why a set: epoch-aware retrieval after a
     /// session split). An empty set counts nothing.
-    pub fn len_sessions(&self, session_ids: &[&str]) -> Result<usize, IndexError> {
+    pub(crate) fn len_sessions(&self, session_ids: &[&str]) -> Result<usize, IndexError> {
         if session_ids.is_empty() {
             return Ok(0);
         }
@@ -448,13 +500,14 @@ fn drop_pre_scope_tables(conn: &Connection) -> Result<(), IndexError> {
         if exists == 0 {
             continue;
         }
-        // `prepare` is the cheapest column probe that works on a virtual table
-        // (`PRAGMA table_info` would too, but needs row parsing). It fails iff
-        // the column is absent.
-        if conn
-            .prepare(&format!("SELECT session_id FROM {table} LIMIT 0"))
-            .is_err()
-        {
+        // Inspect schema directly: a missing column may surface as either
+        // SqliteFailure or SqlInputError, depending on SQLite preparation.
+        let scoped: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name = 'session_id')",
+            params![table],
+            |row| row.get(0),
+        )?;
+        if !scoped {
             tracing::warn!(
                 table,
                 "content index predates session scoping; recreating it empty \
@@ -465,6 +518,15 @@ fn drop_pre_scope_tables(conn: &Connection) -> Result<(), IndexError> {
     }
     Ok(())
 }
+
+/// Maximum raw input accepted by one indexing call.
+const MAX_INPUT_BYTES: usize = 1_048_576;
+
+/// Maximum logical sections retained for one source and session quota check.
+const MAX_SECTIONS: usize = 4_096;
+
+/// Maximum indexed bytes per session, counting both tokenizer tables.
+const MAX_SESSION_INDEX_BYTES: usize = 16 * 1024 * 1024;
 
 /// Number of section titles surfaced in the offload marker preview.
 pub(crate) const PREVIEW_COUNT: usize = 5;

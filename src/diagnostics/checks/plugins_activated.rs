@@ -17,6 +17,7 @@ use async_trait::async_trait;
 use crate::diagnostics::check::{unknown_finding, HealthCheck, Posture};
 use crate::diagnostics::finding::{Finding, Severity};
 use crate::extension::activation_gate::{assess, ActivationReport};
+#[cfg(test)]
 use crate::extension::{PluginRecord, PluginRegistry};
 
 const ID: &str = "extension/plugins-activated";
@@ -30,6 +31,11 @@ enum Source {
     /// The daemon: ask the live registry on every run.
     Live,
     /// A snapshot (tests), or `None` = no manager (the cold process).
+    ///
+    /// Test-only: the daemon always reads the live registry through
+    /// [`PluginsActivatedCheck::live`], so a snapshot constructor with no
+    /// production caller would be a dead seam dressed as a feature.
+    #[cfg(test)]
     Records(Option<Vec<PluginRecord>>),
 }
 
@@ -43,8 +49,12 @@ impl PluginsActivatedCheck {
     }
 
     /// A fixed snapshot; `None` reproduces "no extension manager".
+    ///
+    /// Test-only: the daemon always uses [`Self::live`]; this constructor
+    /// exists so a test can pin the registry snapshot the check reads.
     #[must_use]
-    pub const fn from_records(records: Option<Vec<PluginRecord>>) -> Self {
+    #[cfg(test)]
+    pub(crate) const fn from_records(records: Option<Vec<PluginRecord>>) -> Self {
         Self {
             source: Source::Records(records),
         }
@@ -57,7 +67,9 @@ impl PluginsActivatedCheck {
                 let registry = manager.get_plugin_registry().await;
                 Some(assess(&registry))
             }
+            #[cfg(test)]
             Source::Records(None) => None,
+            #[cfg(test)]
             Source::Records(Some(records)) => {
                 let mut registry = PluginRegistry::new();
                 for r in records {
@@ -73,10 +85,6 @@ impl PluginsActivatedCheck {
 impl HealthCheck for PluginsActivatedCheck {
     fn id(&self) -> &'static str {
         ID
-    }
-
-    fn title(&self) -> &'static str {
-        "Plugin activation"
     }
 
     async fn run(&self, _posture: Posture) -> Vec<Finding> {

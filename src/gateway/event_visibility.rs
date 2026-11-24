@@ -165,6 +165,11 @@ use aleph_protocol::team_topic::team_topic_id;
 /// JSON-RPC notification frames — see `event_bus.rs::publish_frame`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionIdentity {
+    /// A trusted process-local produced envelope. Evaluated with fresh facts.
+    CapabilityAudience,
+    /// Capability ledger loss status has no private payload, but still requires
+    /// an explicitly authenticated current operator and a configured store.
+    CapabilityStatus,
     /// The frame's own payload names its session directly.
     BySessionKey(String),
     /// The frame names only a `run_id`; the session must be resolved through
@@ -346,6 +351,42 @@ fn browser_live_scope(binding: Option<&Value>) -> SessionIdentity {
     }
 }
 
+/// Scope of a browser-live intervention frame from its `summary` payload
+/// member (`InterventionSummary`). Fail closed on the same rules as
+/// [`browser_live_scope`], but the shape differs: an intervention names its
+/// principal and its conversation destination directly instead of carrying a
+/// `ResourceBinding`, and a `Connection` principal (a bridge that acts for
+/// nobody) attributes the frame to no one.
+fn browser_live_intervention_scope(summary: Option<&Value>) -> SessionIdentity {
+    use aleph_protocol::browser_live::{ConversationBinding, IssuerIdentity};
+    let Some(summary) = summary else {
+        return SessionIdentity::Withheld;
+    };
+    let Some(Ok(principal)) = summary
+        .get("principal")
+        .map(|p| serde_json::from_value::<IssuerIdentity>(p.clone()))
+    else {
+        return SessionIdentity::Withheld;
+    };
+    let IssuerIdentity::User { user_id } = principal else {
+        return SessionIdentity::Withheld;
+    };
+    let Some(Ok(destination)) = summary
+        .get("destination")
+        .map(|d| serde_json::from_value::<ConversationBinding>(d.clone()))
+    else {
+        return SessionIdentity::Withheld;
+    };
+    if user_id.is_empty() || destination.session_key.is_empty() || destination.run_id.is_empty() {
+        return SessionIdentity::Withheld;
+    }
+    SessionIdentity::ByBrowserLiveScope {
+        user_id,
+        session_key: destination.session_key,
+        run_id: destination.run_id,
+    }
+}
+
 /// The one topic this module PROJECTS rather than admits/denies, and the one
 /// payload field it rewrites. Named once because two bodies match on them —
 /// [`session_identity_of`]'s `Global` arm and
@@ -406,6 +447,8 @@ pub(crate) fn classify(topic: &str, data: Option<&Value>) -> Option<SessionIdent
         return Some(SessionIdentity::ByTeamId(team_id.to_string()));
     }
     Some(match topic {
+        "capability.event" | "capabilities.ui.display" => SessionIdentity::CapabilityAudience,
+        "capability.event.status" => SessionIdentity::CapabilityStatus,
         // The two clarification frames are plain `BySessionKey`: they must
         // admit exactly whom their two RPC faces admit, and those faces are
         // OWNER-keyed — `clarification.pending` filters every item through
@@ -650,6 +693,11 @@ pub(crate) fn classify(topic: &str, data: Option<&Value>) -> Option<SessionIdent
         aleph_protocol::browser_live::CLOSED_TOPIC => {
             browser_live_scope(data.and_then(|d| d.pointer("/closed/binding")))
         }
+        // An intervention names its principal and destination directly, so it
+        // does not go through `browser_live_scope` (which reads a binding).
+        aleph_protocol::browser_live::INTERVENTION_TOPIC => {
+            browser_live_intervention_scope(data.and_then(|d| d.pointer("/summary")))
+        }
 
         // A project room's roster-visible state changed
         // (`GatewayEventFrame::ProjectsChanged`). `project_id` is always
@@ -816,6 +864,15 @@ impl SessionOwnership {
 struct OwnershipCache {
     order: VecDeque<String>,
     map: HashMap<String, Option<SessionOwnership>>,
+    /// Bumped by every invalidation (`forget_session`).
+    ///
+    /// A cache MISS reads the ownership from the session store, and only then
+    /// inserts it. If an invalidation lands in between, the insert would
+    /// publish the PRE-rescope ownership and poison the cache until FIFO
+    /// eviction: room members would be denied and the former personal owner
+    /// would still be admitted. A fill therefore captures the generation
+    /// before its read and may only publish while the generation is unchanged.
+    generation: u64,
 }
 
 /// Cached team→(owner, scope) stamps for [`SessionIdentity::ByTeamId`].
@@ -963,6 +1020,49 @@ impl EventVisibilityIndex {
     /// [`role_is_operator`](crate::tools::turn_context::role_is_operator) reads
     /// as trusted local/internal — the repo-wide convention, and why the
     /// boolean shim above is safe for internal callers rather than a hole.
+    /// Capability observations use fresh existing session metadata and roster
+    /// facts. The historical session cache and legacy missing-role exemption do
+    /// not authorize these new topics, even for an operator.
+    pub async fn capability_audience_admits(
+        &self,
+        audience: &crate::capability::event_audience::EventAudience,
+        caller_user: Option<&str>,
+        caller_role: Option<&str>,
+        store: &Arc<dyn SessionStore>,
+    ) -> bool {
+        use crate::capability::event_audience::EventAudience;
+        let Some(user) = caller_user.filter(|user| !user.trim().is_empty()) else {
+            return false;
+        };
+        if !matches!(caller_role, Some("operator" | "member")) {
+            return false;
+        }
+        match audience {
+            EventAudience::OperatorOnly => caller_role == Some("operator"),
+            EventAudience::Principal(principal) => {
+                if principal.user_id() != user {
+                    return false;
+                }
+                let Some(session) = principal.session_key() else {
+                    return principal.workspace().is_none();
+                };
+                let Some(key) = SessionKey::from_key_string(session) else {
+                    return false;
+                };
+                let Ok(Some(meta)) = store.get_metadata(&key).await else {
+                    return false;
+                };
+                if principal
+                    .workspace()
+                    .is_some_and(|workspace| meta.scope_id.as_deref() != Some(workspace))
+                {
+                    return false;
+                }
+                crate::gateway::visibility::session_visible_to(&meta, user)
+            }
+        }
+    }
+
     pub async fn event_admits_for(
         &self,
         topic: &str,
@@ -973,6 +1073,19 @@ impl EventVisibilityIndex {
         teams: Option<&Arc<dyn TeamStore>>,
     ) -> bool {
         match session_identity_of(topic, data) {
+            SessionIdentity::CapabilityAudience => {
+                let Some(audience) = data.and_then(
+                    crate::capability::event_audience::EventAudience::from_produced_frame,
+                ) else {
+                    return false;
+                };
+                self.capability_audience_admits(&audience, caller_user, caller_role, store)
+                    .await
+            }
+            SessionIdentity::CapabilityStatus => {
+                caller_user.is_some_and(|user| !user.trim().is_empty())
+                    && caller_role == Some("operator")
+            }
             SessionIdentity::Global => true,
             SessionIdentity::OperatorOnly => {
                 crate::tools::turn_context::role_is_operator(caller_role)
@@ -1167,56 +1280,87 @@ impl EventVisibilityIndex {
             return cached.is_some_and(|o| o.visible_to(caller));
         }
 
-        let ownership = match SessionKey::from_key_string(session_key) {
-            Some(key) => match store.get_metadata(&key).await {
-                Ok(Some(meta)) => Some(SessionOwnership::of(&meta)),
-                // Row absent: TRANSIENT, exactly like the store error below,
-                // and for a reason that fires on the happy path of a brand-new
-                // conversation. `execute.rs` emits `RunAccepted{session_key}`
-                // BEFORE `ensure_session` creates the row, so the very first
-                // frame of a fresh session can arrive while the row does not
-                // exist yet. Caching that absence as an unresolvable key would
-                // deny EVERY later frame for that session key — the only
-                // invalidation hook is `forget_session`, whose sole caller is
-                // the channel-bind rescope, so nothing on this path would ever
-                // drop the key, and the cache otherwise evicts only by FIFO at
-                // `MAX_CACHED_SESSION_OWNERS` — so streaming for that
-                // conversation would stay dead for the process lifetime. It
-                // fails closed, so nothing leaks, but it dies silently, and
-                // loopback resolves to `Some(OWNER_USER_ID)` so a single-user
-                // box runs this path too.
-                //
-                // Deny THIS frame and re-resolve on the next one. For run
-                // frames the dropped early frame self-heals via
-                // `run_complete`'s summary reconciliation on the client (see
-                // the module doc). For the `running_set_changed` PROJECTION
-                // there is no such client-side reconciliation, so "the next
-                // one" is a real producer, not a hope:
-                // `SessionRunRegistry::republish_running_set`, called by
-                // `execute.rs` immediately after `ensure_session` — see the
-                // projection section of the module doc.
-                Ok(None) => return false,
-                // Store error: fail closed, and don't cache a transient
-                // failure as a permanent "no owner" — matching
-                // `visibility::existing_session_is_visible`'s own rule.
-                Err(_) => return false,
-            },
-            // Malformed session_key string: cache as unresolvable so a
-            // repeated malformed key doesn't re-hit the parse on every event.
-            // This one IS permanent — a string that does not parse today will
-            // not parse later, so nothing can invalidate it. It must stay
-            // distinct from a row whose `owner_user_id` is absent, which reads
-            // as the LEGACY owner and admits them.
-            None => None,
-        };
-        self.cache_ownership(session_key.to_string(), ownership.clone())
-            .await;
-        ownership.is_some_and(|o| o.visible_to(caller))
+        // Fence the fill against a concurrent invalidation (G1-01): capture
+        // the invalidation generation BEFORE the store read; the insert below
+        // is only allowed to publish while the generation is unchanged. A
+        // rescope that lands in between makes the loaded ownership stale, so
+        // the read is repeated once with the new generation instead of
+        // caching the stale value.
+        for _ in 0..2 {
+            let generation = self.ownership_generation().await;
+            let ownership = match SessionKey::from_key_string(session_key) {
+                Some(key) => match store.get_metadata(&key).await {
+                    Ok(Some(meta)) => Some(SessionOwnership::of(&meta)),
+                    // Row absent: TRANSIENT, exactly like the store error below,
+                    // and for a reason that fires on the happy path of a brand-new
+                    // conversation. `execute.rs` emits `RunAccepted{session_key}`
+                    // BEFORE `ensure_session` creates the row, so the very first
+                    // frame of a fresh session can arrive while the row does not
+                    // exist yet. Caching that absence as an unresolvable key would
+                    // deny EVERY later frame for that session key — the only
+                    // invalidation hook is `forget_session`, whose sole caller is
+                    // the channel-bind rescope, so nothing on this path would ever
+                    // drop the key, and the cache otherwise evicts only by FIFO at
+                    // `MAX_CACHED_SESSION_OWNERS` — so streaming for that
+                    // conversation would stay dead for the process lifetime. It
+                    // fails closed, so nothing leaks, but it dies silently, and
+                    // loopback resolves to `Some(OWNER_USER_ID)` so a single-user
+                    // box runs this path too.
+                    //
+                    // Deny THIS frame and re-resolve on the next one. For run
+                    // frames the dropped early frame self-heals via
+                    // `run_complete`'s summary reconciliation on the client (see
+                    // the module doc). For the `running_set_changed` PROJECTION
+                    // there is no such client-side reconciliation, so "the next
+                    // one" is a real producer, not a hope:
+                    // `SessionRunRegistry::republish_running_set`, called by
+                    // `execute.rs` immediately after `ensure_session` — see the
+                    // projection section of the module doc.
+                    Ok(None) => return false,
+                    // Store error: fail closed, and don't cache a transient
+                    // failure as a permanent "no owner" — matching
+                    // `visibility::existing_session_is_visible`'s own rule.
+                    Err(_) => return false,
+                },
+                // Malformed session_key string: cache as unresolvable so a
+                // repeated malformed key doesn't re-hit the parse on every event.
+                // This one IS permanent — a string that does not parse today will
+                // not parse later, so nothing can invalidate it. It must stay
+                // distinct from a row whose `owner_user_id` is absent, which reads
+                // as the LEGACY owner and admits them.
+                None => None,
+            };
+            if self
+                .cache_ownership_if_current(session_key.to_string(), ownership.clone(), generation)
+                .await
+            {
+                return ownership.is_some_and(|o| o.visible_to(caller));
+            }
+            // An invalidation landed during the read: reload with the new
+            // generation. The loop gives this exactly one retry; after that we
+            // fail closed rather than publish an ownership we cannot vouch for.
+        }
+        false
     }
 
-    async fn cache_ownership(&self, session_key: String, ownership: Option<SessionOwnership>) {
+    /// The current invalidation generation of the ownership cache.
+    async fn ownership_generation(&self) -> u64 {
+        self.owners.read().await.generation
+    }
+
+    /// Insert `ownership` into the cache ONLY while `generation` is still the
+    /// current one. Returns whether the value was published.
+    async fn cache_ownership_if_current(
+        &self,
+        session_key: String,
+        ownership: Option<SessionOwnership>,
+        generation: u64,
+    ) -> bool {
         let mut inner = self.owners.write().await;
-        let OwnershipCache { order, map } = &mut *inner;
+        if inner.generation != generation {
+            return false;
+        }
+        let OwnershipCache { order, map, .. } = &mut *inner;
         remember(
             order,
             map,
@@ -1224,6 +1368,7 @@ impl EventVisibilityIndex {
             ownership,
             MAX_CACHED_SESSION_OWNERS,
         );
+        true
     }
 
     /// Whether `caller` may receive a `team.<id>.*` frame.
@@ -1329,7 +1474,11 @@ impl EventVisibilityIndex {
     /// [`SessionStore::rescope_attribution`]: crate::gateway::session_store::SessionStore::rescope_attribution
     pub async fn forget_session(&self, session_key: &str) {
         let mut inner = self.owners.write().await;
-        let OwnershipCache { order, map } = &mut *inner;
+        // Invalidate any in-flight cache FILL too: a fill that read the
+        // pre-rescope ownership before this point must not publish it after
+        // the invalidation (G1-01).
+        inner.generation = inner.generation.wrapping_add(1);
+        let OwnershipCache { order, map, .. } = &mut *inner;
         forget(order, map, session_key);
     }
 
@@ -2619,6 +2768,7 @@ mod tests {
     #[tokio::test]
     #[serial_test::parallel(pty_global_manager)]
     async fn pty_frames_reach_only_the_owner_and_outlive_the_session() {
+        let manager = crate::gateway::pty::manager::activate_test_provider();
         let (store, _temp) = test_store();
         let store: Arc<dyn SessionStore> = Arc::new(store);
         let index = EventVisibilityIndex::new();
@@ -2666,9 +2816,8 @@ mod tests {
             );
         }
 
-        // `pty.exit` fires one line before `remove` and delivery is async —
-        // the owner must still be admitted for a session already gone.
-        crate::gateway::pty::manager().remove(&sid);
+        // Close the test-owned child while keeping the retained owner stamp.
+        manager.close(&sid).expect("close test session");
         let data = serde_json::json!({ "session_id": sid });
         assert!(
             index
@@ -3095,6 +3244,33 @@ mod tests {
         }
     }
 
+    fn bl_intervention(principal: bl::IssuerIdentity) -> bl::InterventionSummary {
+        bl::InterventionSummary {
+            intervention_id: "intervention-1".into(),
+            destination: bl::ConversationBinding {
+                session_key: "agent:operator:browser".into(),
+                run_id: "run-7".into(),
+            },
+            target: bl::BrowserTargetBinding {
+                profile: "default".into(),
+                browser_session_id: "bs-1".into(),
+                target_id: "t-1".into(),
+            },
+            principal,
+            started_at_ms: 1_799_000_000_000,
+            ended_at_ms: 1_799_000_001_000,
+            control_epoch_before: 1,
+            control_epoch_after: 2,
+            ended_by: bl::InterventionEnd::Cede,
+            facts: bl::InterventionFacts {
+                input_event_count: 3,
+                typed_text_chars: 2,
+                navigation_count: 0,
+                final_origin: None,
+            },
+        }
+    }
+
     fn expected_browser_live(binding: &bl::ResourceBinding) -> SessionIdentity {
         match binding {
             bl::ResourceBinding::Browser { viewer } => match &viewer.principal {
@@ -3385,6 +3561,21 @@ mod tests {
                 GatewayEventFrame::BrowserLiveClosed { closed } => {
                     expected_browser_live(&closed.binding)
                 }
+                // An intervention carries its principal and destination
+                // instead of a binding: a `User` principal scopes the frame
+                // to that user's session, a `Connection` principal to nobody.
+                GatewayEventFrame::BrowserLiveIntervention { summary } => {
+                    match &summary.principal {
+                        bl::IssuerIdentity::User { user_id } => {
+                            SessionIdentity::ByBrowserLiveScope {
+                                user_id: user_id.clone(),
+                                session_key: summary.destination.session_key.clone(),
+                                run_id: summary.destination.run_id.clone(),
+                            }
+                        }
+                        bl::IssuerIdentity::Connection { .. } => SessionIdentity::Withheld,
+                    }
+                }
             }
         }
 
@@ -3653,6 +3844,16 @@ mod tests {
             },
             GatewayEventFrame::BrowserLiveClosed {
                 closed: bl_closed(bl_artifact_binding()),
+            },
+            GatewayEventFrame::BrowserLiveIntervention {
+                summary: bl_intervention(bl::IssuerIdentity::User {
+                    user_id: "u-alice".into(),
+                }),
+            },
+            GatewayEventFrame::BrowserLiveIntervention {
+                summary: bl_intervention(bl::IssuerIdentity::Connection {
+                    connection_id: "conn-1".into(),
+                }),
             },
         ];
 

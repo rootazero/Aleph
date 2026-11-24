@@ -1,0 +1,70 @@
+{
+  "status": "PASS",
+  "overall_phase9_verdict": "PASS",
+  "phase10_readiness": true,
+  "acceptance": {
+    "path": "docs/superpowers/runs/2026-11-18-phase9-acceptance.json",
+    "sha256": "8714d91fb95a07a95f0cf77f921c1917ca4451de5f31d79db7c9f72bd4e4f181"
+  },
+  "base": "3892804c112fd6e574166a4c03a7c40a77d0b239",
+  "head": "3892804c112fd6e574166a4c03a7c40a77d0b239",
+  "branch": "runtime-proof",
+  "performance": {
+    "status": "VALID",
+    "threshold_status": "ACCEPTED",
+    "rounds": 80,
+    "failure_metrics": []
+  },
+  "audit": {
+    "status": "PASS",
+    "failures": [],
+    "execution": {
+      "path": ".superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/full-closure/isolated-matrix-40-20261118T185504/audit-program-execution.json",
+      "sha256": "062e60f38a52ac70577ea1a4431e0b79921c06aa55658275edf8717a712f9585"
+    }
+  },
+  "source_manifest": {
+    "path": "docs/superpowers/runs/2026-11-18-phase9-source-manifest.json",
+    "sha256": "68a10a1082a58e867f9119514c142f39b31a88e4a1d7132115ad65c5668a926f"
+  },
+  "source_files": 52,
+  "source_mismatches": [],
+  "default_manifest": {
+    "path": "docs/superpowers/runs/2026-11-18-phase9-default-manifest.json",
+    "sha256": "fa24d1c0e017e506dd79f174bc7cc7e670cbcfc78d1416db4780e4671daeaaa9"
+  },
+  "default_artifact_mismatches": [],
+  "default_qa_ingress_absent": true,
+  "lock_sha256": "12300967333b45f8a0fa1f401cf13a559b5b8a881ee95550b1bbf1a8d42e21f5",
+  "ordered_reviews_complete": true,
+  "protected_paths_git_status": "",
+  "limits": [
+    "Debug macOS evidence only",
+    "Settlement covers members visible in retained coalition samples and terminal snapshots; sub-interval unsampled members are not inventoried",
+    "Queued transition coverage is a separate real-Gateway-wire-to-production-ChatState integration proof, not required in each performance round",
+    "Historical ignored Core tests unchanged",
+    "No release/cross-platform/full embedded-core package acceptance",
+    "Public quit_app exercises standalone single-window application exit; user WindowClose callback semantics are not accepted by this experiment.",
+    "Terminal absence is recorded from public OS observations at collection time, not cryptographic proof against rewriting an entire evidence set.",
+    "Target WebKit catalog scope uses the pinned application display name; unrelated applications are excluded.",
+    "No commit, merge, push, release, OS policy change, root/private API, detached daemon takeover or Tauri/WebChat removal.",
+    "No workspace/all-features/clippy or recursive whole-repository rustfmt claim; existing host_functions.rs formatting differences remain.",
+    "A dedicated collector-final-listing exception-path regression and duplicate synthetic tail fixture cleanup remain nonblocking test-maintenance notes."
+  ],
+  "historical_manifest": {
+    "path": "docs/superpowers/runs/2026-11-16-phase9-source-manifest.json",
+    "sha256": "c489ab6324cf3aeb339bdb4083827c100ff669981d7595bb73ea25f283046b8e"
+  },
+  "final_spec": {
+    "path": ".superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/full-closure/review-archive/1b81b8e5-9ad8-4ac3-94f9-1dc63580cbcc/spec-terminal-remnant-review.6a56ccd2.1b81b8e5.md",
+    "sha256": "7776e9fd1937644eae8a40ac7f7ec6564ea8235d4c57ff96db687c53867f8d55"
+  },
+  "final_quality": {
+    "path": ".superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/full-closure/review-archive/8377f29f-7f6e-41f7-8e79-480c7137e8fe/quality-final-evidence-review.md",
+    "sha256": "73c0531b2e28f628a6fad113db55616b0da4d63afad02e7fbcf4760cc8f8893f"
+  },
+  "final_review_archive": {
+    "path": ".superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/full-closure/review-archive/manifest.json",
+    "sha256": "83f0d25dfc842c886df70aa03e38f464222559fe38217efea25268a00da8f575"
+  }
+}

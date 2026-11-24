@@ -1,0 +1,51 @@
+{
+  "console": [
+    "error: WebSocket connection to 'wss://127.0.0.1:52474/v1/ws' failed: HTTP Authentication failed; no valid credentials available",
+    "error: WebSocket connection to 'wss://127.0.0.1:52474/v1/ws' failed: HTTP Authentication failed; no valid credentials available"
+  ],
+  "steps": [
+    {
+      "name": "paired_live_events_granted",
+      "features": [
+        "live_events"
+      ],
+      "subject": "8c2d20e74df3150f9eac32539083d9b6"
+    },
+    {
+      "name": "cross_surface_history",
+      "row": "Open chat S3desktophello",
+      "desktop_message_copies": 1
+    },
+    {
+      "name": "ime_return_does_not_send",
+      "committed": "你好\n"
+    },
+    {
+      "name": "send_streams_and_completes",
+      "topics": {
+        "stream.run_accepted": 2,
+        "stream.response_chunk": 4,
+        "stream.run_complete": 1
+      },
+      "methods_after_send": {
+        "chat.send": 1,
+        "chat.history": 1
+      },
+      "idempotency_key_present": true
+    },
+    {
+      "name": "stop_probe",
+      "outcome": "stop_pressed",
+      "abort_sent": true,
+      "topics": {
+        "stream.run_accepted": 2,
+        "stream.run_error": 1
+      }
+    },
+    {
+      "name": "gateway_restart_repair_restores_history",
+      "row": "Open chat S3desktophello"
+    }
+  ],
+  "ok": true
+}

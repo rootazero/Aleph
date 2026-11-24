@@ -1,5 +1,15 @@
 # Desktop Bridge (Swift Helper Process)
 
+> **Scope note / 范围说明 (2026-11-21):** This Swift IPC bridge is not
+> `desktop/nsh-shell/src/panel_bridge.rs`. The latter is an origin/document-scoped
+> WKWebView navigation/notification bridge into the existing Panel, with one NSH
+> root and no second Gateway connection or native business projection.
+> [Phase10 closeout](../superpowers/runs/2026-11-21-phase10-closeout.md) accepts
+> only the local macOS shell slice under its approved Quit-only threshold
+> amendment; it does not migrate Swift camera/voice/screenshot capabilities.
+> / Swift 原生能力桥与 NSH Panel 文档消息桥不同；本期未迁移相机、语音或截图。
+
+
 > Long-lived `AlephBridge` Swift subprocess that proxies macOS native APIs
 > (AVFoundation, Vision, Accessibility, IOKit) over JSON-RPC 2.0 stdio.
 
@@ -42,7 +52,7 @@ AlephBridge (Swift)          ← long-lived child process
 ### Spawn lifecycle
 
 The `SwiftBridge` client (`desktop/shared/src/bridge/client.rs`) spawns the
-helper lazily on the first call. A `Supervisor` (`bridge/supervisor.rs`)
+helper lazily on the first call. A `Supervisor` (`desktop/shared/src/bridge/supervisor.rs`)
 monitors the child process and respawns it with exponential backoff (1 s, 2 s,
 4 s, 8 s, 16 s, capped at 30 s) when it exits unexpectedly. After five
 restarts within a ten-minute window the bridge enters **disabled mode**: all
@@ -172,7 +182,7 @@ advertises exactly this list as `supported_methods`, so a method absent here is
 a method the Rust client will not attempt. There are no longer any declared-but-
 unserved constants: `input.clipboard_read` / `input.clipboard_write` had neither
 a handler nor a caller and were removed (clipboard access is done in-process by
-the limb — `desktop/macos/src/system/clipboard.rs`, `NSPasteboard` — never over
+the limb — `desktop/shared/src/macos/clipboard.rs`, `NSPasteboard` — never over
 the bridge). **Do not re-add a constant ahead of its handler**: a published
 method with nothing behind it answers `-32601` at runtime, which reads to the
 model as "this feature is broken" rather than "this feature does not exist".

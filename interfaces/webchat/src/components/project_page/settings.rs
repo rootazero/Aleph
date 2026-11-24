@@ -76,7 +76,18 @@ pub fn SettingsTab(project: ProjectInfo, refresh: Callback<()>) -> impl IntoView
     // empty-state / list. A plain `refresh()` would instead re-fetch and
     // keep rendering the now-archived room in place.
     let on_archived: OnDone = Callback::new(move |result: Result<(), String>| match result {
-        Ok(()) => tab_state.selected_project_id.set(None),
+        Ok(()) => {
+            tab_state.selected_project_id.set(None);
+            #[cfg(feature = "panel-modular")]
+            dash.panel_discovery.update(|state| {
+                let request = state.invalidate_context();
+                state.mark_error_for_request(
+                    state.connection_epoch(),
+                    request,
+                    "Panel project context is unavailable".to_string(),
+                );
+            });
+        }
         Err(e) => error.set(Some(
             crate::components::admin_refusal::settings_write_error(i18n, &e, |e| e.to_string()),
         )),

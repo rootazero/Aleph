@@ -36,32 +36,54 @@ const CONSERVATIVE_PATTERNS: &[(&str, &str)] = &[
     ("password=", "password=[REDACTED]"),
 ];
 
-fn conservative_redact(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut remaining = text;
-    for (needle, replacement) in CONSERVATIVE_PATTERNS {
-        while let Some(idx) = remaining
-            .to_ascii_lowercase()
-            .find(&needle.to_ascii_lowercase())
-        {
-            out.push_str(&remaining[..idx]);
-            out.push_str(replacement);
-            // Consume the value following the needle (up to the next
-            // whitespace, delimiter, or quote) so the credential itself does
-            // not survive into the trailing slice — e.g. for input
-            // "Authorization: Bearer xyz" this drops "xyz" along with the
-            // needle. Without this, `out` would end with the replacement and
-            // `remaining` would still hold the secret, leaking it into the
-            // final `out.push_str(remaining)` below.
-            remaining = &remaining[idx + needle.len()..];
-            let val_end = remaining
-                .find(|c: char| c.is_whitespace() || matches!(c, '&' | ',' | '"' | '\''))
-                .unwrap_or(remaining.len());
-            remaining = &remaining[val_end..];
-        }
+fn find_ascii_case_insensitive(haystack: &str, needle: &str) -> Option<usize> {
+    if needle.is_empty() {
+        return Some(0);
     }
-    out.push_str(remaining);
-    out
+    let needle_bytes = needle.as_bytes();
+    let haystack_bytes = haystack.as_bytes();
+    if needle_bytes.len() > haystack_bytes.len() {
+        return None;
+    }
+    haystack_bytes
+        .windows(needle_bytes.len())
+        .position(|window| window.eq_ignore_ascii_case(needle_bytes))
+}
+
+fn conservative_redact(text: &str) -> String {
+    // Raw vendor credentials use the same catalog as approval and gateway
+    // masking. The assignment pass below remains as a supplement for the
+    // deliberately short `key=value` values its existing contract accepts.
+    let mut current = crate::exec::SecretMasker::new().mask(text);
+    for (needle, replacement) in CONSERVATIVE_PATTERNS {
+        let mut out = String::with_capacity(current.len());
+        let mut remaining = current.as_str();
+        while let Some(idx) = find_ascii_case_insensitive(remaining, needle) {
+            let prefix = remaining.get(..idx).unwrap_or("");
+            out.push_str(prefix);
+            out.push_str(replacement);
+            let after_needle = remaining.get(idx + needle.len()..).unwrap_or("");
+            let val_end = if after_needle.starts_with('"') {
+                after_needle
+                    .get(1..)
+                    .and_then(|tail| tail.find('"').map(|end| end + 2))
+                    .unwrap_or(after_needle.len())
+            } else if after_needle.starts_with('\'') {
+                after_needle
+                    .get(1..)
+                    .and_then(|tail| tail.find('\'').map(|end| end + 2))
+                    .unwrap_or(after_needle.len())
+            } else {
+                after_needle
+                    .find(|c: char| c.is_whitespace() || matches!(c, '&' | ',' | '"' | '\''))
+                    .unwrap_or(after_needle.len())
+            };
+            remaining = after_needle.get(val_end..).unwrap_or("");
+        }
+        out.push_str(remaining);
+        current = out;
+    }
+    current
 }
 
 /// Redact secrets and PII from an MCP-originated error string.
@@ -103,6 +125,19 @@ mod tests {
         let out = conservative_redact(input);
         assert!(!out.contains("abc123.def456"), "got: {out}");
         assert!(out.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn conservative_redact_uses_shared_raw_credential_patterns() {
+        for key in [
+            "sk-proj-abcdefghijklmnopqrstuvwxyz12345678",
+            "sk_live_abcdefghijklmnopqrstuvwxyz1234",
+        ] {
+            let input = format!("upstream rejected raw credential {key}");
+            let out = conservative_redact(&input);
+            assert!(!out.contains(key), "raw credential survived: {out}");
+            assert!(out.contains("***REDACTED***"), "got: {out}");
+        }
     }
 
     #[test]

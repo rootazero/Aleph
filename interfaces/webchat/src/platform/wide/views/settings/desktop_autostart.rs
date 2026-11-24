@@ -1,19 +1,9 @@
-//! "This device" autostart toggle — desktop-shell only.
-//!
-//! Launch-at-login is a property of the *local* Tauri shell, not the (possibly
-//! remote) server this Panel talks to, so it bypasses the gateway JSON-RPC and
-//! calls the `tauri-plugin-autostart` commands directly over Tauri IPC
-//! (`window.__TAURI__.core.invoke`, available because the shell sets
-//! `withGlobalTauri: true` and the `default` capability grants `autostart:*` to
-//! the loopback Panel origin via its `remote.urls`). The section renders only
-//! when (a) we are inside the native shell AND (b) the IPC probe succeeds —
-//! which is false for a remote-origin Panel (the lite shell, or a full App
-//! pointed at a remote server), whose foreign origin sits outside the
-//! capability's `remote.urls`, so the plugin command is rejected. The lite shell
-//! exposes the toggle in its tray menu instead; a full App pointed at a remote
-//! server has no in-app launch-at-login control — switch back to Local mode
-//! (which restores the loopback origin) to change it. The OS login item persists
-//! across the switch, so this is a discoverability gap, not a loss of control.
+//! Host login-item settings, never the remote server service's autostart.
+//! NSH exposes a typed read-only status until its setter is validated. Tauri
+//! retains its existing plugin path and remote-origin ACL behavior.
+
+use crate::api::native_credentials::nsh_shell_present;
+use aleph_protocol::panel_shell::AutostartStatus;
 
 use crate::i18n::{t, use_i18n};
 use crate::platform::wide::views::voice::audio::is_native_shell;
@@ -68,8 +58,28 @@ async fn set_autostart(enabled: bool) -> Result<(), String> {
     invoke(cmd, JsValue::NULL).await.map(|_| ())
 }
 
-/// Launch-at-login toggle for the local desktop shell. Self-hiding: renders
-/// nothing unless we are in the native shell and the IPC probe succeeds.
+async fn nsh_status() -> Result<AutostartStatus, ()> {
+    let window = web_sys::window().ok_or(())?;
+    let bridge = Reflect::get(&window, &JsValue::from_str("__alephShellBridge")).map_err(|_| ())?;
+    let query: Function = Reflect::get(&bridge, &JsValue::from_str("autostartStatus"))
+        .map_err(|_| ())?
+        .dyn_into()
+        .map_err(|_| ())?;
+    let promise: Promise = query
+        .call0(&bridge)
+        .map_err(|_| ())?
+        .dyn_into()
+        .map_err(|_| ())?;
+    let value = JsFuture::from(promise).await.map_err(|_| ())?;
+    let raw = js_sys::JSON::stringify(&value)
+        .map_err(|_| ())?
+        .as_string()
+        .ok_or(())?;
+    serde_json::from_str(&raw).map_err(|_| ())
+}
+
+/// Launch-at-login status for the current host. NSH never renders an unchecked
+/// toggle for Unavailable, Failed or RequiresApproval; writes remain Tauri-only.
 #[component]
 #[must_use]
 pub fn DesktopAutostartSection() -> impl IntoView {
@@ -77,8 +87,16 @@ pub fn DesktopAutostartSection() -> impl IntoView {
     // `available`: probe resolved AND we are in the shell. `enabled`: current state.
     let (available, set_available) = signal(false);
     let (enabled, set_enabled) = signal(false);
+    let (status, set_status) = signal(None);
+    let nsh = nsh_shell_present();
 
-    if is_native_shell() {
+    if nsh {
+        set_available.set(true);
+        spawn_local(async move {
+            let value = nsh_status().await.unwrap_or(AutostartStatus::Failed {});
+            let _ = set_status.try_set(Some(value));
+        });
+    } else if is_native_shell() {
         spawn_local(async move {
             if let Ok(state) = get_autostart().await {
                 set_enabled.set(state);
@@ -104,7 +122,7 @@ pub fn DesktopAutostartSection() -> impl IntoView {
     move || {
         available.get().then(|| {
             view! {
-                <div class="bg-surface-sunken/40 rounded-xl p-4">
+                <div class="bg-surface-sunken/40 rounded-xl p-4" data-testid="desktop-autostart-section">
                     <div class="flex items-center justify-between gap-4">
                         <div>
                             <h2 class="text-xl font-semibold text-text-primary mb-2">
@@ -114,7 +132,22 @@ pub fn DesktopAutostartSection() -> impl IntoView {
                                 {t!(i18n, settings.general.autostart.description)}
                             </p>
                         </div>
-                        // Panel-canonical iOS-style switch (matches settings/policies, plugins).
+                        {if nsh {
+                            view! {
+                                <div class="text-sm text-text-secondary" role="status" aria-live="polite" data-testid="desktop-autostart-status">
+                                    <p>{move || match status.get() {
+                                        None => t!(i18n, settings.general.autostart.status_loading).into_any(),
+                                        Some(AutostartStatus::Enabled {}) => t!(i18n, settings.general.autostart.status_enabled).into_any(),
+                                        Some(AutostartStatus::Disabled {}) => t!(i18n, settings.general.autostart.status_disabled).into_any(),
+                                        Some(AutostartStatus::RequiresApproval {}) => t!(i18n, settings.general.autostart.status_approval).into_any(),
+                                        Some(AutostartStatus::Unavailable { .. }) => t!(i18n, settings.general.autostart.status_unavailable).into_any(),
+                                        Some(AutostartStatus::Failed {}) => t!(i18n, settings.general.autostart.status_failed).into_any(),
+                                    }}</p>
+                                    <p>{t!(i18n, settings.general.autostart.read_only)}</p>
+                                </div>
+                            }.into_any()
+                        } else {
+                        view! {
                         <label class="relative inline-flex items-center cursor-pointer shrink-0">
                             <input
                                 type="checkbox"
@@ -124,6 +157,8 @@ pub fn DesktopAutostartSection() -> impl IntoView {
                             />
                             <div class="w-11 h-6 bg-surface-sunken peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary/30 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
                         </label>
+                        }.into_any()
+                        }}
                     </div>
                 </div>
             }

@@ -16,7 +16,7 @@ qa-service = []
 
 [dependencies]
 aleph-protocol = { path = "../protocol" }
-tokio = { version = "1.53.3", features = ["rt-multi-thread", "sync", "time", "macros"] }
+tokio = { version = "1.53.3", features = ["rt-multi-thread", "sync", "time", "macros", "net", "io-util"] }
 tokio-tungstenite = { version = "0.30", features = ["native-tls"] }
 # Direct dependency only so a `wss://` connection can be handed a pinned root
 # (the server's own self-signed certificate). Already in the tree transitively
@@ -28,6 +28,7 @@ serde_json = "1.0"
 toml = "1.1.8"
 thiserror = "2.0"
 tracing = "0.1"
+url = { workspace = true }
 dirs = "7"
 
 # OS-protected storage for the paired-device credential (see
@@ -36,8 +37,19 @@ dirs = "7"
 # provider and the store fails closed. There is deliberately NO plaintext-file
 # fallback. Linux uses the Secret Service (persistent; the kernel keyutils
 # provider is not enabled because it does not survive a reboot).
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [target.'cfg(windows)'.dependencies]
 keyring = { version = "4.2", default-features = false, features = ["v1"] }
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "4.2", default-features = false, features = ["v1"] }
@@ -46,5 +58,4 @@ keyring = { version = "4.2", default-features = false, features = ["v1"] }
 keyring = { version = "4.2", default-features = false, features = ["v1"] }
 
 [dev-dependencies]
-# `net` for the loopback WebSocket server the handshake test spins up.
-tokio = { version = "1.53.3", features = ["net"] }
+tempfile = "3"

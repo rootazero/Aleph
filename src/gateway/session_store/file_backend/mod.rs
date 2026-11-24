@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use std::path::PathBuf;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::gateway::event_bus::GatewayEventBus;
 use crate::gateway::router::SessionKey;
@@ -14,6 +14,34 @@ use crate::gateway::session_store::{RunBill, SessionStore, StampOutcome};
 use crate::sync_primitives::Arc;
 
 pub(crate) mod meta;
+
+#[cfg(all(test, windows))]
+mod archive_diagnostics_tests;
+
+// Six retries allow brief Windows handle contention to clear without making
+// a lasting permission denial unbounded (1575ms total planned backoff).
+const ARCHIVE_SHARING_BACKOFF_MS: [u64; 6] = [25, 50, 100, 200, 400, 800];
+
+#[derive(Debug, PartialEq, Eq)]
+enum ArchiveRenameFailure {
+    Collision,
+    SharingConflict,
+    Terminal,
+}
+
+fn archive_rename_failure(
+    error: &std::io::Error,
+    destination_exists: bool,
+) -> ArchiveRenameFailure {
+    // Windows can report ACCESS_DENIED for an occupied destination too.
+    if destination_exists {
+        return ArchiveRenameFailure::Collision;
+    }
+    if cfg!(windows) && matches!(error.raw_os_error(), Some(5 | 32 | 33)) {
+        return ArchiveRenameFailure::SharingConflict;
+    }
+    ArchiveRenameFailure::Terminal
+}
 
 /// Sanitize a session key into a filesystem-safe directory name.
 ///
@@ -157,6 +185,7 @@ pub struct FileSessionStore {
     /// the file backend also drives session-end summarization / reflection /
     /// profile synthesis. `None` (the default) keeps the legacy behaviour.
     raw_memory_writer: Option<Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>>,
+    memory_runtime: Option<std::sync::Weak<crate::memory::runtime::MemoryRuntime>>,
     /// Per-session-key locks for `metadata.json`. Everything that writes goes
     /// through these — see the [`meta`] module doc for why.
     metadata_locks: meta::MetaLocks,
@@ -182,6 +211,7 @@ impl FileSessionStore {
             config,
             event_bus: crate::sync_primitives::RwLock::new(None),
             raw_memory_writer: None,
+            memory_runtime: None,
             metadata_locks: meta::MetaLocks::new(),
         })
     }
@@ -262,6 +292,16 @@ impl FileSessionStore {
         writer: Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>,
     ) -> Self {
         self.raw_memory_writer = Some(writer);
+        self
+    }
+
+    /// Attach the canonical Memory source without extending its lifetime.
+    #[must_use]
+    pub fn with_memory_runtime(
+        mut self,
+        runtime: &Arc<crate::memory::runtime::MemoryRuntime>,
+    ) -> Self {
+        self.memory_runtime = Some(Arc::downgrade(runtime));
         self
     }
 
@@ -604,7 +644,6 @@ fn new_session_meta(
         last_active_at: now,
         message_count,
         total_tokens: 0,
-        auto_reset_at: None,
         state: Some(SessionState::Created),
         topic: None,
         status: None,
@@ -771,20 +810,69 @@ impl SessionStore for FileSessionStore {
             return Ok(DeleteResult { deleted: false });
         }
         let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
-        let archive_dir = self
+        // The archive directory name must be spelled the SAME way the session
+        // directory is (`sanitize_key_for_dir`), not with the raw key: a raw
+        // key always contains the `:` separator, which is illegal in a
+        // Windows file name (os error 123), and a segment containing `/`
+        // would escape `.archive/<date>/` on POSIX. The archived session is
+        // still identified by its key — `sweep_archive_events` reads the key
+        // out of `metadata.json`, not out of the directory name.
+        let archive_base = self
             .config
             .base_dir
             .join(".archive")
             .join(date)
-            .join(&key_str);
-        if let Some(parent) = archive_dir.parent() {
+            .join(sanitize_key_for_dir(&key_str));
+        if let Some(parent) = archive_base.parent() {
             tokio::fs::create_dir_all(parent).await.map_err(|e| {
                 SessionStoreError::DatabaseError(format!("Create archive dir failed: {e}"))
             })?;
         }
-        tokio::fs::rename(&dir, &archive_dir).await.map_err(|e| {
-            SessionStoreError::DatabaseError(format!("Archive session failed: {e}"))
-        })?;
+        let mut archive_dir = archive_base.clone();
+        let mut collision = 0usize;
+        // One sharing budget spans suffix changes; collisions cannot renew it.
+        let mut sharing_retries = 0usize;
+        loop {
+            match tokio::fs::rename(&dir, &archive_dir).await {
+                Ok(()) => break,
+                Err(error) => match archive_rename_failure(&error, archive_dir.exists()) {
+                    ArchiveRenameFailure::Collision => {
+                        collision += 1;
+                        if collision > 1024 {
+                            return Err(SessionStoreError::DatabaseError(format!(
+                                "Archive session failed after too many name collisions: {error}"
+                            )));
+                        }
+                        archive_dir = archive_base.with_file_name(format!(
+                            "{}-{collision}",
+                            archive_base
+                                .file_name()
+                                .and_then(|name| name.to_str())
+                                .unwrap_or("session")
+                        ));
+                    }
+                    ArchiveRenameFailure::SharingConflict
+                        if sharing_retries < ARCHIVE_SHARING_BACKOFF_MS.len() =>
+                    {
+                        let delay = ARCHIVE_SHARING_BACKOFF_MS[sharing_retries];
+                        sharing_retries += 1;
+                        tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                    }
+                    ArchiveRenameFailure::SharingConflict | ArchiveRenameFailure::Terminal => {
+                        warn!(
+                            attempts = collision + sharing_retries + 1,
+                            sharing_retries,
+                            collision,
+                            error = %error,
+                            "Archive session rename failed"
+                        );
+                        return Err(SessionStoreError::DatabaseError(format!(
+                            "Archive session failed: {error}"
+                        )));
+                    }
+                },
+            }
+        }
         self.emit_session_changed(&key_str, "delete", None);
         Ok(DeleteResult { deleted: true })
     }
@@ -1062,11 +1150,28 @@ impl SessionStore for FileSessionStore {
             meta.input_tokens += msg.input_tokens;
             meta.output_tokens += msg.output_tokens;
         }
-        let path = self.transcript_path(&new_key_str);
         tokio::fs::create_dir_all(self.session_dir(&new_key_str))
             .await
             .map_err(|e| SessionStoreError::DatabaseError(format!("Create dir failed: {e}")))?;
-        write_transcript_atomic(&path, &checkpoint_messages).await?;
+        // Lock FIRST: the transcript rewrite and the metadata commit are one
+        // critical section. Writing the transcript before taking the lock
+        // left a window in which a concurrent `append_message` on the
+        // branched session could write between the rewrite and the commit
+        // and be lost by the rewrite.
+        let mut guard = self.lock_metadata(&new_key_str).await?;
+        // Create-if-absent, decided by the store under its own lock. The
+        // caller-side preflight (`get_metadata`) is a fast path only: another
+        // writer can create the target between that check and this call, and
+        // the branch would then replace a session the caller never owned.
+        // The guard read the document after taking the lock, so `None` here is
+        // authoritative — no window between "does it exist" and "write it".
+        if guard.existing().is_some() {
+            return Err(SessionStoreError::AlreadyExists(format!(
+                "Session {new_key_str} already exists"
+            )));
+        }
+        self.write_transcript_locked(&guard, &new_key_str, &checkpoint_messages)
+            .await?;
         // P1 data isolation: this is a freshly-created session (new_key), so
         // it gets the same owner/scope stamp `get_or_create`'s CREATE branch
         // gives every other new session — no-op outside any `scope::
@@ -1074,7 +1179,6 @@ impl SessionStore for FileSessionStore {
         // legacy/owner-owned under `visibility::session_visible`, invisible
         // to the member who just created it (see the trait doc on this fn).
         meta.stamp_attribution();
-        let mut guard = self.lock_metadata(&new_key_str).await?;
         guard.insert(meta);
         let meta = guard.commit().await?;
         self.emit_session_changed(&new_key_str, "checkpoint-branch", Some(&meta));
@@ -1146,15 +1250,26 @@ impl SessionStore for FileSessionStore {
                 // scope columns directly (no extra query) so the session-end
                 // reflector can write OPEN_LOOPS.md under the same composed
                 // id the curated-envelope reader resolves.
-                crate::gateway::session_manager::ops::emit_session_end_raw(
+                crate::gateway::session_manager::ops::capture_session_end(
+                    self.memory_runtime
+                        .as_ref()
+                        .and_then(std::sync::Weak::upgrade),
                     writer,
-                    key.agent_id().to_string(),
-                    key_str.clone(),
-                    tail,
-                    crate::memory::store::raw_memory::SessionEndReason::Disconnect,
-                    meta.owner_user_id.clone(),
-                    meta.scope_id.clone(),
-                );
+                    crate::memory::store::raw_memory::RawMemory::new(
+                        tail,
+                        crate::memory::store::raw_memory::RawMemorySource::SessionEnd {
+                            reason: crate::memory::store::raw_memory::SessionEndReason::Disconnect,
+                        },
+                    )
+                    .with_agent(key.agent_id())
+                    .with_session(key_str.clone()),
+                    crate::scope::ScopeAttribution::from_persisted(
+                        meta.owner_user_id.as_deref(),
+                        meta.scope_id.as_deref(),
+                    ),
+                    true,
+                )
+                .await;
             }
 
             meta.state = Some(SessionState::Stopped);
@@ -1179,6 +1294,47 @@ impl SessionStore for FileSessionStore {
                 identity_meta
                     .custom
                     .insert("topic".to_string(), serde_json::json!(topic));
+            });
+            guard.commit().await?;
+        }
+        Ok(())
+    }
+
+    /// See the trait doc. The file backend keeps the origin on the session's
+    /// identity metadata, exactly like the SQL backend: the origin channel is
+    /// written only when it is still unset, and the origin conversation id
+    /// lands in `custom["origin_conversation"]`. A default no-op here would
+    /// silently drop the origin for every file-backed session.
+    async fn set_source_channel(
+        &self,
+        key: &SessionKey,
+        channel: &str,
+        conversation: Option<&str>,
+    ) -> Result<(), SessionStoreError> {
+        let channel = channel.trim();
+        if channel.is_empty() || channel == "unknown" {
+            return Ok(());
+        }
+        let conversation = conversation
+            .map(str::trim)
+            .filter(|c| !c.is_empty())
+            .map(str::to_string);
+        let key_str = key.to_key_string();
+        let mut guard = self.lock_metadata(&key_str).await?;
+        if let Some(meta) = guard.existing_mut() {
+            with_identity_meta(meta, |identity_meta| {
+                let current = identity_meta.source_channel.trim();
+                // Never clobber an already-recorded real origin.
+                if !current.is_empty() && current != "unknown" {
+                    return;
+                }
+                identity_meta.source_channel = channel.to_string();
+                if let Some(ref conv) = conversation {
+                    identity_meta.custom.insert(
+                        crate::gateway::session_store::types::ORIGIN_CONVERSATION_KEY.to_string(),
+                        serde_json::json!(conv),
+                    );
+                }
             });
             guard.commit().await?;
         }
@@ -1320,6 +1476,35 @@ impl SessionStore for FileSessionStore {
             }
         }
         Ok(max_epoch)
+    }
+
+    async fn reserve_next_epoch(&self, base_key_pattern: &str) -> Result<u32, SessionStoreError> {
+        use crate::utils::atomic_io::{with_file_lock, write_atomic};
+        use sha2::{Digest, Sha256};
+
+        let persisted = self.get_current_epoch(base_key_pattern).await?;
+        let dir = self.config.base_dir.join(".epoch-reservations");
+        let path = dir.join(hex::encode(Sha256::digest(base_key_pattern.as_bytes())));
+        tokio::task::spawn_blocking(move || -> std::io::Result<u32> {
+            std::fs::create_dir_all(&dir)?;
+            with_file_lock(&path.with_extension("lock"), |_| {
+                let reserved: u32 = match std::fs::read_to_string(&path) {
+                    Ok(value) => value
+                        .parse()
+                        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?,
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => 0,
+                    Err(e) => return Err(e),
+                };
+                let next = persisted.max(reserved).checked_add(1).ok_or_else(|| {
+                    std::io::Error::new(std::io::ErrorKind::InvalidData, "Session epoch exhausted")
+                })?;
+                write_atomic(&path, next.to_string().as_bytes())?;
+                Ok(next)
+            })
+        })
+        .await
+        .map_err(|e| SessionStoreError::DatabaseError(e.to_string()))?
+        .map_err(SessionStoreError::from)
     }
 
     async fn get_session_topic(
@@ -1540,37 +1725,6 @@ impl SessionStore for FileSessionStore {
         let meta = self.read_metadata(&key_str).await?;
         let messages = self.read_transcript(&key_str, Some(message_limit)).await?;
         Ok(SessionPreview { meta, messages })
-    }
-
-    async fn count_by_state(&self, state: SessionState) -> Result<usize, SessionStoreError> {
-        let sessions = self.list_sessions(SessionFilter::default()).await?;
-        Ok(sessions
-            .into_iter()
-            .filter(|m| m.state == Some(state))
-            .count())
-    }
-
-    async fn list_by_state(
-        &self,
-        state: SessionState,
-    ) -> Result<Vec<SessionMetadata>, SessionStoreError> {
-        let sessions = self.list_sessions(SessionFilter::default()).await?;
-        Ok(sessions
-            .into_iter()
-            .filter(|m| m.state == Some(state))
-            .collect())
-    }
-
-    async fn set_error(
-        &self,
-        key: &SessionKey,
-        _error_msg: Option<&str>,
-    ) -> Result<(), SessionStoreError> {
-        self.set_state(key, SessionState::Error).await
-    }
-
-    async fn stop(&self, key: &SessionKey) -> Result<(), SessionStoreError> {
-        self.set_state(key, SessionState::Stopped).await
     }
 
     async fn set_idle(&self, key: &SessionKey) -> Result<(), SessionStoreError> {
@@ -2512,6 +2666,186 @@ mod reap_tests {
         let (store, _dir) = temp_store();
         let cutoff = chrono::Utc::now().timestamp();
         assert_eq!(store.reap_task_sessions("cron", cutoff).await.unwrap(), 0);
+    }
+}
+
+#[cfg(test)]
+mod archive_tests {
+    use super::*;
+
+    #[test]
+    fn rename_failure_classifies_destination_before_os_error() {
+        for code in [5, 32, 33, 13] {
+            assert_eq!(
+                archive_rename_failure(&std::io::Error::from_raw_os_error(code), true),
+                ArchiveRenameFailure::Collision
+            );
+        }
+        for code in [5, 32, 33] {
+            assert_eq!(
+                archive_rename_failure(&std::io::Error::from_raw_os_error(code), false),
+                if cfg!(windows) {
+                    ArchiveRenameFailure::SharingConflict
+                } else {
+                    ArchiveRenameFailure::Terminal
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn rename_failure_does_not_retry_unrelated_or_untyped_errors() {
+        for code in [2, 3, 13, 30, 80, 183] {
+            assert_eq!(
+                archive_rename_failure(&std::io::Error::from_raw_os_error(code), false),
+                ArchiveRenameFailure::Terminal
+            );
+        }
+        assert_eq!(
+            archive_rename_failure(
+                &std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+                false
+            ),
+            ArchiveRenameFailure::Terminal
+        );
+    }
+
+    #[cfg(windows)]
+    #[tokio::test(start_paused = true)]
+    async fn delete_session_bounds_windows_sharing_denial_and_preserves_source() {
+        use std::os::windows::fs::OpenOptionsExt;
+        use std::time::Duration;
+        use tokio::time::Instant;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = FileSessionStore::new(FileSessionStoreConfig {
+            base_dir: dir.path().to_path_buf(),
+            ..Default::default()
+        })
+        .unwrap();
+        let key = SessionKey::main("main");
+        store.get_or_create(&key).await.unwrap();
+        let source = store.session_dir(&key.to_key_string());
+        // Share reads/writes, but deliberately deny FILE_SHARE_DELETE.
+        let handle = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .share_mode(3)
+            .open(source.join("held.txt"))
+            .unwrap();
+        let started = Instant::now();
+        let deletion = store.delete_session(&key);
+        tokio::pin!(deletion);
+        tokio::select! {
+            biased;
+            result = &mut deletion => panic!("must wait for the held child: {result:?}"),
+            _ = tokio::time::sleep(Duration::from_millis(1)) => {}
+        }
+        // Introduce a real name collision after the first sharing denial.
+        // The next suffix must not reset the already-started sharing budget.
+        let archive = dir
+            .path()
+            .join(".archive")
+            .join(chrono::Utc::now().format("%Y-%m-%d").to_string());
+        let incumbent = archive.join("agent_main_main");
+        std::fs::create_dir(&incumbent).unwrap();
+        std::fs::write(incumbent.join("original.txt"), b"original").unwrap();
+        let error = deletion.await.unwrap_err().to_string();
+        let elapsed = started.elapsed();
+        println!("held child: {error}; elapsed={elapsed:?}");
+        assert!(error.contains("Archive session failed"), "{error}");
+        assert!(error.contains("os error 5"), "{error}");
+        assert!(source.exists());
+        // A held handle must exhaust a finite backoff, not fail immediately
+        // or spin forever. Keep the handle alive until after both checks.
+        // Six delays of 25, 50, 100, 200, 400, 800ms exhaust the budget.
+        // Allow at most one virtual timer tick of rounding per delay.
+        assert!(elapsed >= Duration::from_millis(1575), "{elapsed:?}");
+        assert!(elapsed <= Duration::from_millis(1581), "{elapsed:?}");
+        drop(handle);
+        assert!(store.delete_session(&key).await.unwrap().deleted);
+        assert_eq!(std::fs::read_dir(&archive).unwrap().count(), 2);
+        assert_eq!(
+            std::fs::read(incumbent.join("original.txt")).unwrap(),
+            b"original"
+        );
+        assert!(archive.join("agent_main_main-1/held.txt").exists());
+    }
+
+    #[cfg(windows)]
+    #[tokio::test(start_paused = true)]
+    async fn delete_session_retries_same_destination_after_child_handle_release() {
+        use std::os::windows::fs::OpenOptionsExt;
+        use std::time::Duration;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = FileSessionStore::new(FileSessionStoreConfig {
+            base_dir: dir.path().to_path_buf(),
+            ..Default::default()
+        })
+        .unwrap();
+        let key = SessionKey::main("main");
+        store.get_or_create(&key).await.unwrap();
+        let source = store.session_dir(&key.to_key_string());
+        let handle = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .share_mode(3)
+            .open(source.join("held.txt"))
+            .unwrap();
+        let deletion = store.delete_session(&key);
+        tokio::pin!(deletion);
+        // Paused time cannot auto-advance while Tokio's blocking filesystem
+        // work is running. The biased branch runs the real rename before the
+        // 1ms virtual deadline; only the production backoff can let it expire.
+        tokio::select! {
+            biased;
+            result = &mut deletion => panic!("must wait for the held child: {result:?}"),
+            _ = tokio::time::sleep(Duration::from_millis(1)) => {}
+        }
+        assert!(source.exists());
+        drop(handle);
+        assert!(deletion.await.unwrap().deleted);
+        let archive = dir
+            .path()
+            .join(".archive")
+            .join(chrono::Utc::now().format("%Y-%m-%d").to_string());
+        let names = std::fs::read_dir(archive)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["agent_main_main"]);
+    }
+
+    #[tokio::test]
+    async fn delete_session_reuses_a_key_without_colliding_with_its_archive() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = FileSessionStore::new(FileSessionStoreConfig {
+            base_dir: dir.path().to_path_buf(),
+            ..Default::default()
+        })
+        .expect("store");
+        let key = SessionKey::main("main");
+
+        store.get_or_create(&key).await.unwrap();
+        assert!(store.delete_session(&key).await.unwrap().deleted);
+        store.get_or_create(&key).await.unwrap();
+        assert!(store.delete_session(&key).await.unwrap().deleted);
+
+        let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let archive = dir.path().join(".archive").join(date);
+        let mut entries = tokio::fs::read_dir(&archive).await.unwrap();
+        let mut names = Vec::new();
+        while let Some(entry) = entries.next_entry().await.unwrap() {
+            names.push(entry.file_name().to_string_lossy().into_owned());
+        }
+
+        let base = sanitize_key_for_dir(&key.to_key_string());
+        assert_eq!(names.len(), 2);
+        assert!(names.contains(&base));
+        assert!(names.contains(&format!("{base}-1")));
     }
 }
 

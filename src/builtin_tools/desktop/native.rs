@@ -461,14 +461,14 @@ fn require_drag_points(
 /// only, not a new refusal: both errors were already true, and the arms below
 /// still do their own extraction. This decides which of the two the model sees.
 ///
-/// `scroll` is deliberately absent: its point is required on the targeted rail
-/// and optional on the global one (which scrolls at the real cursor), so only
-/// the arm that knows the rail can rule on it.
+/// `scroll` accepts no point on the global rail, but a partially supplied or
+/// non-finite point is malformed regardless of the delivery rail.
 fn reject_malformed_coordinates(args: &DesktopArgs) -> std::result::Result<(), DesktopOutput> {
     match args.action.as_str() {
         "click" | "double_click" | "hover" | "mouse_button" => {
             require_xy(args, &args.action).map(|_| ())
         }
+        "scroll" if args.x.is_some() || args.y.is_some() => require_xy(args, "scroll").map(|_| ()),
         "drag" => require_drag_points(args).map(|_| ()),
         _ => Ok(()),
     }
@@ -1091,7 +1091,11 @@ impl super::DesktopTool {
                             // routinely contain small UI text and 0.75 caused
                             // legibility complaints from the LLM consumer. PNG
                             // is unaffected (lossless regardless of quality).
-                            let quality_u8 = (quality.unwrap_or(0.9).clamp(0.0, 1.0) * 100.0) as u8;
+                            let q = quality
+                                .filter(|v| !v.is_nan())
+                                .unwrap_or(0.9)
+                                .clamp(0.0, 1.0);
+                            let quality_u8 = (q * 100.0) as u8;
                             // The re-encode must not drop what `take_screenshot`
                             // reported: the points-to-pixels ratio survives via
                             // the `_with_scale` entry point.
@@ -1302,6 +1306,22 @@ impl super::DesktopTool {
                 let key = main_key
                     .first()
                     .expect("invariant: main_key has exactly one element after split");
+                // The secure-field hard block, on the key path. `type_text` and
+                // `paste` both refuse to write into a password box; a key
+                // combination that carries text (a character, or Cmd/Ctrl+V)
+                // writes into whatever holds focus just the same, and it used
+                // to reach the focused password field with no gate at all.
+                // Combinations that move the caret or copy are left alone.
+                if super::focus_gate::carries_text(keys) {
+                    let pid = match rail {
+                        Rail::Targeted(pid) => Some(pid),
+                        Rail::Global => None,
+                    };
+                    if let Some(refusal) = super::focus_gate::check_secure_only(platform, pid).await
+                    {
+                        return Ok(Some(refusal));
+                    }
+                }
                 let result = match rail {
                     Rail::Targeted(pid) => screen.key_combo_targeted(pid, &modifiers, key).await,
                     Rail::Global => screen.key_combo(&modifiers, key).await,
@@ -1329,6 +1349,18 @@ impl super::DesktopTool {
                         data: None,
                         message: Some("key_button requires 'keys' array".to_string()),
                     }));
+                }
+                // Same secure-field hard block as `key_combo`: a named button
+                // that types a character writes into whatever holds focus.
+                if super::focus_gate::carries_text(keys) {
+                    let pid = match rail {
+                        Rail::Targeted(pid) => Some(pid),
+                        Rail::Global => None,
+                    };
+                    if let Some(refusal) = super::focus_gate::check_secure_only(platform, pid).await
+                    {
+                        return Ok(Some(refusal));
+                    }
                 }
                 let action = match parse_press_action(args.press_action.as_deref()) {
                     Ok(action) => action,
@@ -1429,7 +1461,13 @@ impl super::DesktopTool {
                 // scrolling is the ONLY way to scroll a chosen view. No point at
                 // all stays valid on the global rail: it scrolls at the real
                 // cursor, unchanged.
-                let point = require_xy(args, "scroll").ok();
+                let point = match (args.x, args.y) {
+                    (None, None) => None,
+                    _ => match require_xy(args, "scroll") {
+                        Ok(point) => Some(point),
+                        Err(error) => return Ok(Some(error)),
+                    },
+                };
                 let result = match rail {
                     Rail::Targeted(pid) => {
                         let Some((x, y)) = point else {

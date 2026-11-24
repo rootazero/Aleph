@@ -68,14 +68,8 @@ impl AcpAdapter for CustomAcpAdapter {
 
         // Map trust_level -> PermissionPolicy. `Full` trusts the harness
         // fully; `Disabled` denies all filesystem access. See ACP-07.
-        let permission_policy = match self.config.trust_level {
-            crate::config::types::acp::TrustLevel::Full => {
-                crate::acp::incoming::PermissionPolicy::ApproveAll
-            }
-            crate::config::types::acp::TrustLevel::Disabled => {
-                crate::acp::incoming::PermissionPolicy::DenyAll
-            }
-        };
+        let permission_policy =
+            crate::acp::incoming::PermissionPolicy::from(&self.config.trust_level);
 
         AdapterConfig {
             executable: self.executable().to_string(),

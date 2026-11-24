@@ -77,7 +77,10 @@ impl Spinner {
                 {
                     let mut err = std::io::stderr().lock();
                     // \r returns cursor; \x1b[K clears to end-of-line.
-                    let frame = frames[idx % frames.len()];
+                    let frame = frames
+                        .get(idx % frames.len().max(1))
+                        .copied()
+                        .unwrap_or('-');
                     let painted = paint(Style::Info, &frame.to_string());
                     let _ = write!(err, "\r{painted} {message}\x1b[K");
                     let _ = err.flush();

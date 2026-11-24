@@ -261,6 +261,14 @@ impl GenerationProvider for DeepgramTtsProvider {
                 .or_else(|| request.params.voice.clone())
                 .unwrap_or_else(|| self.model.clone());
 
+            if !AVAILABLE_VOICES.contains(&model.as_str()) {
+                tracing::warn!(
+                    model = %model,
+                    provider = "deepgram-tts",
+                    "voice not in known Aura voice list; sending anyway"
+                );
+            }
+
             let format = request
                 .params
                 .format

@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "timestamp": "20261116T085202.713303Z",
+  "memory_gate": {
+    "argv": [
+      "python3",
+      "qa/browser_live/check_memory.py",
+      "--required-bytes",
+      "4294967296"
+    ],
+    "cwd": "/Volumes/TBU4/Workspace/Aleph",
+    "env_overrides": {},
+    "exit_code": 0,
+    "timed_out": false,
+    "pid": 98748,
+    "cleanup_error": null,
+    "unjoined_descendants": false,
+    "elapsed_seconds": 0.03542124998057261,
+    "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T085202.713303Z-memory.stdout.log",
+    "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T085202.713303Z-memory.stderr.log"
+  },
+  "test_filter": null,
+  "status": "FAIL",
+  "command": {
+    "argv": [
+      "cargo",
+      "test",
+      "-p",
+      "alephcore",
+      "--lib",
+      "--offline",
+      "--locked",
+      "--jobs",
+      "1",
+      "--",
+      "--test-threads=1"
+    ],
+    "cwd": "/Volumes/TBU4/Workspace/Aleph",
+    "env_overrides": {
+      "HOME": "/Users/zouguojun/.p9-home-pu5vt7ia",
+      "ALEPH_HOME": "/tmp/p9-2c2b4e2h/aleph",
+      "CARGO_HOME": "/Users/zouguojun/.cargo",
+      "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+      "TMPDIR": "/tmp/p9-2c2b4e2h",
+      "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+      "RUST_BACKTRACE": "1"
+    },
+    "exit_code": -15,
+    "timed_out": true,
+    "pid": 98750,
+    "cleanup_error": "[Errno 1] Operation not permitted",
+    "unjoined_descendants": false,
+    "elapsed_seconds": 1200.0211336250068,
+    "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T085202.713303Z.stdout.log",
+    "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T085202.713303Z.stderr.log"
+  },
+  "fixture": {
+    "path": "/tmp/p9-2c2b4e2h",
+    "home": "/Users/zouguojun/.p9-home-pu5vt7ia",
+    "cleanup": "removed"
+  }
+}

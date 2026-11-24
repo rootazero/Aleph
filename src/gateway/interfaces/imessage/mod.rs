@@ -41,7 +41,8 @@ use tracing::{debug, error, info, warn};
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
-    ChannelResult, ChannelState, ChannelStatus, MessageId, OutboundMessage, SendResult,
+    ChannelResult, ChannelState, ChannelStatus, MessageId, OutboundMessage, SendOperation,
+    SendResult,
 };
 // Reuse the gateway-shared, SQLite-backed monotonic cursor (currently homed in
 // the telegram module) to persist the catch-up watermark across restarts.
@@ -70,9 +71,23 @@ impl IMessageChannel {
         Self::with_mode(config, false)
     }
 
+    /// Create a new iMessage channel under an explicit instance id.
+    ///
+    /// The registry passes the configured instance id; the channel id is what
+    /// routes a reply back to the right instance, so it cannot be the adapter
+    /// name when more than one iMessage account is configured.
+    #[must_use]
+    pub fn with_id(id: impl Into<String>, config: IMessageConfig) -> Self {
+        Self::with_mode_and_id(id, config, false)
+    }
+
     fn with_mode(config: IMessageConfig, test_mode: bool) -> Self {
+        Self::with_mode_and_id("imessage", config, test_mode)
+    }
+
+    fn with_mode_and_id(id: impl Into<String>, config: IMessageConfig, test_mode: bool) -> Self {
         let info = ChannelInfo {
-            id: ChannelId::new("imessage"),
+            id: ChannelId::new(id),
             name: "iMessage".to_string(),
             channel_type: "imessage".to_string(),
             status: ChannelStatus::Disconnected,
@@ -95,7 +110,6 @@ impl IMessageChannel {
                 stream_protocol: Default::default(),
             },
         };
-
         Self {
             info,
             config,
@@ -124,10 +138,16 @@ impl IMessageChannel {
     async fn start_polling(&mut self) -> ChannelResult<()> {
         let db_path = self.config.db_path();
 
-        // Open database
-        let mut db = MessagesDb::open(&db_path).map_err(|e| {
-            ChannelError::ConfigError(format!("Failed to open Messages database: {e}"))
-        })?;
+        // Open database on a blocking worker so slow disk / SQLite lock waits
+        // never stall an async runtime thread.
+        let mut db = tokio::task::spawn_blocking(move || MessagesDb::open(&db_path))
+            .await
+            .map_err(|e| {
+                ChannelError::ConfigError(format!("Messages database worker failed: {e}"))
+            })?
+            .map_err(|e| {
+                ChannelError::ConfigError(format!("Failed to open Messages database: {e}"))
+            })?;
 
         // Apply attachment handling policy from config.
         db.set_attachment_policy(
@@ -166,8 +186,9 @@ impl IMessageChannel {
 
             while running.load(Ordering::SeqCst) {
                 // Poll for new messages, capturing the watermark to persist.
-                let (messages, watermark) = {
-                    let mut db_lock = db.lock().await;
+                let worker_db = db.clone();
+                let batch = tokio::task::spawn_blocking(move || {
+                    let mut db_lock = worker_db.blocking_lock();
                     if let Some(ref mut db) = *db_lock {
                         match db.poll_new_messages() {
                             Ok(msgs) => (msgs, db.last_rowid()),
@@ -178,6 +199,14 @@ impl IMessageChannel {
                         }
                     } else {
                         (vec![], 0)
+                    }
+                })
+                .await;
+                let (messages, watermark) = match batch {
+                    Ok(batch) => batch,
+                    Err(e) => {
+                        error!("Messages database worker failed: {e}");
+                        break;
                     }
                 };
 
@@ -262,10 +291,11 @@ impl Channel for IMessageChannel {
         }
 
         // Close database
-        {
-            let mut db_lock = self.db.lock().await;
-            *db_lock = None;
-        }
+        let db = self.db.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            *db.blocking_lock() = None;
+        })
+        .await;
 
         self.channel_state
             .set_status(ChannelStatus::Disconnected)
@@ -274,79 +304,98 @@ impl Channel for IMessageChannel {
         Ok(())
     }
 
-    async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-        if self.test_mode {
-            return Ok(SendResult {
-                message_id: MessageId::new(uuid::Uuid::new_v4().to_string()),
-                timestamp: chrono::Utc::now(),
-            });
-        }
+    fn send(&self, message: OutboundMessage) -> SendOperation {
+        let test_mode = self.test_mode;
+        let running = Arc::clone(&self.running);
+        Box::pin(async move {
+            if test_mode {
+                return Ok(SendResult {
+                    message_id: MessageId::new(uuid::Uuid::new_v4().to_string()),
+                    timestamp: chrono::Utc::now(),
+                });
+            }
 
-        if !self.running.load(Ordering::SeqCst) {
-            return Err(ChannelError::NotConnected(
-                "iMessage channel not started".to_string(),
-            ));
-        }
-
-        let target = message.conversation_id.as_str();
-
-        // Route by parsed target: chat_id:/chat_guid: prefixed targets use
-        // chat-id send (group chat); phone/email/bare identifiers fall through
-        // to participant send_text (existing behaviour).
-        // Note: inbound group messages carry a bare chat_identifier (no prefix),
-        // so they still route to send_text — fully fixing AppleScript group
-        // replies requires macOS-runtime chat-GUID resolution (out of scope;
-        // BlueBubbles transport handles groups robustly).
-        if !message.text.is_empty() {
-            // Re-check `running` immediately before the AppleScript call: a
-            // `stop()` landing between the gate above and the script
-            // invocation would otherwise fire one stale outbound message per
-            // restart window (the script is a real side effect — it texts a
-            // human). Same rationale applies to the attachment loop below.
-            if !self.running.load(Ordering::SeqCst) {
+            if !running.load(Ordering::SeqCst) {
                 return Err(ChannelError::NotConnected(
-                    "iMessage channel stopped before send".to_string(),
+                    "iMessage channel not started".to_string(),
                 ));
             }
-            match parse_target(target) {
-                Ok(IMessageTarget::ChatId { id }) => {
-                    MessageSender::send_to_chat(&format!("chat_id:{id}"), &message.text)
-                        .await
-                        .map_err(|e| ChannelError::SendFailed(e.to_string()))?;
-                }
-                Ok(IMessageTarget::ChatGuid { guid }) => {
-                    MessageSender::send_to_chat(&guid, &message.text)
-                        .await
-                        .map_err(|e| ChannelError::SendFailed(e.to_string()))?;
-                }
-                // Phone / Email / parse error: participant send (existing behavior)
-                _ => {
-                    MessageSender::send_text(target, &message.text)
-                        .await
-                        .map_err(|e| ChannelError::SendFailed(e.to_string()))?;
-                }
-            }
-        }
 
-        // Send attachments
-        for attachment in &message.attachments {
-            if let Some(path) = &attachment.path {
-                if !self.running.load(Ordering::SeqCst) {
+            let target = message.conversation_id.as_str();
+
+            // Route by parsed target: chat_id:/chat_guid: prefixed targets use
+            // chat-id send (group chat); phone/email/bare identifiers fall through
+            // to participant send_text (existing behaviour).
+            // Note: inbound group messages carry a bare chat_identifier (no prefix),
+            // so they still route to send_text — fully fixing AppleScript group
+            // replies requires macOS-runtime chat-GUID resolution (out of scope;
+            // BlueBubbles transport handles groups robustly).
+            if !message.text.is_empty() {
+                // Re-check `running` immediately before the AppleScript call: a
+                // `stop()` landing between the gate above and the script
+                // invocation would otherwise fire one stale outbound message per
+                // restart window (the script is a real side effect — it texts a
+                // human). Same rationale applies to the attachment loop below.
+                if !running.load(Ordering::SeqCst) {
                     return Err(ChannelError::NotConnected(
-                        "iMessage channel stopped before attachment send".to_string(),
+                        "iMessage channel stopped before send".to_string(),
                     ));
                 }
-                MessageSender::send_file(target, std::path::Path::new(path))
-                    .await
-                    .map_err(|e| ChannelError::SendFailed(e.to_string()))?;
+                match parse_target(target) {
+                    Ok(IMessageTarget::ChatId { id }) => {
+                        MessageSender::send_to_chat(&format!("chat_id:{id}"), &message.text)
+                            .await
+                            .map_err(|e| ChannelError::SendFailed(e.to_string()))?;
+                    }
+                    Ok(IMessageTarget::ChatGuid { guid }) => {
+                        MessageSender::send_to_chat(&guid, &message.text)
+                            .await
+                            .map_err(|e| ChannelError::SendFailed(e.to_string()))?;
+                    }
+                    // Phone / Email / parse error: participant send (existing behavior)
+                    _ => {
+                        MessageSender::send_text(target, &message.text)
+                            .await
+                            .map_err(|e| ChannelError::SendFailed(e.to_string()))?;
+                    }
+                }
             }
-        }
 
-        Ok(SendResult {
-            message_id: MessageId::new(uuid::Uuid::new_v4().to_string()),
-            timestamp: chrono::Utc::now(),
+            // Send attachments
+            for attachment in &message.attachments {
+                if attachment.path.is_none() {
+                    return Err(ChannelError::SendFailed(
+                        "iMessage transport requires attachment.path; data/url not supported"
+                            .to_string(),
+                    ));
+                }
+                if let Some(path) = &attachment.path {
+                    if !running.load(Ordering::SeqCst) {
+                        return Err(stopped_before_attachment_send());
+                    }
+                    MessageSender::send_file(target, std::path::Path::new(path))
+                        .await
+                        .map_err(|e| ChannelError::SendFailed(e.to_string()))?;
+                }
+            }
+
+            Ok(SendResult {
+                message_id: MessageId::new(uuid::Uuid::new_v4().to_string()),
+                timestamp: chrono::Utc::now(),
+            })
         })
     }
+}
+
+/// Error for a `stop()` observed before an attachment send in a multi-part
+/// operation. The body or earlier attachments may already be on the wire; with
+/// no earlier part, this conservatively treats the boundary as ambiguous too.
+///
+/// This must stay ambiguous. `NotConnected` means "definitely not delivered"
+/// to `delivery_queue::should_enqueue`, which would retry the whole payload and
+/// text the recipient a second time after a partial delivery.
+fn stopped_before_attachment_send() -> ChannelError {
+    ChannelError::SendFailed("iMessage channel stopped before attachment send".to_string())
 }
 
 /// Factory for creating iMessage channels
@@ -373,6 +422,14 @@ impl ChannelFactory for IMessageChannelFactory {
     }
 
     async fn create(&self, config: serde_json::Value) -> ChannelResult<Box<dyn Channel>> {
+        self.create_with_id("imessage", config).await
+    }
+
+    async fn create_with_id(
+        &self,
+        id: &str,
+        config: serde_json::Value,
+    ) -> ChannelResult<Box<dyn Channel>> {
         let config: IMessageConfig = serde_json::from_value(config)
             .map_err(|e| ChannelError::ConfigError(format!("Invalid iMessage config: {e}")))?;
 
@@ -382,13 +439,14 @@ impl ChannelFactory for IMessageChannelFactory {
             ));
         }
 
-        Ok(Box::new(IMessageChannel::new(config)))
+        Ok(Box::new(IMessageChannel::with_id(id, config)))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gateway::delivery_queue::{should_enqueue, terminal_reason, DeadLetterReason};
 
     #[test]
     fn test_channel_info() {
@@ -428,5 +486,17 @@ mod tests {
             parse_target("+15551234567").unwrap(),
             IMessageTarget::Phone { .. }
         ));
+    }
+
+    #[test]
+    fn stop_after_partial_delivery_is_not_auto_retried() {
+        // This boundary may follow a delivered body or earlier attachment, so
+        // its error is conservatively ambiguous instead of auto-retryable.
+        let err = stopped_before_attachment_send();
+        assert!(
+            !should_enqueue(&err),
+            "post-side-effect stop must not be retryable: {err:?}"
+        );
+        assert_eq!(terminal_reason(&err), DeadLetterReason::Ambiguous);
     }
 }

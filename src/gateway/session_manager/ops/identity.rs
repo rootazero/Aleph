@@ -15,52 +15,55 @@ impl SessionManager {
         session_key: &str,
         source_channel: &str,
     ) -> Result<IdentityContext, SessionManagerError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
+        let session_key = session_key.to_owned();
+        let source_channel = source_channel.to_owned();
+        self.query_blocking(move |conn| {
+            let identity_meta: SessionIdentityMeta = {
+                let mut stmt = conn
+                    .prepare("SELECT metadata FROM sessions WHERE key = ?")
+                    .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
 
-        let identity_meta: SessionIdentityMeta = {
-            let mut stmt = conn
-                .prepare("SELECT metadata FROM sessions WHERE key = ?")
-                .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
+                let metadata_json: Option<String> = stmt
+                    .query_row(params![session_key], |row| row.get(0))
+                    .optional()
+                    .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
 
-            let metadata_json: Option<String> = stmt
-                .query_row(params![session_key], |row| row.get(0))
-                .optional()
-                .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
+                metadata_json
+                    .and_then(|json| serde_json::from_str(&json).ok())
+                    .unwrap_or_else(|| SessionIdentityMeta::owner(source_channel))
+            };
 
-            metadata_json
-                .and_then(|json| serde_json::from_str(&json).ok())
-                .unwrap_or_else(|| SessionIdentityMeta::owner(source_channel))
-        };
+            let identity = match identity_meta.role {
+                Role::Owner => {
+                    IdentityContext::owner(session_key.to_string(), identity_meta.source_channel)
+                }
+                Role::Guest => {
+                    let scope = identity_meta.scope.unwrap_or_else(|| GuestScope {
+                        allowed_tools: vec![],
+                        expires_at: None,
+                        display_name: None,
+                    });
+                    IdentityContext::guest(
+                        session_key.to_string(),
+                        identity_meta.identity_id,
+                        scope,
+                        identity_meta.source_channel,
+                    )
+                }
+                Role::Anonymous => {
+                    // Anonymous is "always denied" (see aleph_protocol::IdentityContext);
+                    // mirror SessionIdentityMeta::to_identity_context instead of
+                    // escalating a stored Anonymous role to Owner.
+                    IdentityContext::anonymous(
+                        session_key.to_string(),
+                        identity_meta.source_channel,
+                    )
+                }
+            };
 
-        let identity = match identity_meta.role {
-            Role::Owner => {
-                IdentityContext::owner(session_key.to_string(), identity_meta.source_channel)
-            }
-            Role::Guest => {
-                let scope = identity_meta.scope.unwrap_or_else(|| GuestScope {
-                    allowed_tools: vec![],
-                    expires_at: None,
-                    display_name: None,
-                });
-                IdentityContext::guest(
-                    session_key.to_string(),
-                    identity_meta.identity_id,
-                    scope,
-                    identity_meta.source_channel,
-                )
-            }
-            Role::Anonymous => {
-                // Anonymous is "always denied" (see aleph_protocol::IdentityContext);
-                // mirror SessionIdentityMeta::to_identity_context instead of
-                // escalating a stored Anonymous role to Owner.
-                IdentityContext::anonymous(session_key.to_string(), identity_meta.source_channel)
-            }
-        };
-
-        Ok(identity)
+            Ok(identity)
+        })
+        .await
     }
 
     /// Read the most recent `limit` messages for a session from the DB connection.
@@ -68,7 +71,6 @@ impl SessionManager {
     /// Returns a newline-separated string in chronological order (oldest first).
     /// Returns an empty string when the session has no messages yet.
     pub(super) fn read_recent_messages(
-        &self,
         conn: &rusqlite::Connection,
         key_str: &str,
         limit: usize,
@@ -109,11 +111,15 @@ impl SessionManager {
         &self,
         base_key_pattern: &str,
     ) -> Result<u32, SessionManagerError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
+        let base_key_pattern = base_key_pattern.to_owned();
+        self.query_blocking(move |conn| Self::current_epoch_on(conn, &base_key_pattern))
+            .await
+    }
 
+    fn current_epoch_on(
+        conn: &rusqlite::Connection,
+        base_key_pattern: &str,
+    ) -> Result<u32, SessionManagerError> {
         // MAX over every epoch this base has, not "the row created last".
         //
         // Two things were wrong with the previous
@@ -157,33 +163,69 @@ impl SessionManager {
         Ok(max_epoch)
     }
 
+    /// Reserve a fresh epoch in the store without materializing an empty session.
+    pub async fn reserve_next_epoch(
+        &self,
+        base_key_pattern: &str,
+    ) -> Result<u32, SessionManagerError> {
+        let base_key_pattern = base_key_pattern.to_owned();
+        self.query_blocking(move |conn| {
+            let tx = conn
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
+            let persisted = Self::current_epoch_on(&tx, &base_key_pattern)?;
+            let reserved: Option<u32> = tx
+                .query_row(
+                    "SELECT epoch FROM session_epoch_reservations WHERE base_key = ?",
+                    params![base_key_pattern],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
+            let next = persisted
+                .max(reserved.unwrap_or(0))
+                .checked_add(1)
+                .ok_or_else(|| {
+                    SessionManagerError::DatabaseError("Session epoch exhausted".into())
+                })?;
+            tx.execute(
+                "INSERT INTO session_epoch_reservations(base_key, epoch) VALUES (?, ?)
+             ON CONFLICT(base_key) DO UPDATE SET epoch = excluded.epoch",
+                params![base_key_pattern, next],
+            )
+            .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
+            tx.commit()
+                .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
+            Ok(next)
+        })
+        .await
+    }
+
     /// Get the topic string from a session's metadata
     pub async fn get_session_topic(
         &self,
         key: &SessionKey,
     ) -> Result<Option<String>, SessionManagerError> {
         let key_str = key.to_key_string();
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
+        self.query_blocking(move |conn| {
+            let metadata_json: Option<String> = conn
+                .query_row(
+                    "SELECT metadata FROM sessions WHERE key = ?",
+                    params![&key_str],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?
+                .flatten();
 
-        let metadata_json: Option<String> = conn
-            .query_row(
-                "SELECT metadata FROM sessions WHERE key = ?",
-                params![&key_str],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?
-            .flatten();
-
-        let identity_meta = SessionIdentityMeta::from_json_str(metadata_json.as_deref());
-        Ok(identity_meta
-            .custom
-            .get("topic")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string()))
+            let identity_meta = SessionIdentityMeta::from_json_str(metadata_json.as_deref());
+            Ok(identity_meta
+                .custom
+                .get("topic")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()))
+        })
+        .await
     }
 
     /// Cleanup expired sessions
@@ -191,14 +233,10 @@ impl SessionManager {
         if self.config.session_expiry_secs == 0 {
             return Ok(0);
         }
-
         let expiry_threshold =
             chrono::Utc::now().timestamp() - self.config.session_expiry_secs as i64;
 
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
+        self.query_blocking(move |conn| {
 
         let keys: Vec<String> = {
             // `created_at` as well as `last_active_at`: nothing can have been
@@ -221,6 +259,11 @@ impl SessionManager {
 
         let mut deleted = 0;
         for key in &keys {
+            conn.execute(
+                "DELETE FROM messages_fts WHERE rowid IN (SELECT id FROM messages WHERE session_key = ?)",
+                params![key],
+            )
+            .ok();
             conn.execute("DELETE FROM messages WHERE session_key = ?", params![key])
                 .ok();
             if conn
@@ -236,5 +279,7 @@ impl SessionManager {
         }
 
         Ok(deleted)
+        })
+        .await
     }
 }

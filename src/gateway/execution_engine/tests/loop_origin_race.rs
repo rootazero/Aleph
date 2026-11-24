@@ -617,13 +617,18 @@ async fn rearm_loop_after_busy_is_bound_to_the_claimed_incarnation() {
 // row AND the welded strategy row, so neither side can pass vacuously.
 
 fn strategy_store() -> Arc<crate::strategy::StrategyStore> {
-    // `set_global_for_test` is install-once; seed/assert through whichever
-    // store is actually global (unique session keys avoid collisions).
-    crate::strategy::set_global_for_test(Arc::new(
-        crate::strategy::StrategyStore::open(&tempfile::tempdir().unwrap().keep().join("s.db"))
-            .unwrap(),
-    ));
-    crate::strategy::global().expect("strategy global set")
+    // `set_global_for_test` is install-once; if already set, return existing.
+    if let Some(global) = crate::strategy::global() {
+        return global;
+    }
+    // First call: create temp dir without .keep(), let it clean up naturally.
+    let temp_dir = tempfile::tempdir().unwrap();
+    let store =
+        Arc::new(crate::strategy::StrategyStore::open(&temp_dir.path().join("s.db")).unwrap());
+    crate::strategy::set_global_for_test(store.clone());
+    // Leak the temp_dir so the db file persists for test duration.
+    std::mem::forget(temp_dir);
+    store
 }
 
 fn seed_strategy(session: &str) {

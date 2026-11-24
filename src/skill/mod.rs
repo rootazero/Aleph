@@ -48,7 +48,6 @@ use std::path::{Path, PathBuf};
 use tokio::sync::RwLock;
 
 use crate::domain::skill::{SkillId, SkillManifest, SkillSource};
-use crate::domain::Entity;
 
 // ---------------------------------------------------------------------------
 // SkillSystem facade
@@ -841,18 +840,15 @@ impl SkillSystem {
             .collect();
 
         let registry = self.inner.registry.read().await;
-        let mut new_snapshot = SkillSnapshot::build(
+        let new_snapshot = SkillSnapshot::build(
             &registry,
             &self.inner.eligibility,
             current_version,
             &config_value,
             &skill_entries,
             &archived,
+            prompt_budget,
         );
-        // Carry the configured budget to consumers (the prompt layer renders
-        // the authoritative index with it; `build` only computes the
-        // default-budget preview).
-        new_snapshot.prompt_budget = prompt_budget;
         drop(registry);
 
         let mut snapshot = self.inner.snapshot.write().await;
@@ -1122,25 +1118,20 @@ pub fn guess_source(path: &Path) -> SkillSource {
 /// `contains(".claude/skills")` would never match on Windows.
 fn compat_root_of(path: &Path) -> Option<crate::domain::skill::CompatRoot> {
     use crate::domain::skill::CompatRoot;
-    let comps: Vec<&std::ffi::OsStr> = path
-        .components()
-        .filter_map(|c| match c {
-            std::path::Component::Normal(s) => Some(s),
-            _ => None,
-        })
-        .collect();
-    comps.windows(2).find_map(|w| {
-        if w[1] != std::ffi::OsStr::new("skills") {
-            return None;
+    let mut prev = None;
+    for c in path.components() {
+        if let std::path::Component::Normal(s) = c {
+            if s == std::ffi::OsStr::new("skills") {
+                if prev == Some(std::ffi::OsStr::new(".claude")) {
+                    return Some(CompatRoot::Claude);
+                } else if prev == Some(std::ffi::OsStr::new(".agents")) {
+                    return Some(CompatRoot::Agents);
+                }
+            }
+            prev = Some(s);
         }
-        if w[0] == std::ffi::OsStr::new(".claude") {
-            Some(CompatRoot::Claude)
-        } else if w[0] == std::ffi::OsStr::new(".agents") {
-            Some(CompatRoot::Agents)
-        } else {
-            None
-        }
-    })
+    }
+    None
 }
 
 /// True when `path` sits under a `<…>/.aleph/skills/` component pair — the
@@ -1151,16 +1142,16 @@ fn compat_root_of(path: &Path) -> Option<crate::domain::skill::CompatRoot> {
 /// the path renders as `.aleph\skills`), silently misclassifying every
 /// workspace skill as `Bundled` — the lowest override priority.
 fn is_workspace_aleph_skills(path: &Path) -> bool {
-    let comps: Vec<&std::ffi::OsStr> = path
-        .components()
-        .filter_map(|c| match c {
-            std::path::Component::Normal(s) => Some(s),
-            _ => None,
-        })
-        .collect();
-    comps
-        .windows(2)
-        .any(|w| w[0] == std::ffi::OsStr::new(".aleph") && w[1] == std::ffi::OsStr::new("skills"))
+    let mut prev = None;
+    for c in path.components() {
+        if let std::path::Component::Normal(s) = c {
+            if prev == Some(std::ffi::OsStr::new(".aleph")) && s == std::ffi::OsStr::new("skills") {
+                return true;
+            }
+            prev = Some(s);
+        }
+    }
+    false
 }
 
 #[cfg(test)]

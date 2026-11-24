@@ -199,7 +199,7 @@ pub async fn phase3_writeback<C: Clock>(
         // even though the run never executed.
         if let Some(s) = result.output.as_ref() {
             const MAX_CHARS: usize = 2_000;
-            job.state.last_output = Some(if s.chars().count() > MAX_CHARS {
+            job.state.last_output = Some(if s.chars().nth(MAX_CHARS).is_some() {
                 s.chars().take(MAX_CHARS).collect()
             } else {
                 s.clone()
@@ -321,45 +321,6 @@ pub async fn phase3_writeback<C: Clock>(
     //
     // Both cases stay limited to non-`At` (recurring) jobs; one-shot `At` jobs
     // are never rescheduled and may have already been removed above.
-    let backoff_now = clock.now_ms();
-    for (job_id, result) in results {
-        if !matches!(result.status, RunStatus::Error | RunStatus::Timeout) {
-            continue;
-        }
-        let Some(job) = guard.get_job_mut(job_id) else {
-            continue;
-        };
-        if matches!(job.schedule_kind, ScheduleKind::At { .. }) {
-            continue;
-        }
-        let hint = result.retry_hint.unwrap_or_else(RetryHint::permanent);
-        if !hint.retryable {
-            // Permanent: do not schedule another run; the alert dispatcher
-            // below will notify the user with the classified reason.
-            if job.state.next_run_at_ms.is_some() {
-                info!(
-                    job_id,
-                    "phase3: permanent failure detected, clearing next_run_at_ms"
-                );
-            }
-            job.state.next_run_at_ms = None;
-            continue;
-        }
-        let backoff = compute_backoff_ms_for(hint.category, job.state.consecutive_errors);
-        if backoff > 0 {
-            let floor = backoff_now.saturating_add(backoff);
-            let next = job.state.next_run_at_ms.map_or(floor, |n| n.max(floor));
-            job.state.next_run_at_ms = Some(next);
-        }
-    }
-
-    // Failure alerts: for any job configured with `failure_alert`, evaluate
-    // `should_send_alert` against the freshly-incremented `consecutive_errors`
-    // and the run's classified retry hint. Permanent failures bypass the
-    // cooldown (the original alert helper only respected `cooldown_ms`, so the
-    // policy lives here in the caller). The returned `PendingAlert`s are
-    // dispatched by the timer loop via the shared delivery pipeline — phase3
-    // keeps no I/O coupling beyond SQLite.
     let now_alert = clock.now_ms();
     let mut pending_alerts: Vec<PendingAlert> = Vec::new();
     for (job_id, result) in results {
@@ -369,10 +330,41 @@ pub async fn phase3_writeback<C: Clock>(
         let Some(job) = guard.get_job_mut(job_id) else {
             continue;
         };
+        let hint = result.retry_hint.unwrap_or_else(RetryHint::permanent);
+
+        // 1. Backoff adjustment for recurring jobs
+        if !matches!(job.schedule_kind, ScheduleKind::At { .. }) {
+            if !hint.retryable {
+                // Permanent: do not schedule another run; the alert dispatcher
+                // below will notify the user with the classified reason.
+                if job.state.next_run_at_ms.is_some() {
+                    info!(
+                        job_id,
+                        "phase3: permanent failure detected, clearing next_run_at_ms"
+                    );
+                }
+                job.state.next_run_at_ms = None;
+            } else {
+                let backoff = compute_backoff_ms_for(hint.category, job.state.consecutive_errors);
+                if backoff > 0 {
+                    let floor = now_alert.saturating_add(backoff);
+                    let next = job.state.next_run_at_ms.map_or(floor, |n| n.max(floor));
+                    job.state.next_run_at_ms = Some(next);
+                }
+            }
+        }
+
+        // 2. Failure alerts: evaluate against consecutive_errors and retry hint
+        let bypass = !hint.retryable;
+        if !bypass && job.state.consecutive_errors < TRANSIENT_ALERT_FLOOR {
+            // Transient failure still within the perseverance window — keep
+            // retrying with backoff, don't alarm the user over a self-healing throttle.
+            continue;
+        }
+
         // D4: when no explicit `failure_alert` is configured but the job has
         // a delivery channel + conversation, synthesize a sane default so
-        // failures aren't silently dropped (which previously required users
-        // to opt in to alerting per job).
+        // failures aren't silently dropped.
         let alert_cfg = job.failure_alert.clone().or_else(|| {
             if !notify_on_failure_default {
                 return None;
@@ -392,11 +384,9 @@ pub async fn phase3_writeback<C: Clock>(
         let Some(alert_cfg) = alert_cfg else {
             continue;
         };
-        let hint = result.retry_hint.unwrap_or_else(RetryHint::permanent);
+
         // Permanent failures fire on the first error, bypassing both the
-        // `after` threshold and the cooldown — operator intervention is
-        // required anyway, no point burying it under retry noise.
-        let bypass = !hint.retryable;
+        // `after` threshold and the cooldown.
         let msg = if bypass {
             Some(format!(
                 "Cron job '{}' ({}) failed permanently (no further retries scheduled). \
@@ -405,12 +395,6 @@ pub async fn phase3_writeback<C: Clock>(
                 job.id,
                 job.state.last_error.as_deref().unwrap_or("unknown")
             ))
-        } else if job.state.consecutive_errors < TRANSIENT_ALERT_FLOOR {
-            // Transient failure still within the perseverance window — keep
-            // retrying with backoff, don't alarm the user over a self-healing
-            // throttle. (A momentary rate-limit that succeeds on the next
-            // attempt resets `consecutive_errors` to 0 and never reaches here.)
-            None
         } else {
             should_send_alert(job, &alert_cfg, now_alert)
         };

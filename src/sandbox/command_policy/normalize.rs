@@ -122,6 +122,7 @@ const MAX_VIEW_BYTES: usize = 2 * 1024 * 1024;
 /// `rm -rf /` runs, but carries no whitespace for a rule to anchor on.
 /// `\b` after `IFS` is what keeps `$IFSX` — a *different* variable — from
 /// being read as `$IFS` followed by `X`.
+#[allow(clippy::expect_used)]
 static IFS_REFERENCE_RE: Lazy<Regex> = Lazy::new(|| {
     // rust-doctor-disable-next-line unwrap-in-production
     Regex::new(r"\$\{IFS[^}]*\}|\$IFS\b").expect("IFS reference pattern must compile")
@@ -137,6 +138,7 @@ static IFS_REFERENCE_RE: Lazy<Regex> = Lazy::new(|| {
 /// encodes UTF-16LE, so 16 base64 characters is a six-character script — the
 /// length of `rd D:\`. A higher floor reads better on paper and silently misses
 /// exactly the shortest catastrophic commands.
+#[allow(clippy::expect_used)]
 static ENCODED_COMMAND_RE: Lazy<Regex> = Lazy::new(|| {
     // rust-doctor-disable-next-line unwrap-in-production
     Regex::new(r#"(?i)[-/]e(?:c|n[a-z]*)?\s+["']?([a-zA-Z0-9+/]{16,}={0,2})"#)
@@ -287,7 +289,9 @@ fn push_view(out: &mut String, view: &str) {
     while end > 0 && !view.is_char_boundary(end) {
         end -= 1;
     }
-    out.push_str(&view[..end]);
+    if let Some(v) = view.get(..end) {
+        out.push_str(v);
+    }
 }
 
 /// Whether a shell-word view would say anything the escape views do not.
@@ -338,7 +342,7 @@ fn shell_word_fold(s: &str) -> String {
 fn may_carry_encoded_payload(text: &str) -> bool {
     text.as_bytes()
         .windows(2)
-        .any(|w| matches!(w[0], b'-' | b'/') && matches!(w[1], b'e' | b'E'))
+        .any(|w| matches!(w, [b'-' | b'/', b'e' | b'E']))
 }
 
 /// Rewrite Windows' alternate spellings of the same path to the plain form:
@@ -356,17 +360,19 @@ fn strip_windows_path_prefixes(s: &str) -> Cow<'_, str> {
     let mut out = String::with_capacity(s.len());
     let mut rest = s;
     while let Some(idx) = rest.find("\\\\") {
-        out.push_str(&rest[..idx]);
-        let after = &rest[idx + 2..];
+        if let Some(prefix) = rest.get(..idx) {
+            out.push_str(prefix);
+        }
+        let after = rest.get(idx + 2..).unwrap_or("");
         if after.starts_with("?\\") || after.starts_with(".\\") {
-            let body = &after[2..];
+            let body = after.get(2..).unwrap_or("");
             if body
                 .get(..4)
                 .is_some_and(|p| p.eq_ignore_ascii_case("unc\\"))
             {
                 // The UNC namespace maps back onto the plain `\\server\share`.
                 out.push_str("\\\\");
-                rest = &body[4..];
+                rest = body.get(4..).unwrap_or("");
             } else {
                 rest = body;
             }
@@ -444,7 +450,7 @@ fn decode_encoded_command(token: &str) -> Option<String> {
             .as_chunks::<2>()
             .0
             .iter()
-            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .map(|pair| u16::from_le_bytes(*pair))
             .collect();
         if let Some(text) = String::from_utf16(&units).ok().filter(|s| reads_as_text(s)) {
             return Some(text);

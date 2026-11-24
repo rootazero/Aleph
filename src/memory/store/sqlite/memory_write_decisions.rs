@@ -138,43 +138,40 @@ impl SqliteMemoryBackend {
         reason: MemoryWriteReason,
         subject: &str,
     ) -> Result<(), AlephError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| AlephError::config(format!("Mutex poisoned: {e}")))?;
-
-        conn.execute(
-            "INSERT INTO memory_write_decisions \
+        self.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO memory_write_decisions \
              (id, agent_id, action, reason, subject, created_at) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![
-                uuid::Uuid::new_v4().to_string(),
-                agent_id,
-                action,
-                reason.as_str(),
-                excerpt(subject),
-                chrono::Utc::now().timestamp(),
-            ],
-        )
-        .map_err(|e| AlephError::config(format!("record_write_decision insert: {e}")))?;
+                params![
+                    uuid::Uuid::new_v4().to_string(),
+                    agent_id,
+                    action,
+                    reason.as_str(),
+                    excerpt(subject),
+                    chrono::Utc::now().timestamp(),
+                ],
+            )
+            .map_err(|e| AlephError::config(format!("record_write_decision insert: {e}")))?;
 
-        // Prune on write — this is a diagnostic log, so it has a ceiling rather
-        // than a retention policy. `rowid` breaks `created_at` ties: a retry
-        // loop writes several rows within the same second, and without the
-        // tiebreaker the prune could drop the newest of them.
-        conn.execute(
-            "DELETE FROM memory_write_decisions \
+            // Prune on write — this is a diagnostic log, so it has a ceiling rather
+            // than a retention policy. `rowid` breaks `created_at` ties: a retry
+            // loop writes several rows within the same second, and without the
+            // tiebreaker the prune could drop the newest of them.
+            conn.execute(
+                "DELETE FROM memory_write_decisions \
              WHERE agent_id = ?1 AND id IN ( \
                  SELECT id FROM memory_write_decisions \
                  WHERE agent_id = ?1 \
                  ORDER BY created_at DESC, rowid DESC \
                  LIMIT -1 OFFSET ?2 \
              )",
-            params![agent_id, MAX_DECISIONS_PER_AGENT as i64],
-        )
-        .map_err(|e| AlephError::config(format!("record_write_decision prune: {e}")))?;
+                params![agent_id, MAX_DECISIONS_PER_AGENT as i64],
+            )
+            .map_err(|e| AlephError::config(format!("record_write_decision prune: {e}")))?;
 
-        Ok(())
+            Ok(())
+        })
     }
 
     /// Read an agent's most recent write decisions, newest first.
@@ -188,54 +185,53 @@ impl SqliteMemoryBackend {
         subject_filter: Option<&str>,
         limit: usize,
     ) -> Result<Vec<MemoryWriteDecisionRow>, AlephError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| AlephError::config(format!("Mutex poisoned: {e}")))?;
+        self.with_connection(|conn| {
+            let filter = subject_filter
+                .map(str::trim)
+                .filter(|f| !f.is_empty())
+                .map(|f| format!("%{}%", super::escape_like(f)));
 
-        let filter = subject_filter
-            .map(str::trim)
-            .filter(|f| !f.is_empty())
-            .map(|f| format!("%{}%", super::escape_like(f)));
-
-        let sql = format!(
-            "SELECT action, reason, subject, created_at \
+            let sql = format!(
+                "SELECT action, reason, subject, created_at \
              FROM memory_write_decisions \
              WHERE agent_id = ?1{} \
              ORDER BY created_at DESC, rowid DESC \
              LIMIT ?2",
-            if filter.is_some() {
-                r" AND subject LIKE ?3 ESCAPE '\'"
-            } else {
-                ""
-            }
-        );
-
-        let mut stmt = conn
-            .prepare(&sql)
-            .map_err(|e| AlephError::config(format!("recent_write_decisions prepare: {e}")))?;
-
-        let map_row = |row: &rusqlite::Row| {
-            Ok(MemoryWriteDecisionRow {
-                action: row.get("action")?,
-                reason: row.get("reason")?,
-                subject: row.get("subject")?,
-                created_at: row.get("created_at")?,
-            })
-        };
-        let rows = match filter.as_ref() {
-            Some(f) => stmt.query_map(params![agent_id, limit as i64, f], map_row),
-            None => stmt.query_map(params![agent_id, limit as i64], map_row),
-        }
-        .map_err(|e| AlephError::config(format!("recent_write_decisions query: {e}")))?;
-
-        let mut out = Vec::new();
-        for row in rows {
-            out.push(
-                row.map_err(|e| AlephError::config(format!("recent_write_decisions row: {e}")))?,
+                if filter.is_some() {
+                    r" AND subject LIKE ?3 ESCAPE '\'"
+                } else {
+                    ""
+                }
             );
-        }
-        Ok(out)
+
+            let mut stmt = conn
+                .prepare(&sql)
+                .map_err(|e| AlephError::config(format!("recent_write_decisions prepare: {e}")))?;
+
+            let map_row = |row: &rusqlite::Row| {
+                Ok(MemoryWriteDecisionRow {
+                    action: row.get("action")?,
+                    reason: row.get("reason")?,
+                    subject: row.get("subject")?,
+                    created_at: row.get("created_at")?,
+                })
+            };
+            let rows = match filter.as_ref() {
+                Some(f) => stmt.query_map(params![agent_id, limit as i64, f], map_row),
+                None => stmt.query_map(params![agent_id, limit as i64], map_row),
+            }
+            .map_err(|e| AlephError::config(format!("recent_write_decisions query: {e}")))?;
+
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(
+                    row.map_err(|e| {
+                        AlephError::config(format!("recent_write_decisions row: {e}"))
+                    })?,
+                );
+            }
+            Ok(out)
+        })
     }
 }
 

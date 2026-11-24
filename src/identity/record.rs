@@ -16,7 +16,7 @@ use serde::Serialize;
 /// Deliberately small and closed. Every variant below has a real producer —
 /// a declared-but-never-constructed variant is how an audit surface starts
 /// lying about coverage.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LedgerAction {
     /// A non-idempotent (mutating) tool call ran to completion.
@@ -76,16 +76,12 @@ impl LedgerAction {
         Self::IdentityRevoked,
         Self::ArtifactSigned,
     ];
-
-    /// Compile-time guard: ALL must list every variant. Update both when
-    /// adding a variant — the from_str / from_string round-trip would
-    /// silently diverge otherwise (serde would still parse the new
-    /// variant while `from_str` would return `Err`).
-    const _ALL_LEN_MATCHES: () = assert!(
-        Self::ALL.len() == 8,
-        "LedgerAction::ALL must list every variant"
-    );
 }
+
+const _: () = assert!(
+    LedgerAction::ALL.len() == 8,
+    "LedgerAction::ALL must list every variant"
+);
 
 impl fmt::Display for LedgerAction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -106,7 +102,7 @@ impl FromStr for LedgerAction {
 }
 
 /// How the recorded action ended.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LedgerOutcome {
     Ok,
@@ -126,13 +122,12 @@ impl LedgerOutcome {
     }
 
     const ALL: &'static [Self] = &[Self::Ok, Self::Error, Self::Denied];
-
-    /// Compile-time guard: ALL must list every variant. See `LedgerAction`.
-    const _ALL_LEN_MATCHES: () = assert!(
-        Self::ALL.len() == 3,
-        "LedgerOutcome::ALL must list every variant"
-    );
 }
+
+const _: () = assert!(
+    LedgerOutcome::ALL.len() == 3,
+    "LedgerOutcome::ALL must list every variant"
+);
 
 impl fmt::Display for LedgerOutcome {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -156,7 +151,7 @@ impl FromStr for LedgerOutcome {
 /// `signer_fp` and `at_ms` are assigned by the writer, never by the caller.
 ///
 /// Not `Deserialize` — see the module doc.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewRecord {
     /// The acting agent. Resolved at the chokepoint from `TURN_CONTEXT`, never
     /// taken from tool arguments.
@@ -276,7 +271,7 @@ impl NewRecord {
 }
 
 /// A materialized ledger row.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct LedgerRecord {
     pub agent_id: String,
     pub seq: i64,
@@ -320,8 +315,8 @@ fn ser_opt_hex<S: serde::Serializer>(bytes: &Option<Vec<u8>>, s: S) -> Result<S:
 /// silently reconstructed as something else — that would turn a corrupted row
 /// into a passing one.
 pub fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<LedgerRecord> {
-    let action_str: String = row.get(6)?;
-    let outcome_str: String = row.get(8)?;
+    let action_str = row.get_ref(6)?.as_str()?;
+    let outcome_str = row.get_ref(8)?.as_str()?;
     let parse_err = |i: usize, e: String| {
         rusqlite::Error::FromSqlConversionFailure(i, rusqlite::types::Type::Text, e.into())
     };

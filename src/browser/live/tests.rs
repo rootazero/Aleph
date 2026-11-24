@@ -1119,10 +1119,10 @@ async fn human_input_waits_on_the_mutation_gate_and_times_out_with_a_clear_error
 #[tokio::test]
 async fn retired_owner_refuses_attach_and_never_claims_ownership() {
     let (_server, owner, _handle) = fixture().await;
-    owner.retire_routing();
+    owner.retire();
     assert!(
         owner.attach_target(binding("T1")).await.is_err(),
-        "a routing-retired owner accepts no new attachment"
+        "a retired owner accepts no new attachment"
     );
     assert!(owner.subscribe_latest("T1").is_err());
 }

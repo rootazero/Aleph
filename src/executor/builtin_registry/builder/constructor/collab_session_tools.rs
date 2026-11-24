@@ -10,7 +10,7 @@
 use crate::sync_primitives::Arc;
 use std::collections::HashMap;
 
-use tracing::{info, warn};
+use tracing::info;
 
 use super::{BuiltinToolConfig, BuiltinToolRegistry};
 use crate::tool_metadata::{ToolSource, UnifiedTool};
@@ -18,11 +18,14 @@ use crate::tool_metadata::{ToolSource, UnifiedTool};
 #[allow(clippy::type_complexity)]
 impl BuiltinToolRegistry {
     /// Build messaging/session/skill/note tools and register their schemas.
+    ///
+    /// Fails when a tool that was asked for cannot be built safely — see the
+    /// note directory handling below.
     pub(crate) fn build_collab_session_tools(
         config: &BuiltinToolConfig,
         tools: &mut HashMap<String, UnifiedTool>,
         boot_fallback_agent_id: &str,
-    ) -> (
+    ) -> crate::error::Result<(
         Option<crate::builtin_tools::team::MessageSendTool>,
         Option<crate::builtin_tools::team::InboxReadTool>,
         Option<crate::builtin_tools::team::PlanSubmitTool>,
@@ -41,10 +44,13 @@ impl BuiltinToolRegistry {
         crate::builtin_tools::skill_status::SkillStatusTool,
         crate::builtin_tools::skill_install::SkillInstallTool,
         crate::builtin_tools::skill_manage::SkillManageTool,
-        Option<crate::builtin_tools::note_manage::NoteManageTool>,
+        Option<
+            crate::builtin_tools::runtime::RuntimeTool<
+                crate::builtin_tools::note_manage::NoteManageTool,
+            >,
+        >,
         Option<crate::builtin_tools::session_complete::SessionCompleteTool>,
-        Option<crate::builtin_tools::memory_reflect::MemoryReflectTool>,
-    ) {
+    )> {
         // Fallback only — see the identical note in `coord_team_tools.rs`. The
         // acting identity is resolved per call by
         // `builtin_tools::acting_agent::acting_agent_id`.
@@ -83,7 +89,9 @@ impl BuiltinToolRegistry {
                         &td.description,
                         ToolSource::Builtin,
                     );
-                    ut = ut.with_parameters_schema(td.parameters.clone());
+                    ut = ut
+                        .with_parameters_schema(td.parameters.clone())
+                        .with_services(td.services.clone());
                     tools.insert(td.name.clone(), ut);
                 }
             }
@@ -167,7 +175,9 @@ impl BuiltinToolRegistry {
                         &td.description,
                         ToolSource::Builtin,
                     );
-                    ut = ut.with_parameters_schema(td.parameters.clone());
+                    ut = ut
+                        .with_parameters_schema(td.parameters.clone())
+                        .with_services(td.services.clone());
                     tools.insert(td.name.clone(), ut);
                 }
             }
@@ -227,7 +237,9 @@ impl BuiltinToolRegistry {
                         &td.description,
                         ToolSource::Builtin,
                     );
-                    ut = ut.with_parameters_schema(td.parameters.clone());
+                    ut = ut
+                        .with_parameters_schema(td.parameters.clone())
+                        .with_services(td.services.clone());
                     tools.insert(td.name.clone(), ut);
                 }
                 info!(
@@ -271,7 +283,9 @@ impl BuiltinToolRegistry {
                             &td.description,
                             ToolSource::Builtin,
                         );
-                        ut = ut.with_parameters_schema(td.parameters.clone());
+                        ut = ut
+                            .with_parameters_schema(td.parameters.clone())
+                            .with_services(td.services.clone());
                         tools.insert(td.name.clone(), ut);
                     }
                 }
@@ -302,7 +316,9 @@ impl BuiltinToolRegistry {
                     &td.description,
                     ToolSource::Builtin,
                 );
-                ut = ut.with_parameters_schema(td.parameters.clone());
+                ut = ut
+                    .with_parameters_schema(td.parameters.clone())
+                    .with_services(td.services.clone());
                 tools.insert(td.name.clone(), ut);
             }
             info!("Registered task_review tool (leader acceptance)");
@@ -365,7 +381,9 @@ impl BuiltinToolRegistry {
                         &td.description,
                         ToolSource::Builtin,
                     );
-                    ut = ut.with_parameters_schema(td.parameters.clone());
+                    ut = ut
+                        .with_parameters_schema(td.parameters.clone())
+                        .with_services(td.services.clone());
                     tools.insert(td.name.clone(), ut);
                 }
             }
@@ -419,57 +437,29 @@ impl BuiltinToolRegistry {
                     &td.description,
                     ToolSource::Builtin,
                 );
-                ut = ut.with_parameters_schema(td.parameters.clone());
+                ut = ut
+                    .with_parameters_schema(td.parameters.clone())
+                    .with_services(td.services.clone());
                 tools.insert(td.name.clone(), ut);
             }
         }
         info!("Registered skill management tools (skill_status, skill_install, skill_manage)");
 
-        // Note management tool — unified CRUD for all note categories
-        let note_manage_tool = if let Some(ref db) = config.memory_db {
-            let memory_dir = crate::utils::paths::get_note_memory_dir().unwrap_or_else(|_| {
-                // See the twin in `constructor/mod.rs`: the home branch was
-                // either identical to the path that just failed, or wrong
-                // because it ignored `ALEPH_HOME`.
-                std::env::temp_dir()
-                    .join("aleph")
-                    .join("memory")
-                    .join("note")
-            });
-            let mut tool =
-                crate::builtin_tools::note_manage::NoteManageTool::new(memory_dir, db.clone())
-                    .with_project_scoping(config.memory_project_scoped);
-            // Wire the embedder so `query` runs hybrid (vector + FTS) search;
-            // without it the action silently degrades to FTS-only, which the
-            // unicode61 tokenizer makes near-useless for CJK queries.
-            if let Some(ref embedder) = config.embedder {
-                tool = tool.with_embedder(Arc::clone(embedder));
-            }
-            // Wire the event-sourcing handler so note create/update/delete
-            // actions feed the per-note event log that the memory_timeline
-            // tool reads. Event-log only (no note_indexer) — note_manage owns
-            // the notes-filesystem write path.
-            if let Some(ref state_db) = config.state_db {
-                let handler = Arc::new(crate::memory::events::handler::MemoryCommandHandler::new(
-                    Arc::clone(state_db),
-                ));
-                tool = tool.with_command_handler(handler);
-            }
-
-            // Register note_manage tool schema
-            {
-                use crate::tools::AlephTool;
-                let td = tool.definition();
-                let mut ut = UnifiedTool::new(
-                    format!("builtin:{}", td.name),
-                    &td.name,
-                    &td.description,
-                    ToolSource::Builtin,
-                );
-                ut = ut.with_parameters_schema(td.parameters.clone());
-                tools.insert(td.name.clone(), ut);
-            }
-            info!("Registered note_manage tool");
+        // Keep only the stable source; a call constructs its admitted tool.
+        let note_manage_tool = if let Some(runtime) = &config.memory_runtime {
+            let tool = crate::builtin_tools::runtime::RuntimeTool::<
+                crate::builtin_tools::note_manage::NoteManageTool,
+            >::new(runtime.clone());
+            let td = crate::tools::AlephTool::definition(&tool);
+            let ut = UnifiedTool::new(
+                format!("builtin:{}", td.name),
+                &td.name,
+                &td.description,
+                ToolSource::Builtin,
+            )
+            .with_parameters_schema(td.parameters)
+            .with_services(td.services);
+            tools.insert(td.name, ut);
             Some(tool)
         } else {
             None
@@ -477,7 +467,7 @@ impl BuiltinToolRegistry {
 
         // Session-complete signals belong to the raw store, not the notes index.
         let session_complete_tool = if let Some(ref store) = config.raw_memory_store {
-            let agent_id = "main".to_string();
+            let agent_id = current_agent_id.clone();
             let mut tool =
                 crate::builtin_tools::session_complete::SessionCompleteTool::new_with_store(
                     store.clone(),
@@ -485,6 +475,9 @@ impl BuiltinToolRegistry {
                 );
             if let Some(ref reg) = config.capture_registry {
                 tool = tool.with_capture_registry(Arc::clone(reg));
+            }
+            if let Some(runtime) = &config.memory_runtime {
+                tool = tool.with_memory_runtime(Arc::downgrade(runtime));
             }
 
             // Register tool schema
@@ -497,7 +490,9 @@ impl BuiltinToolRegistry {
                     &td.description,
                     ToolSource::Builtin,
                 );
-                ut = ut.with_parameters_schema(td.parameters.clone());
+                ut = ut
+                    .with_parameters_schema(td.parameters.clone())
+                    .with_services(td.services.clone());
                 tools.insert(td.name.clone(), ut);
             }
             info!("Registered session_complete tool");
@@ -506,44 +501,42 @@ impl BuiltinToolRegistry {
             None
         };
 
-        // Memory-reflect tool — always constructed; reflector injected later by Task 8.
-        // Registration is gated on injection_mode (same rule as the other retrieval tools).
+        // The retrieval tools are gated on injection_mode (same rule for all
+        // of them).
         let expose_retrieval_tools = matches!(
             config.injection_mode,
             crate::config::types::memory::MemoryInjectionMode::Tools
                 | crate::config::types::memory::MemoryInjectionMode::Hybrid,
         );
-        let memory_reflect_tool = {
-            let agent_id = "main".to_string();
-            let tool = crate::builtin_tools::memory_reflect::MemoryReflectTool::new(agent_id);
 
-            // Register tool schema only when retrieval tools are exposed
-            if expose_retrieval_tools {
-                use crate::tools::AlephTool;
-                let td = tool.definition();
-                let mut ut = UnifiedTool::new(
-                    format!("builtin:{}", td.name),
-                    &td.name,
-                    &td.description,
-                    ToolSource::Builtin,
-                );
-                ut = ut.with_parameters_schema(td.parameters.clone());
-                tools.insert(td.name.clone(), ut);
-                info!("Registered memory_reflect tool");
-            }
-            Some(tool)
-        };
+        // memory_reflect tool — schema only. The registry holds no instance:
+        // the dispatch arm builds the tool per call from the Memory runtime
+        // (see `tool_registry_impl.rs`), so an instance kept here could only
+        // ever be an unwired placeholder.
+        if expose_retrieval_tools {
+            use crate::builtin_tools::memory_reflect::{MemoryReflectArgs, MemoryReflectTool};
+            use crate::executor::builtin_registry::builder::core_tools::tool_schema;
+            use crate::tools::AlephTool;
+            let schema = tool_schema::<MemoryReflectArgs>("memory_reflect");
+            let mut ut = UnifiedTool::new(
+                format!("builtin:{}", <MemoryReflectTool as AlephTool>::NAME),
+                <MemoryReflectTool as AlephTool>::NAME,
+                <MemoryReflectTool as AlephTool>::DESCRIPTION,
+                ToolSource::Builtin,
+            );
+            ut.parameters_schema = Some(schema);
+            ut.services = <MemoryReflectTool as AlephTool>::services();
+            tools.insert(<MemoryReflectTool as AlephTool>::NAME.to_string(), ut);
+            info!("Registered memory_reflect tool");
+        }
 
         // recall_context tool — gated on injection_mode (retrieval tools only)
         if expose_retrieval_tools {
             use crate::builtin_tools::RecallContextTool;
-            let schema = serde_json::to_value(schemars::schema_for!(
-                crate::builtin_tools::recall_context::RecallContextArgs
-            ))
-            .unwrap_or_else(|e| {
-                warn!("Failed to serialize schema for recall_context: {}", e);
-                serde_json::Value::Object(Default::default())
-            });
+            use crate::executor::builtin_registry::builder::core_tools::tool_schema;
+            let schema = tool_schema::<crate::builtin_tools::recall_context::RecallContextArgs>(
+                "recall_context",
+            );
             let mut ut = UnifiedTool::new(
                 format!("builtin:{}", RecallContextTool::NAME),
                 RecallContextTool::NAME,
@@ -558,13 +551,9 @@ impl BuiltinToolRegistry {
         // memory_trace tool — gated on injection_mode (retrieval tools only)
         if expose_retrieval_tools {
             use crate::builtin_tools::memory_trace::MemoryTraceTool;
-            let schema = serde_json::to_value(schemars::schema_for!(
-                crate::builtin_tools::memory_trace::MemoryTraceArgs
-            ))
-            .unwrap_or_else(|e| {
-                warn!("Failed to serialize schema for memory_trace: {}", e);
-                serde_json::Value::Object(Default::default())
-            });
+            use crate::executor::builtin_registry::builder::core_tools::tool_schema;
+            let schema =
+                tool_schema::<crate::builtin_tools::memory_trace::MemoryTraceArgs>("memory_trace");
             let mut ut = UnifiedTool::new(
                 format!("builtin:{}", MemoryTraceTool::NAME),
                 MemoryTraceTool::NAME,
@@ -572,6 +561,7 @@ impl BuiltinToolRegistry {
                 ToolSource::Builtin,
             );
             ut.parameters_schema = Some(schema);
+            ut.services = MemoryTraceTool::services();
             tools.insert(MemoryTraceTool::NAME.to_string(), ut);
             info!("Registered memory_trace tool");
         }
@@ -579,13 +569,10 @@ impl BuiltinToolRegistry {
         // note_graph_query tool — read-only graph interrogation (retrieval tools only)
         if expose_retrieval_tools {
             use crate::builtin_tools::note_graph_query::NoteGraphQueryTool;
-            let schema = serde_json::to_value(schemars::schema_for!(
-                crate::builtin_tools::note_graph_query::NoteGraphQueryArgs
-            ))
-            .unwrap_or_else(|e| {
-                warn!("Failed to serialize schema for note_graph_query: {}", e);
-                serde_json::Value::Object(Default::default())
-            });
+            use crate::executor::builtin_registry::builder::core_tools::tool_schema;
+            let schema = tool_schema::<crate::builtin_tools::note_graph_query::NoteGraphQueryArgs>(
+                "note_graph_query",
+            );
             let mut ut = UnifiedTool::new(
                 format!("builtin:{}", NoteGraphQueryTool::NAME),
                 NoteGraphQueryTool::NAME,
@@ -593,11 +580,12 @@ impl BuiltinToolRegistry {
                 ToolSource::Builtin,
             );
             ut.parameters_schema = Some(schema);
+            ut.services = NoteGraphQueryTool::services();
             tools.insert(NoteGraphQueryTool::NAME.to_string(), ut);
             info!("Registered note_graph_query tool");
         }
 
-        (
+        Ok((
             message_send_tool,
             inbox_read_tool,
             plan_submit_tool,
@@ -618,7 +606,6 @@ impl BuiltinToolRegistry {
             skill_manage_tool,
             note_manage_tool,
             session_complete_tool,
-            memory_reflect_tool,
-        )
+        ))
     }
 }

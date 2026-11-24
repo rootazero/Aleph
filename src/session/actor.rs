@@ -63,7 +63,7 @@ pub struct SessionActor {
 /// on the receiver side, not an error on the producer.
 pub(crate) fn notify_appended(
     id: &SessionId,
-    record: &SessionEventRecord,
+    record: SessionEventRecord,
     observer: Option<&Arc<dyn SessionEventObserver>>,
     broadcaster: &broadcast::Sender<SessionEventRecord>,
 ) {
@@ -71,7 +71,7 @@ pub(crate) fn notify_appended(
         // `catch_unwind` is sound here: the closure takes `id: &SessionId`
         // and `record: &SessionEventRecord`, both `RefUnwindSafe`.
         if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            obs.on_appended(id, record);
+            obs.on_appended(id, &record);
         }))
         .is_err()
         {
@@ -83,10 +83,11 @@ pub(crate) fn notify_appended(
             );
         }
     }
-    if let Err(_record) = broadcaster.send(record.clone()) {
+    let seq = record.seq;
+    if let Err(_record) = broadcaster.send(record) {
         tracing::debug!(
             id = ?id,
-            seq = record.seq,
+            seq,
             "broadcast had no receivers during append notification; \
              event is durable in the SSOT log only"
         );
@@ -203,7 +204,7 @@ impl SessionActor {
             event,
             created_at_ms: at,
         };
-        notify_appended(&self.id, &record, self.observer.as_ref(), &self.broadcaster);
+        notify_appended(&self.id, record, self.observer.as_ref(), &self.broadcaster);
     }
 
     /// Rebuilds `head_seq` from the store's own allocation counter.
@@ -261,6 +262,7 @@ impl SessionActor {
                     }
                 },
                 _ = tokio::time::sleep_until(idle_deadline) => {
+                    self.inbox.close();
                     // Drain any commands already buffered in the inbox
                     // before exiting. Without this, a command that lands
                     // between the sleep returning and `run()` returning

@@ -27,7 +27,8 @@
 //!   of descriptor-owned fields to the provider metadata shape — it
 //!   must NOT route through a synthetic `ToolCapabilityDescriptor` (that
 //!   manufactured replay identity that never existed).
-//! * `to_metadata_form` is a pure compatibility wrapper kept only for
+//! * `to_metadata_form` is a pure compatibility wrapper, still called by
+//!   `src/orchestrator/harness_bridge/public_lookup_tool.rs` and
 //!   `src/harness/tests/tools_surface.rs`; new callers should use
 //!   `ToolDefinition::to_metadata_definition` directly.
 
@@ -244,6 +245,8 @@ pub use crate::descriptor::ToolSource;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolDefinitionMetadata {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub services: Vec<crate::capability::Service>,
     #[serde(default)]
     pub hidden_from_llm: bool,
     #[serde(default)]
@@ -309,6 +312,7 @@ impl ToolDefinition {
             input_schema: descriptor.input_schema.clone(),
             source: descriptor.source.clone(),
             metadata: ToolDefinitionMetadata {
+                services: descriptor.services.clone(),
                 requires_approval: descriptor.requires_confirmation,
                 idempotent: descriptor.idempotent,
                 concurrent_safe: descriptor.concurrent_safe,
@@ -339,6 +343,7 @@ impl ToolDefinition {
             description: self.description.clone(),
             parameters: self.input_schema.clone(),
             requires_confirmation: self.metadata.requires_approval,
+            services: self.metadata.services.clone(),
             category,
             strict: false,
         }
@@ -410,8 +415,9 @@ pub struct ToolImage {
 /// Previously this fabricated a revision-1 [`ToolCapabilityDescriptor`] per
 /// definition and projected through it — a lie, because loop-side definitions
 /// carry no revision and revision 1 is not canonical. The projection is now
-/// direct. Kept only because `src/harness/tests/tools_surface.rs` imports it;
-/// new callers should use [`ToolDefinition::to_metadata_definition`] directly.
+/// direct. Still called by `src/orchestrator/harness_bridge/public_lookup_tool.rs`
+/// and `src/harness/tests/tools_surface.rs`; new callers should use
+/// [`ToolDefinition::to_metadata_definition`] directly.
 ///
 /// This is a pure compatibility projection and does not provide canonical
 /// capability identity, authorization, or registry state.
@@ -524,6 +530,7 @@ mod metadata_tests {
     #[test]
     fn metadata_max_duration_ms_round_trips_through_json() {
         let original = ToolDefinitionMetadata {
+            services: Vec::new(),
             hidden_from_llm: false,
             requires_approval: false,
             tags: Vec::new(),

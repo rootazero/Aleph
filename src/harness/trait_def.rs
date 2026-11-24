@@ -30,7 +30,7 @@ pub enum TurnState {
 /// `match` arms self-documenting and stops a future fifth signal from being
 /// bolted on as `.4`. Pure scaffolding: it records what the turn did, it does
 /// not decide anything (R10-safe).
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[must_use = "TurnStep carries the loop-control signal; dropping it loses the turn outcome"]
 pub struct TurnStep {
     /// Whether the loop continues or the model finished this turn.

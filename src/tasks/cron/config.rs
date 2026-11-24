@@ -142,13 +142,13 @@ const ALEPH_HOME_PREFIX: &str = "~/.aleph/";
 fn expand_configured_path(raw: &str) -> String {
     if let Some(rest) = raw.strip_prefix(ALEPH_HOME_PREFIX) {
         if let Ok(root) = crate::utils::paths::get_config_dir() {
-            return root.join(rest).to_string_lossy().to_string();
+            return root.join(rest).to_string_lossy().into_owned();
         }
     }
     // A user-written `~/` prefix means the real home directory.
     if let Some(rest) = raw.strip_prefix("~/") {
         if let Ok(home) = crate::utils::paths::get_home_dir() {
-            return home.join(rest).to_string_lossy().to_string();
+            return home.join(rest).to_string_lossy().into_owned();
         }
     }
     raw.to_string()

@@ -16,7 +16,7 @@ use crate::orchestrator::errors::FlowError;
 use crate::orchestrator::flow_spec::{FlowInput, FlowSpec};
 use crate::routing::session_key::SessionKey;
 use crate::sandbox::Sandbox;
-use crate::session::events::SessionEvent;
+use crate::session::events::{SessionEvent, SessionEventRecord};
 use crate::session::service::SessionId;
 
 use super::*;
@@ -178,8 +178,9 @@ impl HarnessRunner for AgentHarnessRunner {
         // being shadowed by that provider's static catalog. The directive-less
         // path is byte-identical to before — it uses `BrainRef` and lets the
         // failover primary walk its catalog as usual.
-        let session_pref_key = SessionKey::from_key_string(&session_key)
-            // rust-doctor-disable-next-line excessive-clone
+        let parsed_session_key = SessionKey::from_key_string(&session_key);
+        let session_pref_key = parsed_session_key
+            .as_ref()
             .map_or_else(|| session_key.clone(), |s| s.to_key_string());
         let session_model_snapshot =
             crate::providers::session_model_handle::get_session_model_snapshot(&session_pref_key);
@@ -232,13 +233,12 @@ impl HarnessRunner for AgentHarnessRunner {
         // directly; otherwise treat the incoming string as an ephemeral id
         // under `spec.agent` so orchestrator ↔ harness session identity stays
         // deterministic (no fresh-uuid divergence).
-        let session_id: SessionId =
-            SessionKey::from_key_string(&session_key).unwrap_or_else(|| SessionKey::Ephemeral {
-                // rust-doctor-disable-next-line excessive-clone
-                agent_id: spec.agent.clone(),
-                // rust-doctor-disable-next-line excessive-clone
-                ephemeral_id: session_key.clone(),
-            });
+        let session_id: SessionId = parsed_session_key.unwrap_or_else(|| SessionKey::Ephemeral {
+            // rust-doctor-disable-next-line excessive-clone
+            agent_id: spec.agent.clone(),
+            // rust-doctor-disable-next-line excessive-clone
+            ephemeral_id: session_key.clone(),
+        });
 
         // Step 5: seed the session with the input as the appropriate event(s)
         // so the inner harness Think loop can read it. Preserve per-message
@@ -318,14 +318,12 @@ impl HarnessRunner for AgentHarnessRunner {
             .then(|| llm.serving_model_hint().map(std::borrow::Cow::into_owned))
             .flatten();
         let gauge_model: String = if dynamic_identity {
-            // rust-doctor-disable-next-line excessive-clone
             serving_hint
-                .clone()
-                // rust-doctor-disable-next-line excessive-clone
-                .unwrap_or_else(|| provider_name.clone())
+                .as_deref()
+                .unwrap_or(&provider_name)
+                .to_string()
         } else {
-            // rust-doctor-disable-next-line excessive-clone
-            identity_model_id.clone()
+            identity_model_id
         };
         // Provider id that keys the cost estimate. Prefer the explicit routing
         // directive, then the provider's serving hint, and finally its wrapper name.
@@ -475,6 +473,7 @@ impl HarnessRunner for AgentHarnessRunner {
         // service here is how the bridge observes it without reaching in.)
         // The trait contract says implementations cache and return an `Arc`
         // for O(1) per-turn cloning, so the extra call is a clone.
+        let session_key_str = session_id.to_key_string();
         if let Some(reg) = crate::thinker::prompt_size_registry::global_prompt_size_registry() {
             let tool_sizes = tools
                 .metadata_schema()
@@ -487,7 +486,7 @@ impl HarnessRunner for AgentHarnessRunner {
                     )
                 })
                 .collect();
-            reg.record_turn(&session_id.to_key_string(), prompt_layout, tool_sizes);
+            reg.record_turn(&session_key_str, prompt_layout, tool_sizes);
         }
         // Wire the platform-specific power capability so the harness can
         // inhibit idle sleep for the duration of each Think→Act turn.
@@ -520,7 +519,7 @@ impl HarnessRunner for AgentHarnessRunner {
                 // Count reasoning as this run's provider will send it.
                 budget_inner.set_reasoning_replay(llm.reasoning_replay(None));
                 budget_inner.set_server_clears_tool_results(llm.clears_tool_results_server_side());
-                budget_inner.publish_message_tokens_as(session_id.to_key_string());
+                budget_inner.publish_message_tokens_as(session_key_str.clone());
                 // Seed ONLY the tokenizer-calibration factor from the previous
                 // run on the same model (see CALIBRATION_CARRYOVER below): the
                 // fresh per-run budget keeps breaker / split counters
@@ -553,7 +552,7 @@ impl HarnessRunner for AgentHarnessRunner {
                 // the provider prompt cache with freshly-worded summary text.
                 // Hash-validated on read, so a history rewritten between runs
                 // (post-turn compression, splits) simply misses.
-                .with_cache_carryover(session_id.to_key_string())
+                .with_cache_carryover(session_key_str.clone())
                 // This run's stop signal. The harness races every LLM call it
                 // makes itself against this token; the compaction step was the
                 // one that was not, so stopping mid-compaction waited out the
@@ -572,7 +571,7 @@ impl HarnessRunner for AgentHarnessRunner {
                 .with_monitor_scope(
                     crate::thinker::prompt_builder::cache_monitor::cache_scope(
                         &spec.agent,
-                        Some(&session_id.to_key_string()),
+                        Some(&session_key_str),
                     ),
                 );
                 // Wire the zero-API-cost session-summary reuse path: the
@@ -686,7 +685,7 @@ impl HarnessRunner for AgentHarnessRunner {
             .map(|store| {
                 crate::tools::result_store::ToolResultStore::for_session(
                     &store,
-                    session_id.to_key_string(),
+                    session_key_str.clone(),
                 )
             });
         // Layer 3 turn budget + Layer 2 shared store. Prefer the
@@ -785,7 +784,7 @@ impl HarnessRunner for AgentHarnessRunner {
                     std::sync::Arc::new(crate::memory::tool_signal_sink::RawMemoryToolSink::new(
                         store,
                         sink_agent_id,
-                        session_id.to_key_string(),
+                        session_key_str.clone(),
                     ))
                         as std::sync::Arc<dyn crate::memory::tool_signal_sink::ToolSignalSink>
                 }
@@ -934,27 +933,36 @@ impl HarnessRunner for AgentHarnessRunner {
         // the history / start a new session" advice `i18n::render_loop_halt`
         // carries for it — was structurally unreachable on every surface.
         //
-        // On the failure arm a session-read error must NOT replace the run's
-        // own error (that would swap the real cause for "session read: .."),
-        // so the scan there falls back to an empty log: the harness-sourced
-        // fields still land and the log-sourced ones stay zero.
-        let records = match self
+        // A session-read error must NOT replace the run's own outcome: it
+        // swaps the real cause ("session read: ..") for the cause of a run
+        // that may well have succeeded. On the SUCCESS arm it did worse
+        // than that: it returned `FlowError::Internal`, which discarded a
+        // run that had actually succeeded AND skipped the terminal settle
+        // below (`cb.on_complete_with_outcome`) — the gateway then
+        // synthesized its own placeholder outcome for a run that had
+        // produced text. The settle is owed on BOTH arms, so a read failure
+        // is logged and the outcome is built from what is still known: the
+        // harness-sourced fields land, the log-sourced ones stay empty (no
+        // `final_text`, zero `iterations` / `tool_calls_made`).
+        let (records, session_read_failed) = match self
             .session_service
             .get_events(&session_id, None, None)
             .await
         {
-            Ok(records) => records,
-            Err(e) if run_result.is_err() => {
+            Ok(records) => (records, false),
+            Err(e) => {
                 tracing::warn!(
                     error = %e,
-                    "session read failed while settling a failed run; \
+                    "session read failed while settling the run; \
                      reporting harness-sourced accounting only"
                 );
-                Vec::new()
+                (Vec::new(), true)
             }
-            Err(e) => return Err(FlowError::Internal(format!("session read: {e}"))),
         };
 
+        let mut last_assistant_content: Option<&crate::session::MessageContent> = None;
+        let mut iterations: u32 = 0;
+        let mut tool_calls_made: u32 = 0;
         // Scope the per-run counters to THIS run: only count events emitted
         // after this run's own `RunStarted` marker. A reused session
         // (`FlowInput::History` / `FlowInput::Resume` / `SessionStrategy::Reuse`)
@@ -964,53 +972,37 @@ impl HarnessRunner for AgentHarnessRunner {
         // `token_breakdown` / `tool_timeline` read from the harness accessors
         // below. It would also let a run that produces no new text return a
         // stale prior-turn answer as `final_text`.
-        //
-        // Marker emitted at `SessionEvent::RunStarted { run_id: run_marker_id }`
-        // just before `harness.run`; all seeded history/user events precede it.
-        // `rposition` takes the LAST opener under this id: the fallback retry
-        // loop can leave earlier brackets of the same run in this log. On a
-        // compaction-driven session split the adopted child's log carries the
-        // split's own opener under this same id AFTER the carried tail (the
-        // parent's copied opener is filtered out of the tail, F14), so the
-        // scan counts only what the run produced after the split; the pre-split
-        // part stays in the parent's log.
-        let run_scan_start = records
-            .iter()
-            .rposition(|r| {
-                matches!(
-                    &r.event,
-                    SessionEvent::RunStarted { run_id, .. } if run_id == &run_marker_id
-                )
-            })
-            .map_or(0, |i| i + 1);
-
-        let mut final_text = String::new();
-        let mut iterations: u32 = 0;
-        let mut tool_calls_made: u32 = 0;
-        for r in &records[run_scan_start..] {
+        let run_records: &[SessionEventRecord] = match per_run_records(&records, &run_marker_id) {
+            Some(slice) => slice,
+            None => {
+                // A MISSING marker is not "scan from the beginning". The
+                // marker is emitted by `SessionEvent::RunStarted` immediately
+                // before `harness.run`, so its absence means this log does
+                // not describe this run at all (truncated, rotated, or read
+                // from another session). The old `map_or(0, |i| i + 1)`
+                // widened the scan to the WHOLE log in that case: a stale
+                // prior-turn answer could be returned as `final_text`, and
+                // `iterations` / `tool_calls_made` counted events this run
+                // never produced. A missing marker now contributes no events
+                // (empty `final_text`, zero counters) and is reported.
+                //
+                // A failed read has already been reported above; its empty
+                // log carries no marker by construction, so the missing
+                // marker here is a consequence, not a second anomaly.
+                if !session_read_failed {
+                    tracing::warn!(
+                        run_id = %run_marker_id,
+                        "session log has no RunStarted marker for this run; \
+                         reporting no log-sourced accounting"
+                    );
+                }
+                &[]
+            }
+        };
+        for r in run_records {
             match &r.event {
                 SessionEvent::AssistantMessage { content, .. } => {
-                    // P5: dropped the 8-layer JSON field extraction
-                    // (action.summary / action.content / action.text / summary
-                    // / content / message / text / reasoning) that previously
-                    // tried to recover a "real" message from the legacy
-                    // {reasoning, action} envelope. `ResponseFormatLayer` was
-                    // unregistered from the prompt pipeline on 2026-05-10
-                    // (see memory: project_response_format_layer_cleanup),
-                    // so the model no longer emits that envelope and the
-                    // fallback only served to silently rewrite valid JSON
-                    // payloads. Native tool_use is the canonical egress now.
-                    //
-                    // Thinking-only completions (extended-thinking providers
-                    // that may put output in the `thinking` field on a
-                    // text-empty assistant turn) keep the explicit fallback.
-                    final_text = if content.text.is_empty() {
-                        // rust-doctor-disable-next-line excessive-clone
-                        content.thinking.clone().unwrap_or_default()
-                    } else {
-                        // rust-doctor-disable-next-line excessive-clone
-                        content.text.clone()
-                    };
+                    last_assistant_content = Some(content);
                     iterations = iterations.saturating_add(1);
                 }
                 SessionEvent::ToolCallRequested { .. } => {
@@ -1019,6 +1011,29 @@ impl HarnessRunner for AgentHarnessRunner {
                 _ => {}
             }
         }
+
+        // P5: dropped the 8-layer JSON field extraction
+        // (action.summary / action.content / action.text / summary
+        // / content / message / text / reasoning) that previously
+        // tried to recover a "real" message from the legacy
+        // {reasoning, action} envelope. `ResponseFormatLayer` was
+        // unregistered from the prompt pipeline on 2026-05-10
+        // (see memory: project_response_format_layer_cleanup),
+        // so the model no longer emits that envelope and the
+        // fallback only served to silently rewrite valid JSON
+        // payloads. Native tool_use is the canonical egress now.
+        //
+        // Thinking-only completions (extended-thinking providers
+        // that may put output in the `thinking` field on a
+        // text-empty assistant turn) keep the explicit fallback.
+        // Cloned once for the terminal assistant turn rather than on every iteration.
+        let final_text = match last_assistant_content {
+            Some(content) if content.text.is_empty() => {
+                content.thinking.clone().unwrap_or_default()
+            }
+            Some(content) => content.text.clone(),
+            None => String::new(),
+        };
 
         // Durable receipt for a run whose input a guardrail refused. Placed
         // here rather than beside `RunFinished` above because the discriminator
@@ -1128,10 +1143,8 @@ impl HarnessRunner for AgentHarnessRunner {
             context_window,
             // Same pair the cost estimate above is keyed on — resolved once
             // pre-loop, never the FailoverProvider wrapper name.
-            // rust-doctor-disable-next-line excessive-clone
-            serving_model: Some(gauge_model.clone()),
-            // rust-doctor-disable-next-line excessive-clone
-            serving_provider: Some(cost_provider.clone()),
+            serving_model: Some(gauge_model),
+            serving_provider: Some(cost_provider),
             // Owner runs never offer `request_private_lookup`.
             private_lookup: None,
         };
@@ -1321,6 +1334,40 @@ impl HarnessRunner for AgentHarnessRunner {
             None => raw,
         })
     }
+}
+
+/// The slice of `records` that THIS run produced.
+///
+/// `None` means the log carries no `RunStarted` marker for `run_marker_id` —
+/// i.e. the log does not describe this run at all (truncated, rotated, or read
+/// from another session). `Some` is the slice that starts AFTER the marker, so
+/// the caller never counts events this run did not produce.
+///
+/// `rposition` takes the LAST opener under this id: the fallback retry loop can
+/// leave earlier brackets of the same run in this log. On a compaction-driven
+/// session split the adopted child's log carries the split's own opener under
+/// this same id AFTER the carried tail (the parent's copied opener is filtered
+/// out of the tail, F14), so the scan counts only what the run produced after
+/// the split; the pre-split part stays in the parent's log.
+///
+/// A MISSING marker is deliberately NOT "scan from the beginning": the old
+/// `map_or(0, |i| i + 1)` widened the scan to the WHOLE log, so a stale
+/// prior-turn answer could be returned as `final_text` and the counters
+/// counted events this run never produced.
+fn per_run_records<'a>(
+    records: &'a [SessionEventRecord],
+    run_marker_id: &str,
+) -> Option<&'a [SessionEventRecord]> {
+    let start = records
+        .iter()
+        .rposition(|r| {
+            matches!(
+                &r.event,
+                SessionEvent::RunStarted { run_id, .. } if run_id == run_marker_id
+            )
+        })
+        .map(|i| i + 1)?;
+    records.get(start..)
 }
 
 /// Cross-run tokenizer-calibration carry-over slot, keyed by serving model id.

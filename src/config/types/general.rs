@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 // =============================================================================
 
 /// General configuration settings
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct GeneralConfig {
     /// Default provider to use when no routing rule matches
     #[serde(default)]
@@ -35,6 +35,18 @@ pub struct GeneralConfig {
     /// key read as a no-op.
     #[serde(default = "default_session_store_backend")]
     pub session_store_backend: String,
+}
+
+impl Default for GeneralConfig {
+    fn default() -> Self {
+        Self {
+            default_provider: None,
+            language: None,
+            browser: Default::default(),
+            fallback_providers: Vec::new(),
+            session_store_backend: default_session_store_backend(),
+        }
+    }
 }
 
 fn default_session_store_backend() -> String {

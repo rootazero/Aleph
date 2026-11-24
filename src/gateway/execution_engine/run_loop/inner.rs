@@ -446,10 +446,17 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                             run_id = run_id,
                             "UserPromptSubmit hook requested prevent_continuation; stopping run"
                         );
-                        // `Cancelled`: the run did what the hook asked. The
-                        // receipt is the only report on this arm (the `Ok`
-                        // string below is dropped by `execute.rs`).
+                        // `Cancelled`: the run did what the hook asked. Two
+                        // reports, two audiences: the receipt is the
+                        // transcript row, and the stop text goes out as the
+                        // run's FINAL response chunk — the returned `Ok`
+                        // string is dropped by `execute.rs` and no
+                        // `RunComplete` follows (the drain never ran), so
+                        // without the chunk a chat channel gets no reply.
                         journal_hook_stop(request, RunOutcome::Cancelled, &stop_msg).await;
+                        emitter
+                            .emit_response_chunk(run_id, &stop_msg, &stop_msg, 0, true, false)
+                            .await;
                         return Ok(stop_msg);
                     }
                     // Claude-Code convention for UserPromptSubmit: PLAIN
@@ -656,10 +663,18 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // future-drop alike — while the success arms call `cleanup_now()` to
         // keep the cleanup at its original, log-adjacent position and disarm
         // the guard so it does not double-clean.
+        //
+        // The guard is constructed BEFORE `media_blocks` is evaluated so that
+        // any media already written to the session cache during
+        // `archive_inbound_attachments` / `media_processor.process` (which
+        // ran above) is covered even if this future is dropped before reaching
+        // the retry loop.  The `active` flag is set whenever there are
+        // non-empty attachments AND a media processor is present — the same
+        // condition that caused those awaits to write into the cache.
         let mut media_cleanup_guard = MediaCleanupGuard {
             processor: self.media_processor.clone(),
             session_key: request.session_key.to_key_string(),
-            active: !media_blocks.is_empty(),
+            active: !request.attachments.is_empty() && self.media_processor.is_some(),
         };
 
         // === Retry loop: resolve provider → build agent loop → run ===
@@ -1246,6 +1261,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 // leaves it dormant — the registry no-ops when empty.
                 if let Some(cr) = self.capture_registry.as_ref() {
                     t = t.with_capture_registry(cr.clone());
+                }
+                if let Some(runtime) = self.memory_runtime.as_ref() {
+                    t = t.with_memory_runtime(Arc::downgrade(runtime));
                 }
                 if let Some(ref mgr) = self.teammate_manager {
                     t = t.with_teammate_manager(mgr.clone());
@@ -1946,25 +1964,8 @@ pub(super) fn mcp_handler_admitted(
     }
 }
 
-/// Face ⑤, the one derivation of "may this run see MCP server `server_id`",
-/// built once per run: the join's gate and every capability builtin read this
-/// one value. A server no plugin declared is visible; a plugin-owned one iff
-/// the extension manager can see its owner from `visibility`. No manager ⇒ an
-/// owned server is refused: the manager is the only authority on where a
-/// plugin came from, and "I cannot tell" is not "yes".
-pub(super) fn visible_mcp_servers(
-    visibility: crate::extension::visibility::VisibilityCtx,
-    ext: Option<Arc<crate::extension::ExtensionManager>>,
-) -> crate::tools::handlers::McpServerFilter {
-    Arc::new(move |server_id| {
-        match crate::extension::mcp_config::owning_plugin_of_server_id(server_id) {
-            None => true,
-            Some(owner) => {
-                crate::extension::visibility::owner_visible_via(ext.as_deref(), owner, &visibility)
-            }
-        }
-    })
-}
+/// Shared MCP-server visibility derivation used by the run loop and MCP face.
+pub(super) use crate::gateway::execution_engine::tool_service_builder::visible_mcp_servers;
 
 /// RAII guard for the per-session media cache.
 ///

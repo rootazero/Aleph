@@ -61,10 +61,8 @@ const MAX_INFLIGHT_ATTEMPTS: usize = 8;
 /// Hard bound on live grants; on overflow the nearest-expiry grant is
 /// evicted (its live viewer is revoked). Pre-auth abuse can therefore
 /// DoS a *viewer grant*, never the gateway itself.
-#[allow(dead_code)] // enforced by `issue`, wired by the Task 6 issuer RPC surface
 const MAX_LIVE_GRANTS: usize = 4096;
 
-#[allow(dead_code)] // consumed by `issue`, wired by the Task 6 issuer RPC surface
 fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
@@ -111,7 +109,6 @@ impl fmt::Display for GrantDenied {
 }
 
 /// Result of a successful `issue`: the one-time plaintext nonce.
-#[allow(dead_code)] // constructed by `issue`, wired by the Task 6 issuer RPC surface
 pub(crate) struct IssuedGrant {
     pub grant_id: String,
     pub nonce: FragmentNonce,
@@ -127,7 +124,6 @@ pub(crate) struct ConsumedNonce {
 /// Result of a successful ticket exchange: the session's first secret `S0`
 /// plus everything the transport needs to prepare the viewer session.
 #[derive(Clone)]
-#[allow(dead_code)] // `binding`/`resource_id`/`permissions`/`origin` are read by the Task 6 boot-wired backend
 pub(crate) struct ExchangedGrant {
     pub grant_id: String,
     pub viewer_session_id: String,
@@ -137,7 +133,6 @@ pub(crate) struct ExchangedGrant {
     pub binding: ViewerBinding,
     pub resource_id: String,
     pub permissions: Vec<ViewerPermission>,
-    pub origin: ViewerOrigin,
     pub expires_at_ms: i64,
 }
 
@@ -152,8 +147,6 @@ pub(crate) struct AuthCommit {
     /// refuses a re-used viewer session id, so every committed rotation
     /// mints a new one; the client learns it from `State` messages.
     pub viewer_session_id: String,
-    #[allow(dead_code)] // exposed for Task 6 surfaces; the route keys off `ws_generation`
-    pub generation: u64,
 }
 
 struct ConsumedSecret {
@@ -175,15 +168,8 @@ struct SessionState {
 }
 
 enum Stage {
-    #[allow(dead_code)] // constructed by `issue`, wired by the Task 6 issuer RPC surface
-    Nonce {
-        hash: [u8; 32],
-        consumed: bool,
-    },
-    Ticket {
-        hash: [u8; 32],
-        deadline: Instant,
-    },
+    Nonce { hash: [u8; 32], consumed: bool },
+    Ticket { hash: [u8; 32], deadline: Instant },
     Session(SessionState),
 }
 
@@ -195,7 +181,6 @@ struct LiveViewer {
 }
 
 struct GrantEntry {
-    #[allow(dead_code)] // read by the Task 6 issuer RPC surface (revoke authorization)
     issuer: IssuerIdentity,
     binding: ViewerBinding,
     resource_id: String,
@@ -226,7 +211,6 @@ struct Inner {
 }
 
 impl Inner {
-    #[allow(dead_code)] // called by `issue`, wired by the Task 6 issuer RPC surface
     fn prune_expired(&mut self) {
         let now = Instant::now();
         self.entries.retain(|_, e| now < e.deadline);
@@ -252,11 +236,14 @@ impl ViewerGrantStore {
         self.lock().principal_validator = Some(validator);
     }
 
-    /// Mint a grant over an exact binding. `permissions` are canonicalized
-    /// (sorted, deduped); an empty effective set is denied. The wire type
-    /// [`ViewerBinding`] is browser-only, so artifact-bound grants are
-    /// excluded at the type level, not by a check that could be forgotten.
-    #[allow(dead_code)] // consumed by the Task 6 issuer RPC surface
+    /// Mint a grant that lives for `ttl`.
+    ///
+    /// **Test-only convenience.** Production mints against an absolute
+    /// deadline through [`Self::issue_until`], so the expiry it hands out is
+    /// the one the caller decided on; a relative TTL would let a slow mint
+    /// outlive its own window. One implementation, two doors: this one
+    /// derives the deadline and hands it to `issue_until`.
+    #[cfg(test)]
     pub(crate) fn issue(
         &self,
         issuer: IssuerIdentity,
@@ -266,15 +253,14 @@ impl ViewerGrantStore {
         origin: ViewerOrigin,
         ttl: Duration,
     ) -> Result<IssuedGrant, GrantDenied> {
-        let ttl_ms = i64::try_from(ttl.as_millis()).map_err(|_| GrantDenied)?;
-        let expires_at_ms = now_ms().checked_add(ttl_ms).ok_or(GrantDenied)?;
+        let ttl_ms = i64::try_from(ttl.as_millis()).unwrap_or(i64::MAX);
         self.issue_until(
             issuer,
             binding,
             resource_id,
             permissions,
             origin,
-            expires_at_ms,
+            now_ms().saturating_add(ttl_ms),
         )
     }
 
@@ -422,7 +408,6 @@ impl ViewerGrantStore {
             binding: entry.binding.clone(),
             resource_id: entry.resource_id.clone(),
             permissions: entry.permissions.clone(),
-            origin: entry.origin.clone(),
             expires_at_ms: entry.expires_at_ms,
         };
         entry.stage = Stage::Session(SessionState {
@@ -532,7 +517,6 @@ impl ViewerGrantStore {
             ws_generation: session.ws_generation,
             next_secret: next,
             viewer_session_id: format!("vs_{}", mint_secret()),
-            generation: session.generation,
         })
     }
 
@@ -584,7 +568,6 @@ impl ViewerGrantStore {
     /// becomes unknown. Returns how many grants were revoked. A bounded scan
     /// (<= `MAX_LIVE_GRANTS`) rather than a second index that could drift
     /// from `entries`.
-    #[allow(dead_code)] // consumed by the Task 6 resource close/expiry wiring
     pub(crate) fn revoke_resource(&self, resource_id: &str) -> usize {
         let mut inner = self.lock();
         let doomed: Vec<String> = inner
@@ -631,7 +614,6 @@ impl ViewerGrantStore {
 
     /// Public, authority-free descriptor. `None` and "denied" are the same
     /// to callers with no credential; this is for the issuer-side paths.
-    #[allow(dead_code)] // consumed by the Task 6 issuer RPC surface
     pub(crate) fn grant_info(&self, grant_id: &str) -> Option<ViewerGrantInfo> {
         let inner = self.lock();
         let entry = inner.entries.get(grant_id).filter(|e| e.alive())?;
@@ -758,13 +740,13 @@ mod tests {
 
     fn issue(store: &ViewerGrantStore, resource_id: &str, target_id: &str) -> IssuedGrant {
         store
-            .issue(
+            .issue_until(
                 issuer(),
                 binding(target_id),
                 resource_id,
                 &[ViewerPermission::Frames, ViewerPermission::HumanInput],
                 origin(),
-                Duration::from_secs(600),
+                now_ms() + 600_000,
             )
             .expect("issue")
     }
@@ -1094,13 +1076,13 @@ mod tests {
         let mut other_binding = binding("target-2");
         other_binding.principal = other.clone();
         let foreign = store
-            .issue(
+            .issue_until(
                 other.clone(),
                 other_binding,
                 "res-2",
                 &[ViewerPermission::Frames],
                 origin(),
-                Duration::from_secs(600),
+                now_ms() + 600_000,
             )
             .expect("issue other");
 

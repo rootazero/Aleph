@@ -184,7 +184,7 @@ impl GroupChatSession {
             return;
         }
         if round < self.current_round {
-            tracing::debug!(
+            tracing::warn!(
                 subsystem = "group_chat",
                 session_id = %self.id,
                 attempt = round,
@@ -237,28 +237,25 @@ impl GroupChatSession {
         if window_rounds == 0 || self.current_round <= window_rounds {
             return self.build_history_text();
         }
-        let cutoff = self.current_round - window_rounds;
+        let cutoff = self.current_round.saturating_sub(window_rounds);
+        let split_idx = self.history.partition_point(|t| t.round <= cutoff);
+        let (older, recent) = self.history.split_at(split_idx);
+
         let mut text = String::new();
-        let mut older_turns = 0usize;
-        let mut older_rounds_seen: std::collections::BTreeSet<u32> =
-            std::collections::BTreeSet::new();
-        let mut recent: Vec<&GroupChatTurn> = Vec::new();
-        for turn in &self.history {
-            if turn.round <= cutoff {
-                older_turns += 1;
-                older_rounds_seen.insert(turn.round);
-            } else {
-                recent.push(turn);
+        if !older.is_empty() {
+            let older_turns = older.len();
+            let mut older_rounds = 0usize;
+            let mut prev_round = None;
+            for turn in older {
+                if prev_round != Some(turn.round) {
+                    older_rounds += 1;
+                    prev_round = Some(turn.round);
+                }
             }
-        }
-        if older_turns > 0 {
             let _ = writeln!(
                 text,
-                "[Summary]: {} earlier turn(s) across {} round(s) omitted \
-                 (window keeps the most recent {} rounds).\n",
-                older_turns,
-                older_rounds_seen.len(),
-                window_rounds
+                "[Summary]: {older_turns} earlier turn(s) across {older_rounds} round(s) omitted \
+                 (window keeps the most recent {window_rounds} rounds).\n"
             );
         }
         for turn in recent {

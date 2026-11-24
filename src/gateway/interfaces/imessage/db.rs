@@ -20,6 +20,7 @@ use super::reaction;
 use crate::gateway::channel::{
     Attachment, ChannelId, ConversationId, InboundMessage, MessageId, MessageMeta, UserId,
 };
+use crate::utils::sqlite_open::open_sqlite_readonly;
 
 /// Apple epoch offset (2001-01-01 00:00:00 UTC in Unix timestamp)
 const APPLE_EPOCH_OFFSET: i64 = 978307200;
@@ -59,6 +60,32 @@ fn resolve_attachment_path(raw: &str) -> Option<PathBuf> {
         PathBuf::from(raw)
     };
     path.exists().then_some(path)
+}
+
+/// Resolve a raw `attachment.filename` to an existing path that lives UNDER
+/// `root`.
+///
+/// `attachment.filename` is a value read out of `chat.db`, not a path this
+/// process produced: it names a file on this machine, and whatever it points
+/// at is read and handed to the model. A path outside the Messages directory
+/// is therefore not an attachment — it is an attempt to pull a local file
+/// into the conversation.
+///
+/// The comparison runs on canonicalized paths, so a symlink inside the root
+/// that points outside of it is rejected as well. A missing root resolves
+/// nothing (fail closed).
+fn resolve_contained_attachment(root: Option<&Path>, raw: &str) -> Option<PathBuf> {
+    let root = root?;
+    let canonical = resolve_attachment_path(raw)?.canonicalize().ok()?;
+    if !canonical.starts_with(root) {
+        debug!(
+            path = %canonical.display(),
+            root = %root.display(),
+            "Refusing attachment outside the Messages directory"
+        );
+        return None;
+    }
+    Some(canonical)
 }
 
 /// Raw message data from the database
@@ -117,6 +144,13 @@ pub struct MessagesDb {
     /// (0 = unlimited). Oversized attachments keep their metadata but omit
     /// the local path so the agent is not forced to load a huge file.
     max_attachment_size: u64,
+    /// Canonicalized directory the attachments must live under — the
+    /// directory that holds `chat.db` (`~/Library/Messages` in the default
+    /// setup, whose `Attachments/` subdirectory holds the files).
+    ///
+    /// `None` means "no attachment may be resolved": the containment root is
+    /// unknown, so the answer is no.
+    attachments_root: Option<PathBuf>,
 }
 
 impl MessagesDb {
@@ -126,10 +160,7 @@ impl MessagesDb {
         debug!("Opening Messages database: {}", path.display());
 
         // Open in read-only mode
-        let conn = Connection::open_with_flags(
-            path,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )?;
+        let conn = open_sqlite_readonly(path)?;
 
         // Get the latest message ID to start from
         let last_rowid: i64 = conn
@@ -138,11 +169,18 @@ impl MessagesDb {
 
         debug!("Starting from message ROWID: {}", last_rowid);
 
+        // Attachments must live under the directory that holds `chat.db`
+        // (`~/Library/Messages`, whose `Attachments/` subdirectory holds the
+        // files). A missing or unresolvable directory leaves the root unset,
+        // which disables attachment resolution entirely (fail closed).
+        let attachments_root = path.parent().and_then(|dir| dir.canonicalize().ok());
+
         Ok(Self {
             conn,
             last_message_rowid: last_rowid,
             include_attachments: true,
             max_attachment_size: 0,
+            attachments_root,
         })
     }
 
@@ -155,6 +193,9 @@ impl MessagesDb {
             last_message_rowid: 0,
             include_attachments: true,
             max_attachment_size: 0,
+            // No database path means no containment root — no attachment is
+            // resolved.
+            attachments_root: None,
         }
     }
 
@@ -232,12 +273,25 @@ impl MessagesDb {
 
         let mut messages = Vec::new();
 
-        for row_result in rows {
-            let raw = row_result?;
+        // Hoisted out of the message loop so the attachment closure below
+        // borrows no part of `self`.
+        let max_attachment_size = self.max_attachment_size;
+        let attachments_root = self.attachments_root.clone();
 
-            // Update last seen ROWID
-            if raw.rowid > self.last_message_rowid {
-                self.last_message_rowid = raw.rowid;
+        let mut new_watermark = self.last_message_rowid;
+
+        for row_result in rows {
+            let raw = match row_result {
+                Ok(r) => r,
+                Err(e) => {
+                    warn!("Message decode failed after ROWID {new_watermark}: {e}");
+                    break; // Deliver the valid prefix; retry this row next poll.
+                }
+            };
+            // Keep the prior cursor available if routing cannot be trusted.
+            let prior_watermark = new_watermark;
+            if raw.rowid > new_watermark {
+                new_watermark = raw.rowid;
             }
 
             // A non-zero associated_message_type is an add-tapback (the query
@@ -271,9 +325,23 @@ impl MessagesDb {
                 }
             };
 
-            // Get chat info if available
+            // Distinguish "no chat_id" (a genuine DM) from "chat_id present but
+            // lookup failed". The latter must not be downgraded to a DM route:
+            // a group message misrouted to a single contact would leak the
+            // reply to the wrong recipient. Roll the watermark back and retry
+            // the batch later instead of consuming an untrusted route.
             let chat_info = if let Some(chat_id) = raw.chat_id {
-                self.get_chat_info(chat_id).ok()
+                match self.get_chat_info(chat_id) {
+                    Ok(info) => Some(info),
+                    Err(e) => {
+                        warn!(
+                            "Refusing to route message ROWID {} (chat {} lookup failed: {})",
+                            raw.rowid, chat_id, e
+                        );
+                        new_watermark = prior_watermark;
+                        break;
+                    }
+                }
             } else {
                 None
             };
@@ -301,7 +369,7 @@ impl MessagesDb {
 
             // Determine conversation ID
             let conversation_id = if let Some(ref chat) = chat_info {
-                chat.chat_identifier.clone()
+                format!("chat_guid:{}", chat.guid)
             } else {
                 handle.id.clone()
             };
@@ -341,10 +409,12 @@ impl MessagesDb {
                         // is the user-facing basename. Resolve the real path so
                         // the agent can actually read the file, honoring the
                         // configured size cap (0 = unlimited).
-                        let within_size = self.max_attachment_size == 0
-                            || (a.total_bytes as u64) <= self.max_attachment_size;
+                        let within_size = max_attachment_size == 0
+                            || (a.total_bytes as u64) <= max_attachment_size;
                         let resolved_path = if within_size {
-                            a.filename.as_deref().and_then(resolve_attachment_path)
+                            a.filename.as_deref().and_then(|raw| {
+                                resolve_contained_attachment(attachments_root.as_deref(), raw)
+                            })
                         } else {
                             None
                         };
@@ -385,6 +455,7 @@ impl MessagesDb {
             debug!("Found {} new messages", messages.len());
         }
 
+        self.last_message_rowid = new_watermark;
         Ok(messages)
     }
 
@@ -455,52 +526,10 @@ impl MessagesDb {
         rows.collect()
     }
 
-    /// Get all chats
-    pub fn list_chats(&self) -> SqliteResult<Vec<ChatInfo>> {
-        let sql = r#"
-            SELECT
-                ROWID,
-                guid,
-                chat_identifier,
-                display_name,
-                group_id
-            FROM chat
-            ORDER BY ROWID DESC
-        "#;
-
-        let mut stmt = self.conn.prepare(sql)?;
-        let rows = stmt.query_map([], |row| {
-            let group_id: Option<String> = row.get(4)?;
-            Ok(ChatInfo {
-                rowid: row.get(0)?,
-                guid: row.get(1)?,
-                chat_identifier: row.get(2)?,
-                display_name: row.get(3)?,
-                is_group: group_id.is_some(),
-            })
-        })?;
-
-        rows.collect()
-    }
-
     /// Get message count
     pub fn message_count(&self) -> SqliteResult<i64> {
         self.conn
             .query_row("SELECT COUNT(*) FROM message", [], |row| row.get(0))
-    }
-
-    /// Reset the last message marker (useful for testing)
-    pub const fn reset_marker(&mut self) {
-        self.last_message_rowid = 0;
-    }
-
-    /// Set the marker to skip all existing messages
-    pub fn skip_existing(&mut self) -> SqliteResult<()> {
-        self.last_message_rowid = self
-            .conn
-            .query_row("SELECT MAX(ROWID) FROM message", [], |row| row.get(0))
-            .unwrap_or(0);
-        Ok(())
     }
 }
 
@@ -544,6 +573,37 @@ mod tests {
         assert!(resolve_attachment_path("/nonexistent/aleph/imsg/attachment.heic").is_none());
     }
 
+    #[test]
+    fn test_attachment_outside_the_messages_root_is_refused() {
+        let (_scratch, dir) = crate::utils::scratch::scratch_root();
+        std::fs::create_dir_all(&dir).unwrap();
+        let root = dir.join("messages");
+        std::fs::create_dir_all(&root).unwrap();
+        let inside = root.join("attachment.bin");
+        std::fs::write(&inside, b"x").unwrap();
+        let outside = dir.join("outside.bin");
+        std::fs::write(&outside, b"x").unwrap();
+
+        let canonical_root = root.canonicalize().unwrap();
+        assert!(
+            resolve_contained_attachment(Some(canonical_root.as_path()), &inside.to_string_lossy())
+                .is_some(),
+            "a file inside the Messages directory resolves"
+        );
+        assert!(
+            resolve_contained_attachment(
+                Some(canonical_root.as_path()),
+                &outside.to_string_lossy()
+            )
+            .is_none(),
+            "a file outside the Messages directory does not resolve"
+        );
+        assert!(
+            resolve_contained_attachment(None, &inside.to_string_lossy()).is_none(),
+            "without a containment root nothing resolves"
+        );
+    }
+
     /// Build a minimal in-memory chat.db subset with the columns
     /// `poll_new_messages` reads, so filtering can be verified end-to-end.
     fn seed_db() -> Connection {
@@ -574,6 +634,20 @@ mod tests {
         )
         .unwrap();
         conn
+    }
+
+    #[test]
+    fn unresolved_existing_chat_does_not_become_dm_or_advance_watermark() {
+        let conn = seed_db();
+        conn.execute("INSERT INTO chat_message_join VALUES (11, 99)", [])
+            .unwrap();
+        let mut db = MessagesDb::from_conn(conn);
+        let msgs = db.poll_new_messages().unwrap();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].id.as_str(), "g-normal");
+        assert_eq!(db.last_rowid(), 10);
+        assert!(db.poll_new_messages().unwrap().is_empty());
+        assert_eq!(db.last_rowid(), 10);
     }
 
     #[test]

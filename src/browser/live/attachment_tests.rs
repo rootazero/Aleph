@@ -9,7 +9,7 @@ use aleph_cdp::SessionId;
 use aleph_protocol::browser_live::{
     BrowserTargetBinding, ConversationBinding, DisplayPolicy, IssuerIdentity, PreviewKind,
     PreviewProvenance, PreviewResource, PreviewSource, RedactionStatus, ViewerBinding,
-    ViewerOrigin, ViewerPermission, ViewerSecret, ViewportCssPx,
+    ViewerPermission, ViewerSecret, ViewportCssPx,
 };
 
 use super::grant::ExchangedGrant;
@@ -18,7 +18,7 @@ use super::resource::{ResourceDraft, ResourceRegistry};
 use super::tests::{binding, fixture, fixture_with, frame_event, within};
 use super::viewer_backend::{LiveViewerBackend, ViewerBackend};
 use super::LiveProfileOwner;
-use crate::browser::cdp_backend::{BrowserOperationKind, BrowserOperationRecord};
+use crate::browser::cdp_backend::BrowserOperationRecord;
 use crate::browser::engine::EngineHandle;
 use crate::browser::network_policy::BrowserSsrfGuard;
 use std::sync::Arc;
@@ -86,11 +86,6 @@ fn grant(viewer: &ViewerBinding, resource: &PreviewResource, id: &str) -> Exchan
         binding: viewer.clone(),
         resource_id: resource.resource_id.clone(),
         permissions: vec![ViewerPermission::Frames],
-        origin: ViewerOrigin {
-            scheme: "http".into(),
-            host: "localhost".into(),
-            port: 1,
-        },
         expires_at_ms: resource.expires_at_ms,
     }
 }
@@ -111,7 +106,6 @@ fn rig_over(
             &owner,
             handle,
             "T1".into(),
-            BrowserOperationKind::Open,
         ))
         .unwrap();
     let resources = ResourceRegistry::default();

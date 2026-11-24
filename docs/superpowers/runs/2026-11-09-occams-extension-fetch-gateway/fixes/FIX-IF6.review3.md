@@ -1,0 +1,18 @@
+# Fix review — IF6
+
+| ID | Verdict | Comment |
+|---|---|---|
+| IF6-06 | FIXED | `let mut html = Self::escape_html(markdown);` escapes the source before any tag insertion, `extract_inline_code` wraps inline code in `<code>...</code>` placeholders so inner markup stays literal, and `convert_links` now receives pre-escaped text so `href="..."` values carry `&quot;`/`&amp;` — the test asserts `List&lt;T&gt;`, `&lt;img src=x&gt;`, `<code>**&lt;tag&gt;**</code>`, and `href="https://example.com/?a=&quot;quoted&quot;&amp;b=1"`. |
+| IF6-12 | NOT_FIXED | The diff only touches the stdout-send path (`spawn_blocking` around `writeln!`/`print!`); no hunk replaces the `std::thread::spawn` stdin reader in `CliChannel::start` or adds any shared/cancellable read mechanism, so the detached-thread/StdinLock duplication across restart remains. |
+| IF6-13 | NOT_FIXED | The only `transport.rs` hunk re-times `validate_operation_admission`; nothing addresses the `outcome: None` insertion, cancellation path, or `prune_operations`, so cancelled pending operations still persist indefinitely. |
+| IF6-15 | FIXED | `poll_imap_once` now iterates `(1..=mailbox.exists).step_by(MAX_IMAP_BATCH_MESSAGES)` with `uid_search("{first}:{last} UNSEEN SMALLER {cap}")`, fetches via `uid_fetch(..., "(BODY.PEEK[]<0.{cap}> UID RFC822.SIZE)")`, streams with `while let Some(result) = messages_stream.next().await`, and `is_complete_imap_body` rejects bodies whose `RFC822.SIZE` mismatch — no unbounded `.collect()` remains. |
+
+## New problems
+
+- `src/gateway/interfaces/email/message_ops.rs:329-371` — The new `for first in (1..=mailbox.exists).step_by(...)` windowed search uses sequence numbers against `uid_search`, but the bigger issue is that `imap_uid_batch` truncates the UID set to `MAX_IMAP_BATCH_MESSAGES` while `uid_search` may return more UIDs than that within the window; the truncated remainder stays UNSEEN only by accident of the next poll, and the loop's `continue` on empty search skips the window without examining remaining messages in that sequence range. More importantly, the inner `while let Some(result) = messages_stream.next().await` drains the fetch stream but on `inbound_tx.send` failure does `while messages_stream.next().await.is_some() {}` then `break` — this discards the rest of the batch without marking them seen (correct), but the `drop(messages_stream)` + `uid_store` on `published_uids` only marks successfully sent messages; messages that failed mid-stream with `fetch.body()` returning `None` or incomplete are never re-fetched because they were never marked seen, yet the code does not distinguish "incomplete body, skip" from "fetch error, skip" — both leave the message UNSEEN, which is correct for retry but means a permanently oversized message will be re-fetched every poll forever. This is acceptable behavior but worth noting.
+- `src/gateway/interfaces/irc/message_ops.rs:625,627` — `reader_task.abort()` is called twice (once in the shutdown branch, once after the inner loop), and the `JoinHandle` is never awaited. The review explicitly flagged this as a robustness concern; the diff does not address it.
+- `src/gateway/interfaces/cli.rs:307-309` — `message.text.clone()` and `config.prompt.clone()` still happen synchronously on the async worker before `spawn_blocking`, exactly as the review flagged; the diff does not address this.
+
+## Batch verdict
+
+Needs rework: IF6-12 and IF6-13 remain unfixed, and the two new robustness concerns (IRC reader task not awaited, CLI pre-spawn clone) are still present.

@@ -1593,8 +1593,8 @@ mod tests {
             ("src/builtin_tools/project_manage.rs", 3, 2),
             // COMPOSE: the `authority_change` audit actor.
             ("src/builtin_tools/agent_manage/update.rs", 1, 1),
-            // COMPOSE: spawn's `created_by`; COMPARE: two ownership checks.
-            ("src/gateway/handlers/pty.rs", 3, 1),
+            // COMPOSE: special spawn's `created_by`; COMPARE: list ownership.
+            ("src/capability/tool_adapters.rs", 2, 1),
             // COMPOSE: `namespace_explicit_project_id` builds a project id.
             ("src/builtin_tools/scratchpad.rs", 1, 1),
             // COMPOSE: the admission proof's caller field.
@@ -1612,6 +1612,8 @@ mod tests {
             // column or a key the way the sites above can.
             ("src/tools/dispatch_verdict.rs", 1, 1),
             // COMPARE only from here on.
+            // PTY: addressed session, session listing and journal tombstone ownership.
+            ("src/gateway/handlers/pty.rs", 3, 0),
             ("src/teams/dispatcher/runner.rs", 2, 0),
             ("src/teams/scoped.rs", 1, 0),
             ("src/teams/broadcast/mod.rs", 1, 0),

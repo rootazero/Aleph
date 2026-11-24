@@ -125,7 +125,7 @@ impl<S: NoteStore + Send + Sync + 'static> NoteOrientation for FsNoteOrientation
             } else {
                 DEFAULT_SCHEMA.to_string()
             };
-            ss.write(&body, None).await?;
+            ss.write_if_missing(&body).await?;
         }
 
         self.rebuild_index(agent_id).await?;

@@ -97,10 +97,11 @@
 //! derivation `gateway::visibility` exists to prevent, and it would miss both
 //! the fail-closed and the no-oracle halves.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use tokio::io::AsyncReadExt;
 
 use super::super::protocol::{
     JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS, PERMISSION_DENIED,
@@ -1104,42 +1105,52 @@ pub async fn handle_workspace_list(
     };
 
     let rel = params.rel_path.unwrap_or_default();
-    let dir = match resolve_in_workspace(root, &rel) {
-        Ok(p) => p,
-        Err(refusal) => return workspace_refusal(request.id, &refusal, &rel),
-    };
-
-    let Ok(reader) = std::fs::read_dir(&dir) else {
-        return workspace_refusal(request.id, &PathRefusal::Missing, &rel);
-    };
-
-    let denied = crate::builtin_tools::file_ops::get_denied_paths();
-    let mut entries: Vec<WorkspaceEntry> = Vec::new();
-    for item in reader.flatten() {
-        // Per-entry, and on the canonical form: a denied file must not appear
-        // in a listing it would be refused from reading. An entry that cannot
-        // be canonicalized (a broken symlink, a race with a delete) is
-        // skipped rather than reported — this surface describes what is
-        // readable, and a name it cannot resolve is not.
-        let Ok(canonical) = item.path().canonicalize() else {
-            continue;
-        };
-        if crate::builtin_tools::file_ops::path_is_denied(&canonical, &denied) {
-            continue;
+    let result = tokio::task::spawn_blocking({
+        let root = root.clone();
+        let rel = rel.clone();
+        move || {
+            let dir = match resolve_in_workspace(&root, &rel) {
+                Ok(p) => p,
+                Err(refusal) => return Err(refusal),
+            };
+            let Ok(reader) = std::fs::read_dir(&dir) else {
+                return Err(PathRefusal::Missing);
+            };
+            let denied = crate::builtin_tools::file_ops::get_denied_paths();
+            let mut entries: Vec<WorkspaceEntry> = Vec::new();
+            for item in reader.flatten() {
+                // Per-entry, and on the canonical form: a denied file must not appear
+                // in a listing it would be refused from reading. An entry that cannot
+                // be canonicalized (a broken symlink, a race with a delete) is
+                // skipped rather than reported — this surface describes what is
+                // readable, and a name it cannot resolve is not.
+                let Ok(canonical) = item.path().canonicalize() else {
+                    continue;
+                };
+                if crate::builtin_tools::file_ops::path_is_denied(&canonical, &denied) {
+                    continue;
+                }
+                let Ok(meta) = item.metadata() else {
+                    continue;
+                };
+                entries.push(WorkspaceEntry {
+                    name: item.file_name().to_string_lossy().into_owned(),
+                    is_dir: meta.is_dir(),
+                    size: if meta.is_dir() { 0 } else { meta.len() },
+                });
+            }
+            // Directories first, then by name — a stable order, so a listing does not
+            // reshuffle between two reads of an unchanged directory.
+            entries.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.cmp(&b.name)));
+            Ok(entries)
         }
-        let Ok(meta) = item.metadata() else {
-            continue;
-        };
-        entries.push(WorkspaceEntry {
-            name: item.file_name().to_string_lossy().into_owned(),
-            is_dir: meta.is_dir(),
-            size: if meta.is_dir() { 0 } else { meta.len() },
-        });
-    }
-    // Directories first, then by name — a stable order, so a listing does not
-    // reshuffle between two reads of an unchanged directory.
-    entries.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.cmp(&b.name)));
-
+    })
+    .await;
+    let entries = match result {
+        Ok(Ok(entries)) => entries,
+        Ok(Err(refusal)) => return workspace_refusal(request.id, &refusal, &rel),
+        Err(_e) => return workspace_refusal(request.id, &PathRefusal::Missing, &rel),
+    };
     JsonRpcResponse::success(
         request.id,
         json!({ "root_bound": true, "entries": entries }),
@@ -1173,16 +1184,31 @@ pub async fn handle_workspace_read(
         Ok(p) => p,
         Err(refusal) => return workspace_refusal(request.id, &refusal, &params.rel_path),
     };
-    if file.is_dir() {
+    // A regular file only: the preview reads it, and a fifo or a device node
+    // would either block the read forever or answer with bytes that are not
+    // the file at all.
+    let meta = match tokio::fs::metadata(&file).await {
+        Ok(m) => m,
+        Err(_) => return workspace_refusal(request.id, &PathRefusal::Missing, &params.rel_path),
+    };
+    if meta.is_dir() {
         return JsonRpcResponse::error(
             request.id,
             INVALID_PARAMS,
             "That path is a directory; use projects.workspace.list".to_string(),
         );
     }
+    if !meta.is_file() {
+        return JsonRpcResponse::error(
+            request.id,
+            INVALID_PARAMS,
+            "That path is not a regular file".to_string(),
+        );
+    }
 
-    let Ok(bytes) = std::fs::read(&file) else {
-        return workspace_refusal(request.id, &PathRefusal::Missing, &params.rel_path);
+    let bytes = match read_preview_bytes(&file).await {
+        Ok(b) => b,
+        Err(_) => return workspace_refusal(request.id, &PathRefusal::Missing, &params.rel_path),
     };
     let sniff = bytes.len().min(WORKSPACE_BINARY_SNIFF_BYTES);
     if bytes[..sniff].contains(&0) {
@@ -1213,6 +1239,20 @@ pub async fn handle_workspace_read(
         request.id,
         json!({ "content": content, "truncated": truncated }),
     )
+}
+
+/// Read the first `WORKSPACE_READ_MAX_BYTES + 1` bytes of `path`.
+///
+/// One byte past the cap, because that byte is the only way to learn the file
+/// is longer than the preview without reading the rest of it. The cap used to
+/// bound the RESPONSE only — the whole file was loaded into memory and then cut
+/// down to 64 KiB, so a multi-gigabyte log took the process down with it.
+async fn read_preview_bytes(path: &Path) -> std::io::Result<Vec<u8>> {
+    let file = tokio::fs::File::open(path).await?;
+    let mut reader = file.take((WORKSPACE_READ_MAX_BYTES + 1) as u64);
+    let mut buf = Vec::with_capacity(WORKSPACE_READ_MAX_BYTES + 1);
+    reader.read_to_end(&mut buf).await?;
+    Ok(buf)
 }
 #[cfg(test)]
 mod tests {

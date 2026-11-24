@@ -12,6 +12,8 @@
 
 use std::path::Path;
 
+use rusqlite::OptionalExtension;
+
 use crate::error::{AlephError, Result};
 use crate::loop_graph::types::{cadence_rank, EdgeKind, GraphEdge, GraphNode, NodeKind, Origin};
 use crate::sync_primitives::{Mutex, MutexGuard};
@@ -127,11 +129,15 @@ impl LoopGraphStore {
         // the node from `lint_naked_loops` and `coverage_source_rejection`;
         // the caller must delete + recreate to change kind.
         let conn = self.lock();
-        if let Ok(existing_kind) = conn.query_row(
-            "SELECT kind FROM graph_nodes WHERE agent_id = ?1 AND id = ?2",
-            rusqlite::params![node.agent_id, node.id],
-            |r| r.get::<_, String>(0),
-        ) {
+        let existing_kind: Option<String> = conn
+            .query_row(
+                "SELECT kind FROM graph_nodes WHERE agent_id = ?1 AND id = ?2",
+                rusqlite::params![node.agent_id, node.id],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|e| AlephError::other(format!("loop_graph node kind check: {e}")))?;
+        if let Some(existing_kind) = existing_kind {
             if existing_kind != node.kind.as_str() {
                 return Err(AlephError::other(format!(
                     "loop_graph invariant: cannot change node kind after registration \
@@ -208,13 +214,7 @@ impl LoopGraphStore {
         let rows = stmt
             .query_map(rusqlite::params![agent_id], row_to_node)
             .map_err(|e| AlephError::other(format!("loop_graph nodes query: {e}")))?;
-        let mut out = Vec::new();
-        for r in rows {
-            if let Ok(Some(n)) = r {
-                out.push(n);
-            }
-        }
-        Ok(out)
+        Ok(rows.filter_map(|r| r.ok().flatten()).collect())
     }
 
     /// Insert or update an edge. Both endpoints must exist at creation time
@@ -323,13 +323,7 @@ impl LoopGraphStore {
         let rows = stmt
             .query_map(rusqlite::params![agent_id], row_to_edge)
             .map_err(|e| AlephError::other(format!("loop_graph edges query: {e}")))?;
-        let mut out = Vec::new();
-        for r in rows {
-            if let Ok(Some(e)) = r {
-                out.push(e);
-            }
-        }
-        Ok(out)
+        Ok(rows.filter_map(|r| r.ok().flatten()).collect())
     }
 
     /// Ids of the loops that own `to_id`'s reference, read from raw columns.
@@ -427,14 +421,19 @@ impl LoopGraphStore {
         }
         let conn = self.lock();
         // Build placeholders for the IN clause.
-        let placeholders = std::iter::repeat_n("?", ids.len())
-            .collect::<Vec<_>>()
-            .join(",");
+        let mut placeholders = String::with_capacity(ids.len() * 2);
+        for i in 0..ids.len() {
+            if i > 0 {
+                placeholders.push(',');
+            }
+            placeholders.push('?');
+        }
         let sql = format!(
             "SELECT id, label FROM graph_nodes
              WHERE agent_id = ?1 AND id IN ({placeholders})"
         );
-        let mut params: Vec<&dyn rusqlite::ToSql> = vec![&agent_id];
+        let mut params: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(1 + ids.len());
+        params.push(&agent_id);
         for id in ids {
             params.push(id);
         }
@@ -446,11 +445,8 @@ impl LoopGraphStore {
                 Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
             })
             .map_err(|e| AlephError::other(format!("loop_graph labels query: {e}")))?;
-        let mut out = Vec::new();
-        for r in rows {
-            out.push(r.map_err(|e| AlephError::other(format!("loop_graph labels row: {e}")))?);
-        }
-        Ok(out)
+        rows.map(|r| r.map_err(|e| AlephError::other(format!("loop_graph labels row: {e}"))))
+            .collect()
     }
 
     /// Ids of the loops watching `to_id`, read from raw columns.
@@ -484,11 +480,8 @@ impl LoopGraphStore {
                 r.get::<_, String>(0)
             })
             .map_err(|e| AlephError::other(format!("loop_graph {ctx} query: {e}")))?;
-        let mut out = Vec::new();
-        for r in rows {
-            out.push(r.map_err(|e| AlephError::other(format!("loop_graph {ctx}: {e}")))?);
-        }
-        Ok(out)
+        rows.map(|r| r.map_err(|e| AlephError::other(format!("loop_graph {ctx}: {e}"))))
+            .collect()
     }
 
     /// Ids of the nodes whose `body` is exactly `body`, read from raw columns.
@@ -511,11 +504,8 @@ impl LoopGraphStore {
         let rows = stmt
             .query_map(rusqlite::params![agent_id, body], |r| r.get::<_, String>(0))
             .map_err(|e| AlephError::other(format!("loop_graph body scan query: {e}")))?;
-        let mut out = Vec::new();
-        for r in rows {
-            out.push(r.map_err(|e| AlephError::other(format!("loop_graph body scan: {e}")))?);
-        }
-        Ok(out)
+        rows.map(|r| r.map_err(|e| AlephError::other(format!("loop_graph body scan: {e}"))))
+            .collect()
     }
 
     /// Remove dangling edges (endpoint node gone). Explicit only — never
@@ -753,7 +743,7 @@ impl LoopGraphStore {
 /// Can a node of this kind cover another one (be a `watches`/`audits` source)?
 /// The positive form of [`coverage_source_rejection`], for readers that filter
 /// legacy rows rather than reject writes. One vocabulary, two directions.
-fn can_cover(kind: NodeKind) -> bool {
+pub(crate) fn can_cover(kind: NodeKind) -> bool {
     kind.is_optimization_loop() || kind == NodeKind::Root
 }
 
@@ -790,11 +780,8 @@ fn node_ids_present(
     let rows = stmt
         .query_map(rusqlite::params![agent_id], |r| r.get::<_, String>(0))
         .map_err(|e| AlephError::other(format!("loop_graph {ctx} node ids query: {e}")))?;
-    let mut out = std::collections::HashSet::new();
-    for r in rows {
-        out.insert(r.map_err(|e| AlephError::other(format!("loop_graph {ctx} node id: {e}")))?);
-    }
-    Ok(out)
+    rows.map(|r| r.map_err(|e| AlephError::other(format!("loop_graph {ctx} node id: {e}"))))
+        .collect()
 }
 
 fn lint_dangling_edges(
@@ -803,11 +790,16 @@ fn lint_dangling_edges(
 ) -> Vec<String> {
     let mut findings = Vec::new();
     for e in edges {
-        let missing: Vec<&str> = [e.from_id.as_str(), e.to_id.as_str()]
-            .into_iter()
-            .filter(|id| !present.contains(*id))
-            .collect();
-        if !missing.is_empty() {
+        let from_missing = !present.contains(&e.from_id);
+        let to_missing = !present.contains(&e.to_id);
+        if from_missing || to_missing {
+            let mut missing = Vec::with_capacity(2);
+            if from_missing {
+                missing.push(e.from_id.as_str());
+            }
+            if to_missing {
+                missing.push(e.to_id.as_str());
+            }
             findings.push(format!(
                 "悬空边: {} -[{}]-> {}（节点 {:?} 已消失——被治理的环不见了，需审计裁决或 gc）",
                 e.from_id,

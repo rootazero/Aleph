@@ -424,6 +424,11 @@ pub trait SessionStore: Send + Sync {
         source_channel: &str,
     ) -> Result<aleph_protocol::IdentityContext, SessionStoreError>;
     async fn get_current_epoch(&self, base_key_pattern: &str) -> Result<u32, SessionStoreError>;
+    /// Atomically reserve an epoch above persisted sessions and prior reservations,
+    /// without creating a conversation or retiring its predecessor.
+    async fn reserve_next_epoch(&self, _base_key_pattern: &str) -> Result<u32, SessionStoreError> {
+        Err(SessionStoreError::Unsupported)
+    }
     async fn get_session_topic(
         &self,
         key: &SessionKey,
@@ -562,20 +567,6 @@ pub trait SessionStore: Send + Sync {
         key: &SessionKey,
         message_limit: usize,
     ) -> Result<SessionPreview, SessionStoreError>;
-    async fn count_by_state(
-        &self,
-        state: crate::gateway::session_manager::SessionState,
-    ) -> Result<usize, SessionStoreError>;
-    async fn list_by_state(
-        &self,
-        state: crate::gateway::session_manager::SessionState,
-    ) -> Result<Vec<SessionMetadata>, SessionStoreError>;
-    async fn set_error(
-        &self,
-        key: &SessionKey,
-        error_msg: Option<&str>,
-    ) -> Result<(), SessionStoreError>;
-    async fn stop(&self, key: &SessionKey) -> Result<(), SessionStoreError>;
     async fn set_idle(&self, key: &SessionKey) -> Result<(), SessionStoreError>;
 
     /// Load a windowed slice of the transcript for a session.

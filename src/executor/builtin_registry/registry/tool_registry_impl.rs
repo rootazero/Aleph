@@ -318,66 +318,9 @@ impl ToolRegistry for BuiltinToolRegistry {
             }),
             "goal" => Box::pin(async move { self.goal_tool.call_json(arguments).await }),
             "loop_graph" => {
-                // Same delivery plumbing `cron_manage` gets, for the same
-                // reason: `enable_audit` / `pair` INSTALL cron jobs, and those
-                // jobs' whole point is to report a governance verdict back to
-                // the user (AUDIT_TEMPLATE step 7 / WATCH_TEMPLATE_FOOTER).
-                // Without a channel they run, decide, and deliver nowhere.
-                // Prefer the race-free per-turn context over the process-global
-                // mirror, which a concurrent run can swap mid-turn.
                 let arguments = {
                     let mut args = arguments;
-                    let (channel, conversation_id) =
-                        match crate::tools::turn_context::current_turn_context() {
-                            Some(t) => {
-                                (Some(t.channel_id.clone()), Some(t.conversation_id.clone()))
-                            }
-                            None => self
-                                .session_context_handle
-                                .as_ref()
-                                .and_then(|h| match h.try_read() {
-                                    Ok(ctx) => Some(ctx),
-                                    Err(_) => {
-                                        tracing::warn!(
-                                            "loop_graph: session context lock contended; the \
-                                             installed cron job will have no delivery route"
-                                        );
-                                        None
-                                    }
-                                })
-                                .map(|ctx| {
-                                    (Some(ctx.channel.clone()), Some(ctx.conversation_id.clone()))
-                                })
-                                .unwrap_or((None, None)),
-                        };
-                    // Only inject a route that names something. `TurnContext`
-                    // carries `channel_id`/`conversation_id` as `String`, and
-                    // they are EMPTY for exactly the turns that have no channel
-                    // — a governance or steward cron, a heartbeat probe, a
-                    // webhook turn, a `tools.invoke` call. Wrapping those in
-                    // `Some("")` is not "no route", it is a route that fails
-                    // every `is_some()` test the delivery side runs: the
-                    // installed job would be stamped
-                    // `source_channel_id = Some("")`, which makes
-                    // `cron::executor`'s `approval_is_routable` true, so
-                    // `UNATTENDED_KEY` is never set and the weekly audit run is
-                    // treated as attended; and `build_cron_prompt` then tells
-                    // the auditor "the runtime will deliver it to the user
-                    // automatically. Do NOT call any messaging tool" — taking
-                    // away the model's own fallback in favour of a delivery
-                    // that cannot happen. `None` is the honest value and every
-                    // one of those paths already handles it.
-                    if let Some(obj) = args.as_object_mut() {
-                        if let Some(channel) = channel.filter(|c| !c.is_empty()) {
-                            obj.insert("__channel".into(), serde_json::Value::String(channel));
-                        }
-                        if let Some(conversation_id) = conversation_id.filter(|c| !c.is_empty()) {
-                            obj.insert(
-                                "__conversation_id".into(),
-                                serde_json::Value::String(conversation_id),
-                            );
-                        }
-                    }
+                    self.inject_delivery_route(&mut args);
                     args
                 };
                 Box::pin(async move { self.loop_graph_tool.call_json(arguments).await })
@@ -409,7 +352,7 @@ impl ToolRegistry for BuiltinToolRegistry {
             // composed one plus the org tier; who may see rows no backfill
             // could attribute is `unattributed_memory_events_for`'s call.
             "memory_timeline" => {
-                let partitions = self.caller_memory_read_partitions("main");
+                let partitions = self.caller_memory_read_partitions();
                 let unpartitioned = crate::gateway::visibility::unattributed_memory_events_for(
                     &crate::gateway::visibility::run_principal(),
                     &partitions,
@@ -442,44 +385,61 @@ impl ToolRegistry for BuiltinToolRegistry {
             // that org-wide standing rules come from the org tier rather than
             // from whoever typed last.
             "flag_user_correction" => {
-                let agent_id = self.caller_memory_partition("main");
+                let agent_id = self.caller_memory_partition();
                 Box::pin(async move {
-                    let db = self.flag_user_correction_db.as_ref().ok_or_else(|| {
+                    let runtime = self.memory_runtime.as_ref().ok_or_else(|| {
                         AlephError::tool(
-                            "flag_user_correction not available: no memory backend configured",
+                            "flag_user_correction not available: Memory runtime not configured",
                         )
                     })?;
-                    let raw_store = self.raw_memory_store.clone().ok_or_else(|| {
-                        AlephError::tool(
-                            "flag_user_correction not available: no raw memory store configured",
-                        )
-                    })?;
-                    Self::build_flag_user_correction(db, raw_store, agent_id)
-                        .call_json(arguments)
-                        .await
+                    crate::builtin_tools::runtime::RuntimeTool::<
+                        crate::builtin_tools::FlagUserCorrectionTool,
+                    >::new(runtime.clone())
+                    .call_for_partition(agent_id, arguments)
+                    .await
                 })
             }
 
-            // Governance audit reality probe — read-only counts (recent user
-            // corrections + dreaming activity) straight from the memory backend,
-            // the in-core replacement for the loop-governance sqlite probes.
-            // Shares the memory_trace_db handle (both gate on config.memory_db).
+            "memory_runtime_status" => Box::pin(async move {
+                let runtime = self
+                    .memory_runtime
+                    .as_ref()
+                    .ok_or_else(|| AlephError::tool("Memory runtime is not configured"))?;
+                crate::builtin_tools::runtime_control::MemoryRuntimeStatusTool::new(runtime.clone())
+                    .call_json(arguments)
+                    .await
+            }),
+            "memory_runtime_start" => Box::pin(async move {
+                let runtime = self
+                    .memory_runtime
+                    .as_ref()
+                    .ok_or_else(|| AlephError::tool("Memory runtime is not configured"))?;
+                crate::builtin_tools::runtime_control::MemoryRuntimeStartTool::new(runtime.clone())
+                    .call_json(arguments)
+                    .await
+            }),
+            "memory_runtime_stop" => Box::pin(async move {
+                let runtime = self
+                    .memory_runtime
+                    .as_ref()
+                    .ok_or_else(|| AlephError::tool("Memory runtime is not configured"))?;
+                crate::builtin_tools::runtime_control::MemoryRuntimeStopTool::new(runtime.clone())
+                    .call_json(arguments)
+                    .await
+            }),
+
+            // The probe resolves the current admitted bundle on each call.
             "governance_metrics" => Box::pin(async move {
-                let db = self.memory_trace_db.as_ref().ok_or_else(|| {
+                let runtime = self.memory_runtime.as_ref().ok_or_else(|| {
                     AlephError::tool(
-                        "governance_metrics not available: no memory backend configured",
+                        "governance_metrics not available: Memory runtime not configured",
                     )
                 })?;
-                let raw_store = self.raw_memory_store.clone().ok_or_else(|| {
-                    AlephError::tool(
-                        "governance_metrics not available: no raw memory store configured",
-                    )
-                })?;
-                let tool = crate::builtin_tools::governance_metrics::GovernanceMetricsTool::new(
-                    db.clone(),
-                    raw_store,
-                );
-                tool.call_json(arguments).await
+                crate::builtin_tools::runtime::RuntimeTool::<
+                    crate::builtin_tools::governance_metrics::GovernanceMetricsTool,
+                >::new(runtime.clone())
+                .call_json(arguments)
+                .await
             }),
 
             // Curated hot memory write tool — resolves a per-agent
@@ -492,23 +452,18 @@ impl ToolRegistry for BuiltinToolRegistry {
             // idempotent under re-application — feeding it an already-composed
             // id under an active personal scope would double-compose.
             "remember" => Box::pin(async move {
-                let mcp = self.memory_context_provider.get().ok_or_else(|| {
-                    AlephError::tool(
-                        "remember not available: MemoryContextProvider not yet injected",
-                    )
+                let runtime = self.memory_runtime.as_ref().ok_or_else(|| {
+                    AlephError::tool("remember not available: Memory runtime not configured")
                 })?;
-                let base_agent = self.caller_agent_id("main");
-                let store = mcp
-                    .get_or_load_curated_store(&base_agent)
-                    .await
-                    .map_err(|e| AlephError::tool(format!("remember: {e}")))?;
-                // The write-decision audit log shares the memory_trace_db handle
-                // (both gate on config.memory_db, and `memory_trace` is what
-                // reads these rows back). `None` before/without a memory
-                // backend: the audit is a NO-OP there, never a write failure.
-                let tool = crate::builtin_tools::RememberTool::new(store)
-                    .with_decision_log(self.memory_trace_db.clone());
-                tool.call_json(arguments).await
+                let args = serde_json::from_value(arguments)
+                    .map_err(|error| AlephError::tool(format!("remember: bad args: {error}")))?;
+                let output = crate::builtin_tools::runtime::RuntimeTool::<
+                    crate::builtin_tools::RememberTool,
+                >::new(runtime.clone())
+                .call_for_agent(&self.caller_partition_base(), args)
+                .await?;
+                serde_json::to_value(output)
+                    .map_err(|error| AlephError::tool(format!("remember: serialize: {error}")))
             }),
 
             // Cluster discovery tool — read-only projection of the same
@@ -560,8 +515,16 @@ impl ToolRegistry for BuiltinToolRegistry {
                 let store = self.node_security_store.get().ok_or_else(|| {
                     AlephError::tool("node_manage not available: SecurityStore not injected")
                 })?;
-                let tool =
-                    crate::builtin_tools::NodeManageTool::new(reg.clone(), store.clone(), None);
+                // The bus is the SAME one the RPC leg publishes on
+                // (`node.disconnected`), so a deregistration driven by the
+                // model announces itself exactly like one driven by the
+                // operator. It used to be hardcoded `None`, so this leg
+                // evicted the node and stayed silent.
+                let tool = crate::builtin_tools::NodeManageTool::new(
+                    reg.clone(),
+                    store.clone(),
+                    self.gateway_event_bus.get().map(Arc::clone),
+                );
                 tool.call_json(arguments).await
             }),
 
@@ -597,19 +560,18 @@ impl ToolRegistry for BuiltinToolRegistry {
                 // Derive caller identity from session context. Falls back to
                 // "main" when the handle is missing or the key fails to parse.
                 let caller_id = self.caller_agent_id("main");
-                // Assembler from MCP (None if not yet injected → call_impl falls back to raw FTS5).
-                let assembler = self
-                    .memory_context_provider
-                    .get()
-                    .map(|mcp| mcp.assembler());
-                // SummarySynthesizer from SessionEndSummarizer global cell (None if no AiProvider).
-                let synthesizer = crate::thinker::memory_context_provider::session_end_summarizer()
-                    .map(|s| s.synthesizer.clone());
+                if let Some(runtime) = &self.memory_runtime {
+                    return crate::builtin_tools::runtime::RuntimeTool::<
+                        crate::builtin_tools::SessionSearchTool,
+                    >::new(runtime.clone())
+                    .call_with_context(context.clone(), caller_id, arguments)
+                    .await;
+                }
                 let tool = crate::builtin_tools::SessionSearchTool::new(
                     Arc::clone(context),
                     caller_id,
-                    assembler,
-                    synthesizer,
+                    None,
+                    None,
                 );
                 tool.call_json(arguments).await
             }),
@@ -707,33 +669,9 @@ impl ToolRegistry for BuiltinToolRegistry {
             "session_new" => {
                 let arguments = {
                     let mut args = arguments;
-                    // Prefer the race-free per-turn session key; the process-global
-                    // session_context_handle is rewritten at every run start, so a
-                    // concurrent run of another agent can swap it mid-turn and this
-                    // tool would close/create the WRONG session (same rule
-                    // recall_context and memory_search scope=current_session follow).
-                    let session_key =
-                        crate::tools::turn_context::current_session_key().or_else(|| {
-                            self.session_context_handle
-                                .as_ref()
-                                .and_then(|h| match h.try_read() {
-                                    Ok(ctx) => Some(ctx),
-                                    Err(_) => {
-                                        tracing::warn!(
-                                            "session_new: session context lock contended; session \
-                                             key unresolved — no __session_key injected"
-                                        );
-                                        None
-                                    }
-                                })
-                                .map(|ctx| ctx.session_key_str.clone())
-                        });
-                    if let (Some(session_key), Some(obj)) = (session_key, args.as_object_mut()) {
-                        obj.insert(
-                            "__session_key".into(),
-                            serde_json::Value::String(session_key),
-                        );
-                    }
+                    // The session of THIS turn — see `inject_session_key` for why
+                    // the per-turn context wins over the process-global mirror.
+                    self.inject_session_key(&mut args);
                     args
                 };
                 Box::pin(async move {
@@ -748,29 +686,8 @@ impl ToolRegistry for BuiltinToolRegistry {
             "session_compact" => {
                 let arguments = {
                     let mut args = arguments;
-                    // Prefer the race-free per-turn session key; see session_new above.
-                    let session_key =
-                        crate::tools::turn_context::current_session_key().or_else(|| {
-                            self.session_context_handle
-                                .as_ref()
-                                .and_then(|h| match h.try_read() {
-                                    Ok(ctx) => Some(ctx),
-                                    Err(_) => {
-                                        tracing::warn!(
-                                            "session_compact: session context lock contended; \
-                                             session key unresolved — no __session_key injected"
-                                        );
-                                        None
-                                    }
-                                })
-                                .map(|ctx| ctx.session_key_str.clone())
-                        });
-                    if let (Some(session_key), Some(obj)) = (session_key, args.as_object_mut()) {
-                        obj.insert(
-                            "__session_key".into(),
-                            serde_json::Value::String(session_key),
-                        );
-                    }
+                    // The session of THIS turn; see `inject_session_key`.
+                    self.inject_session_key(&mut args);
                     args
                 };
                 Box::pin(async move {
@@ -789,29 +706,8 @@ impl ToolRegistry for BuiltinToolRegistry {
             "session_decompress" => {
                 let arguments = {
                     let mut args = arguments;
-                    // Prefer the race-free per-turn session key; see session_new above.
-                    let session_key =
-                        crate::tools::turn_context::current_session_key().or_else(|| {
-                            self.session_context_handle
-                                .as_ref()
-                                .and_then(|h| match h.try_read() {
-                                    Ok(ctx) => Some(ctx),
-                                    Err(_) => {
-                                        tracing::warn!(
-                                            "session_decompress: session context lock contended; \
-                                             session key unresolved — no __session_key injected"
-                                        );
-                                        None
-                                    }
-                                })
-                                .map(|ctx| ctx.session_key_str.clone())
-                        });
-                    if let (Some(session_key), Some(obj)) = (session_key, args.as_object_mut()) {
-                        obj.insert(
-                            "__session_key".into(),
-                            serde_json::Value::String(session_key),
-                        );
-                    }
+                    // The session of THIS turn; see `inject_session_key`.
+                    self.inject_session_key(&mut args);
                     args
                 };
                 Box::pin(async move {
@@ -825,29 +721,8 @@ impl ToolRegistry for BuiltinToolRegistry {
             "session_rename" => {
                 let arguments = {
                     let mut args = arguments;
-                    // Prefer the race-free per-turn session key; see session_new above.
-                    let session_key =
-                        crate::tools::turn_context::current_session_key().or_else(|| {
-                            self.session_context_handle
-                                .as_ref()
-                                .and_then(|h| match h.try_read() {
-                                    Ok(ctx) => Some(ctx),
-                                    Err(_) => {
-                                        tracing::warn!(
-                                            "session_rename: session context lock contended; \
-                                             session key unresolved — no __session_key injected"
-                                        );
-                                        None
-                                    }
-                                })
-                                .map(|ctx| ctx.session_key_str.clone())
-                        });
-                    if let (Some(session_key), Some(obj)) = (session_key, args.as_object_mut()) {
-                        obj.insert(
-                            "__session_key".into(),
-                            serde_json::Value::String(session_key),
-                        );
-                    }
+                    // The session of THIS turn; see `inject_session_key`.
+                    self.inject_session_key(&mut args);
                     args
                 };
                 Box::pin(async move {
@@ -864,29 +739,8 @@ impl ToolRegistry for BuiltinToolRegistry {
             "session_set_mode" => {
                 let arguments = {
                     let mut args = arguments;
-                    // Prefer the race-free per-turn session key; see session_new above.
-                    let session_key =
-                        crate::tools::turn_context::current_session_key().or_else(|| {
-                            self.session_context_handle
-                                .as_ref()
-                                .and_then(|h| match h.try_read() {
-                                    Ok(ctx) => Some(ctx),
-                                    Err(_) => {
-                                        tracing::warn!(
-                                            "session_set_mode: session context lock contended; \
-                                             session key unresolved — no __session_key injected"
-                                        );
-                                        None
-                                    }
-                                })
-                                .map(|ctx| ctx.session_key_str.clone())
-                        });
-                    if let (Some(session_key), Some(obj)) = (session_key, args.as_object_mut()) {
-                        obj.insert(
-                            "__session_key".into(),
-                            serde_json::Value::String(session_key),
-                        );
-                    }
+                    // The session of THIS turn; see `inject_session_key`.
+                    self.inject_session_key(&mut args);
                     args
                 };
                 Box::pin(async move {
@@ -1009,87 +863,76 @@ impl ToolRegistry for BuiltinToolRegistry {
 
             // Agent management tools — snapshot session context into arguments
             // to avoid race conditions from concurrent reads of the shared handle.
-            "agent_create" | "agent_list" | "agent_delete" | "agent_switch" | "agent_unbind"
-            | "agent_update" => {
-                // Snapshot session context into tool arguments before async execution
-                let arguments = {
-                    let mut args = arguments;
-                    // Prefer the race-free per-turn channel; the process-global
-                    // session_context_handle is rewritten at every run start, so a
-                    // concurrent run of another agent can swap it mid-turn and
-                    // agent_switch would rebind the WRONG channel's active agent.
-                    // Fall back to the mirror only outside a scoped turn.
-                    let channel = match crate::tools::turn_context::current_turn_context() {
-                        Some(t) => Some(t.channel_id.clone()),
-                        None => self
-                            .session_context_handle
-                            .as_ref()
-                            .and_then(|h| match h.try_read() {
-                                Ok(ctx) => Some(ctx),
-                                Err(_) => {
-                                    tracing::warn!(
-                                        "agent management tools: session context lock contended; \
-                                         channel unresolved — no __channel injected"
-                                    );
-                                    None
-                                }
-                            })
-                            .map(|ctx| ctx.channel.clone()),
-                    };
-                    if let (Some(channel), Some(obj)) = (channel, args.as_object_mut()) {
-                        obj.insert("__channel".into(), serde_json::Value::String(channel));
-                    }
-                    args
-                };
-
-                match tool_name {
-                    "agent_create" => Box::pin(async move {
-                        let tool = self.agent_create_tool.as_ref().ok_or_else(|| {
-                            AlephError::tool("agent_create not available: no AgentRegistry/AgentEnvStore configured")
-                        })?;
-                        tool.call_json(arguments).await
-                    }),
-                    "agent_list" => Box::pin(async move {
-                        let tool = self.agent_list_tool.as_ref().ok_or_else(|| {
-                            AlephError::tool("agent_list not available: no AgentRegistry/AgentEnvStore configured")
-                        })?;
-                        tool.call_json(arguments).await
-                    }),
-                    "agent_delete" => Box::pin(async move {
-                        let tool = self.agent_delete_tool.as_ref().ok_or_else(|| {
-                            AlephError::tool("agent_delete not available: no AgentRegistry/AgentEnvStore configured")
-                        })?;
-                        tool.call_json(arguments).await
-                    }),
-                    "agent_switch" => Box::pin(async move {
-                        let tool = self.agent_switch_tool.as_ref().ok_or_else(|| {
-                            AlephError::tool("agent_switch not available: no AgentRegistry/AgentEnvStore configured")
-                        })?;
-                        tool.call_json(arguments).await
-                    }),
-                    "agent_unbind" => Box::pin(async move {
-                        let tool = self.agent_unbind_tool.as_ref().ok_or_else(|| {
-                            AlephError::tool("agent_unbind not available: no AgentRegistry/AgentEnvStore configured")
-                        })?;
-                        tool.call_json(arguments).await
-                    }),
-                    "agent_update" => Box::pin(async move {
-                        let tool = self.agent_update_tool.as_ref().ok_or_else(|| {
-                            AlephError::tool(
-                                "agent_update not available: no AgentRegistry configured",
-                            )
-                        })?;
-                        tool.call_json(arguments).await
-                    }),
-                    _ => {
-                        let tool = tool_name.to_string();
-                        Box::pin(async move {
-                            Err(AlephError::tool(format!(
-                                "Agent tool '{tool}' is not yet wired"
-                            )))
-                        })
-                    }
-                }
+            //
+            // One arm per tool, not one arm with an inner `match tool_name`:
+            // the outer match has already narrowed the name, so an inner
+            // dispatch could only carry a wildcard arm for a case that cannot
+            // happen — and the wildcard arm is the one a reader has to take on
+            // faith ("is this name wired?"). The channel snapshot the six
+            // arms share lives in `with_current_channel`.
+            "agent_create" => {
+                let arguments = self.with_current_channel(arguments);
+                Box::pin(async move {
+                    let tool = self.agent_create_tool.as_ref().ok_or_else(|| {
+                        AlephError::tool(
+                            "agent_create not available: no AgentRegistry/AgentEnvStore configured",
+                        )
+                    })?;
+                    tool.call_json(arguments).await
+                })
+            }
+            "agent_list" => {
+                let arguments = self.with_current_channel(arguments);
+                Box::pin(async move {
+                    let tool = self.agent_list_tool.as_ref().ok_or_else(|| {
+                        AlephError::tool(
+                            "agent_list not available: no AgentRegistry/AgentEnvStore configured",
+                        )
+                    })?;
+                    tool.call_json(arguments).await
+                })
+            }
+            "agent_delete" => {
+                let arguments = self.with_current_channel(arguments);
+                Box::pin(async move {
+                    let tool = self.agent_delete_tool.as_ref().ok_or_else(|| {
+                        AlephError::tool(
+                            "agent_delete not available: no AgentRegistry/AgentEnvStore configured",
+                        )
+                    })?;
+                    tool.call_json(arguments).await
+                })
+            }
+            "agent_switch" => {
+                let arguments = self.with_current_channel(arguments);
+                Box::pin(async move {
+                    let tool = self.agent_switch_tool.as_ref().ok_or_else(|| {
+                        AlephError::tool(
+                            "agent_switch not available: no AgentRegistry/AgentEnvStore configured",
+                        )
+                    })?;
+                    tool.call_json(arguments).await
+                })
+            }
+            "agent_unbind" => {
+                let arguments = self.with_current_channel(arguments);
+                Box::pin(async move {
+                    let tool = self.agent_unbind_tool.as_ref().ok_or_else(|| {
+                        AlephError::tool(
+                            "agent_unbind not available: no AgentRegistry/AgentEnvStore configured",
+                        )
+                    })?;
+                    tool.call_json(arguments).await
+                })
+            }
+            "agent_update" => {
+                let arguments = self.with_current_channel(arguments);
+                Box::pin(async move {
+                    let tool = self.agent_update_tool.as_ref().ok_or_else(|| {
+                        AlephError::tool("agent_update not available: no AgentRegistry configured")
+                    })?;
+                    tool.call_json(arguments).await
+                })
             }
             // agent_info is read-only and always available — no session-context
             // snapshot, no optional-dependency gate.
@@ -1566,26 +1409,29 @@ impl ToolRegistry for BuiltinToolRegistry {
                 // needs the ambient-scope task-local a spawned task cannot
                 // see (`scope::current_scope`'s doc). Twin of
                 // `flag_user_correction` above.
-                let filed_agent_id = self.caller_memory_partition("main");
-                if let Some(ref tool) = self.memory_reflect_tool {
-                    let tool = tool.clone();
-                    Box::pin(async move {
-                        let args: crate::builtin_tools::memory_reflect::MemoryReflectArgs =
-                            serde_json::from_value(arguments).map_err(|e| {
-                                AlephError::tool(format!("memory_reflect: bad args: {e}"))
-                            })?;
-                        let out = tool.call_with_filed_partition(filed_agent_id, args).await?;
-                        serde_json::to_value(out).map_err(|e| {
-                            AlephError::tool(format!("memory_reflect: serialize: {e}"))
+                let filed_agent_id = self.caller_memory_partition();
+                if let Some(runtime) = &self.memory_runtime {
+                    let runtime = runtime.clone();
+                    let session = self.memory_session_key_handle.clone();
+                    return Box::pin(async move {
+                        let args = serde_json::from_value(arguments).map_err(|error| {
+                            AlephError::tool(format!("memory_reflect: bad args: {error}"))
+                        })?;
+                        let output = crate::builtin_tools::runtime::RuntimeTool::<
+                            crate::builtin_tools::MemoryReflectTool,
+                        >::new(runtime)
+                        .call_for_partition(filed_agent_id, session, args)
+                        .await?;
+                        serde_json::to_value(output).map_err(|error| {
+                            AlephError::tool(format!("memory_reflect: serialize: {error}"))
                         })
-                    })
-                } else {
-                    Box::pin(async move {
-                        Err(AlephError::tool(
-                            "memory_reflect tool is not available: MemoryReflector not wired (server builder needs to inject it)",
-                        ))
-                    })
+                    });
                 }
+                Box::pin(async move {
+                    Err(AlephError::tool(
+                        "memory_reflect tool is not available: no Memory runtime is configured",
+                    ))
+                })
             }
 
             // Wiki orientation tools (Spec 5)
@@ -1594,7 +1440,7 @@ impl ToolRegistry for BuiltinToolRegistry {
                 // note writers compose the session scope in, so a reader that
                 // does not compose reads an empty `main` (see
                 // `caller_memory_partition`).
-                let agent_id = self.caller_memory_partition("default");
+                let agent_id = self.caller_memory_partition();
                 if let Some(ref tool) = self.note_orient_tool {
                     let tool = tool.clone();
                     Box::pin(async move {
@@ -1616,7 +1462,7 @@ impl ToolRegistry for BuiltinToolRegistry {
             }
 
             "note_schema" => {
-                let agent_id = self.caller_memory_partition("default");
+                let agent_id = self.caller_memory_partition();
                 if let Some(ref tool) = self.note_schema_tool {
                     let tool = tool.clone();
                     Box::pin(async move {
@@ -1645,7 +1491,7 @@ impl ToolRegistry for BuiltinToolRegistry {
                 // `None` there on purpose (`project_scope`'s doc), and the
                 // honest answer is "no such thing here" rather than the room's
                 // merged USER.md.
-                let Some(agent_id) = self.caller_profile_partition("default") else {
+                let Some(agent_id) = self.caller_profile_partition() else {
                     return Box::pin(async move {
                         Err(AlephError::tool(
                             "user_profile is not available inside a project room: a room has more \
@@ -1791,33 +1637,19 @@ impl ToolRegistry for BuiltinToolRegistry {
             "recall_context" => {
                 // Resolve the same (optionally project-scoped) agent id the
                 // compaction pipeline writes raw chunks under. Done first so
-                // it lands inside the ratchet's 20-line arm window (see
+                // it lands inside the ratchet's arm window (see
                 // `every_memory_dispatch_arm_composes_the_partition`); moving
-                // it past the session-key fallback would push it past line
-                // 1613 and the ratchet would falsely flag this arm.
-                let agent_id = self.caller_memory_partition("default");
-                // Per-task turn context first (race-free), then the
-                // process-global session context mirror: the handle is
-                // rewritten at every run start, so a concurrent run of
-                // another agent can swap the session mid-turn and split it
+                // it past the session-key resolution would push it out of
+                // that window and the ratchet would falsely flag this arm.
+                let agent_id = self.caller_memory_partition();
+                // The session of THIS turn, resolved the same race-free way
+                // as the agent id above — the process-global session context
+                // mirror is rewritten at every run start, so a concurrent run
+                // of another agent can swap the session mid-turn and split it
                 // from the agent id resolved above. Taking both from the same
                 // TurnContext keeps the (agent, session) pair coherent — the
                 // same rule memory_search scope=current_session follows.
-                let session_id = crate::tools::turn_context::current_session_key().or_else(|| {
-                    self.session_context_handle
-                        .as_ref()
-                        .and_then(|h| match h.try_read() {
-                            Ok(ctx) => Some(ctx),
-                            Err(_) => {
-                                tracing::warn!(
-                                    "recall_context: session context lock contended; session key \
-                                     unresolved — the call will fail: no active session context"
-                                );
-                                None
-                            }
-                        })
-                        .map(|ctx| ctx.session_key_str.clone())
-                });
+                let session_id = self.current_session_key();
                 Box::pin(async move {
                     let db = self.raw_memory_store.as_ref().ok_or_else(|| {
                         AlephError::tool(
@@ -1854,30 +1686,22 @@ impl ToolRegistry for BuiltinToolRegistry {
                 // these rows rather than from recollection. Those rows are
                 // written under the composed partition; reading the bare
                 // persona answered "there are none" for every scoped run.
-                let agent_id = self.caller_memory_partition("default");
+                let agent_id = self.caller_memory_partition();
                 Box::pin(async move {
-                    let db = self.memory_trace_db.as_ref().ok_or_else(|| {
-                        AlephError::tool("memory_trace not available: no memory backend configured")
+                    let runtime = self.memory_runtime.as_ref().ok_or_else(|| {
+                        AlephError::tool(
+                            "memory_trace not available: Memory runtime not configured",
+                        )
                     })?;
-                    let note_memory_dir = crate::utils::paths::get_note_memory_dir()
-                        .map_err(|e| AlephError::tool(format!("memory_trace: note dir: {e}")))?;
                     let args: crate::builtin_tools::memory_trace::MemoryTraceArgs =
                         serde_json::from_value(arguments).map_err(|e| {
                             AlephError::tool(format!("memory_trace: bad args: {e}"))
                         })?;
-                    let raw_store = self.raw_memory_store.clone().ok_or_else(|| {
-                        AlephError::tool(
-                            "memory_trace not available: no raw memory store configured",
-                        )
-                    })?;
-                    let tool = crate::builtin_tools::memory_trace::MemoryTraceTool::new(
-                        db.clone(),
-                        raw_store,
-                        agent_id,
-                        note_memory_dir,
-                    );
+                    let tool = crate::builtin_tools::runtime::RuntimeTool::<
+                        crate::builtin_tools::memory_trace::MemoryTraceTool,
+                    >::new(runtime.clone());
                     let out = tool
-                        .call_impl(args)
+                        .call_impl(&agent_id, args)
                         .await
                         .map_err(|e| AlephError::tool(format!("memory_trace: {e}")))?;
                     serde_json::to_value(out)
@@ -1888,23 +1712,22 @@ impl ToolRegistry for BuiltinToolRegistry {
             // Read-only knowledge-graph interrogation: schema / neighbors /
             // community / related over the note graph.
             "note_graph_query" => {
-                let agent_id = self.caller_memory_partition("default");
+                let agent_id = self.caller_memory_partition();
                 Box::pin(async move {
-                    let db = self.memory_trace_db.as_ref().ok_or_else(|| {
+                    let runtime = self.memory_runtime.as_ref().ok_or_else(|| {
                         AlephError::tool(
-                            "note_graph_query not available: no memory backend configured",
+                            "note_graph_query not available: Memory runtime not configured",
                         )
                     })?;
                     let args: crate::builtin_tools::note_graph_query::NoteGraphQueryArgs =
                         serde_json::from_value(arguments).map_err(|e| {
                             AlephError::tool(format!("note_graph_query: bad args: {e}"))
                         })?;
-                    let tool = crate::builtin_tools::note_graph_query::NoteGraphQueryTool::new(
-                        db.clone(),
-                        agent_id,
-                    );
+                    let tool = crate::builtin_tools::runtime::RuntimeTool::<
+                        crate::builtin_tools::note_graph_query::NoteGraphQueryTool,
+                    >::new(runtime.clone());
                     let out = tool
-                        .call_impl(args)
+                        .call_impl(&agent_id, args)
                         .await
                         .map_err(|e| AlephError::tool(format!("note_graph_query: {e}")))?;
                     serde_json::to_value(out)
@@ -2167,111 +1990,6 @@ mod channel_tool_dispatch_tests {
 
     // -- read/write partition symmetry --------------------------------------
 
-    /// T09: driven through the ACTUAL dispatch chokepoint (`execute_tool`,
-    /// not a direct call on the tool), under an active `Personal(u-alice)`
-    /// scope — the same shape a stock loopback Panel session already has.
-    /// The query filer's fire-and-forget write must land in `main__u-alice`,
-    /// not the org partition `main` every principal's reads union in.
-    #[tokio::test]
-    async fn memory_reflect_query_filer_writes_to_the_partition_it_read_from() {
-        use crate::memory::assembler::envelope::{EnvelopeMeta, MemoryEnvelope};
-        use crate::memory::assembler::{AssemblyBudget, WorkingMemoryAssembler};
-        use crate::memory::notes::query_filer::{CheapGateReason, FileOutcome, QueryFiler};
-        use crate::memory::reflector::fs_reflector::RecallWriter;
-        use crate::memory::reflector::MemoryReflector;
-        use crate::memory::session_search_summary::FactSourceFilter;
-        use crate::providers::recording_mock::RecordingMockProvider;
-
-        /// Empty-envelope assembler: `reflect()` short-circuits on it before
-        /// any LLM call, so this test needs no synthesis machinery — only
-        /// which partition each side of `memory_reflect` used.
-        struct EmptyAssembler;
-        #[async_trait::async_trait]
-        impl WorkingMemoryAssembler for EmptyAssembler {
-            async fn assemble(
-                &self,
-                query: &str,
-                agent_id: &str,
-                _session_id: Option<&str>,
-                _budget: AssemblyBudget,
-                _filter: FactSourceFilter,
-            ) -> Result<MemoryEnvelope> {
-                Ok(MemoryEnvelope {
-                    schema_version: "1.0".into(),
-                    generated_at: 0,
-                    query: query.to_string(),
-                    agent_id: agent_id.to_string(),
-                    session_id: None,
-                    slots: vec![],
-                    meta: EnvelopeMeta {
-                        strategy: "test_empty".into(),
-                        candidates_considered: 0,
-                        used_fallback: false,
-                        fallback_reason: None,
-                        llm_rerank_latency_ms: None,
-                        total_latency_ms: 0,
-                    },
-                })
-            }
-        }
-
-        /// Records the `agent_id` handed to `maybe_file` and signals over a
-        /// channel so the test can wait for the fire-and-forget
-        /// `tokio::spawn` deterministically, instead of sleeping.
-        struct RecordingFiler {
-            tx: tokio::sync::mpsc::UnboundedSender<String>,
-        }
-        #[async_trait::async_trait]
-        impl QueryFiler for RecordingFiler {
-            async fn maybe_file(
-                &self,
-                agent_id: &str,
-                _query: &str,
-                _synthesis: &crate::memory::reflector::Synthesis,
-                _session_id: Option<&str>,
-            ) -> Result<FileOutcome> {
-                let _ = self.tx.send(agent_id.to_string());
-                Ok(FileOutcome::SkippedCheapGate {
-                    reason: CheapGateReason::TooFewSources { count: 0 },
-                })
-            }
-        }
-
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
-        let mut registry = BuiltinToolRegistry::new().await.unwrap();
-
-        let assembler: Arc<dyn WorkingMemoryAssembler> = Arc::new(EmptyAssembler);
-        let provider: Arc<dyn crate::providers::AiProvider> =
-            Arc::new(RecordingMockProvider::new("unused".into()));
-        let recall_writer: RecallWriter = Arc::new(|_row| Box::pin(async { Ok(()) }));
-        registry.set_memory_reflector(Arc::new(MemoryReflector::new(
-            assembler,
-            provider,
-            recall_writer,
-        )));
-
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        registry.set_query_filer(Arc::new(RecordingFiler { tx }));
-
-        let personal = crate::scope::ScopeAttribution::personal("u-alice");
-        crate::scope::with_scope(Some(personal), async {
-            registry
-                .execute_tool("memory_reflect", serde_json::json!({"query": "q"}))
-                .await
-        })
-        .await
-        .expect("memory_reflect call should succeed");
-
-        let filed_id = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
-            .await
-            .expect("query filer was never invoked (timed out)")
-            .expect("query filer channel closed without a value");
-        assert_eq!(
-            filed_id, "main__u-alice",
-            "the query note must land in the reader's own partition, not the org partition `main`"
-        );
-    }
-
     /// Every dispatch arm that hands a memory/note tool an agent id must hand
     /// it the COMPOSED partition, because that is what the writers wrote to.
     ///
@@ -2386,18 +2104,15 @@ mod channel_tool_dispatch_tests {
         let registry = BuiltinToolRegistry::new().await.unwrap();
 
         // No scope at all (cron / tests / direct calls): unchanged.
-        assert_eq!(registry.caller_memory_partition("main"), "main");
-        assert_eq!(
-            registry.caller_profile_partition("main").as_deref(),
-            Some("main")
-        );
+        assert_eq!(registry.caller_memory_partition(), "main");
+        assert_eq!(registry.caller_profile_partition().as_deref(), Some("main"));
 
         // A personal session writes and reads its own partition.
         let personal = crate::scope::ScopeAttribution::personal("u-alice");
         let (partition, profile) = crate::scope::with_scope(Some(personal), async {
             (
-                registry.caller_memory_partition("main"),
-                registry.caller_profile_partition("main"),
+                registry.caller_memory_partition(),
+                registry.caller_profile_partition(),
             )
         })
         .await;
@@ -2411,8 +2126,8 @@ mod channel_tool_dispatch_tests {
         };
         let (partition, profile) = crate::scope::with_scope(Some(room), async {
             (
-                registry.caller_memory_partition("main"),
-                registry.caller_profile_partition("main"),
+                registry.caller_memory_partition(),
+                registry.caller_profile_partition(),
             )
         })
         .await;
@@ -2431,13 +2146,13 @@ mod channel_tool_dispatch_tests {
         let _home = crate::utils::paths::IsolatedAlephHome::new();
         let registry = BuiltinToolRegistry::new().await.unwrap();
         assert_eq!(
-            registry.caller_memory_read_partitions("main"),
+            registry.caller_memory_read_partitions(),
             vec!["main".to_string()]
         );
         let personal = crate::scope::ScopeAttribution::personal("u-alice");
         let (tool_face, rpc_face) = crate::scope::with_scope(Some(personal), async {
             (
-                registry.caller_memory_read_partitions("main"),
+                registry.caller_memory_read_partitions(),
                 crate::gateway::handlers::memory_scope::read_partitions("main"),
             )
         })
@@ -2447,6 +2162,45 @@ mod channel_tool_dispatch_tests {
             tool_face,
             vec!["main".to_string(), "main__u-alice".to_string()]
         );
+    }
+
+    /// The read side and the write side of one memory partition address the
+    /// SAME key for the same caller.
+    ///
+    /// The write side composes its partition from the base id
+    /// [`crate::routing::DEFAULT_AGENT_ID`] ("main") — the constant
+    /// `note_manage`'s `agent_id()` returns — and the read side composes it
+    /// from that same base. A reader that fell back to a different base
+    /// looked in `default__u-alice` while the writer filed the note under
+    /// `main__u-alice`: the write was invisible to every reader, and nothing
+    /// anywhere reported an error.
+    #[tokio::test]
+    async fn the_read_side_and_the_write_side_address_the_same_partition() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let registry = BuiltinToolRegistry::new().await.unwrap();
+
+        // The write side's base id, taken from the constant it uses.
+        let write_base = crate::routing::DEFAULT_AGENT_ID;
+        assert_eq!(write_base, "main");
+
+        // Unscoped: both sides land on the bare base id.
+        assert_eq!(registry.caller_memory_partition(), write_base);
+
+        // Scoped: both sides land on the same composed partition.
+        let personal = crate::scope::ScopeAttribution::personal("u-alice");
+        let (read_partition, write_partition) = crate::scope::with_scope(Some(personal), async {
+            (
+                registry.caller_memory_partition(),
+                crate::memory::project_scope::session_write_id(
+                    write_base,
+                    registry.memory_project_scoped,
+                    crate::projects::current_project_root().as_deref(),
+                ),
+            )
+        })
+        .await;
+        assert_eq!(read_partition, write_partition);
+        assert_eq!(read_partition, "main__u-alice");
     }
 
     /// D7 through the real dispatch arm: Alice's fact history reaches Alice;

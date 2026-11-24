@@ -104,7 +104,7 @@ const PASSTHROUGH: &[&str] = &["sudo", "env", "time", "nice", "command", "nohup"
 /// only one classified.
 fn classify(cmd: &str) -> Option<Replacement> {
     let first = first_segment(cmd);
-    let mut tokens = first.split_whitespace().peekable();
+    let mut tokens = first.split_whitespace();
 
     // Skip `VAR=value` prefixes and passthrough wrappers to reach the real verb.
     let verb = loop {
@@ -157,15 +157,16 @@ fn first_segment(cmd: &str) -> &str {
     let end = cmd
         .find(['|', ';', '&', '\n', '(', ')', '`'])
         .unwrap_or(cmd.len());
-    cmd[..end].trim()
+    cmd.get(..end).unwrap_or(cmd).trim()
 }
 
 /// Whether `cmd` is a single command with no pipeline, list or heredoc.
 fn is_whole_command(cmd: &str) -> bool {
+    // `||` needs no arm of its own: it contains `|`, which is already
+    // excluded above.
     !cmd.contains('|')
         && !cmd.contains(';')
         && !cmd.contains("&&")
-        && !cmd.contains("||")
         && !cmd.contains('\n')
         && !cmd.contains("<<")
 }
@@ -190,7 +191,9 @@ fn recursive_flag(args: &[&str]) -> bool {
 
 /// Whether `token` is a short-flag cluster containing `flag`.
 fn is_short_flag_with(token: &str, flag: char) -> bool {
-    token.starts_with('-') && !token.starts_with("--") && token[1..].contains(flag)
+    token
+        .strip_prefix('-')
+        .is_some_and(|rest| !rest.starts_with('-') && rest.contains(flag))
 }
 
 /// Whether a token looks like a file operand rather than a flag or `-` (stdin).

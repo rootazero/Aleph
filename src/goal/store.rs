@@ -17,7 +17,7 @@ use crate::goal::types::{Goal, GoalStatus};
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_millis() as u64)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
 }
 
 /// A claimed continuation presumed dead once this long past its due wake — the
@@ -359,6 +359,11 @@ impl GoalStore {
             rusqlite::params![session_id],
         )
         .map_err(|e| AlephError::other(format!("goal delete: {e}")))?;
+        tx.execute(
+            "DELETE FROM settle_notified WHERE session_id = ?1",
+            rusqlite::params![session_id],
+        )
+        .map_err(|e| AlephError::other(format!("goal delete: {e}")))?;
         tx.commit()
             .map_err(|e| AlephError::other(format!("goal delete: {e}")))
     }
@@ -367,15 +372,28 @@ impl GoalStore {
     /// helpers below read → decide → write inside ONE guard).
     fn get_locked(conn: &rusqlite::Connection, session_id: &str) -> Result<Option<Goal>> {
         use rusqlite::OptionalExtension;
-        let row: Option<String> = conn
+        let row: Option<Option<Goal>> = conn
             .query_row(
                 "SELECT json FROM goals WHERE session_id = ?1",
                 rusqlite::params![session_id],
-                |r| r.get(0),
+                |r| {
+                    let s = r.get_ref(0)?.as_str()?;
+                    Ok(match serde_json::from_str::<Goal>(s) {
+                        Ok(goal) => Some(goal),
+                        Err(e) => {
+                            tracing::error!(
+                                session_id = %session_id,
+                                error = %e,
+                                "failed to deserialize stored goal JSON"
+                            );
+                            None
+                        }
+                    })
+                },
             )
             .optional()
             .map_err(|e| AlephError::other(format!("goal get: {e}")))?;
-        Ok(row.and_then(|j| serde_json::from_str::<Goal>(&j).ok()))
+        Ok(row.flatten())
     }
 
     /// Write a goal under an already-held connection lock (see [`Self::get_locked`]).
@@ -473,9 +491,9 @@ impl GoalStore {
             Ok(origin) => origin,
             Err(reason) => return Ok(BoundClaim::Refused(reason)),
         };
-        let decision = Self::claim_locked(
+        let decision = Self::claim_goal_locked(
             &conn,
-            &expected.session_id,
+            live,
             tokens_total,
             now_ms,
             gate_configured,
@@ -524,7 +542,24 @@ impl GoalStore {
         let Some(current) = Self::get_locked(conn, session_id)? else {
             return Ok(ContinuationDecision::Idle);
         };
+        Self::claim_goal_locked(
+            conn,
+            current,
+            tokens_total,
+            now_ms,
+            gate_configured,
+            workspace,
+        )
+    }
 
+    fn claim_goal_locked(
+        conn: &rusqlite::Connection,
+        current: Goal,
+        tokens_total: Option<u64>,
+        now_ms: u64,
+        gate_configured: bool,
+        workspace: Option<&str>,
+    ) -> Result<ContinuationDecision> {
         // The model claimed completion and a gate must arbitrate it. Gate
         // arbitration is an async shell command the caller runs with the session
         // run-slot FREE, so a user turn completing inside that window re-enters
@@ -550,6 +585,7 @@ impl GoalStore {
         // barrier is satisfied, so drop the stale wait fields on this claim's
         // write path instead of carrying them into renders forever. An
         // unsatisfied barrier is handled below, after the in-flight gate.
+        let original_waiting_until_ms = current.waiting_until_ms;
         let current = if current
             .waiting_until_ms
             .is_some_and(|until| now_ms != 0 && until <= now_ms)
@@ -563,36 +599,33 @@ impl GoalStore {
         // (codex `tokenStartFresh`): just captured → 0 spent, never a false
         // over-budget. Only meaningful for an Active pursuit — the budget is
         // consumed by the continuation path alone.
-        let goal = match (
-            current.token_budget,
-            current.baseline_captured,
-            current.is_active(),
+        let mut baseline_changed = false;
+        let mut goal = current;
+        if let (Some(_), false, true, Some(total)) = (
+            goal.token_budget,
+            goal.baseline_captured,
+            goal.is_active(),
             tokens_total,
         ) {
-            (Some(_), false, true, Some(total)) => current.clone().with_baseline(total, now_ms),
-            _ => current.clone(),
-        };
+            goal = goal.with_baseline(total, now_ms);
+            baseline_changed = true;
+        }
         // Record the claiming run's project root so a hook-less wake (task
         // settle / boot re-arm / periodic recheck) can rebuild the
         // continuation in the same workspace. `None` = the claim carries no
         // workspace info (wake-service claims) → keep the stored value.
-        let goal = match workspace {
-            Some(ws) if goal.workspace.as_deref() != Some(ws) => {
-                goal.with_workspace(Some(ws.to_string()))
+        let mut workspace_changed = false;
+        if let Some(ws) = workspace {
+            if goal.workspace.as_deref() != Some(ws) {
+                goal = goal.with_workspace(Some(ws.to_string()));
+                workspace_changed = true;
             }
-            _ => goal,
-        };
+        }
         // `dirty` covers every field the lazy self-clear / baseline seed /
-        // workspace stamp above may have changed. Without the `waiting_until_ms`
-        // arm, an elapsed barrier whose clear is the ONLY change in this claim
-        // would be lost when neither baseline nor workspace mutated — the row
-        // would carry a still-pending wait into the next render and prompt
-        // assembly would re-show "parked (waiting)" until FIFO eviction
-        // re-read the stored value. Including the barrier change here means
-        // the Idle-return path persists the clear as the comment claims.
-        let dirty = goal.baseline_captured != current.baseline_captured
-            || goal.workspace != current.workspace
-            || goal.waiting_until_ms != current.waiting_until_ms;
+        // workspace stamp above may have changed.
+        let dirty = baseline_changed
+            || workspace_changed
+            || goal.waiting_until_ms != original_waiting_until_ms;
         // Budget enforcement needs the live total; without one (or without a
         // budget at all) pass 0 so only the iteration/deadline caps apply.
         let tokens_now = if goal.token_budget.is_some() {
@@ -1019,7 +1052,7 @@ impl GoalStore {
     /// objectives and accumulated lessons destroyed. Each owner session resumes
     /// its own with `goal(action='update', status='active')`.
     pub fn pause_all_active(&self, note: &str, now_ms: u64) -> Result<Vec<String>> {
-        let conn = self.lock();
+        let mut conn = self.lock();
         let mut stmt = conn
             .prepare("SELECT json FROM goals")
             .map_err(|e| AlephError::other(format!("goal pause_all prepare: {e}")))?;
@@ -1037,19 +1070,25 @@ impl GoalStore {
             }
         }
         drop(stmt);
+        let tx = conn
+            .transaction()
+            .map_err(|e| AlephError::other(format!("goal pause_all tx: {e}")))?;
+        let note_opt = Some(note.to_string());
         let mut paused = Vec::with_capacity(active.len());
         for goal in active {
             let session = goal.session_id.clone();
             Self::put_locked(
-                &conn,
+                &tx,
                 &goal
                     .with_status(GoalStatus::Paused, now_ms)
-                    .with_note(Some(note.to_string()), now_ms)
+                    .with_note(note_opt.clone(), now_ms)
                     .without_wait(now_ms)
                     .with_pending_continuation(None),
             )?;
             paused.push(session);
         }
+        tx.commit()
+            .map_err(|e| AlephError::other(format!("goal pause_all commit: {e}")))?;
         Ok(paused)
     }
 
@@ -1073,7 +1112,7 @@ impl GoalStore {
     /// principal OWNS. See [`Self::count_owned_by`].
     pub fn pause_all_owned_by(&self, user_id: &str) -> Result<usize> {
         let now_ms = now_ms();
-        let conn = self.lock();
+        let mut conn = self.lock();
         let mut stmt = conn
             .prepare("SELECT json FROM goals")
             .map_err(|e| AlephError::other(format!("goal pause_all_owned_by prepare: {e}")))?;
@@ -1094,11 +1133,14 @@ impl GoalStore {
             }
         }
         drop(stmt);
+        let tx = conn
+            .transaction()
+            .map_err(|e| AlephError::other(format!("goal pause_all_owned_by tx: {e}")))?;
         let note = format!("Account '{user_id}' was deactivated — pursuit frozen.");
         let count = targets.len();
         for goal in targets {
             Self::put_locked(
-                &conn,
+                &tx,
                 &goal
                     .with_status(GoalStatus::Paused, now_ms)
                     .with_note(Some(note.clone()), now_ms)
@@ -1106,6 +1148,8 @@ impl GoalStore {
                     .with_pending_continuation(None),
             )?;
         }
+        tx.commit()
+            .map_err(|e| AlephError::other(format!("goal pause_all_owned_by commit: {e}")))?;
         Ok(count)
     }
 
@@ -1213,15 +1257,34 @@ impl GoalStore {
     }
 
     /// Clear an unsatisfied wait barrier (both kinds) on a still-Active goal,
-    /// in one guard. Used by the goal-wake service when the awaited task
-    /// settles (or the boot recheck finds it already settled / vanished —
-    /// fail-open) before it claims the wake continuation. `false` = nothing
-    /// to clear (goal gone, terminal, or barrier already dropped) — the wake
-    /// is then a no-op, never a resurrection.
-    pub fn clear_wait_barrier(&self, session_id: &str, now_ms: u64) -> Result<bool> {
+    /// in one guard — but ONLY when the live goal still carries the SAME
+    /// barrier the caller observed. A goal that moved on to a different wait
+    /// keeps its barrier: the wake that read the old snapshot must not
+    /// release the new one (that is how a parked pursuit could resume before
+    /// the task it now waits for has settled).
+    ///
+    /// `expected_task` / `expected_until_ms` are the barrier the caller saw.
+    /// The two barrier kinds are mutually exclusive, so exactly one of them
+    /// is `Some` on both sides.
+    ///
+    /// `false` = nothing to clear (goal gone, terminal, barrier already
+    /// dropped, or the barrier no longer matches) — the wake is then a
+    /// no-op, never a resurrection.
+    pub fn clear_wait_barrier(
+        &self,
+        session_id: &str,
+        expected_task: Option<&str>,
+        expected_until_ms: Option<u64>,
+        now_ms: u64,
+    ) -> Result<bool> {
         let conn = self.lock();
         match Self::get_locked(&conn, session_id)? {
             Some(g) if g.is_active() && g.has_wait_barrier() => {
+                if g.waiting_on_task.as_deref() != expected_task
+                    || g.waiting_until_ms != expected_until_ms
+                {
+                    return Ok(false);
+                }
                 Self::put_locked(&conn, &g.without_wait(now_ms))?;
                 Ok(true)
             }
@@ -1451,26 +1514,26 @@ impl GoalStore {
                 merged.budget_members = live.budget_members;
                 // The claiming run's project root is likewise pipeline-owned:
                 // a tool update must never roll it back to the snapshot's.
-                merged.workspace = live.workspace.clone();
+                merged.workspace = live.workspace;
                 // Owner/scope/author attribution (P1 data isolation; the
                 // author is round 11's R-b) is stamped once at creation and
                 // never re-derived from a tool snapshot — same ownership rule
                 // as `workspace`.
-                merged.owner_user_id = live.owner_user_id.clone();
-                merged.scope_id = live.scope_id.clone();
-                merged.author_user_id = live.author_user_id.clone();
+                merged.owner_user_id = live.owner_user_id;
+                merged.scope_id = live.scope_id;
+                merged.author_user_id = live.author_user_id;
                 let outcome = if live.status == expected_status {
                     FieldUpdate::Committed
                 } else {
                     // A concurrent lifecycle transition won the gap — keep its
                     // verdict (and the note explaining it) over the snapshot's.
                     merged.status = live.status;
-                    merged.note = live.note.clone();
+                    merged.note = live.note;
                     merged.gate_outcome = live.gate_outcome;
                     merged.completed_at_ms = live.completed_at_ms;
                     merged.waiting_until_ms = live.waiting_until_ms;
-                    merged.waiting_on_task = live.waiting_on_task.clone();
-                    merged.waiting_reason = live.waiting_reason.clone();
+                    merged.waiting_on_task = live.waiting_on_task;
+                    merged.waiting_reason = live.waiting_reason;
                     FieldUpdate::StatusSuperseded(live.status)
                 };
                 Self::put_locked(&conn, &merged)?;
@@ -1625,7 +1688,9 @@ mod tests {
         // User un-parks: clears the barrier (tool) then supersedes the armed
         // marker. Without the supersede the next claim would gate on the future
         // pending marker and stay Idle until the ORIGINAL wake.
-        assert!(store.clear_wait_barrier("sess-unpark", 2_000).unwrap());
+        assert!(store
+            .clear_wait_barrier("sess-unpark", None, Some(61_000), 2_000)
+            .unwrap());
         assert!(store.supersede_wait_timer("sess-unpark", 61_000).unwrap());
         assert_eq!(
             store
@@ -1796,7 +1861,9 @@ mod tests {
         assert_eq!(live.continuations_used, 0, "parking spends nothing");
 
         // The wake service clears the barrier, then the claim proceeds.
-        assert!(store.clear_wait_barrier("sess-task", 2_000).unwrap());
+        assert!(store
+            .clear_wait_barrier("sess-task", Some("task-42"), None, 2_000)
+            .unwrap());
         assert!(matches!(
             store
                 .try_claim_continuation("sess-task", None, 2_000, false, None)
@@ -1804,7 +1871,9 @@ mod tests {
             ContinuationDecision::Fire { .. }
         ));
         // Second clear is a no-op (CAS honesty).
-        assert!(!store.clear_wait_barrier("sess-task", 3_000).unwrap());
+        assert!(!store
+            .clear_wait_barrier("sess-task", Some("task-42"), None, 3_000)
+            .unwrap());
     }
 
     #[test]
@@ -1872,11 +1941,39 @@ mod tests {
             .with_wait_on_task("t".into(), None, 1)
             .with_status(GoalStatus::Complete, 2);
         store.put(&g).unwrap();
-        assert!(!store.clear_wait_barrier("sess-done", 3).unwrap());
+        assert!(!store
+            .clear_wait_barrier("sess-done", Some("t"), None, 3)
+            .unwrap());
         assert_eq!(
             store.get("sess-done").unwrap().unwrap().status,
             GoalStatus::Complete
         );
+    }
+
+    #[test]
+    fn a_goal_that_moved_on_keeps_its_new_wait_barrier() {
+        let (store, _d) = temp_store();
+        // The goal waits on task A, then is re-pointed at task B.
+        store
+            .put(&Goal::new("sess-1", "obj", 0, 0).with_wait_on_task("a".into(), None, 1))
+            .unwrap();
+        store
+            .put(&Goal::new("sess-1", "obj", 0, 0).with_wait_on_task("b".into(), None, 1))
+            .unwrap();
+
+        // The stale wake (which observed task A) must not release task B.
+        assert!(!store
+            .clear_wait_barrier("sess-1", Some("a"), None, 2)
+            .unwrap());
+        let live = store.get("sess-1").unwrap().unwrap();
+        assert!(live.has_wait_barrier(), "B's barrier must survive A's wake");
+        assert_eq!(live.waiting_on_task.as_deref(), Some("b"));
+
+        // The current wake (which observed task B) clears it.
+        assert!(store
+            .clear_wait_barrier("sess-1", Some("b"), None, 3)
+            .unwrap());
+        assert!(!store.get("sess-1").unwrap().unwrap().has_wait_barrier());
     }
 
     #[test]

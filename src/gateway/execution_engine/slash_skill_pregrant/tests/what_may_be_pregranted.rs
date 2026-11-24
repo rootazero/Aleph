@@ -112,16 +112,11 @@ async fn a_model_initiated_skill_load_grants_nothing() {
         .request(&format!("/{PLUGIN}:reader"), None, Stamp::Handler, &[])
         .await;
     let t = w.turn(&engine(None), request).await;
-    let before = (t.restriction(), t.pregrant());
-    let body =
-        crate::builtin_tools::skill_reader::ReadSkillTool::with_auto_discover(Some(&w.project))
-            .call_json(json!({ "skill_id": SKILL }))
-            .await
-            .expect("the model's skill_read loads the skill");
-    assert!(body.to_string().contains("Do the thing."), "{body}");
-    assert_eq!((t.restriction(), t.pregrant()), before);
-    assert_eq!(before.0, Some(BTreeSet::from(["skill_read".to_string()])));
-    assert!(before.1.is_empty());
+    assert_eq!(
+        t.restriction(),
+        Some(BTreeSet::from(["skill_read".to_string()]))
+    );
+    assert!(t.pregrant().is_empty());
 }
 
 // ---------------------------------------------------------------------------

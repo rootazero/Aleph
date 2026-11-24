@@ -108,13 +108,16 @@ impl StreamingContextScrubber {
     }
 
     /// Multi-pair discard scrubber. Every pair's tags must be ASCII; non-ASCII
-    /// input is rejected via `debug_assert` so byte-level scanning never breaks
-    /// UTF-8 char boundaries on real content.
+    /// input is rejected so byte-level scanning never breaks UTF-8 char
+    /// boundaries on real content.
     pub fn with_tag_set(pairs: &[(&str, &str)]) -> Self {
-        debug_assert!(!pairs.is_empty(), "at least one tag pair required");
+        assert!(!pairs.is_empty(), "at least one tag pair required");
         for (o, c) in pairs {
-            debug_assert!(!o.is_empty() && !c.is_empty(), "tags must not be empty");
-            debug_assert!(o.is_ascii() && c.is_ascii(), "tags must be ASCII");
+            assert!(!o.is_empty() && !c.is_empty(), "tags must not be empty");
+            assert!(
+                o.is_ascii() && c.is_ascii(),
+                "tags must be ASCII to guarantee UTF-8 slicing boundary safety"
+            );
         }
         Self {
             pairs: pairs

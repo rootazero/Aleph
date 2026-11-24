@@ -261,24 +261,28 @@ impl LiveViewerBackend {
             ));
         }
         let key = (control_key(binding), route.epoch());
-        let mut controls = self.controls.lock().await;
-        route.validate()?;
-        controls.retain(|(target, epoch), _| target != &key.0 || *epoch == key.1);
-        if let Some(existing) = controls.get(&key) {
-            if existing.is_live() {
-                let live = existing.snapshot();
-                if live.resource_id == resource_id && live.binding == *binding {
-                    return Ok(existing.clone());
+        {
+            let mut controls = self.controls.lock().await;
+            route.validate()?;
+            controls.retain(|(target, epoch), _| target != &key.0 || *epoch == key.1);
+            if let Some(existing) = controls.get(&key) {
+                if existing.is_live() {
+                    let live = existing.snapshot();
+                    if live.resource_id == resource_id && live.binding == *binding {
+                        return Ok(existing.clone());
+                    }
+                    return Err(BrowserError::ActionFailed(
+                        "target already has a control binding for a different viewer resource"
+                            .into(),
+                    ));
                 }
-                return Err(BrowserError::ActionFailed(
-                    "target already has a control binding for a different viewer resource".into(),
-                ));
+                // Dead tombstone (target closed / re-attached): drop it and bind
+                // fresh. The owner's `bind_control` replaces dead tombstones and
+                // still refuses a live duplicate.
+                controls.remove(&key);
             }
-            // Dead tombstone (target closed / re-attached): drop it and bind
-            // fresh. The owner's `bind_control` replaces dead tombstones and
-            // still refuses a live duplicate.
-            controls.remove(&key);
         }
+        route.validate()?;
         let control = route
             .owner()
             .bind_control(
@@ -288,6 +292,18 @@ impl LiveViewerBackend {
                 self.sink.clone(),
             )
             .await?;
+        let mut controls = self.controls.lock().await;
+        route.validate()?;
+        controls.retain(|(target, epoch), _| target != &key.0 || *epoch == key.1);
+        if let Some(existing) = controls.get(&key).filter(|existing| existing.is_live()) {
+            let live = existing.snapshot();
+            if live.resource_id == resource_id && live.binding == *binding {
+                return Ok(existing.clone());
+            }
+            return Err(BrowserError::ActionFailed(
+                "target already has a control binding for a different viewer resource".into(),
+            ));
+        }
         controls.insert(key, control.clone());
         Ok(control)
     }
@@ -359,7 +375,7 @@ mod tests {
 
     use aleph_protocol::browser_live::{
         ClosedReason, ConversationBinding, DisplayPolicy, IssuerIdentity, PreviewKind,
-        PreviewProvenance, PreviewSource, RedactionStatus, ViewerOrigin, ViewerSecret,
+        PreviewProvenance, PreviewSource, RedactionStatus, ViewerSecret,
     };
 
     use super::super::resource::ResourceDraft;
@@ -371,7 +387,7 @@ mod tests {
         owner: &Arc<LiveProfileOwner>,
         handle: &Arc<crate::browser::engine::EngineHandle>,
     ) -> LiveOwnerRegistry {
-        use crate::browser::cdp_backend::{BrowserOperationKind, BrowserOperationRecord};
+        use crate::browser::cdp_backend::BrowserOperationRecord;
         let registry = LiveOwnerRegistry::default();
         for target in ["T1", "T2", "T3"] {
             registry
@@ -379,7 +395,6 @@ mod tests {
                     owner,
                     handle,
                     target.into(),
-                    BrowserOperationKind::Open,
                 ))
                 .unwrap();
         }
@@ -530,7 +545,6 @@ mod tests {
                         &ob,
                         &hb,
                         target.into(),
-                        crate::browser::cdp_backend::BrowserOperationKind::Open,
                     ),
                 )
                 .unwrap();
@@ -566,7 +580,10 @@ mod tests {
             .unwrap();
         assert_eq!(sa.received_for("Input.insertText").len(), 1);
         assert!(sb.received_for("Input.insertText").is_empty());
-        assert!(owners.retire_owner(routes[0].lease.as_ref().unwrap()));
+        // The owner ends: an ended owner routes nothing, so the lease of its
+        // target fails closed on the next dispatch (the same liveness
+        // predicate `route_available` applies).
+        oa.retire();
         assert!(backend
             .dispatch_input(
                 &routes[0],
@@ -608,11 +625,6 @@ mod tests {
             binding,
             resource_id: resource.resource_id.clone(),
             permissions: vec![ViewerPermission::Frames],
-            origin: ViewerOrigin {
-                scheme: "http".into(),
-                host: "localhost".into(),
-                port: 1,
-            },
             expires_at_ms: resource.expires_at_ms,
         }
     }

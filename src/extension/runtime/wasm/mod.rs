@@ -54,6 +54,8 @@ pub struct WasmToolOutput {
 #[derive(Default)]
 pub struct WasmRuntime {
     plugins: HashMap<String, Arc<LoadedWasmPlugin>>,
+    #[cfg(test)]
+    probe: Option<crate::extension::loader::WasmLoadProbe>,
 }
 
 #[cfg(test)]
@@ -64,16 +66,19 @@ type GuestBarrier = (
 
 #[derive(Debug)]
 struct LoadedWasmPlugin {
-    plugin: Mutex<extism::Plugin>,
+    plugin: Mutex<Option<extism::Plugin>>,
+    kernel: Arc<WasmCapabilityKernel>,
     #[cfg(test)]
     guest_barrier: Arc<Mutex<Option<GuestBarrier>>>,
-    // Captured from the effective configuration at build time, never from a
-    // manifest supplied by a later binding caller. No per-call attenuation.
-    context_effect_free: bool,
+    #[cfg(test)]
+    instance_receipt: Option<crate::extension::loader::WasmInstanceReceipt>,
     // Immutable discovery facts of THIS incarnation, not active registrations.
     context_declarations: Vec<crate::extension::capability::ContextDeclaration>,
     // Declaration facts captured from THIS mounted manifest, not call metadata.
     hook_exports: std::collections::HashSet<String>,
+    // Captured from the effective configuration at build time, never from a
+    // manifest supplied by a later binding caller. No per-call attenuation.
+    context_effect_free: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -152,11 +157,32 @@ impl WasmMountIdentity {
     }
 }
 
+impl Drop for LoadedWasmPlugin {
+    fn drop(&mut self) {
+        let plugin = match self.plugin.get_mut() {
+            Ok(plugin) => plugin,
+            Err(error) => error.into_inner(),
+        };
+        drop(plugin.take());
+        #[cfg(test)]
+        if let Some(receipt) = &self.instance_receipt {
+            receipt.mark_dropped();
+        }
+    }
+}
+
 impl WasmRuntime {
-    /// Create a new WASM runtime
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_probe(probe: crate::extension::loader::WasmLoadProbe) -> Self {
+        Self {
+            plugins: HashMap::new(),
+            probe: Some(probe),
+        }
     }
 
     /// Load a WASM plugin.
@@ -246,6 +272,13 @@ impl WasmRuntime {
         }
 
         info!("Loading WASM plugin: {} from {:?}", manifest.id, wasm_path);
+        let wasm_bytes = std::fs::read(&wasm_path).map_err(|error| {
+            ExtensionError::Runtime(format!("Failed to read WASM file {wasm_path:?}: {error}"))
+        })?;
+        #[cfg(test)]
+        if let Some(probe) = &self.probe {
+            probe.record_guest_read(wasm_bytes.len());
+        }
 
         // Parse capabilities from manifest (default = zero permissions)
         let capabilities = manifest.wasm_capabilities.clone().unwrap_or_default();
@@ -289,22 +322,21 @@ impl WasmRuntime {
         // (the plugin instance cannot continue afterwards and must be
         // reloaded).
         let mut extism_manifest =
-            ExtismManifest::new([Wasm::file(&wasm_path)]).with_timeout(call_timeout);
-        if has_contexts {
-            // WASM pages are 64 KiB; memory_mb is measured in MiB. Apply the
-            // existing mounted limits to the VM, not just the host kernel.
-            let pages = memory_pages.ok_or_else(|| {
-                ExtensionError::Runtime(
-                    "context WASM memory limit must be positive and fit in pages".into(),
-                )
-            })?;
-            if fuel == 0 {
-                return Err(ExtensionError::Runtime(
-                    "context WASM fuel limit must be positive".into(),
-                ));
-            }
-            extism_manifest = extism_manifest.with_memory_max(pages);
+            ExtismManifest::new([Wasm::data(wasm_bytes)]).with_timeout(call_timeout);
+        // WASM pages are 64 KiB; memory_mb is measured in MiB. Apply the
+        // mounted limits to the VM, not just the host kernel — for every
+        // plugin, context guests or not: an ordinary marketplace plugin is
+        // untrusted code too and must not be able to allocate the default
+        // 4 GiB or spin without fuel.
+        let pages = memory_pages.ok_or_else(|| {
+            ExtensionError::Runtime("WASM memory limit must be positive and fit in pages".into())
+        })?;
+        if fuel == 0 {
+            return Err(ExtensionError::Runtime(
+                "WASM fuel limit must be positive".into(),
+            ));
         }
+        extism_manifest = extism_manifest.with_memory_max(pages);
 
         // The operator's configuration, as Extism config keys. Scalars are
         // passed in their natural spelling and structured values as JSON, so
@@ -323,6 +355,7 @@ impl WasmRuntime {
 
         let mut builder = PluginBuilder::new(extism_manifest)
             .with_wasi(!has_contexts)
+            .with_fuel_limit(fuel)
             .with_function(
                 "log",
                 [PTR, PTR],
@@ -364,7 +397,7 @@ impl WasmRuntime {
                 memdump: None,
                 ..Default::default()
             };
-            builder = builder.with_fuel_limit(fuel).with_debug_options(debug);
+            builder = builder.with_debug_options(debug);
             // Extism installs these independently of our `log` import. Its
             // linker explicitly permits namespaced host functions to shadow
             // builtins, so raw context cannot escape through PDK logging.
@@ -424,9 +457,15 @@ impl WasmRuntime {
             .map(|ext| ext.contexts.clone())
             .unwrap_or_default();
         let loaded = Arc::new(LoadedWasmPlugin {
-            plugin: Mutex::new(plugin),
+            plugin: Mutex::new(Some(plugin)),
+            kernel: kernel.clone(),
             #[cfg(test)]
             guest_barrier,
+            #[cfg(test)]
+            instance_receipt: self
+                .probe
+                .as_ref()
+                .map(crate::extension::loader::WasmLoadProbe::record_instance),
             context_declarations,
             hook_exports: manifest
                 .hooks_v2
@@ -444,6 +483,16 @@ impl WasmRuntime {
         self.plugins.insert(manifest.id.clone(), loaded);
 
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn instance_receipt(
+        &self,
+        plugin_id: &str,
+    ) -> Option<crate::extension::loader::WasmInstanceReceipt> {
+        self.plugins
+            .get(plugin_id)
+            .and_then(|instance| instance.instance_receipt.clone())
     }
 
     /// Unload a plugin
@@ -501,7 +550,10 @@ impl WasmRuntime {
             .plugin
             .lock()
             .map_err(|e| ExtensionError::Runtime(format!("Failed to lock plugin: {e}")))?;
-        if !plugin.function_exists(export) {
+        if !plugin
+            .as_ref()
+            .is_some_and(|plugin| plugin.function_exists(export))
+        {
             return Err(ExtensionError::Runtime(format!(
                 "WASM export not found: {export}"
             )));
@@ -582,13 +634,16 @@ impl WasmRuntime {
             .map_err(|e| ExtensionError::Runtime(format!("Failed to serialize input: {e}")))?;
 
         debug!(plugin = plugin_id, handler, "Calling WASM handler");
-
         let mut plugin = loaded
             .plugin
             .lock()
-            .map_err(|e| ExtensionError::Runtime(format!("Failed to lock plugin: {e}")))?;
+            .map_err(|error| ExtensionError::Runtime(format!("Failed to lock plugin: {error}")))?;
+
+        loaded.kernel.reset_per_execution_counters();
 
         let result = plugin
+            .as_mut()
+            .ok_or_else(|| ExtensionError::Runtime("WASM plugin instance unavailable".into()))?
             .call::<&str, &str>(handler, &input_json)
             .map_err(|e| ExtensionError::Runtime(format!("WASM call failed: {e}")))?;
 
@@ -612,6 +667,58 @@ pub(crate) mod tests {
     use super::*;
     use crate::extension::types::PluginKind;
     use std::path::PathBuf;
+
+    #[test]
+    fn guest_calls_reset_execution_counters_but_preserve_rate_limit() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut manifest = guest_fixture::manifest_with_guest(
+            directory.path(),
+            "counter-reset",
+            guest_fixture::PAYLOAD_A,
+        );
+        manifest.wasm_resource_limits = Some(limits::WasmResourceLimits {
+            max_http_calls: 1,
+            max_log_entries: 1,
+            ..Default::default()
+        });
+        manifest.wasm_capabilities = Some(capabilities::WasmCapabilities {
+            http: Some(capabilities::HttpCapability {
+                rate_limit: Some(capabilities::RateLimit {
+                    requests_per_minute: 1,
+                    requests_per_hour: 1,
+                }),
+                allowlist: vec![],
+                credentials: vec![],
+                timeout_secs: 30,
+                max_request_bytes: 1024,
+                max_response_bytes: 2048,
+            }),
+            ..Default::default()
+        });
+        let mut runtime = WasmRuntime::new();
+        runtime.load_plugin(&manifest).unwrap();
+        let binding = runtime.bind(&manifest.id, guest_fixture::HANDLER).unwrap();
+        let kernel = &binding.instance.kernel;
+        kernel.check_rate_limit().unwrap();
+        for _ in 0..2 {
+            kernel.check_http_limit().unwrap();
+            assert!(kernel.check_http_limit().is_err());
+            kernel.log("info", "per-execution log").unwrap();
+            assert!(kernel.log("info", "over limit").is_err());
+            runtime
+                .call_bound(
+                    &binding,
+                    WasmToolInput {
+                        name: "test".into(),
+                        arguments: serde_json::json!({}),
+                    },
+                )
+                .unwrap();
+            assert!(kernel.check_rate_limit().is_err());
+        }
+        kernel.check_http_limit().unwrap();
+        kernel.log("info", "reset after final guest call").unwrap();
+    }
 
     #[test]
     fn test_wasm_runtime_not_found() {
@@ -655,5 +762,28 @@ pub(crate) mod tests {
     fn test_wasm_runtime_unload_returns_false() {
         let mut runtime = WasmRuntime::new();
         assert!(!runtime.unload_plugin("any-plugin"));
+    }
+
+    #[test]
+    fn ordinary_plugin_vm_enforces_the_mounted_memory_limit() {
+        use self::guest_fixture::{
+            call_guest_raw, manifest_with_guest, write_memory_probe_guest, PAYLOAD_A,
+        };
+
+        let directory = tempfile::tempdir().unwrap();
+        let mut manifest = manifest_with_guest(directory.path(), "ordinary", PAYLOAD_A);
+        manifest.wasm_resource_limits = Some(WasmResourceLimits {
+            memory_mb: 10,
+            fuel: 1_000_000_000,
+            timeout_secs: 2,
+            ..Default::default()
+        });
+        write_memory_probe_guest(&manifest.entry_path().unwrap(), 32 * 1024 * 1024);
+        let mut runtime = WasmRuntime::new();
+        runtime.load_plugin(&manifest).unwrap();
+        assert!(
+            call_guest_raw(&runtime, &manifest.id).is_err(),
+            "ordinary guest allocated 32 MiB despite its mounted 10 MiB VM limit"
+        );
     }
 }

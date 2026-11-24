@@ -1071,7 +1071,7 @@ fn namespace_explicit_project_id(project_id: &str) -> String {
                 use std::hash::{Hash, Hasher};
                 let mut h = std::collections::hash_map::DefaultHasher::new();
                 actor.hash(&mut h);
-                format!("{:x}", h.finish())[..8].to_string()
+                format!("{:016x}", h.finish())[..8].to_string()
             } else {
                 String::new()
             };

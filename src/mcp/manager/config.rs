@@ -152,8 +152,8 @@ impl McpPersistentConfig {
         // and the next `load` reading the old (pre-rename) file.
         #[cfg(unix)]
         {
-            if let Ok(file) = std::fs::File::open(&temp_path) {
-                let _ = file.sync_all();
+            if let Ok(file) = tokio::fs::File::open(&temp_path).await {
+                let _ = file.sync_all().await;
             }
         }
 
@@ -174,8 +174,8 @@ impl McpPersistentConfig {
         // Same defensive pattern as auth/storage.rs::save_to_file.
         #[cfg(unix)]
         if let Some(parent) = path.parent() {
-            if let Ok(dir) = std::fs::File::open(parent) {
-                if let Err(e) = dir.sync_all() {
+            if let Ok(dir) = tokio::fs::File::open(parent).await {
+                if let Err(e) = dir.sync_all().await {
                     tracing::warn!(
                         parent = %parent.display(),
                         error = %e,
@@ -238,9 +238,9 @@ impl McpPersistentConfig {
             }
 
             // Expand in command
-            if let Some(ref cmd) = config.command {
+            if let Some(cmd) = &mut config.command {
                 if let Some(expanded) = expand_env_var(cmd) {
-                    config.command = Some(expanded);
+                    *cmd = expanded;
                 }
             }
 
@@ -253,9 +253,9 @@ impl McpPersistentConfig {
             }
 
             // Expand in URL
-            if let Some(ref url) = config.url {
+            if let Some(url) = &mut config.url {
                 if let Some(expanded) = expand_env_var(url) {
-                    config.url = Some(expanded);
+                    *url = expanded;
                 }
             }
         }
@@ -269,11 +269,15 @@ impl McpPersistentConfig {
 ///
 /// Unknown variables are left as-is.
 fn expand_env_var(s: &str) -> Option<String> {
+    if !s.contains("${") {
+        return None;
+    }
+
     // Static regex compiled once, reused on every call
     static ENV_VAR_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
-    let re = ENV_VAR_RE.get_or_init(|| {
-        Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
-            .unwrap_or_else(|_| unreachable!("hardcoded regex is valid"))
+    let re = ENV_VAR_RE.get_or_init(|| match Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}") {
+        Ok(re) => re,
+        Err(e) => panic!("hardcoded regex is valid: {e}"),
     });
 
     let mut result = s.to_string();
@@ -316,7 +320,15 @@ mod tests {
             .unwrap_or_else(|e| e.into_inner());
         let path = McpPersistentConfig::default_path();
         assert!(path.ends_with("mcp_config.json"));
-        assert!(path.to_string_lossy().contains(".aleph"));
+        // The file lives in the CONFIG DIR, which is `~/.aleph` by default
+        // but `$ALEPH_HOME` when the operator (or a test) relocated the
+        // state directory. Asserting the literal ".aleph" would pin the
+        // default location only and would fail for any legitimately
+        // relocated home, so the contract is asserted against the resolved
+        // config dir instead.
+        let expected_parent = crate::utils::paths::get_config_dir()
+            .unwrap_or_else(|_| std::path::PathBuf::from(".aleph"));
+        assert_eq!(path.parent(), Some(expected_parent.as_path()));
     }
 
     #[test]

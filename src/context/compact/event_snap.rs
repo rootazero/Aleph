@@ -50,33 +50,47 @@ pub(crate) fn snap_past_tool_results(events: &[SessionEventRecord], cut: usize) 
 /// was already lost — and pulling the split boundary back over it would
 /// re-seed the child with a run the parent already finished.
 pub(crate) fn snap_out_of_open_run(events: &[SessionEventRecord], cut: usize) -> usize {
-    // One pass over the kept tail collects the runs it closes; the prefix scan
-    // is then a set lookup rather than a nested search.
-    let closed_after_cut: std::collections::HashSet<&str> = events[cut..]
-        .iter()
-        .filter_map(|r| match &r.event {
-            SessionEvent::RunFinished { run_id, .. } => Some(run_id.as_str()),
-            _ => None,
-        })
-        .collect();
-    if closed_after_cut.is_empty() {
-        return cut;
-    }
-    // Each closer pairs with the LAST opener under its id before the cut: one
-    // engine run can leave several brackets under one id (the fallback retry
-    // loop), and only the last one is the bracket this closer ends. The cut
-    // then goes back to the earliest such opener, so every run closed in the
-    // kept tail keeps its opener too.
-    let mut earliest: Option<usize> = None;
-    for id in &closed_after_cut {
-        let opener = events[..cut].iter().rposition(|r| {
-            matches!(&r.event, SessionEvent::RunStarted { run_id, .. } if run_id.as_str() == *id)
-        });
-        if let Some(pos) = opener {
-            earliest = Some(earliest.map_or(pos, |e| e.min(pos)));
+    // One pass pairs every closer with the last opener under its id that is
+    // still unmatched: one engine run can leave several brackets under one id
+    // (the fallback retry loop), and only the last opener is the bracket this
+    // closer ends.
+    let mut openers: std::collections::HashMap<&str, Vec<usize>> = std::collections::HashMap::new();
+    let mut crossing: Option<usize> = None;
+    for (idx, record) in events.iter().enumerate() {
+        match &record.event {
+            SessionEvent::RunStarted { run_id, .. } => {
+                openers.entry(run_id.as_str()).or_default().push(idx);
+            }
+            SessionEvent::RunFinished { run_id, .. } => {
+                let Some(opener) = openers
+                    .get_mut(run_id.as_str())
+                    .and_then(|stack| stack.pop())
+                else {
+                    continue;
+                };
+                // The bracket is split by the cut when its opener is retired
+                // into the prefix while its closer stays in the kept tail.
+                // Only such a bracket pulls the cut back — a bracket that was
+                // already closed before the cut has both markers on the same
+                // side, and pulling back over it would compact MORE than the
+                // guard is allowed to.
+                if opener < cut && idx >= cut {
+                    crossing = Some(crossing.map_or(opener, |c| c.min(opener)));
+                }
+            }
+            _ => {}
         }
     }
-    earliest.unwrap_or(cut)
+    // Any opener still unclosed (e.g. open run currently executing) whose
+    // opener is before the cut must also pull the cut back to keep RunStarted in the tail
+    for stack in openers.values() {
+        for &opener in stack {
+            if opener < cut {
+                crossing = Some(crossing.map_or(opener, |c| c.min(opener)));
+            }
+        }
+    }
+    crossing.unwrap_or(cut)
 }
 
 #[cfg(test)]
@@ -175,8 +189,9 @@ mod tests {
         assert_eq!(snap_out_of_open_run(&events, 3), 1);
         // A cut before the run starts is untouched.
         assert_eq!(snap_out_of_open_run(&events, 1), 1);
-        // No RunFinished in the kept tail → nothing to protect.
-        assert_eq!(snap_out_of_open_run(&events[..4], 3), 3);
+        // An unfinished run also keeps its opener, so a later finish cannot
+        // outlive the RunStarted retired by this compaction.
+        assert_eq!(snap_out_of_open_run(&events[..4], 3), 1);
     }
 
     /// One engine run can leave several brackets under ONE id (the fallback
@@ -212,5 +227,21 @@ mod tests {
             run(6, "b", true),
         ];
         assert_eq!(snap_out_of_open_run(&events, 4), 0);
+    }
+
+    /// A run id that was closed and REOPENED before the cut is not split by
+    /// it: the closer in the kept tail pairs with the later opener, and that
+    /// opener is in the kept tail too. Pulling the cut back over the earlier,
+    /// already-closed bracket would compact more than the guard may.
+    #[test]
+    fn a_run_reopened_before_the_cut_does_not_pull_it_back() {
+        let events = vec![
+            run(1, "r", false),
+            run(2, "r", true),
+            user(3),
+            run(4, "r", false),
+            run(5, "r", true),
+        ];
+        assert_eq!(snap_out_of_open_run(&events, 2), 2);
     }
 }

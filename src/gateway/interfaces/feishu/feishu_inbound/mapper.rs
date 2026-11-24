@@ -8,13 +8,19 @@ use crate::gateway::interfaces::feishu::config::{FeishuConfig, GroupSessionScope
 use crate::gateway::interfaces::feishu::feishu_inbound::user_cache::UserProfileCache;
 use crate::gateway::interfaces::feishu::types::{ChatType, FeishuEvent, Mention};
 
-pub fn map_event_to_inbound(
+/// Map one routed Feishu event to an `InboundMessage`, or `None` when the event
+/// carries nothing the agent can answer.
+///
+/// `sender_name` is resolved through [`UserProfileCache`], which fills the gap
+/// Feishu leaves in message events (they carry the sender's `open_id` but no
+/// display name) and keeps the lookup cached across messages.
+pub async fn map_event_to_inbound(
     event: &FeishuEvent,
     channel_id: &ChannelId,
     config: &FeishuConfig,
     bot_open_id: &str,
-    _user_cache: &UserProfileCache,
-    _api: &Arc<FeishuApi>,
+    user_cache: &UserProfileCache,
+    api: &Arc<FeishuApi>,
 ) -> Option<InboundMessage> {
     match event {
         FeishuEvent::MessageReceive {
@@ -49,7 +55,10 @@ pub fn map_event_to_inbound(
                 channel_id: channel_id.clone(),
                 conversation_id: ConversationId::new(conversation_id),
                 sender_id: UserId::new(sender_id),
-                sender_name: sender_name.clone(),
+                sender_name: match sender_name {
+                    Some(name) => Some(name.clone()),
+                    None => user_cache.get_name(sender_id, api).await,
+                },
                 text,
                 attachments: vec![],
                 timestamp: Utc::now(),
@@ -59,25 +68,33 @@ pub fn map_event_to_inbound(
                 metadata,
             })
         }
-        FeishuEvent::CardAction {
-            chat_id,
-            sender_id,
-            action_value,
-            message_id,
-        } => Some(InboundMessage {
-            id: MessageId::new(message_id),
-            channel_id: channel_id.clone(),
-            conversation_id: ConversationId::new(chat_id.clone()),
-            sender_id: UserId::new(sender_id),
-            sender_name: None,
-            text: action_value.clone(),
-            attachments: vec![],
-            timestamp: Utc::now(),
-            reply_to: Some(MessageId::new(message_id)),
-            is_group: false,
-            raw: None,
-            metadata: vec![],
-        }),
+        FeishuEvent::BotMenu {
+            event_key,
+            operator_id,
+            operator_name,
+            timestamp,
+        } => {
+            // A bot-menu click is the operator interacting with the bot in their
+            // own chat with it, so the DM classification is authoritative here —
+            // unlike card actions, which carry no chat type at all.
+            Some(InboundMessage {
+                id: MessageId::new(format!("menu:{operator_id}:{timestamp}")),
+                channel_id: channel_id.clone(),
+                conversation_id: ConversationId::new(format!("dm:{operator_id}")),
+                sender_id: UserId::new(operator_id),
+                sender_name: match operator_name {
+                    Some(name) => Some(name.clone()),
+                    None => user_cache.get_name(operator_id, api).await,
+                },
+                text: format!("[Menu] {event_key}"),
+                attachments: vec![],
+                timestamp: Utc::now(),
+                reply_to: None,
+                is_group: false,
+                raw: Some(serde_json::json!(event)),
+                metadata: vec![],
+            })
+        }
         _ => None,
     }
 }
@@ -166,7 +183,6 @@ mod tests {
             streaming: true,
             render_mode: "auto".into(),
             typing_indicator: true,
-            reaction_notifications: true,
             group_session_scope: GroupSessionScope::default(),
             connection_mode: "websocket".into(),
             webhook_port: 3000,
@@ -179,16 +195,23 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_card_action_to_inbound_message() {
-        let event = FeishuEvent::CardAction {
-            chat_id: "oc_1".into(),
-            sender_id: "ou_1".into(),
-            action_value: "approve".into(),
-            message_id: "om_1".into(),
+    #[tokio::test]
+    async fn test_bot_menu_click_becomes_a_direct_message() {
+        let event = FeishuEvent::BotMenu {
+            event_key: "menu_settings".into(),
+            operator_id: "ou_1".into(),
+            operator_name: None,
+            timestamp: 1_700_000_000_000,
         };
         let api = make_api();
+        // Pre-seed the cache so the mapping never reaches the network.
         let cache = UserProfileCache::new();
+        cache.insert(
+            crate::gateway::interfaces::feishu::feishu_inbound::user_cache::UserProfile {
+                open_id: "ou_1".into(),
+                name: Some("Operator".into()),
+            },
+        );
         let msg = map_event_to_inbound(
             &event,
             &ChannelId::new("feishu"),
@@ -196,11 +219,50 @@ mod tests {
             "bot",
             &cache,
             &api,
-        );
-        assert!(msg.is_some());
-        let msg = msg.unwrap();
-        assert_eq!(msg.text, "approve");
-        assert_eq!(msg.conversation_id.as_str(), "oc_1");
+        )
+        .await
+        .expect("a menu click is routable");
+        // A menu click happens in the operator's own chat with the bot, so it is
+        // a DM and goes through the DM policy engine.
+        assert!(!msg.is_group);
+        assert_eq!(msg.conversation_id.as_str(), "dm:ou_1");
+        assert_eq!(msg.sender_id.as_str(), "ou_1");
+        assert_eq!(msg.sender_name.as_deref(), Some("Operator"));
+        assert_eq!(msg.text, "[Menu] menu_settings");
+    }
+
+    #[tokio::test]
+    async fn test_sender_name_comes_from_the_profile_cache() {
+        let sender = crate::gateway::interfaces::feishu::feishu_inbound::user_cache::UserProfile {
+            open_id: "ou_1".into(),
+            name: Some("Alice".into()),
+        };
+        let cache = UserProfileCache::new();
+        cache.insert(sender);
+        let event = FeishuEvent::MessageReceive {
+            message_id: "om_1".into(),
+            chat_id: "oc_1".into(),
+            chat_type: ChatType::P2p,
+            sender_id: "ou_1".into(),
+            // Feishu message events never carry a display name.
+            sender_name: None,
+            message_type: "text".into(),
+            content: r#"{"text":"hi"}"#.into(),
+            mentions: vec![],
+            parent_id: None,
+            root_id: None,
+        };
+        let msg = map_event_to_inbound(
+            &event,
+            &ChannelId::new("feishu"),
+            &feishu_config(),
+            "bot",
+            &cache,
+            &make_api(),
+        )
+        .await
+        .expect("text messages are routable");
+        assert_eq!(msg.sender_name.as_deref(), Some("Alice"));
     }
 
     #[test]

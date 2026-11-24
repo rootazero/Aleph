@@ -1,9 +1,10 @@
 //! Diagnostics Handlers
 //!
 //! RPC surface for the unified self-diagnosis engine (`crate::diagnostics`).
-//! Lets connected clients (the `aleph doctor` CLI, the Panel) run the same
-//! check battery the daemon-side `doctor` tool uses, instead of duplicating
-//! the checks client-side.
+//! Lets connected clients run the same check battery the daemon-side `doctor`
+//! tool uses, instead of duplicating the checks client-side. The in-repo
+//! client is the `aleph doctor` CLI; the Panel reaches diagnostics through the
+//! agent and the `doctor` builtin tool, not through this RPC.
 
 use crate::sync_primitives::Arc;
 use serde::Deserialize;
@@ -138,7 +139,7 @@ mod tests {
         let params: DiagnosticsRunParams = serde_json::from_value(json!({
             "fix": true,
             "only": ["core/data-dir"],
-            "skip": ["core/stale-lock"]
+            "skip": ["core/instance-lock"]
         }))
         .unwrap();
         assert!(params.fix);
@@ -146,6 +147,6 @@ mod tests {
             params.only.as_deref(),
             Some(&["core/data-dir".to_string()][..])
         );
-        assert_eq!(params.skip, vec!["core/stale-lock".to_string()]);
+        assert_eq!(params.skip, vec!["core/instance-lock".to_string()]);
     }
 }

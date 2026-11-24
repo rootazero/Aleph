@@ -8,13 +8,20 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
+use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Output, Stdio};
+use std::time::Duration;
+use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::process::Command;
 use tracing::{debug, trace, warn};
 
 use crate::runtimes::ledger::CapabilitySource;
 use crate::runtimes::specs::{find_spec, RuntimeSpec};
 use crate::utils::no_window::NoWindow;
+
+const PROBE_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+const MAX_PROBE_STREAM_BYTES: u64 = 64 * 1024;
 
 /// Result of probing for a capability.
 #[derive(Debug)]
@@ -40,7 +47,7 @@ impl ProbeResult {
 
 /// Probe for a named capability. Returns a `ProbeResult` describing what
 /// was found on the system PATH (or nothing).
-pub fn probe(name: &str) -> ProbeResult {
+pub async fn probe(name: &str) -> ProbeResult {
     let spec = match find_spec(name) {
         Some(s) => s,
         None => {
@@ -49,7 +56,7 @@ pub fn probe(name: &str) -> ProbeResult {
         }
     };
 
-    if let Some(result) = probe_system_path(spec) {
+    if let Some(result) = probe_system_path(spec).await {
         debug!(
             "found '{}' on system PATH: {:?}",
             name,
@@ -62,22 +69,27 @@ pub fn probe(name: &str) -> ProbeResult {
     ProbeResult::not_found()
 }
 
-fn probe_system_path(spec: &RuntimeSpec) -> Option<ProbeResult> {
+async fn probe_system_path(spec: &RuntimeSpec) -> Option<ProbeResult> {
     let search_path = enriched_search_path();
     // Iterate all known binary aliases (e.g. ["node", "nodejs"]) so a spec can
     // express packaging differences (Debian's `nodejs` vs upstream `node`) and
     // we keep probing on the first hit. Returning on the first `spec.binaries`
     // entry silently dropped later aliases.
-    let bin_path = spec
-        .binaries
-        .iter()
-        .find_map(|bin_name| find_on_path(bin_name, &search_path))?;
+    let mut bin_path = None;
+    for bin_name in spec.binaries {
+        if let Some(path) = find_on_path(bin_name, &search_path).await {
+            bin_path = Some(path);
+            break;
+        }
+    }
+    let bin_path = bin_path?;
     let version = get_version(
         &bin_path,
         spec.version_flag,
         spec.version_regex,
         &search_path,
-    );
+    )
+    .await;
     let version_warning = check_version_warning(spec, version.as_deref());
     Some(ProbeResult {
         found: true,
@@ -115,7 +127,7 @@ fn enriched_search_path() -> OsString {
 /// First tries the platform-native locator (`which` on Unix, `where` on Windows).
 /// Falls back to a manual PATH walk for minimal environments (e.g. containers
 /// without the `which` binary).
-fn find_on_path(bin_name: &str, search_path: &OsStr) -> Option<PathBuf> {
+async fn find_on_path(bin_name: &str, search_path: &OsStr) -> Option<PathBuf> {
     // 1. Try the native locator first (more reliable, handles aliases, etc.)
     let locator = if cfg!(target_os = "windows") {
         "where"
@@ -125,7 +137,7 @@ fn find_on_path(bin_name: &str, search_path: &OsStr) -> Option<PathBuf> {
     trace!("looking for '{}' via {}", bin_name, locator);
     let mut cmd = Command::new(locator);
     cmd.arg(bin_name).env("PATH", search_path);
-    if let Ok(output) = cmd.no_window().output() {
+    if let Ok(output) = probe_output(cmd, PROBE_COMMAND_TIMEOUT).await {
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
             let path_str = stdout.lines().next().unwrap_or("").trim();
@@ -143,17 +155,23 @@ fn find_on_path(bin_name: &str, search_path: &OsStr) -> Option<PathBuf> {
 /// Manually walk `search_path` (a joined PATH string) looking for `bin_name`.
 fn find_in_dirs(bin_name: &str, search_path: &OsStr) -> Option<PathBuf> {
     for dir in std::env::split_paths(search_path) {
-        let candidates: Vec<PathBuf> = if cfg!(target_os = "windows") {
-            vec![
-                dir.join(format!("{bin_name}.exe")),
-                dir.join(format!("{bin_name}.bat")),
-                dir.join(format!("{bin_name}.cmd")),
-                dir.join(bin_name),
-            ]
-        } else {
-            vec![dir.join(bin_name)]
-        };
-        for candidate in candidates {
+        #[cfg(target_os = "windows")]
+        {
+            let exts = [".exe", ".bat", ".cmd", ""];
+            for ext in exts {
+                let candidate = if ext.is_empty() {
+                    dir.join(bin_name)
+                } else {
+                    dir.join(format!("{bin_name}{ext}"))
+                };
+                if is_executable_file(&candidate) {
+                    return Some(candidate);
+                }
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let candidate = dir.join(bin_name);
             if is_executable_file(&candidate) {
                 return Some(candidate);
             }
@@ -410,17 +428,16 @@ fn fnm_node_bin_dirs(root: &Path) -> Vec<PathBuf> {
 static REGEX_CACHE: Lazy<Mutex<HashMap<&'static str, Regex>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
-fn get_compiled_regex(pattern: &'static str) -> Option<Regex> {
+fn with_compiled_regex<R>(pattern: &'static str, f: impl FnOnce(&Regex) -> R) -> Option<R> {
     let mut cache = REGEX_CACHE.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(re) = cache.get(pattern) {
-        // rust-doctor-disable-next-line excessive-clone
-        return Some(re.clone());
+        return Some(f(re));
     }
     match Regex::new(pattern) {
         Ok(re) => {
-            // rust-doctor-disable-next-line excessive-clone
-            cache.insert(pattern, re.clone());
-            Some(re)
+            let res = f(&re);
+            cache.insert(pattern, re);
+            Some(res)
         }
         Err(e) => {
             warn!("invalid version regex '{}': {}", pattern, e);
@@ -429,7 +446,55 @@ fn get_compiled_regex(pattern: &'static str) -> Option<Regex> {
     }
 }
 
-fn get_version(
+async fn probe_output(mut cmd: Command, deadline: Duration) -> io::Result<Output> {
+    let mut child = cmd
+        .no_window()
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()?;
+    let stdout = child.stdout.take().expect("piped stdout");
+    let stderr = child.stderr.take().expect("piped stderr");
+    let output = tokio::time::timeout(deadline, async {
+        // Drain both pipes while waiting; a full pipe must not deadlock the child.
+        let (status, stdout, stderr) = tokio::try_join!(
+            child.wait(),
+            read_probe_stream(stdout),
+            read_probe_stream(stderr)
+        )?;
+        Ok(Output {
+            status,
+            stdout,
+            stderr,
+        })
+    })
+    .await;
+    let failure = match output {
+        Ok(Ok(output)) => return Ok(output),
+        Ok(Err(error)) => error,
+        Err(_) => io::Error::new(ErrorKind::TimedOut, "runtime probe timed out"),
+    };
+    child.kill().await?;
+    Err(failure)
+}
+
+async fn read_probe_stream(stream: impl AsyncRead + Unpin) -> io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    stream
+        .take(MAX_PROBE_STREAM_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .await?;
+    if bytes.len() as u64 > MAX_PROBE_STREAM_BYTES {
+        return Err(io::Error::new(
+            ErrorKind::InvalidData,
+            "runtime probe output too large",
+        ));
+    }
+    Ok(bytes)
+}
+
+async fn get_version(
     bin_path: &Path,
     version_flag: &str,
     version_regex: &'static str,
@@ -441,16 +506,65 @@ fn get_version(
     // PATH, so on a daemon's minimal PATH `node` would be "not found" and the
     // version would come back empty even though the binary itself was located.
     cmd.arg(version_flag).env("PATH", search_path);
-    let output = cmd.no_window().output().ok()?;
-    let combined = format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr),
-    );
-    let re = get_compiled_regex(version_regex)?;
-    re.captures(&combined)
-        .and_then(|caps| caps.get(1))
-        .map(|m| m.as_str().to_string())
+    let output = probe_output(cmd, PROBE_COMMAND_TIMEOUT).await.ok()?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if let Some(version) = with_compiled_regex(version_regex, |re| {
+        re.captures(&stdout)
+            .and_then(|caps| caps.get(1))
+            .map(|m| m.as_str().to_string())
+    })
+    .flatten()
+    {
+        return Some(version);
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    with_compiled_regex(version_regex, |re| {
+        re.captures(&stderr)
+            .and_then(|caps| caps.get(1))
+            .map(|m| m.as_str().to_string())
+    })
+    .flatten()
+}
+
+#[cfg(all(test, unix))]
+#[tokio::test]
+async fn version_probe_times_out_on_an_owned_slow_command() {
+    let dir = tempfile::tempdir().unwrap();
+    let pid_file = dir.path().join("pid");
+    let mut cmd = Command::new("/bin/sh");
+    cmd.args(["-c", "echo $$ > \"$1\"; exec /bin/sleep 3", "sh"])
+        .arg(&pid_file);
+    let output = probe_output(cmd, Duration::from_secs(1)).await;
+    assert_eq!(output.unwrap_err().kind(), ErrorKind::TimedOut);
+    let pid = std::fs::read_to_string(pid_file).unwrap();
+    assert!(!std::process::Command::new("/bin/kill")
+        .args(["-0", pid.trim()])
+        .stderr(Stdio::null())
+        .status()
+        .unwrap()
+        .success());
+}
+
+#[cfg(all(test, unix))]
+#[tokio::test]
+async fn version_probe_captures_both_streams() {
+    let mut cmd = Command::new("/bin/sh");
+    cmd.args(["-c", "printf out; printf err >&2; exit 7"]);
+    let output = probe_output(cmd, Duration::from_secs(2)).await.unwrap();
+    assert_eq!(output.status.code(), Some(7));
+    assert_eq!(output.stdout, b"out");
+    assert_eq!(output.stderr, b"err");
+}
+
+#[cfg(all(test, unix))]
+#[tokio::test]
+async fn version_probe_rejects_oversized_output() {
+    let mut cmd = Command::new("/bin/sh");
+    cmd.args(["-c", "exec /bin/dd if=/dev/zero bs=1024 count=65"]);
+    let result = probe_output(cmd, Duration::from_secs(2)).await;
+    assert_eq!(result.unwrap_err().kind(), ErrorKind::InvalidData);
 }
 
 fn check_version_warning(spec: &RuntimeSpec, version: Option<&str>) -> Option<String> {
@@ -474,13 +588,16 @@ fn check_version_warning(spec: &RuntimeSpec, version: Option<&str>) -> Option<St
 /// the future, this should be replaced by a proper semver parser.
 fn version_lt(actual: &str, minimum: &str) -> bool {
     let parse = |s: &str| -> (u64, u64) {
-        let mut parts = s.split('.');
+        let clean = s.trim_start_matches(|c: char| !c.is_ascii_digit());
+        let mut parts = clean.split('.');
         let major = parts
             .next()
+            .and_then(|p| p.split(|c: char| !c.is_ascii_digit()).next())
             .and_then(|p| p.parse::<u64>().ok())
             .unwrap_or(0);
         let minor = parts
             .next()
+            .and_then(|p| p.split(|c: char| !c.is_ascii_digit()).next())
             .and_then(|p| p.parse::<u64>().ok())
             .unwrap_or(0);
         (major, minor)
@@ -505,17 +622,17 @@ mod tests {
         assert!(!version_lt("3.12.1", "3.10"));
     }
 
-    #[test]
-    fn test_probe_unknown_returns_not_found() {
-        let r = probe("nonexistent_capability_xyz");
+    #[tokio::test]
+    async fn test_probe_unknown_returns_not_found() {
+        let r = probe("nonexistent_capability_xyz").await;
         assert!(!r.found);
         assert!(r.bin_path.is_none());
     }
 
-    #[test]
-    fn test_probe_known_spec_consistency() {
+    #[tokio::test]
+    async fn test_probe_known_spec_consistency() {
         // fnm may or may not be on the test machine; just assert the contract.
-        let r = probe("fnm");
+        let r = probe("fnm").await;
         if r.found {
             assert!(r.bin_path.is_some());
         } else {
@@ -722,8 +839,8 @@ mod tests {
     /// the bug this fix closes. Modelled with a tool that execs a helper which
     /// only exists in the enriched dir.
     #[cfg(unix)]
-    #[test]
-    fn test_get_version_runs_probe_with_enriched_path() {
+    #[tokio::test]
+    async fn test_get_version_runs_probe_with_enriched_path() {
         use std::os::unix::fs::PermissionsExt;
         let set_exec = |p: &Path| {
             let mut perms = std::fs::metadata(p).unwrap().permissions();
@@ -749,7 +866,7 @@ mod tests {
         // Minimal PATH: interpreter unresolvable → no version captured (the bug).
         let minimal = OsString::from("/usr/bin:/bin");
         assert_eq!(
-            get_version(&tool, "--version", re, &minimal),
+            get_version(&tool, "--version", re, &minimal).await,
             None,
             "precondition: interpreter must be unresolvable on the minimal PATH"
         );
@@ -760,7 +877,9 @@ mod tests {
             std::slice::from_ref(&interp_dir.path().to_path_buf()),
         );
         assert_eq!(
-            get_version(&tool, "--version", re, &enriched).as_deref(),
+            get_version(&tool, "--version", re, &enriched)
+                .await
+                .as_deref(),
             Some("9.8.7"),
             "version must be captured once the interpreter dir is on the enriched PATH"
         );

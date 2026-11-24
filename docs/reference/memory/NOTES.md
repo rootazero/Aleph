@@ -53,7 +53,7 @@ All note categories are enumerated by `CATEGORY_DIRS` in `src/memory/notes/index
     └── query/*.md                 # Spec 8: filed-back query answers
 ```
 
-`NoteIndexer::ensure_dirs` creates every one of these directories lazily on first use. Filenames are sanitized by `sanitize_title` (see §4) to strip path separators and filesystem-unsafe characters, so a malicious note title like `../../etc/passwd` becomes the literal `etcpasswd` before ever touching disk.
+`NoteIndexer::ensure_dirs` creates every one of these directories lazily on first use. Filenames are sanitized by `sanitize_title` (see §4) to strip path separators and filesystem-unsafe characters, so a malicious note title like `(example path for testing)` becomes the literal `etcpasswd` before ever touching disk.
 
 ## 3. Frontmatter Schema
 
@@ -105,7 +105,7 @@ superseded_by: []
 
 `relations` and `permanent` are emitted only when non-default, so legacy notes without them serialize byte-for-byte as before those fields existed. Forward-compatible: unknown fields are ignored by the parser.
 
-> **Every frontmatter scalar that can carry model output MUST go through `yaml_scalar` (`note/helpers.rs`).** This is a durability rule, not a style preference: an unquoted `title: [wip] plans` makes the whole note permanently unparseable, and *the failure is silent* — `mention_weave` drops the note with `.ok()?`, `note_decay` `continue`s past it, nothing logs above `debug!`, and `load_existing_or_default` hands the next ingest an empty note that overwrites the original's facts. The note simply disappears from the corpus.
+> **Every frontmatter scalar that can carry model output MUST go through `yaml_scalar` (`src/memory/notes/note/helpers.rs`).** This is a durability rule, not a style preference: an unquoted `title: [wip] plans` makes the whole note permanently unparseable, and *the failure is silent* — `mention_weave` drops the note with `.ok()?`, `note_decay` `continue`s past it, nothing logs above `debug!`, and `load_existing_or_default` hands the next ingest an empty note that overwrites the original's facts. The note simply disappears from the corpus.
 >
 > `title` / `type` / `category` and the arrays (via `yaml_inline_array`) were always quoted; the `relations:` block was not, until 2026-08-01. Both of its fields are raw model input — the ingest prompt tells the model `"to": "<entity path or [P<n>] token>"`, and `rel_type` is an explicitly free-form LLM-chosen verb (R7, no fixed taxonomy) — so `to: [[plan/x]]`, the wikilink form the model sees everywhere else in the note API, parsed as a nested YAML flow sequence and bricked the note.
 >
@@ -383,9 +383,17 @@ degrade gracefully to the legacy create-everything behaviour (P7).
 
 Corpora are reconciled sequentially: each reconcile already fans out over categories up to `available_parallelism()`, so an outer fan-out would only multiply peak contention on the single SQLite connection. A corpus whose reconcile returns `Err` is recorded in `RebuildAllStats::failed` (name + error) and the pass continues — kept separate from `total.errors`, which counts *files* that would not parse (normal on a hand-edited vault). A whole namespace left unmaintained is a different fact from a bad file, and folding them together is how it would stay invisible.
 
+### 6.3a Startup maintenance ownership / 启动维护任务所有权
+
+The existing orientation bootstrap and `full_rebuild_all` wrappers now return their actual `JoinHandle<()>` values into one concrete `NoteMaintenanceOwner` at the existing startup positions. The common post-`run_until_shutdown` funnel drains the watcher first, then awaits both stored maintenance handles through mutable references before later shared-resource disposal. Cancellation preserves pending handles for retry; either JoinError remains sticky and does not skip observing the sibling; successful repeated drain starts no new work. Existing bootstrap failure warnings, per-corpus nonfatal failures and complete rebuild statistics remain unchanged.
+
+`reconcile_corpus` also retains the first category error and drains its JoinSet before returning that same error. Real temporary Markdown/SQLite tests cover completed effects, exact task IDs across cancellation, failure observation, idempotence and production warning/statistics output. / 两个真实启动任务现有明确 owner 与可等待完成边界；category 出错后仍观察所有兄弟任务。该切片不处理 early startup error cleanup，不关闭共享 NoteStore/raw session storage，也不承诺整个 Memory 静止或硬停机时限。See [implementation evidence and limits](../../superpowers/runs/2026-11-01-note-maintenance-drain-run.md). The watcher slice below remains a separate ownership boundary.
+
 ### 6.4 Vault watcher — markdown edited outside Aleph
 
-`src/memory/notes/watcher.rs`. `spawn_note_vault_watcher(indexer)` puts one debounced recursive watch (`notify` + `notify-debouncer-full`, 750 ms settle) over the whole note root and returns a `NoteVaultWatcher`; **dropping it stops the watch**, so the server binds it for the process lifetime.
+`src/memory/notes/watcher.rs`. `spawn_note_vault_watcher(indexer)` puts one debounced recursive watch (`notify` + `notify-debouncer-full`, 750 ms settle) over the whole note root and returns a `NoteVaultWatcher`; the server binds it for the process lifetime. `NoteVaultWatcher::shutdown(&mut self)` now moves the existing producer stop into one retained `spawn_blocking` task, awaits it and the retained Tokio consumer independently, preserves cancellation-owned handles for retry, and keeps the first observed JoinError as a sticky failure. The common server teardown awaits this same owner through `drain_note_vault_watcher`. `Drop` remains a synchronous fallback: it calls `stop_nonblocking` only when explicit shutdown has not started, warns when completion is unobserved, and does not claim worker/consumer quiescence.
+
+当前显式 watcher shutdown 会保留 consumer JoinHandle，并在 `shutdown(&mut self)` 中通过一个 source-owned `spawn_blocking` stop helper 等待 producer，再独立 drain consumer；取消后原位重试，已观察到的 JoinError 保持失败。生产公共 teardown 借用同一个 owner。Drop 仍只是同步 fallback：只调用 `stop_nonblocking`、提示未观察到的收尾，不证明后台 consumer 或 debouncer 线程已完成。该切片不增加配置开关，也不代表整个 Memory 可关闭；startup rebuild、共享 NoteStore 与其他 Memory writer 仍在边界之外。实现与验证见 [implementation run](../../superpowers/runs/2026-10-31-note-watcher-shutdown-run.md)。
 
 The markdown is the source of truth and every agent directory gets an `.obsidian/` vault config written into it (§9) — i.e. the product tells the user to open their memory in Obsidian. Until this existed nothing honoured that: an edit made outside Aleph changed the truth and search, links and the graph went on serving the old body until the next restart (and, before §6.3, forever for any corpus but the default agent's). A deletion was worse — the index row survived, so recall kept surfacing a note whose file was gone.
 
@@ -558,25 +566,25 @@ Three generated files live in each agent's note directory and are managed by `sr
 
 | File | Generator | Purpose |
 |---|---|---|
-| `SCHEMA.md` | `SchemaStore` (`orientation/schema.rs`) | Per-agent memory schema: tag taxonomy, page thresholds, update policy |
-| `index.md` | `IndexMdGenerator` (`orientation/index_md.rs`) | Category-grouped note listing, rebuilt by `FsNoteOrientation::rebuild_index` |
-| `log.md` | `LogMdWriter` (`orientation/log_md.rs`) | Append-only audit log of ingest, query, lint, and session events |
+| `SCHEMA.md` | `SchemaStore` (`src/memory/notes/orientation/schema.rs`) | Per-agent memory schema: tag taxonomy, page thresholds, update policy |
+| `index.md` | `IndexMdGenerator` (`src/memory/notes/orientation/index_md.rs`) | Category-grouped note listing, rebuilt by `FsNoteOrientation::rebuild_index` |
+| `log.md` | `LogMdWriter` (`src/memory/notes/orientation/log_md.rs`) | Append-only audit log of ingest, query, lint, and session events |
 
 `FsNoteOrientation::bootstrap` creates all three on first use. `IndexRefresherStage` (wired into the ingest path) calls `refresh_index_after_ingest` after each batch so `index.md` stays current.
 
 `read_snapshot` assembles these three files into an `OrientationSnapshot` that is injected into agent prompts: `schema_text` comes from `SchemaDoc::compact_for_prompt()` (Tag Taxonomy + Page Thresholds + Update Policy sections only, to reduce prompt tokens); `index_text` is the full `index.md`; `recent_log_tail` is the last 20 log entries.
 
-> The `src/wiki/` directory and its `WikiGitManager` / `generate_index_content` were removed. All orientation functionality now lives in `src/memory/notes/orientation/`.
+> The `(removed; memory system is now src/memory/)` directory and its `WikiGitManager` / `generate_index_content` were removed. All orientation functionality now lives in `src/memory/notes/orientation/`.
 
 ## 10. Skills as Notes
 
-The `skill/` directory under `memory/note/{agent_id}/` receives skill-category notes whose frontmatter carries `scope: persona` (§3.3). These markdown files are the distilled, human-readable form of persona-scoped skill knowledge and travel through the same indexer, wikilink graph, FTS, and vector search as every other note category.
+The `src/skill/` directory under `memory/note/{agent_id}/` receives skill-category notes whose frontmatter carries `scope: persona` (§3.3). These markdown files are the distilled, human-readable form of persona-scoped skill knowledge and travel through the same indexer, wikilink graph, FTS, and vector search as every other note category.
 
 A distinct subsystem lives in `src/skill/` — `SkillSystem`, `SkillId`, `PromptScope`, and the `skill_manage` tool (`src/builtin_tools/skill_manage.rs`) — that deals with **extension skills** (external, installable skill manifests, toggled via `skill_manage(skill_id, enabled, scope)` with scope values `system` | `tool` | `standalone` | `disabled`). That system is orthogonal to skill-category notes: `skill_manage` never touches the notes filesystem, and `note_manage(category='skill', ...)` never touches the extension registry. Keeping the distinction sharp avoids confusing persona notes (markdown under `memory/note/{agent}/skill/`) with installed skill extensions (configuration under `~/.aleph/skills/`).
 
 ## 11. `note_manage` Tool
 
-`NoteManageTool` (`src/builtin_tools/note_manage.rs`) is the unified LLM-facing CRUD surface for every note category. Action enum:
+`NoteManageTool` (`src/builtin_tools/note_manage/mod.rs`) is the unified LLM-facing CRUD surface for every note category. Action enum:
 
 ```rust
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -666,7 +674,7 @@ Frontmatter is produced by `KnowledgeNote::to_markdown` (the single real write p
 **Deprecation status (verified by grep):**
 
 - `src/builtin_tools/skill_manage.rs` is still present and active — but it configures **extension skills** (§10), not skill-category notes. The module exists; it does not overlap with `note_manage`.
-- `wiki_manage` is **removed**. The `src/wiki/` directory has been deleted; orientation functionality moved to `src/memory/notes/orientation/` (§9).
+- `wiki_manage` is **removed**. The `(removed; memory system is now src/memory/)` directory has been deleted; orientation functionality moved to `src/memory/notes/orientation/` (§9).
 
 ## 12. Event Sourcing
 
@@ -749,7 +757,7 @@ The graph is **materialized offline** by `GraphRecomputeStage` (`src/memory/drea
 
 **MentionWeaveStage** (`src/memory/dreaming/stages/mention_weave.rs`) is a separate, corpus-scanning consumer — not a reader of the materialized cache above. It sits in the Consolidate pipeline between `NoteWeaveStage` (real links win first) and `NoteDecayStage` (so mention edges count toward `link_weight` the same cycle it runs), and scans every note body for **unlinked mentions** of another note's filename/alias via `src/memory/notes/links/mentions.rs::scan_mentions`: deterministic exact matching (ASCII names require word boundaries on both sides; CJK names match as substrings since CJK text has no word boundaries; a name must be ≥4 ASCII chars or ≥2 CJK chars to qualify, and a name owned by more than one note is dropped wholesale — the same never-guess rule as §5.2), zero LLM. Each cycle **fully replaces** the `relation = 'mention'` edge set (`NoteStore::replace_mention_links`, one transaction) — capped at `MAX_MENTIONS_PER_NOTE = 5` per source note and `MAX_MENTIONS_PER_CYCLE = 200` overall (deterministic truncation over the `(from, to)`-sorted scan output) — inserting rows at `confidence = 0.35` with `resolved_by = 'mention_scan'` and `ON CONFLICT(agent_id, from_note, to_note) DO NOTHING`, so an existing real wikilink or typed relation for the same pair always wins over the soft mention edge.
 
-**Canvas / gateway enrichment.** `graph.query` (`src/gateway/handlers/graph.rs::handle_query_impl`) layers three graph-health signals onto the base node/edge feed before returning: top-3-per-node MinHash similarity edges (`related_edges_between`, surfaced as edge kind `related_similarity`, deduped against real links by undirected pair), `bridge_nodes` (the materialized `bridge` insight, filtered to nodes visible in this response), and `surprising_edges` (the materialized `surprising` insight, both endpoints visible). The panel's galaxy renderer (`interfaces/webchat/src/platform/wide/views/canvas/galaxy_build.rs` + `gl/edges.rs`) maps each edge's `relation`/`kind` string to a render code and tint via `edge_kind_code`/`edge_kind_color`; `mention` and `related_similarity` render at a fixed dim brightness (not confidence-scaled, since they are soft/derived edges rather than authored links), and any edge present in `surprising_edges` overrides its base kind with a bloom-emphasized code regardless of its real relation.
+**Canvas / gateway enrichment.** `graph.query` (`src/gateway/handlers/graph/mod.rs::handle_query_impl`) layers three graph-health signals onto the base node/edge feed before returning: top-3-per-node MinHash similarity edges (`related_edges_between`, surfaced as edge kind `related_similarity`, deduped against real links by undirected pair), `bridge_nodes` (the materialized `bridge` insight, filtered to nodes visible in this response), and `surprising_edges` (the materialized `surprising` insight, both endpoints visible). The panel's galaxy renderer (`(removed; canvas is now interfaces/webchat/src/platform/wide/views/canvas/mod.rs)` + `interfaces/webchat/src/platform/wide/views/memory/galaxy/gl/edges.rs`) maps each edge's `relation`/`kind` string to a render code and tint via `edge_kind_code`/`edge_kind_color`; `mention` and `related_similarity` render at a fixed dim brightness (not confidence-scaled, since they are soft/derived edges rather than authored links), and any edge present in `surprising_edges` overrides its base kind with a bloom-emphasized code regardless of its real relation.
 
 ## 15. Governance verdict archive
 

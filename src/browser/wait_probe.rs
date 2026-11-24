@@ -29,6 +29,14 @@ pub(crate) const WAIT_PROBE_ERROR: &str = "ALEPH_WAIT_ERROR";
 /// generalized.
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
 
+/// Ceiling for a plain delay, in milliseconds.
+///
+/// The delay IS the condition, so it is bounded by the tool layer's own clamp
+/// (`wait_for::clamp_timeout`, 500–120000 ms). The same ceiling is applied
+/// here so a direct caller of this predicate cannot park the runtime for an
+/// unbounded time.
+pub(crate) const MAX_TIME_WAIT_MS: u64 = 120_000;
+
 /// Build the JS probe `evaluate` runs to test whether `condition` holds on the
 /// page. The probe is an arrow function (both drivers' eval primitives expect
 /// one) resolving to [`WAIT_PROBE_FOUND`], `'absent'`, or — for a selector
@@ -98,12 +106,14 @@ pub(crate) async fn poll_wait_for<B: BrowserBackend + ?Sized>(
     // `ms` is pre-clamped into the safe window by the tool layer, and a delay
     // IS the condition — `timeout_ms` does not apply to it.
     if let WaitCondition::Time(ms) = condition {
-        // BROWSER-R4-14: clamp the Time arm to timeout_ms so a caller
-        // passing timeout_ms=60_000 with ms=120_000 does not silently
-        // double its budget. The tool layer pre-clamps today, but
-        // keeping the invariant at the predicate means a future direct
-        // caller of poll_wait_for cannot bypass it either.
-        let clamped_ms = (*ms).min(timeout_ms);
+        // `timeout_ms` is the budget for the POLLING arms — "how long to keep
+        // looking for this text / selector / URL". It is an independent knob
+        // (the tool's own default is 5s) and clamping a requested delay to it
+        // silently shortened the wait: a model asking for a 60s settle slept
+        // 5s while the tool still reported "Delay 60000ms found". The delay
+        // is clamped on its own scale instead — the tool layer's window, and
+        // the same ceiling here for a direct caller.
+        let clamped_ms = (*ms).min(MAX_TIME_WAIT_MS);
         tokio::time::sleep(Duration::from_millis(clamped_ms)).await;
         return Ok(true);
     }
@@ -276,6 +286,27 @@ mod tests {
             .expect("a timeout is not an error");
         assert!(!found);
         assert_eq!(backend.calls().len(), 1);
+    }
+
+    /// The delay is the condition — it is NOT truncated to the polling
+    /// budget. `timeout_ms` is an independent knob (the tool's own default is
+    /// 5s); clamping a requested settle to it made `browser_wait_for
+    /// { time_ms: 60000 }` sleep 5s while the tool reported "Delay
+    /// 60000ms found".
+    #[tokio::test]
+    async fn the_time_arm_sleeps_the_requested_delay_not_the_polling_budget() {
+        let backend = FakeBackend::new(None);
+        let started = std::time::Instant::now();
+        let found = poll_wait_for(&backend, "1", &WaitCondition::Time(300), 1)
+            .await
+            .expect("a delay always resolves");
+        assert!(found);
+        assert!(
+            started.elapsed() >= Duration::from_millis(250),
+            "the delay must not be truncated to timeout_ms: {:?}",
+            started.elapsed()
+        );
+        assert!(backend.calls().is_empty());
     }
 
     #[tokio::test]

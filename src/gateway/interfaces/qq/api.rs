@@ -18,7 +18,7 @@ pub struct TokenManager {
     app_id: String,
     client_secret: String,
     cache: Mutex<Option<CachedToken>>,
-    in_flight: Mutex<Option<tokio::sync::oneshot::Receiver<String>>>,
+    fetch_lock: Mutex<()>,
 }
 
 impl TokenManager {
@@ -28,7 +28,7 @@ impl TokenManager {
             app_id,
             client_secret,
             cache: Mutex::new(None),
-            in_flight: Mutex::new(None),
+            fetch_lock: Mutex::new(()),
         }
     }
 
@@ -44,30 +44,21 @@ impl TokenManager {
             }
         }
 
+        // Keep the lock through fetch + cache update; every waiter rechecks the cache.
+        let _fetch = self.fetch_lock.lock().await;
+
         {
-            let mut in_flight = self.in_flight.lock().await;
-            if let Some(rx) = in_flight.take() {
-                drop(in_flight);
-                if let Ok(token) = rx.await {
-                    return Ok(token);
+            let guard = self.cache.lock().await;
+            if let Some(ref cached) = *guard {
+                let remaining = cached.expires_at.saturating_duration_since(Instant::now());
+                let refresh_ahead = Duration::from_secs(300).min(remaining / 3);
+                if remaining > refresh_ahead {
+                    return Ok(cached.token.clone());
                 }
             }
         }
 
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        let mut in_flight = self.in_flight.lock().await;
-        *in_flight = Some(rx);
-        drop(in_flight);
-
-        let result = self.fetch_token(client).await;
-        if let Ok(ref token) = result {
-            let _ = tx.send(token.clone());
-        }
-        // Always clear the in-flight slot. A oneshot receiver left behind
-        // buffers the sent token forever, so a later caller (e.g. after the
-        // token expires) would take it and get back a stale, expired token.
-        let _ = self.in_flight.lock().await.take();
-        result
+        self.fetch_token(client).await
     }
 
     async fn fetch_token(&self, client: &reqwest::Client) -> Result<String, QQError> {
@@ -194,5 +185,80 @@ mod tests {
     #[test]
     fn test_token_manager_creation() {
         let _tm = TokenManager::new("app".into(), "secret".into());
+    }
+
+    #[tokio::test]
+    async fn concurrent_token_waiters_recheck_cache_even_after_cancellation() {
+        let manager = TokenManager::new("app".into(), "secret".into());
+        let client = reqwest::Client::new();
+        let fetch = manager.fetch_lock.lock().await;
+        let mut waiters: Vec<_> = (0..4)
+            .map(|_| Box::pin(manager.get_token(&client)))
+            .collect();
+        for waiter in &mut waiters {
+            assert!(futures_util::poll!(waiter.as_mut()).is_pending());
+        }
+        // Cancelling a waiter cannot consume another caller's coordination slot.
+        drop(waiters.remove(0));
+        *manager.cache.lock().await = Some(CachedToken {
+            token: "refreshed".into(),
+            expires_at: Instant::now() + Duration::from_secs(3600),
+        });
+        drop(fetch);
+
+        let results = tokio::time::timeout(
+            Duration::from_secs(1),
+            futures_util::future::join_all(waiters),
+        )
+        .await
+        .expect("all token waiters must complete");
+        assert_eq!(results.len(), 3);
+        for result in results {
+            assert_eq!(result.unwrap(), "refreshed");
+        }
+    }
+
+    #[tokio::test]
+    async fn gateway_identify_reads_the_shared_refreshed_token() {
+        use super::super::gateway::{identify_payload, GatewayContext};
+        use crate::gateway::channel::ChannelId;
+
+        let api = Arc::new(QQApiClient::new("app".into(), "secret".into()));
+        let (event_tx, _event_rx) = tokio::sync::mpsc::channel(4);
+        let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let ctx = GatewayContext {
+            channel_id: ChannelId::new("qq"),
+            api: api.clone(),
+            event_tx,
+            shutdown_rx,
+        };
+        *api.token_manager.cache.lock().await = Some(CachedToken {
+            token: "startup".into(),
+            expires_at: Instant::now() + Duration::from_secs(3600),
+        });
+        assert_eq!(
+            identify_payload(&ctx.api).await.unwrap()["d"]["token"],
+            "QQBot startup"
+        );
+
+        let fetch = api.token_manager.fetch_lock.lock().await;
+        api.token_manager
+            .cache
+            .lock()
+            .await
+            .as_mut()
+            .unwrap()
+            .expires_at = Instant::now();
+        let mut reconnect = Box::pin(identify_payload(&ctx.api));
+        assert!(futures_util::poll!(reconnect.as_mut()).is_pending());
+        // The same manager is refreshed by REST; the gateway owns no token snapshot.
+        *api.token_manager.cache.lock().await = Some(CachedToken {
+            token: "renewed".into(),
+            expires_at: Instant::now() + Duration::from_secs(3600),
+        });
+        drop(fetch);
+        let identify = reconnect.await.unwrap();
+        assert_eq!(identify["op"], 2);
+        assert_eq!(identify["d"]["token"], "QQBot renewed");
     }
 }

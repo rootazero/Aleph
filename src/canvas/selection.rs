@@ -20,6 +20,8 @@ use std::collections::HashMap;
 
 use aleph_protocol::canvas::MAX_SHAPES;
 
+use super::validate::is_valid_id;
+
 use crate::sync_primitives::{Mutex, OnceLock};
 
 /// Hard ceiling on live selection entries (one per canvas).
@@ -29,6 +31,7 @@ use crate::sync_primitives::{Mutex, OnceLock};
 /// least-recently-written entry is dropped — same bound, same reasoning as
 /// `artifact_caps::MAX_LIVE_CAPS`.
 const MAX_LIVE: usize = 4096;
+const MAX_SELECTION_BYTES: usize = 64 * 1024;
 
 /// One canvas's latest pushed selection, stamped for evict-oldest.
 struct Entry {
@@ -59,7 +62,20 @@ impl SelectionTable {
         // A selection can never name more live shapes than a document may
         // hold; the excess is unaddressable noise, and truncating here keeps
         // the per-entry dimension (ids) bounded alongside the entry count.
+        shape_ids.retain(|id| is_valid_id(id));
         shape_ids.truncate(MAX_SHAPES);
+        let mut bytes = 0;
+        shape_ids.retain(|id| {
+            if bytes + id.len() > MAX_SELECTION_BYTES {
+                return false;
+            }
+            bytes += id.len();
+            true
+        });
+        if shape_ids.is_empty() {
+            self.entries.remove(canvas_id);
+            return;
+        }
         let stamp = self.next_stamp;
         self.next_stamp += 1;
         if self.entries.len() >= MAX_LIVE && !self.entries.contains_key(canvas_id) {

@@ -21,7 +21,8 @@ fn test_nostr_properties() {
 
     assert_eq!(channel.channel_type(), "nostr");
     assert!(channel.capabilities().reactions);
-    assert!(channel.capabilities().replies);
+    // Inbound `e` tags become `reply_to`, but outbound notes are not threaded.
+    assert!(!channel.capabilities().replies);
     assert!(!channel.capabilities().editing);
     assert_eq!(channel.capabilities().max_message_length, 65535);
 }
@@ -55,10 +56,11 @@ async fn test_nostr_test_mode_send() {
 }
 
 #[tokio::test]
-async fn test_nostr_test_mode_send_dm() {
+async fn test_nostr_test_mode_refuses_dm() {
     let mut channel = NostrChannel::for_test("nostr-test", test_nostr_config());
     channel.start().await.unwrap();
 
+    // Test mode follows the production path: no NIP-04 encryption means no DM.
     let result = channel
         .send(alephcore::gateway::channel::OutboundMessage::text(
             "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
@@ -66,7 +68,13 @@ async fn test_nostr_test_mode_send_dm() {
         ))
         .await;
 
-    assert!(result.is_ok());
+    assert!(
+        matches!(
+            result,
+            Err(alephcore::gateway::channel::ChannelError::UnsupportedFeature(_))
+        ),
+        "Nostr must refuse direct messages instead of publishing plaintext"
+    );
     channel.stop().await.unwrap();
 }
 

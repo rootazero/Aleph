@@ -102,9 +102,13 @@ impl McpHandler {
     /// unicode) is mapped to `_`.
     #[must_use]
     pub fn qualified_name(&self) -> String {
+        // `{server}:{tool}` -> `{tool}`, without building the prefix string:
+        // the namespace separator is a literal ':' and the server id is
+        // matched by `strip_prefix` directly.
         let short = self
             .tool_name
-            .strip_prefix(&format!("{}:", self.server_id))
+            .strip_prefix(self.server_id.as_str())
+            .and_then(|rest| rest.strip_prefix(':'))
             .unwrap_or(&self.tool_name);
         sanitize_tool_name(&format!("{}__{}", self.server_id, short))
     }
@@ -125,7 +129,7 @@ pub(crate) fn is_tool_key_of_server(server_id: &str, name: &str) -> bool {
 /// `[A-Za-z0-9_-]`, truncating to 64 characters. Strict-schema providers
 /// (`OpenAI` function calling) reject names outside this set with a request-
 /// level 400, which would poison the whole turn for every tool.
-pub(crate) fn sanitize_tool_name(raw: &str) -> String {
+fn sanitize_tool_name(raw: &str) -> String {
     raw.chars()
         .map(|c| {
             if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
@@ -141,7 +145,6 @@ pub(crate) fn sanitize_tool_name(raw: &str) -> String {
 #[async_trait]
 impl ToolHandler for McpHandler {
     async fn invoke(&self, input: Value) -> Result<ToolOutput, ToolError> {
-        let qualified = self.qualified_name();
         // The underlying McpClient resolves tools by their *inner* name (the
         // short name reported by the server), not the qualified form.
         match self.client.call_tool(&self.tool_name, input).await {
@@ -157,12 +160,14 @@ impl ToolHandler for McpHandler {
                         .filter(|s| !s.is_empty())
                         .unwrap_or_else(|| "MCP tool returned failure without message".to_string());
                     Err(ToolError::Execution {
-                        name: qualified,
+                        name: self.qualified_name(),
                         cause: crate::mcp::redact_mcp_error(&error_msg),
                     })
                 }
             }
-            Err(e) => Err(map_mcp_error(qualified, e)),
+            // The qualified name only labels a failure, so it is computed on
+            // the error path rather than on every call.
+            Err(e) => Err(map_mcp_error(self.qualified_name(), e)),
         }
     }
 

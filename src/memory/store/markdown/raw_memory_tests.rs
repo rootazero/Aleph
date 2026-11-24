@@ -14,6 +14,48 @@ fn raw(id: &str, created_at: i64, agent: &str, path: &str) -> RawMemory {
     raw
 }
 
+#[tokio::test]
+async fn memory_connection_closes_while_raw_archival_continues() {
+    use crate::memory::notes::store::NoteStore;
+    use crate::memory::store::sqlite::SqliteMemoryBackend;
+
+    let dir = tempfile::tempdir().unwrap();
+    let backend = SqliteMemoryBackend::new(dir.path()).unwrap();
+    let raw_store = MarkdownSessionStore::new(dir.path()).await.unwrap();
+    let before = raw("before-close", 1, "owner", "raw-before");
+    raw_store.insert_raw_memory(&before).await.unwrap();
+    backend.close().unwrap();
+
+    let after = raw("after-close", 2, "owner", "raw-after");
+    raw_store.insert_raw_memory(&after).await.unwrap();
+    let retained = raw_store
+        .find_by_path("raw-after", "owner")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(retained.content, after.content);
+    assert_eq!(
+        raw_store.raw_owner(&before.id).await.unwrap().as_deref(),
+        Some("owner")
+    );
+    let integrity: String = raw_store
+        .db
+        .lock()
+        .await
+        .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(integrity, "ok");
+
+    let replacement = SqliteMemoryBackend::new(dir.path()).unwrap();
+    assert_eq!(replacement.count_all_notes().await.unwrap(), 0);
+    replacement.close().unwrap();
+    backend.close().unwrap();
+    assert!(
+        backend.count_all_notes().await.is_err(),
+        "replacement must not reopen the original Memory backend"
+    );
+}
+
 fn ids(rows: &[RawMemory]) -> Vec<&str> {
     rows.iter().map(|row| row.id.as_str()).collect()
 }

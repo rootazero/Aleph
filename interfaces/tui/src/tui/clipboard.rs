@@ -109,7 +109,9 @@ fn run_helper(helper: Helper, bytes: &[u8], deadline: Instant) -> Result<(), &'s
         if Instant::now() >= deadline {
             return Err("Clipboard helper timed out");
         }
-        match input.write(&bytes[offset..bytes.len().min(offset + 16 * 1024)]) {
+        let end = bytes.len().min(offset + 16 * 1024);
+        let chunk = bytes.get(offset..end).unwrap_or(&[]);
+        match input.write(chunk) {
             Ok(0) => std::thread::sleep(POLL),
             Ok(written) => offset += written,
             Err(e)
@@ -154,9 +156,14 @@ fn nonblocking(input: &ChildStdin) -> io::Result<()> {
     const O_NONBLOCK: i32 = 0x800;
     #[cfg(target_os = "macos")]
     const O_NONBLOCK: i32 = 0x4;
-    // SAFETY: stdin owns a live fd; F_GETFL=3 / F_SETFL=4 use integer flags.
+    // SAFETY: stdin owns a live fd; F_GETFL=3 reads file status flags.
     let flags = unsafe { fcntl(input.as_raw_fd(), 3) };
-    if flags < 0 || unsafe { fcntl(input.as_raw_fd(), 4, flags | O_NONBLOCK) } < 0 {
+    if flags < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: stdin owns a live fd; F_SETFL=4 sets non-blocking mode with integer flags.
+    let ret = unsafe { fcntl(input.as_raw_fd(), 4, flags | O_NONBLOCK) };
+    if ret < 0 {
         return Err(io::Error::last_os_error());
     }
     Ok(())

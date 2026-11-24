@@ -96,10 +96,8 @@ pub fn all_presets() -> Vec<CatalogEntry> {
 /// catalog first.
 #[must_use]
 pub fn presets_for_modality(modality: Modality) -> Vec<CatalogEntry> {
-    let mut out = Vec::new();
-
     // Chat side — uses the chat default-to-Chat convention.
-    let mut chat: Vec<CatalogEntry> = chat_presets::presets_by_modality(modality)
+    let mut out: Vec<CatalogEntry> = chat_presets::presets_by_modality(modality)
         .into_iter()
         .map(|name| CatalogEntry {
             name,
@@ -107,8 +105,7 @@ pub fn presets_for_modality(modality: Modality) -> Vec<CatalogEntry> {
             metadata: chat_presets::provider_metadata(name),
         })
         .collect();
-    chat.sort_unstable_by_key(|e| e.name);
-    out.append(&mut chat);
+    out.sort_unstable_by_key(|e| e.name);
 
     // Generation side — explicit metadata only.
     let mut gen: Vec<CatalogEntry> = gen_presets::generation_presets_by_modality(modality)

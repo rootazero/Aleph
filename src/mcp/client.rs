@@ -190,9 +190,15 @@ impl McpClient {
             // strip the "{server}:" namespace prefix added by refresh_tools
             // before testing.
             if let Some(filter) = &self.tool_filter {
-                let prefix = format!("{}:", connection.name());
-                conn_tools
-                    .retain(|t| filter.allows(t.name.strip_prefix(&prefix).unwrap_or(&t.name)));
+                let s_name = connection.name();
+                conn_tools.retain(|t| {
+                    let unqual = if let Some(rest) = t.name.strip_prefix(s_name) {
+                        rest.strip_prefix(':').unwrap_or(&t.name)
+                    } else {
+                        &t.name
+                    };
+                    filter.allows(unqual)
+                });
             }
             tools.extend(conn_tools);
         }
@@ -289,8 +295,9 @@ impl McpClient {
         }
         let mut best: Option<&Arc<McpServerConnection>> = None;
         for (id, conn) in servers {
-            let prefix = format!("{id}:");
-            if name.starts_with(&prefix) && best.as_ref().is_none_or(|b| b.name().len() < id.len())
+            if name.starts_with(id)
+                && name[id.len()..].starts_with(':')
+                && best.as_ref().is_none_or(|b| b.name().len() < id.len())
             {
                 best = Some(conn);
             }
@@ -449,9 +456,12 @@ impl McpClient {
 
     /// Stop all external servers
     pub async fn stop_all(&self) -> Result<()> {
-        let mut servers = self.external_servers.write().await;
+        let to_close: Vec<(String, Arc<McpServerConnection>)> = {
+            let mut servers = self.external_servers.write().await;
+            servers.drain().collect()
+        };
 
-        for (name, connection) in servers.drain() {
+        for (name, connection) in to_close {
             tracing::info!(server = %name, "Stopping external MCP server");
             if let Err(e) = connection.close().await {
                 tracing::warn!(

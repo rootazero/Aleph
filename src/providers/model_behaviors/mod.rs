@@ -16,8 +16,8 @@ fn is_valid_behavior_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 64
         && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
 /// Load model behavior content by name (async).
@@ -42,17 +42,17 @@ pub async fn load_model_behavior(name: &str) -> Option<String> {
     }
 
     // 2. Fallback to built-in
-    builtin_behavior(name)
+    builtin_behavior(name).map(str::to_string)
 }
 
 /// Get built-in behavior content (no user override check).
-fn builtin_behavior(name: &str) -> Option<String> {
+fn builtin_behavior(name: &str) -> Option<&'static str> {
     match name {
-        "anthropic" => Some(BUILTIN_ANTHROPIC.to_string()),
-        "openai" => Some(BUILTIN_OPENAI.to_string()),
-        "gemini" => Some(BUILTIN_GEMINI.to_string()),
-        "ollama" => Some(BUILTIN_OLLAMA.to_string()),
-        "strict" => Some(BUILTIN_STRICT.to_string()),
+        "anthropic" => Some(BUILTIN_ANTHROPIC),
+        "openai" => Some(BUILTIN_OPENAI),
+        "gemini" => Some(BUILTIN_GEMINI),
+        "ollama" => Some(BUILTIN_OLLAMA),
+        "strict" => Some(BUILTIN_STRICT),
         _ => None,
     }
 }

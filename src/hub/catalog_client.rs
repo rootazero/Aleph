@@ -83,7 +83,11 @@ fn sanitize_generated_at(raw: &str) -> Option<String> {
     // Day/month digit sanity on the fixed-width slots so the parser never
     // hands a downstream consumer bytes it can re-parse. Full date validation
     // would need `chrono` so we keep it cheap.
-    for slot in [&bytes[0..4], &bytes[5..7], &bytes[8..10]] {
+    let slots = match (bytes.get(0..4), bytes.get(5..7), bytes.get(8..10)) {
+        (Some(y), Some(m), Some(d)) => [y, m, d],
+        _ => return None,
+    };
+    for slot in slots {
         if !slot.iter().all(|b| b.is_ascii_digit()) {
             return None;
         }
@@ -220,16 +224,19 @@ impl AlephHubCatalog {
             // hostile publisher can route prompt-injection text through any
             // of them. The scan is warn-only by design — failing the whole
             // sync on a single finding is a denial-of-service lever.
-            let scan_blob = format!(
-                "{} {} {} {} {} {} {}",
+            let mut scan_blob = format!(
+                "{} {} {} {} {} {}",
                 he.name,
                 he.description,
                 he.author.as_deref().unwrap_or(""),
                 he.via.as_deref().unwrap_or(""),
                 he.repo_url.as_deref().unwrap_or(""),
                 he.version.as_deref().unwrap_or(""),
-                he.tags.join(" ")
             );
+            for tag in &he.tags {
+                scan_blob.push(' ');
+                scan_blob.push_str(tag);
+            }
             let findings = scan_for_injection(&scan_blob);
             if !findings.is_empty() {
                 tracing::warn!(hub = %self.id, id = %he.id, ?findings, "hub entry injection findings");

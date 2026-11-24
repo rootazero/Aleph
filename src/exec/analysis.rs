@@ -16,21 +16,16 @@ pub struct CommandAnalysis {
 
     /// All command segments (flattened from all chains/pipelines)
     pub segments: Vec<CommandSegment>,
-
-    /// Commands grouped by chain operators (&&, ||, ;)
-    /// Each inner Vec is a pipeline (commands connected by |)
-    pub chains: Option<Vec<Vec<CommandSegment>>>,
 }
 
 impl CommandAnalysis {
     /// Create a successful analysis with segments
     #[must_use]
-    pub const fn success(segments: Vec<CommandSegment>, chains: Vec<Vec<CommandSegment>>) -> Self {
+    pub const fn success(segments: Vec<CommandSegment>) -> Self {
         Self {
             ok: true,
             reason: None,
             segments,
-            chains: Some(chains),
         }
     }
 
@@ -40,19 +35,20 @@ impl CommandAnalysis {
     /// approved as an action, not as a command line; there is no argv to
     /// parse. `ok` is `true` because **nothing failed** — "there was nothing
     /// to parse" and "parsing failed" are different answers, and
-    /// [`crate::exec::manager::ExecApprovalManager::create`] asserts on the
-    /// second (a card the human can only deny is not worth a delivery slot).
+    /// [`crate::exec::manager::ExecApprovalManager::create`] treats the
+    /// second as a condition to log, never as a reason to withhold the card.
     ///
     /// Named because the distinction is not obvious from the struct: three
     /// separate test fixtures reached for [`Self::error`] here, and every one
-    /// of them tripped that assertion — eleven tests that had never passed.
+    /// of them tripped an assertion in the manager — eleven tests that had
+    /// never passed. The manager no longer asserts on a failed analysis, but
+    /// the distinction is what keeps those fixtures honest.
     #[must_use]
     pub const fn not_a_command() -> Self {
         Self {
             ok: true,
             reason: None,
             segments: Vec::new(),
-            chains: None,
         }
     }
 
@@ -62,7 +58,6 @@ impl CommandAnalysis {
             ok: false,
             reason: Some(reason.into()),
             segments: Vec::new(),
-            chains: None,
         }
     }
 }
@@ -73,19 +68,15 @@ pub struct CommandSegment {
     /// Raw command string
     pub raw: String,
 
-    /// Tokenized arguments
-    pub argv: Vec<String>,
-
     /// Resolution information (if executable was found)
     pub resolution: Option<CommandResolution>,
 }
 
 impl CommandSegment {
-    /// Create a new segment with raw string and argv
-    pub fn new(raw: impl Into<String>, argv: Vec<String>) -> Self {
+    /// Create a new segment with its raw command string.
+    pub fn new(raw: impl Into<String>) -> Self {
         Self {
             raw: raw.into(),
-            argv,
             resolution: None,
         }
     }
@@ -96,20 +87,11 @@ impl CommandSegment {
         self.resolution = Some(resolution);
         self
     }
-
-    /// Get the executable name (first argv element)
-    #[must_use]
-    pub fn executable(&self) -> Option<&str> {
-        self.argv.first().map(|s| s.as_str())
-    }
 }
 
 /// Resolution information for an executable
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommandResolution {
-    /// Raw executable as specified (e.g., "git", "./script.sh", "/usr/bin/ls")
-    pub raw_executable: String,
-
     /// Fully resolved path (if found in PATH)
     pub resolved_path: Option<PathBuf>,
 
@@ -128,7 +110,6 @@ impl CommandResolution {
             .to_string();
 
         Self {
-            raw_executable: raw,
             resolved_path: Some(path),
             executable_name: name,
         }
@@ -154,7 +135,6 @@ impl CommandResolution {
         };
 
         Self {
-            raw_executable: raw,
             resolved_path: None,
             executable_name: name,
         }
@@ -167,8 +147,8 @@ mod tests {
 
     #[test]
     fn test_analysis_success() {
-        let segment = CommandSegment::new("ls -la", vec!["ls".into(), "-la".into()]);
-        let analysis = CommandAnalysis::success(vec![segment.clone()], vec![vec![segment]]);
+        let segment = CommandSegment::new("ls -la");
+        let analysis = CommandAnalysis::success(vec![segment]);
 
         assert!(analysis.ok);
         assert!(analysis.reason.is_none());
@@ -181,12 +161,6 @@ mod tests {
 
         assert!(!analysis.ok);
         assert_eq!(analysis.reason, Some("parse failed".to_string()));
-    }
-
-    #[test]
-    fn test_segment_executable() {
-        let segment = CommandSegment::new("git status", vec!["git".into(), "status".into()]);
-        assert_eq!(segment.executable(), Some("git"));
     }
 
     #[test]

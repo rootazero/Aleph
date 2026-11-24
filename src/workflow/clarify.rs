@@ -162,18 +162,11 @@ impl ClarifyTaskMeta {
     /// others. One renderer, one shape, nothing to keep in sync.
     #[must_use]
     pub fn rendered_prompt(&self) -> String {
-        // `build_request` always produces a non-empty request (the constructor
-        // rejects empty question lists), and `render` needs an `&ClarificationQuestion`,
-        // so `first()`'s `None` arm cannot fire in practice. `expect` keeps
-        // the API contract enforced at runtime.
-        crate::clarification::render::render(
-            self.build_request()
-                .first()
-                .expect("a ClarificationRequest built by a constructor is never empty"),
-            0,
-            1,
-        )
-        .text
+        let req = self.build_request();
+        let Some(first_question) = req.first() else {
+            return String::new();
+        };
+        crate::clarification::render::render(first_question, 0, 1).text
     }
 }
 

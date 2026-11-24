@@ -4,7 +4,7 @@
 //! into `RunRequest`, executing via `ExecutionAdapter`, and mapping results
 //! back to A2A task state transitions.
 
-use crate::sync_primitives::Arc;
+use crate::sync_primitives::{Arc, AtomicU64, Mutex, Ordering};
 use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
@@ -15,16 +15,19 @@ use futures::{FutureExt, Stream};
 use tracing::{error, info};
 
 use crate::a2a::domain::{
-    A2AError, A2AMessage, A2ARole, A2ATask, TaskState, TaskStatus, TaskStatusUpdateEvent,
-    UpdateEvent,
+    A2AError, A2AMessage, A2ARole, A2ATask, Artifact, Part, TaskArtifactUpdateEvent, TaskState,
+    TaskStatus, TaskStatusUpdateEvent, UpdateEvent,
 };
 use crate::a2a::port::{A2AMessageHandler, A2AResult, A2AStreamingHandler, A2ATaskManager};
 use crate::gateway::agent_instance::AgentRegistry;
-use crate::gateway::event_emitter::NoOpEventEmitter;
+use crate::gateway::event_emitter::{EventEmitError, EventEmitter, StreamEvent};
 use crate::gateway::execution_adapter::ExecutionAdapter;
 use crate::gateway::execution_engine::RunRequest;
 use crate::gateway::router::SessionKey;
 use crate::tools::turn_context::{TurnContext, TURN_CONTEXT};
+
+/// Fallback response text when a run finished without a final response.
+const DEFAULT_COMPLETION_TEXT: &str = "Task completed successfully";
 
 /// Bridges A2A protocol messages to Aleph's Agent Loop execution.
 ///
@@ -35,6 +38,119 @@ pub struct AgentLoopBridge {
     pub(crate) execution_adapter: Arc<dyn ExecutionAdapter>,
     pub(crate) task_manager: Arc<dyn A2ATaskManager>,
     pub(crate) streaming: Arc<dyn A2AStreamingHandler>,
+}
+
+/// Captures the assistant's final text from a run's terminal `RunComplete` event.
+///
+/// `ExecutionAdapter::execute` returns only `Result<(), ExecutionError>`, so the
+/// answer the agent produced is observable exclusively through the event
+/// emitter. The A2A bridge needs that text to build the task's response
+/// message instead of a fixed placeholder.
+struct FinalResponseEmitter {
+    seq_counter: AtomicU64,
+    final_response: Mutex<Option<String>>,
+}
+
+impl Default for FinalResponseEmitter {
+    fn default() -> Self {
+        Self {
+            seq_counter: AtomicU64::new(0),
+            final_response: Mutex::new(None),
+        }
+    }
+}
+
+impl FinalResponseEmitter {
+    /// Take the captured final text, if the run produced one.
+    fn take_final_response(&self) -> Option<String> {
+        self.final_response
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+    }
+}
+
+#[async_trait]
+impl EventEmitter for FinalResponseEmitter {
+    async fn emit(&self, event: StreamEvent) -> Result<(), EventEmitError> {
+        if let StreamEvent::RunComplete { summary, .. } = event {
+            *self
+                .final_response
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = summary.final_response;
+        }
+        Ok(())
+    }
+
+    fn next_seq(&self) -> u64 {
+        self.seq_counter.fetch_add(1, Ordering::SeqCst)
+    }
+}
+
+/// Whether the task already reached a terminal state.
+///
+/// A cancel that lands while a run is in flight moves the task to `Canceled`
+/// and publishes its own terminal event. The run's own result must not
+/// overwrite that state, and the event stream must not receive a second,
+/// contradictory terminal event.
+async fn task_is_terminal(task_manager: &Arc<dyn A2ATaskManager>, task_id: &str) -> bool {
+    match task_manager.get_task(task_id, None).await {
+        Ok(task) => task.status.state.is_terminal(),
+        Err(e) => {
+            tracing::error!(
+                task_id,
+                error = %e,
+                "A2A bridge: failed to read task state"
+            );
+            false
+        }
+    }
+}
+
+/// Store `text` as the task's artifact and publish the artifact event.
+///
+/// A2A tasks carry their output in `artifacts`; the artifact machinery (the
+/// `artifact-update` push-notification filter, the SSE `ArtifactUpdate`
+/// branch) had no server-side producer, so a completed task came back with an
+/// empty artifact list and an artifact-only subscriber never heard anything.
+async fn publish_artifact(
+    task_manager: &Arc<dyn A2ATaskManager>,
+    streaming: &Arc<dyn A2AStreamingHandler>,
+    task_id: &str,
+    context_id: &str,
+    text: &str,
+) {
+    let artifact = Artifact {
+        artifact_id: uuid::Uuid::new_v4().to_string(),
+        kind: "text".to_string(),
+        parts: vec![Part::Text {
+            text: text.to_string(),
+            metadata: None,
+        }],
+        metadata: None,
+    };
+    if let Err(e) = task_manager.add_artifact(task_id, artifact.clone()).await {
+        tracing::debug!(
+            task_id,
+            error = %e,
+            "A2A bridge: could not store the task artifact"
+        );
+    }
+    let event = TaskArtifactUpdateEvent {
+        task_id: task_id.to_string(),
+        context_id: context_id.to_string(),
+        artifact,
+        append: false,
+        last_chunk: true,
+        metadata: None,
+    };
+    if let Err(e) = streaming.broadcast_artifact(task_id, event).await {
+        tracing::debug!(
+            task_id,
+            error = %e,
+            "A2A bridge: no live subscriber for the artifact event"
+        );
+    }
 }
 
 impl AgentLoopBridge {
@@ -144,6 +260,54 @@ impl AgentLoopBridge {
     fn context_id<'a>(task_id: &'a str, session_id: Option<&'a str>) -> &'a str {
         session_id.unwrap_or(task_id)
     }
+
+    /// Publish the task's terminal state to the event stream.
+    ///
+    /// The task store and the event stream are separate views: the synchronous
+    /// path wrote the task store but never notified subscribers, so a client
+    /// that registered a push-notification webhook and used `message/send`
+    /// never received the completion.
+    async fn publish_terminal_status(&self, task: &A2ATask) {
+        let event = TaskStatusUpdateEvent::new(
+            task.id.clone(),
+            task.context_id.clone(),
+            task.status.clone(),
+            None,
+        );
+        if let Err(e) = self.streaming.broadcast_status(&task.id, event).await {
+            tracing::debug!(
+                task_id = %task.id,
+                error = %e,
+                "A2A bridge: no live subscriber for the terminal event"
+            );
+        }
+        // The synchronous path opens no subscription of its own, so the hub
+        // channel the broadcast just created would linger for every task.
+        if let Err(e) = self.streaming.cleanup_task(&task.id).await {
+            tracing::warn!(
+                task_id = %task.id,
+                error = %e,
+                "A2A bridge: cleanup_task failed after a synchronous completion"
+            );
+        }
+    }
+
+    /// Store the run's answer as the task's artifact and publish it.
+    ///
+    /// The A2A task shape carries its output in `artifacts`, and the artifact
+    /// machinery (the `artifact-update` push-notification filter, the SSE
+    /// `ArtifactUpdate` branch) had no server-side producer: a completed task
+    /// came back with an empty artifact list.
+    async fn publish_terminal_artifact(&self, task: &A2ATask, text: &str) {
+        publish_artifact(
+            &self.task_manager,
+            &self.streaming,
+            &task.id,
+            &task.context_id,
+            text,
+        )
+        .await;
+    }
 }
 
 #[async_trait]
@@ -215,33 +379,55 @@ impl A2AMessageHandler for AgentLoopBridge {
         // Build and execute the run request
         let request = Self::build_run_request(task_id, &input);
         let run_id = request.run_id.clone();
-        let emitter: Arc<dyn crate::gateway::event_emitter::EventEmitter + Send + Sync> =
-            Arc::new(NoOpEventEmitter::new());
+        let emitter = Arc::new(FinalResponseEmitter::default());
 
         info!(task_id, run_id = %run_id, "A2A bridge: executing synchronous run");
 
         match self
             .execution_adapter
-            .execute(request, agent, emitter)
+            .execute(request, agent, emitter.clone())
             .await
         {
             Ok(()) => {
-                // Execution succeeded — mark task as Completed with a response message
-                let response_msg = A2AMessage::text(A2ARole::Agent, "Task completed successfully");
+                // Execution succeeded — mark task as Completed with the answer
+                // the agent produced.
+                let final_text = emitter
+                    .take_final_response()
+                    .unwrap_or_else(|| DEFAULT_COMPLETION_TEXT.to_string());
+                let response_msg = A2AMessage::text(A2ARole::Agent, final_text.clone());
+                // A cancel that landed while the run was in flight wins: the
+                // task is already terminal, so the run's result must not
+                // overwrite it.
+                if task_is_terminal(&self.task_manager, task_id).await {
+                    let task = self.task_manager.get_task(task_id, None).await?;
+                    info!(
+                        task_id,
+                        "A2A bridge: task already terminal; keeping its terminal state"
+                    );
+                    return Ok(task);
+                }
                 let task = self
                     .task_manager
                     .update_status(task_id, TaskState::Completed, Some(response_msg))
                     .await?;
+                self.publish_terminal_artifact(&task, &final_text).await;
+                self.publish_terminal_status(&task).await;
                 info!(task_id, "A2A bridge: task completed");
                 Ok(task)
             }
             Err(e) => {
                 // Execution failed — mark task as Failed
                 let error_msg = A2AMessage::text(A2ARole::Agent, format!("Execution failed: {e}"));
+                if task_is_terminal(&self.task_manager, task_id).await {
+                    let task = self.task_manager.get_task(task_id, None).await?;
+                    error!(task_id, error = %e, "A2A bridge: task already terminal; keeping its terminal state");
+                    return Ok(task);
+                }
                 let task = self
                     .task_manager
                     .update_status(task_id, TaskState::Failed, Some(error_msg))
                     .await?;
+                self.publish_terminal_status(&task).await;
                 error!(task_id, error = %e, "A2A bridge: task failed");
                 Ok(task)
             }
@@ -309,17 +495,16 @@ impl A2AMessageHandler for AgentLoopBridge {
         // path, including panics in `execution_adapter.execute`.
         let stream = self.streaming.subscribe_all(task_id).await?;
 
-        let working_event = TaskStatusUpdateEvent {
-            task_id: task_id.to_string(),
-            context_id: context_id.to_string(),
-            status: TaskStatus {
+        let working_event = TaskStatusUpdateEvent::new(
+            task_id.to_string(),
+            context_id.to_string(),
+            TaskStatus {
                 state: TaskState::Working,
                 message: None,
                 timestamp: Utc::now(),
             },
-            is_final: false,
-            metadata: None,
-        };
+            None,
+        );
         if let Err(e) = self
             .streaming
             .broadcast_status(task_id, working_event)
@@ -338,8 +523,7 @@ impl A2AMessageHandler for AgentLoopBridge {
         // Build the run request
         let request = Self::build_run_request(task_id, &input);
         let run_id = request.run_id.clone();
-        let emitter: Arc<dyn crate::gateway::event_emitter::EventEmitter + Send + Sync> =
-            Arc::new(NoOpEventEmitter::new());
+        let emitter = Arc::new(FinalResponseEmitter::default());
 
         info!(task_id, run_id = %run_id, "A2A bridge: executing streaming run");
 
@@ -349,6 +533,9 @@ impl A2AMessageHandler for AgentLoopBridge {
         let execution_adapter = Arc::clone(&self.execution_adapter);
         let task_id_owned = task_id.to_string();
         let context_id_owned = context_id.to_string();
+        // Kept for the panic path below: `context_id_owned` is moved into the
+        // execution body, but a panic still has to publish a terminal event.
+        let context_id_for_panic = context_id_owned.clone();
 
         // What this actor actually is, and what it is NOT, is written on
         // `a2a_turn_context` — read it before adding an identity here.
@@ -366,12 +553,21 @@ impl A2AMessageHandler for AgentLoopBridge {
             // arm so the cleanup runs in both branches.
             async move {
                 let body = async {
-                    match execution_adapter.execute(request, agent, emitter).await {
+                    match execution_adapter.execute(request, agent, emitter.clone()).await {
                         Ok(()) => {
-                            let response_msg = A2AMessage::text(
-                                A2ARole::Agent,
-                                "Task completed successfully",
-                            );
+                            let final_text = emitter
+                                .take_final_response()
+                                .unwrap_or_else(|| DEFAULT_COMPLETION_TEXT.to_string());
+                            let response_msg = A2AMessage::text(A2ARole::Agent, final_text.clone());
+                            // A cancel that landed while the run was in flight
+                            // already moved the task to a terminal state and
+                            // published its own terminal event: the run's result
+                            // must not overwrite it, and the stream must not see
+                            // a second, contradictory terminal event.
+                            if task_is_terminal(&task_manager, &task_id_owned).await {
+                                info!(task_id = %task_id_owned, "A2A bridge: task already terminal; keeping its terminal state");
+                                return;
+                            }
                             if let Err(e) = task_manager
                                 .update_status(
                                     &task_id_owned,
@@ -380,21 +576,32 @@ impl A2AMessageHandler for AgentLoopBridge {
                                 )
                                 .await
                             {
+                                // Do not abort the broadcast: the stored state
+                                // and the event stream are separate views, and a
+                                // consumer that only watches the stream would
+                                // otherwise see the channel close with no
+                                // terminal event at all.
                                 error!(task_id = %task_id_owned, error = %e, "Failed to update task to Completed");
-                                return;
                             }
 
-                            let completed_event = TaskStatusUpdateEvent {
-                                task_id: task_id_owned.clone(),
-                                context_id: context_id_owned,
-                                status: TaskStatus {
+                            let completed_event = TaskStatusUpdateEvent::new(
+                                task_id_owned.clone(),
+                                context_id_owned.clone(),
+                                TaskStatus {
                                     state: TaskState::Completed,
                                     message: Some(response_msg),
                                     timestamp: Utc::now(),
                                 },
-                                is_final: true,
-                                metadata: None,
-                            };
+                                None,
+                            );
+                            publish_artifact(
+                                &task_manager,
+                                &streaming,
+                                &task_id_owned,
+                                &context_id_owned,
+                                &final_text,
+                            )
+                            .await;
                             if let Err(e) = streaming
                                 .broadcast_status(&task_id_owned, completed_event)
                                 .await
@@ -413,6 +620,12 @@ impl A2AMessageHandler for AgentLoopBridge {
                                 A2ARole::Agent,
                                 format!("Execution failed: {e}"),
                             );
+                            // Same guard as the completion arm: a cancel that
+                            // landed during the run owns the terminal state.
+                            if task_is_terminal(&task_manager, &task_id_owned).await {
+                                error!(task_id = %task_id_owned, error = %e, "A2A bridge: task already terminal; keeping its terminal state");
+                                return;
+                            }
                             if let Err(update_err) = task_manager
                                 .update_status(
                                     &task_id_owned,
@@ -421,21 +634,21 @@ impl A2AMessageHandler for AgentLoopBridge {
                                 )
                                 .await
                             {
+                                // Same reasoning as the Completed branch: the
+                                // failure event must still reach subscribers.
                                 error!(task_id = %task_id_owned, error = %update_err, "Failed to update task to Failed");
-                                return;
                             }
 
-                            let failed_event = TaskStatusUpdateEvent {
-                                task_id: task_id_owned.clone(),
-                                context_id: context_id_owned,
-                                status: TaskStatus {
+                            let failed_event = TaskStatusUpdateEvent::new(
+                                task_id_owned.clone(),
+                                context_id_owned,
+                                TaskStatus {
                                     state: TaskState::Failed,
                                     message: Some(error_msg),
                                     timestamp: Utc::now(),
                                 },
-                                is_final: true,
-                                metadata: None,
-                            };
+                                None,
+                            );
                             if let Err(bcast_err) = streaming
                                 .broadcast_status(&task_id_owned, failed_event)
                                 .await
@@ -457,8 +670,45 @@ impl A2AMessageHandler for AgentLoopBridge {
                     error!(
                         task_id = %task_id_owned,
                         ?panic_payload,
-                        "panic in A2A streaming bridge; cleanup will still run"
+                        "panic in A2A streaming bridge; task will be marked Failed"
                     );
+                    // A panic strands the task in `Working`: no terminal status
+                    // is recorded, so the task id stays unusable for later
+                    // callers and SSE subscribers never receive a final event.
+                    // Drive the task to `Failed` and publish that event.
+                    let already_terminal = task_is_terminal(&task_manager, &task_id_owned).await;
+                    if !already_terminal {
+                        if let Err(e) = task_manager
+                            .update_status(&task_id_owned, TaskState::Failed, None)
+                            .await
+                        {
+                            tracing::error!(
+                                task_id = %task_id_owned,
+                                error = %e,
+                                "A2A bridge: failed to mark task Failed after panic"
+                            );
+                        }
+                        let failed_event = TaskStatusUpdateEvent::new(
+                            task_id_owned.clone(),
+                            context_id_for_panic,
+                            TaskStatus {
+                                state: TaskState::Failed,
+                                message: None,
+                                timestamp: Utc::now(),
+                            },
+                            None,
+                        );
+                        if let Err(e) = streaming
+                            .broadcast_status(&task_id_owned, failed_event)
+                            .await
+                        {
+                            tracing::error!(
+                                task_id = %task_id_owned,
+                                error = %e,
+                                "A2A bridge: failed to broadcast failed-state event after panic"
+                            );
+                        }
+                    }
                 }
                 // Cleanup runs in BOTH the success and the panic branches.
                 if let Err(e) = streaming.cleanup_task(&task_id_owned).await {

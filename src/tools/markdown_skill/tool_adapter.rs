@@ -254,7 +254,12 @@ impl MarkdownCliTool {
     fn append_flag_arg(&self, cli_args: &mut Vec<String>, key: &str, value: &Value) {
         let flag = format!("--{}", key.replace('_', "-"));
 
-        // Skip value for boolean true
+        // Omit flag entirely for null or boolean false
+        if value.is_null() || value.as_bool() == Some(false) {
+            return;
+        }
+
+        // Add bare flag for boolean true
         if let Some(true) = value.as_bool() {
             cli_args.push(flag);
             return;

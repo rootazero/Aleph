@@ -1,0 +1,44 @@
+[package]
+name = "aleph-nsh-shell"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+embedded-core = ["dep:aleph-desktop-host"]
+qa-service = ["aleph-client/qa-service"]
+# Opt-in embedded TSX Panel (macOS only in S2): runs `interfaces/panel` in an
+# NSH AppView when launched with ALEPH_SHELL_PANEL=tsx. Needs the Panel
+# bundle first: `just panel-tsx-bundle`.
+# No `nsh-platform-macos/crypto`: it adds 16 crates (RSA, elliptic curves,
+# simd-json) and the Panel must not name the `crypto` global (S3).
+tsx-panel = ["dep:aleph-panel-ui", "nsh-platform-macos/js"]
+
+[dependencies]
+nsh-core = "=0.6.0"
+nsh-base = { version = "=0.6.0", default-features = false }
+nsh-engine = { version = "=0.6.0", default-features = false }
+aleph-client = { path = "../../shared/client" }
+aleph-desktop-host = { path = "../host", features = ["gateway-admission"], optional = true }
+aleph-panel-ui = { path = "../../interfaces/panel", optional = true }
+aleph-protocol = { path = "../../shared/protocol" }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["std"] }
+uuid = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+nsh-platform-macos = { version = "=0.6.0", default-features = false }
+objc2 = { version = "0.6.5", default-features = false, features = ["std"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSBundle", "NSString"] }
+objc2-service-management = { version = "0.3.2", default-features = false, features = ["std", "SMAppService", "objc2", "objc2-foundation"] }
+log = "0.4"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+nsh-platform-linux = { version = "=0.6.0", default-features = false, features = ["webview"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+nsh-platform-windows = { version = "=0.6.0", default-features = false, features = ["webview"] }
+
+[dev-dependencies]
+futures-util = "0.3"
+tokio-tungstenite = "0.28"

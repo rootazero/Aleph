@@ -106,7 +106,9 @@ pub async fn handle_logs(request: JsonRpcRequest) -> JsonRpcResponse {
     let requested_lines = params.lines.min(MAX_LOG_LINES);
 
     let log_dir = log_directory();
-    let log_file = find_latest_log(&log_dir);
+    let log_file = tokio::task::spawn_blocking(move || find_latest_log(&log_dir))
+        .await
+        .unwrap_or(None);
 
     match log_file {
         Some(path) => {
@@ -235,16 +237,12 @@ mod tests {
 
     #[test]
     fn log_directory_is_under_home() {
-        // ALEPH_HOME is process-global; lock so other tests don't point it at a
-        // temp directory without "aleph" in the path while we read it. Same
-        // hazard, same guard as `logging::file_appender::test_get_log_directory`
-        // — this reads the very same `get_log_directory()`.
-        let _guard = crate::utils::paths::ALEPH_HOME_TEST_GUARD
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-
-        let dir = log_directory();
-        assert!(dir.to_string_lossy().contains(".aleph"));
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        // Verify relocation reaches the daemon endpoint, not a directory spelling.
+        assert_eq!(
+            log_directory(),
+            crate::utils::paths::get_config_dir().unwrap().join("logs")
+        );
     }
 
     #[test]

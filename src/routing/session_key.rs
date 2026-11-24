@@ -305,7 +305,7 @@ impl SessionKey {
     }
 
     /// Format the base string for a DM session key (shared between `to_key_string` and `base_key_pattern`).
-    fn format_dm_base(agent_id: &str, channel: &str, peer_id: &str, dm_scope: &DmScope) -> String {
+    fn format_dm_base(agent_id: &str, channel: &str, peer_id: &str, dm_scope: DmScope) -> String {
         match dm_scope {
             DmScope::Main => format!("agent:{agent_id}:main"),
             DmScope::PerPeer if channel.is_empty() => {
@@ -319,12 +319,12 @@ impl SessionKey {
     }
 
     /// Append epoch suffix if non-zero.
-    fn append_epoch(base: String, epoch: u32) -> String {
+    fn append_epoch(mut base: String, epoch: u32) -> String {
         if epoch > 0 {
-            format!("{base}:s{epoch}")
-        } else {
-            base
+            use std::fmt::Write;
+            let _ = write!(base, ":s{epoch}");
         }
+        base
     }
 
     /// Get the agent ID from this session key
@@ -456,7 +456,7 @@ impl SessionKey {
                 peer_id,
                 dm_scope,
                 ..
-            } => Self::format_dm_base(agent_id, channel, peer_id, dm_scope),
+            } => Self::format_dm_base(agent_id, channel, peer_id, *dm_scope),
             // Non-epoch types: base_key_pattern == to_key_string
             _ => self.to_key_string(),
         }
@@ -516,7 +516,7 @@ impl SessionKey {
                 dm_scope,
                 epoch,
             } => {
-                let base = Self::format_dm_base(agent_id, channel, peer_id, dm_scope);
+                let base = Self::format_dm_base(agent_id, channel, peer_id, *dm_scope);
                 Self::append_epoch(base, *epoch)
             }
             Self::Group {
@@ -570,7 +570,11 @@ impl SessionKey {
         let s = s.trim();
         let parts: Vec<&str> = s.split(':').collect();
 
-        if parts.len() < 3 || !parts[0].eq_ignore_ascii_case("agent") {
+        if parts.len() < 3
+            || !parts
+                .first()
+                .is_some_and(|p| p.eq_ignore_ascii_case("agent"))
+        {
             return None;
         }
 
@@ -583,34 +587,38 @@ impl SessionKey {
         // would silently drop every layer above the innermost subagent, collapsing
         // a sub-subagent session into its grandparent's session.
         if let Some(pos) = parts.iter().rposition(|&p| p == "subagent") {
-            if pos >= 2 && pos + 1 < parts.len() {
-                let parent_str = parts[..pos].join(":");
-                if parts[pos + 1].is_empty() {
-                    return None;
-                }
-                // Mirror the constructor: sanitize the subagent_id so a path
-                // like `agent:main:main:subagent:../etc/passwd` cannot inject
-                // an unsanitized component downstream. Round-trip via
-                // `to_key_string` is now symmetric with `SessionKey::subagent`.
-                let subagent_id = sanitize_component(parts[pos + 1]);
-                if subagent_id.is_empty() {
-                    return None;
-                }
-                if let Some(parent_key) = Self::parse_with_depth(&parent_str, depth + 1) {
-                    return Some(Self::Subagent {
-                        parent_key: Box::new(parent_key),
-                        subagent_id,
-                    });
+            if pos >= 2 {
+                if let (Some(parent_slice), Some(&raw_subagent_id)) =
+                    (parts.get(..pos), parts.get(pos + 1))
+                {
+                    if raw_subagent_id.is_empty() {
+                        return None;
+                    }
+                    // Mirror the constructor: sanitize the subagent_id so a path
+                    // like `agent:main:main:subagent:../etc/passwd` cannot inject
+                    // an unsanitized component downstream. Round-trip via
+                    // `to_key_string` is now symmetric with `SessionKey::subagent`.
+                    let subagent_id = sanitize_component(raw_subagent_id);
+                    if subagent_id.is_empty() {
+                        return None;
+                    }
+                    let parent_str = parent_slice.join(":");
+                    if let Some(parent_key) = Self::parse_with_depth(&parent_str, depth + 1) {
+                        return Some(Self::Subagent {
+                            parent_key: Box::new(parent_key),
+                            subagent_id,
+                        });
+                    }
                 }
             }
         }
 
-        let agent_id = normalize_agent_id(parts[1]);
+        let agent_id = normalize_agent_id(parts.get(1)?);
         if agent_id.is_empty() {
             return None;
         }
 
-        let rest = &parts[2..];
+        let rest = parts.get(2..)?;
 
         if let Some((rest_no_epoch, epoch)) = Self::strip_epoch(rest) {
             if let Some(key) = Self::parse_rest(&agent_id, rest_no_epoch, epoch) {
@@ -635,25 +643,24 @@ impl SessionKey {
     }
 
     fn strip_epoch<'a>(rest: &'a [&'a str]) -> Option<(&'a [&'a str], u32)> {
-        let last = rest.last()?;
+        let (last, prefix) = rest.split_last()?;
+        if prefix.is_empty() {
+            return None;
+        }
         let n_str = last.strip_prefix('s')?;
         let n = n_str.parse::<u32>().ok()?;
         // Accept epoch 0 (s0) so that keys like agent:id:main:s0 are
         // parsed as Main with epoch 0 rather than falling through to
         // the [task_type, task_id] catch-all and becoming a Task.
-        if rest.len() > 1 {
-            // Only treat a trailing `:sN` as an epoch when the stripped rest
-            // is a known epoch-bearing shape. For 2-segment rests, the first
-            // segment must be `main` (Main) or a DM marker; otherwise a Task
-            // whose `task_id` happens to match `s[0-9]+` (e.g. `cron:s7`)
-            // would round-trip as Main and break routing.
-            if rest.len() == 2 && !matches!(rest[0], "main" | "peer" | "dm") {
-                return None;
-            }
-            Some((&rest[..rest.len() - 1], n))
-        } else {
-            None
+        // Only treat a trailing `:sN` as an epoch when the stripped rest
+        // is a known epoch-bearing shape. For 2-segment rests, the first
+        // segment must be `main` (Main) or a DM marker; otherwise a Task
+        // whose `task_id` happens to match `s[0-9]+` (e.g. `cron:s7`)
+        // would round-trip as Main and break routing.
+        if rest.len() == 2 && !matches!(rest.first().copied(), Some("main" | "peer" | "dm")) {
+            return None;
         }
+        Some((prefix, n))
     }
 
     fn parse_rest(agent_id: &str, rest: &[&str], epoch: u32) -> Option<Self> {
@@ -755,11 +762,15 @@ impl SessionKey {
         }
         let parts: Vec<&str> = s.split(':').collect();
 
-        if parts.len() < 3 || !parts[0].eq_ignore_ascii_case("agent") {
+        if parts.len() < 3
+            || !parts
+                .first()
+                .is_some_and(|p| p.eq_ignore_ascii_case("agent"))
+        {
             return None;
         }
 
-        let agent_id = normalize_agent_id(parts[1]);
+        let agent_id = normalize_agent_id(parts.get(1)?);
 
         match parts.get(2..) {
             Some(&["peer", ref rest @ ..]) if !rest.is_empty() => Some(Self::DirectMessage {
@@ -791,34 +802,24 @@ pub fn normalize_agent_id(id: &str) -> String {
         return DEFAULT_AGENT_ID.to_string();
     }
 
-    let normalized: String = trimmed
-        .to_lowercase()
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '-'
-            }
-        })
-        .collect();
+    let mut normalized = String::with_capacity(trimmed.len());
+    for c in trimmed.chars() {
+        let lower = c.to_ascii_lowercase();
+        if lower.is_ascii_alphanumeric() || lower == '-' || lower == '_' {
+            normalized.push(lower);
+        } else {
+            normalized.push('-');
+        }
+    }
 
-    let result = normalized
-        .trim_start_matches('-')
-        .trim_end_matches('-')
-        .to_string();
+    let result = normalized.trim_start_matches('-').trim_end_matches('-');
 
     if result.is_empty() {
         DEFAULT_AGENT_ID.to_string()
     } else if result.len() > 64 {
-        // Safe: chars().take(64) is a *character*-based truncation, not a
-        // byte-indexed slice. The current filter above only emits ASCII, so
-        // chars and bytes are equivalent on a 64-cap, but chars().take() is
-        // what the code actually does — a future filter that admits any
-        // multi-byte UTF-8 would otherwise panic at a non-boundary index.
         result.chars().take(64).collect()
     } else {
-        result
+        result.to_string()
     }
 }
 
@@ -837,24 +838,21 @@ pub(crate) fn sanitize_component(s: &str) -> String {
     if trimmed.is_empty() {
         return String::new();
     }
-    let normalized: String = trimmed
-        .to_lowercase()
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '-'
-            }
-        })
-        .collect();
+    let mut normalized = String::with_capacity(trimmed.len());
+    for c in trimmed.chars() {
+        let lower = c.to_ascii_lowercase();
+        if lower.is_ascii_alphanumeric() || lower == '-' || lower == '_' {
+            normalized.push(lower);
+        } else {
+            normalized.push('-');
+        }
+    }
 
     // Cap component length to prevent unbounded session key growth.
     if normalized.len() > 64 {
-        normalized.chars().take(64).collect()
-    } else {
-        normalized
+        normalized.truncate(64);
     }
+    normalized
 }
 
 impl fmt::Display for SessionKey {

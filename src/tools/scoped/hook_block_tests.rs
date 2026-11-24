@@ -123,52 +123,46 @@ fn assert_policy_refusal(err: &ToolError, reason: &str, marker: &Path) {
     );
 }
 
-#[tokio::test]
-async fn an_exit_2_worded_like_an_upstream_404_is_a_policy_refusal() {
+/// The hook command `command` blocks the call: the model reads a policy
+/// refusal citing `reason`, and the PermissionDenied observer stayed silent.
+async fn assert_blocked(command: &str, reason: &str) {
     let dir = tempfile::tempdir().unwrap();
     let marker = dir.path().join("denied.json");
-    let reason = "HTTP 404: .env not found upstream";
-    let err = blocked_by(&format!("echo '{reason}' >&2; exit 2"), &marker).await;
+    let err = blocked_by(command, &marker).await;
     assert_policy_refusal(&err, reason, &marker);
+}
+
+#[tokio::test]
+async fn an_exit_2_worded_like_an_upstream_404_is_a_policy_refusal() {
+    let reason = "HTTP 404: .env not found upstream";
+    assert_blocked(&format!("echo '{reason}' >&2; exit 2"), reason).await;
 }
 
 #[tokio::test]
 async fn an_exit_2_worded_like_a_timeout_is_a_policy_refusal() {
-    let dir = tempfile::tempdir().unwrap();
-    let marker = dir.path().join("denied.json");
     let reason = "tool file_read timed out after 5000ms";
-    let err = blocked_by(&format!("echo '{reason}' >&2; exit 2"), &marker).await;
-    assert_policy_refusal(&err, reason, &marker);
+    assert_blocked(&format!("echo '{reason}' >&2; exit 2"), reason).await;
 }
 
 #[tokio::test]
 async fn an_exit_2_with_nothing_on_stderr_is_the_same_policy_refusal() {
-    let dir = tempfile::tempdir().unwrap();
-    let marker = dir.path().join("denied.json");
-    let err = blocked_by("exit 2", &marker).await;
-    assert_policy_refusal(&err, crate::extension::hooks::EXIT2_DEFAULT_REASON, &marker);
+    assert_blocked("exit 2", crate::extension::hooks::EXIT2_DEFAULT_REASON).await;
 }
 
 #[tokio::test]
 async fn a_json_block_decision_is_a_policy_refusal() {
-    let dir = tempfile::tempdir().unwrap();
-    let marker = dir.path().join("denied.json");
     let reason = "429 rate limit on secrets";
-    let err = blocked_by(
+    assert_blocked(
         &format!(r#"echo '{{"decision":"block","reason":"{reason}"}}'"#),
-        &marker,
+        reason,
     )
     .await;
-    assert_policy_refusal(&err, reason, &marker);
 }
 
 #[tokio::test]
 async fn a_block_line_is_a_policy_refusal() {
-    let dir = tempfile::tempdir().unwrap();
-    let marker = dir.path().join("denied.json");
     let reason = "503 service unavailable";
-    let err = blocked_by(&format!("echo 'block: {reason}'"), &marker).await;
-    assert_policy_refusal(&err, reason, &marker);
+    assert_blocked(&format!("echo 'block: {reason}'"), reason).await;
 }
 
 /// The control: a genuine execution failure (no hook) keeps the kind its

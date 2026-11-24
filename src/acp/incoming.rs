@@ -20,7 +20,7 @@
 
 use std::path::{Component, Path, PathBuf};
 
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use tracing::{debug, warn};
 
 /// How the client answers `session/request_permission` and gates filesystem
@@ -37,6 +37,21 @@ pub enum PermissionPolicy {
     ApproveReads,
     /// Deny everything — useful for a read-only audit harness.
     DenyAll,
+}
+
+impl From<&crate::config::types::acp::TrustLevel> for PermissionPolicy {
+    fn from(level: &crate::config::types::acp::TrustLevel) -> Self {
+        match level {
+            crate::config::types::acp::TrustLevel::Full => Self::ApproveAll,
+            crate::config::types::acp::TrustLevel::Disabled => Self::DenyAll,
+        }
+    }
+}
+
+impl From<crate::config::types::acp::TrustLevel> for PermissionPolicy {
+    fn from(level: crate::config::types::acp::TrustLevel) -> Self {
+        Self::from(&level)
+    }
 }
 
 /// Outcome of handling an agent→client request: either a JSON-RPC `result`
@@ -116,11 +131,34 @@ impl IncomingHandler {
                 let abs = if p.is_absolute() {
                     p.to_path_buf()
                 } else {
-                    std::env::current_dir().unwrap_or_default().join(p)
+                    match std::env::current_dir() {
+                        Ok(dir) => dir.join(p),
+                        Err(err) => {
+                            // Same fallback as the `None` branch: a relative
+                            // root that still contains paths. An EMPTY base
+                            // would make `root.join(p)` stay relative to an
+                            // unknown working directory.
+                            warn!(
+                                cwd = %c,
+                                error = %err,
+                                "ACP incoming: no current directory; resolving the workspace root relatively"
+                            );
+                            PathBuf::from(FALLBACK_WORKSPACE_ROOT).join(p)
+                        }
+                    }
                 };
                 crate::acp::manager::session_key::normalize_path(&abs)
             }
-            None => std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            None => match std::env::current_dir() {
+                Ok(dir) => dir,
+                Err(err) => {
+                    warn!(
+                        error = %err,
+                        "ACP incoming: no current directory; falling back to a relative workspace root"
+                    );
+                    PathBuf::from(FALLBACK_WORKSPACE_ROOT)
+                }
+            },
         };
         Self { root, policy }
     }
@@ -233,20 +271,17 @@ impl IncomingHandler {
     // --- session/request_permission ---------------------------------------
 
     fn request_permission(&self, params: &Value) -> HandlerOutcome {
+        let empty_options = [];
         let options = params
             .get("options")
             .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
+            .map_or(&empty_options[..], Vec::as_slice);
 
         let allow = self.permission_allows(params);
         let chosen = if allow {
-            pick_option(&options, &["allow_once", "allow_always", "allow"])
+            pick_option(options, &["allow_once", "allow_always", "allow"])
         } else {
-            pick_option(
-                &options,
-                &["reject_once", "reject_always", "reject", "deny"],
-            )
+            pick_option(options, &["reject_once", "reject_always", "reject", "deny"])
         };
 
         match chosen {
@@ -266,9 +301,9 @@ impl IncomingHandler {
             PermissionPolicy::ApproveAll => true,
             PermissionPolicy::DenyAll => false,
             PermissionPolicy::ApproveReads => {
-                let kind = params
-                    .get("toolCall")
-                    .and_then(|t| t.get("kind"))
+                let tool_call = params.get("toolCall");
+                let kind = tool_call
+                    .and_then(|tc| tc.get("kind"))
                     .and_then(Value::as_str)
                     .unwrap_or("");
                 if !matches!(kind, "read" | "search" | "fetch" | "think") {
@@ -281,18 +316,76 @@ impl IncomingHandler {
                 // describes a write/exec is the exact bypass this guard
                 // closes. If any sensitive parameter is present, fall
                 // through to UI confirmation rather than auto-approve.
-                let tool_call = params.get("toolCall");
-                let has_sensitive_param = tool_call.is_some_and(|tc| {
-                    tc.get("path").is_some()
-                        || tc.get("file_path").is_some()
-                        || tc.get("command").is_some()
-                        || tc.get("shell").is_some()
-                        || tc.get("exec").is_some()
-                        || tc.get("url").is_some()
-                });
-                !has_sensitive_param
+                if tool_call.is_some_and(|tc| {
+                    SENSITIVE_TOOL_FIELDS
+                        .iter()
+                        .any(|field| tc.get(*field).is_some())
+                }) {
+                    return false;
+                }
+                // Per the ACP spec the tool arguments live in
+                // `toolCall.rawInput`, not in the top-level fields checked
+                // above — a top-level-only check is bypassed by moving the
+                // argument into `rawInput`.
+                match tool_call.and_then(|tc| tc.get("rawInput")) {
+                    Some(Value::Object(raw)) => !self.raw_input_is_sensitive(kind, raw),
+                    // A `rawInput` that is not an object cannot be inspected;
+                    // never auto-approve what cannot be reasoned about.
+                    Some(_) => false,
+                    None => true,
+                }
             }
         }
+    }
+
+    /// Decide whether the arguments carried in `toolCall.rawInput` describe
+    /// something a read-shaped tool call must not be auto-approved for.
+    ///
+    /// A genuine read names a path inside the workspace, a fetch names a url
+    /// and a search names a pattern — none of them an execution primitive.
+    /// Execution primitives (`command`, `shell`, `exec`), a url on a
+    /// non-fetch call, and a path that escapes the workspace are sensitive:
+    /// the request then falls through to the reject path instead of being
+    /// auto-approved.
+    fn raw_input_is_sensitive(&self, kind: &str, raw: &Map<String, Value>) -> bool {
+        if ["command", "shell", "exec"]
+            .iter()
+            .any(|field| raw.contains_key(*field))
+        {
+            return true;
+        }
+        if raw.contains_key("url") && kind != "fetch" {
+            return true;
+        }
+        for field in ["path", "file_path"] {
+            let Some(value) = raw.get(field) else {
+                continue;
+            };
+            // A non-string path cannot be reasoned about → treat it as sensitive.
+            let Some(text) = value.as_str() else {
+                return true;
+            };
+            if self.path_escapes_workspace(text) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// True when `requested` resolves outside the workspace root.
+    ///
+    /// The check is lexical on purpose: a permission prompt asks whether the
+    /// *argument* stays inside the workspace, and the target file need not
+    /// exist yet. Symlink escapes are refused later by `confine_blocking`
+    /// when the read itself is served.
+    fn path_escapes_workspace(&self, requested: &str) -> bool {
+        let raw = Path::new(requested);
+        let joined = if raw.is_absolute() {
+            raw.to_path_buf()
+        } else {
+            self.root.join(raw)
+        };
+        !crate::acp::manager::session_key::normalize_path(&joined).starts_with(&self.root)
     }
 
     /// True if the policy permits filesystem reads.
@@ -313,8 +406,7 @@ impl IncomingHandler {
         let root = self.root.clone();
         let req = requested.to_string();
         match tokio::task::spawn_blocking(move || Self::confine_blocking(&root, &req)).await {
-            Ok(Ok(p)) => Ok(p),
-            Ok(Err(e)) => Err(e),
+            Ok(res) => res,
             Err(join_err) => {
                 warn!(
                     requested,
@@ -367,6 +459,19 @@ impl IncomingHandler {
     }
 }
 
+/// Tool-call fields that make a read-shaped permission request suspicious
+/// when they appear at the top level of `toolCall`.
+const SENSITIVE_TOOL_FIELDS: [&str; 6] = ["path", "file_path", "command", "shell", "exec", "url"];
+
+/// Workspace-root fallback used when the process has no current directory.
+///
+/// The fallback must keep the containment check meaningful. An *empty* root is
+/// the dangerous case: `Path::new("x").starts_with(Path::new(""))` is true,
+/// so every path would look contained and the sandbox would silently stop
+/// containing anything. `.` fails closed instead — no joined path starts with
+/// `.` — and the degradation is logged where it happens.
+const FALLBACK_WORKSPACE_ROOT: &str = ".";
+
 /// JSON-RPC-adjacent permission error code. Negative app-defined range; mirrors
 /// the spirit of acpx's `PERMISSION_DENIED` classification.
 const PERMISSION_DENIED: i64 = -32000;
@@ -380,7 +485,10 @@ const INVALID_PARAMS: i64 = -32602;
 /// pull arbitrary bytes out of the workspace (e.g. `/proc/self/maps`,
 /// multi-GB logs) into one read result and pin them in the heap until
 /// the caller drops the response.
-const MAX_FS_READ_BYTES: u64 = 32 * 1024 * 1024;
+///
+/// Shared with the oneshot harness capture (`adapters::MAX_ONESHOT_CAPTURE_BYTES`)
+/// so the ACP module keeps a single "max payload buffered per operation" limit.
+pub(super) const MAX_FS_READ_BYTES: u64 = 32 * 1024 * 1024;
 
 /// Maximum size of the inline `content` string accepted by
 /// `fs/write_text_file`. Without a cap, a single agent call could dump
@@ -461,28 +569,16 @@ fn apply_line_window(content: &str, line: Option<u64>, limit: Option<u64>) -> St
     if line.is_none() && limit.is_none() {
         return content.to_string();
     }
-    // Subtract in u64 space (line is clamped to >=1, so this never underflows),
-    // then convert. Width is bounded by the file's line count below.
     let start = usize::try_from(line.unwrap_or(1).max(1) - 1).unwrap_or(usize::MAX);
-    let lines: Vec<&str> = content.lines().collect();
-    if start >= lines.len() {
-        return String::new();
-    }
-    // `saturating_add` so an attacker-supplied huge `limit` can't overflow
-    // `usize` (a debug-build panic in this "never panics" handler).
-    let end = match limit {
-        Some(n) => start
-            .saturating_add(usize::try_from(n).unwrap_or(usize::MAX))
-            .min(lines.len()),
-        None => lines.len(),
+    let iter = content.lines().skip(start);
+    let windowed: Vec<&str> = match limit {
+        Some(n) => {
+            let count = usize::try_from(n).unwrap_or(usize::MAX);
+            iter.take(count).collect()
+        }
+        None => iter.collect(),
     };
-    // `get` returns `None` only if the bounds are inverted — impossible by
-    // construction (`start < lines.len()` from the early return above, and
-    // `end` is clamped to `lines.len()`). Use `unwrap_or_default` so an
-    // unexpected out-of-bounds path never panics this agent-facing handler
-    // (the function is documented as "never panics"); the empty-string result
-    // is the same observable behaviour the caller would get on a 0-line file.
-    lines.get(start..end).unwrap_or_default().join("\n")
+    windowed.join("\n")
 }
 
 /// Pick the first option whose `kind` (or `name`) matches one of `wanted`,
@@ -697,6 +793,86 @@ mod tests {
             HandlerOutcome::Result(v) => assert_eq!(v["outcome"]["optionId"], "r"),
             other => panic!("expected reject, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn permission_approve_reads_rejects_exec_smuggled_in_raw_input() {
+        // The ACP spec keeps the real tool arguments in `toolCall.rawInput`;
+        // a read-shaped kind must not smuggle an exec through it.
+        let h = IncomingHandler::new(None, PermissionPolicy::ApproveReads);
+        let out = h
+            .handle(
+                "session/request_permission",
+                &json!({
+                    "options": [
+                        { "optionId": "a", "kind": "allow_once" },
+                        { "optionId": "r", "kind": "reject_once" }
+                    ],
+                    "toolCall": {
+                        "kind": "read",
+                        "rawInput": { "command": "rm -rf ~" }
+                    }
+                }),
+            )
+            .await;
+        match out {
+            HandlerOutcome::Result(v) => assert_eq!(v["outcome"]["optionId"], "r"),
+            other => panic!("expected reject, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn permission_approve_reads_rejects_raw_input_path_outside_workspace() {
+        let (_scratch, dir) = crate::utils::scratch::scratch_root();
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let h = handler_at(&dir, PermissionPolicy::ApproveReads);
+        let out = h
+            .handle(
+                "session/request_permission",
+                &json!({
+                    "options": [
+                        { "optionId": "a", "kind": "allow_once" },
+                        { "optionId": "r", "kind": "reject_once" }
+                    ],
+                    "toolCall": {
+                        "kind": "read",
+                        "rawInput": { "file_path": "/etc/passwd" }
+                    }
+                }),
+            )
+            .await;
+        match out {
+            HandlerOutcome::Result(v) => assert_eq!(v["outcome"]["optionId"], "r"),
+            other => panic!("expected reject, got {other:?}"),
+        }
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    #[tokio::test]
+    async fn permission_approve_reads_allows_raw_input_path_inside_workspace() {
+        let (_scratch, dir) = crate::utils::scratch::scratch_root();
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let h = handler_at(&dir, PermissionPolicy::ApproveReads);
+        let out = h
+            .handle(
+                "session/request_permission",
+                &json!({
+                    "options": [
+                        { "optionId": "a", "kind": "allow_once" },
+                        { "optionId": "r", "kind": "reject_once" }
+                    ],
+                    "toolCall": {
+                        "kind": "read",
+                        "rawInput": { "file_path": "notes.md" }
+                    }
+                }),
+            )
+            .await;
+        match out {
+            HandlerOutcome::Result(v) => assert_eq!(v["outcome"]["optionId"], "a"),
+            other => panic!("expected allow, got {other:?}"),
+        }
+        let _ = tokio::fs::remove_dir_all(&dir).await;
     }
 
     #[tokio::test]

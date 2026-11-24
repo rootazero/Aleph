@@ -116,6 +116,7 @@ pub fn audit_config(cfg: &Config) -> Vec<Finding> {
     let mut out = Vec::new();
     audit_ssrf(cfg, &mut out);
     audit_sandbox(cfg, &mut out);
+    audit_shell(cfg, &mut out);
     audit_privacy(cfg, &mut out);
     out
 }
@@ -162,16 +163,36 @@ pub fn audit_ssrf(cfg: &Config, out: &mut Vec<Finding>) {
     }
 }
 
-/// Sandbox posture for exec-class tools. A disabled sandbox means code/shell
-/// execution runs without isolation.
+/// Sandbox posture for exec-class tools. A disabled sandbox does not let
+/// exec-class tools run unsandboxed: `build_sandbox` returns a `NoopSandbox`
+/// whose `execute` refuses every command, so the consequence is that the tools
+/// are unavailable, not that they are unprotected.
 pub fn audit_sandbox(cfg: &Config, out: &mut Vec<Finding>) {
     let s = &cfg.sandbox;
     if !s.enabled {
         out.push(Finding::new(
-            SEV_CRITICAL,
+            SEV_WARN,
             "sandbox",
-            "Sandbox is disabled — code/shell execution (code_exec, bash) runs without isolation.",
+            "Sandbox is disabled — exec-class tools (code_exec, bash) refuse every command rather than running unsandboxed.",
             "Set sandbox.enabled = true so exec-class tools run inside the OS sandbox.",
+        ));
+    }
+}
+
+/// Shell-security posture. The custom risk patterns are advisory and gated:
+/// they are loaded only when `enable_custom_patterns` is on, so patterns
+/// written without the flag are silently inert.
+pub fn audit_shell(cfg: &Config, out: &mut Vec<Finding>) {
+    let s = &cfg.security;
+    let custom = s.custom_blocked.len() + s.custom_danger.len();
+    if custom > 0 && !s.enable_custom_patterns {
+        out.push(Finding::new(
+            SEV_WARN,
+            "shell_security",
+            format!(
+                "security.enable_custom_patterns is false — the {custom} custom risk pattern(s) in [security] are never applied to a command."
+            ),
+            "Set security.enable_custom_patterns = true so the custom blocked/danger patterns are enforced.",
         ));
     }
 }
@@ -344,13 +365,16 @@ mod tests {
     }
 
     #[test]
-    fn sandbox_disabled_is_critical() {
+    fn sandbox_disabled_is_a_warn_not_a_critical() {
+        // A disabled sandbox refuses every exec-class command
+        // (`NoopSandbox::execute` errors), so it is an availability
+        // finding, not an "unprotected execution" one.
         let mut cfg = Config::default();
         cfg.sandbox.enabled = false;
         let mut out = Vec::new();
         audit_sandbox(&cfg, &mut out);
         assert_eq!(out.len(), 1);
-        assert_eq!(out[0].severity, SEV_CRITICAL);
+        assert_eq!(out[0].severity, SEV_WARN);
         assert_eq!(out[0].area, "sandbox");
     }
 
@@ -360,6 +384,39 @@ mod tests {
         cfg.sandbox.enabled = true;
         let mut out = Vec::new();
         audit_sandbox(&cfg, &mut out);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn custom_patterns_without_the_flag_are_reported_as_inert() {
+        let mut cfg = Config::default();
+        cfg.security.enable_custom_patterns = false;
+        cfg.security
+            .custom_blocked
+            .push(crate::config::types::CustomRiskPattern {
+                pattern: "^danger".to_string(),
+                reason: None,
+            });
+        let mut out = Vec::new();
+        audit_shell(&cfg, &mut out);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].severity, SEV_WARN);
+        assert_eq!(out[0].area, "shell_security");
+        assert!(out[0].finding.contains("enable_custom_patterns"));
+    }
+
+    #[test]
+    fn custom_patterns_with_the_flag_are_clean() {
+        let mut cfg = Config::default();
+        cfg.security.enable_custom_patterns = true;
+        cfg.security
+            .custom_danger
+            .push(crate::config::types::CustomRiskPattern {
+                pattern: "^danger".to_string(),
+                reason: None,
+            });
+        let mut out = Vec::new();
+        audit_shell(&cfg, &mut out);
         assert!(out.is_empty());
     }
 

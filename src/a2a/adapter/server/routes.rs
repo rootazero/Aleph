@@ -221,6 +221,18 @@ async fn stream_resubscribe(
         }
     };
 
+    // `subscribe_all` creates a hub channel for ANY id, so an unchecked id
+    // allocates a channel that is never cleaned up and holds an SSE response
+    // open for a task that does not exist. Only re-attach to a task the
+    // server actually knows about.
+    if state.task_manager.get_task(&task_id, None).await.is_err() {
+        return sse_error(JsonRpcResponse::error(
+            request.id.clone(),
+            -32001,
+            "Task not found",
+        ));
+    }
+
     let update_stream = match state.streaming.subscribe_all(&task_id).await {
         Ok(stream) => stream,
         Err(e) => {
@@ -287,18 +299,43 @@ fn update_event_frame(
                 UpdateEvent::StatusUpdate(_) => "status-update",
                 UpdateEvent::ArtifactUpdate(_) => "artifact-update",
             };
-            let data = serde_json::to_string(&JsonRpcResponse::success(
-                request_id.clone(),
-                serde_json::to_value(&event).unwrap_or_default(),
-            ))
-            .unwrap_or_default();
-            (event_type, data)
+            let payload = match serde_json::to_value(&event) {
+                Ok(payload) => payload,
+                Err(e) => {
+                    tracing::error!(error = %e, "A2A SSE: failed to serialize update event");
+                    return (
+                        "error",
+                        serialize_rpc_frame(&JsonRpcResponse::error(
+                            request_id.clone(),
+                            -32603,
+                            &format!("Failed to serialize update event: {e}"),
+                        )),
+                    );
+                }
+            };
+            (
+                event_type,
+                serialize_rpc_frame(&JsonRpcResponse::success(request_id.clone(), payload)),
+            )
         }
+        Err(e) => (
+            "error",
+            serialize_rpc_frame(&JsonRpcResponse::from_a2a_error(request_id.clone(), &e)),
+        ),
+    }
+}
+
+/// Serialize a JSON-RPC frame for the SSE wire format.
+///
+/// A serialization failure must not degrade into an empty payload: the
+/// client would silently see a frame with no content instead of an error.
+fn serialize_rpc_frame(response: &JsonRpcResponse) -> String {
+    match serde_json::to_string(response) {
+        Ok(json) => json,
         Err(e) => {
-            let data =
-                serde_json::to_string(&JsonRpcResponse::from_a2a_error(request_id.clone(), &e))
-                    .unwrap_or_default();
-            ("error", data)
+            tracing::error!(error = %e, "A2A SSE: failed to serialize JSON-RPC frame");
+            r#"{"jsonrpc":"2.0","error":{"code":-32603,"message":"failed to serialize response"},"id":null}"#
+                .to_string()
         }
     }
 }
@@ -314,7 +351,7 @@ fn update_event_to_sse(
 
 /// Build an SSE error response from a `JsonRpcResponse`
 fn sse_error(resp: JsonRpcResponse) -> axum::response::Response {
-    let json = serde_json::to_string(&resp).unwrap_or_default();
+    let json = serialize_rpc_frame(&resp);
     let stream = futures::stream::once(async move {
         Ok::<_, Infallible>(Event::default().event("error").data(json))
     });

@@ -3,7 +3,6 @@
 //! `parse_caller_agent_id` and `resolve_plugin_handler_from_sources` are
 //! standalone helpers (no `self`), grouped here so the registry's `impl`
 //! blocks stay focused on method dispatch.
-#![allow(unused_imports)]
 
 use std::collections::HashMap;
 

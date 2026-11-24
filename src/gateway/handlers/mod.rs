@@ -51,6 +51,7 @@ pub mod browser_viewer;
 pub mod bundled_sync;
 pub mod canvas;
 pub mod canvas_error;
+pub mod capabilities;
 pub mod channel;
 pub mod chat;
 pub mod clarification;
@@ -101,6 +102,7 @@ pub mod memory_curated;
 pub mod memory_scope;
 pub mod oauth;
 pub mod pairing;
+pub mod panel_capabilities;
 pub mod plugins;
 pub mod projects;
 pub mod projects_channel;
@@ -123,6 +125,7 @@ pub mod security_audit;
 pub mod skills;
 pub mod spend;
 pub mod subagent;
+pub mod system_hello;
 pub mod system_info;
 pub mod task_error;
 pub mod teams;
@@ -320,10 +323,16 @@ impl HandlerRegistry {
         registry.register("echo", echo::handle);
         registry.register("version", version::handle);
         registry.register("system.info", system_info::handle);
+        registry.register("system.hello", system_hello::handle);
         registry.register("request.state", request_state::handle);
 
         // Config handlers (schema is stateless)
         registry.register("config.schema", config::handle_schema);
+        registry.register("capabilities.describe", capabilities::handle);
+        registry.register(
+            "capabilities.terminal.invoke",
+            capabilities::handle_terminal_invoke,
+        );
 
         // Logs handlers
         registry.register("logs.getLevel", logs::handle_get_level);
@@ -389,6 +398,9 @@ impl HandlerRegistry {
             plugins::handle_marketplace_install,
         );
 
+        registry.register("panel.capabilities.snapshot", panel_capabilities::handle);
+        registry.register("panel.project.select", panel_capabilities::handle_select);
+
         // Service handlers
         registry.register("services.start", services::handle_start);
         registry.register("services.stop", services::handle_stop);
@@ -401,14 +413,14 @@ impl HandlerRegistry {
         // `pty::manager()` accessor; the event bus is attached once in
         // `GatewayServer::build_router`, so no boot-time wiring is required here.
         //
-        // `pty.spawn` is NOT registered here — it needs the live
-        // `Arc<RwLock<Config>>` to read `[policies.terminal]` (the session
-        // gate, and the scrollback/session-cap values), which this
-        // stateless registry has no handle to. It is registered instead by
-        // `register_pty_handlers` in
+        // `pty.spawn` is NOT registered here — it needs the
+        // `TerminalCapabilitySource` (the owner of the live `Config` behind
+        // `[policies.terminal]`: the session gate, and the
+        // scrollback/session-cap values), which this stateless registry has no
+        // handle to. It is registered instead by `register_pty_handlers` in
         // `src/bin/aleph-server/commands/start/builder/handlers/system.rs`,
         // via `register_handler!`, alongside the rest of the server's
-        // config-carrying handlers.
+        // source-carrying handlers.
         registry.register("pty.input", pty::handle_input);
         registry.register("pty.resize", pty::handle_resize);
         registry.register("pty.close", pty::handle_close);
@@ -1249,7 +1261,8 @@ impl HandlerRegistry {
     /// The response from the handler, or a method not found error
     pub async fn handle(&self, request: &JsonRpcRequest) -> JsonRpcResponse {
         if let Some(handler) = self.handlers.get(&request.method) {
-            handler(request.clone()).await
+            let response = handler(request.clone()).await;
+            self.project_panel_snapshot(request, response)
         } else {
             JsonRpcResponse::error(
                 request.id.clone(),
@@ -1257,6 +1270,50 @@ impl HandlerRegistry {
                 format!("Method not found: {}", request.method),
             )
         }
+    }
+
+    pub(crate) async fn handle_with_panel_context(
+        &self,
+        request: &JsonRpcRequest,
+        context: &crate::gateway::panel_project_context::PanelRequestContext,
+    ) -> JsonRpcResponse {
+        if self.has_method(&request.method)
+            && panel_capabilities::is_context_method(&request.method)
+        {
+            let response = panel_capabilities::handle_with_context(request.clone(), context).await;
+            return self.project_panel_snapshot(request, response);
+        }
+        self.handle(request).await
+    }
+
+    fn memory_nebula_mounted(&self) -> bool {
+        use aleph_protocol::memory_graph::{
+            GRAPH_NODE_DETAIL_METHOD, GRAPH_QUERY_METHOD, GRAPH_SEARCH_METHOD,
+        };
+
+        [
+            GRAPH_QUERY_METHOD,
+            GRAPH_SEARCH_METHOD,
+            GRAPH_NODE_DETAIL_METHOD,
+        ]
+        .into_iter()
+        .all(|method| self.has_method(method))
+    }
+
+    fn project_panel_snapshot(
+        &self,
+        request: &JsonRpcRequest,
+        mut response: JsonRpcResponse,
+    ) -> JsonRpcResponse {
+        if request.method == aleph_protocol::panel::PANEL_UI_CAPABILITY_SNAPSHOT_METHOD
+            && response.error.is_none()
+            && self.memory_nebula_mounted()
+        {
+            if let Some(result) = response.result.as_mut() {
+                panel_capabilities::project_memory_nebula(result);
+            }
+        }
+        response
     }
 
     /// Check if a method is registered
@@ -1302,6 +1359,7 @@ mod tests {
         assert!(registry.has_method("health"));
         assert!(registry.has_method("echo"));
         assert!(registry.has_method("version"));
+        assert!(registry.has_method("panel.capabilities.snapshot"));
     }
 
     #[test]

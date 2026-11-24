@@ -255,9 +255,9 @@ pub fn select_schedulable(
     // Per-owner concurrency load, seeded from tasks already in flight in this
     // process. Owned `String` keys keep the fill free of borrow gymnastics —
     // owner ids are short and the candidate set per tick is small.
-    let mut load: HashMap<String, usize> = HashMap::new();
+    let mut load: HashMap<&str, usize> = HashMap::new();
     for owner in running.values() {
-        *load.entry(owner.clone()).or_insert(0) += 1;
+        *load.entry(owner.as_str()).or_insert(0) += 1;
     }
 
     let mut picked: Vec<CoordTask> = Vec::with_capacity(available_slots);
@@ -286,9 +286,10 @@ pub fn select_schedulable(
             break; // nothing left that is both un-consumed and under cap
         };
         consumed[i] = true;
-        let owner = candidates[i].owner.clone().unwrap_or_default();
+        let task = candidates[i];
+        let owner = task.owner.as_deref().unwrap_or("");
         *load.entry(owner).or_insert(0) += 1;
-        picked.push(candidates[i].clone());
+        picked.push((*task).clone());
     }
 
     picked

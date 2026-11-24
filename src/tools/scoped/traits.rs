@@ -2,6 +2,25 @@
 
 use crate::tools::service::ToolDefinition;
 
+/// Current constraint facts supplied by the trusted invocation owner, not tool input.
+///
+/// Called once per canonical invocation with an installed activation controller.
+/// Counts exclude the invocation being admitted and include other occupied slots;
+/// an already-Active controller is lifecycle state, not a reserved invocation slot.
+/// Thus activation and invocation both require usage strictly below the limit
+/// before consuming one new slot. The owner is responsible for accounting and
+/// serialization/reservations; this read contract does not create an atomic budget.
+/// Named conditions and time must come from the owner's current trusted state.
+/// Return an error when that state cannot be read; never substitute dummy facts.
+/// This code-installed source is not an RPC field or a new authorization authority.
+pub type CapabilityConstraintContextSource = dyn Fn(
+        &str,
+    ) -> Result<
+        crate::capability::constraints::ConstraintContext,
+        crate::capability::constraints::ConstraintViolation,
+    > + Send
+    + Sync;
+
 // =============================================================================
 // ToolDefinitionRewriter trait
 // =============================================================================

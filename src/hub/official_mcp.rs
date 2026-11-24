@@ -46,11 +46,9 @@ fn is_projectable(t: &PresetTransport) -> bool {
             // interpolation (`<ENV_KEY>`) would have slipped through and the
             // secrets resolver would have no real env var to substitute — the
             // install would silently drop the placeholder. (review/hub-statics)
-            t.command.as_deref().map(clean).unwrap_or(false) && t.args.iter().all(|a| clean(a))
+            t.command.as_deref().is_some_and(clean) && t.args.iter().all(|a| clean(a))
         }
-        McpTransportType::Http | McpTransportType::Sse => {
-            t.url.as_deref().map(clean).unwrap_or(false)
-        }
+        McpTransportType::Http | McpTransportType::Sse => t.url.as_deref().is_some_and(clean),
     }
 }
 
@@ -115,7 +113,9 @@ pub fn primer_entries() -> Vec<ExtensionEntry> {
 /// Returns `None` for non-preset ids, unknown slugs, or presets without
 /// guidance.
 pub fn post_install_for(entry_id: &str) -> Option<&'static str> {
-    let slug = entry_id.strip_prefix(&format!("{ALEPH_HUB_ID}:"))?;
+    let slug = entry_id
+        .strip_prefix(ALEPH_HUB_ID)
+        .and_then(|s| s.strip_prefix(':'))?;
     presets::find(slug)?.post_install.as_deref()
 }
 
@@ -144,7 +144,7 @@ pub async fn migrate_legacy_preset_servers(mcp: &McpManagerHandle) {
     };
     for cfg in configs {
         if is_legacy_preset_server(&cfg) {
-            let id = cfg.id.clone();
+            let id = cfg.id;
             match mcp.remove_server(id.clone()).await {
                 Ok(()) => {
                     tracing::info!(%id, "removed retired-preset MCP server; re-install from Aleph Hub")

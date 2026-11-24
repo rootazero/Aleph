@@ -1,4 +1,4 @@
-use super::{Arc, GatewayServer, MemoryBackend};
+use super::{Arc, GatewayServer};
 
 pub(in crate::commands::start) fn register_agents_handlers(
     server: &mut GatewayServer,
@@ -570,73 +570,38 @@ pub(in crate::commands::start) fn register_teams_handlers(
 
 pub(in crate::commands::start) fn register_graph_handlers(
     server: &mut GatewayServer,
-    memory_db: &MemoryBackend,
-    indexer: Option<
-        &::std::sync::Arc<
-            alephcore::memory::notes::NoteIndexer<
-                alephcore::memory::store::sqlite::SqliteMemoryBackend,
-            >,
-        >,
-    >,
+    memory_runtime: &Arc<alephcore::memory::runtime::MemoryRuntime>,
 ) {
-    use alephcore::gateway::handlers::graph;
-
-    {
-        let db = ::std::sync::Arc::clone(memory_db);
-        server.handlers_mut().register("graph.query", move |req| {
-            let db = ::std::sync::Arc::clone(&db);
-            async move { graph::handle_query_impl(req, db).await }
-        });
-    }
-
-    {
-        let db = ::std::sync::Arc::clone(memory_db);
-        server
-            .handlers_mut()
-            .register("graph.node_detail", move |req| {
-                let db = ::std::sync::Arc::clone(&db);
-                async move { graph::handle_node_detail_impl(req, db).await }
-            });
-    }
-
-    {
-        let db = ::std::sync::Arc::clone(memory_db);
-        server.handlers_mut().register("graph.search", move |req| {
-            let db = ::std::sync::Arc::clone(&db);
-            async move { graph::handle_search_impl(req, db).await }
-        });
-    }
-
-    // graph.update_note / graph.rename_note / graph.delete_note need the
-    // NoteIndexer (write path). Only registered when the indexer is available;
-    // otherwise these methods are simply absent (METHOD_NOT_FOUND).
-    if let Some(indexer) = indexer {
-        {
-            let indexer = ::std::sync::Arc::clone(indexer);
-            server
-                .handlers_mut()
-                .register("graph.update_note", move |req| {
-                    let indexer = ::std::sync::Arc::clone(&indexer);
-                    async move { graph::handle_update_note_impl(req, indexer).await }
-                });
-        }
-        {
-            let indexer = ::std::sync::Arc::clone(indexer);
-            server
-                .handlers_mut()
-                .register("graph.rename_note", move |req| {
-                    let indexer = ::std::sync::Arc::clone(&indexer);
-                    async move { graph::handle_rename_note_impl(req, indexer).await }
-                });
-        }
-        {
-            let indexer = ::std::sync::Arc::clone(indexer);
-            server
-                .handlers_mut()
-                .register("graph.delete_note", move |req| {
-                    let indexer = ::std::sync::Arc::clone(&indexer);
-                    async move { graph::handle_delete_note_impl(req, indexer).await }
-                });
-        }
-    }
+    use alephcore::gateway::handlers::memory::runtime;
+    register_handler!(server, "graph.query", runtime::handle_graph, memory_runtime);
+    register_handler!(
+        server,
+        "graph.node_detail",
+        runtime::handle_graph,
+        memory_runtime
+    );
+    register_handler!(
+        server,
+        "graph.search",
+        runtime::handle_graph,
+        memory_runtime
+    );
+    register_handler!(
+        server,
+        "graph.update_note",
+        runtime::handle_graph,
+        memory_runtime
+    );
+    register_handler!(
+        server,
+        "graph.rename_note",
+        runtime::handle_graph,
+        memory_runtime
+    );
+    register_handler!(
+        server,
+        "graph.delete_note",
+        runtime::handle_graph,
+        memory_runtime
+    );
 }

@@ -1,0 +1,22 @@
+{
+  "status": "PASS_INDEPENDENT_READ_ONLY_RECOMPUTATION",
+  "source_manifest_sha256": "0aca3c9595789c8a295edc48d901daa2b4d2dc77497a787025bba2fe9164c36c",
+  "source_files": 178,
+  "source_hashes_match": true,
+  "review_report": ".superpowers/sdd/2026-11-12-session-ui-readiness-and-phase7-continuation/p7-final-current-source-quality-v3.7fbf11e2.c8fb8bf4.md",
+  "review_report_sha256": "e99bb5292273482bf3bc07e90dd0c5b1a0d79351b703ae73ad3181ec44892d0a",
+  "analysis_sha256": "13fd34474cf9de128204893cdfc482de74971d477489bb06576b639692bed5eb",
+  "retained_lcov": ".superpowers/sdd/2026-11-12-session-ui-readiness-and-phase7-continuation/artifacts-20261112-a/p7-coverage-production-v6.lcov",
+  "retained_lcov_sha256": "f0d4abc8c8a4e4f2942f104377d36551c3809a2044d3e803bd932a78f91e32ad",
+  "executable_production_files": 66,
+  "covered_lines": 14311,
+  "mapped_production_lines": 16193,
+  "line_percent": 88.37769406533687,
+  "missing_executable_files": 0,
+  "threshold_percent": 80,
+  "gate_passed": true,
+  "superseded_coverage_label": "Archived v6 19385/21367 and 67 production files are inaccurate; original raw exports and receipts preserved.",
+  "method": "Exact independently reviewed report appendix, read only: masks Rust lifetimes/char/raw strings/comments, stops cfg(test) declarations/fields at actual delimiters, excludes test-only census. Scoped frozen-source analysis, not a certified general-purpose Rust parser.",
+  "production_source_or_checker_modified": false,
+  "portable_copy_note": "Original receipt retained unchanged locally. This copy only makes the retained LCOV path repository-relative; all measurements and original evidence hashes are preserved."
+}

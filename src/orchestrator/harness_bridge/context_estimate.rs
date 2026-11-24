@@ -56,9 +56,14 @@ pub struct OverheadCache {
 impl Default for OverheadCache {
     fn default() -> Self {
         Self {
+            // `NonZeroUsize::MIN` instead of an `unreachable!`: the capacity
+            // is a compile-time-known positive number, so the fallback is
+            // unreachable in practice — but a panic in a `Default` impl
+            // would take the whole process down if the constant were ever
+            // edited to 0. A capacity of 1 degrades the cache, it does not
+            // crash it.
             inner: Mutex::new(LruCache::new(
-                NonZeroUsize::new(OVERHEAD_CACHE_CAPACITY)
-                    .unwrap_or_else(|| unreachable!("OVERHEAD_CACHE_CAPACITY > 0")),
+                NonZeroUsize::new(OVERHEAD_CACHE_CAPACITY).unwrap_or(NonZeroUsize::MIN),
             )),
         }
     }

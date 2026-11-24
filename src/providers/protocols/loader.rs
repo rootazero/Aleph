@@ -61,19 +61,18 @@ impl ProtocolLoader {
             AlephError::invalid_config(format!("Failed to parse protocol YAML {path:?}: {e}"))
         })?;
 
+        let name = def.name.clone();
         // Create ConfigurableProtocol
         let protocol = ConfigurableProtocol::new(
-            // rust-doctor-disable-next-line excessive-clone
-            def.clone(),
+            def,
             crate::providers::protocols::http_client::build_provider_http_client(),
         )?;
 
         // Register in ProtocolRegistry
-        // rust-doctor-disable-next-line excessive-clone
-        ProtocolRegistry::global().register(def.name.clone(), Arc::new(protocol))?;
+        ProtocolRegistry::global().register(name.clone(), Arc::new(protocol))?;
 
         info!(
-            protocol_name = %def.name,
+            protocol_name = %name,
             path = ?path,
             "Successfully loaded protocol from file"
         );

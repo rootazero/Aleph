@@ -137,6 +137,10 @@ pub struct MemoryTraceTool {
 }
 
 impl MemoryTraceTool {
+    pub(crate) fn services() -> Vec<aleph_slot_api::capability::Service> {
+        vec![crate::memory::runtime::required_service()]
+    }
+
     /// Tool identifier registered with the agent runtime.
     pub const NAME: &'static str = "memory_trace";
 

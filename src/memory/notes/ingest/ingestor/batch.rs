@@ -47,8 +47,11 @@ impl<S: NoteStore + Send + Sync + 'static> CompoundIngestor for DefaultCompoundI
                 warn!("orientation bootstrap for {agent_id} failed (continuing): {e}");
             }
         }
+        let Some(first_raw) = raws.first() else {
+            return Ok(ApplyReport::default());
+        };
         // rust-doctor-disable-next-line excessive-clone
-        let source = raws[0].source.clone();
+        let source = first_raw.source.clone();
         // rust-doctor-disable-next-line excessive-clone
         let batch_ids: Vec<String> = raws.iter().map(|r| r.id.clone()).collect();
         // Related-page gathering is best-effort context enrichment for the

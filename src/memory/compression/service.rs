@@ -72,6 +72,8 @@ pub struct CompressionService {
     config: CompressionConfig,
     compound_ingestor: Option<Arc<dyn crate::memory::notes::ingest::CompoundIngestor>>,
     compound_enabled: bool,
+    /// Runtime-created services fail closed when no Memory operation is available.
+    runtime_bound: bool,
     profile_synthesizer: Option<Arc<dyn crate::memory::notes::profile::ProfileSynthesizer>>,
     /// Optional memory-extension registry. When set, `compress_to_notes` fires
     /// `on_pre_compress` and folds the contribution into the ingest prompt.
@@ -123,6 +125,7 @@ impl CompressionService {
             config,
             compound_ingestor: None,
             compound_enabled: false,
+            runtime_bound: false,
             profile_synthesizer: None,
             extension_registry: None,
             post_hooks: TokioRwLock::new(Vec::new()),
@@ -130,7 +133,12 @@ impl CompressionService {
         }
     }
 
-    /// Register a [`PostCompressionHook`] that fires after each successful
+    pub(crate) fn require_runtime(mut self) -> Self {
+        self.runtime_bound = true;
+        self
+    }
+
+    /// Register a hook that runs after each successful
     /// per-agent `compress_default_notes` call.
     ///
     /// `&self` (not `&mut self`) so callers holding `Arc<CompressionService>`
@@ -157,8 +165,9 @@ impl CompressionService {
 
     /// Attach a `ProfileSynthesizer` to trigger user-profile updates on `SessionEnd`.
     ///
-    /// When set, a fire-and-forget profile update is spawned after each
-    /// `SessionEnd` batch is successfully ingested.
+    /// Each `SessionEnd` batch launches a profile update. A bundle-owned backend
+    /// retains that child with the same operation; standalone services retain
+    /// their existing background behavior.
     pub fn with_profile_synthesizer(
         mut self,
         ps: Arc<dyn crate::memory::notes::profile::ProfileSynthesizer>,
@@ -242,6 +251,16 @@ impl CompressionService {
         &self,
         workspace_id: &str,
     ) -> Result<CompressionResult, AlephError> {
+        // Admission must precede raw consumption and extension/file effects,
+        // not just the eventual SQLite projection.
+        let _operation = match self.database.operation()? {
+            None if self.runtime_bound => {
+                return Err(AlephError::other(
+                    "runtime-bound compression requires an admitted Memory operation",
+                ));
+            }
+            operation => operation,
+        };
         let start = Instant::now();
 
         // Serialize compressions for this agent — see `ingest_locks`. Held across
@@ -371,11 +390,17 @@ impl CompressionService {
                     .collect();
                 if !session_end_raws.is_empty() {
                     let agent = workspace_id.to_string();
-                    let digest: String = session_end_raws
-                        .iter()
-                        .map(|r| r.content.clone())
-                        .collect::<Vec<_>>()
-                        .join("\n");
+                    let digest: String = {
+                        let total_len = session_end_raws.iter().map(|r| r.content.len() + 1).sum();
+                        let mut buf = String::with_capacity(total_len);
+                        for (i, r) in session_end_raws.iter().enumerate() {
+                            if i > 0 {
+                                buf.push('\n');
+                            }
+                            buf.push_str(&r.content);
+                        }
+                        buf
+                    };
                     let reason = match &session_end_raws[0].source {
                         RawMemorySource::SessionEnd { reason } => format!("{reason:?}"),
                         _ => "unknown".to_string(),
@@ -385,7 +410,7 @@ impl CompressionService {
                         session_end_count = session_end_raws.len(),
                         "ProfileSynthesizer: firing on SessionEnd raws"
                     );
-                    tokio::spawn(async move {
+                    let task = async move {
                         let signal = crate::memory::notes::profile::SessionSignal {
                             reason,
                             digest_text: digest,
@@ -400,7 +425,26 @@ impl CompressionService {
                                 "ProfileSynthesizer: USER.md update completed"
                             );
                         }
-                    });
+                    };
+                    match self.database.operation() {
+                        Ok(Some(operation)) => {
+                            if let Err(error) = operation.spawn(crate::memory::runtime::carry(task))
+                            {
+                                tracing::warn!(%error, "profile task could not be retained by Memory");
+                            }
+                        }
+                        Ok(None) if self.runtime_bound => {
+                            tracing::debug!(
+                                "runtime-bound profile update skipped without Memory admission"
+                            );
+                        }
+                        Ok(None) => {
+                            tokio::spawn(task);
+                        }
+                        Err(error) => {
+                            tracing::warn!(%error, "profile update has no valid Memory operation");
+                        }
+                    }
                 }
             }
 
@@ -431,7 +475,7 @@ impl CompressionService {
             // `raws[0].source`, so a mixed drain MUST be split or
             // Reflection/SessionEnd/Delegation rows silently degrade to
             // whichever source happened to be fetched first.
-            let mut groups: Vec<(String, Vec<RawMemory>)> = Vec::new();
+            let mut groups: Vec<(&'static str, Vec<RawMemory>)> = Vec::new();
             for r in ingestable {
                 let key = ingest_group_key(&r.source);
                 match groups.iter_mut().find(|(k, _)| *k == key) {
@@ -618,47 +662,65 @@ impl CompressionService {
     /// The scheduler-based triggers are handled separately via `record_turn_and_maybe_compress()`.
     pub fn start_background_task(self: Arc<Self>) -> JoinHandle<()> {
         let interval_secs = self.config.background_interval_seconds;
-
         tokio::spawn(async move {
-            // `tokio::time::interval` panics on a zero period; clamp a
-            // misconfigured 0 from user config to 1s instead of killing the task.
-            let mut interval = interval(Duration::from_secs(u64::from(interval_secs.max(1))));
-            // SECURITY (P1): the default `MissedTickBehavior::Burst` would
-            // let a slow compress() call (LLM provider outage) queue missed
-            // ticks and fire back-to-back, compounding the very outage that
-            // caused the lag. `MemoryProducerScheduler` already uses `Skip`;
-            // mirror that here so the two schedulers stay in lockstep.
-            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-
+            let mut ticker = interval(Duration::from_secs(u64::from(interval_secs.max(1))));
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             tracing::info!(
                 interval_seconds = interval_secs,
                 "Started background compression task"
             );
-
             loop {
-                interval.tick().await;
-
-                // Background task compresses unconditionally — the scheduler
-                // is only for turn-based / signal-based immediate triggers.
-                match self.compress().await {
-                    Ok(result) => {
-                        if result.memories_processed > 0 {
-                            tracing::info!(
-                                memories = result.memories_processed,
-                                facts = result.facts_extracted,
-                                duration_ms = result.duration_ms,
-                                "Background compression completed"
-                            );
-                        } else {
-                            tracing::debug!("Background compression: no memories to process");
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!(error = %e, "Background compression failed");
-                    }
-                }
+                ticker.tick().await;
+                self.background_tick().await;
             }
         })
+    }
+
+    pub(crate) fn start_owned_background_task(
+        self: Arc<Self>,
+        runtime: Arc<crate::memory::runtime::MemoryRuntime>,
+        mut stop: tokio::sync::watch::Receiver<bool>,
+    ) -> JoinHandle<()> {
+        tokio::spawn(async move {
+            let interval_secs = self.config.background_interval_seconds;
+            let mut ticker = interval(Duration::from_secs(u64::from(interval_secs.max(1))));
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            tracing::info!(
+                interval_seconds = interval_secs,
+                "Started background compression task"
+            );
+            loop {
+                if *stop.borrow() {
+                    break;
+                }
+                tokio::select! {
+                    biased;
+                    _ = stop.changed() => break,
+                    _ = ticker.tick() => {}
+                }
+                let operation = match runtime.operation() {
+                    Ok(operation) => operation,
+                    Err(_) => break,
+                };
+                // Stop ends scheduling; the admitted tick and its children finish.
+                operation.scope(self.background_tick()).await;
+            }
+        })
+    }
+
+    async fn background_tick(&self) {
+        match self.compress().await {
+            Ok(result) if result.memories_processed > 0 => {
+                tracing::info!(
+                    memories = result.memories_processed,
+                    facts = result.facts_extracted,
+                    duration_ms = result.duration_ms,
+                    "Background compression completed"
+                );
+            }
+            Ok(_) => tracing::debug!("Background compression: no memories to process"),
+            Err(error) => tracing::error!(%error, "Background compression failed"),
+        }
     }
 
     /// Record a conversation turn and compress once the turn threshold is crossed.
@@ -674,6 +736,17 @@ impl CompressionService {
     ///
     /// Non-blocking: the actual compression runs in a spawned task.
     pub fn record_turn_and_maybe_compress(self: &Arc<Self>) {
+        let operation = match self.database.operation() {
+            Ok(operation) => operation,
+            Err(error) => {
+                tracing::warn!(%error, "compression turn has no valid Memory operation");
+                return;
+            }
+        };
+        if self.runtime_bound && operation.is_none() {
+            tracing::debug!("runtime-bound compression skipped without Memory admission");
+            return;
+        }
         // Count the turn exactly once at the threshold crossing.
         let old_turns = self
             .scheduler
@@ -689,7 +762,7 @@ impl CompressionService {
                 "Turn threshold reached, triggering compression"
             );
             let service = Arc::clone(self);
-            tokio::spawn(async move {
+            let task = async move {
                 match service.check_and_compress().await {
                     Ok(Some(result)) => tracing::info!(
                         facts = result.facts_extracted,
@@ -698,7 +771,14 @@ impl CompressionService {
                     Ok(None) => tracing::debug!("Compression: no action needed"),
                     Err(e) => tracing::error!(error = %e, "Compression failed (turn threshold)"),
                 }
-            });
+            };
+            if let Some(operation) = operation {
+                if let Err(error) = operation.spawn(crate::memory::runtime::carry(task)) {
+                    tracing::warn!(%error, "threshold task could not be retained by Memory");
+                }
+                return;
+            }
+            tokio::spawn(task);
         }
     }
 
@@ -755,13 +835,22 @@ fn partition_by_retry_grace(
 /// ignored so a drain does not shatter into per-payload micro-batches;
 /// `SessionEnd` splits by reason because Disconnect (DIGEST) and TaskDone
 /// (RETRO) select different prompts.
-fn ingest_group_key(source: &crate::memory::store::raw_memory::RawMemorySource) -> String {
-    use crate::memory::store::raw_memory::RawMemorySource;
+fn ingest_group_key(source: &crate::memory::store::raw_memory::RawMemorySource) -> &'static str {
+    use crate::memory::store::raw_memory::{RawMemorySource, SessionEndReason};
     match source {
-        RawMemorySource::SessionEnd { reason } => format!("session_end/{reason:?}"),
-        other => other.to_persisted().0.to_string(),
+        RawMemorySource::SessionEnd {
+            reason: SessionEndReason::Disconnect,
+        } => "session_end/Disconnect",
+        RawMemorySource::SessionEnd {
+            reason: SessionEndReason::TaskDone,
+        } => "session_end/TaskDone",
+        other => other.to_persisted().0,
     }
 }
+
+#[cfg(test)]
+#[path = "service_lifecycle_tests.rs"]
+mod lifecycle_tests;
 
 #[cfg(test)]
 mod tests {

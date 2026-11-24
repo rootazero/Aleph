@@ -248,8 +248,12 @@ impl CgroupV2Scope {
                 "cgroup.procs path too long",
             ));
         }
-        path_buf[..path_bytes.len()].copy_from_slice(path_bytes);
-        path_buf[path_bytes.len()] = b'\0';
+        if let Some(target) = path_buf.get_mut(..path_bytes.len()) {
+            target.copy_from_slice(path_bytes);
+        }
+        if let Some(nul) = path_buf.get_mut(path_bytes.len()) {
+            *nul = b'\0';
+        }
 
         // SAFETY: `path_buf` is a NUL-terminated byte array with valid open flags.
         // rust-doctor-disable-next-line unsafe-block-audit
@@ -266,27 +270,37 @@ impl CgroupV2Scope {
         let mut pid_buf = [0u8; 16];
         // The kernel expects "<pid>\n"; the newline must trail the digits.
         // Reserve index 15 for it and write decimal digits LSB-first from 14.
-        pid_buf[15] = b'\n';
+        if let Some(nl) = pid_buf.get_mut(15) {
+            *nl = b'\n';
+        }
         let mut n = pid;
-        let mut i = 0;
+        let mut cursor = 15usize;
         loop {
-            pid_buf[14 - i] = b'0' + (n % 10) as u8;
+            if cursor == 0 {
+                break;
+            }
+            cursor -= 1;
+            if let Some(slot) = pid_buf.get_mut(cursor) {
+                *slot = b'0' + (n % 10) as u8;
+            }
             n /= 10;
-            i += 1;
             if n == 0 {
                 break;
             }
         }
-        let pid_slice = &pid_buf[14 - (i - 1)..16];
+        let pid_slice = pid_buf.get(cursor..16).unwrap_or(&pid_buf[15..16]);
         let mut written = 0;
         while written < pid_slice.len() {
+            let Some(remaining) = pid_slice.get(written..) else {
+                break;
+            };
             // SAFETY: `fd` is valid and `pid_slice` is a contiguous byte buffer.
             // rust-doctor-disable-next-line unsafe-block-audit
             let ret = unsafe {
                 libc::write(
                     fd,
-                    pid_slice[written..].as_ptr() as *const libc::c_void,
-                    pid_slice.len() - written,
+                    remaining.as_ptr() as *const libc::c_void,
+                    remaining.len(),
                 )
             };
             if ret < 0 {

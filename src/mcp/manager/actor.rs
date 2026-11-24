@@ -290,7 +290,8 @@ impl McpManagerActor {
 
         let mut to_restart: Vec<String> = Vec::new();
         for (server_id, client) in probes {
-            let alive = client.check_server_health().await.values().all(|&ok| ok);
+            let health_map = client.check_server_health().await;
+            let alive = !health_map.is_empty() && health_map.values().all(|&ok| ok);
             if alive {
                 if let Some(health) = self.health_states.get_mut(&server_id) {
                     health.record_success();
@@ -427,10 +428,9 @@ impl McpManagerActor {
                 let instructions = self.aggregate_instructions().await;
                 let _ = respond_to.send(instructions);
             }
-            McpCommand::Shutdown { .. } => {
-                // Handled in the run() loop directly to ensure ACK is sent
-                // after shutdown_all() completes
-                unreachable!("Shutdown is handled in run() loop");
+            McpCommand::Shutdown { respond_to } => {
+                let _ = respond_to.send(());
+                return false;
             }
             McpCommand::SetSamplingCallback {
                 callback,
@@ -499,6 +499,12 @@ impl McpManagerActor {
     ///
     /// Upserts the config, saves to disk, and optionally starts if `auto_start` is true.
     async fn add_server(&mut self, config: McpManagerConfig) -> Result<(), String> {
+        // Refuse an unapplicable `cwd` before it is persisted: with
+        // `auto_start = false` the spawn funnel would not see it until much
+        // later, and a config on disk that can never start is worse than a
+        // refused write.
+        config.validate()?;
+
         // rust-doctor-disable-next-line excessive-clone
         let server_id = config.id.clone();
         // rust-doctor-disable-next-line excessive-clone
@@ -720,6 +726,12 @@ impl McpManagerActor {
     ///
     /// Creates an `McpClient` and connects using the appropriate transport.
     async fn start_server_internal(&mut self, config: &McpManagerConfig) -> Result<(), String> {
+        // Refuse a `cwd` no child could honour before any client/transport is
+        // built: the config paths (config.toml, RPC create/update, hub) all
+        // funnel through here, and a silently-dropped cwd would start the
+        // server against the wrong tree.
+        config.validate()?;
+
         // Install the per-server tool filter before the client is shared, so
         // `list_tools` (and thus registration, aggregation, and counts) only
         // ever surface the tools this server is allowed to expose.
@@ -774,7 +786,8 @@ impl McpManagerActor {
                     // rust-doctor-disable-next-line excessive-clone
                     args: config.args.clone(),
                     env: resolved_env,
-                    cwd: None,
+                    // rust-doctor-disable-next-line excessive-clone
+                    cwd: config.cwd.clone(),
                     // rust-doctor-disable-next-line excessive-clone
                     requires_runtime: config.requires_runtime.clone(),
                     timeout_seconds: config.timeout_seconds,

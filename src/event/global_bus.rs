@@ -1,9 +1,11 @@
 // Aleph/core/src/event/global_bus.rs
 //! Global event bus for cross-agent event aggregation.
 //!
-//! The `GlobalBus` provides a singleton event bus that aggregates events from
-//! multiple Agent `EventBus` instances, enabling cross-agent event subscription
-//! and routing.
+//! The `GlobalBus` is ONE bus with many publishers: every producer broadcasts
+//! through `GlobalBus::global()` and every subscriber attaches to that same
+//! bus with an `EventFilter`, which is what makes cross-agent event
+//! subscription and routing possible. There is no per-agent bus to aggregate —
+//! the per-instance `EventBus` was removed in the 2026-08 severed-wire audits.
 //!
 //! **Notification-only boundary:** `GlobalBus` is a low-latency fan-out
 //! notification surface. Its callbacks are not authorization, persistence, or
@@ -24,23 +26,19 @@
 //!     EventType::ProcessCompleted,
 //! ]);
 //!
-//! let sub_id = bus.subscribe_async(filter, |event| {
+//! let _subscription_id = bus.subscribe_async(filter, |event| {
 //!     println!("Received event from agent: {}", event.source_agent_id);
 //! }).await;
-//!
-//! // Later: unsubscribe
-//! bus.unsubscribe(&sub_id).await;
 //! ```
 
 use crate::event::filter::EventFilter;
 use crate::event::types::AlephEvent;
 use crate::sync_primitives::Arc;
 use crate::sync_primitives::{AsyncRwLock, AtomicU64, Ordering};
-use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tokio::sync::broadcast;
-use tracing::{debug, trace};
+use tracing::{debug, trace, warn};
 
 // =============================================================================
 // Constants
@@ -110,7 +108,11 @@ impl GlobalEvent {
 // =============================================================================
 
 /// Unique identifier for a subscription (newtype for type safety)
+///
+/// The id is an opaque diagnostic identifier, not a guard. Subscriptions are
+/// process-lifetime: dropping the id does not remove the callback.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[must_use = "the SubscriptionId identifies the process-lifetime subscription in diagnostics"]
 pub struct SubscriptionId(String);
 
 impl SubscriptionId {
@@ -167,9 +169,9 @@ impl std::fmt::Debug for Subscription {
 
 /// Global event bus singleton for cross-agent event aggregation.
 ///
-/// The `GlobalBus` aggregates events from multiple Agent `EventBus` instances,
-/// enabling cross-agent event subscription. It uses a broadcast channel
-/// internally.
+/// One bus, many publishers: every producer broadcasts through
+/// [`GlobalBus::global`] and every subscriber attaches to the same bus with
+/// an [`EventFilter`]. It uses a broadcast channel internally.
 pub struct GlobalBus {
     /// Broadcast sender for global events
     sender: broadcast::Sender<GlobalEvent>,
@@ -180,7 +182,7 @@ pub struct GlobalBus {
 }
 
 // Singleton instance
-static GLOBAL_BUS: Lazy<GlobalBus> = Lazy::new(GlobalBus::new);
+static GLOBAL_BUS: std::sync::LazyLock<GlobalBus> = std::sync::LazyLock::new(GlobalBus::new);
 
 impl Default for GlobalBus {
     fn default() -> Self {
@@ -253,11 +255,13 @@ impl GlobalBus {
             "Broadcasting global event"
         );
 
-        // Send via broadcast channel for async subscribers. A subscriber
-        // who ALSO wired `subscribe_async` for the same event will see it
+        // Send via broadcast channel for async subscribers if there are active receivers.
+        // A subscriber who ALSO wired `subscribe_async` for the same event will see it
         // twice — see the "Single-delivery contract" doc above.
-        if let Err(e) = self.sender.send(global_event.clone()) {
-            trace!("No broadcast receivers: {}", e);
+        if self.sender.receiver_count() > 0 {
+            if let Err(e) = self.sender.send(global_event.clone()) {
+                trace!("No broadcast receivers: {}", e);
+            }
         }
 
         // Collect matching callbacks and dispatch each in its own task.
@@ -268,19 +272,30 @@ impl GlobalBus {
         // must use the extract-and-respawn pattern: pull the data out of
         // the event synchronously, then spawn their own task (see the
         // `goal_wait` subscriber in `gateway::execution_engine::goal_wait`).
+        // A callback that panics is caught and logged, because tokio records
+        // the panic on the JoinHandle — which the bus never keeps — so
+        // without the catch the panic would vanish together with the event.
         let callbacks = {
             let subscriptions = self.subscriptions.read().await;
             subscriptions
-                .values()
-                .filter(|sub| sub.filter.matches(&global_event))
-                .map(|sub| Arc::clone(&sub.callback))
+                .iter()
+                .filter(|(_, sub)| sub.filter.matches(&global_event))
+                .map(|(id, sub)| (id.clone(), Arc::clone(&sub.callback)))
                 .collect::<Vec<_>>()
         };
 
-        for callback in callbacks {
+        for (id, callback) in callbacks {
             let event = global_event.clone();
             tokio::spawn(async move {
-                callback(event);
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    callback(event);
+                }));
+                if outcome.is_err() {
+                    warn!(
+                        subscription_id = %id,
+                        "Global event subscriber panicked; event dropped"
+                    );
+                }
             });
         }
     }
@@ -291,6 +306,11 @@ impl GlobalBus {
     /// synchronous closure dispatched per event inside its own
     /// `tokio::spawn`; see [`broadcast`](Self::broadcast) for the dispatch
     /// contract (non-blocking requirement, no per-subscriber ordering).
+    ///
+    /// The returned [`SubscriptionId`] is the ONLY handle to this
+    /// subscription. It is a handle, not a guard: dropping it does not
+    /// unsubscribe, so the subscription stays live — and leaking — until
+    /// [`unsubscribe`](Self::unsubscribe) is called with it.
     pub async fn subscribe_async(
         &self,
         filter: EventFilter,
@@ -309,31 +329,24 @@ impl GlobalBus {
         id
     }
 
-    /// Unsubscribe from global events.
-    ///
-    /// # Arguments
-    ///
-    /// * `id` - The subscription ID returned from `subscribe`
-    pub async fn unsubscribe(&self, id: &SubscriptionId) {
-        let mut subscriptions = self.subscriptions.write().await;
-        if subscriptions.remove(id).is_some() {
-            debug!(subscription_id = %id, "Removed global event subscription");
-        }
-    }
-
     /// Get a broadcast receiver for async event handling.
     ///
     /// This is useful for components that want to process events
     /// asynchronously using `recv().await`.
+    ///
+    /// # Obligations
+    ///
+    /// * **Unfiltered.** The channel send happens before any subscriber
+    ///   filter is consulted, so the receiver sees EVERY event on the bus —
+    ///   including the ones no filtered subscriber matched. A caller that
+    ///   wants the filtered view has to filter by hand.
+    /// * **Lossy.** The channel is bounded (`DEFAULT_BUFFER_SIZE`). A
+    ///   receiver that falls behind gets `RecvError::Lagged(n)` and those
+    ///   `n` events are gone — the bus has no replay. After a `Lagged` the
+    ///   caller must re-read the authoritative state instead of assuming
+    ///   continuity.
     pub fn subscribe_broadcast(&self) -> broadcast::Receiver<GlobalEvent> {
         self.sender.subscribe()
-    }
-
-    /// Get the current number of active subscriptions.
-    #[cfg(test)]
-    pub async fn subscription_count(&self) -> usize {
-        let subscriptions = self.subscriptions.read().await;
-        subscriptions.len()
     }
 }
 
@@ -429,80 +442,52 @@ mod tests {
         assert_eq!(counter.load(Ordering::SeqCst), 1);
     }
 
-    #[tokio::test]
-    async fn test_subscribe_unsubscribe() {
+    /// Both dimension filters are the same contract: of two broadcasts, only
+    /// the one whose field matches the filter is delivered.
+    async fn count_delivered_for(filter: EventFilter, broadcasts: [(&str, &str); 2]) -> usize {
         let bus = GlobalBus::new();
 
-        // Subscribe
-        let filter = EventFilter::all();
-        let sub_id = bus.subscribe_async(filter, |_| {}).await;
+        let counter = Arc::new(AtomicUsize::new(0));
+        let counter_clone = counter.clone();
 
-        assert_eq!(bus.subscription_count().await, 1);
+        let _sub_id = bus
+            .subscribe_async(filter, move |_event| {
+                counter_clone.fetch_add(1, Ordering::SeqCst);
+            })
+            .await;
 
-        // Unsubscribe
-        bus.unsubscribe(&sub_id).await;
-        assert_eq!(bus.subscription_count().await, 0);
+        for (agent_id, session_id) in broadcasts {
+            bus.broadcast(agent_id, session_id, make_subagent_event())
+                .await;
+        }
 
-        // Unsubscribe non-existent (should not panic)
-        bus.unsubscribe(&SubscriptionId::new("non-existent")).await;
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+
+        counter.load(Ordering::SeqCst)
     }
 
     #[tokio::test]
     async fn test_filter_by_agent() {
-        let bus = GlobalBus::new();
+        // Only the event from agent-1 should have matched
+        let delivered = count_delivered_for(
+            EventFilter::new(vec![EventType::SubAgentCompleted]).with_agent("agent-1"),
+            [("agent-1", "session-1"), ("agent-2", "session-2")],
+        )
+        .await;
 
-        let counter = Arc::new(AtomicUsize::new(0));
-        let counter_clone = counter.clone();
-
-        // Subscribe to events from agent-1 only
-        let filter = EventFilter::all().with_agent("agent-1");
-        let _sub_id = bus
-            .subscribe_async(filter, move |_event| {
-                counter_clone.fetch_add(1, Ordering::SeqCst);
-            })
-            .await;
-
-        // Broadcast from agent-1
-        bus.broadcast("agent-1", "session-1", make_subagent_event())
-            .await;
-
-        // Broadcast from agent-2 (should not match)
-        bus.broadcast("agent-2", "session-2", make_subagent_event())
-            .await;
-
-        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-
-        // Only one event should have matched
-        assert_eq!(counter.load(Ordering::SeqCst), 1);
+        assert_eq!(delivered, 1);
     }
 
     #[tokio::test]
     async fn test_filter_by_session() {
-        let bus = GlobalBus::new();
+        // Only the event from session-1 should have matched
+        let delivered = count_delivered_for(
+            EventFilter::new(vec![EventType::SubAgentCompleted]).with_session("session-1"),
+            [("agent-1", "session-1"), ("agent-1", "session-2")],
+        )
+        .await;
 
-        let counter = Arc::new(AtomicUsize::new(0));
-        let counter_clone = counter.clone();
-
-        // Subscribe to events from session-1 only
-        let filter = EventFilter::all().with_session("session-1");
-        let _sub_id = bus
-            .subscribe_async(filter, move |_event| {
-                counter_clone.fetch_add(1, Ordering::SeqCst);
-            })
-            .await;
-
-        // Broadcast from session-1
-        bus.broadcast("agent-1", "session-1", make_subagent_event())
-            .await;
-
-        // Broadcast from session-2 (should not match)
-        bus.broadcast("agent-1", "session-2", make_subagent_event())
-            .await;
-
-        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-
-        // Only one event should have matched
-        assert_eq!(counter.load(Ordering::SeqCst), 1);
+        assert_eq!(delivered, 1);
     }
 
     #[tokio::test]
@@ -523,7 +508,7 @@ mod tests {
             })
             .await;
 
-        let filter2 = EventFilter::all();
+        let filter2 = EventFilter::new(vec![EventType::SubAgentCompleted]);
         let _sub2 = bus
             .subscribe_async(filter2, move |_event| {
                 counter2_clone.fetch_add(1, Ordering::SeqCst);

@@ -68,6 +68,12 @@ pub(crate) async fn resolve_and_validate(
     port: u16,
     policy: &SsrfPolicy,
 ) -> Result<SocketAddr, SsrfError> {
+    // `Url::host_str()` keeps the brackets of an IPv6 literal; strip one
+    // matching pair so the literal is recognised instead of sent to DNS.
+    let host = host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host);
     // If host is already an IP literal, validate directly
     if let Ok(ip) = host.parse::<IpAddr>() {
         if is_ip_blocked_by_policy(ip, policy) {
@@ -114,8 +120,14 @@ pub(crate) async fn resolve_and_validate(
         }
     }
 
-    // Return the first valid address for pinning
-    Ok(addrs[0])
+    // Return the first valid address for pinning (non-empty checked above).
+    addrs
+        .first()
+        .copied()
+        .ok_or_else(|| SsrfError::DnsResolutionFailed {
+            host: host.to_string(),
+            reason: "no addresses returned".to_string(),
+        })
 }
 
 async fn lookup(host: &str, port: u16) -> Result<Vec<SocketAddr>, SsrfError> {
@@ -169,6 +181,17 @@ mod tests {
         let policy = SsrfPolicy::default();
         let result = resolve_and_validate("169.254.169.254", 80, &policy).await;
         assert!(matches!(result, Err(SsrfError::BlockedAddress(_))));
+    }
+
+    #[tokio::test]
+    async fn bracketed_ipv6_literal_is_recognised() {
+        let policy = SsrfPolicy::default();
+        let blocked = resolve_and_validate("[::1]", 80, &policy).await;
+        assert!(matches!(blocked, Err(SsrfError::BlockedAddress(_))));
+        let ok = resolve_and_validate("[2606:4700:4700::1111]", 443, &policy)
+            .await
+            .unwrap();
+        assert_eq!(ok.port(), 443);
     }
 
     #[tokio::test]

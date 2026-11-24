@@ -11,6 +11,7 @@ use std::task::{Context, Poll};
 use tower::{Layer, Service};
 
 use crate::gateway::handlers::HandlerRegistry;
+use crate::gateway::panel_project_context::PanelRequestContext;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse};
 
 #[derive(Clone)]
@@ -45,6 +46,7 @@ impl<S> Layer<S> for HandlerLayer {
 pub struct HandlerService<S> {
     _marker: S,
     handlers: Arc<HandlerRegistry>,
+    panel_context: Option<PanelRequestContext>,
 }
 
 impl HandlerService<()> {
@@ -53,7 +55,13 @@ impl HandlerService<()> {
         Self {
             _marker: (),
             handlers,
+            panel_context: None,
         }
+    }
+
+    pub(crate) fn with_panel_context(mut self, context: Option<PanelRequestContext>) -> Self {
+        self.panel_context = context;
+        self
     }
 }
 
@@ -62,6 +70,7 @@ impl<S> HandlerService<S> {
         Self {
             _marker: inner,
             handlers,
+            panel_context: None,
         }
     }
 }
@@ -77,6 +86,12 @@ impl Service<JsonRpcRequest> for HandlerService<()> {
 
     fn call(&mut self, req: JsonRpcRequest) -> Self::Future {
         let handlers = self.handlers.clone();
-        Box::pin(async move { Ok(handlers.handle(&req).await) })
+        let context = self.panel_context.clone();
+        Box::pin(async move {
+            Ok(match context {
+                Some(context) => handlers.handle_with_panel_context(&req, &context).await,
+                None => handlers.handle(&req).await,
+            })
+        })
     }
 }

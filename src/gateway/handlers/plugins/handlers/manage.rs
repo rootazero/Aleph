@@ -27,9 +27,9 @@ pub async fn handle_list(request: JsonRpcRequest) -> JsonRpcResponse {
         Err(e) => return e.with_id(request.id),
     };
 
-    // Ensure plugins are discovered and loaded before listing
-    if let Err(e) = manager.ensure_loaded().await {
-        tracing::warn!("Failed to load extensions: {}", e);
+    // Ensure plugin declarations are available without activating providers.
+    if let Err(e) = manager.ensure_discovered().await {
+        tracing::warn!("Failed to discover extensions: {}", e);
     }
 
     let mut plugins: Vec<PluginRow> = manager
@@ -202,8 +202,8 @@ pub async fn set_enabled_via_registry(
     name: &str,
     enabled: bool,
 ) -> JsonRpcResponse {
-    if let Err(e) = manager.ensure_loaded().await {
-        tracing::warn!("Failed to load extensions: {}", e);
+    if let Err(e) = manager.ensure_discovered().await {
+        tracing::warn!("Failed to discover extensions: {}", e);
     }
     if manager.get_plugin_record(name).await.is_none() {
         return JsonRpcResponse::error(id, INVALID_PARAMS, format!("Plugin not found: {name}"));

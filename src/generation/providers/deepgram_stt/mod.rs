@@ -355,9 +355,15 @@ async fn load_local(path: &Path) -> GenerationResult<(Vec<u8>, String)> {
             Some("file_path".to_string()),
         )
     })?;
+    let cwd_canonical = tokio::fs::canonicalize(".").await.ok();
+    let escapes_cwd = match &cwd_canonical {
+        Some(cwd) => !canonical.starts_with(cwd),
+        None => canonical.is_absolute(),
+    };
     if canonical
         .components()
         .any(|c| matches!(c, Component::ParentDir))
+        || escapes_cwd
     {
         return Err(GenerationError::invalid_parameters(
             format!(
@@ -382,23 +388,30 @@ async fn load_local(path: &Path) -> GenerationResult<(Vec<u8>, String)> {
 }
 
 fn is_audio_extension(ext: Option<&str>) -> bool {
-    matches!(
-        ext.unwrap_or("").to_lowercase().as_str(),
-        "mp3" | "wav" | "ogg" | "oga" | "flac" | "m4a" | "mp4" | "webm"
-    )
+    let Some(ext) = ext else { return false };
+    const AUDIO_EXTS: &[&str] = &["mp3", "wav", "ogg", "oga", "flac", "m4a", "mp4", "webm"];
+    AUDIO_EXTS.iter().any(|e| e.eq_ignore_ascii_case(ext))
 }
 
 fn mime_from_extension(ext: Option<&str>) -> String {
-    match ext.unwrap_or("").to_lowercase().as_str() {
-        "mp3" => "audio/mpeg",
-        "wav" => "audio/wav",
-        "ogg" | "oga" => "audio/ogg",
-        "flac" => "audio/flac",
-        "m4a" | "mp4" => "audio/mp4",
-        "webm" => "audio/webm",
-        _ => "application/octet-stream",
+    let Some(ext) = ext else {
+        return "application/octet-stream".to_string();
+    };
+    if ext.eq_ignore_ascii_case("mp3") {
+        "audio/mpeg".to_string()
+    } else if ext.eq_ignore_ascii_case("wav") {
+        "audio/wav".to_string()
+    } else if ext.eq_ignore_ascii_case("ogg") || ext.eq_ignore_ascii_case("oga") {
+        "audio/ogg".to_string()
+    } else if ext.eq_ignore_ascii_case("flac") {
+        "audio/flac".to_string()
+    } else if ext.eq_ignore_ascii_case("m4a") || ext.eq_ignore_ascii_case("mp4") {
+        "audio/mp4".to_string()
+    } else if ext.eq_ignore_ascii_case("webm") {
+        "audio/webm".to_string()
+    } else {
+        "application/octet-stream".to_string()
     }
-    .to_string()
 }
 
 fn decode_data_url(rest: &str) -> GenerationResult<(Vec<u8>, String)> {
@@ -410,11 +423,16 @@ fn decode_data_url(rest: &str) -> GenerationResult<(Vec<u8>, String)> {
     })?;
     let mut mime = "application/octet-stream".to_string();
     let mut is_base64 = false;
-    for piece in header.split(';') {
-        if piece == "base64" {
+    let mut pieces = header.split(';');
+    if let Some(first) = pieces.next() {
+        let trimmed = first.trim();
+        if !trimmed.is_empty() {
+            mime = trimmed.to_string();
+        }
+    }
+    for piece in pieces {
+        if piece.trim() == "base64" {
             is_base64 = true;
-        } else if !piece.is_empty() {
-            mime = piece.to_string();
         }
     }
     let bytes = if is_base64 {

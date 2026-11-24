@@ -1,7 +1,7 @@
 # 大文件拆分 Round 1 — 按 Rust 规范分级处理，特别文件保留
 
 > **日期** 2026-09-22 · **分支** `worktree-large-file-split-r1` · **base** main
-> **对标规范** [`docs/reference/CODE_ORGANIZATION.md`](../reference/CODE_ORGANIZATION.md) §3–§7（拆分触发条件、Pattern A/B/C/D、Refactoring Backlog）
+> **对标规范** [`docs/reference/CODE_ORGANIZATION.md`](../../reference/CODE_ORGANIZATION.md) §3–§7（拆分触发条件、Pattern A/B/C/D、Refactoring Backlog）
 > **架构红线** R10 (`src/harness/` 12 文件棘轮 — **不动**) · R1–R9（拆分不引入新依赖、不破坏 trait 边界）
 
 **立场只有一句**：按 `CODE_ORGANIZATION.md` 的 Pattern A/B/C/D 拆分所有应拆文件，把不能拆的（Rust 语言约束 / 单概念深度实现 / 已 orchestration-only）明确登记为「声明遗留」，并在 §6 增补文档化一节与现有 `memory/store/sqlite/notes/store_impl.rs` 范式一致。每文件一个 PR，行为零变更，pub API 零变更。

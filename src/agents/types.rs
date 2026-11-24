@@ -235,7 +235,12 @@ pub struct AgentDef {
     pub denied_tools: Vec<String>,
     /// Maximum iterations (overrides default loop limit)
     pub max_iterations: Option<u32>,
-    /// Token budget override for this agent's loop
+    /// Token budget override for this agent's loop.
+    ///
+    /// Caps the child's context window: the effective window is the smaller
+    /// of the model/operator window and this number, so a declared budget can
+    /// only lower the window — never raise it past what the serving model
+    /// accepts.
     pub token_budget: Option<u32>,
     /// Context mode: whether sub-agent gets parent context
     pub context_mode: ContextMode,

@@ -88,12 +88,20 @@ impl ReplyEmitter {
             }
         }
 
+        // Choose the body before terminal metadata can make an empty buffer look populated.
+        let mut text = std::mem::take(&mut *self.buffer.lock().await);
+        let body_from_summary = text.is_empty();
+        if body_from_summary {
+            text = summary.final_response.clone().unwrap_or_default();
+        }
+        let mut suffix = String::new();
+
         // Hermes-summary-wiring: append a one-line cap notice when
         // the run did not complete cleanly. Pulls `terminate_reason`
         // off the enriched RunSummary; silent when the field is
         // missing (legacy producers) or equals "completed".
         if let Some(notice) = cap_notice_for(&summary, self.config.locale) {
-            self.buffer.lock().await.push_str(&notice);
+            suffix.push_str(&notice);
         }
 
         // Append fallback notice for non-Panel channels (Telegram, CLI, etc.).
@@ -111,7 +119,7 @@ impl ReplyEmitter {
                 _ => info.model.clone(),
             };
             let notice = format!("\n\n\u{26a1} {head} ({})", info.provider);
-            self.buffer.lock().await.push_str(&notice);
+            suffix.push_str(&notice);
         }
 
         // Optional runtime-metadata footer (model · tokens · duration
@@ -137,16 +145,11 @@ impl ReplyEmitter {
                 home.as_deref(),
             );
             if !block.is_empty() {
-                self.buffer.lock().await.push_str(&block);
+                suffix.push_str(&block);
             }
         }
 
-        // Flush accumulated buffer (always flush — intermediate messages
-        // may have set has_sent, but the buffer holds the final response)
-        let text = {
-            let mut buffer = self.buffer.lock().await;
-            std::mem::take(&mut *buffer)
-        };
+        text.push_str(&suffix);
         let reasoning = self.take_reasoning_buffer().await;
 
         if !text.is_empty() {
@@ -164,6 +167,11 @@ impl ReplyEmitter {
                 }
                 // Finalize the streaming controller
                 let mut ctrl = self.streaming.lock().await;
+                if body_from_summary && ctrl.buffer().is_empty() && ctrl.message_id().is_none() {
+                    ctrl.push_chunk(summary.final_response.as_deref().unwrap_or_default());
+                }
+                // Only decorate the current tail: earlier overflow pages are already delivered.
+                ctrl.push_chunk(&suffix);
                 match ctrl.finalize() {
                     StreamAction::SendFinal(final_text) => {
                         drop(ctrl);
@@ -199,27 +207,11 @@ impl ReplyEmitter {
                         }
                     }
                     StreamAction::Done => {
-                        // `finalize()` says the last debounced edit already
-                        // put the whole buffer on screen, so there is no
-                        // settling rewrite — and therefore nothing that
-                        // could carry the badge. For a side answer that is
-                        // an answer delivered unmarked, and on the DEFAULT
-                        // path: `output_mode` is `"typewriter"` and
-                        // `apply_channel_capabilities` keeps streaming on
-                        // for any channel that can edit.
-                        //
-                        // So issue the edit `EditFinal` would have issued —
-                        // but only when the badge would actually change the
-                        // text, so an ordinary run takes this arm exactly as
-                        // it did before, down to the byte and the API call.
-                        let settle = self.is_marking().then(|| {
-                            (
-                                sanitize_llm_output(ctrl.buffer()).into_owned(),
-                                ctrl.message_id().cloned(),
-                            )
-                        });
+                        // Body bytes can be up-to-date while the visible cursor still needs settling.
+                        let settled = sanitize_llm_output(ctrl.buffer()).into_owned();
+                        let msg_id = ctrl.message_id().cloned();
                         drop(ctrl);
-                        if let Some((settled, Some(msg_id))) = settle {
+                        if let Some(msg_id) = msg_id {
                             if !settled.is_empty() {
                                 let _ = self
                                     .channel_registry
@@ -242,26 +234,6 @@ impl ReplyEmitter {
             } else {
                 self.send_to_channel_with_reasoning(&text, reasoning.as_deref())
                     .await;
-            }
-        }
-
-        // Fallback: if buffer was empty (race with fire-and-forget emit),
-        // use final_response from summary
-        if text.is_empty() {
-            if let Some(ref final_response) = summary.final_response {
-                if !final_response.is_empty() {
-                    debug!(
-                        "Run {} complete, sending final_response as fallback (length: {})",
-                        self.run_id,
-                        final_response.len()
-                    );
-                    if self.should_voice().await {
-                        self.send_as_voice(final_response).await;
-                    } else {
-                        self.send_to_channel_with_reasoning(final_response, reasoning.as_deref())
-                            .await;
-                    }
-                }
             }
         }
 
@@ -332,6 +304,20 @@ impl EventEmitter for ReplyEmitter {
                                         let mut buffer = self.buffer.lock().await;
                                         let _ = std::mem::take(&mut *buffer);
                                         return Ok(());
+                                    }
+                                    StreamAction::Done => {
+                                        if let Some(msg_id) = ctrl.message_id().cloned() {
+                                            let text = sanitize_llm_output(ctrl.buffer());
+                                            let _ = self
+                                                .channel_registry
+                                                .edit(
+                                                    &self.route.channel_id,
+                                                    &self.route.conversation_id,
+                                                    &msg_id,
+                                                    &text,
+                                                )
+                                                .await;
+                                        }
                                     }
                                     _ => {}
                                 }

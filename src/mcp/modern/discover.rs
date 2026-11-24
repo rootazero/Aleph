@@ -86,7 +86,7 @@ pub fn select_version(supported: &[String], preferred: &str) -> VersionChoice {
         return VersionChoice::Modern(preferred.to_string());
     }
 
-    if supported.iter().all(|v| v.as_str() < preferred) {
+    if supported.iter().any(|v| v.as_str() < preferred) {
         return VersionChoice::Legacy;
     }
 

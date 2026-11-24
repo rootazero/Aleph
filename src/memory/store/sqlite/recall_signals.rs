@@ -70,10 +70,7 @@ impl SqliteMemoryBackend {
             return Ok(0);
         }
 
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| AlephError::config(format!("Mutex poisoned: {e}")))?;
+        self.with_connection(|conn| {
 
         let qhash = query_hash(query);
         let bucket = today_bucket();
@@ -117,6 +114,7 @@ impl SqliteMemoryBackend {
             .map_err(|e| AlephError::config(format!("record_signals commit: {e}")))?;
 
         Ok(inserted)
+        })
     }
 
     /// Aggregate co-recall pairs: notes retrieved together by the same query
@@ -134,14 +132,10 @@ impl SqliteMemoryBackend {
         min_co_hits: i64,
         limit: usize,
     ) -> Result<Vec<(String, String, i64)>, AlephError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| AlephError::config(format!("Mutex poisoned: {e}")))?;
-
-        let mut stmt = conn
-            .prepare(
-                "SELECT a.note_path, b.note_path, COUNT(*) AS co_hits \
+        self.with_connection(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT a.note_path, b.note_path, COUNT(*) AS co_hits \
                  FROM recall_signals a \
                  JOIN recall_signals b \
                    ON a.query_hash = b.query_hash \
@@ -154,24 +148,27 @@ impl SqliteMemoryBackend {
                  HAVING COUNT(*) >= ?1 \
                  ORDER BY co_hits DESC, a.note_path, b.note_path \
                  LIMIT ?2",
-            )
-            .map_err(|e| AlephError::config(format!("co_recall_pairs prepare: {e}")))?;
+                )
+                .map_err(|e| AlephError::config(format!("co_recall_pairs prepare: {e}")))?;
 
-        let rows = stmt
-            .query_map(params![min_co_hits, limit as i64, agent_id], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, i64>(2)?,
-                ))
-            })
-            .map_err(|e| AlephError::config(format!("co_recall_pairs query: {e}")))?;
+            let rows = stmt
+                .query_map(params![min_co_hits, limit as i64, agent_id], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                })
+                .map_err(|e| AlephError::config(format!("co_recall_pairs query: {e}")))?;
 
-        let mut pairs = Vec::new();
-        for row in rows {
-            pairs.push(row.map_err(|e| AlephError::config(format!("co_recall_pairs row: {e}")))?);
-        }
-        Ok(pairs)
+            let mut pairs = Vec::new();
+            for row in rows {
+                pairs.push(
+                    row.map_err(|e| AlephError::config(format!("co_recall_pairs row: {e}")))?,
+                );
+            }
+            Ok(pairs)
+        })
     }
 
     /// Count recall signals for a given channel.
@@ -179,20 +176,19 @@ impl SqliteMemoryBackend {
     /// Returns the number of rows in `recall_signals` with the given channel.
     /// Exposed as a public helper primarily for integration tests.
     pub fn count_recall_signals_for_channel(&self, channel: &str) -> Result<u64, AlephError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| AlephError::config(format!("Mutex poisoned: {e}")))?;
+        self.with_connection(|conn| {
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM recall_signals WHERE channel = ?1",
+                    rusqlite::params![channel],
+                    |row: &rusqlite::Row| row.get::<_, i64>(0),
+                )
+                .map_err(|e| {
+                    AlephError::config(format!("count_recall_signals_for_channel: {e}"))
+                })?;
 
-        let count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM recall_signals WHERE channel = ?1",
-                rusqlite::params![channel],
-                |row: &rusqlite::Row| row.get::<_, i64>(0),
-            )
-            .map_err(|e| AlephError::config(format!("count_recall_signals_for_channel: {e}")))?;
-
-        Ok(count as u64)
+            Ok(count as u64)
+        })
     }
 
     /// Delete recall signals older than `retention_days`.
@@ -204,21 +200,18 @@ impl SqliteMemoryBackend {
     /// was deliberately deferred: the table is small today and the right
     /// retention cadence is a product call, not a wire.
     pub fn cleanup_old_signals(&self, retention_days: u32) -> Result<usize, AlephError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| AlephError::config(format!("Mutex poisoned: {e}")))?;
+        self.with_connection(|conn| {
+            let cutoff = Utc::now().timestamp() - (i64::from(retention_days) * 86400);
 
-        let cutoff = Utc::now().timestamp() - (i64::from(retention_days) * 86400);
+            let deleted = conn
+                .execute(
+                    "DELETE FROM recall_signals WHERE created_at < ?1",
+                    params![cutoff],
+                )
+                .map_err(|e| AlephError::config(format!("cleanup_old_signals: {e}")))?;
 
-        let deleted = conn
-            .execute(
-                "DELETE FROM recall_signals WHERE created_at < ?1",
-                params![cutoff],
-            )
-            .map_err(|e| AlephError::config(format!("cleanup_old_signals: {e}")))?;
-
-        Ok(deleted)
+            Ok(deleted)
+        })
     }
 }
 

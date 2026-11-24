@@ -1,0 +1,64 @@
+# Brief — GX3: src/gateway — session_store + session_manager + busy_queue (state ownership, backpressure)
+
+**Module area**: `gateway` · **Files**: 24 · **LOC**: 17556
+
+## Files in this batch (read ALL of them, in full)
+
+| File | LOC |
+|---|---|
+| `src/gateway/session_store/file_backend/mod.rs` | 3619 |
+| `src/gateway/session_store/mod.rs` | 2206 |
+| `src/gateway/busy_queue/mod.rs` | 1461 |
+| `src/gateway/session_manager/tests.rs` | 1366 |
+| `src/gateway/busy_queue/durable.rs` | 1271 |
+| `src/gateway/session_store/sqlite_backend/mod.rs` | 1253 |
+| `src/gateway/session_store/migration.rs` | 1018 |
+| `src/gateway/session_manager/ops/crud.rs` | 726 |
+| `src/gateway/busy_queue/deliver.rs` | 720 |
+| `src/gateway/session_manager/ops/modify.rs` | 714 |
+| `src/gateway/session_store/types.rs` | 637 |
+| `src/gateway/session_manager/mod.rs` | 523 |
+| `src/gateway/session_store/file_backend/meta.rs` | 410 |
+| `src/gateway/session_manager/ops/query.rs` | 356 |
+| `src/gateway/session_manager/ops/identity.rs` | 240 |
+| `src/gateway/session_store/hook_transcripts.rs` | 237 |
+| `src/gateway/busy_queue/spawn.rs` | 153 |
+| `src/gateway/session_manager/memory_lifecycle_tests.rs` | 122 |
+| `src/gateway/session_manager/ops/mod.rs` | 120 |
+| `src/gateway/session_manager/ops/emit.rs` | 108 |
+| `src/gateway/busy_queue/config.rs` | 101 |
+| `src/gateway/session_manager/ops/tests.rs` | 97 |
+| `src/gateway/session_store/file_backend/archive_diagnostics_tests.rs` | 81 |
+| `src/gateway/session_store/error.rs` | 17 |
+
+## Area contracts (invariants that must survive any fix)
+
+### Gateway area contracts (`src/gateway`)
+
+- **R4 — Interface layer is pure I/O**: `handlers/`, `interfaces/`, `server/`, `control_plane/`, `admin_api/` are Bridge/Interface layers. Business logic leaking into them is a finding only when it *duplicates* a Core-side decision or bypasses a Core-side contract (shape #1: two statements of the same fact). "This handler is too long" is NOT a finding.
+- **R1/R6 — Core vs. Bridge**: Rust Core is the only brain; multi-end surfaces do I/O. Gateway code must not re-implement Core behavior (e.g. re-deriving tool results, re-parsing policy that Core already resolved).
+- **R5 — AI proactively reaches the user**: delivery must go through the user's existing work channel (the channel registry + `delivery_queue` + `reply_emitter`); a delivery path that silently drops, duplicates or reorders messages is a finding.
+- **Single owner for state**: session state, visibility rules, channel bindings and queued deliveries each need exactly one owner. Two maps/registries holding the same fact → **P1** duplicate-source finding.
+- **Concurrency**: `tokio` runtime — no blocking I/O (std fs/net/sleep) inside `async fn` on a runtime thread; no lock held across `.await`; no lock-order inversion between the two lock families; no unbounded channel/semaphore; bounded queues must have backpressure or a documented drop policy.
+- **Ordering & retry**: message ordering, retry/backoff, idempotency and cancellation semantics are observable behavior — preserve them.
+- **Secret hygiene**: tokens, API keys and webhook signing secrets must not appear in logs, error strings, or `Debug` impls.
+- **Fail-closed**: security checks (webhook signature verification, auth, path/permission checks) must deny on error, never default-allow.
+- **Channel adapters** (`interfaces/`): per-platform adapters are near-duplicates by nature. Report *specific divergences* in behavior (different retry, different signature check, different escaping) — not "these adapters duplicate each other".
+
+
+
+## Process
+
+1. `graphify query "<question about this area>"` first (orientation).
+2. Read every file in the table above, in full.
+3. Produce the output file described in `BRIEF_COMMON.md`:
+   - cheap tier → `candidates/GX3.md` (candidate table only, no verdicts)
+   - reasoning tier → `findings/GX3.md` (verified findings with severity + minimal fix)
+4. Do not edit source files. Do not run cargo. Do not touch git state.
+
+## Anti-patterns for this batch
+
+- Do not report "this file is large" or "this module is complex" as a finding.
+- Do not report missing tests as a finding (test gaps are noted in the round README, not as findings).
+- Do not propose a redesign; propose the smallest change that removes the defect while preserving the
+  contracts above.

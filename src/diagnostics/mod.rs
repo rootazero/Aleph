@@ -27,12 +27,16 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use futures::future::join_all;
+use futures::FutureExt;
 use serde::Serialize;
 
 use crate::error::Result;
 
 /// Tag on the synthetic finding emitted when a check blows its deadline.
 pub const TAG_CHECK_TIMEOUT: &str = "check-timeout";
+/// Tag on the finding produced when a check panics and is contained at the
+/// execution boundary (see [`run_bounded`]).
+pub const TAG_CHECK_PANIC: &str = "check-panic";
 
 /// A check slower than this gets its own line in the human render (codex uses
 /// the same 2s threshold to start emitting "still checking…" heartbeats).
@@ -45,7 +49,11 @@ pub struct DiagnosticEngine {
 }
 
 impl DiagnosticEngine {
-    /// Construct from an explicit check list (used by tests).
+    /// Construct from an explicit check list.
+    ///
+    /// This is the only constructor of a [`DiagnosticEngine`] in production:
+    /// [`default_registry`] builds every production face through it. Tests use
+    /// it directly to register their own fixtures.
     #[must_use]
     pub fn new(checks: Vec<Arc<dyn HealthCheck>>) -> Self {
         Self { checks }
@@ -111,7 +119,8 @@ impl DiagnosticEngine {
             Arc::new(checks::StaleLockCheck::new(data_dir.clone())),
             Arc::new(checks::SqliteIntegrityCheck::new(data_dir.clone())),
             Arc::new(checks::DiskSpaceCheck::new(data_dir)),
-            Arc::new(checks::ConfigParseCheck::new(config_path)),
+            Arc::new(checks::ConfigParseCheck::new(config_path.clone())),
+            Arc::new(checks::BrowserIgnoredFieldsCheck::new(config_path)),
             Arc::new(checks::VaultCheck::from_default_path()),
             Arc::new(checks::HooksConsentCheck::from_default_path()),
             Arc::new(checks::BrowserRuntimeCheck::new()),
@@ -276,11 +285,6 @@ impl DiagnosticEngine {
         self
     }
 
-    /// Run every check concurrently and collect a report.
-    pub async fn run(&self, posture: Posture) -> DiagnosticReport {
-        self.run_with_filter(posture, None, &[]).await
-    }
-
     /// Run a filtered subset of checks and collect a report.
     ///
     /// `only` selects checks by id (e.g. `core/data-dir`); `skip` excludes
@@ -385,14 +389,23 @@ struct BoundedOutcome {
 /// naming it instead of hanging the whole report — the failure the deadline
 /// exists to prevent is a silent stall inside an agent turn, so it must be
 /// *reported*, not just avoided.
+///
+/// A check that **panics** is contained the same way: the panic is caught at
+/// this boundary and turned into a finding, so one broken check cannot take
+/// the other checks' observations down with it. The report must never lose
+/// the whole diagnostic because of a single check.
 async fn run_bounded(check: &Arc<dyn HealthCheck>, posture: Posture) -> BoundedOutcome {
     let deadline = check.timeout();
     let started = Instant::now();
-    let result = tokio::time::timeout(deadline, check.run(posture)).await;
+    let result = tokio::time::timeout(
+        deadline,
+        std::panic::AssertUnwindSafe(check.run(posture)).catch_unwind(),
+    )
+    .await;
     let duration_ms = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
 
     match result {
-        Ok(findings) => BoundedOutcome {
+        Ok(Ok(findings)) => BoundedOutcome {
             findings,
             timing: CheckTiming {
                 check_id: check.id(),
@@ -400,6 +413,30 @@ async fn run_bounded(check: &Arc<dyn HealthCheck>, posture: Posture) -> BoundedO
                 timed_out: false,
             },
         },
+        Ok(Err(payload)) => {
+            let detail = panic_message(payload);
+            BoundedOutcome {
+                findings: vec![Finding::problem(
+                    check.id(),
+                    Severity::Error,
+                    format!("{}: check panicked", check.id()),
+                    format!(
+                        "The check panicked and was abandoned; its domain is UNKNOWN, not \
+                         healthy.{detail}"
+                    ),
+                )
+                .with_fix_hint(
+                    "Re-run doctor with this check skipped to get the rest of the report, and \
+                     report the panic with the check id above.",
+                )
+                .with_tag(TAG_CHECK_PANIC)],
+                timing: CheckTiming {
+                    check_id: check.id(),
+                    duration_ms,
+                    timed_out: false,
+                },
+            }
+        }
         Err(_) => BoundedOutcome {
             findings: vec![Finding::problem(
                 check.id(),
@@ -424,6 +461,17 @@ async fn run_bounded(check: &Arc<dyn HealthCheck>, posture: Posture) -> BoundedO
             },
         },
     }
+}
+
+/// Readable text from a caught panic payload, for the finding that reports it.
+fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        return format!(" ({message})");
+    }
+    if let Some(message) = payload.downcast_ref::<String>() {
+        return format!(" ({message})");
+    }
+    String::new()
 }
 
 const fn posture_label(p: Posture) -> &'static str {
@@ -623,6 +671,123 @@ mod tests {
         );
     }
 
+    /// Every check module under `checks/` must be attached to SOME engine
+    /// face.
+    ///
+    /// A check module compiles clean, exports its type, and is still invisible
+    /// to every operator if nobody registers it — the far end of the wire is
+    /// simply not connected to anything. That failure mode is invisible in
+    /// review because the module looks complete and the registry looks
+    /// complete; only the two lists compared here disagree.
+    ///
+    /// The mapping is mechanical: `snake_case` module name → `CamelCase` +
+    /// `Check`. Every module under `checks/` follows that convention, so the
+    /// guard needs no hand-maintained list to drift.
+    ///
+    /// **What it can and cannot see**, stated rather than left to be
+    /// discovered:
+    ///
+    /// - *Sees*: a module declared in `checks/mod.rs` whose check type is
+    ///   never constructed in `diagnostics/mod.rs` — an orphan check.
+    /// - *Sees*: a check type constructed nowhere, i.e. a dead registration
+    ///   is still visible as a construction, but a check whose id was renamed
+    ///   is not.
+    /// - *Blind to*: a check that is registered but whose `id()` collides with
+    ///   another check's id, and a check registered on a face that no
+    ///   production caller builds. Both need the engine's runtime id list.
+    /// - The match is textual, not a type-level proof: it reads the
+    ///   production text of the two files, so it sees a construction even if
+    ///   the surrounding expression is dead code.
+    ///
+    /// CRLF-safe: [`code_text`](crate::utils::source_scan::code_text) and
+    /// [`production_text`](crate::utils::source_scan::production_text) both
+    /// drop `\r` before anything else.
+    #[test]
+    fn every_check_module_is_attached_to_an_engine_face() {
+        use crate::utils::source_scan::{code_text, production_text, rust_sources_under};
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("diagnostics");
+        let sources = rust_sources_under(&root);
+        // Self-count: the walk reached this directory at all. A guard that
+        // examined nothing is green and blind, not clean.
+        assert!(
+            sources.len() >= 24,
+            "the walk found only {} .rs files under src/diagnostics/ — a guard that \
+             examined nothing is green and blind, not clean",
+            sources.len()
+        );
+
+        let mut declared: Vec<String> = Vec::new();
+        let mut constructed: Vec<String> = Vec::new();
+        for (rel, text) in &sources {
+            let path = std::path::Path::new(rel);
+            let prod = code_text(&production_text(path, text));
+            if rel == "src/diagnostics/checks/mod.rs" {
+                for line in prod.lines() {
+                    let line = line.trim();
+                    if let Some(rest) = line.strip_prefix("pub mod ") {
+                        let name = rest.trim_end_matches(';').trim();
+                        if !name.is_empty()
+                            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                        {
+                            declared.push(name.to_string());
+                        }
+                    }
+                }
+            }
+            if rel == "src/diagnostics/mod.rs" {
+                // `checks::BrowserRuntimeCheck` — the `::` is part of the name,
+                // so the scan must look for the path prefix itself instead of
+                // splitting the text into words.
+                for (idx, _) in prod.match_indices("checks::") {
+                    let name: String = prod[idx + "checks::".len()..]
+                        .chars()
+                        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                        .collect();
+                    if !name.is_empty() {
+                        constructed.push(name);
+                    }
+                }
+            }
+        }
+
+        assert!(
+            declared.len() >= 20,
+            "only {} check module(s) were declared under checks/; the scan is broken if \
+             that number is this small",
+            declared.len()
+        );
+
+        let orphans: Vec<String> = declared
+            .iter()
+            .filter(|module| {
+                let camel: String = module
+                    .split('_')
+                    .map(|part| {
+                        let mut chars = part.chars();
+                        match chars.next() {
+                            Some(first) => first.to_ascii_uppercase().to_string() + chars.as_str(),
+                            None => String::new(),
+                        }
+                    })
+                    .collect();
+                let expected = format!("{camel}Check");
+                !constructed.contains(&expected)
+            })
+            .cloned()
+            .collect();
+
+        assert!(
+            orphans.is_empty(),
+            "these check modules are declared under src/diagnostics/checks/ but never \
+             attached to a DiagnosticEngine — they compile, they export a type, and no \
+             operator can ever see them:\n  {}",
+            orphans.join("\n  ")
+        );
+    }
+
     /// The RPC path (`gateway::handlers::diagnostics::handle_run`) builds its
     /// engine from live handles and has no unit test that can construct them,
     /// so the "both daemon paths keep the check" half of Item 0 is asserted
@@ -725,9 +890,6 @@ mod tests {
         fn id(&self) -> &'static str {
             self.id
         }
-        fn title(&self) -> &'static str {
-            "fake"
-        }
         async fn run(&self, _posture: Posture) -> Vec<Finding> {
             vec![self.finding.clone()]
         }
@@ -745,7 +907,7 @@ mod tests {
                 finding: Finding::problem("b", Severity::Error, "boom", "broke"),
             }),
         ]);
-        let report = engine.run(Posture::Inspect).await;
+        let report = engine.run_with_filter(Posture::Inspect, None, &[]).await;
         assert_eq!(report.checks_run, 2);
         assert_eq!(report.findings.len(), 2);
         assert_eq!(report.errors(), 1);
@@ -760,9 +922,6 @@ mod tests {
     impl HealthCheck for GenuineRepairCheck {
         fn id(&self) -> &'static str {
             "fake/genuine"
-        }
-        fn title(&self) -> &'static str {
-            "fake"
         }
         async fn run(&self, posture: Posture) -> Vec<Finding> {
             if posture.allows_repair() {
@@ -782,7 +941,7 @@ mod tests {
     #[tokio::test]
     async fn report_ok_when_repaired() {
         let engine = DiagnosticEngine::new(vec![Arc::new(GenuineRepairCheck)]);
-        let report = engine.run(Posture::Fix).await;
+        let report = engine.run_with_filter(Posture::Fix, None, &[]).await;
         assert!(report.ok(), "a repaired problem should not block ok()");
         assert_eq!(report.repaired(), 1);
     }
@@ -865,9 +1024,6 @@ mod tests {
         fn id(&self) -> &'static str {
             "fake/theatre"
         }
-        fn title(&self) -> &'static str {
-            "fake"
-        }
         async fn run(&self, posture: Posture) -> Vec<Finding> {
             let f = Finding::problem("fake/theatre", Severity::Warning, "stale", "left behind")
                 .repairable();
@@ -884,7 +1040,7 @@ mod tests {
     #[tokio::test]
     async fn fix_revalidates_and_flags_repair_theatre() {
         let engine = DiagnosticEngine::new(vec![Arc::new(RepairTheatreCheck)]);
-        let report = engine.run(Posture::Fix).await;
+        let report = engine.run_with_filter(Posture::Fix, None, &[]).await;
         assert_eq!(report.repaired(), 1);
         let residual: Vec<_> = report
             .findings
@@ -912,9 +1068,6 @@ mod tests {
         fn id(&self) -> &'static str {
             "fake/leaky"
         }
-        fn title(&self) -> &'static str {
-            "fake"
-        }
         async fn run(&self, _posture: Posture) -> Vec<Finding> {
             vec![Finding::problem(
                 "fake/leaky",
@@ -929,7 +1082,7 @@ mod tests {
     #[tokio::test]
     async fn engine_redacts_findings_from_checks_that_never_asked() {
         let engine = DiagnosticEngine::new(vec![Arc::new(LeakyCheck)]);
-        let report = engine.run(Posture::Inspect).await;
+        let report = engine.run_with_filter(Posture::Inspect, None, &[]).await;
         assert_eq!(report.findings[0].detail, "server rejected ***");
         assert_eq!(
             report.findings[0].fix_hint.as_deref(),
@@ -950,9 +1103,6 @@ mod tests {
         fn id(&self) -> &'static str {
             "fake/wedged"
         }
-        fn title(&self) -> &'static str {
-            "fake"
-        }
         async fn run(&self, _posture: Posture) -> Vec<Finding> {
             std::future::pending::<()>().await;
             unreachable!()
@@ -971,7 +1121,7 @@ mod tests {
                 finding: Finding::ok("a", "fine", "ok"),
             }),
         ]);
-        let report = engine.run(Posture::Inspect).await;
+        let report = engine.run_with_filter(Posture::Inspect, None, &[]).await;
 
         // The healthy sibling still reported.
         assert!(report.findings.iter().any(|f| f.check_id == "a"));
@@ -1017,7 +1167,7 @@ mod tests {
     #[tokio::test]
     async fn fix_revalidation_passes_for_genuine_repairs() {
         let engine = DiagnosticEngine::new(vec![Arc::new(GenuineRepairCheck)]);
-        let report = engine.run(Posture::Fix).await;
+        let report = engine.run_with_filter(Posture::Fix, None, &[]).await;
         assert_eq!(report.repaired(), 1);
         assert!(
             !report

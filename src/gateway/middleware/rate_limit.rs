@@ -69,11 +69,13 @@ impl<S> RateLimitService<S> {
 /// # The three answers, in order
 ///
 /// 1. **Loopback** keeps the literal `127.0.0.1`, which is what the limiter's
-///    own `exempt_loopback` matches on. This arm is first *because*
-///    `CALLER_USER` is `Some(OWNER_USER_ID)` for a loopback connection — reading
-///    the principal first would key the desktop App's local Panel into a
-///    rationed bucket and put its voice loop back on the air-time budget the
-///    loopback exemption exists to remove. Single-user boxes are byte-identical.
+///    own `exempt_loopback` matches on — through the trusted loopback bit
+///    this layer hands it, not by parsing the identity. This arm is first
+///    *because* `CALLER_USER` is `Some(OWNER_USER_ID)` for a loopback
+///    connection — reading the principal first would key the desktop App's
+///    local Panel into a rationed bucket and put its voice loop back on the
+///    air-time budget the loopback exemption exists to remove. Single-user
+///    boxes are byte-identical.
 /// 2. **An authenticated principal** gets its own window, namespaced so a
 ///    user id can never collide with the literals on either side of it. Two
 ///    devices of the same person share one window — that is the point: the
@@ -135,7 +137,11 @@ where
             scope
         };
         let identity = rate_limit_identity();
-        let key = RateLimitKey::new(&identity, scope.clone());
+        let key = RateLimitKey::for_caller(
+            &identity,
+            scope.clone(),
+            crate::gateway::caller_identity::current_caller_is_loopback(),
+        );
 
         if let Err(e) = limiter.check_and_record(&key) {
             warn!(method = %method, scope = %scope, error = %e, "rate limited");

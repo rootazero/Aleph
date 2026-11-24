@@ -63,12 +63,12 @@ fn parse_github_source(source: &str) -> CliResult<(String, String, Option<String
         .strip_prefix("github:")
         .ok_or_else(|| CliError::Other("Not a github: source".into()))?;
     let parts: Vec<&str> = rest.splitn(3, '/').collect();
-    match parts.len() {
-        2 => Ok((parts[0].to_string(), parts[1].to_string(), None)),
-        3 => Ok((
-            parts[0].to_string(),
-            parts[1].to_string(),
-            Some(parts[2].to_string()),
+    match parts.as_slice() {
+        [owner, repo] => Ok((owner.to_string(), repo.to_string(), None)),
+        [owner, repo, plugin_name] => Ok((
+            owner.to_string(),
+            repo.to_string(),
+            Some(plugin_name.to_string()),
         )),
         _ => Err(CliError::Other(format!(
             "Invalid github source format: '{source}'. Expected github:owner/repo or github:owner/repo/plugin-name"

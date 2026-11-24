@@ -242,6 +242,12 @@ pub(crate) struct HandleSite {
     pub name: String,
     pub container: String,
     pub is_slot: bool,
+    /// The slot's own id — the key `crate::capability::ALL_SLOTS` is keyed on.
+    ///
+    /// `None` for a handle that is not (yet) a slot. Captured from the
+    /// declaration's id literal so the roster guard can compare the two sides
+    /// in ONE key space instead of comparing the sizes of two.
+    pub slot_id: Option<String>,
 }
 
 /// A container `static` the rule excluded, with the one fact needed to tell
@@ -249,6 +255,15 @@ pub(crate) struct HandleSite {
 struct LazySite {
     file: String,
     name: String,
+    /// The container type, for the messages that name the offender.
+    container: String,
+    /// The declaration is visible outside its module.
+    ///
+    /// A `pub` container static is reachable from every module, so "nobody
+    /// installs it" is a statement about the whole tree — and the file-local
+    /// reading of it cannot support one. See the tree-wide writer index in
+    /// [`take_census`].
+    is_pub: bool,
     /// Form 2 found at least one `get_or_init` / `get_or_try_init` call on this
     /// static. Distinguishes "the arm looked and said no" from "the arm never
     /// reached it" — which is the difference between a correct exclusion and a
@@ -458,6 +473,20 @@ fn fn_spans(text: &str) -> Vec<FnSpan> {
     out
 }
 
+/// Is the `>` at `i` the closer of a generic list?
+///
+/// `->` and `=>` end in `>` and close nothing. Counting them as closers drives
+/// the depth NEGATIVE, and every parameter after the arrow is then read as
+/// nested — so a callback-typed parameter swallows the ones behind it and the
+/// signature parser loses them.
+///
+/// One rule, three call sites: the generic reader, the parameter splitter and
+/// the parameter-type reader disagreed about the same text until they shared
+/// this one.
+fn closes_generic(bytes: &[u8], i: usize) -> bool {
+    !matches!(bytes.get(i.wrapping_sub(1)), Some(b'-' | b'='))
+}
+
 /// Offset of the `>` closing the generic list opened at `open`.
 ///
 /// `->` and `=>` are not closers, and a `(` group inside (`Fn(u32) -> u32`) is
@@ -469,7 +498,7 @@ fn matching_generics(text: &str, open: usize) -> Option<usize> {
     while i < bytes.len() {
         match bytes[i] {
             b'<' => depth += 1,
-            b'>' if !matches!(bytes.get(i.wrapping_sub(1)), Some(b'-' | b'=')) => {
+            b'>' if closes_generic(bytes, i) => {
                 depth -= 1;
                 if depth == 0 {
                     return Some(i);
@@ -528,7 +557,11 @@ fn split_top_level_commas(src: &str) -> Vec<&str> {
     for (i, b) in bytes.iter().enumerate() {
         match b {
             b'(' | b'<' | b'[' | b'{' => depth += 1,
-            b')' | b'>' | b']' | b'}' => depth -= 1,
+            // `>` closes a generic only when it is not the tail of `->` or
+            // `=>`: an arrow drove the depth negative and every parameter
+            // after it was swallowed into the one before it.
+            b'>' if closes_generic(bytes, i) => depth -= 1,
+            b')' | b']' | b'}' => depth -= 1,
             b',' if depth == 0 => {
                 out.push(&src[start..i]);
                 start = i + 1;
@@ -546,7 +579,8 @@ fn top_level_colon(p: &str) -> Option<usize> {
     while i < bytes.len() {
         match bytes[i] {
             b'(' | b'<' | b'[' | b'{' => depth += 1,
-            b')' | b'>' | b']' | b'}' => depth -= 1,
+            b'>' if closes_generic(bytes, i) => depth -= 1,
+            b')' | b']' | b'}' => depth -= 1,
             b':' if depth == 0 => {
                 if bytes.get(i + 1) == Some(&b':') {
                     i += 1; // path separator
@@ -568,6 +602,75 @@ fn is_written(text: &str, name: &str) -> bool {
             .iter()
             .any(|m| method_call_open_paren(text, at + name.len(), m).is_some())
     })
+}
+
+/// The receivers of every `RECEIVER.set(` / `.store(` / `.swap(` call in `text`.
+///
+/// The writer arm of the census used to ask this question of ONE file — the
+/// one that declares the static — so a container installed from another module
+/// was invisible to it. This asks it of whatever text it is given, and
+/// [`take_census`] gives it the whole tree.
+///
+/// The receiver is the identifier immediately before the `.`, so `x.set(`,
+/// `x . set(` and `self.cache.set(` all yield the name the census keys on.
+fn writer_receivers(text: &str) -> std::collections::BTreeSet<String> {
+    let bytes = text.as_bytes();
+    let mut out = std::collections::BTreeSet::new();
+    for m in WRITERS {
+        let mut from = 0usize;
+        while let Some(rel) = text[from..].find(m) {
+            let at = from + rel;
+            let after = at + m.len();
+            from = after;
+            // `set_foo(` is not `set(` — the method name has to end here.
+            if bytes.get(after).is_some_and(|b| is_ident_byte(*b)) {
+                continue;
+            }
+            // The receiver ends just before the `.` that precedes the method.
+            let mut recv_end = at;
+            while recv_end > 0 && bytes[recv_end - 1].is_ascii_whitespace() {
+                recv_end -= 1;
+            }
+            if recv_end == 0 || bytes[recv_end - 1] != b'.' {
+                continue;
+            }
+            recv_end -= 1;
+            while recv_end > 0 && bytes[recv_end - 1].is_ascii_whitespace() {
+                recv_end -= 1;
+            }
+            let mut recv_start = recv_end;
+            while recv_start > 0 && is_ident_byte(bytes[recv_start - 1]) {
+                recv_start -= 1;
+            }
+            if recv_start == recv_end {
+                continue; // `.set(` with no receiver to name
+            }
+            if method_call_open_paren(text, recv_end, m).is_none() {
+                continue; // `x.set` without a call
+            }
+            out.insert(text[recv_start..recv_end].to_string());
+        }
+    }
+    out
+}
+
+/// Is this static declaration visible outside its module?
+///
+/// Only an unrestricted `pub` reaches beyond the declaring module. The
+/// restricted forms — `pub(crate)`, `pub(super)`, `pub(in path)` — stop at a
+/// boundary inside the module tree, so they are not module-external: the
+/// `LazySite::is_pub` rule this predicate serves is about a handle "reachable
+/// from every module", which a crate- or super-visible static is not.
+fn is_public_decl(line: &str) -> bool {
+    let t = line.trim_start();
+    let Some(rest) = t.strip_prefix("pub") else {
+        return false;
+    };
+    // `pub(` opens a restricted form; `pub ` (any whitespace) is unrestricted.
+    if rest.starts_with('(') {
+        return false;
+    }
+    rest.starts_with(char::is_whitespace)
 }
 
 /// Verdict of the first-caller-wins arm, with the fact the guards need.
@@ -651,9 +754,22 @@ impl Census {
     }
 }
 
+/// The source walk, in a deterministic order.
+///
+/// `rust_sources_under` walks directories with `read_dir`, whose order is
+/// filesystem-dependent, so an unsorted walk makes every census output that
+/// lists sites order-dependent: the same tree yields a different handle order
+/// from one run to the next. Sorting by path makes the census a function of
+/// the tree rather than of the filesystem.
+fn sorted_sources(root: &std::path::Path) -> Vec<(String, String)> {
+    let mut sources = rust_sources_under(root);
+    sources.sort_by(|a, b| a.0.cmp(&b.0));
+    sources
+}
+
 fn take_census() -> Census {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let sources = rust_sources_under(&root);
+    let sources = sorted_sources(&root);
     assert!(
         sources.len() > 100,
         "the source walk found only {} files under src/ — the census scanned \
@@ -661,17 +777,50 @@ fn take_census() -> Census {
         sources.len()
     );
 
+    // Production text, computed ONCE per file.
+    //
+    // The writer index below needs every file, and the walk below needs each
+    // of them again — so the text is cut once and kept.
+    //
+    // `production_text`, not `production_prefix`: a whole-file test
+    // module has no `#[cfg(test)]` of its own, so the per-file cut hands
+    // this walk 100% of a test file as production (判据 §3).
+    let prods: Vec<(String, String)> = sources
+        .into_iter()
+        .map(|(rel, text)| {
+            let prod = strip_comment_lines(&production_text(std::path::Path::new(&rel), &text));
+            (rel, prod)
+        })
+        .collect();
+
+    // The writer index, over the WHOLE tree.
+    //
+    // The rule used to ask "does THIS file install its own static?", so a
+    // container installed from another module was invisible to it: it landed
+    // in the `lazy` bucket, which has no floor and no guard — no count, no
+    // roster entry, no red test. The exposure is one `pub` away:
+    // `src/extension/manifest/mod.rs::GLOBAL_MANIFEST_CACHE` is the only
+    // `pub` container static in `src/` today.
+    //
+    // Keyed by the receiver's NAME, so a same-named static in another module
+    // is over-seen — the direction that fails loudly. Under-seeing would need
+    // the declaration's own path, which is a different key space (the shape
+    // `every_declared_slot_is_in_the_roster` had to be repaired for).
+    let mut writers: std::collections::BTreeMap<String, std::collections::BTreeSet<String>> =
+        std::collections::BTreeMap::new();
+    for (rel, prod) in &prods {
+        for name in writer_receivers(prod) {
+            writers.entry(name).or_default().insert(rel.clone());
+        }
+    }
+
     let mut c = Census {
         written: Vec::new(),
         first_caller: Vec::new(),
         slots: Vec::new(),
         lazy: Vec::new(),
     };
-    for (rel, text) in sources {
-        // `production_text`, not `production_prefix`: a whole-file test
-        // module has no `#[cfg(test)]` of its own, so the per-file cut hands
-        // this walk 100% of a test file as production (判据 §3).
-        let prod = strip_comment_lines(&production_text(std::path::Path::new(&rel), &text));
+    for (rel, prod) in &prods {
         let mut spans: Option<Vec<FnSpan>> = None;
         for line in prod.lines() {
             let Some((name, container)) = parse_static_decl(line) else {
@@ -682,19 +831,29 @@ fn take_census() -> Census {
                 name: name.clone(),
                 container: container.clone(),
                 is_slot: false,
+                slot_id: None,
             };
-            if is_written(&prod, &name) {
+            // Install form 1: a writer. The writer may live in another module
+            // — the handle is process-global, so the file that owns it is not
+            // the file that writes to it.
+            if is_written(prod, &name)
+                || writers
+                    .get(name.as_str())
+                    .is_some_and(|files| files.iter().any(|f| f != rel))
+            {
                 c.written.push(site());
                 continue;
             }
-            let spans = spans.get_or_insert_with(|| fn_spans(&prod));
-            let v = first_caller_install(&prod, &name, spans);
+            let spans = spans.get_or_insert_with(|| fn_spans(prod));
+            let v = first_caller_install(prod, &name, spans);
             if v.installs {
                 c.first_caller.push(site());
             } else {
                 c.lazy.push(LazySite {
                     file: rel.clone(),
-                    name,
+                    name: name.clone(),
+                    container: container.clone(),
+                    is_pub: is_public_decl(line),
                     saw_install_call: v.saw_call,
                     saw_parameterised_get_or_init: v.declined_on_use,
                 });
@@ -703,7 +862,8 @@ fn take_census() -> Census {
         // Slots are declared with the newtype, not a raw container. Migration
         // moves handles from the first two buckets to this one; the SUM is what
         // the guard pins, so a half-finished migration cannot go quiet.
-        for line in prod.lines() {
+        let lines: Vec<&str> = prod.lines().collect();
+        for (i, line) in lines.iter().enumerate() {
             let t = strip_visibility(line.trim_start());
             let Some(rest) = t.strip_prefix("static ") else {
                 continue;
@@ -722,11 +882,28 @@ fn take_census() -> Census {
             // return `None`, so its `else { continue }` arm was unreachable
             // code wearing the shape of a fallible parse.
             let declared = after.split_once('<').map_or(after, |(head, _)| head).trim();
+            // The slot's own id is the key `ALL_SLOTS` is keyed on, and it
+            // lives in the initialiser — which `rustfmt` may push onto the
+            // next line, so the item is accumulated up to its `;` before the
+            // literal is read. The same extraction `slot_declarations` does.
+            let mut item = String::new();
+            for l in &lines[i..] {
+                item.push_str(l);
+                item.push('\n');
+                if l.trim_end().ends_with(';') {
+                    break;
+                }
+            }
+            let slot_id = item
+                .split_once('"')
+                .and_then(|(_, after)| after.split_once('"'))
+                .map(|(id, _)| id.to_string());
             c.slots.push(HandleSite {
                 file: rel.clone(),
                 name: name.trim().to_string(),
                 container: declared.rsplit("::").next().unwrap_or(declared).to_string(),
                 is_slot: true,
+                slot_id,
             });
         }
     }
@@ -772,14 +949,15 @@ mod tests {
             sites.iter().filter(|s| !s.is_slot).count(),
             sites.iter().filter(|s| s.is_slot).count(),
         );
-        // Measured from this worktree after the raw first-caller handle's module
-        // removal: 0 raw + 55 slots = 55. Keep the sum guard for future changes;
-        // investigate a drift before editing it (判据 §17).
+        // Measured from this worktree after the Memory/Dream capability slots
+        // moved under MemoryRuntime: 0 raw + 49 slots = 49. Keep the sum
+        // guard for future changes; investigate a drift before editing it
+        // (判据 §17).
         assert_eq!(
             raw + slots,
-            55,
+            49,
             "capability handle total drifted: {raw} raw + {slots} slots = {}, not \
-             55. Never assert either side alone: raw shrinks and slots grows as \
+             49. Never assert either side alone: raw shrinks and slots grows as \
              migration proceeds, so only the SUM is stable. A drift means either \
              a census recogniser regressed (see the module doc's recogniser blind \
              spots) or a handle genuinely left the corpus — investigate before \
@@ -793,36 +971,58 @@ mod tests {
     /// invisible to the `core/capability-wiring` diagnostic, which is the same
     /// silence as before this round.
     ///
-    /// Compares COUNTS, not names: a slot's `id()` (e.g. `"spend/policy"`) is
-    /// deliberately not its static's name (`GLOBAL_POLICY`), so there is no
-    /// shared key to compare `declared` and `rostered` element-by-element. The
-    /// count equality is the real check, self-referential against the live
-    /// census rather than a hand-carried figure; the `>= 40` floor beneath it
-    /// exists only so the equality cannot pass vacuously at `0 == 0` if both
-    /// sides went blind at once.
+    /// Compares IDS, element by element: a slot's `id()` (e.g. `"spend/policy"`)
+    /// is deliberately not its static's name (`GLOBAL_POLICY`), so the two sides
+    /// are read into ONE key space — the id literal each declaration carries.
+    /// The census captures that literal, so a slot that is declared but not
+    /// rostered is reported by NAME.
     ///
-    /// ⚠️ `declared` is keyed on `{file}::{name}`, not on the bare static
-    /// name: six of today's 45 slots are named `GLOBAL` (this module's own doc
-    /// walks through why that name collides so often), so a `BTreeSet` keyed
-    /// on `name` alone collapses those six into one and undercounts by five —
-    /// measured, not guessed against: first-written this test compared bare
-    /// names and asserted `40 == 45` against a correctly-sized roster.
+    /// The count equality this used to assert could not see a swap: a slot
+    /// dropped from `ALL_SLOTS` and a stale entry left in it have the same
+    /// SIZE, so the equality held while the roster was wrong. Both directions
+    /// are now named, and the symmetric difference is printed.
+    ///
+    /// ⚠️ The id is the key, so it has to be unique: two declarations sharing
+    /// an id collapse into one roster entry and the second handle disappears.
+    /// That is asserted here rather than assumed.
     #[test]
     fn every_declared_slot_is_in_the_roster() {
-        let declared: std::collections::BTreeSet<String> = capability_handles()
-            .into_iter()
-            .filter(|s| s.is_slot)
-            .map(|s| format!("{}::{}", s.file, s.name))
-            .collect();
+        let declared: std::collections::BTreeMap<String, Vec<String>> = {
+            let mut by_id: std::collections::BTreeMap<String, Vec<String>> = Default::default();
+            for site in capability_handles().into_iter().filter(|s| s.is_slot) {
+                let id = site.slot_id.clone().unwrap_or_else(|| {
+                    panic!(
+                        "the slot {}::{} carries no id literal — the key the roster \
+                         is built on cannot be read from it",
+                        site.file, site.name
+                    )
+                });
+                by_id
+                    .entry(id)
+                    .or_default()
+                    .push(format!("{}::{}", site.file, site.name));
+            }
+            by_id
+        };
         let rostered: std::collections::BTreeSet<String> = crate::capability::ALL_SLOTS
             .iter()
             .map(|s| s.id().to_string())
             .collect();
+
+        let declared_ids: std::collections::BTreeSet<String> = declared.keys().cloned().collect();
         assert_eq!(
-            declared.len(),
-            rostered.len(),
-            "declared slots: {declared:?}\nroster ids: {rostered:?}\n\
-             every CapabilitySlot::new() must be reachable from ALL_SLOTS"
+            declared_ids.len(),
+            declared.values().map(|v| v.len()).sum::<usize>(),
+            "two declarations share one id, so the roster holds only one of them \
+             and the other handle disappears:\n  {declared:?}"
+        );
+        let missing: Vec<&String> = declared_ids.difference(&rostered).collect();
+        let extra: Vec<&String> = rostered.difference(&declared_ids).collect();
+        assert!(
+            missing.is_empty() && extra.is_empty(),
+            "the declared slots and the roster disagree.\n  declared but not \
+             rostered: {missing:?}\n  rostered but not declared: {extra:?}\n  every \
+             CapabilitySlot::new() must be reachable from ALL_SLOTS"
         );
         assert!(
             rostered.len() >= 40,
@@ -1218,7 +1418,7 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
     /// Every roster declaration across `src/`.
     fn rosters_in_src() -> Vec<String> {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        rust_sources_under(&root)
+        sorted_sources(&root)
             .into_iter()
             .flat_map(|(rel, text)| {
                 roster_collections(&strip_comment_lines(&production_prefix(&text)))
@@ -1323,7 +1523,7 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
     fn roster_accessors() -> Vec<AccessorSite> {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut out = Vec::new();
-        for (rel, text) in rust_sources_under(&root) {
+        for (rel, text) in sorted_sources(&root) {
             let prod = strip_comment_lines(&production_prefix(&text));
             for at in word_occurrences(&prod, "SlotStatus") {
                 let Some(arrow) = slot_status_return_at(&prod, at) else {
@@ -1615,7 +1815,26 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
     /// a fixed-size window reads into whatever follows, and this repo has
     /// shipped a guard that passed because its 400-character window read the
     /// neighbouring declaration.
+    ///
+    /// An unterminated block has no closing line, and this used to answer
+    /// "the last line of the file" — an index that points AT the line the
+    /// caller had just read. [`else_chain`] believed it and asked for the same
+    /// line again, forever, on a file whose last line is `} else {`. The
+    /// unterminated case is now its own answer ([`block_at_checked`]) and the
+    /// fallback index is only ever a fallback.
     fn block_at(lines: &[String], start: usize) -> (String, usize) {
+        block_at_checked(lines, start)
+            .unwrap_or_else(|| (lines[start..].join("\n"), lines.len().saturating_sub(1)))
+    }
+
+    /// `(body, index_of_closing_line)` for the block opening at `start`, or
+    /// `None` when the block is never closed.
+    ///
+    /// The difference from [`block_at`] is the point: "this block is
+    /// unterminated" is a fact about the text, and the callers that can act on
+    /// it (the else-chain reader) must be able to see it instead of receiving
+    /// an index that looks like a closing line.
+    fn block_at_checked(lines: &[String], start: usize) -> Option<(String, usize)> {
         let indent = indent_of(&lines[start]);
         let mut body = vec![lines[start].clone()];
         for (offset, line) in lines[start + 1..].iter().enumerate() {
@@ -1623,11 +1842,11 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
                 && indent_of(line) <= indent
                 && line.trim_start().starts_with('}')
             {
-                return (body.join("\n"), start + 1 + offset);
+                return Some((body.join("\n"), start + 1 + offset));
             }
             body.push(line.clone());
         }
-        (body.join("\n"), lines.len().saturating_sub(1))
+        None
     }
 
     /// Whether the line at `at` sits directly inside an `impl` block — walk
@@ -1832,7 +2051,7 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
             decline_file: std::collections::BTreeMap::new(),
             in_impl: std::collections::BTreeSet::new(),
         };
-        for (rel, text) in rust_sources_under(&manifest_src()) {
+        for (rel, text) in sorted_sources(&manifest_src()) {
             if !text.contains("CapabilitySlot") {
                 continue;
             }
@@ -1909,7 +2128,7 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
             installs: HopMap::new(),
             declines: HopMap::new(),
         };
-        for (rel, text) in rust_sources_under(&manifest_src()) {
+        for (rel, text) in sorted_sources(&manifest_src()) {
             if rel.starts_with("src/capability/") || test_only.contains(&rel) {
                 continue;
             }
@@ -2040,8 +2259,13 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
 
     /// Names of the `pub fn`s that install a capability — the vocabulary the
     /// conditional-site scan matches call sites against.
-    fn install_wrapper_names() -> std::collections::BTreeSet<String> {
-        capability_wrappers().installs.into_keys().collect()
+    ///
+    /// Takes the wrapper table as an argument so the caller does not have to
+    /// derive it twice: the conditional-site scan needs the NAMES (to match
+    /// call sites) and the SLOT SETS (to know which handle a site installs),
+    /// and the second is only in the table.
+    fn install_wrapper_names(cw: &CapWrappers) -> std::collections::BTreeSet<String> {
+        cw.installs.keys().cloned().collect()
     }
 
     fn manifest_src() -> std::path::PathBuf {
@@ -2059,7 +2283,7 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
     /// instead of a per-guard workaround.
     fn test_only_module_files() -> std::collections::BTreeSet<String> {
         let mut out = std::collections::BTreeSet::new();
-        for (rel, text) in rust_sources_under(&manifest_src()) {
+        for (rel, text) in sorted_sources(&manifest_src()) {
             for line in cfg_test_portion(&text).lines() {
                 let t = strip_visibility(line.trim_start()).trim_start();
                 let Some(rest) = t.strip_prefix("mod ") else {
@@ -2088,6 +2312,15 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
     ///
     /// Shared by [`governing_alternative`] and the gate rule, so "what counts as
     /// the else side of a conditional" has one answer rather than two that drift.
+    ///
+    /// **Two bounds, both load-bearing.** The chain is read forward only: a
+    /// truncated block has no closing line, so it has no successor arm, and the
+    /// loop stops there. The old fallback index pointed at the line just read,
+    /// so the loop asked for that same line again — forever, on a file whose
+    /// last production line is `} else {`. A guard that hangs is worse than a
+    /// guard that is wrong: it takes the whole test binary with it and reports
+    /// nothing. `the_else_chain_terminates_on_a_truncated_block` fails by name
+    /// if it regresses.
     fn else_chain(lines: &[String], first_close: usize) -> Option<String> {
         if !lines
             .get(first_close)
@@ -2098,8 +2331,16 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
         let mut out = Vec::new();
         let mut cur = first_close;
         loop {
-            let (body, c) = block_at(lines, cur);
+            let Some((body, c)) = block_at_checked(lines, cur) else {
+                // Unterminated: the arm's text is what is left, and the chain
+                // has no further arm to read.
+                out.push(lines[cur..].join("\n"));
+                break;
+            };
             out.push(body);
+            if c <= cur {
+                break; // no forward progress: the chain cannot continue
+            }
             if lines
                 .get(c)
                 .is_some_and(|l| l.trim_start().starts_with("} else"))
@@ -2213,7 +2454,10 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
     struct CondSite {
         wrapper: String,
         at: String,
-        declines: bool,
+        /// Does the alternative DECLINE one of the handles this site installs?
+        ///
+        /// Not "does the alternative mention decline" — see the doc above.
+        explains_skip: bool,
     }
 
     /// The call site's fully qualified path for `wrapper`, e.g.
@@ -2316,6 +2560,23 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
     ///   per-slot question this one cannot, by resolving wrappers to the slot
     ///   statics they touch rather than to their names — the two are
     ///   complementary and neither subsumes the other.
+    ///   ⚠️ The check above this paragraph USED to be that substring search,
+    ///   and it was replaced: the alternative must now CALL a decline on one of
+    ///   the handles this site installs — the site's own handle, resolved
+    ///   through the wrapper vocabulary ([`capability_wrappers`]) rather than
+    ///   read out of a comment, a string literal or a differently named
+    ///   helper. The word is not consulted at all: `strip_comment_lines`
+    ///   removes comment-ONLY lines, so a trailing comment saying "decline"
+    ///   survived, and a string literal containing the word survived with it.
+    ///   The new verdict is a set intersection — the declined slot keys
+    ///   against the installed ones — so both sides live in ONE key space
+    ///   (`{declaring file}::{STATIC}`).
+    ///   The direction that remains: the wrapper's slot set is keyed by the
+    ///   BARE wrapper name, so a name several modules share (`init_global` is
+    ///   five functions) contributes all of their slots, and a site that
+    ///   declines one of the five satisfies the rule for a handle it never
+    ///   installs. Over-see, and the same collision the module doc already
+    ///   names for every other name-keyed derivation here.
     /// * **Conditionals above the nearest one.** The opener is the first
     ///   strictly-shallower line, matching this scan's stated rule; an install
     ///   nested three blocks inside a gate is judged against the innermost. The
@@ -2330,7 +2591,8 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
     ///   test is the `if` line itself, not the line above the body).
     #[test]
     fn no_conditional_capability_install_is_silent() {
-        let wrappers = install_wrapper_names();
+        let cw = capability_wrappers();
+        let wrappers = install_wrapper_names(&cw);
         assert!(
             wrappers.len() >= 39,
             "derived only {} install wrappers; >=39 expected (the live count on \
@@ -2339,10 +2601,13 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
             wrappers.len()
         );
         let test_only = test_only_module_files();
+        // The one hop, so an alternative that reaches its decline through a
+        // binary-level function is read the same way the gate rule reads it.
+        let hop = one_hop(&cw, &test_only);
 
         let mut sites: Vec<CondSite> = Vec::new();
         let mut suppressed = 0usize;
-        for (rel, text) in rust_sources_under(&manifest_src()) {
+        for (rel, text) in sorted_sources(&manifest_src()) {
             if rel.starts_with("src/capability/") {
                 continue;
             }
@@ -2352,6 +2617,7 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
                 continue;
             }
             let (nums, lines) = prod_lines(&text);
+            let statics = slot_statics(&lines);
             for i in 0..lines.len() {
                 if is_fn_definition(&lines[i]) {
                     continue;
@@ -2366,28 +2632,38 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
                     suppressed += 1;
                     continue;
                 }
+                // The alternative must CALL a decline on one of the handles
+                // THIS site installs.
+                //
+                // The verdict used to be `alt.contains("decline")`, which a
+                // comment or a string literal satisfied, and which a decline
+                // helper under another name did not. Both sides are now slot
+                // keys — `{declaring file}::{STATIC}` — so the two are
+                // comparable: the handle the site installs, against the handle
+                // the alternative declines.
+                //
+                // `cw.installs` is keyed by the BARE wrapper name, so a name
+                // several modules share contributes all of their slots; that
+                // over-sees (see the doc's "What this cannot see").
+                let installed = cw.installs.get(w.as_str()).cloned().unwrap_or_default();
+                let declined = gate_declines(&alt, &cw.declines, &statics, &rel, &hop.declines);
                 sites.push(CondSite {
                     // The QUALIFIED path, not the bare name — see
                     // `qualified_call`. Grouping rule 2 on the bare name makes
                     // two unrelated slots read as one handle.
                     wrapper: qualified_call(&lines[i], w),
                     at: format!("{rel}:{}", nums[i]),
-                    declines: alt.contains("decline"),
+                    explains_skip: !installed.is_disjoint(&declined),
                 });
             }
         }
 
         assert!(
-            sites.len() >= 20,
-            "examined only {} conditional installs; 20 were measured on \
-             2026-09-04 (19 on 2026-08-25, plus the heartbeat service's boot \
-             gate), and this floor sits flush against that measurement on \
-             purpose. An earlier draft left it at 15 — four below — and the \
-             slack was not caution, it was already-issued permission: it turned \
-             a mutation the guard CAN see (reverting the if-with-no-`else` fix, \
-             which costs exactly two sites) into a documented 'boundary'. \
-             Zero-or-few is how this guard reports 'all clear' about sites it \
-             never read.",
+            sites.len() >= 17,
+            "examined only {} conditional installs; 17 are present after the \
+             Memory/Dream capability slots moved under MemoryRuntime. Keep this \
+             floor aligned with the current source-derived inventory and \
+             investigate any further drift before editing it.",
             sites.len()
         );
 
@@ -2452,11 +2728,11 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
             if group.len() >= 2 {
                 exempt.push(w);
                 for s in group {
-                    if s.declines {
+                    if s.explains_skip {
                         hazardous.push(format!("{} ({w})", s.at));
                     }
                 }
-            } else if !group[0].declines {
+            } else if !group[0].explains_skip {
                 silent.push(format!("{} ({w})", group[0].at));
             }
         }
@@ -2761,7 +3037,7 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
         let mut gates = 0usize;
         let mut offenders: Vec<String> = Vec::new();
 
-        for (rel, text) in rust_sources_under(&manifest_src()) {
+        for (rel, text) in sorted_sources(&manifest_src()) {
             if rel.starts_with("src/capability/") || test_only.contains(&rel) {
                 continue;
             }
@@ -2805,18 +3081,11 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
         }
 
         assert_eq!(
-            gates, 19,
-            "examined {gates} gated blocks that install a capability; 19 were \
-             measured after the opt-in telecom public-history startup gate was \
-             added (2026-10-12); 18 were measured on 2026-09-24 (17 lexical + the orchestrator gate, which is \
-             reached only through the one-hop rule). A count that moved without a capability \
-             being added or removed means the block reader stopped matching — \
-             which is how this guard would report 'all clear' about blocks it \
-             never opened. Last moved 2026-09-24: 17 -> 18, the two-store gate at \
-             `start/mod.rs` that installs `teams/background-stores` (declined in \
-             its `else`). Before that, 2026-09-04: 16 -> 17, the `[heartbeat] \
-             enabled` gate at `start/mod.rs` that now installs \
-             `heartbeat/service`."
+            gates, 16,
+            "examined {gates} gated blocks that install a capability; 16 remain \
+             after the Memory/Dream capability slots moved under MemoryRuntime. \
+             Keep this count aligned with the current source-derived inventory \
+             and investigate further drift before editing it."
         );
         assert!(
             offenders.is_empty(),
@@ -2865,17 +3134,17 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
     fn every_decline_wrapper_has_a_production_caller() {
         let w = capability_wrappers();
         assert!(
-            w.declines.len() >= 24,
-            "derived only {} decline wrappers; >=24 expected — the live count on \
-             2026-08-25, so this floor sits flush against its own measurement. \
-             A derivation that stopped matching makes this guard pass by finding \
-             nothing.",
+            w.declines.len() >= 19,
+            "derived only {} decline wrappers; >=19 expected after the \
+             Memory/Dream capability slots moved under MemoryRuntime. Keep this \
+             floor aligned with the current source-derived inventory and \
+             investigate further drift before editing it.",
             w.declines.len()
         );
         let test_only = test_only_module_files();
 
         let mut called: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-        for (rel, text) in rust_sources_under(&manifest_src()) {
+        for (rel, text) in sorted_sources(&manifest_src()) {
             if rel.starts_with("src/capability/") || test_only.contains(&rel) {
                 continue;
             }
@@ -2954,7 +3223,7 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
     /// stayed green after the line it was checking had been deleted.
     fn slot_declarations() -> Vec<SlotDecl> {
         let mut out = Vec::new();
-        for (rel, text) in rust_sources_under(&manifest_src()) {
+        for (rel, text) in sorted_sources(&manifest_src()) {
             if rel.starts_with("src/capability/") {
                 continue;
             }
@@ -3056,7 +3325,7 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
     fn every_slot_pins_its_own_missing_semantics() {
         let decls = slot_declarations();
         let test_only = test_only_module_files();
-        let sources = rust_sources_under(&manifest_src());
+        let sources = sorted_sources(&manifest_src());
 
         let mut tally: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
         for d in &decls {
@@ -3224,7 +3493,7 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
         ));
         assert!(names_type("impl<T> CapabilitySlot<T> {", "CapabilitySlot"));
 
-        let sources = rust_sources_under(&manifest_src());
+        let sources = sorted_sources(&manifest_src());
 
         // Declarations, read out of the inherent impls.
         let mod_rs = sources
@@ -3374,5 +3643,141 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
         assert!(calls("    foo::install_it(x);", "install_it"));
         assert!(!calls("    handle_plugins_install_it(x);", "install_it"));
         assert!(!calls("    thing.install_it(x);", "install_it"));
+    }
+
+    /// The else-chain reader must terminate on a truncated block.
+    ///
+    /// A file whose last production line is `} else {` has no closing brace.
+    /// The block reader answered "the last line of the file" — the very line
+    /// it had just read — so the chain asked for that line again, forever,
+    /// and the test binary hung with no message naming the cause. A guard that
+    /// hangs takes the whole suite with it and reports nothing, so the
+    /// termination is pinned here rather than left to be rediscovered by a
+    /// timeout.
+    #[test]
+    fn the_else_chain_terminates_on_a_truncated_block() {
+        let lines = |s: &str| -> Vec<String> { s.lines().map(str::to_string).collect() };
+
+        let truncated = lines("fn boot() {\n    if cond {\n        install_it(x);\n    } else {");
+        let alt = else_chain(&truncated, 3).expect("the `} else` line opens an else arm");
+        assert!(
+            alt.contains("} else {"),
+            "the truncated arm's own text must still be reported: {alt}"
+        );
+
+        // Two arms, the second truncated: the reader must stop at the second
+        // arm instead of asking for it again.
+        let two = lines(
+            "fn boot() {\n    if cond {\n        install_it(x);\n    } else {\n        decline_it(\"why\");\n    } else {",
+        );
+        let alt = else_chain(&two, 3).expect("the first `} else` opens an else arm");
+        assert!(
+            alt.contains("decline_it") && alt.contains("} else {"),
+            "both arms must be reported: {alt}"
+        );
+    }
+
+    /// The parameter splitter must not lose the parameters behind an arrow.
+    ///
+    /// `fmt_fn: impl Fn(&str, &str) -> String` ends in `>`, and the `>` of the
+    /// arrow was counted as a generic closer: the depth went negative, the
+    /// next top-level comma stopped being a separator, and every parameter
+    /// after the callback was swallowed into it. The enclosing fn then looked
+    /// as if it had no parameter after the callback — so an initialiser that
+    /// used that parameter read as parameter-independent, and the handle was
+    /// filed as a lazy cache instead of a handle.
+    #[test]
+    fn the_parameter_splitter_reads_past_an_arrow() {
+        let params = param_idents("cfg: Config, fmt_fn: impl Fn(&str, &str) -> String, tail: u64");
+        assert!(
+            params.iter().any(|p| p == "cfg"),
+            "the parameter before the callback must survive: {params:?}"
+        );
+        assert!(
+            params.iter().any(|p| p == "fmt_fn"),
+            "the callback parameter must survive: {params:?}"
+        );
+        assert!(
+            params.iter().any(|p| p == "tail"),
+            "the parameter BEHIND the arrow must survive — the `>` of `->` \
+             closes nothing: {params:?}"
+        );
+    }
+
+    /// The module-external predicate, exercised on synthetic declarations.
+    ///
+    /// The rule the census states is "visible outside its module", so the
+    /// restricted forms do not qualify: `pub(crate)` stops at the crate,
+    /// `pub(super)` at the parent module and `pub(in path)` at the named one.
+    /// A predicate that counted them would file a crate-visible container as
+    /// "reachable from every module" and hold it to the roster rule the
+    /// module-external reading does not apply to.
+    ///
+    /// The positive cases matter as much as the negative ones: a predicate
+    /// that stopped matching altogether would make the guard below vacuously
+    /// green, which is the same silence the recogniser test above was written
+    /// against.
+    #[test]
+    fn the_module_external_predicate_excludes_restricted_visibilities() {
+        for line in [
+            "pub static GLOBAL_THING: OnceLock<u8> = OnceLock::new();",
+            "    pub static GLOBAL_THING: OnceLock<u8> = OnceLock::new();",
+        ] {
+            assert!(
+                is_public_decl(line),
+                "not module-external, but the rule says it is: {line}"
+            );
+        }
+        for line in [
+            "pub(crate) static THING: OnceLock<u8> = OnceLock::new();",
+            "pub(super) static THING: OnceLock<u8> = OnceLock::new();",
+            "pub(in crate::memory) static THING: OnceLock<u8> = OnceLock::new();",
+            "static THING: OnceLock<u8> = OnceLock::new();",
+        ] {
+            assert!(
+                !is_public_decl(line),
+                "counted as module-external, but the rule says it is not: {line}"
+            );
+        }
+    }
+
+    /// Every `pub` container static must be on the roster, or self-initialising.
+    ///
+    /// A `pub` static is reachable from every module, so "nobody installs it"
+    /// is a statement about the WHOLE tree — and the file-local reading of it
+    /// ("does THIS file install its own static?") cannot support one. A
+    /// container installed from another module was invisible to the rule: it
+    /// landed in the `lazy` bucket, which has no floor, no count and no
+    /// guard.
+    ///
+    /// The census now indexes writers over the whole tree, so a cross-module
+    /// WRITE reaches the roster and Guard A asks for a slot. This guard covers
+    /// the other half — a `pub` static nothing installs at all — which no
+    /// amount of tree-wide writing would reach, because there is no write to
+    /// find.
+    #[test]
+    fn every_public_container_static_is_rostered_or_self_initialising() {
+        let c = take_census();
+        let pub_sites: Vec<&LazySite> = c.lazy.iter().filter(|s| s.is_pub).collect();
+        assert!(
+            !pub_sites.is_empty(),
+            "no `pub` container static was examined at all. Either the last one \
+             stopped being `pub` — a real change, so re-measure this guard — or \
+             the recogniser went blind, and a blind guard is green for the wrong \
+             reason."
+        );
+        let offenders: Vec<String> = pub_sites
+            .iter()
+            .filter(|s| !s.saw_install_call)
+            .map(|s| format!("{}::{} ({})", s.file, s.name, s.container))
+            .collect();
+        assert!(
+            offenders.is_empty(),
+            "these `pub` container statics are on no roster and nothing installs \
+             them — and a `pub` static is reachable from every module, so the \
+             file-local reading of \"nobody installs it\" cannot answer for \
+             them:\n  {}",
+            offenders.join("\n  ")
+        );
     }
 }

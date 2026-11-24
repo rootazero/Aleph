@@ -1,0 +1,1658 @@
+{
+  "version": 1,
+  "surface": "nsh",
+  "origin": "live_gateway",
+  "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+  "gateway": {
+    "kind": "production_gateway",
+    "isolated": true,
+    "url": "http://127.0.0.1:56512/",
+    "binary": "/Volumes/TBU4/Workspace/Aleph/.phase9-target/debug/aleph-server",
+    "binary_sha256": "3d97a101b0eff154d59e8e3f552c4dae42804ee8c73ac653c68027928947bd2b",
+    "pid": 32222,
+    "model_endpoint": "deterministic_protocol_fixture"
+  },
+  "events": [
+    {
+      "connection_epoch": 0,
+      "kind": "ready",
+      "payload": {},
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": null,
+      "session_key": null,
+      "at_ms": 1597.428957989905
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "hello",
+      "payload": {},
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": null,
+      "session_key": null,
+      "at_ms": 6885.129124973901
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "qa-diagnostic",
+      "payload": {
+        "observed_session": null,
+        "result_keys": [
+          "busy_queue",
+          "run_concurrency",
+          "running_sessions"
+        ],
+        "rpc": "gateway.metrics.run_concurrency"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": null,
+      "session_key": null,
+      "at_ms": 6893.181415973231
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "rpc-error",
+      "payload": {
+        "code": -32099,
+        "method": "graph.query"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": null,
+      "session_key": null,
+      "at_ms": 6900.969207985327
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "rpc-error",
+      "payload": {
+        "code": -32099,
+        "method": "memory.stats"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": null,
+      "session_key": null,
+      "at_ms": 6900.984665961005
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "rpc-error",
+      "payload": {
+        "code": -32099,
+        "method": "memory.listFacts"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": null,
+      "session_key": null,
+      "at_ms": 6900.988624955062
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "qa-diagnostic",
+      "payload": {
+        "observed_session": null,
+        "result_keys": [
+          "count",
+          "sessions"
+        ],
+        "rpc": "sessions.list"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": null,
+      "session_key": null,
+      "at_ms": 6911.143374978565
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "rpc-error",
+      "payload": {
+        "code": -32099,
+        "method": "memory.stats"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": null,
+      "session_key": null,
+      "at_ms": 6911.149290972389
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "rendered",
+      "payload": {},
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": null,
+      "session_key": null,
+      "at_ms": 6919.40249997424
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "route-requested",
+      "payload": {},
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": null,
+      "session_key": null,
+      "at_ms": 6919.415415963158
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "rpc-error",
+      "payload": {
+        "code": -32099,
+        "method": "memory.stats"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": null,
+      "session_key": null,
+      "at_ms": 6968.6197499977425
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "rpc-error",
+      "payload": {
+        "code": -32601,
+        "method": "cron.list"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": null,
+      "session_key": null,
+      "at_ms": 6968.624832981732
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "route-ready",
+      "payload": {
+        "from": "/",
+        "to": "/",
+        "via": "/dashboard"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": null,
+      "session_key": null,
+      "at_ms": 6999.75891597569
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "input",
+      "payload": {},
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": null,
+      "session_key": null,
+      "at_ms": 7008.620332984719
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "qa-diagnostic",
+      "payload": {
+        "observed_session": null,
+        "result_keys": [
+          "count",
+          "sessions"
+        ],
+        "rpc": "sessions.list"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": null,
+      "session_key": null,
+      "at_ms": 7221.412165963557
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "qa-diagnostic",
+      "payload": {
+        "observed_session": null,
+        "request_session": "agent:main:main:s2",
+        "result_keys": [
+          "count",
+          "items",
+          "session_key"
+        ],
+        "rpc": "artifacts.list"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": null,
+      "session_key": null,
+      "at_ms": 7222.1663749660365
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "qa-diagnostic",
+      "payload": {
+        "observed_session": null,
+        "result_keys": [
+          "count",
+          "sessions"
+        ],
+        "rpc": "sessions.list"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": null,
+      "session_key": null,
+      "at_ms": 7225.80737498356
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "accepted",
+      "payload": {},
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 7233.3052909816615
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "qa-diagnostic",
+      "payload": {
+        "observed_session": "agent:main:main:s2",
+        "result_keys": [
+          "count",
+          "sessions"
+        ],
+        "rpc": "sessions.list"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 7237.839207984507
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "qa-diagnostic",
+      "payload": {
+        "observed_session": "agent:main:main:s2",
+        "result_keys": [
+          "count",
+          "sessions"
+        ],
+        "rpc": "sessions.list"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 7285.779582976829
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "streamed",
+      "payload": {},
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 7308.448583004065
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "qa-diagnostic",
+      "payload": {
+        "observed_session": "agent:main:main:s2",
+        "result_keys": [
+          "count",
+          "sessions"
+        ],
+        "rpc": "sessions.list"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 7362.851124955341
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "qa-diagnostic",
+      "payload": {
+        "observed_session": "agent:main:main:s2",
+        "result_keys": [
+          "count",
+          "sessions"
+        ],
+        "rpc": "sessions.list"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 7371.215540973935
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "qa-diagnostic",
+      "payload": {
+        "observed_session": "agent:main:main:s2",
+        "request_session": "agent:main:main:s2",
+        "result_keys": [
+          "count",
+          "items",
+          "session_key"
+        ],
+        "rpc": "artifacts.list"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 7382.871457957663
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "qa-diagnostic",
+      "payload": {
+        "observed_session": "agent:main:main:s2",
+        "result_keys": [
+          "count",
+          "sessions"
+        ],
+        "rpc": "sessions.list"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 7394.1198329557665
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "streamed",
+      "payload": {},
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 7400.9593749651685
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "qa-diagnostic",
+      "payload": {
+        "observed_session": "agent:main:main:s2",
+        "result_keys": [
+          "count",
+          "sessions"
+        ],
+        "rpc": "sessions.list"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 7456.522665976081
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "qa-diagnostic",
+      "payload": {
+        "observed_session": "agent:main:main:s2",
+        "result_keys": [
+          "count",
+          "sessions"
+        ],
+        "rpc": "sessions.list"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 7464.050540991593
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "qa-diagnostic",
+      "payload": {
+        "observed_session": "agent:main:main:s2",
+        "request_session": "agent:main:main:s2",
+        "result_keys": [
+          "count",
+          "items",
+          "session_key"
+        ],
+        "rpc": "artifacts.list"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 7478.10629097512
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "qa-diagnostic",
+      "payload": {
+        "observed_session": "agent:main:main:s2",
+        "result_keys": [
+          "count",
+          "sessions"
+        ],
+        "rpc": "sessions.list"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 7487.650415976532
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "streamed",
+      "payload": {},
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 7493.910791003145
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "qa-diagnostic",
+      "payload": {
+        "observed_session": "agent:main:main:s2",
+        "result_keys": [
+          "count",
+          "sessions"
+        ],
+        "rpc": "sessions.list"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 7553.386457962915
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "qa-diagnostic",
+      "payload": {
+        "observed_session": "agent:main:main:s2",
+        "result_keys": [
+          "count",
+          "sessions"
+        ],
+        "rpc": "sessions.list"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 7557.490165985655
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "qa-diagnostic",
+      "payload": {
+        "observed_session": "agent:main:main:s2",
+        "request_session": "agent:main:main:s2",
+        "result_keys": [
+          "count",
+          "items",
+          "session_key"
+        ],
+        "rpc": "artifacts.list"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 7573.718832980376
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "qa-diagnostic",
+      "payload": {
+        "observed_session": "agent:main:main:s2",
+        "result_keys": [
+          "count",
+          "sessions"
+        ],
+        "rpc": "sessions.list"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 7586.152874981053
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "streamed",
+      "payload": {},
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 7591.698957956396
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "qa-diagnostic",
+      "payload": {
+        "observed_session": "agent:main:main:s2",
+        "result_keys": [
+          "count",
+          "sessions"
+        ],
+        "rpc": "sessions.list"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 7654.421457962599
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "qa-diagnostic",
+      "payload": {
+        "observed_session": "agent:main:main:s2",
+        "result_keys": [
+          "count",
+          "sessions"
+        ],
+        "rpc": "sessions.list"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 7662.33616595855
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "qa-diagnostic",
+      "payload": {
+        "observed_session": "agent:main:main:s2",
+        "request_session": "agent:main:main:s2",
+        "result_keys": [
+          "count",
+          "items",
+          "session_key"
+        ],
+        "rpc": "artifacts.list"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 7675.09179096669
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "qa-diagnostic",
+      "payload": {
+        "observed_session": "agent:main:main:s2",
+        "result_keys": [
+          "count",
+          "sessions"
+        ],
+        "rpc": "sessions.list"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 7685.092333005741
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "streamed",
+      "payload": {},
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 7691.532291006297
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "qa-diagnostic",
+      "payload": {
+        "observed_session": "agent:main:main:s2",
+        "result_keys": [
+          "count",
+          "sessions"
+        ],
+        "rpc": "sessions.list"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 7752.441749966238
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "qa-diagnostic",
+      "payload": {
+        "observed_session": "agent:main:main:s2",
+        "result_keys": [
+          "count",
+          "sessions"
+        ],
+        "rpc": "sessions.list"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 7755.064749973826
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "qa-diagnostic",
+      "payload": {
+        "observed_session": "agent:main:main:s2",
+        "result_keys": [
+          "count",
+          "sessions"
+        ],
+        "rpc": "sessions.list"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 7757.102083007339
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "streamed",
+      "payload": {},
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 7764.047457952984
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "qa-diagnostic",
+      "payload": {
+        "observed_session": "agent:main:main:s2",
+        "result_keys": [
+          "count",
+          "sessions"
+        ],
+        "rpc": "sessions.list"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 7828.209790983237
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "qa-diagnostic",
+      "payload": {
+        "observed_session": "agent:main:main:s2",
+        "result_keys": [
+          "count",
+          "sessions"
+        ],
+        "rpc": "sessions.list"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 7833.579832979012
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "qa-diagnostic",
+      "payload": {
+        "observed_session": "agent:main:main:s2",
+        "result_keys": [
+          "count",
+          "sessions"
+        ],
+        "rpc": "sessions.list"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 7837.06049999455
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "streamed",
+      "payload": {},
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 7845.31095798593
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "qa-diagnostic",
+      "payload": {
+        "observed_session": "agent:main:main:s2",
+        "result_keys": [
+          "count",
+          "sessions"
+        ],
+        "rpc": "sessions.list"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 7911.09874995891
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "qa-diagnostic",
+      "payload": {
+        "observed_session": "agent:main:main:s2",
+        "result_keys": [
+          "count",
+          "sessions"
+        ],
+        "rpc": "sessions.list"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 7911.10312496312
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "qa-diagnostic",
+      "payload": {
+        "observed_session": "agent:main:main:s2",
+        "result_keys": [
+          "count",
+          "sessions"
+        ],
+        "rpc": "sessions.list"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 7914.766582951415
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "streamed",
+      "payload": {},
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 7923.52737498004
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "qa-diagnostic",
+      "payload": {
+        "observed_session": "agent:main:main:s2",
+        "result_keys": [
+          "count",
+          "sessions"
+        ],
+        "rpc": "sessions.list"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 7987.752249988262
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "qa-diagnostic",
+      "payload": {
+        "observed_session": "agent:main:main:s2",
+        "result_keys": [
+          "count",
+          "sessions"
+        ],
+        "rpc": "sessions.list"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 7991.826665995177
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "complete",
+      "payload": {},
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 7993.046957999468
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "artifact-refreshed",
+      "payload": {
+        "count": 4,
+        "refetched": true
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 7993.054249964189
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "qa-diagnostic",
+      "payload": {
+        "observed_session": "agent:main:main:s2",
+        "result_keys": [
+          "count",
+          "sessions"
+        ],
+        "rpc": "sessions.list"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 8012.255290988833
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "qa-diagnostic",
+      "payload": {
+        "observed_session": "agent:main:main:s2",
+        "result_keys": [
+          "count",
+          "sessions"
+        ],
+        "rpc": "sessions.list"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 8012.264874996617
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "qa-diagnostic",
+      "payload": {
+        "observed_session": "agent:main:main:s2",
+        "result_keys": [
+          "count",
+          "sessions"
+        ],
+        "rpc": "sessions.list"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 8016.243082995061
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "qa-diagnostic",
+      "payload": {
+        "observed_session": "agent:main:main:s2",
+        "result_keys": [
+          "count",
+          "sessions"
+        ],
+        "rpc": "sessions.list"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 8040.3556659584865
+    },
+    {
+      "connection_epoch": 1,
+      "kind": "disconnected",
+      "payload": {},
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 8994.158665998839
+    },
+    {
+      "connection_epoch": 2,
+      "kind": "hello",
+      "payload": {},
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 9998.949125001673
+    },
+    {
+      "connection_epoch": 2,
+      "kind": "qa-diagnostic",
+      "payload": {
+        "observed_session": "agent:main:main:s2",
+        "result_keys": [
+          "busy_queue",
+          "run_concurrency",
+          "running_sessions"
+        ],
+        "rpc": "gateway.metrics.run_concurrency"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 10010.755624971353
+    },
+    {
+      "connection_epoch": 2,
+      "kind": "rpc-error",
+      "payload": {
+        "code": -32099,
+        "method": "graph.query"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 10010.76454098802
+    },
+    {
+      "connection_epoch": 2,
+      "kind": "rpc-error",
+      "payload": {
+        "code": -32099,
+        "method": "memory.stats"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 10010.76887495583
+    },
+    {
+      "connection_epoch": 2,
+      "kind": "rpc-error",
+      "payload": {
+        "code": -32099,
+        "method": "memory.listFacts"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 10010.771374974865
+    },
+    {
+      "connection_epoch": 2,
+      "kind": "qa-diagnostic",
+      "payload": {
+        "observed_session": "agent:main:main:s2",
+        "request_session": "agent:main:main:s2",
+        "result_keys": [
+          "count",
+          "items",
+          "session_key"
+        ],
+        "rpc": "artifacts.list"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 10011.13841595361
+    },
+    {
+      "connection_epoch": 2,
+      "kind": "artifact-refreshed",
+      "payload": {
+        "count": 4,
+        "refetched": true
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 10011.176457977854
+    },
+    {
+      "connection_epoch": 2,
+      "kind": "qa-diagnostic",
+      "payload": {
+        "observed_session": "agent:main:main:s2",
+        "request_session": "agent:main:main:s2",
+        "result_keys": [
+          "active_run",
+          "active_run_elapsed_ms",
+          "count",
+          "messages",
+          "pending",
+          "plan",
+          "session",
+          "session_key",
+          "total"
+        ],
+        "rpc": "chat.history"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 10012.603915994987
+    },
+    {
+      "connection_epoch": 2,
+      "kind": "qa-diagnostic",
+      "payload": {
+        "observed_session": "agent:main:main:s2",
+        "result_keys": [
+          "count",
+          "sessions"
+        ],
+        "rpc": "sessions.list"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 10013.165332959034
+    },
+    {
+      "connection_epoch": 2,
+      "kind": "snapshot",
+      "payload": {
+        "artifacts": true,
+        "history": true,
+        "sessions": true
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 10013.181082962546
+    },
+    {
+      "connection_epoch": 2,
+      "kind": "reconnected",
+      "payload": {},
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 10013.187290984206
+    },
+    {
+      "connection_epoch": 2,
+      "kind": "rejected",
+      "payload": {
+        "after": "{\"messages\":\"\u4eca\u5929Phase9 isolated QA: reply briefly with PHASE9_RUNTIME_PROOF, and create a small text artifact named phase9-proof.txt containing that marker.22:07\u590d\u5236PHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5\ud83d\udd27{\\\"content\\\":\\\"Controlled runtime fixture. Actual Gateway artifact storage and notification.\\\",\\\"figures\\\":[],\\\"title\\\":\\\"Phase9 runtime proof\\\"}\ud83d\udd27\\\"{\\\\\\\"artifact_id\\\\\\\":\\\\\\\"9b98fb07-9094-4358-8f46-35424a955cad\\\\\\\",\\\\\\\"filename\\\\\\\":\\\\\\\"phase9-runtime-proof.html\\\\\\\",\\\\\\\"published\\\\\\\":\\\\\\\"Published \\\\\\\\\\\\\\\"Phase9 runtime proof\\\\\\\\\\\\\\\" (8.2 KB) and stored it with this session. This turn came from the \\\\\\\\\\\\\\\"gui:chat\\\\\\\\\\\\\\\" channel, which has no artifacts pane and no browser tab, so the user has NOT seen it \u2014 do not tell them it opened. Summarise the substance in your reply so the message stands on its own.\\\\\\\",\\\\\\\"size\\\\\\\":8404,\\\\\\\"skipped_figures\\\\\\\":[]}\\\"PHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5\ud83d\udd27{\\\"content\\\":\\\"Controlled runtime fixture. Actual Gateway artifact storage and notification.\\\",\\\"figures\\\":[],\\\"title\\\":\\\"Phase9 runtime proof\\\"}\ud83d\udd27\\\"{\\\\\\\"artifact_id\\\\\\\":\\\\\\\"d5c9b7c8-5ed1-4d36-be30-240df5009d84\\\\\\\",\\\\\\\"filename\\\\\\\":\\\\\\\"phase9-runtime-proof.html\\\\\\\",\\\\\\\"published\\\\\\\":\\\\\\\"Published \\\\\\\\\\\\\\\"Phase9 runtime proof\\\\\\\\\\\\\\\" (8.2 KB) and stored it with this session. This turn came from the \\\\\\\\\\\\\\\"gui:chat\\\\\\\\\\\\\\\" channel, which has no artifacts pane and no browser tab, so the user has NOT seen it \u2014 do not tell them it opened. Summarise the substance in your reply so the message stands on its own.\\\\\\\",\\\\\\\"size\\\\\\\":8404,\\\\\\\"skipped_figures\\\\\\\":[]}\\\"PHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5\ud83d\udd27{\\\"content\\\":\\\"Controlled runtime fixture. Actual Gateway artifact storage and notification.\\\",\\\"figures\\\":[],\\\"title\\\":\\\"Phase9 runtime proof\\\"}\ud83d\udd27\\\"{\\\\\\\"artifact_id\\\\\\\":\\\\\\\"d711e867-47d5-498d-8de5-c349a5d7199b\\\\\\\",\\\\\\\"filename\\\\\\\":\\\\\\\"phase9-runtime-proof.html\\\\\\\",\\\\\\\"published\\\\\\\":\\\\\\\"Published \\\\\\\\\\\\\\\"Phase9 runtime proof\\\\\\\\\\\\\\\" (8.2 KB) and stored it with this session. This turn came from the \\\\\\\\\\\\\\\"gui:chat\\\\\\\\\\\\\\\" channel, which has no artifacts pane and no browser tab, so the user has NOT seen it \u2014 do not tell them it opened. Summarise the substance in your reply so the message stands on its own.\\\\\\\",\\\\\\\"size\\\\\\\":8404,\\\\\\\"skipped_figures\\\\\\\":[]}\\\"PHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5\ud83d\udd27{\\\"content\\\":\\\"Controlled runtime fixture. Actual Gateway artifact storage and notification.\\\",\\\"figures\\\":[],\\\"title\\\":\\\"Phase9 runtime proof\\\"}\ud83d\udd27\\\"{\\\\\\\"artifact_id\\\\\\\":\\\\\\\"1df2bc17-9780-4ed3-a99c-0d8f53bd3017\\\\\\\",\\\\\\\"filename\\\\\\\":\\\\\\\"phase9-runtime-proof.html\\\\\\\",\\\\\\\"published\\\\\\\":\\\\\\\"Published \\\\\\\\\\\\\\\"Phase9 runtime proof\\\\\\\\\\\\\\\" (8.2 KB) and stored it with this session. This turn came from the \\\\\\\\\\\\\\\"gui:chat\\\\\\\\\\\\\\\" channel, which has no artifacts pane and no browser tab, so the user has NOT seen it \u2014 do not tell them it opened. Summarise the substance in your reply so the message stands on its own.\\\\\\\",\\\\\\\"size\\\\\\\":8404,\\\\\\\"skipped_figures\\\\\\\":[]}\\\"PHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5[verifier veto] tool 'artifact_publish' invoked 5 consecutive times with identical arguments \u2014 try a different approach or summarize what you've found22:07\u590d\u5236\ud83d\udd27call not executed \u2014 verifier vetoPHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5[verifier veto] tool 'artifact_publish' invoked 6 consecutive times with identical arguments \u2014 try a different approach or summarize what you've found22:07\u590d\u5236\ud83d\udd27call not executed \u2014 verifier vetoPHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5[verifier veto] tool 'artifact_publish' invoked 7 consecutive times with identical arguments \u2014 try a different approach or summarize what you've found22:07\u590d\u5236\ud83d\udd27call not executed \u2014 verifier vetoPHASE9_RUNTIME_PROOF\\n\u2022artifact_publish\u2713\u25b8PHASE9_RUNTIME_PROOF\\nPHASE9_RUNTIME_PROOF\\nPHASE9_RUNTIME_PROOF\\nPHASE9_RUNTIME_PROOF\\nPHASE9_RUNTIME_PROOF\\nPHASE9_RUNTIME_PROOF\\nPHASE9_RUNTIME_PROOF\\n\u2248$0.0000128 tok\u26a0\ufe0f\u88ab Stop hook \u62e6\u622a22:07\u590d\u5236\u91cd\u8bd5[stop hook halt] tool 'artifact_publish' invoked 8 consecutive times with identical arguments despite repeated feedback \u2014 terminating an unproductive loop22:07\u590d\u5236\ud83d\udd27call not executed \u2014 tool-loop halt\u63a8\u7406\u25b6\",\"artifacts\":[[\"\u25c6phase9-runtime-proof.html8.2 KB\u6253\u5f00\",\"http://127.0.0.1:56512/artifact/Cajh74QZK0AjBD0be3MHopNnzHLhl7Z-RKzAEc9iFfc/1df2bc17-9780-4ed3-a99c-0d8f53bd3017/phase9-runtime-proof.html\"],[\"\u25c6phase9-runtime-proof.html8.2 KB\u6253\u5f00\",\"http://127.0.0.1:56512/artifact/Cajh74QZK0AjBD0be3MHopNnzHLhl7Z-RKzAEc9iFfc/d711e867-47d5-498d-8de5-c349a5d7199b/phase9-runtime-proof.html\"],[\"\u25c6phase9-runtime-proof.html8.2 KB\u6253\u5f00\",\"http://127.0.0.1:56512/artifact/Cajh74QZK0AjBD0be3MHopNnzHLhl7Z-RKzAEc9iFfc/d5c9b7c8-5ed1-4d36-be30-240df5009d84/phase9-runtime-proof.html\"],[\"\u25c6phase9-runtime-proof.html8.2 KB\u6253\u5f00\",\"http://127.0.0.1:56512/artifact/Cajh74QZK0AjBD0be3MHopNnzHLhl7Z-RKzAEc9iFfc/9b98fb07-9094-4358-8f46-35424a955cad/phase9-runtime-proof.html\"]]}",
+        "before": "{\"messages\":\"\u4eca\u5929Phase9 isolated QA: reply briefly with PHASE9_RUNTIME_PROOF, and create a small text artifact named phase9-proof.txt containing that marker.22:07\u590d\u5236PHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5\ud83d\udd27{\\\"content\\\":\\\"Controlled runtime fixture. Actual Gateway artifact storage and notification.\\\",\\\"figures\\\":[],\\\"title\\\":\\\"Phase9 runtime proof\\\"}\ud83d\udd27\\\"{\\\\\\\"artifact_id\\\\\\\":\\\\\\\"9b98fb07-9094-4358-8f46-35424a955cad\\\\\\\",\\\\\\\"filename\\\\\\\":\\\\\\\"phase9-runtime-proof.html\\\\\\\",\\\\\\\"published\\\\\\\":\\\\\\\"Published \\\\\\\\\\\\\\\"Phase9 runtime proof\\\\\\\\\\\\\\\" (8.2 KB) and stored it with this session. This turn came from the \\\\\\\\\\\\\\\"gui:chat\\\\\\\\\\\\\\\" channel, which has no artifacts pane and no browser tab, so the user has NOT seen it \u2014 do not tell them it opened. Summarise the substance in your reply so the message stands on its own.\\\\\\\",\\\\\\\"size\\\\\\\":8404,\\\\\\\"skipped_figures\\\\\\\":[]}\\\"PHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5\ud83d\udd27{\\\"content\\\":\\\"Controlled runtime fixture. Actual Gateway artifact storage and notification.\\\",\\\"figures\\\":[],\\\"title\\\":\\\"Phase9 runtime proof\\\"}\ud83d\udd27\\\"{\\\\\\\"artifact_id\\\\\\\":\\\\\\\"d5c9b7c8-5ed1-4d36-be30-240df5009d84\\\\\\\",\\\\\\\"filename\\\\\\\":\\\\\\\"phase9-runtime-proof.html\\\\\\\",\\\\\\\"published\\\\\\\":\\\\\\\"Published \\\\\\\\\\\\\\\"Phase9 runtime proof\\\\\\\\\\\\\\\" (8.2 KB) and stored it with this session. This turn came from the \\\\\\\\\\\\\\\"gui:chat\\\\\\\\\\\\\\\" channel, which has no artifacts pane and no browser tab, so the user has NOT seen it \u2014 do not tell them it opened. Summarise the substance in your reply so the message stands on its own.\\\\\\\",\\\\\\\"size\\\\\\\":8404,\\\\\\\"skipped_figures\\\\\\\":[]}\\\"PHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5\ud83d\udd27{\\\"content\\\":\\\"Controlled runtime fixture. Actual Gateway artifact storage and notification.\\\",\\\"figures\\\":[],\\\"title\\\":\\\"Phase9 runtime proof\\\"}\ud83d\udd27\\\"{\\\\\\\"artifact_id\\\\\\\":\\\\\\\"d711e867-47d5-498d-8de5-c349a5d7199b\\\\\\\",\\\\\\\"filename\\\\\\\":\\\\\\\"phase9-runtime-proof.html\\\\\\\",\\\\\\\"published\\\\\\\":\\\\\\\"Published \\\\\\\\\\\\\\\"Phase9 runtime proof\\\\\\\\\\\\\\\" (8.2 KB) and stored it with this session. This turn came from the \\\\\\\\\\\\\\\"gui:chat\\\\\\\\\\\\\\\" channel, which has no artifacts pane and no browser tab, so the user has NOT seen it \u2014 do not tell them it opened. Summarise the substance in your reply so the message stands on its own.\\\\\\\",\\\\\\\"size\\\\\\\":8404,\\\\\\\"skipped_figures\\\\\\\":[]}\\\"PHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5\ud83d\udd27{\\\"content\\\":\\\"Controlled runtime fixture. Actual Gateway artifact storage and notification.\\\",\\\"figures\\\":[],\\\"title\\\":\\\"Phase9 runtime proof\\\"}\ud83d\udd27\\\"{\\\\\\\"artifact_id\\\\\\\":\\\\\\\"1df2bc17-9780-4ed3-a99c-0d8f53bd3017\\\\\\\",\\\\\\\"filename\\\\\\\":\\\\\\\"phase9-runtime-proof.html\\\\\\\",\\\\\\\"published\\\\\\\":\\\\\\\"Published \\\\\\\\\\\\\\\"Phase9 runtime proof\\\\\\\\\\\\\\\" (8.2 KB) and stored it with this session. This turn came from the \\\\\\\\\\\\\\\"gui:chat\\\\\\\\\\\\\\\" channel, which has no artifacts pane and no browser tab, so the user has NOT seen it \u2014 do not tell them it opened. Summarise the substance in your reply so the message stands on its own.\\\\\\\",\\\\\\\"size\\\\\\\":8404,\\\\\\\"skipped_figures\\\\\\\":[]}\\\"PHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5[verifier veto] tool 'artifact_publish' invoked 5 consecutive times with identical arguments \u2014 try a different approach or summarize what you've found22:07\u590d\u5236\ud83d\udd27call not executed \u2014 verifier vetoPHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5[verifier veto] tool 'artifact_publish' invoked 6 consecutive times with identical arguments \u2014 try a different approach or summarize what you've found22:07\u590d\u5236\ud83d\udd27call not executed \u2014 verifier vetoPHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5[verifier veto] tool 'artifact_publish' invoked 7 consecutive times with identical arguments \u2014 try a different approach or summarize what you've found22:07\u590d\u5236\ud83d\udd27call not executed \u2014 verifier vetoPHASE9_RUNTIME_PROOF\\n\u2022artifact_publish\u2713\u25b8PHASE9_RUNTIME_PROOF\\nPHASE9_RUNTIME_PROOF\\nPHASE9_RUNTIME_PROOF\\nPHASE9_RUNTIME_PROOF\\nPHASE9_RUNTIME_PROOF\\nPHASE9_RUNTIME_PROOF\\nPHASE9_RUNTIME_PROOF\\n\u2248$0.0000128 tok\u26a0\ufe0f\u88ab Stop hook \u62e6\u622a22:07\u590d\u5236\u91cd\u8bd5[stop hook halt] tool 'artifact_publish' invoked 8 consecutive times with identical arguments despite repeated feedback \u2014 terminating an unproductive loop22:07\u590d\u5236\ud83d\udd27call not executed \u2014 tool-loop halt\u63a8\u7406\u25b6\",\"artifacts\":[[\"\u25c6phase9-runtime-proof.html8.2 KB\u6253\u5f00\",\"http://127.0.0.1:56512/artifact/Cajh74QZK0AjBD0be3MHopNnzHLhl7Z-RKzAEc9iFfc/1df2bc17-9780-4ed3-a99c-0d8f53bd3017/phase9-runtime-proof.html\"],[\"\u25c6phase9-runtime-proof.html8.2 KB\u6253\u5f00\",\"http://127.0.0.1:56512/artifact/Cajh74QZK0AjBD0be3MHopNnzHLhl7Z-RKzAEc9iFfc/d711e867-47d5-498d-8de5-c349a5d7199b/phase9-runtime-proof.html\"],[\"\u25c6phase9-runtime-proof.html8.2 KB\u6253\u5f00\",\"http://127.0.0.1:56512/artifact/Cajh74QZK0AjBD0be3MHopNnzHLhl7Z-RKzAEc9iFfc/d5c9b7c8-5ed1-4d36-be30-240df5009d84/phase9-runtime-proof.html\"],[\"\u25c6phase9-runtime-proof.html8.2 KB\u6253\u5f00\",\"http://127.0.0.1:56512/artifact/Cajh74QZK0AjBD0be3MHopNnzHLhl7Z-RKzAEc9iFfc/9b98fb07-9094-4358-8f46-35424a955cad/phase9-runtime-proof.html\"]]}",
+        "boundary": "panel_ingress",
+        "current_control_accepted": true,
+        "handler_invoked": true,
+        "reason": "old_epoch",
+        "stale_frame_accepted": false
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 10283.828040992375
+    },
+    {
+      "connection_epoch": 2,
+      "kind": "rejected",
+      "payload": {
+        "after": "{\"messages\":\"\u4eca\u5929Phase9 isolated QA: reply briefly with PHASE9_RUNTIME_PROOF, and create a small text artifact named phase9-proof.txt containing that marker.22:07\u590d\u5236PHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5\ud83d\udd27{\\\"content\\\":\\\"Controlled runtime fixture. Actual Gateway artifact storage and notification.\\\",\\\"figures\\\":[],\\\"title\\\":\\\"Phase9 runtime proof\\\"}\ud83d\udd27\\\"{\\\\\\\"artifact_id\\\\\\\":\\\\\\\"9b98fb07-9094-4358-8f46-35424a955cad\\\\\\\",\\\\\\\"filename\\\\\\\":\\\\\\\"phase9-runtime-proof.html\\\\\\\",\\\\\\\"published\\\\\\\":\\\\\\\"Published \\\\\\\\\\\\\\\"Phase9 runtime proof\\\\\\\\\\\\\\\" (8.2 KB) and stored it with this session. This turn came from the \\\\\\\\\\\\\\\"gui:chat\\\\\\\\\\\\\\\" channel, which has no artifacts pane and no browser tab, so the user has NOT seen it \u2014 do not tell them it opened. Summarise the substance in your reply so the message stands on its own.\\\\\\\",\\\\\\\"size\\\\\\\":8404,\\\\\\\"skipped_figures\\\\\\\":[]}\\\"PHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5\ud83d\udd27{\\\"content\\\":\\\"Controlled runtime fixture. Actual Gateway artifact storage and notification.\\\",\\\"figures\\\":[],\\\"title\\\":\\\"Phase9 runtime proof\\\"}\ud83d\udd27\\\"{\\\\\\\"artifact_id\\\\\\\":\\\\\\\"d5c9b7c8-5ed1-4d36-be30-240df5009d84\\\\\\\",\\\\\\\"filename\\\\\\\":\\\\\\\"phase9-runtime-proof.html\\\\\\\",\\\\\\\"published\\\\\\\":\\\\\\\"Published \\\\\\\\\\\\\\\"Phase9 runtime proof\\\\\\\\\\\\\\\" (8.2 KB) and stored it with this session. This turn came from the \\\\\\\\\\\\\\\"gui:chat\\\\\\\\\\\\\\\" channel, which has no artifacts pane and no browser tab, so the user has NOT seen it \u2014 do not tell them it opened. Summarise the substance in your reply so the message stands on its own.\\\\\\\",\\\\\\\"size\\\\\\\":8404,\\\\\\\"skipped_figures\\\\\\\":[]}\\\"PHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5\ud83d\udd27{\\\"content\\\":\\\"Controlled runtime fixture. Actual Gateway artifact storage and notification.\\\",\\\"figures\\\":[],\\\"title\\\":\\\"Phase9 runtime proof\\\"}\ud83d\udd27\\\"{\\\\\\\"artifact_id\\\\\\\":\\\\\\\"d711e867-47d5-498d-8de5-c349a5d7199b\\\\\\\",\\\\\\\"filename\\\\\\\":\\\\\\\"phase9-runtime-proof.html\\\\\\\",\\\\\\\"published\\\\\\\":\\\\\\\"Published \\\\\\\\\\\\\\\"Phase9 runtime proof\\\\\\\\\\\\\\\" (8.2 KB) and stored it with this session. This turn came from the \\\\\\\\\\\\\\\"gui:chat\\\\\\\\\\\\\\\" channel, which has no artifacts pane and no browser tab, so the user has NOT seen it \u2014 do not tell them it opened. Summarise the substance in your reply so the message stands on its own.\\\\\\\",\\\\\\\"size\\\\\\\":8404,\\\\\\\"skipped_figures\\\\\\\":[]}\\\"PHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5\ud83d\udd27{\\\"content\\\":\\\"Controlled runtime fixture. Actual Gateway artifact storage and notification.\\\",\\\"figures\\\":[],\\\"title\\\":\\\"Phase9 runtime proof\\\"}\ud83d\udd27\\\"{\\\\\\\"artifact_id\\\\\\\":\\\\\\\"1df2bc17-9780-4ed3-a99c-0d8f53bd3017\\\\\\\",\\\\\\\"filename\\\\\\\":\\\\\\\"phase9-runtime-proof.html\\\\\\\",\\\\\\\"published\\\\\\\":\\\\\\\"Published \\\\\\\\\\\\\\\"Phase9 runtime proof\\\\\\\\\\\\\\\" (8.2 KB) and stored it with this session. This turn came from the \\\\\\\\\\\\\\\"gui:chat\\\\\\\\\\\\\\\" channel, which has no artifacts pane and no browser tab, so the user has NOT seen it \u2014 do not tell them it opened. Summarise the substance in your reply so the message stands on its own.\\\\\\\",\\\\\\\"size\\\\\\\":8404,\\\\\\\"skipped_figures\\\\\\\":[]}\\\"PHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5[verifier veto] tool 'artifact_publish' invoked 5 consecutive times with identical arguments \u2014 try a different approach or summarize what you've found22:07\u590d\u5236\ud83d\udd27call not executed \u2014 verifier vetoPHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5[verifier veto] tool 'artifact_publish' invoked 6 consecutive times with identical arguments \u2014 try a different approach or summarize what you've found22:07\u590d\u5236\ud83d\udd27call not executed \u2014 verifier vetoPHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5[verifier veto] tool 'artifact_publish' invoked 7 consecutive times with identical arguments \u2014 try a different approach or summarize what you've found22:07\u590d\u5236\ud83d\udd27call not executed \u2014 verifier vetoPHASE9_RUNTIME_PROOF\\n\u2022artifact_publish\u2713\u25b8PHASE9_RUNTIME_PROOF\\nPHASE9_RUNTIME_PROOF\\nPHASE9_RUNTIME_PROOF\\nPHASE9_RUNTIME_PROOF\\nPHASE9_RUNTIME_PROOF\\nPHASE9_RUNTIME_PROOF\\nPHASE9_RUNTIME_PROOF\\n\u2248$0.0000128 tok\u26a0\ufe0f\u88ab Stop hook \u62e6\u622a22:07\u590d\u5236\u91cd\u8bd5[stop hook halt] tool 'artifact_publish' invoked 8 consecutive times with identical arguments despite repeated feedback \u2014 terminating an unproductive loop22:07\u590d\u5236\ud83d\udd27call not executed \u2014 tool-loop halt\u63a8\u7406\u25b6\",\"artifacts\":[[\"\u25c6phase9-runtime-proof.html8.2 KB\u6253\u5f00\",\"http://127.0.0.1:56512/artifact/Cajh74QZK0AjBD0be3MHopNnzHLhl7Z-RKzAEc9iFfc/1df2bc17-9780-4ed3-a99c-0d8f53bd3017/phase9-runtime-proof.html\"],[\"\u25c6phase9-runtime-proof.html8.2 KB\u6253\u5f00\",\"http://127.0.0.1:56512/artifact/Cajh74QZK0AjBD0be3MHopNnzHLhl7Z-RKzAEc9iFfc/d711e867-47d5-498d-8de5-c349a5d7199b/phase9-runtime-proof.html\"],[\"\u25c6phase9-runtime-proof.html8.2 KB\u6253\u5f00\",\"http://127.0.0.1:56512/artifact/Cajh74QZK0AjBD0be3MHopNnzHLhl7Z-RKzAEc9iFfc/d5c9b7c8-5ed1-4d36-be30-240df5009d84/phase9-runtime-proof.html\"],[\"\u25c6phase9-runtime-proof.html8.2 KB\u6253\u5f00\",\"http://127.0.0.1:56512/artifact/Cajh74QZK0AjBD0be3MHopNnzHLhl7Z-RKzAEc9iFfc/9b98fb07-9094-4358-8f46-35424a955cad/phase9-runtime-proof.html\"]]}",
+        "before": "{\"messages\":\"\u4eca\u5929Phase9 isolated QA: reply briefly with PHASE9_RUNTIME_PROOF, and create a small text artifact named phase9-proof.txt containing that marker.22:07\u590d\u5236PHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5\ud83d\udd27{\\\"content\\\":\\\"Controlled runtime fixture. Actual Gateway artifact storage and notification.\\\",\\\"figures\\\":[],\\\"title\\\":\\\"Phase9 runtime proof\\\"}\ud83d\udd27\\\"{\\\\\\\"artifact_id\\\\\\\":\\\\\\\"9b98fb07-9094-4358-8f46-35424a955cad\\\\\\\",\\\\\\\"filename\\\\\\\":\\\\\\\"phase9-runtime-proof.html\\\\\\\",\\\\\\\"published\\\\\\\":\\\\\\\"Published \\\\\\\\\\\\\\\"Phase9 runtime proof\\\\\\\\\\\\\\\" (8.2 KB) and stored it with this session. This turn came from the \\\\\\\\\\\\\\\"gui:chat\\\\\\\\\\\\\\\" channel, which has no artifacts pane and no browser tab, so the user has NOT seen it \u2014 do not tell them it opened. Summarise the substance in your reply so the message stands on its own.\\\\\\\",\\\\\\\"size\\\\\\\":8404,\\\\\\\"skipped_figures\\\\\\\":[]}\\\"PHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5\ud83d\udd27{\\\"content\\\":\\\"Controlled runtime fixture. Actual Gateway artifact storage and notification.\\\",\\\"figures\\\":[],\\\"title\\\":\\\"Phase9 runtime proof\\\"}\ud83d\udd27\\\"{\\\\\\\"artifact_id\\\\\\\":\\\\\\\"d5c9b7c8-5ed1-4d36-be30-240df5009d84\\\\\\\",\\\\\\\"filename\\\\\\\":\\\\\\\"phase9-runtime-proof.html\\\\\\\",\\\\\\\"published\\\\\\\":\\\\\\\"Published \\\\\\\\\\\\\\\"Phase9 runtime proof\\\\\\\\\\\\\\\" (8.2 KB) and stored it with this session. This turn came from the \\\\\\\\\\\\\\\"gui:chat\\\\\\\\\\\\\\\" channel, which has no artifacts pane and no browser tab, so the user has NOT seen it \u2014 do not tell them it opened. Summarise the substance in your reply so the message stands on its own.\\\\\\\",\\\\\\\"size\\\\\\\":8404,\\\\\\\"skipped_figures\\\\\\\":[]}\\\"PHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5\ud83d\udd27{\\\"content\\\":\\\"Controlled runtime fixture. Actual Gateway artifact storage and notification.\\\",\\\"figures\\\":[],\\\"title\\\":\\\"Phase9 runtime proof\\\"}\ud83d\udd27\\\"{\\\\\\\"artifact_id\\\\\\\":\\\\\\\"d711e867-47d5-498d-8de5-c349a5d7199b\\\\\\\",\\\\\\\"filename\\\\\\\":\\\\\\\"phase9-runtime-proof.html\\\\\\\",\\\\\\\"published\\\\\\\":\\\\\\\"Published \\\\\\\\\\\\\\\"Phase9 runtime proof\\\\\\\\\\\\\\\" (8.2 KB) and stored it with this session. This turn came from the \\\\\\\\\\\\\\\"gui:chat\\\\\\\\\\\\\\\" channel, which has no artifacts pane and no browser tab, so the user has NOT seen it \u2014 do not tell them it opened. Summarise the substance in your reply so the message stands on its own.\\\\\\\",\\\\\\\"size\\\\\\\":8404,\\\\\\\"skipped_figures\\\\\\\":[]}\\\"PHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5\ud83d\udd27{\\\"content\\\":\\\"Controlled runtime fixture. Actual Gateway artifact storage and notification.\\\",\\\"figures\\\":[],\\\"title\\\":\\\"Phase9 runtime proof\\\"}\ud83d\udd27\\\"{\\\\\\\"artifact_id\\\\\\\":\\\\\\\"1df2bc17-9780-4ed3-a99c-0d8f53bd3017\\\\\\\",\\\\\\\"filename\\\\\\\":\\\\\\\"phase9-runtime-proof.html\\\\\\\",\\\\\\\"published\\\\\\\":\\\\\\\"Published \\\\\\\\\\\\\\\"Phase9 runtime proof\\\\\\\\\\\\\\\" (8.2 KB) and stored it with this session. This turn came from the \\\\\\\\\\\\\\\"gui:chat\\\\\\\\\\\\\\\" channel, which has no artifacts pane and no browser tab, so the user has NOT seen it \u2014 do not tell them it opened. Summarise the substance in your reply so the message stands on its own.\\\\\\\",\\\\\\\"size\\\\\\\":8404,\\\\\\\"skipped_figures\\\\\\\":[]}\\\"PHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5[verifier veto] tool 'artifact_publish' invoked 5 consecutive times with identical arguments \u2014 try a different approach or summarize what you've found22:07\u590d\u5236\ud83d\udd27call not executed \u2014 verifier vetoPHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5[verifier veto] tool 'artifact_publish' invoked 6 consecutive times with identical arguments \u2014 try a different approach or summarize what you've found22:07\u590d\u5236\ud83d\udd27call not executed \u2014 verifier vetoPHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5[verifier veto] tool 'artifact_publish' invoked 7 consecutive times with identical arguments \u2014 try a different approach or summarize what you've found22:07\u590d\u5236\ud83d\udd27call not executed \u2014 verifier vetoPHASE9_RUNTIME_PROOF\\n\u2022artifact_publish\u2713\u25b8PHASE9_RUNTIME_PROOF\\nPHASE9_RUNTIME_PROOF\\nPHASE9_RUNTIME_PROOF\\nPHASE9_RUNTIME_PROOF\\nPHASE9_RUNTIME_PROOF\\nPHASE9_RUNTIME_PROOF\\nPHASE9_RUNTIME_PROOF\\n\u2248$0.0000128 tok\u26a0\ufe0f\u88ab Stop hook \u62e6\u622a22:07\u590d\u5236\u91cd\u8bd5[stop hook halt] tool 'artifact_publish' invoked 8 consecutive times with identical arguments despite repeated feedback \u2014 terminating an unproductive loop22:07\u590d\u5236\ud83d\udd27call not executed \u2014 tool-loop halt\u63a8\u7406\u25b6\",\"artifacts\":[[\"\u25c6phase9-runtime-proof.html8.2 KB\u6253\u5f00\",\"http://127.0.0.1:56512/artifact/Cajh74QZK0AjBD0be3MHopNnzHLhl7Z-RKzAEc9iFfc/1df2bc17-9780-4ed3-a99c-0d8f53bd3017/phase9-runtime-proof.html\"],[\"\u25c6phase9-runtime-proof.html8.2 KB\u6253\u5f00\",\"http://127.0.0.1:56512/artifact/Cajh74QZK0AjBD0be3MHopNnzHLhl7Z-RKzAEc9iFfc/d711e867-47d5-498d-8de5-c349a5d7199b/phase9-runtime-proof.html\"],[\"\u25c6phase9-runtime-proof.html8.2 KB\u6253\u5f00\",\"http://127.0.0.1:56512/artifact/Cajh74QZK0AjBD0be3MHopNnzHLhl7Z-RKzAEc9iFfc/d5c9b7c8-5ed1-4d36-be30-240df5009d84/phase9-runtime-proof.html\"],[\"\u25c6phase9-runtime-proof.html8.2 KB\u6253\u5f00\",\"http://127.0.0.1:56512/artifact/Cajh74QZK0AjBD0be3MHopNnzHLhl7Z-RKzAEc9iFfc/9b98fb07-9094-4358-8f46-35424a955cad/phase9-runtime-proof.html\"]]}",
+        "reason": "wrong_session"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 10316.780040971935
+    },
+    {
+      "connection_epoch": 2,
+      "kind": "rejected",
+      "payload": {
+        "after": "{\"messages\":\"\u4eca\u5929Phase9 isolated QA: reply briefly with PHASE9_RUNTIME_PROOF, and create a small text artifact named phase9-proof.txt containing that marker.22:07\u590d\u5236PHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5\ud83d\udd27{\\\"content\\\":\\\"Controlled runtime fixture. Actual Gateway artifact storage and notification.\\\",\\\"figures\\\":[],\\\"title\\\":\\\"Phase9 runtime proof\\\"}\ud83d\udd27\\\"{\\\\\\\"artifact_id\\\\\\\":\\\\\\\"9b98fb07-9094-4358-8f46-35424a955cad\\\\\\\",\\\\\\\"filename\\\\\\\":\\\\\\\"phase9-runtime-proof.html\\\\\\\",\\\\\\\"published\\\\\\\":\\\\\\\"Published \\\\\\\\\\\\\\\"Phase9 runtime proof\\\\\\\\\\\\\\\" (8.2 KB) and stored it with this session. This turn came from the \\\\\\\\\\\\\\\"gui:chat\\\\\\\\\\\\\\\" channel, which has no artifacts pane and no browser tab, so the user has NOT seen it \u2014 do not tell them it opened. Summarise the substance in your reply so the message stands on its own.\\\\\\\",\\\\\\\"size\\\\\\\":8404,\\\\\\\"skipped_figures\\\\\\\":[]}\\\"PHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5\ud83d\udd27{\\\"content\\\":\\\"Controlled runtime fixture. Actual Gateway artifact storage and notification.\\\",\\\"figures\\\":[],\\\"title\\\":\\\"Phase9 runtime proof\\\"}\ud83d\udd27\\\"{\\\\\\\"artifact_id\\\\\\\":\\\\\\\"d5c9b7c8-5ed1-4d36-be30-240df5009d84\\\\\\\",\\\\\\\"filename\\\\\\\":\\\\\\\"phase9-runtime-proof.html\\\\\\\",\\\\\\\"published\\\\\\\":\\\\\\\"Published \\\\\\\\\\\\\\\"Phase9 runtime proof\\\\\\\\\\\\\\\" (8.2 KB) and stored it with this session. This turn came from the \\\\\\\\\\\\\\\"gui:chat\\\\\\\\\\\\\\\" channel, which has no artifacts pane and no browser tab, so the user has NOT seen it \u2014 do not tell them it opened. Summarise the substance in your reply so the message stands on its own.\\\\\\\",\\\\\\\"size\\\\\\\":8404,\\\\\\\"skipped_figures\\\\\\\":[]}\\\"PHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5\ud83d\udd27{\\\"content\\\":\\\"Controlled runtime fixture. Actual Gateway artifact storage and notification.\\\",\\\"figures\\\":[],\\\"title\\\":\\\"Phase9 runtime proof\\\"}\ud83d\udd27\\\"{\\\\\\\"artifact_id\\\\\\\":\\\\\\\"d711e867-47d5-498d-8de5-c349a5d7199b\\\\\\\",\\\\\\\"filename\\\\\\\":\\\\\\\"phase9-runtime-proof.html\\\\\\\",\\\\\\\"published\\\\\\\":\\\\\\\"Published \\\\\\\\\\\\\\\"Phase9 runtime proof\\\\\\\\\\\\\\\" (8.2 KB) and stored it with this session. This turn came from the \\\\\\\\\\\\\\\"gui:chat\\\\\\\\\\\\\\\" channel, which has no artifacts pane and no browser tab, so the user has NOT seen it \u2014 do not tell them it opened. Summarise the substance in your reply so the message stands on its own.\\\\\\\",\\\\\\\"size\\\\\\\":8404,\\\\\\\"skipped_figures\\\\\\\":[]}\\\"PHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5\ud83d\udd27{\\\"content\\\":\\\"Controlled runtime fixture. Actual Gateway artifact storage and notification.\\\",\\\"figures\\\":[],\\\"title\\\":\\\"Phase9 runtime proof\\\"}\ud83d\udd27\\\"{\\\\\\\"artifact_id\\\\\\\":\\\\\\\"1df2bc17-9780-4ed3-a99c-0d8f53bd3017\\\\\\\",\\\\\\\"filename\\\\\\\":\\\\\\\"phase9-runtime-proof.html\\\\\\\",\\\\\\\"published\\\\\\\":\\\\\\\"Published \\\\\\\\\\\\\\\"Phase9 runtime proof\\\\\\\\\\\\\\\" (8.2 KB) and stored it with this session. This turn came from the \\\\\\\\\\\\\\\"gui:chat\\\\\\\\\\\\\\\" channel, which has no artifacts pane and no browser tab, so the user has NOT seen it \u2014 do not tell them it opened. Summarise the substance in your reply so the message stands on its own.\\\\\\\",\\\\\\\"size\\\\\\\":8404,\\\\\\\"skipped_figures\\\\\\\":[]}\\\"PHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5[verifier veto] tool 'artifact_publish' invoked 5 consecutive times with identical arguments \u2014 try a different approach or summarize what you've found22:07\u590d\u5236\ud83d\udd27call not executed \u2014 verifier vetoPHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5[verifier veto] tool 'artifact_publish' invoked 6 consecutive times with identical arguments \u2014 try a different approach or summarize what you've found22:07\u590d\u5236\ud83d\udd27call not executed \u2014 verifier vetoPHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5[verifier veto] tool 'artifact_publish' invoked 7 consecutive times with identical arguments \u2014 try a different approach or summarize what you've found22:07\u590d\u5236\ud83d\udd27call not executed \u2014 verifier vetoPHASE9_RUNTIME_PROOF\\n\u2022artifact_publish\u2713\u25b8PHASE9_RUNTIME_PROOF\\nPHASE9_RUNTIME_PROOF\\nPHASE9_RUNTIME_PROOF\\nPHASE9_RUNTIME_PROOF\\nPHASE9_RUNTIME_PROOF\\nPHASE9_RUNTIME_PROOF\\nPHASE9_RUNTIME_PROOF\\n\u2248$0.0000128 tok\u26a0\ufe0f\u88ab Stop hook \u62e6\u622a22:07\u590d\u5236\u91cd\u8bd5[stop hook halt] tool 'artifact_publish' invoked 8 consecutive times with identical arguments despite repeated feedback \u2014 terminating an unproductive loop22:07\u590d\u5236\ud83d\udd27call not executed \u2014 tool-loop halt\u63a8\u7406\u25b6\",\"artifacts\":[[\"\u25c6phase9-runtime-proof.html8.2 KB\u6253\u5f00\",\"http://127.0.0.1:56512/artifact/Cajh74QZK0AjBD0be3MHopNnzHLhl7Z-RKzAEc9iFfc/1df2bc17-9780-4ed3-a99c-0d8f53bd3017/phase9-runtime-proof.html\"],[\"\u25c6phase9-runtime-proof.html8.2 KB\u6253\u5f00\",\"http://127.0.0.1:56512/artifact/Cajh74QZK0AjBD0be3MHopNnzHLhl7Z-RKzAEc9iFfc/d711e867-47d5-498d-8de5-c349a5d7199b/phase9-runtime-proof.html\"],[\"\u25c6phase9-runtime-proof.html8.2 KB\u6253\u5f00\",\"http://127.0.0.1:56512/artifact/Cajh74QZK0AjBD0be3MHopNnzHLhl7Z-RKzAEc9iFfc/d5c9b7c8-5ed1-4d36-be30-240df5009d84/phase9-runtime-proof.html\"],[\"\u25c6phase9-runtime-proof.html8.2 KB\u6253\u5f00\",\"http://127.0.0.1:56512/artifact/Cajh74QZK0AjBD0be3MHopNnzHLhl7Z-RKzAEc9iFfc/9b98fb07-9094-4358-8f46-35424a955cad/phase9-runtime-proof.html\"]]}",
+        "before": "{\"messages\":\"\u4eca\u5929Phase9 isolated QA: reply briefly with PHASE9_RUNTIME_PROOF, and create a small text artifact named phase9-proof.txt containing that marker.22:07\u590d\u5236PHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5\ud83d\udd27{\\\"content\\\":\\\"Controlled runtime fixture. Actual Gateway artifact storage and notification.\\\",\\\"figures\\\":[],\\\"title\\\":\\\"Phase9 runtime proof\\\"}\ud83d\udd27\\\"{\\\\\\\"artifact_id\\\\\\\":\\\\\\\"9b98fb07-9094-4358-8f46-35424a955cad\\\\\\\",\\\\\\\"filename\\\\\\\":\\\\\\\"phase9-runtime-proof.html\\\\\\\",\\\\\\\"published\\\\\\\":\\\\\\\"Published \\\\\\\\\\\\\\\"Phase9 runtime proof\\\\\\\\\\\\\\\" (8.2 KB) and stored it with this session. This turn came from the \\\\\\\\\\\\\\\"gui:chat\\\\\\\\\\\\\\\" channel, which has no artifacts pane and no browser tab, so the user has NOT seen it \u2014 do not tell them it opened. Summarise the substance in your reply so the message stands on its own.\\\\\\\",\\\\\\\"size\\\\\\\":8404,\\\\\\\"skipped_figures\\\\\\\":[]}\\\"PHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5\ud83d\udd27{\\\"content\\\":\\\"Controlled runtime fixture. Actual Gateway artifact storage and notification.\\\",\\\"figures\\\":[],\\\"title\\\":\\\"Phase9 runtime proof\\\"}\ud83d\udd27\\\"{\\\\\\\"artifact_id\\\\\\\":\\\\\\\"d5c9b7c8-5ed1-4d36-be30-240df5009d84\\\\\\\",\\\\\\\"filename\\\\\\\":\\\\\\\"phase9-runtime-proof.html\\\\\\\",\\\\\\\"published\\\\\\\":\\\\\\\"Published \\\\\\\\\\\\\\\"Phase9 runtime proof\\\\\\\\\\\\\\\" (8.2 KB) and stored it with this session. This turn came from the \\\\\\\\\\\\\\\"gui:chat\\\\\\\\\\\\\\\" channel, which has no artifacts pane and no browser tab, so the user has NOT seen it \u2014 do not tell them it opened. Summarise the substance in your reply so the message stands on its own.\\\\\\\",\\\\\\\"size\\\\\\\":8404,\\\\\\\"skipped_figures\\\\\\\":[]}\\\"PHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5\ud83d\udd27{\\\"content\\\":\\\"Controlled runtime fixture. Actual Gateway artifact storage and notification.\\\",\\\"figures\\\":[],\\\"title\\\":\\\"Phase9 runtime proof\\\"}\ud83d\udd27\\\"{\\\\\\\"artifact_id\\\\\\\":\\\\\\\"d711e867-47d5-498d-8de5-c349a5d7199b\\\\\\\",\\\\\\\"filename\\\\\\\":\\\\\\\"phase9-runtime-proof.html\\\\\\\",\\\\\\\"published\\\\\\\":\\\\\\\"Published \\\\\\\\\\\\\\\"Phase9 runtime proof\\\\\\\\\\\\\\\" (8.2 KB) and stored it with this session. This turn came from the \\\\\\\\\\\\\\\"gui:chat\\\\\\\\\\\\\\\" channel, which has no artifacts pane and no browser tab, so the user has NOT seen it \u2014 do not tell them it opened. Summarise the substance in your reply so the message stands on its own.\\\\\\\",\\\\\\\"size\\\\\\\":8404,\\\\\\\"skipped_figures\\\\\\\":[]}\\\"PHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5\ud83d\udd27{\\\"content\\\":\\\"Controlled runtime fixture. Actual Gateway artifact storage and notification.\\\",\\\"figures\\\":[],\\\"title\\\":\\\"Phase9 runtime proof\\\"}\ud83d\udd27\\\"{\\\\\\\"artifact_id\\\\\\\":\\\\\\\"1df2bc17-9780-4ed3-a99c-0d8f53bd3017\\\\\\\",\\\\\\\"filename\\\\\\\":\\\\\\\"phase9-runtime-proof.html\\\\\\\",\\\\\\\"published\\\\\\\":\\\\\\\"Published \\\\\\\\\\\\\\\"Phase9 runtime proof\\\\\\\\\\\\\\\" (8.2 KB) and stored it with this session. This turn came from the \\\\\\\\\\\\\\\"gui:chat\\\\\\\\\\\\\\\" channel, which has no artifacts pane and no browser tab, so the user has NOT seen it \u2014 do not tell them it opened. Summarise the substance in your reply so the message stands on its own.\\\\\\\",\\\\\\\"size\\\\\\\":8404,\\\\\\\"skipped_figures\\\\\\\":[]}\\\"PHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5[verifier veto] tool 'artifact_publish' invoked 5 consecutive times with identical arguments \u2014 try a different approach or summarize what you've found22:07\u590d\u5236\ud83d\udd27call not executed \u2014 verifier vetoPHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5[verifier veto] tool 'artifact_publish' invoked 6 consecutive times with identical arguments \u2014 try a different approach or summarize what you've found22:07\u590d\u5236\ud83d\udd27call not executed \u2014 verifier vetoPHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5[verifier veto] tool 'artifact_publish' invoked 7 consecutive times with identical arguments \u2014 try a different approach or summarize what you've found22:07\u590d\u5236\ud83d\udd27call not executed \u2014 verifier vetoPHASE9_RUNTIME_PROOF\\n\u2022artifact_publish\u2713\u25b8PHASE9_RUNTIME_PROOF\\nPHASE9_RUNTIME_PROOF\\nPHASE9_RUNTIME_PROOF\\nPHASE9_RUNTIME_PROOF\\nPHASE9_RUNTIME_PROOF\\nPHASE9_RUNTIME_PROOF\\nPHASE9_RUNTIME_PROOF\\n\u2248$0.0000128 tok\u26a0\ufe0f\u88ab Stop hook \u62e6\u622a22:07\u590d\u5236\u91cd\u8bd5[stop hook halt] tool 'artifact_publish' invoked 8 consecutive times with identical arguments despite repeated feedback \u2014 terminating an unproductive loop22:07\u590d\u5236\ud83d\udd27call not executed \u2014 tool-loop halt\u63a8\u7406\u25b6\",\"artifacts\":[[\"\u25c6phase9-runtime-proof.html8.2 KB\u6253\u5f00\",\"http://127.0.0.1:56512/artifact/Cajh74QZK0AjBD0be3MHopNnzHLhl7Z-RKzAEc9iFfc/1df2bc17-9780-4ed3-a99c-0d8f53bd3017/phase9-runtime-proof.html\"],[\"\u25c6phase9-runtime-proof.html8.2 KB\u6253\u5f00\",\"http://127.0.0.1:56512/artifact/Cajh74QZK0AjBD0be3MHopNnzHLhl7Z-RKzAEc9iFfc/d711e867-47d5-498d-8de5-c349a5d7199b/phase9-runtime-proof.html\"],[\"\u25c6phase9-runtime-proof.html8.2 KB\u6253\u5f00\",\"http://127.0.0.1:56512/artifact/Cajh74QZK0AjBD0be3MHopNnzHLhl7Z-RKzAEc9iFfc/d5c9b7c8-5ed1-4d36-be30-240df5009d84/phase9-runtime-proof.html\"],[\"\u25c6phase9-runtime-proof.html8.2 KB\u6253\u5f00\",\"http://127.0.0.1:56512/artifact/Cajh74QZK0AjBD0be3MHopNnzHLhl7Z-RKzAEc9iFfc/9b98fb07-9094-4358-8f46-35424a955cad/phase9-runtime-proof.html\"]]}",
+        "reason": "malformed_topic"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 10348.752082965802
+    },
+    {
+      "connection_epoch": 2,
+      "kind": "rejected",
+      "payload": {
+        "after": "{\"messages\":\"\u4eca\u5929Phase9 isolated QA: reply briefly with PHASE9_RUNTIME_PROOF, and create a small text artifact named phase9-proof.txt containing that marker.22:07\u590d\u5236PHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5\ud83d\udd27{\\\"content\\\":\\\"Controlled runtime fixture. Actual Gateway artifact storage and notification.\\\",\\\"figures\\\":[],\\\"title\\\":\\\"Phase9 runtime proof\\\"}\ud83d\udd27\\\"{\\\\\\\"artifact_id\\\\\\\":\\\\\\\"9b98fb07-9094-4358-8f46-35424a955cad\\\\\\\",\\\\\\\"filename\\\\\\\":\\\\\\\"phase9-runtime-proof.html\\\\\\\",\\\\\\\"published\\\\\\\":\\\\\\\"Published \\\\\\\\\\\\\\\"Phase9 runtime proof\\\\\\\\\\\\\\\" (8.2 KB) and stored it with this session. This turn came from the \\\\\\\\\\\\\\\"gui:chat\\\\\\\\\\\\\\\" channel, which has no artifacts pane and no browser tab, so the user has NOT seen it \u2014 do not tell them it opened. Summarise the substance in your reply so the message stands on its own.\\\\\\\",\\\\\\\"size\\\\\\\":8404,\\\\\\\"skipped_figures\\\\\\\":[]}\\\"PHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5\ud83d\udd27{\\\"content\\\":\\\"Controlled runtime fixture. Actual Gateway artifact storage and notification.\\\",\\\"figures\\\":[],\\\"title\\\":\\\"Phase9 runtime proof\\\"}\ud83d\udd27\\\"{\\\\\\\"artifact_id\\\\\\\":\\\\\\\"d5c9b7c8-5ed1-4d36-be30-240df5009d84\\\\\\\",\\\\\\\"filename\\\\\\\":\\\\\\\"phase9-runtime-proof.html\\\\\\\",\\\\\\\"published\\\\\\\":\\\\\\\"Published \\\\\\\\\\\\\\\"Phase9 runtime proof\\\\\\\\\\\\\\\" (8.2 KB) and stored it with this session. This turn came from the \\\\\\\\\\\\\\\"gui:chat\\\\\\\\\\\\\\\" channel, which has no artifacts pane and no browser tab, so the user has NOT seen it \u2014 do not tell them it opened. Summarise the substance in your reply so the message stands on its own.\\\\\\\",\\\\\\\"size\\\\\\\":8404,\\\\\\\"skipped_figures\\\\\\\":[]}\\\"PHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5\ud83d\udd27{\\\"content\\\":\\\"Controlled runtime fixture. Actual Gateway artifact storage and notification.\\\",\\\"figures\\\":[],\\\"title\\\":\\\"Phase9 runtime proof\\\"}\ud83d\udd27\\\"{\\\\\\\"artifact_id\\\\\\\":\\\\\\\"d711e867-47d5-498d-8de5-c349a5d7199b\\\\\\\",\\\\\\\"filename\\\\\\\":\\\\\\\"phase9-runtime-proof.html\\\\\\\",\\\\\\\"published\\\\\\\":\\\\\\\"Published \\\\\\\\\\\\\\\"Phase9 runtime proof\\\\\\\\\\\\\\\" (8.2 KB) and stored it with this session. This turn came from the \\\\\\\\\\\\\\\"gui:chat\\\\\\\\\\\\\\\" channel, which has no artifacts pane and no browser tab, so the user has NOT seen it \u2014 do not tell them it opened. Summarise the substance in your reply so the message stands on its own.\\\\\\\",\\\\\\\"size\\\\\\\":8404,\\\\\\\"skipped_figures\\\\\\\":[]}\\\"PHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5\ud83d\udd27{\\\"content\\\":\\\"Controlled runtime fixture. Actual Gateway artifact storage and notification.\\\",\\\"figures\\\":[],\\\"title\\\":\\\"Phase9 runtime proof\\\"}\ud83d\udd27\\\"{\\\\\\\"artifact_id\\\\\\\":\\\\\\\"1df2bc17-9780-4ed3-a99c-0d8f53bd3017\\\\\\\",\\\\\\\"filename\\\\\\\":\\\\\\\"phase9-runtime-proof.html\\\\\\\",\\\\\\\"published\\\\\\\":\\\\\\\"Published \\\\\\\\\\\\\\\"Phase9 runtime proof\\\\\\\\\\\\\\\" (8.2 KB) and stored it with this session. This turn came from the \\\\\\\\\\\\\\\"gui:chat\\\\\\\\\\\\\\\" channel, which has no artifacts pane and no browser tab, so the user has NOT seen it \u2014 do not tell them it opened. Summarise the substance in your reply so the message stands on its own.\\\\\\\",\\\\\\\"size\\\\\\\":8404,\\\\\\\"skipped_figures\\\\\\\":[]}\\\"PHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5[verifier veto] tool 'artifact_publish' invoked 5 consecutive times with identical arguments \u2014 try a different approach or summarize what you've found22:07\u590d\u5236\ud83d\udd27call not executed \u2014 verifier vetoPHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5[verifier veto] tool 'artifact_publish' invoked 6 consecutive times with identical arguments \u2014 try a different approach or summarize what you've found22:07\u590d\u5236\ud83d\udd27call not executed \u2014 verifier vetoPHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5[verifier veto] tool 'artifact_publish' invoked 7 consecutive times with identical arguments \u2014 try a different approach or summarize what you've found22:07\u590d\u5236\ud83d\udd27call not executed \u2014 verifier vetoPHASE9_RUNTIME_PROOF\\n\u2022artifact_publish\u2713\u25b8PHASE9_RUNTIME_PROOF\\nPHASE9_RUNTIME_PROOF\\nPHASE9_RUNTIME_PROOF\\nPHASE9_RUNTIME_PROOF\\nPHASE9_RUNTIME_PROOF\\nPHASE9_RUNTIME_PROOF\\nPHASE9_RUNTIME_PROOF\\n\u2248$0.0000128 tok\u26a0\ufe0f\u88ab Stop hook \u62e6\u622a22:07\u590d\u5236\u91cd\u8bd5[stop hook halt] tool 'artifact_publish' invoked 8 consecutive times with identical arguments despite repeated feedback \u2014 terminating an unproductive loop22:07\u590d\u5236\ud83d\udd27call not executed \u2014 tool-loop halt\u63a8\u7406\u25b6\",\"artifacts\":[[\"\u25c6phase9-runtime-proof.html8.2 KB\u6253\u5f00\",\"http://127.0.0.1:56512/artifact/Cajh74QZK0AjBD0be3MHopNnzHLhl7Z-RKzAEc9iFfc/1df2bc17-9780-4ed3-a99c-0d8f53bd3017/phase9-runtime-proof.html\"],[\"\u25c6phase9-runtime-proof.html8.2 KB\u6253\u5f00\",\"http://127.0.0.1:56512/artifact/Cajh74QZK0AjBD0be3MHopNnzHLhl7Z-RKzAEc9iFfc/d711e867-47d5-498d-8de5-c349a5d7199b/phase9-runtime-proof.html\"],[\"\u25c6phase9-runtime-proof.html8.2 KB\u6253\u5f00\",\"http://127.0.0.1:56512/artifact/Cajh74QZK0AjBD0be3MHopNnzHLhl7Z-RKzAEc9iFfc/d5c9b7c8-5ed1-4d36-be30-240df5009d84/phase9-runtime-proof.html\"],[\"\u25c6phase9-runtime-proof.html8.2 KB\u6253\u5f00\",\"http://127.0.0.1:56512/artifact/Cajh74QZK0AjBD0be3MHopNnzHLhl7Z-RKzAEc9iFfc/9b98fb07-9094-4358-8f46-35424a955cad/phase9-runtime-proof.html\"]]}",
+        "before": "{\"messages\":\"\u4eca\u5929Phase9 isolated QA: reply briefly with PHASE9_RUNTIME_PROOF, and create a small text artifact named phase9-proof.txt containing that marker.22:07\u590d\u5236PHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5\ud83d\udd27{\\\"content\\\":\\\"Controlled runtime fixture. Actual Gateway artifact storage and notification.\\\",\\\"figures\\\":[],\\\"title\\\":\\\"Phase9 runtime proof\\\"}\ud83d\udd27\\\"{\\\\\\\"artifact_id\\\\\\\":\\\\\\\"9b98fb07-9094-4358-8f46-35424a955cad\\\\\\\",\\\\\\\"filename\\\\\\\":\\\\\\\"phase9-runtime-proof.html\\\\\\\",\\\\\\\"published\\\\\\\":\\\\\\\"Published \\\\\\\\\\\\\\\"Phase9 runtime proof\\\\\\\\\\\\\\\" (8.2 KB) and stored it with this session. This turn came from the \\\\\\\\\\\\\\\"gui:chat\\\\\\\\\\\\\\\" channel, which has no artifacts pane and no browser tab, so the user has NOT seen it \u2014 do not tell them it opened. Summarise the substance in your reply so the message stands on its own.\\\\\\\",\\\\\\\"size\\\\\\\":8404,\\\\\\\"skipped_figures\\\\\\\":[]}\\\"PHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5\ud83d\udd27{\\\"content\\\":\\\"Controlled runtime fixture. Actual Gateway artifact storage and notification.\\\",\\\"figures\\\":[],\\\"title\\\":\\\"Phase9 runtime proof\\\"}\ud83d\udd27\\\"{\\\\\\\"artifact_id\\\\\\\":\\\\\\\"d5c9b7c8-5ed1-4d36-be30-240df5009d84\\\\\\\",\\\\\\\"filename\\\\\\\":\\\\\\\"phase9-runtime-proof.html\\\\\\\",\\\\\\\"published\\\\\\\":\\\\\\\"Published \\\\\\\\\\\\\\\"Phase9 runtime proof\\\\\\\\\\\\\\\" (8.2 KB) and stored it with this session. This turn came from the \\\\\\\\\\\\\\\"gui:chat\\\\\\\\\\\\\\\" channel, which has no artifacts pane and no browser tab, so the user has NOT seen it \u2014 do not tell them it opened. Summarise the substance in your reply so the message stands on its own.\\\\\\\",\\\\\\\"size\\\\\\\":8404,\\\\\\\"skipped_figures\\\\\\\":[]}\\\"PHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5\ud83d\udd27{\\\"content\\\":\\\"Controlled runtime fixture. Actual Gateway artifact storage and notification.\\\",\\\"figures\\\":[],\\\"title\\\":\\\"Phase9 runtime proof\\\"}\ud83d\udd27\\\"{\\\\\\\"artifact_id\\\\\\\":\\\\\\\"d711e867-47d5-498d-8de5-c349a5d7199b\\\\\\\",\\\\\\\"filename\\\\\\\":\\\\\\\"phase9-runtime-proof.html\\\\\\\",\\\\\\\"published\\\\\\\":\\\\\\\"Published \\\\\\\\\\\\\\\"Phase9 runtime proof\\\\\\\\\\\\\\\" (8.2 KB) and stored it with this session. This turn came from the \\\\\\\\\\\\\\\"gui:chat\\\\\\\\\\\\\\\" channel, which has no artifacts pane and no browser tab, so the user has NOT seen it \u2014 do not tell them it opened. Summarise the substance in your reply so the message stands on its own.\\\\\\\",\\\\\\\"size\\\\\\\":8404,\\\\\\\"skipped_figures\\\\\\\":[]}\\\"PHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5\ud83d\udd27{\\\"content\\\":\\\"Controlled runtime fixture. Actual Gateway artifact storage and notification.\\\",\\\"figures\\\":[],\\\"title\\\":\\\"Phase9 runtime proof\\\"}\ud83d\udd27\\\"{\\\\\\\"artifact_id\\\\\\\":\\\\\\\"1df2bc17-9780-4ed3-a99c-0d8f53bd3017\\\\\\\",\\\\\\\"filename\\\\\\\":\\\\\\\"phase9-runtime-proof.html\\\\\\\",\\\\\\\"published\\\\\\\":\\\\\\\"Published \\\\\\\\\\\\\\\"Phase9 runtime proof\\\\\\\\\\\\\\\" (8.2 KB) and stored it with this session. This turn came from the \\\\\\\\\\\\\\\"gui:chat\\\\\\\\\\\\\\\" channel, which has no artifacts pane and no browser tab, so the user has NOT seen it \u2014 do not tell them it opened. Summarise the substance in your reply so the message stands on its own.\\\\\\\",\\\\\\\"size\\\\\\\":8404,\\\\\\\"skipped_figures\\\\\\\":[]}\\\"PHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5[verifier veto] tool 'artifact_publish' invoked 5 consecutive times with identical arguments \u2014 try a different approach or summarize what you've found22:07\u590d\u5236\ud83d\udd27call not executed \u2014 verifier vetoPHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5[verifier veto] tool 'artifact_publish' invoked 6 consecutive times with identical arguments \u2014 try a different approach or summarize what you've found22:07\u590d\u5236\ud83d\udd27call not executed \u2014 verifier vetoPHASE9_RUNTIME_PROOF\\n22:07\u590d\u5236\u91cd\u8bd5[verifier veto] tool 'artifact_publish' invoked 7 consecutive times with identical arguments \u2014 try a different approach or summarize what you've found22:07\u590d\u5236\ud83d\udd27call not executed \u2014 verifier vetoPHASE9_RUNTIME_PROOF\\n\u2022artifact_publish\u2713\u25b8PHASE9_RUNTIME_PROOF\\nPHASE9_RUNTIME_PROOF\\nPHASE9_RUNTIME_PROOF\\nPHASE9_RUNTIME_PROOF\\nPHASE9_RUNTIME_PROOF\\nPHASE9_RUNTIME_PROOF\\nPHASE9_RUNTIME_PROOF\\n\u2248$0.0000128 tok\u26a0\ufe0f\u88ab Stop hook \u62e6\u622a22:07\u590d\u5236\u91cd\u8bd5[stop hook halt] tool 'artifact_publish' invoked 8 consecutive times with identical arguments despite repeated feedback \u2014 terminating an unproductive loop22:07\u590d\u5236\ud83d\udd27call not executed \u2014 tool-loop halt\u63a8\u7406\u25b6\",\"artifacts\":[[\"\u25c6phase9-runtime-proof.html8.2 KB\u6253\u5f00\",\"http://127.0.0.1:56512/artifact/Cajh74QZK0AjBD0be3MHopNnzHLhl7Z-RKzAEc9iFfc/1df2bc17-9780-4ed3-a99c-0d8f53bd3017/phase9-runtime-proof.html\"],[\"\u25c6phase9-runtime-proof.html8.2 KB\u6253\u5f00\",\"http://127.0.0.1:56512/artifact/Cajh74QZK0AjBD0be3MHopNnzHLhl7Z-RKzAEc9iFfc/d711e867-47d5-498d-8de5-c349a5d7199b/phase9-runtime-proof.html\"],[\"\u25c6phase9-runtime-proof.html8.2 KB\u6253\u5f00\",\"http://127.0.0.1:56512/artifact/Cajh74QZK0AjBD0be3MHopNnzHLhl7Z-RKzAEc9iFfc/d5c9b7c8-5ed1-4d36-be30-240df5009d84/phase9-runtime-proof.html\"],[\"\u25c6phase9-runtime-proof.html8.2 KB\u6253\u5f00\",\"http://127.0.0.1:56512/artifact/Cajh74QZK0AjBD0be3MHopNnzHLhl7Z-RKzAEc9iFfc/9b98fb07-9094-4358-8f46-35424a955cad/phase9-runtime-proof.html\"]]}",
+        "reason": "duplicate"
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 10383.70991597185
+    },
+    {
+      "connection_epoch": 2,
+      "kind": "close-requested",
+      "payload": {},
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 10383.721290971152
+    },
+    {
+      "connection_epoch": 2,
+      "kind": "closed",
+      "payload": {
+        "owned_drained": true
+      },
+      "qa_run_id": "0ddec823eb76441eaeef232ce3e3e6d9",
+      "run_id": "8ccd5a86-692b-456d-8723-5194a5ef034b",
+      "session_key": "agent:main:main:s2",
+      "at_ms": 10414.00937497383
+    }
+  ],
+  "resources": [
+    {
+      "at_ms": 3.0499579734168947,
+      "rss_mb": 0.03125,
+      "threads": 2
+    },
+    {
+      "at_ms": 102.02495800331235,
+      "rss_mb": 0.03125,
+      "threads": 2
+    },
+    {
+      "at_ms": 202.0236249663867,
+      "rss_mb": 0.03125,
+      "threads": 2
+    },
+    {
+      "at_ms": 302.0247079548426,
+      "rss_mb": 0.03125,
+      "threads": 2
+    },
+    {
+      "at_ms": 402.0406249910593,
+      "rss_mb": 0.03125,
+      "threads": 2
+    },
+    {
+      "at_ms": 502.0294999703765,
+      "rss_mb": 0.03125,
+      "threads": 2
+    },
+    {
+      "at_ms": 600.5632079904899,
+      "rss_mb": 0.03125,
+      "threads": 2
+    },
+    {
+      "at_ms": 700.8184579899535,
+      "rss_mb": 0.03125,
+      "threads": 2
+    },
+    {
+      "at_ms": 800.2085409825668,
+      "rss_mb": 0.03125,
+      "threads": 2
+    },
+    {
+      "at_ms": 900.0361659564078,
+      "rss_mb": 0.03125,
+      "threads": 2
+    },
+    {
+      "at_ms": 1000.0991249689832,
+      "rss_mb": 0.03125,
+      "threads": 2
+    },
+    {
+      "at_ms": 1102.0220000064,
+      "rss_mb": 0.03125,
+      "threads": 2
+    },
+    {
+      "at_ms": 1201.6488749650307,
+      "rss_mb": 0.03125,
+      "threads": 2
+    },
+    {
+      "at_ms": 1301.6554579953663,
+      "rss_mb": 52.953125,
+      "threads": 6
+    },
+    {
+      "at_ms": 1402.0335410023108,
+      "rss_mb": 111.484375,
+      "threads": 17
+    },
+    {
+      "at_ms": 1502.0354579901323,
+      "rss_mb": 115.03125,
+      "threads": 17
+    },
+    {
+      "at_ms": 1600.1273749861866,
+      "rss_mb": 116.203125,
+      "threads": 19
+    },
+    {
+      "at_ms": 1701.1156659573317,
+      "rss_mb": 117.171875,
+      "threads": 19
+    },
+    {
+      "at_ms": 1801.5412910026498,
+      "rss_mb": 117.171875,
+      "threads": 19
+    },
+    {
+      "at_ms": 1900.1829999615438,
+      "rss_mb": 117.171875,
+      "threads": 19
+    },
+    {
+      "at_ms": 2002.1188329556026,
+      "rss_mb": 117.171875,
+      "threads": 19
+    },
+    {
+      "at_ms": 2102.028082998004,
+      "rss_mb": 117.1875,
+      "threads": 19
+    },
+    {
+      "at_ms": 2202.0207080058753,
+      "rss_mb": 117.1875,
+      "threads": 19
+    },
+    {
+      "at_ms": 2301.376374962274,
+      "rss_mb": 117.1875,
+      "threads": 19
+    },
+    {
+      "at_ms": 2400.190832966473,
+      "rss_mb": 117.1875,
+      "threads": 19
+    },
+    {
+      "at_ms": 2500.8564579766244,
+      "rss_mb": 117.1875,
+      "threads": 19
+    },
+    {
+      "at_ms": 2602.0247499691322,
+      "rss_mb": 117.1875,
+      "threads": 19
+    },
+    {
+      "at_ms": 2700.102415983565,
+      "rss_mb": 117.1875,
+      "threads": 19
+    },
+    {
+      "at_ms": 2800.4377500037663,
+      "rss_mb": 117.1875,
+      "threads": 19
+    },
+    {
+      "at_ms": 2900.280165951699,
+      "rss_mb": 117.1875,
+      "threads": 19
+    },
+    {
+      "at_ms": 3000.9445409523323,
+      "rss_mb": 117.1875,
+      "threads": 19
+    },
+    {
+      "at_ms": 3102.0266659907065,
+      "rss_mb": 117.1875,
+      "threads": 19
+    },
+    {
+      "at_ms": 3201.0009159566835,
+      "rss_mb": 117.1875,
+      "threads": 19
+    },
+    {
+      "at_ms": 3302.033665997442,
+      "rss_mb": 117.1875,
+      "threads": 19
+    },
+    {
+      "at_ms": 3401.414207997732,
+      "rss_mb": 117.1875,
+      "threads": 19
+    },
+    {
+      "at_ms": 3502.098749973811,
+      "rss_mb": 117.1875,
+      "threads": 19
+    },
+    {
+      "at_ms": 3600.1076249522157,
+      "rss_mb": 117.1875,
+      "threads": 19
+    },
+    {
+      "at_ms": 3701.861915993504,
+      "rss_mb": 117.1875,
+      "threads": 19
+    },
+    {
+      "at_ms": 3801.318874990102,
+      "rss_mb": 117.1875,
+      "threads": 19
+    },
+    {
+      "at_ms": 3902.0280829863623,
+      "rss_mb": 117.1875,
+      "threads": 19
+    },
+    {
+      "at_ms": 4002.0244999905117,
+      "rss_mb": 117.1875,
+      "threads": 19
+    },
+    {
+      "at_ms": 4101.824415964074,
+      "rss_mb": 117.1875,
+      "threads": 19
+    },
+    {
+      "at_ms": 4202.027665975038,
+      "rss_mb": 117.1875,
+      "threads": 19
+    },
+    {
+      "at_ms": 4302.032332983799,
+      "rss_mb": 117.1875,
+      "threads": 19
+    },
+    {
+      "at_ms": 4402.024749957491,
+      "rss_mb": 117.1875,
+      "threads": 19
+    },
+    {
+      "at_ms": 4502.052374999039,
+      "rss_mb": 117.1875,
+      "threads": 19
+    },
+    {
+      "at_ms": 4602.027165994514,
+      "rss_mb": 117.1875,
+      "threads": 19
+    },
+    {
+      "at_ms": 4702.033665962517,
+      "rss_mb": 117.203125,
+      "threads": 19
+    },
+    {
+      "at_ms": 4802.028207981493,
+      "rss_mb": 117.203125,
+      "threads": 19
+    },
+    {
+      "at_ms": 4900.723707978614,
+      "rss_mb": 117.203125,
+      "threads": 19
+    },
+    {
+      "at_ms": 5002.020082960371,
+      "rss_mb": 117.203125,
+      "threads": 19
+    },
+    {
+      "at_ms": 5101.238375005778,
+      "rss_mb": 117.203125,
+      "threads": 19
+    },
+    {
+      "at_ms": 5200.126332987566,
+      "rss_mb": 117.203125,
+      "threads": 19
+    },
+    {
+      "at_ms": 5302.027374971658,
+      "rss_mb": 117.203125,
+      "threads": 19
+    },
+    {
+      "at_ms": 5402.021749992855,
+      "rss_mb": 117.203125,
+      "threads": 19
+    },
+    {
+      "at_ms": 5500.390582950786,
+      "rss_mb": 117.203125,
+      "threads": 19
+    },
+    {
+      "at_ms": 5600.039165990893,
+      "rss_mb": 117.203125,
+      "threads": 19
+    },
+    {
+      "at_ms": 5700.0510829966515,
+      "rss_mb": 117.203125,
+      "threads": 19
+    },
+    {
+      "at_ms": 5802.021249954123,
+      "rss_mb": 117.203125,
+      "threads": 19
+    },
+    {
+      "at_ms": 5902.020999987144,
+      "rss_mb": 117.203125,
+      "threads": 19
+    },
+    {
+      "at_ms": 6000.702290970366,
+      "rss_mb": 117.203125,
+      "threads": 19
+    },
+    {
+      "at_ms": 6102.022290986497,
+      "rss_mb": 117.203125,
+      "threads": 19
+    },
+    {
+      "at_ms": 6200.237624987494,
+      "rss_mb": 117.109375,
+      "threads": 17
+    },
+    {
+      "at_ms": 6302.020749950316,
+      "rss_mb": 117.109375,
+      "threads": 17
+    },
+    {
+      "at_ms": 6402.027082978748,
+      "rss_mb": 117.078125,
+      "threads": 16
+    },
+    {
+      "at_ms": 6502.021999971475,
+      "rss_mb": 117.015625,
+      "threads": 15
+    },
+    {
+      "at_ms": 6601.181250007357,
+      "rss_mb": 117.015625,
+      "threads": 15
+    },
+    {
+      "at_ms": 6702.021915989462,
+      "rss_mb": 117.015625,
+      "threads": 15
+    },
+    {
+      "at_ms": 6802.022957999725,
+      "rss_mb": 117.015625,
+      "threads": 15
+    },
+    {
+      "at_ms": 6900.995125004556,
+      "rss_mb": 117.296875,
+      "threads": 13
+    },
+    {
+      "at_ms": 7000.070749956649,
+      "rss_mb": 117.53125,
+      "threads": 13
+    },
+    {
+      "at_ms": 7102.025832980871,
+      "rss_mb": 117.578125,
+      "threads": 13
+    },
+    {
+      "at_ms": 7200.68591600284,
+      "rss_mb": 117.578125,
+      "threads": 13
+    },
+    {
+      "at_ms": 7301.066665968392,
+      "rss_mb": 117.59375,
+      "threads": 13
+    },
+    {
+      "at_ms": 7400.967790978029,
+      "rss_mb": 117.671875,
+      "threads": 13
+    },
+    {
+      "at_ms": 7500.4667500033975,
+      "rss_mb": 117.6875,
+      "threads": 13
+    },
+    {
+      "at_ms": 7600.110915955156,
+      "rss_mb": 117.6875,
+      "threads": 13
+    },
+    {
+      "at_ms": 7702.028165978845,
+      "rss_mb": 117.6875,
+      "threads": 13
+    },
+    {
+      "at_ms": 7801.8168329726905,
+      "rss_mb": 117.703125,
+      "threads": 13
+    },
+    {
+      "at_ms": 7900.264333002269,
+      "rss_mb": 117.703125,
+      "threads": 13
+    },
+    {
+      "at_ms": 8001.652124978136,
+      "rss_mb": 117.734375,
+      "threads": 13
+    },
+    {
+      "at_ms": 8100.102833006531,
+      "rss_mb": 117.734375,
+      "threads": 13
+    },
+    {
+      "at_ms": 8202.023040968925,
+      "rss_mb": 117.734375,
+      "threads": 13
+    },
+    {
+      "at_ms": 8302.02800000552,
+      "rss_mb": 117.734375,
+      "threads": 13
+    },
+    {
+      "at_ms": 8402.020290959626,
+      "rss_mb": 117.734375,
+      "threads": 13
+    },
+    {
+      "at_ms": 8502.025457972195,
+      "rss_mb": 117.734375,
+      "threads": 13
+    },
+    {
+      "at_ms": 8602.023707993794,
+      "rss_mb": 117.734375,
+      "threads": 13
+    },
+    {
+      "at_ms": 8702.021165983751,
+      "rss_mb": 117.734375,
+      "threads": 13
+    },
+    {
+      "at_ms": 8802.023332973476,
+      "rss_mb": 117.734375,
+      "threads": 13
+    },
+    {
+      "at_ms": 8902.023624978028,
+      "rss_mb": 117.734375,
+      "threads": 13
+    },
+    {
+      "at_ms": 9001.485124987084,
+      "rss_mb": 117.734375,
+      "threads": 13
+    },
+    {
+      "at_ms": 9100.156000000425,
+      "rss_mb": 117.734375,
+      "threads": 13
+    },
+    {
+      "at_ms": 9200.586790975649,
+      "rss_mb": 117.734375,
+      "threads": 13
+    },
+    {
+      "at_ms": 9302.023499971256,
+      "rss_mb": 117.734375,
+      "threads": 13
+    },
+    {
+      "at_ms": 9402.025707997382,
+      "rss_mb": 117.734375,
+      "threads": 13
+    },
+    {
+      "at_ms": 9502.020790998358,
+      "rss_mb": 117.734375,
+      "threads": 13
+    },
+    {
+      "at_ms": 9600.143957999535,
+      "rss_mb": 117.734375,
+      "threads": 13
+    },
+    {
+      "at_ms": 9700.31837496208,
+      "rss_mb": 117.734375,
+      "threads": 13
+    },
+    {
+      "at_ms": 9802.025374956429,
+      "rss_mb": 117.734375,
+      "threads": 13
+    },
+    {
+      "at_ms": 9900.079207960516,
+      "rss_mb": 117.734375,
+      "threads": 13
+    },
+    {
+      "at_ms": 10000.278624997009,
+      "rss_mb": 117.734375,
+      "threads": 13
+    },
+    {
+      "at_ms": 10102.04041597899,
+      "rss_mb": 117.796875,
+      "threads": 13
+    },
+    {
+      "at_ms": 10202.006624953356,
+      "rss_mb": 117.8125,
+      "threads": 13
+    },
+    {
+      "at_ms": 10302.016582980286,
+      "rss_mb": 117.84375,
+      "threads": 13
+    },
+    {
+      "at_ms": 10402.020999987144,
+      "rss_mb": 117.984375,
+      "threads": 1
+    }
+  ],
+  "direct_child": {
+    "exit_code": 0,
+    "forced": false
+  },
+  "resource_scope": {
+    "complete": false,
+    "kind": "direct_child_only",
+    "reason": "WebKit XPC process ownership is not inferred from POSIX parentage"
+  },
+  "capture": {
+    "argv": [
+      "/Volumes/TBU4/Workspace/Aleph/.phase9-target/debug/aleph-nsh-shell"
+    ],
+    "cwd": "/Volumes/TBU4/Workspace/Aleph/desktop/nsh-shell",
+    "pid": 32813,
+    "nonce": "520f285cdb6ab19f665ae8b7cf9c47ffd0bf612d39793d12061952598085bad5",
+    "cleanup_error": null,
+    "binary_sha256": "42f1b998a1c24dbdd9ea8e8e6556c5e293163cf42b707efde4a00fa16151c03e",
+    "stdout": "docs/superpowers/runs/2026-11-16-phase9-runtime-attempt14-output/nsh-0.stdout.log",
+    "stderr": "docs/superpowers/runs/2026-11-16-phase9-runtime-attempt14-output/nsh-0.stderr.log",
+    "stdout_sha256": "b72d2c33f9af9c29d3a2db46f3aee5995baa76622cfe8d8206caafa3f0b077cd",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "fixture_cleanup": true
+}

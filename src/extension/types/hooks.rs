@@ -37,28 +37,6 @@ pub enum PromptScope {
     Disabled,
 }
 
-impl PromptScope {
-    /// Parse from string with fallback to System
-    #[must_use]
-    pub fn from_str_or_default(s: &str) -> Self {
-        s.parse().unwrap_or(Self::System)
-    }
-}
-
-impl std::str::FromStr for PromptScope {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "system" => Ok(Self::System),
-            "tool" => Ok(Self::Tool),
-            "standalone" => Ok(Self::Standalone),
-            "disabled" => Ok(Self::Disabled),
-            _ => Err(format!("Unknown prompt scope: {s}")),
-        }
-    }
-}
-
 /// Hook configuration - defines when and how a hook executes
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HookConfig {

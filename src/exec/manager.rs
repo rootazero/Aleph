@@ -77,12 +77,6 @@ pub struct ExecApprovalRecord {
     pub created_at_ms: u64,
     /// Expiration timestamp (Unix ms)
     pub expires_at_ms: u64,
-    /// Resolution timestamp (Unix ms)
-    pub resolved_at_ms: Option<u64>,
-    /// Decision (if resolved)
-    pub decision: Option<ApprovalDecisionType>,
-    /// Who resolved (display name)
-    pub resolved_by: Option<String>,
     /// Why approval was requested (escalation / confirmation context),
     /// surfaced to resolving UIs. Absent on records persisted before this
     /// field existed.
@@ -188,9 +182,6 @@ impl ExecApprovalRecord {
             } else {
                 now.saturating_add(timeout_ms)
             },
-            resolved_at_ms: None,
-            decision: None,
-            resolved_by: None,
             reason: request.reason.clone(),
             // Ambient, not a request field: the requester receives an
             // `ApprovalAction` (redacted tool name, summary, cwd, analysis,
@@ -204,7 +195,7 @@ impl ExecApprovalRecord {
             // the operator's behalf stamps this to `true` on the record it gets
             // back, before `register_pending` publishes it.
             operator_only: false,
-            allowed_decisions: request.allowed_decisions.clone(),
+            allowed_decisions: request.offered_decisions(),
         }
     }
 
@@ -242,8 +233,35 @@ pub struct ResolvedDecision {
 pub struct RegisteredApprovalReceiver {
     receiver: oneshot::Receiver<Option<ApprovalDecisionType>>,
     generation: Option<Arc<()>>,
+    cleanup: Option<PendingRegistration>,
 }
 
+struct PendingRegistration {
+    pending: Arc<RwLock<HashMap<String, PendingEntry>>>,
+    id: String,
+    generation: Arc<()>,
+    armed: bool,
+}
+
+impl Drop for PendingRegistration {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let mut pending = self.pending.write().unwrap_or_else(|e| e.into_inner());
+        if pending
+            .get(&self.id)
+            .is_some_and(|entry| Arc::ptr_eq(&entry.generation, &self.generation))
+        {
+            pending.remove(&self.id);
+        }
+    }
+}
+
+/// Test-only affordance: a non-blocking peek at the registration channel so
+/// a test can assert that NO decision has been delivered yet. Production code
+/// awaits the receiver, so a public poll would be an unused API surface.
+#[cfg(test)]
 impl RegisteredApprovalReceiver {
     pub fn try_recv(
         &mut self,
@@ -256,7 +274,20 @@ impl Future for RegisteredApprovalReceiver {
     type Output = Result<Option<ApprovalDecisionType>, oneshot::error::RecvError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        Pin::new(&mut self.get_mut().receiver).poll(cx)
+        let this = self.get_mut();
+        match Pin::new(&mut this.receiver).poll(cx) {
+            Poll::Ready(result) => {
+                // Normal completion is removed by `await_registered`, which
+                // must harvest the resolver's denial reason first. Cancellation
+                // remains armed so dropping the wait retires this registration.
+                if let Some(cleanup) = this.cleanup.as_mut() {
+                    cleanup.armed = false;
+                }
+                this.cleanup = None;
+                Poll::Ready(result)
+            }
+            Poll::Pending => Poll::Pending,
+        }
     }
 }
 
@@ -401,6 +432,76 @@ pub enum SessionResolveOutcome {
     Ambiguous(Vec<(usize, String)>),
 }
 
+/// Which cards a cascade decision may release.
+///
+/// `Any` is the operator path: an operator's answer stands for the session,
+/// so every identical card is released with it. `Originator` is the member
+/// path: a member's answer covers only the cards the SAME originator raised,
+/// so answering your own card in a group chat never releases a card another
+/// member raised — the group-chat approval bypass (a member's click on their
+/// own card used to resolve every identical card in the session, including
+/// the ones other members raised).
+enum CascadeOriginScope {
+    Any,
+    Originator(Option<String>),
+}
+
+/// Outcome of the by-id locked resolution — the ONE place that says what a
+/// resolution attempt did.
+///
+/// The channel-callback path needs the REASON (a refusal the user can read),
+/// so the locked path reports it instead of a bare `false`; the RPC paths
+/// only need "did it apply".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ApprovalResolveOutcome {
+    /// Applied to the addressed entry. Carries the EFFECTIVE decision (post
+    /// clamp — a legacy `AllowAlways` narrows to `AllowSession`), so the
+    /// caller confirms WHAT was approved instead of echoing the request.
+    Resolved { decision: ApprovalDecisionType },
+    /// Nothing is pending under this id.
+    NotFound,
+    /// The card is an operator approval: a channel button never answers one.
+    OperatorOnly,
+    /// The card recorded NO originator: only the operator path may answer it.
+    NoOriginator,
+    /// The card was raised by ANOTHER user: a channel button answers only the
+    /// card its own author raised.
+    WrongOriginator,
+    /// The card is no longer live (already resolved, expired, or abandoned).
+    NotLive,
+    /// The decision is not one the card was offered.
+    NotOffered,
+}
+
+/// WHO may answer a card on a resolution path.
+///
+/// The paths differ in exactly two things: whether the operator-only
+/// exclusion applies, and whether the answering user must be the card's
+/// ORIGINATOR. Naming both in one enum keeps the whole decision at ONE
+/// place — under the lock that performs the resolution — so a card cannot be
+/// replaced between the check and the write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResolutionAuthority<'a> {
+    /// The operator path: whoever reaches the operator RPC may answer any
+    /// live card.
+    Operator,
+    /// The member RPC path: the operator-only exclusion applies (a card the
+    /// operator reserved for themselves is not a member's to answer), but the
+    /// originator is NOT checked here — that path resolves ownership through
+    /// the session the card belongs to, not through the record.
+    Member,
+    /// The channel-callback path: only the named user may answer, and only a
+    /// card that recorded them as its originator.
+    ChannelUser(&'a str),
+}
+
+impl ResolutionAuthority<'_> {
+    /// Whether the operator-only exclusion applies on this path.
+    fn excludes_operator_only(self) -> bool {
+        !matches!(self, Self::Operator)
+    }
+}
+
 pub struct ExecApprovalManager {
     pending: Arc<RwLock<HashMap<String, PendingEntry>>>,
     /// Per-session snapshot of the last [`SessionResolveOutcome::Ambiguous`]
@@ -433,21 +534,28 @@ impl ExecApprovalManager {
     /// # Returns
     ///
     /// The approval record
+    ///
+    /// # Why a failed analysis does not abort the card
+    ///
+    /// `request.analysis.ok` can be `false` here: the parser refuses
+    /// redirection, subshells, background jobs and newlines, so a benign but
+    /// unparseable command (`echo hi > out.txt`) arrives with a failed
+    /// analysis, and no upstream caller checks the flag. A failed analysis is
+    /// not a decision — refusing to raise the card would deny the command on
+    /// the parser's say-so, while the gate that stopped it already decided
+    /// the command needs a human. So the card is still raised and the human
+    /// still decides, exactly as in release builds; the failed analysis is
+    /// logged so the condition is visible instead of silent.
     pub fn create(&self, request: &ExecApprovalRequest, timeout_ms: u64) -> ExecApprovalRecord {
-        // The parser's `CommandAnalysis::error` is the single source of
-        // "this command is unparseable". Surfacing it as an approval card
-        // (delivered to a channel, presented to a human) is the wrong
-        // default — the caller already knows the command is unrunnable.
-        // `debug_assert!` is the right tier: a misconfigured caller logs
-        // the parser's `reason` rather than silently spending a delivery
-        // slot on a card that the human can only deny.
-        debug_assert!(
-            request.analysis.ok,
-            "ExecApprovalManager::create called with !analysis.ok — caller must reject \
-             before this point. Parser reason: {:?}",
-            request.analysis.reason,
-        );
         let record = ExecApprovalRecord::from_request(request, timeout_ms);
+        if !request.analysis.ok {
+            warn!(
+                id = %record.id,
+                reason = ?request.analysis.reason,
+                "ExecApprovalManager::create called with a failed analysis — the card is still \
+                 raised and the human decides",
+            );
+        }
         debug!(id = %record.id, command = %record.command, "Created approval request");
         record
     }
@@ -524,15 +632,13 @@ impl ExecApprovalManager {
         let (tx, rx) = oneshot::channel();
         let id = record.id.clone();
 
-        // Opportunistic sweep: a waiter whose future was dropped (aborted
-        // agent run) never reaches `await_registered`'s removal, so its entry
-        // would otherwise linger forever. Each new registration evicts
-        // anything already past its deadline — bounded work, no background
-        // task needed.
-        self.cleanup_expired();
-
+        // Opportunistic sweep performed under the same write lock as insertion:
+        // a waiter whose future was dropped (aborted agent run) never reaches
+        // `await_registered`'s removal, so its entry would otherwise linger forever.
+        // Each new registration evicts anything already past its deadline in a single lock cycle.
         let generation = {
             let mut pending = self.pending.write().unwrap_or_else(|e| e.into_inner());
+            Self::cleanup_expired_locked(&mut pending, &self.session_listings);
             if pending.contains_key(&id) {
                 // Preserve the original waiter. A closed receiver is the
                 // existing API's non-decision failure signal, not a panic or
@@ -543,6 +649,7 @@ impl ExecApprovalManager {
                     RegisteredApprovalReceiver {
                         receiver: rx,
                         generation: None,
+                        cleanup: None,
                     },
                     timeout,
                     None,
@@ -562,11 +669,19 @@ impl ExecApprovalManager {
             generation
         };
 
+        // Operator registrations are retired by their outer registration guard.
+        let cleanup = (!operator_once).then(|| PendingRegistration {
+            pending: self.pending.clone(),
+            id: id.clone(),
+            generation: generation.clone(),
+            armed: true,
+        });
         (
             id,
             RegisteredApprovalReceiver {
                 receiver: rx,
                 generation: Some(generation.clone()),
+                cleanup,
             },
             timeout,
             Some(generation),
@@ -665,18 +780,16 @@ impl ExecApprovalManager {
         resolved_by: Option<String>,
         deny_reason: Option<String>,
     ) -> bool {
-        self.resolve_by_id(id, decision, resolved_by, deny_reason, false)
-    }
-
-    /// Channel callbacks cannot resolve an operator entry even if the id is
-    /// replaced between the callback's early check and this lock acquisition.
-    pub(crate) fn resolve_for_channel(
-        &self,
-        id: &str,
-        decision: ApprovalDecisionType,
-        resolved_by: Option<String>,
-    ) -> bool {
-        self.resolve_for_channel_with_reason(id, decision, resolved_by, None)
+        matches!(
+            self.resolve_by_id(
+                id,
+                decision,
+                resolved_by,
+                deny_reason,
+                ResolutionAuthority::Operator,
+            ),
+            ApprovalResolveOutcome::Resolved { .. }
+        )
     }
 
     /// Owner-addressed RPC decisions use the same final operator exclusion,
@@ -688,7 +801,42 @@ impl ExecApprovalManager {
         resolved_by: Option<String>,
         deny_reason: Option<String>,
     ) -> bool {
-        self.resolve_by_id(id, decision, resolved_by, deny_reason, true)
+        matches!(
+            self.resolve_by_id(
+                id,
+                decision,
+                resolved_by,
+                deny_reason,
+                ResolutionAuthority::Member,
+            ),
+            ApprovalResolveOutcome::Resolved { .. }
+        )
+    }
+
+    /// Resolve an approval from a CHANNEL CALLBACK.
+    ///
+    /// The answering user must be the one who raised the card, and the check
+    /// happens under the SAME lock as the resolution: the callback then
+    /// answers the card it was checked against, never a card that replaced it
+    /// while the callback was in flight (an approval id is reusable once the
+    /// old card is resolved).
+    ///
+    /// The outcome replaces a bare `true`/`false` so the caller can tell the
+    /// user WHY the card was refused, and so a resolution reports the
+    /// EFFECTIVE (post-clamp) decision the manager actually applied.
+    pub(crate) fn resolve_for_channel(
+        &self,
+        id: &str,
+        decision: ApprovalDecisionType,
+        channel_user: &str,
+    ) -> ApprovalResolveOutcome {
+        self.resolve_by_id(
+            id,
+            decision,
+            Some(channel_user.to_string()),
+            None,
+            ResolutionAuthority::ChannelUser(channel_user),
+        )
     }
 
     fn resolve_by_id(
@@ -697,16 +845,16 @@ impl ExecApprovalManager {
         decision: ApprovalDecisionType,
         resolved_by: Option<String>,
         deny_reason: Option<String>,
-        owner_only: bool,
-    ) -> bool {
+        authority: ResolutionAuthority<'_>,
+    ) -> ApprovalResolveOutcome {
         let mut pending = self.pending.write().unwrap_or_else(|e| e.into_inner());
 
         let Some(entry) = pending.get_mut(id) else {
             warn!(id = %id, "Approval not found or already resolved");
-            return false;
+            return ApprovalResolveOutcome::NotFound;
         };
-        if owner_only && entry.is_operator_only() {
-            return false;
+        if authority.excludes_operator_only() && entry.is_operator_only() {
+            return ApprovalResolveOutcome::OperatorOnly;
         }
         // Liveness is the honest signal, exactly as the clarification twin
         // enforces it ([`crate::clarification::session::ClarificationManager::resolve`]):
@@ -719,13 +867,30 @@ impl ExecApprovalManager {
         // by-id path must too, or the two disagree on the same registry.
         if !entry.is_live() {
             warn!(id = %id, "Approval already resolved, expired, or abandoned");
-            return false;
+            return ApprovalResolveOutcome::NotLive;
+        }
+
+        // The ORIGINATOR gate, under this same lock: a channel button may
+        // answer only the card its own author raised, and the card that is
+        // CHECKED must be the card that is RESOLVED. Checking it outside the
+        // lock — as the callback sink used to, against its own snapshot —
+        // leaves a window in which the id is reused for another user's card:
+        // the callback then answers a card its author never saw. A card with
+        // NO originator is refused as well; only the operator path answers
+        // one (see `ApprovalResolveOutcome::NoOriginator`).
+        if let ResolutionAuthority::ChannelUser(user) = authority {
+            let Some(originator) = entry.record.originator_user_id.as_deref() else {
+                return ApprovalResolveOutcome::NoOriginator;
+            };
+            if originator != user {
+                return ApprovalResolveOutcome::WrongOriginator;
+            }
         }
 
         // An independent operator decision must be the actual offered value,
         // not a wider wire decision that ordinary cards narrow to AllowOnce.
         if !entry.accepts_decision(decision) {
-            return false;
+            return ApprovalResolveOutcome::NotOffered;
         }
 
         // Enforced against the set THIS card was raised with, not a global
@@ -733,12 +898,16 @@ impl ExecApprovalManager {
         // being the control (an `allow-always` posted straight at
         // `exec.approval.resolve` was always accepted on the wire).
         let decision = Self::clamp_decision(decision, &entry.record.allowed_decisions);
-        Self::resolve_entry(entry, decision, resolved_by.clone(), deny_reason.clone());
+        Self::resolve_entry(entry, decision, deny_reason.clone());
         debug!(id = %id, ?decision, "Resolved approval");
 
-        let cascade = pending
-            .get(id)
-            .map(|e| (e.record.session_key.clone(), e.record.grant_key.clone()));
+        let cascade = pending.get(id).map(|e| {
+            (
+                e.record.session_key.clone(),
+                e.record.grant_key.clone(),
+                e.record.originator_user_id.clone(),
+            )
+        });
         // R1 audit hook (T1.1): every successful resolution leaves an
         // `AuthorityChange` row in the global audit log so the post-incident
         // question "who allowed what, when" no longer requires a
@@ -756,20 +925,25 @@ impl ExecApprovalManager {
             };
             (command, e.record.session_key.clone())
         });
-        // R2 D2 wiring: clone the attribution BEFORE the cascade consumes
-        // it so the helper call below can carry `resolved_by` as the
-        // audit row's `actor_user`. The cascade path takes ownership to
-        // stamp each cascaded card; the audit path takes a fresh clone so
-        // the two reads stay independent.
+        // Preserve the attribution for the audit row's `actor_user`.
         let resolved_by_for_audit = resolved_by.clone();
-        if let Some((session_key, grant_key)) = cascade {
+        if let Some((session_key, grant_key, originator)) = cascade {
+            // A member's answer (the channel/member paths,
+            // `excludes_operator_only`) releases only the cards the SAME
+            // originator raised; an operator's answer stands for the whole
+            // session.
+            let scope = if authority.excludes_operator_only() {
+                CascadeOriginScope::Originator(originator)
+            } else {
+                CascadeOriginScope::Any
+            };
             Self::cascade_to_identical_cards(
                 &mut pending,
                 id,
                 &session_key,
                 grant_key.as_deref(),
+                &scope,
                 decision,
-                resolved_by,
                 deny_reason,
             );
         }
@@ -786,7 +960,17 @@ impl ExecApprovalManager {
             // `tokio::spawn` requires a runtime context — tests with no
             // audit log installed are the common case and must not panic
             // trying to spawn.
-            if crate::security::audit::global().is_some() {
+            //
+            // The runtime guard is the OTHER half of that promise: the audit
+            // log says the audit hook is wanted, not that a Tokio reactor is
+            // on this thread. `resolve`/`resolve_with_reason` are synchronous
+            // `pub` functions, so a sync caller with the audit log installed
+            // would panic with "there is no reactor running" inside a
+            // security-boundary resolve path. Every production caller today
+            // is async, but the guard is one condition.
+            if crate::security::audit::global().is_some()
+                && tokio::runtime::Handle::try_current().is_ok()
+            {
                 let label = match decision {
                     ApprovalDecisionType::AllowOnce => "allow_once",
                     ApprovalDecisionType::AllowSession => "allow_session",
@@ -807,27 +991,22 @@ impl ExecApprovalManager {
                 });
             }
         }
-        true
+        ApprovalResolveOutcome::Resolved { decision }
     }
 
-    /// Stamp a resolution onto a LIVE entry and wake its waiter. The one
+    /// Record a denial reason on a LIVE entry and wake its waiter. The one
     /// internal path every resolution takes — by-id, by-session, and the
     /// session-grant cascade — so a cascaded record is indistinguishable from
-    /// a manually resolved one: the waiter is woken with the decision, the
-    /// `resolved_by` / `resolved_at_ms` / `deny_reason` audit fields are
-    /// stamped, and [`Self::await_registered`] harvests it the same way.
+    /// a manually resolved one and [`Self::await_registered`] harvests the
+    /// denial reason the same way.
     fn resolve_entry(
         entry: &mut PendingEntry,
         decision: ApprovalDecisionType,
-        resolved_by: Option<String>,
         deny_reason: Option<String>,
     ) {
-        entry.record.decision = Some(decision);
-        entry.record.resolved_by = resolved_by;
         if decision == ApprovalDecisionType::Deny {
             entry.record.deny_reason = deny_reason;
         }
-        entry.record.resolved_at_ms = Some(now_ms_or_warn());
 
         // Callers proved the receiver is still open under this same lock
         // (`is_live`), so the send delivers — no silent drop to a zombie.
@@ -874,14 +1053,25 @@ impl ExecApprovalManager {
     /// `None` key (no action identity: bare route escalations, cluster node
     /// approvals) never cascades.
     ///
+    /// # Which cards the cascade may release
+    ///
+    /// `scope` is the answer's authority, not the card's shape:
+    /// [`CascadeOriginScope::Any`] releases every identical card (an operator
+    /// answers for the session), while
+    /// [`CascadeOriginScope::Originator`] releases only the cards raised by
+    /// the SAME originator as the addressed one. Two cards raised by different
+    /// people in one group chat share a session key and an action identity, so
+    /// without the originator scope the first member's click released the
+    /// second member's parked call — a decision nobody asked for.
+    ///
     /// [`DenialLedger`]: crate::sandbox::exec_approval::denial_ledger::DenialLedger
     fn cascade_to_identical_cards(
         pending: &mut HashMap<String, PendingEntry>,
         resolved_id: &str,
         session_key: &str,
         grant_key: Option<&str>,
+        scope: &CascadeOriginScope,
         decision: ApprovalDecisionType,
-        resolved_by: Option<String>,
         deny_reason: Option<String>,
     ) {
         let Some(key) = grant_key else {
@@ -902,6 +1092,12 @@ impl ExecApprovalManager {
                     && e.is_live()
                     && e.record.session_key == session_key
                     && e.record.grant_key.as_deref() == Some(key)
+                    && (match scope {
+                        CascadeOriginScope::Any => true,
+                        CascadeOriginScope::Originator(expected) => {
+                            e.record.originator_user_id.as_deref() == expected.as_deref()
+                        }
+                    })
             })
             .map(|(id, _)| id.clone())
             .collect();
@@ -910,7 +1106,16 @@ impl ExecApprovalManager {
                 // The reason rides along: a sibling refused by cascade must
                 // reach the model with the same instruction the answered card
                 // produced, or two identical calls get two different stories.
-                Self::resolve_entry(entry, decision, resolved_by.clone(), deny_reason.clone());
+                //
+                // `decision` was clamped to the ADDRESSED card's set. A sibling
+                // may have been raised with a narrower ceiling (an
+                // operator-tier card offering the persistent tier parked
+                // beside an ordinary card at the session ceiling), so the
+                // cascade re-clamps to the sibling's own set: the record must
+                // not state a tier its card never offered. A denial is
+                // unaffected — clamping only narrows.
+                let decision = Self::clamp_decision(decision, &entry.record.allowed_decisions);
+                Self::resolve_entry(entry, decision, deny_reason.clone());
                 debug!(
                     id = %cascade_id,
                     cascaded_from = %resolved_id,
@@ -930,27 +1135,6 @@ impl ExecApprovalManager {
             .unwrap_or_else(|e| e.into_inner())
             .get(id)
             .is_some_and(PendingEntry::is_operator_only)
-    }
-
-    /// The originator (raw channel user id) recorded on a **live** pending
-    /// owner approval, or `None` when the id is operator-only, unknown, already
-    /// resolved, expired, or carries no originator (non-channel/legacy record).
-    /// `None` is NOT operator authorization: channel callers must check
-    /// `Self::is_operator_approval` and use `Self::resolve_for_channel`.
-    ///
-    /// The channel button-callback gate
-    /// ([`ManagerCallbackSink::handle_callback`](crate::approval::callback_sink))
-    /// uses this to let only the originator resolve via a button: a `Some` that
-    /// mismatches the clicker is refused; a `None` skips the gate (best-effort,
-    /// preserving the pre-originator behaviour, and letting dead records fall
-    /// through to the normal "expired" reply from [`Self::resolve`]).
-    #[must_use]
-    pub fn record_originator(&self, id: &str) -> Option<String> {
-        let pending = self.pending.read().unwrap_or_else(|e| e.into_inner());
-        pending
-            .get(id)
-            .filter(|entry| entry.is_live() && !entry.is_operator_only())
-            .and_then(|entry| entry.record.originator_user_id.clone())
     }
 
     /// Resolve an unresolved approval for `session_key` by position.
@@ -1091,18 +1275,37 @@ impl ExecApprovalManager {
             }
             let decision = Self::clamp_decision(decision, &entry.record.allowed_decisions);
             let summary = Self::display_line(&entry.record);
-            Self::resolve_entry(entry, decision, resolved_by.clone(), deny_reason.clone());
+            Self::resolve_entry(entry, decision, deny_reason.clone());
             debug!(id = %id, ?decision, "Resolved approval by session");
-            let grant_key = pending.get(&id).and_then(|e| e.record.grant_key.clone());
+            let (grant_key, originator) = pending
+                .get(&id)
+                .map(|e| {
+                    (
+                        e.record.grant_key.clone(),
+                        e.record.originator_user_id.clone(),
+                    )
+                })
+                .unwrap_or((None, None));
             Self::cascade_to_identical_cards(
                 &mut pending,
                 &id,
                 session_key,
                 grant_key.as_deref(),
+                &CascadeOriginScope::Originator(originator),
                 decision,
-                resolved_by,
                 deny_reason,
             );
+            // A resolved session invalidates the positional snapshot it came
+            // from: the positions shift with every resolve, so the snapshot is
+            // stale the moment the card is answered, and the next ambiguous
+            // reply re-lists (and re-snapshots) instead of guessing. Leaving
+            // it behind would grow this map by one `Vec` per session that ever
+            // hit an ambiguous listing — and unlike `pending`, nothing sweeps
+            // it. Lock order: `pending` (held) → listings, as above.
+            self.session_listings
+                .write()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(session_key);
             SessionResolveOutcome::Resolved { decision, summary }
         } else {
             SessionResolveOutcome::NothingPending
@@ -1222,9 +1425,10 @@ impl ExecApprovalManager {
         true
     }
 
-    /// Clean up expired pending requests
-    pub(crate) fn cleanup_expired(&self) {
-        let mut pending = self.pending.write().unwrap_or_else(|e| e.into_inner());
+    fn cleanup_expired_locked(
+        pending: &mut HashMap<String, PendingEntry>,
+        session_listings: &RwLock<HashMap<String, Vec<String>>>,
+    ) {
         let now = Instant::now();
 
         pending.retain(|id, entry| {
@@ -1241,7 +1445,10 @@ impl ExecApprovalManager {
                 .expires_at_ms
                 .saturating_sub(entry.record.created_at_ms);
 
-            if elapsed > Duration::from_millis(timeout_ms) {
+            let expired = elapsed > Duration::from_millis(timeout_ms) || entry.record.is_expired();
+            let dead_waiter = entry.sender.as_ref().is_some_and(|s| s.is_closed());
+
+            if expired || dead_waiter {
                 // Send None to waiter
                 if let Some(sender) = entry.sender.take() {
                     let _ = sender.send(None);
@@ -1251,6 +1458,14 @@ impl ExecApprovalManager {
             } else {
                 true
             }
+        });
+
+        // Lock order: pending (held) -> session_listings
+        let mut listings = session_listings.write().unwrap_or_else(|e| e.into_inner());
+        listings.retain(|session_key, _| {
+            pending
+                .values()
+                .any(|e| e.record.session_key == *session_key)
         });
     }
 }
@@ -1266,6 +1481,11 @@ mod tests {
     use super::*;
     use crate::exec::analysis::CommandAnalysis;
     use crate::exec::decision::ApprovalRequest;
+
+    fn cleanup_expired(manager: &ExecApprovalManager) {
+        let mut pending = manager.pending.write().unwrap_or_else(|e| e.into_inner());
+        ExecApprovalManager::cleanup_expired_locked(&mut pending, &manager.session_listings);
+    }
 
     fn mock_request() -> ApprovalRequest {
         ApprovalRequest {
@@ -1292,6 +1512,22 @@ mod tests {
             allowed_decisions: crate::exec::allowed_decisions::with_persistent(),
             ..mock_request()
         }
+    }
+
+    /// A command the parser could not analyse must still raise a card: the
+    /// gate already decided the command needs a human, so refusing to raise
+    /// it here would deny the command on the parser's say-so. This used to
+    /// be a `debug_assert!`, which panicked in every debug build.
+    #[test]
+    fn a_failed_analysis_still_raises_a_card() {
+        let manager = ExecApprovalManager::new();
+        let mut request = mock_request();
+        request.analysis = CommandAnalysis::error("redirection is not allowed");
+
+        let record = manager.create(&request, 60_000);
+
+        assert_eq!(record.id, request.id);
+        assert_eq!(record.command, request.command);
     }
 
     // Intentional filter correction: operator escalation cards never belong to
@@ -1322,11 +1558,10 @@ mod tests {
                 (id, rx, timeout, None)
             };
             assert!(manager.is_operator_approval("private"));
-            assert!(!manager.resolve_for_channel(
-                "private",
-                ApprovalDecisionType::AllowOnce,
-                Some("alice".to_string())
-            ));
+            assert_eq!(
+                manager.resolve_for_channel("private", ApprovalDecisionType::AllowOnce, "alice",),
+                ApprovalResolveOutcome::OperatorOnly,
+            );
             for actor in [Some("alice".to_string()), None] {
                 for index in [None, Some(1)] {
                     assert_eq!(
@@ -1345,8 +1580,6 @@ mod tests {
                 rx.try_recv(),
                 Err(oneshot::error::TryRecvError::Empty)
             ));
-            assert!(manager.record_originator("private").is_none());
-
             let (_a, rx_a, _) = manager
                 .register_pending(manager.create(&keyed_request("owner-a", "s1", None), 60_000));
             let (_b, rx_b, _) = manager
@@ -1419,7 +1652,7 @@ mod tests {
                         .get_mut(&id)
                         .unwrap()
                         .created_at = Instant::now() - Duration::from_secs(61);
-                    manager.cleanup_expired();
+                    cleanup_expired(&manager);
                 }
                 assert!(!manager.pending.read().unwrap().contains_key(&id));
                 let (id_b, rx_b, timeout_b, guard_b) = manager
@@ -1554,7 +1787,7 @@ mod tests {
                 ));
                 // retire_pending deliberately retires live cards only. A
                 // resolved no-expiry tombstone is removed by the real sweep.
-                manager.cleanup_expired();
+                cleanup_expired(&manager);
                 assert!(!manager.pending.read().unwrap().contains_key(&id));
             } else {
                 assert!(manager.retire_pending(&id));
@@ -1956,8 +2189,8 @@ mod tests {
         );
 
         // Two sweeps must not retire a live no-expiry card.
-        manager.cleanup_expired();
-        manager.cleanup_expired();
+        cleanup_expired(&manager);
+        cleanup_expired(&manager);
         assert!(manager.get_pending(&id).is_some());
 
         manager.resolve(&id, ApprovalDecisionType::AllowOnce, None);
@@ -2320,6 +2553,169 @@ mod tests {
         );
     }
 
+    /// A member's answer must not release a card ANOTHER member raised.
+    ///
+    /// Two cards raised by different people in one group chat share a
+    /// session key and an action identity, so the cascade used to resolve
+    /// BOTH — a decision nobody asked for, taken by whoever clicked first.
+    /// The cascade is scoped to the ORIGINATOR: the cards the same person
+    /// raised still go together.
+    #[tokio::test]
+    async fn a_member_answer_does_not_release_another_origins_card() {
+        let manager = ExecApprovalManager::new();
+
+        let mut mine = persistent_capable_request();
+        mine.id = "card-mine".to_string();
+        mine.session_key = "telegram:group".to_string();
+        mine.grant_key = Some("fp-shared".to_string());
+        mine.originator_user_id = Some("alice".to_string());
+        let rec = manager.create(&mine, 60_000);
+        let (mine_id, mine_rx, mine_timeout) = manager.register_pending(rec);
+
+        let mut also_mine = persistent_capable_request();
+        also_mine.id = "card-also-mine".to_string();
+        also_mine.session_key = "telegram:group".to_string();
+        also_mine.grant_key = Some("fp-shared".to_string());
+        also_mine.originator_user_id = Some("alice".to_string());
+        let rec = manager.create(&also_mine, 60_000);
+        let (also_mine_id, also_mine_rx, also_mine_timeout) = manager.register_pending(rec);
+
+        let mut theirs = persistent_capable_request();
+        theirs.id = "card-theirs".to_string();
+        theirs.session_key = "telegram:group".to_string();
+        theirs.grant_key = Some("fp-shared".to_string());
+        theirs.originator_user_id = Some("bob".to_string());
+        let rec = manager.create(&theirs, 60_000);
+        let (theirs_id, _theirs_rx, _theirs_timeout) = manager.register_pending(rec);
+
+        // Alice answers HER card in the group chat.
+        assert_eq!(
+            manager.resolve_for_channel(&mine_id, ApprovalDecisionType::AllowSession, "alice"),
+            ApprovalResolveOutcome::Resolved {
+                decision: ApprovalDecisionType::AllowSession,
+            }
+        );
+
+        assert_eq!(
+            manager
+                .await_registered(mine_id, mine_rx, mine_timeout)
+                .await
+                .decision,
+            Some(ApprovalDecisionType::AllowSession)
+        );
+        assert_eq!(
+            manager
+                .await_registered(also_mine_id, also_mine_rx, also_mine_timeout)
+                .await
+                .decision,
+            Some(ApprovalDecisionType::AllowSession),
+            "the cards the SAME originator raised still go together"
+        );
+
+        assert!(
+            manager.get_pending(&theirs_id).is_some(),
+            "another originator's card must not be released by Alice's answer"
+        );
+    }
+
+    /// The ORIGINATOR gate belongs to the LOCKED resolution, not to a
+    /// snapshot the caller took before it: a channel button answers the card
+    /// it was checked against, so a card raised by somebody else stays
+    /// pending for its author.
+    #[tokio::test]
+    async fn a_channel_callback_cannot_answer_another_users_card() {
+        let manager = ExecApprovalManager::new();
+
+        let mut alice = persistent_capable_request();
+        alice.id = "card-alice".to_string();
+        alice.originator_user_id = Some("alice".to_string());
+        let rec = manager.create(&alice, 60_000);
+        let (id, rx, timeout) = manager.register_pending(rec);
+
+        assert_eq!(
+            manager.resolve_for_channel(&id, ApprovalDecisionType::AllowSession, "bob"),
+            ApprovalResolveOutcome::WrongOriginator,
+            "a channel button may only answer the card its own author raised"
+        );
+        assert!(
+            manager.get_pending(&id).is_some(),
+            "the refused card stays pending for its author"
+        );
+
+        assert_eq!(
+            manager.resolve_for_channel(&id, ApprovalDecisionType::AllowSession, "alice"),
+            ApprovalResolveOutcome::Resolved {
+                decision: ApprovalDecisionType::AllowSession,
+            }
+        );
+        assert_eq!(
+            manager.await_registered(id, rx, timeout).await.decision,
+            Some(ApprovalDecisionType::AllowSession)
+        );
+    }
+
+    /// An approval id is reusable once its card is resolved — so a DELAYED
+    /// callback must not answer the NEXT card registered under that id. The
+    /// check and the resolution share one lock, so the callback is always
+    /// judged against the card that is actually resolved.
+    #[tokio::test]
+    async fn a_reused_approval_id_is_answered_by_the_card_of_the_current_author() {
+        let manager = ExecApprovalManager::new();
+
+        let mut alice = persistent_capable_request();
+        alice.id = "shared-id".to_string();
+        alice.originator_user_id = Some("alice".to_string());
+        let rec = manager.create(&alice, 60_000);
+        let (id, rx, timeout) = manager.register_pending(rec);
+
+        // Alice's card is answered and leaves the live set.
+        assert_eq!(
+            manager.resolve_for_channel(&id, ApprovalDecisionType::AllowOnce, "alice"),
+            ApprovalResolveOutcome::Resolved {
+                decision: ApprovalDecisionType::AllowOnce,
+            }
+        );
+        assert_eq!(
+            manager
+                .await_registered(id.clone(), rx, timeout)
+                .await
+                .decision,
+            Some(ApprovalDecisionType::AllowOnce)
+        );
+
+        // The id is free again: Bob's card is raised under it.
+        let mut bob = persistent_capable_request();
+        bob.id = id.clone();
+        bob.originator_user_id = Some("bob".to_string());
+        let rec = manager.create(&bob, 60_000);
+        let (bob_id, bob_rx, bob_timeout) = manager.register_pending(rec);
+        assert_eq!(bob_id, id);
+
+        // Alice's delayed callback must not answer BOB's card.
+        assert_eq!(
+            manager.resolve_for_channel(&id, ApprovalDecisionType::AllowSession, "alice"),
+            ApprovalResolveOutcome::WrongOriginator
+        );
+        assert!(
+            manager.get_pending(&id).is_some(),
+            "Bob's card stays pending for Bob"
+        );
+
+        assert_eq!(
+            manager.resolve_for_channel(&id, ApprovalDecisionType::AllowSession, "bob"),
+            ApprovalResolveOutcome::Resolved {
+                decision: ApprovalDecisionType::AllowSession,
+            }
+        );
+        assert_eq!(
+            manager
+                .await_registered(bob_id, bob_rx, bob_timeout)
+                .await
+                .decision,
+            Some(ApprovalDecisionType::AllowSession)
+        );
+    }
+
     /// The multi-pending guard: with two live cards on one session a bare
     /// `/approve` must resolve NOTHING (FIFO would approve a command the user
     /// may never have read), and an indexed reply must hit exactly the card
@@ -2522,6 +2918,34 @@ mod tests {
         );
     }
 
+    /// A cascade must not widen a sibling card: the decision was clamped to
+    /// the ANSWERED card's tiers, and a sibling may have been raised with a
+    /// narrower ceiling (an operator-tier card offering the persistent tier
+    /// parked beside an ordinary card at the session ceiling). The sibling's
+    /// own record must state a tier its card offered.
+    #[tokio::test]
+    async fn a_cascade_never_widens_a_sibling_beyond_its_own_ceiling() {
+        let manager = ExecApprovalManager::new();
+        let mut wide = keyed_request("w-a", "s1", Some("k1"));
+        wide.allowed_decisions = crate::exec::allowed_decisions::with_persistent();
+        let mut narrow = keyed_request("n-a", "s1", Some("k1"));
+        narrow.allowed_decisions = crate::exec::allowed_decisions::session_max();
+        let (id_wide, _rx_wide, _t_wide) = manager.register_pending(manager.create(&wide, 60_000));
+        let (id_narrow, rx_narrow, t_narrow) =
+            manager.register_pending(manager.create(&narrow, 60_000));
+
+        assert!(manager.resolve(&id_wide, ApprovalDecisionType::AllowAlways, None));
+
+        let cascaded = manager
+            .await_registered(id_narrow, rx_narrow, t_narrow)
+            .await;
+        assert_eq!(
+            cascaded.decision,
+            Some(ApprovalDecisionType::AllowSession),
+            "the sibling offered no persistent tier, so the cascade must not hand it one"
+        );
+    }
+
     /// ②③ A session grant is scoped to (session, action): a different
     /// `grant_key` in the same session and the same `grant_key` in a different
     /// session must both stay pending.
@@ -2538,9 +2962,8 @@ mod tests {
         assert!(manager.resolve(&id_a, ApprovalDecisionType::AllowSession, None));
 
         for id in [&id_b, &id_c] {
-            let record = &manager.get_pending(id).expect("still pending").record;
             assert!(
-                record.decision.is_none(),
+                manager.get_pending(id).is_some(),
                 "{id} must not be resolved by an unrelated session grant"
             );
         }
@@ -2559,9 +2982,8 @@ mod tests {
 
         assert!(manager.resolve(&id_a, ApprovalDecisionType::AllowSession, None));
 
-        let record = &manager.get_pending(&id_b).expect("still pending").record;
         assert!(
-            record.decision.is_none(),
+            manager.get_pending(&id_b).is_some(),
             "a None grant_key must never inherit a session grant"
         );
     }
@@ -2578,9 +3000,8 @@ mod tests {
 
         assert!(manager.resolve(&id_a, ApprovalDecisionType::AllowOnce, None));
 
-        let record = &manager.get_pending(&id_b).expect("still pending").record;
         assert!(
-            record.decision.is_none(),
+            manager.get_pending(&id_b).is_some(),
             "AllowOnce must not cascade to a sibling pending card"
         );
     }
@@ -2623,12 +3044,15 @@ mod tests {
 
         // A different action in the same session is untouched — the cascade is
         // keyed on the action, never on the session alone.
-        assert!(manager
-            .get_pending(&id_c)
-            .expect("still pending")
-            .record
-            .decision
-            .is_none());
+        assert!(
+            manager
+                .get_pending(&id_c)
+                .expect("still pending")
+                .record
+                .deny_reason
+                .is_none(),
+            "a different action in the same session must not be stamped by the cascade"
+        );
     }
 
     /// The cascade also fires on the session-addressed path (`/approve
@@ -2767,6 +3191,22 @@ mod tests {
     /// card never reached anyone) so a transient channel hiccup is not
     /// misfiled as a `UserRejected` denial by the brute-force breaker.
     #[tokio::test]
+    async fn dropping_a_pending_ordinary_wait_removes_its_registration() {
+        let manager = ExecApprovalManager::new();
+        let (id, rx, timeout) = manager.register_pending(manager.create(&mock_request(), 60_000));
+        let mut wait = Box::pin(manager.await_registered(id.clone(), rx, timeout));
+        assert!(std::future::Future::poll(
+            wait.as_mut(),
+            &mut std::task::Context::from_waker(std::task::Waker::noop())
+        )
+        .is_pending());
+        assert!(manager.pending.read().unwrap().contains_key(&id));
+
+        drop(wait);
+        assert!(!manager.pending.read().unwrap().contains_key(&id));
+    }
+
+    #[tokio::test]
     async fn retire_pending_removes_live_entry_without_stamping_decision() {
         let manager = ExecApprovalManager::new();
         let record = manager.create(&mock_request(), 60_000);
@@ -2808,14 +3248,14 @@ mod tests {
             manager.get_pending(&id_b).is_some(),
             "sibling card must still be pending — retire must not cascade"
         );
-        assert_eq!(
+        assert!(
             manager
                 .get_pending(&id_b)
                 .expect("still pending")
                 .record
-                .decision,
-            None,
-            "sibling card must not be stamped with any decision"
+                .deny_reason
+                .is_none(),
+            "sibling card must not be stamped with a denial"
         );
 
         // And b remains resolvable the normal way afterwards.

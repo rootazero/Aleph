@@ -79,7 +79,7 @@
 
 中心对每条连接强制两道闸,顺序是**先首帧规则、后登录墙**:
 
-1. **首帧必须是 `connect`**(`gateway/server/connection/mod.rs::handle_connection`;`server/handler.rs` 自 `4d1061370` 拆分后只剩 re-export)——否则回 `AUTH_REQUIRED`
+1. **首帧必须是 `connect`**(`gateway/server/connection/mod.rs::handle_connection`;`src/gateway/server/handler.rs` 自 `4d1061370` 拆分后只剩 re-export)——否则回 `AUTH_REQUIRED`
    **并关闭 socket**。
 2. **登录墙**:远程未授权连接只能发 `connect`,别的方法一律拒。
 
@@ -137,18 +137,34 @@ aleph-server node \
 > ——不自己装就**全程静默**:登记成功/被拒/重连一行日志都没有,连下文「被注销 → 打印
 > 可操作提示后退出」这条路径都不可能被看见。
 
-`admit_node` 的四条判定(`src/cluster/enrollment.rs`):
+`admit_node` 的判定表(`src/cluster/enrollment.rs`):
 
 | 情形 | 判定 |
 |------|------|
 | 带 id,记录**已吊销** | `Deregistered` → 拒绝(注销粘住,见下) |
 | 带 id,记录活跃 | 原样复用(稳定身份) |
-| 带 id,**查无此记录**(中心库重置/换中心) | 采纳该 id 并补写记录 |
+| 带 id,但该 id 属于**非节点**行(配对的 Panel / operator 设备) | `IdentityConflict` → 拒绝(两半设备命名空间不互相吞并) |
+| 带 id,**查无此记录**(中心库重置/换中心) | 先按**归一化名**收敛:命中唯一活跃行就复用那一行,否则采纳该 id 并补写记录 |
 | 无 id(首启) | 先按**归一化名**复用 operator 预登记的行,否则铸新的;`persist:true` |
+| 名字命中**多条**活跃行 | `Ambiguous` → 拒绝(**终局**):不铸第三行,须先按 id 修好重复 |
+| 设备库**读/写失败** | `StoreUnavailable` → **可重试**:既不登记也不铸行,节点退避后重连 |
+
+三条硬约束:
+
+- **id 才是身份,名字只是显示**。节点带 id 拨入时,id 就是它落盘的凭据(LAN-trust 下
+  节点不持 token,id 即凭据);它声明的 `device_name` 与库里存的不一致时**以 id 为准**——
+  改个机器名不能改掉身份。
+- **歧义不铸第三行**。名字撞上多行就**拒绝**并让人按 id 修:多铸一行只会让重复更
+  深,按名注销也会随之失聪。
+- **存储故障不等于准入**。设备库读不出来时,中心无法判断这台机器是不是已被吊销,故
+  既不放行也不铸行,只回一个**可重试**的失败;节点会退避重连,不会被误判为「已注销」
+  而退出。
 
 "按名复用"消灭了幽灵行:Panel 预登记的 "GPU Box" 与节点 `--name gpu-box` 拨入会
 归并到**同一条**设备记录,而不是各铸一个 UUID 留下一条永不上线的离线条目
-(该幽灵还会让按名的离线注销因歧义而失败)。
+(该幽灵还会让按名的离线注销因歧义而失败)。名字与节点自报的 id 都**有长度上界**
+(在线名 128 字节、节点自报 id 128 字节),超限的名字按字符边界截断、超限的 id 直接
+拒绝(退回首启流程)——两者都是对端可控文本,不能原样写进 `devices` 表。
 
 ### `cluster.enroll` — operator 预占位(可选)
 
@@ -173,20 +189,37 @@ Panel 入口:设置 → **服务与集群 → Aleph 集群 → + Enroll**。Pane
 
 ### 注销 — `cluster.deregister`,且**注销是粘的**
 
-`{ "node": "<name|id>" }`。两步下线:
+`{ "node": "<name|id>" }`。两步下线,**顺序是「先吊销、后驱逐」**:
 
-1. `NodeRegistry::forget` 即时驱逐在线会话(立刻从 `environments.list` 消失,且不再
-   被 `node_invoke`/`node_file` 寻址);
-2. `revoke_device` 置 `revoked_at`。
+1. `revoke_device` 置 `revoked_at`——**吊销写失败即报错**(服务器故障):既不驱逐会话、
+   也不发 `node.disconnected`、也不谎报成功;该行**本就已吊销**则算幂等成功(什么都不用
+   吊销了);
+2. `NodeRegistry::forget` 即时驱逐在线会话(立刻从 `environments.list` 消失,且不再
+   被 `node_invoke`/`node_file` 寻址)。
 
-**关键**:第 ② 步不再只是记账。节点下一次 `connect` 会经 `admit_node` 撞上这条
-`revoked_at`,被判 `Deregistered` 而拒绝登记,回包 `{"node":{"status":"deregistered"}}`;
+**关键**:第 ① 步不再只是记账。节点下一次 `connect` 会经 `admit_node` 撞上这条
+`revoked_at`,被判 `Deregistered` 而拒绝登记,回包
+`{"node":{"status":"deregistered","reason_code":"revoked","reason":"…"}}`;
 节点据此**打印可操作日志并退出**,不再无谓重连。此前 connect 从不查设备表,被注销的
 节点在下一轮退避重连里就自己复活了——注销形同虚设。
 
-返回 `{ node_id, evicted, device_removed }`。寻址先走在线 `NodeRegistry` 多级匹配,
-不在线则回退 `security_store` 已登记节点(精确 id / **唯一归一化 name**),故
-`environments.list` 里可见的离线节点同样可注销(此时 `evicted:false`)。
+> **被注销的节点怎么回来(唯一恢复路径)**:删掉节点机器上的**身份文件**
+> (`~/.aleph/node/<name>.json`),让节点下次启动以**不带 id** 的首启状态拨入——它会按
+> **归一化名**复用 operator 重新登记的那一行,或铸一条新行。中心**不会**复活已吊销的
+> 行(`devices` 表只记吊销,没有「反吊销」,也没有「列出已吊销行」的接口):被吊销就是
+> 终局,想用同一个名字回来,先在中心重新登记、再删节点上的身份文件。
+>
+> 删文件这一步现在是**一条命令**(不用手敲路径、也不用 `rm`——Windows 上没有 `rm`):
+> 在**节点机器**上跑 `aleph-server node --reset-identity --name <name>`(它只需要
+> `--name`,不需要 `--center`),然后重启节点。节点的拒绝日志也会把这条命令原样打出来
+> ——被吊销的节点看到的是「身份文件已死 → 重置它」,同名多行看到的是「先按 id 注销
+> 重复行」,id 冲突看到的是「先腾出那个 id」:三种终局的 operator 动作不同,文案也不同。
+
+返回 `{ node_id, evicted, device_removed }`。寻址**先查已登记设备表**(`security_store`),
+再退回在线 `NodeRegistry` 的模糊匹配:① 精确 `device_id`(**含已吊销的行**,故按 id 重复
+注销是幂等成功而非「查无此节点」)→ ② 已登记节点的**唯一归一化 name**(只认**活跃**行)→
+③ 在线 registry 的模糊匹配。故 `environments.list` 里可见的离线节点同样可注销(此时
+`evicted:false`)。
 
 **第 ① 步现在会当场掐断那条 socket**(2026-07-25):`NodeRegistry::forget` 除了驱逐会话,
 还会触发该连接的 close 信号(`ReverseRpcChannel::close_connection`,与慢消费者踢除共用
@@ -253,8 +286,9 @@ device_name 等值 → ③ 模糊(id 前缀 ≥4 字符 *或* 归一化 name 子
 `ResolveError::Ambiguous(候选标签)`,绝不静默挑第一个;调用方把它翻成给模型的
 精确提示(`node 'x' ambiguous — matches: worker-1 (id…), worker-2 (id…)`)。
 registry 只存在线会话,故无需"prefer-connected" tie-break。同一 `normalize_node_key`
-被 `cluster.deregister` 的离线回退寻址(`handlers/cluster.rs::resolve_enrolled_node`)
-复用,消除"在线名大小写不敏感、离线敏感"的旧漂移。**中心侧 fail-fast**:
+被 `cluster.deregister` 的离线回退寻址(`src/cluster/enrollment.rs::resolve_enrolled_node`,
+**私有**的已登记节点解析;`src/gateway/handlers/cluster.rs` 只做 I/O 翻译)复用,消除"在线名大小写
+不敏感、离线敏感"的旧漂移。**中心侧 fail-fast**:
 仅当节点声明了非空命令目录且其中不含该命令时才拒绝(空目录→交节点权威)。
 下发即 `channel.call("tool.call", {tool, args})`。
 
@@ -399,11 +433,23 @@ approve/deny → 决策作 JSON-RPC 响应下行。
 | 方向 | 帧 |
 |------|----|
 | node → center | `connect { device_id?, device_name, commands, tags, version }`(LAN-trust,无 token;首启省略 `device_id`;`version` 仅观测) |
-| center → node | connect 回包 `{ result:{ …, node:{ node_id, status:"registered"|"deregistered", persist } } }` |
+| center → node | connect 回包 `{ result:{ …, node:{ node_id, status:"registered"|"deregistered", persist, reason?, reason_code? } } }` |
 | center → node | 请求 `{ id, method:"tool.call", params:{ tool, args } }` |
 | node → center | 响应 `{ id, result }` / `{ id, error }` |
 | node → center | 请求 `{ id, method:"node.approval.request", params:{ tool, reason } }` |
 | center → node | 响应 `{ id, result:{ outcome:"approved"|"approved_session"|"timeout"|"denied" } }` |
+
+> connect 回包里的 `node` **载荷可以缺席**:设备库故障时中心无法判断该放行还是该拒绝,
+> 于是既不放 `node` 载荷、也不铸行——**缺席 = 可重试**,节点据此退避重连。
+> `status:"deregistered"` 是**终局**,且可能带 `reason`(只有 operator 能修的拒绝,例如
+> 同名多行);`reason` 缺席时按旧中心的形状处理,节点打印通用文案(向后兼容)。
+>
+> `reason_code` 是**机器可读的「哪一种拒绝」**,`reason` 是**中心侧的人话细节**(两件事,
+> 不是同一事实的两份表述:计数、名字只在中心知道)。节点据此**选**恢复步骤,不从散文里
+> 猜:`revoked`(身份已吊销)/`ambiguous_name`(同名多行)/`identity_conflict`(该 id 属于
+> Panel 或 operator 设备)。三个动作各不相同——吊销要重置身份文件,同名多行要 operator
+> 按 id 注销重复行,id 冲突要 operator 腾出那个 id。旧中心不带 `reason_code`,节点退回
+> 通用文案(向后兼容)。
 
 ## RPC 权限与工具权限
 
@@ -431,7 +477,7 @@ device token / bootstrap ticket / 共享 Gateway token)成为 **operator**,要�
 `environments.list` 是**合并视图**:NodeRegistry 在线会话 + security_store 已登记
 (role=node、未吊销)但离线的设备(`status:"offline"`,附 `last_seen_at` Unix 秒,
 `null` = 登记后从未连入)。last_seen 在节点 connect/disconnect 两接缝经
-`SecurityStore::touch_device`(`gateway/security/store/devices.rs`)盖章——**不是**
+`SecurityStore::touch_device`(`src/gateway/security/store/devices.rs`)盖章——**不是**
 `SharedTokenManager`(那是凭据 vault,与设备表无关;旧写法 `TokenManager::touch_device`
 指向一个不存在的符号)。
 
@@ -480,6 +526,12 @@ device token / bootstrap ticket / 共享 Gateway token)成为 **operator**,要�
   `enroll_refuses_to_deepen_a_pre_existing_duplicate` / `deregister_is_sticky_and_reaches_offline_nodes`,
   RPC 层 `handlers/cluster.rs::enroll_twice_returns_the_same_node_id`,工具层
   `node_manage.rs::enroll_is_idempotent_by_name`。
+- **准入的失败分类**:`enrollment.rs` 的
+  `ambiguous_first_boot_is_refused_instead_of_minting_a_third_row`(同名多行 ⇒ 拒绝,不铸第三行)/
+  `a_store_outage_is_retryable_and_never_an_admission`(设备库故障 ⇒ **可重试**,既不登记也不铸行)/
+  `an_over_long_presented_id_is_refused_and_the_node_falls_back_to_first_boot`(对端自报 id 超长 ⇒ 拒绝)/
+  `a_repeat_deregistration_by_exact_id_is_idempotent`(按 id 重复注销 ⇒ 幂等成功)/
+  `a_failed_deregistration_evicts_nothing`(吊销写失败 ⇒ 报错,在线会话不被驱逐)。
 - **注销掐断连接(真实 socket)**:`tests/cluster_node_enrollment.rs::deregister_tears_down_the_nodes_live_socket`
   ——**单测钉不住这条线**,测试通道用 `ReverseRpcChannel::new`(无 close 信号)。同一测试顺带钉死
   版本握手落到 `Environment.version`。
@@ -490,7 +542,7 @@ device token / bootstrap ticket / 共享 Gateway token)成为 **operator**,要�
 
 ## 与 openclaw 的对照映射 (Gap Analysis)
 
-> 参考实现:`openclaw` 的 **`src/node-host/`(边缘) ↔ `src/gateway/node-*`(中心)**。
+> 参考实现:`openclaw` 的 **`archive/removed-cluster/ (removed 2026-XX)`(边缘) ↔ `archive/removed-cluster/ (removed 2026-XX)`(中心)**。
 > **注意别走错门**:`openclaw/src/fleet/` 不是分布式节点子系统,那是多租户容器编排
 > (Docker/Podman 里跑整个 openclaw 实例),与本文无关。
 >
@@ -501,13 +553,13 @@ device token / bootstrap ticket / 共享 Gateway token)成为 **operator**,要�
 |------|----------|-------|------|
 | 拓扑 | 星型,node 拨出中心,单 WS | 同 | **对齐** |
 | **身份在握手回包里交回** | HelloOk 携 `auth.deviceToken`,客户端就地落盘(`packages/gateway-client/src/client.ts:866-876`) | `connect` 回包携 `result.node.node_id`,节点落盘(`cluster::admit_node`) | **映射**——Aleph「登记折叠进 connect」正是此模式;旧实现另开 socket 发 `cluster.enroll` 才是偏离 |
-| 未批准/已撤销 → 能力清零 | 配对未批准 ⇒ `effectiveCaps: []`(`src/gateway/node-connect-reconcile.ts:167`) | 设备 `revoked_at` ⇒ `NodeAdmission::Deregistered`,拒绝登记 | **映射**(注销粘性) |
+| 未批准/已撤销 → 能力清零 | 配对未批准 ⇒ `effectiveCaps: []`(`archive/removed-cluster/ (removed 2026-XX):167`) | 设备 `revoked_at` ⇒ `NodeAdmission::Deregistered`,拒绝登记 | **映射**(注销粘性) |
 | 反向 RPC 形状 | center 发 **event** `node.invoke.request`,node 回 **req** `node.invoke.result`;关联需 (id, nodeId, connId) 三元组 | 对称 req/res,靠**结构**区分(有 `method`=请求);pending 表天然 per-connection ⇒ connId 隐含 | **分道且更简**(少一层关联键) |
 | 断线 fail-fast | `unregister` reject 全部 pending | `PendingInvokes::cancel_all()` | **对齐** |
-| 舰队排序 | connected-first → displayName → nodeId(`src/gateway/node-catalog.ts:305-311`) | `handle_environments_list` 同序(online → name → id) | **对齐** |
+| 舰队排序 | connected-first → displayName → nodeId(`archive/removed-cluster/ (removed 2026-XX)`) | `handle_environments_list` 同序(online → name → id) | **对齐** |
 | 按名寻址归一化 | `node-match.ts::normalizeNodeKey` 已演进为 **Unicode**(NFC + `[^\p{L}\p{M}\p{N}]+ → -`,保留 CJK/带重音字母) | `cluster::normalize_node_key` 单一真源,在线/离线共用,**Unicode 感知**(`char::is_alphanumeric` + `to_lowercase`,保留 CJK/带重音字母;组合记号 `\p{M}` 有意折为分隔符,零依赖) | **对齐**(2026-07-20 收口 ASCII-only 漂移,见下「已闭合」) |
 | 重连退避 | 1s → ×2 → 30s,**无 jitter**(`client.ts:1506`;全仓 grep `jitter` 零命中) | 2s → ×2 → 60s,**±25% jitter** + 仅在活过 30s 的会话后重置 | 🟢 **超越**(N 节点不齐步撞门;不对"接受即关闭"的中心热转) |
-| 扇出 | **没有**——`invoke()` 只收单个 `nodeId`(`src/gateway/node-registry.ts:606`) | `node_invoke_many` 按 tag AND 并发扇出 + 部分失败容忍 + 结果确定序 | 🟢 **超越**(openclaw 无对应物) |
+| 扇出 | **没有**——`invoke()` 只收单个 `nodeId`(`archive/removed-cluster/ (removed 2026-XX):606`) | `node_invoke_many` 按 tag AND 并发扇出 + 部分失败容忍 + 结果确定序 | 🟢 **超越**(openclaw 无对应物) |
 | 并发调度 | 无(每 invoke 各自 Promise,无资源模型) | `ExclusiveScope::Nodes`——不同机器的 `node_invoke` 并行,同机器串行 | 🟢 **超越**(利用已有 `ConcurrencyClaim` 基建,Rust 侧独有) |
 | 出站背压 | `bufferedAmount > MAX_BUFFERED_BYTES` ⇒ **直接关 socket**(`node-registry.ts:894` `rejectSlowNodeSocket`) | 有界 mpsc(容量 64)+ **入队纳入 `timeout_ms` 预算**;入队卡死回 `OutboundWedged` **并触发关连接**(`with_close` 信号→读循环退出→全套 cleanup),节点退避重连 | **对齐**(2026-07-17 闭合;见下「存活性」节) |
 | 超时语义 | 解析为 `{ok:false, error:{code:"TIMEOUT"}}`(值) | `Timeout`(等响应超时)与 `OutboundWedged`(入队卡死)**两个类型化 Err**——「节点慢」与「socket 死」不再混为一谈 | 🟢 **超越**(Rust 类型安全 + 比 openclaw 单一 TIMEOUT 更细粒度,调用方/模型可分辨) |
@@ -556,7 +608,7 @@ device token / bootstrap ticket / 共享 Gateway token)成为 **operator**,要�
   直接调 `mint_node_device`,**无条件铸新 UUID**——而模块 doc 一直声称「与 connect 自助登记
   共用同一真源,故同名 enroll 不会铸重复行」。**声称的不变量在代码里根本不存在**:Panel
   「+ Enroll」双击 / RPC 重试 / 模型问两次,每次都多一条同名 `role=node` 行。伤害是**自我封死**
-  的三连:① 第二行让 `admit_node` 的 `reuse_by_name` 变歧义 ⇒ 节点首启既不认领也不复用,去铸
+  的三连:① 第二行让 `admit_node` 的按名复用(`match_by_name`)变歧义 ⇒ 节点首启既不认领也不复用,去铸
   **第三行**;② `cluster.deregister` 的离线回退要求名字**唯一**命中(`[d] => Some, _ => None`)
   ⇒ 这几行**一条都删不掉**;③ 于是舰队视图里永久挂着 operator 自己造的幽灵行,只能改数据库。
   现新增 `enroll_node_device`(`enrollment.rs`)作为**唯一**预登记入口:`match_by_name` 三态
@@ -602,12 +654,12 @@ device token / bootstrap ticket / 共享 Gateway token)成为 **operator**,要�
   绝不碰响应超时(长命令安全),且关连接→节点秒级重连,偶发误判也自愈。**该轮**四个 LLM 工具与
   `NodeRegistry` **零改动**(纯传输层收口)——这是当时那笔 diff 的记账,不是现状:
   一周后的注销掐断、以及 2026-09-05 的原子化,都改到了 `NodeRegistry`。锚点 `cluster/reverse_rpc.rs::with_close` +
-  `gateway/server/connection/mod.rs::handle_connection` 的 `rpc_close` select arm(写下时在 `server/handler.rs`)。
+  `gateway/server/connection/mod.rs::handle_connection` 的 `rpc_close` select arm(写下时在 `src/gateway/server/handler.rs`)。
 
 - **按名寻址 Unicode 化(2026-07-20 收口 ASCII-only 漂移)**:`normalize_node_key` 曾用
   `is_ascii_alphanumeric` + `to_ascii_lowercase`,把所有非 ASCII 字母当分隔符——中文/日文节点名
   (如 "工作站")整段折成**空键** ⇒ ① 按名寻址被空键守卫跳过,`node_invoke`/`node_file`/
-  `cluster.deregister` 都够不着;② 更糟:`admit_node` 首启的 `reuse_by_name` 拿到空键返 `None` ⇒
+  `cluster.deregister` 都够不着;② 更糟:`admit_node` 首启的 `match_by_name` 拿到空键返 `None` ⇒
   **每次重连重铸一个新 node_id**,离线幽灵行无限堆积。而其 doc 注释自称是 openclaw
   `node-match.ts::normalizeNodeKey` 的 SSOT 映射,但 openclaw 早已把该函数演进为 Unicode 感知
   (NFC + `[^\p{L}\p{M}\p{N}]+ → -`,其 tests 钉死 `工作站 01→工作站-01`)——Aleph 从**自己引用的
@@ -617,7 +669,7 @@ device token / bootstrap ticket / 共享 Gateway token)成为 **operator**,要�
   **有意偏差(R3 核心轻量化,不为单一 helper 引 `unicode-normalization`)**:组合记号(`\p{M}`,如
   天城文元音符号 / 分解式重音)当分隔符、不做 NFC——只影响键**外观**不影响可寻址性(归一化对
   query 与库存名**对称**施加,两侧折叠一致即匹配)。三个消费者(`registry.rs::match_id` /
-  `enrollment.rs::reuse_by_name` / `handlers/cluster.rs::resolve_enrolled_node`)共用这一 SSOT,
+  `enrollment.rs::match_by_name` / `enrollment.rs::match_name_in`)共用这一 SSOT,
   改一处即全线生效、零消费者改动。回归测试 `registry.rs::{normalize_node_key_is_unicode_aware,
   resolve_cjk_name_is_addressable}` + `enrollment.rs::first_boot_adopts_pre_enrolled_cjk_name_without_churn`
   钉死 CJK 可寻址 + 无重铸 churn。锚点 `cluster/registry.rs::normalize_node_key`。

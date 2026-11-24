@@ -34,7 +34,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::sync_primitives::{Arc, AtomicU64};
+use crate::sync_primitives::{Arc, AtomicU64, Ordering};
 use tokio::sync::broadcast;
 
 use crate::loop_graph::types::{EdgeKind, NodeKind};
@@ -164,6 +164,17 @@ impl TopologyEventBus {
         self.inner.receiver_count()
     }
 
+    /// Total count of events dropped because a subscriber lagged past the channel buffer.
+    #[must_use]
+    pub fn dropped_events(&self) -> u64 {
+        self.dropped_events.load(Ordering::Relaxed)
+    }
+
+    /// Record lagged events count directly.
+    pub fn record_lag(&self, n: u64) {
+        self.dropped_events.fetch_add(n, Ordering::AcqRel);
+    }
+
     /// Clone the inner lag counter so a subscriber task can record lags
     /// without holding the bus itself (which would keep the Sender alive
     /// past every other send site and prevent the bounded channel from
@@ -194,6 +205,9 @@ mod tests {
     #[tokio::test]
     async fn publish_with_no_subscribers_is_silent_no_error() {
         let b = bus();
+        assert_eq!(b.dropped_events(), 0);
+        b.record_lag(5);
+        assert_eq!(b.dropped_events(), 5);
         b.publish(TopologyEvent::NodeDeleted {
             agent_id: "main".into(),
             id: "cron:orphan".into(),

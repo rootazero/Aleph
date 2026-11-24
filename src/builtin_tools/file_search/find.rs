@@ -150,9 +150,9 @@ impl FindTool {
             if let Some(next) = next_offset {
                 msg.push_str(&notes::paging(next, limit));
             }
-            msg.push_str(&notes::walk_capped(&report, respected_ignore).unwrap_or_default());
             msg
         };
+        message.push_str(&notes::walk_capped(&report, respected_ignore).unwrap_or_default());
         // Outside the branch on purpose — see `notes::ignored`. Named only on
         // the empty branch, the lever went unmentioned in exactly the results
         // a caller acts on.

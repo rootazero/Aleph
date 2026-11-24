@@ -37,7 +37,12 @@ pub(crate) const fn global_slot() -> &'static dyn SlotStatus {
 
 /// Install the global store at boot. Idempotent: a second call is ignored.
 pub fn init_global(store: Arc<GoalStore>) {
-    let _ = GLOBAL.install(store);
+    if !GLOBAL.install(store) {
+        tracing::debug!(
+            subsystem = "goal",
+            "goal store already initialized in global slot; ignoring duplicate install"
+        );
+    }
 }
 
 /// Read the global store, if initialized.

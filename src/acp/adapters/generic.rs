@@ -24,12 +24,17 @@ pub struct GenericAcpAdapter {
     display_name: String,
     executable: String,
     default_mode: AdapterMode,
-    supported_modes: Vec<AdapterMode>,
     oneshot_args: Vec<String>,
     native_acp_args: Vec<String>,
     output_format: OutputFormat,
     timeout: Duration,
     trust_level: crate::config::types::acp::TrustLevel,
+    /// Environment variables the harness process inherits, in addition to the
+    /// ones it gets from the parent process.
+    env: Vec<(String, String)>,
+    /// Working directory configured for the harness. Used when the caller
+    /// does not supply one.
+    cwd_override: Option<String>,
 }
 
 impl GenericAcpAdapter {
@@ -41,24 +46,30 @@ impl GenericAcpAdapter {
         let executable = entry.executable.clone().unwrap_or_else(|| id.clone());
         let default_mode = AdapterMode::from_serde(&entry.default_mode);
 
-        // All generic presets support both modes
-        let supported_modes = vec![AdapterMode::Oneshot, AdapterMode::NativeAcp];
-
         Self {
             id,
             display_name,
             executable,
             default_mode,
-            supported_modes,
             oneshot_args: entry.args.clone(),
             native_acp_args: vec!["--acp".to_string()],
             output_format: OutputFormat::from(&entry.output_format),
             timeout: Duration::from_secs(entry.timeout_seconds.max(1)),
             trust_level: entry.trust_level.clone(),
+            env: entry
+                .env
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+            cwd_override: entry.cwd.clone(),
         }
     }
 
     /// Create from individual fields (for programmatic construction).
+    ///
+    /// Programmatic adapters carry no environment overrides and no working
+    /// directory override; use [`Self::from_entry`] when the harness needs
+    /// them.
     pub fn new(
         id: impl Into<String>,
         display_name: impl Into<String>,
@@ -70,18 +81,18 @@ impl GenericAcpAdapter {
         trust_level: crate::config::types::acp::TrustLevel,
     ) -> Self {
         let id = id.into();
-        let supported_modes = vec![AdapterMode::Oneshot, AdapterMode::NativeAcp];
         Self {
             id,
             display_name: display_name.into(),
             executable: executable.into(),
             default_mode,
-            supported_modes,
             oneshot_args,
             native_acp_args,
             output_format,
             timeout: Duration::from_secs(300),
             trust_level,
+            env: Vec::new(),
+            cwd_override: None,
         }
     }
 
@@ -96,19 +107,9 @@ impl GenericAcpAdapter {
 
 impl GenericAcpAdapter {
     /// `trust_level` → `PermissionPolicy`. Shared by `build_config` and
-    /// `spawn_session`; both built the same 9-line match before the helper
-    /// was extracted. Inherent method (not a trait method), so it lives on
-    /// `GenericAcpAdapter` directly rather than inside the `impl AcpAdapter`
-    /// block where the trait-method-only check would reject it.
+    /// `spawn_session`.
     fn permission_policy(&self) -> crate::acp::incoming::PermissionPolicy {
-        match self.trust_level {
-            crate::config::types::acp::TrustLevel::Full => {
-                crate::acp::incoming::PermissionPolicy::ApproveAll
-            }
-            crate::config::types::acp::TrustLevel::Disabled => {
-                crate::acp::incoming::PermissionPolicy::DenyAll
-            }
-        }
+        crate::acp::incoming::PermissionPolicy::from(&self.trust_level)
     }
 }
 
@@ -127,26 +128,33 @@ impl AcpAdapter for GenericAcpAdapter {
     }
 
     fn supported_modes(&self) -> Vec<AdapterMode> {
-        self.supported_modes.clone()
+        vec![AdapterMode::Oneshot, AdapterMode::NativeAcp]
     }
 
     fn build_config(&self, cwd: Option<&str>) -> AdapterConfig {
         AdapterConfig {
             executable: self.executable.clone(),
             args: self.resolve_args(self.default_mode),
-            cwd: cwd.map(String::from),
+            cwd: cwd.map(String::from).or_else(|| self.cwd_override.clone()),
+            env: self.env.clone(),
             timeout: self.timeout.max(Duration::from_secs(1)),
             permission_policy: self.permission_policy(),
-            ..Default::default()
         }
     }
 
     async fn execute_oneshot(&self, prompt: &str, cwd: &str) -> Result<String> {
+        // The caller's working directory wins; the configured one is only a
+        // fallback for callers that do not supply one.
+        let cwd = if cwd.is_empty() {
+            self.cwd_override.as_deref().unwrap_or(cwd)
+        } else {
+            cwd
+        };
         super::run_oneshot_command(
             &self.id,
             &self.executable,
             &self.oneshot_args,
-            &[],
+            &self.env,
             &self.output_format,
             prompt,
             cwd,
@@ -160,10 +168,10 @@ impl AcpAdapter for GenericAcpAdapter {
         let config = AdapterConfig {
             executable: self.executable.clone(),
             args: self.native_acp_args.clone(),
-            cwd: cwd.map(String::from),
+            cwd: cwd.map(String::from).or_else(|| self.cwd_override.clone()),
+            env: self.env.clone(),
             timeout,
             permission_policy: self.permission_policy(),
-            ..Default::default()
         };
         let mut session = AcpSession::spawn(self.id(), &config).await?;
         session.initialize(timeout).await?;
@@ -175,42 +183,6 @@ impl AcpAdapter for GenericAcpAdapter {
 mod tests {
     use super::*;
     use crate::config::types::acp::OutputFormatSerde;
-
-    #[test]
-    fn test_output_format_plain_text() {
-        let fmt = OutputFormat::PlainText;
-        assert_eq!(fmt.parse("  hello world  "), "hello world");
-        assert_eq!(fmt.parse("no trim needed"), "no trim needed");
-    }
-
-    #[test]
-    fn test_output_format_json_field() {
-        let fmt = OutputFormat::JsonField {
-            field: "result".to_string(),
-        };
-        let json = r#"{"result": "success", "other": 123}"#;
-        assert_eq!(fmt.parse(json), "success");
-    }
-
-    #[test]
-    fn test_output_format_json_field_missing() {
-        let fmt = OutputFormat::JsonField {
-            field: "missing".to_string(),
-        };
-        let json = r#"{"result": "success"}"#;
-        // Falls back to full JSON string
-        assert_eq!(fmt.parse(json), r#"{"result":"success"}"#);
-    }
-
-    #[test]
-    fn test_output_format_invalid_json() {
-        let fmt = OutputFormat::JsonField {
-            field: "result".to_string(),
-        };
-        let text = "not json at all";
-        // Falls back to raw text
-        assert_eq!(fmt.parse(text), "not json at all");
-    }
 
     #[test]
     fn test_generic_harness_build_config() {

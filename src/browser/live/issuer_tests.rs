@@ -227,7 +227,12 @@ fn permissions_narrow_without_implicitly_adding_frames_and_ttl_clamps() {
     assert!(response.expires_at_ms <= f.resource.expires_at_ms);
     assert_eq!(
         f.grants.grant_info(&response.grant_id).unwrap().permissions,
-        vec![ViewerPermission::Frames]
+        vec![
+            ViewerPermission::Frames,
+            ViewerPermission::HumanInput,
+            ViewerPermission::Navigate,
+        ],
+        "the issuer grants the control permissions it allows, so the control plane can fire"
     );
     let short = fixture(Duration::from_secs(60));
     let response = short

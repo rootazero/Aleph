@@ -26,9 +26,15 @@ pub enum DiscoveryError {
 
     #[error("failed to resolve Aleph home directory")]
     HomeDir(#[source] crate::error::AlephError),
+
+    /// The USER home (`HOME` / `USERPROFILE`) could not be resolved — a
+    /// different cause from the Aleph home (`~/.aleph`, `ALEPH_HOME`) and a
+    /// different remedy, so it does not share the Aleph home's message.
+    #[error("failed to resolve the user home directory")]
+    UserHome(#[source] crate::error::AlephError),
 }
 
-pub type DiscoveryResult<T> = Result<T, DiscoveryError>;
+pub(crate) type DiscoveryResult<T> = Result<T, DiscoveryError>;
 
 /// Discovery configuration
 #[derive(Debug, Clone)]
@@ -42,7 +48,9 @@ pub struct DiscoveryConfig {
     /// Whether to scan project-level directories
     pub scan_project_dirs: bool,
 
-    /// Maximum depth for upward directory traversal
+    /// How many directories the upward walk examines, the starting
+    /// directory included: 10 = the working directory + 9 ancestors;
+    /// 0 examines nothing.
     pub max_upward_depth: usize,
 
     /// Replaces `~/.claude` — the whole Claude root: its `skills` /
@@ -81,21 +89,6 @@ impl DiscoveryManager {
     pub fn new(config: DiscoveryConfig) -> DiscoveryResult<Self> {
         let scanner = DirectoryScanner::new(&config)?;
         Ok(Self { scanner })
-    }
-
-    /// Get the Aleph home directory (~/.aleph/)
-    ///
-    /// Returns the path resolved at construction (honouring the `ALEPH_HOME`
-    /// override), so it cannot disagree with the scanner's own view.
-    ///
-    /// Infallible: the scanner caches the path at construction (resolving
-    /// `ALEPH_HOME` or defaulting to `~/.aleph`), and any failure that
-    /// could occur here would already have prevented the scanner from
-    /// being built. Returning `DiscoveryResult` here just pushed `?` onto
-    /// callers for an error that cannot happen.
-    #[must_use]
-    pub fn aleph_home(&self) -> PathBuf {
-        self.scanner.aleph_home().to_path_buf()
     }
 
     /// Discover all skill directories

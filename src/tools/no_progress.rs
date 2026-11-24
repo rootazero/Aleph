@@ -100,8 +100,15 @@ impl Tally {
     }
 }
 
-/// Walk `events` and surface idempotent `(tool, args)` keys whose successful
-/// result repeated, byte-identical, at least [`NO_PROGRESS_THRESHOLD`] times.
+/// Shared derivation behind the two loop detectors.
+///
+/// [`aggregate_no_progress`] (idempotent reads) and
+/// [`aggregate_redundant_calls`](crate::tools::redundant_calls::aggregate_redundant_calls)
+/// (everything else) partition the tool space by idempotency, so they must
+/// agree on what "the same call returning the same bytes" means — otherwise
+/// the two notices could read the same event tail differently. `keep` selects
+/// which tools a caller cares about; `threshold` is how many byte-identical
+/// repeats it takes to fire.
 ///
 /// Tool/args resolution mirrors
 /// [`attempt_summary::aggregate_failures`](crate::tools::attempt_summary::aggregate_failures):
@@ -109,9 +116,13 @@ impl Tally {
 /// `ToolCallRequested` with a matching `call_id`. A result whose request is no
 /// longer in the visible window (truncated tail) is skipped — we cannot key it.
 ///
-/// Returns rows sorted by `count` descending, then `tool` ascending, so the
-/// render is deterministic for snapshot tests.
-pub fn aggregate_no_progress(events: &[SessionEventRecord]) -> Vec<NoProgressGroup> {
+/// Returns `(tool, count)` rows sorted by `count` descending, then `tool`
+/// ascending, so the render is deterministic for snapshot tests.
+pub(crate) fn aggregate_identical_repeats(
+    events: &[SessionEventRecord],
+    threshold: usize,
+    keep: impl Fn(&str) -> bool,
+) -> Vec<(String, usize)> {
     let mut tallies: HashMap<(String, String), Tally> = HashMap::new();
 
     for (idx, record) in events.iter().enumerate() {
@@ -124,9 +135,7 @@ pub fn aggregate_no_progress(events: &[SessionEventRecord]) -> Vec<NoProgressGro
         let Some((name, input)) = resolve_request(events, idx, call_id) else {
             continue;
         };
-        // Only pure-read builtins can loop without progress; a tool whose
-        // result is meant to change is never a no-progress signal.
-        if !is_idempotent_builtin_name(name) {
+        if !keep(name) {
             continue;
         }
         let args_key = canonical_json_string(input);
@@ -154,17 +163,31 @@ pub fn aggregate_no_progress(events: &[SessionEventRecord]) -> Vec<NoProgressGro
         }
     }
 
-    let mut groups: Vec<NoProgressGroup> = tallies
+    let mut groups: Vec<(String, usize)> = tallies
         .into_iter()
-        .filter(|(_, t)| t.count >= NO_PROGRESS_THRESHOLD && t.all_identical)
-        .map(|((tool, _args), t)| NoProgressGroup {
-            tool,
-            count: t.count,
-        })
+        .filter(|(_, t)| t.count >= threshold && t.all_identical)
+        .map(|((tool, _args), t)| (tool, t.count))
         .collect();
 
-    groups.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.tool.cmp(&b.tool)));
+    groups.sort_by(|(tool_a, count_a), (tool_b, count_b)| {
+        count_b.cmp(count_a).then_with(|| tool_a.cmp(tool_b))
+    });
     groups
+}
+
+/// Walk `events` and surface idempotent `(tool, args)` keys whose successful
+/// result repeated, byte-identical, at least [`NO_PROGRESS_THRESHOLD`] times.
+///
+/// Only pure-read builtins can loop without progress; a tool whose result is
+/// meant to change is never a no-progress signal.
+///
+/// Returns rows sorted by `count` descending, then `tool` ascending, so the
+/// render is deterministic for snapshot tests.
+pub fn aggregate_no_progress(events: &[SessionEventRecord]) -> Vec<NoProgressGroup> {
+    aggregate_identical_repeats(events, NO_PROGRESS_THRESHOLD, is_idempotent_builtin_name)
+        .into_iter()
+        .map(|(tool, count)| NoProgressGroup { tool, count })
+        .collect()
 }
 
 /// Render the no-progress nudge, or `None` when no idempotent key has looped
@@ -216,15 +239,19 @@ fn resolve_request<'a>(
     call_id: &str,
 ) -> Option<(&'a str, &'a serde_json::Value)> {
     let upper = result_idx.min(events.len());
-    events[..upper].iter().rev().find_map(|r| match &r.event {
-        SessionEvent::ToolCallRequested {
-            call_id: id,
-            name,
-            input,
-            ..
-        } if id == call_id => Some((name.as_str(), input)),
-        _ => None,
-    })
+    events
+        .get(..upper)?
+        .iter()
+        .rev()
+        .find_map(|r| match &r.event {
+            SessionEvent::ToolCallRequested {
+                call_id: id,
+                name,
+                input,
+                ..
+            } if id == call_id => Some((name.as_str(), input)),
+            _ => None,
+        })
 }
 
 #[cfg(test)]

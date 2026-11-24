@@ -27,7 +27,6 @@ use crate::agents::AgentRegistry;
 use crate::context::budget::ContextBudgetConfig;
 use crate::mcp::manager::McpManagerHandle;
 use crate::memory::store::raw_memory::RawMemoryStore;
-use crate::memory::store::MemoryBackend;
 use crate::providers::{AiProvider, DefaultProviderHandle};
 use crate::session::service::SessionService;
 use crate::tools::service::ToolService;
@@ -68,7 +67,8 @@ pub use context_blocks::compute_runtime_state_blocks;
 // orchestrator crate and reaches them via the `context_blocks` module directly
 // (or via the `pub(crate)` re-export below).
 pub(crate) use context_blocks::{
-    active_execution_plan, active_standing_goal, active_timer_loop, live_deadline_status,
+    active_execution_plan, active_standing_goal, active_timer_loop, goal_tier_live,
+    live_deadline_status, loop_tier_live,
 };
 // Producer-side bound for `StandingGoalLayer`, asserted by
 // `thinker::prompt_contract::conditionally_silent_dynamic_layers_are_bounded`.
@@ -167,13 +167,7 @@ pub struct AgentHarnessRunner {
     /// recall message (`HarnessDeps::recall_context`). `None` preserves the
     /// old behaviour (boot path for tests / env without a memory backend).
     pub memory_context_provider:
-        Option<Arc<crate::thinker::memory_context_provider::MemoryContextProvider>>,
-
-    /// `SQLite` memory backend, threaded into the per-run `ContextCompactor` so
-    /// it can reuse the hierarchical session summaries written by
-    /// `SessionCompactor` for zero-API-cost compaction. `None` (tests / boot
-    /// without a memory backend) keeps the LLM summarization path.
-    pub memory_backend: Option<MemoryBackend>,
+        Option<Arc<crate::thinker::memory_context_provider::RuntimeMemoryContext>>,
 
     /// Raw-memory store used by the session-summary reuse reader. The derived
     /// SQLite backend stores notes and metadata; raw bodies live in Markdown.
@@ -248,8 +242,7 @@ pub struct AgentHarnessRunner {
     /// switch, `run.session_updated` live refresh) does not re-assemble the
     /// prompt. Session-keyed because the measured prompt is session-shaped —
     /// see [`context_estimate::OverheadCache`].
-    pub estimate_overhead_cache:
-        std::sync::Arc<crate::orchestrator::harness_bridge::context_estimate::OverheadCache>,
+    pub estimate_overhead_cache: Arc<context_estimate::OverheadCache>,
 
     /// Boot-time `[general] language`, threaded into `PromptConfig.language` so
     /// `LanguageLayer` tells the model which language to answer in.

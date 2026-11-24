@@ -41,9 +41,8 @@ pub fn prefix() -> Option<PathBuf> {
 /// flake this repo has already paid for once.
 fn prefix_from(configured: Option<OsString>) -> Option<PathBuf> {
     if let Some(configured) = configured {
-        let path = PathBuf::from(configured);
-        if !path.as_os_str().is_empty() {
-            return Some(path);
+        if !configured.is_empty() {
+            return Some(PathBuf::from(configured));
         }
     }
     default_prefix()

@@ -308,6 +308,24 @@ pub async fn handle_update(
             }
         };
 
+        // Validate devtools_profile before any shared config is written.
+        // Only the two documented values are accepted: silently mapping anything
+        // else to Managed would swap the operator's Chrome session for an
+        // Aleph-managed instance on a typo.
+        let user_driver = match update.devtools_profile.as_str() {
+            "user" => BrowserDriver::ExistingSession,
+            "managed" => BrowserDriver::Managed,
+            other => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    format!(
+                        "devtools_profile: unrecognised value {other:?}; accepted values are user, managed"
+                    ),
+                );
+            }
+        };
+
         // Update or create the "default" profile with the chosen driver
         if let Some(profile) = browser.profiles.get_mut("default") {
             profile.driver = driver;
@@ -321,12 +339,7 @@ pub async fn handle_update(
             );
         }
 
-        // Update "user" profile based on devtools_profile setting
-        let user_driver = if update.devtools_profile == "user" {
-            BrowserDriver::ExistingSession
-        } else {
-            BrowserDriver::Managed
-        };
+        // Update "user" profile based on devtools_profile setting.
         if let Some(profile) = browser.profiles.get_mut("user") {
             profile.driver = user_driver;
         } else {
@@ -381,20 +394,24 @@ pub async fn handle_update(
             return JsonRpcResponse::error(request.id, INVALID_PARAMS, msg);
         }
 
-        let effective = snapshot(browser);
-        let policy = browser.policy.clone();
-
-        // Validation passed — commit the clone as the real config, then save.
+        // Validation passed — save to disk BEFORE modifying shared config.
+        // The previous section is kept so a failed save can put it back: the
+        // daemon must not serve a config that was never persisted.
+        let previous = cfg.general.browser.clone();
         cfg.general.browser = browser.clone();
 
         // Save to disk — use precise path to avoid overwriting other general settings
         if let Err(e) = cfg.save_incremental(&["general.browser"]) {
+            cfg.general.browser = previous;
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
                 format!("Failed to save config: {e}"),
             );
         }
+
+        let effective = snapshot(&cfg.general.browser);
+        let policy = cfg.general.browser.policy.clone();
         (effective, policy)
     };
 
@@ -415,15 +432,28 @@ pub async fn handle_update(
     });
     let _ = event_bus.publish_gateway_event(&event);
 
+    // The browser change touches three sub-systems with three verdicts. The
+    // overall verdict is the strongest one — the operator has to satisfy all
+    // of them — and the per-field verdicts stay visible under `by_field` so a
+    // reader can still see which part was hot-applied.
+    let kind = ReloadImpact::strongest([ssrf_impact, ReloadImpact::Restart, ReloadImpact::Restart]);
+    let mut reload_impact = kind.wire(kind.user_hint_zh());
+    if let Some(obj) = reload_impact.as_object_mut() {
+        obj.insert(
+            "by_field".to_string(),
+            serde_json::json!({
+                "ssrf_policy": ssrf_impact,
+                "profile_drivers": ReloadImpact::Restart,
+                "playwright_cli": ReloadImpact::Restart,
+            }),
+        );
+    }
+
     JsonRpcResponse::success(
         request.id,
         serde_json::json!({
             "success": true,
-            "reload_impact": {
-                "ssrf_policy": ssrf_impact,
-                "profile_drivers": ReloadImpact::Restart,
-                "playwright_cli": ReloadImpact::Restart,
-            },
+            "reload_impact": reload_impact,
             "headless_shadowed_by": effective.headless_shadowed_by,
         }),
     )
@@ -472,6 +502,43 @@ mod tests {
             .await
             .result
             .expect("browser_config.get must succeed on a default config")
+    }
+
+    #[tokio::test]
+    async fn invalid_devtools_profile_leaves_shared_config_unchanged() {
+        let home = tempfile::tempdir().unwrap();
+        let _home_guard = AlephHomeEnvGuard::acquire_and_set(home.path());
+        let config = make_config();
+        let before = serde_json::to_value(&config.read().await.general.browser).unwrap();
+        for invalid in ["usr", "existing_session", ""] {
+            let mut params = base_params();
+            params["devtools_profile"] = json!(invalid);
+            let response = update(&config, params).await;
+            assert_eq!(response.error.unwrap().code, INVALID_PARAMS);
+            assert_eq!(
+                serde_json::to_value(&config.read().await.general.browser).unwrap(),
+                before,
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn save_failure_restores_browser_config() {
+        let home = tempfile::tempdir().unwrap();
+        let _home_guard = AlephHomeEnvGuard::acquire_and_set(home.path());
+        // A directory at the config path fails saving even when run as root.
+        std::fs::create_dir_all(Config::effective_path()).unwrap();
+        let config = make_config();
+        let before = serde_json::to_value(&config.read().await.general.browser).unwrap();
+        let mut params = base_params();
+        params["headless"] = json!(false);
+        params["block_private"] = json!(false);
+        let response = update(&config, params).await;
+        assert_eq!(response.error.unwrap().code, INTERNAL_ERROR);
+        assert_eq!(
+            serde_json::to_value(&config.read().await.general.browser).unwrap(),
+            before,
+        );
     }
 
     #[tokio::test]
@@ -567,10 +634,16 @@ mod tests {
 
         let config = make_config();
         let v = update(&config, base_params()).await.result.unwrap();
-        assert_eq!(v["reload_impact"]["ssrf_policy"], "restart");
+        assert_eq!(v["reload_impact"]["by_field"]["ssrf_policy"], "restart");
         // The restart-scoped groups are named beside it rather than lumped in.
-        assert_eq!(v["reload_impact"]["profile_drivers"], "restart");
-        assert_eq!(v["reload_impact"]["playwright_cli"], "restart");
+        assert_eq!(v["reload_impact"]["by_field"]["profile_drivers"], "restart");
+        assert_eq!(v["reload_impact"]["by_field"]["playwright_cli"], "restart");
+        // The overall verdict is the strongest of the per-field ones, and the
+        // wire shape is the same `{kind, hint}` every other config RPC sends.
+        assert_eq!(v["reload_impact"]["kind"], "restart");
+        assert!(v["reload_impact"]["hint"]
+            .as_str()
+            .is_some_and(|h| !h.is_empty()));
     }
 
     /// The positive arm, asserted by the *effect* rather than by the call: the
@@ -599,7 +672,7 @@ mod tests {
         params["block_private"] = json!(false);
         let v = update(&config, params).await.result.unwrap();
 
-        assert_eq!(v["reload_impact"]["ssrf_policy"], "live");
+        assert_eq!(v["reload_impact"]["by_field"]["ssrf_policy"], "live");
         assert!(
             manager
                 .check_url("http://127.0.0.1:9000/admin")

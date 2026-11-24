@@ -38,6 +38,8 @@ pub enum RecordStartError {
         searched.join(", ")
     )]
     NoFfmpeg { searched: Vec<String> },
+    #[error("output path already exists: {}", path.display())]
+    PathExists { path: PathBuf },
     #[error("output path is not writable: {}", path.display())]
     PathNotWritable { path: PathBuf },
     /// The extension chooses the codec (spec §3), so a path without one is a
@@ -477,6 +479,9 @@ impl RecordingRegistry {
             }
         }
         let path = if managed { uniquify(raw) } else { raw };
+        if !managed && path.exists() {
+            return Err(RecordStartError::PathExists { path });
+        }
         let codec_args = codec_args_for(&path)?;
         let parent = path
             .parent()
@@ -921,7 +926,7 @@ fn spawn_ffmpeg(
         ScreencastFormat::Png => "png",
     };
     let mut cmd = tokio::process::Command::new(ffmpeg);
-    cmd.arg("-y")
+    cmd.arg("-n")
         .arg("-loglevel")
         .arg("error")
         .arg("-f")
@@ -1967,18 +1972,19 @@ mod tests {
     /// file untouched must not produce "complete" — the file's mtime is
     /// outside the recording window. Without the check this exact shape (old
     /// file at the path) is a silent complete-lie.
+    ///
+    /// The stale file is planted AFTER the start, not before: `start` now
+    /// REFUSES an output path that already exists (see
+    /// `a_start_at_an_existing_path_is_refused_and_registers_nothing`), so a
+    /// file that predates the start is no longer a shape a recording can be
+    /// started into. The encoder here still never touches the path, so what
+    /// lands in the receipt is the stale file — and the mtime check is what
+    /// keeps it from being called complete.
     #[tokio::test]
     async fn a_preexisting_stale_file_is_never_reported_complete() {
         let (server, owner) = recording_server().await;
         let dir = tempfile::tempdir().expect("tmp");
         let out = dir.path().join("stale.webm");
-        std::fs::write(&out, b"old content from an earlier run").expect("seed file");
-        std::fs::File::options()
-            .write(true)
-            .open(&out)
-            .expect("open")
-            .set_modified(std::time::SystemTime::now() - Duration::from_secs(3600))
-            .expect("backdate mtime");
         let stub = encoder_stub(&dir, "no-touch");
         let registry = registry(Duration::from_secs(10));
 
@@ -1992,6 +1998,14 @@ mod tests {
             )
             .await
             .expect("start");
+
+        std::fs::write(&out, b"old content from an earlier run").expect("seed file");
+        std::fs::File::options()
+            .write(true)
+            .open(&out)
+            .expect("open")
+            .set_modified(std::time::SystemTime::now() - Duration::from_secs(3600))
+            .expect("backdate mtime");
         server.push_event(frame_event(1, JPEG_B64));
         wait_until(
             || {
@@ -2017,6 +2031,45 @@ mod tests {
                 .as_deref()
                 .is_some_and(|r| r.contains("mtime")),
             "the mtime check is what fired: {receipt:?}"
+        );
+    }
+
+    /// The refusal that replaced the old shape: a recording can no longer be
+    /// started INTO a path that already exists. `start` refuses it with
+    /// `RecordStartError::PathExists` instead of quietly filing over
+    /// somebody else's file — and the refusal happens BEFORE the encoder is
+    /// spawned, so nothing is registered and the existing file is untouched.
+    #[tokio::test]
+    async fn a_start_at_an_existing_path_is_refused_and_registers_nothing() {
+        let (_server, owner) = recording_server().await;
+        let dir = tempfile::tempdir().expect("tmp");
+        let out = dir.path().join("taken.webm");
+        std::fs::write(&out, b"someone else's file").expect("seed file");
+        let stub = encoder_stub(&dir, "no-touch");
+        let registry = registry(Duration::from_secs(10));
+
+        let err = registry
+            .start(
+                "p",
+                "T1",
+                &session_id(),
+                &owner,
+                opts_with_ffmpeg(out.clone(), stub),
+            )
+            .await
+            .expect_err("an existing output path must be refused");
+        assert!(
+            matches!(err, RecordStartError::PathExists { .. }),
+            "expected PathExists, got {err:?}"
+        );
+        assert!(
+            registry.status("p", "T1").is_none(),
+            "a refused start registers nothing"
+        );
+        assert_eq!(
+            std::fs::read(&out).expect("read back"),
+            b"someone else's file".to_vec(),
+            "the existing file is left untouched"
         );
     }
 

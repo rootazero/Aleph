@@ -137,7 +137,11 @@ impl PinnedHead {
         let (seq, hash) = s.split_once(':').ok_or_else(bad)?;
         let seq: i64 = seq.trim().parse().map_err(|_| bad())?;
         let hash = hash.trim();
-        if seq < 1 || hash.is_empty() || hex::decode(hash).is_err() {
+        if seq < 1
+            || hash.is_empty()
+            || hash.len() % 2 != 0
+            || !hash.bytes().all(|b| b.is_ascii_hexdigit())
+        {
             return Err(bad());
         }
         Ok(Self {
@@ -150,7 +154,7 @@ impl PinnedHead {
 /// The out-of-band values an auditor brings to a verification. Empty means
 /// "check internal consistency only", which is worth saying out loud every time
 /// — see the module doc.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ExportPins {
     /// Root fingerprints previously taken off-box. Any match counts.
     pub roots: Vec<String>,
@@ -192,13 +196,21 @@ impl HeadPin {
 
     fn check(rows: &[LedgerRecord], pin: &PinnedHead) -> Self {
         let last_seq = rows.last().map_or(0, |r| r.seq);
-        let Some(row) = rows.iter().find(|r| r.seq == pin.seq) else {
+        let Ok(idx) = rows.binary_search_by_key(&pin.seq, |r| r.seq) else {
             return Self::Truncated {
                 pinned_seq: pin.seq,
                 last_seq,
             };
         };
-        if !hex::encode(&row.hash).eq_ignore_ascii_case(&pin.hash) {
+        let row = &rows[idx];
+        let mut row_hash_hex = [0u8; 64];
+        let matches = if row.hash.len() == 32 && pin.hash.len() == 64 {
+            let _ = hex::encode_to_slice(&row.hash, &mut row_hash_hex);
+            row_hash_hex.eq_ignore_ascii_case(pin.hash.as_bytes())
+        } else {
+            hex::encode(&row.hash).eq_ignore_ascii_case(&pin.hash)
+        };
+        if !matches {
             return Self::Diverged {
                 pinned_seq: pin.seq,
             };
@@ -222,7 +234,7 @@ impl ExportError {
 /// A public key the exported chain names. Retired keys are included — records
 /// signed before a rotation can only be checked against the key that signed
 /// them.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExportedKey {
     pub fingerprint: String,
     /// Ed25519 public key, hex.
@@ -244,7 +256,7 @@ pub struct ExportedKey {
 /// fence on [`NewRecord`](super::record::NewRecord) is the same idea; keeping
 /// the two forms distinct is what stops a supplied blob from drifting into the
 /// writer.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExportedRecord {
     pub seq: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -267,24 +279,26 @@ pub struct ExportedRecord {
     pub principal: Option<String>,
 }
 
-impl ExportedRecord {
-    fn from_record(r: &LedgerRecord) -> Self {
+impl From<LedgerRecord> for ExportedRecord {
+    fn from(r: LedgerRecord) -> Self {
         Self {
             seq: r.seq,
             prev_hash: r.prev_hash.as_deref().map(hex::encode),
             hash: hex::encode(&r.hash),
             signature: hex::encode(&r.signature),
-            signer_fp: r.signer_fp.clone(),
+            signer_fp: r.signer_fp,
             action: r.action.as_str().to_string(),
-            target: r.target.clone(),
+            target: r.target,
             outcome: r.outcome.as_str().to_string(),
-            args_fp: r.args_fp.clone(),
-            detail: r.detail.clone(),
+            args_fp: r.args_fp,
+            detail: r.detail,
             at_ms: r.at_ms,
-            principal: r.principal.clone(),
+            principal: r.principal,
         }
     }
+}
 
+impl ExportedRecord {
     /// Rebuild the row exactly as the signer saw it. An unparseable action or
     /// outcome is an error, never a lenient default: a row the verifier cannot
     /// reconstruct byte for byte must not be reconstructed as something else,
@@ -328,7 +342,7 @@ impl ExportedRecord {
 /// `default` + `skip_serializing_if` keeps documents exported before signing
 /// existed parseable — they land as `None` and verify with the same verdicts
 /// they always did, the absence reported rather than smoothed over.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExportSignature {
     /// Always `EXPORT_SIGNATURE_SCHEME` today; anything else is malformed,
     /// not a negotiation.
@@ -343,7 +357,7 @@ pub struct ExportSignature {
 
 /// One agent's chain, its keys and its anchor, in a form that needs nothing
 /// from this installation to check.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ChainExport {
     pub format: String,
     pub agent_id: String,
@@ -445,15 +459,15 @@ pub fn export_chain(ledger: &AgentLedger, agent_id: &str) -> Result<ChainExport,
         identity_row_missing: identity.is_none(),
         keys: keys
             .keys_of(agent_id)?
-            .iter()
+            .into_iter()
             .map(|k| ExportedKey {
-                fingerprint: k.fingerprint.clone(),
+                fingerprint: k.fingerprint,
                 public_key: hex::encode(&k.public_key),
                 created_at: k.created_at,
                 retired_at: k.retired_at,
             })
             .collect(),
-        records: records.iter().map(ExportedRecord::from_record).collect(),
+        records: records.into_iter().map(ExportedRecord::from).collect(),
         failed_appends: ledger.lost(),
         signature: None,
     };
@@ -485,7 +499,7 @@ pub(super) struct ExportKeyring {
 
 impl ExportKeyring {
     fn load(doc: &ChainExport) -> Result<Self, ExportError> {
-        let mut keys = HashMap::new();
+        let mut keys = HashMap::with_capacity(doc.keys.len());
         for k in &doc.keys {
             let bytes = hex::decode(&k.public_key).map_err(|e| {
                 ExportError::malformed("public_key", format!("{}: {e}", k.fingerprint))
@@ -511,7 +525,7 @@ impl SignerSource for ExportKeyring {
 }
 
 /// The verdict on an exported chain.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ExportReport {
     pub agent_id: String,
     /// `true` only when there are no faults **and** no supplied pin failed.

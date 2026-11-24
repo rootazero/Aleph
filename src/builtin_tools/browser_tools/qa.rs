@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 
 use super::qa_verdict::{self, Baseline, CheckEntry, CheckOutcome, Impact, Subtraction};
 use crate::browser::backend::BrowserBackend;
+use crate::browser::engine::{capabilities, Cap, Engine};
 use crate::browser::error::BrowserError;
 use crate::browser::manager::ProfileManager;
 use crate::browser::tab_registry;
@@ -55,6 +56,16 @@ const MAX_EXPECTED_TEXTS: usize = 16;
 /// Per-buffer evidence tail budget (chars, head+tail split). The tails are
 /// the NEW lines the verdict reasoned over — evidence, not a dump.
 const EVIDENCE_TAIL_MAX: usize = 4_000;
+
+/// The tool's own worst-case wall clock: one [`MAX_TIMEOUT_MS`] wait per
+/// expectation (up to [`MAX_EXPECTED_TEXTS`] texts) plus the selector and
+/// the gone waits, plus the diagnostic settle.
+///
+/// The harness budget for `browser_qa` must sit ABOVE this number, or the
+/// harness clock preempts the tool's and the verdict it had already
+/// computed is thrown away for an opaque overrun. Declared here, next to the
+/// constants it is derived from, so the two cannot drift apart.
+pub(crate) const MAX_QA_WAIT_MS: u64 = (MAX_EXPECTED_TEXTS as u64 + 2) * MAX_TIMEOUT_MS + SETTLE_MS;
 
 /// Clamp the per-expectation wait budget into the safe window. Hand-rolled
 /// rather than `Ord::clamp` so it stays `const` (same shape as
@@ -321,10 +332,20 @@ fn evaluate_buffer_checks(
     checks: &mut Vec<(&'static str, CheckOutcome)>,
     precise: bool,
     driver: &str,
+    engine: Option<Engine>,
     flags: &CheckFlags,
     console_sub: Option<&Subtraction>,
     network_sub: Option<&Subtraction>,
 ) {
+    // Whether the ENGINE behind the cdp driver can deliver an uncaught
+    // exception at all. The driver folds `Runtime.exceptionThrown` into the
+    // console ring, but obscura never emits that event (the measured
+    // capability row `error_events` is `Unsupported` on that build), so on
+    // that engine an uncaught exception is indistinguishable from its
+    // absence. "No error lines" is not a claim the tool may make there: the
+    // driver gate below answers "can this driver deliver the event at all",
+    // and this answers "can this ENGINE" (判据 §9: one verb, one gate).
+    let sees_uncaught = engine.is_some_and(|e| capabilities(e).error_events == Cap::Supported);
     if let Some(sub) = console_sub {
         if !precise {
             if flags.console {
@@ -372,15 +393,33 @@ fn evaluate_buffer_checks(
                         "check_errors",
                         CheckOutcome::Fail {
                             detail: format!(
-                                "{} new error-level console line(s) (console.error and uncaught \
-                                 exceptions share the cdp [error] ring): {}",
+                                "{} new error-level console line(s) ({}): {}",
                                 new_errors.len(),
+                                if sees_uncaught {
+                                    "console.error and uncaught exceptions share the cdp [error] ring"
+                                } else {
+                                    "console.error only — this engine does not emit \
+                                     Runtime.exceptionThrown, so uncaught exceptions are \
+                                     invisible here"
+                                },
                                 sample_lines(&new_errors)
                             ),
                         },
                     ));
-                } else {
+                } else if sees_uncaught {
                     checks.push(("check_errors", CheckOutcome::Pass));
+                } else {
+                    checks.push((
+                        "check_errors",
+                        CheckOutcome::Unverified {
+                            reason: format!(
+                                "the engine behind driver '{driver}' does not emit \
+                                 Runtime.exceptionThrown, so an uncaught exception cannot be \
+                                 told apart from its absence — console.error lines are still \
+                                 seen, and none arrived"
+                            ),
+                        },
+                    ));
                 }
                 if matched_errors > 0 {
                     checks.push((
@@ -717,6 +756,31 @@ impl BrowserQaTool {
             tokio::time::sleep(std::time::Duration::from_millis(SETTLE_MS)).await;
         }
 
+        // ③½ Re-check the SSRF policy AFTER the waits. The check at dispatch
+        // time only covers the page as it was BEFORE the expectation waits —
+        // and the page may navigate itself while we wait (a redirect, a
+        // meta-refresh, a script-driven `location` change). Every read below
+        // (the console/network rings, the evidence screenshot) would then
+        // read content from a target the policy forbids. Re-reading the tab
+        // list is the only way to see where the page ended up.
+        match backend.list_tabs().await {
+            Ok(tabs) => {
+                if let Some(violation) =
+                    super::current_page_block(&self.manager, &tabs, tab_id).await
+                {
+                    return engine_failure(
+                        &self.manager,
+                        &BrowserError::NavigationFailed(format!(
+                            "current page blocked by SSRF policy ({violation}); \
+                             the page navigated during the QA wait — \
+                             navigate to an allowed URL before reading page content"
+                        )),
+                    );
+                }
+            }
+            Err(e) => return engine_failure(&self.manager, &e),
+        }
+
         // ④ Final read.
         let console_final = if want_console {
             match backend.console_messages(tab_id).await {
@@ -749,13 +813,16 @@ impl BrowserQaTool {
                 &to_lines(&network_final),
             )
         });
-        let precise = backend
+        let cdp = backend
             .as_any()
-            .is::<crate::browser::cdp_backend::CdpBackend>();
+            .downcast_ref::<crate::browser::cdp_backend::CdpBackend>();
+        let precise = cdp.is_some();
+        let engine = cdp.map(|cdp| cdp.engine());
         evaluate_buffer_checks(
             &mut checks,
             precise,
             driver_label(backend),
+            engine,
             &CheckFlags {
                 console: v.check_console,
                 errors: v.check_errors,
@@ -886,6 +953,11 @@ mod tests {
     use crate::browser::profile::BrowserSystemConfig;
     use crate::browser::testkit::FakeBackend;
 
+    // A literal public IP exercises the SSRF gate without an OS DNS dependency.
+    fn backend() -> FakeBackend {
+        FakeBackend::new(None).with_tabs_text("1: https://8.8.8.8/")
+    }
+
     fn manager() -> Arc<ProfileManager> {
         Arc::new(ProfileManager::new(BrowserSystemConfig::default()))
     }
@@ -919,7 +991,7 @@ mod tests {
     #[tokio::test]
     async fn failed_expectations_return_a_successful_tool_result_with_passed_false() {
         let tool = BrowserQaTool::new(manager());
-        let backend = FakeBackend::new(None).with_wait_found(false);
+        let backend = backend().with_wait_found(false);
         let mut args = bare_args();
         args.expected_text = Some(TextExpectation::One("Order confirmed".into()));
         let out = tool
@@ -955,7 +1027,7 @@ mod tests {
     #[tokio::test]
     async fn a_dimension_the_driver_cannot_serve_lands_in_unverified_not_pass() {
         let tool = BrowserQaTool::new(manager());
-        let backend = FakeBackend::new(None);
+        let backend = backend();
         let mut args = bare_args();
         args.expected_text = Some(TextExpectation::One("hello".into()));
         args.check_console = true;
@@ -1124,7 +1196,7 @@ mod tests {
     #[tokio::test]
     async fn a_met_expectation_with_all_checks_off_passes_cleanly() {
         let tool = BrowserQaTool::new(manager());
-        let backend = FakeBackend::new(None);
+        let backend = backend();
         let mut args = bare_args();
         args.expected_text = Some(TextExpectation::Many(vec![
             "Order confirmed".into(),
@@ -1155,7 +1227,7 @@ mod tests {
     #[tokio::test]
     async fn a_selector_that_stays_fails_gone_selector() {
         let tool = BrowserQaTool::new(manager());
-        let backend = FakeBackend::new(None).with_wait_found(false);
+        let backend = backend().with_wait_found(false);
         let mut args = bare_args();
         args.gone_selector = Some(".spinner".into());
         let out = tool
@@ -1182,7 +1254,7 @@ mod tests {
     #[tokio::test]
     async fn evidence_tails_carry_only_the_new_lines() {
         let tool = BrowserQaTool::new(manager());
-        let backend = FakeBackend::new(None)
+        let backend = backend()
             .with_console_text("[log] page booted\n[warn] old warning")
             .with_network_text("<- 200 https://example.com/");
         let mut args = bare_args();
@@ -1213,7 +1285,7 @@ mod tests {
     async fn a_failing_run_with_screenshot_requested_attaches_the_evidence() {
         let _home = crate::utils::paths::IsolatedAlephHome::new();
         let tool = BrowserQaTool::new(manager());
-        let backend = FakeBackend::new(None)
+        let backend = backend()
             .with_wait_found(false)
             .with_screenshot_png(b"\x89PNG-fake");
         let mut args = bare_args();
@@ -1235,7 +1307,7 @@ mod tests {
     #[tokio::test]
     async fn a_passing_run_takes_no_evidence_screenshot() {
         let tool = BrowserQaTool::new(manager());
-        let backend = FakeBackend::new(None);
+        let backend = backend();
         let mut args = bare_args();
         args.expected_text = Some(TextExpectation::One("hello".into()));
         args.screenshot = true;
@@ -1277,6 +1349,7 @@ mod tests {
             &mut checks,
             true,
             "cdp",
+            Some(Engine::Chromium),
             &flags(false, true, false),
             Some(&console),
             None,
@@ -1294,6 +1367,37 @@ mod tests {
             .any(|(_, o)| matches!(o, CheckOutcome::Warn { .. })));
     }
 
+    /// The engine gate: on an engine that never emits
+    /// `Runtime.exceptionThrown` — obscura, on the measured build — "no new
+    /// error lines" is NOT a pass. An uncaught exception is invisible there,
+    /// so the strongest honest outcome is UNVERIFIED. The driver gate above
+    /// already covers "this driver cannot deliver the event"; this covers
+    /// "this engine cannot", and the two are separate facts (判据 §9).
+    #[test]
+    fn an_engine_without_error_events_cannot_pass_the_error_check() {
+        let mut checks = Vec::new();
+        let console = sub(&["[log] quiet"], &[]);
+        evaluate_buffer_checks(
+            &mut checks,
+            true,
+            "cdp",
+            Some(Engine::Obscura),
+            &flags(false, true, false),
+            Some(&console),
+            None,
+        );
+        assert!(
+            checks.iter().any(|(name, o)| {
+                *name == "check_errors" && matches!(o, CheckOutcome::Unverified { .. })
+            }),
+            "{checks:?}"
+        );
+        assert!(
+            !checks.iter().any(|(_, o)| matches!(o, CheckOutcome::Pass)),
+            "an exception class the engine cannot see must not be reported as a pass: {checks:?}"
+        );
+    }
+
     /// Review Focus #3 at the tool layer: a fingerprint the baseline absorbs
     /// is NOT a pass — it is unverified. The mutation "treat matched as
     /// clean" must turn this red.
@@ -1305,6 +1409,7 @@ mod tests {
             &mut checks,
             true,
             "cdp",
+            Some(Engine::Chromium),
             &flags(true, true, false),
             Some(&console),
             None,
@@ -1331,6 +1436,7 @@ mod tests {
             &mut checks,
             true,
             "cdp",
+            Some(Engine::Chromium),
             &flags(false, true, false),
             Some(&console),
             None,
@@ -1359,6 +1465,7 @@ mod tests {
             &mut checks,
             true,
             "cdp",
+            Some(Engine::Chromium),
             &flags(false, false, true),
             None,
             Some(&network),
@@ -1387,6 +1494,7 @@ mod tests {
             &mut checks,
             true,
             "cdp",
+            Some(Engine::Chromium),
             &flags(true, true, false),
             Some(&console),
             None,
@@ -1411,6 +1519,7 @@ mod tests {
             &mut checks,
             true,
             "cdp",
+            Some(Engine::Chromium),
             &flags(true, false, false),
             Some(&console),
             None,
@@ -1429,6 +1538,7 @@ mod tests {
             &mut checks,
             true,
             "cdp",
+            Some(Engine::Chromium),
             &flags(true, true, false),
             Some(&console),
             None,
@@ -1456,6 +1566,7 @@ mod tests {
             &mut checks,
             false,
             "managed (playwright-cli)",
+            None,
             &flags(true, true, true),
             Some(&console),
             Some(&network),
@@ -1480,7 +1591,7 @@ mod tests {
     #[tokio::test]
     async fn the_wire_shape_matches_the_spec() {
         let tool = BrowserQaTool::new(manager());
-        let backend = FakeBackend::new(None).with_wait_found(false);
+        let backend = backend().with_wait_found(false);
         let mut args = bare_args();
         args.expected_text = Some(TextExpectation::One("nope".into()));
         let out = tool

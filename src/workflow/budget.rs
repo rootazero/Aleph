@@ -30,6 +30,19 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
+/// The `(cap, spent) → balance` rule, in one place.
+///
+/// An uncapped budget has no headroom to compute, so it reports `u64::MAX`
+/// (saturating). A capped one reports `cap - spent` and never goes negative:
+/// a tally that briefly exceeds the cap answers "0 left", because "the next
+/// charge will be refused" is the same answer on both sides of the boundary.
+fn balance(cap: Option<u64>, spent: u64) -> u64 {
+    match cap {
+        None => u64::MAX,
+        Some(cap) => cap.saturating_sub(spent),
+    }
+}
+
 /// Per-run budget for a workflow execution.
 ///
 /// `None` total means **unlimited** — every charge succeeds. `total = Some(0)`
@@ -82,10 +95,7 @@ impl WorkflowRunBudget {
     /// lands on.
     #[must_use]
     pub fn remaining(&self) -> u64 {
-        match self.total {
-            None => u64::MAX,
-            Some(cap) => cap.saturating_sub(self.spent.load(Ordering::Relaxed)),
-        }
+        balance(self.total, self.spent.load(Ordering::Relaxed))
     }
 
     /// The full accounting state — `(cap, spent, remaining)`. `cap = None`
@@ -94,14 +104,10 @@ impl WorkflowRunBudget {
     #[must_use]
     pub fn snapshot(&self) -> BudgetSnapshot {
         let spent = self.spent.load(Ordering::Relaxed);
-        let remaining = match self.total {
-            None => u64::MAX,
-            Some(cap) => cap.saturating_sub(spent),
-        };
         BudgetSnapshot {
             total: self.total,
             spent,
-            remaining,
+            remaining: balance(self.total, spent),
         }
     }
 
@@ -131,7 +137,7 @@ impl WorkflowRunBudget {
         };
         loop {
             let current = self.spent.load(Ordering::Relaxed);
-            let headroom = cap.saturating_sub(current);
+            let headroom = balance(Some(cap), current);
             if cost > headroom {
                 return BudgetOutcome::Exhausted {
                     remaining: headroom,
@@ -151,7 +157,7 @@ impl WorkflowRunBudget {
                 .is_ok()
             {
                 return BudgetOutcome::Ok {
-                    remaining: cap - (current + cost),
+                    remaining: balance(Some(cap), current + cost),
                 };
             }
         }

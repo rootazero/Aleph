@@ -2,7 +2,6 @@
 
 use crate::error::AlephError;
 use chrono::Utc;
-use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 
 pub const SCHEMA_FILENAME: &str = "SCHEMA.md";
@@ -83,11 +82,7 @@ fn extract_section<'a>(raw: &'a str, name: &str) -> Option<&'a str> {
     Some(&raw[start..end])
 }
 
-fn hash(s: &str) -> String {
-    let mut h = Sha256::new();
-    h.update(s.as_bytes());
-    hex::encode(h.finalize())
-}
+use crate::memory::notes::indexer::sha2_hash as hash;
 
 /// Reader/writer for `SCHEMA.md`.
 pub struct SchemaStore {
@@ -118,6 +113,31 @@ impl SchemaStore {
             .await
             .map_err(|e| AlephError::other(format!("read schema: {e}")))?;
         Ok(Some(SchemaDoc::parse(raw)?))
+    }
+
+    /// Publish a complete initial schema without replacing an intervening write.
+    pub(super) async fn write_if_missing(&self, content: &str) -> Result<(), AlephError> {
+        let temporary = self.agent_dir.join(format!(
+            ".schema.bootstrap.tmp.{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        ));
+        tokio::fs::write(&temporary, content)
+            .await
+            .map_err(|error| AlephError::other(format!("write initial schema: {error}")))?;
+        // A same-directory hard link publishes atomically and never replaces a
+        // schema that a tool or external editor created while bootstrap ran.
+        let published = match tokio::fs::hard_link(&temporary, self.path()).await {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+            Err(error) => Err(AlephError::other(format!(
+                "publish initial schema: {error}"
+            ))),
+        };
+        let removed = tokio::fs::remove_file(&temporary).await.map_err(|error| {
+            AlephError::other(format!("remove initial schema staging file: {error}"))
+        });
+        published?;
+        removed
     }
 
     /// Atomic write guarded by `expected_hash` (None = first write / force).
@@ -193,6 +213,23 @@ Special: synthesis (weekly dream output). skill/reference have extra frontmatter
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn bootstrap_schema_preserves_an_intervening_write() {
+        let root = tempfile::tempdir().unwrap();
+        let store = SchemaStore::new(root.path());
+        assert!(store.read().await.unwrap().is_none());
+        store
+            .write("# Memory Schema\n\nUser content.", None)
+            .await
+            .unwrap();
+        store.write_if_missing(DEFAULT_SCHEMA).await.unwrap();
+        assert_eq!(
+            store.read().await.unwrap().unwrap().raw,
+            "# Memory Schema\n\nUser content."
+        );
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
+    }
 
     #[test]
     fn parse_default_schema() {

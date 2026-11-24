@@ -56,31 +56,6 @@ pub fn build_text_note(content: &str, pubkey: &str) -> NostrEvent {
     }
 }
 
-/// Build a kind-4 DM event (unsigned, plaintext).
-///
-/// Creates a direct message event targeting `recipient_pubkey`.
-/// Per NIP-04, the content should be encrypted with AES-256-CBC,
-/// but this implementation uses plaintext and notes encryption
-/// as a future enhancement.
-///
-/// Tags include `["p", <recipient_pubkey>]` to identify the recipient.
-#[must_use]
-pub fn build_dm(content: &str, pubkey: &str, recipient_pubkey: &str) -> NostrEvent {
-    let created_at = now_unix();
-    let tags = vec![vec!["p".to_string(), recipient_pubkey.to_string()]];
-    let id = compute_event_id(pubkey, created_at, 4, &tags, content);
-
-    NostrEvent {
-        id,
-        pubkey: pubkey.to_string(),
-        created_at,
-        kind: 4,
-        tags,
-        content: content.to_string(),
-        sig: String::new(),
-    }
-}
-
 /// Build a kind-7 reaction event (unsigned).
 ///
 /// Creates a reaction (e.g., "+") to an existing event.
@@ -283,9 +258,11 @@ pub fn sign_event(event: &mut NostrEvent, private_key_hex: &str) -> Result<(), S
 /// - `event.pubkey` -> `sender_id`
 /// - `event.content` -> `text`
 /// - `event.id` -> `id`
-/// - Kind 4 (DM) -> `is_group = false`
-/// - Kind 1 (text note) -> `is_group = true`
+/// - Kind 1 (text note) -> `is_group = true`, conversation `public`
 /// - `["e", <event_id>]` tag -> `reply_to`
+///
+/// Kind 4 (NIP-04 encrypted DM) is dropped: the channel has no decryption, so
+/// its `content` is ciphertext that must never reach the agent as text.
 pub fn convert_event_to_inbound(
     event: &NostrEvent,
     channel_id: &ChannelId,
@@ -301,18 +278,21 @@ pub fn convert_event_to_inbound(
         return None;
     }
 
-    // Determine if this is a DM or public note
-    let is_group = event.kind != 4;
+    // Kind 4 is a NIP-04 encrypted DM: without decryption the content is
+    // ciphertext. Do not hand it to the agent, and do not subscribe to that
+    // kind (see `run_relay_loop`).
+    if event.kind == 4 {
+        tracing::warn!(
+            "Dropping Nostr kind 4 event from {}: this channel has no NIP-04 decryption",
+            event.pubkey
+        );
+        return None;
+    }
 
-    // For DMs, conversation_id is the sender's pubkey
-    // For public notes, conversation_id is "public" (no specific conversation)
-    let conversation_id = if event.kind == 4 {
-        // DM conversation: use the sender's pubkey as conversation ID
-        event.pubkey.clone()
-    } else {
-        // Public note: use "public" as a catch-all conversation
-        "public".to_string()
-    };
+    // Public notes are the only accepted kind, so the conversation is the
+    // catch-all `public` and every message is a group message.
+    let is_group = true;
+    let conversation_id = "public".to_string();
 
     // Extract reply-to from "e" tags (first "e" tag is the replied-to event)
     let reply_to = event

@@ -80,19 +80,30 @@ pub fn promote_plain_text_tool_calls(
     // produces at least one block wins, so we never interleave formats.
     let matches = extract_tool_call_tags(text).or_else(|| extract_function_xml(text))?;
 
+    // The offered set is the same for every block in this turn and the
+    // resolver's tiers are order-independent (each abstains on ambiguity
+    // rather than picking a favourite), so materialize it once instead of
+    // once per block.
+    let offered: Vec<&str> = allowed_names.iter().copied().collect();
+
+    // Strip before resolving: the residual text only needs the block spans,
+    // and consuming the matches afterwards lets each promoted call take its
+    // arguments by move instead of cloning the whole argument payload.
+    let residual_text = strip_spans(text, &matches);
+
     // Resolve every name up front. Any miss aborts the whole promotion.
     let mut calls = Vec::with_capacity(matches.len());
-    for m in &matches {
-        let resolved = resolve_name(&m.call.name, allowed_names)?;
+    for m in matches {
+        let resolved = resolve_name(&m.call.name, &offered)?;
         calls.push(PromotedToolCall {
             name: resolved,
-            arguments: m.call.arguments.clone(),
+            arguments: m.call.arguments,
         });
     }
 
     Some(Promotion {
         calls,
-        residual_text: strip_spans(text, &matches),
+        residual_text,
     })
 }
 
@@ -102,9 +113,8 @@ pub fn promote_plain_text_tool_calls(
 /// same case / separator (`file.read` ↔ `file_read`) / bounded-typo tolerance.
 /// Returns the canonical offered name, or `None` when nothing resolves safely
 /// (which aborts the whole all-or-nothing promotion).
-fn resolve_name(raw: &str, allowed: &HashSet<&str>) -> Option<String> {
-    let offered: Vec<&str> = allowed.iter().copied().collect();
-    crate::tools::name_repair::repair_tool_name(raw, &offered).map(|r| r.name)
+fn resolve_name(raw: &str, offered: &[&str]) -> Option<String> {
+    crate::tools::name_repair::repair_tool_name(raw, offered).map(|r| r.name)
 }
 
 /// Rebuild the source text with `matches` spans removed, then trim. `matches`
@@ -114,11 +124,15 @@ fn strip_spans(text: &str, matches: &[Match]) -> String {
     let mut cursor = 0usize;
     for m in matches {
         if m.start >= cursor {
-            out.push_str(&text[cursor..m.start]);
+            if let Some(chunk) = text.get(cursor..m.start) {
+                out.push_str(chunk);
+            }
             cursor = m.end;
         }
     }
-    out.push_str(&text[cursor..]);
+    if let Some(tail) = text.get(cursor..) {
+        out.push_str(tail);
+    }
     out.trim().to_string()
 }
 
@@ -139,7 +153,7 @@ fn extract_tool_call_tags(text: &str) -> Option<Vec<Match>> {
         let Some(rel_close) = find_ci(text, TOOL_CALL_CLOSE, body_start) else {
             break;
         };
-        let body = &text[body_start..rel_close];
+        let body = text.get(body_start..rel_close).unwrap_or("");
         let end = rel_close + TOOL_CALL_CLOSE.len();
         if let Some(call) = parse_json_tool_call(body) {
             matches.push(Match {
@@ -202,15 +216,21 @@ fn extract_function_xml(text: &str) -> Option<Vec<Match>> {
     while let Some(rel_open) = find_ci(text, FUNCTION_OPEN, search) {
         let name_start = rel_open + FUNCTION_OPEN.len();
         // Name runs until the closing '>' of the opening tag.
-        let Some(rel_gt) = text[name_start..].find('>') else {
+        let Some(name_slice) = text.get(name_start..) else {
             break;
         };
-        let name = text[name_start..name_start + rel_gt].trim().to_string();
+        let Some(rel_gt) = name_slice.find('>') else {
+            break;
+        };
+        let name = text
+            .get(name_start..name_start + rel_gt)
+            .map_or("", str::trim)
+            .to_string();
         let inner_start = name_start + rel_gt + 1;
         let Some(rel_close) = find_ci(text, FUNCTION_CLOSE, inner_start) else {
             break;
         };
-        let inner = &text[inner_start..rel_close];
+        let inner = text.get(inner_start..rel_close).unwrap_or("");
         let end = rel_close + FUNCTION_CLOSE.len();
         if !name.is_empty() {
             matches.push(Match {
@@ -234,15 +254,21 @@ fn parse_xml_parameters(inner: &str) -> Value {
     let mut search = 0usize;
     while let Some(rel_open) = find_ci(inner, PARAM_OPEN, search) {
         let key_start = rel_open + PARAM_OPEN.len();
-        let Some(rel_gt) = inner[key_start..].find('>') else {
+        let Some(key_slice) = inner.get(key_start..) else {
             break;
         };
-        let key = inner[key_start..key_start + rel_gt].trim().to_string();
+        let Some(rel_gt) = key_slice.find('>') else {
+            break;
+        };
+        let key = inner
+            .get(key_start..key_start + rel_gt)
+            .map_or("", str::trim)
+            .to_string();
         let val_start = key_start + rel_gt + 1;
         let Some(rel_close) = find_ci(inner, PARAM_CLOSE, val_start) else {
             break;
         };
-        let raw = inner[val_start..rel_close].trim();
+        let raw = inner.get(val_start..rel_close).map_or("", str::trim);
         let value =
             serde_json::from_str::<Value>(raw).unwrap_or_else(|_| Value::String(raw.to_string()));
         if !key.is_empty() {

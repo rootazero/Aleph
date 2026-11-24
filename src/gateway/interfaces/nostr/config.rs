@@ -5,13 +5,18 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Default subscription kinds: text notes (1) and encrypted DMs (4).
+/// Default subscription kinds: text notes (1).
+///
+/// Kind 4 (NIP-04 encrypted DMs) is deliberately absent: the channel has no
+/// decryption, so subscribing to it would only deliver ciphertext.
 fn default_subscription_kinds() -> Vec<u64> {
-    vec![1, 4]
+    vec![1]
 }
 
 /// Nostr channel configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+// No `Debug`: `private_key` is the channel's identity and must not reach
+// a log.
+#[derive(Clone, Serialize, Deserialize)]
 pub struct NostrConfig {
     /// Private key (hex-encoded 32 bytes)
     ///
@@ -40,10 +45,11 @@ pub struct NostrConfig {
     #[serde(default)]
     pub blocked_pubkeys: Vec<String>,
 
-    /// Event kinds to subscribe to (default: [1, 4] for text notes and DMs)
+    /// Event kinds to subscribe to (default: `[1]`, public text notes)
     ///
-    /// - Kind 1: Text note (public)
-    /// - Kind 4: Encrypted direct message (NIP-04, plaintext for now)
+    /// Kind 4 (NIP-04 encrypted direct message) is filtered out at connection
+    /// time and logged: the channel cannot decrypt it, so a kind-4 event would
+    /// only ever be ciphertext.
     #[serde(default = "default_subscription_kinds")]
     pub subscription_kinds: Vec<u64>,
 }
@@ -137,7 +143,7 @@ mod tests {
         assert!(config.private_key.is_empty());
         assert!(config.relays.is_empty());
         assert!(config.allowed_pubkeys.is_empty());
-        assert_eq!(config.subscription_kinds, vec![1, 4]);
+        assert_eq!(config.subscription_kinds, vec![1]);
     }
 
     #[test]
@@ -299,6 +305,6 @@ mod tests {
         let config: NostrConfig = serde_json::from_str(json).unwrap();
 
         assert!(config.allowed_pubkeys.is_empty());
-        assert_eq!(config.subscription_kinds, vec![1, 4]);
+        assert_eq!(config.subscription_kinds, vec![1]);
     }
 }

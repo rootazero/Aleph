@@ -13,6 +13,7 @@
 //! `Path::exists()` — see the `presence_discipline` test module at the foot of
 //! this file for why, and for the guard that keeps it that way.
 
+pub mod browser_ignored_fields;
 pub mod browser_runtime;
 pub mod cache_health;
 pub mod cache_hit_rate;
@@ -36,6 +37,7 @@ pub mod sqlite_integrity;
 pub mod stale_lock;
 pub mod vault;
 
+pub use browser_ignored_fields::BrowserIgnoredFieldsCheck;
 pub use browser_runtime::BrowserRuntimeCheck;
 pub use cache_health::CacheHealthCheck;
 pub use cache_hit_rate::CacheHitRateCheck;

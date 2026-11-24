@@ -277,13 +277,13 @@ fn the_promote_branch_sits_between_the_redirect_and_the_admission() {
         .find("redirect_to_side_session(&mut request)")
         .expect("execute() still redirects; if this moved, so did the invariant");
     let promote = production
-        .find("btw::is_promote(&request.metadata)")
+        .find("crate::gateway::btw::is_promote(&request.metadata)")
         .expect(
             "execute() no longer reads the stamp's VALUE — a `/btw promote` is back to \
              being an ordinary side question asked about the literal word `promote`",
         );
     let admit = production
-        .find("self.admit_run(")
+        .find(".admit_run(")
         .expect("execute() still admits; the scan stopped matching, so its green means nothing");
 
     assert!(
@@ -333,7 +333,7 @@ fn an_over_budget_principal_keeps_the_read_only_crossing() {
     let production = crate::utils::source_scan::production_prefix(&text);
 
     let promote = production
-        .find("btw::is_promote(&request.metadata)")
+        .find("crate::gateway::btw::is_promote(&request.metadata)")
         .expect(
             "execute() still serves promote; the scan stopped matching, so its green means nothing",
         );
@@ -341,7 +341,7 @@ fn an_over_budget_principal_keeps_the_read_only_crossing() {
         .find("deny_if_over_spend_and_report(&request, emitter.as_ref())")
         .expect("execute() still denies over-ceiling principals; the scan stopped matching");
     let admit = production
-        .find("self.admit_run(")
+        .find(".admit_run(")
         .expect("execute() still admits; the scan stopped matching, so its green means nothing");
 
     assert!(

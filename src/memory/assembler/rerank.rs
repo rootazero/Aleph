@@ -34,22 +34,29 @@ Rules:
 
 pub(crate) fn build_prompt(query: &str, candidates: &[Candidate], total_budget: u32) -> String {
     let max_sum = ((total_budget as f32) * 0.7) as u32;
-    let cand_block: String = candidates
+    use std::fmt::Write as _;
+    let mut cand_block = String::new();
+    let mut first = true;
+    for c in candidates
         .iter()
         .filter(|c| c.slot_hint != SlotKind::UserProfile && c.slot_hint != SlotKind::Feedback)
-        .map(|c| {
-            let summary: String = c.full_content.chars().take(30).collect();
-            format!(
-                "  [{}] | \"{}\" | {} | {:.2} | {}",
-                c.id,
-                c.title.replace('"', "'"),
-                slot_name(c.slot_hint),
-                c.relevance,
-                summary,
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    {
+        if !first {
+            cand_block.push('\n');
+        }
+        first = false;
+        let summary = crate::utils::text_format::truncate_chars(&c.full_content, 30);
+        let title_escaped = c.title.replace('"', "'");
+        let _ = write!(
+            cand_block,
+            "  [{}] | \"{}\" | {} | {:.2} | {}",
+            c.id,
+            title_escaped,
+            slot_name(c.slot_hint),
+            c.relevance,
+            summary,
+        );
+    }
     // Substitute the trusted template fields FIRST and the user-controlled
     // `{query}` LAST. `String::replace` is applied left-to-right, so if the
     // query were substituted first a query containing the literal `{candidates}`
@@ -110,11 +117,8 @@ pub(crate) fn parse_response(
         if matches!(kind, SlotKind::UserProfile) {
             continue;
         }
-        let ids: Vec<String> = slot
-            .item_ids
-            .into_iter()
-            .filter(|id| valid_ids.contains(id.as_str()))
-            .collect();
+        let mut ids = slot.item_ids;
+        ids.retain(|id| valid_ids.contains(id.as_str()));
         if ids.is_empty() || slot.tokens_budget == 0 {
             continue;
         }

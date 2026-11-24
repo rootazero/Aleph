@@ -65,9 +65,11 @@ impl<'a> RpcJobs<'a> {
     pub async fn next(&mut self) -> RpcResult {
         poll_fn(|cx| {
             for index in 0..self.jobs.len() {
-                if let Poll::Ready(result) = self.jobs[index].1.as_mut().poll(cx) {
-                    let (tag, _) = self.jobs.swap_remove(index);
-                    return Poll::Ready(RpcResult { tag, result });
+                if let Some((_, job)) = self.jobs.get_mut(index) {
+                    if let Poll::Ready(result) = job.as_mut().poll(cx) {
+                        let (tag, _) = self.jobs.swap_remove(index);
+                        return Poll::Ready(RpcResult { tag, result });
+                    }
                 }
             }
             // Empty is deliberately Pending: the terminal/tick branch will

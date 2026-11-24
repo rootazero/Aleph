@@ -196,12 +196,16 @@ impl MutationGate {
         if self.merge_history.len() < MERGE_CYCLE_THRESHOLD {
             return None;
         }
-        let sets: Vec<&HashSet<(String, String)>> = self.merge_history.iter().collect();
 
-        for window in sets.windows(MERGE_CYCLE_THRESHOLD) {
-            let repeated = window[0]
-                .iter()
-                .find(|pair| window[1..].iter().all(|set| set.contains(*pair)));
+        for i in 0..=self
+            .merge_history
+            .len()
+            .saturating_sub(MERGE_CYCLE_THRESHOLD)
+        {
+            let first = &self.merge_history[i];
+            let repeated = first.iter().find(|pair| {
+                (1..MERGE_CYCLE_THRESHOLD).all(|k| self.merge_history[i + k].contains(*pair))
+            });
             if let Some(pair) = repeated {
                 return Some(format!(
                     "merge cycle: ({}, {}) repeated {MERGE_CYCLE_THRESHOLD} consecutive cycles",
@@ -224,11 +228,12 @@ impl MutationGate {
         if self.synthesis_history.len() < SYNTHESIS_CHURN_THRESHOLD {
             return None;
         }
-        let cycles: Vec<&HashMap<String, String>> = self.synthesis_history.iter().collect();
 
-        for (path, digest) in cycles[0] {
+        let first = self.synthesis_history.front()?;
+
+        for (path, digest) in first {
             let mut previous = digest;
-            let flipped = cycles[1..].iter().all(|cycle| {
+            let flipped = self.synthesis_history.iter().skip(1).all(|cycle| {
                 cycle.get(path).is_some_and(|d| {
                     let changed = d != previous;
                     previous = d;
@@ -253,7 +258,9 @@ impl MutationGate {
         let (total_produced, total_recalled): (u32, u32) = self
             .distill_history
             .iter()
-            .fold((0, 0), |(p, r), (dp, dr)| (p + dp, r + dr));
+            .fold((0, 0), |(p, r), (dp, dr)| {
+                (p.saturating_add(*dp), r.saturating_add(*dr))
+            });
 
         if total_produced == 0 {
             return None;

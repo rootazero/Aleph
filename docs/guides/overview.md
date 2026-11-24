@@ -4,7 +4,7 @@
 
 | File | Format | Hot-reload | Description |
 |------|--------|------------|-------------|
-| `~/.aleph/config.toml` | TOML | Yes (fswatch, 500ms debounce) | Main configuration |
+| `~/.aleph/config.toml` | TOML | Partly (fswatch watches it; only PII privacy hot-applies. `config.reload` applies the rest) | Main configuration |
 | `~/.aleph/mcp_config.json` | JSON | No (restart Aleph after edit) | MCP server definitions |
 | `~/.aleph/agents/{id}/` | Directory | On next agent resolution | Per-agent workspace |
 | `~/.aleph/skills/` | Directories | On next skill discovery | Installed skills |

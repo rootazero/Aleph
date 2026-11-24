@@ -69,7 +69,7 @@ const TID = (id) => `[data-testid=${id}]`;
  * missing => `querySelector` returns null). Everything is recorded for assertions.
  */
 export function createMockPage({ script, internals = "default", bytes = 7 } = {}) {
-  const log = { queried: [], clicks: [], nativeSets: [], ownSets: [], inputEvents: [], reloads: 0, sockets: [], timers: [] };
+  const log = { queried: [], clicks: [], navigations: [], nativeSets: [], ownSets: [], inputEvents: [], reloads: 0, sockets: [], timers: [] };
   const dom = new Map();
 
   class HTMLInputElement {
@@ -135,6 +135,9 @@ export function createMockPage({ script, internals = "default", bytes = 7 } = {}
     location: {
       reload() {
         log.reloads += 1;
+      },
+      assign(route) {
+        log.navigations.push(route);
       },
     },
     crypto: {

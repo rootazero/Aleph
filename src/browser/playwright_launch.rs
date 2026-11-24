@@ -227,26 +227,78 @@ pub(super) fn browser_state_dir(leaf: &str) -> Result<PathBuf, super::error::Bro
 /// The key is a profile name, which the config layer constrains; sanitize
 /// anyway so a name can never escape the directory.
 ///
+/// **The mapping must be INJECTIVE.** This name is the ONLY per-profile
+/// separator for the Chromium `--user-data-dir`
+/// (`src/browser/engine/chromium.rs`), the Chrome-MCP user-data-dir
+/// (`src/browser/chrome_mcp.rs`), the CLI output dir, the CLI config file and
+/// the sidecar record (`engine::process::sidecar_file_name`) — so two
+/// profiles that collapse onto one component share a browser data directory
+/// (cross-profile cookie/login bleed), overwrite each other's CLI output and
+/// take each other's sidecar record away. The previous mapping replaced every
+/// disallowed character with `_`, which is many-to-one: "a/b" and "a_b", or
+/// any two non-ASCII profile names, produced the same component.
+///
+/// So the encoding is reversible instead of lossy: an allowed character stays
+/// literal, and every disallowed BYTE is percent-encoded. `%` is itself not an
+/// allowed character, so it never appears literally in the output and the
+/// encoding is unambiguous.
+///
 /// `pub(super)` so the sibling `chrome_mcp` module can reuse it when it
 /// builds its per-profile user-data-dir; without this both paths would have
 /// to keep the same shape in sync to honour the BROWSER-R4-05 isolation
 /// guarantee.
 pub(super) fn sanitize_session_key(session_key: &str) -> String {
-    let safe: String = session_key
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    if safe.is_empty() || safe.starts_with('.') {
-        format!("p_{safe}")
-    } else {
-        safe
+    let mut safe = String::with_capacity(session_key.len());
+    for byte in session_key.as_bytes() {
+        let c = *byte as char;
+        if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') {
+            safe.push(c);
+        } else {
+            // Percent-encode the byte. `format!` inside a loop is fine here:
+            // this runs once per profile name, not per byte of a page.
+            safe.push('%');
+            safe.push_str(&format!("{byte:02X}"));
+        }
     }
+    // A name that encoded to nothing (the empty key) and a name that starts
+    // with '.' (which must not become a hidden file, and must not be "..")
+    // both need a prefix. The prefix is `%` / `%2E` — strings the encoder
+    // above can never produce ('.' is allowed, so it is never encoded, and a
+    // literal '%' is always encoded as "%25"), so the prefix cannot collide
+    // with another key's encoding.
+    if safe.is_empty() {
+        return "%".to_string();
+    }
+    if safe.starts_with('.') {
+        return format!("%2E{safe}");
+    }
+    // A very long (or non-ASCII-heavy) profile name can exceed the file-name
+    // length limit once encoded. Truncate and append a hash of the ORIGINAL
+    // key: `~` cannot appear in the encoded form (the allowed set has no
+    // '~'), so the shortened name is still distinguishable from any other.
+    const MAX_COMPONENT: usize = 100;
+    if safe.len() > MAX_COMPONENT {
+        return format!(
+            "{}~{:016x}",
+            &safe[..MAX_COMPONENT],
+            fnv1a(session_key.as_bytes())
+        );
+    }
+    safe
+}
+
+/// FNV-1a (64-bit) over the raw key bytes.
+///
+/// A local, dependency-free digest used only to disambiguate a truncated
+/// component. It is not a security primitive: it separates two names that
+/// share a long prefix, nothing more.
+fn fnv1a(bytes: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
 }
 
 /// Materialize this session's `--config` file and return its path.
@@ -285,6 +337,58 @@ pub async fn write_launch_config(session_key: &str) -> Result<PathBuf, super::er
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The per-profile separator must be INJECTIVE: two distinct profile
+    /// names may never land on the same component, because that component is
+    /// the whole of the `--user-data-dir` / CLI-output / sidecar isolation.
+    #[test]
+    fn distinct_profile_names_keep_distinct_components() {
+        let names = [
+            "a/b",
+            "a_b",
+            "工作",
+            "默认",
+            "default",
+            "default-2",
+            "..",
+            ".",
+            "",
+            "p_",
+            "p%5F",
+        ];
+        let mut seen = std::collections::HashMap::new();
+        for name in names {
+            let component = sanitize_session_key(name);
+            assert!(
+                !component.is_empty(),
+                "{name:?} must not sanitize to an empty component"
+            );
+            assert!(
+                !component.contains('/'),
+                "{name:?} must not keep a path separator: {component}"
+            );
+            assert!(
+                !component.starts_with('.'),
+                "{name:?} must not become a hidden component: {component}"
+            );
+            assert!(
+                component != "." && component != "..",
+                "{name:?} must not produce a traversal component: {component}"
+            );
+            if let Some(previous) = seen.insert(component.clone(), name) {
+                panic!("{name:?} and {previous:?} share the component {component:?}");
+            }
+        }
+    }
+
+    /// A long or non-ASCII name stays a single, legal path component.
+    #[test]
+    fn a_long_name_still_produces_one_bounded_component() {
+        let long = "工".repeat(200);
+        let component = sanitize_session_key(&long);
+        assert!(component.len() <= 140, "got {} bytes", component.len());
+        assert!(!component.contains('/'));
+    }
 
     /// The config file's key set, exactly. Everything that used to live under
     /// `browser` moved onto the Chrome argv Aleph now builds itself

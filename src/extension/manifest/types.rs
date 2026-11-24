@@ -18,6 +18,53 @@ use super::toml_types::{
 use crate::extension::runtime::wasm::WasmCapabilities;
 use crate::extension::runtime::wasm::WasmResourceLimits;
 
+/// Explicit, optional facts about one single-file community Panel tab.
+/// Trust, availability, asset publication, and revisions belong to the host.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PanelUiManifest {
+    pub tab_id: String,
+    pub label: String,
+    pub icon: String,
+    pub order: i32,
+    pub entry: String,
+    pub api_major: u16,
+    pub permissions: Vec<String>,
+    pub asset_integrity: String,
+}
+
+impl PanelUiManifest {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        use aleph_protocol::panel::{
+            supported_community_permission, valid_asset_integrity, valid_identity_segment,
+            valid_relative_entry, PANEL_UI_API_MAJOR,
+        };
+        if !valid_identity_segment(&self.tab_id) {
+            return Err("panel.invalid_identity");
+        }
+        if self.label.trim().is_empty() || self.icon.trim().is_empty() {
+            return Err("panel.invalid_presentation");
+        }
+        if self.api_major != PANEL_UI_API_MAJOR {
+            return Err("panel.incompatible_api");
+        }
+        if !valid_relative_entry(&self.entry) {
+            return Err("panel.invalid_entry");
+        }
+        if !valid_asset_integrity(&self.asset_integrity) {
+            return Err("panel.invalid_integrity");
+        }
+        if self
+            .permissions
+            .iter()
+            .any(|permission| !supported_community_permission(permission))
+        {
+            return Err("panel.unsupported_permission");
+        }
+        Ok(())
+    }
+}
+
 // =============================================================================
 // Config UI Hints
 // =============================================================================
@@ -142,81 +189,6 @@ impl PluginPermission {
 }
 
 // =============================================================================
-// Author Information
-// =============================================================================
-
-/// Plugin author information
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct AuthorInfo {
-    /// Author name
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-
-    /// Author email
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub email: Option<String>,
-
-    /// Author URL (homepage, profile, etc.)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub url: Option<String>,
-}
-
-impl AuthorInfo {
-    /// Check if this author info has any content
-    #[must_use]
-    pub const fn is_empty(&self) -> bool {
-        self.name.is_none() && self.email.is_none() && self.url.is_none()
-    }
-}
-
-/// Parse author from npm package.json format
-///
-/// Supports both string format ("Name `&lt;email&gt;` (url)") and object format.
-impl From<&str> for AuthorInfo {
-    fn from(s: &str) -> Self {
-        // Parse npm author string: "Name <email> (url)".
-        //
-        // Use `find` (leftmost) rather than `rfind`: the LAST `(` could
-        // belong to a name segment in parentheses, e.g.
-        // "Note (about X) <real@email.com>" — `rfind('(')` would return
-        // the position of "about" and the email stage would then mis-extract.
-        // Likewise "x (y) <z>" would lose the email because rfind('>') on
-        // the remaining "x (y)" finds nothing.
-        let mut info = Self::default();
-        let mut remaining = s.trim();
-
-        // Extract URL (leftmost `(...)`).
-        if let Some(start) = remaining.find('(') {
-            if let Some(end) = remaining[start..].find(')') {
-                let end = start + end;
-                if start < end {
-                    info.url = Some(remaining[start + 1..end].trim().to_string());
-                    remaining = remaining[..start].trim();
-                }
-            }
-        }
-
-        // Extract email (leftmost `<...>`).
-        if let Some(start) = remaining.find('<') {
-            if let Some(end) = remaining[start..].find('>') {
-                let end = start + end;
-                if start < end {
-                    info.email = Some(remaining[start + 1..end].trim().to_string());
-                    remaining = remaining[..start].trim();
-                }
-            }
-        }
-
-        // Whatever remains is the name
-        if !remaining.is_empty() {
-            info.name = Some(remaining.to_string());
-        }
-
-        info
-    }
-}
-
-// =============================================================================
 // Plugin Manifest
 // =============================================================================
 
@@ -262,30 +234,6 @@ pub struct PluginManifest {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub permissions: Vec<PluginPermission>,
 
-    /// Author information
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub author: Option<AuthorInfo>,
-
-    /// Plugin homepage URL
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub homepage: Option<String>,
-
-    /// Repository URL
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub repository: Option<String>,
-
-    /// License identifier (SPDX)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub license: Option<String>,
-
-    /// Search keywords
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub keywords: Vec<String>,
-
-    /// Supported file extensions (for static plugins)
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub extensions: Vec<String>,
-
     // ═══════════════════════════════════════════
     // V2 Extension fields (from aleph_plugin.toml)
     // ═══════════════════════════════════════════
@@ -325,6 +273,10 @@ pub struct PluginManifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aleph_extensions: Option<AlephExtensions>,
 
+    /// Opt-in Panel declaration; never inferred from the generic runtime entry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub panel: Option<PanelUiManifest>,
+
     /// Optional \[memory\] section — memory extension hook declarations.
     /// Parsed from aleph.plugin.toml or .claude-plugin/plugin.toml \[memory\].
     #[serde(skip)]
@@ -359,12 +311,6 @@ impl PluginManifest {
             config_schema: None,
             config_ui_hints: HashMap::new(),
             permissions: Vec::new(),
-            author: None,
-            homepage: None,
-            repository: None,
-            license: None,
-            keywords: Vec::new(),
-            extensions: Vec::new(),
             // V2 fields
             tools_v2: None,
             hooks_v2: None,
@@ -376,6 +322,7 @@ impl PluginManifest {
             wasm_resource_limits: None,
             // CC-compat extensions
             aleph_extensions: None,
+            panel: None,
             // Memory extension manifest section
             memory_manifest: None,
         }
@@ -495,30 +442,6 @@ pub struct AlephExtensions {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_author_info_from_string_full() {
-        let author = AuthorInfo::from("John Doe <john@example.com> (https://example.com)");
-        assert_eq!(author.name, Some("John Doe".to_string()));
-        assert_eq!(author.email, Some("john@example.com".to_string()));
-        assert_eq!(author.url, Some("https://example.com".to_string()));
-    }
-
-    #[test]
-    fn test_author_info_from_string_name_only() {
-        let author = AuthorInfo::from("John Doe");
-        assert_eq!(author.name, Some("John Doe".to_string()));
-        assert_eq!(author.email, None);
-        assert_eq!(author.url, None);
-    }
-
-    #[test]
-    fn test_author_info_from_string_name_and_email() {
-        let author = AuthorInfo::from("John Doe <john@example.com>");
-        assert_eq!(author.name, Some("John Doe".to_string()));
-        assert_eq!(author.email, Some("john@example.com".to_string()));
-        assert_eq!(author.url, None);
-    }
 
     #[test]
     fn test_plugin_permission_display() {

@@ -107,13 +107,18 @@ pub fn infer_vendor(model: &str) -> Option<&'static str> {
 #[must_use]
 // rust-doctor-disable-next-line high-cyclomatic-complexity
 pub fn canonical_provider_id(provider: &str) -> Option<&'static str> {
-    let p = provider.trim().to_ascii_lowercase();
+    let trimmed = provider.trim();
+    let p = if trimmed.bytes().any(|b| b.is_ascii_uppercase()) {
+        std::borrow::Cow::Owned(trimmed.to_ascii_lowercase())
+    } else {
+        std::borrow::Cow::Borrowed(trimmed)
+    };
     // Vendor-native OpenAI-compatible endpoints (MiniMax / Moonshot ship both
     // an anthropic-protocol primary and an OpenAI-protocol secondary). The
     // `-openai` suffix here marks the wire PROTOCOL, not the billing vendor, so
     // these must short-circuit before the generic "openai" substring branch
     // below — which would otherwise shadow them and mis-price the run as OpenAI.
-    match p.as_str() {
+    match p.as_ref() {
         "minimax-openai" => return Some("minimax"),
         "moonshot-openai" | "kimi-openai" => return Some("moonshot"),
         _ => {}

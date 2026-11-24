@@ -2,6 +2,7 @@
 
 use sha2::{Digest, Sha256};
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 
@@ -37,9 +38,18 @@ pub fn hash_prefix(hash: &str) -> &str {
     &hash[..16.min(hash.len())]
 }
 
-/// Atomic write: write to temp file, then rename.
+/// Atomic write: write to a unique temp file, then rename.
 pub async fn atomic_write_markdown(path: &Path, content: &str) -> Result<(), AlephError> {
-    let temp_path = path.with_extension("tmp");
+    // The temp name must be unique per writer: two writers of the SAME file
+    // (a transcript append and a tool-output append on one session) would
+    // otherwise share one temp path, and the first rename would leave the
+    // second one renaming a file that is already gone.
+    static WRITES: AtomicU64 = AtomicU64::new(0);
+    let temp_path = path.with_extension(format!(
+        "tmp.{}.{}",
+        std::process::id(),
+        WRITES.fetch_add(1, Ordering::Relaxed)
+    ));
 
     fs::write(&temp_path, content).await.map_err(|e| {
         AlephError::other(format!("Failed to write temp file {:?}: {}", temp_path, e))

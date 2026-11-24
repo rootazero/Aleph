@@ -433,6 +433,6 @@ The current system uses a numeric confidence threshold (default 0.7) to decide w
 
 ## Sources & References
 
-- **Origin document:** [docs/brainstorms/2026-04-04-two-phase-exec-approval-requirements.md](docs/brainstorms/2026-04-04-two-phase-exec-approval-requirements.md)
+- **Origin document:** [docs/brainstorms/2026-04-04-two-phase-exec-approval-requirements.md](../brainstorms/2026-04-04-two-phase-exec-approval-requirements.md)
 - Related code: `src/agent_loop/loop_core.rs`, `src/dispatcher/confirmation.rs`, `src/providers/adapter.rs`
 - Architecture: `docs/reference/TOOL_SYSTEM.md`, `docs/reference/AGENT_SYSTEM.md`

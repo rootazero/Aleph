@@ -83,6 +83,7 @@ impl Fixture {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path().join(PLUGIN);
         std::fs::create_dir_all(root.join("commands")).unwrap();
+        std::fs::write(root.join("commands/greet.md"), body).unwrap();
         let work = tmp.path().join("work");
         std::fs::create_dir_all(&work).unwrap();
         let consent = Arc::new(ShellHookConsent::with_path(tmp.path().join("allow.json")));
@@ -1110,7 +1111,6 @@ async fn run_loop_with_prompt_hook(hook: Option<&str>, metadata: &[(&str, &str)]
         )),
         Arc::new(super::super::tests::EmptyToolRegistry),
         Vec::new(),
-        None,
     )
     .with_inline_consent(Arc::clone(&f.consent));
     let executor = hook.map(|command| {
@@ -1246,6 +1246,7 @@ async fn the_busy_lane_sees_the_model_a_command_pinned() {
                 steps_completed: 0,
                 current_tool: None,
                 cancel_tx: None,
+                cancel_token: Default::default(),
                 seq_counter: crate::sync_primitives::AtomicU64::new(0),
                 chunk_counter: crate::sync_primitives::AtomicU32::new(0),
             },

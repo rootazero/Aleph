@@ -6,6 +6,7 @@
 //! back results.
 
 use crate::sync_primitives::Arc;
+use futures::FutureExt;
 use tokio::sync::Semaphore;
 use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info, warn};
@@ -167,12 +168,24 @@ pub async fn run_heartbeat_loop(
                         return;
                     }
                 };
-                let result = execute_heartbeat_tick(&task, wake_reason.as_deref(), &ctx).await;
-                writeback_one(&state, &task_id, result, wake_reason.is_some(), &ctx).await;
-                // Push a `StateChanged` frame so the panel (which dropped
-                // polling) refreshes the task's runtime state after each run.
-                if let Some(emitter) = &ctx.change_emitter {
-                    emitter(&task_id);
+                let run_res = std::panic::AssertUnwindSafe(async {
+                    execute_heartbeat_tick(&task, wake_reason.as_deref(), &ctx).await
+                })
+                .catch_unwind()
+                .await;
+                match run_res {
+                    Ok(result) => {
+                        writeback_one(&state, &task_id, result, wake_reason.is_some(), &ctx).await;
+                        // Push a `StateChanged` frame so the panel (which dropped
+                        // polling) refreshes the task's runtime state after each run.
+                        if let Some(emitter) = &ctx.change_emitter {
+                            emitter(&task_id);
+                        }
+                    }
+                    Err(_) => {
+                        error!(task_id = %task_id, "heartbeat: task panicked during tick; clearing running marker");
+                        clear_running_marker(&state, &task_id).await;
+                    }
                 }
             });
         }
@@ -204,10 +217,10 @@ async fn clear_stale_running_markers(state: &HeartbeatServiceState) {
             }
         }
     }
-    if let Err(e) = store.persist() {
-        error!(error = %e, "heartbeat: failed to persist stale-marker cleanup");
-    }
     if cleared > 0 {
+        if let Err(e) = store.persist() {
+            error!(error = %e, "heartbeat: failed to persist stale-marker cleanup");
+        }
         info!(
             cleared,
             "heartbeat: cleared stale running markers on startup"
@@ -248,9 +261,9 @@ async fn collect_due_tasks(
     // its window is not skipped silently — its `next_due_ms` is pushed forward
     // to the next window start in the second pass below so the timer doesn't
     // re-evaluate every tick.
-    let mut due_ids: Vec<(String, Option<String>)> = Vec::new();
-    let mut gated_ids: Vec<(String, i64)> = Vec::new(); // (task_id, new_next_due_ms)
-    for task in store.tasks() {
+    let mut due_indices: Vec<(usize, Option<String>)> = Vec::new();
+    let mut gated_indices: Vec<(usize, i64)> = Vec::new(); // (task_idx, new_next_due_ms)
+    for (i, task) in store.tasks().iter().enumerate() {
         if !task.enabled {
             continue;
         }
@@ -271,20 +284,20 @@ async fn collect_due_tasks(
         }
         // Manual wake bypasses the gate — the user explicitly asked for it.
         if wake_reason.is_some() {
-            due_ids.push((task.id.clone(), wake_reason));
+            due_indices.push((i, wake_reason));
             continue;
         }
         match &task.active_hours {
-            None => due_ids.push((task.id.clone(), None)),
+            None => due_indices.push((i, None)),
             Some(sched) => {
                 if sched.is_open_at(now_ms) {
-                    due_ids.push((task.id.clone(), None));
+                    due_indices.push((i, None));
                 } else if let Some(next_open) = sched.next_open_after(now_ms) {
-                    gated_ids.push((task.id.clone(), next_open));
+                    gated_indices.push((i, next_open));
                 } else {
                     // Permanently closed — push very far out so we stop polling
                     // it but the task survives for the operator to fix.
-                    gated_ids.push((task.id.clone(), now_ms + 86_400_000));
+                    gated_indices.push((i, now_ms.saturating_add(86_400_000)));
                 }
             }
         }
@@ -292,24 +305,22 @@ async fn collect_due_tasks(
 
     // Second pass (mutable): mark each due task as running *before* handing
     // it to the executor; advance gated tasks' next_due_ms past their window.
-    let mut due = Vec::with_capacity(due_ids.len());
-    for (id, wake_reason) in due_ids {
-        if let Some(task) = store.get_task_mut(&id) {
+    let mut due = Vec::with_capacity(due_indices.len());
+    let had_gated = !gated_indices.is_empty();
+    if !due_indices.is_empty() || had_gated {
+        let tasks = store.tasks_mut();
+        for (idx, wake_reason) in due_indices {
+            let task = &mut tasks[idx];
             task.state.running_at_ms = Some(now_ms);
             due.push((task.clone(), wake_reason));
         }
-    }
-    let had_gated = !gated_ids.is_empty();
-    for (id, new_next_due) in gated_ids {
-        if let Some(task) = store.get_task_mut(&id) {
-            task.state.next_due_ms = Some(new_next_due);
+        for (idx, new_next_due) in gated_indices {
+            tasks[idx].state.next_due_ms = Some(new_next_due);
         }
-    }
-    // Persist when *either* running markers or gated reschedules changed. A
-    // gated-only tick (every due task is outside its active-hours window)
-    // still advances `next_due_ms` in memory; without persisting it, a restart
-    // re-gates the task from scratch instead of resuming past the window.
-    if !due.is_empty() || had_gated {
+        // Persist when *either* running markers or gated reschedules changed. A
+        // gated-only tick (every due task is outside its active-hours window)
+        // still advances `next_due_ms` in memory; without persisting it, a restart
+        // re-gates the task from scratch instead of resuming past the window.
         if let Err(e) = store.persist() {
             error!(error = %e, "heartbeat: failed to persist running markers");
         }

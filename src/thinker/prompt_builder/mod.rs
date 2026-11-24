@@ -431,19 +431,19 @@ fn maybe_trace_prompt_size(path: AssemblyPath, sizes: &[LayerSize]) {
     bd.sort_by_key(|l| std::cmp::Reverse(l.chars));
     let total_chars: usize = bd.iter().map(|l| l.chars).sum();
     let total_tokens: usize = bd.iter().map(|l| l.tokens).sum();
-    let rows: String = bd
-        .iter()
-        .map(|l| {
-            let zone = match l.stability {
-                LayerStability::Stable => "stable",
-                LayerStability::Dynamic => "dynamic",
-            };
-            format!(
-                "\n  {:>6}c {:>6}t  {:<7}  p{:<4} {}",
-                l.chars, l.tokens, zone, l.priority, l.name
-            )
-        })
-        .collect();
+    use std::fmt::Write as _;
+    let mut rows = String::new();
+    for l in &bd {
+        let zone = match l.stability {
+            LayerStability::Stable => "stable",
+            LayerStability::Dynamic => "dynamic",
+        };
+        let _ = write!(
+            rows,
+            "\n  {:>6}c {:>6}t  {:<7}  p{:<4} {}",
+            l.chars, l.tokens, zone, l.priority, l.name
+        );
+    }
     tracing::info!(
         "prompt-size breakdown [{:?}] — {} layers, {} chars (~{} tokens):{}",
         path,

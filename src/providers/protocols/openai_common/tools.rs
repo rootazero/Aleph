@@ -71,18 +71,15 @@ pub(crate) fn ensure_properties_recursive(schema: &mut serde_json::Value) {
     }
 
     // Recurse into nested schemas
-    let keys: Vec<String> = obj.keys().cloned().collect();
-    for key in keys {
-        if let Some(v) = obj.get_mut(&key) {
-            match v {
-                serde_json::Value::Object(_) => ensure_properties_recursive(v),
-                serde_json::Value::Array(arr) => {
-                    for item in arr {
-                        ensure_properties_recursive(item);
-                    }
+    for v in obj.values_mut() {
+        match v {
+            serde_json::Value::Object(_) => ensure_properties_recursive(v),
+            serde_json::Value::Array(arr) => {
+                for item in arr {
+                    ensure_properties_recursive(item);
                 }
-                _ => {}
             }
+            _ => {}
         }
     }
 }

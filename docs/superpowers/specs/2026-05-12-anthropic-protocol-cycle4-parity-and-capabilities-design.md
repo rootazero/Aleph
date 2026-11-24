@@ -27,7 +27,7 @@ Anthropic-protocol parity with the OpenAI cycles. Wire the `ProviderConfig` fiel
 - Additional `AnthropicEndpointClass` variants (Bedrock / Vertex / Kimi / OpenRouter). Initial enum is two-variant (Official + Custom); expand when real feature-profile divergence emerges.
 - Per-tool `cache_control` breakpoints (C3 from the brainstorm — deferred to Cycle 5+).
 - Configurable beta-header array (C4 from the brainstorm — deferred to Cycle 5+).
-- User-level capability override fields on `ProviderConfig` — explicitly forbidden per [`feedback_no_user_capability_override.md`](../../../../.claude/projects/-Volumes-TBU4-Workspace-Aleph/memory/feedback_no_user_capability_override.md). Capability bits flow one way: `base_url → AnthropicEndpointClass → AnthropicCapabilities`.
+- User-level capability override fields on `ProviderConfig` — explicitly forbidden per the private historical review note (unavailable in the current tree). Capability bits flow one way: `base_url → AnthropicEndpointClass → AnthropicCapabilities`.
 - Anthropic OAuth-token detection / `service_tier` auto-downgrade (openclaw pattern). Aleph doesn't use OAuth-style Anthropic tokens today; YAGNI.
 - `reasoning_effort` symmetric work on the OpenAI side. Cycle 4 is Anthropic-scoped.
 - Consolidation of OpenAI vs Anthropic `stop_sequences` parsers. Each protocol keeps its own CSV splitter; refactor is a separate concern.
@@ -565,8 +565,8 @@ Cycle 4 ships when:
 ## 14. References
 
 - Cycle 3 spec: [`2026-05-12-openai-protocol-cycle3-output-controls-and-capability-flip-design.md`](./2026-05-12-openai-protocol-cycle3-output-controls-and-capability-flip-design.md)
-- Cycle 4 scope decision: [`project_cycle4_anthropic_scope.md`](../../../../.claude/projects/-Volumes-TBU4-Workspace-Aleph/memory/project_cycle4_anthropic_scope.md)
-- Capability-override redline: [`feedback_no_user_capability_override.md`](../../../../.claude/projects/-Volumes-TBU4-Workspace-Aleph/memory/feedback_no_user_capability_override.md)
+- Cycle 4 scope decision: private historical scope note unavailable in the current tree; this design records the resulting scope locally.
+- Capability-override redline: private historical review note unavailable in the current tree.
 - Prompt-cache prior art: [`2026-05-11-anthropic-protocol-step2-prompt-cache.md`](./2026-05-11-anthropic-protocol-step2-prompt-cache.md)
 - openclaw Anthropic extension: `/Volumes/TBU4/Github/openclaw/extensions/anthropic/` (reference only, not vendored)
 - Anthropic Messages API: https://docs.anthropic.com/en/api/messages

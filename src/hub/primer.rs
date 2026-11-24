@@ -14,9 +14,13 @@ use crate::hub::catalog_client::ALEPH_HUB_ID;
 pub async fn prime_official_catalog_if_empty(cache: &CatalogCache) {
     match cache.count_source(ALEPH_HUB_ID).await {
         Ok(0) => {
-            let mut entries = crate::hub::official_mcp::primer_entries();
-            entries.extend(crate::hub::official_skills::primer_entries());
-            entries.extend(crate::hub::official_plugins::primer_entries());
+            let mcp = crate::hub::official_mcp::primer_entries();
+            let skills = crate::hub::official_skills::primer_entries();
+            let plugins = crate::hub::official_plugins::primer_entries();
+            let mut entries = Vec::with_capacity(mcp.len() + skills.len() + plugins.len());
+            entries.extend(mcp);
+            entries.extend(skills);
+            entries.extend(plugins);
             match cache.replace_source(ALEPH_HUB_ID, &entries).await {
                 Ok(()) => tracing::info!(
                     count = entries.len(),

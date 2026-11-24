@@ -27,7 +27,7 @@ const DEFAULT_MAX_DEPTH: u32 = 5;
 /// Each top-level request gets a unique `chain_id`. Subagent calls
 /// increment `depth`. When `depth >= max_depth`, `child()` returns
 /// `None` to prevent infinite recursion.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChainContext {
     /// Unique identifier for this call chain (shared across all depths).
     pub chain_id: String,

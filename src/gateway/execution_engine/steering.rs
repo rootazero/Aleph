@@ -1058,6 +1058,7 @@ mod tests {
                 completed_at: None,
                 steps_completed: 0,
                 current_tool: None,
+                cancel_token: Default::default(),
                 cancel_tx: None,
                 seq_counter: AtomicU64::new(0),
                 chunk_counter: AtomicU32::new(0),

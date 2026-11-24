@@ -21,8 +21,10 @@
 //!    cron, heartbeat, scheduled tools). Recovers channel from the structured
 //!    `SessionKey`.
 //!
-//! Both unset or a non-channel turn → `Denied` with an explicit warning. Never
-//! a silent auto-approve.
+//! Both unset or a non-channel turn → `Unavailable` with an explicit warning:
+//! no card was ever rendered, so nobody made a decision (the in-code
+//! comment on that arm spells out why this is not a `Denied`). Never a silent
+//! auto-approve.
 //!
 //! A resolvable-but-unregistered channel (the Panel's `gui:chat`) is NOT a
 //! denial: [`FallbackApprovalRequester`] routes those to the operator
@@ -161,7 +163,13 @@ impl FallbackApprovalRequester {
 impl ApprovalRequester for FallbackApprovalRequester {
     async fn request_approval(&self, action: &ApprovalAction) -> ApprovalResponse {
         if self.channel.can_reach_user().await {
-            return self.channel.request_approval(action).await;
+            let response = self.channel.request_approval(action).await;
+            if response.outcome != ApprovalOutcome::Unavailable {
+                return response;
+            }
+            tracing::warn!(
+                "channel approval became unavailable before delivery; falling back to operator"
+            );
         }
         self.operator.request_approval(action).await
     }

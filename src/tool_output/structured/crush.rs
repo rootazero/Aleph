@@ -119,13 +119,22 @@ fn crush_body(
         .enumerate()
         .map(|(i, line)| score_line(kind, line, i, lines, &anchors))
         .collect();
-    let mut picked: Vec<usize> = (0..total).filter(|&i| scores[i] > 0).collect();
-    picked.sort_by(|&a, &b| scores[b].cmp(&scores[a]).then_with(|| a.cmp(&b)));
+    let mut picked: Vec<usize> = (0..total)
+        .filter(|&i| scores.get(i).copied().unwrap_or(0) > 0)
+        .collect();
+    picked.sort_by(|&a, &b| {
+        let score_a = scores.get(a).copied().unwrap_or(0);
+        let score_b = scores.get(b).copied().unwrap_or(0);
+        score_b.cmp(&score_a).then_with(|| a.cmp(&b))
+    });
 
     let mut kept: Vec<usize> = Vec::new();
     let mut spent = 0usize;
     for &i in &picked {
-        let cost = line_cost(lines[i], profile.line_chars);
+        let Some(&line) = lines.get(i) else {
+            continue;
+        };
+        let cost = line_cost(line, profile.line_chars);
         if spent + cost > budget {
             continue;
         }
@@ -168,7 +177,7 @@ fn crush_body(
 ///   nothing the first occurrence does not, so bursts collapse to one
 ///   representative.
 fn score_line(kind: ContentKind, line: &str, idx: usize, lines: &[&str], anchors: &[usize]) -> u8 {
-    if idx > 0 && lines[idx - 1] == line {
+    if idx > 0 && lines.get(idx - 1).copied() == Some(line) {
         return 0;
     }
     if is_error_signal(line) {
@@ -256,10 +265,13 @@ fn crush_is_match_line(line: &str) -> bool {
             b':' if i >= 2 => {
                 let j = i + 1;
                 let mut k = j;
-                while k < bytes.len() && bytes[k].is_ascii_digit() {
+                while bytes.get(k).is_some_and(u8::is_ascii_digit) {
                     k += 1;
                 }
-                if k > j && (k == bytes.len() || matches!(bytes[k], b':' | b' ' | b'\t')) {
+                if k > j
+                    && (k == bytes.len()
+                        || matches!(bytes.get(k), Some(&b':') | Some(&b' ') | Some(&b'\t')))
+                {
                     return true;
                 }
             }

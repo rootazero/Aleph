@@ -400,6 +400,10 @@ impl AlephTool for A2AAgentsTool {
                     .await
                     .map_err(|e| AlephError::tool(format!("Failed to remove agent: {e}")))?;
 
+                // Evict the pooled HTTP client (and the auth token baked into
+                // it) so a removed agent leaves nothing behind in the pool.
+                deps.sub_agent.forget_client(&target_id).await;
+
                 let agents = list_summaries(registry).await?;
                 let message = format!("Removed remote A2A agent '{needle}'");
                 notify_tool_result(Self::NAME, &message, true);

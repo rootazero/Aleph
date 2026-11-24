@@ -1489,16 +1489,23 @@ impl ChatState {
         self.messages.update(|msgs| {
             let len = msgs.len();
             if let Some(idx) = msgs.iter().rposition(|m| m.id == target_id) {
-                let has_payload = !msgs[idx].content.is_empty() || !msgs[idx].tool_calls.is_empty();
-                // Only finalize the bubble as a completed intermediate step when
-                // it already belongs to a *different, already-stamped* iteration.
-                // When the iteration matches (first turn or a raced preview), the
-                // placeholder is reused so the content stays in the step strip.
-                let prior_step = msgs[idx].iteration.is_some_and(|prev| prev != iteration);
-                if has_payload && prior_step {
-                    msgs[idx].is_streaming = false;
-                    msgs[idx].is_intermediate = true;
-                    msgs[idx].id = format!("intermediate-{run_id}-{len}");
+                let should_split = if let Some(msg) = msgs.get(idx) {
+                    let has_payload = !msg.content.is_empty() || !msg.tool_calls.is_empty();
+                    // Only finalize the bubble as a completed intermediate step when
+                    // it already belongs to a *different, already-stamped* iteration.
+                    // When the iteration matches (first turn or a raced preview), the
+                    // placeholder is reused so the content stays in the step strip.
+                    let prior_step = msg.iteration.is_some_and(|prev| prev != iteration);
+                    has_payload && prior_step
+                } else {
+                    false
+                };
+                if should_split {
+                    if let Some(msg) = msgs.get_mut(idx) {
+                        msg.is_streaming = false;
+                        msg.is_intermediate = true;
+                        msg.id = format!("intermediate-{run_id}-{len}");
+                    }
                     msgs.push(ChatMessage {
                         id: target_id,
                         role: "assistant".into(),
@@ -1517,8 +1524,8 @@ impl ChatState {
                         plan_archive: None,
                         author_user_id: None,
                     });
-                } else {
-                    msgs[idx].iteration = Some(iteration);
+                } else if let Some(msg) = msgs.get_mut(idx) {
+                    msg.iteration = Some(iteration);
                 }
             }
         });

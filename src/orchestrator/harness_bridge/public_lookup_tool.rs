@@ -99,9 +99,7 @@ impl ToolService for PrivateLookupToolService {
             return Err(ToolError::Other("query must be a non-empty string".into()));
         }
         if query.len() > MAX_PRIVATE_LOOKUP_QUERY_BYTES {
-            return Err(ToolError::Other(format!(
-                "query exceeds {MAX_PRIVATE_LOOKUP_QUERY_BYTES} bytes"
-            )));
+            return Err(ToolError::Other("query exceeds 512 bytes".into()));
         }
         {
             let mut slot = self.slot.lock().unwrap_or_else(|e| e.into_inner());

@@ -52,6 +52,8 @@ mod notify;
 #[cfg(feature = "embedded-core")]
 mod perm_monitor;
 // QA-only owned-root resolver; absent from every non-QA build.
+#[cfg(all(feature = "qa-owned-root", debug_assertions))]
+mod phase9_qa;
 #[cfg(feature = "qa-owned-root")]
 mod qa_root;
 // QA-only native credential execution trace (stdout pipe to the harness).
@@ -196,7 +198,8 @@ const QA_MONITOR_NONCE_PLACEHOLDER: &str = "__QA_MONITOR_NONCE__";
 /// accepted for a loopback-only QA channel and is why commands are fixed and bounded.
 ///
 /// DOM side: after `hello` the page accepts ONLY fixed snake_case commands
-/// `ask_pair | submit_ticket | reload | inspect | reveal_browser` (envelope
+/// `ask_pair | submit_ticket | reload | inspect | reveal_browser | reveal_projects`
+/// plus fixed `select_project_a/b`, `select_global`, `open_project_a/b`, and `navigate_projects/project_a/project_b` actions (envelope
 /// `{v:1,type:'command',run,id,command[,ticket]}`: exact key set, `run` == this
 /// document's run token, `id` strictly sequential from 0, one command in flight). It
 /// never evaluates harness text, never takes a selector, and never calls
@@ -204,12 +207,17 @@ const QA_MONITOR_NONCE_PLACEHOLDER: &str = "__QA_MONITOR_NONCE__";
 /// button, sets the real password input through the native value setter plus an
 /// `input` event and clicks the real submit button, reloads, reports booleans, or
 /// (`reveal_browser`) opens the workspace pane and selects the Browser tab.
-/// `reveal_browser` is the ONLY multi-step command and stays fixed and bounded: it
+/// `reveal_browser` and `reveal_projects` are multi-step commands and stay fixed and bounded: the former
 /// clicks the `layout-toggle` button ONLY when the workspace pane is not already open
 /// (the toggle would otherwise close it), then polls at most 20 x 25 ms (500 ms) for
 /// the enabled `workspace-tab-browser` button and clicks only that. No selector or
 /// text from the harness is used; absent/disabled => `command_ack` ok:false.
-/// Selectors are the compile-time table `SEL` (stable `data-testid`). The ticket
+/// `reveal_projects` opens the real navigation menu and polls the Projects route
+/// with the same bound. Project actions only click existing Global/project/tab
+/// buttons; none receives an id, selector, URL, or RPC payload from the harness.
+/// Fixed navigation actions accept no route argument and assign only `/projects`
+/// or the QA fixture's `/panel/project-{a,b}/overview` paths.
+/// Selectors are the compile-time table `SEL` (stable DOM attributes). The ticket
 /// lives only in the handler's local variable: it is never stored in a module
 /// variable, emitted, logged or put in a URL. `command_ack` carries only a fixed
 /// action enum and a boolean (false when the element is absent/disabled or the
@@ -224,7 +232,7 @@ const QA_MONITOR_JS: &str = r#"(function () {
   var V = 1;
   var CONTRACT = 'aleph-qa-monitor-v1';
   var MAX_SEQ = 512;
-  var ACTIONS = ['ask_pair', 'submit_ticket', 'reload', 'inspect', 'reveal_browser'];
+  var ACTIONS = ['ask_pair', 'submit_ticket', 'reload', 'inspect', 'reveal_browser', 'reveal_projects', 'select_project_a', 'select_project_b', 'select_global', 'open_project_a', 'open_project_b', 'navigate_projects', 'navigate_project_a', 'navigate_project_b'];
   var MAX_COMMAND_CHARS = 4096;
   var MAX_TICKET_CHARS = 2048;
   var SEL = {
@@ -240,7 +248,16 @@ const QA_MONITOR_JS: &str = r#"(function () {
     liveStatus: '[data-testid=browser-live-status]',
     workspace: '[data-testid=workspace-panel]',
     layoutToggle: '[data-testid=layout-toggle]',
-    browserTab: '[data-testid=workspace-tab-browser]'
+    browserTab: '[data-testid=workspace-tab-browser]',
+    projectA: '[data-panel-project-name="Native QA A"]',
+    projectB: '[data-panel-project-name="Native QA B"]',
+    globalProject: '[data-panel-global]',
+    tabA: '[data-panel-shell] button[data-panel-plugin="project-a"]',
+    tabB: '[data-panel-shell] button[data-panel-plugin="project-b"]',
+    panelShell: '[data-panel-shell]',
+    panelContent: '[data-panel-content-root]',
+    navToggle: '[data-panel-nav-toggle]',
+    projectsRoute: '[data-panel-nav="/projects"]'
   };
   var REVEAL_POLL_MS = 25;
   var REVEAL_MAX_TRIES = 20;
@@ -333,7 +350,11 @@ const QA_MONITOR_JS: &str = r#"(function () {
       layoutToggle: toggle !== null,
       layoutToggleEnabled: enabledButton(toggle),
       browserTab: tab !== null,
-      browserTabEnabled: enabledButton(tab)
+      browserTabEnabled: enabledButton(tab),
+      panelShell: q(SEL.panelShell) !== null,
+      panelTabA: q(SEL.tabA) !== null,
+      panelTabB: q(SEL.tabB) !== null,
+      panelContent: q(SEL.panelContent) !== null
     };
     emit('dom_state', st);
     done('inspect', true);
@@ -394,9 +415,43 @@ const QA_MONITOR_JS: &str = r#"(function () {
     };
     setTimeout(poll, REVEAL_POLL_MS);
   }
+  // These actions click production controls; they cannot provide a project id or call RPC/IPC.
+  function projectAction(action) {
+    var button = action === 'select_project_a' ? q(SEL.projectA)
+      : action === 'select_project_b' ? q(SEL.projectB)
+      : action === 'select_global' ? q(SEL.globalProject)
+      : action === 'open_project_a' ? q(SEL.tabA) : q(SEL.tabB);
+    if (!enabledButton(button)) { done(action, false); return; }
+    button.click();
+    done(action, true);
+  }
+  function revealProjects() {
+    var route = q(SEL.projectsRoute);
+    if (enabledButton(route)) { route.click(); done('reveal_projects', true); return; }
+    var toggle = q(SEL.navToggle);
+    if (!enabledButton(toggle)) { done('reveal_projects', false); return; }
+    toggle.click();
+    var tries = 0;
+    var poll = function () {
+      var button = q(SEL.projectsRoute);
+      if (enabledButton(button)) { button.click(); done('reveal_projects', true); return; }
+      tries += 1;
+      if (tries >= REVEAL_MAX_TRIES) { done('reveal_projects', false); return; }
+      setTimeout(poll, REVEAL_POLL_MS);
+    };
+    setTimeout(poll, REVEAL_POLL_MS);
+  }
   function reload() {
     done('reload', true);
     setTimeout(function () { try { window.location.reload(); } catch (_) {} }, 100);
+  }
+  function navigatePanel(action) {
+    var route = action === 'navigate_projects' ? '/projects'
+      : action === 'navigate_project_a' ? '/panel/project-a/overview'
+      : action === 'navigate_project_b' ? '/panel/project-b/overview' : null;
+    if (route === null) { done(action, false); return; }
+    done(action, true);
+    setTimeout(function () { try { window.location.assign(route); } catch (_) {} }, 100);
   }
   function onCommand(raw) {
     if (ended || !helloSent) { return; }
@@ -414,6 +469,9 @@ const QA_MONITOR_JS: &str = r#"(function () {
       else if (act.action === 'ask_pair') { askPair(); }
       else if (act.action === 'submit_ticket') { submitTicket(act); }
       else if (act.action === 'reveal_browser') { revealBrowser(); }
+      else if (act.action === 'reveal_projects') { revealProjects(); }
+      else if (['navigate_projects', 'navigate_project_a', 'navigate_project_b'].indexOf(act.action) !== -1) { navigatePanel(act.action); }
+      else if (['select_project_a', 'select_project_b', 'select_global', 'open_project_a', 'open_project_b'].indexOf(act.action) !== -1) { projectAction(act.action); }
       else { reload(); }
     } catch (_) { done(act.action, false); }
   }
@@ -607,7 +665,7 @@ fn main() {
     // The two arms are mutually exclusive `generate_handler!` invocations —
     // only one is ever registered.
     #[cfg(feature = "embedded-core")]
-    let builder = builder.invoke_handler(tauri::generate_handler![
+    let handler: fn(tauri::ipc::Invoke) -> bool = tauri::generate_handler![
         connection::get_connection_target,
         connection::set_connection_target,
         connection::clear_connection_target,
@@ -618,9 +676,9 @@ fn main() {
         keyring_bridge::panel_credential_load,
         keyring_bridge::panel_credential_save,
         keyring_bridge::panel_credential_delete,
-    ]);
+    ];
     #[cfg(not(feature = "embedded-core"))]
-    let builder = builder.invoke_handler(tauri::generate_handler![
+    let handler: fn(tauri::ipc::Invoke) -> bool = tauri::generate_handler![
         connection::get_connection_target,
         connection::set_connection_target,
         connection::clear_connection_target,
@@ -633,7 +691,18 @@ fn main() {
         keyring_bridge::panel_credential_load,
         keyring_bridge::panel_credential_save,
         keyring_bridge::panel_credential_delete,
-    ]);
+    ];
+    #[cfg(all(feature = "qa-owned-root", debug_assertions))]
+    let qa_handler: fn(tauri::ipc::Invoke) -> bool =
+        tauri::generate_handler![phase9_qa::phase9_observation];
+    #[cfg(all(feature = "qa-owned-root", debug_assertions))]
+    let handler = move |invoke: tauri::ipc::Invoke| {
+        if invoke.message.command() == "phase9_observation" {
+            return qa_handler(invoke);
+        }
+        handler(invoke)
+    };
+    let builder = builder.invoke_handler(handler);
 
     // Shared update state: the background checker, the tray, and the macOS
     // menu all read it.
@@ -657,6 +726,8 @@ fn main() {
         .menu(menu::build)
         .on_menu_event(|app, event| menu::on_event(app, event.id().as_ref()));
 
+    #[cfg(all(feature = "qa-owned-root", debug_assertions))]
+    phase9_qa::start_clock();
     let app = match builder
         .setup(|app| {
             let handle = app.handle().clone();
@@ -726,7 +797,7 @@ fn main() {
         }
     };
 
-    app.run(|_app_handle, event| match event {
+    let on_event = |_app_handle: &tauri::AppHandle, event| match event {
         // A window-close-driven exit is vetoed (stay in the tray); an
         // explicit "Quit" calls `app.exit(code)` and is allowed.
         RunEvent::ExitRequested {
@@ -745,7 +816,15 @@ fn main() {
             focus_window(_app_handle);
         }
         _ => {}
-    });
+    };
+    #[cfg(all(feature = "qa-owned-root", debug_assertions))]
+    {
+        let exit_code = app.run_return(on_event);
+        phase9_qa::exited();
+        std::process::exit(exit_code);
+    }
+    #[cfg(not(all(feature = "qa-owned-root", debug_assertions)))]
+    app.run(on_event);
 }
 
 /// Create the single main window, hosting the splash until the daemon is up.
@@ -783,6 +862,7 @@ fn build_main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
         // `update::control_action`) — a foreign page forging the path is
         // refused. Everything else falls through to the normal
         // internal/external routing.
+
         .on_navigation({
             let handle = app.clone();
             move |url| {
@@ -852,6 +932,11 @@ fn build_main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
                 ),
             }
         }
+    }
+    #[cfg(all(feature = "qa-owned-root", debug_assertions))]
+    if let Some(script) = phase9_qa::script() {
+        phase9_qa::install(app)?;
+        builder = builder.initialization_script(&script);
     }
     let window = builder.build()?;
 
@@ -927,6 +1012,12 @@ fn spawn_background(handle: tauri::AppHandle) {
                 }
             });
         });
+    #[cfg(all(feature = "qa-owned-root", debug_assertions))]
+    match spawned {
+        Ok(worker) => phase9_qa::own_background(worker),
+        Err(e) => tracing::error!("failed to spawn background thread: {e}"),
+    }
+    #[cfg(not(all(feature = "qa-owned-root", debug_assertions)))]
     if let Err(e) = spawned {
         tracing::error!("failed to spawn background thread: {e}");
     }
@@ -1264,6 +1355,7 @@ fn reveal_panel(handle: &tauri::AppHandle) {
 /// The awaited body of [`reveal_panel`]. `reroute_for_target` calls this
 /// directly (no second spawn) so the switch gate covers the navigation.
 #[cfg(feature = "embedded-core")]
+#[allow(clippy::unused_async)]
 async fn reveal_panel_now(handle: &tauri::AppHandle) {
     navigate_to_target(handle, &connection::load_target());
     focus_window(handle);
@@ -1707,7 +1799,7 @@ async fn supervise_remote_lite(handle: tauri::AppHandle) {
 /// Panel's translucent theme (Phase 2) has a real material to sit on.
 #[cfg(target_os = "macos")]
 fn apply_macos_vibrancy(handle: &tauri::AppHandle) {
-    use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState};
+    use window_vibrancy::{NSVisualEffectMaterial, NSVisualEffectState, apply_vibrancy};
 
     let Some(window) = handle.get_webview_window("main") else {
         return;

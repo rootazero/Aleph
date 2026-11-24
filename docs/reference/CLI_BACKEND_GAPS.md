@@ -23,21 +23,25 @@ Each section answers four questions:
 
 ### What exists today
 
-- `src/gateway/webhooks/` — complete receiver: HMAC-SHA256 verification,
-  GitHub / Stripe / Generic signature formats, session-key templating,
-  `WebhookEndpointConfig` schema with `id / path / secret / agent /
-  session_key_template / allowed_events / extract_headers / max_body_size`.
+- The former src/gateway/webhooks/ module — a complete receiver: HMAC-SHA256
+  verification, GitHub / Stripe / Generic signature formats, session-key
+  templating, `WebhookEndpointConfig` schema with `id / path / secret / agent /
+  session_key_template / allowed_events / extract_headers / max_body_size` —
+  was **cut on 2026-08-17** as dead code. The only webhook server the gateway
+  mounts today is `src/gateway/webhook_receiver.rs`, a different shape
+  (channel-level ingestion for WhatsApp / Generic, not external-service
+  subscriptions).
 - `src/tasks/cron/webhook_target.rs` — outbound webhook (delivery target
   for cron jobs).
-- `src/gateway/webhooks/mod.rs` is **not currently mounted** in any
-  production startup path; `WebhooksConfig` exists as a struct but is
-  not loaded from the global `Config`.
+- The removed src/gateway/webhooks/mod.rs was **never mounted** in any
+  production startup path, and `WebhooksConfig` went with it — the global
+  `Config` has no `[webhooks]` block any more.
 
 ### Gap
 
 - No RPC to list / create / remove webhook endpoints at runtime.
-- The receiver isn't mounted, so even adding RPCs is a no-op until the
-  router is hooked into `GatewayServer::build_router`.
+- The receiver is gone, so even adding RPCs is a no-op until a receiver is
+  re-landed and its router hooked into `GatewayServer::build_router`.
 
 ### Proposed RPC
 
@@ -62,16 +66,18 @@ Errors: `-32004` (id not found), `-32030` (duplicate path),
   `created_at_unix / updated_at_unix`.
 - Delivery log: ring buffer of last N deliveries per endpoint
   (default 50), capped at 1 MB on disk per endpoint. Pruned by a
-  daemon similar to `tasks/shared/reaper.rs`.
+  daemon similar to `src/tasks/shared/reaper.rs`.
 - Secrets are written through `SharedTokenManager` (vault) under
   the key `webhook:{id}:secret`, never inlined in the SQLite row.
 
 ### Sequence to fill the gap
 
-1. Mount `webhook_router` from the gateway `build_router` (guard on
-   `webhooks.enabled` config). Backfill loads from SQLite into the
-   in-memory `WebhookHandlerState` at boot.
-2. Add `src/gateway/handlers/webhooks_admin.rs` with the 7 RPCs above.
+1. Mount `webhook_router` from the gateway `build_router` (the
+   `webhooks.enabled` config key was removed with the module and has to come
+   back with it). Backfill loads from SQLite into the in-memory
+   `WebhookHandlerState` at boot.
+2. Add a `webhooks_admin` handler module under `src/gateway/handlers/` with
+   the 7 RPCs above.
 3. Wire the existing `interfaces/cli/src/commands/webhook_cmd.rs`
    stubs to call those RPCs.
 4. Panel page lists endpoints / payload preview / "fire test" button.
@@ -139,7 +145,7 @@ struct ProxyConfig {
 
 1. Define `ProxyConfig` schema + SQLite migration.
 2. Plumb a `ProxyResolver` into every long-lived `reqwest::Client`
-   constructor (`providers/*`, `gateway/clawhub`, MCP transports).
+   constructor (`src/providers/*`, `gateway/clawhub`, MCP transports).
    Resolver returns `(url, optional auth)` for a given host.
 3. Add 4 RPCs above + wire `interfaces/cli/src/commands/proxy_cmd.rs`
    stubs to them.
@@ -194,7 +200,7 @@ When filling these gaps:
    the existing reaper pattern for cleanup. Don't introduce new
    storage primitives.
 3. **Validate at boundary.** Same shape as
-   `gateway/handlers/secrets.rs` — `INVALID_PARAMS` for shape
+   `src/gateway/handlers/secrets.rs` — `INVALID_PARAMS` for shape
    failures, dedicated codes (`NOT_FOUND` = `-32004`) for semantic
    failures, generic `INTERNAL_ERROR` for everything else.
 4. **Add a parse-guard test in `main.rs`** for backward-compat on

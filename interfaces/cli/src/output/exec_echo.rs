@@ -677,7 +677,7 @@ fn redact(s: &str) -> String {
     for word in s.split_inclusive(char::is_whitespace) {
         let trimmed = word.trim_end();
         if looks_secret(trimmed) {
-            let tail = &word[trimmed.len()..];
+            let tail = word.get(trimmed.len()..).unwrap_or("");
             out.push_str("«redacted»");
             out.push_str(tail);
         } else {

@@ -188,7 +188,7 @@ Four things worth knowing before touching it:
   (`adjudicate_orphaned_tasks`, run from `settle`) only start after that join
   — so a survivor for a session the scan merely skipped, or a user whose
   message was lost pre-seed, waits for the **slowest resumed run** to finish
-  (`start/mod.rs` argues why the order must hold; FOLLOW-UP F27 is the
+  (`src/bin/aleph-server/commands/start/mod.rs` argues why the order must hold; FOLLOW-UP F27 is the
   per-session release).
 
 Status vocabulary (same on both surfaces): `resumed` · `already_resuming` ·
@@ -382,9 +382,9 @@ pub trait Interface: Send + Sync {
 ### Factory registration is what makes a channel configurable
 
 `handlers::channel::create_channel_from_config` resolves a configured
-`[channels.<type>]` entry through the plugin table in
-`interfaces/plugin.rs`, and returns `None` for a type that is not in it —
-after which `initialize_channels` logs `Failed to create channel` and continues.
+`[channels.<id>]` entry through the factory table populated by
+`src/gateway/interfaces/mod.rs::register_channel_plugins`. It returns `None` for
+an unregistered type; `initialize_channels` logs the failure and continues.
 **A `ChannelFactory` that is not registered in `interfaces::register_channel_plugins`
 is therefore unreachable, however complete it is.**
 
@@ -400,6 +400,39 @@ New adapters must be added to `register_channel_plugins` by hand.
 regression, but it cannot enumerate `impl ChannelFactory`, so it will not catch a
 *future* adapter that forgets to register — adding the name to that list is the
 same manual step as the registration.
+
+### Cold declarations / 冷声明
+
+A JSON boolean `enabled: false` (TOML `enabled = false`) leaves the declaration in
+`Config`. At boot, `initialize_channels` skips vault hydration and adapter
+construction, including the iMessage/BlueBubbles branch. `channel.create` saves
+before construction and returns `disabled` for cold declarations. It stages supported
+credentials outside the config, then commits them together to the vault only after
+config persistence succeeds. Unsupported nested credentials and vault write failures
+are errors, not plaintext fallbacks. If vault commit and config rollback both fail,
+the remaining declaration stays cold and contains no newly supplied credentials.
+An omitted flag retains that adapter's existing default.
+
+`channels.list` and `channels.status` report an uninstantiated disabled declaration
+with no runtime capabilities. If a runtime exists under the same ID, its live
+status wins; the list summary counts the ID once. `channel.start` for a config-only
+ID validates the latest config and policy, requires a factory that returns the
+same ID, and publishes policy before starting the adapter. It does not set
+`enabled = true` on disk. The inbound router and system continuations read the
+same policy projection. Send and stop still require a runtime; delete can remove
+a cold declaration. This is not hot reconfiguration, a Zahir Gateway mount, or a
+claim that stopping a channel reclaims every resource or unloads native code.
+
+显式 `enabled = false` 的声明留在 `Config`。启动时不补齐 vault 密钥、不构造
+adapter（包括 iMessage/BlueBubbles）；`channel.create` 先保存，再返回 `disabled`，
+仅在配置落盘后，才将本次明确提供且受支持的凭证一次写入 vault。不支持的嵌套凭证或
+vault 写入失败会报错，不回退到明文。如果 vault 提交与配置回滚都失败，留下的声明
+仍处于冷态，不含新提交的凭证。省略 `enabled` 保留适配器原有默认行为。
+`channels.list` / `channels.status` 显示冷声明且不声明运行能力；同 ID 有运行实例时
+以实时状态为准，只计一次。对仅有配置的 ID，`channel.start` 校验最新配置与策略、
+要求工厂返回同一 ID，并在启动适配器前发布策略，不改写磁盘上的 `enabled`。
+入站与系统续跑读取同一策略投影。发送和停止仍需运行实例，删除可只移除冷声明。
+不提供热更新，不新增 Zahir Gateway 挂载，也不声称 stop 回收全部资源或卸载原生代码。
 
 ### Self-healing needs intent, not just status
 
@@ -427,6 +460,12 @@ no separate transport-liveness signal to tell them apart (openclaw restarts on
 `stale-socket` only because it tracks `lastTransportActivityAt`). `Disabled` is
 excluded as configuration. Mapped from openclaw's `isManagedAccount` +
 `lifecycle` in `gateway/channel-health-policy.ts`.
+
+**XMPP transport lifetime / XMPP 连接生命周期.** Reads with no new `>` still
+count toward the input limit, but cannot complete a stanza, so they skip the
+XML scan. When the receive loop exits for a reconnect, it releases both halves
+of the old TCP connection before waiting. The input limit and reconnect schedule
+are unchanged. / 未读到新的 `>` 时，数据仍计入输入上限，但不会完成 stanza，因此跳过 XML 扫描。接收循环退出并准备重连时，先释放旧 TCP 的读写两端，再等待下次尝试。输入上限和重连间隔不变。
 
 **Adapter rule**: do not unconditionally overwrite `status` on a connection
 task's exit path. That one line erases the failure the line above just
@@ -464,7 +503,7 @@ They are two tools on purpose: `ToolFacts::idempotent` is keyed on the tool **na
 `channel_message` would gate it under the `Ask` exec tier — and a tier never widens,
 so there would be no way back.
 
-Slack implements it in `interfaces/slack/directory.rs::ConversationDirectory`
+Slack implements it in `src/gateway/interfaces/slack/directory.rs::ConversationDirectory`
 (`conversations.list` + `users.list`, cursor-paginated, 15-minute TTL cache, hard page
 cap). The cap is not cosmetic: `ChannelRegistry` holds the channel's **read guard**
 across the adapter call, so an unbounded sweep would block the write lock that
@@ -843,7 +882,7 @@ them *before* the busy lane: the inbound router's execute path
 (`inbound_router/executor.rs:451`), inside `stamp_slash_mode`
 (`slash_command.rs:98`, whose first statement it is) which the `agent.run` and
 `chat.send` run-start handlers call before `busy_queue::spawn_queued_run`
-(`src/bin/aleph-server/server_init.rs:272,466`; the guard
+(`src/bin/aleph-server/commands/start/mod.rs`; the guard
 `every_run_start_handler_stamps_the_slash_mode_before_the_busy_lane` is phrased
 over that file's handlers and inherits nothing outside it), and as the first
 statement of `ExecutionEngine::execute` (`execution_engine/execute.rs:375`).
@@ -979,7 +1018,7 @@ pub enum DmScope {
 
 ### Storage Schema
 
-Abridged from `session_manager/mod.rs`; that file is the source, this is the
+Abridged from `src/gateway/session_manager/mod.rs`; that file is the source, this is the
 shape. There is no `messages TEXT` JSON column and no `session_metadata`
 table — both were in this document long after they stopped existing.
 
@@ -1159,11 +1198,17 @@ Configuration changes are detected via file watcher:
 └─────────────────────────────────┘
 ```
 
+### Stage E code-loading boundary / Stage E 代码加载边界
+
+Gateway hot reload and plugin WASM code loading are separate boundaries. Stage E proves only the existing Extension lifecycle’s bounded Extism path: cold discovery/projection does not read guest bytes or create an instance; explicit activation reads and executes a real guest; replacement rejects stale bindings and drops the exact old `LoadedWasmPlugin` after retained `Arc` holders are released. It does not make built-in Gateway channels dynamically loadable, and it does not measure Extism engine-wide JIT, OS mappings, thread shutdown or RSS reclamation.
+
+Gateway hot reload 与 plugin WASM code loading 是两个边界。Stage E 只证明既有 Extension lifecycle 的有界 Extism 路径：cold discovery/projection 不读取 guest bytes、不创建 instance；显式激活读取并执行真实 guest；替换拒绝 stale binding，并在释放 retained `Arc` holders 后 drop 具体旧 `LoadedWasmPlugin`。它不会让内置 Gateway channel 变成动态加载，也不测量 Extism engine-wide JIT、OS mapping、线程退出或 RSS 回收。
+
 ---
 
 ## HTTP Server
 
-**Location**: `src/gateway/http_server.rs`
+**Location**: `src/gateway/server/mod.rs`
 
 Alongside WebSocket, Gateway serves:
 - Static files (WebChat UI)
@@ -1176,10 +1221,11 @@ Alongside WebSocket, Gateway serves:
   Implemented in `src/gateway/server/metrics_endpoint.rs` +
   `src/gateway/middleware/latency.rs`.
 - MCP server face (`POST/GET/DELETE /mcp`, Streamable HTTP) — Aleph as an MCP
-  *server* for dsh / pi-mcp-adapter / Claude Code: `tools/list` + `tools/call`
+  *server* for dsh / pi-mcp-adapter / Claude Code: `src/tools/registry.rs` + `src/tools/server/mod.rs`
   over the same scoped dispatch a chat turn uses, whitelist from
   `[mcp_server].expose`, loopback free / remote bearer (device or gateway
-  token), `notifications/tools/list_changed` on plugin transitions. Implemented
+  token), the `notifications/tools/list_changed` JSON-RPC notification on plugin
+  transitions. Implemented
   in `src/gateway/mcp_face/`; real-machine `qa/mcp_face/run.sh`.
 
 Abuse protection at WS upgrade: besides the global `max_connections` cap, a
@@ -1213,11 +1259,15 @@ own comment recorded that those numbers had already needed changing once.
   extension.
 
 Two limits carried deliberately. There is **no read face**: an operator can set
-the ceilings but still cannot ask a running server what they are. And `Auth` and
-`WebhookAuth` share one window (`RateLimitConfig::config_for` fans both into
-`auth`), so writing `[gateway.rate_limit.auth]` retunes webhook auth too and
-nothing says so — unchanged behaviour, but the section makes it visible for the
-first time.
+the ceilings but still cannot ask a running server what they are. And there is
+**no separate webhook-auth window**: the `WebhookAuth` scope never had a
+producer — the webhook receiver authenticates by HMAC signature and never
+classified its attempts into a rate-limit scope — so it was removed instead of
+being left as a second spelling of `auth`. `[gateway.rate_limit.auth]` is the
+handshake window (`connect`: 10 attempts/min, 5-minute lockout), enforced per
+client IP by the WebSocket dispatch loop; the shared-bucket layer keeps the
+handshake in the lockout-free default bucket so one token-guessing client
+cannot lock every remote Panel out of the handshake.
 
 ### Reverse proxies (opt-in `X-Forwarded-For` resolution)
 
@@ -1375,11 +1425,11 @@ return a handler from `Channel::webhook_handler()`. `build_router()` registers
 
 Aleph 对外**是一个 MCP server**：dsh 一行 `cordis.yml`、pi 一行 `pi-mcp-adapter` 配置、Claude Code 一行
 `.mcp.json`（`type: http`）都能挂上，零专属代码。**客户端侧的接法只写一份**：`packages/pi-aleph/README.md`——
-一个 JS-free 的 pi 包（`package.json#pi = { skills, mcp }` + `mcp.json` + `skills/aleph/SKILL.md`），README 同时给出
+一个 JS-free 的 pi 包（`package.json#pi = { skills, mcp }` + `mcp.json` + `(removed or relocated; skills are now under ~/.aleph/skills/)`），README 同时给出
 pi（经 pi-mcp-adapter）、Claude Code `.mcp.json`（`type: http`）与 dsh `cordis.yml` 的三行配置；本节不抄那三行。设计母本：spec
 `docs/superpowers/specs/2026-09-20-plugin-scope-and-cc-compat-design.md` §3.7。它是一张**接口脸**（R4：
-纯 I/O），把 `tools/call` 翻成 Aleph 自己的工具调用路径；**wire 类型复用 `src/mcp/{jsonrpc,protocol,types}.rs`，
-信封复用网关自己的 `protocol::JsonRpc{Request,Response}`（客户端侧的 `mcp/jsonrpc.rs` 的 id 是 `u64`，回不了字符串 id），不复制**（CLAUDE.md 禁用清单 2026-09-20 那一行）。
+纯 I/O），把 `src/tools/server/mod.rs` 翻成 Aleph 自己的工具调用路径；**wire 类型复用 `src/mcp/{jsonrpc,protocol,types}.rs`，
+信封复用网关自己的 `protocol::JsonRpc{Request,Response}`（客户端侧的 `src/mcp/jsonrpc.rs` 的 id 是 `u64`，回不了字符串 id），不复制**（CLAUDE.md 禁用清单 2026-09-20 那一行）。
 
 | 项 | 决定 |
 |---|---|
@@ -1391,13 +1441,13 @@ pi（经 pi-mcp-adapter）、Claude Code `.mcp.json`（`type: http`）与 dsh `c
 | 会话 / principal | 每个 MCP session ↔ 一个 Aleph 会话；principal `McpClient { client_name }`（来自 `initialize.clientInfo.name`）。调用走**同一条** scoped dispatch（审批门 + spend ledger + hooks）——不是第二条执行路径 |
 | 审批 | 「有没有 operator 能答」是**连接表**上的事实：`McpFace` 每次调用问 `OperatorPresence` 探针（`GatewayServer::operator_presence_probe()`），派发时 `unattended = !present`——无 operator 界面时 confirm 门**立刻** fail-closed，结果 `isError: true`，文本末尾附 `MCP_APPROVAL_HINT`（告诉对端模型卡本会去哪、怎么开）。⚠️ 这一步**不是** `OperatorApprovalRequester` 的「零订阅者即拒绝」——boot 给事件总线挂了内部消费者，那条臂在真服务器上**永远不触发**（FL 附录 D.0.199）。**有 operator 在线时**：卡按现有审批流升起，**没有死线**（2026-08-28 裁定），MCP 客户端那边等的是它自己的超时（dsh 60 s / adapter 30 s）；客户端放弃后卡**仍挂在 Panel 上**——用户裁定接受这个形状（U-d），「handler future 掉落时收回卡」记为 follow-up，未建 |
 | 错误形状 | 工具执行错误 → `isError: true` 的结果（**不是**协议错误）；不在 `expose` → tool not found；body 不是 JSON-RPC → 400 + JSON-RPC error body；非 `initialize` 请求缺 session 头 → 400；未知 / 过期 session → 404 |
-| 通知 | 插件 mount/unmount/reload（`lifecycle.rs::after_transition` 里的 `if let Some(face) = try_mcp_face() { face.notify_tools_list_changed() }`，G3 钉住这个调用点）与 `expose` 变更 → 向每条活着的 MCP session 广播 `notifications/tools/list_changed`。进程级句柄 `try_mcp_face() -> Option<&'static Arc<McpFace>>`（同 spend 的 `install_ledger` 形状，FL §5.25）让 lifecycle 不必穿 7 个构造点 |
+| 通知 | 插件 mount/unmount/reload（`lifecycle.rs::after_transition` 里的 `if let Some(face) = try_mcp_face() { face.notify_tools_list_changed() }`，G3 钉住这个调用点）与 `expose` 变更 → 向每条活着的 MCP session 广播 `notifications/tools/list_changed`（JSON-RPC 通知方法名）。进程级句柄 `try_mcp_face() -> Option<&'static Arc<McpFace>>`（同 spend 的 `install_ledger` 形状，FL §5.25）让 lifecycle 不必穿 7 个构造点 |
 | 名字 | Aleph 工具名已是 `[a-z0-9_]`，满足 dsh 的 64 字符规则（dsh 侧展示为 `mcp__<server>__<tool>`）；P6 逐名验证无超长名 |
 
 **有 operator 在线时的审批卡是「挂着的」，这是接受下来的形状（用户裁定 2026-09-20，U-d）。** 一个需要确认的
-`tools/call` 在 Panel 上升起一张没有死线的卡（2026-08-28 裁定：审批不超时）；MCP 客户端那边等的是**它自己的**超时
+`src/tools/server/mod.rs` 在 Panel 上升起一张没有死线的卡（2026-08-28 裁定：审批不超时）；MCP 客户端那边等的是**它自己的**超时
 （dsh 60 s、pi-mcp-adapter 30 s），到点后客户端把这次调用当失败，而卡**仍挂在 Panel 上**——operator 点批准时，那个
-`tools/call` 的 handler future 早已被丢弃，批准落在一个没有人在等的动作上。两种后果都比它们的替代品便宜：立刻拒绝
+`src/tools/server/mod.rs` 的 handler future 早已被丢弃，批准落在一个没有人在等的动作上。两种后果都比它们的替代品便宜：立刻拒绝
 会把每一个 attended 调用变成 unattended（那正是 `deny` 阶段要证的另一臂），给卡加死线会推翻 08-28 的裁定。
 「handler future 掉落时收回卡」记为 follow-up，未建；在那之前，Panel 上一张来自 `McpClient` 的旧卡读作
 「对端已经放弃了」，不是「还在等」。
@@ -1405,8 +1455,57 @@ pi（经 pi-mcp-adapter）、Claude Code `.mcp.json`（`type: http`）与 dsh `c
 真机：`qa/mcp_face/run.sh {handshake,tools,auth,list_changed,deny}`——每阶段证明什么见
 [`qa/README.md`](../../qa/README.md)。
 
----
-## See Also
+
+
+### Source-owned Bound lifecycle evidence / Source-owned Bound 生命周期证据（Stage B，2026-10-27）
+
+The bounded Stage B slice uses `ChannelRegistry` as the sole Gateway association and publication authority for source-private Generic Webhook/loopback Bound channels. Retirement, replacement, and unregister install an entry-local fence, perform real drain/stop/forwarder/task cleanup outside the source gate, then perform one checked publication or removal commit. Old completion is validated against the original source, ownership binding, provider generation, and original entry/ticket before it can be accepted; retirement makes it `DiscardedStale`.
+
+受限 Stage B 切片使用 `ChannelRegistry` 作为 source-private Generic Webhook/loopback Bound channel 唯一的 Gateway association 与 publication authority。retirement、replacement 和 unregister 先安装 entry-local fence，在 source gate 外执行真实 drain/stop/forwarder/task cleanup，再以一次 checked publication 或 removal commit 完成。旧 completion 必须依次通过 original source、ownership binding、provider generation、original entry/ticket 校验；retirement 后结果为 `DiscardedStale`。
+
+This evidence covers the test composition only. It does not establish production Bound mount or ingress, Feishu/R2 integration, Zahir routing, all-channel compatibility, crash recovery, durable replay, or external exactly-once effects. See the bilingual run record at [`docs/superpowers/runs/2026-10-27-gateway-bound-retirement-run.md`](../superpowers/runs/2026-10-27-gateway-bound-retirement-run.md).
+
+该证据仅覆盖测试组合，不代表 production Bound mount/ingress、Feishu/R2 integration、Zahir routing、全通道 compatibility、crash recovery、durable replay 或 external exactly-once effects 已完成。详见双语 run record：[`docs/superpowers/runs/2026-10-27-gateway-bound-retirement-run.md`](../superpowers/runs/2026-10-27-gateway-bound-retirement-run.md)。
+
+### Current source-owned Generic Gateway capability read/lease slice / 当前源所有 Generic Gateway capability read/lease 切片（2026-10-30）
+
+The current source-private Bound slice adds an asynchronous read model over the existing `ChannelRegistry` authority. `describe_bound_capabilities`, `list_bound_capabilities`, and `project_bound_capabilities` derive a single source publication cut from existing bound entries; `resolve_bound_capability` captures source evidence, validates provider and ownership outside source locks, and revalidates the source cut before returning the existing `BoundChannelCapture` as a read lease. The implementation is in `src/gateway/channel_registry/capability.rs` and does not introduce a second registry, descriptor catalog, capture authority, `CapabilityBackend`, or universal `ZahirFacade` mount.
+
+当前 source-private Bound 切片在既有 `ChannelRegistry` authority 之上提供异步 read model。`describe_bound_capabilities`、`list_bound_capabilities`、`project_bound_capabilities` 从既有 bound entry 读取同一 source publication cut；`resolve_bound_capability` 先捕获 source evidence，在释放 source lock 后校验 provider 与 ownership，再复验 source cut，最后返回现有 `BoundChannelCapture` 作为 read lease。实现位于 `src/gateway/channel_registry/capability.rs`，没有新增第二 registry、descriptor catalog、capture authority、`CapabilityBackend` 或 universal `ZahirFacade` mount。
+
+`ChannelRegistry` 的 `source_revision` 与 descriptor revision 独立，并使用 checked publication fencing；source-wide publication synchronization covers legacy and Bound publication paths. Replacement/unregister commit sections check source/entry identity、retirement marker、active work 与 publication revision；provider instance/generation、descriptor fingerprint 与 ownership binding 则由 capability resolution 和 execution admission 分别校验。较低层的 `validate_bound_capture` 拒绝 future source revision claim；`resolve_bound_capability` 还会在自身 source cut 变化时 fail-closed，而通过 `validate_bound_capture` 检查的当前 capture 可以跨越无关后续 source publication 保持有效。The read surface is no-start/no-auth/no-network: it does not start providers or channels, refresh tokens, bind listeners, spawn tasks/drivers, or mount webhooks. Cold and disabled declarations remain readable; execution still requires the existing provider and ownership admission fences.
+
+`ChannelRegistry` 的 `source_revision` 与 descriptor revision 相互独立，并通过 checked publication fencing 保护；source-wide publication synchronization 覆盖 legacy 与 Bound publication path。Replacement/unregister commit section 校验 source/entry identity、retirement marker、active work 与 publication revision；provider instance/generation、descriptor fingerprint 与 ownership binding 则由 capability resolution 与 execution admission 分别校验。较低层的 `validate_bound_capture` 拒绝 future source revision claim；`resolve_bound_capability` 还会在自身 source cut 变化时 fail-closed，而通过 `validate_bound_capture` 检查的当前 capture 可以跨越无关后续 source publication 保持有效。该 read surface 满足 no-start/no-auth/no-network：不启动 provider/channel、不刷新 token、不绑定 listener、不 spawn task/driver、不 mount webhook。Cold 与 Disabled declaration 仍可读取；执行仍必须通过既有 provider 与 ownership admission fence。
+
+This slice does not establish production Bound ingress/runtime, Feishu/R2 integration, Zahir routing, subscriptions, durable or crash recovery, external exactly-once effects, all-channel compatibility, Terminal/Memory/Sandbox migration, EffectClaim production, Safe Replay, a universal scheduler, or remaining capability kinds. `ChannelRegistry` remains the only `WebhookMountTable` writer and Gateway lifecycle authority; production mount/ingress and Feishu B8.2 gates remain deferred.
+
+本切片不证明 production Bound ingress/runtime、Feishu/R2 integration、Zahir routing、subscription、durable/crash recovery、external exactly-once effects、all-channel compatibility、Terminal/Memory/Sandbox migration、EffectClaim production、Safe Replay、universal scheduler 或其余 capability kind。`ChannelRegistry` 仍是唯一 `WebhookMountTable` writer 与 Gateway lifecycle authority；production mount/ingress 与 Feishu B8.2 gates 仍 deferred。
+
+### Terminal source-owned lifecycle / Terminal 源所有生命周期（2026-10-31）
+
+The existing `PtyManager` is the only Terminal session/owner-retention/event-bus authority. It owns one side-effect-free `ProviderHandle` and one joinable flush driver. `GatewayServer` receives the existing shared application Config; a disabled or unwired router leaves the manager uninitialized. Enabled activation captures a checked generation, owns its driver handle and only then publishes `Ready`. Repeated activation reuses that generation and bus; replacing a live bus requires stop.
+
+现有 `PtyManager` 是唯一 Terminal session/owner-retention/event-bus authority，持有一个无副作用 `ProviderHandle` 和一个可 join 的 flush driver。`GatewayServer` 接收现有 shared application Config；disabled 或未接线的 router 不初始化 manager。Enabled activation 捕获 checked generation、拥有 driver handle 后才发布 `Ready`。重复激活复用同一 generation 与 bus；替换 live bus 必须先 stop。
+
+Stop transitions to `Stopping` before session cleanup, retains failed sessions in the canonical map, signals the driver and awaits the retained handle. Successful cleanup/join permits `Stopped`; failures remain `Failed` with `TerminalResidual`. Session cleanup observes a successful kill request or successful waiter-confirmed child exit; it does not join descendant processes or reader threads. Cancelling a stop future retains the handle. `LifecycleSnapshot::driver_active` denotes retained driver ownership, including pending cleanup, not OS-thread liveness. Normal daemon shutdown awaits this boundary; forced shutdown attempts it with a one-second timeout and logs remaining evidence. That timeout cannot preempt synchronous native I/O or mutex waits.
+
+Stop 在 session cleanup 前转换为 `Stopping`，失败 session 保留在 canonical map，随后 signal driver 并等待保留的 handle。仅成功 cleanup/join 才允许 `Stopped`；失败保持 `Failed` 与 `TerminalResidual`。Session cleanup 观察的是 kill 请求成功或 waiter 成功确认 child 退出，不包含 descendant process 或 reader thread join。取消 stop future 不丢 handle。`LifecycleSnapshot::driver_active` 表示保留的 driver 所有权，含 pending cleanup，不表示 OS-thread liveness。正常 daemon shutdown 等待此边界；forced shutdown 尝试一秒并记录剩余证据，该 timeout 不能抢占同步 native I/O 或 mutex wait。
+
+The shared async `apply_live_sections` receives an optional reference to the existing Gateway bus. Production supplies it through `ConfigPatcher::with_event_bus` and explicit reload registration before sharing those entry points. Patch, shared-patcher self_config update/rollback, rollback and explicit RPC reload use this executor; dedicated execution/search callers await it with `None` and their original exact targets. Cold enable requires explicit bus context and can start the first driver without restart. Repeated Ready enable reuses the same bus/generation; Stopping→enable first completes the retained stop. Disable reports Terminal live only after checked source cleanup and stored-driver join. Missing enable context, failure or a five-second local async wait timeout remain non-live; cancellation preserves source ownership. This budget does not bound Config lock acquisition or synchronous native work.
+
+共享异步 `apply_live_sections` 接收既有 Gateway bus 的 optional 引用。生产通过 `ConfigPatcher::with_event_bus` 和显式 reload 注册传入，随后才共享入口。Patch、共享 patcher 的 self_config update/rollback、rollback 与显式 RPC reload 共用执行器；execution/search 专用入口以 `None` 和原精确 target await。Cold enable 必须有显式 bus context，可在不重启时启动首个 driver；Ready 重复 enable 复用 bus/generation，Stopping→enable 先完成 retained stop。Disable 仅在 checked source cleanup 与 stored-driver join 完成后报告 Terminal live。enable 缺 context、失败或五秒局部异步等待超时保持 non-live，取消保留 source 所有权；该预算不限制 Config 锁等待或同步 native 工作。
+
+Persisted success remains distinct from live application. Patcher/rollback and reload apply the latest shared Config under a read guard held through completion; reload releases its installation write guard first. Identical patch/self_config updates perform no write, backup, mtime change or lifecycle retry and fabricate no live result. After an incomplete persisted disable, explicit `config.reload` finishes the retained join through the real handler. File-watcher updates remain outside this path. No enabled cache, bus singleton or detached cleanup driver is added.
+
+持久化成功与 live application 分开报告。Patcher/rollback 与 reload 在最新 shared Config 的 read guard 下完成应用；reload 先释放安装配置的 write guard。相同 patch/self_config 不写文件、不备份、不改变 mtime、不重试 lifecycle，也不伪造 live 结果。持久化 disable 未完成时，显式 `config.reload` 经真实 handler 完成 retained join。文件 watcher 仍不在此路径；没有 enabled cache、bus singleton 或 detached cleanup driver。
+
+Spawn/input/resize/attach/close capture the current Ready generation; the source admission gate serializes their effects with stop. Flush and final-exit publication/removal check their original generation. Screen/exit topic payloads carry `provider_generation`; WebSocket forwarding rejects queued stale or missing generations before visibility lookup and after asynchronous filtering. The existing `created_by`/`owner_admits` predicate and retained owner stamps still govern owner visibility. The existing process journal remains the durable PTY fact source.
+
+Spawn/input/resize/attach/close 捕获当前 Ready generation，source admission gate 将其 effect 与 stop 串行化。Flush 与 final-exit publication/removal 校验原 generation。Screen/exit topic payload 携带 `provider_generation`，WebSocket forwarding 在 visibility lookup 前和异步过滤后拒绝排队的旧代或缺失 generation 事件。既有 `created_by`/`owner_admits` 与 retained owner stamp 继续决定 owner visibility；现有 process journal 仍是 durable PTY fact source。
+
+Evidence and exclusions are recorded in [Terminal lifecycle run](../superpowers/runs/2026-10-31-terminal-lifecycle-run.md) and [explicit live-config run](../superpowers/runs/2026-10-31-terminal-live-config-run.md). This does not establish Terminal Zahir/BackendLease/MCP/ACP integration, durable Capability recovery, native unload, OS process/reader-thread/RSS reclamation, process isolation, external delivery or exactly-once effects; other providers and harness remain outside this slice.
+
+证据与排除见上述 run record。本切片不证明 Terminal Zahir/BackendLease/MCP/ACP integration、durable Capability recovery、native unload、OS process/reader-thread/RSS reclamation、process isolation、external delivery 或 exactly-once effects；其余 provider 与 harness 不在范围内。
 
 - [Architecture](ARCHITECTURE.md) - System overview
 - [Agent System](AGENT_SYSTEM.md) - Agent loop

@@ -8,7 +8,8 @@
 //! [`ManifestCache`] keys each entry by `(canonical path, size, mtime, ctime,
 //! dev, ino)` — the same tuple used by openclaw's
 //! `plugin-cache-primitives.createPluginCacheKey` to detect hardlinks and
-//! in-place edits without an extra `stat` per read.
+//! in-place edits without an extra `stat` per read. `ctime` is the inode
+//! change time (see [`inode_change_time`]), not the file's birth time.
 //!
 //! ## Threading
 //!
@@ -66,6 +67,30 @@ fn device_and_inode(_meta: &std::fs::Metadata) -> (u64, u64) {
     (0, 0)
 }
 
+/// Returns the time the file's inode last changed — the `ctime` the cache
+/// key documents.
+///
+/// On Unix this is `st_ctime`, which the kernel bumps on every write, link
+/// count change or permission change. It is deliberately *not*
+/// `Metadata::created()`: on Linux that reports the birth time, which never
+/// changes, so an in-place rewrite that preserved the size and the mtime
+/// (`cp -p`, a tar restore, an editor that keeps timestamps) kept the same
+/// key and the stale manifest was served from cache. On platforms without
+/// `st_ctime` the modification time is the best available signal.
+#[cfg(unix)]
+fn inode_change_time(meta: &std::fs::Metadata) -> Option<SystemTime> {
+    use std::os::unix::fs::MetadataExt;
+
+    let secs = u64::try_from(meta.ctime()).ok()?;
+    let nanos = u32::try_from(meta.ctime_nsec()).ok()?;
+    SystemTime::UNIX_EPOCH.checked_add(std::time::Duration::new(secs, nanos))
+}
+
+#[cfg(not(unix))]
+fn inode_change_time(meta: &std::fs::Metadata) -> Option<SystemTime> {
+    meta.modified().ok()
+}
+
 /// Maximum number of manifest entries cached in-process.
 ///
 /// Mirrors openclaw's `MAX_PLUGIN_MANIFEST_LOAD_CACHE_ENTRIES`. Each entry
@@ -74,7 +99,9 @@ pub const MAX_ENTRIES: usize = 512;
 
 /// Composite cache key for a manifest file. Two `(path, size, mtime, ctime,
 /// dev, ino)` tuples are equal iff every component matches; any drift in
-/// those six fields invalidates the entry.
+/// those six fields invalidates the entry. `ctime` is the inode change time
+/// (see [`inode_change_time`]), so a rewrite that preserves the size and the
+/// mtime still invalidates the entry.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct ManifestCacheKey {
     path: PathBuf,
@@ -103,7 +130,7 @@ impl ManifestCacheKey {
             path: path.to_path_buf(),
             size: meta.len(),
             mtime: meta.modified().ok()?,
-            ctime: meta.created().or_else(|_| meta.modified()).ok()?,
+            ctime: inode_change_time(meta)?,
             dev,
             ino,
             kind_sidecar: plugin_dir
@@ -204,6 +231,48 @@ mod tests {
     /// The directory a temp manifest sits in, standing in for its plugin dir.
     fn dir_of(tmp: &tempfile::NamedTempFile) -> &Path {
         tmp.path().parent().expect("a temp file has a parent")
+    }
+
+    /// An in-place rewrite that preserves the file's size and mtime must
+    /// still invalidate the entry.
+    ///
+    /// The key's third timestamp used to be the file's *birth* time, which
+    /// never changes — so a rewrite that restored the mtime (`cp -p`, a tar
+    /// restore) served the stale manifest from cache. The inode change time
+    /// catches it.
+    #[cfg(unix)]
+    #[test]
+    fn an_in_place_rewrite_with_a_restored_mtime_invalidates_the_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = dir.path().join("plugin.json");
+        std::fs::write(&manifest, "{}").unwrap();
+        let meta = std::fs::metadata(&manifest).unwrap();
+        let cache = ManifestCache::new();
+        cache.put(
+            dir.path(),
+            &manifest,
+            &meta,
+            PluginManifest::default_for_test(),
+        );
+        assert!(cache.get(dir.path(), &manifest, &meta).is_some());
+
+        // Same byte count, then the original mtime restored.
+        std::fs::write(&manifest, "{}").unwrap();
+        let file = std::fs::File::options()
+            .write(true)
+            .open(&manifest)
+            .expect("open for mtime restore");
+        file.set_times(std::fs::FileTimes::new().set_modified(meta.modified().unwrap()))
+            .expect("restore mtime");
+        drop(file);
+
+        let meta2 = std::fs::metadata(&manifest).unwrap();
+        assert_eq!(meta2.len(), meta.len());
+        assert_eq!(meta2.modified().unwrap(), meta.modified().unwrap());
+        assert!(
+            cache.get(dir.path(), &manifest, &meta2).is_none(),
+            "a rewrite that preserved size and mtime must still invalidate the entry"
+        );
     }
 
     /// A `.mcp.json` appearing beside the manifest changes the parse (the

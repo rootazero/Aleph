@@ -68,6 +68,18 @@ use cli::{Args, Command, PluginAction, PluginsAction};
 /// `main()` and then build the tokio runtime manually.
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = Args::parse();
+    if args.desktop_ipc.is_some() {
+        if !aleph_client::local_ipc::AVAILABLE {
+            return Err("Desktop IPC is unavailable on this platform".into());
+        }
+        if !matches!(args.command, Some(Command::Start) | None) {
+            return Err("--desktop-ipc is only available when starting the Gateway".into());
+        }
+        #[cfg(windows)]
+        if let Some(endpoint) = args.desktop_ipc.as_deref() {
+            aleph_client::local_ipc::windows::validate_endpoint(endpoint)?;
+        }
+    }
 
     // `--config <path>` has to pin the config file for the WHOLE process, not
     // just for the gateway loader that is handed the flag. Do it here, before
@@ -378,7 +390,27 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
             let code = commands::bootstrap_runtime::run(br_args).await;
             std::process::exit(code);
         }
-        Some(Command::Node { center, name, tags }) => {
+        Some(Command::Node {
+            center,
+            name,
+            tags,
+            reset_identity,
+        }) => {
+            // The reset is a local, one-shot action on the node machine: it
+            // needs no center, so it never opens a session.
+            if reset_identity {
+                return commands::node::reset_identity(&name);
+            }
+            // clap makes `--center` mandatory unless `--reset-identity` is
+            // given; say so plainly rather than unwrapping a value clap
+            // already guaranteed.
+            let Some(center) = center else {
+                return Err(
+                    "`node` needs --center <URL> (or --reset-identity to forget the \
+                     local identity file)"
+                        .into(),
+                );
+            };
             return commands::node::handle_node(center, name, tags).await;
         }
         Some(Command::SandboxDebug {

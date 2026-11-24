@@ -1,0 +1,104 @@
+[
+  {
+    "id": "PII",
+    "subsystem": "pii",
+    "description": "PII detection engine, rule scanners, allowlist, and platform exclusion routing",
+    "files": [
+      "src/pii/allowlist.rs",
+      "src/pii/engine.rs",
+      "src/pii/mod.rs",
+      "src/pii/rules/api_key.rs",
+      "src/pii/rules/bank_card.rs",
+      "src/pii/rules/custom.rs",
+      "src/pii/rules/email.rs",
+      "src/pii/rules/id_card.rs",
+      "src/pii/rules/ip_address.rs",
+      "src/pii/rules/mod.rs",
+      "src/pii/rules/phone.rs",
+      "src/pii/rules/ssh_key.rs"
+    ]
+  },
+  {
+    "id": "PROJECTS",
+    "subsystem": "projects",
+    "description": "Project storage, workspace bindings, attribution backfill, authz, and project events",
+    "files": [
+      "src/projects/attribution_backfill.rs",
+      "src/projects/authz.rs",
+      "src/projects/binding.rs",
+      "src/projects/events.rs",
+      "src/projects/mod.rs",
+      "src/projects/roster.rs",
+      "src/projects/run_context.rs",
+      "src/projects/store.rs"
+    ]
+  },
+  {
+    "id": "ORCH_ROOT",
+    "subsystem": "orchestrator",
+    "description": "Orchestrator root engine, dispatch loop, flow specification, flow registry, loader, resolver, and sandbox factory",
+    "files": [
+      "src/orchestrator/dispatch.rs",
+      "src/orchestrator/errors.rs",
+      "src/orchestrator/flow_registry.rs",
+      "src/orchestrator/flow_spec.rs",
+      "src/orchestrator/loader.rs",
+      "src/orchestrator/mod.rs",
+      "src/orchestrator/resolver.rs",
+      "src/orchestrator/sandbox_factory.rs",
+      "src/orchestrator/presets/mod.rs"
+    ]
+  },
+  {
+    "id": "ORCH_DEPS",
+    "subsystem": "orchestrator/deps_builder",
+    "description": "Orchestrator dependencies builder, context budget, provider chain, and stability monitoring",
+    "files": [
+      "src/orchestrator/deps_builder/common.rs",
+      "src/orchestrator/deps_builder/context_budget.rs",
+      "src/orchestrator/deps_builder/mod.rs",
+      "src/orchestrator/deps_builder/provider_chain.rs",
+      "src/orchestrator/deps_builder/stability.rs",
+      "src/orchestrator/deps_builder/summary.rs"
+    ]
+  },
+  {
+    "id": "ORCH_HARNESS_A",
+    "subsystem": "orchestrator/harness_bridge",
+    "description": "Harness bridge core, backfill, behavior resolution, callbacks, context blocks, context estimation, error, and llm interface",
+    "files": [
+      "src/orchestrator/harness_bridge/mod.rs",
+      "src/orchestrator/harness_bridge/backfill.rs",
+      "src/orchestrator/harness_bridge/behavior_resolve.rs",
+      "src/orchestrator/harness_bridge/callback.rs",
+      "src/orchestrator/harness_bridge/context_blocks.rs",
+      "src/orchestrator/harness_bridge/context_estimate.rs",
+      "src/orchestrator/harness_bridge/error.rs",
+      "src/orchestrator/harness_bridge/llm.rs"
+    ]
+  },
+  {
+    "id": "ORCH_HARNESS_B",
+    "subsystem": "orchestrator/harness_bridge_b_and_tests",
+    "description": "Harness bridge prompt building, public runners, replay adapter, session seed, harness bridge tests, and orchestrator integration tests",
+    "files": [
+      "src/orchestrator/harness_bridge/prompt_build.rs",
+      "src/orchestrator/harness_bridge/public_lookup_tool.rs",
+      "src/orchestrator/harness_bridge/public_run.rs",
+      "src/orchestrator/harness_bridge/public_spend_tests.rs",
+      "src/orchestrator/harness_bridge/replay_adapter.rs",
+      "src/orchestrator/harness_bridge/runner_impl.rs",
+      "src/orchestrator/harness_bridge/session_seed.rs",
+      "src/orchestrator/harness_bridge/tests.rs",
+      "src/orchestrator/tests/dispatch.rs",
+      "src/orchestrator/tests/errors.rs",
+      "src/orchestrator/tests/flow_registry.rs",
+      "src/orchestrator/tests/flow_spec_parse.rs",
+      "src/orchestrator/tests/harness_bridge.rs",
+      "src/orchestrator/tests/loader.rs",
+      "src/orchestrator/tests/mod.rs",
+      "src/orchestrator/tests/resolver.rs",
+      "src/orchestrator/tests/sandbox_factory.rs"
+    ]
+  }
+]

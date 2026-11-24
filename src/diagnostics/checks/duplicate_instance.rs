@@ -2,10 +2,10 @@
 //!
 //! Multiple daemon processes racing the same vault cause HMAC failure and
 //! **vault data loss** (the AGENTS.md process-management redline). This check
-//! counts live processes whose exe name contains `aleph-server`, excluding
-//! itself, and warns when others exist. **Not repairable**: killing processes
-//! is a human call (which one survives is not a mechanical decision), so the
-//! finding quotes the documented procedure instead of applying it.
+//! excludes the cold `aleph-server doctor` process itself and warns only when
+//! a daemon process scan finds other live server processes. **Not repairable**:
+//! killing processes is a human call, so the finding asks the operator to
+//! confirm the shared data-directory lock owner before stopping anything.
 
 use async_trait::async_trait;
 
@@ -40,6 +40,8 @@ fn count_other_instances() -> usize {
         .values()
         .filter(|p| {
             p.pid().as_u32() != own
+                // Exclude other diagnostic/doctor command processes
+                && !p.cmd().iter().any(|arg| arg.to_string_lossy() == "doctor")
                 // Zombies/the dead still hold a table entry but are not
                 // "running" — and typically have no exe path anyway.
                 && !matches!(
@@ -68,10 +70,6 @@ impl DuplicateInstanceCheck {
 impl HealthCheck for DuplicateInstanceCheck {
     fn id(&self) -> &'static str {
         ID
-    }
-
-    fn title(&self) -> &'static str {
-        "Duplicate instance"
     }
 
     async fn run(&self, _posture: Posture) -> Vec<Finding> {
@@ -106,9 +104,8 @@ impl HealthCheck for DuplicateInstanceCheck {
                 ),
             )
             .with_fix_hint(
-                "Stop the duplicates before continuing (AGENTS.md procedure): \
-                 pkill -f \"target/release/aleph-server\"; pkill -f \"target/debug/aleph-server\"; \
-                 sleep 2 — then restart a single instance.",
+                "Stop only confirmed duplicate daemon instances before continuing; inspect the \
+                 process list and shared data-directory lock owner first.",
             )],
             None => vec![Finding::ok(
                 ID,

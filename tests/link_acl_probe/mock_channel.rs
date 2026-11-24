@@ -6,7 +6,7 @@ use tokio::sync::mpsc;
 
 use alephcore::gateway::channel::{
     Channel, ChannelCapabilities, ChannelInfo, ChannelResult, ChannelState, ChannelStatus,
-    OutboundMessage, SendResult,
+    OutboundMessage, SendOperation, SendResult,
 };
 use alephcore::gateway::{ChannelId, MessageId};
 
@@ -61,14 +61,17 @@ impl Channel for MockChannel {
         Ok(())
     }
 
-    async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-        let _ = self.reply_tx.send(CapturedReply {
-            conversation_id: message.conversation_id.as_str().to_string(),
-            text: message.text.clone(),
-        });
-        Ok(SendResult {
-            message_id: MessageId::new("sent-1"),
-            timestamp: Utc::now(),
+    fn send(&self, message: OutboundMessage) -> SendOperation {
+        let reply_tx = self.reply_tx.clone();
+        Box::pin(async move {
+            let _ = reply_tx.send(CapturedReply {
+                conversation_id: message.conversation_id.as_str().to_string(),
+                text: message.text.clone(),
+            });
+            Ok(SendResult {
+                message_id: MessageId::new("sent-1"),
+                timestamp: Utc::now(),
+            })
         })
     }
 }

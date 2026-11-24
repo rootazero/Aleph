@@ -1555,6 +1555,15 @@ mod tests {
     /// Drive a navigation to completion: the fake answers `Page.navigate`, and
     /// the load barrier is ended by a pushed `Page.loadEventFired` once the
     /// navigate frame is on the wire.
+    ///
+    /// The main frame's `Page.frameNavigated` is pushed FIRST because the
+    /// landed URL is an OBSERVATION the production path requires: `navigate`
+    /// reads it from that event (or, when the engine omits it, from
+    /// `Page.getFrameTree`) and fails the navigation CLOSED — closing the tab
+    /// — when neither carries one. The requested URL is not a fallback: an
+    /// unobserved landing is not an observation. This fake used to answer
+    /// `Page.getFrameTree` with `{}`, so every navigation here failed closed
+    /// before the barrier was ever reached.
     async fn navigate_to_completion(
         server: &FakeCdpServer,
         backend: Arc<crate::browser::cdp_backend::CdpBackend>,
@@ -1563,11 +1572,17 @@ mod tests {
     ) -> Result<(), crate::browser::error::BrowserError> {
         let tab = tab_id.to_string();
         let url = url.to_string();
+        let landed = url.clone();
         let nav = tokio::spawn(async move { backend.navigate(&tab, &url).await });
         assert!(
             wait_until(|| server.received_for("Page.navigate").len() == 1).await,
             "the navigation was dispatched"
         );
+        server.push_event(json!({
+            "method": "Page.frameNavigated",
+            "sessionId": "S1",
+            "params": { "frame": { "id": "F1", "loaderId": "L1", "url": landed } }
+        }));
         server.push_event(json!({
             "method": "Page.loadEventFired",
             "sessionId": "S1",

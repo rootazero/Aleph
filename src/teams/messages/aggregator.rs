@@ -237,13 +237,14 @@ fn merge_requests(reqs: Vec<SendRequest>) -> Option<SendRequest> {
         return Some(head);
     }
 
-    let mut bodies: Vec<String> = Vec::new();
-    bodies.push(std::mem::take(&mut head.content));
     let mut attachments: Vec<String> = std::mem::take(&mut head.attachments);
 
     for r in iter {
         if !r.content.is_empty() {
-            bodies.push(r.content);
+            if !head.content.is_empty() {
+                head.content.push_str("\n\n");
+            }
+            head.content.push_str(&r.content);
         }
         for a in r.attachments {
             if !attachments.contains(&a) {
@@ -258,7 +259,6 @@ fn merge_requests(reqs: Vec<SendRequest>) -> Option<SendRequest> {
         }
     }
 
-    head.content = bodies.join("\n\n");
     head.attachments = attachments;
     Some(head)
 }

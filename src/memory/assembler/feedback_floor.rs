@@ -138,7 +138,7 @@ impl FeedbackFloorLoader {
             }
             out.push(FeedbackFloorEntry {
                 path: format!("feedback/{stem}"),
-                title: note.title.clone(),
+                title: note.title,
                 body: strip_frontmatter(&content),
                 severity: note.severity,
                 updated_at: note.updated_at,

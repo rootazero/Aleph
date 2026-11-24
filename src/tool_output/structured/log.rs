@@ -149,22 +149,27 @@ fn mark_signal(
         if spent >= budget {
             break;
         }
-        if !is_loud(lines[i]) {
+        let Some(&line_i) = lines.get(i) else {
+            continue;
+        };
+        if !is_loud(line_i) {
             prev_loud = None;
             continue;
         }
         // Collapse an immediately-repeated loud line (progress-bar warnings).
-        if prev_loud == Some(lines[i]) {
+        if prev_loud == Some(line_i) {
             continue;
         }
-        prev_loud = Some(lines[i]);
+        prev_loud = Some(line_i);
         // Only a newly-marked loud line costs budget; re-visiting one the other
         // pass already kept is free, so the two passes can't double-charge.
-        if !keep[i] {
-            keep[i] = true;
-            spent += 1;
+        if let Some(keep_i) = keep.get_mut(i) {
+            if !*keep_i {
+                *keep_i = true;
+                spent += 1;
+            }
         }
-        let base_indent = indent_of(lines[i]);
+        let base_indent = indent_of(line_i);
         for k in 1..=ERROR_CONTEXT {
             // `get` returning None already covers `i + k >= total` — a
             // separate bounds check here could never fire.
@@ -185,7 +190,9 @@ fn mark_signal(
             {
                 break;
             }
-            keep[i + k] = true;
+            if let Some(keep_k) = keep.get_mut(i + k) {
+                *keep_k = true;
+            }
         }
     }
     spent
@@ -196,10 +203,14 @@ pub(super) fn reduce_log(lines: &[&str], profile: &Profile) -> Option<Reduction>
     let mut keep = vec![false; total];
 
     for i in head_indices(lines, KEEP_HEAD) {
-        keep[i] = true;
+        if let Some(k) = keep.get_mut(i) {
+            *k = true;
+        }
     }
     for i in tail_indices(lines, KEEP_TAIL) {
-        keep[i] = true;
+        if let Some(k) = keep.get_mut(i) {
+            *k = true;
+        }
     }
 
     // Loud lines + trailing context, with adjacent dedup so a burst of the same
@@ -223,7 +234,9 @@ pub(super) fn reduce_log(lines: &[&str], profile: &Profile) -> Option<Reduction>
         profile.log_signal.saturating_sub(spent_tail),
     );
 
-    let selected: Vec<usize> = (0..total).filter(|&i| keep[i]).collect();
+    let selected: Vec<usize> = (0..total)
+        .filter(|&i| keep.get(i).copied().unwrap_or(false))
+        .collect();
     // Collapse a burst of identical consecutive lines kept via error-context
     // (e.g. the same warning repeated dozens of times): keep only the first of
     // each original-consecutive identical run. `prev` tracks the previous kept
@@ -232,7 +245,7 @@ pub(super) fn reduce_log(lines: &[&str], profile: &Profile) -> Option<Reduction>
     let mut kept: Vec<usize> = Vec::with_capacity(selected.len());
     let mut prev: Option<usize> = None;
     for &i in &selected {
-        let is_burst_dup = matches!(prev, Some(p) if p + 1 == i && lines[p] == lines[i]);
+        let is_burst_dup = matches!(prev, Some(p) if p + 1 == i && lines.get(p) == lines.get(i));
         if !is_burst_dup {
             kept.push(i);
         }

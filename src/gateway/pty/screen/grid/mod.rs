@@ -280,6 +280,22 @@ impl Grid {
         (self.cursor_row, self.cursor_col)
     }
 
+    /// The 1-based position a cursor position report (CPR) answers with.
+    /// Under DECOM the row counts from the scroll region's top, the same
+    /// origin CUP addresses through [`Self::resolve_row`]. A pending wrap
+    /// (`cursor_col == cols`) reports the last column, where the cursor is drawn.
+    #[must_use]
+    pub fn reported_cursor(&self) -> (u16, u16) {
+        let origin = if self.origin_mode {
+            self.scroll_region.0
+        } else {
+            0
+        };
+        let row = self.cursor_row.saturating_sub(origin);
+        let col = self.cursor_col.min(self.cols.saturating_sub(1));
+        (row + 1, col + 1)
+    }
+
     /// Rows CURRENTLY retained in scrollback -- not a running total of rows
     /// ever evicted. The ring is capped at `scrollback_limit`, and once it
     /// saturates each new eviction drops the oldest row, so this value stops

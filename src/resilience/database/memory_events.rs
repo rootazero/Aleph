@@ -40,16 +40,21 @@ impl StateDatabase {
         &self,
         envelope: &MemoryEventEnvelope,
     ) -> Result<i64, AlephError> {
-        let envelope = envelope.clone();
-        self.with_conn(move |conn| {
-            let event_json = serde_json::to_string(&envelope.event)
-                .map_err(|e| AlephError::other(format!("Failed to serialize event: {e}")))?;
-            let tier = if envelope.event.is_skeleton() {
-                "skeleton"
-            } else {
-                "pulse"
-            };
+        let event_json = serde_json::to_string(&envelope.event)
+            .map_err(|e| AlephError::other(format!("Failed to serialize event: {e}")))?;
+        let actor = envelope.actor.to_string();
+        let tier = if envelope.event.is_skeleton() {
+            "skeleton"
+        } else {
+            "pulse"
+        };
+        let fact_id = envelope.fact_id.clone();
+        let event_type_tag = envelope.event.event_type_tag();
+        let timestamp = envelope.timestamp;
+        let correlation_id = envelope.correlation_id.clone();
+        let partition = envelope.partition.clone();
 
+        self.with_conn(move |conn| {
             // Single statement: compute next seq for this fact_id and INSERT in
             // one go. SQLite serializes this through its per-connection write
             // lock, so two concurrent appends on the same fact_id cannot both
@@ -59,18 +64,17 @@ impl StateDatabase {
                 INSERT INTO memory_events (fact_id, seq, event_type, event_json, actor, tier, timestamp, correlation_id, partition)
                 SELECT ?1,
                        COALESCE((SELECT MAX(seq) FROM memory_events WHERE fact_id = ?1), 0) + 1,
-                       ?3, ?4, ?5, ?6, ?7, ?8, ?9
+                       ?2, ?3, ?4, ?5, ?6, ?7, ?8
                 "#,
                 params![
-                    envelope.fact_id,
-                    envelope.fact_id, // fact_id appears twice: once for the row, once for the sub-query scope
-                    envelope.event.event_type_tag(),
+                    fact_id,
+                    event_type_tag,
                     event_json,
-                    envelope.actor.to_string(),
+                    actor,
                     tier,
-                    envelope.timestamp,
-                    envelope.correlation_id,
-                    envelope.partition,
+                    timestamp,
+                    correlation_id,
+                    partition,
                 ],
             )
             .map_err(|e| AlephError::other(format!("Failed to append memory event: {e}")))?;
@@ -243,9 +247,17 @@ impl StateDatabase {
     /// Recognizes both the new `NoteMigrated` tag and the legacy `FactMigrated`
     /// tag for backward compatibility with pre-R2.2 event stores.
     pub async fn has_migration_events(&self) -> Result<bool, AlephError> {
-        let new_count = self.count_memory_events(Some("NoteMigrated")).await?;
-        let legacy_count = self.count_memory_events(Some("FactMigrated")).await?;
-        Ok(new_count + legacy_count > 0)
+        self.with_conn(|conn| {
+            let exists: bool = conn
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM memory_events WHERE event_type IN ('NoteMigrated', 'FactMigrated'))",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(|e| AlephError::other(format!("Failed to probe migration events: {e}")))?;
+            Ok(exists)
+        })
+        .await
     }
 
     /// Count total memory events, optionally filtered by event type.
@@ -287,7 +299,6 @@ struct MemoryEventRow {
     event_type: String,
     event_json: String,
     actor: String,
-    _tier: String,
     timestamp: i64,
     correlation_id: Option<String>,
     partition: Option<String>,
@@ -315,7 +326,6 @@ impl MemoryEventRow {
             event_type: row.get::<_, String>(3)?,
             event_json: row.get(4)?,
             actor: row.get(5)?,
-            _tier: row.get::<_, String>(6)?,
             timestamp: row.get(7)?,
             correlation_id: row.get(8)?,
             partition: row.get(9)?,
@@ -348,10 +358,7 @@ impl MemoryEventRow {
                 return Ok(None);
             }
         };
-        let actor: EventActor = self
-            .actor
-            .parse()
-            .map_err(|e: String| AlephError::other(e))?;
+        let actor: EventActor = self.actor.parse().map_err(AlephError::other)?;
         Ok(Some(MemoryEventEnvelope {
             id: self.id,
             fact_id: self.fact_id,
@@ -910,10 +917,26 @@ mod tests {
             "a new caller of MemoryTimeTraveler::explain_fact picks its own partitions; \
              read through memory_timeline's dispatch arm instead"
         );
-        let bind =
-            crate::utils::source_scan::files_whose_production_code_reads(&root, "for_caller");
+        // Pin method calls, rather than the generic identifier: the rate limiter
+        // has a distinct associated function `RateLimitKey::for_caller`.
+        let mut bind = crate::utils::source_scan::rust_sources_under(&root)
+            .into_iter()
+            .filter(|(rel, text)| {
+                let code = crate::utils::source_scan::production_code_text(
+                    std::path::Path::new(rel),
+                    text,
+                );
+                // The CALL SITE (`.for_caller(`) is the binding; the tool's own
+                // `pub fn for_caller(` is its definition, not a consumer.
+                code.split_whitespace()
+                    .collect::<String>()
+                    .contains(".for_caller(")
+            })
+            .map(|(rel, _)| rel)
+            .collect::<Vec<_>>();
+        bind.sort();
         assert_eq!(
-            bind.into_iter().collect::<Vec<_>>(),
+            bind,
             vec!["src/executor/builtin_registry/registry/tool_registry_impl.rs".to_string()],
             "MemoryTimelineTool::for_caller must be bound only by the registry arm, which \
              derives the partitions (caller_memory_read_partitions + \

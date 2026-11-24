@@ -27,7 +27,7 @@ use super::resource::{ResourceDraft, ResourceError, ResourceRegistry};
 use super::stream_hub::LatestFrameHub;
 use super::tests::{fixture, frame_event, within};
 use super::LiveProfileOwner;
-use crate::browser::cdp_backend::{BrowserOperationKind, BrowserOperationRecord};
+use crate::browser::cdp_backend::BrowserOperationRecord;
 use crate::gateway::event_bus::GatewayEventBus;
 
 fn user() -> IssuerIdentity {
@@ -103,7 +103,7 @@ impl Rig {
         let grant = self
             .lifecycle
             .grants()
-            .issue(
+            .issue_until(
                 binding.principal.clone(),
                 binding,
                 &resource.resource_id,
@@ -113,7 +113,7 @@ impl Rig {
                     host: "viewer.test".into(),
                     port: 443,
                 },
-                Duration::from_secs(600),
+                chrono::Utc::now().timestamp_millis() + 600_000,
             )
             .unwrap()
             .grant_id;
@@ -440,12 +440,7 @@ async fn registering_an_operation_installs_the_registry_sink_on_its_owner() {
     let resource = lifecycle
         .publish(draft(viewer_binding(&owner, "T1"), RedactionStatus::Safe))
         .unwrap();
-    let record = BrowserOperationRecord::capture_for_test(
-        &owner,
-        &handle,
-        "T1".into(),
-        BrowserOperationKind::Open,
-    );
+    let record = BrowserOperationRecord::capture_for_test(&owner, &handle, "T1".into());
     owners.register_operation(&record).unwrap();
     // Registering again (a join) must not duplicate the sink.
     owners.register_operation(&record).unwrap();

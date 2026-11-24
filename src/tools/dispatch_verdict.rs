@@ -2,7 +2,7 @@
 
 use futures::future::BoxFuture;
 use std::future::Future;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 
 use crate::sync_primitives::Arc;
 
@@ -22,8 +22,8 @@ pub(crate) struct DispatchVerdict {
     input: Value,
     actor: Option<String>,
     caller: AdmissionCaller,
-    /// The one-shot operator-approval cell. Its only reader was the terminal
-    /// tool's approval consumption, removed with the terminal herdr runtime
+    /// The one-shot operator-approval cell. No reader remains — the terminal
+    /// tool's approval consumption went with the terminal herdr runtime
     /// (5dd337df1); the gate still writes it, so the cell is kept rather than
     /// half-removed until the next operator-gated tool claims it.
     #[allow(dead_code)]
@@ -234,32 +234,6 @@ pub(crate) async fn with_replay_admission<F: Future>(
         .await
 }
 
-/// Consume only an operator-approved exact call, never generic admission or replay.
-/// Mismatches leave the proof untouched; successful consumers share one atomic
-/// claim across verdict clones and dispatch retries. No authority crosses spawn.
-#[allow(dead_code)] // no production caller since the terminal herdr removal (5dd337df1)
-pub(crate) fn consume_operator_approval(name: &str, input: &Value) -> bool {
-    let Some(call_id) = crate::approval::current_tool_call_id() else {
-        return false;
-    };
-    let Some(identity) = current_admitted_handler_identity() else {
-        return false;
-    };
-    let actor = crate::identity::current_actor();
-    DISPATCH_VERDICT
-        .try_with(|verdict| {
-            verdict.as_ref().is_some_and(|verdict| {
-                verdict.matches(&call_id, name, &identity, input, actor.as_deref())
-                    && verdict.caller == AdmissionCaller::current()
-                    && verdict.operator_approval.as_ref().is_some_and(|used| {
-                        used.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-                            .is_ok()
-                    })
-            })
-        })
-        .unwrap_or(false)
-}
-
 /// A nested dispatch masks the identity as well as both admission lanes.
 #[must_use]
 pub(super) fn current_admitted_handler_identity() -> Option<ToolCallIdentity> {
@@ -271,7 +245,7 @@ pub(super) fn current_admitted_handler_identity() -> Option<ToolCallIdentity> {
 
 /// Only the registry-owned provider wrapper supplies immutable producer proof.
 /// Ordinary handlers, metadata and replay scopes cannot manufacture it.
-pub(super) async fn with_plugin_publication<F: Future>(
+pub(crate) async fn with_plugin_publication<F: Future>(
     publication: Option<Arc<crate::tools::registry::ReadySnapshot>>,
     future: F,
 ) -> F::Output {
@@ -279,12 +253,31 @@ pub(super) async fn with_plugin_publication<F: Future>(
 }
 
 /// Publish only the descriptor identity checked by the registry boundary.
-pub(super) async fn with_admitted_handler<F: Future>(
+pub(crate) async fn with_admitted_handler<F: Future>(
     identity: ToolCallIdentity,
     future: F,
 ) -> F::Output {
     ADMITTED_HANDLER_IDENTITY
         .scope(Some(identity), future)
+        .await
+}
+
+/// Rebind an already-admitted call to the exact descriptor revision published
+/// by a retained Cold activation. The existing gate verdict is copied; no new
+/// permission decision or transport supplied authority can enter this scope.
+pub(crate) async fn with_rebound_handler<F: Future>(
+    identity: ToolCallIdentity,
+    future: F,
+) -> F::Output {
+    let verdict = current_dispatch_verdict().map(|current| DispatchVerdict {
+        identity,
+        ..current
+    });
+    DISPATCH_VERDICT
+        .scope(
+            verdict,
+            ADMITTED_HANDLER_IDENTITY.scope(Some(identity), future),
+        )
         .await
 }
 

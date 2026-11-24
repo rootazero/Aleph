@@ -171,9 +171,11 @@ pub async fn handle_create(request: JsonRpcRequest, store: Arc<CanvasStore>) -> 
 /// so the listing form carries it for exactly this filter).
 pub async fn handle_list(request: JsonRpcRequest, store: Arc<CanvasStore>) -> JsonRpcResponse {
     const CONTEXT: &str = "Failed to list canvases";
-    let canvases = store
-        .list_entries()
-        .await
+    let entries = match store.list_entries().await {
+        Ok(entries) => entries,
+        Err(error) => return canvas_error::respond(request.id.clone(), CONTEXT, &error),
+    };
+    let canvases = entries
         .into_iter()
         .filter(|entry| {
             visibility::canvas_visible(

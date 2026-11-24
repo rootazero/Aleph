@@ -1,5 +1,7 @@
 # Tool System
 
+> Current-state cross-subsystem map: [`FEATURE_LOCATOR.md`](FEATURE_LOCATOR.md#current-state--当前现状). This document owns callable Tool dispatch and its raw compatibility boundary; it does not imply that deferred Capability kinds are mounted through the Tool registry. / 当前现状跨子系统地图：[`FEATURE_LOCATOR.md`](FEATURE_LOCATOR.md#current-state--当前现状)。本文档拥有 callable Tool dispatch 与 raw compatibility 边界；这不表示 deferred Capability kinds 已通过 Tool registry mount。
+
 > AlephTool trait, built-in tools, and tool development guide
 
 ---
@@ -42,6 +44,77 @@ The pre-`ScopedToolService` Phase 2 decorator chain (`facade.rs` /
 deleted in 2026-05-20; it was unreachable because agent-turn requests
 overrode it. This is not a claim that all RPC dispatch is scoped. See
 `docs/superpowers/specs/2026-05-19-hitl-loop-closure-design.md` §8.
+
+---
+
+## Startup capability restrictions / 启动期 Capability 限制
+
+`policies.capability_constraints` is a typed, startup-applied map keyed by a
+fully qualified capability ID. The final `/` separates namespace and name;
+segments must be nonempty and contain no whitespace/control characters. A
+well-formed target may arrive after startup. Empty defaults are omitted from
+serialized config. Both the parent section and every child need **Restart**;
+editing the file does not modify an already compiled Policy runtime.
+
+`policies.capability_constraints` 为按完整 Capability ID 索引的类型化启动配置。
+末尾 `/` 分隔 namespace 与 name，各段非空且不含空白/控制字符；合法但尚未出现
+的目标保留为 pending。空默认值不写入配置。父节与叶字段均需 **Restart**，写盘
+不会改变已经编译的运行时规则。
+
+```toml
+[policies.capability_constraints."aleph/tools/example".time]
+start_hour = 9
+end_hour = 17
+
+[policies.capability_constraints."aleph/tools/example".resource]
+unit = "active_calls"
+max_active = 2
+
+[policies.capability_constraints."aleph/tools/example".required_conditions]
+provider_ready = true
+```
+
+- Time uses the existing **UTC**, inclusive-start/exclusive-end evaluator:
+  `9..17` admits 09:00 but not 17:00; `22..6` crosses midnight. Hours must satisfy
+  `start_hour < 24`, `end_hour <= 24`, and differ. No local timezone conversion.
+- `max_active` must be positive. `active_calls` counts other operations on the
+  same source attachment, excluding the candidate. The non-Clone RAII guard
+  stays with the actual operation until completion, not just the waiting caller.
+  The strict-below check is **not a process-wide atomic semaphore**.
+- `pty_sessions` reads the real source-owned session count: spawn allocates;
+  input/attach/resize use existing resources; close releases. Existing/Release
+  skip only the resource predicate, never time, required facts, lease, or lifecycle.
+  Provider stop/revoke remains an unconditional cleanup path.
+- Required facts are read live after approval, outside ownership/registry locks.
+  Unknown readers/units are rejected at attachment; missing/false facts, reader
+  failure, stale captures, and configured targets without attachments deny.
+  Independent live surfaces behind one Tool ingress do not replace each other's
+  readers or reset their in-flight counts.
+
+时间使用既有 **UTC** 半开窗口，支持跨午夜，不转换成本地时区。资源上限必须为正；
+`active_calls` 只统计同一 source attachment 的其他实际操作，不含候选操作，且不是
+全局原子信号量。guard 必须随实际操作存活。`pty_sessions` 使用真实 session 数，
+spawn 分配，input/attach/resize 复用，close 回收；复用/回收仅跳过资源谓词，其他
+限制仍有效。stop/revoke 的清理不走分配闸。facts 由真实 owner 在审批后提供，缺失、
+失败、旧 capture、无 attachment 或不支持的 reader/unit 均拒绝；同入口多个 surface
+不互相覆盖 reader 或计数。
+
+The trusted ingress supplies the real caller actor and separate authenticated
+principal. Runtime admission does not equate that actor with the captured
+capability owner: a legal Session/Run may call a Runtime-owned Tool. Existing
+`Policy::resolve` owner checks and owning-ingress authorization remain unchanged;
+never rewrite the caller as the owner to satisfy a gate. Task 2 must separately
+prove unauthorized callers have zero effect at the actual ingress.
+可信入口提供真实 actor，用户 principal 独立保存。合法 Session/Run 可以调用
+Runtime-owned Tool，附加 runtime 限制不比较 actor 与 captured owner 是否相同。
+原 `Policy::resolve` 和入口授权完全保留，不得把调用者改写成 owner 来过闸；Task 2
+仍须在真实入口证明未授权调用零 effect，不能用「不同 actor 被拒」代替。
+
+These APIs add restrictions to existing permission, visibility, provider and
+lease gates; they do not grant authority. This Task 1 foundation does **not**
+claim the production dispatch/PTY/Panel ingress wiring is complete. / 这些 API
+只增加限制，不替代或授予既有权限；Task 1 基础设施不表示生产派发、PTY 或 Panel
+入口已经接线完成。
 
 ---
 
@@ -121,17 +194,21 @@ B5 历史基线验证：`cargo fmt --all --check` 通过；`cargo check -p aleph
 
 B6 keeps B5 discovery Cold and connects enabled, eligible tool-only WASM to the real `ExtensionManager::ensure_loaded` path. Discovery runs under `load_guard` with `loaded` unpublished; the exact Cold owners are captured, activation runs outside that guard, and a final guard-held proof settles each owner before `cache_state.loaded=true`. `boot_guard` serializes the whole pass. Boot and explicit enable share `owner_activation_proof`, which verifies the current owner incarnation, provider `Ready`, row `Loaded`, mount identity, batch receipt, and effect scope. An unattached activation context fails closed and leaves the provider `Failed`; one plugin failure does not abort other plugin activations.
 
-Public `load_all` and `reload` remain discovery/mount primitives and do not implicitly activate Cold owners; they are serialized against the boot pass. Read-side catalog, describe, resolve, `plugins.list`, observer, and doctor paths have no activation entry. D-C therefore keeps Cold observable on those discovery-only paths, after an unattached-context failure, and during explicit control races. B6 proves only the Tool/Plugin slice. The full failure matrix is represented by the existing B5 lifecycle tests plus real WASM boot tests for single and concurrent `ensure_loaded`; at B6 time channel, terminal, memory, MCP, replay, scheduler, EffectClaim, and other Capability kinds remained deferred. B7 (below) wires exactly one Gateway provider slice — Feishu — and nothing else.
+Public `load_all` and `reload` remain discovery/mount primitives and do not implicitly activate Cold owners; they are serialized against the boot pass. Read-side catalog, describe, resolve, `plugins.list`, observer, and doctor paths have no activation entry. D-C therefore keeps Cold observable on those discovery-only paths, after an unattached-context failure, and during explicit control races. B6 proves only the Tool/Plugin slice. Stage H makes the boundary explicit: `ensure_discovered()` is declaration-only discovery; `ensure_loaded()` and explicit enable/reload/control remain activation boundaries. Startup catalog and agent-run paths are activation boundaries only when they invoke the existing load/activation path, while `describe`, `resolve`, `project`, and ProjectionHost read-side calls do not start providers. The full failure matrix is represented by the existing B5 lifecycle tests plus real WASM boot tests for single and concurrent `ensure_loaded`; channel, terminal, memory, MCP, replay, scheduler, EffectClaim, and other Capability kinds remain deferred, and current Feishu → Zahir status is **NO-GO / deferred** under B8.2.
 
 B6（Tool/Plugin 启动激活）保持 B5 的 Cold discovery 语义，把 enabled 且 eligible 的 tool-only WASM 接入真实 `ExtensionManager::ensure_loaded`。discovery 在 `load_guard` 内执行但不发布 `loaded`；捕获 exact Cold owner 后释放 guard，在 guard 外激活，再重新取 guard 用 proof settle 每个 owner，最后才写入 `cache_state.loaded=true`。`boot_guard` 串行化整个 pass。boot 与显式 enable 共用 `owner_activation_proof`，统一检查 current owner incarnation、provider `Ready`、row `Loaded`、mount identity、batch receipt 与 effect scope。未 attach activation context 时 fail-closed，provider 进入 `Failed`；单个插件失败不会阻断其他插件。
 
-public `load_all` 与 `reload` 仍是 discovery/mount 原语，不隐式激活 Cold，并与 boot pass 互斥。catalog、describe、resolve、`plugins.list`、observer、doctor 等读侧没有 activation 入口。D-C 因此保留这些 discovery-only 路径、未 attach 失败和显式 control 竞态中的 Cold 可见性。B6 只证明 Tool/Plugin slice；在 B6 时 channel、terminal、memory、MCP、replay、scheduler、EffectClaim 及其他 Capability kinds 均 deferred。B7（见下）只接入 **一条** Gateway provider slice——Feishu——别的什么都没接。
+public `load_all` 与 `reload` 仍是 discovery/mount 原语，不隐式激活 Cold，并与 boot pass 互斥。catalog、describe、resolve、`plugins.list`、observer、doctor 等读侧没有 activation 入口。D-C 因此保留这些 discovery-only 路径、未 attach 失败和显式 control 竞态中的 Cold 可见性。B6 只证明 Tool/Plugin slice。Stage H 进一步明确：`ensure_discovered()` 只做 declaration-only discovery；`ensure_loaded()` 与显式 enable/reload/control 仍是 activation boundary。startup catalog 与 agent-run 路径只有在调用既有 load/activation 路径时才是 activation boundary，而 `describe` / `resolve` / `project` / `ProjectionHost` 的 read-side 调用不会启动 provider。B5 lifecycle tests 与单次/并发 `ensure_loaded` 的真实 WASM boot tests 仍覆盖 failure matrix；channel、terminal、memory、MCP、replay、scheduler、EffectClaim 与其他 Capability kinds 仍 deferred，当前 Feishu → Zahir 状态受 B8.2 的 **NO-GO / deferred** 边界约束。
+
+`Current closure (2026-11-03):` the dated B5/B6 paragraphs above remain historical evidence for their explicit-control and boot behavior. Current declaration discovery publishes metadata-only Cold entries in the existing canonical registry; an exact permitted canonical Tool call may activate the retained owner through single-flight activation and re-enter the Ready handler after identity/generation checks. Read-side catalog/describe/resolve/project/observer/doctor calls never activate, and transport compatibility remains mounted-only. No other Capability kind is implied by this closure.
+
+`当前闭合（2026-11-03）：` 上方 B5/B6 日期段落仍是显式 control 与 boot 行为的历史证据。当前 declaration discovery 会在既有 canonical registry 中发布只含 metadata 的 Cold entry；只有通过权限与 scope 的 exact canonical Tool call 才可能经 single-flight 激活 retained owner，并在 identity/generation 校验后重新进入 Ready handler。catalog/describe/resolve/project/observer/doctor 等读侧永不激活，transport compatibility 仍保持 mounted-only。本闭合不表示其他 Capability kind 已接入。
 
 ### B8.2 current Feishu lifecycle re-gate / B8.2 当前 Feishu 生命周期复闸（2026-10-25）
 
-The current code exposes a Gateway Feishu **provider lifecycle slice**, not a Tool and not a Zahir Capability. `ChannelRegistry` owns instances, desired intent, lifecycle serialization, replacement preflight, and webhook mounts (`src/gateway/channel_registry.rs:187-220,295-433,600-688,1460-1504`). Disabled boot records `Stopped` and is excluded from `start_all`; `create_channel` derives intent from `ChannelConfig.enabled`; restart records `Running` only after a complete stop/start/mount refresh.
+The current code exposes a Gateway Feishu **provider lifecycle slice**, not a Tool and not a Zahir Capability. `ChannelRegistry` owns instances, desired intent, lifecycle serialization, replacement preflight, and webhook mounts (`src/gateway/channel_registry.rs`). Disabled boot records `Stopped` and is excluded from `start_all`; `create_channel` derives intent from `ChannelConfig.enabled`; restart records `Running` only after a complete stop/start/mount refresh.
 
-`FeishuChannel` uses the shared `ProviderHandle` for state/generation admission. `api_handle` is only a derived cache fenced by provider instance and generation (`src/gateway/interfaces/feishu/mod.rs:51-183,334-405`; `src/gateway/interfaces/feishu/api_handle.rs:1-104`). Every retained HTTP call holds the shared API read guard through token acquisition; webhook admission uses the same guard and returns `503` after revocation (`src/gateway/interfaces/feishu/api.rs:61-115`; `src/gateway/interfaces/feishu/feishu_inbound/webhook_server.rs:48-120`). Stop retains serve/join/refresh/WS residuals and does not claim complete accepted-handler ownership/join.
+`FeishuChannel` uses the shared `ProviderHandle` for state/generation admission. `api_handle` is only a derived cache fenced by provider instance and generation (`src/gateway/interfaces/feishu/mod.rs`; `src/gateway/interfaces/feishu/api_handle.rs`). Every retained HTTP call holds the shared API read guard through token acquisition; webhook admission uses the same guard and returns `503` after revocation (`src/gateway/interfaces/feishu/api.rs`; `src/gateway/interfaces/feishu/feishu_inbound/webhook_server.rs`). Stop retains serve/join/refresh/WS residuals and does not claim complete accepted-handler ownership/join.
 
 The source-backed route is boot builder → `ChannelRegistry::register_for_boot` → `start_all` → `FeishuChannel::start` → runtime → `api_handle::publish` → `ProviderHandle::with_ready_commit`; outbound calls pass `admit_call` → `ProviderHandle::acquire_call` → `FeishuApi::admit`, while inbound webhook/WS forwarding uses the same admission fence. B8.2-A/B/C/D are all **NO-GO / deferred**: no Feishu descriptor/kind adapter, Feishu `BackendLease` route, Feishu callable resolve path, Feishu Capability observer, or durable provider lifecycle producer exists. Tool `ProjectionHost`/`ZahirFacade` production wiring is Tool-only evidence. Webhook remains Gateway-owned external effect; EffectClaim producer, Safe Replay, scheduler, and external exactly-once remain deferred. Current focused validation and the exact failure matrix are in `docs/research/aleph_modularization_phase2b_b8_2_closeout.md`; production Feishu → Zahir mount is prohibited.
 
@@ -251,7 +328,7 @@ Three things about this pair are load-bearing:
 - **They replace `bash`.** A `grep -r` does not read `.gitignore`, so one
   recursive run pours every hit under `node_modules/`, `target/` and `dist/`
   into the context window. `bash`'s own DESCRIPTION says so, and
-  `tools/scoped/search_steer.rs` repeats it at call time as a non-blocking
+  `src/tools/scoped/search_steer.rs` repeats it at call time as a non-blocking
   `<system-reminder>` when a shell command duplicates one of them. `rg` and
   `fd` are never steered — they are the sanctioned shell fallback.
 - **`file_ops{operation:"search"}` is a different face, not a duplicate.** That
@@ -425,7 +502,7 @@ pub struct MemorySearchOutput {
 **Architecture**:
 ```
 memory_search(query)
-  → Hybrid search (see [Retrieval](../memory/RETRIEVAL.md))
+  → Hybrid search (see [Retrieval](memory/RETRIEVAL.md))
     → Facts + raw memories fallback
   → ContextComptroller.arbitrate(results, budget)
     → Detect redundancy via cosine similarity (threshold: 0.95)
@@ -498,9 +575,7 @@ pub struct ToolDefinition {
 
 ## Tool Server
 
-**Location**: `src/tools/server.rs`
-
-The Tool Server manages tool execution:
+Current tool execution goes through `src/tools/service.rs` and `src/tools/scoped/mod.rs`. The `ToolServer` sketch below is historical:
 
 ```rust
 pub struct ToolServer {
@@ -630,18 +705,18 @@ The sites, in the order a new tool needs them:
 
 | # | File | What it buys |
 |---|------|--------------|
-| 1 | `executor/builtin_registry/definitions.rs` — `BUILTIN_TOOL_DEFINITIONS` | catalog row; the description starts being billed on every request |
+| 1 | `src/executor/builtin_registry/definitions.rs` — `BUILTIN_TOOL_DEFINITIONS` | catalog row; the description starts being billed on every request |
 | 2 | `definitions.rs` — `create_tool_boxed` | construction for `AlephToolServer` |
-| 3 | `registry/tool_registry_impl.rs` — `execute_tool` match arm | **dispatch**; without it every call answers `Unknown tool` |
-| 4 | `registry/struct_def.rs` | the instance field |
-| 5 | `builder/constructor/mod.rs` | construction + struct init (pass the shared `ToolContext` handle if the tool resolves paths) |
-| 6 | `builder/core_tools.rs` — `reg(...)` | registry-map row (`agent_init` completes the model's list from here) |
-| 7 | `builtin_registry/groups.rs` | Panel display category |
-| 8 | `config/types/tools.rs` — `default_core_tools()` | schema-resident vs collapsed behind a `get_tool_schema` round-trip |
-| 9 | `tools/adapters/registry_adapter.rs` — `READ_ONLY_TOOLS` | read-only ⇒ idempotent ⇒ auto-retry ⇒ callable under the `Ask` / `Plan` tiers |
-| 10 | `tools/fallback_registry.rs` — `ToolFamily::from_name` | which alternatives are suggested when it fails |
+| 3 | `src/executor/builtin_registry/registry/tool_registry_impl.rs` — `execute_tool` match arm | **dispatch**; without it every call answers `Unknown tool` |
+| 4 | `src/executor/builtin_registry/registry/struct_def.rs` | the instance field |
+| 5 | `src/executor/builtin_registry/builder/constructor/mod.rs` | construction + struct init (pass the shared `ToolContext` handle if the tool resolves paths) |
+| 6 | `src/executor/builtin_registry/builder/core_tools.rs` — `reg(...)` | registry-map row (`agent_init` completes the model's list from here) |
+| 7 | `src/executor/builtin_registry/groups.rs` | Panel display category |
+| 8 | `src/config/types/tools.rs` — `default_core_tools()` | schema-resident vs collapsed behind a `get_tool_schema` round-trip |
+| 9 | `src/tools/adapters/registry_adapter.rs` — `READ_ONLY_TOOLS` | read-only ⇒ idempotent ⇒ auto-retry ⇒ callable under the `Ask` / `Plan` tiers |
+| 10 | `src/tools/fallback_registry.rs` — `ToolFamily::from_name` | which alternatives are suggested when it fails |
 
-1–3 and 6 are enforced: `builtin_registry/dispatchable.rs` recovers both the
+1–3 and 6 are enforced: `src/executor/builtin_registry/dispatchable.rs` recovers both the
 advertised set and the dispatchable set **from the source text** (not from a
 list someone maintains) and fails naming the tool that is in one and not the
 other. 4–5 are compile errors. 7–10 are silent if missed — a Panel row that
@@ -652,9 +727,7 @@ that the `Ask` tier stops to ask about.
 
 ## Tool Filtering
 
-**Location**: `src/thinker/tool_filter.rs`
-
-Control which tools are available:
+Current tool availability is enforced by `src/tools/scoped/mod.rs`. The `ToolFilter` sketch and configuration below are historical:
 
 ```rust
 pub struct ToolFilter {
@@ -698,7 +771,7 @@ pub struct ToolResult {
 ### Ingress: 结果在进入上下文之前要经过什么
 
 唯一入口 `src/tool_output/ingress.rs::clean_for_ingress`，由
-`tools/scoped/dispatch.rs::apply_layer_two` 调用一次：
+`src/tools/scoped/dispatch.rs::apply_layer_two` 调用一次：
 
 ```text
 value (serde_json::Value —— 文本字段仍带真换行)
@@ -793,7 +866,7 @@ lower it. `fit_to_budget` measures the whole result the way Layer 2 does (flatte
 marker) and shrinks the cap proportionally, at most `FIT_ATTEMPTS` times, so the result arrives inline instead of
 being offloaded again. A result still over after those attempts is bounded by Layer 2.
 
-**Fetch by intent · 按意图取页** (`builtin_tools/web_fetch/intent.rs`) — `web_fetch` with a `prompt` on a page
+**Fetch by intent · 按意图取页** (`src/builtin_tools/web_fetch/intent.rs`) — `web_fetch` with a `prompt` on a page
 longer than that cap: the page is extracted whole (bounded by `WebFetchTool::INTENT_EXTRACT_MAX_CHARS`);
 `index_page` offloads and indexes it **once** through `recovery_footer_for` into the same store `ctx_search`
 reads; `sections_for_prompt` BM25-searches **this page's own sections** with the prompt

@@ -93,7 +93,16 @@ English: Probe each identity column before ALTER. A partially completed migratio
   via `SharedTokenManager::validate` — stamps `ConnectionState.caller_role`
   (`operator` / `guest`), and echoes `role` / `authorized` / `needs_token` so
   the Panel renders the wall or unlocks the full app.
-- **Channel tool gate** (`tools/scoped/dispatch.rs` +
+- **Protocol v1 entrances** (`server/connection/{local_ipc,web_v1}.rs`, both
+  opt-in) never see `connect`: the principal is bound before `system.hello`.
+  Desktop IPC admits a same-account peer (kernel credentials) as the
+  instance's live Desktop owner; Web v1 admits a short-lived host-only Cookie
+  minted by an explicit same-origin pairing exchange, re-checked against the
+  device/ticket owner on every request. Both stamp `ConnectionState`, accept
+  only `V1_METHODS` through the shared RPC executor (method visibility, rate,
+  idempotency) and receive pushed frames only through `admit_event` (below).
+  Details: [DESKTOP_SHELL.md §NSH Panel migration](DESKTOP_SHELL.md#nsh-panel-migration--panel-迁移).
+- **Channel tool gate** (`src/tools/scoped/dispatch.rs` +
   `method_authz::tool_requires_operator`): governs **channels only**. The
   inbound router stamps each channel run's `caller_role` from its
   `ChannelPermissionLevel` (default `Chat` ⇒ `guest`), and the tool-dispatch
@@ -126,9 +135,9 @@ English: Probe each identity column before ALTER. A partially completed migratio
 The role-based guest / invitation permission *engine* was deleted in the
 LAN-trust revert:
 
-- **`PolicyEngine`** (`src/gateway/security/policy_engine.rs`) — the
+- **Legacy `PolicyEngine`** — the
   per-tool `Owner` / `Guest` / `Anonymous` permission checker. Gone.
-- **`InvitationManager`** (`src/gateway/security/invitation_manager.rs`)
+- **`InvitationManager`**
   and the `aleph guests invite / list / revoke` CLI — guest invitation
   lifecycle. Gone.
 
@@ -203,7 +212,7 @@ without being asked. The exemption stood on two legs and the load-bearing one
 landed. The gate now runs inside `resume_named_session`, after the visibility
 gate and before the coordinator, refusing with an honest `PERMISSION_DENIED`
 that shares its wording with `BuildRunError::AgentForbidden`. See
-`handlers/resume.rs` and [AGENT_IDENTITY.md](AGENT_IDENTITY.md) §6 ①.
+`src/gateway/handlers/resume.rs` and [AGENT_IDENTITY.md](AGENT_IDENTITY.md) §6 ①.
 
 Full model and threat analysis in [AGENT_IDENTITY.md](AGENT_IDENTITY.md); the
 seam-level landmines are in `src/gateway/CLAUDE.md`.
@@ -360,11 +369,11 @@ discipline the channel clamp keeps by hand (`clamp_tier_for_channel`,
 only tighten: a conversation already at `Plan` is byte-identical, and no tier, no
 explicit `[policies.tool_permissions]` entry and no request-carried pick can
 raise it, because `Plan`'s refusal is rung 0 rather than a default. It rides to
-the tool layer on `TurnContext::side_question` (`tools/turn_context.rs:85`).
+the tool layer on `TurnContext::side_question` (`src/tools/turn_context.rs`).
 
 **Both `PLAN_REACHABLE_TOOLS` carve-outs are revoked** — a side question is
 strictly narrower than planning — at
-`ScopedToolService::permission_for`'s rung −1 (`tools/scoped/builder.rs:250`),
+`ScopedToolService::permission_for`'s rung −1 (`src/tools/scoped/builder.rs`),
 above the tier verdict, because neither is removable by configuration nor
 resolvable by approving a plan, which are the two repairs everything beneath it
 points at. The reasons differ and both are load-bearing:
@@ -409,7 +418,7 @@ Two further consequences:
   `a_side_question_admits_the_read_arm_of_a_multiplexer_and_refuses_the_rest`,
   `the_side_question_refusal_promises_reads_that_really_run`).
   `GateRule::SideQuestion` is checked **ahead of** `PlanMode` and `PolicyDeny`
-  (`tools/scoped/gate_chain.rs:433`), because both of those name a repair that
+  (`src/tools/scoped/gate_chain.rs`), because both of those name a repair that
   cannot work here (approve the plan; edit the policy). Its sentence tells the
   model the side question "can read and search" — so the per-call read
   re-admission in `dispatch.rs:238` is keyed on **`PlanMode | SideQuestion`**,
@@ -425,10 +434,10 @@ Two further consequences:
 
 `ToolFacts { name, idempotent, requires_approval }` has exactly one constructor,
 `ToolFacts::for_tool(name, Option<DeclaredFacts>)`
-(`config/types/policies/exec_tier.rs`, round 11 D8), and every face calls it: the
-scoped builder (`tools/scoped/builder.rs::tool_facts`) passes
+(`src/config/types/policies/exec_tier.rs`, round 11 D8), and every face calls it: the
+scoped builder (`src/tools/scoped/builder.rs::tool_facts`) passes
 `Some(DeclaredFacts { idempotent, requires_confirmation })` from the registry,
-and the slash fast path (`execution_engine/slash_command.rs`), which has no
+and the slash fast path (`src/gateway/execution_engine/slash_command.rs`), which has no
 registry at hand, passes `None`. The builtin allowlists answer for every builtin
 either way, and a declaration can only ADD to them (both fields are ORed), so no
 face can answer from a narrower source. `no_production_code_builds_tool_facts_by_hand`
@@ -441,8 +450,8 @@ fails `NotFound`. That only ever adds a prompt, never removes one. The facts
 themselves come from the tool's own `ToolDefinition`:
 
 - `idempotent` ← `LoopTool::is_idempotent()` — the builtin pure-read allowlist
-  (`tools/retry.rs::is_idempotent_builtin_name`, which delegates to the single
-  `READ_ONLY_TOOLS` list in `tools/adapters/registry_adapter.rs` — read-only ⇒
+  (`src/tools/retry.rs::is_idempotent_builtin_name`, which delegates to the single
+  `READ_ONLY_TOOLS` list in `src/tools/adapters/registry_adapter.rs` — read-only ⇒
   idempotent, one source for the concurrency claim, auto-retry, and this tier
   rule) or an MCP server's
   `readOnlyHint` / `idempotentHint` (`mcp/protocol.rs::is_idempotent`).
@@ -507,16 +516,16 @@ These surfaces can execute tools **without passing through `ScopedToolService`**
 Some route gated calls back into the loop; others retain a narrower hard floor.
 Do not mistake the latter for full scoped authorization when adding a surface.
 
-1. **Slash-command fast path** (`execution_engine/slash_command.rs`). `/bash`,
+1. **Slash-command fast path** (`src/gateway/execution_engine/slash_command.rs`). `/bash`,
    `/file_ops` etc. dispatched straight into `BuiltinToolRegistry` — no tier, no
    `tool_permissions`, no `requires_confirmation`, no operator gate — and the
    path is reachable **from channels**. Now `slash_gate_reason()` returns the
    existing `ExecutionError::Fallthrough` for any gated call, routing it into the
    fully-gated agent loop; ungated slash commands keep their deterministic fast
    path.
-2. **`tools.invoke` RPC** (`gateway/handlers/tools_invoke.rs`) retains ordinary
+2. **`tools.invoke` RPC** (`src/gateway/handlers/tools_invoke.rs`) retains ordinary
    raw `ToolRegistry` dispatch, not a unified `ScopedToolService` gate. Its hard
-   floor reuses `security/dangerous_tools.rs` (dangerous/static confirmation
+   floor reuses `src/security/dangerous_tools.rs` (dangerous/static confirmation
    names and `ExecTier::Auto::asks_for_arguments`), plus confirmation declarations
    from the canonical descriptor and raw registry metadata. Argument-level
    risks such as `file_ops delete` and `loop_graph` root mutations are refused,
@@ -539,7 +548,7 @@ Do not mistake the latter for full scoped authorization when adding a surface.
 ### Unattended = fail closed
 
 A run with no human attached is stamped `UNATTENDED_KEY`
-(`execution_engine/mod.rs`) at every headless producer: cron **when its approval
+(`src/gateway/execution_engine/mod.rs`) at every headless producer: cron **when its approval
 is not routable** (a job carrying both a source channel and a conversation has a
 real `/approve` path — stamping it would auto-deny a working HITL flow),
 heartbeat and a2a always. `continuation_metadata` inserts the marker **last**, so
@@ -673,7 +682,7 @@ two real layers documented above:
   (`src/sandbox/command_policy/`), applied before every sandboxed exec on every
   tier. This is the only *blocking* command classifier.
 - **Exec tier + approval gate** — the metadata-driven tier
-  (`config/types/policies/exec_tier.rs`) enforced at `src/tools/scoped/`, which
+  (`src/config/types/policies/exec_tier.rs`) enforced at `src/tools/scoped/`, which
   raises the action-aware approval card via `src/sandbox/exec_approval/`.
 
 > **The prompt gets exactly one approval voice, and it is the enforced one.**
@@ -912,7 +921,7 @@ closer. Pinned by
 the twin of the session-grant guard.
 
 **And there is a way back.** `exec.grants.list` / `exec.grant.revoke`
-(`gateway/handlers/exec_grants.rs`, rendered under Settings → Policies) show
+(`src/gateway/handlers/exec_grants.rs`, rendered under Settings → Policies) show
 every standing grant with the summary that was approved, and take one back. Both
 are scoped exactly like their `exec.approvals.*` siblings: an unrestricted
 caller sees everything; a member sees only session grants for sessions already
@@ -1095,7 +1104,8 @@ the operator could not have removed.
 - **PTY 不经 `[sandbox.command_policy]` 也不经 exec tier**（`method_admin.rs` 的注释自陈 "strictly more dangerous"）。
   会话粒度的开关 `[policies.terminal] enabled` 是这一层唯一说得出口的谓词；关掉它会杀掉在飞的会话。
 - **终端历史住在服务器上**（每会话 `scrollback_lines` 行，默认 1000），因此对诊断与审计面可见。
-- **同一装机的所有 operator 共享 `["*"]` 作用域**，能互相看见并 attach 彼此的会话。这是单层信任模型的有意结果，不是疏漏。
+- **Operator scope and session ownership are separate gates.** Operator `['*']` permits reaching the PTY RPC/event surface; it does not override the existing `created_by` check. `owner_admits` is shared by listing, addressed operations and event delivery: a resolved caller must match the recorded creator. An internal caller with no resolved identity retains the existing unscoped behavior.
+  **Operator scope 与 session ownership 是两道闸。** Operator 的 `['*']` 允许到达 PTY RPC/event 面，但不覆盖 `created_by` 判定。list、addressed operations 与事件交付共用 `owner_admits`：已解析身份的 caller 必须匹配创建者；未解析身份的内部 caller 保留现有 unscoped 行为。
 - **打开这道闸本身不举卡就是一次绕闸**：`[policies.terminal] enabled` 在
   `config::types::policies::exec_tier::GATE_DECIDING_CONFIG_PATHS` 上，所以经 `self_config`
   写它在**每个执行档位**——包括 `Full`——都停下来问。这张卡不提供"始终允许"，原因不是它例外，
@@ -1188,7 +1198,7 @@ Gateway owns CDP; Panel/TUI are I/O only; opt-in only for an explicit valid `[ga
 
 ## Command allowlist
 
-There is **no** `src/exec/allowlist.rs` and no `exec.allowlist` / `exec.blocklist`
+There is **no** standalone exec allowlist module and no `exec.allowlist` / `exec.blocklist`
 config table — an older revision of this doc invented one. There is a **grant
 registry** (`~/.aleph/approval-grants.json`, see *Standing grants* above), and it
 is deliberately not the same thing: it holds per-CALL exceptions a human created
@@ -1209,7 +1219,7 @@ described:
 
 The only command-shape allowlist in the tree is `READ_ONLY_TOOLS`
 (`src/tools/adapters/registry_adapter.rs`, consumed via
-`tools/retry.rs::is_idempotent_builtin_name`), the pure-read builtins the tier
+`src/tools/retry.rs::is_idempotent_builtin_name`), the pure-read builtins the tier
 treats as safe.
 
 ---
@@ -1333,7 +1343,7 @@ turn with a registered channel.
 
 ## Permission System
 
-There is no `src/permission/` module and there never was one. Limiting *what an
+There is no standalone permission module. Limiting *what an
 agent may do* is exactly three things, and they compose in this order:
 
 1. **`[policies.tool_permissions]`** — per-tool `allow` / `ask` / `deny`, exact
@@ -1363,10 +1373,10 @@ deterministic HITL gate (R7/R9).
 `every_file_that_parks_on_an_approval_also_writes_both_releases`
 (`src/tools/scoped/tests.rs`) is the list of those gates — do not count them
 here. The two trails are not written the same way at every gate: the tool-confirm
-gate's `tools/scoped/dispatch.rs::record_approval_decision` writes the signed
+gate's `src/tools/scoped/dispatch.rs::record_approval_decision` writes the signed
 identity ledger row (with its `[gate: <rule_id>]` suffix, "Signed agent ledger" below) and
 the session copy from ONE function; the sandbox capability-elevation gate
-(`sandbox/workspace/mod.rs`) writes its session copy itself, after the answer,
+(`src/sandbox/workspace/mod.rs`) writes its session copy itself, after the answer,
 while its ledger row comes from a different function at a different chokepoint
 — `sandbox/exec_approval/gate.rs::record_gate_decision`, inside
 `ApprovalGate::request_approval_for_action`, without a `[gate: …]` suffix
@@ -1374,8 +1384,7 @@ because that card is raised outside the `GateRule` chain. Query the session
 copy through the session service, alongside every other event of the run that
 produced it.
 
-**Deleted (2026-07-14), do not go looking for it**: `src/exec/approval/storage.rs`
-+ `audit.rs` and the `aleph-server audit` CLI command. They queried three SQLite
+**Deleted (2026-07-14), do not go looking for it**: the old approval `storage` and `audit` modules and the `aleph-server audit` CLI command. They queried three SQLite
 tables (`~/.aleph/approval_audit.db`) whose **only writers were test helpers** —
 an operator running `audit` got zeros and concluded nothing had happened, while
 the real trail sat in the session event log. That is worse than dead code.
@@ -1383,7 +1392,7 @@ the real trail sat in the session event log. That is worse than dead code.
 Deleted in the same sweep, all zero-consumer:
 `src/exec/approval/{escalation,binding,path_canonicalize}.rs` (path-escalation,
 binding-compliance and sensitive-directory checks that nothing ever called),
-`benches/approval_performance.rs`, and
+the approval performance benchmark, and
 `exec/allowed_decisions.rs::{decisions_for_risk, assess_command_decisions,
 risk_segments}`.
 
@@ -1443,13 +1452,13 @@ needs only the turn's agent identity and therefore covers surfaces the ambient
 `ApprovalGate::request_approval_for_action`, whose `record_gate_decision` writes
 the ledger row for every real verdict (`Timeout` / `Unavailable` are not
 recorded). The session-log copy of the same verdict is written separately, in
-`sandbox/workspace/mod.rs`. So one elevation verdict has two writers in two
+`src/sandbox/workspace/mod.rs`. So one elevation verdict has two writers in two
 files, and a change to how either one attributes it does not reach the other
 (CLAUDE.md criteria #1 and #16). By design, elevation-gate ledger rows carry
 no `[gate: <rule_id>]` suffix. That suffix is reserved for cards produced by
 the `GateRule` chain.
 
-This is the first production consumer of `gateway/security/crypto.rs`'s Ed25519
+This is the first production consumer of `src/gateway/security/crypto.rs`'s Ed25519
 helpers, which had none (the `devices.public_key BLOB NOT NULL` column every
 writer fills with empty bytes is the visible half of that).
 
@@ -1620,13 +1629,13 @@ calendar boundaries backward in period-sized steps instead.
 
 `spend::install_policy`/`spend::install_ledger` install the two
 process-global handles this whole control reads; both must run at boot
-(`start/mod.rs`), unconditionally — including when no ceiling is
+(`src/bin/aleph-server/commands/start/mod.rs`), unconditionally — including when no ceiling is
 configured. `spend::update_policy` (the live-apply path for
 `[policies.spend]`) returns `false`, and the live-apply verdict honestly
 downgrades to `Restart`, when no handle has been installed yet; skipping
 installation on an unconfigured box would mean an operator could turn a
 ceiling *off* live but never turn one *on* live — the direction that
-matters less. A source-level census in `start/mod.rs`'s own test module
+matters less. A source-level census in `src/bin/aleph-server/commands/start/mod.rs`'s own test module
 (`boot_installs_the_spend_policy_and_the_spend_ledger`) pins that both calls
 exist in production, because nothing else can see their absence: it is not
 a compile error, no other test goes red, and a server missing either call
@@ -1759,8 +1768,18 @@ pub struct SsrfPolicy {
     pub blocked_hosts: Vec<String>,       // Blocklist: ["*.malware.com"]
     pub max_redirects: u8,                // Redirect limit (default: 5)
     pub strip_auth_on_cross_origin: bool, // Strip Auth/Cookie on cross-origin redirects (default: true)
+    pub use_system_proxy: bool,           // Let the system proxy resolve the target host (default: false)
 }
 ```
+
+> **`use_system_proxy` (2026-11-03).** The guarded clients pin the target
+> host by resolving it locally and connecting to the pinned address. A system
+> HTTP proxy breaks that guarantee: the proxy performs the DNS resolution, so
+> the address the guard validated is not the address the request reaches.
+> The proxy is therefore disabled for guarded fetches by default
+> (`reqwest::ClientBuilder::no_proxy()`). Operators who must egress through a
+> proxy can set `use_system_proxy = true`, accepting that the SSRF guard then
+> validates the host name only — the resolved address is chosen by the proxy.
 
 ### IP Classification (`ip.rs`)
 
@@ -1867,15 +1886,15 @@ All outbound HTTP requests go through the SSRF engine:
 | Caller | File | Method |
 |--------|------|--------|
 | Web fetch tool | `builtin_tools/web_fetch.rs` | `safe_fetch()` |
-| Webhook delivery | `tasks/cron/webhook_target.rs` | `safe_fetch()` |
+| Webhook delivery | `src/tasks/cron/webhook_target.rs` | `safe_fetch()` |
 | Media downloader | `gateway/pipeline/media_download.rs` | `safe_fetch()` |
-| MCP HTTP transport | `mcp/transport/http.rs` | `safe_fetch()` |
-| MCP SSE transport | `mcp/transport/sse.rs` | `validate_url_with_pinned()` |
-| MCP preflight probe | `mcp/preflight.rs` | `validate_url_async()` + pinned `resolve()` |
-| A2A push webhook | `a2a/service/notification.rs` | `validate_url_async()` at register, `safe_fetch()` at send |
-| ~~Fetch providers (crawl4ai/firecrawl)~~ | **removed from runtime** (BT-D-R4-22) | The `[fetch]` provider chain was excised: a provider re-resolves DNS and follows redirects from **its own** network position, so the Aleph-side DNS pin cannot cross the process boundary — validate-then-delegate was exactly the audited High-severity gap. Config surface kept (`[fetch]` section, `fetch_config.get/update/test` RPC); boot logs a one-time warn via `inert_fetch_backend_names` when `[fetch]` is enabled. `web_fetch` uses the built-in `safe_fetch()` path only |
-| Media pipeline URLs | `media/pipeline.rs` | `validate_url_async()` |
-| Browser navigation | `browser/network_policy.rs` | `validate_url_async()` via `BrowserSsrfGuard` |
+| MCP HTTP transport | `src/mcp/transport/http.rs` | `safe_fetch()` |
+| MCP SSE transport | `src/mcp/transport/sse.rs` | `validate_url_with_pinned()` |
+| MCP preflight probe | `src/mcp/preflight.rs` | `validate_url_async()` + pinned `resolve()` |
+| A2A push webhook | `src/a2a/service/notification.rs` | `validate_url_async()` at register, `safe_fetch()` at send |
+| ~~Fetch providers (crawl4ai/firecrawl)~~ | **removed from runtime** (BT-D-R4-22) | The `[fetch]` provider chain was excised: a provider re-resolves DNS and follows redirects from **its own** network position, so the Aleph-side DNS pin cannot cross the process boundary — validate-then-delegate was exactly the audited High-severity gap. Config surface kept (`[fetch]` section, `fetch_config.get/update/test` RPC); boot logs a one-time warn via `inert_fetch_backend_names` for every backend configured in `[fetch]` (the section has no routing knob: `enabled`/`default_provider`/`fallback_providers` were cut because nothing read them). `web_fetch` uses the built-in `safe_fetch()` path only |
+| Media pipeline URLs | `src/media/pipeline.rs` | `validate_url_async()` |
+| Browser navigation | `src/browser/network_policy.rs` | `validate_url_async()` via `BrowserSsrfGuard` |
 
 ### Browser SSRF Guard
 
@@ -1906,7 +1925,7 @@ in this process rather than as a CLI's stdout. Every layer below still applies a
 sites, because none of them was ever a property of the transport: `check_navigation` runs in the
 tool, `post_nav` runs inside the backend's `open_tab`/`navigate`, the input scan runs before the
 approval gate, and `redact_and_wrap` runs on the way out. The full six-chokepoint enumeration
-(these four plus per-`ActionType` approval and the `tools/scoped` execution tier) is in
+(these four plus per-`ActionType` approval and the `src/tools/scoped` execution tier) is in
 [FEATURE_LOCATOR §3.12](FEATURE_LOCATOR.md) 第三轮 A.
 
 ⚠️ **What the new driver adds is a place they could be skipped, and it is held shut by convention
@@ -2447,9 +2466,12 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
   role-based and default-allow for ordinary session/run events, so without
   this every connected member would receive every OTHER user's live run
   stream. `EventVisibilityIndex` is the last `&&` term of the
-  `should_forward` chain in `server/connection/mod.rs::handle_connection`
+  admission chain in `server/connection/event_admission.rs::admit_event`
   (`wall_admits` && `EventScopeGuard::can_receive` && `audience_allows` &&
-  `should_receive` && `event_admits_for`) — it classifies each delivered frame's
+  `should_receive` && `event_admits_for`), the one function legacy `/ws`
+  (`handle_connection`) and both Protocol v1 endpoints (Desktop IPC, Web v1,
+  after `live_events` is negotiated) call per frame; v1 then only narrows to
+  `V1_EVENT_TOPICS` — it classifies each delivered frame's
   identity (`session_identity_of`: by session key directly, by `run_id`
   through a seeded run→session cache, by `team_id` for the `team.<id>.*`
   plane, or `Global` for org-level infrastructure) and then resolves that
@@ -2541,7 +2563,7 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
   One-way, no auto-resume on reactivation (spec silent on the reverse;
   recorded as a deliberate P1 scope boundary, not an oversight).
 
-  ⚠️ **Cron was excluded until 2026-08-13 on a premise `handlers/users.rs`
+  ⚠️ **Cron was excluded until 2026-08-13 on a premise `src/gateway/handlers/users.rs`
   itself falsifies**: "`cron.*` is admin-gated, so a deactivated MEMBER owns
   none by construction". The owner guard in that file pins only
   `OWNER_USER_ID`, and `users.create` accepts `role: "admin"` — so a SECOND
@@ -2689,7 +2711,7 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
   no client is a member surface, not that there is only one. That page renders
   for anybody, calls, and reports this gate's refusal through
   `components::admin_refusal` instead of showing a member an empty roster. The
-  file named above is now `api/agent_binding.rs`; `api/workspace.rs` is the
+  file named above is now `interfaces/webchat/src/api/agent_binding.rs`; `interfaces/webchat/src/api/workspace.rs` is the
   real family.)*
   Nor was the read half worth what it
   looked like: `env_vars`, `system_prompt_override` and `allowed_tools` have
@@ -2909,11 +2931,11 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
      kept here for the criterion it teaches). `event_visibility::event_admits`
      resolves `team.<id>.*` through `ConnectionContext`'s `TeamStore`, and
      `teams: None` denies. That handle was installed by
-     `server.set_team_store(...)` inside `start/mod.rs`'s
+     `server.set_team_store(...)` inside `src/bin/aleph-server/commands/start/mod.rs`'s
      `if let (Some(ref ts), Some(ref cs)) = (&agent_result.team_store,
      &agent_result.coord_task_store)`, while the PRODUCER — the
      `teams.chat.send` registration driving `GroupChatBroadcaster` /
-     `publish_team_event` — sits under `builder/agent_init/mod.rs`'s
+     `publish_team_event` — sits under `src/bin/aleph-server/commands/start/builder/agent_init/mod.rs`'s
      `if let Some(ts) = team_store.clone()`, i.e. `team_store` ALONE. The two
      stores open two different databases from two different files (`teams.db`
      vs `coord.db`), and coord init returns `(None, None)` on any of three
@@ -2949,7 +2971,7 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
      `ScopedToolService` re-decides it with the real facts and can raise the
      approval card. The residual is narrower and different in kind: this path
      CONSTRUCTS its own `ToolFacts`, a second statement of one fact, so a third
-     input added to that struct in `tools/scoped/builder.rs` alone leaves the
+     input added to that struct in `src/tools/scoped/builder.rs` alone leaves the
      fast path deciding on a stale shape — silently, and only for slash
      commands. Converging the two constructions is the open work.
      ✅ **Closed in round 11 (D8, `1eca4aaef`):** both faces now build through
@@ -2991,7 +3013,7 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
      in the state being probed.** Two calls that take the same early-return
      branch prove nothing, and they read exactly like a real guard.
   7. The admin gate's refusal wording is now ONE constant, not a Panel copy of
-     a server literal (resolved). `settings/network/cluster.rs` used to
+     a server literal (resolved). `interfaces/webchat/src/platform/wide/views/settings/network/cluster.rs` used to
      transcribe the server's refusal string and claim a doc comment's worth of
      drift protection it could not deliver: `aleph-panel` does not depend on
      `alephcore`, and its test fed its OWN constant into `fleet_error_label`, so
@@ -2999,7 +3021,7 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
      cluster page on the raw English protocol string with both crates' tests
      still green. The wording moved to
      `aleph_protocol::jsonrpc::ADMIN_REQUIRED_MESSAGE` — the one crate both
-     sides already depend on — and both the emit site (`server/connection/dispatch.rs`, via
+     sides already depend on — and both the emit site (`src/gateway/server/connection/dispatch.rs`, via
      `gateway::protocol`'s re-export beside `AUTH_REQUIRED`) and the match site
      read it, so there is no reword that moves one side without the other. The
      Panel test now feeds that shared constant in, which is what makes it able
@@ -3274,7 +3296,7 @@ attribution, and a bound workspace as the room's default cwd.
   renders nothing at all.
 - **Model-facing room management goes through the same authorization as the
   RPC face, and stops short of the one verb that grants reach.**
-  `project_manage` (R8) shares `projects::authz` with `handlers/projects.rs`
+  `project_manage` (R8) shares `projects::authz` with `src/gateway/handlers/projects.rs`
   — the same `project_for` (not-found for a non-member) and `is_owner`
   (owner or org admin; renamed `manageable_given`, `pub(crate)`, in round 11,
   with `manageable` as the public face the server now derives
@@ -3326,7 +3348,7 @@ attribution, and a bound workspace as the room's default cwd.
   one session, and the frame that tells a Panel to re-hydrate
   (`stream.session_updated`) used to be judged by `origin_channel`. That field
   is a surface CLASS — every Panel connection hardcodes the literal
-  `"gui:chat"` (`api/chat.rs`) — so reading it as "mine" said "mine" for a
+  `"gui:chat"` (`interfaces/webchat/src/api/chat.rs`) — so reading it as "mine" said "mine" for a
   second tab of the same user and for every other member of the room, and
   their turns never appeared until someone reselected the session. The frame
   therefore also carries `origin_run_id`: the run that caused the update,
@@ -3402,8 +3424,8 @@ attribution, and a bound workspace as the room's default cwd.
      while the file backend still can, and so can any snapshot:
      - **SQLite (opt-in: `[general] session_store_backend = "sqlite"`; the
        shipped default is `"file"`)** — **closed in round-11 (D1)**.
-       `session_manager::ops::query::collect_rows` fails `list_sessions` /
-       `list_by_state` on any undecodable row (each one `warn!`ed by index),
+       `session_manager::ops::query::collect_rows` fails `list_sessions`
+       on any undecodable row (each one `warn!`ed by index),
        so the receipt reads `Unknown`, not `NothingToMove`. Display-only reads
        (`search_messages`, `get_session_preview`) use the lossy
        `collect_rows_lossy`, which drops and counts, loudly. Pinned by
@@ -3478,12 +3500,12 @@ still owed): FEATURE_LOCATOR §5.22 「第十一轮」.
   Refused(Deactivated | Gone), Unknown}`. The person checked is the AUTHOR,
   else the owner (`checked_person`; empty strings read as absent). The users
   table is reached through the capability slot `security/users-store`
-  (`gateway/security/store/slot.rs`, `FailsOpen`: with nothing installed every
+  (`src/gateway/security/store/slot.rs`, `FailsOpen`: with nothing installed every
   subject is `Legacy`, which is what tests and minimal servers have always
   had). Boot installs it unconditionally. Tests never install the process
   global; they inject through `resolve_with` / `resolve_with_users`, and
   `no_lib_test_installs_the_process_global_users_store` pins that.
-  `gateway/fire_gate.rs` is the single verdict → metadata mapping for the
+  `src/gateway/fire_gate.rs` is the single verdict → metadata mapping for the
   gateway families (`apply`, `authorize_session_run`, `admit_session_metadata`),
   and its `FireVerdict` keeps "refused" and "unknown" apart at the type level.
 - **Rulings (user-approved, spec §2).**
@@ -3519,13 +3541,13 @@ still owed): FEATURE_LOCATOR §5.22 「第十一轮」.
 | # | Executor | Person checked | Unknown | Refused (Deactivated / Gone) | Who sees the refusal / what next | Legacy (no person) |
 |---|---|---|---|---|---|---|
 | 1 | cron (`tasks/cron/executor.rs::admit_cron_fire`) | job owner (no author) | Skip this fire as a transient error: `consecutive_errors++` (backoff kept), no chain in either direction (`ExecutionResult.unadmitted`). Alert only once the streak reaches `TRANSIENT_ALERT_FLOOR`. Job stays enabled. | Job disabled (set, never toggle) + permanent error `principal deactivated (u-x) — job disabled at fire time` | Run history, `last_error`, immediate alert to the job's source channel. No exit is named: re-enabling takes `cron_manage` toggle, and the text does not say so. | `Granted::legacy` |
-| 2 | heartbeat (`tasks/heartbeat/service/timer.rs`, before the L1 probe) | task owner | L1 `Skipped` + error, `consecutive_errors++`, task stays armed. **Alerts only once the streak reaches cron's `TRANSIENT_ALERT_FLOOR`** (fix wave M3; it used to page on the first unknown beat). | Disabled at writeback (`ops::disable_walled_owner_task`): `… — task disabled at fire time` | History and alert. No exit is named. | `Granted::legacy` |
+| 2 | heartbeat (`src/tasks/heartbeat/service/timer.rs`, before the L1 probe) | task owner | L1 `Skipped` + error, `consecutive_errors++`, task stays armed. **Alerts only once the streak reaches cron's `TRANSIENT_ALERT_FLOOR`** (fix wave M3; it used to page on the first unknown beat). | Disabled at writeback (`ops::disable_walled_owner_task`): `… — task disabled at fire time` | History and alert. No exit is named. | `Granted::legacy` |
 | 3–5 | goal after-run / goal wake / loop tick (`execution_engine/execute.rs::admit_continuation`) | carried author, else owner | Re-arm the same step after 30 s (`rearm_*_after_busy`). No iteration spent. Retries without limit. Log only. | Goal `block_if_active`, loop `Paused`. Deactivated: "An administrator must reactivate that person…". **Gone: "That person no longer exists … Stop it and set a new goal / loop as a current user."** (fix wave M4 — the text used to offer a "reassign" no verb provides.) | `notify_origin` (the room channel if room-bound). Names no one, but discloses the status. | no stamp |
 | 6 | team dispatcher (`teams/dispatcher/schedule/authority.rs::authorize_claim`) | task author, else team owner, else origin-session owner | Stays `Pending`. Retried every tick, no backoff. Log only. | Task `Paused`; `result` names the person and the status and the exit (reactivate → set back to pending, or cancel and recreate) | Task drawer — every team member. **Names the person and the status** (M2, open). | spawn bare |
 | 7 | boot / on-demand resume (`gateway/resume_coordinator.rs::admit_resume`, pre-check `fire_gate::session_may_act`) | session row owner (no author rides a resume) — **room row with no author and no carried role: `caller_role` floored at `member`** | `HoldUnspent`: nothing written, no attempt spent, `report.refused` gets `authority_unknown` | Run closed once (`Abandoned`), counted under `abandoned` | Public notice names nobody. The operator report has the name + "send the message again". | no stamp |
 | 8 | announce (`gateway/announce_delivery.rs::admit_announce`) | session row owner (the initiator is not carried) — **same room floor** | Wait 30 s, at most 10 times, then give up at the fallback. Log only. | The delivery returns; warn log only | **Nobody in-band.** The result is left at the fallback. | no stamp |
 | 9 | busy-queue reinjection (`gateway/busy_queue/durable.rs::admit_reinjection`) | payload author, else row owner — same room floor when no author | Left journaled for the next boot. Log only. | Tombstoned `authority_refused`, with a `detail` naming the person | **Nobody in-band.** A queued message silently never runs. | no stamp |
-| — | deactivation freeze, team leg (`teams/background.rs`) | **team owner** (not the author) | n/a | `Paused`, `result` = `account 'u-x' was deactivated and owns this task's team…` | Task drawer. Names the person and the status. | n/a |
+| — | deactivation freeze, team leg (`src/teams/background.rs`) | **team owner** (not the author) | n/a | `Paused`, `result` = `account 'u-x' was deactivated and owns this task's team…` | Task drawer. Names the person and the status. | n/a |
 
 Reading the table:
 
@@ -4181,12 +4203,19 @@ Spec C closes that gap with four layered protections:
   forward to `/v1/admin/*` IPC endpoints (token rotation
   self-heals via a single 401 retry). When no server is running,
   the CLI takes the lock locally and operates directly.
+  Each subcommand module also carries a machine-readable
+  `//! lock-policy: none | with-policy | run-no-lock` line, which the
+  regression gate checks against the code in that module.
 
-Reverse-regression: `scripts/spec_c_regression.sh` enforces the four
-invariants (no direct rusqlite open, no direct fs ops on vault/acp
-files, every CLI subcommand annotated, no leftover
-`acquire_instance_lock` callers). Run before any commit that touches
-`src/utils/`, `src/cli/`, `src/gateway/admin_api/`, or
+Reverse-regression: `tests/spec_c_invariants.rs` enforces the four
+invariants against the parsed source — no direct rusqlite open, no
+direct fs write on vault/acp files, every CLI subcommand's
+`//! lock-policy:` declaration matching its code, and one owner for
+the singleton lock. `scripts/spec_c_regression.sh` is a thin wrapper
+around that test; CI runs the test itself. The gate reads the AST, so
+`#[cfg(test)]` code is not counted as a violation. It scans all of
+`src/`, so run it before any commit that touches `src/` — in
+particular `src/utils/`, `src/cli/`, `src/gateway/admin_api/`, or
 `src/bin/aleph-server/commands/`.
 
 ## See Also

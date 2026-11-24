@@ -6,7 +6,7 @@ use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::Json;
 
-use super::auth::{extract_bearer_token, ApiError};
+use super::auth::{authorize, ApiError};
 use super::state::OpenAiApiState;
 use super::types::{EmbeddingData, EmbeddingInput, EmbeddingRequest, EmbeddingResponse, Usage};
 
@@ -22,21 +22,11 @@ pub async fn handle(
     Json(req): Json<EmbeddingRequest>,
 ) -> Result<Json<EmbeddingResponse>, ApiError> {
     // Auth check
-    let auth_header = headers
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    let token = extract_bearer_token(auth_header)
-        .ok_or_else(|| ApiError::Unauthorized("Missing or invalid Authorization header".into()))?;
-    if let Some(expected) = (state.api_token)() {
-        if !crate::security::secret_equal(Some(token), Some(expected.as_str())) {
-            return Err(ApiError::Unauthorized("Invalid API key".into()));
-        }
-    }
+    authorize(&state, &headers)?;
 
-    // Get embedding provider
-    let provider = state
-        .embedding_provider
+    // Resolve the stable source without retaining a concrete provider.
+    let runtime = state
+        .memory_runtime
         .as_ref()
         .ok_or_else(|| ApiError::ServiceUnavailable("Embedding provider not configured".into()))?;
 
@@ -67,15 +57,15 @@ pub async fn handle(
         }
     }
 
-    // Call provider
-    let text_refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
-    let embeddings = provider
-        .embed_batch(&text_refs)
+    let batch = runtime
+        .embed_batch(texts)
         .await
-        .map_err(|e| ApiError::BadGateway(format!("Embedding provider error: {e}")))?;
+        .map_err(|e| ApiError::BadGateway(format!("Embedding provider error: {e}")))?
+        .ok_or_else(|| ApiError::ServiceUnavailable("Embedding provider not configured".into()))?;
 
     // Build response
-    let data: Vec<EmbeddingData> = embeddings
+    let data: Vec<EmbeddingData> = batch
+        .embeddings
         .into_iter()
         .enumerate()
         .map(|(i, embedding)| EmbeddingData {
@@ -88,7 +78,7 @@ pub async fn handle(
     Ok(Json(EmbeddingResponse {
         object: "list".to_string(),
         data,
-        model: provider.model_name().to_string(),
+        model: batch.model,
         usage: Usage {
             prompt_tokens: 0,
             completion_tokens: 0,

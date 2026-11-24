@@ -44,6 +44,9 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
         id: "memory_knowledge",
         name: "记忆与知识",
         tools: &[
+            "memory_runtime_status",
+            "memory_runtime_start",
+            "memory_runtime_stop",
             "memory_search",
             "memory_browse",
             "memory_explore",
@@ -114,6 +117,11 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
             // doc), so its authorization lives in
             // `method_authz::OPERATOR_TOOLS`, not here.
             "runtime_manage",
+            // The capability runtime's own diagnostic surface — a sibling of
+            // `runtime_manage` and `doctor` (it inspects and controls the
+            // runtime the registry built), enablement-gated on
+            // `ALEPH_CAPABILITY_DIAGNOSTICS=1` and operator-only.
+            "capability_projection_diagnostics",
             "select_model",
             "list_models",
             "vault_store",
@@ -329,14 +337,14 @@ mod tests {
 
     #[test]
     fn test_all_builtin_tools_have_a_group() {
-        let grouped: Vec<&str> = TOOL_CATEGORIES
+        let grouped: std::collections::HashSet<&str> = TOOL_CATEGORIES
             .iter()
             .flat_map(|g| g.tools.iter().copied())
             .collect();
 
         for def in BUILTIN_TOOL_DEFINITIONS.iter() {
             assert!(
-                grouped.contains(&def.name),
+                grouped.contains(def.name),
                 "Builtin tool '{}' is not in any group",
                 def.name
             );
@@ -416,11 +424,11 @@ mod tests {
             }
         }
         for (name, _) in super::super::REGISTRY_ONLY_DESCRIPTIONS.iter().copied() {
-            // REGISTRY_ONLY_DESCRIPTIONS is gated `#[cfg(test)]` so it
-            // is not exported under the production binary — this test
-            // needs the dev profile to compile, which is fine for a
-            // test-only constant. Reached via the `#[cfg(test)]`
-            // re-export at `builtin_registry/mod.rs`.
+            // REGISTRY_ONLY_DESCRIPTIONS is not test-gated any more: it is
+            // the runtime source of truth for the descriptions of the tools
+            // the registry registers outside the catalog, and the Panel's
+            // tool schema reads it. Reached via the re-export at
+            // `builtin_registry/mod.rs`.
             if !grouped.contains(name) {
                 orphans.push(name.to_string());
             }
@@ -429,5 +437,41 @@ mod tests {
             orphans.is_empty(),
             "these tools reach the model but are listed in no group: {orphans:?}"
         );
+    }
+
+    /// The other direction of the Hub drift guard.
+    ///
+    /// `agents::registry`'s `verify_denies_every_hub_tool` derives the family
+    /// from the GROUP; this one derives it from the CATALOG, which is where a
+    /// new `hub_*` tool lands first. `verify`'s `denied_tools` is an
+    /// exact-match list, so a Hub tool that reaches the catalog without
+    /// reaching that list stays reachable through `verify`'s `*` allow — the
+    /// read-only verifier could then install extensions.
+    ///
+    /// The deny list itself is not touched here: this guard only says that a
+    /// catalog tool of the Hub family must be denied by `verify`.
+    #[test]
+    fn verify_denies_every_hub_tool_in_the_catalog() {
+        let agents = crate::agents::builtin_agents();
+        let verify = agents
+            .iter()
+            .find(|agent| agent.id == "verify")
+            .expect("verify builtin must exist");
+        let family: Vec<&str> = BUILTIN_TOOL_DEFINITIONS
+            .iter()
+            .map(|def| def.name)
+            .filter(|name| name.starts_with("hub_"))
+            .collect();
+        assert!(
+            !family.is_empty(),
+            "the catalog must still contain the Hub family"
+        );
+        for name in family {
+            assert!(
+                !verify.is_tool_allowed(name),
+                "verify must deny every Hub tool; '{name}' is in the catalog but not in verify's \
+                 denied_tools"
+            );
+        }
     }
 }

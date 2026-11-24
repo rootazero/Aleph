@@ -66,17 +66,18 @@ pub fn blend_scores(
     let weight = rerank_weight.clamp(0.0, 1.0);
     let original_weight = 1.0 - weight;
 
+    let mut rerank_map: std::collections::HashMap<usize, f32> =
+        std::collections::HashMap::with_capacity(reranked.len());
+    for r in reranked {
+        rerank_map.insert(r.index, r.relevance_score);
+    }
+
     let mut blended: Vec<(String, f32)> = originals
         .iter()
         .enumerate()
         .map(|(i, (doc, orig_score))| {
-            let rerank_score = reranked
-                .iter()
-                .find(|r| r.index == i)
-                .map_or(0.0, |r| r.relevance_score);
-
+            let rerank_score = rerank_map.get(&i).copied().unwrap_or(0.0);
             let final_score = weight * rerank_score + original_weight * orig_score;
-            // rust-doctor-disable-next-line excessive-clone
             (doc.clone(), final_score)
         })
         .collect();

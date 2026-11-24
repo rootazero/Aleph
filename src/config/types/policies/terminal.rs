@@ -53,10 +53,11 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct TerminalConfig {
-    /// The session-grained gate. Turning this off also kills live sessions
-    /// (`live_apply`'s `"policies.terminal"` arm calls `PtyManager::close_all`)
-    /// — a gate evaluated only at admission would leave a shell that is
-    /// already open still open.
+    /// The sole Terminal enabled intent. Disabled boot creates no manager or
+    /// driver. Live disable revokes admission, closes sessions and signals the
+    /// owned driver; a pending join or cleanup failure is reported as non-live.
+    /// Re-enable joins any pending stop before allocating a new generation;
+    /// a boot without an attached event bus requires restart.
     ///
     /// ⚠️ That kill happens when `apply_live_sections` runs, NOT when the file
     /// changes. Its real callers are `config/patcher.rs` and

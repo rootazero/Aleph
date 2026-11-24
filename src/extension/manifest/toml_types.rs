@@ -10,7 +10,7 @@
 //! - `parse_aleph_plugin_toml*` functions for aleph.plugin.toml parsing
 
 use crate::extension::error::{ExtensionError, ExtensionResult};
-use crate::extension::manifest::types::{AuthorInfo, ConfigUiHint, PluginManifest};
+use crate::extension::manifest::types::{ConfigUiHint, PluginManifest};
 use crate::extension::manifest::{sanitize_plugin_id, validate_plugin_id};
 use crate::extension::runtime::wasm::{
     CredentialBinding, CredentialInject, EndpointPattern, HttpCapability, RateLimit,
@@ -40,6 +40,8 @@ pub const ALEPH_PLUGIN_TOML: &str = "aleph.plugin.toml";
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AlephPluginToml {
     pub plugin: PluginSection,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub panel: Option<super::types::PanelUiManifest>,
     #[serde(default)]
     pub permissions: PermissionsSection,
     #[serde(default)]
@@ -81,42 +83,13 @@ pub struct PluginSection {
     #[serde(default)]
     pub entry: Option<String>,
     #[serde(default)]
-    pub author: Option<PluginAuthorToml>,
-    #[serde(default)]
     pub config_schema: Option<JsonValue>,
     #[serde(default)]
     pub config_ui_hints: Option<HashMap<String, ConfigUiHint>>,
-    #[serde(default)]
-    pub homepage: Option<String>,
-    #[serde(default)]
-    pub repository: Option<String>,
-    #[serde(default)]
-    pub license: Option<String>,
-    #[serde(default)]
-    pub keywords: Option<Vec<String>>,
-    #[serde(default)]
-    pub extensions: Option<Vec<String>>,
-}
-
-/// Plugin author information (TOML format)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PluginAuthorToml {
-    #[serde(default)]
-    pub name: Option<String>,
-    #[serde(default)]
-    pub email: Option<String>,
-    #[serde(default)]
-    pub url: Option<String>,
-}
-
-impl From<PluginAuthorToml> for AuthorInfo {
-    fn from(author: PluginAuthorToml) -> Self {
-        Self {
-            name: author.name,
-            email: author.email,
-            url: author.url,
-        }
-    }
+    // Display-only metadata (`author`, `homepage`, `repository`, `license`,
+    // `keywords`) is deliberately NOT declared: serde ignores the unknown keys,
+    // so manifests that carry them still parse, and nothing here pretends to
+    // carry them into `PluginManifest` where no reader would see them.
 }
 
 /// Permissions section
@@ -146,26 +119,6 @@ pub enum FilesystemPermission {
 impl Default for FilesystemPermission {
     fn default() -> Self {
         Self::Bool(false)
-    }
-}
-
-impl FilesystemPermission {
-    #[must_use]
-    pub fn can_read(&self) -> bool {
-        match self {
-            Self::Bool(true) => true,
-            Self::Bool(false) => false,
-            Self::Level(s) => matches!(s.as_str(), "read" | "write" | "full"),
-        }
-    }
-
-    #[must_use]
-    pub fn can_write(&self) -> bool {
-        match self {
-            Self::Bool(true) => true,
-            Self::Bool(false) => false,
-            Self::Level(s) => matches!(s.as_str(), "write" | "full"),
-        }
     }
 }
 
@@ -533,7 +486,24 @@ pub fn parse_aleph_plugin_toml_content(
 
     let permissions = convert_permissions(&toml.permissions);
 
+    if let Some(panel) = &toml.panel {
+        if toml
+            .plugin
+            .version
+            .as_deref()
+            .is_none_or(|version| version.trim().is_empty())
+        {
+            return Err(ExtensionError::invalid_manifest(
+                plugin_dir,
+                "panel.missing_version",
+            ));
+        }
+        panel
+            .validate()
+            .map_err(|reason| ExtensionError::invalid_manifest(plugin_dir, reason))?;
+    }
     Ok(PluginManifest {
+        panel: toml.panel,
         id: plugin_id,
         name,
         version: toml.plugin.version,
@@ -544,12 +514,6 @@ pub fn parse_aleph_plugin_toml_content(
         config_schema: toml.plugin.config_schema,
         config_ui_hints: toml.plugin.config_ui_hints.unwrap_or_default(),
         permissions,
-        author: toml.plugin.author.map(AuthorInfo::from),
-        homepage: toml.plugin.homepage,
-        repository: toml.plugin.repository,
-        license: toml.plugin.license,
-        keywords: toml.plugin.keywords.unwrap_or_default(),
-        extensions: toml.plugin.extensions.unwrap_or_default(),
         tools_v2: if toml.tools.is_empty() {
             None
         } else {

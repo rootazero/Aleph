@@ -9,7 +9,7 @@ use once_cell::sync::Lazy;
 use regex::RegexSet;
 
 /// Severity of the worst finding in a scan.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ThreatLevel {
     Safe,
     Caution,
@@ -144,12 +144,13 @@ pub fn scan_content(file: &str, content: &[u8]) -> ScanVerdict {
     let mut findings = Vec::new();
 
     for idx in PATTERN_SET.matches(&text).into_iter() {
-        let p = &PATTERNS[idx];
-        findings.push(Finding {
-            file: file.to_string(),
-            pattern_id: p.id,
-            level: p.level,
-        });
+        if let Some(p) = PATTERNS.get(idx) {
+            findings.push(Finding {
+                file: file.to_string(),
+                pattern_id: p.id,
+                level: p.level,
+            });
+        }
     }
     // Defer to the crate-wide invisible-char SSOT (`security::unicode_guard`)
     // instead of a local list: it also covers the U+E0000 tag block (ASCII
@@ -170,11 +171,7 @@ pub fn scan_content(file: &str, content: &[u8]) -> ScanVerdict {
     let level = findings
         .iter()
         .map(|f| f.level)
-        .max_by_key(|l| match l {
-            ThreatLevel::Safe => 0,
-            ThreatLevel::Caution => 1,
-            ThreatLevel::Dangerous => 2,
-        })
+        .max()
         .unwrap_or(ThreatLevel::Safe);
     ScanVerdict { level, findings }
 }
@@ -188,11 +185,7 @@ pub fn merge_verdicts(verdicts: impl IntoIterator<Item = ScanVerdict>) -> ScanVe
     let level = findings
         .iter()
         .map(|f| f.level)
-        .max_by_key(|l| match l {
-            ThreatLevel::Safe => 0,
-            ThreatLevel::Caution => 1,
-            ThreatLevel::Dangerous => 2,
-        })
+        .max()
         .unwrap_or(ThreatLevel::Safe);
     ScanVerdict { level, findings }
 }
@@ -244,27 +237,32 @@ fn scan_skill_directory_inner(dir: &std::path::Path, verdicts: &mut Vec<ScanVerd
         if let Ok(file_type) = entry.file_type() {
             if file_type.is_dir() && !file_type.is_symlink() {
                 scan_skill_directory_inner(&path, verdicts);
-            } else if file_type.is_file() {
-                let label = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_default();
-                // Reject oversized files before reading so a malicious
-                // bundle cannot OOM the scanner via a multi-GB blob.
-                let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-                if size > MAX_SCAN_BYTES {
-                    verdicts.push(ScanVerdict {
-                        level: ThreatLevel::Caution,
-                        findings: vec![Finding {
-                            file: label,
-                            pattern_id: "oversized_file",
+            } else {
+                let meta = std::fs::metadata(&path).ok();
+                let is_file = file_type.is_file()
+                    || (file_type.is_symlink() && meta.as_ref().is_some_and(|m| m.is_file()));
+                if is_file {
+                    let label = path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    // Reject oversized files before reading so a malicious
+                    // bundle cannot OOM the scanner via a multi-GB blob.
+                    let size = meta.map(|m| m.len()).unwrap_or(0);
+                    if size > MAX_SCAN_BYTES {
+                        verdicts.push(ScanVerdict {
                             level: ThreatLevel::Caution,
-                        }],
-                    });
-                    continue;
-                }
-                if let Ok(content) = std::fs::read(&path) {
-                    verdicts.push(scan_content(&label, &content));
+                            findings: vec![Finding {
+                                file: label,
+                                pattern_id: "oversized_file",
+                                level: ThreatLevel::Caution,
+                            }],
+                        });
+                        continue;
+                    }
+                    if let Ok(content) = std::fs::read(&path) {
+                        verdicts.push(scan_content(&label, &content));
+                    }
                 }
             }
         }

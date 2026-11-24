@@ -14,9 +14,7 @@ use super::compaction_window::{
     estimate_tokens, first_message_text, hash_window, select_window_end, serialize_transcript,
     snap_boundary_forward, strip_context_summary_prefix,
 };
-use super::preserve::{
-    is_summary_text, preserved_user_messages, PRESERVED_USER_TOKEN_BUDGET, SUMMARY_MARKER,
-};
+use super::preserve::{preserved_user_messages, PRESERVED_USER_TOKEN_BUDGET, SUMMARY_MARKER};
 use super::summary_utils::{
     build_summary_update_prompt, build_window_summary_prompt, cap_transcript_text,
     latest_user_task, prepend_user_instructions, strip_analysis_block,
@@ -490,18 +488,31 @@ impl ContextCompactor {
         }
 
         // Step 2: idempotency check — skip if already compacted and window is
-        // small. `is_summary_text` recognises both marker flavours — plain
-        // `[Context Summary]` and the reuse path's `(from session memory)`.
-        if let Some(first_text) = first_message_text(&messages[0]) {
-            if is_summary_text(first_text) && cut_end <= 2 {
-                return Ok(CompactResult {
-                    tokens_before: 0,
-                    tokens_after: 0,
-                    strategy_used: CompactStrategy::Skipped {
-                        reason: "already compacted with small window".into(),
-                    },
-                });
-            }
+        // small. The probe scans the compressible HEAD for a running summary
+        // instead of looking at `messages[0]` alone: preservation re-attaches
+        // the user's verbatim turns ABOVE the summary, so after any compaction
+        // the summary is no longer the first message and a `messages[0]` probe
+        // could never fire — the guard was dead code on every compacted list.
+        // The marker may sit anywhere in that head (a summary followed by the
+        // assistant's continuation is the ordinary shape), so every message of
+        // the head is probed, not only its last one.
+        // `strip_context_summary_prefix` recognises both marker flavours —
+        // plain `[Context Summary]` and the reuse path's `(from session
+        // memory)`.
+        if cut_end <= 2
+            && messages[..cut_end].iter().any(|m| {
+                first_message_text(m)
+                    .and_then(strip_context_summary_prefix)
+                    .is_some()
+            })
+        {
+            return Ok(CompactResult {
+                tokens_before: 0,
+                tokens_after: 0,
+                strategy_used: CompactStrategy::Skipped {
+                    reason: "already compacted with small window".into(),
+                },
+            });
         }
 
         // Step 3: select the compaction window. Anchor it at the OLDEST
@@ -594,9 +605,29 @@ impl ContextCompactor {
             .find_map(|(i, m)| {
                 first_message_text(m)
                     .and_then(strip_context_summary_prefix)
-                    .map(|prior| (window_start + i, prior))
+                    .map(|prior| (window_start + i, prior.to_string()))
             });
-        let prompt = match prior_summary {
+        // Nothing new to fold: the window ENDS with the running summary, so
+        // that summary already is the condensed state of the whole window.
+        // Re-condensing it would rewrite it at `target_ratio` of its own size
+        // — paraphrase decay and detail loss bought for nothing.
+        //
+        // Step 2 rejects the same shape when the compressible head is tiny
+        // (`cut_end <= 2`); a wider window slips past that bound, and before
+        // this branch it fell into the full re-summarization prompt, which
+        // folded an empty gap and rewrote the running summary at 25% size.
+        if let Some((idx, _)) = &prior_summary {
+            if *idx + 1 == window_end {
+                return Ok(self.reuse_running_summary(
+                    messages,
+                    window_start,
+                    window_end,
+                    *idx,
+                    window_hash,
+                ));
+            }
+        }
+        let prompt = match &prior_summary {
             Some((idx, prior)) if idx + 1 < window_end => {
                 let new_transcript = serialize_transcript(&messages[idx + 1..window_end]);
                 build_summary_update_prompt(prior, &new_transcript, token_budget, focus.as_deref())
@@ -710,6 +741,55 @@ impl ContextCompactor {
                     })
                 }
             }
+        }
+    }
+
+    /// Keep the window's running summary verbatim instead of re-condensing it.
+    ///
+    /// The window is `[… preserved user turns, running summary]` and holds
+    /// nothing after the summary, so the summary already is the condensed
+    /// state of the window. Draining the window into a fresh summary would
+    /// shrink it to `target_ratio` of its own size — every cycle would shed
+    /// detail the previous cycle kept, for no informational gain.
+    ///
+    /// The summary is re-seated at `window_start` next to the preserved turns
+    /// (the shape every drain site produces), the turns it already covers are
+    /// dropped, and the fingerprint cache is advanced so the next turn
+    /// re-applies this summary instead of paying the side-channel call again.
+    fn reuse_running_summary(
+        &self,
+        messages: &mut Vec<UnifiedMessage>,
+        window_start: usize,
+        window_end: usize,
+        summary_idx: usize,
+        window_hash: u64,
+    ) -> CompactResult {
+        let summary_text = first_message_text(&messages[summary_idx])
+            .unwrap_or_default()
+            .to_string();
+        let tokens_before =
+            estimate_tokens(&serialize_transcript(&messages[window_start..window_end]));
+        let preserved = preserved_user_messages(
+            &messages[window_start..window_end],
+            PRESERVED_USER_TOKEN_BUDGET,
+        );
+        splice_preserved(
+            messages,
+            window_start..window_end,
+            preserved,
+            UnifiedMessage::user(summary_text.clone()),
+        );
+        self.store_cache(
+            window_start,
+            window_end,
+            window_hash,
+            summary_text.clone(),
+            SummaryQuality::Full,
+        );
+        CompactResult {
+            tokens_before,
+            tokens_after: estimate_tokens(&summary_text),
+            strategy_used: CompactStrategy::CacheReuse,
         }
     }
 
@@ -896,6 +976,12 @@ impl ContextCompactor {
         // so preserving over the gap too would duplicate them.
         let preserved =
             preserved_user_messages(&messages[c.start..c.end], PRESERVED_USER_TOKEN_BUDGET);
+        // The splice below rewrites the list BEFORE the merge call is made, so
+        // a cancelled merge must be able to take it back: this arm's contract
+        // is "a cancelled turn must commit neither" — neither the merge nor
+        // the re-splice. Keep the region the splice is about to replace so
+        // the cancel path can put it back verbatim.
+        let replaced_region: Vec<UnifiedMessage> = messages[c.start..c.end].to_vec();
         // Taken from the splice itself, never recomputed: the carriers it
         // appends below the summary are conditional, and a hand-rolled
         // `preserved.len() + 1` under-counts by one for every window that still
@@ -962,7 +1048,13 @@ impl ContextCompactor {
             SummarizerOutcome::Failed => None,
             // Same contract as the window path: the extend-merge arm also
             // splices and caches, so a cancelled turn must commit neither.
-            SummarizerOutcome::Cancelled => return Ok(cancelled_result(tokens_before)),
+            // The re-splice above already happened, so it is taken back here:
+            // the list goes back to exactly the state the merge found it in,
+            // and the cached cover is left untouched for the next turn.
+            SummarizerOutcome::Cancelled => {
+                messages.splice(c.start..c.start + inserted, replaced_region);
+                return Ok(cancelled_result(tokens_before));
+            }
         };
         let (body, strategy) = match merged {
             Some(s) => (s, CompactStrategy::LlmSummary),

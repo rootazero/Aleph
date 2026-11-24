@@ -164,15 +164,13 @@ pub(super) const SELECT_JS: &str = r"
 function(v) {
   const el = this;
   if (!el.options) { return { ok: false, options: [] }; }
-  let found = false;
-  for (const opt of el.options) {
-    const hit = (opt.value === v || opt.label === v || opt.text === v);
-    opt.selected = hit;
-    found = found || hit;
-  }
-  if (!found) {
+  const match = Array.from(el.options).find(opt =>
+    opt.value === v || opt.label === v || opt.text === v
+  );
+  if (!match) {
     return { ok: false, options: Array.from(el.options).map(o => o.value).slice(0, 20) };
   }
+  match.selected = true;
   el.dispatchEvent(new Event('input', { bubbles: true }));
   el.dispatchEvent(new Event('change', { bubbles: true }));
   return { ok: true };
@@ -1169,7 +1167,12 @@ pub(super) async fn click(
         &probe_label(&target),
     )
     .await;
-    press_and_release(be, &handle, &session, x, y, 1).await?;
+    if let Err(error) = press_and_release(be, &handle, &session, x, y, 1).await {
+        if armed {
+            let _ = read_effect_probe(&handle, &session).await;
+        }
+        return Err(error);
+    }
     conclude_effect_probe(be, &handle, &session, "browser_click", "click", armed).await
 }
 
@@ -1385,31 +1388,10 @@ pub(super) async fn type_text(
     let can_insert = caps.insert_text == Cap::Supported;
     // A newline in typed text is a key, not a character: `Input.insertText`
     // would put a literal "\n" in a single-line input instead of submitting it.
-    for (i, segment) in text.split('\n').enumerate() {
-        if i > 0 {
-            let (down, up) = press_key_event("Enter").expect("Enter is in the table");
-            input::dispatch_key_event(&handle.conn, Some(&session), &down)
-                .await
-                .map_err(|e| map_cdp_err(be.engine(), "Input.dispatchKeyEvent", e))?;
-            input::dispatch_key_event(&handle.conn, Some(&session), &up)
-                .await
-                .map_err(|e| map_cdp_err(be.engine(), "Input.dispatchKeyEvent", e))?;
-        }
-        if segment.is_empty() {
-            continue;
-        }
-        if can_insert {
-            input::insert_text(&handle.conn, Some(&session), segment)
-                .await
-                .map_err(|e| map_cdp_err(be.engine(), "Input.insertText", e))?;
-        } else {
-            // Per character, because `browser_type` exists for the pages that
-            // need key events (autocomplete, key handlers); an engine without
-            // `insertText` must still deliver them.
-            for c in segment.chars() {
-                let Some((down, up)) = press_key_event(&c.to_string()) else {
-                    continue;
-                };
+    let dispatch_result = async {
+        for (i, segment) in text.split('\n').enumerate() {
+            if i > 0 {
+                let (down, up) = press_key_event("Enter").expect("Enter is in the table");
                 input::dispatch_key_event(&handle.conn, Some(&session), &down)
                     .await
                     .map_err(|e| map_cdp_err(be.engine(), "Input.dispatchKeyEvent", e))?;
@@ -1417,7 +1399,38 @@ pub(super) async fn type_text(
                     .await
                     .map_err(|e| map_cdp_err(be.engine(), "Input.dispatchKeyEvent", e))?;
             }
+            if segment.is_empty() {
+                continue;
+            }
+            if can_insert {
+                input::insert_text(&handle.conn, Some(&session), segment)
+                    .await
+                    .map_err(|e| map_cdp_err(be.engine(), "Input.insertText", e))?;
+            } else {
+                // Per character, because `browser_type` exists for the pages that
+                // need key events (autocomplete, key handlers); an engine without
+                // `insertText` must still deliver them.
+                for c in segment.chars() {
+                    let Some((down, up)) = press_key_event(&c.to_string()) else {
+                        continue;
+                    };
+                    input::dispatch_key_event(&handle.conn, Some(&session), &down)
+                        .await
+                        .map_err(|e| map_cdp_err(be.engine(), "Input.dispatchKeyEvent", e))?;
+                    input::dispatch_key_event(&handle.conn, Some(&session), &up)
+                        .await
+                        .map_err(|e| map_cdp_err(be.engine(), "Input.dispatchKeyEvent", e))?;
+                }
+            }
         }
+        Ok::<(), BrowserError>(())
+    }
+    .await;
+    if let Err(error) = dispatch_result {
+        if armed {
+            let _ = read_effect_probe(&handle, &session).await;
+        }
+        return Err(error);
     }
     conclude_effect_probe(be, &handle, &session, "browser_type", "input", armed).await
 }
@@ -1516,7 +1529,7 @@ pub(super) async fn fill(
         &probe_label(&target),
     )
     .await;
-    let out = call_on_node(
+    let out = match call_on_node(
         be,
         &handle,
         &session,
@@ -1524,10 +1537,22 @@ pub(super) async fn fill(
         FILL_JS,
         vec![serde_json::json!(value)],
     )
-    .await?;
+    .await
+    {
+        Ok(out) => out,
+        Err(error) => {
+            if armed {
+                let _ = read_effect_probe(&handle, &session).await;
+            }
+            return Err(error);
+        }
+    };
     if out.get("ok").and_then(serde_json::Value::as_bool) == Some(true) {
         conclude_effect_probe(be, &handle, &session, "browser_fill_form", "input", armed).await
     } else {
+        if armed {
+            let _ = read_effect_probe(&handle, &session).await;
+        }
         Err(BrowserError::ActionFailed(
             "the element did not accept a value; it may not be an input, a \
              textarea or contenteditable"

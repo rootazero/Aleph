@@ -1,3 +1,5 @@
+#[cfg(feature = "panel-modular")]
+use crate::i18n::t_string;
 use crate::i18n::{use_i18n, I18nContextProvider};
 use crate::state::memory::MemoryState;
 use aleph_protocol::browser_live::{CLOSED_TOPIC, RESOURCE_TOPIC};
@@ -5,6 +7,9 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 use leptos_router::components::Router;
 use leptos_router::hooks::{use_location, use_navigate};
+
+#[cfg(target_arch = "wasm32")]
+mod shell_bridge;
 
 // Views
 use crate::views::agent_trace::AgentTrace;
@@ -66,6 +71,8 @@ use crate::state::viewport::{FormFactor, FormFactorState};
 use crate::views::chat::events::subscribe_run_events;
 use crate::views::chat::ChatState;
 use crate::views::voice::{ImmersiveVoiceView, VoiceMode};
+#[cfg(feature = "panel-modular")]
+use shared_ui_logic::panel::discovery::{PanelDiscoveryState, PanelDiscoveryStatus};
 
 #[component]
 #[must_use]
@@ -189,15 +196,16 @@ fn AppContent() -> impl IntoView {
     // sessions no longer freeze while another tab is in view.
     {
         let ws = expect_context::<WorkspaceState>();
-        // The dispatcher outlives every component, so it cannot look the i18n
-        // context up on demand — hand it the (Copy) handle once here.
+        // The dispatcher outlives every component, so capture the existing
+        // context and provide it only when a localized trace needs it.
+        let i18n = use_i18n();
         let _root_run_sub = subscribe_run_events(
             &state,
             session_map,
             chat_state,
             ws,
             canvas_state,
-            use_i18n(),
+            move || i18n,
         );
         // Root-level subscription is app-lifetime; no on_cleanup needed.
     }
@@ -230,18 +238,19 @@ fn AppContent() -> impl IntoView {
         });
     }
 
-    // Typewriter reveal clock — paces the Panel's streamed-text reveal at the
-    // configured `behavior.typing_speed` (chars/sec). Provided here so the chat
-    // view (reader) and the behavior settings page (writer-on-save) share one
-    // clock. The animation ticker advances the reveal between token arrivals;
-    // the boot fetch wires the *live* typing_speed/output_mode (previously the
-    // slider was a dead knob — see state/typewriter.rs). `f` repair-hotkey
-    // pattern aside, this is pure presentation (R10).
+    // Typewriter reveal clock — paces the Panel's streamed-text reveal.
+    // Provided here so the chat view (reader) and the behavior settings page
+    // (writer-on-save) share one clock. The animation ticker advances the
+    // reveal between token arrivals; the boot fetch wires the *live*
+    // output_mode. The reveal RATE is a Panel-local constant
+    // (`state::typewriter::DEFAULT_CPS`) — the server retired
+    // `behavior.typing_speed`, so there is no server-owned rate to fetch (see
+    // state/typewriter.rs). `f` repair-hotkey pattern aside, this is pure
+    // presentation (R10).
     let typewriter = TypewriterClock::new();
     provide_context(typewriter);
     spawn_local(async move {
         if let Ok(cfg) = BehaviorConfigApi::get(&state).await {
-            typewriter.cps.set(cfg.typing_speed);
             typewriter.instant.set(cfg.output_mode == "instant");
         }
     });
@@ -355,8 +364,22 @@ fn AppContent() -> impl IntoView {
         });
     }
 
+    // The panel community fixture seeds a canonical snapshot locally and must
+    // keep the transport disconnected so the fixture remains deterministic.
+    let panel_fixture_route = cfg!(feature = "panel-tab-spike")
+        && web_sys::window().is_some_and(|window| {
+            window
+                .location()
+                .pathname()
+                .unwrap_or_default()
+                .starts_with("/panel/")
+        });
+
     // Setup WebSocket connection and alert subscriptions on mount
     Effect::new(move || {
+        if panel_fixture_route {
+            return;
+        }
         let state = state;
         spawn_local(async move {
             match state.connect().await {
@@ -422,6 +445,11 @@ fn AppContent() -> impl IntoView {
     // Gating them here removes the whole class by construction rather than
     // relying on the overlay staying opaque and on top.
     let not_phone = move || ff_for_shell.form_factor.get() != FormFactor::Phone;
+    let legacy_chrome = move || {
+        not_phone()
+            && (!cfg!(feature = "panel-tab-spike")
+                || ff_for_shell.form_factor.get() != FormFactor::Wide)
+    };
     let flex_right_pane = flex_path_enabled();
 
     view! {
@@ -455,7 +483,7 @@ fn AppContent() -> impl IntoView {
             //     brand-row button in SidebarBrand handles it.
             // `data-tauri-drag-region="false"` opts out of the parent drag
             // strip so clicks aren't swallowed by the window-drag handler.
-            <Show when=not_phone>
+            <Show when=legacy_chrome>
                 <button
                     type="button"
                     class="aleph-sidebar-toggle"
@@ -481,9 +509,10 @@ fn AppContent() -> impl IntoView {
                 </button>
             </Show>
             <Router>
+                {#[cfg(target_arch = "wasm32")] { view! { <shell_bridge::ShellBridge /> } }}
                 // Left column — context-aware sidebar, full window height.
                 // Phone has its own tab bar; see `not_phone` above.
-                <Show when=not_phone>
+                <Show when=legacy_chrome>
                     <ModeSidebar />
                 </Show>
 
@@ -506,7 +535,7 @@ fn AppContent() -> impl IntoView {
                     // `z-50` keeps the band's chrome chips above
                     // tab content; the band itself is transparent
                     // so any text scrolling beneath is fine.
-                    <Show when=not_phone>
+                    <Show when=legacy_chrome>
                         <div
                             class="aleph-main-drag-band z-50"
                             data-tauri-drag-region=""
@@ -521,7 +550,7 @@ fn AppContent() -> impl IntoView {
                 // path changes the host without duplicating WorkspaceState,
                 // width persistence, or pane body behavior. The legacy branch
                 // remains available for rollback and visual comparison.
-                <Show when=not_phone>
+                <Show when=legacy_chrome>
                     {move || if flex_right_pane {
                         view! { <RightPane /> }.into_any()
                     } else {
@@ -638,6 +667,156 @@ fn ChatBandChrome() -> impl IntoView {
 /// dedicated router components.
 #[component]
 fn MainContent() -> impl IntoView {
+    #[cfg(feature = "panel-modular")]
+    {
+        let form_factor = expect_context::<FormFactorState>();
+        let dashboard = expect_context::<DashboardState>();
+        let location = use_location();
+        let i18n = use_i18n();
+        let projection = shared_ui_logic::panel::projection::PanelProjection::builtins(
+            t_string!(i18n, panel_spike.pilot).to_string(),
+        );
+        return move || {
+            let path = location.pathname.get();
+            let route = shared_ui_logic::panel::projection::PanelProjection::select_route(
+                &path,
+                projection.as_ref().ok(),
+            );
+            if form_factor.form_factor.get() != FormFactor::Phone {
+                if let Some((community_projection, initial_tab)) =
+                    explicit_community_panel(&path, &dashboard.panel_discovery.get())
+                {
+                    return view! {
+                        <crate::panel::PanelShell
+                            projection=community_projection
+                            initial_tab=Some(initial_tab)
+                        />
+                    }
+                    .into_any();
+                }
+                match route {
+                    shared_ui_logic::panel::projection::PanelRoute::Modular(initial_tab) => {
+                        if let Ok(projection) = projection.as_ref() {
+                            return view! {
+                                <crate::panel::PanelShell
+                                    projection=projection.clone()
+                                    initial_tab=Some(initial_tab)
+                                />
+                            }
+                            .into_any();
+                        }
+                    }
+                    shared_ui_logic::panel::projection::PanelRoute::Unavailable => {
+                        return view! {
+                            <section class="h-full flex flex-col" data-panel-shell="panel-error">
+                                <div role="status">"Panel unavailable"</div>
+                            </section>
+                        }
+                        .into_any();
+                    }
+                    shared_ui_logic::panel::projection::PanelRoute::Legacy => {}
+                }
+            }
+            view! { <LegacyMainContent /> }.into_any()
+        };
+    }
+    #[cfg(not(feature = "panel-modular"))]
+    view! { <LegacyMainContent /> }
+}
+
+#[cfg(feature = "panel-modular")]
+fn explicit_community_panel(
+    path: &str,
+    discovery: &PanelDiscoveryState,
+) -> Option<(
+    shared_ui_logic::panel::projection::PanelProjection,
+    aleph_protocol::panel::PanelTabKey,
+)> {
+    match discovery.status() {
+        PanelDiscoveryStatus::Ready => {
+            leptos::logging::log!("🔍 [routing] Step 1 PASS: discovery.status() = Ready");
+        }
+        status => {
+            leptos::logging::log!(
+                "🔍 [routing] Step 1 FAIL: discovery.status() = {:?}",
+                status
+            );
+            return None;
+        }
+    }
+
+    let key = match shared_ui_logic::panel::projection::PanelProjection::explicit_key(path) {
+        Some(key) => {
+            leptos::logging::log!(
+                "🔍 [routing] Step 2 PASS: explicit_key({}) = {:?}",
+                path,
+                key
+            );
+            key
+        }
+        None => {
+            leptos::logging::log!(
+                "🔍 [routing] Step 2 FAIL: explicit_key({}) returned None",
+                path
+            );
+            return None;
+        }
+    };
+
+    let mut snapshot = match discovery.snapshot() {
+        Some(snapshot) => {
+            leptos::logging::log!(
+                "🔍 [routing] Step 3 PASS: snapshot exists, revision={}",
+                snapshot.revision
+            );
+            snapshot.clone()
+        }
+        None => {
+            leptos::logging::log!("🔍 [routing] Step 3 FAIL: snapshot() returned None");
+            return None;
+        }
+    };
+
+    // Nebula uses the TSX renderer. Exclude it before building the DOM
+    // registry, including the tabs of other explicitly selected modules.
+    snapshot.declarations.retain(|declaration| {
+        let key = &declaration.descriptor.key;
+        key.plugin_id != shared_ui_logic::panel::registry::BUILTIN_NAMESPACE
+            || key.tab_id != aleph_protocol::memory_graph::NEBULA_TAB_ID
+    });
+    let projection = match shared_ui_logic::panel::projection::PanelProjection::from_snapshot(
+        snapshot.clone(),
+    ) {
+        Ok(projection) => {
+            leptos::logging::log!("🔍 [routing] Step 4 PASS: from_snapshot succeeded");
+            projection
+        }
+        Err(error) => {
+            leptos::logging::log!("🔍 [routing] Step 4 FAIL: from_snapshot error: {:?}", error);
+            return None;
+        }
+    };
+
+    match projection.select_explicit(&key, snapshot.revision) {
+        Ok(descriptor) => {
+            leptos::logging::log!(
+                "🔍 [routing] Step 5 PASS: select_explicit succeeded, descriptor.key={:?}",
+                descriptor.key
+            );
+            Some((projection, descriptor.key))
+        }
+        Err(error) => {
+            leptos::logging::log!(
+                "🔍 [routing] Step 5 FAIL: select_explicit error: {:?}",
+                error
+            );
+            None
+        }
+    }
+}
+
+#[component]
+fn LegacyMainContent() -> impl IntoView {
     let location = use_location();
     let mode = Memo::new(move |_| PanelMode::from_path(&location.pathname.get()));
     let form_factor = expect_context::<FormFactorState>();

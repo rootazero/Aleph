@@ -51,7 +51,7 @@ ModelRecord {
 
 ### 为什么必须是一个点
 
-重构前，`capabilities_for` + `rate_card` + `endpoint_kind_for_base_url` 这个三元 join 被**手抄了三处**：`builtin_tools/list_models.rs::enrich`、`gateway/handlers/providers/handlers.rs` 的 preset 行、同文件的 custom provider 行。加第四个维度（本轮的 lifecycle）会接上其中两处、漏掉第三处——而漏掉的那处不会报错，只会少一个字段。
+重构前，`capabilities_for` + `rate_card` + `endpoint_kind_for_base_url` 这个三元 join 被**手抄了三处**：`builtin_tools/list_models.rs::enrich`、`src/gateway/handlers/providers/handlers.rs` 的 preset 行、同文件的 custom provider 行。加第四个维度（本轮的 lifecycle）会接上其中两处、漏掉第三处——而漏掉的那处不会报错，只会少一个字段。
 
 （`route_observe::price_milli_per_mtok` 与 `failover::price_hint` 只读 `pricing` 一张表，并且应当保持如此：它们要的是一个用来排序的标量，不是一条用来展示的记录。）
 
@@ -373,7 +373,7 @@ openclaw 把整份目录放在每个 provider 插件的 `openclaw.plugin.json` �
 
 ### 8.3 pi（`@earendil-works/pi-ai`，2026-08 round-3）
 
-pi 的目录是**生成期 hydrate**：`scripts/generate-models.ts`（2762 行）从 models.dev / OpenRouter / Vercel AI Gateway 三源拉数据，叠加散在脚本里的裸常量修正，烧进每 provider 一个 JSON shard 随包发布；运行时另有 per-provider `fetchModels` overlay。与 Aleph 的编译期四表是**同一代际的两种打包方式**，可比的维度如下。
+pi 的目录是**生成期 hydrate**：模型生成脚本（审计时 2762 行）从 models.dev / OpenRouter / Vercel AI Gateway 三源拉数据，叠加散在脚本里的裸常量修正，烧进每 provider 一个 JSON shard 随包发布；运行时另有 per-provider `fetchModels` overlay。与 Aleph 的编译期四表是**同一代际的两种打包方式**，可比的维度如下。
 
 | 维度 | pi | Aleph | 裁决 |
 |------|-----|-------|------|
@@ -390,7 +390,7 @@ pi 的目录是**生成期 hydrate**：`scripts/generate-models.ts`（2762 行�
 | 溢出检测 | 20+ provider 的错误文案正则库（`utils/overflow.ts`） | 无 | **评估为不移植**：属错误分类层（§2.x 语境），非目录层；且正则启发式与 R8 的适用范围有张力 |
 | 模型可见性过滤 | `filterModels(credential)` + `getAvailable()` | `list_models` 默认只列已配置 provider | **对齐** |
 
-pi 侧独有但**本轮明确不收**的：`compat` 能力矩阵（30+ 字段的"同 API 不同方言"行为差异）——那是协议实现层的关注点，Aleph 的对应物是 `openai_common/provider_policy.rs` 的 `PayloadPolicy`，不进目录层。
+pi 侧独有但**本轮明确不收**的：`compat` 能力矩阵（30+ 字段的"同 API 不同方言"行为差异）——那是协议实现层的关注点，Aleph 的对应物是 `src/providers/protocols/openai_common/provider_policy.rs` 的 `PayloadPolicy`，不进目录层。
 
 #### 8.3b pi 的选择面（2026-08-13 round-5 delta）
 
@@ -429,7 +429,7 @@ round-3/8.3b 比的是**机制**；本轮比的是**数字本身**。pi 的目�
 | 成本语义 | RouteLLM 无成本表（threshold 只对应"%强模型调用"）；vLLM SR 互斥桶计价；Bifrost `CalculateCost` | pricing.rs + `RateBasis` + `cost_aware` | **Aleph 领先**（真实美元 vs 调用占比代理） |
 | 故障韧性 | RouteLLM **无 failover**（异常透传）；vLLM SR 静态 weight 无健康信号；Bifrost 重试+key轮换+fallback，**无断路器/EWMA** | 断路器 + 双层 cooldown + EWMA + 游走梯 | **Aleph 领先** |
 | key 池 | Bifrost 401/402/403=死 key 请求内不复活免 backoff，429=本轮排除保留 backoff | 单 key per provider | **有意不移植**（个人 runtime，key 池=多租户税） |
-| 流式带内错误 | Bifrost `CheckFirstStreamChunkForError`：HTTP 200 流内错误载荷→重试/fallback | `ProviderDelta::Error` 基建早有（Anthropic/Responses 已接），**OpenAI 兼容 SSE 未接** | **缺口，round-4 连线**（`openai_chat/sse.rs`） |
+| 流式带内错误 | Bifrost `CheckFirstStreamChunkForError`：HTTP 200 流内错误载荷→重试/fallback | `ProviderDelta::Error` 基建早有（Anthropic/Responses 已接），**OpenAI 兼容 SSE 未接** | **缺口，round-4 连线**（`src/providers/protocols/openai_chat/sse.rs`） |
 | live 目录并发 | Bifrost `live.UpsertIfCurrent` generation counter；keyconfig 变更=不可变 snapshot 整体换 | 单飞 + stale 回退；**缓存未绑端点指纹** | **缺口，round-4 补** base_url 指纹；generation counter 评估为不需要（单飞串行化同进程写，多进程本被 doctor 禁止） |
 | picker/消费面一致性 | — | roster 合并曾在**前端**重实现，且缺 base_url-moved 守卫（中继端点推荐必 400 的 id） | **缺口，round-4 收编**：`presets::model_ladder` 成为 picker/failover 共用 leaf |
 
@@ -441,13 +441,13 @@ RouteLLM 可提炼的三条资产——score→threshold 决策契约、"阈值=
 |------|------------------|-----------|
 | 滑动窗口限流计数 | LiteLLM/Bifrost 用固定分钟桶，边界清零是它们已知的坑——Aleph 在 round-2 立 `rate_limits` 时把**同一个坑**也继承了（`over_limit` 边界 99%→0% 抖动） | `load_stats.rs::RateWindow` 双桶加权：当前窗口 + 上一窗口 × 剩余时间比例，占用率逐秒线性衰减不跳零 |
 | 限流文本词表 | Bifrost `IsRateLimitErrorMessage` 的 22 个模式——限流不一定以干净 429 到达 | `llm_retry.rs::RATE_LIMIT_TEXT_PATTERNS` 补 12 个真空缺模式（`throttled`/`tpm exceeded`/`concurrent requests limit` 等），**拒 6 个**（`requests per`/`limit exceeded`/`usage limit`/`rate increased` 等误伤面，理由写在常量 doc）；`classify` 与 `classify_exhausted` 的词表从此同源（顺带根治了两臂漂移的 F1） |
-| 后台健康探测 | 参考项目普遍带后台探测循环（LiteLLM `background_health_checks`、Bifrost 健康检查）——**Aleph 缺这一块**：熔断只能等真实流量 half-open 或手动 `providers.test` | `gateway/health_prober.rs`：`[route] health_probe_interval_secs`（**默认关**，探测花真实请求；Panel 路由页与 `route_config` 工具两张脸都能拨），只探 circuit-open **且 operator 未停用**的 provider，绿色探测只清断路器、不碰限流 cooldown |
+| 后台健康探测 | 参考项目普遍带后台探测循环（LiteLLM `background_health_checks`、Bifrost 健康检查）——**Aleph 缺这一块**：熔断只能等真实流量 half-open 或手动 `providers.test` | `src/gateway/health_prober.rs`：`[route] health_probe_interval_secs`（**默认关**，探测花真实请求；Panel 路由页与 `route_config` 工具两张脸都能拨），只探 circuit-open **且 operator 未停用**的 provider，绿色探测只清断路器、不碰限流 cooldown |
 
 本轮新裁决（追加进 §9 的同款判据）：**hedging（并行对冲请求）不移植**——并行对冲是拿双倍请求钱买尾延迟，多租户网关的流量形态才值这个价；Aleph 的 failover walk 是顺序链，断路器 + 双层 cooldown + EWMA 已覆盖慢/死端点，个人 runtime 无此需求。**key 池维持 round-4 裁决**（多租户税）。**metrics 导出（Prometheus/OTel exporter）不移植**——可观测性的答案已经有 `route_status` 快照（含 `next_order` 与 `config_problems`）+ doctor，独立导出器是新依赖加新常驻面（R3），真出现外接监控需求时单独立项。**run 粒度 witness 键（E3①）不做**——`RequestPayload.metadata` 只有 `session_id` 没有 run_id，跨 harness↔gateway 穿一个 id 的代价对 best-effort 诊断不成比例；溢出全清抹在飞 run 的那一半已修（LRU 淘汰 + 写入刷新年龄，`route_witness::BoundedWitnesses`）。
 
 ### 8.5 grok-bot-0.18-reconstructed（2026-09-02 round-6）
 
-一个 Cursor/Codex 后端的 TypeScript 助手，`README` 里把「Inference Router」列为一等子系统——但它的 router 是**一个 `settings.json` 枚举**（`shared/inference-router.ts`，默认 `cursor`，每会话在三处各读一遍磁盘），韧性全部住在 turn runner 里（`host/runner/*`）。它的重试边界**自述为 dormant**（`host-runner-composition.ts:1593-1605`：那条装配从未在生产里通电），所以下表把它的设计一律读作**意图**，不读作证据；能对标的只有「运行时路由与降级」这一族维度，目录层没有可比面。落地记录见 FEATURE_LOCATOR §3.6 round-6。
+一个 Cursor/Codex 后端的 TypeScript 助手，`README` 里把「Inference Router」列为一等子系统——但它的 router 是**一个 `settings.json` 枚举**（shared inference-router 模块，默认 `cursor`，每会话在三处各读一遍磁盘），韧性全部住在 turn runner 里（`host/runner/*`）。它的重试边界**自述为 dormant**（`host-runner-composition.ts:1593-1605`：那条装配从未在生产里通电），所以下表把它的设计一律读作**意图**，不读作证据；能对标的只有「运行时路由与降级」这一族维度，目录层没有可比面。落地记录见 FEATURE_LOCATOR §3.6 round-6。
 
 | 维度 | grok-bot（参考） | Aleph | 裁决 |
 |------|-----------------|-------|------|
@@ -508,7 +508,7 @@ RouteLLM 可提炼的三条资产——score→threshold 决策契约、"阈值=
 - **ETag / Last-Modified 条件请求** — pi 的 `ModelsStoreEntry` 预留了这两个字段但**没有任何代码写入它们**（纯 schema 预留）；且各家 `/models` 端点基本不发 ETag。300s TTL + 单飞已覆盖实际需求。
 - **pi 的溢出检测正则库**（`utils/overflow.ts`）— 那是"这一轮请求失败了没有"的错误分类层（§2.x/§3.6 语境），不是"这个模型是什么"的目录层；如需引入应在 failover/compaction 那侧单独立项评估。
 - **改 `hyperbolic` / `huggingface` 的默认模型**（仍是 Llama-3.3 时代）— 与 round-2 对 siliconflow 的判断同款：没有 accepted 源给出"应该改成什么"，`Llama-3.3-70B-Instruct` 是真实可用的 id（这两家是托管方不是厂商）。陈旧但能用 > 可能 404。
-- **pi 的 per-model `compat` 矩阵** — 协议方言差异属 `openai_common/provider_policy.rs` 的 `PayloadPolicy` 层，不进目录层。
+- **pi 的 per-model `compat` 矩阵** — 协议方言差异属 `src/providers/protocols/openai_common/provider_policy.rs` 的 `PayloadPolicy` 层，不进目录层。
 
 以下是 2026-08 round-4（对标 RouteLLM / vLLM semantic-router / Bifrost）评估后**明确不做**的：
 
@@ -599,8 +599,8 @@ RouteLLM 可提炼的三条资产——score→threshold 决策契约、"阈值=
 | 想做的事 | 改哪儿 |
 |---------|--------|
 | 加/改预设别名 | `presets/registry.rs`（别名是**解析键不是展示行**：枚举面只迭代 `canonical_profiles()`；别名→canonical 归一走 `canonical_preset_id()`，别再在 handler 里硬编码特例） |
-| 某模型支不支持 vision/tool-use | `model_catalog/capabilities.rs` + `capability_gate.rs` |
-| 本地还是云端 | `model_catalog/endpoint.rs` |
+| 某模型支不支持 vision/tool-use | `src/providers/model_catalog/capabilities.rs` + `capability_gate.rs` |
+| 本地还是云端 | `src/providers/model_catalog/endpoint.rs` |
 | 成本 | `pricing.rs`（`RateCard` = picker 的费率投影） |
 | 按失败后的 provider/model fallback ladder | provider 的 `models` / `model_ladder` 与 `src/providers/failover/`；只在当前尝试失败后按配置顺序 retry/fallback，并受 cooldown/circuit 状态约束 |
 
@@ -620,7 +620,7 @@ RouteLLM 可提炼的三条资产——score→threshold 决策契约、"阈值=
 | **给 `QUOTA_BILLED_MODELS` 加一条** | 写 **canonical** 形式（表在 `canonicalize_model` 之后被读），线上拼法留注释；守卫 `quota_billed_ids_are_stated_in_lookup_form` |
 | **要一个表里没有的新模型** | **`list_models { refresh: true }` 或 `providers.modelsRefresh`** |
 | 子代理 / provider/model 绑定 | Generic subagents receive explicit provider/model/session/`BrainRef` binding; provider fallback occurs only after failure. Historical MoA/provider-routing notes below are retained for traceability and are not live guidance |
-| **某模型的 API 会不会自己丢掉早先轮次的 thinking / 会不会把 thinking 绑到对话前缀** | 模型事实：`model_catalog/capabilities.rs` 的 `STRIPS_PRIOR_TURN_THINKING(_EXACT)` / `PREFIX_BOUND_THINKING`（经 `strips_prior_turn_thinking` / `binds_thinking_to_prefix` 读，与 `capabilities_for` 同一套 id 归一）。主机能不能接对应的请求控制是协议策略的问题，见 §11 |
+| **某模型的 API 会不会自己丢掉早先轮次的 thinking / 会不会把 thinking 绑到对话前缀** | 模型事实：`src/providers/model_catalog/capabilities.rs` 的 `STRIPS_PRIOR_TURN_THINKING(_EXACT)` / `PREFIX_BOUND_THINKING`（经 `strips_prior_turn_thinking` / `binds_thinking_to_prefix` 读，与 `capabilities_for` 同一套 id 归一）。主机能不能接对应的请求控制是协议策略的问题，见 §11 |
 | **某个目标该收到哪段历史推理** | `providers/reasoning_replay.rs::ReasoningReplay::for_target` 一张表，见 §11。**别在 adapter 或 harness 里另加一条规则** |
 
 ## 11. 推理回放与服务端上下文编辑 (Reasoning Replay & Server Context Editing)

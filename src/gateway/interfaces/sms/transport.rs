@@ -616,8 +616,8 @@ impl SmsRelayTransport {
             },
             None => self.authorizer.authorize(operation).await,
         };
+        let mut state = self.state.lock().await;
         if let Err(error) = authorization {
-            let mut state = self.state.lock().await;
             if state.operations.get(&operation_id).is_some_and(|stored| {
                 stored.operation == *operation
                     && stored.outcome.is_none()
@@ -627,6 +627,10 @@ impl SmsRelayTransport {
             }
             return Err(error);
         }
+        if !state.operations.contains_key(&operation_id) {
+            return Err(SmsTransportError::PrivateCancelled);
+        }
+        drop(state);
 
         // This is the final Core-side fence before the irreversible peer call.
         // The authenticated peer must perform its own generation check at the
@@ -656,12 +660,19 @@ impl SmsRelayTransport {
                     }
                     guard.check(&state, operation)?;
                 }
-                validate_operation_admission(
-                    &self.policy,
-                    &current,
-                    operation,
-                    if pinned.is_some() { Utc::now() } else { now },
-                )?;
+                let admission_time = if pinned.is_some() {
+                    Utc::now()
+                } else {
+                    let refreshed = Utc::now();
+                    if refreshed >= operation.command.expires_at {
+                        return Err(SmsTransportError::Expired {
+                            operation_id: operation_id.clone(),
+                            expires_at: operation.command.expires_at,
+                        });
+                    }
+                    refreshed
+                };
+                validate_operation_admission(&self.policy, &current, operation, admission_time)?;
                 let stored = state.operations.get_mut(&operation_id).ok_or_else(|| {
                     SmsTransportError::OperationNotFound {
                         operation_id: operation_id.clone(),
@@ -2007,7 +2018,14 @@ mod tests {
                     // Trigger ordinary pruning without touching the old id.
                     let mut trigger = test_operation(now + Duration::seconds(60));
                     trigger.command.operation_id = "trigger-prune".into();
-                    transport.submit_at(&trigger, now).await.unwrap();
+                    // The explicit clock exercises GC, but the last send fence
+                    // must still reject a week-future command against real time.
+                    let submissions = peer.submissions().len();
+                    assert!(matches!(
+                        transport.submit_at(&trigger, now).await,
+                        Err(SmsTransportError::CommandTtlExceeded { .. })
+                    ));
+                    assert_eq!(peer.submissions().len(), submissions);
                 } else if path == "explicit" {
                     let result = transport
                         .expire_unknown(operation.operation_id(), now)
@@ -2057,12 +2075,21 @@ mod tests {
                             operation_id: operation.operation_id().into(),
                         })
                     );
-                    // GC does not revive the original expired command. A new
-                    // request with a fresh deadline may reuse the cleared id.
+                    // GC does not revive the expired original. Test retention
+                    // with the explicit clock, then submit a genuinely fresh
+                    // request against the unchanged real-time send fence.
+                    assert!(matches!(
+                        transport.submit_at(&operation, now).await,
+                        Err(SmsTransportError::Expired { .. })
+                    ));
+                    let submitted_at = Utc::now();
                     let mut replacement = operation.clone();
-                    replacement.command.expires_at = now + Duration::seconds(60);
+                    replacement.command.expires_at = submitted_at + Duration::seconds(60);
                     assert_eq!(
-                        transport.submit_at(&replacement, now).await.unwrap(),
+                        transport
+                            .submit_at(&replacement, submitted_at)
+                            .await
+                            .unwrap(),
                         TelecomOutcome::Accepted
                     );
                     assert_eq!(peer.submissions().len(), submissions + 1);
@@ -2074,20 +2101,28 @@ mod tests {
     #[tokio::test]
     async fn terminal_operation_pruning_is_bounded_and_deterministic() {
         let peer = Arc::new(InMemorySmsPeer::default());
-        let transport = SmsRelayTransport::new("binding", peer, allow_all());
+        let transport = SmsRelayTransport::new("binding", peer.clone(), allow_all());
         transport.connect().await.unwrap();
         let base = Utc::now();
         let old = test_operation(base + Duration::seconds(60));
         transport.submit_at(&old, base).await.unwrap();
         assert!(transport.operation(old.operation_id()).await.is_some());
-        let mut fresh = test_operation(base + Duration::days(8) + Duration::seconds(60));
-        fresh.command.operation_id = "fresh-after-prune".into();
-        transport
-            .submit_at(&fresh, base + Duration::days(8))
-            .await
-            .unwrap();
+        let mut trigger = test_operation(base + Duration::days(8) + Duration::seconds(60));
+        trigger.command.operation_id = "trigger-prune".into();
+        assert!(matches!(
+            transport
+                .submit_at(&trigger, base + Duration::days(8))
+                .await,
+            Err(SmsTransportError::CommandTtlExceeded { .. })
+        ));
         assert!(transport.operation(old.operation_id()).await.is_none());
+        assert_eq!(peer.submissions().len(), 1);
+        let now = Utc::now();
+        let mut fresh = test_operation(now + Duration::seconds(60));
+        fresh.command.operation_id = "fresh-after-prune".into();
+        transport.submit_at(&fresh, now).await.unwrap();
         assert!(transport.operation(fresh.operation_id()).await.is_some());
+        assert_eq!(peer.submissions().len(), 2);
     }
 
     #[tokio::test]

@@ -1,0 +1,19 @@
+   Compiling alephcore v26.9.1 (/Volumes/TBU4/Workspace/Aleph)
+error[E0382]: borrow of moved value: `cli`
+    --> src/builtin_tools/runtime_manage.rs:1492:24
+     |
+1444 |         let cli = tmp.path().join("fake-playwright-cli");
+     |             --- move occurs because `cli` has type `std::path::PathBuf`, which does not implement the `Copy` trait
+...
+1458 |         let spawner = RegistrySpawner::with_cli_locator(Arc::new(FixedCliLocator(cli)));
+     |                                                                                  --- value moved here
+...
+1492 |         std::fs::write(cli.with_extension("release"), b"release\n").expect("release fake cli");
+     |                        ^^^ value borrowed here after move
+     |
+     = note: borrow occurs due to deref coercion to `std::path::Path`
+help: consider cloning the value if the performance cost is acceptable
+     |
+1458 |         let spawner = RegistrySpawner::with_cli_locator(Arc::new(FixedCliLocator(cli.clone())));
+     |                                                                                     ++++++++
+

@@ -93,9 +93,9 @@ pub(crate) fn extract_host(raw: &str) -> Option<String> {
     // `localhost` as the *scheme*, not the host. Prefix `http://` when the
     // input lacks a `://` separator so host extraction is reliable.
     let candidate = if raw.contains("://") {
-        raw.to_string()
+        std::borrow::Cow::Borrowed(raw)
     } else {
-        format!("http://{raw}")
+        std::borrow::Cow::Owned(format!("http://{raw}"))
     };
     let url = Url::parse(&candidate).ok()?;
     url.host_str().map(|h| h.to_ascii_lowercase())
@@ -137,44 +137,16 @@ fn host_is_local(host: &str) -> bool {
     }
 
     // IPv4 literal: classify by RFC-1918 / loopback / link-local octets.
-    if let Some(octets) = parse_ipv4(host) {
-        let [a, b, ..] = octets;
-        // 127.0.0.0/8 loopback
-        if a == 127 {
-            return true;
-        }
-        // 10.0.0.0/8
-        if a == 10 {
-            return true;
-        }
-        // 192.168.0.0/16
-        if a == 192 && b == 168 {
-            return true;
-        }
-        // 172.16.0.0/12
-        if a == 172 && (16..=31).contains(&b) {
-            return true;
-        }
-        // 169.254.0.0/16 link-local
-        if a == 169 && b == 254 {
-            return true;
-        }
+    if let Ok(v4) = host.parse::<std::net::Ipv4Addr>() {
+        let [a, b, ..] = v4.octets();
+        return a == 127
+            || a == 10
+            || (a == 192 && b == 168)
+            || (a == 172 && (16..=31).contains(&b))
+            || (a == 169 && b == 254);
     }
 
     false
-}
-
-/// Parse a dotted-quad IPv4 literal into its four octets, or `None`.
-fn parse_ipv4(host: &str) -> Option<[u8; 4]> {
-    let mut it = host.split('.');
-    let a = it.next()?.parse::<u8>().ok()?;
-    let b = it.next()?.parse::<u8>().ok()?;
-    let c = it.next()?.parse::<u8>().ok()?;
-    let d = it.next()?.parse::<u8>().ok()?;
-    if it.next().is_some() {
-        return None; // more than four parts — not a dotted quad
-    }
-    Some([a, b, c, d])
 }
 
 #[cfg(test)]

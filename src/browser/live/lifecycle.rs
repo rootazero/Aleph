@@ -524,7 +524,7 @@ mod tests {
     fn mint(f: &Fixture, resource: &PreviewResource) -> String {
         let binding = resource.viewer_binding().unwrap();
         f.grants
-            .issue(
+            .issue_until(
                 binding.principal.clone(),
                 binding.clone(),
                 &resource.resource_id,
@@ -534,7 +534,7 @@ mod tests {
                     host: "viewer.test".into(),
                     port: 443,
                 },
-                Duration::from_secs(600),
+                chrono::Utc::now().timestamp_millis() + 600_000,
             )
             .unwrap()
             .grant_id

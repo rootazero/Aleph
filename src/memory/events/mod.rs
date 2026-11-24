@@ -70,13 +70,18 @@ impl std::str::FromStr for EventActor {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "agent" => Ok(Self::Agent),
-            "user" => Ok(Self::User),
-            "system" => Ok(Self::System),
-            "decay" => Ok(Self::Decay),
-            "migration" => Ok(Self::Migration),
-            _ => Err(format!("Unknown event actor: {s}")),
+        if s.eq_ignore_ascii_case("agent") {
+            Ok(Self::Agent)
+        } else if s.eq_ignore_ascii_case("user") {
+            Ok(Self::User)
+        } else if s.eq_ignore_ascii_case("system") {
+            Ok(Self::System)
+        } else if s.eq_ignore_ascii_case("decay") {
+            Ok(Self::Decay)
+        } else if s.eq_ignore_ascii_case("migration") {
+            Ok(Self::Migration)
+        } else {
+            Err(format!("Unknown event actor: {s}"))
         }
     }
 }

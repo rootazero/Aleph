@@ -14,6 +14,10 @@ pub mod component_source;
 pub mod config_validation;
 pub mod declared_sections;
 pub mod manifest_cache;
+#[cfg(test)]
+mod panel_schema_tests;
+#[cfg(test)]
+mod panel_tests;
 pub mod parsers;
 pub mod toml_types;
 mod types;
@@ -53,11 +57,11 @@ pub use cc_plugin_toml::{
 pub use toml_types::{
     convert_permissions, parse_aleph_plugin_toml, parse_aleph_plugin_toml_content,
     parse_aleph_plugin_toml_sync, AlephPluginToml, CapabilitiesSection, CommandSection,
-    FilesystemPermission, HookSection, PermissionsSection, PluginAuthorToml, PluginSection,
-    PromptSection, ServiceSection, ToolSection, ALEPH_PLUGIN_TOML,
+    FilesystemPermission, HookSection, PermissionsSection, PluginSection, PromptSection,
+    ServiceSection, ToolSection, ALEPH_PLUGIN_TOML,
 };
 pub use types::{
-    AlephExtensions, AlephRuntime, AuthorInfo, ConfigUiHint, FilesystemAccess, PluginManifest,
+    AlephExtensions, AlephRuntime, ConfigUiHint, FilesystemAccess, PanelUiManifest, PluginManifest,
     PluginPermission,
 };
 
@@ -146,41 +150,8 @@ pub const ALEPH_PLUGIN_MANIFEST: &str = "aleph.plugin.json";
 // Auto-Detection Parser
 // =============================================================================
 
-/// Parse a plugin manifest from a directory (async).
-///
-/// Checks formats in priority order:
-/// 1. `.claude-plugin/plugin.toml`
-/// 2. `.claude-plugin/plugin.json`
-/// 3. `aleph.plugin.toml` (deprecated)
-/// 4. Auto-discover from component directories
-pub async fn parse_manifest_from_dir(dir: &Path) -> ExtensionResult<PluginManifest> {
-    // 1. .claude-plugin/plugin.toml (CC-compat, preferred)
-    let cc_toml_path = dir.join(CC_PLUGIN_TOML);
-    if cc_toml_path.exists() {
-        return parse_cc_plugin_toml(dir).await;
-    }
-
-    // 2. .claude-plugin/plugin.json (CC-compat, read-only)
-    let cc_json_path = dir.join(CC_PLUGIN_JSON);
-    if cc_json_path.exists() {
-        return parse_cc_plugin_json(dir).await;
-    }
-
-    // 3. aleph.plugin.toml (deprecated — warn)
-    let aleph_toml_path = dir.join(ALEPH_PLUGIN_TOML);
-    if aleph_toml_path.exists() {
-        tracing::warn!(
-            "Plugin at {:?} uses deprecated aleph.plugin.toml format. Migrate to .claude-plugin/plugin.toml",
-            dir
-        );
-        return parse_aleph_plugin_toml(dir).await;
-    }
-
-    // 4. Auto-discover (no manifest file at all)
-    auto_discover_manifest(dir)
-}
-
-/// Synchronous version of `parse_manifest_from_dir`
+/// Parse a plugin manifest from a directory, consulting the process-wide
+/// manifest cache.
 pub fn parse_manifest_from_dir_sync(dir: &Path) -> ExtensionResult<PluginManifest> {
     parse_manifest_from_dir_sync_with(dir, None)
 }
@@ -290,7 +261,16 @@ pub fn auto_discover_manifest(dir: &Path) -> ExtensionResult<PluginManifest> {
             .and_then(|n| n.to_str())
             .unwrap_or("unknown");
         let id = sanitize_plugin_id(dir_name);
-        let mut manifest = PluginManifest::new(id.clone(), id, PluginKind::Static, ".".into());
+        // A plugin with no manifest but a `.mcp.json` sidecar IS an MCP
+        // plugin: the `mcp_server` effect keys on `kind == Mcp`, so a Static
+        // kind counted the servers and never started one. Same sidecar
+        // caliber as the CC parsers.
+        let (kind, entry) = if dir.join(cc_plugin_json::KIND_SIDECAR).is_file() {
+            (PluginKind::Mcp, cc_plugin_json::KIND_SIDECAR.to_string())
+        } else {
+            (PluginKind::Static, ".".to_string())
+        };
+        let mut manifest = PluginManifest::new(id.clone(), id, kind, entry.into());
         manifest.root_dir = dir.to_path_buf();
         Ok(manifest)
     } else {
@@ -484,19 +464,5 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let result = auto_discover_manifest(tmp.path());
         assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_parse_manifest_from_dir_async_toml() {
-        let temp_dir = TempDir::new().unwrap();
-        tokio::fs::write(
-            temp_dir.path().join("aleph.plugin.toml"),
-            "[plugin]\nid = \"async-toml-test\"\n",
-        )
-        .await
-        .unwrap();
-
-        let manifest = parse_manifest_from_dir(temp_dir.path()).await.unwrap();
-        assert_eq!(manifest.id, "async-toml-test");
     }
 }

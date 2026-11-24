@@ -348,7 +348,9 @@ fn read_member_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TeamMember> {
         agent_id: row.get(1)?,
         role: row.get(2)?,
         joined_at: row.get(3)?,
-        kind: row.get(4).unwrap_or(TeamMemberKind::Agent),
+        kind: row
+            .get::<_, Option<TeamMemberKind>>(4)?
+            .unwrap_or(TeamMemberKind::Agent),
         acp_harness_id: row.get(5).ok(),
         acp_cwd: row.get(6).ok(),
         acp_session_name: row.get(7).ok(),
@@ -440,15 +442,11 @@ impl TeamStore for SqliteTeamStore {
         })?;
         drop(conn);
 
-        // Members (including the leader) enroll via `add_member`, which emits
-        // one `TeamMemberAdded` each — so `member_ids` is empty here and the
-        // timeline stays complete without double-reporting membership.
         broadcast_team_event(
             &id,
             crate::event::AlephEvent::TeamCreated {
                 team_id: id.clone(),
                 name: input.name.clone(),
-                member_ids: Vec::new(),
             },
         )
         .await;
@@ -797,11 +795,13 @@ impl TeamStore for SqliteTeamStore {
                 // the leader's system prompt at render time, so an unbounded
                 // string gives whoever can call set_protocol an arbitrary
                 // prompt-injection sink against the leader.
-                let mut end = MAX_PROTOCOL_LEN;
-                while end > 0 && !t.is_char_boundary(end) {
-                    end -= 1;
+                let end = t.floor_char_boundary(MAX_PROTOCOL_LEN);
+                let capped = t.get(..end).unwrap_or("").trim();
+                if capped.is_empty() {
+                    None
+                } else {
+                    Some(capped.to_string())
                 }
-                Some(t[..end].to_string())
             } else {
                 Some(t.to_string())
             }

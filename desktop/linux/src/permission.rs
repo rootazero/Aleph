@@ -290,7 +290,7 @@ async fn status_for(kind: PermissionKind, session: SessionKind) -> PermissionSta
 ///
 /// "Dispatched" is therefore the honest claim: we know the binary started, not
 /// that the user did anything with it.
-async fn open_settings_panel() -> bool {
+fn open_settings_panel() -> bool {
     #[cfg(target_os = "linux")]
     {
         use std::process::Stdio;
@@ -352,7 +352,7 @@ impl PermissionCapability for LinuxPermission {
         let session = aleph_desktop::linux::session().kind;
         let status = status_for(permission, session).await;
         if !matches!(status, PermissionStatus::Granted) {
-            let _ = open_settings_panel().await;
+            let _ = open_settings_panel();
         }
         Ok(build_info(permission, status))
     }
@@ -383,7 +383,7 @@ impl PermissionCapability for LinuxPermission {
     }
 
     async fn open_settings(&self, _kind: PermissionKind) -> Result<bool> {
-        Ok(open_settings_panel().await)
+        Ok(open_settings_panel())
     }
 }
 

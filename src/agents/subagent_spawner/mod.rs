@@ -30,9 +30,7 @@ use crate::memory::extensions::MemoryExtensionRegistry;
 use crate::memory::store::raw_memory::RawMemoryStore;
 use crate::providers::AiProvider;
 use crate::routing::session_key::SessionKey;
-use crate::session::events::{
-    now_ms, MessageContent, SessionEvent, SessionEventRecord, TurnTrigger,
-};
+use crate::session::events::{now_ms, MessageContent, SessionEvent, TurnTrigger};
 use crate::session::service::{SessionId, SessionService};
 use crate::thinker::prompt_builder::{PromptBuilder, PromptConfig};
 use crate::tools::service::ToolService;
@@ -61,6 +59,7 @@ pub struct SpawnerBase {
     pub raw_memory_writer: Option<Arc<dyn RawMemoryStore>>,
     /// Optional capture-filter registry threaded into the delegation emit.
     pub capture_registry: Option<Arc<MemoryExtensionRegistry>>,
+    pub memory_runtime: Option<std::sync::Weak<crate::memory::runtime::MemoryRuntime>>,
     /// Parent agent identity stamped onto the emitted `RawMemory` row.
     /// `None` falls back to `"default"` to match the A2A path's behaviour.
     pub parent_agent_id: Option<String>,
@@ -553,6 +552,12 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
         //     is passed in so `ChainContextLayer` can tell the spawned agent it
         //     is nested and how much delegation budget remains.
         let resolved_model: Option<String> = req.model.map(str::to_string);
+        // An agent's own `token_budget` (frontmatter) caps the child's context
+        // window. The cap can only LOWER the window the model / operator
+        // config allows — never raise it past what the serving model
+        // accepts. Before this the field was parsed, validated and displayed
+        // but never reached the loop, so an author's declared budget was inert.
+        let agent_token_budget = req.agent_def.token_budget.map(u64::from);
         let token_budget = base.context_budget_config.as_ref().map_or_else(
             crate::thinker::prompt_budget::TokenBudget::default,
             |cfg| {
@@ -571,9 +576,11 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
                     ),
                     _ => cfg.clone(),
                 };
-                crate::thinker::prompt_budget::TokenBudget::from_context_window(
-                    refined.token_budget,
-                )
+                let window = match agent_token_budget {
+                    Some(cap) => refined.token_budget.min(cap),
+                    None => refined.token_budget,
+                };
+                crate::thinker::prompt_budget::TokenBudget::from_context_window(window)
             },
         );
         // Seed the prompt token gate from the cross-run calibration
@@ -803,6 +810,7 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             &child_id,
             // rust-doctor-disable-next-line excessive-clone
             req.cancel.clone(),
+            agent_token_budget,
         );
 
         // §3.2 overflow-tier parity: was `None`, so a subagent's oversized
@@ -992,7 +1000,24 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
                 // background sub-agents need this event in the session
                 // log; silently dropping an emit failure would make the
                 // sub-agent look "still running" forever after a restart.
-                let summary = result.final_text.clone().unwrap_or_default();
+                // A child that ended without a final text must not be recorded
+                // as a completed run carrying an EMPTY summary: the durable
+                // record would read as "the sub-agent finished and had nothing
+                // to say", while the truth is "the sub-agent ended without
+                // producing an answer" — the recovery face that replays this
+                // event would otherwise present a missing answer as a
+                // finished one. The marker is self-describing, and names the
+                // iteration limit when that is what ended the child.
+                let summary = match result.final_text.clone() {
+                    Some(text) if !text.trim().is_empty() => text,
+                    _ if hit_limit => {
+                        "[no final response: the sub-agent stopped at its iteration limit]"
+                            .to_string()
+                    }
+                    _ => {
+                        "[no final response: the sub-agent ended without producing one]".to_string()
+                    }
+                };
                 if let Some(ref parent_str) = base.parent_session_id {
                     if let Some(parent_id) = parent_session_id_of(parent_str) {
                         if let Err(e) = base
@@ -1022,7 +1047,6 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
                 //    can distil parent-side lessons. Skipped silently when no writer is
                 //    threaded through (legacy callers, tests, off-by-config).
                 if let Some(writer) = base.raw_memory_writer.clone() {
-                    let summary = result.final_text.clone().unwrap_or_default();
                     let parent_id = base
                         .parent_agent_id
                         .clone()
@@ -1035,7 +1059,9 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
                         base.parent_session_id.clone(),
                         req.agent_def.id.clone(),
                         base.capture_registry.clone(),
-                    );
+                        base.memory_runtime.clone(),
+                    )
+                    .await;
                 }
 
                 Ok(result)
@@ -1048,8 +1074,8 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
         None => body.await,
     };
 
-    // P3 Stage I — explicit MCP scope shutdown on the success path. Errors and
-    // cancels leak the scope to the Drop safety net (which logs `leaked: true`).
+    // P3 Stage I & H — explicit cleanup on the success path. Errors and cancels
+    // leak to the Drop safety net (which logs `leaked: true`).
     if result.is_ok() {
         if let Some(scope) = mcp_scope {
             if let Err(e) = scope.shutdown().await {
@@ -1059,12 +1085,6 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
                 );
             }
         }
-    }
-
-    // P3 Stage H — explicit cleanup on the success path. Errors and cancels
-    // leak the handle to the Drop safety net (which logs `leaked: true` via
-    // TraceSink).
-    if result.is_ok() {
         if let Some(h) = worktree_handle {
             if let Err(e) = h.cleanup().await {
                 tracing::error!(
@@ -1168,19 +1188,9 @@ async fn extract_run_result(
             SessionEvent::AssistantMessage { content, .. } => {
                 iterations = iterations.saturating_add(1);
                 // Keep the most recent assistant text as the "final" answer.
-                if !content.text.is_empty() {
-                    final_text = Some(content.text.clone());
-                } else if is_last_assistant(events, rec) {
-                    // Edge case: the *last* AssistantMessage is pure tool_use
-                    // (no text) — the run ended mid-work (typically a capped
-                    // run, `hit_limit=true`). Clear any earlier textual answer
-                    // so stale mid-run narration is never presented as the
-                    // final result; the subagent tool surfaces the cap via
-                    // `hit_iteration_limit` instead. The dedicated
-                    // `final_text_cleared_when_…` regression test below
-                    // asserts this behavior.
-                    final_text = None;
-                }
+                // If the latest assistant message has empty text (pure tool_use),
+                // final_text is cleared to None so stale mid-run narration is not presented.
+                final_text = (!content.text.is_empty()).then(|| content.text.clone());
             }
             SessionEvent::ToolCallRequested { .. } => {
                 tool_calls_made = tool_calls_made.saturating_add(1);
@@ -1314,6 +1324,7 @@ fn child_context_triple(
     agent_id: &str,
     child_id: &SessionId,
     cancel: CancellationToken,
+    agent_token_budget: Option<u64>,
 ) -> ContextTriple {
     let metered_cheap: Option<Arc<dyn AiProvider>> =
         base.cheap_summary_provider.as_ref().map(|cheap| {
@@ -1324,8 +1335,17 @@ fn child_context_triple(
                 format!("compactor:{agent_id}"),
             )) as Arc<dyn AiProvider>
         });
+    // The agent's declared budget caps the child's context window (never
+    // raises it) — the same cap the prompt gate above applies.
+    let effective_budget_config = base.context_budget_config.as_ref().map(|cfg| {
+        let mut capped = cfg.clone();
+        if let Some(cap) = agent_token_budget {
+            capped.token_budget = capped.token_budget.min(cap);
+        }
+        capped
+    });
     build_context_triple(
-        base.context_budget_config.as_ref(),
+        effective_budget_config.as_ref(),
         llm,
         metered_cheap.as_ref(),
         agent_id,
@@ -1435,15 +1455,6 @@ fn build_context_triple(
     }
     let fabric = Arc::new(builder.build());
     (Some(budget), Some(compactor), Some(fabric))
-}
-
-/// Whether `target` is the last `AssistantMessage` in `events` (by seq).
-fn is_last_assistant(events: &[SessionEventRecord], target: &SessionEventRecord) -> bool {
-    events
-        .iter()
-        .rev()
-        .find(|r| matches!(r.event, SessionEvent::AssistantMessage { .. }))
-        .is_some_and(|r| r.seq == target.seq)
 }
 
 #[cfg(test)]

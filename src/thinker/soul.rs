@@ -233,25 +233,30 @@ impl SoulManifest {
     fn split_frontmatter(content: &str) -> Result<(String, String), SoulLoadError> {
         let trimmed = content.trim_start();
 
-        if !trimmed.starts_with("---") {
+        let rest = trimmed
+            .strip_prefix("---\r\n")
+            .or_else(|| trimmed.strip_prefix("---\n"));
+        let Some(rest) = rest else {
             // No frontmatter, entire content is body
             return Ok((String::new(), content.to_string()));
-        }
+        };
 
-        // Find the closing ---
-        let after_first = trimmed.get(3..).unwrap_or_default();
-        if let Some(end_pos) = after_first.find("\n---") {
-            let frontmatter = after_first
-                .get(..end_pos)
-                .unwrap_or_default()
-                .trim()
-                .to_string();
-            let body = after_first
-                .get(end_pos + 4..)
-                .unwrap_or_default()
-                .trim_start()
-                .to_string();
-            Ok((frontmatter, body))
+        let found = rest
+            .split_once("\r\n---\r\n")
+            .or_else(|| rest.split_once("\n---\n"))
+            .or_else(|| rest.split_once("\r\n---\n"))
+            .or_else(|| rest.split_once("\n---\r\n"));
+
+        if let Some((frontmatter, body)) = found {
+            Ok((
+                frontmatter.trim().to_string(),
+                body.trim_start().to_string(),
+            ))
+        } else if let Some(stripped) = rest
+            .strip_suffix("\r\n---")
+            .or_else(|| rest.strip_suffix("\n---"))
+        {
+            Ok((stripped.trim().to_string(), String::new()))
         } else {
             Err(SoulLoadError::Parse(
                 "Unclosed YAML frontmatter".to_string(),

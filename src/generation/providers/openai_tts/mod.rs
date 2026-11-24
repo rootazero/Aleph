@@ -221,8 +221,8 @@ impl OpenAiTtsProvider {
     }
 
     /// Get the full URL for the speech endpoint
-    fn speech_url(&self) -> String {
-        self.endpoint.clone()
+    fn speech_url(&self) -> &str {
+        &self.endpoint
     }
 
     /// Build the API request body from a `GenerationRequest`
@@ -365,7 +365,7 @@ impl GenerationProvider for OpenAiTtsProvider {
             // Make API request
             let response = self
                 .client
-                .post(&url)
+                .post(url)
                 .header("Authorization", format!("Bearer {}", self.api_key))
                 .header("Content-Type", "application/json")
                 .json(&body)

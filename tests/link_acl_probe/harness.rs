@@ -198,6 +198,8 @@ impl LinkAclHarness {
                 allow_from: vec![],
                 group_allow_from: vec![],
                 require_mention: false,
+                // Per-room mention gating (the room key is the chat id).
+                room_require_mention: Default::default(),
                 bot_name: None,
                 // All-empty slash-access → gating OFF (equivalent to the prior
                 // four empty ACL vecs now folded into SlashAccessConfig).

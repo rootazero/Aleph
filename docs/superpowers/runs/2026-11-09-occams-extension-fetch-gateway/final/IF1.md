@@ -1,0 +1,24 @@
+# Final verdicts — IF1
+
+| ID | Verdict | Severity | Reason |
+|---|---|---|---|
+| IF1-01 | REFUTED | P1 | Lines 113-119 show `AccessController::new` is called but no `expect` panic in the excerpt; claim not proven / `AccessController::new` behavior is not shown; lines 113-119 only insert the synthetic controller and do not prove the claimed resolver panic. |
+| IF1-02 | UPHELD | P1 | Lines 38, 42, 47 insert duplicate keys without checking; later overwrites earlier silently / Lines 35-48 use unconditional `HashMap::insert`, so duplicate account/group/topic keys silently replace earlier policy. |
+| IF1-03 | DOWNGRADE | P1 | Line 205 shows `block_streaming` exists but no merge/usage visible; dead field not P1 / Lines 205 and 45-48 expose `block_streaming` but omit it from `ResolvedConfig`; the excerpt does not show it reaching delivery. |
+| IF1-04 | UPHELD | P1 | Lines 19-24 show proxy failure returns `Bot::new(token)` directly, bypassing intended route / Lines 20-24 explicitly log a warning and construct the no-proxy fallback after proxy-client build failure. |
+| IF1-05 | UPHELD | P1 | Line 140 discards send result with `let _ =`; line 143 returns `Ok(())` regardless / Lines 139-143 discard the `send` result with `let _ = ...` and unconditionally return `Ok(())`. |
+| IF1-06 | UPHELD | P1 | Lines 364-369 show loop logs warnings, returns `"0"` on all-fail; line 372 returns success / Lines 363-373 log attachment errors, assign placeholder ID `0`, and return success without requiring a successful attachment. |
+| IF1-07 | DOWNGRADE | P1 | Lines 259-262 return `true` for AdminOnly without checking admin; comment admits caller should check / Lines 259-262 say the caller checks admin status; the excerpt does not prove an unauthorized caller reaches this helper. |
+| IF1-08 | REFUTED | P1 | tie-break(88apiclaude/claude-opus-5-5): Excerpt shows diagnostic `getUpdates` request but no offset advance code visible in lines 107-123. Evidence of actual offset consumption missing. |
+| IF1-09 | UPHELD | P1 | Lines 661-675 show poll answer builds InboundMessage and sends without access check / Lines 661-675 show poll answers entering a handler without an access check; no equivalent authorization gate appears in the cited path. |
+| IF1-10 | UPHELD | P1 | Lines 745-759 spawn health loop with no cancel; stop() at 787-798 only signals shutdown_tx / Lines 745-754 spawn an unbounded health-check loop, while lines 790-794 stop only polling shutdown senders. |
+| IF1-11 | UPHELD | P1 | Line 153 locks tracker, line 162 awaits send while locked, line 163 updates after / Lines 153-162 hold the tracker mutex across `send_text_message().await`, making the lock span network I/O. |
+| IF1-12 | UPHELD | P1 | Lines 179-183 unconditionally write/finalize error without policy check / Lines 179-183 unconditionally write and finalize an error message without checking the effective error policy. |
+| IF1-13 | UPHELD | P1 | Lines 43-57 construct ResolvedConfig with hardcoded defaults, not chat-specific policy / Lines 43-62 construct delivery with synthetic account/token/default policy and a fresh cooldown, rather than effective resolved configuration. |
+| IF1-14 | UPHELD | P1 | Line 76 hardcodes `id: MessageId::new("1")` for synthetic inbound used by reactions / Lines 75-90 construct the synthetic inbound message with ID `1`, which the orchestrator receives as its inbound context. |
+| IF1-15 | DOWNGRADE | P1 | Lines 102-115 send event then immediately call deliver_run_media without finalize ack / Lines 103-115 send `RunComplete` then immediately deliver media; the comment asserts ordering “in practice,” but no completion acknowledgement is shown. |
+| IF1-16 | UPHELD | P1 | Lines 809-812 find first account where resolve succeeds; account fallback at (0, None) matches first / Lines 809-813 select the first account whose resolver entry exists; the excerpt does not prioritize explicit mappings across accounts. |
+| IF1-17 | UPHELD | P1 | Lines 1023-1034 clone only first bot instance for approval capability / Lines 1020-1034 explicitly select `bot_instances.first()` and construct the capability from that single account. |
+| IF1-18 | UPHELD | P2 | Lines 250-256 show get-check-insert race; concurrent calls both return true for Once / Lines 250-256 perform a non-atomic `get` followed by `insert`; concurrent callers can both observe no cooldown and return `true`. |
+| IF1-19 | DOWNGRADE | P2 | Line 92 sets last_update before send at 94; failure leaves throttle consumed with no message / Lines 90-94 set `last_update` before the first send and propagate failure, so the defect is a delayed retry rather than data loss. |
+| IF1-20 | UPHELD | P2 | Lines 75-89 CAS succeeds but persistence error at 86-88 only logs, returns regardless / Lines 75-89 advance the in-memory offset before persistence, and the excerpt shows persistence failure is only logged, allowing restart reprocessing. |

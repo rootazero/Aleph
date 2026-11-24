@@ -33,6 +33,8 @@
 //! The Gateway stays the only authority on who the User is; this module never
 //! stores a role and never derives identity from a URL.
 
+#[cfg(target_arch = "wasm32")]
+use aleph_protocol::native_credentials::COMMAND_DELETE;
 use aleph_protocol::native_credentials::{
     DeviceConnectCredential, PanelCredentialLease, COMMAND_LOAD, COMMAND_SAVE,
 };
@@ -44,7 +46,7 @@ use std::sync::{Arc, Mutex};
 /// Why a Bridge call failed. Carries no backend text on purpose.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BridgeError {
-    /// There is no Tauri IPC to call (plain browser, or the shell is missing).
+    /// There is no native IPC to call (plain browser, or the shell is missing).
     Unavailable,
     /// The shell refused or failed the command (ACL, lease, keyring, ...).
     Rejected,
@@ -129,8 +131,7 @@ pub fn native_expected() -> bool {
         .document()
         .and_then(|d| d.document_element())
         .and_then(|e| e.get_attribute("data-shell"))
-        .as_deref()
-        == Some("aleph-tauri");
+        .is_some_and(|shell| matches!(shell.as_str(), "aleph-tauri" | "aleph-nsh"));
     native_expected_from(marker, shell_attribute, has("__TAURI_INTERNALS__"))
 }
 
@@ -200,6 +201,100 @@ async fn wasm_invoke(command: &'static str, args: Value) -> Result<Value, Bridge
     if value.is_undefined() {
         return Ok(Value::Null);
     }
+    let text = JSON::stringify(&value)
+        .map_err(|_| BridgeError::Malformed)?
+        .as_string()
+        .ok_or(BridgeError::Malformed)?;
+    serde_json::from_str(&text).map_err(|_| BridgeError::Malformed)
+}
+
+/// The explicit native IPC selector. NSH and Tauri have separate transports;
+/// NSH never emulates Tauri's private invoke object.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NativeIpc;
+
+#[cfg(target_arch = "wasm32")]
+impl BridgeIpc for NativeIpc {
+    fn invoke(
+        &self,
+        command: &'static str,
+        args: Value,
+    ) -> impl Future<Output = Result<Value, BridgeError>> {
+        async move {
+            if nsh_shell_present() {
+                nsh_invoke(command, args).await
+            } else {
+                wasm_invoke(command, args).await
+            }
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl BridgeIpc for NativeIpc {
+    fn invoke(
+        &self,
+        _command: &'static str,
+        _args: Value,
+    ) -> impl Future<Output = Result<Value, BridgeError>> {
+        std::future::ready(Err(BridgeError::Unavailable))
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn nsh_shell_present() -> bool {
+    let Some(window) = web_sys::window() else {
+        return false;
+    };
+    // Presence selects the transport even if malformed: never fall through to
+    // Tauri or browser storage when an NSH bridge failed to initialize.
+    js_sys::Reflect::has(
+        &window,
+        &wasm_bindgen::JsValue::from_str("__alephShellBridge"),
+    )
+    .unwrap_or(false)
+        || window
+            .document()
+            .and_then(|document| document.document_element())
+            .and_then(|element| element.get_attribute("data-shell"))
+            .as_deref()
+            == Some("aleph-nsh")
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn nsh_shell_present() -> bool {
+    false
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn nsh_invoke(command: &'static str, args: Value) -> Result<Value, BridgeError> {
+    if !matches!(command, COMMAND_LOAD | COMMAND_SAVE | COMMAND_DELETE) {
+        return Err(BridgeError::Malformed);
+    }
+    use js_sys::{Function, Promise, Reflect, JSON};
+    use wasm_bindgen::{JsCast, JsValue};
+    use wasm_bindgen_futures::JsFuture;
+
+    let window = web_sys::window().ok_or(BridgeError::Unavailable)?;
+    let bridge = Reflect::get(&window, &JsValue::from_str("__alephShellBridge"))
+        .map_err(|_| BridgeError::Unavailable)?;
+    let invoke: Function = Reflect::get(&bridge, &JsValue::from_str("invoke"))
+        .map_err(|_| BridgeError::Unavailable)?
+        .dyn_into()
+        .map_err(|_| BridgeError::Unavailable)?;
+    let js_args = if args.is_null() {
+        JsValue::NULL
+    } else {
+        JSON::parse(&args.to_string()).map_err(|_| BridgeError::Malformed)?
+    };
+    let promise: Promise = invoke
+        .call2(&bridge, &JsValue::from_str(command), &js_args)
+        .map_err(|_| BridgeError::Unavailable)?
+        .dyn_into()
+        .map_err(|_| BridgeError::Unavailable)?;
+    let value = JsFuture::from(promise)
+        .await
+        .map_err(|_| BridgeError::Rejected)?;
     let text = JSON::stringify(&value)
         .map_err(|_| BridgeError::Malformed)?
         .as_string()
@@ -543,17 +638,22 @@ where
     };
 
     let mut params = json!({ "device_name": req.device_name });
-    match &kind {
-        Kind::Bootstrap { ticket, device_id } => {
-            params["device_id"] = json!(device_id);
-            params["bootstrap_ticket"] = json!(ticket);
-        }
-        Kind::Stored { credential } => {
-            params["device_id"] = json!(credential.device_id);
-            params["device_token"] = json!(credential.device_token);
-        }
-        Kind::None => {
-            params["device_id"] = json!(req.auth.ephemeral_id(req.new_device_id));
+    if let Some(map) = params.as_object_mut() {
+        match &kind {
+            Kind::Bootstrap { ticket, device_id } => {
+                map.insert("device_id".to_string(), json!(device_id));
+                map.insert("bootstrap_ticket".to_string(), json!(ticket));
+            }
+            Kind::Stored { credential } => {
+                map.insert("device_id".to_string(), json!(credential.device_id));
+                map.insert("device_token".to_string(), json!(credential.device_token));
+            }
+            Kind::None => {
+                map.insert(
+                    "device_id".to_string(),
+                    json!(req.auth.ephemeral_id(req.new_device_id)),
+                );
+            }
         }
     }
     let presented = !matches!(kind, Kind::None);

@@ -97,7 +97,7 @@ pub async fn handle_update(
                 request.id,
                 INVALID_PARAMS,
                 format!("Invalid rerank config: {e}"),
-            )
+            );
         }
     };
 
@@ -106,6 +106,11 @@ pub async fn handle_update(
     if !rerank_config.api_key.is_empty() {
         if let Err(e) = vault.store_secret(&vault_key(&provider_name), &rerank_config.api_key) {
             error!(error = %e, "Failed to store rerank API key in vault");
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                "Failed to store rerank API key",
+            );
         }
     }
     // Clear api_key before saving to config (it's in vault now)
@@ -168,7 +173,7 @@ pub async fn handle_test(
                 request.id,
                 INVALID_PARAMS,
                 format!("Invalid rerank config: {e}"),
-            )
+            );
         }
     };
 
@@ -234,7 +239,14 @@ mod tests {
     async fn test_handle_get_default() {
         let config = Arc::new(RwLock::new(Config::default()));
         let store = Arc::new(crate::gateway::security::SecurityStore::in_memory().unwrap());
-        let vault = Arc::new(SharedTokenManager::new(store, "/tmp/test_rerank.vault"));
+        // The vault lives in its OWN directory: `SecretVault::prepare_parent`
+        // tightens the parent to 0700, which a shared `/tmp` does not allow
+        // for a non-root user (EPERM).
+        let vault_dir = tempfile::tempdir().unwrap();
+        let vault = Arc::new(SharedTokenManager::new(
+            store,
+            vault_dir.path().join("test_rerank.vault"),
+        ));
         let _ = vault.generate_token();
 
         let request = JsonRpcRequest::with_id("rerank_config.get", None, serde_json::json!(1));
@@ -251,9 +263,13 @@ mod tests {
     async fn test_handle_get_reports_has_api_key_without_echoing_secret() {
         let config = Arc::new(RwLock::new(Config::default()));
         let store = Arc::new(crate::gateway::security::SecurityStore::in_memory().unwrap());
+        // The vault lives in its OWN directory: `SecretVault::prepare_parent`
+        // tightens the parent to 0700, which a shared `/tmp` does not allow
+        // for a non-root user (EPERM).
+        let vault_dir = tempfile::tempdir().unwrap();
         let vault = Arc::new(SharedTokenManager::new(
             store,
-            "/tmp/test_rerank_haskey.vault",
+            vault_dir.path().join("test_rerank_haskey.vault"),
         ));
         let _ = vault.generate_token();
         // Active provider defaults to "jina"; seed its vault key.
@@ -299,7 +315,7 @@ mod tests {
         let store = Arc::new(crate::gateway::security::SecurityStore::in_memory().unwrap());
         let vault = Arc::new(SharedTokenManager::new(
             store,
-            "/tmp/test_rerank_update.vault",
+            dir.path().join("test_rerank_update.vault"),
         ));
         let _ = vault.generate_token();
 
@@ -343,9 +359,10 @@ mod tests {
         let config = Arc::new(RwLock::new(Config::default()));
         let event_bus = Arc::new(GatewayEventBus::new());
         let store = Arc::new(crate::gateway::security::SecurityStore::in_memory().unwrap());
+        let vault_dir = tempfile::tempdir().unwrap();
         let vault = Arc::new(SharedTokenManager::new(
             store,
-            "/tmp/test_rerank_invalid.vault",
+            vault_dir.path().join("test_rerank_invalid.vault"),
         ));
         let _ = vault.generate_token();
 

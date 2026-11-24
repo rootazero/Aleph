@@ -38,19 +38,42 @@ use crate::capability::diagnostic_control::{
 };
 use crate::capability::facade::{CapabilityChange, Cursor, Scope};
 use crate::capability::ownership::{OwnerGeneration, OwnershipChange, OwnershipTree};
+use crate::capability::special::{CapabilityHandlerRegistry, SpecialPublication};
 use crate::capability::zahir_facade::{FacadeEntriesSnapshot, ZahirFacade};
 use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
-use crate::sync_primitives::Arc;
+use crate::sync_primitives::{Arc, AtomicBool, AtomicU64, Mutex, Ordering, PoisonError, Weak};
 use crate::tools::registry::{
     RegistryEntry, RegistryPublication, RegistrySnapshot, ToolHandlerRegistry,
 };
 use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Mutex, Weak};
 use std::time::Duration;
 use tokio::sync::{broadcast, Notify};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
+
+#[cfg(test)]
+static REGISTRATION_ROLLBACK_HOOK: std::sync::OnceLock<Mutex<Option<Arc<dyn Fn() + Send + Sync>>>> =
+    std::sync::OnceLock::new();
+
+#[cfg(test)]
+fn run_registration_rollback_hook() {
+    let hook = REGISTRATION_ROLLBACK_HOOK
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .take();
+    if let Some(hook) = hook {
+        hook();
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn set_registration_rollback_hook(hook: Arc<dyn Fn() + Send + Sync>) {
+    *REGISTRATION_ROLLBACK_HOOK
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(hook);
+}
 
 /// Per-consumer pending-event capacity (Ruling14). The default consumer
 /// applies snapshots into run-loop-readable state and effectively never
@@ -102,21 +125,32 @@ pub struct HostSnapshot {
     /// Registry entries in scope, keyed by tool name, SHARED behind an [`Arc`]
     /// so cloning a snapshot is cheap.
     pub entries: Arc<HashMap<String, RegistryEntry>>,
+    /// Pure Resource descriptors, never callable registry entries.
+    pub resources: Vec<crate::capability::descriptor::CapabilityDescriptor>,
     /// The registry revision `entries` were frozen from (registry cut).
     pub registry_cursor: Cursor,
     /// The registry close flag from the same frozen state (registry cut).
     pub registry_closed: bool,
     /// Owner generation for every id in `entries` (identical membership).
     pub owner_generations: HashMap<CapabilityId, OwnerGeneration>,
+    /// Special capability descriptors projected by the same facade cut. These
+    /// are callable capabilities, not ordinary Resource descriptors.
+    pub specials: Vec<crate::capability::descriptor::CapabilityDescriptor>,
 }
+
+#[cfg(test)]
+#[path = "projection_host_memory_tests.rs"]
+mod memory_tests;
 
 impl HostSnapshot {
     fn from_facade(f: FacadeEntriesSnapshot) -> Self {
         HostSnapshot {
             entries: f.entries,
+            resources: f.resources,
             registry_cursor: f.registry_cursor,
             registry_closed: f.registry_closed,
             owner_generations: f.owner_generations,
+            specials: f.specials,
         }
     }
 }
@@ -144,6 +178,10 @@ impl std::fmt::Debug for HostSnapshot {
             .field("registry_cursor", &self.registry_cursor)
             .field("registry_closed", &self.registry_closed)
             .field("owner_generations", &self.owner_generations)
+            .field(
+                "special_ids",
+                &self.specials.iter().map(|d| &d.id).collect::<Vec<_>>(),
+            )
             .finish()
     }
 }
@@ -209,7 +247,7 @@ impl ConsumerState {
     fn last_cursor(&self) -> Cursor {
         self.queue
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .last_cursor
     }
 
@@ -220,7 +258,7 @@ impl ConsumerState {
         self.closed.store(true, Ordering::SeqCst);
         self.queue
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .items
             .clear();
         self.wake.notify_waiters();
@@ -229,7 +267,7 @@ impl ConsumerState {
     fn try_pop(&self) -> Option<ProjectionEvent> {
         self.queue
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .items
             .pop_front()
     }
@@ -238,10 +276,7 @@ impl ConsumerState {
     /// backlog with `Invalidated` + the fresh replacement `Snapshot`.
     /// Returns `true` iff overflow fired and the backlog was cleared.
     fn enqueue_snapshot(&self, snapshot: HostSnapshot) -> bool {
-        let mut q = self
-            .queue
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut q = self.queue.lock().unwrap_or_else(PoisonError::into_inner);
         let backlog_cleared = if q.items.len() >= self.capacity {
             q.items.clear();
             q.items.push_back(ProjectionEvent::Invalidated);
@@ -261,10 +296,7 @@ impl ConsumerState {
     /// ONE atomic unit: the pair is guaranteed to fit together, clearing the
     /// stale backlog first when it would not.
     fn enqueue_invalidation(&self, snapshot: HostSnapshot) {
-        let mut q = self
-            .queue
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut q = self.queue.lock().unwrap_or_else(PoisonError::into_inner);
         if q.items.len() + 2 > self.capacity {
             q.items.clear();
         }
@@ -286,10 +318,7 @@ impl ConsumerState {
         cursor: Cursor,
         replacement: HostSnapshot,
     ) {
-        let mut q = self
-            .queue
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut q = self.queue.lock().unwrap_or_else(PoisonError::into_inner);
         if cursor <= q.last_cursor {
             return;
         }
@@ -472,6 +501,8 @@ impl ApplierTestGate {
 struct HostInner {
     facade: Arc<ZahirFacade>,
     registry: ToolHandlerRegistry,
+    /// The sole special-capability record source mounted with this host.
+    specials: CapabilityHandlerRegistry,
     /// The owner authority this host is mounted on. Also exposed (by Arc
     /// identity) so diagnostic control can refuse a second authority.
     tree: Arc<OwnershipTree>,
@@ -530,28 +561,137 @@ impl ProjectionHost {
     /// live change streams are subscribed before the first snapshot.
     #[must_use]
     pub fn mount(registry: ToolHandlerRegistry, tree: Arc<OwnershipTree>) -> Arc<Self> {
-        Self::mount_with_diagnostics(registry, tree, true)
+        Self::mount_internal(registry, tree, DEFAULT_PENDING_CAPACITY, true)
     }
 
     /// Mount the canonical projection host with startup-scoped diagnostics.
     /// `false` leaves the ordinary source/delivery path unchanged while
     /// omitting all diagnostic hold/timer machinery.
+    ///
+    /// Test fixture: production mounts through `mount_with_memory` /
+    /// `mount_with_runtime_and_events`, so this stays out of the runtime
+    /// surface (severed-wire audit 2026-11-20).
+    #[cfg(test)]
     #[must_use]
     pub fn mount_with_diagnostics(
         registry: ToolHandlerRegistry,
         tree: Arc<OwnershipTree>,
         diagnostics_enabled: bool,
     ) -> Arc<Self> {
-        let facade = ZahirFacade::new(registry.clone(), Arc::clone(&tree));
+        Self::mount_internal(
+            registry,
+            tree,
+            DEFAULT_PENDING_CAPACITY,
+            diagnostics_enabled,
+        )
+    }
+
+    /// Mount the canonical Tool sources plus the concrete Memory Resource.
+    #[must_use]
+    pub fn mount_with_memory(
+        registry: ToolHandlerRegistry,
+        tree: Arc<OwnershipTree>,
+        memory: Arc<crate::memory::runtime::MemoryRuntime>,
+        diagnostics_enabled: bool,
+    ) -> Arc<Self> {
+        let facade = ZahirFacade::new_with_memory(registry.clone(), tree.clone(), memory);
+        Self::mount_sources(
+            registry,
+            tree,
+            facade,
+            CapabilityHandlerRegistry::new(),
+            DEFAULT_PENDING_CAPACITY,
+            diagnostics_enabled,
+        )
+    }
+
+    /// Mount the startup Policy on the same canonical Tool and Memory sources.
+    #[must_use]
+    pub fn mount_with_policy(
+        registry: ToolHandlerRegistry,
+        tree: Arc<OwnershipTree>,
+        memory: Arc<crate::memory::runtime::MemoryRuntime>,
+        policy: Arc<crate::capability::policy::PolicyEngine>,
+        diagnostics_enabled: bool,
+    ) -> Arc<Self> {
+        let facade =
+            ZahirFacade::new_with_memory_and_policy(registry.clone(), tree.clone(), memory, policy);
+        Self::mount_sources(
+            registry,
+            tree,
+            facade,
+            CapabilityHandlerRegistry::new(),
+            DEFAULT_PENDING_CAPACITY,
+            diagnostics_enabled,
+        )
+    }
+
+    /// Mount the actual startup event source, shared by facade subscriptions and audit.
+    #[must_use]
+    pub fn mount_with_runtime_and_events(
+        registry: ToolHandlerRegistry,
+        tree: Arc<OwnershipTree>,
+        memory: Arc<crate::memory::runtime::MemoryRuntime>,
+        specials: CapabilityHandlerRegistry,
+        policy: Arc<crate::capability::policy::PolicyEngine>,
+        events: Arc<crate::capability::events::InMemoryEventStream>,
+        diagnostics_enabled: bool,
+    ) -> Arc<Self> {
+        let facade = ZahirFacade::new_with_memory_and_policy_and_specials_and_events(
+            registry.clone(),
+            tree.clone(),
+            memory,
+            policy,
+            specials.clone(),
+            events,
+        );
+        Self::mount_sources(
+            registry,
+            tree,
+            facade,
+            specials,
+            DEFAULT_PENDING_CAPACITY,
+            diagnostics_enabled,
+        )
+    }
+
+    fn mount_internal(
+        registry: ToolHandlerRegistry,
+        tree: Arc<OwnershipTree>,
+        capacity: usize,
+        diagnostics_enabled: bool,
+    ) -> Arc<Self> {
+        let facade = ZahirFacade::new(registry.clone(), tree.clone());
+        Self::mount_sources(
+            registry,
+            tree,
+            facade,
+            CapabilityHandlerRegistry::new(),
+            capacity,
+            diagnostics_enabled,
+        )
+    }
+
+    fn mount_sources(
+        registry: ToolHandlerRegistry,
+        tree: Arc<OwnershipTree>,
+        facade: Arc<ZahirFacade>,
+        specials: CapabilityHandlerRegistry,
+        capacity: usize,
+        diagnostics_enabled: bool,
+    ) -> Arc<Self> {
         // Subscribe to BOTH live sources BEFORE reading the initial snapshot
         // (subscribe-before-snapshot).
         let registry_rx = registry.subscribe_publications();
         let ownership_rx = tree.subscribe_changes();
+        let special_rx = specials.subscribe();
 
         let default_scope = Scope::default();
         let initial = HostSnapshot::from_facade(facade.snapshot_entries_in_scope(&default_scope));
-        let default_consumer =
-            Arc::new(ConsumerState::new(default_scope, DEFAULT_PENDING_CAPACITY));
+        let default_consumer = Arc::new(ConsumerState::new(
+            default_scope,
+            capacity.max(MIN_PENDING_CAPACITY),
+        ));
         // Enqueue the initial snapshot into the DEFAULT delivery queue BEFORE
         // the source/applier tasks spawn, so the REAL default applier applies
         // it (Ruling16). `applied` starts `None`; no publisher state may
@@ -561,6 +701,7 @@ impl ProjectionHost {
         let inner = Arc::new(HostInner {
             facade,
             registry: registry.clone(),
+            specials,
             tree,
             publish: Mutex::new(()),
             consumers: Mutex::new(ConsumerMap {
@@ -610,6 +751,7 @@ impl ProjectionHost {
             inner.cancel.clone(),
             registry_rx,
             ownership_rx,
+            special_rx,
         ));
         let applier = tokio::spawn(applier_worker(
             Arc::clone(&default_consumer),
@@ -619,11 +761,11 @@ impl ProjectionHost {
         *inner
             .source_task
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(source);
+            .unwrap_or_else(PoisonError::into_inner) = Some(source);
         *inner
             .applier_task
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(applier);
+            .unwrap_or_else(PoisonError::into_inner) = Some(applier);
 
         host
     }
@@ -633,88 +775,18 @@ impl ProjectionHost {
     /// overflow replacement semantics. The capacity is clamped to
     /// `MIN_PENDING_CAPACITY` because `Invalidated` + replacement `Snapshot`
     /// must fit as one atomic pair.
+    ///
+    /// Test fixture: production mounts through `mount_with_memory` /
+    /// `mount_with_runtime_and_events`, so this stays out of the runtime
+    /// surface (severed-wire audit 2026-11-20).
+    #[cfg(test)]
     #[must_use]
     pub fn mount_with_capacity(
         registry: ToolHandlerRegistry,
         tree: Arc<OwnershipTree>,
         capacity: usize,
     ) -> Arc<Self> {
-        let facade = ZahirFacade::new(registry.clone(), Arc::clone(&tree));
-        let registry_rx = registry.subscribe_publications();
-        let ownership_rx = tree.subscribe_changes();
-
-        let default_scope = Scope::default();
-        let initial = HostSnapshot::from_facade(facade.snapshot_entries_in_scope(&default_scope));
-        let default_consumer = Arc::new(ConsumerState::new(
-            default_scope,
-            capacity.max(MIN_PENDING_CAPACITY),
-        ));
-        default_consumer.enqueue_snapshot(initial);
-
-        let inner = Arc::new(HostInner {
-            facade,
-            registry: registry.clone(),
-            tree,
-            publish: Mutex::new(()),
-            consumers: Mutex::new(ConsumerMap {
-                next_id: 1,
-                by_id: HashMap::new(),
-            }),
-            default_consumer: Arc::clone(&default_consumer),
-            applied: Mutex::new(AppliedState {
-                snapshot: None,
-                closed: false,
-                applied_invalidation_count: 0,
-                applied_replacement_count: 0,
-                awaiting_replacement: false,
-                last_replacement_registry_cursor: None,
-                last_replacement_tool_ids: Vec::new(),
-            }),
-            readiness: Notify::new(),
-            cancel: CancellationToken::new(),
-            closed: AtomicBool::new(false),
-            source_task: Mutex::new(None),
-            applier_task: Mutex::new(None),
-            completion: Mutex::new(CompletionState {
-                started: false,
-                outcome: None,
-            }),
-            completion_notify: Notify::new(),
-            #[cfg(test)]
-            applier_test_gate: ApplierTestGate::new(),
-            diagnostics: Some(DiagnosticMachinery {
-                hold: Mutex::new(DiagnosticHoldState::default()),
-                notify: Notify::new(),
-            }),
-            replacement_count: AtomicU64::new(0),
-            lag_count: AtomicU64::new(0),
-        });
-
-        let host = Arc::new(ProjectionHost {
-            inner: Arc::clone(&inner),
-        });
-
-        let source = tokio::spawn(source_worker(
-            Arc::downgrade(&inner),
-            inner.cancel.clone(),
-            registry_rx,
-            ownership_rx,
-        ));
-        let applier = tokio::spawn(applier_worker(
-            Arc::clone(&default_consumer),
-            Arc::downgrade(&inner),
-            inner.cancel.clone(),
-        ));
-        *inner
-            .source_task
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(source);
-        *inner
-            .applier_task
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(applier);
-
-        host
+        Self::mount_internal(registry, tree, capacity, true)
     }
 
     /// Wait until the default consumer has actually applied a snapshot.
@@ -756,7 +828,7 @@ impl ProjectionHost {
             .inner
             .applied
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         if applied.closed {
             return None;
         }
@@ -773,8 +845,85 @@ impl ProjectionHost {
     /// The existing facade mounted with this host. This is a handle-only
     /// bridge; the host does not expose any callable registry or owner state.
     #[must_use]
-    pub(crate) fn facade(&self) -> Arc<ZahirFacade> {
+    pub fn facade(&self) -> Arc<ZahirFacade> {
         Arc::clone(&self.inner.facade)
+    }
+
+    /// The mounted facade's one bounded observation source (not metadata changes).
+    pub fn event_stream(&self) -> Arc<crate::capability::events::InMemoryEventStream> {
+        self.inner.facade.event_stream()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn audit_collector(&self) -> crate::capability::audit::AuditCollector {
+        crate::capability::audit::AuditCollector::new(self.event_stream())
+    }
+
+    /// The single special-capability registry mounted with this host.
+    #[must_use]
+    pub fn specials(&self) -> CapabilityHandlerRegistry {
+        self.inner.specials.clone()
+    }
+
+    /// Register the host-owned canonical adapters. Domain owners are not
+    /// mounted in Task3, so their handlers remain typed `Unavailable`.
+    ///
+    /// Test fixture: production registers the terminal source through
+    /// `register_special_tool_adapters_with_terminal_source`, so the
+    /// source-less variant stays out of the runtime surface (severed-wire
+    /// audit 2026-11-20).
+    #[cfg(test)]
+    pub fn register_special_tool_adapters(
+        &self,
+        tools: &ToolHandlerRegistry,
+    ) -> Result<Vec<crate::capability::descriptor::CapabilityId>, String> {
+        self.register_special_tool_adapters_with_terminal_source(tools, None)
+    }
+
+    pub fn register_special_tool_adapters_with_terminal_source(
+        &self,
+        tools: &ToolHandlerRegistry,
+        terminal_source: Option<&Arc<crate::capability::tool_adapters::TerminalCapabilitySource>>,
+    ) -> Result<Vec<crate::capability::descriptor::CapabilityId>, String> {
+        if !self.inner.facade.is_backed_by_registry(tools) {
+            return Err("special adapters must use the mounted canonical Tool registry".into());
+        }
+        self.inner
+            .specials
+            .bind_domain_facade(&self.inner.facade)
+            .map_err(|error| error.to_string())?;
+        let bundle =
+            crate::capability::tool_adapters::register_canonical_adapters_with_tools_bundle(
+                &self.inner.specials,
+                Some(tools),
+                terminal_source,
+            )
+            .map_err(|error| error.to_string())?;
+        let ids = bundle.ids.clone();
+        let registrations = ids.iter().cloned().map(|id| {
+            (
+                id,
+                crate::capability::ownership::OwnerRef::Runtime,
+                crate::capability::ownership::LifetimeScope::Runtime,
+                crate::capability::ownership::VisibilityScope::default(),
+            )
+        });
+        if let Err(error) = self.inner.tree.register_if_absent_batch(registrations) {
+            #[cfg(test)]
+            run_registration_rollback_hook();
+            bundle.dispose();
+            return Err(format!("ownership registration failed: {error:?}"));
+        }
+        // Registration happens after mount in the production startup seam. Queue
+        // a fresh snapshot so the real applier, not publisher state, observes it.
+        let _publish = self
+            .inner
+            .publish
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let snapshot = build_snapshot(&self.inner, &Scope::default());
+        self.inner.default_consumer.enqueue_snapshot(snapshot);
+        Ok(ids)
     }
 
     /// `true` once the host has been requested to close or has reached its
@@ -788,7 +937,7 @@ impl ProjectionHost {
         self.inner
             .completion
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .outcome
             .is_some()
     }
@@ -803,7 +952,7 @@ impl ProjectionHost {
             .inner
             .publish
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         let consumer = Arc::new(ConsumerState::new(scope, DEFAULT_PENDING_CAPACITY));
         let mut id = 0;
         if !self.inner.closed.load(Ordering::SeqCst) {
@@ -813,7 +962,7 @@ impl ProjectionHost {
                 .inner
                 .consumers
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                .unwrap_or_else(PoisonError::into_inner);
             id = map.next_id;
             map.next_id += 1;
             map.by_id.insert(id, Arc::clone(&consumer));
@@ -846,7 +995,7 @@ impl ProjectionHost {
                 .inner
                 .completion
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .unwrap_or_else(PoisonError::into_inner)
                 .outcome
                 .clone()
             {
@@ -866,7 +1015,7 @@ impl ProjectionHost {
             .inner
             .completion
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         let lifecycle = if completion.outcome.is_some() {
             DiagnosticLifecycle::Closed
         } else if self.inner.closed.load(Ordering::Acquire) || completion.started {
@@ -880,7 +1029,7 @@ impl ProjectionHost {
             .inner
             .applied
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         let registry_cursor = applied
             .snapshot
             .as_ref()
@@ -919,7 +1068,7 @@ impl ProjectionHost {
             .default_consumer
             .queue
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         let pending_depth = q.items.len();
         let pending_capacity = self.inner.default_consumer.capacity;
         drop(q);
@@ -964,7 +1113,7 @@ impl ProjectionHost {
             let mut guard = diagnostics
                 .hold
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                .unwrap_or_else(PoisonError::into_inner);
             if guard.active.is_some() {
                 return Err(DiagnosticError::HoldAlreadyActive);
             }
@@ -983,7 +1132,7 @@ impl ProjectionHost {
                         let cleared = diagnostics
                             .hold
                             .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .unwrap_or_else(PoisonError::into_inner)
                             .clear_if(id);
                         if cleared {
                             diagnostics.notify.notify_waiters();
@@ -1010,7 +1159,7 @@ impl ProjectionHost {
             let still_ours = diagnostics
                 .hold
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .unwrap_or_else(PoisonError::into_inner)
                 .active
                 .as_ref()
                 .is_some_and(|h| h.id == id);
@@ -1029,7 +1178,7 @@ impl ProjectionHost {
         let taken = diagnostics
             .hold
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .active
             .take();
         if let Some(hold) = taken {
@@ -1056,7 +1205,7 @@ impl ProjectionHost {
                     .inner
                     .completion
                     .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    .unwrap_or_else(PoisonError::into_inner);
                 if let Some(outcome) = guard.outcome.clone() {
                     return Ok(outcome);
                 }
@@ -1103,7 +1252,7 @@ impl ProjectionHost {
         self.inner
             .completion
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .outcome
             .is_some()
     }
@@ -1123,6 +1272,9 @@ impl ProjectionHandle {
     /// its pending queue is drained.
     pub async fn recv(&mut self) -> Option<ProjectionEvent> {
         loop {
+            let notified = self.consumer.wake.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
             if let Some(event) = self.consumer.try_pop() {
                 return Some(event);
             }
@@ -1132,7 +1284,7 @@ impl ProjectionHandle {
             tokio::select! {
                 biased;
                 _ = self.cancel.cancelled() => return None,
-                _ = self.consumer.wake.notified() => {}
+                _ = &mut notified => {}
             }
         }
     }
@@ -1151,12 +1303,12 @@ impl ProjectionHandle {
             .host
             .publish
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         let mut map = self
             .host
             .consumers
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         map.by_id.remove(&self.id);
         self.consumer.close_and_discard();
     }
@@ -1172,12 +1324,12 @@ impl Drop for ProjectionHandle {
             .host
             .publish
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         let mut map = self
             .host
             .consumers
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         map.by_id.remove(&self.id);
         self.consumer.close_and_discard();
     }
@@ -1225,7 +1377,7 @@ async fn wait_diagnostic_hold(
     let release_at = diagnostics
         .hold
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .unwrap_or_else(PoisonError::into_inner)
         .active
         .as_ref()
         .filter(|h| h.plane == plane)
@@ -1246,21 +1398,22 @@ async fn wait_diagnostic_hold(
 }
 
 fn request_local_close(inner: &Arc<HostInner>) {
-    let _publish = inner
-        .publish
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _publish = inner.publish.lock().unwrap_or_else(PoisonError::into_inner);
     if !inner.closed.swap(true, Ordering::SeqCst) {
         let consumers = inner
             .consumers
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         for consumer in consumers.by_id.values() {
             consumer.close_and_discard();
         }
         inner.default_consumer.mark_closed();
     }
     drop(_publish);
+    // Specials are host-owned records, unlike the shared Tool registry; close
+    // them at this lifecycle boundary so captured entries fail closed after the
+    // host is gone.
+    let _ = inner.specials.close();
     inner.cancel.cancel();
 }
 
@@ -1273,7 +1426,7 @@ fn start_shutdown(inner: &Arc<HostInner>) {
         let mut state = inner
             .completion
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         if state.started {
             false
         } else {
@@ -1287,7 +1440,7 @@ fn start_shutdown(inner: &Arc<HostInner>) {
             let source_task = owned
                 .source_task
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .unwrap_or_else(PoisonError::into_inner)
                 .take();
             let source_failed = match source_task {
                 Some(task) => task.await.is_err(),
@@ -1297,7 +1450,7 @@ fn start_shutdown(inner: &Arc<HostInner>) {
             let applier_task = owned
                 .applier_task
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .unwrap_or_else(PoisonError::into_inner)
                 .take();
             let applier_failed = match applier_task {
                 Some(task) => task.await.is_err(),
@@ -1312,7 +1465,7 @@ fn start_shutdown(inner: &Arc<HostInner>) {
             owned
                 .completion
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .unwrap_or_else(PoisonError::into_inner)
                 .outcome = Some(outcome);
             owned.completion_notify.notify_waiters();
         });
@@ -1350,15 +1503,17 @@ async fn source_worker(
     cancel: CancellationToken,
     mut registry_rx: broadcast::Receiver<RegistryPublication>,
     mut ownership_rx: broadcast::Receiver<OwnershipChange>,
+    mut special_rx: broadcast::Receiver<SpecialPublication>,
 ) {
     let Some(initial_inner) = inner.upgrade() else {
         return;
     };
     let close_signal = initial_inner.registry.close_signal();
-    let already_closed = initial_inner.registry.is_closed();
-    drop(initial_inner);
     let notified = close_signal.notified();
     tokio::pin!(notified);
+    notified.as_mut().enable();
+    let already_closed = initial_inner.registry.is_closed();
+    drop(initial_inner);
     if already_closed {
         if let Some(inner) = inner.upgrade() {
             deliver_close(&inner);
@@ -1430,6 +1585,23 @@ async fn source_worker(
                     }
                 }
             }
+            res = special_rx.recv() => {
+                match res {
+                    Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {
+                        if let Some(inner) = inner.upgrade() {
+                            invalidate_all(&inner);
+                        } else {
+                            return;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Closed) => {
+                        if let Some(inner) = inner.upgrade() {
+                            deliver_close(&inner);
+                        }
+                        return;
+                    }
+                }
+            }
         }
     }
 }
@@ -1443,7 +1615,7 @@ fn publication_already_reflected(inner: &HostInner, cursor: Cursor) -> bool {
     let consumers = inner
         .consumers
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+        .unwrap_or_else(PoisonError::into_inner);
     consumers
         .by_id
         .values()
@@ -1454,10 +1626,7 @@ fn publication_already_reflected(inner: &HostInner, cursor: Cursor) -> bool {
 /// Fan out one primary registry publication to every consumer.
 fn process_registry_publication(inner: &HostInner, publication: RegistryPublication) {
     let (cursor, changes) = inner.facade.map_registry_publication(publication.clone());
-    let _publish = inner
-        .publish
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _publish = inner.publish.lock().unwrap_or_else(PoisonError::into_inner);
     if inner.closed.load(Ordering::SeqCst) {
         return;
     }
@@ -1474,9 +1643,13 @@ fn process_registry_publication(inner: &HostInner, publication: RegistryPublicat
     }
 
     // Default consumer: apply a fresh snapshot so run-loop-readable state stays
-    // current (the applier drains this queue into `applied`).
+    // current (the applier drains this queue into `applied`). Reconcile this
+    // publication even if the default consumer has closed; attached-consumer
+    // cohort filtering depends on the binding.
+    let default_snapshot =
+        build_snapshot_from_cut(inner, &inner.default_consumer.scope, &registry_cut);
     if !inner.default_consumer.is_closed() {
-        let snapshot = build_snapshot_from_cut(inner, &inner.default_consumer.scope, &registry_cut);
+        let snapshot = default_snapshot;
         if inner.default_consumer.enqueue_snapshot(snapshot) {
             inner.replacement_count.fetch_add(1, Ordering::Relaxed);
         }
@@ -1487,7 +1660,7 @@ fn process_registry_publication(inner: &HostInner, publication: RegistryPublicat
     let consumers = inner
         .consumers
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+        .unwrap_or_else(PoisonError::into_inner);
     for consumer in consumers.by_id.values() {
         if consumer.is_closed() {
             continue;
@@ -1505,10 +1678,7 @@ fn process_registry_publication(inner: &HostInner, publication: RegistryPublicat
 /// Invalidate every consumer: enqueue `Invalidated` + a fresh snapshot. The
 /// registry cursor is NOT advanced — only the registry advances it.
 fn invalidate_all(inner: &HostInner) {
-    let _publish = inner
-        .publish
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _publish = inner.publish.lock().unwrap_or_else(PoisonError::into_inner);
     if inner.closed.load(Ordering::SeqCst) {
         return;
     }
@@ -1530,7 +1700,7 @@ fn invalidate_all_from_cut(inner: &HostInner, registry_cut: &RegistrySnapshot) {
     let consumers = inner
         .consumers
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+        .unwrap_or_else(PoisonError::into_inner);
     for consumer in consumers.by_id.values() {
         if consumer.is_closed() {
             continue;
@@ -1542,10 +1712,7 @@ fn invalidate_all_from_cut(inner: &HostInner, registry_cut: &RegistrySnapshot) {
 
 /// Deliver the terminal close projection to every consumer and mark each closed.
 fn deliver_close(inner: &HostInner) {
-    let _publish = inner
-        .publish
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _publish = inner.publish.lock().unwrap_or_else(PoisonError::into_inner);
     if inner.closed.swap(true, Ordering::SeqCst) {
         return;
     }
@@ -1560,7 +1727,7 @@ fn deliver_close(inner: &HostInner) {
     let consumers = inner
         .consumers
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+        .unwrap_or_else(PoisonError::into_inner);
     for consumer in consumers.by_id.values() {
         if consumer.is_closed() {
             continue;
@@ -1599,10 +1766,8 @@ async fn applier_worker(
                         }
                     }
                     {
-                        let mut applied = inner
-                            .applied
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        let mut applied =
+                            inner.applied.lock().unwrap_or_else(PoisonError::into_inner);
                         applied.snapshot = Some(snapshot.clone());
                         // Replacement receipt (observational only):
                         // write under the SAME lock as the snapshot install
@@ -1632,10 +1797,8 @@ async fn applier_worker(
                     // is never served between invalidation and its replacement
                     // Snapshot.
                     {
-                        let mut applied = inner
-                            .applied
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        let mut applied =
+                            inner.applied.lock().unwrap_or_else(PoisonError::into_inner);
                         applied.snapshot = None;
                         // Observational receipt under the SAME lock cut as
                         // the snapshot clear, so the bumped counter / set
@@ -1655,10 +1818,7 @@ async fn applier_worker(
         }
         let Some(inner) = inner.upgrade() else { return };
         if default.is_closed() {
-            let mut applied = inner
-                .applied
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut applied = inner.applied.lock().unwrap_or_else(PoisonError::into_inner);
             applied.closed = true;
             return;
         }
@@ -1676,10 +1836,17 @@ mod tests {
     use super::*;
     use crate::approval::{with_call_identity, CallIdentity};
     use crate::capability::backend::TOOL_NAMESPACE;
-    use crate::capability::descriptor::{CapabilityId, CapabilityRevision};
+    use crate::capability::descriptor::{
+        CapabilityDescriptor, CapabilityId, CapabilityKind, CapabilityRevision,
+    };
     use crate::capability::facade::{Reference, ResolveError, Zahir};
-    use crate::capability::ownership::{LifetimeScope, VisibilityScope};
+    use crate::capability::ownership::{LifetimeScope, OwnerRef, VisibilityScope};
+    use crate::capability::special::CapabilityHandlerRegistry;
+    use crate::capability::tool_adapters::{
+        register_canonical_adapters, register_canonical_adapters_with_tools,
+    };
     use crate::session::events::{ToolOutput, TurnId};
+    use crate::sync_primitives::AtomicUsize;
     use crate::tools::adapters::McpRegistryTool;
     use crate::tools::descriptor::{
         ReplayPolicy, ToolCapabilityDescriptor, ToolKind, SCHEMA_VERSION,
@@ -1692,7 +1859,161 @@ mod tests {
     };
     use async_trait::async_trait;
     use serde_json::Value;
-    use std::sync::atomic::AtomicUsize;
+
+    fn special_descriptors(facade: &ZahirFacade) -> Vec<CapabilityDescriptor> {
+        let mut descriptors = facade
+            .describe(Scope::default())
+            .capabilities
+            .into_iter()
+            .filter(|descriptor| {
+                matches!(
+                    descriptor.kind,
+                    CapabilityKind::Terminal | CapabilityKind::Ui
+                )
+            })
+            .collect::<Vec<_>>();
+        descriptors.sort_by(|left, right| {
+            (left.id.namespace.as_str(), left.id.name.as_str())
+                .cmp(&(right.id.namespace.as_str(), right.id.name.as_str()))
+        });
+        descriptors
+    }
+
+    fn sort_specials(mut descriptors: Vec<CapabilityDescriptor>) -> Vec<CapabilityDescriptor> {
+        descriptors.sort_by(|left, right| {
+            (left.id.namespace.as_str(), left.id.name.as_str())
+                .cmp(&(right.id.namespace.as_str(), right.id.name.as_str()))
+        });
+        descriptors
+    }
+
+    #[tokio::test]
+    async fn special_withdrawal_rebuilds_existing_host_projection() {
+        let tools = ToolHandlerRegistry::new();
+        let specials = CapabilityHandlerRegistry::new();
+        let ids = register_canonical_adapters(&specials).expect("canonical special adapters");
+        let tree = Arc::new(OwnershipTree::new());
+        for id in &ids {
+            tree.register(
+                id.clone(),
+                OwnerRef::Runtime,
+                LifetimeScope::Runtime,
+                VisibilityScope::default(),
+            )
+            .expect("special owner binding");
+        }
+        let facade =
+            ZahirFacade::new_with_specials(tools.clone(), Arc::clone(&tree), specials.clone());
+        let host = ProjectionHost::mount_sources(
+            tools,
+            tree,
+            facade,
+            specials.clone(),
+            DEFAULT_PENDING_CAPACITY,
+            false,
+        );
+        let mut consumer = host.attach(Scope::default());
+        let initial = match recv_bounded(&mut consumer).await {
+            ProjectionEvent::Snapshot(snapshot) => snapshot,
+            other => panic!("expected initial snapshot, got {other:?}"),
+        };
+        assert!(initial
+            .specials
+            .iter()
+            .any(|descriptor| descriptor.id.name == "terminal_capability"));
+        let initial_cursor = initial.registry_cursor;
+        let facade = host.facade();
+        assert_eq!(
+            sort_specials(initial.specials.clone()),
+            special_descriptors(&facade),
+            "HostSnapshot specials must equal the complete facade descriptor cut"
+        );
+
+        let terminal_id = CapabilityId {
+            namespace: "aleph/tools".into(),
+            name: "terminal_capability".into(),
+        };
+        specials.unregister(&terminal_id).expect("withdraw special");
+        assert!(matches!(
+            recv_bounded(&mut consumer).await,
+            ProjectionEvent::Invalidated
+        ));
+        let replacement = match recv_bounded(&mut consumer).await {
+            ProjectionEvent::Snapshot(snapshot) => snapshot,
+            other => panic!("expected replacement snapshot, got {other:?}"),
+        };
+        assert!(!replacement
+            .specials
+            .iter()
+            .any(|descriptor| descriptor.id == terminal_id));
+        assert!(replacement.registry_cursor > initial_cursor);
+        assert_eq!(
+            sort_specials(replacement.specials.clone()),
+            special_descriptors(&facade),
+            "replacement HostSnapshot must equal the complete facade descriptor cut"
+        );
+        assert!(!facade
+            .describe(Scope::default())
+            .capabilities
+            .iter()
+            .any(|descriptor| descriptor.id == terminal_id));
+        host.close_and_await().await;
+    }
+
+    #[tokio::test]
+    async fn failed_host_registration_preserves_replacement_bundle() {
+        let tools = ToolHandlerRegistry::new();
+        let specials = CapabilityHandlerRegistry::new();
+        let tree = Arc::new(OwnershipTree::new());
+        let terminal_id = CapabilityId {
+            namespace: "aleph/tools".into(),
+            name: "terminal_capability".into(),
+        };
+        let ui_id = CapabilityId {
+            namespace: "aleph/tools".into(),
+            name: "ui_capability".into(),
+        };
+        tree.exhaust_generation_for_test();
+        let facade =
+            ZahirFacade::new_with_specials(tools.clone(), Arc::clone(&tree), specials.clone());
+        let host = ProjectionHost::mount_sources(
+            tools.clone(),
+            Arc::clone(&tree),
+            facade,
+            specials.clone(),
+            DEFAULT_PENDING_CAPACITY,
+            false,
+        );
+
+        let replacement_specials = specials.clone();
+        let replacement_tools = tools.clone();
+        let replacement_terminal_id = terminal_id.clone();
+        let replacement_ui_id = ui_id.clone();
+        set_registration_rollback_hook(Arc::new(move || {
+            let _ = replacement_specials.unregister(&replacement_terminal_id);
+            let _ = replacement_specials.unregister(&replacement_ui_id);
+            let _ = replacement_tools.unregister("terminal_capability");
+            let _ = replacement_tools.unregister("ui_capability");
+            register_canonical_adapters_with_tools(&replacement_specials, Some(&replacement_tools))
+                .expect("replacement publication");
+        }));
+
+        let error = host
+            .register_special_tool_adapters(&tools)
+            .expect_err("incumbent batch must fail after publication");
+        assert!(error.contains("ownership registration failed"));
+        assert!(specials.capture(&terminal_id).is_some());
+        assert!(specials.capture(&ui_id).is_some());
+        assert!(tools.descriptor("terminal_capability").is_some());
+        assert!(tools.descriptor("ui_capability").is_some());
+        assert!(tree
+            .generation(&terminal_id, &VisibilityScope::default())
+            .is_none());
+        assert!(tree
+            .generation(&ui_id, &VisibilityScope::default())
+            .is_none());
+        host.close_and_await().await;
+    }
 
     struct FakeHandler {
         name: String,
@@ -1841,6 +2162,7 @@ mod tests {
             concurrent_safe: false,
             max_duration_ms: None,
             revision: 0,
+            services: Vec::new(),
             implementation_contract: None,
         }
     }
@@ -1923,7 +2245,7 @@ mod tests {
             .default_consumer
             .queue
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         // After mount the queue held [Snapshot(initial)]; invalidate_all must
         // have appended the mandated Invalidated + replacement Snapshot pair.
         assert_eq!(
@@ -1984,7 +2306,7 @@ mod tests {
                 .default_consumer
                 .queue
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                .unwrap_or_else(PoisonError::into_inner);
             assert_eq!(
                 q.items.len(),
                 2,
@@ -2058,7 +2380,7 @@ mod tests {
             .consumer
             .queue
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         assert_eq!(q.items.len(), 3);
         assert!(matches!(q.items[0], ProjectionEvent::Snapshot(_)));
         assert!(matches!(q.items[1], ProjectionEvent::Change(_)));
@@ -2087,7 +2409,7 @@ mod tests {
                 .consumer
                 .queue
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                .unwrap_or_else(PoisonError::into_inner);
             assert_eq!(q.items.len(), DEFAULT_PENDING_CAPACITY - 1);
         }
 
@@ -2106,7 +2428,7 @@ mod tests {
             .consumer
             .queue
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         assert_eq!(q.items.len(), 2);
         assert!(matches!(q.items[0], ProjectionEvent::Invalidated));
         let ProjectionEvent::Snapshot(snapshot) = &q.items[1] else {
@@ -2145,7 +2467,7 @@ mod tests {
             .default_consumer
             .queue
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         assert_eq!(q.items.len(), 3);
         assert!(matches!(q.items[1], ProjectionEvent::Invalidated));
         let ProjectionEvent::Snapshot(snapshot) = &q.items[2] else {
@@ -2509,7 +2831,7 @@ mod tests {
                 host.inner
                     .publish
                     .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+                    .unwrap_or_else(PoisonError::into_inner),
             );
         }
 
@@ -2781,7 +3103,7 @@ mod tests {
                 .default_consumer
                 .queue
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                .unwrap_or_else(PoisonError::into_inner);
             q.items.push_back(ProjectionEvent::Invalidated);
         }
         host.inner.default_consumer.wake.notify_one();
@@ -2860,7 +3182,7 @@ mod tests {
             host.inner
                 .completion
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .unwrap_or_else(PoisonError::into_inner)
                 .outcome
                 .is_none(),
             "shutdown cannot report completion while captured delivery is held"
@@ -3143,7 +3465,7 @@ mod tests {
             .as_ref()?
             .hold
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .active
             .as_ref()
             .map(|h| h.plane)
@@ -3364,7 +3686,7 @@ mod tests {
                         .default_consumer
                         .queue
                         .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        .unwrap_or_else(PoisonError::into_inner);
                     let last_full = matches!(
                         q.items.back(),
                         Some(ProjectionEvent::Snapshot(s)) if s.entries.len() == 10
@@ -3459,7 +3781,7 @@ mod tests {
             host.inner
                 .completion
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .unwrap_or_else(PoisonError::into_inner)
                 .outcome
                 .is_none(),
             "timeout must not fabricate completion"
@@ -3587,7 +3909,7 @@ mod tests {
                 .default_consumer
                 .queue
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                .unwrap_or_else(PoisonError::into_inner);
             q.items.push_back(ProjectionEvent::Invalidated);
         }
         host.inner.default_consumer.wake.notify_one();
@@ -3800,9 +4122,7 @@ mod tests {
             "recorded tool-id set MUST exactly equal the actual applied              replacement payload's entries (a set equality, not `any`); an              implementation that recorded the initial set or a stale set              would fail this"
         );
         assert!(
-            recorded_ids
-                .iter()
-                .all(|n| n != "alpha"),
+            recorded_ids.iter().all(|n| n != "alpha"),
             "the replacement set MUST NOT contain the initial tool;              proving the receipt came from the post-mutation payload"
         );
         assert!(

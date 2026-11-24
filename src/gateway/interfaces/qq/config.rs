@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+// No `Debug`: the account configs carry `client_secret`, and a derived
+// Debug would print it into every log line that formats a config.
+#[derive(Clone, Serialize, Deserialize)]
 pub struct QQConfig {
     pub accounts: Vec<QQAccountConfig>,
 }
@@ -37,7 +39,8 @@ impl QQConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+// No `Debug`: `client_secret` must not reach a log.
+#[derive(Clone, Serialize, Deserialize)]
 pub struct QQAccountConfig {
     /// Label for this account in logs and access decisions.
     ///
@@ -133,8 +136,10 @@ mod tests {
     /// `app_id` for a config that never claimed to have one.
     #[test]
     fn the_flat_branch_names_the_missing_field() {
-        let err =
-            QQConfig::from_wire(json!({ "client_secret": "s" })).expect_err("app_id is required");
+        let err = match QQConfig::from_wire(json!({ "client_secret": "s" })) {
+            Ok(_) => panic!("app_id is required"),
+            Err(err) => err,
+        };
         assert!(
             err.contains("app_id"),
             "error should name the missing field, got: {err}"

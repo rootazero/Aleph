@@ -580,22 +580,12 @@ impl ProfileManager {
     }
 
     /// The shared tab-identity + activity registry. The cdp backend records
-    /// into it; the tool layer reads `resolve_identity` / `last_url` from it.
+    /// into it; the tool layer reads `last_url` from it (the registry's
+    /// `resolve_identity` half was CUT — its reader had no production
+    /// caller, and the CDP engine's own table is the TabGone authority).
     #[must_use]
     pub const fn tab_registry(&self) -> &Arc<TabRegistry> {
         &self.tab_registry
-    }
-
-    /// The shared mock-route table handed to every cdp backend this manager
-    /// builds (see the field's own doc for why it lives here).
-    pub fn route_registry(&self) -> &Arc<super::cdp_backend::routes::RouteRegistry> {
-        &self.route_registry
-    }
-
-    /// The shared recording registry handed to every cdp backend this
-    /// manager builds (see the field's own doc for why it lives here).
-    pub fn recording_registry(&self) -> &Arc<super::cdp_backend::recording::RecordingRegistry> {
-        &self.recording_registry
     }
 
     /// The per-command CDP timeout both engines are driven with.
@@ -711,21 +701,7 @@ impl ProfileManager {
         })
     }
 
-    /// The live engine for `profile`, on the engine its config resolves to.
-    ///
-    /// A thin delegate: the derivation is [`Self::launch_request_for`]'s and
-    /// the caching is the registry's. Kept as a method because the tool layer
-    /// and `switch_engine` (Task 19) address a profile, not a registry.
-    pub async fn engine_handle(
-        &self,
-        profile: &str,
-        gate: EngineLaunch,
-    ) -> Result<Arc<EngineHandle>, BrowserError> {
-        let (engine, req) = self.launch_request_for(profile)?;
-        self.engines.handle(engine, &req, gate).await
-    }
-
-    /// [`Self::engine_handle`] with the engine named explicitly — the face
+    /// The engine handle for `profile` on a NAMED engine — the face
     /// `browser_open{engine}` and `switch_engine` use. A profile already
     /// running a different engine is refused, not swapped (`EngineMismatch`).
     ///
@@ -1190,7 +1166,7 @@ impl ProfileManager {
             // The engine registry's own answer, on the same terms as the
             // `Managed` arm above: it asks the browser, not the bookkeeping.
             // A hardcoded `false` was correct only while nothing could put an
-            // engine in the map; `engine_handle` can, so the constant would
+            // engine in the map; the engine registry can, so the constant would
             // have become a lie the moment the first CDP profile launched
             // (判据 §1 — this commit is what falsifies it).
             Some(BrowserDriver::Cdp) => self.engines.is_live(name),
@@ -1340,15 +1316,12 @@ impl ProfileManager {
                 }
             };
             let live_ids = tab_ids(&tabs);
-            // The sweep's `list_tabs` is also the OLD drivers' identity
-            // discovery point (the cdp backend records into the same registry
-            // itself, from inside the verbs). A listing row knows no targetId,
-            // so `None` is recorded for it — and because `record_identity`
-            // merges rather than replaces, that `None` never erases a
-            // targetId the cdp backend recorded.
+            // The sweep's `list_tabs` is also the OLD drivers' URL discovery
+            // point (the cdp backend records into the same registry itself,
+            // from inside the verbs).
             for line in &tabs {
                 self.tab_registry
-                    .record_identity(&profile, &line.id, None, Some(line.url.clone()));
+                    .record_url(&profile, &line.id, Some(line.url.clone()));
             }
             let victims = self.tab_registry.select_victims(
                 &profile,
@@ -1379,18 +1352,6 @@ impl ProfileManager {
             "ProfileManager::get_driver"
         );
         result
-    }
-
-    /// Every entry with derived session liveness (see [`Self::session_active`]),
-    /// INCLUDING principal-materialized ones. Diagnostic / construction-time
-    /// use (`tools::probes::browser`); the tool face lists through
-    /// [`Self::list_profiles_for`].
-    pub fn list_profiles(&self) -> Vec<(String, bool)> {
-        let profiles = self.profiles.read().unwrap_or_else(|e| e.into_inner());
-        profiles
-            .keys()
-            .map(|name| (name.clone(), self.session_active(name)))
-            .collect()
     }
 
     /// Get the configuration of a named profile.
@@ -1489,33 +1450,6 @@ impl ProfileManager {
             .collect()
     }
 
-    /// The live CDP endpoint of a `Managed` profile's browser, if it has one.
-    ///
-    /// The accessor spec §3.2 asks for. `ExistingSession` answers `None` by
-    /// construction: that browser is the user's own, Aleph never launched it,
-    /// and the live view is deliberately Managed-only — a Chrome the user
-    /// started is already on their screen.
-    ///
-    /// ⚠️ `None` is "**Aleph** has no browser for this profile", which is the
-    /// same sentence as "no browser is running" only after
-    /// [`Self::spawn_idle_reaper`]'s boot sweep: a Chromium orphaned by a
-    /// previous process lives in the sidecar registry, not in this driver's
-    /// map (判据 §8 — an absent record is not an absent process).
-    // The one allow this task adds, and it replaces two: `PlaywrightCliDriver`'s
-    // `endpoint` and `shutdown_chromium` each carried one naming Task 6, and
-    // both are consumed here now. This one is the head of that chain — nothing
-    // in this crate reads a live endpoint until Plan 2's live view does, and
-    // `--lib` (which does not compile `#[cfg(test)]`) sees only that. Delete it
-    // with the first non-test caller; if Plan 2 does not land, this is a CUT,
-    // not a permanent allow.
-    #[allow(dead_code)]
-    pub(crate) fn live_endpoint(&self, profile: &str) -> Option<super::CdpEndpoint> {
-        match self.get_driver(profile) {
-            Some(BrowserDriver::Managed) => self.playwright_cli_driver.endpoint(profile),
-            Some(BrowserDriver::ExistingSession | BrowserDriver::Cdp) | None => None,
-        }
-    }
-
     /// Kill every browser this manager launched. Returns how many were stopped.
     ///
     /// spec §3.6「退出时杀」. `std::process::Child` does not kill on drop, and
@@ -1573,13 +1507,13 @@ impl ProfileManager {
 
     /// Validate a URL against the SSRF policy.
     pub async fn check_url(&self, url: &str) -> Result<(), PolicyViolation> {
-        self.ssrf_guard.load().check_url(url).await
+        self.ssrf_guard.load_full().check_url(url).await
     }
 
     /// Validate an agent-initiated navigation target: SSRF policy plus
     /// secret-exfiltration scanning. Use this for `goto`/`open`.
     pub async fn check_navigation(&self, url: &str) -> Result<(), PolicyViolation> {
-        self.ssrf_guard.load().check_navigation(url).await
+        self.ssrf_guard.load_full().check_navigation(url).await
     }
 
     /// Scan `text` about to be typed into a page form for an embedded
@@ -1640,7 +1574,7 @@ impl ProfileManager {
     #[cfg(test)]
     #[cfg_attr(not(unix), allow(dead_code))]
     pub(crate) fn insert_test_child(&self, profile: &str, child: std::process::Child) {
-        let endpoint = super::CdpEndpoint {
+        let endpoint = crate::browser::engine::process::CdpEndpoint {
             http_url: "http://127.0.0.1:1".into(),
             ws_url: "ws://127.0.0.1:1/devtools/browser/test".into(),
             pid: child.id(),
@@ -1683,7 +1617,7 @@ fn args_without_store_flags(args: &[String]) -> Vec<String> {
     let mut kept = Vec::with_capacity(args.len());
     let mut drop_value = false;
     for arg in args {
-        if std::mem::take(&mut drop_value) && !arg.starts_with('-') {
+        if std::mem::take(&mut drop_value) && !arg.starts_with('-') && store_flag(arg).is_none() {
             continue;
         }
         match store_flag(arg) {
@@ -1706,7 +1640,10 @@ enum StoreFlagValue {
 /// Whether `arg` names a browser store, and how its value is spelled.
 fn store_flag(arg: &str) -> Option<StoreFlagValue> {
     const STORE_FLAGS: [&str; 2] = ["user-data-dir", "profile-directory"];
-    let name = arg.strip_prefix("--").or_else(|| arg.strip_prefix('-'))?;
+    let name = arg
+        .strip_prefix("--")
+        .or_else(|| arg.strip_prefix('-'))
+        .or_else(|| arg.strip_prefix('/'))?;
     STORE_FLAGS.iter().find_map(|flag| {
         let rest = name.strip_prefix(flag)?;
         if rest.is_empty() {
@@ -1745,6 +1682,9 @@ mod tests {
             "-user-data-dir=/x",
             "-profile-directory",
             "Profile 2",
+            "/user-data-dir=C:\\Users\\owner\\Chrome",
+            "/profile-directory",
+            "Default",
             "--lang=en",
         ]
         .into_iter()
@@ -1869,17 +1809,17 @@ mod tests {
         ));
     }
 
-    /// `engine_handle` is a delegate: what it returns is what the registry
+    /// `engine_handle_for` is a delegate: what it returns is what the registry
     /// stored, under the profile's own key.
     #[tokio::test]
-    async fn engine_handle_delegates_to_the_registry() {
+    async fn engine_handle_for_delegates_to_the_registry() {
         let home = tempfile::tempdir().expect("tempdir");
         let _home_guard = AlephHomeEnvGuard::acquire_and_set(home.path());
         let server = FakeCdpServer::start(engine_peer).await;
         let (manager, proc) = manager_with_fake_engine(&server, home.path());
 
         let handle = manager
-            .engine_handle("default", EngineLaunch::Allow)
+            .engine_handle_for("default", Engine::Chromium, EngineLaunch::Allow)
             .await
             .expect("launches through the registry");
         let from_registry = manager
@@ -1947,7 +1887,7 @@ mod tests {
         let (manager, proc) = manager_with_fake_engine(&server, home.path());
 
         let handle = manager
-            .engine_handle("default", EngineLaunch::Allow)
+            .engine_handle_for("default", Engine::Chromium, EngineLaunch::Allow)
             .await
             .expect("launch");
         let sidecar = handle.launched.sidecar_path.clone();
@@ -2034,7 +1974,7 @@ mod tests {
         );
 
         let manager = ProfileManager::new(config);
-        let profiles = manager.list_profiles();
+        let profiles = manager.list_profiles_for(None);
         // 2 explicit + auto-injected "user" = 3
         assert_eq!(profiles.len(), 3);
         assert!(profiles.iter().any(|p| p.0 == "default"));
@@ -2046,7 +1986,7 @@ mod tests {
     fn test_manager_default_profile_if_none_configured() {
         let config = BrowserSystemConfig::default();
         let manager = ProfileManager::new(config);
-        let profiles = manager.list_profiles();
+        let profiles = manager.list_profiles_for(None);
         // "default" + auto-injected "user" = 2
         assert_eq!(profiles.len(), 2);
         assert!(profiles.iter().any(|p| p.0 == "default"));
@@ -2096,7 +2036,7 @@ mod tests {
     fn test_auto_injects_user_profile() {
         let config = BrowserSystemConfig::default();
         let manager = ProfileManager::new(config);
-        let profiles = manager.list_profiles();
+        let profiles = manager.list_profiles_for(None);
         assert!(profiles.iter().any(|p| p.0 == "default"));
         assert!(profiles.iter().any(|p| p.0 == "user"));
     }
@@ -2490,14 +2430,15 @@ mod tests {
             Some("https://example.com/"),
             "the listing's URL observation reached the registry"
         );
-        // The old-driver shape: no targetId was ever learnable, so the
-        // registry holds the URL and must NOT be able to call the tab gone
-        // (判据 §8 — 'I cannot tell' is not a verdict).
-        let identity = registry
-            .resolve_identity("default", "1", &[])
-            .expect("a recorded identity without a targetId resolves, never TabGone");
-        assert_eq!(identity.target_id, None);
-        assert_eq!(identity.last_url.as_deref(), Some("https://other.example/"));
+        // The old-driver shape: a listing row knows no targetId, so the
+        // registry holds the URL — and nothing else. The liveness question is
+        // answered at the engine layer now, not here (判据 §8 — 'I cannot
+        // tell' is not a verdict).
+        assert_eq!(
+            registry.last_url("default", "1").as_deref(),
+            Some("https://other.example/"),
+            "the listing's URL observation reached the registry"
+        );
     }
 
     #[tokio::test]
@@ -2654,79 +2595,6 @@ mod tests {
         config
     }
 
-    /// The view accessor spec §3.2 asks for, and the one property that makes it
-    /// honest: an `ExistingSession` profile has no Aleph-owned browser, so it
-    /// must answer `None` rather than somebody else's endpoint. The live view is
-    /// Managed-only on purpose — a user's own Chrome is already visible to them.
-    ///
-    /// The `get_driver` assertion is not decoration. Without it the
-    /// `ExistingSession` arm is an empty guard: point it at the driver too and
-    /// the test stays green, because no browser exists either way. Pinning
-    /// *which* driver the profile has is what makes the arm falsifiable
-    /// (判据 §3 — a guard that has never been falsified is not a guard).
-    #[tokio::test]
-    async fn live_endpoint_is_none_without_a_browser_and_never_answers_for_existing_session() {
-        let home = tempfile::tempdir().expect("tempdir");
-        let _home_guard = AlephHomeEnvGuard::acquire_and_set(home.path());
-        let manager = ProfileManager::new(BrowserSystemConfig::default());
-        // Both auto-injected profiles exist (`ProfileManager::new`): `default`
-        // is Cdp since the dual-engine flip, `user` is ExistingSession.
-        assert_eq!(manager.get_driver("default"), Some(BrowserDriver::Cdp));
-        assert_eq!(
-            manager.get_driver("user"),
-            Some(BrowserDriver::ExistingSession),
-            "precondition: `user` is the ExistingSession arm this asserts on"
-        );
-        assert!(manager.live_endpoint("default").is_none());
-        assert!(manager.live_endpoint("user").is_none());
-        assert!(manager.live_endpoint("no-such-profile").is_none());
-    }
-
-    /// The falsifying half of the test above.
-    ///
-    /// Asserting `None` for `user` on a manager that never launched anything
-    /// is an EMPTY guard: point the `ExistingSession` arm at the driver and it
-    /// stays green, because the driver has nothing to answer with either
-    /// (判据 §3 — a guard that cannot go red is not a guard). So give the
-    /// driver something to answer with, under that very profile's key, and the
-    /// arm has to be the thing that refuses.
-    ///
-    /// Not a contrived state: the driver's map is keyed by profile name, so a
-    /// profile that is `Managed` today and `ExistingSession` in tomorrow's
-    /// config is exactly this shape — and the live view showing Aleph's own
-    /// stale browser as "the user's Chrome" is the failure it would produce.
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn live_endpoint_refuses_an_existing_session_profile_that_has_a_child_in_the_map() {
-        let home = tempfile::tempdir().expect("tempdir");
-        let _home_guard = AlephHomeEnvGuard::acquire_and_set(home.path());
-        let manager = ProfileManager::new(BrowserSystemConfig::default());
-        assert_eq!(
-            manager.get_driver("user"),
-            Some(BrowserDriver::ExistingSession),
-            "precondition: `user` is the arm under test"
-        );
-
-        let child = std::process::Command::new("sleep")
-            .arg("120")
-            .spawn()
-            .expect("spawn the stand-in browser");
-        manager.insert_test_child("user", child);
-
-        assert!(
-            manager.live_endpoint("user").is_none(),
-            "the live view is Managed-only; an ExistingSession profile must not \
-             be handed an endpoint even when the driver has one under its key"
-        );
-        assert_eq!(
-            manager
-                .shutdown_browsers(engine::ENGINE_SHUTDOWN_BUDGET)
-                .await,
-            1,
-            "precondition: the driver really was holding a child to answer with"
-        );
-    }
-
     /// `session_active` used to answer from the tab registry, which its own doc
     /// called an approximation. Now that Aleph owns the process there is an
     /// exact answer, and the approximation must be GONE rather than kept beside
@@ -2764,7 +2632,10 @@ mod tests {
         // than about the clock.
         backdate(&manager, "default", Duration::from_secs(2));
         assert_eq!(manager.reap_idle().await, 0);
-        assert!(manager.live_endpoint("default").is_none());
+        assert!(
+            !manager.session_active("default"),
+            "the sweep must not have launched a browser in order to reap one"
+        );
     }
 
     /// spec §3.6 「退出时杀」. `std::process::Child` does NOT kill on drop, and
@@ -2874,8 +2745,8 @@ mod tests {
             "`close` disconnects; only the kill reclaims — the browser is still running"
         );
         assert!(
-            manager.live_endpoint("default").is_none(),
-            "the reaped profile must not still advertise an endpoint"
+            !manager.session_active("default"),
+            "the reaped profile must not still advertise a live browser"
         );
     }
 
@@ -2926,7 +2797,10 @@ mod tests {
             1,
             "a dead browser's record, sidecar and tabs are still state to reclaim"
         );
-        assert!(manager.live_endpoint("default").is_none());
+        assert!(
+            !manager.session_active("default"),
+            "a dead browser must not still read as a live one"
+        );
         assert!(
             !manager.has_tracked_tabs("default"),
             "the tab entries survived the sweep that was supposed to clear them"

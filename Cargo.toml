@@ -4,11 +4,14 @@
 [workspace]
 resolver = "2"
 members = [
+    "desktop/host",
     "desktop/shared",
     "desktop/macos",
     "desktop/linux",
     "desktop/windows",
+    "desktop/nsh-shell",
     "desktop/shell",
+    "desktop/nsh-shell",
     "shared/logging",
     "shared/protocol",
     "shared/ui_logic",
@@ -18,6 +21,10 @@ members = [
     "interfaces/cli",
     "interfaces/tui",
     "interfaces/webchat",
+    "interfaces/panel",
+    "interfaces/webchat/tabs/terminal-ui",
+    "interfaces/webchat/tabs/terminal-pilot",
+    "interfaces/webchat/tabs/terminal",
 
     "crates/aleph-cdp",
     "crates/aleph-slot-api",
@@ -164,6 +171,7 @@ loom = ["dep:loom"]
 # feature does not compile it and does not need the fake peer. The integration
 # tests get `aleph-cdp/testkit` through the dev-dependency, as before.
 test-helpers = []
+native-qa = []
 # Control plane UI (Leptos/WASM dashboard)
 control-plane = []
 # Disabled test modules awaiting rewrite
@@ -407,6 +415,13 @@ path = "src/bin/aleph-migrate/main.rs"
 test = false
 bench = false
 
+[[bin]]
+name = "aleph-panel-native-qa-gateway"
+path = "src/bin/aleph-panel-native-qa-gateway/main.rs"
+required-features = ["native-qa"]
+test = false
+bench = false
+
 [dev-dependencies]
 # Task9 independent source import guard only. Never used by normal library code.
 syn = { version = "=3.0.9", default-features = false, features = ["full", "parsing", "printing", "visit"] }
@@ -431,8 +446,9 @@ aleph-protocol = { path = "shared/protocol" }
 # wasm-bindgen / web-sys into alephcore's test build. With defaults off it
 # adds no new crates to the graph (same spelling `interfaces/tui` uses), and
 # there is no cycle: shared-ui-logic depends on aleph-protocol, never on
-# alephcore.
-shared-ui-logic = { path = "shared/ui_logic", default-features = false }
+# alephcore. The `panel` feature also lets the Gateway's Nebula declaration
+# test verify the declaration against the real Panel projection.
+shared-ui-logic = { path = "shared/ui_logic", default-features = false, features = ["panel"] }
 proptest = "1.12"
 rand = "0.10"
 http-body-util = "0.1.5"
@@ -507,6 +523,10 @@ required-features = ["test-helpers"]
 # surface where `scratch` is configured out, and rustc reports E0433.
 [[test]]
 name = "memory_modes_integration"
+required-features = ["test-helpers"]
+
+[[test]]
+name = "memory_runtime_lifecycle"
 required-features = ["test-helpers"]
 
 [[test]]

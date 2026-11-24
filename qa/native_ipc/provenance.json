@@ -1,0 +1,36 @@
+{
+  "revision": "f9fa908b1c215ea93401abbb6e42d107c7f350e8",
+  "created_at": "2026-11-03T23:59:00Z",
+  "artifacts": {
+    "shell": {
+      "path": "target/debug/aleph-desktop-shell.exe",
+      "sha256": "dff2efb824a1194a24281c85cd5b014e8bc08e1c7a37a1ade94d59f7b861de7d"
+    },
+    "gateway": {
+      "path": "target/debug/aleph-panel-native-qa-gateway.exe",
+      "sha256": "da5b58962b71f0ed4be21c08aeb9f8e3c92e71321e95d41701fbe5e1796cb81c"
+    },
+    "reaper": {
+      "path": "target/debug/examples/qa_credential_reaper.exe",
+      "sha256": "2527f0e5952ab00e92aea87d403761bd8e4e972875a91a182a2cd22091198e35"
+    },
+    "panel_wasm": {
+      "path": "interfaces/webchat/.panel-live/shell/aleph_panel_bg.wasm",
+      "sha256": "9fad7f0adc906d3a86be3644a0a1e8d03a3325e259d9ea7fc9fc9a7866777075"
+    },
+    "panel_manifest": {
+      "path": "interfaces/webchat/.panel-live/shell/manifest.json",
+      "sha256": "d9846d324cf8438c388afbc01800a3691bab3042023db394ba3ce4e0fe710a05"
+    },
+    "tauri_config": {
+      "path": "desktop/shell/tauri.conf.json",
+      "sha256": "220bacd6b0f81f6890acff0e4071795a0722fb2ac6bc6f7ca676e720bea5c544"
+    }
+  },
+  "features": {
+    "shell": ["qa-owned-root"],
+    "gateway": ["native-qa"],
+    "panel": ["panel-modular"]
+  },
+  "notes": "Panel route mount investigation artifacts (Task 2 preflight)"
+}

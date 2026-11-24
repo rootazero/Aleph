@@ -19,15 +19,13 @@ impl StateDatabase {
     pub async fn get_channel_offset(&self, channel_id: &str) -> Result<Option<i64>, AlephError> {
         let channel_id = channel_id.to_string();
         self.with_conn(move |conn| {
-            let result = conn
-                .query_row(
-                    "SELECT last_update_id FROM channel_offsets WHERE channel_id = ?1",
-                    params![channel_id],
-                    |row| row.get(0),
-                )
-                .optional()
-                .map_err(|e| AlephError::config(format!("Failed to get channel offset: {e}")))?;
-            Ok(result)
+            conn.query_row(
+                "SELECT last_update_id FROM channel_offsets WHERE channel_id = ?1",
+                params![channel_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| AlephError::config(format!("Failed to get channel offset: {e}")))
         })
         .await
     }

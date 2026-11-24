@@ -174,7 +174,9 @@ fn extract_path(line: &str) -> Option<String> {
         // number. The first qualifying colon is taken, so Unix `path:line:col`
         // behaves exactly as before (its first colon already qualifies).
         for (colon, _) in tok.match_indices(':') {
-            let path_part = &tok[..colon];
+            let Some(path_part) = tok.get(..colon) else {
+                continue;
+            };
             if path_part.is_empty() {
                 continue;
             }
@@ -188,14 +190,16 @@ fn extract_path(line: &str) -> Option<String> {
             if !path_part.contains('.') && !path_part.contains('/') && !path_part.contains('\\') {
                 continue;
             }
-            let rest = &tok[colon + 1..]; // drop the ':'
-                                          // rest must start with digits (the line number).
+            let Some(rest) = tok.get(colon.saturating_add(1)..) else {
+                continue;
+            };
+            // rest must start with digits (the line number).
             let line_digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
             if line_digits.is_empty() {
                 continue;
             }
             // Optional `:col`.
-            let after = &rest[line_digits.len()..];
+            let after = rest.get(line_digits.len()..).unwrap_or("");
             let col = after.strip_prefix(':').map(|c| {
                 c.chars()
                     .take_while(|ch| ch.is_ascii_digit())

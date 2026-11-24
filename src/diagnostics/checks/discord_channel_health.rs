@@ -5,9 +5,8 @@
 //! `DiscordConfig::validate()` (empty / too-short bot token) — but the
 //! validation surface there covers only the **credential half**. Misaligned
 //! intents (`guild_messages` on, `message_content` off → the bot sees message
-//! events whose `content` is the empty string), a `slash_commands_enabled`
-//! flag with no `application_id` (the gateway silently registers nothing),
-//! or a deliberately-tweaked `max_message_length` (Discord's hard limit is
+//! events whose `content` is the empty string), or a deliberately-tweaked
+//! `max_message_length` (Discord's hard limit is
 //! 2000; the only value the channel ever honours), are all surfaces where
 //! the bot **starts cleanly** and then quietly fails to read or reply.
 //!
@@ -88,15 +87,11 @@ enum DiscordVerdict {
 ///
 /// All fields are `Option` / default-fillable so a config that lacks a
 /// field we don't probe still parses cleanly — the *only* failure mode
-/// we recognise is "the file is not on disk" or "the bytes are not JSON".
+/// we recognise is "the file is not on disk" or "the bytes are not TOML".
 #[derive(Debug, Deserialize, Default)]
 struct DiscordConfigShape {
     #[serde(default)]
     bot_token: String,
-    #[serde(default)]
-    application_id: Option<u64>,
-    #[serde(default)]
-    slash_commands_enabled: Option<bool>,
     #[serde(default)]
     intents: IntentsShape,
     #[serde(default)]
@@ -152,14 +147,6 @@ impl DiscordConfigShape {
             problems.push("intents_misaligned");
         }
 
-        // slash_commands_enabled without an application_id: serenity's
-        // global-command registration requires both, and the gateway
-        // silently registers nothing if only one is present. The bot still
-        // starts; the slash UI never appears.
-        if self.slash_commands_enabled.unwrap_or(true) && self.application_id.is_none() {
-            problems.push("application_id_missing");
-        }
-
         // max_message_length override above Discord's hard ceiling. The
         // `discord` channel hard-codes 2000 in its `capabilities()`
         // builder; a config that promises something larger is meaningless
@@ -181,8 +168,8 @@ fn findings_for(verdict: &DiscordVerdict) -> Vec<Finding> {
         DiscordVerdict::Ok => vec![Finding::ok(
             CHECK_ID,
             "Discord channel config looks healthy",
-            "bot_token, intents, slash-command wiring, and message-length \
-             ceiling all line up with what the discord channel expects.",
+            "bot_token, intents, and the message-length ceiling all line up \
+             with what the discord channel expects.",
         )
         .with_tag(TAG_DISCORD_OK)],
         DiscordVerdict::Misconfigured(tags) => {
@@ -197,10 +184,6 @@ fn findings_for(verdict: &DiscordVerdict) -> Vec<Finding> {
                     "intents_misaligned" => {
                         "guild_messages is on but message_content is off — \
                          incoming message content will read as the empty string"
-                    }
-                    "application_id_missing" => {
-                        "slash_commands_enabled is true but no application_id \
-                         is set — slash commands will silently not register"
                     }
                     "max_message_length_too_high" => {
                         "max_message_length exceeds Discord's 2000-char ceiling — \
@@ -217,15 +200,14 @@ fn findings_for(verdict: &DiscordVerdict) -> Vec<Finding> {
             )
             .with_fix_hint(
                 "Edit the discord section of the config: provide a real bot \
-                 token, pair guild_messages with message_content, set \
-                 application_id when slash_commands_enabled is true, and \
+                 token, pair guild_messages with message_content, and \
                  leave max_message_length at the Discord ceiling (2000).",
             )
             .with_tag(TAG_DISCORD_MISCONFIGURED)]
         }
         DiscordVerdict::Unknown(reason) => vec![Finding::problem(
             CHECK_ID,
-            Severity::Info,
+            Severity::Warning,
             "Discord channel config status unknown",
             format!(
                 "Could not load the discord config to audit it: {reason}. \
@@ -242,7 +224,8 @@ fn findings_for(verdict: &DiscordVerdict) -> Vec<Finding> {
 
 /// Load and parse the discord config subset from `path`.
 ///
-/// Returns `Unknown(reason)` on any I/O or parse failure — the same shape
+/// An absent config means no channel is configured. Other I/O or parse failures
+/// return `Unknown(reason)` — the same shape
 /// `media_codecs` uses for `gst-inspect-1.0` being absent. The path is
 /// always the same on every supported platform (`config.toml` next to
 /// the data dir), so we resolve it eagerly and surface the resolution
@@ -250,30 +233,53 @@ fn findings_for(verdict: &DiscordVerdict) -> Vec<Finding> {
 async fn probe(path: &std::path::Path) -> DiscordVerdict {
     let bytes = match tokio::fs::read(path).await {
         Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return DiscordVerdict::Ok;
+        }
         Err(e) => return DiscordVerdict::Unknown(format!("read failed: {e}")),
+    };
+    let contents = match std::str::from_utf8(&bytes) {
+        Ok(contents) => contents,
+        Err(e) => return DiscordVerdict::Unknown(format!("config is not valid UTF-8: {e}")),
+    };
+    let value: toml::Value = match toml::from_str(contents) {
+        Ok(v) => v,
+        Err(e) => return DiscordVerdict::Unknown(format!("not valid TOML: {e}")),
     };
     // Extract just the discord section. A whole-file parse would let a
     // bad [channels.config] in another channel poison the verdict; we
-    // only care about the discord table.
-    let value: serde_json::Value = match serde_json::from_slice(&bytes) {
-        Ok(v) => v,
-        Err(e) => return DiscordVerdict::Unknown(format!("not valid JSON/TOML: {e}")),
-    };
+    // only care about the discord table. This follows Config::resolved_channels:
+    // a channel's `type` field wins, otherwise the section key is the type.
     let discord_section = value
         .get("channels")
-        .and_then(|c| c.as_array())
-        .and_then(|arr| {
-            arr.iter()
-                .find(|entry| entry.get("channel_type").and_then(|t| t.as_str()) == Some("discord"))
-        })
-        .and_then(|entry| entry.get("config"));
-    let Some(section) = discord_section else {
+        .and_then(toml::Value::as_table)
+        .and_then(|channels| {
+            channels.iter().find_map(|(id, entry)| {
+                let channel_type = entry
+                    .get("type")
+                    .and_then(toml::Value::as_str)
+                    .unwrap_or(id);
+                if channel_type != "discord" {
+                    return None;
+                }
+                let mut config = entry.clone();
+                if let Some(table) = config.as_table_mut() {
+                    table.remove("type");
+                }
+                Some(config)
+            })
+        });
+    let Some(discord_section) = discord_section else {
         // No discord channel is configured at all — that's an *OK* for the
         // discord check (we have nothing to audit), not a misconfiguration.
         // The operator may simply not have turned discord on.
         return DiscordVerdict::Ok;
     };
-    let shape: DiscordConfigShape = match serde_json::from_value(section.clone()) {
+    let section = match serde_json::to_value(discord_section) {
+        Ok(v) => v,
+        Err(e) => return DiscordVerdict::Unknown(format!("discord section malformed: {e}")),
+    };
+    let shape: DiscordConfigShape = match serde_json::from_value(section) {
         Ok(s) => s,
         Err(e) => return DiscordVerdict::Unknown(format!("discord section malformed: {e}")),
     };
@@ -308,24 +314,14 @@ impl DiscordChannelHealthCheck {
     }
 }
 
-impl Default for DiscordChannelHealthCheck {
-    fn default() -> Self {
-        Self::from_default_path()
-    }
-}
-
 #[async_trait]
 impl HealthCheck for DiscordChannelHealthCheck {
     fn id(&self) -> &'static str {
         CHECK_ID
     }
 
-    fn title(&self) -> &'static str {
-        "Discord channel config"
-    }
-
     fn timeout(&self) -> Duration {
-        // Probe is one file read + JSON parse. 5s covers any sane
+        // Probe is one file read + TOML parse. 5s covers any sane
         // filesystem; the engine's 20s default would be wasted slack.
         Duration::from_secs(5)
     }
@@ -354,8 +350,10 @@ mod tests {
 
     #[test]
     fn misconfigured_lists_each_problem() {
-        let verdict =
-            DiscordVerdict::Misconfigured(vec!["intents_misaligned", "application_id_missing"]);
+        let verdict = DiscordVerdict::Misconfigured(vec![
+            "intents_misaligned",
+            "max_message_length_too_high",
+        ]);
         let f = findings_for(&verdict);
         assert_eq!(f.len(), 1);
         assert_eq!(f[0].severity, Severity::Warning);
@@ -367,32 +365,30 @@ mod tests {
             f[0].detail
         );
         assert!(
-            f[0].detail.contains("application_id"),
+            f[0].detail.contains("max_message_length"),
             "detail: {}",
             f[0].detail
         );
     }
 
     #[test]
-    fn unknown_is_info_with_unknown_tag() {
+    fn unknown_is_warning_with_unknown_tag() {
         let verdict = DiscordVerdict::Unknown("parse error".to_string());
         let f = findings_for(&verdict);
         assert_eq!(f.len(), 1);
-        // Severity::Info, same as `Ok` — the distinction is the tag.
-        assert_eq!(f[0].severity, Severity::Info);
+        // An unreadable or malformed config must not look like a healthy check.
+        assert_eq!(f[0].severity, Severity::Warning);
         assert!(f[0].has_tag(TAG_DISCORD_UNKNOWN));
         assert!(f[0].detail.contains("parse error"));
     }
 
     /// `intent_violations` is the heart of the check: a healthy config
-    /// (full token + aligned intents + application_id when slash on)
-    /// reports no violations.
+    /// (full token + aligned intents + sane message ceiling) reports no
+    /// violations.
     #[test]
     fn healthy_config_has_no_violations() {
         let shape = DiscordConfigShape {
             bot_token: "x".repeat(DISCORD_MIN_BOT_TOKEN_LEN + 1),
-            application_id: Some(123),
-            slash_commands_enabled: Some(true),
             intents: IntentsShape::default(),
             max_message_length: Some(DISCORD_MAX_MESSAGE_LENGTH),
         };
@@ -434,29 +430,6 @@ mod tests {
     }
 
     #[test]
-    fn slash_without_application_id_violates() {
-        let shape = DiscordConfigShape {
-            slash_commands_enabled: Some(true),
-            application_id: None,
-            ..Default::default()
-        };
-        let v = shape.invariant_violations();
-        assert!(v.contains(&"application_id_missing"));
-    }
-
-    #[test]
-    fn slash_off_without_application_id_is_fine() {
-        // slash_commands_enabled=false means application_id is irrelevant.
-        let shape = DiscordConfigShape {
-            slash_commands_enabled: Some(false),
-            application_id: None,
-            ..Default::default()
-        };
-        let v = shape.invariant_violations();
-        assert!(!v.contains(&"application_id_missing"));
-    }
-
-    #[test]
     fn oversized_message_length_violates() {
         let shape = DiscordConfigShape {
             max_message_length: Some(DISCORD_MAX_MESSAGE_LENGTH + 1),
@@ -471,24 +444,15 @@ mod tests {
     #[tokio::test]
     async fn probe_a_healthy_config_reports_ok() {
         let mut tmp = tempfile::NamedTempFile::new().expect("tempfile");
-        let payload = serde_json::json!({
-            "channels": [{
-                "channel_type": "discord",
-                "config": {
-                    "bot_token": "x".repeat(DISCORD_MIN_BOT_TOKEN_LEN + 1),
-                    "application_id": 999,
-                    "slash_commands_enabled": true,
-                    "intents": {
-                        "guild_messages": true,
-                        "message_content": true,
-                        "direct_messages": true,
-                    },
-                    "max_message_length": DISCORD_MAX_MESSAGE_LENGTH,
-                }
-            }]
-        });
-        tmp.write_all(serde_json::to_vec(&payload).unwrap().as_slice())
-            .unwrap();
+        tmp.write_all(
+            format!(
+                "[channels.discord]\nbot_token = \"{}\"\nmax_message_length = {}\n",
+                "x".repeat(DISCORD_MIN_BOT_TOKEN_LEN + 1),
+                DISCORD_MAX_MESSAGE_LENGTH,
+            )
+            .as_bytes(),
+        )
+        .unwrap();
         let verdict = probe(tmp.path()).await;
         assert_eq!(verdict, DiscordVerdict::Ok);
     }
@@ -498,59 +462,39 @@ mod tests {
     #[tokio::test]
     async fn probe_a_config_without_discord_reports_ok() {
         let mut tmp = tempfile::NamedTempFile::new().expect("tempfile");
-        let payload = serde_json::json!({
-            "channels": [{
-                "channel_type": "telegram",
-                "config": {"token": "y"}
-            }]
-        });
-        tmp.write_all(serde_json::to_vec(&payload).unwrap().as_slice())
+        tmp.write_all(b"[channels.telegram]\ntoken = \"y\"\n")
             .unwrap();
         let verdict = probe(tmp.path()).await;
         assert_eq!(verdict, DiscordVerdict::Ok);
     }
 
-    /// End-to-end: a config whose discord section violates two invariants
-    /// at once reports both in a single `Misconfigured` verdict.
+    /// End-to-end: a config whose discord section has misaligned intents
+    /// reports the violation through the `Misconfigured` verdict.
     #[tokio::test]
-    async fn probe_a_misaligned_config_reports_each_violation() {
+    async fn probe_a_misaligned_config_reports_the_violation() {
         let mut tmp = tempfile::NamedTempFile::new().expect("tempfile");
-        let payload = serde_json::json!({
-            "channels": [{
-                "channel_type": "discord",
-                "config": {
-                    "bot_token": "x".repeat(DISCORD_MIN_BOT_TOKEN_LEN + 1),
-                    "slash_commands_enabled": true,
-                    "application_id": null,
-                    "intents": {
-                        "guild_messages": true,
-                        "message_content": false,
-                    }
-                }
-            }]
-        });
-        tmp.write_all(serde_json::to_vec(&payload).unwrap().as_slice())
-            .unwrap();
+        tmp.write_all(
+            format!(
+                "[channels.discord]\nbot_token = \"{}\"\n\n[channels.discord.intents]\nguild_messages = true\nmessage_content = false\n",
+                "x".repeat(DISCORD_MIN_BOT_TOKEN_LEN + 1)
+            )
+            .as_bytes(),
+        )
+        .unwrap();
         let verdict = probe(tmp.path()).await;
         match verdict {
             DiscordVerdict::Misconfigured(tags) => {
                 assert!(tags.contains(&"intents_misaligned"));
-                assert!(tags.contains(&"application_id_missing"));
             }
             other => panic!("expected Misconfigured, got {other:?}"),
         }
     }
 
-    /// A file that doesn't exist surfaces as `Unknown`, not as `Ok`.
-    /// Same rule as `media_codecs`: "I couldn't tell" is not the same
-    /// answer as "it's fine".
+    /// Missing configuration is an unconfigured channel, not a failed audit.
     #[tokio::test]
-    async fn probe_a_missing_file_reports_unknown() {
+    async fn probe_a_missing_file_reports_unconfigured_ok() {
         let verdict = probe(std::path::Path::new("/nonexistent/path/config.toml")).await;
-        match verdict {
-            DiscordVerdict::Unknown(reason) => assert!(reason.contains("read failed")),
-            other => panic!("expected Unknown, got {other:?}"),
-        }
+        assert!(matches!(verdict, DiscordVerdict::Ok));
     }
 
     /// A malformed file surfaces as `Unknown` with a parse error, not as
@@ -558,10 +502,10 @@ mod tests {
     #[tokio::test]
     async fn probe_a_malformed_file_reports_unknown() {
         let mut tmp = tempfile::NamedTempFile::new().expect("tempfile");
-        tmp.write_all(b"this is not json {{{").unwrap();
+        tmp.write_all(b"this is not TOML = {").unwrap();
         let verdict = probe(tmp.path()).await;
         match verdict {
-            DiscordVerdict::Unknown(reason) => assert!(reason.contains("JSON/TOML")),
+            DiscordVerdict::Unknown(reason) => assert!(reason.contains("TOML")),
             other => panic!("expected Unknown, got {other:?}"),
         }
     }

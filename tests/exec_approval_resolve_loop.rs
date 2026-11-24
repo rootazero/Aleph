@@ -23,11 +23,11 @@ fn request(id: &str) -> ApprovalRequest {
         // later grew a `debug_assert!` rejecting exactly that (a card a human
         // can only ever deny should never be raised), so all three tests
         // panicked before reaching the resolve loop they exist to cover.
-        analysis: CommandAnalysis::success(Vec::new(), Vec::new()),
+        analysis: CommandAnalysis::success(Vec::new()),
         agent_id: "main".to_string(),
         session_key: "telegram:123456".to_string(),
         reason: None,
-        originator_user_id: None,
+        originator_user_id: Some("user-1".to_string()),
         grant_key: None,
         // The default ceiling every gate but the operator-tier confirm gate
         // raises its cards with.
@@ -49,6 +49,14 @@ async fn approve_callback_wakes_blocked_waiter() {
     };
 
     let sink = ManagerCallbackSink::new(manager.clone());
+    let foreign = sink
+        .handle_callback(&format!("approve:{}:once", id), "different-user")
+        .await
+        .expect("foreign approval callback");
+    assert!(
+        !foreign.resolved,
+        "a different originator must not resolve the card"
+    );
     let out = sink
         .handle_callback(&format!("approve:{}:once", id), "user-1")
         .await

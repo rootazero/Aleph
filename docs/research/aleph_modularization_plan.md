@@ -652,7 +652,7 @@ API 覆盖分三档，加载时生成报告，告诉用户每个扩展哪些部�
   - `aleph plugin install <source>`：复用 marketplace（GitHub / 本地 / npm），安装时展示插件要认领的槽位、要申请的能力，以及兼容插件的 API 覆盖报告。
   - `aleph plugin grant | revoke <id> <item>`、`aleph plugin status <id>`。
 - 工具化（R8）：槽位的查询和设置同时暴露成工具（`slots.list` / `slots.set`），模型可以在用户授权后帮用户换模块。授权本身不暴露成模型可调用的工具。
-- Panel：在 Leptos 面板里加槽位视图和 hook 链视图（R2，UI 逻辑在 WASM 端），数据来自 `SlotPlan` 和 `HookRegistry` 快照的投影。
+- Panel：槽位和 hook 链视图仍以 `SlotPlan` 与 `HookRegistry` 投影为设计输入，不是新的权威。当前面板为 Leptos/WASM；R2 要求唯一共享呈现源，[NSH 迁移](../reference/DESKTOP_SHELL.md#nsh-panel-migration--panel-迁移)目标为共享 TSX 与 Native Components/Web fallback，不改变 L1/L2/L3。 / The renderer can migrate; these views remain projections.
 - 会话状态：当前会话里有槽位处于 Fallback / Failed 时，在会话状态里显示，不只出现在 CLI。
 - 每次工具调用的结果元数据都带 `served_by`（slot、backend、generation），排障和审计都有据可查。
 

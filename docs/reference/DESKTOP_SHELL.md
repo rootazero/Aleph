@@ -1,5 +1,41 @@
 # DESKTOP_SHELL.md
 
+## NSH macOS Phase10 scope / NSH macOS Phase10 范围
+
+`desktop/nsh-shell/` is the official NSH 0.6.0 alternative host for the same
+Leptos/WASM Panel, not a second business UI. Its resident window, tray, summon
+hotkey, validated `aleph://open`, notifications and placement have local macOS
+evidence. [Phase10 closeout](../superpowers/runs/2026-11-21-phase10-closeout.md)
+uses the explicitly approved Quit-only median/p95 ≤ 1.30× amendment; it does
+**not** claim faster Quit or a pass under the original limits. Physical display
+topology remains user-deferred and NOT TESTED. / NSH 只托管同一 Panel；按用户批准的
+退出门槛修订收尾，不声称提速，多屏拓扑仍未测试。
+
+The Tauri host described below remains available and was the G7 comparator.
+No default desktop switch, daemon-supervisor migration, release distribution,
+Windows/Linux NSH acceptance or Tauri removal follows. NSH uses an existing
+Gateway; its root owns native callbacks and tasks, not that Gateway's lifetime.
+`ALEPH_SHELL_HOTKEY=disabled` avoids shortcut registration. Notification OS
+permission is not a product feature-disable switch; no such switch is supplied.
+/ 保留下述 Tauri；NSH 不接管独立 Gateway，热键可禁用，通知权限不等于功能开关。
+
+Phase11 now has a [scoped real Panel/native status proof](../superpowers/runs/2026-11-22-phase11-production-panel-receipt.json): the regenerated canonical WASM performs an empty nonce-isolated credential load, obtains real credentialless Gateway authorization and renders its actual read-only native login-status component. The [QA guide](../../qa/phase11_nsh_panel_status.md) separates this from protected pairing, OS writes, performance and platform/default/dual-track acceptance. / 已验证真实 Panel 的有限功能链路，不是全期或跨平台验收。
+
+A separate [protected Panel checkpoint](../superpowers/runs/2026-11-22-phase11-protected-panel-receipt.json) proves actual ticket submission, native save, distinct-document stored-credential reload, isolated deletion and canonical helper-confirmed Alice binding plus shutdown. Its [guide](../../qa/phase11_nsh_pairing.md) states that the protected-auth helper is not the full production server; TLS/remote, other platforms, service/default/dual-track and removal remain open. / 受保护配对证据独立，不扩张完整生产服务或三平台结论。
+
+
+## NSH Panel migration / Panel 迁移
+
+- **当前挂载 / Current mount:** [NSH main](../../desktop/nsh-shell/src/main.rs) hosts the existing Leptos/WASM Panel in a WebView; Tauri remains available. [`panel-modular`](../../interfaces/webchat/Cargo.toml) is opt-in, not a default feature. Its actual `PanelShell` render sites are in [`app.rs`](../../interfaces/webchat/src/app.rs). / NSH 仍托管现有 Panel；模块化面板经 feature 启用，不是另一个生产 UI 权威。
+- **S0 基础 / Foundation:** [Gateway `system.hello`](../../src/gateway/handlers/system_hello.rs) on the legacy `/ws` path follows `connect`; it selects a compatible minor and advertises only implemented features. Its legacy limits are compatibility hints, not enforced bounds. / 旧入口的协商值不等于准入，也不代表旧 WS 已部署 IPC 帧上限。
+- **S1-A 共享分发 / Shared dispatch:** The existing `/ws` path uses the [common RPC executor](../../src/gateway/server/connection/rpc.rs), and [Client pending calls](../../shared/client/src/connection/requests.rs) belong to one socket. S1-A itself mounted no listener. [Verification receipt](../superpowers/runs/2026-11-23-nsh-panel-s1a-shared-dispatch-verification.md). / 共享分发与请求隔离已验证，旧生产入口不变。
+- **S1-B 本地只读 IPC / Read-only Desktop IPC:** An explicit `--desktop-ipc <socket>` mounts the [Unix listener](../../src/gateway/server/connection/local_ipc.rs) using [bounded frames](../../shared/protocol/src/framing.rs), same-account OS authentication, and the instance's live Core owner. The caller supplies a fresh path in its private directory each launch. The dedicated [NSH status command](../../desktop/nsh-shell/src/ipc_status.rs) queries `health` via the shared Client; WebView still uses its existing transport. / 不回退 TCP/WS；仅允许共享的 [`V1_METHODS`](../../src/gateway/server/connection/mod.rs)（S1 时为 `health`、`sessions.list`、`panel.capabilities.snapshot`；S3 与 Memory Nebula 分别增加会话和只读图谱方法，见下）。[S1-B 回执 / receipt](../superpowers/runs/2026-11-23-nsh-panel-s1b-desktop-ipc-verification.md) records macOS native verification; see the independent [Linux native retest](../superpowers/runs/2026-11-23-nsh-panel-s1b-linux-native-retest.md) for Linux. Windows production still refuses both opt-in commands; the [Windows Named Pipe receipt](../superpowers/runs/2026-11-23-nsh-panel-s1b-windows-named-pipe-verification.md) separates candidate evidence from the missing alternate-account gate. / Windows 生产入口仍拒绝，候选结果不代替异账户验收。
+- **S1-C 浏览器只读接入 / Read-only Web v1:** The [native TLS listener](../../src/gateway/server/connection/web_v1.rs) mounts explicit same-origin `POST /v1/session` and `GET /v1/ws`. An active paired device or explicitly user-bound one-time ticket yields a short-lived host-only Cookie; it does not change the Core principal. `system.hello` precedes bounded binary calls limited to the same `V1_METHODS` as Desktop IPC (at S1 `health`, `sessions.list`, `panel.capabilities.snapshot`; S3 and Memory Nebula extend the allowlist with chat and read-only graph methods, below); hello carries an opaque per-principal `subject` (HMAC of the user under the shared-token secret) for client-side layout keys. / [S1-C 验证回执](../superpowers/runs/2026-11-23-nsh-panel-s1c-web-v1-verification.md)记录真实 Chrome 证据；旧 `/ws` 和现有 Panel 不换线，未支持代理终止 TLS。
+- **S2 可定制 TSX 壳 / Customizable TSX shell (opt-in):** [`interfaces/panel`](../../interfaces/panel/nsh.json) is one TSX source (shell, layout editor, pairing form, Overview / Sessions / Capabilities modules) plus the Rust UI set [`aleph-panel-ui`](../../interfaces/panel/src/lib.rs) over the shared [panel model](../../shared/ui_logic/src/panel/mod.rs). [`PanelLayout`](../../shared/ui_logic/src/panel/layout.rs) persists only stable tab IDs under `aleph.panel.layout.v1:<endpoint>:<subject>`; a tab the snapshot no longer offers shows as unavailable and never runs. Desktop: the shell's `tsx-panel` feature with `ALEPH_SHELL_PANEL=tsx` mounts one embedded `AppView` ([`panel_surface.rs`](../../desktop/nsh-shell/src/panel_surface.rs); a second is refused) whose [host functions](../../desktop/nsh-shell/src/panel_host.rs) reach the Gateway only through the Desktop IPC socket named by `ALEPH_SHELL_PANEL_IPC`, with no WS fallback (macOS only). Web: [`web/host.js`](../../interfaces/panel/web/host.js) speaks the Web v1 framing, and the Gateway serves the package at `/v1/panel/` with a CSP only when `[gateway] panel_web_dir` is set ([`panel_routes`](../../src/gateway/server/connection/web_v1.rs)). Recipes: `just panel-tsx-test`, `panel-tsx-bundle`, `panel-tsx-web`, `shell-tsx-dev <socket>`. [S2 receipt](../superpowers/runs/2026-11-23-nsh-panel-s2-shell-receipt.md) (macOS real-machine Desktop + Chrome). / 默认渲染仍是 Leptos/WASM；TSX 壳需显式启用，DOM-ABI 社区 tab 在其中显示为不可用。
+- **记忆星云 / Memory Nebula (opt-in):** Core advertises `aleph:memory-nebula` only when `graph.query`, `graph.search`, and `graph.node_detail` are registered. Desktop IPC and Web v1 expose exactly those graph reads, never graph mutations; registration is not a readiness promise. The [shared TSX module](../../interfaces/panel/modules/MemoryNebula.tsx) renders the same bounded scene and accessible list on both hosts. It does not fall back to legacy `/ws`. / 三个读取方法挂载才公布入口；运行时停用后仍按原权限与错误语义处理。旧 Leptos 图继续使用原入口，不渲染此 TSX 模块。
+- **S3 会话纵切 / Chat slice (in the opt-in TSX shell):** `V1_METHODS` adds `chat.history`, `chat.send`, `chat.abort`; v1 writes keep the idempotency cache (`idempotency_key`). The hello feature `live_events` ([`Feature::LiveEvents`](../../shared/protocol/src/system_hello.rs)) is implemented only by the v1 endpoints (`V1_FEATURES`). Once negotiated, the Gateway pushes id-less frames that pass the same [`admit_event`](../../src/gateway/server/connection/event_admission.rs) as legacy `/ws` (ownership, scope, audience, projection), narrowed to `V1_EVENT_TOPICS` (`stream.run_accepted`, `stream.response_chunk`, `stream.run_complete`, `stream.run_error`, `connection.warning`). An oversized frame becomes `connection.warning` and the connection stays; bus lag sends the warning and closes. There is no replay: Chat refetches `chat.history` after a warning, a dropped desktop frame (`connection.stale`) or a reconnect. Both hosts deliver frames as the host event `aleph.event {topic, data}` ([`panel_host.rs`](../../desktop/nsh-shell/src/panel_host.rs), [`web/host.js`](../../interfaces/panel/web/host.js)); modules subscribe with SDK `on(topicPrefix)`. [`Chat.tsx`](../../interfaces/panel/modules/Chat.tsx): history → send (one v4-format key per attempt, built from `Math.random` because the desktop runtime has no Web Crypto) → streamed preview by `run_id` → refetch; Stop → `chat.abort`; a send lost with the connection is reported as unknown and never retried. Sessions rows open their session in Chat. The providerless (simulated) run path now checks session ownership like the real engine. [S3 receipt](../superpowers/runs/2026-11-24-nsh-panel-s3-chat-receipt.md) (macOS Desktop + Chrome). / v1 端点协商 `live_events` 后推送经同一准入的会话流帧；无重放，断线或告警后重取快照。Linux/Windows、Chrome 内真实输入法、桌面端 Stop 未验证。
+- **目标与退场 / Target and retirement:** [Approved design](../superpowers/specs/2026-11-22-nsh-panel-modular-refactor-design.md) targets one shared TSX source, Native Components with Web fallbacks, and Core-owned capability and authorization. Migrating the remaining pages into the TSX shell (after the S3 chat slice), Linux/Windows embedding, the default switch and S4 snapshot/replay remain separate work. The [migration roadmap](../superpowers/plans/2026-11-22-nsh-panel-migration-roadmap.md) retains per-surface replacement proof, three native platforms, and a real common 14-day dual track before Tauri removal. / 未完成对应验证，不切默认、不删旧入口。
+
 The **desktop shell** (`desktop/shell/`, crate `aleph-desktop-shell`) is the
 "last-mile native shell" — a thin Tauri v2 app that turns the existing Leptos
 Panel into a real desktop application. It is **not** the Panel and **not** the
@@ -30,7 +66,7 @@ lifecycle, OS notifications, and launch-at-login.
 ```
 ┌──────────────────── aleph-desktop-shell (Tauri v2) ────────────────────┐
 │  main.rs     builder, window, plugins, run-loop, daemon supervisor      │
-│  daemon.rs   locate / launch / probe aleph-server; relaunch if it dies  │
+│  daemon.rs   legacy reconcile / explicit stop; shared startup reexports │
 │  tray.rs     system tray icon + menu                                    │
 │  notify.rs   ws://…/ws  → subscribe → OS notifications  (best-effort)    │
 │  update.rs   background GitHub-Releases auto-update    (best-effort)     │
@@ -46,7 +82,7 @@ lifecycle, OS notifications, and launch-at-login.
 
 ### Startup flow
 
-1. The window opens showing the bundled splash (`splash/index.html`), at the
+1. The window opens showing the bundled splash (`desktop/shell/splash/index.html`), at the
    size and position it had last run.
 2. A background thread (its own Tokio runtime) probes the daemon port. If a
    foreign process holds it the shell fails fast with a clear message;
@@ -136,6 +172,8 @@ stop the local daemon.
 
 ### Daemon health supervision
 
+The full Tauri shell delegates startup, status-only readiness probes and relaunch I/O to the unpublished `aleph-desktop-host` library in `desktop/host/src/local_server.rs`. Opt-in NSH `embedded-core` uses the same launcher but checks canonical `/health` and `/ready` documents for the local target before mounting the Panel. Only connection refusal permits launching the bundled sibling; incompatible listeners are left untouched. That compatibility check does not authenticate a process. NSH has no persistent supervisor or stop action yet; version takeover, legacy autostart removal and explicit stop remain in `desktop/shell/src/daemon.rs`. See the [scoped admission receipt](../superpowers/runs/2026-11-22-phase11-gateway-admission-receipt.json). / NSH 仅显式启用的本地 full 路径执行严格启动准入；不接管现有进程，尚未完成监督、停服与三平台验收。
+
 The daemon can crash, be killed, or be stopped out from under the shell. A
 supervisor task probes `GET /ready` every few seconds for the shell's whole
 lifetime. After a short run of failures it declares the daemon down,
@@ -203,6 +241,14 @@ unconfigured endpoint is logged and the shell carries on unaffected. CalVer
 versions (`YY.M.D`) are valid semver, so the updater's version comparison
 works unchanged; see *Build & release* for how CI signs and publishes the
 update manifest.
+
+`desktop/host/src/updater.rs::verify_artifact` is the pure, source-compatible
+minisign adapter for the NSH migration; it has no default trust key or I/O and
+is not yet mounted as an NSH updater. It verifies the global signature before
+using the signed version. Existing configs leave `requireSignedVersion` at the
+pinned plugin's false default, so authenticated old artifacts without a signed
+version still do not bind the announced version. This is not complete rollback
+protection. / NSH 迁移现阶段只有纯验签器；未接下载或安装，不改变现有信任和兼容策略，也不冒称完整防回滚。
 
 ### `aleph://` deep links
 

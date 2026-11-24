@@ -43,6 +43,7 @@ fn panel_url(server_url: &str) -> String {
 }
 
 /// Open the Panel URL in the system browser. With `--json` only prints the URL.
+#[allow(clippy::unused_async)]
 pub async fn run(server_url: &str, json: bool) -> CliResult<()> {
     let url = panel_url(server_url);
 

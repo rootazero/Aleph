@@ -1,4 +1,11 @@
 use super::*;
+
+#[path = "memory_runtime_tests.rs"]
+mod memory_runtime;
+
+#[path = "memory_runtime_boundary_tests.rs"]
+mod memory_runtime_boundary;
+
 // HookExecutor + make_command_hook are only exercised by the cfg(unix) hook tests below.
 #[cfg(unix)]
 use crate::extension::hooks::HookExecutor;
@@ -75,6 +82,45 @@ fn in_mem_session() -> Arc<dyn crate::session::service::SessionService> {
     migrate_add_session_events(&conn).unwrap();
     let store: Arc<dyn SessionEventStore> = Arc::new(SqliteEventStore::new(conn));
     Arc::new(InProcessActorSessionService::new(store))
+}
+
+/// The subagent tool the list / describe / execute tests attach beside the
+/// registry: a real `SubagentTool` over a canned-reply provider.
+fn mock_subagent_tool(reply: &'static str) -> Arc<crate::agents::subagent_tool::SubagentTool> {
+    use crate::agents::background_tracker::BackgroundAgentTracker;
+    use crate::agents::AgentRegistry;
+    use crate::harness::chain_context::ChainContext;
+    use crate::providers::adapter::{ProviderResponse, RequestPayload};
+    use crate::providers::AiProvider;
+    use std::future::Future;
+    use std::pin::Pin;
+
+    struct MockProvider(&'static str);
+    impl AiProvider for MockProvider {
+        fn process<'a>(
+            &'a self,
+            _p: RequestPayload<'a>,
+        ) -> Pin<Box<dyn Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>>
+        {
+            let reply = self.0;
+            Box::pin(async move { Ok(ProviderResponse::text_only(reply.into())) })
+        }
+        fn name(&self) -> &str {
+            "mock"
+        }
+        fn color(&self) -> &str {
+            "#000"
+        }
+    }
+
+    Arc::new(crate::agents::subagent_tool::SubagentTool::new(
+        Arc::new(MockProvider(reply)),
+        ChainContext::new(),
+        Arc::new(AgentRegistry::with_builtins()),
+        Arc::new(BackgroundAgentTracker::new()),
+        in_mem_session(),
+        Arc::new(NoopParentTools),
+    ))
 }
 
 struct StubTool {
@@ -196,43 +242,7 @@ fn metadata_schema_reflects_rewriter_after_cache_bump() {
 // -------------------------------------------------------------------------
 #[tokio::test]
 async fn list_includes_subagent_tool_when_set() {
-    use crate::agents::background_tracker::BackgroundAgentTracker;
-    use crate::agents::AgentRegistry;
-    use crate::harness::chain_context::ChainContext;
-    use crate::providers::adapter::{ProviderResponse, RequestPayload};
-    use crate::providers::AiProvider;
-    use std::future::Future;
-    use std::pin::Pin;
-
-    struct MockProvider;
-    impl AiProvider for MockProvider {
-        fn process<'a>(
-            &'a self,
-            _p: RequestPayload<'a>,
-        ) -> Pin<Box<dyn Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>>
-        {
-            Box::pin(async { Ok(ProviderResponse::text_only("ok".into())) })
-        }
-        fn name(&self) -> &str {
-            "mock"
-        }
-        fn color(&self) -> &str {
-            "#000"
-        }
-    }
-
-    let provider: Arc<dyn AiProvider> = Arc::new(MockProvider);
-    let chain = ChainContext::new();
-    let registry_arc = Arc::new(AgentRegistry::with_builtins());
-    let tracker = Arc::new(BackgroundAgentTracker::new());
-    let st = Arc::new(crate::agents::subagent_tool::SubagentTool::new(
-        provider,
-        chain,
-        registry_arc,
-        tracker,
-        in_mem_session(),
-        Arc::new(NoopParentTools),
-    ));
+    let st = mock_subagent_tool("ok");
 
     let registry = make_registry(&["read_file"]);
     let svc = ScopedToolService::new(registry, BTreeSet::new()).with_subagent_tool(st);
@@ -269,40 +279,7 @@ async fn list_includes_subagent_tool_when_set() {
 // -------------------------------------------------------------------------
 #[tokio::test]
 async fn subagent_survives_non_empty_allow_set() {
-    use crate::agents::background_tracker::BackgroundAgentTracker;
-    use crate::agents::AgentRegistry;
-    use crate::harness::chain_context::ChainContext;
-    use crate::providers::adapter::{ProviderResponse, RequestPayload};
-    use crate::providers::AiProvider;
-    use std::future::Future;
-    use std::pin::Pin;
-
-    struct MockProvider;
-    impl AiProvider for MockProvider {
-        fn process<'a>(
-            &'a self,
-            _p: RequestPayload<'a>,
-        ) -> Pin<Box<dyn Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>>
-        {
-            Box::pin(async { Ok(ProviderResponse::text_only("ok".into())) })
-        }
-        fn name(&self) -> &str {
-            "mock"
-        }
-        fn color(&self) -> &str {
-            "#000"
-        }
-    }
-
-    let provider: Arc<dyn AiProvider> = Arc::new(MockProvider);
-    let st = Arc::new(crate::agents::subagent_tool::SubagentTool::new(
-        provider,
-        ChainContext::new(),
-        Arc::new(AgentRegistry::with_builtins()),
-        Arc::new(BackgroundAgentTracker::new()),
-        in_mem_session(),
-        Arc::new(NoopParentTools),
-    ));
+    let st = mock_subagent_tool("ok");
 
     // Production-shaped allow set: only registry-known tool names, no
     // "subagent" entry — exactly what gateway run_loop produces.
@@ -351,43 +328,7 @@ async fn subagent_survives_non_empty_allow_set() {
 // -------------------------------------------------------------------------
 #[tokio::test]
 async fn execute_routes_to_subagent_tool_by_name() {
-    use crate::agents::background_tracker::BackgroundAgentTracker;
-    use crate::agents::AgentRegistry;
-    use crate::harness::chain_context::ChainContext;
-    use crate::providers::adapter::{ProviderResponse, RequestPayload};
-    use crate::providers::AiProvider;
-    use std::future::Future;
-    use std::pin::Pin;
-
-    struct MockProvider;
-    impl AiProvider for MockProvider {
-        fn process<'a>(
-            &'a self,
-            _p: RequestPayload<'a>,
-        ) -> Pin<Box<dyn Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>>
-        {
-            Box::pin(async { Ok(ProviderResponse::text_only("subagent result".into())) })
-        }
-        fn name(&self) -> &str {
-            "mock"
-        }
-        fn color(&self) -> &str {
-            "#000"
-        }
-    }
-
-    let provider: Arc<dyn AiProvider> = Arc::new(MockProvider);
-    let chain = ChainContext::new();
-    let registry_arc = Arc::new(AgentRegistry::with_builtins());
-    let tracker = Arc::new(BackgroundAgentTracker::new());
-    let st = Arc::new(crate::agents::subagent_tool::SubagentTool::new(
-        provider,
-        chain,
-        registry_arc,
-        tracker,
-        in_mem_session(),
-        Arc::new(NoopParentTools),
-    ));
+    let st = mock_subagent_tool("subagent result");
 
     // Registry has NO "subagent" tool — proves routing goes to st, not inner
     let registry = make_registry(&["read_file"]);
@@ -712,18 +653,7 @@ fn assert_denial_observed(marker: &std::path::Path, err: &ToolError) {
 
 #[cfg(unix)]
 fn guest_turn(session: &str) -> crate::tools::turn_context::TurnContext {
-    crate::tools::turn_context::TurnContext {
-        session_key: crate::routing::session_key::SessionKey::main(session),
-        run_id: String::new(),
-        channel_id: String::new(),
-        conversation_id: String::new(),
-        caller_role: Some("guest".to_string()),
-        channel_tool_permissions: None,
-        unattended: false,
-        plan_gate: None,
-        side_question: false,
-        telecom_authority: None,
-    }
+    role_turn(session, "guest")
 }
 
 /// Arm 1: the `deny_rule` gate (here an explicit `[policies.tool_permissions]`
@@ -1049,8 +979,7 @@ async fn after_tool_hook_observer_fires_on_success() {
     let svc = ScopedToolService::new(echo_registry(), BTreeSet::new())
         .with_hook_executor(executor, "test-session");
 
-    let _ = svc
-        .execute("echo", json!({}))
+    svc.execute("echo", json!({}))
         .await
         .expect("execute should succeed");
 
@@ -1876,6 +1805,24 @@ fn turn_ctx(agent: &str) -> crate::tools::turn_context::TurnContext {
     }
 }
 
+/// The same isolation rule as `turn_ctx`, for the tier tests that differ only
+/// in the caller's role. A role-carrying turn has no channel behind it, so the
+/// channel and conversation stay empty.
+fn role_turn(agent: &str, role: &str) -> crate::tools::turn_context::TurnContext {
+    crate::tools::turn_context::TurnContext {
+        session_key: crate::routing::session_key::SessionKey::main(agent),
+        run_id: String::new(),
+        channel_id: String::new(),
+        conversation_id: String::new(),
+        caller_role: Some(role.to_string()),
+        channel_tool_permissions: None,
+        unattended: false,
+        plan_gate: None,
+        side_question: false,
+        telecom_authority: None,
+    }
+}
+
 #[tokio::test]
 async fn session_grant_skips_reprompt_within_session() {
     // An "approve for session" must be remembered for the SAME call: the first
@@ -2199,26 +2146,12 @@ async fn execute_without_turn_context_leaves_session_unset() {
 
 #[tokio::test]
 async fn chat_tier_blocked_from_config_tool() {
-    use crate::routing::session_key::SessionKey;
     let registry = make_registry(&["cron_manage"]);
-    let svc = ScopedToolService::new(registry, BTreeSet::new()).with_turn_context(
-        crate::tools::turn_context::TurnContext {
-            // Distinct from every other test's key on purpose: `main()` is
-            // deterministic, and the approval stores it keys (session memory +
-            // denial ledger) are process-global with a sticky session-pause
-            // flag. Two tests on one key share a bucket and go order-dependent.
-            session_key: SessionKey::main("agent-cfg-chat-tier"),
-            run_id: String::new(),
-            channel_id: String::new(),
-            conversation_id: String::new(),
-            caller_role: Some("guest".to_string()),
-            channel_tool_permissions: None,
-            unattended: false,
-            plan_gate: None,
-            side_question: false,
-            telecom_authority: None,
-        },
-    );
+    // Distinct session key per test: the approval stores this key addresses
+    // (`main()` is deterministic) are process-global with a sticky session-pause
+    // flag, so two tests on one key share a bucket and go order-dependent.
+    let svc = ScopedToolService::new(registry, BTreeSet::new())
+        .with_turn_context(role_turn("agent-cfg-chat-tier", "guest"));
     let err = svc.execute("cron_manage", json!({})).await.unwrap_err();
     assert!(
         matches!(err, ToolError::PermissionDenied { .. }),
@@ -2228,22 +2161,9 @@ async fn chat_tier_blocked_from_config_tool() {
 
 #[tokio::test]
 async fn operator_tier_allowed_config_tool() {
-    use crate::routing::session_key::SessionKey;
     let registry = make_registry(&["cron_manage"]);
-    let svc = ScopedToolService::new(registry, BTreeSet::new()).with_turn_context(
-        crate::tools::turn_context::TurnContext {
-            session_key: SessionKey::main("agent-cfg-operator-tier"),
-            run_id: String::new(),
-            channel_id: String::new(),
-            conversation_id: String::new(),
-            caller_role: Some("operator".to_string()),
-            channel_tool_permissions: None,
-            unattended: false,
-            plan_gate: None,
-            side_question: false,
-            telecom_authority: None,
-        },
-    );
+    let svc = ScopedToolService::new(registry, BTreeSet::new())
+        .with_turn_context(role_turn("agent-cfg-operator-tier", "operator"));
     assert!(svc.execute("cron_manage", json!({})).await.is_ok());
 }
 
@@ -2281,29 +2201,17 @@ impl crate::sandbox::exec_approval::gate::ApprovalRequester for StubApprover {
 
 #[tokio::test]
 async fn chat_tier_config_tool_approved_executes() {
-    use crate::routing::session_key::SessionKey;
     use crate::sandbox::exec_approval::gate::ApprovalOutcome;
     let mut reg = LoopToolRegistry::new();
     reg.register(Box::new(StubTool {
         tool_name: "cron_manage",
     }));
+    // Distinct session key per test: confirm_with_memory writes to the
+    // process-global denial_ledger / session_memory keyed by session, so
+    // sharing a key across tests would let the `denied` test's ledger entry
+    // auto-reject this one (order-dependent flake).
     let svc = ScopedToolService::new(Arc::new(reg), BTreeSet::new())
-        .with_turn_context(crate::tools::turn_context::TurnContext {
-            // Distinct session key per test: confirm_with_memory writes to the
-            // process-global denial_ledger / session_memory keyed by session, so
-            // sharing a key across tests would let the `denied` test's ledger
-            // entry auto-reject this one (order-dependent flake).
-            session_key: SessionKey::main("cfg-approve-test"),
-            run_id: String::new(),
-            channel_id: String::new(),
-            conversation_id: String::new(),
-            caller_role: Some("guest".to_string()),
-            channel_tool_permissions: None,
-            unattended: false,
-            plan_gate: None,
-            side_question: false,
-            telecom_authority: None,
-        })
+        .with_turn_context(role_turn("cfg-approve-test", "guest"))
         .with_config_approval(Arc::new(StubApprover(ApprovalOutcome::Approved)));
     assert!(
         svc.execute("cron_manage", json!({})).await.is_ok(),
@@ -2313,25 +2221,13 @@ async fn chat_tier_config_tool_approved_executes() {
 
 #[tokio::test]
 async fn chat_tier_config_tool_denied_rejected() {
-    use crate::routing::session_key::SessionKey;
     use crate::sandbox::exec_approval::gate::ApprovalOutcome;
     let mut reg = LoopToolRegistry::new();
     reg.register(Box::new(StubTool {
         tool_name: "cron_manage",
     }));
     let svc = ScopedToolService::new(Arc::new(reg), BTreeSet::new())
-        .with_turn_context(crate::tools::turn_context::TurnContext {
-            session_key: SessionKey::main("cfg-deny-test"),
-            run_id: String::new(),
-            channel_id: String::new(),
-            conversation_id: String::new(),
-            caller_role: Some("guest".to_string()),
-            channel_tool_permissions: None,
-            unattended: false,
-            plan_gate: None,
-            side_question: false,
-            telecom_authority: None,
-        })
+        .with_turn_context(role_turn("cfg-deny-test", "guest"))
         .with_config_approval(Arc::new(StubApprover(ApprovalOutcome::Denied)));
     let err = svc.execute("cron_manage", json!({})).await.unwrap_err();
     assert!(
@@ -2409,7 +2305,6 @@ impl LoopTool for OperatorConfirmTool {
 /// confirm the action the operator already read and authorized.
 #[tokio::test]
 async fn operator_approval_is_not_double_prompted_by_the_confirm_gate() {
-    use crate::routing::session_key::SessionKey;
     use crate::sandbox::exec_approval::gate::ApprovalOutcome;
     let mut reg = LoopToolRegistry::new();
     reg.register(Box::new(OperatorConfirmTool));
@@ -2420,18 +2315,7 @@ async fn operator_approval_is_not_double_prompted_by_the_confirm_gate() {
     let own_channel = StdArc::new(FakeRequester::new(ApprovalOutcome::Denied));
 
     let svc = ScopedToolService::new(Arc::new(reg), BTreeSet::new())
-        .with_turn_context(crate::tools::turn_context::TurnContext {
-            session_key: SessionKey::main("cfg-no-double-prompt"),
-            run_id: String::new(),
-            channel_id: String::new(),
-            conversation_id: String::new(),
-            caller_role: Some("guest".to_string()),
-            channel_tool_permissions: None,
-            unattended: false,
-            plan_gate: None,
-            side_question: false,
-            telecom_authority: None,
-        })
+        .with_turn_context(role_turn("cfg-no-double-prompt", "guest"))
         .with_config_approval(StdArc::clone(&operator) as _)
         .with_confirmation(StdArc::clone(&own_channel) as _);
 
@@ -2455,25 +2339,13 @@ async fn operator_approval_is_not_double_prompted_by_the_confirm_gate() {
 /// confirmation gate must still fire for it.
 #[tokio::test]
 async fn operator_tier_caller_still_hits_the_confirm_gate() {
-    use crate::routing::session_key::SessionKey;
     use crate::sandbox::exec_approval::gate::ApprovalOutcome;
     let mut reg = LoopToolRegistry::new();
     reg.register(Box::new(OperatorConfirmTool));
 
     let own_channel = StdArc::new(FakeRequester::new(ApprovalOutcome::Approved));
     let svc = ScopedToolService::new(Arc::new(reg), BTreeSet::new())
-        .with_turn_context(crate::tools::turn_context::TurnContext {
-            session_key: SessionKey::main("cfg-operator-still-confirms"),
-            run_id: String::new(),
-            channel_id: String::new(),
-            conversation_id: String::new(),
-            caller_role: Some("operator".to_string()),
-            channel_tool_permissions: None,
-            unattended: false,
-            plan_gate: None,
-            side_question: false,
-            telecom_authority: None,
-        })
+        .with_turn_context(role_turn("cfg-operator-still-confirms", "operator"))
         .with_confirmation(StdArc::clone(&own_channel) as _);
 
     svc.execute("vault_store", json!({"key": "k", "value": "v"}))
@@ -2944,16 +2816,8 @@ async fn approval_gates_no_longer_force_global_claims() {
     use crate::tools::service::ToolService;
 
     let ctx_with_role = |role: Option<&str>| crate::tools::turn_context::TurnContext {
-        session_key: crate::routing::session_key::SessionKey::main("op-gate-test"),
-        run_id: String::new(),
-        channel_id: "test".to_string(),
-        conversation_id: "conv".to_string(),
         caller_role: role.map(String::from),
-        channel_tool_permissions: None,
-        unattended: false,
-        plan_gate: None,
-        side_question: false,
-        telecom_authority: None,
+        ..turn_ctx("op-gate-test")
     };
 
     for role in [Some("guest"), Some("operator")] {
@@ -3069,18 +2933,7 @@ async fn every_card_names_the_rule_that_raised_it() {
         tool_name: "cron_manage",
     }));
     let guest = ScopedToolService::new(Arc::new(reg), BTreeSet::new())
-        .with_turn_context(crate::tools::turn_context::TurnContext {
-            session_key: crate::routing::session_key::SessionKey::main("rule-id-operator-gate"),
-            run_id: String::new(),
-            channel_id: String::new(),
-            conversation_id: String::new(),
-            caller_role: Some("guest".to_string()),
-            channel_tool_permissions: None,
-            unattended: false,
-            plan_gate: None,
-            side_question: false,
-            telecom_authority: None,
-        })
+        .with_turn_context(role_turn("rule-id-operator-gate", "guest"))
         .with_config_approval(StdArc::clone(&operator) as _);
     guest.execute("cron_manage", json!({})).await.unwrap();
     assert_eq!(operator.rule_ids(), vec![Some("operator_required")]);
@@ -3276,9 +3129,7 @@ impl LoopTool for FailingTestRunner {
     }
 }
 
-fn hygiene_store(
-    _name: &str,
-) -> (
+fn hygiene_store() -> (
     tempfile::TempDir,
     StdArc<crate::tools::result_store::ToolResultStore>,
 ) {
@@ -3300,7 +3151,7 @@ fn hygiene_store(
 /// the only available next move was to re-run the suite.
 #[tokio::test]
 async fn a_failing_test_run_reaches_the_model_as_signal_not_as_json_envelope_head() {
-    let (_scratch, hygiene) = hygiene_store("failing_test_run");
+    let (_scratch, hygiene) = hygiene_store();
     let mut registry = LoopToolRegistry::new();
     registry.register(Box::new(FailingTestRunner));
     // A retrieval tool to read the offload back: without one nothing is
@@ -3371,7 +3222,7 @@ async fn a_small_result_is_untouched_by_ingress_hygiene() {
             }
         }
     }
-    let (_scratch, hygiene) = hygiene_store("small_untouched");
+    let (_scratch, hygiene) = hygiene_store();
     let mut registry = LoopToolRegistry::new();
     registry.register(Box::new(Tiny));
     let svc = ScopedToolService::new(StdArc::new(registry), std::collections::BTreeSet::new())
@@ -3424,7 +3275,7 @@ async fn the_recovery_footer_names_only_retrieval_tools_the_model_can_call() {
         |names: &[&str]| -> BTreeSet<String> { names.iter().map(|n| (*n).to_string()).collect() };
 
     // Positive half: both callable ⇒ the search hint is offered.
-    let (_s1, store) = hygiene_store("footer_both");
+    let (_s1, store) = hygiene_store();
     let both = footer_of(
         ScopedToolService::new(registry(), allow(&["bash", "ctx_search", "file_read"]))
             .with_result_store(store),
@@ -3433,7 +3284,7 @@ async fn the_recovery_footer_names_only_retrieval_tools_the_model_can_call() {
     assert!(both.contains("ctx_search("), "both callable:\n{both}");
 
     // Not in the agent's allow set.
-    let (_s2, store) = hygiene_store("footer_not_allowed");
+    let (_s2, store) = hygiene_store();
     let not_allowed = footer_of(
         ScopedToolService::new(registry(), allow(&["bash", "file_read"])).with_result_store(store),
     )
@@ -3448,7 +3299,7 @@ async fn the_recovery_footer_names_only_retrieval_tools_the_model_can_call() {
     );
 
     // Denied by policy (and hidden from the model's list).
-    let (_s3, store) = hygiene_store("footer_denied");
+    let (_s3, store) = hygiene_store();
     let denied = footer_of(
         ScopedToolService::new(registry(), BTreeSet::new())
             .with_tool_permissions(perms(
@@ -3466,7 +3317,7 @@ async fn the_recovery_footer_names_only_retrieval_tools_the_model_can_call() {
 
     // Neither callable ⇒ nothing is offloaded: a bare path the model has no
     // tool to open is a dead handle. The cut says so instead.
-    let (_s4, store) = hygiene_store("footer_neither");
+    let (_s4, store) = hygiene_store();
     let neither = ScopedToolService::new(registry(), allow(&["bash"]))
         .with_result_store(store)
         .execute("bash", json!({}))
@@ -4912,7 +4763,7 @@ async fn an_allowlist_narrows_the_retrieval_set_under_it() {
     registry.register(Box::new(StubTool {
         tool_name: "file_read",
     }));
-    let (_scratch, store) = hygiene_store("allowlist_chain");
+    let (_scratch, store) = hygiene_store();
     let parent: StdArc<dyn ToolService> = StdArc::new(
         ScopedToolService::new(StdArc::new(registry), BTreeSet::new()).with_result_store(store),
     );
@@ -4966,7 +4817,7 @@ async fn an_agent_with_no_retrieval_tool_gets_a_cut_not_an_offload() {
     registry.register(Box::new(StubTool {
         tool_name: "file_read",
     }));
-    let (_scratch, store) = hygiene_store("no_retrieval_chain");
+    let (_scratch, store) = hygiene_store();
     let parent: StdArc<dyn ToolService> = StdArc::new(
         ScopedToolService::new(StdArc::new(registry), BTreeSet::new()).with_result_store(store),
     );
@@ -5196,21 +5047,26 @@ mod a3 {
         overlap: Option<StdArc<Barrier>>,
     }
 
+    impl RecordingHandler {
+        /// The plain spy these tests want: the approval-gated `terminal`
+        /// definition, no partial write, no cross-invocation barrier.
+        fn new(tag: &'static str, invoked: &StdArc<StdMutex<Vec<Invocation>>>) -> Self {
+            Self {
+                definition: definition("terminal", false),
+                tag,
+                invoked: StdArc::clone(invoked),
+                partial_write: None,
+                own_identity: unsafe_identity(1),
+                overlap: None,
+            }
+        }
+    }
+
     #[tokio::test]
     async fn fresh_canonical_entry_runs_real_handler_effect() {
         let registry = StdArc::new(ToolHandlerRegistry::new());
         let invoked = StdArc::new(StdMutex::new(Vec::new()));
-        register(
-            &registry,
-            RecordingHandler {
-                definition: definition("terminal", false),
-                tag: "handler1",
-                invoked: invoked.clone(),
-                partial_write: None,
-                own_identity: unsafe_identity(1),
-                overlap: None,
-            },
-        );
+        register(&registry, RecordingHandler::new("handler1", &invoked));
         let svc = service(&registry).with_confirmation(StdArc::new(SequenceRequester::new([
             ApprovalOutcome::Approved,
         ])));
@@ -5227,21 +5083,207 @@ mod a3 {
         assert_eq!(invoked.lock().unwrap().len(), 1);
     }
 
+    fn activation_gate_service(
+        constraints: Vec<crate::capability::constraints::Constraint>,
+        context: StdArc<StdMutex<crate::capability::constraints::ConstraintContext>>,
+    ) -> (ScopedToolService, StdArc<StdMutex<Vec<Invocation>>>) {
+        let registry = StdArc::new(ToolHandlerRegistry::new());
+        let invoked = StdArc::new(StdMutex::new(Vec::new()));
+        register(&registry, RecordingHandler::new("runtime-facts", &invoked));
+        let generation = crate::capability::ownership::OwnerGeneration(0);
+        let mut controller = crate::capability::activation::CapabilityActivationController::new(
+            None,
+            generation,
+            constraints,
+        );
+        controller.attach().unwrap();
+        controller
+            .activate(&context.lock().unwrap(), generation)
+            .unwrap();
+        (
+            service(&registry)
+                .with_confirmation(StdArc::new(SequenceRequester::new([
+                    ApprovalOutcome::Approved,
+                    ApprovalOutcome::Approved,
+                ])))
+                .with_capability_activation("terminal", StdArc::new(controller))
+                .with_capability_constraint_context(StdArc::new(move |name| {
+                    assert_eq!(name, "terminal");
+                    Ok(context.lock().unwrap().clone())
+                })),
+            invoked,
+        )
+    }
+
+    #[tokio::test]
+    async fn activation_gate_current_conditions_reach_real_execute() {
+        let context = StdArc::new(StdMutex::new(
+            crate::capability::constraints::ConstraintContext::now(1)
+                .unwrap()
+                .with_condition("permitted", true),
+        ));
+        let (svc, invoked) = activation_gate_service(
+            vec![crate::capability::constraints::Constraint::condition(
+                "permitted",
+            )],
+            context.clone(),
+        );
+        let allowed = with_call_identity(
+            Some(identity("condition-allowed")),
+            svc.execute("terminal", json!({"action": "write"})),
+        )
+        .await;
+        assert!(
+            allowed.is_ok(),
+            "satisfied owner condition was lost: {allowed:?}"
+        );
+        assert_eq!(invoked.lock().unwrap().len(), 1);
+        *context.lock().unwrap() = crate::capability::constraints::ConstraintContext::now(1)
+            .unwrap()
+            .with_condition("permitted", false);
+        let denied = with_call_identity(
+            Some(identity("condition-denied")),
+            svc.execute("terminal", json!({"action": "write"})),
+        )
+        .await;
+        assert!(
+            matches!(denied, Err(ToolError::PermissionDenied { reason, .. }) if reason.contains("permitted"))
+        );
+        assert_eq!(
+            invoked.lock().unwrap().len(),
+            1,
+            "denied call had an effect"
+        );
+    }
+
+    #[tokio::test]
+    async fn activation_gate_nonzero_usage_and_exact_boundary_reach_real_execute() {
+        let context = StdArc::new(StdMutex::new(
+            crate::capability::constraints::ConstraintContext::now(1).unwrap(),
+        ));
+        let (svc, invoked) = activation_gate_service(
+            vec![crate::capability::constraints::Constraint::resource_limit(
+                2,
+            )],
+            context.clone(),
+        );
+        let allowed = with_call_identity(
+            Some(identity("usage-below-limit")),
+            svc.execute("terminal", json!({"action": "write"})),
+        )
+        .await;
+        assert!(
+            allowed.is_ok(),
+            "one other slot leaves room for this invocation: {allowed:?}"
+        );
+        assert_eq!(invoked.lock().unwrap().len(), 1);
+        *context.lock().unwrap() =
+            crate::capability::constraints::ConstraintContext::now(2).unwrap();
+        let denied = with_call_identity(
+            Some(identity("usage-at-limit")),
+            svc.execute("terminal", json!({"action": "write"})),
+        )
+        .await;
+        assert!(
+            matches!(denied, Err(ToolError::PermissionDenied { reason, .. }) if reason.contains("resource limit"))
+        );
+        assert_eq!(
+            invoked.lock().unwrap().len(),
+            1,
+            "full budget must not reach the handler"
+        );
+    }
+
+    #[tokio::test]
+    async fn activation_gate_missing_owner_context_fails_closed() {
+        let context = StdArc::new(StdMutex::new(
+            crate::capability::constraints::ConstraintContext::now(0).unwrap(),
+        ));
+        let (mut svc, invoked) = activation_gate_service(vec![], context);
+        svc.capability_constraint_context = None;
+        let denied = with_call_identity(
+            Some(identity("context-missing")),
+            svc.execute("terminal", json!({"action": "write"})),
+        )
+        .await;
+        assert!(
+            matches!(denied, Err(ToolError::PermissionDenied { reason, .. }) if reason.contains("context source"))
+        );
+        assert!(invoked.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn activation_gate_unavailable_owner_context_fails_closed() {
+        let context = StdArc::new(StdMutex::new(
+            crate::capability::constraints::ConstraintContext::now(0).unwrap(),
+        ));
+        let (svc, invoked) = activation_gate_service(vec![], context);
+        let reads = StdArc::new(std::sync::atomic::AtomicUsize::new(0));
+        let capture = reads.clone();
+        let svc = svc.with_capability_constraint_context(StdArc::new(move |_| {
+            capture.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err(crate::capability::constraints::ConstraintViolation::ClockUnavailable)
+        }));
+        let denied = with_call_identity(
+            Some(identity("context-unavailable")),
+            svc.execute("terminal", json!({"action": "write"})),
+        )
+        .await;
+        assert!(
+            matches!(denied, Err(ToolError::PermissionDenied { reason, .. }) if reason.contains("context unavailable"))
+        );
+        assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert!(invoked.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn canonical_dispatch_denies_runtime_constraint_before_handler_effect() {
+        let registry = StdArc::new(ToolHandlerRegistry::new());
+        let invoked = StdArc::new(StdMutex::new(Vec::new()));
+        register(&registry, RecordingHandler::new("handler1", &invoked));
+
+        let runtime_context = crate::capability::constraints::ConstraintContext::now(0)
+            .expect("system clock must be available");
+        let start_hour = (runtime_context.current_hour() + 1) % 24;
+        let end_hour = (start_hour + 1) % 24;
+        let constraint =
+            crate::capability::constraints::Constraint::time_window(start_hour, end_hour).unwrap();
+        let mut activation = crate::capability::activation::CapabilityActivationController::new(
+            None,
+            crate::capability::ownership::OwnerGeneration(0),
+            vec![constraint],
+        );
+        activation.attach().unwrap();
+        activation
+            .activate(
+                &crate::capability::constraints::ConstraintContext::at_hour(start_hour).unwrap(),
+                crate::capability::ownership::OwnerGeneration(0),
+            )
+            .unwrap();
+
+        let svc = service(&registry)
+            .with_capability_activation("terminal", StdArc::new(activation))
+            .with_capability_constraint_context(StdArc::new(move |_| Ok(runtime_context.clone())))
+            .with_confirmation(StdArc::new(SequenceRequester::new([
+                ApprovalOutcome::Approved,
+            ])));
+        let result = with_call_identity(
+            Some(identity("runtime-constraint-denied")),
+            svc.execute("terminal", json!({"action": "write"})),
+        )
+        .await;
+
+        assert!(
+            matches!(result, Err(ToolError::PermissionDenied { reason, .. }) if reason.contains("runtime restriction"))
+        );
+        assert!(invoked.lock().unwrap().is_empty());
+    }
+
     #[tokio::test]
     async fn missing_canonical_facade_fails_closed_before_handler_effect() {
         let registry = StdArc::new(ToolHandlerRegistry::new());
         let invoked = StdArc::new(StdMutex::new(Vec::new()));
-        register(
-            &registry,
-            RecordingHandler {
-                definition: definition("terminal", false),
-                tag: "handler1",
-                invoked: invoked.clone(),
-                partial_write: None,
-                own_identity: unsafe_identity(1),
-                overlap: None,
-            },
-        );
+        register(&registry, RecordingHandler::new("handler1", &invoked));
         let mut inner = LoopToolRegistry::new();
         inner.bind_canonical_registry(registry.clone(), StdArc::new(|_| true));
         assert!(inner.canonical_registry().is_some());
@@ -5268,17 +5310,7 @@ mod a3 {
     async fn provider_generation_stale_fails_before_handler_effect() {
         let registry = StdArc::new(ToolHandlerRegistry::new());
         let invoked = StdArc::new(StdMutex::new(Vec::new()));
-        register(
-            &registry,
-            RecordingHandler {
-                definition: definition("terminal", false),
-                tag: "handler1",
-                invoked: invoked.clone(),
-                partial_write: None,
-                own_identity: unsafe_identity(1),
-                overlap: None,
-            },
-        );
+        register(&registry, RecordingHandler::new("handler1", &invoked));
         let svc = service(&registry);
         let first = svc.with_confirmation(StdArc::new(SequenceRequester::new([
             ApprovalOutcome::Approved,
@@ -5336,17 +5368,7 @@ mod a3 {
     async fn owner_bump_fails_before_handler_effect() {
         let registry = StdArc::new(ToolHandlerRegistry::new());
         let invoked = StdArc::new(StdMutex::new(Vec::new()));
-        register(
-            &registry,
-            RecordingHandler {
-                definition: definition("terminal", false),
-                tag: "handler1",
-                invoked: invoked.clone(),
-                partial_write: None,
-                own_identity: unsafe_identity(1),
-                overlap: None,
-            },
-        );
+        register(&registry, RecordingHandler::new("handler1", &invoked));
         let (svc, host) = canonical_service(&registry);
         let first = svc.with_confirmation(StdArc::new(SequenceRequester::new([
             ApprovalOutcome::Approved,
@@ -5395,17 +5417,7 @@ mod a3 {
     async fn unregister_between_gate_and_dispatch_fails_before_handler_effect() {
         let registry = StdArc::new(ToolHandlerRegistry::new());
         let invoked = StdArc::new(StdMutex::new(Vec::new()));
-        register(
-            &registry,
-            RecordingHandler {
-                definition: definition("terminal", false),
-                tag: "handler1",
-                invoked: invoked.clone(),
-                partial_write: None,
-                own_identity: unsafe_identity(1),
-                overlap: None,
-            },
-        );
+        register(&registry, RecordingHandler::new("handler1", &invoked));
         let arrived = StdArc::new(Barrier::new(2));
         let release = StdArc::new(Barrier::new(2));
         let requester = StdArc::new(BoundaryRequester {
@@ -5441,17 +5453,7 @@ mod a3 {
     async fn stale_canonical_entry_fails_before_handler_effect() {
         let registry = StdArc::new(ToolHandlerRegistry::new());
         let invoked = StdArc::new(StdMutex::new(Vec::new()));
-        register(
-            &registry,
-            RecordingHandler {
-                definition: definition("terminal", false),
-                tag: "handler1",
-                invoked: invoked.clone(),
-                partial_write: None,
-                own_identity: unsafe_identity(1),
-                overlap: None,
-            },
-        );
+        register(&registry, RecordingHandler::new("handler1", &invoked));
         let arrived = StdArc::new(Barrier::new(2));
         let release = StdArc::new(Barrier::new(2));
         let requester = StdArc::new(BoundaryRequester {
@@ -5478,12 +5480,8 @@ mod a3 {
             .await
             .expect("capture must reach the approval barrier");
         let replacement = RecordingHandler {
-            definition: definition("terminal", false),
-            tag: "handler2",
-            invoked: invoked.clone(),
-            partial_write: None,
             own_identity: unsafe_identity(2),
-            overlap: None,
+            ..RecordingHandler::new("handler2", &invoked)
         };
         registry
             .replace(
@@ -5644,23 +5642,13 @@ mod a3 {
     // fixture binds the canonical registry and the existing facade handle; the
     // mounted-host binding path is exercised separately by canonical_service.
     fn service(registry: &StdArc<ToolHandlerRegistry>) -> ScopedToolService {
-        let mut inner = LoopToolRegistry::new();
-        inner.bind_canonical_registry(registry.clone(), StdArc::new(|_| true));
-        assert!(
-            inner.bind_canonical_facade(crate::capability::zahir_facade::ZahirFacade::new(
+        service_with_facade(
+            registry,
+            crate::capability::zahir_facade::ZahirFacade::new(
                 registry.as_ref().clone(),
                 StdArc::new(crate::capability::ownership::OwnershipTree::new()),
-            ),)
-        );
-        for entry in registry.entries_snapshot().values() {
-            inner.register(Box::new(
-                crate::tools::adapters::McpRegistryTool::from_registry_entry(
-                    StdArc::clone(&entry.handler),
-                    &entry.descriptor,
-                ),
-            ));
-        }
-        ScopedToolService::new(StdArc::new(inner), BTreeSet::new())
+            ),
+        )
     }
 
     fn service_with_facade(
@@ -5767,17 +5755,7 @@ mod a3 {
     async fn replacement_between_gate_and_dispatch_rejects_stale_capture() {
         let registry = StdArc::new(ToolHandlerRegistry::new());
         let invoked = StdArc::new(StdMutex::new(Vec::new()));
-        register(
-            &registry,
-            RecordingHandler {
-                definition: definition("terminal", false),
-                tag: "handler1",
-                invoked: invoked.clone(),
-                partial_write: None,
-                own_identity: unsafe_identity(1),
-                overlap: None,
-            },
-        );
+        register(&registry, RecordingHandler::new("handler1", &invoked));
         let arrived = StdArc::new(Barrier::new(2));
         let release = StdArc::new(Barrier::new(2));
         let requester = StdArc::new(BoundaryRequester {
@@ -5804,12 +5782,8 @@ mod a3 {
             .await
             .expect("rev1 must reach the approval barrier");
         let replacement = RecordingHandler {
-            definition: definition("terminal", false),
-            tag: "handler2",
-            invoked: invoked.clone(),
-            partial_write: None,
             own_identity: unsafe_identity(2),
-            overlap: None,
+            ..RecordingHandler::new("handler2", &invoked)
         };
         registry
             .replace(
@@ -5877,17 +5851,7 @@ mod a3 {
     async fn proof_for_original_input_cannot_authorize_rewrite() {
         let registry = StdArc::new(ToolHandlerRegistry::new());
         let invoked = StdArc::new(StdMutex::new(Vec::new()));
-        register(
-            &registry,
-            RecordingHandler {
-                definition: definition("terminal", false),
-                tag: "terminal",
-                invoked: invoked.clone(),
-                partial_write: None,
-                own_identity: unsafe_identity(1),
-                overlap: None,
-            },
-        );
+        register(&registry, RecordingHandler::new("terminal", &invoked));
         let requester = StdArc::new(SequenceRequester::new([
             ApprovalOutcome::Approved,
             ApprovalOutcome::Denied,
@@ -5972,12 +5936,8 @@ mod a3 {
         register(
             &registry,
             RecordingHandler {
-                definition: definition("terminal", false),
-                tag: "terminal",
-                invoked: invoked.clone(),
-                partial_write: None,
-                own_identity: unsafe_identity(1),
                 overlap: Some(StdArc::new(Barrier::new(2))),
+                ..RecordingHandler::new("terminal", &invoked)
             },
         );
         let requester = StdArc::new(ParallelRequester {
@@ -6243,11 +6203,8 @@ mod a3 {
             &registry,
             RecordingHandler {
                 definition: definition("terminal", true),
-                tag: "terminal",
-                invoked: invoked.clone(),
                 partial_write: Some(sink.clone()),
-                own_identity: unsafe_identity(1),
-                overlap: None,
+                ..RecordingHandler::new("terminal", &invoked)
             },
         );
         assert_eq!(
@@ -6296,17 +6253,7 @@ mod a3 {
     async fn removed_canonical_entry_never_resurrects_its_projection() {
         let registry = StdArc::new(ToolHandlerRegistry::new());
         let invoked = StdArc::new(StdMutex::new(Vec::new()));
-        register(
-            &registry,
-            RecordingHandler {
-                definition: definition("terminal", false),
-                tag: "old",
-                invoked: invoked.clone(),
-                partial_write: None,
-                own_identity: unsafe_identity(1),
-                overlap: None,
-            },
-        );
+        register(&registry, RecordingHandler::new("old", &invoked));
         let requester = StdArc::new(SequenceRequester::new([ApprovalOutcome::Approved]));
         let svc = service(&registry).with_confirmation(requester.clone());
         registry.unregister("terminal").unwrap();
@@ -6336,17 +6283,7 @@ mod a3 {
     async fn source_changed_canonical_entry_fails_closed_for_same_service() {
         let registry = StdArc::new(ToolHandlerRegistry::new());
         let invoked = StdArc::new(StdMutex::new(Vec::new()));
-        register(
-            &registry,
-            RecordingHandler {
-                definition: definition("terminal", false),
-                tag: "old",
-                invoked: invoked.clone(),
-                partial_write: None,
-                own_identity: unsafe_identity(1),
-                overlap: None,
-            },
-        );
+        register(&registry, RecordingHandler::new("old", &invoked));
         let svc = service(&registry);
         let mut changed = definition("terminal", false);
         changed.source = ToolSource::Mcp {
@@ -6354,11 +6291,8 @@ mod a3 {
         };
         let replacement = RecordingHandler {
             definition: changed,
-            tag: "hidden",
-            invoked: invoked.clone(),
-            partial_write: None,
             own_identity: unsafe_identity(2),
-            overlap: None,
+            ..RecordingHandler::new("hidden", &invoked)
         };
         registry
             .replace(
@@ -6386,11 +6320,7 @@ mod a3 {
             &registry,
             RecordingHandler {
                 definition: first,
-                tag: "old",
-                invoked: invoked.clone(),
-                partial_write: None,
-                own_identity: unsafe_identity(1),
-                overlap: None,
+                ..RecordingHandler::new("old", &invoked)
             },
         );
         let requester = StdArc::new(SequenceRequester::new([ApprovalOutcome::Denied]));
@@ -6398,12 +6328,8 @@ mod a3 {
             .with_exec_tier(crate::config::types::policies::ExecTier::Full)
             .with_confirmation(requester.clone());
         let replacement = RecordingHandler {
-            definition: definition("terminal", false),
-            tag: "new-confirmed",
-            invoked: invoked.clone(),
-            partial_write: None,
             own_identity: unsafe_identity(2),
-            overlap: None,
+            ..RecordingHandler::new("new-confirmed", &invoked)
         };
         registry
             .replace(
@@ -6602,11 +6528,7 @@ mod a3 {
             &registry,
             RecordingHandler {
                 definition: def,
-                tag: "visible",
-                invoked: invoked.clone(),
-                partial_write: None,
-                own_identity: unsafe_identity(1),
-                overlap: None,
+                ..RecordingHandler::new("visible", &invoked)
             },
         );
         let visibility = StdArc::new(std::sync::atomic::AtomicBool::new(true));
@@ -6774,7 +6696,7 @@ mod a3 {
 
         /// The produced size must sit strictly between the two budgets the
         /// real resolver would enforce, or the test proves nothing.
-        fn assert_discriminating_size() -> usize {
+        fn assert_discriminating_size() {
             let produced = crate::context::budget::pressure::estimate_tokens_smart(&body("x"));
             let resolve = crate::tools::result_processing::resolve_result_budget;
             assert_eq!(resolve(NAME, Some(SMALL)), Some(SMALL));
@@ -6784,7 +6706,6 @@ mod a3 {
                 produced > SMALL * 2 && produced < LARGE.min(default),
                 "fixture size {produced} must discriminate {SMALL} from {LARGE}/{default}"
             );
-            produced
         }
 
         fn assert_inline_whole(text: &str, tag: &str) {
@@ -6805,14 +6726,14 @@ mod a3 {
         // budget (or a second live lookup) instead of the entry it captured.
         #[tokio::test]
         async fn replacement_before_execute_uses_replacement_entry_budget() {
-            let produced = assert_discriminating_size();
+            assert_discriminating_size();
             let registry = StdArc::new(ToolHandlerRegistry::new());
             let calls: Calls = StdArc::new(StdMutex::new(Vec::new()));
             let a = handler("budgetA", 1, &calls);
             registry
                 .register_with_result_budget(descriptor(&a), StdArc::new(a), Some(SMALL))
                 .unwrap();
-            let (_scratch, store) = hygiene_store("r0_replace_before");
+            let (_scratch, store) = hygiene_store();
             let requester = StdArc::new(SequenceRequester::new([ApprovalOutcome::Approved]));
             let svc = budget_service(&registry, Some(SMALL), store)
                 .with_turn_context(turn_ctx("r0-replace-before-execute"))
@@ -6841,7 +6762,6 @@ mod a3 {
             assert_eq!(calls[0].1.as_deref(), Some("r0-before"));
             let seen = requester.seen.lock().unwrap();
             assert_eq!(seen.len(), 1, "exactly one real approval");
-            let _ = produced;
         }
 
         // Break caught: a call captured at rev1 adopts rev2's budget after the
@@ -6863,7 +6783,7 @@ mod a3 {
                 release: release.clone(),
                 seen: StdMutex::new(Vec::new()),
             });
-            let (_scratch, store) = hygiene_store("r0_gate_held");
+            let (_scratch, store) = hygiene_store();
             let svc = StdArc::new(
                 budget_service(&registry, Some(SMALL), store.clone())
                     .with_turn_context(turn_ctx("r0-gate-held-capture"))
@@ -6933,7 +6853,7 @@ mod a3 {
             registry
                 .register_with_result_budget(descriptor(&a), StdArc::new(a), Some(SMALL))
                 .unwrap();
-            let (_scratch, store) = hygiene_store("r0_none");
+            let (_scratch, store) = hygiene_store();
             let requester = StdArc::new(SequenceRequester::new([ApprovalOutcome::Approved]));
             let svc = budget_service(&registry, Some(SMALL), store)
                 .with_turn_context(turn_ctx("r0-canonical-none"))
@@ -6971,7 +6891,7 @@ mod a3 {
             registry
                 .register_with_result_budget(descriptor(&a), StdArc::new(a), Some(SMALL))
                 .unwrap();
-            let (_scratch, store) = hygiene_store("r0_rpc");
+            let (_scratch, store) = hygiene_store();
             let requester = StdArc::new(SequenceRequester::new([ApprovalOutcome::Approved]));
             let svc = budget_service(&registry, Some(SMALL), store)
                 .with_structured_rpc_transport()
@@ -7125,6 +7045,28 @@ mod r1a {
             .expect("actual admitted entry")
     }
 
+    /// The canonical side of the spoofing fixtures: the one `r1a_tool` handler
+    /// whose captured source is `plugin:REAL`.
+    fn real_plugin_entry(
+        registry: &ToolHandlerRegistry,
+        calls: StdArc<AtomicUsize>,
+        fails: bool,
+    ) -> crate::tools::registry::RegistryEntry {
+        register(
+            registry,
+            definition(
+                "r1a_tool",
+                ToolSource::Extension {
+                    plugin_id: "REAL".into(),
+                },
+                true,
+            ),
+            calls,
+            fails,
+            true,
+        )
+    }
+
     fn service(
         registry: &StdArc<ToolHandlerRegistry>,
         projection: Projection,
@@ -7244,14 +7186,7 @@ mod r1a {
         let _home = crate::utils::paths::IsolatedAlephHome::new();
         let registry = StdArc::new(ToolHandlerRegistry::new());
         let canonical_calls = StdArc::new(AtomicUsize::new(0));
-        let def = definition(
-            "r1a_tool",
-            ToolSource::Extension {
-                plugin_id: "REAL".into(),
-            },
-            true,
-        );
-        let entry = register(&registry, def, StdArc::clone(&canonical_calls), false, true);
+        let entry = real_plugin_entry(&registry, StdArc::clone(&canonical_calls), false);
         let projection_calls = StdArc::new(AtomicUsize::new(0));
         let svc = service(
             &registry,
@@ -7323,19 +7258,7 @@ mod r1a {
         let _home = crate::utils::paths::IsolatedAlephHome::new();
         let registry = StdArc::new(ToolHandlerRegistry::new());
         let calls = StdArc::new(AtomicUsize::new(0));
-        let entry = register(
-            &registry,
-            definition(
-                "r1a_tool",
-                ToolSource::Extension {
-                    plugin_id: "REAL".into(),
-                },
-                true,
-            ),
-            StdArc::clone(&calls),
-            true,
-            true,
-        );
+        let entry = real_plugin_entry(&registry, StdArc::clone(&calls), true);
         let projection_calls = StdArc::new(AtomicUsize::new(0));
         let svc = service(
             &registry,
@@ -7360,19 +7283,7 @@ mod r1a {
         let _home = crate::utils::paths::IsolatedAlephHome::new();
         let registry = StdArc::new(ToolHandlerRegistry::new());
         let calls = StdArc::new(AtomicUsize::new(0));
-        let entry = register(
-            &registry,
-            definition(
-                "r1a_tool",
-                ToolSource::Extension {
-                    plugin_id: "REAL".into(),
-                },
-                true,
-            ),
-            StdArc::clone(&calls),
-            false,
-            true,
-        );
+        let entry = real_plugin_entry(&registry, StdArc::clone(&calls), false);
         let svc = service(
             &registry,
             projection(
@@ -7402,19 +7313,7 @@ mod r1a {
         let _home = crate::utils::paths::IsolatedAlephHome::new();
         let registry = StdArc::new(ToolHandlerRegistry::new());
         let calls = StdArc::new(AtomicUsize::new(0));
-        let entry = register(
-            &registry,
-            definition(
-                "r1a_tool",
-                ToolSource::Extension {
-                    plugin_id: "REAL".into(),
-                },
-                true,
-            ),
-            StdArc::clone(&calls),
-            false,
-            true,
-        );
+        let entry = real_plugin_entry(&registry, StdArc::clone(&calls), false);
         let projection_calls = StdArc::new(AtomicUsize::new(0));
         let svc = service(
             &registry,
@@ -7494,19 +7393,7 @@ mod r1a {
         let _home = crate::utils::paths::IsolatedAlephHome::new();
         let registry = StdArc::new(ToolHandlerRegistry::new());
         let calls_old = StdArc::new(AtomicUsize::new(0));
-        let entry = register(
-            &registry,
-            definition(
-                "r1a_tool",
-                ToolSource::Extension {
-                    plugin_id: "REAL".into(),
-                },
-                true,
-            ),
-            StdArc::clone(&calls_old),
-            false,
-            true,
-        );
+        let entry = real_plugin_entry(&registry, StdArc::clone(&calls_old), false);
         let projection_calls = StdArc::new(AtomicUsize::new(0));
         let svc = service(
             &registry,
@@ -7555,19 +7442,7 @@ mod r1a {
         let _home = crate::utils::paths::IsolatedAlephHome::new();
         let registry = StdArc::new(ToolHandlerRegistry::new());
         let calls = StdArc::new(AtomicUsize::new(0));
-        let entry = register(
-            &registry,
-            definition(
-                "r1a_tool",
-                ToolSource::Extension {
-                    plugin_id: "REAL".into(),
-                },
-                true,
-            ),
-            StdArc::clone(&calls),
-            false,
-            true,
-        );
+        let entry = real_plugin_entry(&registry, StdArc::clone(&calls), false);
         let canonical = service(
             &registry,
             projection(

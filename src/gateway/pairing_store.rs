@@ -285,15 +285,49 @@ impl PairingStore for SqlitePairingStore {
         let conn = self.conn.lock().await;
 
         // Check for existing request
-        let existing: Option<String> = conn
+        let existing: Option<(String, String)> = conn
             .query_row(
-                "SELECT code FROM pairing_requests WHERE channel = ?1 AND sender_id = ?2",
+                "SELECT code, created_at FROM pairing_requests WHERE channel = ?1 AND sender_id = ?2",
                 params![channel, sender_id],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?;
 
-        if let Some(code) = existing {
+        if let Some((code, created_at)) = existing {
+            // Check if the existing request has expired
+            if self.expiry_secs > 0 {
+                // A stored timestamp we cannot parse is treated as expired:
+                // the request is re-issued instead of kept alive on a clock
+                // we cannot read.
+                let expired = match DateTime::parse_from_rfc3339(&created_at) {
+                    Ok(created) => {
+                        let now = Utc::now();
+                        now.signed_duration_since(created.with_timezone(&Utc))
+                            .num_seconds() as u64
+                            > self.expiry_secs
+                    }
+                    Err(_) => true,
+                };
+                if expired {
+                    // Expired - delete and create new
+                    conn.execute(
+                        "DELETE FROM pairing_requests WHERE channel = ?1 AND sender_id = ?2",
+                        params![channel, sender_id],
+                    )?;
+                    let new_code = Self::generate_code();
+                    let now = Utc::now().to_rfc3339();
+                    let metadata_json = serde_json::to_string(&metadata).unwrap_or_default();
+                    conn.execute(
+                        "INSERT INTO pairing_requests (channel, sender_id, code, created_at, metadata) VALUES (?1, ?2, ?3, ?4, ?5)",
+                        params![channel, sender_id, new_code, now, metadata_json],
+                    )?;
+                    info!(
+                        "Replaced expired pairing request for {}:{} with code {}",
+                        channel, sender_id, new_code
+                    );
+                    return Ok((new_code, true));
+                }
+            }
             debug!(
                 "Found existing pairing request for {}:{}",
                 channel, sender_id

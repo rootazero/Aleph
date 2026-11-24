@@ -315,10 +315,6 @@ impl HealthCheck for BrowserRuntimeCheck {
         ID
     }
 
-    fn title(&self) -> &'static str {
-        "Browser runtime"
-    }
-
     async fn run(&self, _posture: Posture) -> Vec<Finding> {
         // All three binary probes are independent — run them concurrently.
         let (chromium, node, managed) = tokio::join!(

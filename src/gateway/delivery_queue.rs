@@ -37,8 +37,9 @@
 //! record behind — replayed verbatim on the next boot, i.e. a duplicate. The
 //! outcome of an interrupted attempt is exactly as ambiguous as
 //! [`SendFailed`](ChannelError::SendFailed), so it gets the same verdict:
-//! [`DeliveryStore::mark_inflight`] stamps the row immediately before the send
-//! crosses the transport boundary, and [`DeliveryStore::reconcile_inflight`]
+//! the attempt stamp is written in the same transaction that revalidates the
+//! row (`DeliveryStore::begin_replay`) immediately before the send crosses the
+//! transport boundary, and [`DeliveryStore::reconcile_inflight`]
 //! (run once per process by [`spawn_drain`]) retires every surviving stamp into
 //! the dead-letter table as [`DeadLetterReason::UnknownOutcome`] instead of
 //! re-sending it. This mirrors openclaw's
@@ -379,6 +380,17 @@ pub enum DeadLetterReason {
     /// [`redrivable`](Self::redrivable): re-inserting it would put an implicit
     /// retry back in the queue, and the body no longer exists to re-send.
     ExplicitOnlyRetired,
+    /// A live record was evicted to make room for a newer one because the queue
+    /// was at [`DeliveryQueueConfig::max_queue_len`].
+    ///
+    /// Safe to replay ⇒ [`replay_safe`](Self::replay_safe): a row that is still
+    /// in the live queue only ever failed with a definitely-not-delivered error
+    /// (`NotConnected` / `RateLimited`) — an ambiguous failure is retired into
+    /// dead letters instead of being retried — so a replay cannot duplicate a
+    /// delivery. It *is* [`redrivable`](Self::redrivable): the remedy is to
+    /// free capacity (drain the backlog), after which the operator can move it
+    /// back into the queue.
+    QueueOverflow,
 }
 
 impl DeadLetterReason {
@@ -393,6 +405,7 @@ impl DeadLetterReason {
         Self::UnknownOutcome,
         Self::PayloadTooLarge,
         Self::ExplicitOnlyRetired,
+        Self::QueueOverflow,
     ];
 
     /// The database tokens a redrive is willing to move.
@@ -419,7 +432,11 @@ impl DeadLetterReason {
     pub const fn replay_safe(self) -> bool {
         matches!(
             self,
-            Self::Exhausted | Self::Permanent | Self::PayloadTooLarge | Self::ExplicitOnlyRetired
+            Self::Exhausted
+                | Self::Permanent
+                | Self::PayloadTooLarge
+                | Self::ExplicitOnlyRetired
+                | Self::QueueOverflow
         )
     }
 
@@ -441,7 +458,10 @@ impl DeadLetterReason {
     /// invariant something can violate.
     #[must_use]
     pub const fn redrivable(self) -> bool {
-        matches!(self, Self::Exhausted | Self::Permanent)
+        matches!(
+            self,
+            Self::Exhausted | Self::Permanent | Self::QueueOverflow
+        )
     }
 
     /// Stable wire/database token.
@@ -454,6 +474,7 @@ impl DeadLetterReason {
             Self::UnknownOutcome => "unknown_outcome",
             Self::PayloadTooLarge => "payload_too_large",
             Self::ExplicitOnlyRetired => "explicit_only_retired",
+            Self::QueueOverflow => "queue_overflow",
         }
     }
 
@@ -468,6 +489,7 @@ impl DeadLetterReason {
             "unknown_outcome" => Self::UnknownOutcome,
             "payload_too_large" => Self::PayloadTooLarge,
             "explicit_only_retired" => Self::ExplicitOnlyRetired,
+            "queue_overflow" => Self::QueueOverflow,
             _ => Self::Ambiguous,
         }
     }
@@ -592,6 +614,24 @@ pub struct DeliveryStore {
     /// a second process was never a supported deployment, so a durable lease
     /// would buy nothing and cost a migration.
     drain_gate: tokio::sync::Mutex<()>,
+}
+
+/// Validate the current Legacy registration before admitting a raw queue row.
+/// This is the only cross-module fixture/import entry to the private SQLite write.
+pub async fn enqueue_validated_legacy(
+    registry: &ChannelRegistry,
+    store: &DeliveryStore,
+    channel_id: &str,
+    message: &OutboundMessage,
+    last_error: &str,
+    next_attempt_at: i64,
+) -> Result<EnqueueOutcome, ChannelError> {
+    registry
+        .require_legacy_channel(&ChannelId::new(channel_id))
+        .await?;
+    store
+        .enqueue(channel_id, message, last_error, next_attempt_at)
+        .map_err(|error| ChannelError::Internal(error.to_string()))
 }
 
 impl DeliveryStore {
@@ -875,7 +915,7 @@ impl DeliveryStore {
     /// [`DeadLetterReason::PayloadTooLarge`] so the operator can still see what
     /// was dropped and why, and the caller gets
     /// [`EnqueueOutcome::TooLarge`].
-    pub fn enqueue(
+    fn enqueue(
         &self,
         channel_id: &str,
         message: &OutboundMessage,
@@ -929,13 +969,27 @@ impl DeliveryStore {
 
         if payload.len() > self.config.max_payload_bytes {
             let bytes = payload.len();
+            // The rejected body must NOT be persisted. The dead-letter table
+            // bounds its ROW COUNT, not its bytes, so storing the payload
+            // grows the database by exactly the size the limit exists to
+            // reject. What is kept is a bounded diagnostic: the identity of
+            // the delivery and the size it had.
+            let diagnostic = serde_json::json!({
+                "channel_id": channel_id,
+                "conversation_id": message.conversation_id.as_str(),
+                "original_bytes": bytes,
+                "max_payload_bytes": self.config.max_payload_bytes,
+                "note": "payload exceeded max_payload_bytes; the body was not retained",
+            });
+            let diagnostic_payload = serde_json::to_string(&diagnostic)
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
             Self::insert_dead_letter(
                 conn,
                 self.config.max_queue_len,
                 DeadLetterInsert {
                     channel_id,
                     conversation_id: message.conversation_id.as_str(),
-                    payload: &payload,
+                    payload: &diagnostic_payload,
                     attempts: 0,
                     last_error: &format!(
                         "payload {bytes} B exceeds max_payload_bytes {} (never enqueued); last transport error: {last_error}",
@@ -953,11 +1007,13 @@ impl DeliveryStore {
             conn.query_row("SELECT COUNT(*) FROM outbound_deliveries", [], |r| r.get(0))?;
         if len >= self.config.max_queue_len {
             let overflow = len - self.config.max_queue_len + 1;
-            conn.execute(
-                "DELETE FROM outbound_deliveries WHERE id IN (
-                    SELECT id FROM outbound_deliveries ORDER BY created_at ASC LIMIT ?1)",
-                params![overflow],
-            )?;
+            let evicted = self.evict_overflow(conn, overflow)?;
+            warn!(
+                evicted,
+                needed = overflow,
+                max_queue_len = self.config.max_queue_len,
+                "delivery queue: at capacity; oldest pending deliveries moved to the dead-letter table"
+            );
         }
 
         // Never become due before this conversation's own backlog. The caller
@@ -1082,6 +1138,80 @@ impl DeliveryStore {
         Ok(())
     }
 
+    /// Make room for a newer delivery by retiring the `count` oldest live
+    /// records into the dead-letter table.
+    ///
+    /// The eviction used to be a bare `DELETE`, which lost a live, still
+    /// deliverable message with no trace at all: no dead letter, no log line,
+    /// no operator signal. The evicted rows are now retired with
+    /// [`DeadLetterReason::QueueOverflow`], so they stay inspectable and can be
+    /// redriven once the backlog has room again.
+    ///
+    /// Rows with an in-flight stamp are *not* eviction candidates: their
+    /// attempt already crossed the transport boundary, so deleting the row
+    /// would erase the only record of a message whose outcome is unknown. The
+    /// queue can therefore stay above the cap while an attempt is in flight —
+    /// that is the correct trade, and `evicted` reports how many were retired
+    /// so a shortfall against `count` is visible.
+    fn evict_overflow(&self, conn: &Connection, count: i64) -> rusqlite::Result<u64> {
+        let victims: Vec<(
+            i64,
+            String,
+            Option<String>,
+            String,
+            i64,
+            i64,
+            Option<String>,
+        )> = {
+            let mut stmt = conn.prepare(
+                "SELECT id, channel_id, conversation_id, payload, created_at, attempts, last_error
+                 FROM outbound_deliveries
+                 WHERE inflight_since IS NULL
+                 ORDER BY created_at ASC, id ASC
+                 LIMIT ?1",
+            )?;
+            let rows = stmt.query_map(params![count], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                ))
+            })?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+
+        let mut evicted = 0u64;
+        for (id, channel_id, conversation_id, payload, created_at, attempts, last_error) in &victims
+        {
+            let note = format!(
+                "queue overflow: evicted to make room for a newer delivery (queue at {} records); last transport error: {}",
+                self.config.max_queue_len,
+                last_error.as_deref().unwrap_or("none")
+            );
+            Self::insert_dead_letter(
+                conn,
+                self.config.max_queue_len,
+                DeadLetterInsert {
+                    channel_id: channel_id.as_str(),
+                    conversation_id: conversation_id.as_deref().unwrap_or_default(),
+                    payload: payload.as_str(),
+                    attempts: (*attempts).clamp(0, i64::from(u32::MAX)) as u32,
+                    last_error: note.as_str(),
+                    reason: DeadLetterReason::QueueOverflow,
+                    created_at: *created_at,
+                    died_at: now_secs(),
+                },
+            )?;
+            conn.execute("DELETE FROM outbound_deliveries WHERE id = ?1", params![id])?;
+            evicted += 1;
+        }
+        Ok(evicted)
+    }
+
     /// Claim up to `limit` records whose `next_attempt_at <= now`, oldest first.
     ///
     /// Rows whose payload no longer deserializes (schema drift, corruption) are
@@ -1174,6 +1304,25 @@ impl DeliveryStore {
         Ok(Self::hydrate(&conn, raw))
     }
 
+    /// How many live records are still queued for this conversation.
+    ///
+    /// The inline flush uses it to tell a *harmless* skip (the drainer holds
+    /// the gate, but this conversation has nothing queued, so there is nothing
+    /// to overtake) from a real ordering violation (a backlog exists and the
+    /// live send will jump ahead of it).
+    pub fn pending_for_conversation(
+        &self,
+        channel_id: &str,
+        conversation_id: &str,
+    ) -> rusqlite::Result<i64> {
+        self.guard().query_row(
+            "SELECT COUNT(*) FROM outbound_deliveries
+             WHERE channel_id = ?1 AND conversation_id = ?2",
+            params![channel_id, conversation_id],
+            |r| r.get(0),
+        )
+    }
+
     /// Turn claimed raw rows into records, dropping any whose payload no longer
     /// deserializes so a poison row can never wedge the queue. Shared by both
     /// claim paths so "what a claimed record is" has one definition.
@@ -1254,6 +1403,11 @@ impl DeliveryStore {
     /// after an abrupt exit. Best-effort by design — a failure here is logged by
     /// the caller and the send proceeds, because refusing to deliver is a worse
     /// outcome than risking one duplicate.
+    ///
+    /// The production send path stamps through [`begin_replay`](Self::begin_replay),
+    /// which writes the same column inside the transaction that also revalidates
+    /// the row and the durable policy. This method stays the raw statement
+    /// helper; nothing outside the store's own tests calls it.
     pub fn mark_inflight(&self, id: i64, now: i64) -> rusqlite::Result<()> {
         self.guard().execute(
             "UPDATE outbound_deliveries SET inflight_since = ?1 WHERE id = ?2",
@@ -1264,6 +1418,14 @@ impl DeliveryStore {
 
     /// Replay choke point: row existence, durable policy and attempt stamp are
     /// atomic. This also fences in-memory claims retired by a replacement.
+    ///
+    /// A row that still carries a stamp from a previous attempt is an
+    /// *unsettled* attempt: the previous send may have crossed the transport
+    /// boundary but never reached settlement. Replaying it automatically would
+    /// risk a duplicate delivery, which the module's policy forbids — such
+    /// rows must be surfaced as `UnknownOutcome` for explicit operator
+    /// recovery instead. We therefore refuse to claim any row whose stamp is
+    /// already set, rather than overwriting it.
     pub(crate) fn begin_replay(&self, id: i64, channel_id: &str) -> rusqlite::Result<bool> {
         let failures = self
             .policy_failures
@@ -1277,8 +1439,13 @@ impl DeliveryStore {
         if Self::has_marker(&tx, channel_id)? {
             return Ok(false);
         }
+        // Only claim a row that has no residual stamp. A stamped row is an
+        // unsettled prior attempt; overwriting the stamp here would turn an
+        // ambiguous send into an automatic retry, violating the rule that
+        // ambiguous sends become `UnknownOutcome`, never silent re-sends.
         let changed = tx.execute(
-            "UPDATE outbound_deliveries SET inflight_since = ?1 WHERE id = ?2 AND channel_id = ?3",
+            "UPDATE outbound_deliveries SET inflight_since = ?1 \
+             WHERE id = ?2 AND channel_id = ?3 AND inflight_since IS NULL",
             params![now_secs(), id, channel_id],
         )?;
         tx.commit()?;
@@ -1540,11 +1707,13 @@ impl DeliveryStore {
 
     /// Most-recently dead-lettered deliveries, newest first, for troubleshooting
     /// (parity-plus over openclaw, which retains failed rows but exposes no
-    /// inspection path). Rows whose payload no longer deserializes are skipped.
+    /// inspection path). Oversize diagnostics project a content-free message;
+    /// other rows whose payload no longer deserializes are skipped.
     pub fn recent_dead_letters(&self, limit: usize) -> rusqlite::Result<Vec<DeadLetter>> {
         let conn = self.guard();
         let raw: Vec<(
             String,
+            Option<String>,
             String,
             i64,
             Option<String>,
@@ -1554,19 +1723,20 @@ impl DeliveryStore {
             bool,
         )> = {
             let mut stmt = conn.prepare(
-                "SELECT channel_id, payload, attempts, last_error, reason, created_at, died_at, retired_by_policy
+                "SELECT channel_id, conversation_id, payload, attempts, last_error, reason, created_at, died_at, retired_by_policy
                  FROM dead_letters ORDER BY died_at DESC LIMIT ?1",
             )?;
             let rows = stmt.query_map(params![limit as i64], |r| {
                 Ok((
                     r.get::<_, String>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, i64>(2)?,
-                    r.get::<_, Option<String>>(3)?,
+                    r.get::<_, Option<String>>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, i64>(3)?,
                     r.get::<_, Option<String>>(4)?,
-                    r.get::<_, i64>(5)?,
+                    r.get::<_, Option<String>>(5)?,
                     r.get::<_, i64>(6)?,
-                    r.get::<_, bool>(7)?,
+                    r.get::<_, i64>(7)?,
+                    r.get::<_, bool>(8)?,
                 ))
             })?;
             rows.collect::<rusqlite::Result<Vec<_>>>()?
@@ -1574,6 +1744,7 @@ impl DeliveryStore {
         let mut out = Vec::with_capacity(raw.len());
         for (
             channel_id,
+            conversation_id,
             payload,
             attempts,
             last_error,
@@ -1583,23 +1754,30 @@ impl DeliveryStore {
             retired_by_policy,
         ) in raw
         {
-            if let Ok(message) = serde_json::from_str::<OutboundMessage>(&payload) {
-                out.push(DeadLetter {
-                    channel_id,
-                    message,
-                    attempts: attempts.max(0) as u32,
-                    last_error: last_error.unwrap_or_default(),
-                    // Rows written before the column existed carry the DEFAULT
-                    // ('exhausted'), which is exactly what they were.
-                    reason: reason.as_deref().map_or(
-                        DeadLetterReason::Exhausted,
-                        DeadLetterReason::from_str_lossy,
-                    ),
-                    created_at,
-                    died_at,
-                    retired_by_policy,
-                });
-            }
+            // Pre-column rows default to exhausted. Oversize rows deliberately
+            // store diagnostics, not messages, and are never redrivable.
+            let reason = reason.as_deref().map_or(
+                DeadLetterReason::Exhausted,
+                DeadLetterReason::from_str_lossy,
+            );
+            let message = if reason == DeadLetterReason::PayloadTooLarge {
+                OutboundMessage::text(conversation_id.as_deref().unwrap_or_default(), "")
+            } else {
+                let Ok(message) = serde_json::from_str::<OutboundMessage>(&payload) else {
+                    continue;
+                };
+                message
+            };
+            out.push(DeadLetter {
+                channel_id,
+                message,
+                attempts: attempts.max(0) as u32,
+                last_error: last_error.unwrap_or_default(),
+                reason,
+                created_at,
+                died_at,
+                retired_by_policy,
+            });
         }
         Ok(out)
     }
@@ -2023,9 +2201,14 @@ async fn deliver_one(
 ///
 /// - It never runs while the background drainer holds the gate
 ///   ([`try_lock`](tokio::sync::Mutex::try_lock)): the drainer is already
-///   delivering this conversation in order, and blocking a user-facing send
-///   behind a whole drain tick is worse than the one-tick reorder window that
-///   skipping leaves.
+///   delivering the conversations it claimed, in order, and blocking a
+///   user-facing send behind a whole drain tick is worse than the one-tick
+///   reorder window that skipping leaves.
+///   The gate covers the drainer's *whole* pass, though — and a pass can be
+///   long (a rate-limit backoff sleeps up to `max_retry_after` per attempt) —
+///   so a send arriving while the drainer works on *other* conversations does
+///   overtake its own backlog. That case is reported at `warn` with the
+///   backlog depth instead of passing silently.
 /// - It never spends the backlog's retry budget — see [`AttemptMode::Inline`].
 /// - It stops at [`DeliveryQueueConfig::inline_flush_max`] records and says so,
 ///   rather than letting one send block on an unbounded backlog.
@@ -2044,10 +2227,30 @@ pub(super) async fn flush_conversation(
         return;
     }
     let Ok(_gate) = store.drain_gate.try_lock() else {
-        debug!(
-            channel = %channel_id,
-            "delivery queue: drain in progress; skipping the inline flush for this send"
-        );
+        // The drainer holds the gate for its whole pass, so the backlog is not
+        // being flushed ahead of this send — it is being delivered *by the
+        // drainer*, in order, for the conversations the drainer claimed. For
+        // any other conversation this send overtakes its own backlog, and the
+        // drainer may be holding the gate for a long time (a rate-limit
+        // backoff sleeps up to `max_retry_after` per attempt). That is an
+        // ordering violation, so it is reported — with the backlog depth,
+        // which is what makes it actionable. With nothing queued there is
+        // nothing to overtake, and the skip is the boring case.
+        let backlog = store
+            .pending_for_conversation(channel_id, conversation_id)
+            .unwrap_or(0);
+        if backlog > 0 {
+            warn!(
+                channel = %channel_id,
+                backlog,
+                "delivery queue: drain in progress; this send may overtake the queued backlog for its conversation"
+            );
+        } else {
+            debug!(
+                channel = %channel_id,
+                "delivery queue: drain in progress; nothing queued for this conversation"
+            );
+        }
         return;
     };
 
@@ -3131,6 +3334,10 @@ mod tests {
         let dl = s.recent_dead_letters(10).unwrap();
         assert_eq!(dl.len(), 1, "but still visible to the operator");
         assert_eq!(dl[0].reason, DeadLetterReason::PayloadTooLarge);
+        assert_eq!(dl[0].message.conversation_id, big.conversation_id);
+        assert!(dl[0].message.text.is_empty());
+        assert!(dl[0].message.attachments.is_empty());
+        assert!(!format!("{:?}", dl[0]).contains(&"x".repeat(2000)));
         // Two questions, two answers. The old single assertion said
         // `!replay_safe()` with the message "redriving it would re-hit the cap"
         // — a true sentence attached to the wrong predicate, which is how the
@@ -3202,28 +3409,28 @@ mod tests {
         async fn stop(&mut self) -> super::super::channel::ChannelResult<()> {
             Ok(())
         }
-        async fn send(
-            &self,
-            message: OutboundMessage,
-        ) -> super::super::channel::ChannelResult<super::super::channel::SendResult> {
-            if self.terminal {
-                return Err(ChannelError::SendFailed("permanent".into()));
-            }
-            if self
-                .failing
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .contains(&message.text)
-            {
-                return Err(ChannelError::NotConnected("down".into()));
-            }
-            self.sent
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .push(message.text.clone());
-            Ok(super::super::channel::SendResult {
-                message_id: super::super::channel::MessageId::new("ok"),
-                timestamp: chrono::Utc::now(),
+        fn send(&self, message: OutboundMessage) -> super::super::channel::SendOperation {
+            let sent = Arc::clone(&self.sent);
+            let failing = Arc::clone(&self.failing);
+            let terminal = self.terminal;
+            Box::pin(async move {
+                if terminal {
+                    return Err(ChannelError::SendFailed("permanent".into()));
+                }
+                if failing
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .contains(&message.text)
+                {
+                    return Err(ChannelError::NotConnected("down".into()));
+                }
+                sent.lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(message.text.clone());
+                Ok(super::super::channel::SendResult {
+                    message_id: super::super::channel::MessageId::new("ok"),
+                    timestamp: chrono::Utc::now(),
+                })
             })
         }
     }
@@ -3725,11 +3932,12 @@ mod tests {
                 | DeadLetterReason::Permanent
                 | DeadLetterReason::UnknownOutcome
                 | DeadLetterReason::PayloadTooLarge
-                | DeadLetterReason::ExplicitOnlyRetired => {}
+                | DeadLetterReason::ExplicitOnlyRetired
+                | DeadLetterReason::QueueOverflow => {}
             }
             assert_eq!(DeadLetterReason::from_str_lossy(r.as_str()), *r);
         }
-        assert_eq!(DeadLetterReason::ALL.len(), 6);
+        assert_eq!(DeadLetterReason::ALL.len(), 7);
     }
 
     /// The two questions must not collapse back into one boolean. Derived from

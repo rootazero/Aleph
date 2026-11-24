@@ -10,6 +10,20 @@
     "projects": "项目",
     "terminal": "终端"
   },
+  "panel_spike": {
+    "tabs": "面板标签",
+    "pilot": "终端试验",
+    "close": "关闭标签",
+    "select": "请选择标签",
+    "failed": "标签加载失败"
+  },
+  "capability_surface": {
+    "title": "能力表面",
+    "session_key": "会话键",
+    "attach": "连接",
+    "attached": "已连接",
+    "disconnected": "未连接"
+  },
   "session": {
     "healthy": "正常",
     "degraded": "降级",
@@ -754,7 +768,14 @@
       },
       "autostart": {
         "title": "此设备",
-        "description": "登录此电脑时自动启动 Aleph。"
+        "description": "登录此电脑时自动启动 Aleph。",
+        "status_loading": "正在读取登录项状态…",
+        "status_enabled": "已启用",
+        "status_disabled": "已禁用",
+        "status_approval": "需要在系统设置中批准",
+        "status_unavailable": "状态不可用，并非已确认禁用",
+        "status_failed": "无法读取登录项状态",
+        "read_only": "只读：NSH 暂不支持修改此设置。"
       }
     },
     "behavior": {
@@ -766,12 +787,6 @@
       "typewriter_desc": "逐字符显示响应内容",
       "instant": "即时",
       "instant_desc": "立即显示完整响应",
-      "typing_speed": "打字速度",
-      "typing_speed_desc": "打字机模式下每秒字符数（50-400）",
-      "speed_label": "速度",
-      "chars_sec": "字符/秒",
-      "slow": "慢（50）",
-      "fast": "快（400）",
       "saved": "保存成功",
       "gateway_unavailable": "网关不可用 — 显示默认设置"
     },
@@ -1035,8 +1050,8 @@
       "no_config": "未加载配置",
       "basic_settings": "基础设置",
       "enable_memory": "启用记忆模块",
-      "vector_db": "向量数据库",
-      "vector_db_hint": "sqlite-vec 是当前使用的向量数据库后端",
+      "backend": "向量数据库",
+      "backend_hint": "sqlite-vec 是当前使用的向量数据库后端",
       "compression": "记忆压缩",
       "compression_hint": "后台记忆压缩的调度参数（policies.memory.compression）。",
       "turn_threshold": "轮次阈值",
@@ -1373,6 +1388,13 @@
       "exec_tier_full_desc": "从不询问。灾难性命令的硬底线（fork bomb / rm -rf / 抹盘）依然生效，任何档位都无法关闭。",
       "exec_tier_pill_title": "工具执行档位",
       "exec_tier_follow_global": "跟随全局",
+      "exec_tier_loading": "正在加载执行档位…",
+      "exec_tier_empty": "暂无可选执行档位，仍可选择跟随全局。",
+      "exec_tier_load_failed": "无法加载执行档位，请重试。",
+      "exec_tier_retry": "重试",
+      "exec_tier_saving": "正在保存…",
+      "exec_tier_save_failed": "档位保存失败，已保留原选择。",
+      "exec_tier_save_refused": "当前连接无法修改会话档位，已保留原选择。",
       "exec_tier_confirm_again": "再点一次确认",
       "exec_tier_floor_note": "沙箱命令硬底线（fork bomb / rm -rf / 抹盘）任何档位都无法关闭。",
       "exec_tier_full_confirm_title": "切换到完全权限？",
@@ -2297,6 +2319,7 @@
     "sidebar_empty": "暂无项目 — 点击右上角 + 创建一个",
     "sidebar_name_placeholder": "项目名称",
     "sidebar_new": "新建项目",
+    "panel_global": "全局面板",
     "tab_chat": "群聊",
     "tab_kanban": "看板",
     "tab_memory": "记忆浏览",

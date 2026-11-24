@@ -24,8 +24,28 @@
 //! └─────────────────────────────────────────────────────────┘
 //! ```
 
+pub(crate) mod binding;
+pub(crate) mod capability;
+#[cfg(test)]
+mod resource_matrix;
+#[cfg(test)]
+pub(crate) mod test_support;
+
+use crate::capability::descriptor::{
+    CapabilityDescriptor, CapabilityFacet, CapabilityFacets, CapabilityId, CapabilityKind,
+    CapabilityRevision,
+};
+use crate::capability::ownership::{OwnershipTree, VisibilityScope};
+use crate::capability::provider::{
+    ProviderHandle, ProviderId, ProviderLifecycle, ProviderState, ProviderTransport,
+};
 use crate::sync_primitives::{Arc, Mutex};
+use binding::{
+    canonical_descriptor_fingerprint, lock_runtime, BoundChannelCapture, ChannelBindingError,
+    ChannelInitialState, ChannelLifecycleContract,
+};
 use std::collections::HashMap;
+use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 use tokio::sync::{broadcast, Mutex as AsyncMutex, RwLock};
 use tracing::{error, info, warn};
@@ -40,6 +60,72 @@ use super::voice::VoiceState;
 
 /// Type alias for a thread-safe, shareable channel handle
 type ChannelHandle = Arc<RwLock<Box<dyn Channel>>>;
+
+struct ChannelRegistrationEntry {
+    channel: ChannelHandle,
+    registration: ChannelRegistration,
+    runtime: Mutex<binding::EntryRuntime>,
+    drained: tokio::sync::Notify,
+    /// The inbound forwarder task of this registration.
+    ///
+    /// A stop followed by a start must not leave two forwarders subscribed
+    /// to the same channel: both would deliver every inbound message, so the
+    /// agent would see each message twice. The handle lives here so the
+    /// start path can tell a live forwarder from a finished one.
+    forwarder_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+}
+
+enum ChannelRegistration {
+    /// A legacy registration published at `publication_revision`, a revision
+    /// unique to this publication for as long as the registry lives.
+    ///
+    /// The revision is the identity a webhook mount carries: it is stamped once
+    /// at publication and never rewritten, so `mount == current entry` is
+    /// decidable at dispatch without an owner map or a second instance
+    /// authority. Bound registrations keep their own `entry_revision`.
+    Legacy {
+        publication_revision: u64,
+    },
+    Bound(Box<BoundChannelRegistration>),
+}
+
+#[allow(dead_code)] // Immutable source publication, consumed by later lifecycle tasks.
+struct BoundChannelRegistration {
+    source: Arc<()>,
+    entry_revision: u64,
+    descriptor_revision: u64,
+    contract: ChannelLifecycleContract,
+    descriptor: CapabilityDescriptor,
+    descriptor_fingerprint: [u8; 32],
+    provider: ProviderHandle,
+    ownership: Arc<OwnershipTree>,
+}
+
+/// A source-owned capture of one registered channel instance.
+///
+/// The handle identity is the admission fence. `source_revision` records the
+/// registry publication cut for diagnostics and future descriptor projection;
+/// an unrelated channel publication must not invalidate this capture.
+///
+/// This contract is intentionally crate-private and not mounted into a
+/// capability route until the provider binding gate closes.
+#[allow(dead_code)]
+#[derive(Clone)]
+pub(crate) struct ChannelCapture {
+    channel_id: ChannelId,
+    source: Arc<()>,
+    entry: Arc<ChannelRegistrationEntry>,
+    source_revision: u64,
+    handle: ChannelHandle,
+}
+
+#[allow(dead_code)]
+impl ChannelCapture {
+    #[must_use]
+    pub(crate) fn source_revision(&self) -> u64 {
+        self.source_revision
+    }
+}
 
 /// Private telecom precommit fence result. An error or timeout is deliberately
 /// not an `Invalid` result: transport acceptance may already have occurred.
@@ -183,10 +269,68 @@ impl SendRetryTomlConfig {
     }
 }
 
+/// Dispatch-time authority over a channel's Legacy publication identity.
+///
+/// Owned by the registry and handed to its webhook mount table. The HTTP
+/// endpoint holds the mount table, not the registry: a registry is a plain
+/// value until its owner wraps it, so it cannot hand out a back-reference to
+/// itself, and a second map of "which channels are live" would be a second
+/// instance authority.
+///
+/// Validation is a positive match against the *current* entry, so a mount whose
+/// channel id was replaced, retired, or converted to Bound is refused even
+/// though its handler object and signature are still live.
+struct ChannelSourceGuard {
+    channels: Arc<RwLock<HashMap<ChannelId, Arc<ChannelRegistrationEntry>>>>,
+}
+
+impl ChannelSourceGuard {
+    /// Registry-owned mount validation: does `channel_id` still denote the
+    /// Legacy registration published with `source_revision`?
+    ///
+    /// Holds the channel map for one read only — no lifecycle gate, no I/O — so
+    /// dispatch can call this before status, handler, or inbound work without
+    /// any registry lock outliving it.
+    async fn validate_legacy_webhook(
+        &self,
+        channel_id: &ChannelId,
+        source_revision: u64,
+    ) -> ChannelResult<()> {
+        let channels = self.channels.read().await;
+        let published = channels.get(channel_id).is_some_and(|entry| {
+            matches!(
+                entry.registration,
+                ChannelRegistration::Legacy {
+                    publication_revision
+                } if publication_revision == source_revision
+            )
+        });
+        if published {
+            return Ok(());
+        }
+        Err(ChannelError::NotConnected(format!(
+            "webhook mount for {channel_id} is not its published Legacy registration"
+        )))
+    }
+}
+
+#[async_trait::async_trait]
+impl super::webhook_receiver::LegacyWebhookGuard for ChannelSourceGuard {
+    async fn validate_legacy_webhook(
+        &self,
+        channel_id: &ChannelId,
+        source_revision: u64,
+    ) -> ChannelResult<()> {
+        ChannelSourceGuard::validate_legacy_webhook(self, channel_id, source_revision).await
+    }
+}
+
 /// Central registry for all channel instances
 pub struct ChannelRegistry {
     /// Registered channel instances
-    channels: RwLock<HashMap<ChannelId, ChannelHandle>>,
+    channels: Arc<RwLock<HashMap<ChannelId, Arc<ChannelRegistrationEntry>>>>,
+    /// Private identity shared by this source's immutable publications.
+    source: Arc<()>,
     /// Channel factories by type
     factories: RwLock<HashMap<String, Arc<dyn ChannelFactory>>>,
     /// Unified inbound message sender
@@ -212,6 +356,13 @@ pub struct ChannelRegistry {
     /// This is a synchronization boundary only; channel maps remain the sole
     /// instance authority and desired_state remains the sole intent authority.
     lifecycle_sync: AsyncMutex<()>,
+    /// Serializes source publication reservations across retirement and commit.
+    source_publication_sync: AsyncMutex<()>,
+    /// Publication revision for the channel source. It advances only after a
+    /// registration or unregistration is committed to `channels`.
+    source_revision: AtomicU64,
+    /// Publication revision for the source-owned bound descriptor projection.
+    descriptor_revision: AtomicU64,
     /// Per-channel *intent* (see [`DesiredChannelState`]). Written only by the
     /// lifecycle methods on this type, read by the health monitor.
     desired_state: RwLock<HashMap<ChannelId, DesiredChannelState>>,
@@ -222,17 +373,25 @@ impl ChannelRegistry {
     #[must_use]
     pub fn new() -> Self {
         let (inbound_tx, inbound_rx) = broadcast::channel(1000);
+        let channels: Arc<RwLock<HashMap<ChannelId, Arc<ChannelRegistrationEntry>>>> =
+            Arc::new(RwLock::new(HashMap::new()));
 
         Self {
-            channels: RwLock::new(HashMap::new()),
+            channels: Arc::clone(&channels),
+            source: Arc::new(()),
             factories: RwLock::new(HashMap::new()),
             inbound_tx: InboundMessageSender::from(inbound_tx),
             inbound_rx: Arc::new(Mutex::new(Some(inbound_rx))),
             voice_states: RwLock::new(HashMap::new()),
             send_retry: SendRetryPolicy::default(),
             delivery_store: None,
-            webhook_mounts: Arc::new(super::webhook_receiver::WebhookMountTable::new()),
+            webhook_mounts: Arc::new(super::webhook_receiver::WebhookMountTable::guarded_by(
+                Arc::new(ChannelSourceGuard { channels }),
+            )),
             lifecycle_sync: AsyncMutex::new(()),
+            source_publication_sync: AsyncMutex::new(()),
+            source_revision: AtomicU64::new(0),
+            descriptor_revision: AtomicU64::new(0),
             desired_state: RwLock::new(HashMap::new()),
         }
     }
@@ -293,23 +452,55 @@ impl ChannelRegistry {
     /// `handlers::channel::create_channel_from_config`.
     #[allow(dead_code)]
     pub async fn create_channel(&self, config: ChannelConfig) -> ChannelResult<ChannelId> {
-        let _lifecycle = self.lifecycle_sync.lock().await;
+        let _source_publication = self.source_publication_sync.lock().await;
+        if let Err(error) = self.next_bound_revision() {
+            return Err(ChannelError::Internal(error.to_string()));
+        }
+        let config_id = ChannelId::new(&config.id);
+        let operation = match self.channels.read().await.get(&config_id).cloned() {
+            Some(entry) => Some((
+                entry.clone(),
+                self.begin_legacy_operation(&config_id, &entry).await?,
+            )),
+            None => None,
+        };
         let factories = self.factories.read().await;
-        let factory = factories.get(&config.channel_type).ok_or_else(|| {
-            ChannelError::ConfigError(format!(
-                "No factory registered for channel type: {}",
-                config.channel_type
-            ))
-        })?;
-
-        let channel = factory
-            .create_with_id(&config.id, config.config.clone())
-            .await?;
-        let channel_id = channel.id().clone();
-
+        let factory = match factories.get(&config.channel_type).cloned() {
+            Some(factory) => factory,
+            None => {
+                if let Some((entry, marker)) = &operation {
+                    self.finish_legacy_operation(entry, marker).await;
+                }
+                return Err(ChannelError::ConfigError(format!(
+                    "No factory registered for channel type: {}",
+                    config.channel_type
+                )));
+            }
+        };
         drop(factories);
 
-        // Observe the replacement policy before touching the outgoing Feishu
+        let channel = match factory
+            .create_with_id(&config.id, config.config.clone())
+            .await
+        {
+            Ok(channel) => channel,
+            Err(error) => {
+                if let Some((entry, marker)) = &operation {
+                    self.finish_legacy_operation(entry, marker).await;
+                }
+                return Err(error);
+            }
+        };
+        let channel_id = channel.id().clone();
+
+        if let Err(error) = self.reject_bound_legacy_access(&channel_id).await {
+            if let Some((entry, marker)) = &operation {
+                self.finish_legacy_operation(entry, marker).await;
+            }
+            return Err(error);
+        }
+
+        // Observe the replacement policy before touching the outgoing channel
         // runtime, webhook mount, or publication. DeliveryStore deliberately
         // latches observation failures fail closed; returning here therefore
         // retains the incumbent's live state while preserving that durable
@@ -325,12 +516,25 @@ impl ChannelRegistry {
                 publication = "untouched",
                 admission = "fail_closed_by_delivery_store",
                 %error,
-                "channel replacement refused before Feishu teardown"
+                "channel replacement refused before channel teardown"
             );
+            if let Some((entry, marker)) = &operation {
+                self.finish_legacy_operation(entry, marker).await;
+            }
             return Err(error);
         }
 
-        self.stop_outgoing_feishu(&channel_id).await?;
+        let stop_result = if let Some((entry, _marker)) = &operation {
+            self.stop_channel_inner(&channel_id, entry).await
+        } else {
+            self.stop_outgoing_channel(&channel_id).await
+        };
+        if let Err(error) = stop_result {
+            if let Some((entry, marker)) = &operation {
+                self.finish_legacy_operation(entry, marker).await;
+            }
+            return Err(error);
+        }
 
         // Same reasoning as `register`: the freshly-created instance has not
         // started, so drop whatever the outgoing instance at this id left
@@ -338,8 +542,25 @@ impl ChannelRegistry {
         self.webhook_mounts.unmount_channel(&channel_id).await;
 
         let mut channels = self.channels.write().await;
-        channels.insert(channel_id.clone(), Arc::new(RwLock::new(channel)));
-        drop(channels);
+        let mut desired = self.desired_state.write().await;
+        // Stamp the publication while the map and intent are locked together:
+        // the mount built from this entry later carries the stamp, and dispatch
+        // compares it against this very entry.
+        let publication_revision = self
+            .try_advance_source_revision()
+            .map_err(|error| ChannelError::Internal(error.to_string()))?;
+        channels.insert(
+            channel_id.clone(),
+            Arc::new(ChannelRegistrationEntry {
+                channel: Arc::new(RwLock::new(channel)),
+                registration: ChannelRegistration::Legacy {
+                    publication_revision,
+                },
+                runtime: Mutex::new(binding::EntryRuntime::default()),
+                drained: tokio::sync::Notify::new(),
+                forwarder_task: Mutex::new(None),
+            }),
+        );
 
         // Preserve the configured boot intent: a successful replacement is
         // selected by `start_all` only when its config explicitly enables it.
@@ -348,7 +569,13 @@ impl ChannelRegistry {
         } else {
             DesiredChannelState::Stopped
         };
-        self.set_desired(&channel_id, boot_intent).await;
+        desired.insert(channel_id.clone(), boot_intent);
+        drop(desired);
+        drop(channels);
+
+        if let Some((entry, marker)) = &operation {
+            self.finish_legacy_operation(entry, marker).await;
+        }
 
         info!(
             "Created channel: {} (type: {})",
@@ -387,10 +614,18 @@ impl ChannelRegistry {
         channel: Box<dyn Channel>,
         boot_intent: DesiredChannelState,
     ) -> ChannelId {
-        let _lifecycle = self.lifecycle_sync.lock().await;
+        let _source_publication = self.source_publication_sync.lock().await;
         let channel_id = channel.id().clone();
+        if self.next_bound_revision().is_err() {
+            warn!(channel = %channel_id, "legacy registration refused; source revision exhausted");
+            return channel_id;
+        }
+        if let Err(error) = self.reject_bound_legacy_access(&channel_id).await {
+            warn!(channel = %channel_id, %error, "legacy registration refused; bound incumbent retained");
+            return channel_id;
+        }
 
-        // Observe the replacement policy before touching the outgoing Feishu
+        // Observe the replacement policy before touching the outgoing channel
         // runtime, webhook mount, or publication. DeliveryStore deliberately
         // latches observation failures fail closed; returning here therefore
         // retains the incumbent's live state while preserving that durable
@@ -406,15 +641,19 @@ impl ChannelRegistry {
                 publication = "untouched",
                 admission = "fail_closed_by_delivery_store",
                 %error,
-                "channel replacement refused before Feishu teardown"
+                "channel replacement refused before channel teardown"
             );
             return channel_id;
         }
 
-        if let Err(error) = self.stop_outgoing_feishu(&channel_id).await {
+        if let Err(error) = self.stop_outgoing_channel(&channel_id).await {
             // This legacy API returns only an id. Preserve the failed owner and
             // its structured residual instead of dropping failure evidence.
-            warn!(channel = %channel_id, %error, "Feishu replacement refused; incumbent retained");
+            warn!(
+                channel = %channel_id,
+                %error,
+                "channel replacement refused; incumbent retained"
+            );
             return channel_id;
         }
 
@@ -424,34 +663,94 @@ impl ChannelRegistry {
         self.webhook_mounts.unmount_channel(&channel_id).await;
 
         let mut channels = self.channels.write().await;
-        channels.insert(channel_id.clone(), Arc::new(RwLock::new(channel)));
-        drop(channels);
+        let mut desired = self.desired_state.write().await;
+        // Stamped under the map and intent locks, exactly like `create_channel`:
+        // a retained mount is refused once this id denotes a different publication.
+        let Ok(publication_revision) = self.try_advance_source_revision() else {
+            warn!(channel = %channel_id, "legacy registration refused; source revision exhausted");
+            return channel_id;
+        };
+        channels.insert(
+            channel_id.clone(),
+            Arc::new(ChannelRegistrationEntry {
+                channel: Arc::new(RwLock::new(channel)),
+                registration: ChannelRegistration::Legacy {
+                    publication_revision,
+                },
+                runtime: Mutex::new(binding::EntryRuntime::default()),
+                drained: tokio::sync::Notify::new(),
+                forwarder_task: Mutex::new(None),
+            }),
+        );
 
         // This unconditional write is intentional: replacement gets the new
         // registration's boot intent rather than inheriting the old instance's.
-        self.desired_state
-            .write()
-            .await
-            .insert(channel_id.clone(), boot_intent);
+        desired.insert(channel_id.clone(), boot_intent);
+        drop(desired);
+        drop(channels);
         info!("Registered channel: {}", channel_id);
         channel_id
     }
 
-    /// Tear down only the concrete Feishu slice before replacing/removing it.
-    /// Called with lifecycle_sync held; never hold the channel map across I/O.
-    async fn stop_outgoing_feishu(&self, channel_id: &ChannelId) -> ChannelResult<()> {
-        let Some(handle) = self.get(channel_id).await else {
+    /// Publish and start a config-only declaration without replacing an incumbent.
+    /// Project its policy under the same publication gate before adapter startup.
+    pub(crate) async fn register_and_start_vacant(
+        &self,
+        channel: Box<dyn Channel>,
+        before_publish: impl FnOnce(&ChannelId) + Send,
+    ) -> ChannelResult<()> {
+        let id = channel.info().id.clone();
+        let marker = Arc::new(());
+        let entry = {
+            let _publication = self.source_publication_sync.lock().await;
+            let _lifecycle = self.lifecycle_sync.lock().await;
+            let mut channels = self.channels.write().await;
+            if channels.contains_key(&id) {
+                return Err(ChannelError::Busy(format!(
+                    "Channel already registered: {id}"
+                )));
+            }
+            self.next_bound_revision()
+                .map_err(|error| ChannelError::Internal(error.to_string()))?;
+            self.observe_delivery_policy(&id, channel.outbound_delivery_policy())?;
+            let mut desired = self.desired_state.write().await;
+            let publication_revision = self
+                .try_advance_source_revision()
+                .map_err(|error| ChannelError::Internal(error.to_string()))?;
+            let entry = Arc::new(ChannelRegistrationEntry {
+                channel: Arc::new(RwLock::new(channel)),
+                registration: ChannelRegistration::Legacy {
+                    publication_revision,
+                },
+                runtime: Mutex::new(binding::EntryRuntime {
+                    operation: Some(marker.clone()),
+                    ..Default::default()
+                }),
+                drained: tokio::sync::Notify::new(),
+                forwarder_task: Mutex::new(None),
+            });
+            before_publish(&id);
+            channels.insert(id.clone(), entry.clone());
+            desired.insert(id.clone(), DesiredChannelState::Stopped);
+            entry
+        };
+        let result = self.start_channel_inner(&id, &entry).await;
+        self.finish_legacy_operation(&entry, &marker).await;
+        result
+    }
+
+    /// Tear down the current channel before replacing or removing it.
+    /// The entry operation marker serializes the same channel while the shared
+    /// lifecycle gate remains available to unrelated channels.
+    async fn stop_outgoing_channel(&self, channel_id: &ChannelId) -> ChannelResult<()> {
+        let entry = self.channels.read().await.get(channel_id).cloned();
+        let Some(entry) = entry else {
             return Ok(());
         };
-        let is_feishu = handle
-            .read()
-            .await
-            .as_any()
-            .is_some_and(|value| value.is::<super::interfaces::feishu::FeishuChannel>());
-        if is_feishu {
-            self.stop_channel_inner(channel_id).await?;
-        }
-        Ok(())
+        let marker = self.begin_legacy_operation(channel_id, &entry).await?;
+        let result = self.stop_channel_inner(channel_id, &entry).await;
+        self.finish_legacy_operation(&entry, &marker).await;
+        result
     }
 
     /// Unregister a channel
@@ -473,9 +772,17 @@ impl ChannelRegistry {
     /// who keeps the adapter alive while the forwarder runs).
 
     pub async fn unregister(&self, channel_id: &ChannelId) -> Option<Box<dyn Channel>> {
-        let _lifecycle = self.lifecycle_sync.lock().await;
-        if let Err(error) = self.stop_outgoing_feishu(channel_id).await {
-            warn!(channel = %channel_id, %error, "Feishu removal refused; incumbent retained");
+        let _source_publication = self.source_publication_sync.lock().await;
+        if self.next_bound_revision().is_err() {
+            warn!(channel = %channel_id, "legacy unregistration refused; source revision exhausted");
+            return None;
+        }
+        if let Err(error) = self.stop_outgoing_channel(channel_id).await {
+            warn!(
+                channel = %channel_id,
+                %error,
+                "channel removal refused; incumbent retained"
+            );
             return None;
         }
         // Drop the HTTP surface before the instance leaves the registry —
@@ -483,34 +790,404 @@ impl ChannelRegistry {
         // `channel.delete` otherwise leaves an authenticated endpoint the
         // operator believes is gone.
         self.webhook_mounts.unmount_channel(channel_id).await;
-        // Drop the intent with the instance. Leaving it behind would both leak
-        // an entry per deleted channel and hand a later channel that reuses the
-        // id a `Running` intent it never asked for.
-        self.desired_state.write().await.remove(channel_id);
-
         let mut channels = self.channels.write().await;
-        if let Some(channel_arc) = channels.remove(channel_id) {
-            // Try to extract the inner channel
-            match Arc::try_unwrap(channel_arc) {
-                Ok(rw_lock) => {
-                    let channel = rw_lock.into_inner();
-                    info!("Unregistered channel: {}", channel_id);
-                    Some(channel)
-                }
-                Err(_) => {
-                    warn!("Could not unregister channel {} - still in use", channel_id);
-                    None
-                }
+        if !channels.contains_key(channel_id) {
+            return None;
+        }
+        let mut desired = self.desired_state.write().await;
+        self.try_advance_source_revision().ok()?;
+        let entry = channels.remove(channel_id).expect("channel checked above");
+        desired.remove(channel_id);
+        drop(desired);
+        drop(channels);
+
+        // Legacy captures retain the entry as well as the channel handle.
+        let channel_arc = Arc::try_unwrap(entry).ok()?.channel;
+        match Arc::try_unwrap(channel_arc) {
+            Ok(rw_lock) => {
+                let channel = rw_lock.into_inner();
+                info!("Unregistered channel: {}", channel_id);
+                Some(channel)
             }
-        } else {
-            None
+            Err(_) => {
+                warn!("Could not unregister channel {} - still in use", channel_id);
+                None
+            }
         }
     }
 
-    /// Get channel by ID
-    pub async fn get(&self, channel_id: &ChannelId) -> Option<ChannelHandle> {
+    /// Capture the current registered instance without starting or authenticating it.
+    ///
+    /// The capture and its source revision come from the same registry read
+    /// boundary. The returned handle is opaque to callers; use admission must
+    /// revalidate it through [`Self::validate_channel_capture`].
+    #[allow(dead_code)]
+    pub(crate) async fn capture_channel(&self, channel_id: &ChannelId) -> Option<ChannelCapture> {
+        let _lifecycle = self.lifecycle_sync.lock().await;
         let channels = self.channels.read().await;
-        channels.get(channel_id).cloned()
+        let entry = channels.get(channel_id)?;
+        if !matches!(entry.registration, ChannelRegistration::Legacy { .. }) {
+            return None;
+        }
+        Some(ChannelCapture {
+            channel_id: channel_id.clone(),
+            source: self.source.clone(),
+            entry: entry.clone(),
+            source_revision: self
+                .source_revision
+                .load(std::sync::atomic::Ordering::Relaxed),
+            handle: entry.channel.clone(),
+        })
+    }
+
+    /// Revalidate a source-owned capture at the use boundary.
+    ///
+    /// An unrelated publication may advance the source revision without
+    /// invalidating this entry. Replacement or unregister always changes the
+    /// registered `Arc` identity, so stale work fails closed here.
+    #[allow(dead_code)]
+    pub(crate) async fn validate_channel_capture(
+        &self,
+        capture: &ChannelCapture,
+    ) -> Option<ChannelHandle> {
+        let _lifecycle = self.lifecycle_sync.lock().await;
+        let channels = self.channels.read().await;
+        let current = channels.get(&capture.channel_id)?;
+        (Arc::ptr_eq(&self.source, &capture.source)
+            && Arc::ptr_eq(current, &capture.entry)
+            && matches!(current.registration, ChannelRegistration::Legacy { .. })
+            && Arc::ptr_eq(&current.channel, &capture.handle))
+        .then(|| current.channel.clone())
+    }
+
+    /// Advance the source publication revision and return the new value.
+    ///
+    /// Callers that publish an entry stamp it with the returned revision while
+    /// holding the `channels` write lock, so the atomic cut and the stamped
+    /// entry are never observed out of step and every stamp is unique.
+    fn try_advance_source_revision(&self) -> Result<u64, binding::ChannelBindingError> {
+        self.source_revision
+            .try_update(
+                std::sync::atomic::Ordering::Relaxed,
+                std::sync::atomic::Ordering::Relaxed,
+                |revision| revision.checked_add(1),
+            )
+            .map(|previous| previous + 1)
+            .map_err(|_| binding::ChannelBindingError::PublicationExhausted)
+    }
+
+    fn try_advance_descriptor_revision(&self) -> Result<u64, binding::ChannelBindingError> {
+        self.descriptor_revision
+            .try_update(
+                std::sync::atomic::Ordering::Relaxed,
+                std::sync::atomic::Ordering::Relaxed,
+                |revision| revision.checked_add(1),
+            )
+            .map(|previous| previous + 1)
+            .map_err(|_| binding::ChannelBindingError::DescriptorPublicationExhausted)
+    }
+
+    fn next_descriptor_revision(&self) -> Result<u64, binding::ChannelBindingError> {
+        self.descriptor_revision
+            .load(std::sync::atomic::Ordering::Relaxed)
+            .checked_add(1)
+            .ok_or(binding::ChannelBindingError::DescriptorPublicationExhausted)
+    }
+
+    fn prepare_bound_entry(
+        &self,
+        channel: Box<dyn Channel>,
+        contract: ChannelLifecycleContract,
+        ownership: Arc<OwnershipTree>,
+        initial: ChannelInitialState,
+        source_revision: u64,
+        descriptor_revision: u64,
+    ) -> Result<Arc<ChannelRegistrationEntry>, ChannelBindingError> {
+        let channel_id = channel.id().clone();
+        if channel_id.as_str().is_empty() {
+            return Err(ChannelBindingError::InvalidContract);
+        }
+        let provider = ProviderHandle::new(ProviderLifecycle::new(
+            ProviderId::new(format!("aleph/gateway/channels/{channel_id}"))
+                .map_err(|_| ChannelBindingError::InvalidContract)?,
+            ProviderTransport::InProcess,
+        ));
+        match initial {
+            ChannelInitialState::Discovered => {}
+            ChannelInitialState::Cold => {
+                provider.transition(ProviderState::Cold)?;
+            }
+            ChannelInitialState::Disabled => {
+                provider.transition(ProviderState::Disabled)?;
+            }
+        }
+        let descriptor = CapabilityDescriptor {
+            id: CapabilityId {
+                namespace: "aleph/gateway/channels".into(),
+                name: channel_id.as_str().into(),
+            },
+            kind: CapabilityKind::Resource,
+            schema: contract.schema,
+            revision: CapabilityRevision(descriptor_revision),
+            owner: contract.owner.clone(),
+            lifetime: contract.lifetime,
+            visibility: contract.visibility.clone(),
+            metadata: contract.metadata.clone(),
+            services: Vec::new(),
+            facets: CapabilityFacets::new().with(CapabilityFacet::ProviderLifecycle),
+        };
+        Ok(Arc::new(ChannelRegistrationEntry {
+            channel: Arc::new(RwLock::new(channel)),
+            runtime: Mutex::new(binding::EntryRuntime::default()),
+            drained: tokio::sync::Notify::new(),
+            forwarder_task: Mutex::new(None),
+            registration: ChannelRegistration::Bound(Box::new(BoundChannelRegistration {
+                source: self.source.clone(),
+                entry_revision: source_revision,
+                descriptor_revision,
+                descriptor_fingerprint: canonical_descriptor_fingerprint(&descriptor),
+                descriptor,
+                contract,
+                provider,
+                ownership,
+            })),
+        }))
+    }
+    /// Publish one complete, cold lifecycle declaration. No runtime activation.
+    #[allow(dead_code)]
+    pub(crate) async fn register_bound_channel(
+        &self,
+        channel: Box<dyn Channel>,
+        contract: ChannelLifecycleContract,
+        ownership: Arc<OwnershipTree>,
+        initial: ChannelInitialState,
+    ) -> Result<ChannelId, ChannelBindingError> {
+        let _source_publication = self.source_publication_sync.lock().await;
+        let _lifecycle = self.lifecycle_sync.lock().await;
+        let channel_id = channel.id().clone();
+        let mut channels = self.channels.write().await;
+        if channels.contains_key(&channel_id) {
+            return Err(ChannelBindingError::Busy);
+        }
+        let source_revision = self
+            .source_revision
+            .load(std::sync::atomic::Ordering::Relaxed)
+            .checked_add(1)
+            .ok_or(ChannelBindingError::PublicationExhausted)?;
+        let descriptor_revision = self.next_descriptor_revision()?;
+        let mut entry = self.prepare_bound_entry(
+            channel,
+            contract,
+            ownership,
+            initial,
+            source_revision,
+            descriptor_revision,
+        )?;
+        // Acquire every publication lock before the first write: cancellation
+        // cannot leave a half-published tuple or mismatched desired intent.
+        let mut desired = self.desired_state.write().await;
+        let source_revision = self.try_advance_source_revision()?;
+        let descriptor_revision = self.try_advance_descriptor_revision()?;
+        let bound = match &mut Arc::get_mut(&mut entry)
+            .ok_or(ChannelBindingError::Busy)?
+            .registration
+        {
+            ChannelRegistration::Bound(bound) => bound,
+            _ => return Err(ChannelBindingError::InvalidContract),
+        };
+        bound.entry_revision = source_revision;
+        bound.descriptor_revision = descriptor_revision;
+        bound.descriptor.revision = CapabilityRevision(descriptor_revision);
+        bound.descriptor_fingerprint = canonical_descriptor_fingerprint(&bound.descriptor);
+        channels.insert(channel_id.clone(), entry);
+        desired.insert(channel_id.clone(), DesiredChannelState::Stopped);
+        Ok(channel_id)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) async fn capture_bound_channel(
+        &self,
+        id: &ChannelId,
+    ) -> Result<BoundChannelCapture, ChannelBindingError> {
+        let _lifecycle = self.lifecycle_sync.lock().await;
+        let channels = self.channels.read().await;
+        let entry = channels.get(id).ok_or(ChannelBindingError::NotFound)?;
+        let ChannelRegistration::Bound(bound) = &entry.registration else {
+            return Err(ChannelBindingError::UnboundLegacy);
+        };
+        Ok(BoundChannelCapture {
+            source: bound.source.clone(),
+            entry: entry.clone(),
+            channel: entry.channel.clone(),
+            source_revision: self
+                .source_revision
+                .load(std::sync::atomic::Ordering::Relaxed),
+            entry_revision: bound.entry_revision,
+            descriptor_revision: bound.descriptor_revision,
+            descriptor: bound.descriptor.clone(),
+            descriptor_fingerprint: bound.descriptor_fingerprint,
+            provider: bound.provider.clone(),
+            provider_generation: bound.provider.snapshot().1,
+        })
+    }
+
+    /// Exact-scope, source-local projection only; never creates ownership.
+    #[allow(dead_code)]
+    pub(crate) async fn snapshot_bound_channels(
+        &self,
+        visibility: &VisibilityScope,
+    ) -> (Vec<CapabilityDescriptor>, u64) {
+        let _lifecycle = self.lifecycle_sync.lock().await;
+        let channels = self.channels.read().await;
+        let mut descriptors: Vec<_> = channels
+            .values()
+            .filter_map(|entry| {
+                let ChannelRegistration::Bound(bound) = &entry.registration else {
+                    return None;
+                };
+                (&bound.descriptor.visibility == visibility).then(|| bound.descriptor.clone())
+            })
+            .collect();
+        descriptors.sort_by(|a, b| a.id.name.cmp(&b.id.name));
+        (
+            descriptors,
+            self.source_revision
+                .load(std::sync::atomic::Ordering::Relaxed),
+        )
+    }
+
+    /// Validate the current registration without exposing its Legacy handle.
+    pub(crate) async fn require_legacy_channel(&self, id: &ChannelId) -> ChannelResult<()> {
+        let channels = self.channels.read().await;
+        match channels.get(id) {
+            Some(entry) if matches!(entry.registration, ChannelRegistration::Legacy { .. }) => {
+                Ok(())
+            }
+            Some(_) => Err(ChannelError::UnsupportedFeature(
+                "bound channel runtime is not implemented".into(),
+            )),
+            None => Err(ChannelError::NotConnected(format!(
+                "Channel not found: {id}"
+            ))),
+        }
+    }
+
+    async fn reject_bound_legacy_access(&self, id: &ChannelId) -> ChannelResult<()> {
+        if self
+            .channels
+            .read()
+            .await
+            .get(id)
+            .is_some_and(|entry| matches!(entry.registration, ChannelRegistration::Bound(_)))
+        {
+            return Err(ChannelError::UnsupportedFeature(
+                "bound channel runtime is not implemented".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Legacy execution adapters must never receive a Bound raw handle.
+    async fn legacy_channel(&self, id: &ChannelId) -> ChannelResult<ChannelHandle> {
+        let channels = self.channels.read().await;
+        let entry = channels
+            .get(id)
+            .ok_or_else(|| ChannelError::NotConnected(format!("Channel not found: {id}")))?;
+        match entry.registration {
+            ChannelRegistration::Legacy { .. } => Ok(entry.channel.clone()),
+            ChannelRegistration::Bound(_) => Err(ChannelError::UnsupportedFeature(
+                "bound channel runtime is not implemented".into(),
+            )),
+        }
+    }
+
+    async fn legacy_entry(&self, id: &ChannelId) -> ChannelResult<Arc<ChannelRegistrationEntry>> {
+        let channels = self.channels.read().await;
+        let entry = channels
+            .get(id)
+            .cloned()
+            .ok_or_else(|| ChannelError::NotConnected(format!("Channel not found: {id}")))?;
+        if matches!(entry.registration, ChannelRegistration::Bound(_)) {
+            return Err(ChannelError::UnsupportedFeature(
+                "bound channel runtime is not implemented".into(),
+            ));
+        }
+        Ok(entry)
+    }
+
+    async fn begin_legacy_operation(
+        &self,
+        id: &ChannelId,
+        entry: &Arc<ChannelRegistrationEntry>,
+    ) -> ChannelResult<Arc<()>> {
+        let _source = self.lifecycle_sync.lock().await;
+        let current = self
+            .channels
+            .read()
+            .await
+            .get(id)
+            .cloned()
+            .ok_or_else(|| ChannelError::NotConnected(format!("Channel not found: {id}")))?;
+        if !Arc::ptr_eq(&current, entry) {
+            return Err(ChannelError::Busy(format!(
+                "Channel changed during lifecycle admission: {id}"
+            )));
+        }
+        if !matches!(current.registration, ChannelRegistration::Legacy { .. }) {
+            return Err(ChannelError::UnsupportedFeature(
+                "bound channel runtime is not implemented".into(),
+            ));
+        }
+        let (mut runtime, poisoned) = lock_runtime(entry);
+        if poisoned {
+            // A poisoned runtime means a previous lifecycle operation may not
+            // have finished: refuse to start another one on unknown state.
+            return Err(ChannelError::Busy(format!(
+                "Channel runtime state is uncertain after a poisoned mutex; a previous lifecycle operation may not have finished: {id}"
+            )));
+        }
+        if runtime.operation.is_some() {
+            return Err(ChannelError::Busy(format!(
+                "Channel lifecycle operation already active: {id}"
+            )));
+        }
+        let marker = Arc::new(());
+        runtime.operation = Some(marker.clone());
+        Ok(marker)
+    }
+
+    async fn finish_legacy_operation(
+        &self,
+        entry: &Arc<ChannelRegistrationEntry>,
+        marker: &Arc<()>,
+    ) {
+        let _source = self.lifecycle_sync.lock().await;
+        let (mut runtime, _poisoned) = lock_runtime(entry);
+        if runtime
+            .operation
+            .as_ref()
+            .is_some_and(|active| Arc::ptr_eq(active, marker))
+        {
+            runtime.operation = None;
+        }
+    }
+
+    pub(crate) async fn contains(&self, id: &ChannelId) -> bool {
+        self.channels.read().await.contains_key(id)
+    }
+
+    /// Read either kind of registration without exposing a bound channel handle.
+    pub(crate) async fn channel_info(&self, id: &ChannelId) -> Option<ChannelInfo> {
+        let entry = self.channels.read().await.get(id).cloned()?;
+        let channel = entry.channel.read().await;
+        let mut info = channel.info().clone();
+        info.status = channel.status();
+        Some(info)
+    }
+
+    /// Get a legacy channel by ID. Bound handles remain source-private.
+    pub async fn get(&self, channel_id: &ChannelId) -> Option<ChannelHandle> {
+        self.legacy_channel(channel_id).await.ok()
     }
 
     /// Get the capabilities for a channel by ID.
@@ -525,7 +1202,7 @@ impl ChannelRegistry {
     pub async fn get_capabilities(&self, channel_id: &ChannelId) -> Option<ChannelCapabilities> {
         let channels = self.channels.read().await;
         if let Some(handle) = channels.get(channel_id) {
-            let channel = handle.read().await;
+            let channel = handle.channel.read().await;
             Some(channel.capabilities().clone())
         } else {
             None
@@ -544,8 +1221,8 @@ impl ChannelRegistry {
         let channels = self.channels.read().await;
         let mut infos = Vec::with_capacity(channels.len());
 
-        for channel_arc in channels.values() {
-            let channel = channel_arc.read().await;
+        for entry in channels.values() {
+            let channel = entry.channel.read().await;
             let mut info = channel.info().clone();
             info.status = channel.status(); // override with live status
             infos.push(info);
@@ -566,8 +1243,8 @@ impl ChannelRegistry {
         let channels = self.channels.read().await;
         let mut infos = Vec::new();
 
-        for channel_arc in channels.values() {
-            let channel = channel_arc.read().await;
+        for entry in channels.values() {
+            let channel = entry.channel.read().await;
             if channel.channel_type() == channel_type {
                 let mut info = channel.info().clone();
                 info.status = channel.status();
@@ -580,12 +1257,22 @@ impl ChannelRegistry {
 
     /// Build the webhook mount for `channel_id` from `channel`'s just-(re)started
     /// state, if it exposes a webhook handler — `None` for every non-webhook
-    /// channel. Shared by `start_channel` and `restart_channel`, the two sites
-    /// where `start()` (re)builds the handler.
+    /// channel and for a Bound registration, which owns no Legacy publication.
+    /// The mount carries the publication stamp of `entry`, so dispatch can tell
+    /// whether this id still denotes that registration.
+    /// Shared by `start_channel` and `restart_channel`, the two sites where
+    /// `start()` (re)builds the handler.
     fn webhook_mount_for(
         channel: &dyn Channel,
         channel_id: &ChannelId,
+        entry: &ChannelRegistrationEntry,
     ) -> Option<super::webhook_receiver::WebhookMount> {
+        let publication_revision = match entry.registration {
+            ChannelRegistration::Legacy {
+                publication_revision,
+            } => publication_revision,
+            ChannelRegistration::Bound(_) => return None,
+        };
         channel
             .webhook_handler()
             .map(|handler| super::webhook_receiver::WebhookMount {
@@ -593,19 +1280,38 @@ impl ChannelRegistry {
                 inbound: channel.state().sender(),
                 status: channel.state().status_handle(),
                 channel_id: channel_id.clone(),
+                source_revision: publication_revision,
             })
     }
 
     /// Start a channel
     pub async fn start_channel(&self, channel_id: &ChannelId) -> ChannelResult<()> {
-        let _lifecycle = self.lifecycle_sync.lock().await;
-        self.start_channel_inner(channel_id).await
+        if self
+            .channels
+            .read()
+            .await
+            .get(channel_id)
+            .is_some_and(|entry| matches!(entry.registration, ChannelRegistration::Bound(_)))
+        {
+            return self
+                .start_bound_channel_compat(channel_id)
+                .await
+                .map_err(|error| ChannelError::Internal(error.to_string()));
+        }
+        let entry = self.legacy_entry(channel_id).await?;
+        let marker = self.begin_legacy_operation(channel_id, &entry).await?;
+        let result = self.start_channel_inner(channel_id, &entry).await;
+        self.finish_legacy_operation(&entry, &marker).await;
+        result
     }
 
-    async fn start_channel_inner(&self, channel_id: &ChannelId) -> ChannelResult<()> {
-        let channel_arc = self.get(channel_id).await.ok_or_else(|| {
-            ChannelError::NotConnected(format!("Channel not found: {channel_id}"))
-        })?;
+    async fn start_channel_inner(
+        &self,
+        channel_id: &ChannelId,
+        channel_arc: &Arc<ChannelRegistrationEntry>,
+    ) -> ChannelResult<()> {
+        let entry = channel_arc;
+        let channel_arc = channel_arc.channel.clone();
 
         let mut channel = channel_arc.write().await;
         channel.start().await?;
@@ -615,13 +1321,38 @@ impl ChannelRegistry {
         // OWN broadcast so `start_message_forwarder` still stamps channel
         // health — going to the registry's sender directly would make a
         // receiving channel look dead to the health monitor.
-        let mount = Self::webhook_mount_for(&**channel, channel_id);
+        let mount = Self::webhook_mount_for(&**channel, channel_id, entry);
 
-        // Start forwarding inbound messages
-        self.start_message_forwarder(channel_id.clone(), channel_arc.clone())
-            .await;
+        // Start forwarding inbound messages only if no LIVE forwarder is
+        // running. The handle lives in the registration entry, so a stop
+        // followed by a start cannot leave two forwarders subscribed to the
+        // same channel — the second one would deliver every inbound message
+        // a second time.
+        // The lock is a `std::sync::Mutex`, so it must not be held across an
+        // await: the forwarder is started first and its handle stored
+        // afterwards. A concurrent start may have installed a live forwarder
+        // in the meantime — the extra one is aborted instead of replacing it.
+        let needs_forwarder = {
+            let forwarder = entry.forwarder_task.lock().unwrap();
+            !forwarder
+                .as_ref()
+                .is_some_and(|handle| !handle.is_finished())
+        };
+        if needs_forwarder {
+            let handle = self
+                .start_message_forwarder(channel_id.clone(), channel_arc.clone())
+                .await;
+            let mut forwarder = entry.forwarder_task.lock().unwrap();
+            let live = forwarder
+                .as_ref()
+                .is_some_and(|handle| !handle.is_finished());
+            if live {
+                handle.abort();
+            } else {
+                *forwarder = Some(handle);
+            }
+        }
         drop(channel);
-
         if let Some(mount) = mount {
             self.webhook_mounts.mount(mount).await;
         }
@@ -637,14 +1368,31 @@ impl ChannelRegistry {
 
     /// Stop a channel
     pub async fn stop_channel(&self, channel_id: &ChannelId) -> ChannelResult<()> {
-        let _lifecycle = self.lifecycle_sync.lock().await;
-        self.stop_channel_inner(channel_id).await
+        if self
+            .channels
+            .read()
+            .await
+            .get(channel_id)
+            .is_some_and(|entry| matches!(entry.registration, ChannelRegistration::Bound(_)))
+        {
+            return self
+                .stop_bound_channel_compat(channel_id)
+                .await
+                .map_err(|error| ChannelError::Internal(error.to_string()));
+        }
+        let entry = self.legacy_entry(channel_id).await?;
+        let marker = self.begin_legacy_operation(channel_id, &entry).await?;
+        let result = self.stop_channel_inner(channel_id, &entry).await;
+        self.finish_legacy_operation(&entry, &marker).await;
+        result
     }
 
-    async fn stop_channel_inner(&self, channel_id: &ChannelId) -> ChannelResult<()> {
-        let channel_arc = self.get(channel_id).await.ok_or_else(|| {
-            ChannelError::NotConnected(format!("Channel not found: {channel_id}"))
-        })?;
+    async fn stop_channel_inner(
+        &self,
+        channel_id: &ChannelId,
+        entry: &Arc<ChannelRegistrationEntry>,
+    ) -> ChannelResult<()> {
+        let channel_arc = entry.channel.clone();
 
         // Recorded before `stop()` runs, not after: an adapter whose `stop`
         // returns an error has still been told to shut down, and the health
@@ -666,12 +1414,7 @@ impl ChannelRegistry {
     }
 
     /// Start all configured-enabled channels.
-    ///
-    /// Boot intent is recorded by [`Self::register_for_boot`]. Disabled
-    /// channels remain available for an explicit `start_channel` request but
-    /// are never started as a boot side effect.
     pub async fn start_all(&self) -> Vec<(ChannelId, ChannelResult<()>)> {
-        let _lifecycle = self.lifecycle_sync.lock().await;
         let desired = self.desired_state.read().await;
         let channel_ids: Vec<ChannelId> = desired
             .iter()
@@ -683,7 +1426,7 @@ impl ChannelRegistry {
 
         let mut results = Vec::with_capacity(channel_ids.len());
         for channel_id in channel_ids {
-            let result = self.start_channel_inner(&channel_id).await;
+            let result = self.start_channel(&channel_id).await;
             results.push((channel_id, result));
         }
         results
@@ -714,11 +1457,12 @@ impl ChannelRegistry {
         channel_id: &ChannelId,
         message: OutboundMessage,
     ) -> ChannelResult<SendResult> {
-        let channel_arc = self.get(channel_id).await.ok_or_else(|| {
-            ChannelError::NotConnected(format!("Channel not found: {channel_id}"))
-        })?;
-        let channel = channel_arc.read().await;
-        channel.send(message).await
+        let channel_arc = self.legacy_channel(channel_id).await?;
+        let operation = {
+            let channel = channel_arc.read().await;
+            channel.send(message)
+        };
+        operation.await
     }
 
     /// Cancel-safe pre-submit variant of [`Self::send_public_telecom`].
@@ -740,9 +1484,7 @@ impl ChannelRegistry {
         let channel_arc = tokio::select! {
             biased;
             _ = cancel.cancelled() => return Ok(None),
-            channel = self.get(channel_id) => channel.ok_or_else(|| {
-                ChannelError::NotConnected(format!("Channel not found: {channel_id}"))
-            })?,
+            channel = self.legacy_channel(channel_id) => channel?,
         };
         let channel = tokio::select! {
             biased;
@@ -755,7 +1497,9 @@ impl ChannelRegistry {
         // No await or cancellation select between this fence and the first
         // poll of send. Once committed, only the caller's delivery timeout can
         // abandon an ACK (with an unknown external outcome, never retracted).
-        channel.send(message).await.map(Some)
+        let operation = channel.send(message);
+        drop(channel);
+        operation.await.map(Some)
     }
 
     /// Ask the actual registered channel, never its advertised type string.
@@ -790,9 +1534,7 @@ impl ChannelRegistry {
             biased;
             _ = cancel.cancelled() => return Ok(ApprovedTelecomSend::Cancelled),
             _ = lease.revoked() => return Ok(ApprovedTelecomSend::Invalid),
-            channel = self.get(channel_id) => channel.ok_or_else(|| {
-                ChannelError::NotConnected(format!("Channel not found: {channel_id}"))
-            })?,
+            channel = self.legacy_channel(channel_id) => channel?,
         };
         let channel = tokio::select! {
             biased;
@@ -854,6 +1596,13 @@ impl ChannelRegistry {
         channel_id: &ChannelId,
         message: OutboundMessage,
     ) -> SendReport {
+        if let Err(error) = self.reject_bound_legacy_access(channel_id).await {
+            return SendReport {
+                result: Err(error),
+                policy: None,
+                queue: QueueDisposition::NotQueueable,
+            };
+        }
         if let Some(store) = &self.delivery_store {
             super::delivery_queue::flush_conversation(
                 self,
@@ -979,14 +1728,15 @@ impl ChannelRegistry {
         message: &OutboundMessage,
         kind: AttemptKind<'_>,
     ) -> Attempt {
-        let Some(channel_arc) = self.get(channel_id).await else {
-            return Attempt {
-                result: Err(ChannelError::NotConnected(format!(
-                    "Channel not found: {channel_id}"
-                ))),
-                policy: None,
-                replay_refused: false,
-            };
+        let channel_arc = match self.legacy_channel(channel_id).await {
+            Ok(channel) => channel,
+            Err(error) => {
+                return Attempt {
+                    result: Err(error),
+                    policy: None,
+                    replay_refused: false,
+                }
+            }
         };
 
         self.send_on(&channel_arc, channel_id, message, kind).await
@@ -1032,7 +1782,8 @@ impl ChannelRegistry {
         loop {
             // Revalidate on every acquisition: `get` exposes this Arc and a
             // writer can replace its Box during an observer or retry wait.
-            // This exact guard carries both the policy and the transport call.
+            // Prepare the operation, policy, and any replay stamp under this
+            // guard; its owned future performs the transport call after release.
             let channel = channel_arc.read().await;
             let policy = channel.outbound_delivery_policy();
             if (matches!(kind, AttemptKind::Replay { .. }) || is_retry)
@@ -1063,14 +1814,15 @@ impl ChannelRegistry {
                     };
                 }
             }
-            let result = if channel.status() == ChannelStatus::Disabled {
-                Err(ChannelError::NotConnected(format!(
-                    "Channel {channel_id} is disabled"
-                )))
-            } else {
-                channel.send(message.clone()).await
-            };
+            let operation = (channel.status() != ChannelStatus::Disabled)
+                .then(|| channel.send(message.clone()));
             drop(channel);
+            let result = match operation {
+                Some(operation) => operation.await,
+                None => Err(ChannelError::NotConnected(format!(
+                    "Channel {channel_id} is disabled"
+                ))),
+            };
 
             match result {
                 Ok(sent) => {
@@ -1094,6 +1846,20 @@ impl ChannelRegistry {
                 Err(ChannelError::RateLimited { retry_after_secs })
                     if retries_left > 0 && policy == OutboundDeliveryPolicy::Automatic =>
                 {
+                    if let AttemptKind::Replay { store, record_id } = kind {
+                        // A 429 is a definite pre-delivery refusal. Release only
+                        // this completed attempt's stamp; the next iteration
+                        // must revalidate the row and policy before re-stamping.
+                        if store.clear_inflight(record_id).is_err() {
+                            return Attempt {
+                                result: Err(ChannelError::ConfigError(
+                                    "delivery state unavailable: rate-limit retry refused".into(),
+                                )),
+                                policy: Some(policy),
+                                replay_refused: true,
+                            };
+                        }
+                    }
                     let wait =
                         Duration::from_secs(retry_after_secs).min(self.send_retry.max_retry_after);
                     warn!(
@@ -1126,16 +1892,13 @@ impl ChannelRegistry {
         message_id: &super::channel::MessageId,
         new_text: &str,
     ) -> ChannelResult<()> {
-        let channel_arc = self.get(channel_id).await.ok_or_else(|| {
-            ChannelError::NotConnected(format!("Channel not found: {channel_id}"))
-        })?;
+        let channel_arc = self.legacy_channel(channel_id).await?;
 
         // NOTE: the read guard is held across the await on `channel.edit`
         // because `Channel::edit` returns a future that borrows `&self`.
-        // Releasing the guard before the await requires the trait to
-        // return an owned (Box<dyn Future>) future, which would need a
-        // breaking change to every `Channel` impl. Documented risk:
-        // a slow adapter edit can block stop_channel / health; mitigated
+        // The owned-operation pattern used by `send` can be applied to edit
+        // separately; this migration covers outbound sends only. Documented
+        // risk: a slow adapter edit can block stop_channel / health; mitigated
         // by the per-adapter `editing` capability gate.
         let channel = channel_arc.read().await;
         channel.edit(conversation_id, message_id, new_text).await
@@ -1149,9 +1912,7 @@ impl ChannelRegistry {
         message_id: &super::channel::MessageId,
         reaction: &str,
     ) -> ChannelResult<()> {
-        let channel_arc = self.get(channel_id).await.ok_or_else(|| {
-            ChannelError::NotConnected(format!("Channel not found: {channel_id}"))
-        })?;
+        let channel_arc = self.legacy_channel(channel_id).await?;
 
         // NOTE: the read guard is held across the await on `channel.react`
         // (see `edit` for the trait-borrow rationale). The same `Channel`
@@ -1166,9 +1927,7 @@ impl ChannelRegistry {
         channel_id: &ChannelId,
         conversation_id: &ConversationId,
     ) -> ChannelResult<()> {
-        let channel_arc = self.get(channel_id).await.ok_or_else(|| {
-            ChannelError::NotConnected(format!("Channel not found: {channel_id}"))
-        })?;
+        let channel_arc = self.legacy_channel(channel_id).await?;
         // NOTE: guard held across await (see `edit`).
         let channel = channel_arc.read().await;
         channel.send_typing(conversation_id).await
@@ -1188,9 +1947,7 @@ impl ChannelRegistry {
         options: &[String],
         allow_multiple: bool,
     ) -> ChannelResult<super::channel::MessageId> {
-        let channel_arc = self.get(channel_id).await.ok_or_else(|| {
-            ChannelError::NotConnected(format!("Channel not found: {channel_id}"))
-        })?;
+        let channel_arc = self.legacy_channel(channel_id).await?;
         let channel = channel_arc.read().await;
         channel
             .create_poll(conversation_id, question, options, allow_multiple)
@@ -1208,9 +1965,7 @@ impl ChannelRegistry {
         conversation_id: &ConversationId,
         icon_data_url: &str,
     ) -> ChannelResult<()> {
-        let channel_arc = self.get(channel_id).await.ok_or_else(|| {
-            ChannelError::NotConnected(format!("Channel not found: {channel_id}"))
-        })?;
+        let channel_arc = self.legacy_channel(channel_id).await?;
         let channel = channel_arc.read().await;
         channel.set_group_icon(conversation_id, icon_data_url).await
     }
@@ -1226,9 +1981,7 @@ impl ChannelRegistry {
         query: &str,
         limit: usize,
     ) -> ChannelResult<super::channel::ConversationPage> {
-        let channel_arc = self.get(channel_id).await.ok_or_else(|| {
-            ChannelError::NotConnected(format!("Channel not found: {channel_id}"))
-        })?;
+        let channel_arc = self.legacy_channel(channel_id).await?;
 
         // Known trade-off: the `Channel` trait uses `async fn` returning a
         // future that borrows `&self`, so the read guard must be held for
@@ -1274,7 +2027,11 @@ impl ChannelRegistry {
     }
 
     /// Start forwarding messages from a channel to the unified stream
-    async fn start_message_forwarder(&self, channel_id: ChannelId, channel_arc: ChannelHandle) {
+    async fn start_message_forwarder(
+        &self,
+        channel_id: ChannelId,
+        channel_arc: ChannelHandle,
+    ) -> tokio::task::JoinHandle<()> {
         let inbound_tx = self.inbound_tx.clone();
 
         tokio::spawn(async move {
@@ -1339,7 +2096,7 @@ impl ChannelRegistry {
             }
 
             info!("[Forwarder] Channel {} forwarder stopped", channel_id);
-        });
+        })
     }
 
     /// Get the voice state for a channel, returning default if not set.
@@ -1388,17 +2145,9 @@ impl ChannelRegistry {
         let channels = self.channels.read().await;
         let mut summary = ChannelStatusSummary::default();
 
-        for channel_arc in channels.values() {
-            let channel = channel_arc.read().await;
-            summary.total += 1;
-            match channel.status() {
-                ChannelStatus::Connected => summary.connected += 1,
-                ChannelStatus::Connecting => summary.connecting += 1,
-                ChannelStatus::Pairing => summary.pairing += 1,
-                ChannelStatus::Disconnected => summary.disconnected += 1,
-                ChannelStatus::Error => summary.error += 1,
-                ChannelStatus::Disabled => summary.disabled += 1,
-            }
+        for entry in channels.values() {
+            let channel = entry.channel.read().await;
+            summary.record(channel.status());
         }
 
         summary
@@ -1408,8 +2157,8 @@ impl ChannelRegistry {
         let channels = self.channels.read().await;
         let mut summary = ChannelHealthSummary::default();
 
-        for channel_arc in channels.values() {
-            let channel = channel_arc.read().await;
+        for entry in channels.values() {
+            let channel = entry.channel.read().await;
             summary.total += 1;
             let health = channel.health().await;
             match health.status {
@@ -1430,8 +2179,8 @@ impl ChannelRegistry {
         let channels = self.channels.read().await;
         let desired = self.desired_state.read().await;
         let mut out = Vec::with_capacity(channels.len());
-        for (id, channel_arc) in channels.iter() {
-            let channel = channel_arc.read().await;
+        for (id, entry) in channels.iter() {
+            let channel = entry.channel.read().await;
             out.push(ChannelLifecycleSnapshot {
                 // A channel registered but never started has no entry, which is
                 // `Stopped` — the correct answer, and the reason this defaults
@@ -1457,15 +2206,40 @@ impl ChannelRegistry {
     /// keeps draining that broadcast, so reusing it here avoids the
     /// duplicate-delivery that a second `start_channel` would cause. This is
     /// the recovery primitive used by the health monitor for wedged channels.
+    ///
+    /// For a Bound registration, the registry-level lifecycle stop (not
+    /// `Channel::stop`) first drains admitted source work with no timeout. A wedged transport can therefore keep restart—and a health
+    /// monitor awaiting it—blocked. Stage C does not add cancellation or a
+    /// bounded-drain authority; production Bound mount remains deferred.
     pub async fn restart_channel(&self, channel_id: &ChannelId) -> ChannelResult<()> {
-        let _lifecycle = self.lifecycle_sync.lock().await;
-        self.restart_channel_inner(channel_id).await
+        if self
+            .channels
+            .read()
+            .await
+            .get(channel_id)
+            .is_some_and(|entry| matches!(entry.registration, ChannelRegistration::Bound(_)))
+        {
+            self.stop_bound_channel_compat(channel_id)
+                .await
+                .map_err(|error| ChannelError::Internal(error.to_string()))?;
+            return self
+                .start_bound_channel_compat(channel_id)
+                .await
+                .map_err(|error| ChannelError::Internal(error.to_string()));
+        }
+        let entry = self.legacy_entry(channel_id).await?;
+        let marker = self.begin_legacy_operation(channel_id, &entry).await?;
+        let result = self.restart_channel_inner(channel_id, &entry).await;
+        self.finish_legacy_operation(&entry, &marker).await;
+        result
     }
 
-    async fn restart_channel_inner(&self, channel_id: &ChannelId) -> ChannelResult<()> {
-        let channel_arc = self.get(channel_id).await.ok_or_else(|| {
-            ChannelError::NotConnected(format!("Channel not found: {channel_id}"))
-        })?;
+    async fn restart_channel_inner(
+        &self,
+        channel_id: &ChannelId,
+        entry: &Arc<ChannelRegistrationEntry>,
+    ) -> ChannelResult<()> {
+        let channel_arc = entry.channel.clone();
 
         let mut channel = channel_arc.write().await;
         channel.stop().await?;
@@ -1483,7 +2257,7 @@ impl ChannelRegistry {
         // its own refresh: `start()` builds a NEW handler and the table would
         // otherwise keep serving the pre-restart clone. If `start()` yielded no
         // handler this time, unmount instead of leaving the stale one behind.
-        let mount = Self::webhook_mount_for(&**channel, channel_id);
+        let mount = Self::webhook_mount_for(&**channel, channel_id, entry);
         drop(channel);
 
         match mount {
@@ -1596,8 +2370,11 @@ impl ChannelRegistry {
             .iter()
             .map(|(id, handle)| (id.clone(), handle.clone()))
             .collect();
-        for (id, handle) in handles {
-            let channel = handle.read().await;
+        for (id, entry) in handles {
+            if matches!(entry.registration, ChannelRegistration::Bound(_)) {
+                continue;
+            }
+            let channel = entry.channel.read().await;
             // Recheck map identity after acquiring the channel guard. No map
             // guard crosses a channel await; it spans only synchronous store
             // observation so a stale Arc cannot overwrite a new registration.
@@ -1612,7 +2389,7 @@ impl ChannelRegistry {
             };
             if channels
                 .get(&id)
-                .is_some_and(|current| Arc::ptr_eq(current, &handle))
+                .is_some_and(|current| Arc::ptr_eq(current, &entry))
                 && channel.outbound_delivery_policy() == OutboundDeliveryPolicy::ExplicitOnly
             {
                 store
@@ -1656,6 +2433,20 @@ pub struct ChannelStatusSummary {
     pub disabled: usize,
 }
 
+impl ChannelStatusSummary {
+    pub(crate) fn record(&mut self, status: ChannelStatus) {
+        self.total += 1;
+        match status {
+            ChannelStatus::Connected => self.connected += 1,
+            ChannelStatus::Connecting => self.connecting += 1,
+            ChannelStatus::Pairing => self.pairing += 1,
+            ChannelStatus::Disconnected => self.disconnected += 1,
+            ChannelStatus::Error => self.error += 1,
+            ChannelStatus::Disabled => self.disabled += 1,
+        }
+    }
+}
+
 /// One channel's lifecycle facts, as the health monitor sees them.
 ///
 /// Carries `desired` alongside the live `status` because the two answer
@@ -1680,8 +2471,841 @@ pub struct ChannelHealthSummary {
 
 #[cfg(test)]
 mod tests {
+    use super::test_support::{lifecycle_contract, register_bound};
+
+    async fn real_bound(
+        url: String,
+    ) -> (
+        Arc<ChannelRegistry>,
+        ChannelId,
+        super::test_support::ResourceProbe,
+        Arc<OwnershipTree>,
+    ) {
+        use crate::gateway::interfaces::webhook::{WebhookChannel, WebhookChannelConfig};
+        let probe = super::test_support::ResourceProbe::default();
+        let tree = Arc::new(OwnershipTree::new());
+        let registry = Arc::new(ChannelRegistry::new());
+        let id = register_bound(
+            &registry,
+            &tree,
+            Box::new(WebhookChannel::observed(
+                "real-bound",
+                WebhookChannelConfig {
+                    secret: "test-secret".into(),
+                    callback_url: url,
+                    ..Default::default()
+                },
+                probe.clone(),
+            )),
+            ChannelInitialState::Cold,
+        )
+        .await;
+        (registry, id, probe, tree)
+    }
+
+    #[tokio::test]
+    async fn bound_webhook_stop_drains_without_deadlock() {
+        use super::binding::BoundCompletion;
+        use crate::capability::ownership::VisibilityScope;
+        let peer = super::test_support::LoopbackPeer::new(200).await;
+        let (registry, id, probe, _) = real_bound(peer.url).await;
+        registry
+            .start_bound_channel(&id)
+            .await
+            .unwrap()
+            .await
+            .unwrap()
+            .unwrap();
+        let capture = registry.capture_bound_channel(&id).await.unwrap();
+        assert_eq!(capture.provider.snapshot(), (ProviderState::Ready, 1));
+        let lease = registry
+            .resolve_bound_channel(capture, &VisibilityScope::default())
+            .await
+            .unwrap();
+        let result = registry
+            .send_bound_once(lease, OutboundMessage::text("test", "real effect"))
+            .await
+            .unwrap();
+        let bytes = peer.arrived.await.unwrap();
+        assert!(String::from_utf8_lossy(&bytes).contains("real effect"));
+        let stop = registry.stop_bound_channel(&id).await.unwrap();
+        assert_eq!(
+            registry
+                .capture_bound_channel(&id)
+                .await
+                .unwrap()
+                .provider
+                .state(),
+            ProviderState::Stopping
+        );
+        let stale = registry
+            .resolve_bound_channel(
+                registry.capture_bound_channel(&id).await.unwrap(),
+                &VisibilityScope::default(),
+            )
+            .await;
+        assert!(stale.is_err());
+        assert_eq!(probe.count("client_drop"), 0);
+        peer.release.send(()).unwrap();
+        assert!(matches!(
+            result.await.unwrap(),
+            BoundCompletion::Accepted(Ok(_))
+        ));
+        stop.await.unwrap().unwrap();
+        peer.task.await.unwrap();
+        assert_eq!(capture_state(&registry, &id).await, ProviderState::Stopped);
+        assert_eq!(probe.count("client_built"), 1);
+        assert_eq!(probe.count("client_drop"), 1);
+        let entry = registry.channels.read().await.get(&id).unwrap().clone();
+        assert_eq!(entry.runtime.lock().unwrap().active_work, 0);
+        assert!(entry.runtime.lock().unwrap().forwarder.is_none());
+    }
+
+    async fn capture_state(registry: &ChannelRegistry, id: &ChannelId) -> ProviderState {
+        registry
+            .capture_bound_channel(id)
+            .await
+            .unwrap()
+            .provider
+            .state()
+    }
+
+    #[tokio::test]
+    async fn bound_webhook_owner_change_rejects_completion() {
+        use super::binding::BoundCompletion;
+        use crate::capability::ownership::{LifetimeScope, OwnerRef, TaskId, VisibilityScope};
+        for change in 0..4 {
+            let peer = super::test_support::LoopbackPeer::new(200).await;
+            let (registry, id, _, tree) = real_bound(peer.url).await;
+            registry
+                .start_bound_channel(&id)
+                .await
+                .unwrap()
+                .await
+                .unwrap()
+                .unwrap();
+            let capture = registry.capture_bound_channel(&id).await.unwrap();
+            let capability = capture.descriptor.id.clone();
+            let lease = registry
+                .resolve_bound_channel(capture, &VisibilityScope::default())
+                .await
+                .unwrap();
+            let result = registry
+                .send_bound_once(lease, OutboundMessage::text("test", "held"))
+                .await
+                .unwrap();
+            peer.arrived.await.unwrap();
+            match change {
+                0 => {
+                    tree.bump(LifetimeScope::Runtime).unwrap();
+                }
+                1 => {
+                    tree.revoke(&capability);
+                }
+                2 => {
+                    tree.dispose(LifetimeScope::Runtime);
+                }
+                _ => {
+                    tree.register(
+                        capability,
+                        OwnerRef::Task(TaskId("new-owner".into())),
+                        LifetimeScope::Task,
+                        VisibilityScope::default(),
+                    )
+                    .unwrap();
+                }
+            }
+            peer.release.send(()).unwrap();
+            let BoundCompletion::DiscardedStale(error) = result.await.unwrap() else {
+                panic!("stale owner must reject completion");
+            };
+            assert!(matches!(error, ChannelBindingError::Owner(_)));
+            assert_eq!(capture_state(&registry, &id).await, ProviderState::Ready);
+            registry
+                .stop_bound_channel(&id)
+                .await
+                .unwrap()
+                .await
+                .unwrap()
+                .unwrap();
+            peer.task.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn bound_webhook_cancelled_observer_keeps_work_owned() {
+        use crate::capability::ownership::VisibilityScope;
+        let peer = super::test_support::LoopbackPeer::new(200).await;
+        let (registry, id, probe, _) = real_bound(peer.url).await;
+        registry
+            .start_bound_channel(&id)
+            .await
+            .unwrap()
+            .await
+            .unwrap()
+            .unwrap();
+        let lease = registry
+            .resolve_bound_channel(
+                registry.capture_bound_channel(&id).await.unwrap(),
+                &VisibilityScope::default(),
+            )
+            .await
+            .unwrap();
+        let observer = registry
+            .send_bound_once(lease, OutboundMessage::text("test", "cancelled observer"))
+            .await
+            .unwrap();
+        peer.arrived.await.unwrap();
+        drop(observer);
+        let stop = registry.stop_bound_channel(&id).await.unwrap();
+        assert_eq!(probe.count("client_drop"), 0);
+        let entry = registry.channels.read().await.get(&id).unwrap().clone();
+        assert_eq!(entry.runtime.lock().unwrap().active_work, 1);
+        peer.release.send(()).unwrap();
+        stop.await.unwrap().unwrap();
+        peer.task.await.unwrap();
+        assert_eq!(entry.runtime.lock().unwrap().active_work, 0);
+        assert_eq!(probe.count("client_drop"), 1);
+    }
+
+    fn stage_b_contract(surface: Option<&str>) -> ChannelLifecycleContract {
+        use super::binding::ChannelLifecycleDeclarationV1;
+        use crate::capability::descriptor::ProjectionMetadata;
+        use crate::capability::ownership::{LifetimeScope, OwnerRef, VisibilityScope};
+
+        ChannelLifecycleContract::new(
+            OwnerRef::Runtime,
+            LifetimeScope::Runtime,
+            VisibilityScope::default(),
+            ChannelLifecycleDeclarationV1::schema(),
+            ProjectionMetadata {
+                surface: surface.map(str::to_owned),
+            },
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn bound_retirement_discards_original_completion() {
+        use super::binding::BoundCompletion;
+        use crate::capability::ownership::VisibilityScope;
+        use std::time::Duration;
+        let peer = super::test_support::LoopbackPeer::new(200).await;
+        let (registry, id, _, tree) = real_bound(peer.url.clone()).await;
+        registry
+            .start_bound_channel(&id)
+            .await
+            .unwrap()
+            .await
+            .unwrap()
+            .unwrap();
+        let capture = registry.capture_bound_channel(&id).await.unwrap();
+        let lease = registry
+            .resolve_bound_channel(capture.clone(), &VisibilityScope::default())
+            .await
+            .unwrap();
+        let completion = registry
+            .send_bound_once(lease, OutboundMessage::text("test", "retire me"))
+            .await
+            .unwrap();
+        peer.arrived.await.unwrap();
+
+        let successor = WebhookChannel::observed(
+            "real-bound",
+            WebhookChannelConfig {
+                secret: "successor-secret".into(),
+                callback_url: peer.url.clone(),
+                ..Default::default()
+            },
+            super::test_support::ResourceProbe::default(),
+        );
+        let replacement = tokio::spawn({
+            let registry = registry.clone();
+            let replacement_id = id.clone();
+            async move {
+                registry
+                    .replace_bound_channel(
+                        &replacement_id,
+                        Box::new(successor),
+                        stage_b_contract(Some("successor")),
+                        tree,
+                        ChannelInitialState::Cold,
+                    )
+                    .await
+            }
+        });
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if capture.entry.runtime.lock().unwrap().retiring {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        peer.release.send(()).unwrap();
+        let stale = completion.await.unwrap();
+        assert!(matches!(
+            stale,
+            BoundCompletion::DiscardedStale(ChannelBindingError::StaleEntry)
+                | BoundCompletion::DiscardedStale(ChannelBindingError::Retiring)
+        ));
+        assert!(replacement.await.unwrap().is_ok());
+        assert_eq!(capture.entry.runtime.lock().unwrap().active_work, 0);
+        assert!(registry.capture_bound_channel(&id).await.is_ok());
+        peer.task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn bound_replace_publishes_whole_tuple() {
+        use super::binding::BoundCompletion;
+        use crate::capability::descriptor::ProjectionMetadata;
+        use crate::capability::ownership::VisibilityScope;
+        use std::time::Duration;
+        let peer = super::test_support::LoopbackPeer::new(200).await;
+        let (registry, id, _, tree) = real_bound(peer.url.clone()).await;
+        registry
+            .start_bound_channel(&id)
+            .await
+            .unwrap()
+            .await
+            .unwrap()
+            .unwrap();
+        let before = registry.capture_bound_channel(&id).await.unwrap();
+        let before_revision = before.source_revision;
+        let lease = registry
+            .resolve_bound_channel(before.clone(), &VisibilityScope::default())
+            .await
+            .unwrap();
+        let completion = registry
+            .send_bound_once(lease, OutboundMessage::text("test", "publication boundary"))
+            .await
+            .unwrap();
+        peer.arrived.await.unwrap();
+        let successor_probe = super::test_support::ResourceProbe::default();
+        let successor = WebhookChannel::observed(
+            "real-bound",
+            WebhookChannelConfig {
+                secret: "successor-secret".into(),
+                callback_url: peer.url.clone(),
+                ..Default::default()
+            },
+            successor_probe,
+        );
+        let replacement = tokio::spawn({
+            let registry = registry.clone();
+            let id = id.clone();
+            async move {
+                registry
+                    .replace_bound_channel(
+                        &id,
+                        Box::new(successor),
+                        stage_b_contract(Some("replacement")),
+                        tree,
+                        ChannelInitialState::Cold,
+                    )
+                    .await
+            }
+        });
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if before.entry.runtime.lock().unwrap().retiring {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let during = registry.capture_bound_channel(&id).await.unwrap();
+        assert!(Arc::ptr_eq(&before.entry, &during.entry));
+        assert_eq!(during.source_revision, before_revision);
+        assert_eq!(during.provider.state(), ProviderState::Stopping);
+        peer.release.send(()).unwrap();
+        assert!(matches!(
+            completion.await.unwrap(),
+            BoundCompletion::DiscardedStale(_)
+        ));
+        assert_eq!(replacement.await.unwrap().unwrap(), id);
+        let after = registry.capture_bound_channel(&id).await.unwrap();
+        assert!(!Arc::ptr_eq(&before.entry, &after.entry));
+        assert!(!before.provider.same_instance(&after.provider));
+        assert_ne!(after.source_revision, before_revision);
+        assert_ne!(before.descriptor_fingerprint, after.descriptor_fingerprint);
+        assert_eq!(
+            after.descriptor.metadata,
+            ProjectionMetadata {
+                surface: Some("replacement".into()),
+            }
+        );
+        assert_eq!(after.provider.snapshot().0, ProviderState::Cold);
+        peer.task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn bound_unregister_waits_for_cleanup() {
+        use std::time::Duration;
+        let peer = super::test_support::LoopbackPeer::new(200).await;
+        let (registry, id, _, _) = real_bound(peer.url.clone()).await;
+        registry
+            .start_bound_channel(&id)
+            .await
+            .unwrap()
+            .await
+            .unwrap()
+            .unwrap();
+        let lease = registry
+            .resolve_bound_channel(
+                registry.capture_bound_channel(&id).await.unwrap(),
+                &VisibilityScope::default(),
+            )
+            .await
+            .unwrap();
+        let completion = registry
+            .send_bound_once(lease, OutboundMessage::text("test", "wait"))
+            .await
+            .unwrap();
+        peer.arrived.await.unwrap();
+        let mut unregister = tokio::spawn({
+            let registry = registry.clone();
+            let id = id.clone();
+            async move { registry.unregister_bound_channel(&id).await }
+        });
+        let result = tokio::time::timeout(Duration::from_millis(20), &mut unregister).await;
+        assert!(result.is_err(), "unregister must wait for real cleanup");
+        assert!(registry.capture_bound_channel(&id).await.is_ok());
+        peer.release.send(()).unwrap();
+        assert!(completion.await.is_ok());
+        assert!(unregister.await.unwrap().is_ok());
+        peer.task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn bound_contract_update_retires_old_publication() {
+        use crate::capability::ownership::VisibilityScope;
+        let (registry, id, _, tree) = real_bound("http://127.0.0.1:1/callback".into()).await;
+        registry
+            .start_bound_channel(&id)
+            .await
+            .unwrap()
+            .await
+            .unwrap()
+            .unwrap();
+        let old = registry.capture_bound_channel(&id).await.unwrap();
+        let old_lease = registry
+            .resolve_bound_channel(old.clone(), &VisibilityScope::default())
+            .await
+            .unwrap();
+        registry
+            .replace_bound_channel(
+                &id,
+                Box::new(WebhookChannel::new(
+                    "real-bound",
+                    WebhookChannelConfig {
+                        secret: "contract-update".into(),
+                        callback_url: "http://127.0.0.1:1/callback".into(),
+                        ..Default::default()
+                    },
+                )),
+                stage_b_contract(Some("contract-update")),
+                tree,
+                ChannelInitialState::Cold,
+            )
+            .await
+            .unwrap();
+        assert!(registry
+            .resolve_bound_channel(old, &VisibilityScope::default())
+            .await
+            .is_err());
+        drop(old_lease);
+    }
+
+    #[tokio::test]
+    async fn bound_failed_cleanup_retains_incumbent() {
+        let probe = super::test_support::ResourceProbe::default();
+        let tree = Arc::new(OwnershipTree::new());
+        let registry = Arc::new(ChannelRegistry::new());
+        let id = registry
+            .register_bound_channel(
+                Box::new(super::test_support::FailingStopWebhook::new(
+                    "failed-cleanup",
+                    "http://127.0.0.1:1/callback".into(),
+                    probe,
+                )),
+                stage_b_contract(None),
+                tree.clone(),
+                ChannelInitialState::Cold,
+            )
+            .await
+            .unwrap();
+        let capture = registry.capture_bound_channel(&id).await.unwrap();
+        tree.register(
+            capture.descriptor.id.clone(),
+            capture.descriptor.owner.clone(),
+            capture.descriptor.lifetime,
+            capture.descriptor.visibility.clone(),
+        )
+        .unwrap();
+        registry
+            .start_bound_channel(&id)
+            .await
+            .unwrap()
+            .await
+            .unwrap()
+            .unwrap();
+        let error = registry.unregister_bound_channel(&id).await.unwrap_err();
+        assert!(matches!(error, ChannelBindingError::Runtime { .. }));
+        assert!(registry.capture_bound_channel(&id).await.is_ok());
+        let entry = registry.channels.read().await.get(&id).unwrap().clone();
+        assert!(entry.runtime.lock().unwrap().operation.is_some());
+    }
+
+    #[tokio::test]
+    async fn bound_revision_exhaustion_never_half_publishes() {
+        use std::sync::atomic::Ordering;
+        use std::time::Duration;
+        let (registry, id, _, tree) = real_bound("http://127.0.0.1:1/callback".into()).await;
+        let before = registry.capture_bound_channel(&id).await.unwrap();
+        registry.source_revision.store(u64::MAX, Ordering::Relaxed);
+        let result = registry
+            .replace_bound_channel(
+                &id,
+                Box::new(WebhookChannel::new(
+                    "real-bound",
+                    WebhookChannelConfig::default(),
+                )),
+                stage_b_contract(Some("exhausted")),
+                tree,
+                ChannelInitialState::Cold,
+            )
+            .await;
+        assert!(matches!(
+            result,
+            Err(ChannelBindingError::PublicationExhausted)
+        ));
+        let after = registry.capture_bound_channel(&id).await.unwrap();
+        assert!(Arc::ptr_eq(&before.entry, &after.entry));
+        assert_eq!(after.source_revision, u64::MAX);
+        assert_eq!(before.provider.snapshot(), after.provider.snapshot());
+
+        let peer = super::test_support::LoopbackPeer::new(200).await;
+        let (registry, id, _, tree) = real_bound(peer.url.clone()).await;
+        registry
+            .start_bound_channel(&id)
+            .await
+            .unwrap()
+            .await
+            .unwrap()
+            .unwrap();
+        let before = registry.capture_bound_channel(&id).await.unwrap();
+        let lease = registry
+            .resolve_bound_channel(before.clone(), &VisibilityScope::default())
+            .await
+            .unwrap();
+        let completion = registry
+            .send_bound_once(lease, OutboundMessage::text("test", "revision race"))
+            .await
+            .unwrap();
+        peer.arrived.await.unwrap();
+        registry
+            .source_revision
+            .store(u64::MAX - 1, Ordering::Relaxed);
+        let replacement = tokio::spawn({
+            let registry = registry.clone();
+            let id = id.clone();
+            let peer_url = peer.url.clone();
+            async move {
+                registry
+                    .replace_bound_channel(
+                        &id,
+                        Box::new(WebhookChannel::new(
+                            "real-bound",
+                            WebhookChannelConfig {
+                                callback_url: peer_url,
+                                ..Default::default()
+                            },
+                        )),
+                        stage_b_contract(Some("late-successor")),
+                        tree,
+                        ChannelInitialState::Cold,
+                    )
+                    .await
+            }
+        });
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if before.entry.runtime.lock().unwrap().retiring {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let registration = tokio::spawn({
+            let registry = registry.clone();
+            async move {
+                registry
+                    .register_bound_channel(
+                        Box::new(WebhookChannel::new(
+                            "revision-consumer",
+                            WebhookChannelConfig {
+                                callback_url: "http://127.0.0.1:1/callback".into(),
+                                ..Default::default()
+                            },
+                        )),
+                        stage_b_contract(None),
+                        Arc::new(OwnershipTree::new()),
+                        ChannelInitialState::Cold,
+                    )
+                    .await
+            }
+        });
+        tokio::task::yield_now().await;
+        assert!(!registration.is_finished());
+        peer.release.send(()).unwrap();
+        assert!(matches!(
+            completion.await.unwrap(),
+            super::binding::BoundCompletion::DiscardedStale(_)
+        ));
+        assert_eq!(replacement.await.unwrap().unwrap(), id);
+        assert!(matches!(
+            registration.await.unwrap(),
+            Err(ChannelBindingError::PublicationExhausted)
+        ));
+        assert_eq!(
+            registry
+                .source_revision
+                .load(std::sync::atomic::Ordering::Relaxed),
+            u64::MAX
+        );
+        let after = registry.capture_bound_channel(&id).await.unwrap();
+        assert!(!Arc::ptr_eq(&before.entry, &after.entry));
+        assert_eq!(after.provider.state(), ProviderState::Cold);
+        assert_eq!(after.source_revision, u64::MAX);
+        peer.task.await.unwrap();
+        use super::binding::BoundCompletion;
+        use super::test_support::{HeldFactory, HeldWebhook, LifecycleBlock, LoopbackPeer};
+        use crate::capability::ownership::VisibilityScope;
+        use crate::gateway::interfaces::webhook::{WebhookChannel, WebhookChannelConfig};
+        for mode in [
+            "start",
+            "stop",
+            "restart-start",
+            "restart-stop",
+            "start-all",
+            "factory",
+            "replace",
+            "create-replace",
+            "unregister",
+        ] {
+            let peer = LoopbackPeer::new(200).await;
+            let (registry, bound_id, probe, _) = real_bound(peer.url).await;
+            registry
+                .start_bound_channel(&bound_id)
+                .await
+                .unwrap()
+                .await
+                .unwrap()
+                .unwrap();
+            let entry = registry
+                .channels
+                .read()
+                .await
+                .get(&bound_id)
+                .unwrap()
+                .clone();
+            let observation = registry
+                .resolve_bound_channel(
+                    registry.capture_bound_channel(&bound_id).await.unwrap(),
+                    &VisibilityScope::default(),
+                )
+                .await
+                .unwrap();
+            let completion = registry
+                .send_bound_once(observation, OutboundMessage::text("test", mode))
+                .await
+                .unwrap();
+            peer.arrived.await.unwrap();
+            let (entered, waiting) = tokio::sync::oneshot::channel();
+            let (release, blocked) = tokio::sync::oneshot::channel();
+            let block = LifecycleBlock {
+                entered,
+                release: blocked,
+            };
+            let config = WebhookChannelConfig {
+                secret: "test-secret".into(),
+                callback_url: "http://127.0.0.1:1/".into(),
+                ..Default::default()
+            };
+            let mut held = HeldWebhook {
+                channel: WebhookChannel::new("held-legacy", config.clone()),
+                start: None,
+                stop: None,
+            };
+            if mode == "factory" {
+                registry
+                    .register_factory(Arc::new(HeldFactory(Mutex::new(Some(block)))))
+                    .await;
+            } else if matches!(mode, "start" | "restart-start" | "start-all") {
+                held.start = Some(block);
+            } else {
+                held.stop = Some(block);
+            }
+            let legacy_id = registry.register(Box::new(held)).await;
+            if !matches!(mode, "start" | "start-all" | "restart-start") {
+                registry.start_channel(&legacy_id).await.unwrap();
+            }
+            if mode == "create-replace" {
+                registry
+                    .register_factory(Arc::new(
+                        crate::gateway::interfaces::webhook::WebhookChannelFactory,
+                    ))
+                    .await;
+            }
+            let driver = {
+                let registry = registry.clone();
+                let legacy_id = legacy_id.clone();
+                tokio::spawn(async move {
+                    match mode {
+                        "start" => registry.start_channel(&legacy_id).await,
+                        "stop" => registry.stop_channel(&legacy_id).await,
+                        "restart-start" | "restart-stop" => {
+                            registry.restart_channel(&legacy_id).await
+                        }
+                        "start-all" => {
+                            let results = registry.start_all().await;
+                            assert_eq!(results.len(), 1);
+                            results.into_iter().next().unwrap().1
+                        }
+                        "factory" | "create-replace" => registry
+                            .create_channel(ChannelConfig {
+                                id: legacy_id.to_string(),
+                                channel_type: if mode == "factory" {
+                                    "held-webhook"
+                                } else {
+                                    "webhook"
+                                }
+                                .into(),
+                                enabled: true,
+                                config: serde_json::to_value(config).unwrap(),
+                            })
+                            .await
+                            .map(|_| ()),
+                        "replace" => {
+                            registry
+                                .register(Box::new(WebhookChannel::new("held-legacy", config)))
+                                .await;
+                            Ok(())
+                        }
+                        "unregister" => {
+                            registry.unregister(&legacy_id).await;
+                            Ok(())
+                        }
+                        _ => unreachable!(),
+                    }
+                })
+            };
+            waiting.await.unwrap();
+            let progress = tokio::time::timeout(Duration::from_secs(2), async {
+                // Both completion handoff and drain require the shared source gate.
+                let stop = registry.stop_bound_channel(&bound_id).await.unwrap();
+                peer.release.send(()).unwrap();
+                assert!(matches!(
+                    completion.await.unwrap(),
+                    BoundCompletion::Accepted(Ok(_))
+                ));
+                stop.await.unwrap().unwrap();
+                assert_eq!(entry.runtime.lock().unwrap().active_work, 0);
+                assert!(entry.runtime.lock().unwrap().forwarder.is_none());
+                assert_eq!(probe.count("client_drop"), 1);
+                registry
+                    .start_bound_channel(&bound_id)
+                    .await
+                    .unwrap()
+                    .await
+                    .unwrap()
+                    .unwrap();
+                registry
+                    .stop_bound_channel(&bound_id)
+                    .await
+                    .unwrap()
+                    .await
+                    .unwrap()
+                    .unwrap();
+                // A competing operation must not reach the same Legacy adapter.
+                assert!(
+                    registry.stop_channel(&legacy_id).await.is_err(),
+                    "{mode}: same-entry operation must fail closed"
+                );
+            })
+            .await;
+            release.send(()).unwrap();
+            driver.await.unwrap().unwrap();
+            // Timeout is a deadlock watchdog, never evidence of scheduling order.
+            assert!(
+                progress.is_ok(),
+                "{mode}: Legacy I/O blocked Bound completion/drain/lifecycle"
+            );
+            peer.task.await.unwrap();
+            registry.stop_channel(&legacy_id).await.ok();
+        }
+    }
+
+    #[tokio::test]
+    async fn bound_webhook_construct_and_capture_are_cold() {
+        use super::binding::ChannelLifecycleDeclarationV1;
+        use super::test_support::ResourceProbe;
+        use crate::capability::descriptor::ProjectionMetadata;
+        use crate::capability::ownership::{
+            LifetimeScope, OwnerRef, OwnershipTree, VisibilityScope,
+        };
+        use crate::gateway::interfaces::webhook::{WebhookChannel, WebhookChannelConfig};
+        let probe = ResourceProbe::default();
+        let channel = WebhookChannel::observed(
+            "cold-real-webhook",
+            WebhookChannelConfig {
+                secret: "test-secret".into(),
+                callback_url: "http://127.0.0.1:1/callback".into(),
+                ..Default::default()
+            },
+            probe.clone(),
+        );
+        let registry = ChannelRegistry::new();
+        let id = registry
+            .register_bound_channel(
+                Box::new(channel),
+                ChannelLifecycleContract::new(
+                    OwnerRef::Runtime,
+                    LifetimeScope::Runtime,
+                    VisibilityScope::default(),
+                    ChannelLifecycleDeclarationV1::schema(),
+                    ProjectionMetadata::default(),
+                )
+                .unwrap(),
+                Arc::new(OwnershipTree::new()),
+                ChannelInitialState::Cold,
+            )
+            .await
+            .unwrap();
+        for _ in 0..3 {
+            registry.capture_bound_channel(&id).await.unwrap();
+            registry
+                .snapshot_bound_channels(&VisibilityScope::default())
+                .await;
+        }
+        assert_eq!(
+            probe.count("client_build_attempt"),
+            0,
+            "cold declaration must not construct an HTTP runtime client"
+        );
+        assert_eq!(probe.count("client_built"), 0);
+    }
+
     use super::*;
-    use crate::gateway::channel::{ChannelState, MessageId};
+    use crate::gateway::channel::{ChannelState, MessageId, SendOperation};
+    use crate::gateway::interfaces::webhook::{WebhookChannel, WebhookChannelConfig};
     use chrono::Utc;
     use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
@@ -1939,30 +3563,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn registration_waits_for_lifecycle_serialization_boundary() {
-        use std::future::{poll_fn, Future};
-        use std::task::Poll;
-
+    async fn registration_does_not_wait_on_shared_lifecycle_gate() {
         let registry = ChannelRegistry::new();
         let id = ChannelId::new("register-lifecycle-boundary");
         let lifecycle = registry.lifecycle_sync.lock().await;
-        let mut registration = Box::pin(registry.register(Box::new(WebhookyChannel::new(
-            id.as_str(),
-            "/webhook/register-lifecycle-boundary",
-        ))));
-
-        // Hold the same boundary used by start/stop/restart/unregister while
-        // polling the public registration path. This is deterministic: without
-        // its lock, register would complete here and mutate the live registry.
-        poll_fn(|cx| {
-            assert!(registration.as_mut().poll(cx).is_pending());
-            Poll::Ready(())
-        })
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            registry.register(Box::new(WebhookyChannel::new(
+                id.as_str(),
+                "/webhook/register-lifecycle-boundary",
+            ))),
+        )
         .await;
 
-        drop(lifecycle);
-        assert_eq!(registration.await, id);
+        assert!(
+            result.is_ok(),
+            "registration must not wait on an unrelated lifecycle gate"
+        );
+        assert_eq!(result.unwrap(), id);
         assert!(registry.get(&id).await.is_some());
+        drop(lifecycle);
     }
 
     #[tokio::test]
@@ -2144,11 +3764,12 @@ mod tests {
     struct FlakyChannel {
         info: ChannelInfo,
         state: ChannelState,
-        fail_times: AtomicU32,
+        fail_times: Arc<AtomicU32>,
         attempts: Arc<AtomicU32>,
         terminal: bool,
         delivery_policy: OutboundDeliveryPolicy,
         retry_after_secs: u64,
+        check_start: Option<Box<dyn Fn() -> ChannelResult<()> + Send + Sync>>,
     }
 
     impl FlakyChannel {
@@ -2164,11 +3785,12 @@ mod tests {
                 // `retry_after_secs` is 0 in the error below, so the registry's
                 // capped sleep is a no-op — tests stay fast and deterministic.
                 state: ChannelState::new(8),
-                fail_times: AtomicU32::new(fail_times),
+                fail_times: Arc::new(AtomicU32::new(fail_times)),
                 attempts,
                 terminal,
                 delivery_policy: OutboundDeliveryPolicy::Automatic,
                 retry_after_secs: 0,
+                check_start: None,
             }
         }
     }
@@ -2185,27 +3807,153 @@ mod tests {
             self.delivery_policy
         }
         async fn start(&mut self) -> ChannelResult<()> {
-            Ok(())
+            self.check_start.as_ref().map_or(Ok(()), |check| check())
         }
         async fn stop(&mut self) -> ChannelResult<()> {
             Ok(())
         }
-        async fn send(&self, _message: OutboundMessage) -> ChannelResult<SendResult> {
+        fn send(&self, _message: OutboundMessage) -> SendOperation {
             self.attempts.fetch_add(1, Ordering::SeqCst);
-            if self.terminal {
-                return Err(ChannelError::SendFailed("permanent".to_string()));
-            }
-            if self.fail_times.load(Ordering::SeqCst) > 0 {
-                self.fail_times.fetch_sub(1, Ordering::SeqCst);
-                return Err(ChannelError::RateLimited {
-                    retry_after_secs: self.retry_after_secs,
-                });
-            }
-            Ok(SendResult {
-                message_id: MessageId::new("ok"),
-                timestamp: Utc::now(),
+            let terminal = self.terminal;
+            let fail_times = Arc::clone(&self.fail_times);
+            let retry_after_secs = self.retry_after_secs;
+            Box::pin(async move {
+                if terminal {
+                    return Err(ChannelError::SendFailed("permanent".to_string()));
+                }
+                if fail_times.load(Ordering::SeqCst) > 0 {
+                    fail_times.fetch_sub(1, Ordering::SeqCst);
+                    return Err(ChannelError::RateLimited { retry_after_secs });
+                }
+                Ok(SendResult {
+                    message_id: MessageId::new("ok"),
+                    timestamp: Utc::now(),
+                })
             })
         }
+    }
+
+    #[tokio::test]
+    async fn vacant_activation_publishes_policy_before_start() {
+        use crate::gateway::{
+            channel_policy::ChannelPolicyProjection, inbound_router::GroupPolicy,
+        };
+
+        let registry = ChannelRegistry::new();
+        let policy = Arc::new(ChannelPolicyProjection::default());
+        let check = policy.clone();
+        let mut channel = FlakyChannel::new(0, false, Arc::new(AtomicU32::new(0)));
+        channel.check_start = Some(Box::new(move || {
+            assert_eq!(
+                check.get("flaky").unwrap().group_policy,
+                GroupPolicy::Disabled
+            );
+            Ok(())
+        }));
+        registry
+            .register_and_start_vacant(Box::new(channel), |id| {
+                policy.set_activation(
+                    id.as_str(),
+                    crate::gateway::inbound_router::ChannelConfig {
+                        group_policy: GroupPolicy::Disabled,
+                        ..Default::default()
+                    },
+                    None,
+                );
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            registry.health_states().await[0].desired,
+            DesiredChannelState::Running
+        );
+    }
+
+    #[tokio::test]
+    async fn vacant_activation_refuses_incumbent_without_publishing() {
+        let registry = ChannelRegistry::new();
+        let starts = Arc::new(AtomicU32::new(0));
+        let start_count = starts.clone();
+        let mut incumbent = FlakyChannel::new(0, false, Arc::new(AtomicU32::new(0)));
+        incumbent.check_start = Some(Box::new(move || {
+            start_count.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }));
+        let id = registry.register(Box::new(incumbent)).await;
+        let old = registry.get(&id).await.unwrap();
+        let replacement = FlakyChannel::new(0, false, Arc::new(AtomicU32::new(0)));
+        let result = registry
+            .register_and_start_vacant(Box::new(replacement), |_| {
+                panic!("refused registration must not publish policy");
+            })
+            .await;
+        assert!(matches!(result, Err(ChannelError::Busy(_))));
+        assert_eq!(starts.load(Ordering::Relaxed), 0);
+        assert!(Arc::ptr_eq(&old, &registry.get(&id).await.unwrap()));
+    }
+
+    #[tokio::test]
+    async fn vacant_activation_persists_delivery_policy_before_start() {
+        use super::super::delivery_queue::{DeliveryQueueConfig, DeliveryStore, EnqueueOutcome};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("delivery.sqlite");
+        let store = Arc::new(DeliveryStore::open(&path, DeliveryQueueConfig::default()).unwrap());
+        let registry = ChannelRegistry::new().with_delivery_store(store.clone());
+        let message = OutboundMessage::text("room", "old automatic delivery");
+        assert!(matches!(
+            store
+                .enqueue_fresh("flaky", &message, "offline", 0)
+                .unwrap(),
+            EnqueueOutcome::Queued(_)
+        ));
+
+        let mut incoming = FlakyChannel::new(0, false, Arc::new(AtomicU32::new(0)));
+        incoming.delivery_policy = OutboundDeliveryPolicy::ExplicitOnly;
+        let observed = store.clone();
+        incoming.check_start = Some(Box::new(move || {
+            assert!(observed.is_explicit_only_channel("flaky").unwrap());
+            assert_eq!(observed.len().unwrap(), 0);
+            Ok(())
+        }));
+        registry
+            .register_and_start_vacant(Box::new(incoming), |_| {})
+            .await
+            .unwrap();
+        assert!(matches!(
+            store
+                .enqueue_fresh("flaky", &message, "offline", 0)
+                .unwrap(),
+            EnqueueOutcome::PolicyRefused
+        ));
+    }
+
+    #[tokio::test]
+    async fn vacant_activation_does_not_publish_when_delivery_policy_fails() {
+        use super::super::delivery_queue::{DeliveryQueueConfig, DeliveryStore};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("delivery.sqlite");
+        let store = Arc::new(DeliveryStore::open(&path, DeliveryQueueConfig::default()).unwrap());
+        let registry = ChannelRegistry::new().with_delivery_store(store);
+        rusqlite::Connection::open(path)
+            .unwrap()
+            .execute_batch(
+                "CREATE TRIGGER reject_cold_policy BEFORE INSERT ON explicit_only_channels
+             BEGIN SELECT RAISE(ABORT, 'fixture policy observation rejected'); END;",
+            )
+            .unwrap();
+
+        let mut incoming = FlakyChannel::new(0, false, Arc::new(AtomicU32::new(0)));
+        incoming.delivery_policy = OutboundDeliveryPolicy::ExplicitOnly;
+        incoming.check_start = Some(Box::new(|| panic!("failed observation must not start")));
+        let result = registry
+            .register_and_start_vacant(Box::new(incoming), |_| {
+                panic!("failed observation must not publish policy");
+            })
+            .await;
+        assert!(matches!(result, Err(ChannelError::Internal(_))));
+        assert!(registry.list().await.is_empty());
     }
 
     async fn registry_with(channel: FlakyChannel, policy: SendRetryPolicy) -> ChannelRegistry {
@@ -2630,13 +4378,16 @@ mod tests {
             .await
             .with_delivery_store(store.clone());
             let id = ChannelId::new("flaky");
-            let EnqueueOutcome::Queued(row) = store
-                .enqueue(
+            let EnqueueOutcome::Queued(row) =
+                super::super::delivery_queue::enqueue_validated_legacy(
+                    &registry,
+                    &store,
                     id.as_str(),
                     &OutboundMessage::text("c", "owner-backlog"),
                     "down",
                     0,
                 )
+                .await
                 .unwrap()
             else {
                 panic!("fixture must queue");
@@ -2706,7 +4457,17 @@ mod tests {
         let store =
             Arc::new(DeliveryStore::open_in_memory(DeliveryQueueConfig::default()).unwrap());
         let message = OutboundMessage::text("c", "private-replay-body");
-        let row = match store.enqueue(id.as_str(), &message, "down", 0).unwrap() {
+        let row = match super::super::delivery_queue::enqueue_validated_legacy(
+            &registry,
+            &store,
+            id.as_str(),
+            &message,
+            "down",
+            0,
+        )
+        .await
+        .unwrap()
+        {
             super::super::delivery_queue::EnqueueOutcome::Queued(row) => row,
             outcome => panic!("unexpected fixture outcome: {outcome:?}"),
         };
@@ -2749,6 +4510,13 @@ mod tests {
             0,
             "new Box must receive no replay"
         );
+        assert_eq!(
+            store
+                .reconcile_inflight(super::super::delivery_queue::now_secs())
+                .unwrap(),
+            0,
+            "a definite 429 refusal must not leave an unknown-outcome stamp"
+        );
         // Refusal is not classification: the refused replay leaves the row for
         // the guarded prepare path, which sees the live ExplicitOnly policy.
         registry.prepare_delivery_store_on(&store).await.unwrap();
@@ -2756,9 +4524,11 @@ mod tests {
         let letter = store.recent_dead_letters(1).unwrap().remove(0);
         assert_eq!(
             letter.reason,
-            DeadLetterReason::UnknownOutcome,
-            "first attempt was on wire"
+            DeadLetterReason::ExplicitOnlyRetired,
+            "the first attempt was definitely refused before delivery"
         );
+        assert!(letter.reason.replay_safe());
+        assert!(!letter.reason.redrivable());
         assert!(letter.retired_by_policy);
         assert!(!format!("{letter:?}").contains("private-replay-body"));
     }
@@ -2838,7 +4608,16 @@ mod tests {
             )))
             .await;
         let old = OutboundMessage::text("c", "old-body");
-        let EnqueueOutcome::Queued(r) = store.enqueue(id.as_str(), &old, "down", 0).unwrap() else {
+        let EnqueueOutcome::Queued(r) = super::super::delivery_queue::enqueue_validated_legacy(
+            &registry,
+            &store,
+            id.as_str(),
+            &old,
+            "down",
+            0,
+        )
+        .await
+        .unwrap() else {
             panic!("fixture row must queue");
         };
         let explicit_attempts = Arc::new(AtomicU32::new(0));
@@ -3082,6 +4861,7 @@ mod tests {
         path: String,
         handler: Option<Arc<TestHandler>>,
         fail_start: Arc<AtomicBool>,
+        fail_stop: Arc<AtomicBool>,
         delivery_policy: OutboundDeliveryPolicy,
     }
 
@@ -3151,6 +4931,7 @@ mod tests {
                 path: path.to_string(),
                 handler: None,
                 fail_start: Arc::new(AtomicBool::new(false)),
+                fail_stop: Arc::new(AtomicBool::new(false)),
                 delivery_policy: OutboundDeliveryPolicy::Automatic,
             }
         }
@@ -3167,6 +4948,10 @@ mod tests {
 
         fn start_failure_control(&self) -> Arc<AtomicBool> {
             self.fail_start.clone()
+        }
+
+        fn stop_failure_control(&self) -> Arc<AtomicBool> {
+            self.fail_stop.clone()
         }
     }
 
@@ -3189,6 +4974,9 @@ mod tests {
             Ok(())
         }
         async fn stop(&mut self) -> ChannelResult<()> {
+            if self.fail_stop.load(Ordering::SeqCst) {
+                return Err(ChannelError::Internal("test stop failure".to_string()));
+            }
             self.handler = None;
             self.state.set_status(ChannelStatus::Disconnected).await;
             Ok(())
@@ -3203,12 +4991,546 @@ mod tests {
         fn outbound_delivery_policy(&self) -> OutboundDeliveryPolicy {
             self.delivery_policy
         }
-        async fn send(&self, _message: OutboundMessage) -> ChannelResult<SendResult> {
-            Ok(SendResult {
-                message_id: MessageId::new("ok"),
-                timestamp: Utc::now(),
+        fn send(&self, _message: OutboundMessage) -> SendOperation {
+            Box::pin(async move {
+                Ok(SendResult {
+                    message_id: MessageId::new("ok"),
+                    timestamp: Utc::now(),
+                })
             })
         }
+    }
+
+    #[tokio::test]
+    async fn capture_is_read_only_and_unrelated_publication_keeps_it_valid() {
+        let registry = ChannelRegistry::new();
+        let first_id = registry
+            .register(Box::new(WebhookyChannel::new(
+                "capture-first",
+                "/webhook/capture-first",
+            )))
+            .await;
+        let capture = registry.capture_channel(&first_id).await.unwrap();
+
+        assert_eq!(
+            registry.get(&first_id).await.unwrap().read().await.status(),
+            ChannelStatus::Disconnected,
+            "capture must not start the channel"
+        );
+
+        let second_id = registry
+            .register(Box::new(WebhookyChannel::new(
+                "capture-second",
+                "/webhook/capture-second",
+            )))
+            .await;
+        let second_capture = registry.capture_channel(&second_id).await.unwrap();
+
+        assert_ne!(capture.source_revision(), second_capture.source_revision());
+        assert!(registry.validate_channel_capture(&capture).await.is_some());
+    }
+
+    #[tokio::test]
+    async fn capture_rejects_replaced_channel_instance() {
+        let registry = ChannelRegistry::new();
+        let id = registry
+            .register(Box::new(WebhookyChannel::new(
+                "capture-replaced",
+                "/webhook/capture-replaced",
+            )))
+            .await;
+        let capture = registry.capture_channel(&id).await.unwrap();
+
+        registry
+            .register(Box::new(WebhookyChannel::new(
+                "capture-replaced",
+                "/webhook/capture-replaced",
+            )))
+            .await;
+
+        assert!(registry.validate_channel_capture(&capture).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn capture_rejects_unregistered_channel() {
+        let registry = ChannelRegistry::new();
+        let id = registry
+            .register(Box::new(WebhookyChannel::new(
+                "capture-removed",
+                "/webhook/capture-removed",
+            )))
+            .await;
+        let capture = registry.capture_channel(&id).await.unwrap();
+
+        registry.unregister(&id).await;
+        assert!(registry.get(&id).await.is_none());
+        assert!(registry.validate_channel_capture(&capture).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn bound_publication_exposes_independent_revisions() {
+        let registry = Arc::new(ChannelRegistry::new());
+        let ownership = Arc::new(OwnershipTree::new());
+        let id = register_bound(
+            &registry,
+            &ownership,
+            Box::new(WebhookyChannel::new("revisioned", "/webhook/revisioned")),
+            ChannelInitialState::Cold,
+        )
+        .await;
+        let capture = registry.capture_bound_channel(&id).await.unwrap();
+        assert_eq!(capture.source_revision, 1);
+        assert_eq!(capture.descriptor_revision, 1);
+        assert_eq!(capture.descriptor.revision.0, capture.descriptor_revision);
+    }
+
+    #[tokio::test]
+    async fn bound_replacement_changes_publication_revisions_only() {
+        use crate::capability::ownership::VisibilityScope;
+        use crate::gateway::interfaces::webhook::WebhookChannel;
+        let (registry, id, _, tree) = real_bound("http://127.0.0.1:1/callback".into()).await;
+        registry
+            .register(Box::new(WebhookyChannel::new(
+                "revisioned-legacy",
+                "/webhook/revisioned-legacy",
+            )))
+            .await;
+        let before = registry.capture_bound_channel(&id).await.unwrap();
+        let owner_generation = tree
+            .generation(&before.descriptor.id, &VisibilityScope::default())
+            .unwrap();
+        registry
+            .replace_bound_channel(
+                &id,
+                Box::new(WebhookChannel::new(
+                    "real-bound",
+                    crate::gateway::interfaces::webhook::WebhookChannelConfig {
+                        callback_url: "http://127.0.0.1:1/replacement".into(),
+                        ..Default::default()
+                    },
+                )),
+                stage_b_contract(Some("replacement")),
+                tree.clone(),
+                ChannelInitialState::Cold,
+            )
+            .await
+            .unwrap();
+        let after = registry.capture_bound_channel(&id).await.unwrap();
+        assert_eq!(after.source_revision, 3);
+        assert_eq!(after.descriptor_revision, 2);
+        assert_eq!(after.descriptor.revision.0, after.descriptor_revision);
+        assert_eq!(before.provider_generation, 0);
+        assert_eq!(after.provider_generation, 0);
+        assert_eq!(
+            tree.generation(&after.descriptor.id, &VisibilityScope::default()),
+            Some(owner_generation)
+        );
+    }
+
+    #[tokio::test]
+    async fn bound_descriptor_publication_exhaustion_preserves_incumbent() {
+        use crate::gateway::interfaces::webhook::WebhookChannel;
+        use std::sync::atomic::Ordering;
+        let (registry, id, _, tree) = real_bound("http://127.0.0.1:1/callback".into()).await;
+        let before = registry.capture_bound_channel(&id).await.unwrap();
+        registry
+            .descriptor_revision
+            .store(u64::MAX, Ordering::Relaxed);
+        let result = registry
+            .replace_bound_channel(
+                &id,
+                Box::new(WebhookChannel::new(
+                    "real-bound",
+                    crate::gateway::interfaces::webhook::WebhookChannelConfig {
+                        callback_url: "http://127.0.0.1:1/exhausted".into(),
+                        ..Default::default()
+                    },
+                )),
+                stage_b_contract(Some("descriptor-exhausted")),
+                tree,
+                ChannelInitialState::Cold,
+            )
+            .await;
+        assert!(matches!(
+            result,
+            Err(ChannelBindingError::DescriptorPublicationExhausted)
+        ));
+        let after = registry.capture_bound_channel(&id).await.unwrap();
+        assert!(Arc::ptr_eq(&before.entry, &after.entry));
+        assert_eq!(after.source_revision, before.source_revision);
+        assert_eq!(after.descriptor_revision, before.descriptor_revision);
+        assert_eq!(after.descriptor, before.descriptor);
+    }
+
+    #[tokio::test]
+    async fn bound_descriptor_unregistration_exhaustion_preserves_incumbent() {
+        use std::sync::atomic::Ordering;
+        let (registry, id, _, _) = real_bound("http://127.0.0.1:1/callback".into()).await;
+        let before = registry.capture_bound_channel(&id).await.unwrap();
+        registry
+            .descriptor_revision
+            .store(u64::MAX, Ordering::Relaxed);
+        assert!(matches!(
+            registry.unregister_bound_channel(&id).await,
+            Err(ChannelBindingError::DescriptorPublicationExhausted)
+        ));
+        let after = registry.capture_bound_channel(&id).await.unwrap();
+        assert!(Arc::ptr_eq(&before.entry, &after.entry));
+        assert_eq!(after.source_revision, before.source_revision);
+        assert_eq!(after.descriptor_revision, before.descriptor_revision);
+    }
+
+    #[tokio::test]
+    async fn bound_source_publication_exhaustion_preserves_entry_before_removal() {
+        use std::sync::atomic::Ordering;
+        let (registry, id, _, _) = real_bound("http://127.0.0.1:1/callback".into()).await;
+        let before = registry.capture_bound_channel(&id).await.unwrap();
+        registry.source_revision.store(u64::MAX, Ordering::Relaxed);
+        assert!(matches!(
+            registry.unregister_bound_channel(&id).await,
+            Err(ChannelBindingError::PublicationExhausted)
+        ));
+        let after = registry.capture_bound_channel(&id).await.unwrap();
+        assert!(Arc::ptr_eq(&before.entry, &after.entry));
+        assert_eq!(after.source_revision, u64::MAX);
+    }
+
+    #[tokio::test]
+    async fn bound_registration_mints_canonical_provider_while_cold() {
+        use crate::capability::descriptor::{CapabilityFacet, CapabilityKind};
+        use crate::capability::ownership::{OwnershipTree, VisibilityScope};
+        use crate::capability::provider::{ProviderState, ProviderTransport};
+
+        let registry = ChannelRegistry::new();
+        let ownership = Arc::new(OwnershipTree::new());
+        let id = registry
+            .register_bound_channel(
+                Box::new(WebhookyChannel::new("team/a/b", "/webhook/cold")),
+                lifecycle_contract(),
+                ownership.clone(),
+                binding::ChannelInitialState::Cold,
+            )
+            .await
+            .unwrap();
+        let first = registry.capture_bound_channel(&id).await.unwrap();
+        let second = registry.capture_bound_channel(&id).await.unwrap();
+        assert!(first.provider.same_instance(&second.provider));
+        assert_eq!(first.provider.snapshot(), (ProviderState::Cold, 0));
+        assert_eq!(first.provider_generation, 0);
+        first.provider.with_snapshot(|provider| {
+            assert_eq!(
+                provider.provider_id().as_str(),
+                "aleph/gateway/channels/team/a/b"
+            );
+            assert_eq!(provider.transport(), ProviderTransport::InProcess);
+        });
+        assert_eq!(first.descriptor.id.namespace, "aleph/gateway/channels");
+        assert_eq!(first.descriptor.id.name, "team/a/b");
+        assert_eq!(first.descriptor.revision.0, first.descriptor_revision);
+        assert_eq!(first.entry_revision, first.source_revision);
+        assert_eq!(first.descriptor.kind, CapabilityKind::Resource);
+        assert!(first
+            .descriptor
+            .supports(CapabilityFacet::ProviderLifecycle));
+        assert!(!first.descriptor.supports(CapabilityFacet::Callable));
+        assert!(first.descriptor.services.is_empty());
+        assert_eq!(first.descriptor.metadata.surface, None);
+        assert!(Arc::ptr_eq(
+            &first.entry,
+            &registry.channels.read().await[&id]
+        ));
+        assert!(Arc::ptr_eq(&first.channel, &first.entry.channel));
+        let ChannelRegistration::Bound(bound) = &first.entry.registration else {
+            panic!("not Bound")
+        };
+        assert!(Arc::ptr_eq(&bound.ownership, &ownership));
+        assert_eq!(
+            first.descriptor_fingerprint,
+            binding::canonical_descriptor_fingerprint(&first.descriptor)
+        );
+        assert_eq!(
+            registry.desired_state.read().await[&id],
+            DesiredChannelState::Stopped
+        );
+        assert!(registry.start_all().await.is_empty());
+        let (snapshot, revision) = registry
+            .snapshot_bound_channels(&VisibilityScope::default())
+            .await;
+        assert_eq!(snapshot, vec![first.descriptor.clone()]);
+        assert_eq!(revision, first.source_revision);
+        assert!(registry
+            .snapshot_bound_channels(&VisibilityScope {
+                principal: Some("unknown".into()),
+                ..Default::default()
+            })
+            .await
+            .0
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn legacy_capture_never_synthesizes_provider() {
+        let registry = ChannelRegistry::new();
+        let direct = registry
+            .register(Box::new(WebhookyChannel::new("legacy", "/webhook/legacy")))
+            .await;
+        registry
+            .register_factory(Arc::new(PolicyTestChannelFactory {
+                policy: OutboundDeliveryPolicy::Automatic,
+            }))
+            .await;
+        let created = registry
+            .create_channel(ChannelConfig {
+                id: "factory-legacy".into(),
+                channel_type: "policy-test-webhook".into(),
+                enabled: false,
+                config: serde_json::json!({}),
+            })
+            .await
+            .unwrap();
+        for id in [direct, created] {
+            let capture = registry.capture_channel(&id).await.unwrap();
+            for _ in 0..3 {
+                assert!(registry.validate_channel_capture(&capture).await.is_some());
+                assert!(matches!(
+                    registry.capture_bound_channel(&id).await,
+                    Err(binding::ChannelBindingError::UnboundLegacy)
+                ));
+            }
+        }
+        assert!(registry
+            .snapshot_bound_channels(&Default::default())
+            .await
+            .0
+            .is_empty());
+        assert_eq!(registry.channels.read().await.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn bound_capture_preserves_full_id_and_source_identity() {
+        use crate::capability::ownership::OwnershipTree;
+        let first = ChannelRegistry::new();
+        let second = ChannelRegistry::new();
+        for registry in [&first, &second] {
+            registry
+                .register_bound_channel(
+                    Box::new(WebhookyChannel::new("team/a/b", "/webhook/id")),
+                    lifecycle_contract(),
+                    Arc::new(OwnershipTree::new()),
+                    binding::ChannelInitialState::Cold,
+                )
+                .await
+                .unwrap();
+        }
+        let a = first
+            .capture_bound_channel(&ChannelId::new("team/a/b"))
+            .await
+            .unwrap();
+        let b = second
+            .capture_bound_channel(&ChannelId::new("team/a/b"))
+            .await
+            .unwrap();
+        assert_eq!(a.descriptor.id.name, "team/a/b");
+        assert_eq!(a.source_revision, b.source_revision);
+        assert!(!Arc::ptr_eq(&a.source, &b.source));
+        assert!(!Arc::ptr_eq(&a.entry, &b.entry));
+        assert!(!a.provider.same_instance(&b.provider));
+        let legacy_id = first
+            .register(Box::new(WebhookyChannel::new(
+                "legacy-source",
+                "/webhook/source",
+            )))
+            .await;
+        second
+            .register(Box::new(WebhookyChannel::new(
+                "legacy-source",
+                "/webhook/source",
+            )))
+            .await;
+        assert!(second
+            .validate_channel_capture(&first.capture_channel(&legacy_id).await.unwrap())
+            .await
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn bound_cold_compatibility_paths_and_collisions_fail_closed() {
+        use crate::capability::ownership::OwnershipTree;
+        use crate::capability::provider::ProviderState;
+        for (initial, state) in [
+            (
+                binding::ChannelInitialState::Discovered,
+                ProviderState::Discovered,
+            ),
+            (binding::ChannelInitialState::Cold, ProviderState::Cold),
+            (
+                binding::ChannelInitialState::Disabled,
+                ProviderState::Disabled,
+            ),
+        ] {
+            let registry = ChannelRegistry::new();
+            let id = registry
+                .register_bound_channel(
+                    Box::new(WebhookyChannel::new("bound", "/webhook/bound")),
+                    lifecycle_contract(),
+                    Arc::new(OwnershipTree::new()),
+                    initial,
+                )
+                .await
+                .unwrap();
+            let before = registry.capture_bound_channel(&id).await.unwrap();
+            assert_eq!(before.provider.snapshot(), (state, 0));
+            assert!(registry.get(&id).await.is_none());
+            assert!(registry.capture_channel(&id).await.is_none());
+            assert!(registry.get_capabilities(&id).await.is_some());
+            assert_eq!(registry.list().await.len(), 1);
+            assert_eq!(registry.list_by_type("test-webhook").await.len(), 1);
+            assert_eq!(registry.status_summary().await.total, 1);
+            assert_eq!(registry.health_summary().await.total, 1);
+            assert_eq!(
+                registry.health_states().await[0].desired,
+                DesiredChannelState::Stopped
+            );
+            // Lifecycle compatibility is covered by the source-routing test;
+            // this cold-read contract deliberately performs no start/stop.
+            assert!(matches!(
+                registry.send(&id, OutboundMessage::text("c", "no")).await,
+                Err(ChannelError::UnsupportedFeature(_))
+            ));
+            assert!(registry.unregister(&id).await.is_none());
+            registry
+                .register(Box::new(WebhookyChannel::new(
+                    "bound",
+                    "/webhook/replacement",
+                )))
+                .await;
+            assert!(matches!(
+                registry
+                    .register_bound_channel(
+                        Box::new(WebhookyChannel::new("bound", "/webhook/replacement")),
+                        lifecycle_contract(),
+                        Arc::new(OwnershipTree::new()),
+                        initial,
+                    )
+                    .await,
+                Err(binding::ChannelBindingError::Busy)
+            ));
+            let after = registry.capture_bound_channel(&id).await.unwrap();
+            assert!(Arc::ptr_eq(&before.entry, &after.entry));
+            assert_eq!(before.source_revision, after.source_revision);
+            assert_eq!(after.provider.snapshot(), (state, 0));
+            assert_eq!(registry.webhook_mounts().mounted_count().await, 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn bound_publication_exhaustion_and_legacy_collision_preserve_source() {
+        use crate::capability::ownership::OwnershipTree;
+        let registry = ChannelRegistry::new();
+        let id = registry
+            .register(Box::new(WebhookyChannel::new("legacy", "/webhook/legacy")))
+            .await;
+        let capture = registry.capture_channel(&id).await.unwrap();
+        assert!(matches!(
+            registry
+                .register_bound_channel(
+                    Box::new(WebhookyChannel::new("legacy", "/webhook/legacy")),
+                    lifecycle_contract(),
+                    Arc::new(OwnershipTree::new()),
+                    binding::ChannelInitialState::Cold,
+                )
+                .await,
+            Err(binding::ChannelBindingError::Busy)
+        ));
+        assert!(registry.validate_channel_capture(&capture).await.is_some());
+        registry.source_revision.store(u64::MAX, Ordering::Relaxed);
+        assert!(matches!(
+            registry
+                .register_bound_channel(
+                    Box::new(WebhookyChannel::new("exhausted", "/webhook/exhausted")),
+                    lifecycle_contract(),
+                    Arc::new(OwnershipTree::new()),
+                    binding::ChannelInitialState::Cold,
+                )
+                .await,
+            Err(binding::ChannelBindingError::PublicationExhausted)
+        ));
+        assert_eq!(registry.channels.read().await.len(), 1);
+        assert_eq!(registry.source_revision.load(Ordering::Relaxed), u64::MAX);
+    }
+
+    #[tokio::test]
+    async fn replacement_stops_any_running_channel_before_publication() {
+        let registry = ChannelRegistry::new();
+        let incumbent = WebhookyChannel::new("wh", "/webhook/wh");
+        let incumbent_state = incumbent.state().status_handle();
+        let id = registry.register(Box::new(incumbent)).await;
+        registry.start_channel(&id).await.unwrap();
+
+        registry
+            .register(Box::new(WebhookyChannel::new("wh", "/webhook/wh")))
+            .await;
+
+        assert_eq!(
+            *incumbent_state.read().await,
+            ChannelStatus::Disconnected,
+            "replacement must stop the incumbent regardless of channel type"
+        );
+        assert_eq!(registry.webhook_mounts().mounted_count().await, 0);
+        assert_eq!(
+            registry.get(&id).await.unwrap().read().await.status(),
+            ChannelStatus::Disconnected
+        );
+    }
+
+    #[tokio::test]
+    async fn replacement_stop_failure_retains_the_incumbent() {
+        let registry = ChannelRegistry::new();
+        let incumbent = WebhookyChannel::new("stop-fails", "/webhook/stop-fails");
+        let stop_failure = incumbent.stop_failure_control();
+        let id = registry.register(Box::new(incumbent)).await;
+        registry.start_channel(&id).await.unwrap();
+        stop_failure.store(true, Ordering::SeqCst);
+        let incumbent_handle = registry.get(&id).await.unwrap();
+
+        registry
+            .register(Box::new(WebhookyChannel::new(
+                "stop-fails",
+                "/webhook/stop-fails",
+            )))
+            .await;
+
+        assert!(
+            Arc::ptr_eq(&incumbent_handle, &registry.get(&id).await.unwrap()),
+            "a failed teardown must retain the incumbent registration"
+        );
+        assert_eq!(
+            registry.get(&id).await.unwrap().read().await.status(),
+            ChannelStatus::Connected,
+            "a failed teardown must leave the incumbent usable"
+        );
+    }
+
+    #[tokio::test]
+    async fn unregister_stop_failure_retains_the_incumbent() {
+        let registry = ChannelRegistry::new();
+        let incumbent = WebhookyChannel::new("remove-fails", "/webhook/remove-fails");
+        let stop_failure = incumbent.stop_failure_control();
+        let id = registry.register(Box::new(incumbent)).await;
+        registry.start_channel(&id).await.unwrap();
+        stop_failure.store(true, Ordering::SeqCst);
+        let incumbent_handle = registry.get(&id).await.unwrap();
+
+        assert!(registry.unregister(&id).await.is_none());
+        assert!(
+            Arc::ptr_eq(&incumbent_handle, &registry.get(&id).await.unwrap()),
+            "a failed teardown must retain the incumbent registration"
+        );
+        assert_eq!(
+            registry.webhook_mounts().mounted_count().await,
+            1,
+            "a failed teardown must retain the incumbent HTTP surface"
+        );
     }
 
     #[tokio::test]
@@ -3373,5 +5695,580 @@ mod tests {
             .register(Box::new(WebhookyChannel::new("wh", "/webhook/wh")))
             .await;
         assert_eq!(registry.webhook_mounts().mounted_count().await, 0);
+    }
+
+    // --- Stage C: Legacy compatibility surfaces around a Bound channel ---
+
+    /// Register a Bound channel on an existing registry/ownership tree and
+    /// mirror the claim the source-owned lifecycle needs. Test setup only.
+    async fn register_bound_on(
+        registry: &Arc<ChannelRegistry>,
+        tree: &Arc<OwnershipTree>,
+        channel: Box<dyn Channel>,
+        initial: ChannelInitialState,
+    ) -> ChannelId {
+        register_bound(registry, tree, channel, initial).await
+    }
+
+    fn observed_webhook(
+        id: &str,
+        callback_url: String,
+        path: &str,
+        secret: &str,
+        probe: &super::test_support::ResourceProbe,
+    ) -> crate::gateway::interfaces::webhook::WebhookChannel {
+        use crate::gateway::interfaces::webhook::{WebhookChannel, WebhookChannelConfig};
+        WebhookChannel::observed(
+            id,
+            WebhookChannelConfig {
+                secret: secret.into(),
+                callback_url,
+                path: path.into(),
+                ..Default::default()
+            },
+            probe.clone(),
+        )
+    }
+
+    fn desired_of(snapshots: &[ChannelLifecycleSnapshot], id: &ChannelId) -> DesiredChannelState {
+        snapshots
+            .iter()
+            .find(|snapshot| &snapshot.id == id)
+            .unwrap_or_else(|| panic!("no lifecycle snapshot for {id}"))
+            .desired
+    }
+
+    /// Every Legacy compatibility surface must refuse a Bound registration
+    /// *explicitly* and produce no side effect.
+    ///
+    /// A denial may not degrade into `Ok(None)`, `false`, an empty result, or a
+    /// fallback permission, and it may not reach the transport, the durable
+    /// queue, the inbound stream, or provider activation. The queue half is
+    /// asserted on persisted rows, not on a returned receipt: a `ChannelId`
+    /// alone must never authorize a dynamic send admission.
+    #[tokio::test]
+    async fn bound_compatibility_effect_paths_are_denied() {
+        use super::test_support::{LoopbackPeer, ResourceProbe};
+        use crate::gateway::delivery_queue::{DeliveryQueueConfig, DeliveryStore};
+
+        let peer = LoopbackPeer::new(200).await;
+        let mut arrival = peer.arrived;
+        let probe = ResourceProbe::default();
+        let store = Arc::new(
+            DeliveryStore::open_in_memory(DeliveryQueueConfig::default())
+                .expect("in-memory delivery store"),
+        );
+        let tree = Arc::new(OwnershipTree::new());
+        let registry = Arc::new(ChannelRegistry::new().with_delivery_store(Arc::clone(&store)));
+        let mut inbound = registry
+            .take_inbound_receiver()
+            .expect("the registry owns the only inbound receiver");
+        let id = register_bound_on(
+            &registry,
+            &tree,
+            Box::new(observed_webhook(
+                "effect-bound",
+                peer.url.clone(),
+                "/webhook/effect-bound",
+                "effect-secret",
+                &probe,
+            )),
+            ChannelInitialState::Cold,
+        )
+        .await;
+        let conversation = ConversationId::new("conv-1");
+        let message_id = super::super::channel::MessageId::new("msg-1");
+        let options = ["a".to_string(), "b".to_string()];
+
+        assert!(
+            registry.get(&id).await.is_none(),
+            "a Bound id must never yield a Legacy channel handle"
+        );
+
+        let refusals: [(&str, ChannelResult<()>); 5] = [
+            (
+                "edit",
+                registry
+                    .edit(&id, &conversation, &message_id, "denied")
+                    .await,
+            ),
+            (
+                "react",
+                registry
+                    .react(&id, &conversation, &message_id, "denied")
+                    .await,
+            ),
+            (
+                "send_typing",
+                registry.send_typing(&id, &conversation).await,
+            ),
+            (
+                "set_group_icon",
+                registry
+                    .set_group_icon(&id, &conversation, "data:image/png;base64,AA==")
+                    .await,
+            ),
+            (
+                "list_conversations",
+                registry.list_conversations(&id, "", 10).await.map(|_| ()),
+            ),
+        ];
+        for (surface, result) in refusals {
+            assert!(
+                matches!(result, Err(ChannelError::UnsupportedFeature(_))),
+                "{surface} must refuse a Bound registration explicitly, got {result:?}"
+            );
+        }
+        assert!(
+            matches!(
+                registry
+                    .create_poll(&id, &conversation, "q", &options, false)
+                    .await,
+                Err(ChannelError::UnsupportedFeature(_))
+            ),
+            "create_poll must refuse a Bound registration explicitly"
+        );
+
+        let report = registry
+            .send_reported(&id, OutboundMessage::text("conv-1", "denied send"))
+            .await;
+        assert!(
+            matches!(report.result, Err(ChannelError::UnsupportedFeature(_))),
+            "delivery admission must refuse a Bound registration, got {:?}",
+            report.result
+        );
+        assert_eq!(report.queue, QueueDisposition::NotQueueable);
+
+        // Exercise validated Legacy admission directly. The rows before/after
+        // are the primary assertions: no queued outcome, unchanged row count,
+        // and zero pending deliveries must survive future helper refactors.
+        let before = store.len().expect("queue length");
+        let outcome = super::super::delivery_queue::enqueue_validated_legacy(
+            &registry,
+            &store,
+            id.as_str(),
+            &OutboundMessage::text("conv-1", "raw admission"),
+            "",
+            0,
+        )
+        .await;
+        assert!(
+            !matches!(
+                outcome,
+                Ok(crate::gateway::delivery_queue::EnqueueOutcome::Queued(_))
+            ),
+            "a channel id alone must not authorize queue admission, got {outcome:?}"
+        );
+        assert_eq!(
+            store.len().expect("queue length"),
+            before,
+            "a refused admission must persist no row"
+        );
+        assert_eq!(
+            registry
+                .delivery_queue_stats()
+                .expect("attached store")
+                .pending,
+            0
+        );
+
+        assert_eq!(probe.count("client_build_attempt"), 0);
+        assert_eq!(probe.count("client_built"), 0);
+        assert_eq!(probe.count("request_attempt"), 0);
+        assert_eq!(probe.count("request_ended"), 0);
+        assert_eq!(probe.count("client_drop"), 0);
+        assert!(
+            arrival.try_recv().is_err(),
+            "no effect helper may reach the loopback transport"
+        );
+        assert!(
+            inbound.try_recv().is_err(),
+            "no refused effect may emit an inbound message"
+        );
+        let capture = registry.capture_bound_channel(&id).await.unwrap();
+        assert_eq!(
+            capture.provider.state(),
+            ProviderState::Cold,
+            "a refused effect must not activate the provider"
+        );
+    }
+
+    /// Metadata reads may see a Bound row; none of them may cost a resource.
+    ///
+    /// Cold, Discovered, and Disabled declarations are enumerated because the
+    /// read paths must not care which one it is: none of them may build a
+    /// client, start the channel, create a forwarder, admit a queue row,
+    /// activate the provider, or speak to the directory/transport.
+    #[tokio::test]
+    async fn bound_cold_lists_never_call_transport() {
+        use super::test_support::{LoopbackPeer, ResourceProbe};
+        use crate::gateway::delivery_queue::{DeliveryQueueConfig, DeliveryStore};
+
+        for initial in [
+            ChannelInitialState::Discovered,
+            ChannelInitialState::Cold,
+            ChannelInitialState::Disabled,
+        ] {
+            let label = match initial {
+                ChannelInitialState::Discovered => "discovered",
+                ChannelInitialState::Cold => "cold",
+                ChannelInitialState::Disabled => "disabled",
+            };
+            let expected = match initial {
+                ChannelInitialState::Discovered => ProviderState::Discovered,
+                ChannelInitialState::Cold => ProviderState::Cold,
+                ChannelInitialState::Disabled => ProviderState::Disabled,
+            };
+            let peer = LoopbackPeer::new(200).await;
+            let mut arrival = peer.arrived;
+            let probe = ResourceProbe::default();
+            let store = Arc::new(
+                DeliveryStore::open_in_memory(DeliveryQueueConfig::default())
+                    .expect("in-memory delivery store"),
+            );
+            let tree = Arc::new(OwnershipTree::new());
+            let registry = Arc::new(ChannelRegistry::new().with_delivery_store(Arc::clone(&store)));
+            let mut inbound = registry
+                .take_inbound_receiver()
+                .expect("the registry owns the only inbound receiver");
+            let id = register_bound_on(
+                &registry,
+                &tree,
+                Box::new(observed_webhook(
+                    "cold-list-bound",
+                    peer.url.clone(),
+                    "/webhook/cold-list",
+                    "cold-secret",
+                    &probe,
+                )),
+                initial,
+            )
+            .await;
+            let channel_type = registry.list().await[0].channel_type.clone();
+
+            for _ in 0..3 {
+                let list = registry.list().await;
+                assert_eq!(list.len(), 1, "{label}: metadata rows stay visible");
+                assert_eq!(list[0].id, id);
+                assert_eq!(registry.list_by_type(&channel_type).await.len(), 1);
+                assert_eq!(registry.status_summary().await.total, 1);
+                assert_eq!(registry.health_summary().await.total, 1);
+                let snapshots = registry.health_states().await;
+                assert_eq!(snapshots.len(), 1, "{label}: health snapshot row");
+                assert_eq!(
+                    desired_of(&snapshots, &id),
+                    DesiredChannelState::Stopped,
+                    "{label}: a read never writes desire"
+                );
+                assert!(
+                    registry.get_capabilities(&id).await.is_some(),
+                    "{label}: capability metadata is observable"
+                );
+                assert!(
+                    registry.get(&id).await.is_none(),
+                    "{label}: a handle-returning read stays Legacy-only"
+                );
+                assert!(matches!(
+                    registry.list_conversations(&id, "", 10).await,
+                    Err(ChannelError::UnsupportedFeature(_))
+                ));
+                assert!(registry.capture_bound_channel(&id).await.is_ok());
+                let (descriptors, _) = registry
+                    .snapshot_bound_channels(&VisibilityScope::default())
+                    .await;
+                assert_eq!(descriptors.len(), 1);
+            }
+
+            assert_eq!(probe.count("client_build_attempt"), 0, "{label}");
+            assert_eq!(probe.count("client_built"), 0, "{label}");
+            assert_eq!(probe.count("request_attempt"), 0, "{label}");
+            assert_eq!(probe.count("request_ended"), 0, "{label}");
+            assert_eq!(probe.count("client_drop"), 0, "{label}");
+            assert_eq!(
+                registry.webhook_mounts().mounted_count().await,
+                0,
+                "{label}: a read must not mount ingress"
+            );
+            assert_eq!(store.len().expect("queue length"), 0, "{label}");
+            assert!(inbound.try_recv().is_err(), "{label}");
+            assert!(arrival.try_recv().is_err(), "{label}");
+            let capture = registry.capture_bound_channel(&id).await.unwrap();
+            assert_eq!(capture.provider.state(), expected, "{label}");
+            let entry = registry.channels.read().await.get(&id).unwrap().clone();
+            let runtime = entry.runtime.lock().unwrap();
+            assert!(runtime.driver.is_none(), "{label}");
+            assert!(runtime.forwarder.is_none(), "{label}");
+            assert_eq!(runtime.active_work, 0, "{label}");
+        }
+    }
+
+    /// The compatibility lifecycle entry points must dispatch by registration
+    /// variant: Bound work belongs to the source-owned driver, never to the
+    /// Legacy adapter path.
+    #[tokio::test]
+    async fn bound_compat_lifecycle_uses_source() {
+        use super::test_support::{
+            FailingStopWebhook, HeldWebhook, LifecycleBlock, LoopbackPeer, ResourceProbe,
+        };
+        use crate::gateway::interfaces::webhook::{WebhookChannel, WebhookChannelConfig};
+        use std::time::Duration;
+
+        let peer = LoopbackPeer::new(200).await;
+        let (registry, id, probe, tree) = real_bound(peer.url.clone()).await;
+
+        // start: the driver, the provider, and the entry runtime all move
+        // through the existing binding path.
+        registry
+            .start_channel(&id)
+            .await
+            .expect("compat start must route to the source-owned lifecycle");
+        let capture = registry.capture_bound_channel(&id).await.unwrap();
+        assert_eq!(capture.provider.state(), ProviderState::Ready);
+        assert_eq!(
+            capture.provider.snapshot().1,
+            1,
+            "the provider generation advances through the binding path"
+        );
+        assert_eq!(probe.count("client_built"), 1);
+        assert_eq!(probe.count("request_attempt"), 0);
+        assert_eq!(
+            desired_of(&registry.health_states().await, &id),
+            DesiredChannelState::Running
+        );
+        assert_eq!(
+            registry.webhook_mounts().mounted_count().await,
+            0,
+            "no Bound ingress is mounted"
+        );
+        let entry = registry.channels.read().await.get(&id).unwrap().clone();
+        assert!(entry.runtime.lock().unwrap().forwarder.is_some());
+
+        // stop: same source-owned drain, ending Stopped.
+        registry
+            .stop_channel(&id)
+            .await
+            .expect("compat stop must route to the source-owned lifecycle");
+        assert_eq!(capture_state(&registry, &id).await, ProviderState::Stopped);
+        assert_eq!(probe.count("client_drop"), 1);
+        assert!(entry.runtime.lock().unwrap().forwarder.is_none());
+        assert_eq!(
+            desired_of(&registry.health_states().await, &id),
+            DesiredChannelState::Stopped
+        );
+
+        // restart: a source-owned stop followed by a source-owned start.
+        registry
+            .restart_channel(&id)
+            .await
+            .expect("compat restart must be a source-owned stop then start");
+        assert_eq!(capture_state(&registry, &id).await, ProviderState::Ready);
+        assert_eq!(probe.count("client_built"), 2);
+        // Restart begins from Stopped: the source drain is intentionally a
+        // no-op for an already drained transport, so no second drop occurs.
+        assert_eq!(probe.count("client_drop"), 1);
+        assert_eq!(
+            desired_of(&registry.health_states().await, &id),
+            DesiredChannelState::Running
+        );
+
+        // The shared source gate must not be held while channel I/O blocks.
+        let (entered, waiting) = tokio::sync::oneshot::channel();
+        let (release, blocked) = tokio::sync::oneshot::channel();
+        let held_probe = ResourceProbe::default();
+        let held_id = register_bound_on(
+            &registry,
+            &tree,
+            Box::new(HeldWebhook {
+                channel: WebhookChannel::observed(
+                    "held-bound",
+                    WebhookChannelConfig {
+                        secret: "held-secret".into(),
+                        callback_url: "http://127.0.0.1:1/callback".into(),
+                        path: "/webhook/held-bound".into(),
+                        ..Default::default()
+                    },
+                    held_probe.clone(),
+                ),
+                start: Some(LifecycleBlock {
+                    entered,
+                    release: blocked,
+                }),
+                stop: None,
+            }),
+            ChannelInitialState::Cold,
+        )
+        .await;
+        let driver = {
+            let registry = Arc::clone(&registry);
+            let held_id = held_id.clone();
+            tokio::spawn(async move { registry.start_channel(&held_id).await })
+        };
+        waiting.await.expect("the driver must reach channel.start");
+        assert_eq!(
+            capture_state(&registry, &held_id).await,
+            ProviderState::Starting,
+            "the source-owned driver is active while the adapter blocks"
+        );
+        let progressed = tokio::time::timeout(Duration::from_secs(2), async {
+            registry.capture_bound_channel(&held_id).await.unwrap();
+            registry
+                .register(Box::new(observed_webhook(
+                    "gate-probe",
+                    "http://127.0.0.1:1/callback".into(),
+                    "/webhook/gate-probe",
+                    "gate-secret",
+                    &ResourceProbe::default(),
+                )))
+                .await;
+        })
+        .await;
+        assert!(
+            progressed.is_ok(),
+            "the source gate must stay free while channel I/O blocks"
+        );
+        release.send(()).expect("release the held start");
+        driver
+            .await
+            .expect("join the compat start")
+            .expect("compat start must succeed through the source");
+        assert_eq!(
+            capture_state(&registry, &held_id).await,
+            ProviderState::Ready
+        );
+        assert_eq!(held_probe.count("client_built"), 1);
+
+        // A failed cleanup must not fabricate Ready or revive the entry.
+        let failing_probe = ResourceProbe::default();
+        let failing_id = register_bound_on(
+            &registry,
+            &tree,
+            Box::new(FailingStopWebhook::new(
+                "failing-bound",
+                "http://127.0.0.1:1/callback".into(),
+                failing_probe.clone(),
+            )),
+            ChannelInitialState::Cold,
+        )
+        .await;
+        registry
+            .start_channel(&failing_id)
+            .await
+            .expect("start must succeed before the injected stop failure");
+        assert_eq!(
+            capture_state(&registry, &failing_id).await,
+            ProviderState::Ready
+        );
+        assert!(
+            registry.stop_channel(&failing_id).await.is_err(),
+            "the injected stop failure must be reported, not swallowed"
+        );
+        assert_ne!(
+            capture_state(&registry, &failing_id).await,
+            ProviderState::Ready,
+            "a failed stop must never fabricate Ready"
+        );
+        assert!(
+            registry.restart_channel(&failing_id).await.is_err(),
+            "restart must not revive an entry whose cleanup failed"
+        );
+        assert_ne!(
+            capture_state(&registry, &failing_id).await,
+            ProviderState::Ready
+        );
+        assert_eq!(failing_probe.count("client_drop"), 0);
+    }
+
+    /// Legacy traffic must behave exactly as before: same admission, same
+    /// transport, same mount, same cleanup.
+    #[tokio::test]
+    async fn legacy_positive_controls_unchanged() {
+        use super::test_support::{LoopbackPeer, ResourceProbe};
+        use std::time::Duration;
+
+        let peer = LoopbackPeer::new(200).await;
+        let probe = ResourceProbe::default();
+        let registry = Arc::new(ChannelRegistry::new());
+        let mut inbound = registry
+            .take_inbound_receiver()
+            .expect("the registry owns the only inbound receiver");
+        let id = registry
+            .register(Box::new(observed_webhook(
+                "legacy-control",
+                peer.url.clone(),
+                "/webhook/legacy-control",
+                "legacy-secret",
+                &probe,
+            )))
+            .await;
+
+        registry
+            .start_channel(&id)
+            .await
+            .expect("Legacy start stays available");
+        assert_eq!(probe.count("client_built"), 1);
+        assert!(registry.get(&id).await.is_some());
+        assert_eq!(registry.webhook_mounts().mounted_count().await, 1);
+
+        let send = {
+            let registry = Arc::clone(&registry);
+            let id = id.clone();
+            tokio::spawn(async move {
+                registry
+                    .send_reported(&id, OutboundMessage::text("conv-1", "legacy control"))
+                    .await
+            })
+        };
+        let bytes = peer.arrived.await.expect("the loopback peer is reached");
+        assert!(String::from_utf8_lossy(&bytes).contains("legacy control"));
+        peer.release.send(()).expect("release the held response");
+        let report = send.await.expect("join the send");
+        assert!(
+            report.result.is_ok(),
+            "Legacy send must still deliver: {:?}",
+            report.result.err()
+        );
+        assert_eq!(report.queue, QueueDisposition::Delivered);
+        assert_eq!(probe.count("request_attempt"), 1);
+
+        let body = br#"{"message":"inbound control"}"#;
+        let signature = crate::gateway::webhook_receiver::WebhookReceiver::compute_signature(
+            "legacy-secret",
+            body,
+        );
+        let router =
+            crate::gateway::webhook_receiver::WebhookReceiver::router(registry.webhook_mounts());
+        let response = {
+            use tower::ServiceExt;
+            router
+                .oneshot(
+                    axum::http::Request::builder()
+                        .method("POST")
+                        .uri("/webhook/legacy-control")
+                        .header("x-webhook-signature", signature)
+                        .body(axum::body::Body::from(body.to_vec()))
+                        .expect("build the signed request"),
+                )
+                .await
+                .expect("dispatch the inbound webhook")
+        };
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let forwarded = tokio::time::timeout(Duration::from_secs(2), inbound.recv())
+            .await
+            .expect("the forwarder must publish the inbound message")
+            .expect("inbound broadcast is open");
+        assert_eq!(forwarded.text, "inbound control");
+        assert_eq!(forwarded.channel_id, id);
+
+        registry
+            .stop_channel(&id)
+            .await
+            .expect("Legacy stop stays available");
+        assert_eq!(probe.count("client_drop"), 1);
+        assert_eq!(
+            registry.webhook_mounts().mounted_count().await,
+            0,
+            "stop must unmount"
+        );
+        peer.task.await.expect("the loopback peer task ends");
     }
 }

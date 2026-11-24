@@ -16,6 +16,7 @@ use aleph_client::CliResult;
 
 const GAPS_DOC: &str = "docs/reference/CLI_BACKEND_GAPS.md";
 
+#[allow(clippy::unused_async)]
 pub async fn list(json: bool) -> CliResult<()> {
     let payload = serde_json::json!({
         "status": "not_implemented",

@@ -214,20 +214,27 @@ pub async fn handle_update(
     // `execution_config::handle_update` for the precedent.
     let impact = {
         let cfg = config.read().await;
-        let landed = crate::config::live_apply::apply_live_sections(&cfg, &["search"]);
+        let landed =
+            crate::config::live_apply::apply_live_sections(&cfg, &["search"], None, None).await;
         crate::config::classify_verified("search", &landed)
     };
 
     // Broadcast config change event
+    let mut sanitized_dto = dto.clone();
+    for backend in sanitized_dto.backends.iter_mut() {
+        if backend.api_key.is_some() {
+            backend.api_key = Some("[REDACTED]".to_string());
+        }
+    }
     let event = GatewayEvent::ConfigChanged(ConfigChangedEvent {
         section: Some("search".to_string()),
-        value: serde_json::to_value(&dto).unwrap_or(Value::Null),
+        value: serde_json::to_value(&sanitized_dto).unwrap_or(Value::Null),
         timestamp: chrono::Utc::now().timestamp_millis(),
     });
     let _ = event_bus.publish_gateway_event(&event);
 
     JsonRpcResponse::success(
         request.id,
-        serde_json::json!({ "success": true, "reload_impact": impact }),
+        serde_json::json!({ "success": true, "reload_impact": impact.wire(impact.user_hint_zh()) }),
     )
 }

@@ -110,9 +110,12 @@ impl GroupChatExecutor {
                 // Dedupe the warn across rounds — without this, a misconfigured
                 // persona produces N×M log lines (N rounds × M occurrences per
                 // round) and drowns the tracing output.
-                let first_miss = self
-                    .lock_provider_fallback_warned()
-                    .insert((persona.id.clone(), provider_name.clone()));
+                const MAX_PROVIDER_FALLBACK_WARNED: usize = 256;
+                let mut set = self.lock_provider_fallback_warned();
+                if set.len() >= MAX_PROVIDER_FALLBACK_WARNED {
+                    set.clear();
+                }
+                let first_miss = set.insert((persona.id.clone(), provider_name.clone()));
                 if first_miss {
                     tracing::warn!(
                         subsystem = "group_chat",
@@ -153,9 +156,7 @@ impl GroupChatExecutor {
         speaker: &Speaker,
         content: &str,
     ) {
-        let Some(db) = self.db.clone() else { return };
-        let session_id = session_id.to_string();
-        let content = content.to_string();
+        let Some(db) = &self.db else { return };
 
         let (speaker_type, speaker_id, speaker_name) = match &speaker {
             Speaker::Coordinator => ("coordinator", None, "Coordinator"),
@@ -164,13 +165,13 @@ impl GroupChatExecutor {
         };
         if let Err(e) = db
             .insert_group_chat_turn(
-                &session_id,
+                session_id,
                 round,
                 sequence,
                 speaker_type,
                 speaker_id,
                 speaker_name,
-                &content,
+                content,
             )
             .await
         {
@@ -208,6 +209,9 @@ impl GroupChatExecutor {
         targets: &[String],
     ) -> Result<Vec<GroupChatMessage>, GroupChatError> {
         if session.status != GroupChatStatus::Active {
+            return Err(GroupChatError::SessionInactive(session.id.clone()));
+        }
+        if session.cancel_token.is_cancelled() {
             return Err(GroupChatError::SessionInactive(session.id.clone()));
         }
 
@@ -278,7 +282,7 @@ impl GroupChatExecutor {
             // instead of waiting out the provider timeout. Cancellation maps
             // to `SessionInactive` — the same terminal signal the round-entry
             // gate uses, so callers treat it uniformly.
-            let cancel = session.cancel_token.clone();
+            let cancel = &session.cancel_token;
             let provider = self.default_provider.current();
             tokio::select! {
                 res = provider.process(RequestPayload::new(&msgs)) => {
@@ -354,8 +358,15 @@ impl GroupChatExecutor {
         // mutating session.history or persisting to DB. If any persona call
         // fails, the snapshot is restored and no partial turn is committed.
         let mut prior_discussion = String::new();
-        let total_respondents = plan.respondents.len();
+        // Deduplicate persona respondents and clamp count to total participants
+        let mut seen = std::collections::HashSet::new();
+        plan.respondents
+            .retain(|r| seen.insert(r.persona_id.to_ascii_lowercase()));
         plan.respondents.sort_by_key(|r| r.order);
+        if plan.respondents.len() > session.participants.len() {
+            plan.respondents.truncate(session.participants.len());
+        }
+        let total_respondents = plan.respondents.len();
         let session_id = session.id.clone();
 
         struct PreparedResponse {
@@ -366,11 +377,15 @@ impl GroupChatExecutor {
         }
         let mut prepared: Vec<PreparedResponse> = Vec::with_capacity(total_respondents);
         for (i, respondent) in plan.respondents.iter().enumerate() {
-            // Find the persona in the session participants
+            // Find the persona in the session participants (support case-insensitive and display name matching)
             let persona = session
                 .participants
                 .iter()
-                .find(|p| p.id == respondent.persona_id)
+                .find(|p| {
+                    p.id == respondent.persona_id
+                        || p.id.eq_ignore_ascii_case(&respondent.persona_id)
+                        || p.name.eq_ignore_ascii_case(&respondent.persona_id)
+                })
                 .ok_or_else(|| GroupChatError::PersonaNotFound(respondent.persona_id.clone()))?;
 
             // Build persona prompt with cumulative prior discussion
@@ -411,7 +426,7 @@ impl GroupChatExecutor {
                 // Same `select!`-on-cancel as the coordinator call: an
                 // `end_session` fired mid-persona unwinds the round instead
                 // of holding the session mutex through the provider timeout.
-                let cancel = session.cancel_token.clone();
+                let cancel = &session.cancel_token;
                 tokio::select! {
                     res = provider
                         .process(
@@ -485,7 +500,7 @@ impl GroupChatExecutor {
         // Append the user/system turn to history (matches the original
         // semantic that `add_turn` records both user prompts and persona
         // responses).
-        session.add_turn(round, Speaker::System, user_turn_text.clone());
+        session.add_turn(round, Speaker::System, user_turn_text);
         for p in &prepared {
             let speaker = Speaker::Persona {
                 id: p.persona_id.clone(),
@@ -519,10 +534,10 @@ impl GroupChatExecutor {
         // Build the live-stream `GroupChatMessage` list. The persistence
         // sequence (which includes the user turn) is independent of the
         // live-stream sequence (which omits the user turn and numbers from 0).
-        for p in &prepared {
+        for p in prepared {
             let speaker = Speaker::Persona {
-                id: p.persona_id.clone(),
-                name: p.persona_name.clone(),
+                id: p.persona_id,
+                name: p.persona_name,
             };
             let sequence =
                 p.i.try_into()
@@ -543,7 +558,7 @@ impl GroupChatExecutor {
             messages.push(GroupChatMessage {
                 session_id: session_id.clone(),
                 speaker,
-                content: p.content.clone(),
+                content: p.content,
                 round,
                 sequence,
                 is_final,

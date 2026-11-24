@@ -368,7 +368,9 @@ impl Renderer {
         let mut widths = vec![0usize; cols];
         for row in &table.rows {
             for (i, cell) in row.iter().enumerate() {
-                widths[i] = widths[i].max(display_width(cell));
+                if let Some(w) = widths.get_mut(i) {
+                    *w = (*w).max(display_width(cell));
+                }
             }
         }
 
@@ -377,7 +379,7 @@ impl Renderer {
             let cells: Vec<String> = (0..cols)
                 .map(|i| {
                     let cell = row.get(i).map_or("", String::as_str);
-                    let padded = pad_to(cell, widths[i]);
+                    let padded = pad_to(cell, widths.get(i).copied().unwrap_or(0));
                     if is_header {
                         ansi(self.color, "1", &padded)
                     } else {

@@ -63,26 +63,42 @@ pub fn read_task_timeout(metadata: &Value) -> Option<u64> {
 ///
 /// Mirrors [`with_max_retries`](super::retry::with_max_retries): a non-object
 /// input is promoted to an empty object, `None` leaves the metadata untouched
-/// (so callers pass through unconditionally without polluting the row), and the
-/// value is clamped to [`TASK_TIMEOUT_CEILING_SECS`] on the way in. A `Some(0)`
-/// is treated as "no override" and not written — it would never be honoured by
-/// [`read_task_timeout`] anyway.
+/// (so callers pass through unconditionally without polluting the row), and
+/// the value is clamped to [`TASK_TIMEOUT_CEILING_SECS`] on the way in.
+///
+/// `Some(0)` is the canonical "no override" value — the reader
+/// ([`read_task_timeout`]) already treats a stored `0` as absent — so it
+/// CLEARS a previous override instead of being ignored. Without that, a task
+/// stamped with a long ceiling could never be returned to the global default:
+/// both `None` ("no opinion") and `Some(0)` ("no override") used to keep the
+/// old value, and the operator's reset was silently dropped while the task
+/// kept its 24h budget.
 #[must_use]
 pub fn with_task_timeout(metadata: Value, timeout_secs: Option<u64>) -> Value {
     let mut value = match metadata {
         Value::Object(_) => metadata,
         _ => Value::Object(serde_json::Map::new()),
     };
-    let Some(n) = timeout_secs.filter(|&n| n > 0) else {
-        return value;
-    };
-    if let Some(obj) = value.as_object_mut() {
-        obj.insert(
-            TASK_TIMEOUT_METADATA_KEY.to_string(),
-            Value::Number(n.min(TASK_TIMEOUT_CEILING_SECS).into()),
-        );
+    match timeout_secs {
+        // "No override" → drop any override this row carries.
+        Some(0) => {
+            if let Some(obj) = value.as_object_mut() {
+                obj.remove(TASK_TIMEOUT_METADATA_KEY);
+            }
+            value
+        }
+        Some(n) => {
+            if let Some(obj) = value.as_object_mut() {
+                obj.insert(
+                    TASK_TIMEOUT_METADATA_KEY.to_string(),
+                    Value::Number(n.min(TASK_TIMEOUT_CEILING_SECS).into()),
+                );
+            }
+            value
+        }
+        // "No opinion" → leave the row exactly as it is.
+        None => value,
     }
-    value
 }
 
 /// The effective single-attempt timeout for a task: its per-task override if
@@ -155,6 +171,27 @@ mod tests {
         assert!(merged.get(TASK_TIMEOUT_METADATA_KEY).is_none());
         let merged_zero = with_task_timeout(json!({ "k": 1 }), Some(0));
         assert!(merged_zero.get(TASK_TIMEOUT_METADATA_KEY).is_none());
+    }
+
+    /// `Some(0)` is "no override": it must CLEAR a previous one, otherwise a
+    /// stale ceiling (up to 24h) can never be removed from the row.
+    #[test]
+    fn zero_clears_a_previous_override() {
+        let stamped = with_task_timeout(json!({ "k": 1 }), Some(TASK_TIMEOUT_CEILING_SECS));
+        assert_eq!(read_task_timeout(&stamped), Some(TASK_TIMEOUT_CEILING_SECS));
+        let cleared = with_task_timeout(stamped, Some(0));
+        assert!(cleared.get(TASK_TIMEOUT_METADATA_KEY).is_none());
+        assert_eq!(read_task_timeout(&cleared), None);
+        // The sibling key survives the clear.
+        assert_eq!(cleared["k"], json!(1));
+    }
+
+    /// `None` means "no opinion" — the row keeps whatever it carried.
+    #[test]
+    fn none_keeps_a_previous_override() {
+        let stamped = with_task_timeout(json!({ "k": 1 }), Some(1_800));
+        let kept = with_task_timeout(stamped, None);
+        assert_eq!(read_task_timeout(&kept), Some(1_800));
     }
 
     #[test]

@@ -91,6 +91,7 @@ fn recover_raw_deletions(db: &mut Connection, base: &Path) -> Result<(), AlephEr
         // The deletion committed, or a previous recovery already restored it.
         std::fs::remove_file(&backup).map_err(storage_error)?;
     }
+    tx.commit().map_err(storage_error)?;
     Ok(())
 }
 
@@ -155,11 +156,8 @@ fn dashboard_filter(
     let mut values = Vec::new();
     if let Some(agents) = agents {
         predicate.push_str(" AND agent_id IN (SELECT value FROM json_each(?1))");
-        values.push(
-            serde_json::to_string(agents)
-                .expect("string slice serialization")
-                .into(),
-        );
+        let serialized = serde_json::to_string(agents).unwrap_or_else(|_| "[]".to_string());
+        values.push(serialized.into());
     }
     let needle = query
         .map(str::trim)
@@ -506,6 +504,33 @@ impl RawMemoryStore for MarkdownSessionStore {
             limit,
             None,
         )
+        .await
+    }
+
+    /// Counts rows under the prefix across every agent partition: a
+    /// correction recorded in a project-scoped session lives in that
+    /// session's partition, and a per-agent count would not see it.
+    async fn count_raw_by_path_prefix_since_all_agents(
+        &self,
+        path_prefix: &str,
+        since_created_at: i64,
+    ) -> Result<usize, AlephError> {
+        // The closure is `'static`, so the prefix is owned by it rather than
+        // borrowed from this frame.
+        let path_prefix = path_prefix.to_string();
+        self.with_raw_db(move |db, _| {
+            let mut stmt = db
+                .prepare(
+                    "SELECT count(*) FROM raw_memory_index \
+                     WHERE substr(path, 1, length(?1)) = ?1 COLLATE NOCASE \
+                     AND created_at > ?2",
+                )
+                .map_err(storage_error)?;
+            let n: i64 = stmt
+                .query_row(params![&path_prefix, since_created_at], |row| row.get(0))
+                .map_err(storage_error)?;
+            Ok(n.max(0) as usize)
+        })
         .await
     }
 

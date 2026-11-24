@@ -109,7 +109,6 @@ impl EngineRegistry {
         // orphan's only record. Kill first, and only then let the launch have
         // the slot.
         if let Some(dead) = existing {
-            map.remove(&req.profile);
             tracing::warn!(
                 profile = %req.profile,
                 engine = dead.engine.as_str(),
@@ -118,7 +117,17 @@ impl EngineRegistry {
                  relaunching, because a closed socket says we lost our grip, not that \
                  the browser exited"
             );
-            dead.shutdown().await;
+            if !dead.shutdown().await {
+                return Err(BrowserError::EngineFailure {
+                    engine: dead.engine,
+                    reason: format!(
+                        "could not stop pid {}; its sidecar remains at {} and relaunch was refused",
+                        dead.launched.pid,
+                        dead.launched.sidecar_path.display()
+                    ),
+                });
+            }
+            map.remove(&req.profile);
         }
 
         // The launch itself is `launch_engine`, which takes no `&self` and so
@@ -187,6 +196,13 @@ impl EngineRegistry {
 
     /// The handle for `profile`, without launching one. A sensor must not
     /// create what it measures.
+    ///
+    /// The live engine handle registered for `profile`, if any.
+    ///
+    /// Production reads it from the engine-switch path (a switch needs the
+    /// handle it replaces), so this is not a second way to ask "is there an
+    /// engine for this profile" — it answers "which one", and the switch
+    /// needs exactly that.
     pub async fn get(&self, profile: &str) -> Option<Arc<EngineHandle>> {
         self.handles.lock().await.get(profile).cloned()
     }
@@ -245,16 +261,26 @@ impl EngineRegistry {
             .is_ok_and(|m| m.get(profile).is_some_and(|h| h.alive()))
     }
 
-    /// Take the handle out of the map. The caller owns stopping it — used by
-    /// `switch_engine` (Task 19), which must not have the old engine restarted
-    /// under it while the new one comes up.
-    pub async fn remove(&self, profile: &str) -> Option<Arc<EngineHandle>> {
-        self.handles.lock().await.remove(profile)
-    }
-
     /// Every live handle, for callers that sweep rather than address one.
+    ///
+    /// **Test-only reader.** The production sweep is [`Self::shutdown_all`],
+    /// which stops what it finds; a reader that hands out handles nobody
+    /// asked for is a way to keep an engine alive after its profile is gone
+    /// (判据 §11).
+    #[cfg(test)]
     pub async fn all(&self) -> Vec<Arc<EngineHandle>> {
         self.handles.lock().await.values().cloned().collect()
+    }
+
+    /// Take a handle back out of the registry.
+    ///
+    /// **Test-only reader.** Production retires a profile through the
+    /// lifecycle, which stops the engine and then forgets it; a door that
+    /// removes a handle without stopping it would leave a browser running
+    /// with nothing holding it (判据 §11).
+    #[cfg(test)]
+    pub async fn remove(&self, profile: &str) -> Option<Arc<EngineHandle>> {
+        self.handles.lock().await.remove(profile)
     }
 
     /// Park a pre-built handle under `profile`, so a test can exercise a
@@ -1622,6 +1648,55 @@ mod tests {
             "precondition: the record is keyed on the session key, so the relaunch \
              writes over exactly the slot the orphan would have been reaped from"
         );
+
+        registry.shutdown_all(ENGINE_SHUTDOWN_BUDGET).await;
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_surviving_displaced_engine_blocks_relaunch_and_keeps_its_record() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let server = FakeCdpServer::start(engine_peer).await;
+        let proc = Arc::new(
+            FakeEngineProcess::new(Engine::Chromium, &server, dir.path())
+                .with_kill_outcomes([ScriptedKill::Survived]),
+        );
+        let registry = registry_with(Engine::Chromium, &proc);
+        let req = request("default", dir.path());
+        let first = registry
+            .handle(Engine::Chromium, &req, EngineLaunch::Allow)
+            .await
+            .expect("launch");
+        let sidecar = first.launched.sidecar_path.clone();
+        server.drop_socket();
+        // The socket is gone, but "the engine is dead" is the CDP reader
+        // task's answer, not the socket's: `EngineHandle::alive()` reads the
+        // connection's disconnect watch, which only flips once that task
+        // notices. Until it does, the registry still sees a live engine and
+        // hands back the OLD handle — so the relaunch this test is about
+        // never happens, and the assertion below would be testing the wrong
+        // branch. Wait for the watch the way the sibling test does.
+        let mut closed = first.conn.closed();
+        tokio::time::timeout(Duration::from_secs(5), closed.wait_for(Option::is_some))
+            .await
+            .expect("the client notices the peer went away within 5s")
+            .expect("the watch sender outlives the connection");
+        drop(first);
+
+        let err = refusal(
+            registry
+                .handle(Engine::Chromium, &req, EngineLaunch::Allow)
+                .await,
+            "a surviving displaced engine must block relaunch",
+        );
+        assert!(err.to_string().contains(&proc.pid().to_string()), "{err}");
+        assert!(
+            err.to_string().contains(&sidecar.display().to_string()),
+            "{err}"
+        );
+        assert_eq!(proc.launches().len(), 1, "must not overwrite the sidecar");
+        assert!(sidecar.exists(), "the boot sweep record must remain");
+        assert!(registry.get("default").await.is_some(), "retain the handle");
 
         registry.shutdown_all(ENGINE_SHUTDOWN_BUDGET).await;
         server.shutdown().await;

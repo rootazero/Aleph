@@ -25,7 +25,6 @@ use crate::sync_primitives::Arc;
 use crate::utils::no_window::NoWindow;
 use std::time::Duration;
 
-use futures::FutureExt;
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
@@ -234,63 +233,30 @@ impl StopHookAggregateResult {
 
 /// Execute all stop hooks in parallel.
 ///
-/// `join_all` preserves the input order of the futures it polls, so
-/// tagging each verdict with its hook index at spawn time and re-sorting
-/// by that index on completion gives deterministic ordering in
+/// `join_all` preserves input order, so
 /// [`StopHookAggregateResult::blocking_reason`] and
-/// [`StopHookAggregateResult::halt_reason`]. Without that fix, hooks of
-/// varying latency surface their reasons in completion order rather than
-/// declaration order, which makes audit-log reproducibility depend on
-/// per-hook runtime jitter.
+/// [`StopHookAggregateResult::halt_reason`] return reasons in declaration
+/// order regardless of completion order.
 pub async fn execute_stop_hooks(
     hooks: &[Box<dyn StopHookHandler>],
     context: &StopHookContext,
     cancel: &CancellationToken,
 ) -> StopHookAggregateResult {
-    let mut verdicts_with_idx: Vec<(usize, StopHookVerdict)> = futures::future::join_all(
-        hooks
-            .iter()
-            .enumerate()
-            .map(|(idx, hook)| hook.evaluate(context, cancel).map(move |v| (idx, v))),
-    )
-    .await;
-    // join_all already preserves spawn order on a Vec, but we restate the
-    // invariant explicitly so a future refactor (e.g. switching to an
-    // unordered join) cannot silently break declaration-order semantics.
-    verdicts_with_idx.sort_by_key(|(idx, _)| *idx);
-    StopHookAggregateResult {
-        verdicts: verdicts_with_idx.into_iter().map(|(_, v)| v).collect(),
-    }
+    let verdicts =
+        futures::future::join_all(hooks.iter().map(|hook| hook.evaluate(context, cancel))).await;
+    StopHookAggregateResult { verdicts }
 }
 
-/// `Arc`-parameter version of `execute_stop_hooks` — for consumers outside the
-/// harness that hold guards as `Arc` (goal-loop gate, `StopHookVerifier`). Wraps
-/// each `Arc` into a forwarding box, reuses the concurrent runner above, and
-/// never clones hook implementations.
+/// `Arc`-parameter version of `execute_stop_hooks` for consumers that hold
+/// handlers as `Arc` (the goal-loop gate and `StopHookVerifier`).
 pub async fn execute_stop_hooks_arc(
     hooks: &[Arc<dyn StopHookHandler>],
     context: &StopHookContext,
     cancel: &CancellationToken,
 ) -> StopHookAggregateResult {
-    struct ArcHook(Arc<dyn StopHookHandler>);
-    #[async_trait::async_trait]
-    impl StopHookHandler for ArcHook {
-        fn name(&self) -> &str {
-            self.0.name()
-        }
-        async fn evaluate(
-            &self,
-            ctx: &StopHookContext,
-            cancel: &CancellationToken,
-        ) -> StopHookVerdict {
-            self.0.evaluate(ctx, cancel).await
-        }
-    }
-    let boxed: Vec<Box<dyn StopHookHandler>> = hooks
-        .iter()
-        .map(|h| Box::new(ArcHook(h.clone())) as Box<dyn StopHookHandler>)
-        .collect();
-    execute_stop_hooks(&boxed, context, cancel).await
+    let verdicts =
+        futures::future::join_all(hooks.iter().map(|hook| hook.evaluate(context, cancel))).await;
+    StopHookAggregateResult { verdicts }
 }
 
 // ---------------------------------------------------------------------------

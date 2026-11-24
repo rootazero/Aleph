@@ -44,7 +44,9 @@ pub use capabilities::{
     resolve_context_window_with_override, strips_prior_turn_thinking, ModelCapabilities,
     CONSERVATIVE_CONTEXT_WINDOW,
 };
-pub use discovery::{cached_models, refresh_models, DiscoveredModels, DiscoveryError};
+pub use discovery::{
+    cached_models, cached_models_async, refresh_models, DiscoveredModels, DiscoveryError,
+};
 pub use endpoint::{endpoint_kind_for_base_url, EndpointKind};
 pub use lifecycle::{lifecycle_for, ModelLifecycle, ModelStatus};
 pub use record::{ModelRecord, ModelSource};

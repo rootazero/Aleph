@@ -73,7 +73,7 @@ fn redacted_for_log(url: &str) -> String {
             // Not a parseable absolute URL — best effort: drop the
             // first `?` or `#` and everything after.
             let end = url.find('?').or_else(|| url.find('#')).unwrap_or(url.len());
-            url[..end].to_string()
+            url.get(..end).unwrap_or(url).to_string()
         }
     }
 }

@@ -155,13 +155,14 @@ impl ProviderHealth {
     /// The only operations performed under this lock are `HashMap` reads and
     /// inserts, none of which panic. A poisoned mutex therefore can only
     /// originate from a panic on another thread while the guard was held —
-    /// not a state this code can produce. Propagating keeps ordering honest:
-    /// if the lock is poisoned, the caller should know, not silently
-    /// continue with a recovered guard that may hide a real bug.
+    /// not a state this code can produce. Recovering a poisoned guard keeps
+    /// health bookkeeping from turning an unrelated caller panic into a
+    /// second process panic.
     fn lock(&self) -> MutexGuard<'_, HashMap<String, FailureRecord>> {
-        self.failed_at
-            .lock()
-            .expect("lock held across non-panicking HashMap ops")
+        match self.failed_at.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        }
     }
 
     /// Test-only: forget every recorded failure, so a wiring test can put a

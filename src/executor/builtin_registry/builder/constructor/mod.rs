@@ -13,7 +13,7 @@ use crate::error::AlephError;
 use crate::sync_primitives::Arc;
 use std::collections::HashMap;
 
-use tracing::info;
+use tracing::{info, warn};
 
 use super::{BuiltinToolConfig, BuiltinToolRegistry};
 use crate::builtin_tools::browser_tools::{
@@ -72,7 +72,7 @@ impl BuiltinToolRegistry {
             // path is built-in `safe_fetch` only. Surface that once at
             // startup instead of letting the config silently do nothing.
             if let Some(ref fetch_cfg) = cfg_guard.fetch {
-                let inert = inert_fetch_backend_names(fetch_cfg);
+                let inert = inert_fetch_backend_names(fetch_cfg, cfg_guard.search.as_ref());
                 if !inert.is_empty() {
                     tracing::warn!(
                         backends = ?inert,
@@ -674,96 +674,66 @@ impl BuiltinToolRegistry {
         browser_profile_manager.spawn_idle_reaper(60);
         let browser_profile_tool = BrowserProfileTool::new(browser_profile_manager);
 
-        // Create memory tools if backend and embedder are provided
+        // Retrieval tools exist only in Tools / Hybrid mode. In Context mode the
+        // model receives memory through auto-injected context messages, so the
+        // retrieval tools are not constructed at all: a constructed tool still
+        // answers dispatch calls, which would serve retrieval the model was
+        // never given a schema for. Gating only the schema registration left
+        // the tools reachable behind a parameterless catalog entry.
+        let expose_retrieval_tools = matches!(
+            config.injection_mode,
+            crate::config::types::memory::MemoryInjectionMode::Tools
+                | crate::config::types::memory::MemoryInjectionMode::Hybrid,
+        );
+
+        // Retrieval adapters retain only the source and caller-updated configuration.
         let (
             memory_search_tool,
             memory_browse_tool,
             memory_explore_tool,
             memory_workspace_handle,
             memory_session_key_handle,
-        ) = if let (Some(ref db), Some(ref embedder), Some(ref raw_store)) = (
-            &config.memory_db,
-            &config.embedder,
-            &config.raw_memory_store,
-        ) {
-            // Cross-encoder rerank + retrieval-scoring config (both disabled by
-            // default → no behaviour change). Read once to avoid re-locking.
-            let (rerank_cfg, scoring_cfg, expansion_cfg): (
-                Option<crate::memory::rerank::RerankConfig>,
-                Option<crate::config::types::memory::RetrievalScoringConfig>,
-                Option<crate::config::types::memory::ExpansionConfig>,
-            ) = match &config.config {
-                Some(cfg) => {
-                    let guard = cfg.read().await;
-                    (
-                        Some(guard.memory.rerank.clone()),
-                        Some(guard.memory.retrieval_scoring.clone()),
-                        Some(guard.memory.expansion.clone()),
-                    )
-                }
-                None => (None, None, None),
-            };
-            let search_tool = MemorySearchTool::new_with_config(
-                db.clone(),
-                raw_store.clone(),
-                Arc::clone(embedder),
-                rerank_cfg.as_ref(),
-                scoring_cfg.as_ref(),
-                expansion_cfg.as_ref(),
-            )
-            .with_project_scoping(config.memory_project_scoped);
-            let ws_handle = search_tool.default_workspace_handle();
-            let sk_handle = search_tool.default_session_key_handle();
-            let note_memory_dir = crate::utils::paths::get_note_memory_dir().unwrap_or_else(|_| {
-                // No home branch: `get_note_memory_dir` fails either because
-                // there is no home (so re-deriving one cannot help) or because
-                // creating the directory failed (so re-deriving the *same*
-                // path cannot help either). The only spelling that added
-                // anything was the one that ignored `ALEPH_HOME`.
-                std::env::temp_dir()
-                    .join("aleph")
-                    .join("memory")
-                    .join("note")
-            });
-            let browse_tool = MemoryBrowseTool::new(note_memory_dir, "default".to_string())
-                .with_project_scoping(config.memory_project_scoped);
-            let explore_tool = MemoryExploreTool::new(db.clone(), Arc::clone(embedder))
-                .with_project_scoping(config.memory_project_scoped);
-            info!("Created memory_search, memory_browse, and memory_explore tools");
-            (
-                Some(search_tool),
-                Some(browse_tool),
-                Some(explore_tool),
-                Some(ws_handle),
-                Some(sk_handle),
-            )
-        } else if config.memory_db.is_some() {
-            let note_memory_dir = crate::utils::paths::get_note_memory_dir().unwrap_or_else(|_| {
-                // No home branch: `get_note_memory_dir` fails either because
-                // there is no home (so re-deriving one cannot help) or because
-                // creating the directory failed (so re-deriving the *same*
-                // path cannot help either). The only spelling that added
-                // anything was the one that ignored `ALEPH_HOME`.
-                std::env::temp_dir()
-                    .join("aleph")
-                    .join("memory")
-                    .join("note")
-            });
-            let browse_tool = MemoryBrowseTool::new(note_memory_dir, "default".to_string())
-                .with_project_scoping(config.memory_project_scoped);
-            info!("Created memory_browse tool (no embedder for memory_search)");
-            (None, Some(browse_tool), None, None, None)
-        } else {
-            (None, None, None, None, None)
+        ) = match config
+            .memory_runtime
+            .as_ref()
+            .filter(|_| expose_retrieval_tools)
+        {
+            Some(runtime) => {
+                let search_tool =
+                    crate::builtin_tools::runtime::RuntimeTool::<MemorySearchTool>::new(
+                        runtime.clone(),
+                    );
+                let workspace = search_tool.default_workspace_handle();
+                let session_key = search_tool.default_session_key_handle();
+                (
+                    Some(search_tool),
+                    Some(
+                        crate::builtin_tools::runtime::RuntimeTool::<MemoryBrowseTool>::new(
+                            runtime.clone(),
+                        ),
+                    ),
+                    Some(crate::builtin_tools::runtime::RuntimeTool::<
+                        MemoryExploreTool,
+                    >::new(runtime.clone())),
+                    Some(workspace),
+                    Some(session_key),
+                )
+            }
+            None => (None, None, None, None, None),
         };
 
-        // Create memory timeline tool if StateDatabase is provided
-        let timeline_tool = config.state_db.as_ref().map(|sdb| {
-            let traveler = Arc::new(crate::memory::events::traveler::MemoryTimeTraveler::new(
-                Arc::clone(sdb),
-            ));
-            crate::builtin_tools::MemoryTimelineTool::new(traveler)
-        });
+        // Create memory timeline tool if StateDatabase is provided.
+        // The timeline is a retrieval surface, so it follows the retrieval gate.
+        let timeline_tool = if expose_retrieval_tools {
+            config.state_db.as_ref().map(|sdb| {
+                let traveler = Arc::new(crate::memory::events::traveler::MemoryTimeTraveler::new(
+                    Arc::clone(sdb),
+                ));
+                crate::builtin_tools::MemoryTimelineTool::new(traveler)
+            })
+        } else {
+            None
+        };
 
         // Create image generation tool if generation registry is provided
         let image_generate_tool = config.generation_registry.as_ref().map(|registry| {
@@ -786,23 +756,24 @@ impl BuiltinToolRegistry {
             crate::builtin_tools::generation::SpeechGenerateTool::new(Arc::clone(registry))
         });
 
-        // Build wiki tools (Spec 5 Task 12)
-        let note_orient_tool = config.orientation.as_ref().map(|wiki| {
-            use crate::memory::notes::orientation::types::TokenBudget;
-            crate::builtin_tools::note_orient::NoteOrientTool::new(
-                Arc::clone(wiki),
-                TokenBudget::default(),
-            )
-        });
-
-        let note_schema_tool = config
-            .note_memory_dir
+        let note_orient_tool = config
+            .memory_runtime
             .as_ref()
-            .map(|dir| crate::builtin_tools::note_schema::NoteSchemaTool::new(dir.clone()));
-
-        // Build user profile tool (Spec 7 Task 9)
-        let user_profile_tool = config.profile_synthesizer.as_ref().map(|synth| {
-            crate::builtin_tools::user_profile::UserProfileTool::new(Arc::clone(synth))
+            .filter(|_| expose_retrieval_tools)
+            .map(|runtime| {
+                crate::builtin_tools::runtime::RuntimeTool::<
+                    crate::builtin_tools::note_orient::NoteOrientTool,
+                >::new(runtime.clone())
+            });
+        let note_schema_tool = config.memory_runtime.as_ref().map(|runtime| {
+            crate::builtin_tools::runtime::RuntimeTool::<
+                crate::builtin_tools::note_schema::NoteSchemaTool,
+            >::new(runtime.clone())
+        });
+        let user_profile_tool = config.memory_runtime.as_ref().map(|runtime| {
+            crate::builtin_tools::runtime::RuntimeTool::<
+                crate::builtin_tools::user_profile::UserProfileTool,
+            >::new(runtime.clone())
         });
 
         // Build tool metadata
@@ -852,11 +823,18 @@ impl BuiltinToolRegistry {
                     &td.description,
                     ToolSource::Builtin,
                 );
-                ut = ut.with_parameters_schema(td.parameters.clone());
+                ut = ut
+                    .with_parameters_schema(td.parameters.clone())
+                    .with_services(td.services.clone());
                 tools.insert(td.name.clone(), ut);
             }
+            // The count comes from the collection itself: a hand-written number
+            // drifts the moment a tool is added or removed.
+            info!(
+                "Registered {} browser tools in BuiltinToolRegistry",
+                browser_tool_defs.len()
+            );
         }
-        info!("Registered browser tools (26 tools) in BuiltinToolRegistry");
 
         // Register parameter schemas for always-available tools that are listed
         // in BUILTIN_TOOL_DEFINITIONS (so the LLM sees them) and dispatched in
@@ -897,12 +875,18 @@ impl BuiltinToolRegistry {
                     &td.description,
                     ToolSource::Builtin,
                 );
-                ut = ut.with_parameters_schema(td.parameters.clone());
+                ut = ut
+                    .with_parameters_schema(td.parameters.clone())
+                    .with_services(td.services.clone());
                 tools.insert(td.name.clone(), ut);
             }
+            // The names come from the collection itself: a hand-written list
+            // drifts and can name a tool that is not registered at all.
+            let extra_names: Vec<&str> = extra_defs.iter().map(|td| td.name.as_str()).collect();
             info!(
-                "Registered schemas for apply_patch, desktop AX/SoM/locate, gateway_route, \
-                 google_meet, select_model, doctor, terminal in BuiltinToolRegistry"
+                "Registered {} additional tool schemas ({}) in BuiltinToolRegistry",
+                extra_defs.len(),
+                extra_names.join(", ")
             );
         }
 
@@ -931,25 +915,28 @@ impl BuiltinToolRegistry {
                     &td.description,
                     ToolSource::Builtin,
                 );
-                ut = ut.with_parameters_schema(td.parameters.clone());
+                ut = ut
+                    .with_parameters_schema(td.parameters.clone())
+                    .with_services(td.services.clone());
                 tools.insert(td.name.clone(), ut);
             }
             info!("Registered schemas for media_understand, audio_transcribe, document_extract");
         }
 
-        // Capability-runtime diagnostic control surface. Listed in
-        // BUILTIN_TOOL_DEFINITIONS for *catalog* purposes (so the
-        // BUILTIN_TOOL_DEFINITIONS tripwire sees the name) and
-        // dispatched in registry.rs, but the runtime advertisement is
-        // GATED on `diagnostics_control: Some(_)` — when the env
+        // Capability-runtime diagnostic control surface. The name is in
+        // REGISTRY_ONLY_TOOL_NAMES (NOT in BUILTIN_TOOL_DEFINITIONS — the
+        // catalog holds the unconditional tools), and it IS in the dispatch
+        // census: the census reads the `Registered schema for …` log line
+        // this block emits, so the two directions of the registry-only
+        // guard agree. What is GATED is the runtime advertisement, on
+        // `diagnostics_control: Some(_)` — when the env
         // `ALEPH_CAPABILITY_DIAGNOSTICS=1` is not set at startup,
-        // the tool is not in the runtime tool map, not in the LLM-
-        // facing tool list, and not in the dispatch census. The
-        // wire-level three-part check (operator + loopback + conn_id)
-        // lives in the tool module itself; this is the *enablement*
-        // half of the two-part guard, mirroring the media_pipeline
-        // block above. Keeping the registration block here (not
-        // unconditional) is the only reason a normal-mode build
+        // the tool is not in the runtime tool map and not in the LLM-
+        // facing tool list. The wire-level three-part check (operator +
+        // loopback + conn_id) lives in the tool module itself; this is the
+        // *enablement* half of the two-part guard, mirroring the
+        // media_pipeline block above. Keeping the registration block here
+        // (not unconditional) is the only reason a normal-mode build
         // cannot accidentally dispatch the tool.
         if let Some(ref dc) = config.diagnostics_control {
             let td = crate::builtin_tools::capability_projection_diagnostics::DiagnosticTool::new(
@@ -962,7 +949,9 @@ impl BuiltinToolRegistry {
                 &td.description,
                 ToolSource::Builtin,
             );
-            ut = ut.with_parameters_schema(td.parameters.clone());
+            ut = ut
+                .with_parameters_schema(td.parameters.clone())
+                .with_services(td.services.clone());
             tools.insert(td.name.clone(), ut);
             info!("Registered schema for capability_projection_diagnostics");
         }
@@ -982,7 +971,9 @@ impl BuiltinToolRegistry {
                 &td.description,
                 ToolSource::Builtin,
             );
-            ut = ut.with_parameters_schema(td.parameters.clone());
+            ut = ut
+                .with_parameters_schema(td.parameters.clone())
+                .with_services(td.services.clone());
             tools.insert(td.name.clone(), ut);
             info!("Registered schema for config_audit");
         }
@@ -1006,7 +997,9 @@ impl BuiltinToolRegistry {
                 &td.description,
                 ToolSource::Builtin,
             );
-            ut = ut.with_parameters_schema(td.parameters.clone());
+            ut = ut
+                .with_parameters_schema(td.parameters.clone())
+                .with_services(td.services.clone());
             tools.insert(td.name.clone(), ut);
             info!("Registered schema for hub_catalog_sync");
 
@@ -1021,7 +1014,9 @@ impl BuiltinToolRegistry {
                 &td.description,
                 ToolSource::Builtin,
             );
-            ut = ut.with_parameters_schema(td.parameters.clone());
+            ut = ut
+                .with_parameters_schema(td.parameters.clone())
+                .with_services(td.services.clone());
             tools.insert(td.name.clone(), ut);
             info!("Registered schema for hub_catalog_search");
 
@@ -1035,7 +1030,9 @@ impl BuiltinToolRegistry {
                 &td.description,
                 ToolSource::Builtin,
             );
-            ut = ut.with_parameters_schema(td.parameters.clone());
+            ut = ut
+                .with_parameters_schema(td.parameters.clone())
+                .with_services(td.services.clone());
             tools.insert(td.name.clone(), ut);
             info!("Registered schema for hub_resolve_spec");
 
@@ -1055,7 +1052,9 @@ impl BuiltinToolRegistry {
                     &td.description,
                     ToolSource::Builtin,
                 );
-                ut = ut.with_parameters_schema(td.parameters.clone());
+                ut = ut
+                    .with_parameters_schema(td.parameters.clone())
+                    .with_services(td.services.clone());
                 tools.insert(td.name.clone(), ut);
                 info!("Registered schema for hub_install_run");
             }
@@ -1071,7 +1070,9 @@ impl BuiltinToolRegistry {
                 &td.description,
                 ToolSource::Builtin,
             );
-            ut = ut.with_parameters_schema(td.parameters.clone());
+            ut = ut
+                .with_parameters_schema(td.parameters.clone())
+                .with_services(td.services.clone());
             tools.insert(td.name.clone(), ut);
             info!("Registered schema for hub_fetch_docs");
         }
@@ -1089,7 +1090,9 @@ impl BuiltinToolRegistry {
                 &td.description,
                 ToolSource::Builtin,
             );
-            ut = ut.with_parameters_schema(td.parameters.clone());
+            ut = ut
+                .with_parameters_schema(td.parameters.clone())
+                .with_services(td.services.clone());
             tools.insert(td.name.clone(), ut);
             info!("Registered schema for hub_install_verify");
         }
@@ -1107,7 +1110,9 @@ impl BuiltinToolRegistry {
                 &td.description,
                 ToolSource::Builtin,
             );
-            ut = ut.with_parameters_schema(td.parameters.clone());
+            ut = ut
+                .with_parameters_schema(td.parameters.clone())
+                .with_services(td.services.clone());
             tools.insert(td.name.clone(), ut);
             info!("Registered schema for tool_usage");
         }
@@ -1122,7 +1127,6 @@ impl BuiltinToolRegistry {
             &image_generate_tool,
             &vault_store_tool,
             &config,
-            config.injection_mode,
             &note_orient_tool,
             &note_schema_tool,
             &user_profile_tool,
@@ -1198,8 +1202,7 @@ impl BuiltinToolRegistry {
             skill_manage_tool,
             note_manage_tool,
             session_complete_tool,
-            memory_reflect_tool,
-        ) = Self::build_collab_session_tools(&config, &mut tools, &current_agent_id);
+        ) = Self::build_collab_session_tools(&config, &mut tools, &current_agent_id)?;
 
         Ok(Self {
             search_tool,
@@ -1275,7 +1278,7 @@ impl BuiltinToolRegistry {
             loop_graph_tool,
             strategy_tool: strategy_tool.with_session_key_handle(memory_session_key_handle.clone()),
             memory_search_tool,
-            memory_context_provider: Arc::new(tokio::sync::OnceCell::new()),
+            memory_runtime: config.memory_runtime.clone(),
             node_registry: Arc::new(tokio::sync::OnceCell::new()),
             node_security_store: Arc::new(tokio::sync::OnceCell::new()),
             gateway_event_bus: Arc::new(tokio::sync::OnceCell::new()),
@@ -1342,11 +1345,6 @@ impl BuiltinToolRegistry {
                 crate::builtin_tools::heartbeat_manage::HeartbeatToggleTool::new(Arc::clone(svc))
             }),
             heartbeat_report_tool: crate::builtin_tools::heartbeat_manage::HeartbeatReportTool,
-            // Phase 3 Task 19 — flag_user_correction tool (R9: everything is a tool).
-            // Only the backend handle is stored: the tool itself is built per
-            // call, in the dispatch arm, because its agent id must be the one
-            // executing the turn. See `build_flag_user_correction`.
-            flag_user_correction_db: config.memory_db.clone(),
             raw_memory_store: config.raw_memory_store.clone(),
             browser_open_tool,
             browser_companion_tool,
@@ -1474,7 +1472,6 @@ impl BuiltinToolRegistry {
             skill_manage_tool,
             note_manage_tool,
             session_complete_tool,
-            memory_reflect_tool,
             note_orient_tool,
             note_schema_tool,
             user_profile_tool,
@@ -1484,31 +1481,49 @@ impl BuiltinToolRegistry {
             media_pipeline: config.media_pipeline.clone(),
             diagnostics_control: config.diagnostics_control.clone(),
             memory_project_scoped: config.memory_project_scoped,
-            recall_context_db: config.memory_db.clone(),
-            memory_trace_db: config.memory_db.clone(),
             tools,
         })
     }
+}
 
-    /// The single construction point for `flag_user_correction`.
-    ///
-    /// Built per call rather than once at boot because `agent_id` is not a
-    /// boot-time fact. Corrections are namespaced per agent — `FeedbackDistill`
-    /// reads one agent's corpus at a time — and the registry is constructed
-    /// once, in `agent_init`, where no turn context exists yet. The identity
-    /// baked in there is therefore always the base agent, so every correction
-    /// a non-base agent recorded landed in a corpus that agent's distillation
-    /// never reads.
-    pub(crate) fn build_flag_user_correction(
-        db: &crate::memory::store::MemoryBackend,
-        raw_store: Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>,
-        agent_id: String,
-    ) -> crate::builtin_tools::FlagUserCorrectionTool {
-        crate::builtin_tools::FlagUserCorrectionTool::new(raw_store, agent_id)
-            // Same backend `remember` audits to and `memory_trace` reads back, so
-            // "why isn't that in memory?" covers rung 2 of the destination ladder
-            // and not just rung 1.
-            .with_decision_log(Some(db.clone()))
+/// Resolve the session store the tool constructors should build on.
+///
+/// The gateway context owns the live session store; a directly configured
+/// session manager is the next best source. When neither is present, the
+/// constructors used to build a fresh default manager inline — silently, in two
+/// places, with two different log messages. A fresh manager carries no raw
+/// memory writer and no event bus, so tools built on it behave differently
+/// from tools built on the live store. The substitution is now made in one
+/// place and logged, so the difference is visible instead of silent.
+///
+/// `purpose` names the caller in the log so the two call sites stay
+/// distinguishable.
+pub(super) fn resolve_session_manager(
+    config: &BuiltinToolConfig,
+    purpose: &str,
+) -> Option<Arc<dyn crate::gateway::session_store::SessionStore>> {
+    if let Some(ctx) = config.gateway_context.as_ref() {
+        return Some(Arc::clone(ctx.session_store()));
+    }
+    if let Some(manager) = config.session_manager.clone() {
+        return Some(manager);
+    }
+    match crate::gateway::SessionManager::with_defaults() {
+        Ok(manager) => {
+            warn!(
+                "No session store configured; falling back to a fresh default \
+                 SessionManager for {purpose}. The fallback has no raw memory \
+                 writer and no event bus, so tools built on it are not durable."
+            );
+            Some(Arc::new(manager))
+        }
+        Err(e) => {
+            warn!(
+                "Failed to create fallback SessionManager for {purpose}: {}",
+                e
+            );
+            None
+        }
     }
 }
 
@@ -1551,23 +1566,29 @@ async fn resolve_transcription(
 
 /// Names of the `[fetch]` backends an operator configured that will never be
 /// consulted at runtime (BT-D-R4-22 — see the `web_fetch_tool` construction
-/// above). Empty when the section is absent, disabled, or empty; the caller
-/// logs a single startup warning for the non-empty case so the config is not
+/// above). Empty when the section is absent or empty; the caller logs a
+/// single startup warning for the non-empty case so the config is not
 /// silently inert.
 ///
 /// A firecrawl-only setup has no `[fetch].backends` entry (Strategy V: it
-/// shares the `[search]` config), so an enabled section with a non-empty
-/// `default_provider` but no backends still names the default — the operator
-/// expects fetch routing from it either way.
-fn inert_fetch_backend_names(fetch_cfg: &crate::config::types::FetchConfigInternal) -> Vec<String> {
-    if !fetch_cfg.enabled {
-        return Vec::new();
-    }
+/// shares the `[search]` config), so the shared firecrawl backend is named
+/// too — but only when the operator actually wrote a `[fetch]` section,
+/// because a search-only firecrawl setup is not fetch intent.
+fn inert_fetch_backend_names(
+    fetch_cfg: &crate::config::types::FetchConfigInternal,
+    search_cfg: Option<&crate::config::types::SearchConfigInternal>,
+) -> Vec<String> {
     let mut names: Vec<String> = fetch_cfg.backends.keys().cloned().collect();
-    if names.is_empty() && !fetch_cfg.default_provider.is_empty() {
-        names.push(fetch_cfg.default_provider.clone());
+    names.extend(fetch_cfg.verified_shared.keys().cloned());
+    if search_cfg
+        .and_then(|search| search.backends.get("firecrawl"))
+        .and_then(|backend| backend.base_url.as_deref())
+        .is_some_and(|base_url| !base_url.is_empty())
+    {
+        names.push("firecrawl".to_string());
     }
     names.sort();
+    names.dedup();
     names
 }
 
@@ -1588,52 +1609,55 @@ mod tests {
         }
     }
 
-    fn fetch_cfg(
-        enabled: bool,
-        default_provider: &str,
-        backends: HashMap<String, FetchBackendConfig>,
-    ) -> FetchConfigInternal {
+    fn fetch_cfg(backends: HashMap<String, FetchBackendConfig>) -> FetchConfigInternal {
         FetchConfigInternal {
-            enabled,
-            default_provider: default_provider.into(),
-            fallback_providers: None,
             backends,
             verified_shared: HashMap::new(),
         }
     }
 
+    fn search_with_firecrawl(base_url: &str) -> crate::config::types::SearchConfigInternal {
+        serde_json::from_value(serde_json::json!({
+            "backends": { "firecrawl": { "provider_type": "firecrawl", "base_url": base_url } }
+        }))
+        .unwrap()
+    }
+
     #[test]
-    fn disabled_section_warns_about_nothing() {
-        let mut backends = HashMap::new();
-        backends.insert("crawl4ai".into(), backend("crawl4ai"));
-        let cfg = fetch_cfg(false, "crawl4ai", backends);
+    fn empty_section_warns_about_nothing() {
+        let cfg = fetch_cfg(HashMap::new());
         assert!(
-            inert_fetch_backend_names(&cfg).is_empty(),
-            "an operator who disabled the section opted out deliberately"
+            inert_fetch_backend_names(&cfg, None).is_empty(),
+            "an empty section expresses no fetch intent"
         );
     }
 
     #[test]
-    fn enabled_section_names_configured_backends_sorted() {
+    fn section_names_configured_backends_sorted() {
         let mut backends = HashMap::new();
         backends.insert("zeta".into(), backend("crawl4ai"));
         backends.insert("alpha".into(), backend("crawl4ai"));
-        let cfg = fetch_cfg(true, "alpha", backends);
-        assert_eq!(inert_fetch_backend_names(&cfg), vec!["alpha", "zeta"]);
+        let cfg = fetch_cfg(backends);
+        assert_eq!(inert_fetch_backend_names(&cfg, None), vec!["alpha", "zeta"]);
     }
 
     #[test]
     fn firecrawl_style_section_without_backends_still_warns() {
-        // Strategy V: firecrawl shares the [search] config, so an enabled
-        // [fetch] section can have a default_provider but zero backend
-        // entries. The operator still expects fetch routing — warn.
-        let cfg = fetch_cfg(true, "firecrawl", HashMap::new());
-        assert_eq!(inert_fetch_backend_names(&cfg), vec!["firecrawl"]);
+        // Strategy V: firecrawl shares the [search] config, so a [fetch]
+        // section can have zero backend entries while the operator still
+        // expects fetch routing — warn about the shared backend.
+        let cfg = fetch_cfg(HashMap::new());
+        let search = search_with_firecrawl("https://api.firecrawl.dev");
+        assert_eq!(
+            inert_fetch_backend_names(&cfg, Some(&search)),
+            vec!["firecrawl"]
+        );
     }
 
     #[test]
-    fn enabled_but_truly_empty_section_warns_about_nothing() {
-        let cfg = fetch_cfg(true, "", HashMap::new());
-        assert!(inert_fetch_backend_names(&cfg).is_empty());
+    fn verified_shared_backend_names_are_reported() {
+        let mut cfg = fetch_cfg(HashMap::new());
+        cfg.verified_shared.insert("firecrawl".into(), true);
+        assert_eq!(inert_fetch_backend_names(&cfg, None), vec!["firecrawl"]);
     }
 }

@@ -280,9 +280,24 @@ pub fn speaker_label(user_id: &str) -> String {
     let collapsed = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
     let truncated: String = collapsed.chars().take(SPEAKER_LABEL_MAX_CHARS).collect();
     if truncated.is_empty() {
-        // A name made entirely of forbidden characters must not render `[]:`,
-        // which is a speaker with no identity — worse than an ugly one.
-        user_id.chars().take(SPEAKER_LABEL_MAX_CHARS).collect()
+        let (visible_id, _) = crate::security::unicode_guard::strip_invisible_chars(user_id);
+        let cleaned_id: String = visible_id
+            .chars()
+            .map(|c| {
+                if LABEL_FORBIDDEN.contains(&c) || c.is_control() {
+                    ' '
+                } else {
+                    c
+                }
+            })
+            .collect();
+        let collapsed_id = cleaned_id.split_whitespace().collect::<Vec<_>>().join(" ");
+        let safe_fallback: String = collapsed_id.chars().take(SPEAKER_LABEL_MAX_CHARS).collect();
+        if safe_fallback.is_empty() {
+            "unknown".to_string()
+        } else {
+            safe_fallback
+        }
     } else {
         truncated
     }

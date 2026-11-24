@@ -43,4 +43,4 @@ pub use aleph_slot_api::descriptor::{
     SCHEMA_VERSION,
 };
 
-pub(crate) use aleph_slot_api::descriptor::canonicalize_json;
+pub(crate) use aleph_slot_api::descriptor::{canonicalize_json, canonicalize_services};

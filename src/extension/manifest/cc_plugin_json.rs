@@ -12,9 +12,7 @@ use serde_json::Value as JsonValue;
 use crate::extension::error::{ExtensionError, ExtensionResult};
 use crate::extension::manifest::component_source::{self, ComponentSource};
 use crate::extension::manifest::declared_sections::AlephSuperset;
-use crate::extension::manifest::types::{
-    AlephExtensions, AlephRuntime, AuthorInfo, PluginManifest,
-};
+use crate::extension::manifest::types::{AlephExtensions, AlephRuntime, PluginManifest};
 use crate::extension::manifest::{sanitize_plugin_id, validate_plugin_id};
 use crate::extension::types::PluginKind;
 
@@ -40,26 +38,19 @@ pub struct CcPluginJson {
     /// Plugin name (required — used as plugin ID source)
     pub name: Option<String>,
 
+    /// Explicit Panel UI declaration, independent of plugin runtime kind.
+    pub panel: Option<super::types::PanelUiManifest>,
+
     /// Plugin version (semver)
     pub version: Option<String>,
 
     /// Plugin description
     pub description: Option<String>,
 
-    /// License identifier (SPDX)
-    pub license: Option<String>,
-
-    /// Keywords for search
-    pub keywords: Option<Vec<String>>,
-
-    /// Homepage URL
-    pub homepage: Option<String>,
-
-    /// Repository information (string URL or object)
-    pub repository: Option<CcPluginRepository>,
-
-    /// Author information (string or object)
-    pub author: Option<CcPluginAuthor>,
+    // Display-only metadata (`author`, `homepage`, `repository`, `license`,
+    // `keywords`) is deliberately NOT declared: serde ignores the unknown keys,
+    // so CC manifests that carry them still parse, and nothing here pretends to
+    // carry them into `PluginManifest` where no reader would see them.
 
     // CC-native component fields (camelCase). Each accepts a path, an array
     // of paths, or an inlined object — see `component_source`.
@@ -80,54 +71,6 @@ pub struct CcPluginJson {
 
     /// Aleph-specific extensions (optional, ignored by Claude Code)
     pub aleph: Option<JsonValue>,
-}
-
-/// Author in CC plugin.json — either a plain string or an object
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-pub enum CcPluginAuthor {
-    /// Simple string format: "Name `&lt;email&gt;` (url)"
-    String(String),
-    /// Object format
-    Object {
-        #[serde(default)]
-        name: Option<String>,
-        #[serde(default)]
-        email: Option<String>,
-        #[serde(default)]
-        url: Option<String>,
-    },
-}
-
-impl From<CcPluginAuthor> for AuthorInfo {
-    fn from(author: CcPluginAuthor) -> Self {
-        match author {
-            CcPluginAuthor::String(s) => Self::from(s.as_str()),
-            CcPluginAuthor::Object { name, email, url } => Self { name, email, url },
-        }
-    }
-}
-
-/// Repository in CC plugin.json — either a string URL or an object with `url`
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-pub enum CcPluginRepository {
-    /// Plain URL string
-    Url(String),
-    /// Object with url field
-    Object {
-        #[serde(default)]
-        url: Option<String>,
-    },
-}
-
-impl CcPluginRepository {
-    fn into_url(self) -> Option<String> {
-        match self {
-            Self::Url(url) => Some(url),
-            Self::Object { url } => url,
-        }
-    }
 }
 
 // =============================================================================
@@ -246,12 +189,26 @@ pub fn parse_cc_plugin_json_content(
         (PluginKind::Static, ".".to_string(), None, Vec::new())
     };
 
-    let repository = json.repository.and_then(|r| r.into_url());
     let wasm_capabilities = aleph_ext
         .as_ref()
         .and_then(|ext| ext.capabilities.as_ref())
         .and_then(crate::extension::manifest::toml_types::convert_wasm_capabilities);
 
+    if let Some(panel) = &json.panel {
+        if json
+            .version
+            .as_deref()
+            .is_none_or(|version| version.trim().is_empty())
+        {
+            return Err(ExtensionError::invalid_manifest(
+                plugin_dir,
+                "panel.missing_version",
+            ));
+        }
+        panel
+            .validate()
+            .map_err(|reason| ExtensionError::invalid_manifest(plugin_dir, reason))?;
+    }
     let manifest = PluginManifest {
         id: plugin_id,
         name: raw_name,
@@ -263,12 +220,6 @@ pub fn parse_cc_plugin_json_content(
         config_schema: superset.config_schema,
         config_ui_hints: superset.config_ui_hints,
         permissions,
-        author: json.author.map(AuthorInfo::from),
-        homepage: json.homepage,
-        repository,
-        license: json.license,
-        keywords: json.keywords.unwrap_or_default(),
-        extensions: Vec::new(),
         // Superset sections, carried in the `aleph` object (which Claude Code
         // ignores). `services_v2` stays `None`: services round-trip through
         // `aleph_extensions.services`, and a second copy would be a second
@@ -284,6 +235,7 @@ pub fn parse_cc_plugin_json_content(
         // CC-compat extensions
         aleph_extensions: aleph_ext,
         memory_manifest: superset.memory,
+        panel: json.panel,
     };
 
     Ok(manifest)
@@ -500,57 +452,21 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_cc_json_author_string() {
+    fn test_parse_cc_json_display_metadata_keys_are_ignored() {
+        // `author`, `homepage`, `repository`, `license`, `keywords` are CC
+        // metadata with no reader on the Aleph side. They are not declared on
+        // the input struct, so serde must skip them instead of rejecting the
+        // manifest — third-party plugins keep shipping them.
         let content = r#"{
-            "name": "author-test",
-            "author": "Bob <bob@example.com>"
+            "name": "metadata-ignored",
+            "author": {"name": "Carol", "email": "carol@example.com"},
+            "homepage": "https://carol.dev",
+            "repository": {"url": "https://github.com/user/repo"},
+            "license": "MIT",
+            "keywords": ["one", "two"]
         }"#;
         let manifest = parse_cc_plugin_json_content(content, &test_dir()).unwrap();
-        let author = manifest.author.unwrap();
-        assert_eq!(author.name, Some("Bob".to_string()));
-        assert_eq!(author.email, Some("bob@example.com".to_string()));
-    }
-
-    #[test]
-    fn test_parse_cc_json_author_object() {
-        let content = r#"{
-            "name": "author-obj-test",
-            "author": {
-                "name": "Carol",
-                "email": "carol@example.com",
-                "url": "https://carol.dev"
-            }
-        }"#;
-        let manifest = parse_cc_plugin_json_content(content, &test_dir()).unwrap();
-        let author = manifest.author.unwrap();
-        assert_eq!(author.name, Some("Carol".to_string()));
-        assert_eq!(author.url, Some("https://carol.dev".to_string()));
-    }
-
-    #[test]
-    fn test_parse_cc_json_repository_string() {
-        let content = r#"{
-            "name": "repo-test",
-            "repository": "https://github.com/user/repo"
-        }"#;
-        let manifest = parse_cc_plugin_json_content(content, &test_dir()).unwrap();
-        assert_eq!(
-            manifest.repository,
-            Some("https://github.com/user/repo".to_string())
-        );
-    }
-
-    #[test]
-    fn test_parse_cc_json_repository_object() {
-        let content = r#"{
-            "name": "repo-obj-test",
-            "repository": {"url": "https://github.com/user/repo"}
-        }"#;
-        let manifest = parse_cc_plugin_json_content(content, &test_dir()).unwrap();
-        assert_eq!(
-            manifest.repository,
-            Some("https://github.com/user/repo".to_string())
-        );
+        assert_eq!(manifest.name, "metadata-ignored");
     }
 
     #[test]

@@ -145,8 +145,9 @@ pub(super) const LIST_RESULT_PREVIEW_CHARS: usize = 200;
 /// between `loop_tool::completed_row_json` and `recovery::to_list_row`'s two
 /// arms so the ellipsis convention has one definition.
 pub(super) fn preview(text: &str) -> String {
-    let head: String = text.chars().take(LIST_RESULT_PREVIEW_CHARS).collect();
-    if head.chars().count() < text.chars().count() {
+    let mut chars = text.chars();
+    let head: String = chars.by_ref().take(LIST_RESULT_PREVIEW_CHARS).collect();
+    if chars.next().is_some() {
         format!("{head}…")
     } else {
         head

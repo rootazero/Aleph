@@ -291,8 +291,7 @@ fn expand_line(
     let mut prev_alnum = false;
     let mut i = 0;
 
-    while i < chars.len() {
-        let c = chars[i];
+    while let Some(&c) = chars.get(i) {
         if c == '`' {
             backticks += 1;
             result.push(c);
@@ -304,17 +303,22 @@ fn expand_line(
         // `user@host`) and we are outside an inline code span.
         if c == '@' && backticks.is_multiple_of(2) && !prev_alnum {
             let mut j = i + 1;
-            while j < chars.len() && !chars[j].is_whitespace() && chars[j] != '`' {
+            while let Some(&cj) = chars.get(j) {
+                if cj.is_whitespace() || cj == '`' {
+                    break;
+                }
                 j += 1;
             }
-            let token: String = chars[i + 1..j].iter().collect();
-            if looks_like_path(&token) {
-                result.push_str(&resolve_import_token(
-                    &token, file_dir, boundary, visited, depth,
-                ));
-                prev_alnum = false;
-                i = j;
-                continue;
+            if let Some(token_chars) = chars.get(i + 1..j) {
+                let token: String = token_chars.iter().collect();
+                if looks_like_path(&token) {
+                    result.push_str(&resolve_import_token(
+                        &token, file_dir, boundary, visited, depth,
+                    ));
+                    prev_alnum = false;
+                    i = j;
+                    continue;
+                }
             }
         }
         result.push(c);

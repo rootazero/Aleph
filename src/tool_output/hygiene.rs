@@ -232,7 +232,7 @@ fn reduce_field(
         Some(body)
     })?;
 
-    let method = method.expect("set on every accepting path of the rewrite");
+    let method = method?;
     let tokens_after = estimate_tokens_smart(&rendered);
     // Final guard: never grow the context, whatever either cleaner decided.
     // Re-wrapping a fence costs nothing (the markers come back byte-identical),

@@ -7,7 +7,6 @@
 
 use crate::bundled::{BUNDLED_SKILLS, OFFICIAL_SKILLS_REPO};
 use crate::domain::skill::{SkillManifest, SkillSource};
-use crate::domain::Entity; // brings `manifest.id()` into scope (status.rs does the same)
 use crate::hub::types::{ExtensionEntry, ExtensionKind, InstallSpec};
 use crate::skill::manifest::parse_skill_content;
 
@@ -43,7 +42,7 @@ pub fn primer_entries() -> Vec<ExtensionEntry> {
         // The SKILL.md directly inside this skill dir (borrowed from the static embed).
         let Some(content) = dir
             .files()
-            .find(|f| f.path().file_name().and_then(|n| n.to_str()) == Some("SKILL.md"))
+            .find(|f| f.path().file_name().is_some_and(|n| n == "SKILL.md"))
             .and_then(|f| f.contents_utf8())
         else {
             continue;

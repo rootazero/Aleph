@@ -41,7 +41,7 @@ Gateway / Agent Loop
  queries: NoteFactRetrieval.retrieve() → ScoredFact<MemoryFact>
 ```
 
-Gateway writes conversation turns to Markdown raw memory through `RawMemoryStore`. `CompressionService` periodically drains pending metadata-index rows, reads their Markdown bodies, asks an LLM to extract durable facts, and writes them back as Markdown notes under `~/.aleph/memory/note/{agent}/{category}/`. `NoteIndexer` keeps the separate SQLite notes side (index, wikilinks, FTS5, per-dimension vec0 tables) in sync on every note write. Offline, the Dream Daemon consolidates clusters, resolves drift, synthesizes insights, lints schemas, decays weak notes, and emits digests. Queries flow through `NoteFactRetrieval` and return `ScoredFact<MemoryFact>` — see [RETRIEVAL.md](RETRIEVAL.md).
+Gateway writes conversation turns to Markdown raw memory through `RawMemoryStore`. `CompressionService` periodically drains pending metadata-index rows, reads their Markdown bodies, asks an LLM to extract durable facts, and writes them back as Markdown notes under `~/.aleph/memory/note/{agent}/{category}/`. `NoteIndexer` keeps the separate SQLite notes side (index, wikilinks, FTS5, per-dimension vec0 tables) in sync on every note write. Offline, the Dream Daemon consolidates clusters, resolves drift, synthesizes insights, lints schemas, decays weak notes, and emits digests. Queries flow through `NoteFactRetrieval` and return `ScoredFact<MemoryFact>` — see [RETRIEVAL.md](memory/RETRIEVAL.md).
 
 ### 3.1 Cognitive-layer view (working → episodic → semantic → raw)
 
@@ -59,6 +59,24 @@ Retrieved items are stamped with their layer in the assembled memory context (ma
 **Hot-surfacing & time-decay at recall** default **on** (`memory.retrieval_scoring`): frequently-recalled notes bubble up (`reinforcement`, from `recall_signals` counts), stale ones fade (`recency`); both read existing data with no extra model calls. See [RETRIEVAL.md](memory/RETRIEVAL.md).
 
 **Embeddings** are pluggable via the `EmbeddingProvider` trait (OpenAI / SiliconFlow / Ollama through the OpenAI-compatible `RemoteEmbeddingProvider`); the **data-stays-local** requirement is met today by pointing it at a local **Ollama**. A *bundled* in-binary ONNX backend is intentionally **not** added — it would pull a heavy single-purpose native dependency into core (violates redline R3 核心轻量化) for a privacy goal the local-Ollama path already satisfies. It remains a clean future addition behind the same trait if the trade-off changes.
+
+## Runtime lifecycle boundary / 运行时生命周期边界
+
+The [current-state locator](FEATURE_LOCATOR.md#current-state--当前现状) is the cross-subsystem entry for this bounded contract and its deferred boundaries. / [当前现状入口](FEATURE_LOCATOR.md#current-state--当前现状) 是该有界契约及其 deferred 边界的跨子系统入口。
+
+The current production slice adds one source-owned `MemoryRuntime` for derived Memory resources, admission and retained work. Off keeps raw chat and Markdown session archival available while rejecting new derived Memory operations. Work admitted before stop drains through the source owner; a later start constructs a fresh derived bundle, so old derived resource and Tool handles do not survive restart. Raw session storage remains separately owned, and Runtime/resource authority is distinct from canonical Tool publication. / 当前生产切片以一个 source-owned `MemoryRuntime` 负责派生 Memory 资源、准入与保留任务。Off 时 raw chat 与 Markdown session 归档继续可用，新的派生 Memory 操作被拒绝；stop 前已准入工作由 source owner 排空，重新 start 构造新的派生 bundle，旧派生资源与 Tool handle 不跨重启存活。raw session storage 仍独立持有，Runtime/resource 权威与 canonical Tool 发布权威分离。
+
+The 2026-11-03 bounded source-owned closure makes the runtime bundle the sole production reconciler owner: Admin API resolves the current generation per request, and runtime-created compression rejects missing admission before consuming raw rows or dispatching extensions. The reflector callback is admitted through the same backend operation; session-end raw archival remains available while derived work is Off. `FlushRegistry` remains process-global coordination, not worker ownership. The source census and effect evidence are recorded in the [2026-11-03 run](../superpowers/runs/2026-11-03-memory-source-owned-boundary-run.md), with the approved [design](../superpowers/specs/2026-11-03-memory-source-owned-boundary-design.md) and [implementation plan](../superpowers/plans/2026-11-03-memory-source-owned-boundary-plan.md). / 2026-11-03 有界 source-owned closure 使 runtime bundle 成为唯一生产 reconciler owner：Admin API 每次请求解析当前 generation；runtime 创建的 compression 在消费 raw row 或派发 extension 前拒绝缺失的 admission。reflector callback 通过同一 backend operation 准入；derived Memory Off 时 session-end raw 归档仍可用。`FlushRegistry` 仍是进程级协调器，不是 worker owner。source census 与 effect evidence 见运行记录、已批准设计和实施计划。
+
+These observations close only the named reconciler/compression/callback/flush boundary. They do not establish a universal stop for every Memory writer, a universal scheduler, process isolation, native unloading, RSS reclamation, or exactly-once external effects. / 这些观察只闭合所列 reconciler/compression/callback/flush 边界，不证明所有 Memory writer 的 universal stop、universal scheduler、进程隔离、native unload、RSS 回收或外部效果 exactly-once。
+
+The FileSessionStore archives reused session keys with collision-safe same-day suffixes such as `<key>-1`. Evidence for the 2026-11-02 lifecycle slice is recorded in the [lifecycle run](../superpowers/runs/2026-11-01-memory-runtime-lifecycle-run.md); its approved scope is in the [design](../superpowers/specs/2026-11-01-memory-runtime-lifecycle-design.md). / FileSessionStore 对复用 session key 使用带序号的同日归档目录，例如 `<key>-1`。2026-11-02 生命周期切片的证据见运行记录，批准范围见设计文档。
+
+The 2026-11-04 Windows slice distinguishes an occupied destination from a sharing denial: with no destination, OS errors 5/32/33 retry the same path with six delays of 25/50/100/200/400/800 ms; the nominal total is 1575 ms, not an end-to-end I/O deadline. The existing suffix contract and 1024 collision cap remain. Exhaustion still returns the underlying OS error. Native controlled-handle tests cover recovery after release, bounded failure and preservation of the source and incumbent archive. The rebuilt Windows server passed providerless 102/102 and configured 110/110 probe checks, plus three 20-cycle file-backend archive runs with no first-attempt failures and unchanged prior-archive hashes. The [Windows rename run](../superpowers/runs/2026-11-04-windows-archive-rename-retry-run.md) records these native results separately from the aborted full-lib suite and its baseline comparison. / 2026-11-04 Windows 切片区分目标已存在与共享拒绝：目标不存在时，OS error 5/32/33 在同一路径上按 25/50/100/200/400/800 ms 重试六次，名义总退避 1575 ms，不是端到端 I/O 时限。序号命名契约与 1024 碰撞上限保持不变，耗尽后仍返回底层 OS 错误。Windows 原生受控句柄测试覆盖释放后恢复、有界失败、源目录与既有归档保留；重建 server 的 providerless 102/102、configured 110/110 与三轮 20 次 file backend 归档均通过，无首次失败且旧归档哈希不变。运行记录将这些原生结果与中止的全量库测试及其基线对照分别记载。
+
+The full-lib suite remains non-green; tests after the abnormal exit were not executed. Same-name baseline failures do not establish identical causes. / 全量库测试仍未绿，异常退出后的测试未执行；与基线同名失败不等于根因相同。
+
+The sampled attribution experiment did not establish a store-owned transcript handle leak, so transcript closure is unchanged; the owner of the earlier intermittent live denial remains unexplained. The effective default-backend discrepancy is a separate open finding, and Linux/macOS are unverified by this slice. The run also retains the deferred UI/desktop, RSS reclamation, external-effect exactly-once and cluster/multiprocess boundaries. / 归因采样未证实服务自身 transcript 句柄泄漏，因此未改其关闭方式；此前间歇性 live 拒绝的句柄持有者仍未解释。实际默认 backend 差异留作独立问题，本切片未验证 Linux/macOS；运行记录仍保留 UI/desktop、RSS 回收、外部效果 exactly-once、集群/多进程的 deferred 边界。
 
 ## 4. Storage Traits
 
@@ -306,7 +324,7 @@ owned by `rerank_config.get`/`update` and edited on its own page, and mirroring
 it here spelled `model` against the backend's `models` (which carries
 `alias = "model"`), so every save from this page merged both spellings of one
 aliased field and died on `duplicate field 'models'`. Do not re-add a mirror of a
-section this page does not own. **`[memory]` is `ReloadImpact::Restart`** (`config/reload_impact.rs` —
+section this page does not own. **`[memory]` is `ReloadImpact::Restart`** (`src/config/reload_impact.rs` —
 `LIVE_SECTIONS` is route/behavior/execution only): saving persists to `config.toml`
 but nothing rebuilds the boot-captured `CuratedConfig`, which is why the page
 carries a restart note under its save button.
@@ -368,9 +386,9 @@ governance gate). This knob is read-side only.
 
 ⚠️ **`[memory] enabled` gets its first consumer here — a behaviour change for
 installs that set it to `false`.** The flag is documented above as the master
-switch, is surfaced by `config/ui_hints`, and is logged at startup by both
+switch, is surfaced by `src/config/ui_hints`, and is logged at startup by both
 `config::load` and `config::validate`; before 2026-08-11 **nothing read it to
-decide anything**. The gate in `assembler/hybrid.rs` reads
+decide anything**. The gate in `src/memory/assembler/hybrid.rs` reads
 `[memory.assembler] enabled`, a different flag with a narrower meaning (whether
 hybrid retrieval runs), so an install that turned the master switch off still
 had its curated memory and note index folded into every prompt. Those installs
@@ -395,7 +413,33 @@ Notes form an Obsidian-compatible knowledge graph through `[[wikilink]]` syntax:
 
 The `notes_links` SQLite table stores outgoing links per note, enabling fast graph traversal without re-parsing markdown.
 
+### Panel read projection / 面板只读投影
+
+- [`graph.query`](../../src/gateway/handlers/graph/query.rs) returns a bounded window from one primary read partition, ranked by link count, update time, then path. This is not the entire knowledge graph. [`graph.search`](../../src/gateway/handlers/graph/search.rs) may find an authorized note outside the window. / 星云图只展示单个主读取分区的有界窗口；搜索命中不保证在画布上。
+- [`NoteAddress`](../../shared/protocol/src/memory_graph.rs) is `(agent_id, node_id)`, where `agent_id` is the partition actually read, not necessarily the requested base selector. Details and any legacy mutations use that exact address. Older nodes without a partition can render but cannot be opened by guessing an address. / 详情和旧面板写操作使用实际分区和笔记 ID；缺少分区的旧节点可展示，不推测地址。
+- The NSH renderer receives authorized graph facts and preserves directed link rows independently of the undirected springs used for placement. Core remains responsible for partition checks. / NSH 用无向弹簧排布节点，但保留 Core 返回的有向关系；访问权限仍由 Core 判定。
+
+## Capability lifecycle status / Capability 生命周期状态（2026-11-01 historical snapshot）
+
+**Historical snapshot / 历史阶段记录（2026-11-01）：** At the watcher/maintenance milestones described below, Memory had not yet been independently cold/stoppable: the shared backend, detached startup rebuild, graph consumers and other writers remained outside those bounded slices. This statement describes that dated milestone, not current production status. / **历史阶段记录（2026-11-01）：** 下述 watcher/maintenance 阶段尚未实现 Memory 独立 cold/stoppable；共享 backend、启动 rebuild、graph consumer 与其他 writer 仍在当时有界切片之外。此句描述特定日期的里程碑，不代表当前生产状态。
+
+The later bounded runtime lifecycle and 2026-11-03 source-owned closure are current. The latter makes the runtime-owned reconciler the only production daemon and makes runtime-bound compression fail closed before raw consumption when admission is absent. See the current [Runtime lifecycle boundary](#runtime-lifecycle-boundary--运行时生命周期边界) and [source-owned boundary run](../superpowers/runs/2026-11-03-memory-source-owned-boundary-run.md). Raw/session archival remains separately owned; this does not establish a stop for every Memory writer. / 后续有界 runtime lifecycle 与 2026-11-03 source-owned closure 才是当前状态。后者使 runtime-owned reconciler 成为唯一生产 daemon，并让 runtime-bound compression 在 admission 缺失时、raw 消费前 fail-closed。见当前运行时边界及 source-owned boundary 运行记录。raw/session 归档仍独立持有；这不证明所有 Memory writer 均停止。
+
+The [watcher shutdown design](../superpowers/specs/2026-10-31-capability-core-note-watcher-shutdown-design.md), [plan](../superpowers/plans/2026-10-31-capability-core-note-watcher-shutdown-plan.md) and [implementation run](../superpowers/runs/2026-10-31-note-watcher-shutdown-run.md) now describe an implemented bounded slice. `NoteVaultWatcher` retains its consumer and producer-stop work, and the common server teardown awaits the same owner in place. This still does not make Memory an independently cold/stoppable provider. At that watcher-only milestone, the shared backend, detached startup rebuild, graph consumers and other Memory writers remained outside its slice. The pinned debouncer hides native join errors, so no native-code unloading, process/thread isolation or RSS reduction is established.
+
+The later [startup maintenance implementation run](../superpowers/runs/2026-11-01-note-maintenance-drain-run.md) implements the next bounded prerequisite: one concrete `NoteMaintenanceOwner` retains the actual orientation bootstrap and `full_rebuild_all` handles. The common post-server funnel drains watcher, then maintenance, before later shared-resource disposal, retaining pending handles on cancellation and the first observed JoinError as sticky evidence. The category JoinSet drains all children before returning its first error; nonfatal bootstrap/corpus failures and rebuild summaries are preserved. / 后续切片已收拢两个启动任务，取消可原位重试；不关闭共享 store，不代表所有 Memory writer 已停止。Early startup errors, OS-signal/live-server E2E and whole-Memory quiescence remain outside this evidence.
+
+### Bounded Memory source-owned closure / 有界 Memory source-owned closure（2026-11-03）
+
+The production Admin API resolves the reconciler from the current `MemoryRuntime` generation on each request; startup no longer starts a second server-owned reconciler. Runtime-created `CompressionService` checks backend admission before raw-row reads, extension dispatch or file effects, and refuses unavailable admission instead of detaching derived work. A retained reflector callback writes through the same backend operation and rejects after stop. Session-end raw archival remains available while derived Memory is Off. `FlushRegistry` remains process-global raw-to-derived coordination; it is not a worker owner. / 生产 Admin API 每次请求都从当前 `MemoryRuntime` generation 解析 reconciler；startup 不再启动第二个 server-owned reconciler。runtime 创建的 `CompressionService` 在读取 raw row、派发 extension 或文件效果前检查 backend admission，并在 admission 不可用时拒绝，而不是 detach 派生任务。保留的 reflector callback 经同一 backend operation 写入，stop 后拒绝。derived Memory Off 时 session-end raw 归档仍可用。`FlushRegistry` 仍是进程级 raw-to-derived 协调器，不是 worker owner。
+
+Source evidence and owner/admission/retention/test census: [2026-11-03 run](../superpowers/runs/2026-11-03-memory-source-owned-boundary-run.md). Scope: [approved design](../superpowers/specs/2026-11-03-memory-source-owned-boundary-design.md) and [implementation plan](../superpowers/plans/2026-11-03-memory-source-owned-boundary-plan.md). This closes only the named boundary; it does not claim universal all-writer stop, native unload, RSS reclamation, process isolation or exactly-once external effects.
+
+Endpoint effect evidence was closed in a separate validation-only slice: the real admin router now pins `204` before the owned daemon's first scan publishes a report, `503` while the runtime is Starting, Draining or Failed, and a restart whose response content — not handler identity — distinguishes the current generation. The full `alephcore --lib` suite fails the same 51 named tests at the pinned pre-slice baseline `063345f2f30bf999b28ee5d84aac860be8432fa7`, so the local delta adds no new full-suite failure. [2026-11-03 validation-closure run](../superpowers/runs/2026-11-03-memory-source-owned-validation-closure-run.md). / 端点效果证据在独立的 validation-only 切片中闭合：真实 admin router 现在钉住 owned daemon 首轮扫描发布前的 `204`、runtime 处于 Starting/Draining/Failed 时的 `503`，以及由响应内容（而非 handler identity）区分当前代的重启。全量 `alephcore --lib` 在固定 pre-slice 基线上失败的是同一批 51 个具名测试，因此本地 delta 没有新增全量失败。见 validation-closure 运行记录。 / 源码证据及 owner/admission/retention/test census 见运行记录，范围见已批准设计与实施计划。本切片只闭合所列边界，不宣称 universal all-writer stop、native unload、RSS 回收、进程隔离或外部 exactly-once。
+
 ## 12. Provenance Chain (Evidence Drill-Down)
+
+
 
 Evidence traceability from user profile → synthesized notes → distilled notes → raw source data is enforced via four-level provenance metadata:
 

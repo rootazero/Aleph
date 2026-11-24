@@ -144,17 +144,14 @@ pub fn audit_step_prompt(prompt: &str) -> Vec<DeterminismFinding> {
 ///
 /// A `{` opens a placeholder only when followed by `[A-Za-z_][A-Za-z0-9_]*`
 /// and a closing `}`. A `{nowhere` opens nothing — the audit must not match
-/// the substring `{now`. The boundary check is `is_word_char`, not a regex
-/// word-boundary, so the `{` in `{now {time} }` opens at the first `{` and
-/// the next walk resumes from the next position; `now {time}` therefore
-/// matches only `{time}`, not `{now` (which is followed by a space).
+/// the substring `{now`. The boundary check is a byte-wise word-char test,
+/// not a regex word-boundary, so the `{` in `{now {time} }` opens at the
+/// first `{` and the next walk resumes from the next position; `now {time}`
+/// therefore matches only `{time}`, not `{now` (which is followed by a
+/// space).
 ///
-/// Also rejects `{{keyword}}`: the byte immediately BEFORE the `{` must not
-/// be another `{`. Without this check, the substring `{now}` inside the
-/// `{{name}}` named-arg placeholder would be flagged as non-deterministic
-/// even though the run's args map supplies the value. A run-time arg named
-/// `now` is legitimate; the audit targets the *single-brace* runtime form
-/// only.
+/// The admission rule itself lives in [`is_bounded_placeholder`], shared
+/// with the `{random:N}` scanner.
 fn scan_single_brace_keyword(
     prompt: &str,
     keyword: &str,
@@ -163,25 +160,10 @@ fn scan_single_brace_keyword(
 ) {
     let needle = format!("{{{keyword}}}");
     let mut start = 0usize;
-    while let Some(rel) = prompt[start..].find(&needle) {
+    while let Some(rel) = prompt.get(start..).and_then(|sub| sub.find(&needle)) {
         let at = start + rel;
-        // Word-boundary on the LEFT: the byte before `{` must not be a word
-        // char, otherwise `{now` is part of `prefix{now}` and the user's
-        // intent is ambiguous (the audit errs on the side of catching it,
-        // and the user can decide; matching only the bare `{now}` form would
-        // miss `prefix{now}` entirely, which is the worse failure mode).
-        let left_ok = at == 0 || !prompt[..at].chars().next_back().is_some_and(is_word_char);
-        // `{{keyword}}` (named-arg) guard: the byte before `{` must not be
-        // another `{`. Without it, `{{now}}` matches the `{now}` substring
-        // starting at byte 1.
-        let not_double_brace = at == 0 || prompt.as_bytes()[at - 1] != b'{';
-        // Word-boundary on the RIGHT: the byte after `}` must not be a word
-        // char, otherwise `{now}s` is a word that starts with the
-        // placeholder (matching it would suggest renaming `now` to `nowstamp`
-        // fixes a non-issue).
         let end = at + needle.len();
-        let right_ok = end >= prompt.len() || !is_word_char_in_str_at(prompt, end);
-        if left_ok && not_double_brace && right_ok {
+        if is_bounded_placeholder(prompt, at, end) {
             out.push(DeterminismFinding {
                 kind,
                 column: at,
@@ -205,20 +187,23 @@ fn scan_single_brace_keyword(
 fn scan_random_family(prompt: &str, keyword: &str, out: &mut Vec<DeterminismFinding>) {
     let prefix = '{';
     let mut idx = 0usize;
-    while let Some(rel) = prompt[idx..].find(prefix) {
+    while let Some(rel) = prompt.get(idx..).and_then(|sub| sub.find(prefix)) {
         let at = idx + rel;
         let after_brace = at + 1;
         // Check the keyword starts at `after_brace`.
-        if !prompt[after_brace..].starts_with(keyword) {
+        if !prompt
+            .get(after_brace..)
+            .is_some_and(|sub| sub.starts_with(keyword))
+        {
             idx = at + 1;
             continue;
         }
         let kw_end = after_brace + keyword.len();
         let suffix_start = kw_end;
         // Determine the end of the placeholder: optional `:N` of digits, then `}`.
-        let (placeholder_end, body_end) = match &prompt.as_bytes()[suffix_start..] {
-            [b'}', ..] => (suffix_start + 1, suffix_start + 1),
-            [b':', rest @ ..] => {
+        let placeholder_end = match prompt.as_bytes().get(suffix_start..) {
+            Some([b'}', ..]) => suffix_start + 1,
+            Some([b':', rest @ ..]) => {
                 // Collect digits after the colon. An empty `:}` is a malformed
                 // placeholder — skip it; the prompt author intended a length
                 // and got the parser, not the model.
@@ -227,24 +212,17 @@ fn scan_random_family(prompt: &str, keyword: &str, out: &mut Vec<DeterminismFind
                     idx = at + 1;
                     continue;
                 }
-                (
-                    suffix_start + 1 + digits_end + 1,
-                    suffix_start + 1 + digits_end,
-                )
+                suffix_start + 1 + digits_end + 1
             }
             _ => {
                 idx = at + 1;
                 continue;
             }
         };
-        // Word-boundary checks identical to the keyword case, plus the
-        // `{{keyword}}` guard (the byte before `{` must not be another `{`).
-        let left_ok = at == 0 || !prompt[..at].chars().next_back().is_some_and(is_word_char);
-        let not_double_brace = at == 0 || prompt.as_bytes()[at - 1] != b'{';
-        let right_ok =
-            placeholder_end >= prompt.len() || !is_word_char_in_str_at(prompt, placeholder_end);
-        if left_ok && not_double_brace && right_ok {
-            let snippet = prompt[at..placeholder_end].to_string();
+        // Word-boundary checks identical to the keyword case (the shared
+        // admission rule).
+        if is_bounded_placeholder(prompt, at, placeholder_end) {
+            let snippet = prompt.get(at..placeholder_end).unwrap_or("").to_string();
             out.push(DeterminismFinding {
                 kind: DeterminismFindingKind::RandomValue,
                 column: at,
@@ -252,25 +230,49 @@ fn scan_random_family(prompt: &str, keyword: &str, out: &mut Vec<DeterminismFind
                 snippet,
             });
         }
-        idx = body_end.max(at + 1);
+        // Resume past the placeholder. The closing `}` is not a `{`, so
+        // restarting the scan at it would find the same next `{` — one
+        // resume point, not two.
+        idx = placeholder_end;
     }
 }
 
-const fn is_word_char(c: char) -> bool {
-    c.is_ascii_alphanumeric() || c == '_'
+/// ASCII word character: `[A-Za-z0-9_]`.
+const fn is_word_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
 }
 
-/// `is_word_char(prompt.as_bytes()[i])` expressed in char terms. The byte at
-/// `i` may be the middle byte of a multi-byte UTF-8 sequence (we walk by
-/// bytes for speed), in which case the function returns `false` (it is not
-/// an ASCII word char), which is the conservative answer — non-ASCII bytes
-/// never count as word chars in the audit's boundary check.
-fn is_word_char_in_str_at(s: &str, i: usize) -> bool {
-    // SAFETY: the caller guarantees `i < s.len()` (the only call site checks
-    // against `prompt.len()` before invoking). A mid-codepoint byte cannot
-    // match an ASCII alphanum; this returns false for it, which is the right
-    // boundary answer.
-    s.as_bytes()[i].is_ascii_alphanumeric() || s.as_bytes()[i] == b'_'
+/// The admission rule both scanners share: a candidate placeholder spanning
+/// bytes `at`..`end` is admitted only when
+///
+/// - the byte before `{` is not a word char — otherwise `{now` is part of
+///   `prefix{now}` and the user's intent is ambiguous (the audit errs on the
+///   side of catching it, and the user can decide; matching only the bare
+///   `{now}` form would miss `prefix{now}` entirely, which is the worse
+///   failure mode);
+/// - the byte before `{` is not another `{` — without this check, the
+///   substring `{now}` inside the `{{name}}` named-arg placeholder would be
+///   flagged even though the run's args map supplies the value. A run-time
+///   arg named `now` is legitimate; the audit targets the *single-brace*
+///   runtime form only;
+/// - the byte after the placeholder is not a word char — otherwise `{now}s` is
+///   a word that starts with the placeholder (matching it would suggest
+///   renaming `now` to `nowstamp` fixes a non-issue).
+///
+/// The word-char test is byte-wise because the scanners walk byte offsets:
+/// the byte before a `{` is the last byte of the preceding char, and for a
+/// multi-byte char that byte is non-ASCII — never a word char, which is the
+/// same answer the char-wise test gave.
+fn is_bounded_placeholder(prompt: &str, at: usize, end: usize) -> bool {
+    let bytes = prompt.as_bytes();
+    // The byte before `{` — `None` when the placeholder opens the prompt.
+    let before = at.checked_sub(1).and_then(|i| bytes.get(i)).copied();
+    // The byte after the placeholder — `None` at the end of the prompt.
+    let after = bytes.get(end).copied();
+    let left_ok = !before.is_some_and(is_word_byte);
+    let not_double_brace = before != Some(b'{');
+    let right_ok = !after.is_some_and(is_word_byte);
+    left_ok && not_double_brace && right_ok
 }
 
 #[cfg(test)]

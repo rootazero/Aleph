@@ -14,6 +14,7 @@
 //! backstops. Sibling of `looping::pursuit` (the clock-gated variant); never
 //! in `src/harness/` (R10 12-file redline).
 
+use std::fmt::Write as _;
 use std::time::Duration;
 
 use crate::goal::{GateOutcome, Goal, GoalStatus, PursuitMode};
@@ -24,8 +25,11 @@ use crate::looping::types::fmt_duration_ms;
 /// could slice mid-codepoint and the downstream `String::push_str` would
 /// refuse; char-count avoids the panic and keeps the limit semantics stable
 /// across scripts.
-fn truncate_chars(s: &str, n: usize) -> String {
-    s.chars().take(n).collect()
+fn truncate_chars(s: &str, n: usize) -> &str {
+    match s.char_indices().nth(n) {
+        Some((idx, _)) => &s[..idx],
+        None => s,
+    }
 }
 
 /// Render accumulated lessons (the state file) for injection into a
@@ -38,7 +42,7 @@ fn render_lessons(goal: &Goal) -> String {
     let mut s = String::from("\n\nLessons from earlier iterations (avoid repeating these):\n");
     for lesson in &goal.lessons {
         let trimmed = truncate_chars(lesson, 300);
-        s.push_str(&format!("- {trimmed}\n"));
+        let _ = writeln!(s, "- {trimmed}");
     }
     s
 }
@@ -106,28 +110,31 @@ fn render_quota(goal: &Goal, tokens_now: u64, now_ms: u64) -> String {
     let mut quota = String::new();
     if let Some(deadline) = goal.deadline_ms {
         if now_ms != 0 && deadline > now_ms {
-            quota.push_str(&format!(
+            let _ = write!(
+                quota,
                 " ~{} of wall-clock budget left.",
                 fmt_duration_ms(deadline - now_ms)
-            ));
+            );
         }
     }
     if let Some(budget) = goal.token_budget {
         if goal.baseline_captured && tokens_now > 0 {
-            quota.push_str(&format!(
+            let _ = write!(
+                quota,
                 " ~{} of {budget} token budget left",
                 budget.saturating_sub(goal.tokens_used(tokens_now))
-            ));
+            );
             if goal.budget_members.is_empty() {
                 quota.push('.');
             } else {
                 // Tree budget: every member of the tree sees the SHARED
                 // remainder (codex per-thread reminder parity, via the
                 // prompt-clause channel).
-                quota.push_str(&format!(
+                let _ = write!(
+                    quota,
                     " (shared with {} delegated session(s)).",
                     goal.budget_members.len()
-                ));
+                );
             }
         }
     }
@@ -314,16 +321,14 @@ pub fn transient_park_note(code: &str, delay_ms: u64) -> String {
 /// the two, only bounds whichever one is selected.
 #[must_use]
 pub fn bound_transient_park_delay_ms(hint: Option<Duration>, fallback_ms: u64, max_ms: u64) -> u64 {
-    // The floor is applied before the ceiling, so a `max_ms` under the floor
-    // would invert them and hand back a delay shorter than the 1s spin guard —
-    // silently, since both bounds "applied". No caller passes such a ceiling and
-    // none should; say so where it is enforced rather than in a comment.
+    // Ensure ceiling does not sit below the 1s spin guard floor even in release mode.
+    let effective_max_ms = max_ms.max(1_000);
     debug_assert!(
         max_ms >= 1_000,
         "the park ceiling must not sit under the 1s floor"
     );
     let raw_ms = hint.and_then(|d| u64::try_from(d.as_millis()).ok());
-    raw_ms.unwrap_or(fallback_ms).max(1_000).min(max_ms)
+    raw_ms.unwrap_or(fallback_ms).clamp(1_000, effective_max_ms)
 }
 
 /// Pick the note that explains WHY autonomous pursuit stopped, from the three
@@ -383,7 +388,7 @@ pub fn wait_resume_prompt(goal: &Goal, cause: &str) -> String {
         .waiting_reason
         .as_deref()
         .filter(|r| !r.is_empty())
-        .map(|r| format!(" (you parked it because: {r})"))
+        .map(|r| format!(" (you parked it because: {})", truncate_chars(r, 300)))
         .unwrap_or_default();
     format!(
         "[Resuming your standing goal — {cause}]\nGoal: {}{lessons}\n\nYou had parked \
@@ -444,10 +449,9 @@ pub fn confirm_complete(goal: &Goal, now_ms: u64) -> Goal {
 /// runway left" has a single source of truth across the entire subsystem.
 #[must_use]
 pub fn reopen_after_gate_failure(goal: &Goal, reason: &str, tokens_now: u64, now_ms: u64) -> Goal {
-    let trimmed_lesson: String = format!("Objective gate vetoed: {reason}")
-        .chars()
-        .take(300)
-        .collect();
+    const PREFIX: &str = "Objective gate vetoed: ";
+    let max_reason_chars = 300usize.saturating_sub(PREFIX.chars().count());
+    let trimmed_lesson = format!("{PREFIX}{}", truncate_chars(reason, max_reason_chars));
     // Reopen only if the goal could actually run again — the iteration cap was
     // the only limit consulted here before, so a veto happily reopened a goal
     // whose deadline had passed or whose token budget was spent, and the very
@@ -462,7 +466,7 @@ pub fn reopen_after_gate_failure(goal: &Goal, reason: &str, tokens_now: u64, now
             .with_lesson_appended(trimmed_lesson, now_ms)
     } else {
         let note = stop_reason_note(goal, tokens_now, now_ms);
-        goal.clone()
+        reopened
             .with_status(GoalStatus::Blocked, now_ms)
             .with_note(Some(note), now_ms)
             .with_gate_outcome(GateOutcome::Unchecked, now_ms)

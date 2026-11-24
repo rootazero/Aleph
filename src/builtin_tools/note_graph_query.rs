@@ -164,6 +164,10 @@ pub struct NoteGraphQueryTool {
 }
 
 impl NoteGraphQueryTool {
+    pub(crate) fn services() -> Vec<aleph_slot_api::capability::Service> {
+        vec![crate::memory::runtime::required_service()]
+    }
+
     /// Tool identifier registered with the agent runtime.
     pub const NAME: &'static str = "note_graph_query";
 

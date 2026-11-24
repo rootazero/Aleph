@@ -12,7 +12,7 @@ mod tests {
     use crate::sync_primitives::{AtomicUsize, Ordering};
 
     // =========================================================================
-    // GlobalBus + Multiple EventBus Integration Tests
+    // GlobalBus + Multiple Publisher Integration Tests
     // =========================================================================
 
     fn make_subagent_event() -> AlephEvent {
@@ -41,7 +41,7 @@ mod tests {
     #[tokio::test]
     async fn test_global_bus_aggregates_from_multiple_agents() {
         // Create a dedicated GlobalBus for this test
-        let global_bus = Box::leak(Box::new(GlobalBus::new()));
+        let global_bus = GlobalBus::new();
 
         // Track events received at GlobalBus
         let total_events = Arc::new(AtomicUsize::new(0));
@@ -56,15 +56,21 @@ mod tests {
 
         // Subscribe to all events on GlobalBus
         let _sub_id = global_bus
-            .subscribe_async(EventFilter::all(), move |event| {
-                total_clone.fetch_add(1, Ordering::SeqCst);
-                match event.source_agent_id.as_str() {
-                    "agent-1" => a1_clone.fetch_add(1, Ordering::SeqCst),
-                    "agent-2" => a2_clone.fetch_add(1, Ordering::SeqCst),
-                    "agent-3" => a3_clone.fetch_add(1, Ordering::SeqCst),
-                    _ => 0,
-                };
-            })
+            .subscribe_async(
+                EventFilter::new(vec![
+                    EventType::SubAgentCompleted,
+                    EventType::ProcessCompleted,
+                ]),
+                move |event| {
+                    total_clone.fetch_add(1, Ordering::SeqCst);
+                    match event.source_agent_id.as_str() {
+                        "agent-1" => a1_clone.fetch_add(1, Ordering::SeqCst),
+                        "agent-2" => a2_clone.fetch_add(1, Ordering::SeqCst),
+                        "agent-3" => a3_clone.fetch_add(1, Ordering::SeqCst),
+                        _ => 0,
+                    };
+                },
+            )
             .await;
 
         // Broadcast events from three different agents
@@ -109,7 +115,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_global_bus_filter_by_session() {
-        let global_bus = Box::leak(Box::new(GlobalBus::new()));
+        let global_bus = GlobalBus::new();
 
         let session_a_events = Arc::new(AtomicUsize::new(0));
         let session_b_events = Arc::new(AtomicUsize::new(0));
@@ -118,7 +124,8 @@ mod tests {
         let sb_clone = session_b_events.clone();
 
         // Subscribe to session-a events only
-        let filter_a = EventFilter::all().with_session("session-a");
+        let filter_a =
+            EventFilter::new(vec![EventType::ProcessCompleted]).with_session("session-a");
         let _sub_a = global_bus
             .subscribe_async(filter_a, move |_| {
                 sa_clone.fetch_add(1, Ordering::SeqCst);
@@ -126,7 +133,8 @@ mod tests {
             .await;
 
         // Subscribe to session-b events only
-        let filter_b = EventFilter::all().with_session("session-b");
+        let filter_b =
+            EventFilter::new(vec![EventType::ProcessCompleted]).with_session("session-b");
         let _sub_b = global_bus
             .subscribe_async(filter_b, move |_| {
                 sb_clone.fetch_add(1, Ordering::SeqCst);
@@ -152,7 +160,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_global_bus_filter_by_event_type() {
-        let global_bus = Box::leak(Box::new(GlobalBus::new()));
+        let global_bus = GlobalBus::new();
 
         let subagent_events = Arc::new(AtomicUsize::new(0));
         let process_events = Arc::new(AtomicUsize::new(0));
@@ -195,7 +203,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_global_bus_combined_filters() {
-        let global_bus = Box::leak(Box::new(GlobalBus::new()));
+        let global_bus = GlobalBus::new();
 
         let matched_events = Arc::new(AtomicUsize::new(0));
         let matched_clone = matched_events.clone();
@@ -243,7 +251,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_parent_subscribes_to_child_completion() {
-        let global_bus = Box::leak(Box::new(GlobalBus::new()));
+        let global_bus = GlobalBus::new();
 
         let child_completed = Arc::new(AtomicUsize::new(0));
         let child_completed_clone = child_completed.clone();
@@ -276,7 +284,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_broadcast_receiver_async_consumption() {
-        let global_bus = Box::leak(Box::new(GlobalBus::new()));
+        let global_bus = GlobalBus::new();
 
         let mut receiver = global_bus.subscribe_broadcast();
 
@@ -311,18 +319,21 @@ mod tests {
 
     #[tokio::test]
     async fn test_global_bus_maintains_sequence_ordering() {
-        let global_bus = Box::leak(Box::new(GlobalBus::new()));
+        let global_bus = GlobalBus::new();
 
         let sequences = Arc::new(crate::sync_primitives::Mutex::new(Vec::new()));
         let seq_clone = sequences.clone();
 
         let _sub = global_bus
-            .subscribe_async(EventFilter::all(), move |event| {
-                seq_clone
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .push(event.sequence);
-            })
+            .subscribe_async(
+                EventFilter::new(vec![EventType::SubAgentCompleted]),
+                move |event| {
+                    seq_clone
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .push(event.sequence);
+                },
+            )
             .await;
 
         // Publish multiple events
@@ -337,39 +348,50 @@ mod tests {
         let seqs = sequences.lock().unwrap_or_else(|e| e.into_inner());
         assert_eq!(seqs.len(), 5);
 
-        // Verify sequences are monotonically increasing
-        for window in seqs.windows(2) {
-            assert!(
-                window[1] > window[0],
-                "Sequences should be monotonically increasing"
-            );
-        }
+        // The bus documents that delivery to a single subscriber is NOT
+        // ordered, so the contract under test is that every broadcast was
+        // observed EXACTLY ONCE — not that the callbacks ran in sequence
+        // order. A fresh bus starts its counter at 0, so the five broadcasts
+        // carry the contiguous range 0..5.
+        let mut observed = seqs.clone();
+        observed.sort_unstable();
+        assert_eq!(
+            observed,
+            (0..5).collect::<Vec<u64>>(),
+            "every broadcast must be observed exactly once: {observed:?}"
+        );
     }
 
     // =========================================================================
     // Filter Edge Cases Tests
     // =========================================================================
 
+    /// Both builders accumulate into a set; only the dimension differs.
+    fn assert_builder_collected(ids: &std::collections::HashSet<String>, expected: &[&str]) {
+        assert_eq!(ids.len(), expected.len());
+        for id in expected {
+            assert!(ids.contains(*id), "{id} should be in the filter set");
+        }
+    }
+
     #[test]
     fn test_event_filter_multiple_sessions() {
-        let filter = EventFilter::all()
+        let filter = EventFilter::new(vec![EventType::SubAgentCompleted])
             .with_session("session-1")
             .with_session("session-2");
 
         let session_ids = filter.session_ids.as_ref().unwrap();
-        assert!(session_ids.contains("session-1"));
-        assert!(session_ids.contains("session-2"));
+        assert_builder_collected(session_ids, &["session-1", "session-2"]);
     }
 
     #[test]
     fn test_event_filter_multiple_agents() {
-        let filter = EventFilter::all()
+        let filter = EventFilter::new(vec![EventType::SubAgentCompleted])
             .with_agent("agent-1")
             .with_agent("agent-2");
 
         let agent_ids = filter.agent_ids.as_ref().unwrap();
-        assert!(agent_ids.contains("agent-1"));
-        assert!(agent_ids.contains("agent-2"));
+        assert_builder_collected(agent_ids, &["agent-1", "agent-2"]);
     }
 
     #[test]

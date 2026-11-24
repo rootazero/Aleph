@@ -52,7 +52,7 @@ impl PromptLayer for McpInstructionsLayer {
             // containing `<system-reminder>` or `<|im_start|>` would survive
             // into the prompt and break the contract the Light pass enforces
             // on `instructions` immediately below.
-            let safe_name = sanitize_for_prompt(&item.server_name, SanitizeLevel::Light);
+            let safe_name = sanitize_for_prompt(&item.server_name, SanitizeLevel::Strict);
             output.push_str(&safe_name);
             output.push('\n');
             // Server-supplied free text crossing a trust boundary: sanitized,

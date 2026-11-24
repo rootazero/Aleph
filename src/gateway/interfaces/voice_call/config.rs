@@ -4,12 +4,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::gateway::interfaces::sms::normalize_e164;
 
-const fn default_true() -> bool {
-    true
-}
-
 /// Configuration stored under `[channels.<id>]` with `type = "voice_call"`.
 /// Provider credentials and Relay authority are supplied separately.
+///
+/// There is deliberately no inbound/outbound switch here: call admission is
+/// decided by the telecom permit/approval path, and outbound dialling by the
+/// telecom lifecycle tools, neither of which reads this config.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VoiceCallConfig {
     /// Explicit ISO 3166-1 alpha-2 region; never inferred from the number.
@@ -18,10 +18,6 @@ pub struct VoiceCallConfig {
     pub service_address: String,
     /// Reference to the Core-owned binding, not proof of Relay authority.
     pub binding_ref: String,
-    #[serde(default = "default_true")]
-    pub inbound_enabled: bool,
-    #[serde(default = "default_true")]
-    pub outbound_enabled: bool,
 }
 
 impl VoiceCallConfig {

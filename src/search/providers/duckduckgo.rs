@@ -1,5 +1,5 @@
 use crate::error::{AlephError, Result};
-use crate::search::providers::base::{build_client, retain_usable, send};
+use crate::search::providers::base::{build_client, read_capped, retain_usable, send};
 use crate::search::{SearchCapabilities, SearchOptions, SearchProvider, SearchResult};
 use async_trait::async_trait;
 use reqwest::Client;
@@ -71,8 +71,7 @@ impl SearchProvider for DuckDuckGoProvider {
             None,
         )
         .await?;
-        let body = response
-            .text()
+        let body = read_capped(response, 8 * 1024 * 1024)
             .await
             .map_err(|e| AlephError::provider(format!("Failed to read {NAME} body: {e}")))?;
 
@@ -212,36 +211,36 @@ pub(crate) fn parse_ddg_lite_html(body: &str, max_results: usize) -> Vec<SearchR
         return Vec::new();
     };
 
-    let titles: Vec<(String, String)> = doc
-        .select(&link_sel)
-        .filter_map(|a| {
-            let url = normalize_ddg_href(a.value().attr("href").unwrap_or_default());
-            if url.is_empty() {
-                return None;
-            }
-            let title = a.text().collect::<String>().trim().to_string();
-            Some((title, url))
-        })
-        .collect();
-
+    // Pair a title with the snippet in the SAME position in the document:
+    // DDG Lite lays a result out as a link row followed by a snippet row, so
+    // the i-th link owns the i-th snippet. Filtering the two lists
+    // independently would shift them against each other and hand a snippet to
+    // the wrong result; a title whose snippet is missing keeps an empty one
+    // instead of disappearing.
     let snippets: Vec<String> = doc
         .select(&snippet_sel)
         .map(|td| td.text().collect::<String>().trim().to_string())
         .collect();
 
-    titles
-        .into_iter()
-        .zip(snippets.into_iter().chain(std::iter::repeat(String::new())))
-        .take(max_results)
-        .map(|((title, url), snippet)| SearchResult {
-            title,
-            url,
-            snippet,
-            relevance_score: None,
-            full_content: None,
-            published_date: None,
-            provider: Some(NAME.to_string()),
+    doc.select(&link_sel)
+        .enumerate()
+        .filter_map(|(index, a)| {
+            let url = normalize_ddg_href(a.value().attr("href").unwrap_or_default());
+            if url.is_empty() {
+                return None;
+            }
+            let title = a.text().collect::<String>().trim().to_string();
+            Some(SearchResult {
+                title,
+                url,
+                snippet: snippets.get(index).cloned().unwrap_or_default(),
+                relevance_score: None,
+                full_content: None,
+                published_date: None,
+                provider: Some(NAME.to_string()),
+            })
         })
+        .take(max_results)
         .collect()
 }
 

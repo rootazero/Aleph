@@ -74,6 +74,13 @@ impl BuiltinToolRegistry {
             if let Some(ref wm) = config.workspace_manager {
                 tool = tool.with_store(Arc::clone(wm));
             }
+            // Wire the runtime instance registry so an agent that exists only
+            // as an instance (one `agent_create` just made) can be inspected
+            // too — otherwise `agent_info` says "not found" for an agent
+            // `agent_list` lists.
+            if let Some(ref ar) = config.agent_registry {
+                tool = tool.with_runtime_registry(Arc::clone(ar));
+            }
             let td = tool.definition();
             let mut ut = UnifiedTool::new(
                 format!("builtin:{}", td.name),
@@ -81,27 +88,15 @@ impl BuiltinToolRegistry {
                 &td.description,
                 ToolSource::Builtin,
             );
-            ut = ut.with_parameters_schema(td.parameters.clone());
+            ut = ut
+                .with_parameters_schema(td.parameters.clone())
+                .with_services(td.services.clone());
             tools.insert(td.name.clone(), ut);
             tool
         };
 
         // Add agent management tools (if AgentRegistry + AgentEnvStore are available)
-        let sm_for_agents = config
-            .gateway_context
-            .as_ref()
-            .map(|ctx| Arc::clone(ctx.session_store()))
-            .or_else(|| config.session_manager.clone())
-            .or_else(|| match crate::gateway::SessionManager::with_defaults() {
-                Ok(sm) => Some(Arc::new(sm)),
-                Err(e) => {
-                    warn!(
-                        "Failed to create fallback SessionManager for agent tools: {}",
-                        e
-                    );
-                    None
-                }
-            });
+        let sm_for_agents = super::resolve_session_manager(config, "agent tools");
 
         let (
             agent_create_tool,
@@ -190,7 +185,9 @@ impl BuiltinToolRegistry {
                         &td.description,
                         ToolSource::Builtin,
                     );
-                    ut = ut.with_parameters_schema(td.parameters.clone());
+                    ut = ut
+                        .with_parameters_schema(td.parameters.clone())
+                        .with_services(td.services.clone());
                     tools.insert(td.name.clone(), ut);
                 }
             }
@@ -226,28 +223,15 @@ impl BuiltinToolRegistry {
             use crate::tools::AlephTool;
             info!("Creating ACP delegate tools");
 
-            // Register the unified acp_delegate tool
-            use schemars::schema_for;
-            let acp_schema = serde_json::to_value(schema_for!(
-                crate::builtin_tools::acp_tools::AcpDelegateArgs
-            ))
-            .unwrap_or_else(|e| {
-                warn!("Failed to serialize schema for acp_delegate: {}", e);
-                serde_json::Value::Object(Default::default())
-            });
+            // Register the unified acp_delegate tool using fail-closed tool_schema
+            use crate::executor::builtin_registry::builder::core_tools::tool_schema;
+            let acp_schema =
+                tool_schema::<crate::builtin_tools::acp_tools::AcpDelegateArgs>("acp_delegate");
             let acp_switch_schema =
-                serde_json::to_value(schema_for!(crate::builtin_tools::acp_tools::AcpSwitchArgs))
-                    .unwrap_or_else(|e| {
-                        warn!("Failed to serialize schema for acp_switch: {}", e);
-                        serde_json::Value::Object(Default::default())
-                    });
-            let acp_session_control_schema = serde_json::to_value(schema_for!(
-                crate::builtin_tools::acp_tools::AcpSessionControlArgs
-            ))
-            .unwrap_or_else(|e| {
-                warn!("Failed to serialize schema for acp_session_control: {}", e);
-                serde_json::Value::Object(Default::default())
-            });
+                tool_schema::<crate::builtin_tools::acp_tools::AcpSwitchArgs>("acp_switch");
+            let acp_session_control_schema = tool_schema::<
+                crate::builtin_tools::acp_tools::AcpSessionControlArgs,
+            >("acp_session_control");
 
             let mut ut = UnifiedTool::new(
                 "builtin:acp_delegate",
@@ -309,7 +293,9 @@ impl BuiltinToolRegistry {
                     &td.description,
                     ToolSource::Builtin,
                 );
-                ut = ut.with_parameters_schema(td.parameters.clone());
+                ut = ut
+                    .with_parameters_schema(td.parameters.clone())
+                    .with_services(td.services.clone());
                 tools.insert(td.name.clone(), ut);
             }
             info!("Registered A2A outbound tools (a2a_delegate, a2a_agents)");

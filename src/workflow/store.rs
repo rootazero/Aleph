@@ -47,6 +47,35 @@ fn unique_tmp_path(final_path: &Path) -> PathBuf {
     PathBuf::from(tmp)
 }
 
+/// Atomically publish `body` at `final_path`: write a unique temp sibling,
+/// then rename it over the target, so a reader never sees a torn write.
+///
+/// On either failure the temp file is removed — a failed write leaves no
+/// `.tmp` residue next to the target.
+///
+/// `op_prefix` prefixes the operation name in the error message and carries
+/// its own separator: `"workflow "` yields "workflow write …" / "workflow
+/// rename …", `""` yields "write …" / "rename …".
+fn write_atomic(final_path: &Path, body: &str, op_prefix: &str) -> Result<()> {
+    let tmp_path = unique_tmp_path(final_path);
+    if let Err(e) = fs::write(&tmp_path, body) {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(AlephError::config(format!(
+            "{op_prefix}write {} failed: {e}",
+            tmp_path.display()
+        )));
+    }
+    if let Err(e) = fs::rename(&tmp_path, final_path) {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(AlephError::config(format!(
+            "{op_prefix}rename {} → {} failed: {e}",
+            tmp_path.display(),
+            final_path.display()
+        )));
+    }
+    Ok(())
+}
+
 /// `$ALEPH_HOME/workflows/`. Falls back to `~/.aleph/workflows/`, then
 /// `./workflows/`.
 #[must_use]
@@ -97,11 +126,18 @@ pub struct WorkflowListing {
     /// naming the file.
     pub problems: Vec<String>,
 }
-/// Resolve a logical name within `dir`: `{dir}/{sanitised}.json`. The returned
-/// path is guaranteed to be a direct child of `dir` (no traversal).
+
+/// The stored file for `name` under `dir` with extension `ext`:
+/// `{dir}/{sanitised}.{ext}`. The returned path is guaranteed to be a direct
+/// child of `dir` (no traversal).
+fn final_path_at(dir: &Path, name: &str, ext: &str) -> PathBuf {
+    dir.join(format!("{}.{ext}", sanitise_name(name)))
+}
+
+/// Resolve a logical name within `dir`: `{dir}/{sanitised}.json`.
 #[must_use]
 pub fn resolve_path_at(dir: &Path, name: &str) -> PathBuf {
-    dir.join(format!("{}.{WORKFLOW_EXT}", sanitise_name(name)))
+    final_path_at(dir, name, WORKFLOW_EXT)
 }
 
 fn ensure_dir_at(dir: &Path) -> Result<()> {
@@ -138,22 +174,7 @@ pub fn save_at(dir: &Path, manifest: &WorkflowManifest) -> Result<PathBuf> {
     let body = serde_json::to_string_pretty(manifest)
         .map_err(|e| AlephError::config(format!("workflow serialise failed: {e}")))?;
 
-    let tmp_path = unique_tmp_path(&final_path);
-    if let Err(e) = fs::write(&tmp_path, body) {
-        let _ = fs::remove_file(&tmp_path);
-        return Err(AlephError::config(format!(
-            "workflow write {} failed: {e}",
-            tmp_path.display()
-        )));
-    }
-    if let Err(e) = fs::rename(&tmp_path, &final_path) {
-        let _ = fs::remove_file(&tmp_path);
-        return Err(AlephError::config(format!(
-            "workflow rename {} → {} failed: {e}",
-            tmp_path.display(),
-            final_path.display()
-        )));
-    }
+    write_atomic(&final_path, &body, "workflow ")?;
     Ok(final_path)
 }
 
@@ -170,23 +191,8 @@ pub fn save(manifest: &WorkflowManifest) -> Result<PathBuf> {
 /// concern.
 fn write_text_at(dir: &Path, name: &str, ext: &str, body: &str) -> Result<PathBuf> {
     ensure_dir_at(dir)?;
-    let final_path = dir.join(format!("{}.{ext}", sanitise_name(name)));
-    let tmp_path = unique_tmp_path(&final_path);
-    if let Err(e) = fs::write(&tmp_path, body) {
-        let _ = fs::remove_file(&tmp_path);
-        return Err(AlephError::config(format!(
-            "write {} failed: {e}",
-            tmp_path.display()
-        )));
-    }
-    if let Err(e) = fs::rename(&tmp_path, &final_path) {
-        let _ = fs::remove_file(&tmp_path);
-        return Err(AlephError::config(format!(
-            "rename {} → {} failed: {e}",
-            tmp_path.display(),
-            final_path.display()
-        )));
-    }
+    let final_path = final_path_at(dir, name, ext);
+    write_atomic(&final_path, body, "")?;
     Ok(final_path)
 }
 

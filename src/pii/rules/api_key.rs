@@ -22,9 +22,15 @@ fn api_key_regex() -> &'static Regex {
                 sk-[a-zA-Z0-9\-_]{20,}           # OpenAI / Anthropic style
                 | ghp_[a-zA-Z0-9]{36,}            # GitHub Personal Access Token
                 | gho_[a-zA-Z0-9]{36,}            # GitHub OAuth
+                | ghs_[a-zA-Z0-9]{36,}            # GitHub App server-to-server token
+                | ghr_[a-zA-Z0-9]{36,}            # GitHub refresh token
+                | ghu_[a-zA-Z0-9]{36,}            # GitHub user-to-server token
                 | github_pat_[a-zA-Z0-9_]{40,}    # GitHub Fine-grained PAT
                 | glpat-[a-zA-Z0-9\-_]{20,}       # GitLab Personal Access Token
+                | glptt-[a-zA-Z0-9\-_]{20,}       # GitLab PAT (project / group scope)
+                | glrt-[a-zA-Z0-9\-_]{20,}        # GitLab runner registration token
                 | AKIA[A-Z0-9]{16}                # AWS Access Key ID
+                | ASIA[A-Z0-9]{16}                # AWS STS temporary Access Key ID
                 | AIza[0-9A-Za-z\-_]{35}          # Google API key
                 | sk_live_[0-9a-zA-Z]{16,}        # Stripe live secret key
                 | hf_[A-Za-z0-9]{20,}             # HuggingFace token
@@ -32,6 +38,7 @@ fn api_key_regex() -> &'static Regex {
                 | pplx-[A-Za-z0-9]{20,}           # Perplexity
                 | xox[abprse]-[a-zA-Z0-9\-]{10,}  # Slack tokens (b/p/a/r/s/e)
                 | tvly-[a-zA-Z0-9\-_]{20,}        # Tavily
+                | npm_[a-zA-Z0-9]{36,}            # npm access token
                 | (?i:Bearer)\s+[a-zA-Z0-9._\-]{20,}  # RFC 7235 says case-insensitive
             )
             ",
@@ -219,5 +226,41 @@ mod tests {
             0,
             "AIza inside a non-Google token must not match (word boundary anchor)"
         );
+    }
+
+    // === Current credential prefixes ===
+
+    #[test]
+    fn test_detect_github_current_token_prefixes() {
+        // `ghs_` (App server-to-server), `ghr_` (refresh) and `ghu_`
+        // (user-to-server) are GitHub's current prefixes. They were missing
+        // from the alternation, so those tokens were never redacted.
+        for prefix in ["ghs_", "ghr_", "ghu_"] {
+            let matches = rule().detect(&format!("{prefix}{}", "x".repeat(36)));
+            assert_eq!(matches.len(), 1, "{prefix} token must be detected");
+        }
+    }
+
+    #[test]
+    fn test_detect_aws_sts_session_key() {
+        // AWS hands out temporary credentials with an `ASIA` key id.
+        let matches = rule().detect("ASIAIOSFODNN7EXAMPLE");
+        assert_eq!(matches.len(), 1, "AWS STS key (ASIA) must be detected");
+    }
+
+    #[test]
+    fn test_detect_gitlab_current_token_prefixes() {
+        // `glptt-` (project / group scoped PAT) and `glrt-` (runner
+        // registration token) are GitLab's current prefixes.
+        for prefix in ["glptt-", "glrt-"] {
+            let matches = rule().detect(&format!("{prefix}{}", "a".repeat(20)));
+            assert_eq!(matches.len(), 1, "{prefix} token must be detected");
+        }
+    }
+
+    #[test]
+    fn test_detect_npm_token() {
+        let matches = rule().detect(&format!("npm_{}", "x".repeat(36)));
+        assert_eq!(matches.len(), 1, "npm token must be detected");
     }
 }

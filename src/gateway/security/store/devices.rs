@@ -8,9 +8,9 @@ use rusqlite::{params, Result as SqliteResult};
 /// One constant because there are THREE `SELECT`s and ONE `from_row`: adding a
 /// column to the projection of one of them makes `row.get(n)` on the others a
 /// RUNTIME error, not a compile error, and the two that would break here are
-/// `get_device_by_fingerprint` (every remote connect) and `get_device` (node
-/// admission). Positional decoding across hand-copied column lists is a
-/// contract with no compiler behind it.
+/// `get_device_by_fingerprint` and `get_device` (node admission). Positional
+/// decoding across hand-copied column lists is a contract with no compiler
+/// behind it.
 const DEVICE_COLUMNS: &str = "device_id, device_name, device_type, public_key, fingerprint, role, \
                               scopes, created_at, approved_at, last_seen_at, revoked_at, user_id";
 
@@ -27,6 +27,13 @@ impl SecurityStore {
     /// token that even survived a shared-token rotation.
     pub fn upsert_device(&self, data: &DeviceUpsertData<'_>) -> SqliteResult<()> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        Self::upsert_device_on(&conn, data)
+    }
+
+    pub(in crate::gateway::security) fn upsert_device_on(
+        conn: &rusqlite::Connection,
+        data: &DeviceUpsertData<'_>,
+    ) -> SqliteResult<()> {
         let now = current_timestamp_ms();
         let scopes_json = serde_json::to_string(data.scopes).unwrap_or_else(|e| {
             tracing::warn!("Failed to serialize device scopes: {}", e);

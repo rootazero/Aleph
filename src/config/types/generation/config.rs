@@ -27,9 +27,8 @@ use super::provider::GenerationProviderConfig;
 /// output_dir = "~/.aleph/generation"
 /// auto_paste_threshold_mb = 5
 /// background_task_threshold_seconds = 30
-/// smart_routing_enabled = true
 ///
-/// [generation.providers.dalle]
+/// [generation.image_providers.dalle]
 /// provider_type = "openai"
 /// model = "dall-e-3"
 /// enabled = true
@@ -74,10 +73,6 @@ pub struct GenerationConfig {
     #[serde(default = "default_background_task_threshold_seconds")]
     pub background_task_threshold_seconds: u32,
 
-    /// Enable smart routing based on generation type and capabilities
-    #[serde(default = "default_smart_routing_enabled")]
-    pub smart_routing_enabled: bool,
-
     /// Provider configurations
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub providers: HashMap<String, GenerationProviderConfig>,
@@ -111,10 +106,6 @@ const fn default_background_task_threshold_seconds() -> u32 {
     30 // 30 seconds
 }
 
-const fn default_smart_routing_enabled() -> bool {
-    true
-}
-
 impl Default for GenerationConfig {
     fn default() -> Self {
         Self {
@@ -126,7 +117,6 @@ impl Default for GenerationConfig {
             output_dir: None,
             auto_paste_threshold_mb: default_auto_paste_threshold_mb(),
             background_task_threshold_seconds: default_background_task_threshold_seconds(),
-            smart_routing_enabled: default_smart_routing_enabled(),
             providers: HashMap::new(),
             image_providers: HashMap::new(),
             video_providers: HashMap::new(),
@@ -235,18 +225,35 @@ impl GenerationConfig {
     /// Validate the configuration
     pub fn validate(&self) -> Result<(), String> {
         // Validate default providers exist and are enabled
-        for (field, provider) in [
-            ("default_image_provider", &self.default_image_provider),
-            ("default_video_provider", &self.default_video_provider),
-            ("default_audio_provider", &self.default_audio_provider),
-            ("default_speech_provider", &self.default_speech_provider),
+        for (field, provider, gen_type) in [
+            (
+                "default_image_provider",
+                &self.default_image_provider,
+                GenerationType::Image,
+            ),
+            (
+                "default_video_provider",
+                &self.default_video_provider,
+                GenerationType::Video,
+            ),
+            (
+                "default_audio_provider",
+                &self.default_audio_provider,
+                GenerationType::Audio,
+            ),
+            (
+                "default_speech_provider",
+                &self.default_speech_provider,
+                GenerationType::Speech,
+            ),
             (
                 "default_transcription_provider",
                 &self.default_transcription_provider,
+                GenerationType::Transcription,
             ),
         ] {
             if let Some(provider) = provider {
-                self.validate_provider_reference(provider, field)?;
+                self.validate_provider_reference(provider, field, gen_type)?;
             }
         }
 
@@ -267,27 +274,39 @@ impl GenerationConfig {
         Ok(())
     }
 
-    fn validate_provider_reference(&self, provider: &str, field: &str) -> Result<(), String> {
-        // Check typed maps first, then legacy providers
-        let all_maps: &[&HashMap<String, GenerationProviderConfig>] = &[
-            &self.image_providers,
-            &self.video_providers,
-            &self.speech_providers,
-            &self.audio_providers,
-            &self.transcription_providers,
-            &self.providers,
+    fn validate_provider_reference(
+        &self,
+        provider: &str,
+        field: &str,
+        gen_type: GenerationType,
+    ) -> Result<(), String> {
+        let typed_maps = [
+            (&self.image_providers, GenerationType::Image),
+            (&self.video_providers, GenerationType::Video),
+            (&self.speech_providers, GenerationType::Speech),
+            (&self.audio_providers, GenerationType::Audio),
+            (&self.transcription_providers, GenerationType::Transcription),
         ];
 
-        for map in all_maps {
-            if let Some(config) = map.get(provider) {
-                return if config.enabled {
-                    Ok(())
-                } else {
-                    Err(format!(
-                        "generation.{field} references disabled provider '{provider}'"
-                    ))
-                };
-            }
+        if typed_maps.iter().any(|(map, map_type)| {
+            *map_type == gen_type && map.get(provider).is_some_and(|config| config.enabled)
+        }) {
+            return Ok(());
+        }
+        if typed_maps.iter().any(|(map, _)| map.contains_key(provider)) {
+            return Err(format!(
+                "generation.{field} references unknown/disabled provider '{provider}'"
+            ));
+        }
+
+        if let Some(config) = self.providers.get(provider) {
+            return if config.enabled && config.capabilities.contains(&gen_type) {
+                Ok(())
+            } else {
+                Err(format!(
+                    "generation.{field} references unknown/disabled provider '{provider}'"
+                ))
+            };
         }
 
         Err(format!(

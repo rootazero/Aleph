@@ -33,8 +33,14 @@ const COMMANDS: &[&str] = &[
 ];
 
 fn main() {
-    let attributes = tauri_build::Attributes::new()
-        .app_manifest(tauri_build::AppManifest::new().commands(COMMANDS));
+    let mut commands = COMMANDS.to_vec();
+    if cfg!(debug_assertions) && std::env::var_os("CARGO_FEATURE_QA_OWNED_ROOT").is_some() {
+        commands.push("phase9_observation");
+    }
+    // AppManifest retains a static command slice until this build-script process exits.
+    let attributes = tauri_build::Attributes::new().app_manifest(
+        tauri_build::AppManifest::new().commands(Box::leak(commands.into_boxed_slice())),
+    );
     if let Err(error) = tauri_build::try_build(attributes) {
         let error = format!("{error:#}");
         println!("{error}");

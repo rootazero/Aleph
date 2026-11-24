@@ -67,7 +67,9 @@ impl LinuxPim {
         while start < content.len() {
             let next_from = Self::find_next_from_line(content, start + 1);
             let end = next_from.unwrap_or(content.len());
-            let segment = &content[start..end];
+            let Some(segment) = content.get(start..end) else {
+                break;
+            };
 
             if let Some(msg) = Self::parse_message(segment, start) {
                 messages.push(msg);
@@ -85,13 +87,7 @@ impl LinuxPim {
         // The probe reads up to `bytes[i + 5]`, so a separator in the last 6
         // bytes of the file is in range.
         while i + 5 < bytes.len() {
-            if bytes[i] == b'\n'
-                && bytes[i + 1] == b'F'
-                && bytes[i + 2] == b'r'
-                && bytes[i + 3] == b'o'
-                && bytes[i + 4] == b'm'
-                && bytes[i + 5] == b' '
-            {
+            if bytes.get(i..i + 6) == Some(b"\nFrom ") {
                 return Some(i + 1);
             }
             i += 1;

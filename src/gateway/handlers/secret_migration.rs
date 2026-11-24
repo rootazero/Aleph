@@ -121,21 +121,63 @@ fn migrate_ai_providers(cfg: &mut Config, vault: &SharedTokenManager) -> usize {
 fn migrate_generation_providers(cfg: &mut Config, vault: &SharedTokenManager) -> usize {
     let mut count = 0;
 
+    // Every provider map, enumerated from one list so the migration cannot
+    // drift from the maps the runtime reads: the legacy flat map plus the
+    // five typed ones. `generation_providers/helpers.rs` resolves a provider
+    // by falling back to the legacy map and reads its key from the vault
+    // under `gen:{name}`; a map missing here keeps its plaintext key on disk
+    // until the first `Config::save_*` of the section drops it, because
+    // `GenerationProviderConfig::api_key` is `skip_serializing`.
     let categories = [
+        &mut cfg.generation.providers,
         &mut cfg.generation.image_providers,
         &mut cfg.generation.video_providers,
         &mut cfg.generation.speech_providers,
         &mut cfg.generation.audio_providers,
+        &mut cfg.generation.transcription_providers,
     ];
+
+    // Collect all provider names with their api_keys across categories to detect conflicts
+    let mut name_to_keys: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+    for providers in &categories {
+        for (name, provider) in providers.iter() {
+            if let Some(ref key) = provider.api_key {
+                if !key.is_empty() {
+                    name_to_keys
+                        .entry(name.clone())
+                        .or_default()
+                        .push(key.clone());
+                }
+            }
+        }
+    }
+
+    // Check for conflicts: same name with different non-empty api_keys
+    let mut has_conflict = false;
+    for (name, keys) in &name_to_keys {
+        if keys.len() > 1 {
+            let first = &keys[0];
+            if keys.iter().any(|k| k != first) {
+                tracing::error!(provider = %name, "Conflicting api_keys for same provider name across generation categories; skipping generation migration");
+                has_conflict = true;
+            }
+        }
+    }
+
+    if has_conflict {
+        return 0;
+    }
 
     // We need to collect names first due to borrow checker
     for providers in categories {
         let names: Vec<String> = providers.keys().cloned().collect();
         for name in names {
             if let Some(provider) = providers.get_mut(&name) {
-                if let Some(ref key) = provider.api_key {
+                let vault_key = format!("gen:{name}");
+                let plaintext = provider.api_key.clone();
+                if let Some(ref key) = plaintext {
                     if !key.is_empty() {
-                        let vault_key = format!("gen:{name}");
                         match vault.store_secret(&vault_key, key) {
                             Ok(_) => {
                                 provider.api_key = None;
@@ -148,10 +190,20 @@ fn migrate_generation_providers(cfg: &mut Config, vault: &SharedTokenManager) ->
                         }
                     }
                 }
+                // `GenerationProviderConfig::api_key` is `skip_serializing`, so
+                // the vault is the only durable home for the key. Restore the
+                // runtime copy from the vault — right after a migration, and
+                // on every later start where config.toml no longer carries
+                // the key at all. Without this the migration would leave the
+                // provider with no key for the generation factory to read.
+                if provider.api_key.is_none() {
+                    if let Some(secret) = super::resolve_vault_secret(&vault_key, vault) {
+                        provider.api_key = Some(secret);
+                    }
+                }
             }
         }
     }
-
     count
 }
 
@@ -249,20 +301,38 @@ fn migrate_channels(cfg: &mut Config, vault: &SharedTokenManager) -> usize {
 
 // ── Voice streaming ─────────────────────────────────────────────────────────
 
+/// Vault key holding the streaming ASR bearer token.
+///
+/// The name is `voice_streaming:api_key`, not `voice.streaming:api_key`: every
+/// other key in this module is `<prefix>:<field>`, and `voice.streaming` is a
+/// TOML path in `config.toml`, not a key name. The config doc comment in
+/// `config/types/voice_local.rs` quotes this same name.
+const VOICE_STREAMING_API_KEY: &str = "voice_streaming:api_key";
+
 fn migrate_voice_streaming(cfg: &mut Config, vault: &SharedTokenManager) -> usize {
-    let api_key = &cfg.voice_local.streaming.api_key;
-    if api_key.is_empty() {
-        return 0;
-    }
-    match vault.store_secret("voice_streaming:api_key", api_key) {
-        Ok(_) => {
-            tracing::info!("Migrated voice.streaming.api_key to vault");
-            cfg.voice_local.streaming.api_key = String::new();
-            1
+    let plaintext = cfg.voice_local.streaming.api_key.clone();
+    let mut count = 0;
+    if !plaintext.is_empty() {
+        match vault.store_secret(VOICE_STREAMING_API_KEY, &plaintext) {
+            Ok(_) => {
+                tracing::info!("Migrated voice.streaming.api_key to vault");
+                count += 1;
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to store voice streaming secret");
+                return 0;
+            }
         }
-        Err(e) => {
-            tracing::error!(error = %e, "Failed to store voice streaming secret");
-            0
-        }
     }
+    // `StreamingConfig::api_key` is `skip_serializing`, so the vault is the
+    // only durable home for the token — config.toml never carries it again
+    // once the migration has run. Rehydrate the in-memory config from the
+    // vault so the streaming ASR bearer token reaches the adapter on this
+    // start *and* on every later start, where config.toml has no key to
+    // migrate. Without this read the migration wrote a vault key nothing
+    // looked at and streaming ASR silently ran unauthenticated.
+    if let Some(secret) = super::resolve_vault_secret(VOICE_STREAMING_API_KEY, vault) {
+        cfg.voice_local.streaming.api_key = secret;
+    }
+    count
 }

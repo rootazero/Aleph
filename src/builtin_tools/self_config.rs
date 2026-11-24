@@ -118,6 +118,9 @@ pub struct SelfConfigOutput {
 // Tool Struct
 // =============================================================================
 
+#[cfg(test)]
+mod terminal_tests;
+
 #[derive(Clone)]
 pub struct SelfConfigTool {
     agent_dir: PathBuf,
@@ -428,10 +431,7 @@ impl SelfConfigTool {
                 if let Some(obj) = data.as_object_mut() {
                     obj.insert(
                         "reload_impact".to_string(),
-                        serde_json::json!({
-                            "kind": impact,
-                            "hint": impact.agent_hint(),
-                        }),
+                        impact.wire(impact.agent_hint()),
                     );
                 }
 

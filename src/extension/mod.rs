@@ -49,6 +49,8 @@ pub mod manifest;
 pub mod mcp_config;
 #[cfg(test)]
 mod mcp_plugin_tests;
+mod panel;
+pub(crate) mod panel_publication;
 mod plugin_ops;
 pub mod plugin_secrets;
 pub mod plugin_state;
@@ -70,7 +72,7 @@ pub use effects::{
     async_disposer, sync_disposer, DisposeOutcome, DisposeReport, Disposer, EffectScope, PluginId,
 };
 pub use error::*;
-pub use lifecycle::{MountError, ReloadReport, UnmountError};
+pub use lifecycle::{DiscoveredPluginIds, MountError, ReloadReport, UnmountError};
 pub use loader::PluginLoader;
 pub use manager_global::{
     decline_extension_manager, init_extension_manager, is_extension_manager_initialized,
@@ -104,7 +106,7 @@ use hooks::{HookExecutor, HookInput, HookRegistry, ShellHookConsent};
 use manifest::adapter::AdapterRegistry;
 #[allow(unused_imports)]
 use serde::{Deserialize, Serialize}; // for OwnerTrustPolicyConfig
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Weak;
 use tokio::sync::{Mutex, RwLock};
@@ -117,6 +119,10 @@ use watcher::{ExtensionChangeEvent, ExtensionChangeType, ExtensionWatcher, Inter
 /// Cache state for lazy-loading
 #[derive(Debug, Default)]
 struct CacheState {
+    /// Whether declaration discovery has completed successfully. This is only
+    /// a derived work cache; it is not enabled state, provider state, a
+    /// generation map, an owner table, or cleanup authority.
+    discovered: bool,
     /// Whether components have been loaded
     loaded: bool,
 }
@@ -203,7 +209,15 @@ pub struct ExtensionManager {
     /// Skill System v2 (independent bounded context)
     skill_system: crate::skill::SkillSystem,
 
-    /// Active plugin tools keyed by short tool name.
+    /// Active plugin tools keyed by their namespaced key
+    /// (`plugin_id:tool_name`).
+    ///
+    /// A short tool name is NOT unique across plugins, so every
+    /// registration is kept: dropping the loser of that contest here took
+    /// the tool away from the project that owns it, before any visibility
+    /// question was asked. The short-name winner is decided per view — see
+    /// [`Self::active_plugin_tools_snapshot`] (no project to scope by) and
+    /// [`Self::active_plugin_tools_visible_to`] (visibility first).
     ///
     /// This is a sync snapshot so runtime systems like the agent loop can
     /// cheaply read tool metadata and revision state without awaiting locks.
@@ -217,6 +231,9 @@ pub struct ExtensionManager {
 
     /// Monotonic revision for active plugin tool snapshot changes.
     plugin_tool_revision: Arc<AtomicU64>,
+
+    /// One lifecycle-owned generation of Panel declarations, immutable bytes and internal scope.
+    panel_publication: Arc<StdRwLock<panel_publication::PanelAssetPublicationStore>>,
 
     /// Serialises every transition: the lifecycle primitives, `ensure_loaded`,
     /// and a server-start watcher's final readiness write + view recompute
@@ -261,6 +278,14 @@ pub struct ExtensionManager {
     /// Where [`Self::plugins_config`] is persisted. Resolved once at
     /// construction against the same root the skill twin uses.
     plugins_config_path: PathBuf,
+
+    /// Set when the durable document could not be read at construction.
+    ///
+    /// `Some(reason)` means the in-memory document is the restricted
+    /// stand-in, not the operator's file: plugin preferences must not be
+    /// written back until the file is repaired, because saving now would
+    /// overwrite the operator's trust decisions with a stand-in document.
+    plugins_config_error: Option<String>,
 
     /// Test-only extra plugin parents; see [`ExtensionConfig::extra_plugin_parents`].
     #[cfg(test)]
@@ -449,8 +474,27 @@ impl ExtensionManager {
                 .join("data")
                 .join(crate::extension::plugin_state::PLUGINS_CONFIG_FILE)
         });
-        let loaded_plugins_config =
-            crate::extension::plugin_state::PluginsConfig::load(&plugins_config_path);
+        // An unreadable / malformed document is not "no preferences": the
+        // default document has `enforce = false`, so degrading to it would
+        // switch owner-trust enforcement OFF and load every plugin the
+        // operator had refused. Run restricted instead (enforcement ON, empty
+        // allowlist) and refuse to write over the operator's file until it is
+        // repaired.
+        let (loaded_plugins_config, plugins_config_error) =
+            match crate::extension::plugin_state::PluginsConfig::load(&plugins_config_path) {
+                Ok(cfg) => (cfg, None),
+                Err(e) => {
+                    tracing::error!(
+                        error = %e,
+                        path = %plugins_config_path.display(),
+                        "plugins config could not be read; owner trust enforcement stays ON with an empty allowlist until the operator repairs the file"
+                    );
+                    (
+                        crate::extension::plugin_state::PluginsConfig::restricted_until_repaired(),
+                        Some(e.to_string()),
+                    )
+                }
+            };
         // Derived here, once, from the document just read. The policy has a
         // live handle (`set_owner_trust_policy`) because the trust tool has to
         // change it without a restart, but its *initial* value has exactly one
@@ -473,6 +517,9 @@ impl ExtensionManager {
             active_plugin_tools: Arc::new(StdRwLock::new(HashMap::new())),
             plugin_scope_keys: Arc::new(StdRwLock::new(HashMap::new())),
             plugin_tool_revision: Arc::new(AtomicU64::new(0)),
+            panel_publication: Arc::new(StdRwLock::new(
+                panel_publication::PanelAssetPublicationStore::default(),
+            )),
             load_guard: Arc::new(Mutex::new(())),
             boot_guard: Arc::new(Mutex::new(())),
             memory_registry: crate::sync_primitives::RwLock::new(None),
@@ -489,6 +536,7 @@ impl ExtensionManager {
             owner_trust_policy: Arc::new(crate::sync_primitives::RwLock::new(owner_trust_policy)),
             plugins_config,
             plugins_config_path,
+            plugins_config_error,
             #[cfg(test)]
             extra_plugin_parents: config.extra_plugin_parents.clone(),
         })
@@ -597,7 +645,7 @@ impl ExtensionManager {
     /// late first attachment: a future producer reads this handle under the
     /// lifecycle `load_guard` to publish plugin callables, so attaching it
     /// after the manager already did meaningful work — a finished discovery
-    /// (`cache_state.loaded`), any plugin registry row, a mounted scope, or
+    /// (`cache_state.discovered`), any plugin registry row, a mounted scope, or
     /// a loaded plugin runtime — would leave that work with no producer and
     /// no catch-up here to repair it. The existing `load_guard` is held for
     /// the whole decision + publication, so the check and the store are one
@@ -638,10 +686,10 @@ impl ExtensionManager {
         // its own lock; no std guard is held across an await. A failed scan
         // that left no rows, no scopes, no loaded runtime and the cache
         // still false stays attachable — there is no past-attempt flag.
-        if self.cache_state.read().await.loaded {
+        if self.cache_state.read().await.discovered {
             return Err(ExtensionError::Runtime(
                 "tool handler registry must be attached before the first \
-                 extension load; discovery has already completed"
+                 extension discovery; discovery has already completed"
                     .to_string(),
             ));
         }
@@ -681,12 +729,36 @@ impl ExtensionManager {
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
+    /// Ensure declaration discovery has completed without activating any
+    /// provider. The derived cache only records completed declaration work;
+    /// it never stands in for provider state or durable enabled state.
+    pub async fn ensure_discovered(&self) -> ExtensionResult<()> {
+        if self.cache_state.read().await.discovered {
+            return Ok(());
+        }
+
+        let _boot = self.boot_guard.lock().await;
+        if self.cache_state.read().await.discovered {
+            return Ok(());
+        }
+        let _guard = self.load_guard.lock().await;
+        if self.cache_state.read().await.discovered {
+            return Ok(());
+        }
+
+        self.discover_declarations().await?;
+        self.views().publish_transition_views().await;
+        self.cache_state.write().await.discovered = true;
+        Ok(())
+    }
+
     /// Boot-load discovery and activate every eligible tool-only WASM owner.
     ///
     /// Three phases, in this order, under two different guards:
     ///
-    /// 1. Discovery runs under `load_guard` and publishes declarations only.
-    ///    The `loaded` cache flag stays **false** for the whole pass: it is
+    /// 1. Discovery/reconciliation runs under `load_guard` and publishes
+    ///    declarations before any retained Cold owner is activated. The
+    ///    `loaded` cache flag stays **false** for the whole pass: it is
     ///    the flag the fast path reads, and a flag published here would let a
     ///    concurrent caller return while the Cold owners below are still
     ///    half-activated.
@@ -715,9 +787,17 @@ impl ExtensionManager {
 
         let cold_owners: Vec<Arc<crate::extension::runtime_owner::RuntimeOwner>> = {
             let guard = self.load_guard.lock().await;
-            // Discovery only: this method publishes `loaded` itself, after
-            // the activation pass settles.
-            self.load_all_locked_inner(false).await?;
+            if !self.cache_state.read().await.discovered {
+                self.load_all_locked_inner(false).await?;
+            } else {
+                // A prior cold read retained its exact tool-only WASM owners.
+                // Reconcile non-tool providers and refresh runtime settings
+                // without replacing those owners.
+                self.publish_plugin_settings().await;
+                self.discover_with_mode(crate::extension::lifecycle::DiscoveryMode::Activation)
+                    .await?;
+                self.views().publish_transition_views().await;
+            }
             let desired_enabled = self.plugins_config.read().await;
             let owners = self
                 .runtime_owners
@@ -1157,6 +1237,7 @@ impl projection::Views {
 
     fn build_active_plugin_tool_index(
         registry: &PluginRegistry,
+        mut cold_tools: Vec<ToolRegistration>,
     ) -> (
         HashMap<String, ToolRegistration>,
         HashMap<String, visibility::ScopeKey>,
@@ -1178,8 +1259,22 @@ impl projection::Views {
             plugin_tools.sort_by(|a, b| a.name.cmp(&b.name));
 
             for tool in plugin_tools {
-                active_tools.entry(tool.name.clone()).or_insert(tool);
+                // Keyed by the namespaced key: two plugins may expose the
+                // same short name, and both registrations have to survive
+                // until visibility has decided which one a session sees.
+                active_tools.insert(namespaced_component_key(&tool.plugin_id, &tool.name), tool);
             }
+        }
+
+        cold_tools.sort_by(|a, b| a.name.cmp(&b.name).then(a.plugin_id.cmp(&b.plugin_id)));
+        for tool in cold_tools {
+            // Keyed by the namespaced key, like every registry entry: the
+            // index keeps one registration per owner, and the short-name
+            // contest is settled per view. A Cold declaration never
+            // replaces a Ready registration of the same owner.
+            active_tools
+                .entry(namespaced_component_key(&tool.plugin_id, &tool.name))
+                .or_insert(tool);
         }
 
         let scope_keys = registry
@@ -1191,10 +1286,33 @@ impl projection::Views {
         (active_tools, scope_keys)
     }
 
+    fn cold_plugin_tools(&self) -> Vec<ToolRegistration> {
+        let owners = self.runtime_owners.lock().unwrap();
+        owners
+            .values()
+            .filter(|owner| {
+                owner.provider.state() == crate::capability::provider::ProviderState::Cold
+            })
+            .flat_map(|owner| {
+                owner
+                    .output
+                    .capabilities
+                    .iter()
+                    .filter_map(|capability| match capability {
+                        crate::extension::capability::CapabilityDeclaration::Tool(registration) => {
+                            Some(registration.clone())
+                        }
+                        _ => None,
+                    })
+            })
+            .collect()
+    }
+
     pub(crate) async fn refresh_active_plugin_tools(&self) {
+        let cold_tools = self.cold_plugin_tools();
         let (active_tools, scope_keys) = {
             let registry = self.plugin_registry.read().await;
-            Self::build_active_plugin_tool_index(&registry)
+            Self::build_active_plugin_tool_index(&registry, cold_tools)
         };
 
         // Both maps are derived under the one registry read above, but published
@@ -1224,7 +1342,56 @@ impl ExtensionManager {
         self.plugin_tool_revision.load(Ordering::SeqCst)
     }
 
-    /// Snapshot of active plugin tools keyed by short tool name.
+    /// Canonical Global-only discovery; absent trusted context never adopts the daemon's cwd.
+    #[must_use]
+    pub fn panel_ui_capability_snapshot(&self) -> aleph_protocol::panel::PanelUiCapabilitySnapshot {
+        self.panel_ui_capability_snapshot_for(&visibility::VisibilityCtx::default())
+    }
+
+    /// Internal visibility projection, not an HTTP authentication or project authorization proof.
+    pub(crate) fn panel_ui_capability_snapshot_for(
+        &self,
+        context: &visibility::VisibilityCtx,
+    ) -> aleph_protocol::panel::PanelUiCapabilitySnapshot {
+        self.panel_publication
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .snapshot(context)
+    }
+
+    /// Read only the current admitted identity and exact entry in the caller's trusted scope.
+    pub(crate) fn panel_ui_asset(
+        &self,
+        identity: &panel_publication::PanelAssetIdentity,
+        entry: &str,
+        context: &visibility::VisibilityCtx,
+    ) -> Result<panel_publication::PublishedPanelAsset, panel_publication::PanelAssetPublicationError>
+    {
+        self.panel_publication
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .asset(identity, entry, context)
+    }
+
+    /// Monotonic revision from that same committed publication state.
+    #[must_use]
+    pub fn panel_ui_capability_revision(&self) -> u64 {
+        self.panel_publication
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .revision()
+    }
+
+    /// Snapshot of active plugin tools, one entry per short tool name.
+    ///
+    /// This view has no project to scope by, so the short-name contest is
+    /// settled globally: the lexicographically first plugin id wins, the
+    /// same winner this view has always published. The index keeps every
+    /// registration — see [`Self::active_plugin_tools`].
+    ///
+    /// Admitted Cold declarations are part of this metadata projection: a
+    /// Cold tool is callable metadata, never a Ready proof, and the
+    /// canonical dispatch path activates its owner on the first call.
     pub fn active_plugin_tools_snapshot(&self) -> Vec<ToolRegistration> {
         let tools = self
             .active_plugin_tools
@@ -1232,21 +1399,91 @@ impl ExtensionManager {
             .unwrap_or_else(|e| e.into_inner());
         let mut snapshot: Vec<ToolRegistration> = tools.values().cloned().collect();
         snapshot.sort_by(|a, b| a.name.cmp(&b.name).then(a.plugin_id.cmp(&b.plugin_id)));
+        let mut seen = HashSet::new();
+        snapshot.retain(|tool| seen.insert(tool.name.clone()));
+        snapshot
+    }
+
+    /// Snapshot of plugin tool metadata that the mounted-only transport
+    /// compatibility surfaces may actually invoke. Cold declarations remain
+    /// in the metadata projection for canonical dispatch, but MCP and other
+    /// compatibility adapters do not advertise an uncallable entry.
+    pub fn mounted_plugin_tools_snapshot(&self) -> Vec<ToolRegistration> {
+        let owner_states = self
+            .runtime_owners
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(id, owner)| (id.clone(), owner.provider.state()))
+            .collect::<std::collections::HashMap<_, _>>();
+        let tools = self
+            .active_plugin_tools
+            .read()
+            .unwrap_or_else(|e| e.into_inner());
+        let mut snapshot: Vec<ToolRegistration> = tools.values().cloned().collect();
+        // The Ready filter runs BEFORE the short-name dedup: a Cold owner's
+        // tool must not win the name contest and hide a Ready namesake
+        // (E1-03). `active_plugin_tools_snapshot()` dedups first, so the
+        // snapshot is taken here and deduped after the filter.
+        snapshot.retain(|tool| {
+            owner_states.get(&tool.plugin_id).is_none_or(|state| {
+                matches!(state, crate::capability::provider::ProviderState::Ready)
+            })
+        });
+        snapshot.sort_by(|a, b| a.name.cmp(&b.name).then(a.plugin_id.cmp(&b.plugin_id)));
+        let mut seen = HashSet::new();
+        snapshot.retain(|tool| seen.insert(tool.name.clone()));
         snapshot
     }
 
     /// [`Self::active_plugin_tools_snapshot`] narrowed to the plugins a
-    /// session in `ctx` may see. This is face ① of the visibility predicate;
+    /// session in `ctx` may see. This is the metadata face; canonical
+    /// dispatch still performs permission admission before any activation.
     /// the request-build site (`tool_refresh::active_plugin_tools_for_agent`)
     /// is its only production caller.
     pub fn active_plugin_tools_visible_to(
         &self,
         ctx: &visibility::VisibilityCtx,
     ) -> Vec<ToolRegistration> {
-        self.active_plugin_tools_snapshot()
-            .into_iter()
+        let tools = self
+            .active_plugin_tools
+            .read()
+            .unwrap_or_else(|e| e.into_inner());
+        // Visibility FIRST. A tool this session may see is not dropped
+        // because a plugin the session cannot see claimed the same short
+        // name; the short-name contest is settled among the visible
+        // plugins only.
+        let mut visible: Vec<ToolRegistration> = tools
+            .values()
             .filter(|tool| self.plugin_visible(&tool.plugin_id, ctx))
-            .collect()
+            .cloned()
+            .collect();
+        // Within one short name, the MOST SPECIFIC scope wins: a project
+        // plugin shadows a global plugin that claims the same name, so a
+        // global plugin can never delete the project's own tool. Ties (two
+        // plugins of the same scope) fall back to the lexicographically
+        // first plugin id.
+        visible.sort_by(|a, b| {
+            a.name.cmp(&b.name).then_with(|| {
+                self.scope_specificity(&b.plugin_id)
+                    .cmp(&self.scope_specificity(&a.plugin_id))
+                    .then_with(|| a.plugin_id.cmp(&b.plugin_id))
+            })
+        });
+        let mut seen = HashSet::new();
+        visible.retain(|tool| seen.insert(tool.name.clone()));
+        visible
+    }
+
+    /// How specific a plugin's scope is: a project plugin (1) shadows a
+    /// global plugin (0) when both claim the same tool short name. An
+    /// unknown plugin id scores 0 — the registry is the only authority on
+    /// scope, and a plugin it cannot name has no claim to shadow.
+    fn scope_specificity(&self, plugin_id: &str) -> u8 {
+        match self.plugin_scope_key(plugin_id) {
+            Some(visibility::ScopeKey::Project(_)) => 1,
+            _ => 0,
+        }
     }
 
     /// The visibility key of a registered plugin, any status. `None` = unknown id.
@@ -1270,21 +1507,33 @@ impl ExtensionManager {
             .is_some_and(|key| visibility::visible_to(&key, ctx))
     }
 
-    /// Resolve an active plugin tool by short name or `plugin_id:name`.
+    /// Resolve a plugin tool from the live metadata projection by short name
+    /// or `plugin_id:name`.
+    ///
+    /// An explicit `plugin_id:name` names its owner and resolves to that
+    /// registration directly. A bare short name is ambiguous across
+    /// plugins: the winner is the one
+    /// [`Self::active_plugin_tools_snapshot`] publishes — the
+    /// lexicographically first plugin id.
+    ///
+    /// Cold declarations are metadata-visible here; the canonical handler
+    /// performs activation only after dispatch admission.
     pub fn resolve_active_plugin_tool(&self, name: &str) -> Option<ToolRegistration> {
         let tools = self
             .active_plugin_tools
             .read()
             .unwrap_or_else(|e| e.into_inner());
 
-        if let Some(tool) = tools.get(name) {
-            return Some(tool.clone());
+        if let Some((plugin_id, short_name)) = name.split_once(':') {
+            return tools
+                .get(&namespaced_component_key(plugin_id, short_name))
+                .cloned();
         }
 
-        let (plugin_id, short_name) = name.split_once(':')?;
         tools
-            .get(short_name)
-            .filter(|tool| tool.plugin_id == plugin_id)
+            .values()
+            .filter(|tool| tool.name == name)
+            .min_by(|a, b| a.plugin_id.cmp(&b.plugin_id))
             .cloned()
     }
 
@@ -1402,6 +1651,16 @@ pub fn default_plugins_dir() -> std::path::PathBuf {
 /// grep for the name found the bug's own alibi and nothing else.
 #[must_use]
 pub fn plugin_data_dir(plugin_id: &str) -> std::path::PathBuf {
+    plugin_data_root().join(plugin_id)
+}
+
+/// Root of the per-plugin persistent data directories: `<plugins_root>/data/`.
+///
+/// The parent of every [`plugin_data_dir`], derived from the same path
+/// helper so that the watcher exclusion and the `${ALEPH_PLUGIN_DATA}`
+/// expansion can never point at different trees.
+#[must_use]
+pub fn plugin_data_root() -> std::path::PathBuf {
     default_plugins_dir()
         .parent()
         .map_or_else(
@@ -1409,7 +1668,6 @@ pub fn plugin_data_dir(plugin_id: &str) -> std::path::PathBuf {
             std::path::Path::to_path_buf,
         )
         .join("data")
-        .join(plugin_id)
 }
 
 /// Reject a plugin install destination whose leaf is a symlink (including
@@ -1755,7 +2013,7 @@ mod tests {
     /// working dir itself); the real plugin is the positive control.
     #[tokio::test]
     async fn component_dirs_are_not_plugin_candidates() {
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let _home = crate::utils::paths::IsolatedDiscoveryHome::new();
         let dir = tempfile::tempdir().unwrap();
         let skill = dir.path().join(".aleph/skills/planted-skill");
         std::fs::create_dir_all(&skill).unwrap();
@@ -1808,7 +2066,7 @@ mod tests {
         // `Config::load()` writes a default config when none exists, so an
         // un-isolated run of this test targets the real `~/.aleph/config.toml`
         // — invisible on a developer box that already has one, fatal on CI.
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let _home = crate::utils::paths::IsolatedDiscoveryHome::new();
         let tmp = tempfile::tempdir().unwrap();
         write_project_plugin(tmp.path(), "quiet-plugin");
         let (manager, cfg_path) = isolated_manager(tmp.path()).await;
@@ -1831,6 +2089,7 @@ mod tests {
             .changed());
         assert!(
             !crate::extension::plugin_state::PluginsConfig::load(&cfg_path)
+                .unwrap()
                 .is_enabled_for("quiet-plugin", PluginOrigin::Workspace),
             "the preference must reach disk, not just the in-memory registry"
         );
@@ -1850,6 +2109,53 @@ mod tests {
         );
     }
 
+    /// An unreadable `plugins.toml` must not be read as "no preferences".
+    ///
+    /// The default document has `enforce = false`, so degrading to it would
+    /// switch owner-trust enforcement OFF exactly when the operator's trust
+    /// decisions are unreadable — the one direction a trust decision may not
+    /// fail in. The manager therefore runs restricted (enforcement ON, empty
+    /// allowlist) and refuses to overwrite the operator's file.
+    #[tokio::test]
+    async fn an_unreadable_preferences_document_keeps_trust_enforced() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg_path = tmp.path().join("plugins.toml");
+        let broken = "this is not toml {{{";
+        std::fs::write(&cfg_path, broken).unwrap();
+
+        let manager = ExtensionManager::new(ExtensionConfig {
+            discovery: DiscoveryConfig {
+                working_dir: tmp.path().to_path_buf(),
+                scan_claude_dirs: false,
+                scan_project_dirs: false,
+                max_upward_depth: 0,
+                claude_home_override: None,
+            },
+            plugins_config_path: Some(cfg_path.clone()),
+            ..ExtensionConfig::default()
+        })
+        .await
+        .unwrap();
+
+        let policy = manager.current_owner_trust_policy();
+        assert!(
+            !policy.allows("stray", PluginOrigin::Workspace),
+            "an unreadable trust document must refuse plugins, not admit them"
+        );
+
+        // The operator's file must survive: a write now would replace it with
+        // a document the operator never wrote.
+        assert!(
+            manager.set_plugin_enabled("stray", false).await.is_err(),
+            "a preference write must fail while the document is unreadable"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&cfg_path).unwrap(),
+            broken,
+            "the unreadable document must not be overwritten"
+        );
+    }
+
     /// A disabled plugin keeps a listable `Disabled` row (no capability rows),
     /// and `set_plugin_enabled(id, true)` goes through `mount`, which registers
     /// the capabilities itself — so a runtime re-enable has something behind
@@ -1859,7 +2165,7 @@ mod tests {
         // `Config::load()` writes a default config when none exists, so an
         // un-isolated run of this test targets the real `~/.aleph/config.toml`
         // — invisible on a developer box that already has one, fatal on CI.
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let _home = crate::utils::paths::IsolatedDiscoveryHome::new();
         let tmp = tempfile::tempdir().unwrap();
         write_project_plugin(tmp.path(), "wakeable");
         let (manager, cfg_path) = isolated_manager(tmp.path()).await;
@@ -1909,7 +2215,7 @@ mod tests {
         // `Config::load()` writes a default config when none exists, so an
         // un-isolated run of this test targets the real `~/.aleph/config.toml`
         // — invisible on a developer box that already has one, fatal on CI.
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let _home = crate::utils::paths::IsolatedDiscoveryHome::new();
         let tmp = tempfile::tempdir().unwrap();
         write_project_plugin(tmp.path(), "old-timer");
         let marker = tmp.path().join("plugins/old-timer/.disabled");
@@ -1929,6 +2235,7 @@ mod tests {
         );
         assert!(
             !crate::extension::plugin_state::PluginsConfig::load(&cfg_path)
+                .unwrap()
                 .is_enabled_for("old-timer", PluginOrigin::Workspace),
             "and be written into the durable document"
         );
@@ -2144,7 +2451,7 @@ mod tests {
         // `Config::load()` writes a default config when none exists, so an
         // un-isolated run of this test targets the real `~/.aleph/config.toml`
         // — invisible on a developer box that already has one, fatal on CI.
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let _home = crate::utils::paths::IsolatedDiscoveryHome::new();
         use crate::extension::visibility::{ScopeKey, VisibilityCtx};
         let dir = tempfile::tempdir().unwrap();
         write_project_plugin(dir.path(), "p2-vis");
@@ -2247,6 +2554,85 @@ mod tests {
         assert_eq!(manager.active_plugin_tools_snapshot().len(), 2);
     }
 
+    /// A short tool name is not unique across plugins. The tool index kept
+    /// only the global winner of that contest, so a project plugin's tool
+    /// was deleted before the session in that project ever asked for it.
+    #[tokio::test]
+    async fn a_project_tool_survives_another_plugin_claiming_the_same_short_name() {
+        use crate::extension::visibility::{canonical_root, ScopeKey, VisibilityCtx};
+        let _home = hermetic_home();
+        let proj = tempfile::tempdir().unwrap();
+        let manager = ExtensionManager::with_defaults().await.unwrap();
+        {
+            let mut registry = manager.get_plugin_registry_mut().await;
+            let mut project_plugin = PluginRecord::new(
+                "proj-alpha".into(),
+                "Project Alpha".into(),
+                PluginKind::Wasm,
+                PluginOrigin::Workspace,
+            );
+            project_plugin.scope_key = ScopeKey::project(proj.path());
+            registry.register_plugin(project_plugin);
+            registry.register_tool(ToolRegistration {
+                name: "shared_tool".into(),
+                description: "the project's own tool".into(),
+                parameters: serde_json::json!({"type": "object"}),
+                handler: "tool_proj_alpha".into(),
+                plugin_id: "proj-alpha".into(),
+            });
+            let mut global_plugin = PluginRecord::new(
+                "global-alpha".into(),
+                "Global Alpha".into(),
+                PluginKind::Wasm,
+                PluginOrigin::Global,
+            );
+            global_plugin.scope_key = ScopeKey::Global;
+            registry.register_plugin(global_plugin);
+            registry.register_tool(ToolRegistration {
+                name: "shared_tool".into(),
+                description: "the global tool".into(),
+                parameters: serde_json::json!({"type": "object"}),
+                handler: "tool_global_alpha".into(),
+                plugin_id: "global-alpha".into(),
+            });
+        }
+        manager.sync_runtime_snapshots().await;
+
+        let owners = |ctx: &VisibilityCtx| -> Vec<String> {
+            manager
+                .active_plugin_tools_visible_to(ctx)
+                .into_iter()
+                .filter(|tool| tool.name == "shared_tool")
+                .map(|tool| tool.plugin_id)
+                .collect()
+        };
+        let in_p = VisibilityCtx {
+            project_root: Some(canonical_root(proj.path())),
+        };
+        let nowhere = VisibilityCtx { project_root: None };
+
+        assert_eq!(
+            owners(&in_p),
+            vec!["proj-alpha".to_string()],
+            "the project plugin's tool must not be deleted by the global plugin claiming the same short name"
+        );
+        assert_eq!(owners(&nowhere), vec!["global-alpha".to_string()]);
+        assert_eq!(
+            manager
+                .resolve_active_plugin_tool("proj-alpha:shared_tool")
+                .map(|tool| tool.plugin_id),
+            Some("proj-alpha".to_string()),
+            "an explicit namespace resolves to its own registration"
+        );
+        assert_eq!(
+            manager
+                .resolve_active_plugin_tool("shared_tool")
+                .map(|tool| tool.plugin_id),
+            Some("global-alpha".to_string()),
+            "a bare short name resolves to the global winner"
+        );
+    }
+
     /// Face ⑤: the owner decoded from a plugin server id is a key the
     /// manager answers for — a project-keyed plugin's server is visible in
     /// its project and nowhere else.
@@ -2293,7 +2679,7 @@ mod tests {
         // unguarded read here raced a concurrent sibling's publish and lost
         // the entry before the assertion — reproducible 100% of the time
         // under this module's default parallel test run.
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let _home = crate::utils::paths::IsolatedDiscoveryHome::new();
         let dir = tempfile::tempdir().unwrap();
         write_project_plugin(dir.path(), "p2-skilled");
         std::fs::create_dir_all(dir.path().join("plugins/p2-skilled/skills/hello")).unwrap();
@@ -2321,7 +2707,7 @@ mod tests {
     /// looks up an owner no registry names and drops the skill everywhere.
     #[tokio::test]
     async fn plugin_skills_are_owned_by_the_registry_id_not_the_directory_name() {
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let _home = crate::utils::paths::IsolatedDiscoveryHome::new();
         let dir = tempfile::tempdir().unwrap();
         // Auto-discovered plugin: no manifest, id = sanitize_plugin_id("My_Plugin").
         let skill = dir.path().join("plugins/My_Plugin/skills/planted");
@@ -2444,7 +2830,7 @@ mod tests {
     /// allocation — not a clone of its contents, not a fresh registry.
     #[tokio::test]
     async fn tool_handler_registry_fresh_attachment_stores_the_exact_arc() {
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let _home = crate::utils::paths::IsolatedDiscoveryHome::new();
         let tmp = tempfile::tempdir().unwrap();
         let (manager, _cfg) = isolated_manager(tmp.path()).await;
         assert!(stored_tool_handler_registry(&manager).is_none());
@@ -2466,7 +2852,7 @@ mod tests {
     /// authority changes.
     #[tokio::test]
     async fn tool_handler_registry_same_arc_reattachment_is_ok_after_empty_discovery() {
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let _home = crate::utils::paths::IsolatedDiscoveryHome::new();
         let tmp = tempfile::tempdir().unwrap();
         let (manager, _cfg) = isolated_manager(tmp.path()).await;
         let registry = fresh_tool_handler_registry();
@@ -2492,7 +2878,7 @@ mod tests {
     /// pointer survives the refusal.
     #[tokio::test]
     async fn tool_handler_registry_different_arc_is_refused_and_the_original_is_kept() {
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let _home = crate::utils::paths::IsolatedDiscoveryHome::new();
         let tmp = tempfile::tempdir().unwrap();
         let (manager, _cfg) = isolated_manager(tmp.path()).await;
         let first = fresh_tool_handler_registry();
@@ -2521,7 +2907,7 @@ mod tests {
     /// resource.
     #[tokio::test]
     async fn tool_handler_registry_first_attachment_after_empty_discovery_is_refused() {
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let _home = crate::utils::paths::IsolatedDiscoveryHome::new();
         let tmp = tempfile::tempdir().unwrap();
         let (manager, _cfg) = isolated_manager(tmp.path()).await;
 
@@ -2555,7 +2941,7 @@ mod tests {
         use std::future::Future;
         use std::task::{Context, Poll, Waker};
 
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let _home = crate::utils::paths::IsolatedDiscoveryHome::new();
         let tmp = tempfile::tempdir().unwrap();
         let (manager, _cfg) = isolated_manager(tmp.path()).await;
 
@@ -2594,7 +2980,7 @@ mod tests {
     /// without the resource. The resource stays unset on every refusal.
     #[tokio::test]
     async fn tool_handler_registry_first_attachment_with_an_existing_row_is_refused() {
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let _home = crate::utils::paths::IsolatedDiscoveryHome::new();
         for status in [
             PluginStatus::Disabled,
             PluginStatus::Error("boom".to_string()),
@@ -2638,7 +3024,7 @@ mod tests {
     /// attachment even with the cache flag false.
     #[tokio::test]
     async fn tool_handler_registry_first_attachment_with_a_mounted_scope_is_refused() {
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let _home = crate::utils::paths::IsolatedDiscoveryHome::new();
         let tmp = tempfile::tempdir().unwrap();
         let (manager, _cfg) = isolated_manager(tmp.path()).await;
         manager
@@ -2663,7 +3049,7 @@ mod tests {
     /// discovery cache, registry row or scope has been published yet.
     #[tokio::test]
     async fn tool_handler_registry_first_attachment_with_a_loaded_runtime_is_refused() {
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let _home = crate::utils::paths::IsolatedDiscoveryHome::new();
         let tmp = tempfile::tempdir().unwrap();
         let (manager, _cfg) = isolated_manager(tmp.path()).await;
         let guest = tempfile::tempdir().unwrap();

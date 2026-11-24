@@ -24,7 +24,7 @@ use uuid::Uuid;
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
     ChannelResult, ChannelState, ChannelStatus, ConversationId, InboundMessage, MessageId,
-    OutboundMessage, SendResult, UserId,
+    OutboundMessage, SendOperation, SendResult, UserId,
 };
 
 /// CLI channel configuration
@@ -179,7 +179,6 @@ impl Channel for CliChannel {
     fn info(&self) -> &ChannelInfo {
         &self.info
     }
-
     fn state(&self) -> &ChannelState {
         &self.channel_state
     }
@@ -212,7 +211,9 @@ impl Channel for CliChannel {
         // Create a channel for lines from the blocking reader thread
         let (line_tx, mut line_rx) = mpsc::channel::<String>(10);
 
-        // Spawn blocking reader thread for stdin
+        // Spawn blocking reader thread for stdin. Reading stdin blocks, so it
+        // must not run on the async runtime: the thread hands every line to
+        // the async task over the channel above.
         std::thread::spawn(move || {
             let stdin = io::stdin();
             for line in stdin.lock().lines() {
@@ -240,7 +241,6 @@ impl Channel for CliChannel {
                         if text.is_empty() {
                             continue;
                         }
-
                         let message = InboundMessage {
                             id: MessageId::new(Uuid::new_v4().to_string()),
                             channel_id: ChannelId::new(&config.id),
@@ -291,30 +291,48 @@ impl Channel for CliChannel {
         Ok(())
     }
 
-    async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-        if self.channel_state.status() != ChannelStatus::Connected {
-            return Err(ChannelError::NotConnected(
-                "CLI channel not connected".to_string(),
-            ));
-        }
+    fn send(&self, message: OutboundMessage) -> SendOperation {
+        let channel_state = self.channel_state.clone();
+        let config = self.config.clone();
+        let test_mode = self.test_mode;
+        Box::pin(async move {
+            if channel_state.status() != ChannelStatus::Connected {
+                return Err(ChannelError::NotConnected(
+                    "CLI channel not connected".to_string(),
+                ));
+            }
 
-        // In test mode, skip stdout I/O
-        if !self.test_mode {
-            let mut stdout = io::stdout().lock();
-            writeln!(stdout, "\n{}", message.text)
-                .map_err(|e| ChannelError::SendFailed(format!("Failed to write to stdout: {e}")))?;
-            stdout
-                .flush()
-                .map_err(|e| ChannelError::SendFailed(format!("Failed to flush stdout: {e}")))?;
+            // In test mode, skip stdout I/O
+            if !test_mode {
+                tokio::task::spawn_blocking(move || {
+                    // The text is moved into the blocking thread, not copied:
+                    // the message text can be large, and cloning it on the
+                    // async worker would block the runtime.
+                    let message_text = message.text;
+                    let prompt = config.prompt.clone();
+                    let mut stdout = io::stdout().lock();
+                    writeln!(stdout, "\n{}", message_text).map_err(|e| {
+                        ChannelError::SendFailed(format!("Failed to write to stdout: {e}"))
+                    })?;
+                    stdout.flush().map_err(|e| {
+                        ChannelError::SendFailed(format!("Failed to flush stdout: {e}"))
+                    })?;
 
-            print!("{}", self.config.prompt);
-            io::stdout().flush().ok();
-        }
+                    print!("{}", prompt);
+                    io::stdout().flush().ok();
+                    Ok::<(), ChannelError>(())
+                })
+                .await
+                .map_err(|e| {
+                    ChannelError::SendFailed(format!("Failed to join blocking task: {e}"))
+                })??;
+            }
 
-        let message_id = MessageId::new(Uuid::new_v4().to_string());
-        Ok(SendResult {
-            message_id,
-            timestamp: Utc::now(),
+            let message_id = MessageId::new(Uuid::new_v4().to_string());
+            Ok(SendResult {
+                message_id,
+                timestamp: Utc::now(),
+            })
         })
     }
 }

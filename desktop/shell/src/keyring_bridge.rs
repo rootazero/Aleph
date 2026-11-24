@@ -634,6 +634,7 @@ fn qa_outcome<T>(
 }
 
 #[tauri::command(rename_all = "snake_case")]
+#[allow(clippy::unreachable)]
 pub async fn panel_credential_load(
     webview: tauri::Webview,
     scope: CommandScope<GatewayCredentialScope>,
@@ -666,6 +667,7 @@ pub async fn panel_credential_load(
 // `rename_all = "snake_case"` pins the wire argument names (`lease_id`,
 // `credential`) the Panel will send; Tauri's default would be camelCase.
 #[tauri::command(rename_all = "snake_case")]
+#[allow(clippy::unreachable)]
 pub async fn panel_credential_save(
     webview: tauri::Webview,
     scope: CommandScope<GatewayCredentialScope>,
@@ -696,6 +698,7 @@ pub async fn panel_credential_save(
 }
 
 #[tauri::command(rename_all = "snake_case")]
+#[allow(clippy::unreachable)]
 pub async fn panel_credential_delete(
     webview: tauri::Webview,
     scope: CommandScope<GatewayCredentialScope>,
@@ -1169,10 +1172,11 @@ mod tests {
             // ...and afterwards the old lease is dead before any further I/O.
             *h.backend.during_io.lock().unwrap() = None;
             let before = hits(&h);
-            assert!(h
-                .bridge
-                .save_blocking(&req, lease.lease_id, &cred("x"))
-                .is_err());
+            assert!(
+                h.bridge
+                    .save_blocking(&req, lease.lease_id, &cred("x"))
+                    .is_err()
+            );
             assert!(h.bridge.delete_blocking(&req, lease.lease_id).is_err());
             assert_eq!(hits(&h), before);
         }
@@ -1490,9 +1494,11 @@ mod tests {
 
     #[test]
     fn scope_rejects_unknown_fields() {
-        assert!(serde_json::from_value::<GatewayCredentialScope>(
-            serde_json::json!({"gateway_origin": "http://a:1", "account": "x"})
-        )
-        .is_err());
+        assert!(
+            serde_json::from_value::<GatewayCredentialScope>(
+                serde_json::json!({"gateway_origin": "http://a:1", "account": "x"})
+            )
+            .is_err()
+        );
     }
 }

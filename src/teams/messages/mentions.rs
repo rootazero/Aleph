@@ -77,7 +77,9 @@ fn scan_line(line: &str, push: &mut impl FnMut(String)) {
     let mut prev_is_ident = false;
 
     while i < bytes.len() {
-        let c = bytes[i];
+        let Some(&c) = bytes.get(i) else {
+            break;
+        };
         // Inline-code toggle — backtick flips state, treat content as literal.
         if c == b'`' {
             in_inline_code = !in_inline_code;
@@ -92,29 +94,37 @@ fn scan_line(line: &str, push: &mut impl FnMut(String)) {
             i += 1;
             continue;
         }
-        // Backslash escapes the next character — skip both.
-        if c == b'\\' && i + 1 < bytes.len() {
-            prev_is_ident = is_ident_byte(bytes[i + 1]);
-            i += 2;
+        // Backslash escapes the next character — skip backslash and full escaped char.
+        if c == b'\\' {
+            if let Some(next_slice) = line.get(i + 1..) {
+                if let Some(ch) = next_slice.chars().next() {
+                    prev_is_ident = is_ident_char(ch);
+                    i += 1 + ch.len_utf8();
+                    continue;
+                }
+            }
+            prev_is_ident = false;
+            i += 1;
             continue;
         }
         if c == b'@' && !prev_is_ident {
             // Read the following identifier.
             let start = i + 1;
             let mut j = start;
-            while j < bytes.len() && is_ident_byte(bytes[j]) {
+            while j < bytes.len() && bytes.get(j).copied().is_some_and(is_ident_byte) {
                 j += 1;
             }
             if j > start {
-                let raw = &line[start..j];
-                let normalised = match raw {
-                    "all" | "everyone" => MENTION_ALL.to_string(),
-                    other => other.to_string(),
-                };
-                push(normalised);
-                prev_is_ident = true;
-                i = j;
-                continue;
+                if let Some(raw) = line.get(start..j) {
+                    let normalised = match raw {
+                        "all" | "everyone" => MENTION_ALL.to_string(),
+                        other => other.to_string(),
+                    };
+                    push(normalised);
+                    prev_is_ident = true;
+                    i = j;
+                    continue;
+                }
             }
             // `@` not followed by an identifier — treat as literal text.
             prev_is_ident = false;
@@ -129,6 +139,11 @@ fn scan_line(line: &str, push: &mut impl FnMut(String)) {
 #[inline]
 const fn is_ident_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_' || b == b'-'
+}
+
+#[inline]
+const fn is_ident_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_' || c == '-'
 }
 
 // =============================================================================

@@ -1,0 +1,29 @@
+{
+  "status": "FAIL",
+  "command": {
+    "argv": [
+      "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/cargo-gated-stderr/cargo",
+      "test",
+      "-p",
+      "aleph-panel",
+      "--lib",
+      "activate_moves_data_between_singleton_and_registry"
+    ],
+    "cwd": "/Volumes/TBU4/Workspace/Aleph",
+    "env_overrides": {
+      "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+      "RUST_BACKTRACE": "1"
+    },
+    "exit_code": 101,
+    "timed_out": false,
+    "pid": 22975,
+    "cleanup_error": null,
+    "group_probe": null,
+    "unjoined_descendants": false,
+    "elapsed_seconds": 56.057577791041695,
+    "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/agent-projection-red.stdout.log",
+    "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/agent-projection-red.stderr.log",
+    "output": "\nrunning 1 test\ntest state::sessions::tests::activate_moves_data_between_singleton_and_registry ... FAILED\n\nfailures:\n\n---- state::sessions::tests::activate_moves_data_between_singleton_and_registry stdout ----\n\nthread 'state::sessions::tests::activate_moves_data_between_singleton_and_registry' (16135095) panicked at interfaces/webchat/src/state/sessions.rs:656:13:\nassertion `left == right` failed\n  left: None\n right: Some(\"agent-a\")\nstack backtrace:\n   0: __rustc::rust_begin_unwind\n             at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:679:5\n   1: core::panicking::panic_fmt\n             at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/panicking.rs:80:14\n   2: core::panicking::assert_failed_inner\n   3: core::panicking::assert_failed::<core::option::Option<alloc::string::String>, core::option::Option<alloc::string::String>>\n             at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/panicking.rs:407:5\n   4: aleph_panel::state::sessions::tests::activate_moves_data_between_singleton_and_registry::{closure#0}\n             at ./src/state/sessions.rs:656:13\n   5: aleph_panel::state::sessions::tests::with_owner::<(), aleph_panel::state::sessions::tests::activate_moves_data_between_singleton_and_registry::{closure#0}>\n             at ./src/state/sessions.rs:630:9\n   6: aleph_panel::state::sessions::tests::activate_moves_data_between_singleton_and_registry\n             at ./src/state/sessions.rs:648:9\n   7: aleph_panel::state::sessions::tests::activate_moves_data_between_singleton_and_registry::{closure#0}\n             at ./src/state/sessions.rs:647:60\n   8: <aleph_panel::state::sessions::tests::activate_moves_data_between_singleton_and_registry::{closure#0} as core::ops::function::FnOnce<()>>::call_once\n             at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/ops/function.rs:250:5\n   9: <fn() -> core::result::Result<(), alloc::string::String> as core::ops::function::FnOnce<()>>::call_once\n             at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/ops/function.rs:250:5\nnote: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.\n\n\nfailures:\n    state::sessions::tests::activate_moves_data_between_singleton_and_registry\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1561 filtered out; finished in 0.06s\n\navailable_bytes=9161506816 required_bytes=4294967296 ALLOW\n   Compiling aleph-panel v0.2.0 (/Volumes/TBU4/Workspace/Aleph/interfaces/webchat)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 55.47s\n     Running unittests src/lib.rs (.phase9-target/debug/deps/aleph_panel-72e2fd442cb5e1fe)\nerror: test failed, to rerun pass `-p aleph-panel --lib`\n"
+  },
+  "lock_sha256": "12300967333b45f8a0fa1f401cf13a559b5b8a881ee95550b1bbf1a8d42e21f5"
+}

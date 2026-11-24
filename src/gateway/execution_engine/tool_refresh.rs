@@ -23,8 +23,9 @@ pub(crate) fn plugin_tool_to_unified_tool(
     unified
 }
 
-/// Get active plugin tools filtered by agent allowlist AND by the owning
-/// plugin's visibility to this session (`extension::visibility`).
+/// Get plugin tool metadata filtered by agent allowlist AND by the owning
+/// plugin's visibility to this session (`extension::visibility`). Cold
+/// declarations remain metadata-only until canonical dispatch admits a call.
 pub(super) fn active_plugin_tools_for_agent(
     extension_manager: &crate::extension::ExtensionManager,
     agent: &AgentInstance,

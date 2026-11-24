@@ -9,7 +9,28 @@ use crate::sync_primitives::Arc;
 
 use crate::vision::error::VisionError;
 use crate::vision::provider::VisionProvider;
-use crate::vision::types::{ImageFormat, ImageInput, OcrResult, VisionCapabilities, VisionResult};
+use crate::vision::types::{
+    BoundingBox, ImageFormat, ImageInput, OcrLine, OcrResult, VisionCapabilities, VisionResult,
+    MAX_BASE64_ENCODED_SIZE, MAX_IMAGE_FILE_SIZE,
+};
+
+/// PNG signature bytes (`89 50 4E 47 0D 0A 1A 0A`).
+///
+/// The platform OCR backend only accepts PNG, so every input path checks the
+/// payload against this signature before handing it over — a mislabeled
+/// JPEG-as-PNG payload would otherwise be recognised as the wrong format
+/// (or silently produce wrong text).
+const PNG_MAGIC: &[u8] = &[0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n'];
+
+/// The image size cap expressed in whole megabytes, for error messages.
+const MAX_IMAGE_FILE_SIZE_MB: u64 = MAX_IMAGE_FILE_SIZE / (1024 * 1024);
+
+/// Error for an image file whose size exceeds [`MAX_IMAGE_FILE_SIZE`].
+fn image_file_too_large() -> VisionError {
+    VisionError::ImageError(format!(
+        "image file exceeds maximum size of {MAX_IMAGE_FILE_SIZE_MB} MB"
+    ))
+}
 
 /// Vision provider backed by the platform-native OCR engine.
 ///
@@ -97,21 +118,19 @@ impl PlatformOcrProvider {
                 // *before* allocating the decoded buffer — otherwise a 1 GiB
                 // base64 string costs 1 GiB of `String` plus ~750 MiB of
                 // `Vec<u8>` before the existing post-decode size cap fires.
-                if data.len() > crate::vision::types::MAX_BASE64_ENCODED_SIZE {
+                if data.len() > MAX_BASE64_ENCODED_SIZE {
                     return Err(VisionError::ImageError(format!(
                         "base64 image exceeds maximum encoded size of {} KB \
-                         (decoded limit: {} MB)",
-                        crate::vision::types::MAX_BASE64_ENCODED_SIZE / 1024,
-                        crate::vision::types::MAX_IMAGE_FILE_SIZE / (1024 * 1024)
+                         (decoded limit: {MAX_IMAGE_FILE_SIZE_MB} MB)",
+                        MAX_BASE64_ENCODED_SIZE / 1024
                     )));
                 }
                 let decoded = base64::engine::general_purpose::STANDARD
                     .decode(data)
                     .map_err(|e| VisionError::ImageError(format!("Invalid base64 image: {e}")))?;
-                if decoded.len() as u64 > crate::vision::types::MAX_IMAGE_FILE_SIZE {
+                if decoded.len() as u64 > MAX_IMAGE_FILE_SIZE {
                     return Err(VisionError::ImageError(format!(
-                        "decoded image exceeds maximum size of {} MB",
-                        crate::vision::types::MAX_IMAGE_FILE_SIZE / (1024 * 1024)
+                        "decoded image exceeds maximum size of {MAX_IMAGE_FILE_SIZE_MB} MB"
                     )));
                 }
                 // The platform OCR backend only accepts PNG. Verify the
@@ -120,7 +139,6 @@ impl PlatformOcrProvider {
                 // detects format from magic bytes, but other platform
                 // providers will not (and silently producing wrong OCR text
                 // is worse than failing fast).
-                const PNG_MAGIC: &[u8] = &[0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n'];
                 match format {
                     ImageFormat::Png => {
                         if !decoded.starts_with(PNG_MAGIC) {
@@ -151,11 +169,8 @@ impl PlatformOcrProvider {
                         e
                     ))
                 })?;
-                if meta.len() > crate::vision::types::MAX_IMAGE_FILE_SIZE {
-                    return Err(VisionError::ImageError(format!(
-                        "image file exceeds maximum size of {} MB",
-                        crate::vision::types::MAX_IMAGE_FILE_SIZE / (1024 * 1024)
-                    )));
+                if meta.len() > MAX_IMAGE_FILE_SIZE {
+                    return Err(image_file_too_large());
                 }
                 let bytes = tokio::fs::read(path).await.map_err(|e| {
                     VisionError::ImageError(format!(
@@ -166,11 +181,8 @@ impl PlatformOcrProvider {
                 })?;
                 // Defence-in-depth: re-check post-read in case the file was
                 // extended between `metadata` and `read` (TOCTOU).
-                if bytes.len() as u64 > crate::vision::types::MAX_IMAGE_FILE_SIZE {
-                    return Err(VisionError::ImageError(format!(
-                        "image file exceeds maximum size of {} MB",
-                        crate::vision::types::MAX_IMAGE_FILE_SIZE / (1024 * 1024)
-                    )));
+                if bytes.len() as u64 > MAX_IMAGE_FILE_SIZE {
+                    return Err(image_file_too_large());
                 }
                 // Symmetric with the Base64 arm: a mislabeled JPEG-as-PNG
                 // payload gets caught at the boundary rather than handed to
@@ -178,7 +190,6 @@ impl PlatformOcrProvider {
                 // produces wrong text instead of failing fast. The upstream
                 // Vision framework detects format from magic bytes too, so
                 // this matches its expectations rather than fighting them.
-                const PNG_MAGIC: &[u8] = &[0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n'];
                 if !bytes.starts_with(PNG_MAGIC) {
                     return Err(VisionError::ImageError(format!(
                         "image file {} does not start with PNG magic signature; \
@@ -287,16 +298,14 @@ fn convert_platform_ocr_result(result: aleph_desktop::OcrResult) -> OcrResult {
         lines: result
             .lines
             .into_iter()
-            .map(|line| crate::vision::types::OcrLine {
+            .map(|line| OcrLine {
                 text: line.text,
-                bounding_box: line
-                    .bounding_box
-                    .map(|bb| crate::vision::types::BoundingBox {
-                        x: bb.x,
-                        y: bb.y,
-                        w: bb.w,
-                        h: bb.h,
-                    }),
+                bounding_box: line.bounding_box.map(|bb| BoundingBox {
+                    x: bb.x,
+                    y: bb.y,
+                    w: bb.w,
+                    h: bb.h,
+                }),
                 confidence: line.confidence,
             })
             .collect(),
@@ -310,7 +319,6 @@ fn convert_platform_ocr_result(result: aleph_desktop::OcrResult) -> OcrResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vision::types::ImageFormat;
     use base64::Engine;
 
     fn sample_image() -> ImageInput {
@@ -375,7 +383,6 @@ mod tests {
         // so it would pass the base64 decoder. The pre-decode bound check
         // must reject it on encoded length alone, before the decoder
         // allocates the decoded buffer.
-        use crate::vision::types::MAX_BASE64_ENCODED_SIZE;
         let huge = "A".repeat(MAX_BASE64_ENCODED_SIZE + 4);
         let image = ImageInput::Base64 {
             data: huge,
@@ -424,7 +431,6 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_png_bytes_file_path_uses_metadata_size_check() {
-        use crate::vision::types::MAX_IMAGE_FILE_SIZE;
         // Create a file just over the cap. The metadata-first check must
         // reject it without reading the body into memory.
         let dir = tempfile::tempdir().unwrap();

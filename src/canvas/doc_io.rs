@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Weak};
 
-use aleph_protocol::canvas::CanvasDoc;
+use aleph_protocol::canvas::{CanvasDoc, MAX_DOCUMENT_BYTES};
 
 use crate::sync_primitives::Mutex;
 
@@ -98,6 +98,26 @@ impl DocLocks {
         })
     }
 
+    /// Lock a canvas for deletion, treating an unreadable document as an
+    /// absent document while preserving the lock through directory removal.
+    ///
+    /// A document that cannot be read — unparseable, over the read cap, or
+    /// unreadable for any other reason — must still be deletable: the
+    /// alternative is a canvas the API can neither list nor delete.
+    pub(super) async fn lock_for_delete(
+        &self,
+        id: &str,
+        path: PathBuf,
+    ) -> Result<DocGuard, CanvasError> {
+        let permit = self.slot(id).lock_owned().await;
+        let doc = read(&path).await.unwrap_or(None);
+        Ok(DocGuard {
+            path,
+            doc,
+            _permit: permit,
+        })
+    }
+
     /// How many slots the table is holding. Test-only observability for the
     /// pruning bound.
     #[cfg(test)]
@@ -161,6 +181,20 @@ impl DocGuard {
 /// into the latter is how a corrupt document becomes invisible on every
 /// surface at once.
 pub(super) async fn read(path: &Path) -> Result<Option<CanvasDoc>, CanvasError> {
+    match tokio::fs::metadata(path).await {
+        Ok(metadata) if metadata.len() > MAX_DOCUMENT_BYTES as u64 => {
+            return Err(CanvasError::Internal(format!(
+                "canvas doc exceeds the {MAX_DOCUMENT_BYTES}-byte read cap"
+            )));
+        }
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => {
+            return Err(CanvasError::Internal(format!(
+                "failed to read canvas doc: {e}"
+            )))
+        }
+    }
     let contents = match tokio::fs::read_to_string(path).await {
         Ok(c) => c,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -175,6 +209,27 @@ pub(super) async fn read(path: &Path) -> Result<Option<CanvasDoc>, CanvasError> 
     Ok(Some(doc))
 }
 
+/// Serialize a canvas document exactly the way [`write`] persists it.
+///
+/// ONE encoder for the write AND the byte gate: the gate has to measure the
+/// bytes that actually land on disk, and pretty-printed JSON is strictly
+/// larger than the compact encoding — a gate that sized the compact form
+/// would let a document through that the read path then refuses, leaving a
+/// canvas file that cannot be loaded at all.
+fn serialize(doc: &CanvasDoc) -> Result<String, CanvasError> {
+    serde_json::to_string_pretty(doc)
+        .map_err(|e| CanvasError::Internal(format!("failed to serialize canvas doc: {e}")))
+}
+
+/// How many bytes the document occupies AS PERSISTED.
+///
+/// `String::len()` is the UTF-8 byte length — the same unit the read cap
+/// (`MAX_DOCUMENT_BYTES`) is measured in, so the write-side gate and the
+/// read-side cap agree on what "too big" means.
+pub(super) fn persisted_size(doc: &CanvasDoc) -> Result<usize, CanvasError> {
+    Ok(serialize(doc)?.len())
+}
+
 /// Persist a canvas document atomically.
 ///
 /// Private to this module on purpose: reaching it requires a [`DocGuard`],
@@ -187,8 +242,7 @@ async fn write(path: &Path, doc: &CanvasDoc) -> Result<(), CanvasError> {
             .await
             .map_err(|e| CanvasError::Internal(format!("failed to create canvas dir: {e}")))?;
     }
-    let contents = serde_json::to_string_pretty(doc)
-        .map_err(|e| CanvasError::Internal(format!("failed to serialize canvas doc: {e}")))?;
+    let contents = serialize(doc)?;
     crate::utils::atomic_write::atomic_write_file(path, &contents)
         .await
         .map_err(|e| CanvasError::Internal(format!("failed to write canvas doc: {e}")))
@@ -249,5 +303,36 @@ mod tests {
         drop(guard);
 
         assert!(!path.exists());
+    }
+
+    /// The byte gate measures the bytes that are PERSISTED: the file on disk
+    /// is exactly the pretty-printed encoding, and `persisted_size` reports
+    /// that same encoding's length. A gate that sized a different encoding
+    /// (compact is smaller) would pass documents the read path refuses.
+    #[tokio::test]
+    async fn persisted_size_matches_the_bytes_on_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cv-x").join("doc.json");
+        let doc = CanvasDoc {
+            id: "cv-x".to_string(),
+            title: "sized".to_string(),
+            owner_user_id: None,
+            project_id: None,
+            revision: 1,
+            shapes: Vec::new(),
+            decks: Vec::new(),
+            created_at_ms: 0,
+            updated_at_ms: 0,
+            timeline: None,
+        };
+
+        write(&path, &doc).await.unwrap();
+
+        let on_disk = tokio::fs::metadata(&path).await.unwrap().len();
+        assert_eq!(
+            on_disk,
+            persisted_size(&doc).unwrap() as u64,
+            "the gate must measure the bytes that are actually written"
+        );
     }
 }

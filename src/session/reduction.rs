@@ -399,10 +399,12 @@ pub struct RunReduction {
 /// record `seq: 1` is still a slice. Only a *decrease* is the shape that
 /// derives a false anchor and a false disposition.
 pub fn validate_slice(events: &[SessionEventRecord]) -> Result<(), LogContradiction> {
-    match events.windows(2).find(|w| w[1].seq < w[0].seq) {
-        Some(w) => Err(LogContradiction::OutOfOrderSlice { at_seq: w[1].seq }),
-        None => Ok(()),
+    for w in events.windows(2) {
+        if w[1].seq < w[0].seq {
+            return Err(LogContradiction::OutOfOrderSlice { at_seq: w[1].seq });
+        }
     }
+    Ok(())
 }
 
 /// The run-marker set: the events `SessionEventStore::load_run_markers`
@@ -515,7 +517,7 @@ pub fn reduce_disposition(
         .iter()
         .rposition(|r| matches!(r.event, SessionEvent::RunFinished { .. }))
         .map_or(0, |i| i + 1);
-    let tail = &markers[since_finish..];
+    let tail = markers.get(since_finish..).unwrap_or(&[]);
     let stamps_in = |slice: &[SessionEventRecord]| {
         let n = slice
             .iter()
@@ -542,13 +544,15 @@ pub fn reduce_disposition(
     });
     match last_user {
         Some(i)
-            if !tail[i + 1..]
+            if !tail
+                .get(i + 1..)
+                .unwrap_or(&[])
                 .iter()
                 .any(|r| matches!(r.event, SessionEvent::AssistantMessage { .. })) =>
         {
             Ok(RunDisposition::Unanswered {
-                user_seq: tail[i].seq,
-                attempts: stamps_in(&tail[i + 1..]),
+                user_seq: tail.get(i).map_or(0, |r| r.seq),
+                attempts: stamps_in(tail.get(i + 1..).unwrap_or(&[])),
             })
         }
         _ => Ok(RunDisposition::Clean),
@@ -707,12 +711,12 @@ pub fn reduce_run(events: &[SessionEventRecord]) -> Result<RunReduction, LogCont
                 if after_finish_without_start && saw_run_started && unmarked_first.is_none() {
                     unmarked_first = Some(record.seq);
                 }
-                let prior: Vec<EventSeq> = dispatches
-                    .iter()
-                    .filter(|d| d.call_id == call_id)
-                    .map(|d| d.seq)
-                    .collect();
-                if !prior.is_empty() {
+                if dispatches.iter().any(|d| d.call_id == call_id) {
+                    let prior: Vec<EventSeq> = dispatches
+                        .iter()
+                        .filter(|d| d.call_id == call_id)
+                        .map(|d| d.seq)
+                        .collect();
                     note_duplicate(
                         &mut contradictions,
                         call_id,
@@ -974,7 +978,9 @@ pub fn own_work_start(events: &[SessionEventRecord]) -> usize {
         return 0;
     };
     let after = forked_at + 1;
-    events[after..]
+    events
+        .get(after..)
+        .unwrap_or(&[])
         .iter()
         .position(|r| matches!(r.event, SessionEvent::TurnStarted { .. }))
         .map_or(events.len(), |i| after + i)
