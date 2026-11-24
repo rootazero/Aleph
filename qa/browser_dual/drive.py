@@ -312,6 +312,24 @@ async def goto(rpc, url, profile="default"):
 # --------------------------------------------------------------------------
 
 
+async def wait_for_install_job(rpc, led, job_id):
+    """Block on a `runtime_manage` install job and return its finished outcome.
+
+    `bash{process_action:"wait"}` is the only reader of a background job's
+    result, and `bash` is denied on the gateway `tools.invoke` surface unless
+    `ALEPH_GATEWAY_TOOLS_ALLOW` names it (run.sh does, for this stage only). A
+    denied wait answers instantly with an rpc_error, which used to be dropped:
+    the stage then read nothing and guessed. Assert the wait itself answered.
+    """
+    # `ok` is not read: a failed install is a finished job whose own
+    # `success` is false, and the second caller below expects exactly that.
+    _, body = await rpc.invoke("bash", {"process_action": "wait", "process_id": job_id})
+    led.check(f"bash wait on install job {job_id} returned the job's outcome",
+              isinstance(body, dict) and "success" in body and "rpc_error" not in body,
+              json.dumps(body)[:400])
+    return body if isinstance(body, dict) else {}
+
+
 async def stage_provision(rpc, led, a):
     """The ledger install, against the REAL release.
 
@@ -341,7 +359,7 @@ async def stage_provision(rpc, led, a):
     m = re.search(r"process_id:(\d+)", message) or re.search(r"as job (\d+)", message)
     led.check("the install reported a pollable job id in its message", bool(m), message[:300])
     if m:
-        await rpc.invoke("bash", {"process_action": "wait", "process_id": int(m.group(1))})
+        await wait_for_install_job(rpc, led, int(m.group(1)))
 
     for _ in range(300):
         if os.path.exists(installed):
@@ -413,17 +431,22 @@ async def stage_provision(rpc, led, a):
     led.check("the dead mirror is in the config the installer will read",
               f'download_host = "{a.dead_mirror}"' in open(a.config).read())
     shutil.rmtree(os.path.dirname(installed), ignore_errors=True)
-    before = len(server_log(a))
 
     ok, body = await rpc.invoke("runtime_manage", {"action": "install", "capability": "obscura"})
     m = re.search(r"process_id:(\d+)", (body or {}).get("message", "")) \
         or re.search(r"as job (\d+)", (body or {}).get("message", ""))
-    if m:
-        await rpc.invoke("bash", {"process_action": "wait", "process_id": int(m.group(1))})
-    time.sleep(5)
-    tail = server_log(a)[before:]
+    led.check("the dead-mirror install reported a pollable job id", bool(m), json.dumps(body)[:300])
+    # The failure is read from the JOB'S OWN OUTCOME, not the server log. A
+    # background install that fails is reported only to whoever polls the job
+    # (`run_install` -> `ProcessRegistry::complete`); nothing logs it. Reading
+    # the log made these checks pass only while some other line happened to
+    # carry the words, and made the "did not follow the mirror" check below
+    # pass vacuously on an empty tail.
+    outcome = await wait_for_install_job(rpc, led, int(m.group(1))) if m else {}
+    tail = f"{outcome.get('stderr', '')}\n{outcome.get('stdout', '')}"
 
     led.check("an unreachable asset mirror installs NOTHING", not os.path.exists(installed), installed)
+    led.check("the install job reports failure", outcome.get("success") is False, json.dumps(outcome)[:600])
     led.check("and the failure names the mirror it could not reach",
               a.dead_mirror in tail, tail[-600:])
     # The half that makes the first half mean something. `Fetch::Checksum`'s own

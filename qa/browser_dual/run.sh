@@ -440,8 +440,17 @@ if [ "$STAGE" = "escape" ]; then
   fi
 fi
 
+# `provision` waits on the install job with `bash{process_action:"wait"}` —
+# the only reader of a background job's outcome — and `bash` is denied on the
+# gateway `tools.invoke` surface (src/security/dangerous_tools.rs). Lifted for
+# this stage's isolated server only; every other stage keeps the deny.
+SERVER_ENV=()
+if [ "$STAGE" = "provision" ]; then
+  SERVER_ENV=(ALEPH_GATEWAY_TOOLS_ALLOW=bash)
+fi
+
 say "start server (cwd=$CWD)"
-(cd "$CWD" && "$BIN" start) >"$QA_ROOT/server.log" 2>&1 &
+(cd "$CWD" && env ${SERVER_ENV[@]+"${SERVER_ENV[@]}"} "$BIN" start) >"$QA_ROOT/server.log" 2>&1 &
 SERVER_PID=$!
 for _ in $(seq 1 90); do
   curl -sf -o /dev/null "http://127.0.0.1:$GATEWAY_PORT/health" && break
