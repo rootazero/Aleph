@@ -371,7 +371,7 @@ fn hello() -> HelloParams {
             platform: std::env::consts::OS.into(),
             ui_runtime: "nsh".into(),
         },
-        features: vec![Feature::LiveEvents],
+        features: vec![Feature::LiveEvents, Feature::ChatTranscript],
     }
 }
 
@@ -439,7 +439,27 @@ mod tests {
             topic_event_payload(warning),
             json!({ "topic": "connection.warning", "data": { "reason": "events_overflow" } })
         );
-        assert_eq!(hello().features, vec![Feature::LiveEvents]);
+        assert!(hello().features.contains(&Feature::LiveEvents));
+    }
+
+    #[test]
+    fn rich_tools_use_the_same_typed_notification_as_text() {
+        let offered = serde_json::to_value(hello()).unwrap();
+        assert!(offered["features"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("chat_transcript")));
+        let payload = json!({
+            "type": "chat_tool", "run_id": "r-1", "seq": 2,
+            "tool_call_id": "call-1", "change": {"kind": "working"}
+        });
+        let event: StreamEvent = serde_json::from_value(payload.clone()).unwrap();
+        assert_eq!(
+            stream_event_payload(&event).unwrap(),
+            json!({
+                "topic": "stream.chat_tool", "data": payload
+            })
+        );
     }
 
     #[test]

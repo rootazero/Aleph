@@ -186,9 +186,9 @@ async fn serve_peer(
     };
     // Subscribed before the hello reply is written, so no frame published
     // after the client learns it may expect events is missed.
-    let mut events = granted
-        .contains(&Feature::LiveEvents)
-        .then(|| V1EventFeed::subscribe(&ctx, id.clone(), None, MAX_FRAME_BYTES as usize));
+    let mut events = granted.contains(&Feature::LiveEvents).then(|| {
+        V1EventFeed::subscribe(&ctx, id.clone(), None, MAX_FRAME_BYTES as usize, &granted)
+    });
     let result = tokio::select! {
         biased;
         _ = stop.cancelled() => Ok(()),
@@ -272,6 +272,12 @@ async fn serve_requests(
                     match feed.admit(ctx, received).await {
                         None => {}
                         Some(V1Event::Send(frame)) => send(write, &frame).await?,
+                        Some(V1Event::ToolPresentation(frame)) => {
+                            if peer.snapshot().await.is_none() {
+                                return Ok(());
+                            }
+                            send(write, &frame).await?;
+                        }
                         Some(V1Event::Lost(warning)) => {
                             send(write, &warning).await?;
                             return Ok(());

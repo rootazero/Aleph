@@ -54,6 +54,7 @@ pub mod canvas_error;
 pub mod capabilities;
 pub mod channel;
 pub mod chat;
+pub(crate) mod chat_presentation;
 pub mod clarification;
 pub mod cluster;
 pub mod commands;

@@ -470,6 +470,7 @@ async fn serve(
             conn_id.clone(),
             expected.device_id.clone(),
             MAX_MESSAGE as usize,
+            &granted,
         )
     });
     let expires = binding.expires;
@@ -499,6 +500,13 @@ async fn serve(
                     match feed.admit(&ctx, received).await {
                         None => continue,
                         Some(V1Event::Send(frame)) => {
+                            send(socket, &frame, None, INTERNAL_ERROR).await?;
+                            continue;
+                        }
+                        Some(V1Event::ToolPresentation(frame)) => {
+                            if peer.snapshot().await.is_none() {
+                                break;
+                            }
                             send(socket, &frame, None, INTERNAL_ERROR).await?;
                             continue;
                         }

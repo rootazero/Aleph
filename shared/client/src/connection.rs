@@ -548,12 +548,14 @@ impl AlephClient {
         if result.protocol.major != hello.protocol.major
             || result.protocol.minor > hello.protocol.minor
             || result.connection_id.is_empty()
-            // The only optional feature this client implements on IPC is
-            // `live_events`, and only when it asked for it.
+            // Accept only implemented V1 features that the client requested.
             || !result
                 .features
                 .iter()
-                .all(|feature| *feature == Feature::LiveEvents && hello.features.contains(feature))
+                .all(|feature| {
+                    matches!(feature, Feature::LiveEvents | Feature::ChatTranscript)
+                        && hello.features.contains(feature)
+                })
             || result.limits.max_message_bytes != u64::from(local_ipc::MAX_FRAME_BYTES)
             || !(1..=local_ipc::MAX_INFLIGHT).contains(&result.limits.max_inflight_requests)
         {

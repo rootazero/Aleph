@@ -122,20 +122,24 @@ pub(super) fn v1_mounted(method: &str) -> bool {
 /// The optional `system.hello` features both v1 entries implement. Granted
 /// only when the client also requests them; see
 /// [`event_admission::V1EventFeed`] for what `live_events` delivers.
-pub(super) const V1_FEATURES: &[aleph_protocol::system_hello::Feature] =
-    &[aleph_protocol::system_hello::Feature::LiveEvents];
+pub(super) const V1_FEATURES: &[aleph_protocol::system_hello::Feature] = &[
+    aleph_protocol::system_hello::Feature::LiveEvents,
+    aleph_protocol::system_hello::Feature::ChatTranscript,
+];
 
 /// The event topics a v1 connection may receive once it negotiated
 /// `live_events`. This list only NARROWS: a frame must first pass the shared
 /// [`event_admission::admit_event`] decision (identity, scope, ownership,
 /// projection) and then name one of these topics. It is the chat slice's
-/// run lifecycle plus the overflow warning; widening it is a contract change
-/// for every v1 client, not a filter tweak.
+/// run lifecycle plus the overflow warning. The tool presentation topic can
+/// only be produced by [`event_admission::V1EventFeed`] after negotiation;
+/// its raw source topics remain excluded.
 pub(super) const V1_EVENT_TOPICS: &[&str] = &[
     "stream.run_accepted",
     "stream.response_chunk",
     "stream.run_complete",
     "stream.run_error",
+    aleph_protocol::chat_transcript::CHAT_TOOL_TOPIC,
     "connection.warning",
 ];
 
@@ -1392,7 +1396,7 @@ pub async fn handle_connection(
                         )
                         .await
                         {
-                            EventVerdict::Skip => continue,
+                            EventVerdict::Skip | EventVerdict::ToolPresentation(_) => continue,
                             EventVerdict::Send(wire_json) => {
                                 if let Err(e) = write.send(WsMessage::Text(wire_json.into())).await {
                                     error!("Failed to send event to {}: {}", conn_id, e);

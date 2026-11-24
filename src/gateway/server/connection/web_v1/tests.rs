@@ -169,9 +169,9 @@ async fn web_pairing_requires_an_explicit_active_user_without_changing_legacy_pa
     );
 }
 
-#[test]
-fn web_binding_tracks_exact_token_device_user_and_deadline() {
-    let (_, store, manager) = fixture(true);
+#[tokio::test]
+async fn web_binding_tracks_exact_token_device_user_and_deadline() {
+    let (gateway, store, manager) = fixture(true);
     let ticket = manager
         .create_bootstrap_ticket(None, Some("member-fixture"))
         .unwrap();
@@ -191,6 +191,48 @@ fn web_binding_tracks_exact_token_device_user_and_deadline() {
         expires: tokio::time::Instant::now() + super::TTL,
     };
     assert_eq!(binding.current_role(), Some("member"));
+    let expected = binding.snapshot("member");
+    let mut row = super::ConnectionState::new("127.0.0.1".parse().unwrap(), false);
+    row.first_message = false;
+    row.caller_role = "member".into();
+    row.caller_user = expected.user.clone();
+    row.verified_user = expected.verified_user.clone();
+    row.device_id = expected.device_id.clone();
+    let connection_id = "still-connected".to_owned();
+    gateway
+        .connections
+        .write()
+        .await
+        .insert(connection_id.clone(), row);
+    let peer = |binding| {
+        super::DispatchPeer::web(
+            gateway.connections.clone(),
+            connection_id.clone(),
+            expected.clone(),
+            binding,
+        )
+    };
+    assert!(peer(binding.clone()).snapshot().await.is_some());
+    store
+        .issue_device_token(
+            "expired-fixture",
+            &binding.device_id,
+            "expired-hash",
+            "member",
+            &[],
+            -1,
+        )
+        .unwrap();
+    let mut expired_token = binding.clone();
+    expired_token.token_id = "expired-fixture".into();
+    assert!(expired_token.expires > tokio::time::Instant::now());
+    assert!(peer(expired_token).snapshot().await.is_none());
+    assert!(gateway
+        .connections
+        .read()
+        .await
+        .contains_key(&connection_id));
+
     let mut expired = binding.clone();
     expired.expires = tokio::time::Instant::now();
     assert_eq!(expired.current_role(), None);

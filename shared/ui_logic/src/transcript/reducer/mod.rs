@@ -297,7 +297,8 @@ impl Transcript {
             | StreamEvent::RunRetrying { .. }
             | StreamEvent::ModelResolved { .. }
             | StreamEvent::ContextGauge { .. }
-            | StreamEvent::SessionUserMessage { .. } => Vec::new(),
+            | StreamEvent::SessionUserMessage { .. }
+            | StreamEvent::ChatTool { .. } => Vec::new(),
         }
     }
 

@@ -637,6 +637,38 @@ async fn desktop_ipc_pushes_admitted_events_only_after_negotiation() {
         // Anything pushed to the quiet connection would arrive before this.
         send(&mut quiet, json!({"jsonrpc":"2.0","method":"health","id":2})).await;
         assert_eq!(receive(&mut quiet).await["id"], 2);
+
+        // Use the actual typed receiver the Desktop Panel consumes.
+        let mut request = hello(1, 1);
+        request["params"]["features"] = json!(["live_events", "chat_transcript"]);
+        let params = serde_json::from_value(request["params"].clone()).unwrap();
+        let (_client, mut typed) = aleph_client::AlephClient::connect_local(&endpoint, &params)
+            .await
+            .unwrap();
+        let typed_chunk = |seq, content| {
+            stream_frame(
+                "stream.response_chunk",
+                json!({"type":"response_chunk","run_id":"r-order","seq":seq,
+                       "content":content,"chunk_index":seq,"is_final":false}),
+            )
+        };
+        for frame in [
+            accepted("r-order", &own),
+            typed_chunk(1, "before"),
+            stream_frame(
+                "stream.tool_start",
+                json!({"type":"tool_start","run_id":"r-order","seq":2,"tool_id":"call",
+                       "tool_name":"file_read","params":{"path":"src/main.rs"}}),
+            ),
+            typed_chunk(3, "after"),
+        ] {
+            bus.publish(frame);
+        }
+        use aleph_protocol::StreamEvent;
+        assert!(matches!(typed.recv().await, Some(StreamEvent::RunAccepted { .. })));
+        assert!(matches!(typed.recv().await, Some(StreamEvent::ResponseChunk { seq: 1, .. })));
+        assert!(matches!(typed.recv().await, Some(StreamEvent::ChatTool { seq: 2, .. })));
+        assert!(matches!(typed.recv().await, Some(StreamEvent::ResponseChunk { seq: 3, .. })));
         stop.send(()).unwrap();
         task.await.unwrap().unwrap();
     })

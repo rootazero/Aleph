@@ -454,7 +454,7 @@ impl AppState {
 
             StreamEvent::ToolStart { .. } => Action::None,
 
-            StreamEvent::ToolUpdate { .. } => Action::None,
+            StreamEvent::ToolUpdate { .. } | StreamEvent::ChatTool { .. } => Action::None,
 
             StreamEvent::ToolEnd {
                 tool_id,
