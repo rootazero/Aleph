@@ -704,13 +704,18 @@ impl ToolRegistry for BuiltinToolRegistry {
             // Built fresh per call: a unit struct over the process-global event
             // store, so there is no registry field to hold.
             "session_decompress" => {
-                let arguments = {
-                    let mut args = arguments;
-                    // The session of THIS turn; see `inject_session_key`.
-                    self.inject_session_key(&mut args);
-                    args
-                };
+                let session_key = self.current_session_key();
                 Box::pin(async move {
+                    let session_key = session_key.ok_or_else(|| {
+                        AlephError::tool("session_decompress: no authoritative session context")
+                    })?;
+                    let mut arguments = arguments;
+                    if let Some(args) = arguments.as_object_mut() {
+                        args.insert(
+                            "__session_key".into(),
+                            serde_json::Value::String(session_key),
+                        );
+                    }
                     crate::builtin_tools::SessionDecompressTool::new()
                         .call_json(arguments)
                         .await
