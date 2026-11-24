@@ -546,7 +546,10 @@ async fn stage_a_stable_terminal_deny_reaches_existing_session_ingress() {
     );
 }
 
+const PTY_RETIREMENT_CHILD: &str = "ALEPH_PTY_FACT_RETIREMENT_CHILD";
 const PTY_RETIREMENT_COMPLETED: &str = "aleph-test:pty-fact-retirement:completed";
+const PTY_STALE_HANDLER_CHILD: &str = "ALEPH_PTY_STALE_HANDLER_CHILD";
+const PTY_STALE_HANDLER_COMPLETED: &str = "aleph-test:pty-stale-handler:completed";
 
 fn retired_capture_reclaimed(
     capture: &crate::capability::special::CapturedSpecialEntry,
@@ -559,25 +562,25 @@ fn retired_capture_reclaimed(
     }
 }
 
-fn retirement_child_completed(success: bool, stdout: &[u8]) -> Result<(), &'static str> {
+fn pty_child_completed(success: bool, stdout: &[u8], completion: &str) -> Result<(), &'static str> {
     if !success {
         return Err("owning-source child failed");
     }
     if String::from_utf8_lossy(stdout)
         .lines()
-        .any(|line| line == PTY_RETIREMENT_COMPLETED)
+        .any(|line| line == completion)
     {
         Ok(())
     } else {
-        Err("NO_COVERAGE: intended retirement child did not complete")
+        Err("NO_COVERAGE: intended PTY child did not complete")
     }
 }
 
-fn run_retirement_child(selector: &str) -> std::process::Output {
+fn run_pty_child(selector: &str, marker: &str) -> std::process::Output {
     use std::io::Write;
     let output = std::process::Command::new(std::env::current_exe().unwrap())
         .args(["--exact", selector, "--nocapture", "--test-threads=1"])
-        .env("ALEPH_PTY_FACT_RETIREMENT_CHILD", "1")
+        .env(marker, "1")
         .output()
         .expect("run the single process-isolated owning-source regression");
     std::io::stdout().write_all(&output.stdout).unwrap();
@@ -587,8 +590,9 @@ fn run_retirement_child(selector: &str) -> std::process::Output {
 
 #[test]
 fn stage_a3_retirement_child_rejects_no_match() {
-    let output = run_retirement_child(
+    let output = run_pty_child(
         "gateway::capability_terminal_tests::stage_a3_intentionally_unmatched_selector_do_not_add",
+        PTY_RETIREMENT_CHILD,
     );
     assert!(
         output.status.success(),
@@ -596,18 +600,31 @@ fn stage_a3_retirement_child_rejects_no_match() {
     );
     assert!(String::from_utf8_lossy(&output.stdout).contains("running 0 tests"));
     assert!(
-        retirement_child_completed(output.status.success(), &output.stdout).is_err(),
+        pty_child_completed(
+            output.status.success(),
+            &output.stdout,
+            PTY_RETIREMENT_COMPLETED
+        )
+        .is_err(),
         "successful zero-match child must be rejected by the actual parent validator"
     );
     assert!(
-        retirement_child_completed(true, b"running 1 test\ntest another_selected_test ... ok\n")
-            .is_err(),
+        pty_child_completed(
+            true,
+            b"running 1 test\ntest another_selected_test ... ok\n",
+            PTY_RETIREMENT_COMPLETED,
+        )
+        .is_err(),
         "another successful test without the intended completion is not coverage"
     );
+    let receipt = format!("{PTY_RETIREMENT_COMPLETED}\n");
     assert!(
-        retirement_child_completed(false, format!("{PTY_RETIREMENT_COMPLETED}\n").as_bytes())
-            .is_err(),
+        pty_child_completed(false, receipt.as_bytes(), PTY_RETIREMENT_COMPLETED).is_err(),
         "a failed child cannot pass even if completion text was emitted"
+    );
+    assert!(
+        pty_child_completed(true, receipt.as_bytes(), PTY_STALE_HANDLER_COMPLETED).is_err(),
+        "a successful child must not satisfy a different regression's receipt"
     );
 }
 
@@ -617,10 +634,17 @@ fn a_stage_a2_closed_and_stopped_pty_fact_sources_are_reclaimed() {
     // The production manager source is a process-lifetime OnceLock. Exercise its
     // actual hooks without resetting it or occupying another test's source slot.
     // The child inherits the bounded process group; its full logs are replayed.
-    if std::env::var_os("ALEPH_PTY_FACT_RETIREMENT_CHILD").is_none() {
-        let output = run_retirement_child("gateway::capability_terminal_tests::a_stage_a2_closed_and_stopped_pty_fact_sources_are_reclaimed");
-        retirement_child_completed(output.status.success(), &output.stdout)
-            .expect("real owner lifecycle regression must complete in its isolated process");
+    if std::env::var_os(PTY_RETIREMENT_CHILD).is_none() {
+        let output = run_pty_child(
+            "gateway::capability_terminal_tests::a_stage_a2_closed_and_stopped_pty_fact_sources_are_reclaimed",
+            PTY_RETIREMENT_CHILD,
+        );
+        pty_child_completed(
+            output.status.success(),
+            &output.stdout,
+            PTY_RETIREMENT_COMPLETED,
+        )
+        .expect("real owner lifecycle regression must complete in its isolated process");
         return;
     }
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -1208,12 +1232,28 @@ async fn captured_terminal_rejects_provider_replacement_before_invoke() {
 #[tokio::test]
 #[serial_test::serial(pty_global_manager)]
 async fn addressed_handler_rejects_stale_generation_before_effect() {
+    // The addressed handler resolves the real process-global manager. Its
+    // one-shot source binding must not outlive this fixture in the test runner.
+    if std::env::var_os(PTY_STALE_HANDLER_CHILD).is_none() {
+        let output = run_pty_child(
+            "gateway::capability_terminal_tests::addressed_handler_rejects_stale_generation_before_effect",
+            PTY_STALE_HANDLER_CHILD,
+        );
+        pty_child_completed(
+            output.status.success(),
+            &output.stdout,
+            PTY_STALE_HANDLER_COMPLETED,
+        )
+        .expect("real addressed-handler regression must complete in its isolated process");
+        return;
+    }
+
     let (_facade, source, _tools) = terminal_tool_domain(BTreeMap::new());
     let manager = pty::manager();
-    manager
-        .deactivate()
-        .await
-        .expect("join the previous test driver before replacing its event bus");
+    assert!(
+        manager.capability_source().is_none(),
+        "fresh manager is unbound"
+    );
     let first_generation = manager
         .activate(crate::sync_primitives::Arc::new(
             crate::gateway::event_bus::GatewayEventBus::new(),
@@ -1291,4 +1331,5 @@ async fn addressed_handler_rejects_stale_generation_before_effect() {
         .deactivate()
         .await
         .expect("cleanup replacement provider");
+    println!("\n{PTY_STALE_HANDLER_COMPLETED}");
 }

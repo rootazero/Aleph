@@ -169,7 +169,9 @@ class Desktop:
         result = subprocess.run(['ps', '-M', '-p', str(pid)], capture_output=True, text=True, timeout=10)
         return max(len(result.stdout.splitlines()) - 1, 0)
 
-    def run(self, name, extra_env, settle):
+    def run(self, name, extra_env, settle, action=None):
+        """One launch: wait for the main window, bring it to the front, let it
+        settle, run `action(pid)` if given (S3 types into it), capture it."""
         log = (self.out / f'desktop-{name}.log').open('w', encoding='utf-8')
         child = subprocess.Popen(
             [str(self.shell)], cwd=self.root, env={**self.env, **extra_env},
@@ -184,6 +186,8 @@ class Desktop:
             require(window is not None, f'{name}: the shell opened no main window')
             self.bring_to_front(child.pid)
             time.sleep(settle)
+            if action is not None:
+                action(child.pid)
             window = self.main_window(child.pid)
             require(window and window['onscreen'] and window['width'] >= 400,
                     f'{name}: the main window is not in front: {window}')
@@ -308,7 +312,7 @@ def desktop_phases(desktop, gateway, phases, report, nebula):
     gateway.start('gw-1.sock')
     phases.append(desktop.run('connected', {'ALEPH_SHELL_PANEL_IPC': str(gateway.endpoint)}, settle=8))
     key, first = desktop.layout()
-    shell_tabs = tabs('overview', 'sessions', 'capabilities')
+    shell_tabs = tabs('overview', 'sessions', 'chat', 'capabilities')
     require([tab for tab in first['order'] if tab in shell_tabs] == shell_tabs,
             'default desktop layout is not the shell module order')
     if nebula:
@@ -327,7 +331,8 @@ def desktop_phases(desktop, gateway, phases, report, nebula):
     # fresh socket path (as every Desktop IPC start does), and relaunch.
     edited = {
         'version': 1,
-        'order': tabs('capabilities', 'overview', 'sessions') + [tab for tab in first['order'] if tab not in shell_tabs],
+        'order': tabs('capabilities', 'overview', 'sessions', 'chat')
+        + [tab for tab in first['order'] if tab not in shell_tabs],
         'hidden': tabs('sessions'),
         'active': tabs('capabilities')[0],
     }

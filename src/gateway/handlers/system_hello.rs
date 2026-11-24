@@ -5,8 +5,8 @@
 //! This handler neither admits a connection nor sets its identity.
 
 use aleph_protocol::system_hello::{
-    negotiate_features, negotiate_version, HelloLimits, HelloParams, HelloResult, ProtocolVersion,
-    ServerHello,
+    negotiate_features, negotiate_version, Feature, HelloLimits, HelloParams, HelloResult,
+    ProtocolVersion, ServerHello,
 };
 use uuid::Uuid;
 
@@ -28,7 +28,11 @@ pub async fn handle(request: JsonRpcRequest) -> JsonRpcResponse {
             max_inflight_requests: 128,
         },
         None,
+        // Legacy `/ws` pushes events without negotiation; it implements no
+        // optional feature.
+        &[],
     )
+    .0
 }
 
 const SUBJECT_DOMAIN: &str = "aleph.panel.subject.v1\0";
@@ -54,36 +58,45 @@ pub(crate) fn subject_for(
     Some(panel_subject(&secret, user))
 }
 
+/// Answer one `system.hello`. Returns the response and the features it
+/// granted — the intersection of what the client requested and what the
+/// calling endpoint `implemented` — so the endpoint acts on exactly what the
+/// client was told, without reading its own response back. An error
+/// response grants nothing.
 pub(crate) fn negotiate(
     request: JsonRpcRequest,
     connection_id: String,
     limits: HelloLimits,
     subject: Option<String>,
-) -> JsonRpcResponse {
+    implemented: &[Feature],
+) -> (JsonRpcResponse, Vec<Feature>) {
     let params: HelloParams = match request.params.clone() {
         Some(p) => match serde_json::from_value(p) {
             Ok(v) => v,
             Err(e) => {
-                return JsonRpcResponse::error(
+                let response = JsonRpcResponse::error(
                     request.id,
                     INVALID_PARAMS,
                     format!("Invalid system.hello params: {e}"),
                 );
+                return (response, Vec::new());
             }
         },
         None => {
-            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing params");
+            let response = JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing params");
+            return (response, Vec::new());
         }
     };
 
     let Some(protocol) =
         negotiate_version(&params.protocol, &ProtocolVersion { major: 1, minor: 0 })
     else {
-        return JsonRpcResponse::error(
+        let response = JsonRpcResponse::error(
             request.id,
             INVALID_PARAMS,
             "incompatible protocol major version",
         );
+        return (response, Vec::new());
     };
 
     let result = HelloResult {
@@ -93,7 +106,7 @@ pub(crate) fn negotiate(
             version: env!("ALEPH_VERSION").to_string(),
         },
         connection_id,
-        features: negotiate_features(&params.features, &[]),
+        features: negotiate_features(&params.features, implemented),
         limits,
         subject,
     };
@@ -101,15 +114,19 @@ pub(crate) fn negotiate(
     let result_value = match serde_json::to_value(&result) {
         Ok(v) => v,
         Err(e) => {
-            return JsonRpcResponse::error(
+            let response = JsonRpcResponse::error(
                 request.id,
                 super::super::protocol::INTERNAL_ERROR,
                 format!("Failed to serialize system.hello result: {e}"),
             );
+            return (response, Vec::new());
         }
     };
 
-    JsonRpcResponse::success(request.id, result_value)
+    (
+        JsonRpcResponse::success(request.id, result_value),
+        result.features,
+    )
 }
 
 #[cfg(test)]
@@ -156,6 +173,46 @@ mod tests {
         );
         assert_eq!(result["server"]["name"], "aleph-server");
         assert!(!result["connection_id"].as_str().unwrap().is_empty());
+    }
+
+    /// The endpoint is told exactly what the client is told: `live_events` is
+    /// granted only where it is implemented and requested, the legacy probe
+    /// grants nothing, and an error response grants nothing.
+    #[tokio::test]
+    async fn granted_features_are_what_the_response_reports() {
+        let params = json!({
+            "protocol": {"major": 1, "minor": 0},
+            "client": {"name": "t", "version": "1", "platform": "macos", "ui_runtime": "nsh"},
+            "features": ["event_replay", "live_events"]
+        });
+        let limits = || HelloLimits {
+            max_message_bytes: 1,
+            max_inflight_requests: 1,
+        };
+        let (response, granted) = super::negotiate(
+            req(params.clone()),
+            "c".into(),
+            limits(),
+            None,
+            &[Feature::LiveEvents],
+        );
+        assert_eq!(granted, vec![Feature::LiveEvents]);
+        assert_eq!(response.result.unwrap()["features"], json!(["live_events"]));
+
+        let legacy = handle(req(params.clone())).await;
+        assert_eq!(legacy.result.unwrap()["features"], json!([]));
+
+        let mut wrong_major = params;
+        wrong_major["protocol"]["major"] = json!(2);
+        let (response, granted) = super::negotiate(
+            req(wrong_major),
+            "c".into(),
+            limits(),
+            None,
+            &[Feature::LiveEvents],
+        );
+        assert!(response.error.is_some());
+        assert!(granted.is_empty());
     }
 
     #[tokio::test]

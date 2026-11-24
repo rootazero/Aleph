@@ -118,11 +118,18 @@ impl PairLoopGuardConfig {
     /// router-wide default.
     #[must_use]
     pub fn from_channel_config(config: &serde_json::Value) -> Option<Self> {
+        Self::parse_channel_override(config).ok().flatten()
+    }
+
+    pub(crate) fn parse_channel_override(
+        config: &serde_json::Value,
+    ) -> Result<Option<Self>, serde_json::Error> {
         config
             .get("access")
             .and_then(|access| access.get("bot_loop_protection"))
             .or_else(|| config.get("bot_loop_protection"))
-            .and_then(|value| serde_json::from_value::<Self>(value.clone()).ok())
+            .map(|value| serde_json::from_value(value.clone()))
+            .transpose()
     }
     fn window(&self) -> Duration {
         Duration::from_secs(self.window_seconds.max(1))

@@ -221,7 +221,7 @@ pub async fn handle_send(
             };
             JsonRpcResponse::success(request.id, json!(response))
         }
-        Err(e) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, e),
+        Err(refusal) => refusal.into_response(request.id),
     }
 }
 

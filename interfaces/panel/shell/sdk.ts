@@ -1,7 +1,7 @@
 // The SDK one mounted Panel module gets. It is bound to one tab key and one
 // connection generation: after `dispose()` (the module went away) or once the
 // shell moved to a newer generation (a new socket), results of earlier calls
-// are dropped instead of reaching the module.
+// and live events are dropped instead of reaching the module.
 //
 // No `nsh` import: the shell lends everything through `ShellAccess`, so the
 // rules here are tested on their own (`sdk.test.ts`).
@@ -22,13 +22,27 @@ export class RpcError extends Error {
   }
 }
 
+/**
+ * A live frame the host forwarded (`aleph.event`): `stream.<type>` with the
+ * stream event as `data`, a Gateway topic such as `connection.warning`, or the
+ * desktop host's own `connection.stale` after it dropped frames. Live only:
+ * nothing is replayed, so a module refetches when it sees a warning or stale.
+ */
+export type PanelEvent = { topic: string; data: unknown };
+
+/** What a module that navigated here handed over, e.g. `{ session_key }`. */
+export type Intent = Record<string, unknown>;
+
 /** What the shell lends a module's SDK; read at call time, never cached. */
 export type ShellAccess = {
   rpc(method: string, params: Record<string, unknown>): Promise<unknown>;
   generation(): number;
   connection(): ConnectionState;
-  navigate(key: string): void;
+  navigate(key: string, intent?: Intent): void;
+  /** The intent last handed to the module `key`, if any. */
+  intent(key: string): Intent | null;
   onConnection(listener: (state: ConnectionState) => void): () => void;
+  onEvent(listener: (event: PanelEvent) => void): () => void;
 };
 
 export type PanelSdk = {
@@ -37,8 +51,12 @@ export type PanelSdk = {
   active(): boolean;
   invoke(method: string, params?: Record<string, unknown>): Promise<unknown>;
   subscribe(listener: (state: ConnectionState) => void): () => void;
+  /** Live events whose topic starts with `topicPrefix` (`"stream."`, `"connection."`). */
+  on(topicPrefix: string, listener: (event: PanelEvent) => void): () => void;
   connection(): ConnectionState;
-  navigate(key: string): void;
+  navigate(key: string, intent?: Intent): void;
+  /** What the module that navigated here handed over, if any. */
+  intent(): Intent | null;
   dispose(): void;
 };
 
@@ -46,6 +64,15 @@ export function createSdk(key: string, generation: number, shell: ShellAccess): 
   let disposed = false;
   const releases = new Set<() => void>();
   const current = () => !disposed && shell.generation() === generation;
+  // A listener registration the SDK releases on `dispose()`.
+  const hold = (stop: () => void) => {
+    const release = () => {
+      stop();
+      releases.delete(release);
+    };
+    releases.add(release);
+    return release;
+  };
 
   return {
     key,
@@ -61,20 +88,25 @@ export function createSdk(key: string, generation: number, shell: ShellAccess): 
     },
     subscribe(listener) {
       if (!current()) throw new Error("disposed");
-      const stop = shell.onConnection((state) => {
-        if (current()) listener(state);
-      });
-      const release = () => {
-        stop();
-        releases.delete(release);
-      };
-      releases.add(release);
-      return release;
+      return hold(
+        shell.onConnection((state) => {
+          if (current()) listener(state);
+        }),
+      );
+    },
+    on(topicPrefix, listener) {
+      if (disposed) throw new Error("disposed");
+      return hold(
+        shell.onEvent((event) => {
+          if (current() && event.topic.startsWith(topicPrefix)) listener(event);
+        }),
+      );
     },
     connection: () => shell.connection(),
-    navigate(target) {
-      if (current()) shell.navigate(target);
+    navigate(target, intent) {
+      if (current()) shell.navigate(target, intent);
     },
+    intent: () => shell.intent(key),
     dispose() {
       if (disposed) return;
       disposed = true;

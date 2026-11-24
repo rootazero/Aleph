@@ -48,6 +48,9 @@ pub enum Feature {
     Snapshot,
     /// Binary framing over the WebSocket channel.
     BinaryChannel,
+    /// Live server push of admitted event notifications (id-less frames) on a
+    /// v1 endpoint. No replay: a gap is recovered by refetching a snapshot.
+    LiveEvents,
     /// An unrecognized feature string from a newer version.
     Unknown(String),
 }
@@ -58,6 +61,7 @@ impl Serialize for Feature {
             Feature::EventReplay => s.serialize_str("event_replay"),
             Feature::Snapshot => s.serialize_str("snapshot"),
             Feature::BinaryChannel => s.serialize_str("binary_channel"),
+            Feature::LiveEvents => s.serialize_str("live_events"),
             Feature::Unknown(name) => s.serialize_str(name),
         }
     }
@@ -70,6 +74,7 @@ impl<'de> Deserialize<'de> for Feature {
             "event_replay" => Feature::EventReplay,
             "snapshot" => Feature::Snapshot,
             "binary_channel" => Feature::BinaryChannel,
+            "live_events" => Feature::LiveEvents,
             _ => Feature::Unknown(s),
         })
     }
@@ -80,7 +85,7 @@ impl Feature {
     pub fn is_known(&self) -> bool {
         matches!(
             self,
-            Feature::EventReplay | Feature::Snapshot | Feature::BinaryChannel
+            Feature::EventReplay | Feature::Snapshot | Feature::BinaryChannel | Feature::LiveEvents
         )
     }
 }

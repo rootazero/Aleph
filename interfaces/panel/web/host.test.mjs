@@ -62,7 +62,7 @@ const hello = (maxInflight = 1) => ({
     protocol: { major: 1, minor: 0 },
     server: { name: "aleph", version: "test" },
     connection_id: "web-v1-x",
-    features: [],
+    features: ["live_events"],
     limits: { max_message_bytes: golden.max_payload, max_inflight_requests: maxInflight },
     subject: "0123abcd",
   },
@@ -101,6 +101,41 @@ test("first_frame_is_hello", async () => {
     name: "aleph.connection",
     data: { state: "connected", endpoint: "https://aleph.test:18790", subject: "0123abcd", pairing: false },
   });
+});
+
+test("pushed_frames_reach_the_panel_as_aleph_event", async () => {
+  const { player, env, events, socket } = harness();
+  const host = await createHost(player, env);
+  socket().open();
+  socket().reply(hello());
+  await tick();
+  // The golden pushed frame, byte for byte: a stream event is its own topic.
+  socket().onmessage({ data: fromHex(frame("event").wire_hex).buffer });
+  const event = JSON.parse(frame("event").payload);
+  assert.deepEqual(events.at(-1), { name: "aleph.event", data: { topic: "stream.response_chunk", data: event.params } });
+  // A topic notification carries its own { topic, data }.
+  const warning = { reason: "events_overflow", dropped: 1, total_overflow: 1, advice: "reconnect" };
+  socket().reply({ jsonrpc: "2.0", method: "event", params: { topic: "connection.warning", data: warning } });
+  assert.deepEqual(events.at(-1), { name: "aleph.event", data: { topic: "connection.warning", data: warning } });
+  // Pushes do not disturb calls in flight.
+  const call = host.call("aleph.rpc", { method: "health", params: null });
+  await tick();
+  socket().reply({ jsonrpc: "2.0", method: "stream.run_complete", params: { type: "run_complete", run_id: "r-1" } });
+  socket().reply({ jsonrpc: "2.0", id: 2, result: { ok: true } });
+  assert.deepEqual(await call, { result: { ok: true } });
+  assert.equal(socket().closed, false);
+  // A notification without a topic is unreadable and ends the connection.
+  socket().reply({ jsonrpc: "2.0", method: "event", params: {} });
+  assert.equal(socket().closed, true);
+});
+
+test("a_push_before_hello_ends_the_connection", async () => {
+  const { player, env, events, socket } = harness();
+  await createHost(player, env);
+  socket().open();
+  socket().reply({ jsonrpc: "2.0", method: "stream.run_complete", params: { type: "run_complete" } });
+  assert.equal(socket().closed, true);
+  assert.equal(events.some((event) => event.name === "aleph.event"), false);
 });
 
 test("correlates_out_of_order_responses", async () => {

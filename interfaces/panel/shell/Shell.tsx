@@ -5,12 +5,13 @@ import { batch, cleanup, computed, host, signal, Storage, Text, View } from "nsh
 import { Button } from "nsh/base";
 import { PanelModel } from "aleph/panel";
 import { Capabilities } from "../modules/Capabilities";
+import { Chat } from "../modules/Chat";
 import { MemoryNebula } from "../modules/MemoryNebula";
 import { Overview } from "../modules/Overview";
 import { Sessions } from "../modules/Sessions";
 import { LayoutEditor } from "./LayoutEditor";
 import { PairingForm } from "./PairingForm";
-import { type ConnectionState, createSdk, type PanelSdk, RpcError, type ShellAccess } from "./sdk";
+import { type ConnectionState, createSdk, type Intent, type PanelEvent, type PanelSdk, RpcError, type ShellAccess } from "./sdk";
 import type { PanelTab, PanelView, Slot } from "./view";
 
 const INITIAL: ConnectionState = { state: "connecting", endpoint: "", subject: null, pairing: false };
@@ -30,6 +31,10 @@ export function Shell() {
   const notice = signal<string | null>(null);
   const editing = signal(false);
   const listeners = new Set<(state: ConnectionState) => void>();
+  const eventListeners = new Set<(event: PanelEvent) => void>();
+  // What a module handed the one it navigated to (by tab key), for this run
+  // of the shell only: a reload starts every module without one.
+  const intents = new Map<string, Intent>();
   // The snapshot and storage key the current view was made from.
   let snapshot: unknown = null;
   let storageKey: string | null = null;
@@ -88,11 +93,23 @@ export function Shell() {
     rpc,
     generation: () => generation(),
     connection: () => connection(),
-    navigate: (key) => edit((stored) => PanelModel.select(stored, key)),
+    navigate(key, intent) {
+      if (intent) intents.set(key, intent);
+      edit((stored) => PanelModel.select(stored, key));
+    },
+    intent: (key) => intents.get(key) ?? null,
     onConnection(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
+    onEvent(listener) {
+      eventListeners.add(listener);
+      return () => eventListeners.delete(listener);
+    },
+  };
+
+  const applyEvent = (event: PanelEvent) => {
+    for (const listener of [...eventListeners]) listener(event);
   };
 
   const applyInitialConnection = (state: ConnectionState) => {
@@ -101,6 +118,7 @@ export function Shell() {
   };
   if (host.available()) {
     cleanup(host.on<ConnectionState>("aleph.connection", applyConnection));
+    cleanup(host.on<PanelEvent>("aleph.event", applyEvent));
     void host.call("aleph.connection", null).then(
       (state) => applyInitialConnection(state as ConnectionState),
       () => applyInitialConnection({ ...INITIAL, state: "unavailable" }),
@@ -183,6 +201,8 @@ function ModuleSlot(props: { slot: Slot; tab: PanelTab | undefined; tabs: PanelT
       return <Overview sdk={sdk} />;
     case "aleph:sessions":
       return <Sessions sdk={sdk} />;
+    case "aleph:chat":
+      return <Chat sdk={sdk} />;
     case "aleph:capabilities":
       return <Capabilities tabs={props.tabs} />;
     case "aleph:memory-nebula":

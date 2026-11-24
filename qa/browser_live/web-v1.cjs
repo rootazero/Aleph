@@ -104,10 +104,13 @@ async function run(fixturePath) {
       const hello = await call(client, 'browser-hello', 'system.hello', {
         protocol: { major: 1, minor: 12 },
         client: { name: 'qa', version: '1', platform: 'chromium', ui_runtime: 'browser' },
-        features: ['snapshot', 'event_replay'],
+        features: ['snapshot', 'event_replay', 'live_events'],
       });
+      // Only `live_events` is implemented; the request loop now also serves
+      // the event feed, which must not disturb request/response pairing.
       expect(hello?.id === 'browser-hello' && hello?.result?.protocol?.major === 1 &&
-        hello?.result?.protocol?.minor === 0 && hello?.result?.features?.length === 0 &&
+        hello?.result?.protocol?.minor === 0 &&
+        JSON.stringify(hello?.result?.features) === '["live_events"]' &&
         hello?.result?.limits?.max_inflight_requests === 1, 'invalid v1 hello result');
       const liveHealth = await call(client, 'live-health', 'health');
       expect(liveHealth?.id === 'live-health' && liveHealth?.result?.status === 'healthy', 'authenticated v1 health failed');
@@ -115,8 +118,10 @@ async function run(fixturePath) {
       const sessions = list?.result?.sessions;
       expect(list?.id === 2 && sessions?.length === 1 && sessions[0].key === ownKey,
         'session scope differs from original member');
-      const write = await call(client, 3, 'chat.send');
-      expect(write?.id === 3 && write?.error?.code === -32601, 'unsupported write entered Core');
+      // chat.* is mounted since S3; other writes are still refused before Core.
+      const write = await call(client, 3, 'agent.run');
+      expect(write?.id === 3 && write?.error?.code === -32601 &&
+        write?.error?.message === 'method unavailable on Web v1', 'unsupported write entered Core');
       const select = await call(client, 4, 'panel.project.select', { project_id: null });
       expect(select?.id === 4 && select?.error?.code === -32601, 'project selection is mounted on Web v1');
       const snapshot = await call(client, 5, 'panel.capabilities.snapshot');

@@ -204,6 +204,40 @@ pub struct AgentRunManager {
     /// `None` for test/host-only constructions → falls back to typewriter,
     /// matching the inbound channel path (`inbound_router::executor`).
     app_config: Option<Arc<RwLock<crate::Config>>>,
+    /// Session store for the P1 visibility chokepoint and run attribution,
+    /// the same store the real-engine handlers in `server_init` consult.
+    /// `None` only for test/host-only constructions.
+    sessions: Option<Arc<dyn crate::gateway::session_store::SessionStore>>,
+}
+
+/// Why [`AgentRunManager::start_run`] refused before admitting a run.
+#[derive(Debug)]
+pub enum StartRunError {
+    /// The caller-supplied session already belongs to someone else. Answered
+    /// as `visibility::not_found_response`, byte-identical to a key that was
+    /// never created.
+    SessionNotVisible,
+    /// Any other refusal, surfaced as the message string.
+    Refused(String),
+}
+
+impl std::fmt::Display for StartRunError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StartRunError::SessionNotVisible => f.write_str("session not found"),
+            StartRunError::Refused(message) => f.write_str(message),
+        }
+    }
+}
+
+impl StartRunError {
+    /// The JSON-RPC answer for this refusal.
+    pub(crate) fn into_response(self, id: Option<serde_json::Value>) -> JsonRpcResponse {
+        match self {
+            StartRunError::SessionNotVisible => crate::gateway::visibility::not_found_response(id),
+            StartRunError::Refused(message) => JsonRpcResponse::error(id, INTERNAL_ERROR, message),
+        }
+    }
 }
 
 impl AgentRunManager {
@@ -220,7 +254,19 @@ impl AgentRunManager {
             agent_registry,
             execution_adapter,
             app_config: None,
+            sessions: None,
         }
+    }
+
+    /// Inject the session store so a caller-supplied `session_key` that
+    /// belongs to someone else is refused before a run starts, exactly as on
+    /// the real-engine path (`server_init::handle_chat_send_with_engine`).
+    pub fn with_session_store(
+        mut self,
+        sessions: Arc<dyn crate::gateway::session_store::SessionStore>,
+    ) -> Self {
+        self.sessions = Some(sessions);
+        self
     }
 
     /// Inject the live application config so Panel runs honor the global
@@ -250,7 +296,7 @@ impl AgentRunManager {
     }
 
     /// Start a new agent run
-    pub async fn start_run(&self, params: AgentRunParams) -> Result<AgentRunResult, String> {
+    pub async fn start_run(&self, params: AgentRunParams) -> Result<AgentRunResult, StartRunError> {
         // Generate run ID
         let run_id = uuid::Uuid::new_v4().to_string();
 
@@ -268,6 +314,21 @@ impl AgentRunManager {
         let session_key_str = session_key.to_key_string();
         let accepted_at = chrono::Utc::now().to_rfc3339();
 
+        // P1 visibility chokepoint — same placement and predicate as the
+        // real-engine handlers (immediately after `router.route`, before any
+        // agent resolution): an existing session owned by someone else is
+        // refused; a brand-new key is not a denial.
+        if let Some(sessions) = self.sessions.as_ref() {
+            if !crate::gateway::visibility::existing_session_is_visible(
+                sessions.as_ref(),
+                &session_key,
+            )
+            .await
+            {
+                return Err(StartRunError::SessionNotVisible);
+            }
+        }
+
         // Admission comes after validation: a request that fails the agent
         // lookup or the request builder is refused before it is registered
         // as Running and before `run_accepted` is published — a refused
@@ -277,27 +338,27 @@ impl AgentRunManager {
             Some(a) => a,
             None => {
                 error!("Agent not found: {}", agent_id);
-                return Err(format!("Agent not found: {agent_id}"));
+                return Err(StartRunError::Refused(format!(
+                    "Agent not found: {agent_id}"
+                )));
             }
         };
 
         let stream = params.stream;
         let input = params.input.clone();
 
-        // `sessions: None` — the Simulated-execution fallback has no
-        // `SessionStore` (see this type's doc and `method_visibility.rs`'s
-        // carve-out for the same reason). Errors are surfaced as strings on
-        // this path; the real-engine handlers keep the typed variants.
+        // Build errors are surfaced as strings on this path; the real-engine
+        // handlers keep the typed variants.
         let request = build_run_request(
             run_id.clone(),
             &session_key,
             params,
             self.app_config.as_ref(),
-            None,
+            self.sessions.as_ref(),
             agent.config(),
         )
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| StartRunError::Refused(e.to_string()))?;
 
         // Create run state
         let run_state = RunState {
@@ -598,10 +659,10 @@ impl std::fmt::Display for BuildRunError {
 /// caller), matching `SessionMetadata`'s adoption-by-absence rule rather than
 /// retro-stamping a row nobody asked to move.
 ///
-/// `sessions: None` (the Simulated-execution fallback, which has no store)
-/// cannot distinguish the two paths and takes path 2 for every turn. That is
-/// the documented carve-out, not an oversight: without a store there is no
-/// stored scope to honor.
+/// `sessions: None` (test / host-only constructions with no store) cannot
+/// distinguish the two paths and takes path 2 for every turn: without a store
+/// there is no stored scope to honor. Production run-start paths, including
+/// the Simulated-execution fallback, always pass a store.
 async fn resolve_attribution(
     sessions: Option<&Arc<dyn crate::gateway::session_store::SessionStore>>,
     session_key: &SessionKey,
@@ -814,11 +875,9 @@ fn bound_workspace_of(
 /// `app_config` is `None` for test / host-only constructions: the locale and
 /// the `[voice]` model pin are then skipped rather than guessed.
 ///
-/// `sessions` is `None` on the Simulated-execution fallback path, which has no
-/// `SessionStore` at all — the SAME carve-out `method_visibility.rs` already
-/// records for `chat.send` / `agent.run`. Without a store this cannot tell an
-/// existing session from a new one, so it treats every turn as new; see
-/// `resolve_attribution`.
+/// `sessions` is `None` only for test / host-only constructions. Without a
+/// store this cannot tell an existing session from a new one, so it treats
+/// every turn as new; see `resolve_attribution`.
 ///
 /// Callers map [`BuildRunError`] to their transport's error shape, and the
 /// variants must NOT be flattened into one another: a bad-params complaint, a
@@ -1175,7 +1234,7 @@ pub async fn handle_run(
     // Start the run
     match run_manager.start_run(params).await {
         Ok(result) => JsonRpcResponse::success(request.id, json!(result)),
-        Err(e) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, e),
+        Err(refusal) => refusal.into_response(request.id),
     }
 }
 
@@ -2211,6 +2270,90 @@ mod tests {
         assert!(status.is_some());
     }
 
+    /// The Simulated-execution fallback answers `chat.send` / `agent.run` for
+    /// a session owned by someone else with the same not-found refusal as the
+    /// real-engine path, and starts no run; the owner and a brand-new key
+    /// proceed.
+    #[tokio::test]
+    async fn simulated_run_refuses_a_session_owned_by_someone_else() {
+        use crate::gateway::caller_identity::CALLER_USER;
+        use crate::gateway::protocol::RESOURCE_NOT_FOUND;
+
+        let (agent_registry, tmp) = registry_with_main_agent().await;
+        let sessions: Arc<dyn SessionStore> = Arc::new(
+            FileSessionStore::new(FileSessionStoreConfig {
+                base_dir: tmp.path().join("visibility"),
+                ..FileSessionStoreConfig::default()
+            })
+            .unwrap(),
+        );
+        let owned = SessionKey::main("main");
+        crate::scope::with_scope(
+            Some(crate::scope::ScopeAttribution::personal("u-alice")),
+            sessions.get_or_create(&owned),
+        )
+        .await
+        .unwrap();
+        let manager = Arc::new(
+            AgentRunManager::new(
+                Arc::new(AgentRouter::new()),
+                Arc::new(GatewayEventBus::new()),
+                agent_registry,
+                Arc::new(MockExecutionAdapter),
+            )
+            .with_session_store(sessions),
+        );
+        let send = |session_key: Option<String>| {
+            JsonRpcRequest::with_id(
+                "chat.send",
+                Some(json!({"message": "hi", "session_key": session_key})),
+                json!(1),
+            )
+        };
+
+        for request in [
+            send(Some(owned.to_key_string())),
+            JsonRpcRequest::with_id(
+                "agent.run",
+                Some(json!({"input": "hi", "session_key": owned.to_key_string()})),
+                json!(2),
+            ),
+        ] {
+            let manager = manager.clone();
+            let response = CALLER_USER
+                .scope(Some("u-bob".to_string()), async move {
+                    if request.method == "chat.send" {
+                        super::super::chat::handle_send(request, manager).await
+                    } else {
+                        handle_run(request, manager).await
+                    }
+                })
+                .await;
+            assert_eq!(response.error.expect("refused").code, RESOURCE_NOT_FOUND);
+        }
+        assert!(
+            manager.active_runs.read().await.is_empty(),
+            "no run may start"
+        );
+
+        for (caller, key) in [
+            ("u-alice", Some(owned.to_key_string())),
+            (
+                "u-bob",
+                Some(SessionKey::peer("main", "bob-fresh").to_key_string()),
+            ),
+        ] {
+            let manager = manager.clone();
+            let request = send(key);
+            let response = CALLER_USER
+                .scope(Some(caller.to_string()), async move {
+                    super::super::chat::handle_send(request, manager).await
+                })
+                .await;
+            assert!(response.error.is_none(), "{caller}: {:?}", response.error);
+        }
+    }
+
     /// Layer-2 gate: a chat-tier ("guest") connection may converse but must not
     /// pick an arbitrary working directory — even a valid absolute dir is denied.
     #[tokio::test]
@@ -2247,7 +2390,10 @@ mod tests {
             .scope(Some("guest".to_string()), manager.start_run(params))
             .await;
         let err = result.expect_err("chat-tier project_root override must be rejected");
-        assert!(err.contains("config-tier"), "unexpected error: {err}");
+        assert!(
+            err.to_string().contains("config-tier"),
+            "unexpected error: {err}"
+        );
     }
 
     /// Config-tier ("operator") callers may choose a working directory. Does
@@ -3265,9 +3411,9 @@ mod tests {
             );
         }
 
-        /// The Simulated-execution carve-out, stated as a test rather than only
-        /// as a doc comment: with no store there is no stored scope to honor,
-        /// so every turn takes the new-session path.
+        /// A store-less construction (tests, host-only), stated as a test
+        /// rather than only as a doc comment: with no store there is no stored
+        /// scope to honor, so every turn takes the new-session path.
         #[tokio::test]
         async fn without_a_session_store_every_turn_takes_the_new_session_path() {
             let (_store, pid, _tmp, _guard) = room();

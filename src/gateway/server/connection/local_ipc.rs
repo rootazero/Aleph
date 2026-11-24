@@ -10,7 +10,7 @@ use std::{
 use aleph_client::local_ipc::{
     parse_payload, read_frame_budgeted, write_frame, HELLO_TIMEOUT, MAX_FRAME_BYTES, MAX_INFLIGHT,
 };
-use aleph_protocol::system_hello::HelloLimits;
+use aleph_protocol::system_hello::{Feature, HelloLimits};
 use futures_util::{stream::FuturesUnordered, StreamExt};
 use serde_json::Value;
 use tokio::{
@@ -24,6 +24,7 @@ use tokio_util::sync::CancellationToken;
 use super::{
     cleanup,
     dispatch::{active_desktop_owner, DispatchPeer},
+    event_admission::{next_received, V1Event, V1EventFeed},
     rpc, ConnectionContext,
 };
 use crate::{
@@ -130,7 +131,7 @@ async fn serve_peer(
         return Ok(());
     };
     drop((text, permit));
-    let hello = if request.method == "system.hello" {
+    let (hello, granted) = if request.method == "system.hello" {
         system_hello::negotiate(
             request,
             id.clone(),
@@ -139,9 +140,13 @@ async fn serve_peer(
                 max_inflight_requests: MAX_INFLIGHT,
             },
             system_hello::subject_for(&store, OWNER_USER_ID),
+            super::V1_FEATURES,
         )
     } else {
-        JsonRpcResponse::error(request.id, AUTH_REQUIRED, "system.hello must be first")
+        (
+            JsonRpcResponse::error(request.id, AUTH_REQUIRED, "system.hello must be first"),
+            Vec::new(),
+        )
     };
     if let Some(error) = &hello.error {
         let response = serialize(&hello)?;
@@ -179,12 +184,17 @@ async fn serve_peer(
         idempotency: ctx.idempotency_guard.clone(),
         class: ctx.channel_class,
     };
+    // Subscribed before the hello reply is written, so no frame published
+    // after the client learns it may expect events is missed.
+    let mut events = granted
+        .contains(&Feature::LiveEvents)
+        .then(|| V1EventFeed::subscribe(&ctx, id.clone(), None, MAX_FRAME_BYTES as usize));
     let result = tokio::select! {
         biased;
         _ = stop.cancelled() => Ok(()),
         result = async {
             send(&mut write, &serialize(&hello)?).await?;
-            serve_requests(&mut read, &mut write, &budget, &executor, &peer).await
+            serve_requests(&mut read, &mut write, &budget, &executor, &peer, &ctx, &mut events).await
         } => result,
     };
     drop((read, write));
@@ -223,6 +233,8 @@ async fn serve_requests(
     budget: &FrameBudget,
     executor: &rpc::RpcExecutor,
     peer: &DispatchPeer,
+    ctx: &ConnectionContext,
+    events: &mut Option<V1EventFeed>,
 ) -> io::Result<()> {
     let mut jobs = FuturesUnordered::new();
     let mut active: Vec<Value> = Vec::new();
@@ -251,6 +263,20 @@ async fn serve_requests(
                         };
                         send(write, &response).await?;
                         active.retain(|entry| entry != &id);
+                    }
+                }
+                // Live events: admitted in the body, not the branch, so a
+                // completion or read winning the race never drops a frame.
+                received = next_received(events) => {
+                    let feed = events.as_mut().expect("only a feed yields frames");
+                    match feed.admit(ctx, received).await {
+                        None => {}
+                        Some(V1Event::Send(frame)) => send(write, &frame).await?,
+                        Some(V1Event::Lost(warning)) => {
+                            send(write, &warning).await?;
+                            return Ok(());
+                        }
+                        Some(V1Event::Close(_)) => return Ok(()),
                     }
                 }
                 request = &mut frame => break request?,
@@ -295,9 +321,7 @@ async fn execute(
         ));
     };
     match rpc::prepare(request, &caller, false) {
-        Ok(plan) => Ok(executor
-            .execute(text, request, plan.without_cache(), peer, &caller)
-            .await),
+        Ok(plan) => Ok(executor.execute(text, request, plan, peer, &caller).await),
         Err(error) => serialize(&error),
     }
 }

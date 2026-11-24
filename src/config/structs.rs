@@ -313,6 +313,23 @@ pub struct ChannelInstanceConfig {
     pub config: serde_json::Value,
 }
 
+impl ChannelInstanceConfig {
+    pub fn declared_type<'a>(id: &'a str, config: &'a serde_json::Value) -> Option<&'a str> {
+        config
+            .get("type")
+            .and_then(|value| value.as_str())
+            .or_else(|| {
+                aleph_protocol::channels::CONFIGURABLE_CHANNEL_TYPES
+                    .contains(&id)
+                    .then_some(id)
+            })
+    }
+
+    pub fn is_explicitly_disabled(config: &serde_json::Value) -> bool {
+        config.get("enabled").and_then(|value| value.as_bool()) == Some(false)
+    }
+}
+
 impl Config {
     /// The `[context_budget]` section in force, or `None` when mid-run context
     /// management is switched off. The one derivation of that decision: every
@@ -350,11 +367,7 @@ impl Config {
     pub fn resolved_channels(&self) -> Vec<ChannelInstanceConfig> {
         let mut instances = Vec::new();
         for (key, value) in &self.channels {
-            let channel_type = if let Some(t) = value.get("type").and_then(|v| v.as_str()) {
-                t.to_string()
-            } else if aleph_protocol::channels::CONFIGURABLE_CHANNEL_TYPES.contains(&key.as_str()) {
-                key.clone()
-            } else {
+            let Some(channel_type) = ChannelInstanceConfig::declared_type(key, value) else {
                 tracing::warn!(
                     "Channel '{}' has no 'type' field and is not a known platform name, skipping",
                     key
@@ -373,7 +386,7 @@ impl Config {
 
             instances.push(ChannelInstanceConfig {
                 id: key.clone(),
-                channel_type,
+                channel_type: channel_type.to_owned(),
                 config,
             });
         }

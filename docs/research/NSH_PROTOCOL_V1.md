@@ -173,6 +173,16 @@ IPC 建立前或握手过程中，连接必须绑定到当前 OS
 -   `major` 相同：协商双方支持的兼容 `minor`。
 -   客户端不得假设未协商的 Feature 可用。
 -   新增可选字段和 Feature 应保持旧客户端可忽略。
+
+> **实现注记 / Implementation note (2026-11-24, S3)：** 本文是目标规范，不是当前实现；当前状态以
+> [DESKTOP_SHELL.md §NSH Panel migration](../reference/DESKTOP_SHELL.md#nsh-panel-migration--panel-迁移) 与代码为准。
+> 已实现的 Feature 只有 `live_events`（Desktop IPC 与 Web v1 两个 v1 端点）：协商后推送已准入的无 id 帧，
+> 无 replay。`event_replay`、`snapshot`、`binary_channel` 未实现，协商结果不含它们。v1 方法沿用现有 Gateway
+> 名称（`health`、`sessions.list`、`panel.capabilities.snapshot`、`chat.history`、`chat.send`、`chat.abort`），
+> 不是 §6 的 `message.*` 命名；推送帧沿用现有 JSON-RPC 通知形状（`stream.<type>` / `event`），不是 §8 Envelope；
+> §7.2 的 `idempotency_conflict` 未实现（同键不同参数返回首次结果）。
+> This is a target spec. Implemented today: only the `live_events` feature on the two v1 endpoints (live push, no
+> replay); existing Gateway method names and notification shapes; no `idempotency_conflict`.
 -   改变字段含义、删除必需字段或改变消息语义属于破坏性变更。
 -   Server 应返回实际采用的 Protocol 版本，而不是只回显客户端版本。
 

@@ -471,3 +471,177 @@ async fn desktop_ipc_leaves_occupied_and_published_entries_untouched() {
     drop(listener);
     assert_eq!(std::fs::read_to_string(&endpoint).unwrap(), "replacement");
 }
+
+/// S3: the chat trio is mounted on Desktop IPC, and a retried `chat.send`
+/// with the same idempotency key is answered from the cache instead of
+/// starting a second run — v1 no longer strips the cache key.
+#[tokio::test]
+async fn desktop_ipc_mounts_chat_and_caches_sends_by_idempotency_key() {
+    let (_root, endpoint) = fixture();
+    let mut gateway = GatewayServer::new("127.0.0.1:0".parse().unwrap());
+    gateway.set_security_store(Arc::new(SecurityStore::in_memory().unwrap()));
+    let sends = Arc::new(AtomicUsize::new(0));
+    gateway.handlers_mut().register("chat.send", {
+        let sends = sends.clone();
+        move |req| {
+            let run = sends.fetch_add(1, Ordering::SeqCst);
+            async move {
+                crate::gateway::protocol::JsonRpcResponse::success(
+                    req.id,
+                    json!({"run_id": format!("run-{run}")}),
+                )
+            }
+        }
+    });
+    for method in ["chat.history", "chat.abort"] {
+        gateway.handlers_mut().register(method, |req| async move {
+            crate::gateway::protocol::JsonRpcResponse::success(req.id, json!({"ok": true}))
+        });
+    }
+    let (stop, shutdown) = oneshot::channel();
+    let path = endpoint.clone();
+    let task = tokio::spawn(async move { gateway.run_local_endpoint(shutdown, &path).await });
+    timeout(Duration::from_secs(5), async {
+        let mut stream = connect(&endpoint).await;
+        send(&mut stream, hello(1, 1)).await;
+        assert!(receive(&mut stream).await.get("result").is_some());
+        for (id, method) in [(2, "chat.history"), (3, "chat.abort")] {
+            send(
+                &mut stream,
+                json!({"jsonrpc":"2.0","method":method,"id":id,"params":{}}),
+            )
+            .await;
+            let response = receive(&mut stream).await;
+            assert_eq!(response["result"]["ok"], true, "{method}: {response}");
+        }
+        let mut first_run = None;
+        for id in [4, 5] {
+            send(
+                &mut stream,
+                json!({"jsonrpc":"2.0","method":"chat.send","id":id,
+                       "params":{"message":"hi","idempotency_key":"attempt-1"}}),
+            )
+            .await;
+            let response = receive(&mut stream).await;
+            assert_eq!(response["id"], id);
+            let run = response["result"]["run_id"].clone();
+            assert_eq!(*first_run.get_or_insert(run.clone()), run);
+        }
+        assert_eq!(sends.load(Ordering::SeqCst), 1);
+        stop.send(()).unwrap();
+        task.await.unwrap().unwrap();
+    })
+    .await
+    .unwrap();
+}
+
+/// S3 live events: a connection that negotiated `live_events` receives the
+/// run lifecycle of its own sessions — through the shared admission, then the
+/// v1 topic list — and an oversized frame becomes a warning on a live
+/// connection. A connection that did not negotiate receives nothing.
+#[tokio::test]
+async fn desktop_ipc_pushes_admitted_events_only_after_negotiation() {
+    let (root, endpoint) = fixture();
+    let sessions = Arc::new(
+        FileSessionStore::new(FileSessionStoreConfig {
+            base_dir: root.path().join("sessions"),
+            ..Default::default()
+        })
+        .unwrap(),
+    );
+    let own = SessionKey::main("owner-live");
+    let other = SessionKey::main("other-live");
+    for (owner, key) in [(OWNER_USER_ID, &own), ("other-user", &other)] {
+        with_scope(
+            Some(ScopeAttribution::personal(owner)),
+            sessions.get_or_create(key),
+        )
+        .await
+        .unwrap();
+    }
+    let mut gateway = GatewayServer::new("127.0.0.1:0".parse().unwrap());
+    gateway.set_security_store(Arc::new(SecurityStore::in_memory().unwrap()));
+    gateway.set_session_store(sessions);
+    gateway
+        .handlers_mut()
+        .register("health", crate::gateway::handlers::health::handle);
+    let bus = gateway.event_bus.clone();
+    let (stop, shutdown) = oneshot::channel();
+    let path = endpoint.clone();
+    let task = tokio::spawn(async move { gateway.run_local_endpoint(shutdown, &path).await });
+    let stream_frame = |method: &str, params: Value| -> String {
+        json!({"jsonrpc":"2.0","method":method,"params":params}).to_string()
+    };
+    let accepted = |run: &str, key: &SessionKey| {
+        stream_frame(
+            "stream.run_accepted",
+            json!({"type":"run_accepted","run_id":run,"session_key":key.to_key_string(),"accepted_at":"t"}),
+        )
+    };
+    let chunk = |run: &str, text: &str| {
+        stream_frame(
+            "stream.response_chunk",
+            json!({"type":"response_chunk","run_id":run,"seq":1,"delta":text,"content":text}),
+        )
+    };
+    // Generous: the oversized frame is parsed several times at ~8 MiB in a
+    // debug build, which one parallel suite run pushed past 5 s.
+    timeout(Duration::from_secs(20), async {
+        let mut live = connect(&endpoint).await;
+        let mut request = hello(1, 1);
+        request["params"]["features"] = json!(["event_replay", "live_events"]);
+        send(&mut live, request).await;
+        assert_eq!(
+            receive(&mut live).await["result"]["features"],
+            json!(["live_events"])
+        );
+        let mut quiet = connect(&endpoint).await;
+        send(&mut quiet, hello(1, 1)).await;
+        assert_eq!(receive(&mut quiet).await["result"]["features"], json!([]));
+
+        let own_accepted = accepted("r-own", &own);
+        let own_chunk = chunk("r-own", "hi");
+        let own_complete = stream_frame(
+            "stream.run_complete",
+            json!({"type":"run_complete","run_id":"r-own","seq":3,"summary":{},"total_duration_ms":1}),
+        );
+        for frame in [
+            accepted("r-other", &other),
+            own_accepted.clone(),
+            stream_frame(
+                "stream.reasoning",
+                json!({"type":"reasoning","run_id":"r-own","seq":2,"content":"x"}),
+            ),
+            own_chunk.clone(),
+            chunk("r-other", "not yours"),
+            chunk("r-own", &"x".repeat(MAX_FRAME_BYTES_FOR_TEST + 1)),
+            own_complete.clone(),
+        ] {
+            bus.publish(frame);
+        }
+        for expected in [&own_accepted, &own_chunk] {
+            let received = receive(&mut live).await;
+            assert_eq!(received, serde_json::from_str::<Value>(expected).unwrap());
+        }
+        let warning = receive(&mut live).await;
+        assert_eq!(warning["params"]["topic"], "connection.warning", "{warning}");
+        assert_eq!(warning["params"]["data"]["dropped"], 1);
+        assert_eq!(
+            receive(&mut live).await,
+            serde_json::from_str::<Value>(&own_complete).unwrap()
+        );
+        // The live connection still serves requests after the warning.
+        send(&mut live, json!({"jsonrpc":"2.0","method":"health","id":2})).await;
+        assert_eq!(receive(&mut live).await["id"], 2);
+
+        // Anything pushed to the quiet connection would arrive before this.
+        send(&mut quiet, json!({"jsonrpc":"2.0","method":"health","id":2})).await;
+        assert_eq!(receive(&mut quiet).await["id"], 2);
+        stop.send(()).unwrap();
+        task.await.unwrap().unwrap();
+    })
+    .await
+    .unwrap();
+}
+
+const MAX_FRAME_BYTES_FOR_TEST: usize = aleph_client::local_ipc::MAX_FRAME_BYTES as usize;

@@ -143,3 +143,85 @@ async fn local_client_uses_hello_and_correlates_out_of_order() {
     .await
     .unwrap();
 }
+
+/// S3: a client that requested `live_events` receives id-less notifications
+/// pushed right after the hello response — stream frames on the stream
+/// plane, `event` topics on the topic plane. A server granting a feature the
+/// client did not request is refused at the handshake.
+#[cfg(unix)]
+#[tokio::test]
+async fn local_client_delivers_live_events_only_when_requested() {
+    use crate::AlephClient;
+    use aleph_protocol::{JsonRpcRequest, JsonRpcResponse, StreamEvent};
+    use serde_json::json;
+    use std::os::unix::fs::PermissionsExt;
+    use std::time::Duration;
+    use tokio::time::timeout;
+
+    let dir = tempfile::tempdir_in("/tmp").unwrap();
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let endpoint = dir.path().join("ipc");
+    let listener = tokio::net::UnixListener::bind(&endpoint).unwrap();
+    let hello_params = |features: serde_json::Value| {
+        serde_json::from_value::<aleph_protocol::system_hello::HelloParams>(json!({
+            "protocol": {"major": 1, "minor": 0},
+            "client": {"name": "fixture", "version": "1", "platform": std::env::consts::OS, "ui_runtime": "test"},
+            "features": features,
+        }))
+        .unwrap()
+    };
+    // The fixture always grants `live_events` and pushes two notifications.
+    let peer = async {
+        for _ in 0..2 {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let hello: JsonRpcRequest =
+                serde_json::from_str(&read_frame(&mut stream).await.unwrap().unwrap()).unwrap();
+            let response = JsonRpcResponse::success(
+                hello.id.unwrap(),
+                json!({
+                    "protocol": {"major": 1, "minor": 0},
+                    "server": {"name": "fixture", "version": "1"},
+                    "connection_id": "fixture-connection",
+                    "features": ["live_events"],
+                    "limits": {"max_message_bytes": MAX_FRAME_BYTES, "max_inflight_requests": 2},
+                }),
+            );
+            let frames = [
+                serde_json::to_string(&response).unwrap(),
+                json!({"jsonrpc":"2.0","method":"stream.run_accepted","params":{
+                    "type":"run_accepted","run_id":"r-1","session_key":"agent:main:main","accepted_at":"t"}})
+                .to_string(),
+                json!({"jsonrpc":"2.0","method":"event","params":{
+                    "topic":"connection.warning","data":{"reason":"events_overflow"}}})
+                .to_string(),
+            ];
+            for frame in frames {
+                // The refused client may already be gone.
+                if write_frame(&mut stream, &frame).await.is_err() {
+                    break;
+                }
+            }
+            let _ = read_frame(&mut stream).await;
+        }
+    };
+    let caller = async {
+        let refused = AlephClient::connect_local(&endpoint, &hello_params(json!([]))).await;
+        assert!(refused.is_err(), "unrequested feature granted");
+        let (client, mut events) =
+            AlephClient::connect_local(&endpoint, &hello_params(json!(["live_events"])))
+                .await
+                .unwrap();
+        let mut topics = client.take_topic_events().unwrap();
+        match events.recv().await.unwrap() {
+            StreamEvent::RunAccepted { run_id, .. } => assert_eq!(run_id, "r-1"),
+            other => panic!("unexpected stream event {other:?}"),
+        }
+        let topic = topics.recv().await.unwrap();
+        assert_eq!(topic.topic, "connection.warning");
+        assert_eq!(client.stream_continuity().dropped_events, 0);
+        drop(client);
+    };
+    timeout(Duration::from_secs(5), async { tokio::join!(peer, caller) })
+        .await
+        .unwrap();
+}
