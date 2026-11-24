@@ -22,7 +22,7 @@
 //! many times before anything moved. It read as a dead key, which is why no
 //! test and no bug report found it.
 
-use crate::appearance::{apply_mode, ThemeMode};
+use crate::appearance::{apply_mode, AppearanceLabel, ThemeMode};
 use crate::components::picker_nav::{
     publish_more_below, row_dom_id, scroll_row_into_view, step_highlight,
 };
@@ -32,6 +32,7 @@ use leptos::ev::keydown;
 use leptos::html::Div;
 use leptos::prelude::*;
 use leptos_router::hooks::use_navigate;
+use shared_ui_logic::prefs::commands::score;
 
 /// Namespace for this palette's row ids — see [`row_dom_id`].
 const LIST: &str = "palette";
@@ -185,38 +186,6 @@ fn build_actions() -> Vec<Action> {
             run: Box::new(reload_page),
         },
     ]
-}
-
-/// Substring score: 0 = no match, >0 = better. Word-start matches outrank
-/// mid-word; label matches outrank keyword matches. Empty query returns
-/// `u32::MAX` so everything passes through.
-pub(crate) fn score(query: &str, label: &str, keywords: &[&str]) -> u32 {
-    if query.is_empty() {
-        return u32::MAX;
-    }
-    let q = query.to_lowercase();
-    let l = label.to_lowercase();
-    let mut best: u32 = 0;
-    if l.starts_with(&q) {
-        best = best.max(100);
-    } else if l.contains(&q) {
-        if l.split(|c: char| !c.is_alphanumeric())
-            .any(|t| t.starts_with(&q))
-        {
-            best = best.max(70);
-        } else {
-            best = best.max(40);
-        }
-    }
-    for k in keywords {
-        let kl = k.to_lowercase();
-        if kl.starts_with(&q) {
-            best = best.max(35);
-        } else if kl.contains(&q) {
-            best = best.max(20);
-        }
-    }
-    best
 }
 
 /// One filtered row in display order.
@@ -455,44 +424,4 @@ fn render_list(i18n: I18nCtx, rows: &[Row], selected_idx: usize, open: RwSignal<
     }
 
     view! { <div>{out}</div> }.into_any()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn empty_query_passes_all() {
-        assert_eq!(score("", "Anything", &["k1"]), u32::MAX);
-    }
-
-    #[test]
-    fn label_prefix_beats_substring_beats_keyword() {
-        let prefix = score("set", "Settings", &["preferences"]);
-        let mid = score("ings", "Settings", &["preferences"]);
-        let kw_prefix = score("pre", "Settings", &["preferences"]);
-        let kw_mid = score("ref", "Settings", &["preferences"]);
-        assert!(prefix > mid);
-        assert!(prefix > kw_prefix);
-        assert!(kw_prefix > kw_mid);
-    }
-
-    #[test]
-    fn case_insensitive() {
-        assert!(score("SET", "settings", &[]) > 0);
-        assert!(score("set", "SETTINGS", &[]) > 0);
-    }
-
-    #[test]
-    fn no_match_returns_zero() {
-        assert_eq!(score("zzz", "Settings", &["preferences"]), 0);
-    }
-
-    #[test]
-    fn word_start_beats_random_substring() {
-        // "mem" matches inside "Remember" mid-word vs at start of "Memory"
-        let start = score("mem", "Memory", &[]);
-        let mid = score("mem", "Remember", &[]);
-        assert!(start > mid);
-    }
 }
