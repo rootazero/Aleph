@@ -1,3 +1,84 @@
+//! Bounded, read-only pages from the primary grid's existing retention ring.
+
+use aleph_protocol::pty::{
+    PtyHistoryError, PtyHistoryRequest, PtyHistoryResponse, PtyHistoryRow, PTY_HISTORY_MAX_BYTES,
+};
+
+use super::{convert, diff::row_runs, Screen};
+
+impl Screen {
+    pub(crate) fn history(
+        &self,
+        request: &PtyHistoryRequest,
+    ) -> Result<PtyHistoryResponse, PtyHistoryError> {
+        self.history_with_budget(request, PTY_HISTORY_MAX_BYTES)
+    }
+
+    fn history_with_budget(
+        &self,
+        request: &PtyHistoryRequest,
+        budget: usize,
+    ) -> Result<PtyHistoryResponse, PtyHistoryError> {
+        let before = request.validate()?;
+        if self.alt_screen() {
+            return Err(PtyHistoryError::Unavailable);
+        }
+        let next = self.grid.history_next;
+        let before = before.unwrap_or(next);
+        if before > next {
+            return Err(PtyHistoryError::InvalidCursor);
+        }
+        let ring = &self.grid.scrollback;
+        let oldest = next - ring.len() as u64;
+        let mut page = PtyHistoryResponse {
+            rows: Vec::new(),
+            older_before: None,
+            evicted: before < oldest,
+        };
+        if before <= oldest {
+            return Ok(page);
+        }
+        let end = (before - oldest) as usize;
+        let start = end.saturating_sub(usize::from(request.limit));
+        let mut row_bytes = 0usize;
+        // Index directly into the deque window: never scan all retained rows.
+        for offset in (start..end).rev() {
+            let index = oldest + offset as u64;
+            let row = PtyHistoryRow {
+                index: index.to_string(),
+                runs: row_runs(&ring[offset]).iter().map(convert::run).collect(),
+            };
+            let older_before = (index > oldest).then(|| index.to_string());
+            let envelope = PtyHistoryResponse {
+                rows: Vec::new(),
+                older_before,
+                evicted: page.evicted,
+            };
+            let encoded_row = serde_json::to_vec(&row).map_err(|_| PtyHistoryError::Unavailable)?;
+            let encoded_envelope =
+                serde_json::to_vec(&envelope).map_err(|_| PtyHistoryError::Unavailable)?;
+            let candidate_rows = row_bytes
+                .checked_add(encoded_row.len())
+                .ok_or(PtyHistoryError::RowTooLarge)?;
+            let total = candidate_rows
+                .checked_add(encoded_envelope.len())
+                .and_then(|bytes| bytes.checked_add(page.rows.len())) // row separators
+                .ok_or(PtyHistoryError::RowTooLarge)?;
+            if total > budget {
+                if page.rows.is_empty() {
+                    return Err(PtyHistoryError::RowTooLarge);
+                }
+                break; // The continuation still points before the oldest accepted row.
+            }
+            row_bytes = candidate_rows;
+            page.older_before = envelope.older_before;
+            page.rows.push(row);
+        }
+        page.rows.reverse();
+        Ok(page)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::Screen;
@@ -119,7 +200,7 @@ mod tests {
         }
         // Exercise lossless indices, with no extra retained copy of history.
         screen.grid.history_next = u64::MAX;
-        let mut cursor = None;
+        let mut cursor: Option<String> = None;
         let mut all = Vec::new();
         loop {
             let page = screen.history(&request(cursor.as_deref(), 64)).unwrap();
