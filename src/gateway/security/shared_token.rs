@@ -260,12 +260,48 @@ impl SharedTokenManager {
 
     /// Store an encrypted secret in the vault.
     pub fn store_secret(&self, name: &str, value: &str) -> Result<(), SharedTokenError> {
+        let entry = Self::encrypt_secret(&self.crypto()?, name, value)?;
+        let mut vault = self.vault.write().unwrap_or_else(|e| e.into_inner());
+        vault
+            .set(name, entry)
+            .map_err(|e| SharedTokenError::Storage(e.to_string()))
+    }
+
+    /// Store a credential set in one vault write, or leave every old entry intact.
+    pub(crate) fn store_secret_batch<'a>(
+        &self,
+        secrets: impl IntoIterator<Item = (&'a str, &'a str)>,
+    ) -> Result<(), SharedTokenError> {
+        let mut secrets = secrets.into_iter().peekable();
+        if secrets.peek().is_none() {
+            return Ok(());
+        }
+        let mut vault = self.vault.write().unwrap_or_else(|e| e.into_inner());
+        // Rotation holds this write lock until the current token changes.
         let crypto = self.crypto()?;
+        let mut entries = vault.entries().clone();
+        for (name, value) in secrets {
+            let mut entry = Self::encrypt_secret(&crypto, name, value)?;
+            if let Some(previous) = entries.get(name) {
+                entry.created_at = previous.created_at;
+            }
+            entries.insert(name.to_owned(), entry);
+        }
+        vault
+            .replace_all(entries)
+            .map_err(|error| SharedTokenError::Storage(error.to_string()))
+    }
+
+    fn encrypt_secret(
+        crypto: &SecretsCrypto,
+        name: &str,
+        value: &str,
+    ) -> Result<EncryptedEntry, SharedTokenError> {
         let encrypted = crypto
             .encrypt(value)
             .map_err(|e| SharedTokenError::Storage(format!("Encryption failed: {e}")))?;
         let now = chrono::Utc::now().timestamp();
-        let entry = EncryptedEntry {
+        Ok(EncryptedEntry {
             ciphertext: encrypted.ciphertext,
             nonce: encrypted.nonce,
             salt: encrypted.salt,
@@ -275,11 +311,7 @@ impl SharedTokenManager {
                 description: Some(format!("API key for {name}")),
                 provider: Some(name.to_string()),
             },
-        };
-        let mut vault = self.vault.write().unwrap_or_else(|e| e.into_inner());
-        vault
-            .set(name, entry)
-            .map_err(|e| SharedTokenError::Storage(e.to_string()))
+        })
     }
 
     /// Get a decrypted secret from the vault.

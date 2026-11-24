@@ -382,9 +382,9 @@ pub trait Interface: Send + Sync {
 ### Factory registration is what makes a channel configurable
 
 `handlers::channel::create_channel_from_config` resolves a configured
-`[channels.<type>]` entry through the plugin table in
-`(removed; plugin system is now src/extension/)`, and returns `None` for a type that is not in it —
-after which `initialize_channels` logs `Failed to create channel` and continues.
+`[channels.<id>]` entry through the factory table populated by
+`src/gateway/interfaces/mod.rs::register_channel_plugins`. It returns `None` for
+an unregistered type; `initialize_channels` logs the failure and continues.
 **A `ChannelFactory` that is not registered in `interfaces::register_channel_plugins`
 is therefore unreachable, however complete it is.**
 
@@ -400,6 +400,39 @@ New adapters must be added to `register_channel_plugins` by hand.
 regression, but it cannot enumerate `impl ChannelFactory`, so it will not catch a
 *future* adapter that forgets to register — adding the name to that list is the
 same manual step as the registration.
+
+### Cold declarations / 冷声明
+
+A JSON boolean `enabled: false` (TOML `enabled = false`) leaves the declaration in
+`Config`. At boot, `initialize_channels` skips vault hydration and adapter
+construction, including the iMessage/BlueBubbles branch. `channel.create` saves
+before construction and returns `disabled` for cold declarations. It stages supported
+credentials outside the config, then commits them together to the vault only after
+config persistence succeeds. Unsupported nested credentials and vault write failures
+are errors, not plaintext fallbacks. If vault commit and config rollback both fail,
+the remaining declaration stays cold and contains no newly supplied credentials.
+An omitted flag retains that adapter's existing default.
+
+`channels.list` and `channels.status` report an uninstantiated disabled declaration
+with no runtime capabilities. If a runtime exists under the same ID, its live
+status wins; the list summary counts the ID once. `channel.start` for a config-only
+ID validates the latest config and policy, requires a factory that returns the
+same ID, and publishes policy before starting the adapter. It does not set
+`enabled = true` on disk. The inbound router and system continuations read the
+same policy projection. Send and stop still require a runtime; delete can remove
+a cold declaration. This is not hot reconfiguration, a Zahir Gateway mount, or a
+claim that stopping a channel reclaims every resource or unloads native code.
+
+显式 `enabled = false` 的声明留在 `Config`。启动时不补齐 vault 密钥、不构造
+adapter（包括 iMessage/BlueBubbles）；`channel.create` 先保存，再返回 `disabled`，
+仅在配置落盘后，才将本次明确提供且受支持的凭证一次写入 vault。不支持的嵌套凭证或
+vault 写入失败会报错，不回退到明文。如果 vault 提交与配置回滚都失败，留下的声明
+仍处于冷态，不含新提交的凭证。省略 `enabled` 保留适配器原有默认行为。
+`channels.list` / `channels.status` 显示冷声明且不声明运行能力；同 ID 有运行实例时
+以实时状态为准，只计一次。对仅有配置的 ID，`channel.start` 校验最新配置与策略、
+要求工厂返回同一 ID，并在启动适配器前发布策略，不改写磁盘上的 `enabled`。
+入站与系统续跑读取同一策略投影。发送和停止仍需运行实例，删除可只移除冷声明。
+不提供热更新，不新增 Zahir Gateway 挂载，也不声称 stop 回收全部资源或卸载原生代码。
 
 ### Self-healing needs intent, not just status
 
@@ -427,6 +460,12 @@ no separate transport-liveness signal to tell them apart (openclaw restarts on
 `stale-socket` only because it tracks `lastTransportActivityAt`). `Disabled` is
 excluded as configuration. Mapped from openclaw's `isManagedAccount` +
 `lifecycle` in `gateway/channel-health-policy.ts`.
+
+**XMPP transport lifetime / XMPP 连接生命周期.** Reads with no new `>` still
+count toward the input limit, but cannot complete a stanza, so they skip the
+XML scan. When the receive loop exits for a reconnect, it releases both halves
+of the old TCP connection before waiting. The input limit and reconnect schedule
+are unchanged. / 未读到新的 `>` 时，数据仍计入输入上限，但不会完成 stanza，因此跳过 XML 扫描。接收循环退出并准备重连时，先释放旧 TCP 的读写两端，再等待下次尝试。输入上限和重连间隔不变。
 
 **Adapter rule**: do not unconditionally overwrite `status` on a connection
 task's exit path. That one line erases the failure the line above just

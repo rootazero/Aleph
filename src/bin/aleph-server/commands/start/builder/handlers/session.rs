@@ -252,6 +252,7 @@ pub(in crate::commands::start) fn register_channel_handlers(
     channel_registry: &Arc<ChannelRegistry>,
     app_config: &Arc<tokio::sync::RwLock<alephcore::Config>>,
     vault: &Arc<alephcore::gateway::security::SharedTokenManager>,
+    policy: &Arc<alephcore::gateway::channel_policy::ChannelPolicyProjection>,
 ) {
     register_handler!(
         server,
@@ -264,7 +265,8 @@ pub(in crate::commands::start) fn register_channel_handlers(
         server,
         "channels.status",
         channel_handlers::handle_status,
-        channel_registry
+        channel_registry,
+        app_config
     );
     register_handler!(
         server,
@@ -272,7 +274,8 @@ pub(in crate::commands::start) fn register_channel_handlers(
         channel_handlers::handle_start,
         channel_registry,
         app_config,
-        vault
+        vault,
+        policy
     );
     register_handler!(
         server,

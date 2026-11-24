@@ -249,8 +249,25 @@ impl TelegramConfig {
 pub fn parse_telegram_channel_config(
     value: serde_json::Value,
 ) -> Result<TelegramConfigV2, serde_json::Error> {
+    parse_config(value, false)
+}
+
+/// An explicitly declared V2 account list must pass V2 validation on activation.
+pub(crate) fn parse_activation_config(
+    value: serde_json::Value,
+) -> Result<TelegramConfigV2, serde_json::Error> {
+    parse_config(value, true)
+}
+
+fn parse_config(
+    value: serde_json::Value,
+    strict_activation: bool,
+) -> Result<TelegramConfigV2, serde_json::Error> {
     let config = match serde_json::from_value::<TelegramConfigV2>(value.clone()) {
         Ok(v2) => v2,
+        Err(error) if strict_activation && value.get("accounts").is_some() => {
+            return Err(error);
+        }
         Err(v2_err) => match serde_json::from_value::<TelegramConfig>(value) {
             Ok(v1) => {
                 tracing::debug!(
@@ -274,10 +291,13 @@ pub fn parse_telegram_channel_config(
         ));
     }
     let validation_errors = config.validate();
-    if !validation_errors.is_empty() {
-        for err in &validation_errors {
-            tracing::warn!("Telegram config validation: {}", err);
-        }
+    if strict_activation && !validation_errors.is_empty() {
+        return Err(<serde_json::Error as serde::de::Error>::custom(
+            "Invalid Telegram account configuration",
+        ));
+    }
+    for error in validation_errors {
+        tracing::warn!("Telegram config validation: {error}");
     }
 
     Ok(config)

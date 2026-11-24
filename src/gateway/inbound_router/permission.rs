@@ -70,11 +70,7 @@ impl InboundMessageRouter {
         mut ctx: InboundContext,
     ) -> Result<InboundContext, RoutingError> {
         let channel_id = ctx.message.channel_id.as_str();
-        let mut channel_config = self
-            .channel_configs
-            .get(channel_id)
-            .cloned()
-            .unwrap_or_default();
+        let mut channel_config = self.channel_policy.get(channel_id).unwrap_or_default();
         let mut telegram_chat_id = None;
         if let Some(handle) = self.channel_registry.get(&ctx.message.channel_id).await {
             let channel = handle.read().await;

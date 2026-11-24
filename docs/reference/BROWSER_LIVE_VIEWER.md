@@ -82,7 +82,7 @@
 
 **Panel / 用户 → viewer（设计链路 / designed path）**
 
-`browser.viewer.grant.issue`（RPC，Frames-only，显式 trusted origin）→ 启动 URL `<origin>/<path>#grant_id=…&nonce=…`（nonce 只在 fragment）→ `POST /viewer/browser/consume`（fragment nonce → ticket）→ `POST /viewer/browser/exchange`（ticket → WS 路径 + 轮换 secret）→ `GET /viewer/browser/ws` + 首帧 `AuthHello`（2 s 超时）→ `AuthOk`（先写后注册）→ `LiveViewerBackend`（attach 前读取 resource registry 授权）→ 精确 owner（`owner_registry`：`(browser_session_id, target_id)` 精确路由、compare-and-retire）。
+`browser.viewer.grant.issue`（RPC；Panel 仅请求 Frames；服务端要求显式 trusted origin / Panel requests Frames only; the server requires an explicit trusted origin）→ 启动 URL `<origin>/<path>#grant_id=…&nonce=…`（nonce 只在 fragment）→ `POST /viewer/browser/consume`（fragment nonce → ticket）→ `POST /viewer/browser/exchange`（ticket → WS 路径 + 轮换 secret）→ `GET /viewer/browser/ws` + 首帧 `AuthHello`（2 s 超时）→ `AuthOk`（先写后注册）→ `LiveViewerBackend`（attach 前读取 resource registry 授权）→ 精确 owner（`owner_registry`：`(browser_session_id, target_id)` 精确路由、compare-and-retire）。
 
 > 注意：上述链路的 composition 已由 `BrowserLiveRuntime` 实现（§2.1），但**仅显式合法 origin 才安装真实 backend，默认 deny-only**；**独立 standalone viewer 链路**已在 Windows 单机由真实 Gateway/Chrome/WS/WASM DOM selector 验证（§6，跨多次独立运行的历史覆盖）；**完整 Native Panel**（Panel app 内 launch 点击、窗口级 QA）**未**验证（#56 仍 PARTIAL，window 5 失败于 `reveal_browser`，见 `docs/reports/verify-20261007/task56-native-real-window-5.md`）。The chain is now composed by `BrowserLiveRuntime` (§2.1), but the real backend is installed **only for an explicit valid origin; default is deny-only**. The **standalone viewer chain** has Windows real-machine selector evidence (§6; aggregated across separate runs); the **full Native Panel** (in-app launch click, window-level QA) does **not** (#56 still PARTIAL, window 5 failed at `reveal_browser`).
 
@@ -102,7 +102,7 @@
 1. nonce 仅在 URL fragment；不进请求行 / `Referer` / 日志；`Debug`/`Display` 一律脱敏。The nonce lives only in the fragment and is never logged or `Debug`-printed.
 2. 严格校验 Origin、binding、resource、target；单连接 `next_secret` 轮换，已消费 secret 不可重放。Strict Origin/binding/resource/target checks; single-connection rotating secret, no replay.
 3. 未认证 WS 只允许有界 auth 握手；`AuthOk` 之前不发任何业务消息 / 帧。Pre-auth WS is a bounded handshake only; no business frames before `AuthOk`.
-4. 当前 issuer 仅授 **Frames** 能力；人类输入走 SSRF baseline + mutations gate。Issuer grants Frames-only; human input passes SSRF baseline + mutation gate.
+4. Issuer 只授予请求中受支持的权限：`Frames`、`HumanInput`、`Navigate`。仅请求 `Frames` 不会获得控制权限；人类输入仍走 SSRF baseline + mutations gate。The issuer grants only requested, supported permissions: `Frames`, `HumanInput`, and `Navigate`. A Frames-only request grants no control permissions; human input still passes the SSRF baseline and mutation gate.
 5. 事件总线只带 resource / closed / intervention 三类；frame / state 只走专用 viewer WS。Bus carries resource/closed/intervention only; frames/state only on the dedicated WS.
 6. 精确 owner 路由：不能按 profile 猜 owner，不能从 receipt 重建 owner；retired / unavailable 一律拒绝。Exact owner routing: never guess an owner by profile or rebuild from a receipt; retired → deny.
 7. Redaction 为 Pending / Refused 时 Panel 不描述资源内容；Refused / Closed 的 tombstone 不含 target，旧 revision 不得复活。Pending/Refused resources are withheld; tombstones carry no target and never resurrect.
