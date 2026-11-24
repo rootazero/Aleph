@@ -1094,7 +1094,7 @@ the operator could not have removed.
   它买到的是**"每个终端的起点可枚举、可审计"，不是"终端不能离开工作区"**。别把它当成隔离来引用。
 - **PTY 不经 `[sandbox.command_policy]` 也不经 exec tier**（`method_admin.rs` 的注释自陈 "strictly more dangerous"）。
   会话粒度的开关 `[policies.terminal] enabled` 是这一层唯一说得出口的谓词；关掉它会杀掉在飞的会话。
-- **终端历史住在服务器上**（每会话 `scrollback_lines` 行，默认 1000），因此对诊断与审计面可见。
+- **终端滚屏是服务端会话的内存状态，不是审计记录。** 每会话缓冲上限由 `scrollback_lines` 决定（默认 1000 行）。服务端拥有缓冲不等于其他 operator 可读，也不等于会话关闭后仍有持久历史。 / **Scrollback is server-side session memory, not an audit log.** `scrollback_lines` bounds the per-session buffer (default 1,000 rows). Server ownership does not grant other operators read access or retain history after the session closes.
 - **Operator scope and session ownership are separate gates.** Operator `['*']` permits reaching the PTY RPC/event surface; it does not override the existing `created_by` check. `owner_admits` is shared by listing, addressed operations and event delivery: a resolved caller must match the recorded creator. An internal caller with no resolved identity retains the existing unscoped behavior.
   **Operator scope 与 session ownership 是两道闸。** Operator 的 `['*']` 允许到达 PTY RPC/event 面，但不覆盖 `created_by` 判定。list、addressed operations 与事件交付共用 `owner_admits`：已解析身份的 caller 必须匹配创建者；未解析身份的内部 caller 保留现有 unscoped 行为。
 - **打开这道闸本身不举卡就是一次绕闸**：`[policies.terminal] enabled` 在
