@@ -111,6 +111,9 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
     let stop_events = Rc::new(Cell::new(false));
     let event_streams = Rc::new(RefCell::new(Vec::<TerminalEventStream>::new()));
     let (wake, mut wake_rx) = futures::channel::mpsc::unbounded::<()>();
+    let settlements = state.settlements;
+    let mut settled_revision = settlements.revision();
+    settlements.listen(wake.clone());
     let cleanup_state = LocalCleanup((
         Rc::clone(&stop_events),
         Rc::clone(&event_streams),
@@ -137,6 +140,13 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
             let now = terminal_now_ms();
             let connection = services.connection.get_untracked();
             controller.update_value(|c| c.connect(connection));
+            // Observe before accepting replies: a list issued before the old
+            // write settled cannot authorize the replacement owner's model.
+            let revision = settlements.revision();
+            if settled_revision != revision {
+                settled_revision = revision;
+                controller.update_value(|c| c.mutation_settled());
+            }
             if connection != last_connection {
                 for stream in event_streams.borrow_mut().drain(..) {
                     (stream.dispose)();
@@ -257,6 +267,7 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
                 let stop = Rc::clone(&stop_events);
                 let streams = Rc::clone(&event_streams);
                 let wake = wake.clone();
+                let settlements = Rc::clone(&settlements);
                 spawn_local(async move {
                     if stop.get() {
                         return;
@@ -294,7 +305,17 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
                             }
                         }
                     }
-                    if !stop.get() {
+                    if stop.get() {
+                        if matches!(
+                            request.kind,
+                            crate::recovery::RequestKind::Spawn
+                                | crate::recovery::RequestKind::Close
+                        ) {
+                            // Both success and error may follow a server-side
+                            // mutation. Never carry the old response across owners.
+                            settlements.settled();
+                        }
+                    } else {
                         inbox.borrow_mut().push((request, result));
                         let _ = wake.unbounded_send(());
                     }
@@ -940,6 +961,167 @@ mod tests {
             "a queued replay gap must back off, not commit then immediately attach again"
         );
         owner.cleanup();
+    }
+
+    #[test]
+    fn mounted_old_owner_settlement_relists_without_adopting_or_replaying() {
+        let _ = any_spawner::Executor::init_futures_executor();
+        for close in [false, true] {
+            for failed in [false, true] {
+                for timing in ["before-mount", "after-list", "during-list"] {
+                    let root = Owner::new();
+                    let selection = root.with(crate::TerminalSelection::default);
+                    let lists = Rc::new(Cell::new(0));
+                    let writes = Rc::new(Cell::new(0));
+                    let (first_list_tx, first_list_rx) = futures::channel::oneshot::channel();
+                    let first_list_rx = Rc::new(RefCell::new(Some(first_list_rx)));
+                    let (replacement_list_tx, replacement_list_rx) =
+                        futures::channel::oneshot::channel();
+                    let replacement_list_rx = Rc::new(RefCell::new(Some(replacement_list_rx)));
+                    let (reconcile_tx, reconcile_rx) = futures::channel::oneshot::channel();
+                    let reconcile_rx = Rc::new(RefCell::new(Some(reconcile_rx)));
+                    let (settle, settlement) = futures::channel::oneshot::channel();
+                    let settlement = Rc::new(RefCell::new(Some(settlement)));
+                    let services = root.with(|| TerminalServices {
+                        invoke: {
+                            let lists = Rc::clone(&lists);
+                            let writes = Rc::clone(&writes);
+                            Rc::new(move |method: String, _params| {
+                                let lists = Rc::clone(&lists);
+                                let writes = Rc::clone(&writes);
+                                let first_list_rx = Rc::clone(&first_list_rx);
+                                let replacement_list_rx = Rc::clone(&replacement_list_rx);
+                                let settlement = Rc::clone(&settlement);
+                                let reconcile_rx = Rc::clone(&reconcile_rx);
+                                async move {
+                                    match method.as_str() {
+                                        "pty.list" => {
+                                            let n = lists.get() + 1;
+                                            lists.set(n);
+                                            let deferred = if n == 1 {
+                                                first_list_rx.borrow_mut().take()
+                                            } else if n == 2 && timing == "during-list" {
+                                                replacement_list_rx.borrow_mut().take()
+                                            } else if n == 3 {
+                                                reconcile_rx.borrow_mut().take()
+                                            } else {
+                                                None
+                                            };
+                                            if let Some(deferred) = deferred {
+                                                return Ok(deferred.await.unwrap());
+                                            }
+                                            Ok(if close && timing != "before-mount" {
+                                                json!({"sessions":[{"session_id":"s","shell":"sh","created_at":0,"closed":false}]})
+                                            } else if close {
+                                                json!({"sessions":[]})
+                                            } else {
+                                                json!({"sessions":[{"session_id":"list-authority","shell":"sh","created_at":0,"closed":false}]})
+                                            })
+                                        }
+                                        "pty.spawn" | "pty.close" => {
+                                            writes.set(writes.get() + 1);
+                                            let deferred = settlement.borrow_mut().take().unwrap();
+                                            deferred.await.unwrap()
+                                        }
+                                        "pty.attach" => Ok(json!({"seq":0,"rows":24,"cols":80,"patch":{"rows":[]},"scrollback_len":0})),
+                                        _ => Ok(json!({})),
+                                    }
+                                }.boxed_local()
+                            })
+                        },
+                        subscribe: Rc::new(|_| async { Ok(test_stream(1, Rc::new(Cell::new(0)))) }.boxed_local()),
+                        connection: Signal::derive(|| TerminalConnection { connected: true, epoch: 1 }),
+                        text: test_text(),
+                    });
+                    // This is the default App route boundary: only selection is
+                    // parent-owned; every route entry creates a fresh state.
+                    let old = root.with(Owner::new);
+                    let old_state = old
+                        .with(|| crate::terminal_state_with_selection(services.clone(), selection));
+                    old.with(|| {
+                        let _ = TerminalContent(TerminalContentProps {
+                            state: old_state.clone(),
+                        })
+                        .into_view();
+                    });
+                    any_spawner::Executor::poll_local();
+                    if close {
+                        old_state.close_request.set(Some("s".into()));
+                    } else {
+                        old_state.new_request.set(1);
+                    }
+                    first_list_tx.send(json!({"sessions":[{"session_id":"s","shell":"sh","created_at":0,"closed":false}]})).unwrap();
+                    any_spawner::Executor::poll_local();
+                    assert_eq!(writes.get(), 1);
+                    old.cleanup();
+                    let result = if failed {
+                        Err("old-owner-error-sentinel".to_string())
+                    } else {
+                        Ok(json!({"session_id":"old-payload-sentinel","shell":"sh"}))
+                    };
+                    let settlement = if timing == "before-mount" {
+                        settle.send(result).unwrap();
+                        any_spawner::Executor::poll_local();
+                        None
+                    } else {
+                        Some((settle, result))
+                    };
+                    let replacement = root.with(Owner::new);
+                    let state = replacement
+                        .with(|| crate::terminal_state_with_selection(services.clone(), selection));
+                    replacement.with(|| {
+                        let _ = TerminalContent(TerminalContentProps {
+                            state: state.clone(),
+                        })
+                        .into_view();
+                    });
+                    any_spawner::Executor::poll_local();
+                    assert_eq!(lists.get(), 2);
+                    if let Some((settle, result)) = settlement {
+                        let tabs = state.tabs.get_untracked();
+                        settle.send(result).unwrap();
+                        any_spawner::Executor::poll_local();
+                        assert_eq!(
+                            state.tabs.get_untracked(),
+                            tabs,
+                            "settlement payload must never change the replacement model"
+                        );
+                        if timing == "during-list" {
+                            replacement_list_tx.send(json!({"sessions":[{"session_id":"stale-list-sentinel","shell":"sh","created_at":0,"closed":false}]})).unwrap();
+                            any_spawner::Executor::poll_local();
+                        }
+                        assert_eq!(
+                            lists.get(),
+                            3,
+                            "quiet replacement must re-list exactly once after old settlement"
+                        );
+                        assert_eq!(
+                            state.tabs.get_untracked(),
+                            tabs,
+                            "neither an old effect nor its invalidated list may be adopted"
+                        );
+                        reconcile_tx.send(if close {
+                            json!({"sessions":[]})
+                        } else {
+                            json!({"sessions":[{"session_id":"list-authority","shell":"sh","created_at":0,"closed":false}]})
+                        }).unwrap();
+                        any_spawner::Executor::poll_local();
+                        assert_eq!(lists.get(), 3, "settlement is consumed once");
+                    }
+                    assert!(
+                        !state.actions_disabled.get_untracked(),
+                        "old errors must not disable the replacement"
+                    );
+                    assert_eq!(writes.get(), 1, "settlement must never replay the gesture");
+                    assert_eq!(
+                        state.tabs.get_untracked().selected_id(),
+                        if close { None } else { Some("list-authority") }
+                    );
+                    replacement.cleanup();
+                    root.cleanup();
+                }
+            }
+        }
     }
 
     #[test]

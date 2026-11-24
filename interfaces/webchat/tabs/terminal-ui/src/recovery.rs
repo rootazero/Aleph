@@ -341,6 +341,10 @@ impl Recovery {
         self.effect = Some(request.clone());
         Some(request)
     }
+    pub fn mutation_settled(&mut self) {
+        self.mutation_revision = self.mutation_revision.wrapping_add(1);
+        self.list_dirty = true;
+    }
     pub fn complete_effect(&mut self, request: Request, result: Result<Value, String>) {
         if self.effect.as_ref() != Some(&request) {
             return;
@@ -348,8 +352,7 @@ impl Recovery {
         self.effect = None;
         // An old gesture may settle after the replacement epoch's list. Its
         // payload is stale, but its possible server-side mutation is not.
-        self.mutation_revision = self.mutation_revision.wrapping_add(1);
-        self.list_dirty = true;
+        self.mutation_settled();
         if !self.connection.connected || request.fence.epoch != self.connection.epoch {
             return;
         }
@@ -405,6 +408,41 @@ mod tests {
             0,
         );
     }
+    #[test]
+    fn prior_owner_settlement_invalidates_only_lists_started_before_it() {
+        for timing in ["before-list", "during-list", "after-list"] {
+            let mut c = controller();
+            complete(&mut c, json!(null), 0);
+            if timing == "before-list" {
+                c.mutation_settled();
+            }
+            let list = c.next(0).unwrap();
+            assert_eq!(list.kind, RequestKind::List);
+            if timing == "during-list" {
+                c.mutation_settled();
+            }
+            c.complete(list, Ok(json!({"sessions":[]})), 0);
+            if timing == "after-list" {
+                c.mutation_settled();
+            }
+            if timing == "before-list" {
+                assert!(
+                    c.next(0).is_none(),
+                    "a later list already covers the settlement"
+                );
+            } else {
+                let refresh = c
+                    .next(0)
+                    .expect("settlement must invalidate the earlier list");
+                assert_eq!(refresh.kind, RequestKind::List);
+                c.complete(refresh, Ok(json!({"sessions":[]})), 0);
+                assert!(c.next(0).is_none(), "invalidation must be consumed once");
+            }
+            assert!(c.ready);
+            assert!(c.error.is_none());
+        }
+    }
+
     #[test]
     fn stale_rpc_result_cannot_mutate_current_capture() {
         for error in [false, true] {
