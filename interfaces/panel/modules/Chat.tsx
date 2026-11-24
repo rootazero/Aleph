@@ -162,6 +162,7 @@ export function Chat(props: { sdk: PanelSdk }) {
       report(failure);
     }
   };
+  sdk.commands.register({ id: "stop", label: "Stop reply", keywords: ["abort", "cancel"], run: () => void stop() });
 
   return (
     <View class="flex-1 gap-2 p-4">

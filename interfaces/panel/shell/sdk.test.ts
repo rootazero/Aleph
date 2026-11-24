@@ -1,6 +1,6 @@
 // The SDK's generation and dispose rules, against a stand-in shell.
 import { expect, test } from "nsh/test";
-import { type ConnectionState, createSdk, type PanelEvent, type ShellAccess } from "./sdk";
+import { type CommandSpec, type ConnectionState, createSdk, type PanelEvent, type ShellAccess } from "./sdk";
 
 const CONNECTED: ConnectionState = { state: "connected", endpoint: "https://aleph.test", subject: null, pairing: false };
 
@@ -9,6 +9,7 @@ function standIn() {
   const listeners = new Set<(state: ConnectionState) => void>();
   const events = new Set<(event: PanelEvent) => void>();
   const pending: ((value: unknown) => void)[] = [];
+  const commands = new Map<string, CommandSpec>();
   const shell: ShellAccess = {
     rpc: () => new Promise((resolve) => pending.push(resolve)),
     generation: () => generation,
@@ -23,9 +24,14 @@ function standIn() {
       events.add(listener);
       return () => events.delete(listener);
     },
+    registerCommand(spec) {
+      commands.set(spec.id, spec);
+      return () => commands.delete(spec.id);
+    },
   };
   return {
     shell,
+    commands,
     listeners,
     events,
     push: (event: PanelEvent) => {
@@ -99,4 +105,31 @@ test("live events from an older generation or after dispose are dropped", () => 
   sdk.dispose();
   expect(fake.events.size).toBe(0);
   expect(() => sdk.on("", () => {})).toThrow("disposed");
+});
+
+test("module command ids carry the tab key", () => {
+  const fake = standIn();
+  const sdk = createSdk("aleph:chat", 1, fake.shell);
+  sdk.commands.register({ id: "stop", label: "Stop reply", run: () => {} });
+  expect([...fake.commands.keys()]).toEqual(["aleph:chat/stop"]);
+});
+
+test("module commands unregister on dispose", () => {
+  const fake = standIn();
+  const sdk = createSdk("aleph:chat", 1, fake.shell);
+  sdk.commands.register({ id: "stop", label: "Stop reply", run: () => {} });
+  sdk.dispose();
+  expect(fake.commands.size).toBe(0);
+  expect(() => sdk.commands.register({ id: "stop", label: "Stop reply", run: () => {} })).toThrow("disposed");
+});
+
+test("module commands from an older generation do not run", () => {
+  const fake = standIn();
+  const sdk = createSdk("aleph:chat", 1, fake.shell);
+  let runs = 0;
+  sdk.commands.register({ id: "stop", label: "Stop reply", run: () => (runs += 1) });
+  fake.commands.get("aleph:chat/stop")?.run();
+  fake.reconnect();
+  fake.commands.get("aleph:chat/stop")?.run();
+  expect(runs).toBe(1);
 });

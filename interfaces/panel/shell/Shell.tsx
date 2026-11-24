@@ -3,16 +3,18 @@
 // user's layout and personal preferences. Layout, projection and preference
 // rules live in Rust (`aleph/panel`, shared with the Leptos Panel); this file
 // only wires them.
-import { batch, cleanup, computed, horizontalSizeClass, host, signal, Storage, Text, View } from "nsh";
+import { batch, cleanup, colorScheme, computed, effect, horizontalSizeClass, host, platform, signal, Storage, Text, View } from "nsh";
 import { Button } from "nsh/base";
 import { PanelModel } from "aleph/panel";
 import { Capabilities } from "../modules/Capabilities";
 import { Chat } from "../modules/Chat";
 import { Overview } from "../modules/Overview";
 import { Sessions } from "../modules/Sessions";
+import { CommandPalette } from "./CommandPalette";
+import { bindCommands, type Command, menuCommands, resolveKeys, shellCommands } from "./commands";
 import { PairingForm } from "./PairingForm";
-import { applyPrefs, loadPrefs, type Prefs, savePrefs } from "./prefs";
-import { type ConnectionState, createSdk, type Intent, type PanelEvent, type PanelSdk, RpcError, type ShellAccess } from "./sdk";
+import { applyPrefs, type Binding, loadPrefs, type Prefs, savePrefs } from "./prefs";
+import { type CommandSpec, type ConnectionState, createSdk, type Intent, type PanelEvent, type PanelSdk, RpcError, type ShellAccess } from "./sdk";
 import { Settings } from "./Settings";
 import { Sidebar } from "./Sidebar";
 import type { PanelTab, PanelView, Slot } from "./view";
@@ -35,6 +37,11 @@ export function Shell() {
   const settingsOpen = signal(false);
   const prefs = signal<Prefs | null>(null);
   const fontScaleSupported = signal(true);
+  const paletteOpen = signal(false);
+  // Commands the mounted module registered (already prefixed with its key).
+  const moduleCommands = signal<CommandSpec[]>([]);
+  // Keys the platform refused to bind, by command id.
+  const keyFailures = signal<Map<string, string>>(new Map());
   const listeners = new Set<(state: ConnectionState) => void>();
   const eventListeners = new Set<(event: PanelEvent) => void>();
   // What a module handed the one it navigated to (by tab key), for this run
@@ -103,6 +110,10 @@ export function Shell() {
       eventListeners.add(listener);
       return () => eventListeners.delete(listener);
     },
+    registerCommand(spec) {
+      moduleCommands.update((list) => [...list.filter((command) => command.id !== spec.id), spec]);
+      return () => moduleCommands.update((list) => list.filter((command) => command !== spec));
+    },
   };
 
   const applyEvent = (event: PanelEvent) => {
@@ -129,6 +140,50 @@ export function Shell() {
     settingsOpen.set(false);
     access.navigate(key);
   };
+
+  const changeBinding = async (id: string, binding: Binding | null) => {
+    const current = prefs();
+    if (!current) return;
+    const stored = PanelModel.setBinding(current.stored, id, binding);
+    if (!stored) return;
+    await showPrefs(await savePrefs(stored));
+  };
+
+  const commands = computed<Command[]>(() => [
+    ...shellCommands(
+      {
+        palette: () => paletteOpen.update((open) => !open),
+        settings: () => settingsOpen.update((open) => !open),
+        toggleScheme: () => void changeAppearance("mode", colorScheme() === "dark" ? "light" : "dark"),
+        reconnect: () => {
+          if (host.available()) void host.call("aleph.connect", null);
+        },
+        openSlot: (index) => {
+          const live = (view()?.slots ?? []).filter((slot) => slot.state === "live");
+          const slot = live[index];
+          if (slot) openModule(slot.key);
+        },
+      },
+      platform.os === "web",
+    ),
+    ...menuCommands(view(), openModule),
+    ...moduleCommands().map((command) => ({ ...command, group: "module" as const })),
+  ]);
+  const keys = computed(() => {
+    const current = prefs();
+    return current ? resolveKeys(commands(), current.stored) : [];
+  });
+  const labelOf = (id: string) => commands().find((command) => command.id === id)?.label ?? id;
+  const keyOf = (id: string) => {
+    const entry = keys().find((candidate) => candidate.id === id);
+    return entry?.key && !entry.problem && !keyFailures().has(id) ? entry.key : null;
+  };
+  // Rebind whenever the commands or the user's keys change.
+  effect(() => {
+    const bound = bindCommands(commands(), keys());
+    keyFailures.set(bound.failures);
+    return () => bound.unbind();
+  });
 
   if (host.available()) {
     cleanup(host.on<ConnectionState>("aleph.connection", applyConnection));
@@ -190,10 +245,22 @@ export function Shell() {
                 view={view}
                 onMove={(key, forward) => edit((stored) => PanelModel.moveTab(stored, key, forward))}
                 onHidden={(key, hidden) => edit((stored) => PanelModel.setHidden(stored, key, hidden))}
-                shortcuts={<View />}
+                shortcuts={() =>
+                  keys().map((resolved) => ({
+                    id: resolved.id,
+                    label: labelOf(resolved.id),
+                    resolved,
+                    failure: keyFailures().get(resolved.id) ?? null,
+                  }))
+                }
+                labelOf={labelOf}
+                onBinding={(id, binding) => void changeBinding(id, binding)}
               />
             </If>
           </View>
+          <If when={paletteOpen()}>
+            <CommandPalette commands={commands} keyOf={keyOf} onClose={() => paletteOpen.set(false)} />
+          </If>
         </View>
       )}
     </If>

@@ -319,3 +319,73 @@ test("a send whose answer was lost is reported unknown, not retried", async () =
   await app.wait(100);
   expect(app.host.calls().filter((call) => (call.data as { method?: string })?.method === "chat.send").length).toBe(1);
 });
+
+
+test("mod+k opens the palette and opens a menu entry", async () => {
+  const app = await openPanel({ host: { handlers: gateway() } });
+  await app.waitFor("Gateway: healthy");
+  await app.keyboard.press("mod+k");
+  await app.waitFor("label:Command search");
+  await app.type("label:Command search", "sess");
+  await app.keyboard.press("enter");
+  await app.waitFor("Release notes");
+  await app.waitFor("label:Command search", { state: "gone" });
+});
+
+test("a rebound shortcut fires", async () => {
+  const app = await openPanel({ host: { handlers: gateway() } });
+  await app.waitFor("Gateway: healthy");
+  await app.press("label:Settings");
+  await app.type("label:Shortcut for Command palette", "mod+j");
+  await app.submit("label:Shortcut for Command palette");
+  await app.waitFor("⌘J");
+  expect(JSON.parse((await app.storage())[PREFS_KEY]).keybindings["shell.palette"]).toEqual({ key: "mod+j" });
+  await app.press("label:Settings");
+  await app.keyboard.press("mod+k");
+  expect(app.shows("label:Command search")).toBe(false);
+  await app.keyboard.press("mod+j");
+  await app.waitFor("label:Command search");
+});
+
+test("a reserved override disables only itself", async () => {
+  const stored = JSON.stringify({ version: 1, keybindings: { "shell.settings": { key: "mod+q" } } });
+  const app = await openPanel({ host: { handlers: gateway() }, storage: { [PREFS_KEY]: stored } });
+  await app.waitFor("Gateway: healthy");
+  await app.press("label:Settings");
+  await app.waitUntil(() => app.texts().some((text) => text.startsWith("Reserved by the system")));
+  await app.press("label:Settings");
+  await app.keyboard.press("mod+k");
+  await app.waitFor("label:Command search");
+});
+
+test("conflicting shortcuts are shown", async () => {
+  const app = await openPanel({ host: { handlers: gateway() } });
+  await app.waitFor("Gateway: healthy");
+  await app.press("label:Settings");
+  await app.type("label:Shortcut for Settings", "mod+k");
+  await app.submit("label:Shortcut for Settings");
+  await app.waitUntil(() => app.texts().some((text) => text.startsWith("Conflicts with")));
+});
+
+test("typing in chat does not trigger shortcuts", async () => {
+  const { handlers } = chatGateway();
+  const app = await openChat(handlers);
+  await app.type("label:Message", "k,1");
+  expect(app.shows("label:Command search")).toBe(false);
+  expect(app.shows("Earlier answer")).toBe(true);
+});
+
+test("chat stop is in the palette only while chat is mounted", async () => {
+  const { handlers } = chatGateway();
+  const app = await openChat(handlers);
+  await app.keyboard.press("mod+k");
+  await app.type("label:Command search", "stop");
+  await app.waitFor("Stop reply");
+  await app.keyboard.press("escape");
+  await app.waitFor("label:Command search", { state: "gone" });
+  await app.press("label:Open Overview");
+  await app.waitFor("Gateway: healthy");
+  await app.keyboard.press("mod+k");
+  await app.type("label:Command search", "stop");
+  await app.waitFor("No matching command");
+});

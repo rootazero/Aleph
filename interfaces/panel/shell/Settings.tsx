@@ -1,11 +1,22 @@
 // The Settings page in the right column: appearance, shortcuts and the menu.
 // Every change goes through `PanelModel` and is saved by the shell; this view
 // only reports what the user pressed.
-import { type JSX, Scroll, Text, View } from "nsh";
-import { Button } from "nsh/base";
+import { keymap, Scroll, signal, Text, View } from "nsh";
+import { Button, Input } from "nsh/base";
+import { PanelModel } from "aleph/panel";
+import { APPLE, type ResolvedKey } from "./commands";
 import { LayoutEditor } from "./LayoutEditor";
-import { DENSITY_CLASSES, type Prefs } from "./prefs";
+import { type Binding, DENSITY_CLASSES, type Prefs } from "./prefs";
 import type { PanelView } from "./view";
+
+/** One command's row on the Shortcuts list. */
+export type ShortcutRow = {
+  id: string;
+  label: string;
+  resolved: ResolvedKey;
+  /** The platform refused the key (a reserved shortcut such as ⌘Q). */
+  failure: string | null;
+};
 
 type Axis = {
   axis: keyof Prefs["appearance"];
@@ -74,7 +85,9 @@ export function Settings(props: {
   view: () => PanelView | null;
   onMove: (key: string, forward: boolean) => void;
   onHidden: (key: string, hidden: boolean) => void;
-  shortcuts: JSX.Element;
+  shortcuts: () => ShortcutRow[];
+  labelOf: (id: string) => string;
+  onBinding: (id: string, binding: Binding | null) => void;
 }) {
   const gap = () => DENSITY_CLASSES[props.prefs().density].gap;
   return (
@@ -111,7 +124,9 @@ export function Settings(props: {
         </Each>
 
         <Text class="text-lg text-foreground">Shortcuts</Text>
-        {props.shortcuts}
+        <Each of={props.shortcuts()} key={(row) => row.id}>
+          {(row) => <ShortcutEditor row={row} labelOf={props.labelOf} onBinding={props.onBinding} />}
+        </Each>
 
         <Text class="text-lg text-foreground">Menu</Text>
         <If when={props.view()} else={<Text class="text-muted-foreground">Connect to Aleph to arrange the menu.</Text>}>
@@ -119,5 +134,74 @@ export function Settings(props: {
         </If>
       </View>
     </Scroll>
+  );
+}
+
+function problemText(row: ShortcutRow, labelOf: (id: string) => string): string | null {
+  const problem = row.resolved.problem;
+  if (problem === "invalid") return "Invalid shortcut";
+  if (problem) return `Conflicts with ${labelOf(problem.conflict)}`;
+  if (row.failure) return `Reserved by the system: ${row.failure}`;
+  return null;
+}
+
+function ShortcutEditor(props: {
+  row: () => ShortcutRow;
+  labelOf: (id: string) => string;
+  onBinding: (id: string, binding: Binding | null) => void;
+}) {
+  const draft = signal("");
+  const invalid = signal(false);
+  const current = () => {
+    const key = props.row().resolved.key;
+    return key ? keymap.label(key) : "None";
+  };
+  // The text is stored as typed (`mod+j`), so it means the same key on the
+  // user's other platforms; it is only checked here.
+  const submit = () => {
+    const text = draft().trim().toLowerCase();
+    if (!text) return;
+    if (PanelModel.normalizeKeystroke(text, APPLE) === null) {
+      invalid.set(true);
+      return;
+    }
+    invalid.set(false);
+    draft.set("");
+    props.onBinding(props.row().id, { key: text });
+  };
+  return (
+    <View class="gap-1">
+      <View class="flex-row items-center gap-2">
+        <Text class="flex-1 text-foreground">{props.row().label}</Text>
+        <Text class="text-muted-foreground">{current()}</Text>
+        <Input
+          value={draft()}
+          onChange={({ value }) => draft.set(value)}
+          onSubmit={submit}
+          placeholder="mod+k"
+          accessibilityLabel={`Shortcut for ${props.row().label}`}
+          class="w-28 rounded-(--radius) border border-input px-2 py-1 text-foreground"
+        />
+        <Button
+          accessibilityLabel={`Clear shortcut for ${props.row().label}`}
+          onPress={() => props.onBinding(props.row().id, "cleared")}
+          class="px-2"
+        >
+          <Text>Clear</Text>
+        </Button>
+        <If when={props.row().resolved.source !== "default"}>
+          <Button
+            accessibilityLabel={`Reset shortcut for ${props.row().label}`}
+            onPress={() => props.onBinding(props.row().id, null)}
+            class="px-2"
+          >
+            <Text>Reset</Text>
+          </Button>
+        </If>
+      </View>
+      <If when={invalid() ? "Invalid shortcut" : problemText(props.row(), props.labelOf)}>
+        {(text) => <Text class="text-destructive">{text()}</Text>}
+      </If>
+    </View>
   );
 }
