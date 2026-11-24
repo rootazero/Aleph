@@ -5,7 +5,6 @@
 //! boundary.
 
 mod host;
-mod input;
 mod keymap;
 mod recovery;
 mod render;

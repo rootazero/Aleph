@@ -71,11 +71,6 @@ pub struct TerminalServices {
     pub text: TerminalText,
 }
 
-/// The strings the terminal view renders.
-///
-/// Every field is a string because both mounts supply them from a locale
-/// bundle, and a missing key must be visible in one place rather than
-/// spread across the two adapters.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TerminalText {
     pub new_tab: String,
@@ -84,18 +79,6 @@ pub struct TerminalText {
     pub retry: String,
     pub read_refusal: String,
     pub write_refusal: String,
-    /// The accessible name of the text-entry surface.
-    pub input_label: String,
-    /// A paste or edit that does not fit the wire limit was refused.
-    pub input_too_large: String,
-    /// The write FIFO was full; the edit was dropped, not queued.
-    pub input_queue_full: String,
-    /// A dispatched write failed. Its bytes are gone and are not replayed.
-    pub input_failed: String,
-    /// The label of the copy button.
-    pub copy: String,
-    /// The browser refused the clipboard write.
-    pub copy_failed: String,
 }
 
 pub use shared_ui_logic::terminal_mutation::{TerminalMutationCoordinator, TerminalMutationScope};
@@ -185,13 +168,6 @@ pub struct TerminalState {
     pub(crate) new_request: RwSignal<u64>,
     pub(crate) close_request: RwSignal<Option<String>>,
     pub(crate) actions_disabled: RwSignal<bool>,
-    /// Set by an explicit New/select gesture; consumed by the terminal view
-    /// once the terminal it names is on screen and ready.
-    ///
-    /// Focus is never taken for a background update: a reconnect that
-    /// finishes while the user is typing elsewhere must not move the caret
-    /// into a terminal they are not looking at.
-    pub(crate) focus_request: RwSignal<bool>,
 }
 
 #[must_use]
@@ -204,7 +180,6 @@ pub fn terminal_state(services: TerminalServices) -> TerminalState {
         new_request: RwSignal::new(0),
         close_request: RwSignal::new(None),
         actions_disabled: RwSignal::new(true),
-        focus_request: RwSignal::new(false),
     }
 }
 
