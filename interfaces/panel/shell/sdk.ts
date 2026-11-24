@@ -63,6 +63,7 @@ export type ShellAccess = {
 export type PanelSdk = {
   readonly key: string;
   readonly generation: number;
+  active(): boolean;
   invoke(method: string, params?: Record<string, unknown>): Promise<unknown>;
   subscribe(listener: (state: ConnectionState) => void): () => void;
   /** Live events whose topic starts with `topicPrefix` (`"stream."`, `"connection."`). */
@@ -96,14 +97,17 @@ export function createSdk(key: string, generation: number, shell: ShellAccess): 
   return {
     key,
     generation,
+    active: current,
     async invoke(method, params = {}) {
       if (!current()) throw new Error("disposed");
-      const result = await shell.rpc(method, params);
-      if (!current()) throw new Error("disposed");
-      return result;
+      try {
+        return await shell.rpc(method, params);
+      } finally {
+        if (!current()) throw new Error("disposed");
+      }
     },
     subscribe(listener) {
-      if (disposed) throw new Error("disposed");
+      if (!current()) throw new Error("disposed");
       return hold(
         shell.onConnection((state) => {
           if (current()) listener(state);

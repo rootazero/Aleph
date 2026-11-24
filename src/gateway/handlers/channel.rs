@@ -843,7 +843,9 @@ pub async fn handle_create(
             );
         }
         if let Err(error) = vault.store_secret_batch(
-            pending_secrets.iter().map(|secret| (secret.key.as_str(), secret.value.as_str())),
+            pending_secrets
+                .iter()
+                .map(|secret| (secret.key.as_str(), secret.value.as_str())),
         ) {
             tracing::error!(channel = id, %error, "Could not store cold channel credentials");
             if let Some(declaration) = app_cfg.channels.remove(&id) {
@@ -854,7 +856,11 @@ pub async fn handle_create(
                     tracing::error!(channel = id, %error, "Could not remove the saved cold declaration");
                 }
             }
-            return JsonRpcResponse::error(request.id, INTERNAL_ERROR, "Failed to store channel credentials");
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                "Failed to store channel credentials",
+            );
         }
     }
 
@@ -1205,10 +1211,16 @@ mod tests {
         std::fs::create_dir(&config_path).unwrap();
         for id in ["cold-telegram-retry", "cold-telegram-existing"] {
             let failed = create(id, flat.clone()).await;
-            assert_eq!(failed.error.unwrap().message, "Failed to persist channel configuration");
+            assert_eq!(
+                failed.error.unwrap().message,
+                "Failed to persist channel configuration"
+            );
         }
         assert!(vault.get_secret(&new_key).unwrap().is_none());
-        assert_eq!(vault.get_secret(&old_key).unwrap().unwrap().expose(), "67890:previous");
+        assert_eq!(
+            vault.get_secret(&old_key).unwrap().unwrap().expose(),
+            "67890:previous"
+        );
         std::fs::remove_dir(&config_path).unwrap();
         std::fs::rename(backed_up_config, config_path).unwrap();
         let retried = create("cold-telegram-retry", json!({"enabled": false})).await;

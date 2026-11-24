@@ -338,7 +338,9 @@ impl AgentRunManager {
             Some(a) => a,
             None => {
                 error!("Agent not found: {}", agent_id);
-                return Err(StartRunError::Refused(format!("Agent not found: {agent_id}")));
+                return Err(StartRunError::Refused(format!(
+                    "Agent not found: {agent_id}"
+                )));
             }
         };
 
@@ -2329,11 +2331,17 @@ mod tests {
                 .await;
             assert_eq!(response.error.expect("refused").code, RESOURCE_NOT_FOUND);
         }
-        assert!(manager.active_runs.read().await.is_empty(), "no run may start");
+        assert!(
+            manager.active_runs.read().await.is_empty(),
+            "no run may start"
+        );
 
         for (caller, key) in [
             ("u-alice", Some(owned.to_key_string())),
-            ("u-bob", Some(SessionKey::peer("main", "bob-fresh").to_key_string())),
+            (
+                "u-bob",
+                Some(SessionKey::peer("main", "bob-fresh").to_key_string()),
+            ),
         ] {
             let manager = manager.clone();
             let request = send(key);
@@ -2382,7 +2390,10 @@ mod tests {
             .scope(Some("guest".to_string()), manager.start_run(params))
             .await;
         let err = result.expect_err("chat-tier project_root override must be rejected");
-        assert!(err.to_string().contains("config-tier"), "unexpected error: {err}");
+        assert!(
+            err.to_string().contains("config-tier"),
+            "unexpected error: {err}"
+        );
     }
 
     /// Config-tier ("operator") callers may choose a working directory. Does

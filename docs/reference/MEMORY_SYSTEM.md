@@ -413,6 +413,12 @@ Notes form an Obsidian-compatible knowledge graph through `[[wikilink]]` syntax:
 
 The `notes_links` SQLite table stores outgoing links per note, enabling fast graph traversal without re-parsing markdown.
 
+### Panel read projection / 面板只读投影
+
+- [`graph.query`](../../src/gateway/handlers/graph/query.rs) returns a bounded window from one primary read partition, ranked by link count, update time, then path. This is not the entire knowledge graph. [`graph.search`](../../src/gateway/handlers/graph/search.rs) may find an authorized note outside the window. / 星云图只展示单个主读取分区的有界窗口；搜索命中不保证在画布上。
+- [`NoteAddress`](../../shared/protocol/src/memory_graph.rs) is `(agent_id, node_id)`, where `agent_id` is the partition actually read, not necessarily the requested base selector. Details and any legacy mutations use that exact address. Older nodes without a partition can render but cannot be opened by guessing an address. / 详情和旧面板写操作使用实际分区和笔记 ID；缺少分区的旧节点可展示，不推测地址。
+- The NSH renderer receives authorized graph facts and preserves directed link rows independently of the undirected springs used for placement. Core remains responsible for partition checks. / NSH 用无向弹簧排布节点，但保留 Core 返回的有向关系；访问权限仍由 Core 判定。
+
 ## Capability lifecycle status / Capability 生命周期状态（2026-11-01 historical snapshot）
 
 **Historical snapshot / 历史阶段记录（2026-11-01）：** At the watcher/maintenance milestones described below, Memory had not yet been independently cold/stoppable: the shared backend, detached startup rebuild, graph consumers and other writers remained outside those bounded slices. This statement describes that dated milestone, not current production status. / **历史阶段记录（2026-11-01）：** 下述 watcher/maintenance 阶段尚未实现 Memory 独立 cold/stoppable；共享 backend、启动 rebuild、graph consumer 与其他 writer 仍在当时有界切片之外。此句描述特定日期的里程碑，不代表当前生产状态。

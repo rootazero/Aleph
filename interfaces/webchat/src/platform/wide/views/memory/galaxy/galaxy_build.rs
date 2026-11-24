@@ -244,6 +244,7 @@ mod tests {
             id: id.into(),
             name: id.into(),
             path: id.into(),
+            agent_id: None,
             category: "c".into(),
             tags: vec![],
             link_count: 1,

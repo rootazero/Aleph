@@ -8,8 +8,10 @@ mod viewport_controls;
 
 pub use node_detail_panel::{NodeDetailPanel, NodeExcerpt};
 
+use aleph_protocol::memory_graph::NoteAddress;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
+use std::collections::HashMap;
 
 use crate::api::graph::GraphApi;
 use galaxy_build::{build_galaxy, compute_highlight_set, fold_to_lod};
@@ -96,8 +98,10 @@ fn GalaxyCanvasView() -> impl IntoView {
     // Reactive signals (all Copy — safe to capture in Callback::new closures)
     // selected_node, search_query, fold_threshold are sourced from MemoryState so
     // the sidebar and canvas share the same values.
-    let selected_node = mem.selected_node;
-    let set_selected_node = mem.selected_node;
+    let selected_node = RwSignal::<Option<String>>::new(None);
+    let addresses = RwSignal::new(HashMap::<String, NoteAddress>::new());
+    let graph_version = RwSignal::new(0u32);
+    let search_version = RwSignal::new(0u32);
     let search_query = mem.search_query;
     let fold_threshold = mem.fold_threshold;
     let set_fold_threshold = mem.fold_threshold;
@@ -137,8 +141,7 @@ fn GalaxyCanvasView() -> impl IntoView {
     let viewport_cmd: RwSignal<Option<gl::scene::ViewportCmd>> = RwSignal::new(None);
 
     // Per-node excerpt cache for NodeDetailPanel.
-    let detail_panel_excerpts: RwSignal<std::collections::HashMap<String, NodeExcerpt>> =
-        RwSignal::new(std::collections::HashMap::new());
+    let detail_panel_excerpts = RwSignal::new(HashMap::<NoteAddress, NodeExcerpt>::new());
 
     // Raw hover intent — written by the (Send+Sync) on_event callback on every
     // HoverNode transition. Stored as RwSignal so on_event (write) and Effects
@@ -156,11 +159,6 @@ fn GalaxyCanvasView() -> impl IntoView {
         }
     };
 
-    // `Some(true/false)` once a galaxy is loaded; `None` while it is not.
-    let in_galaxy = move |id: &str| -> Option<bool> {
-        galaxy_data.with_untracked(|d| d.as_ref().map(|g| g.nodes.iter().any(|n| n.id == id)))
-    };
-
     // -----------------------------------------------------------------------
     // Agent-switch reset Effect.
     // Subscribes to `agent_id`; on a real change (prev != current), wipes all
@@ -172,17 +170,20 @@ fn GalaxyCanvasView() -> impl IntoView {
     // it as `prev`. On first mount `prev == None` and the reset body is skipped
     // (avoids clearing empty state before the galaxy-build Effect's first fetch).
     // -----------------------------------------------------------------------
-    Effect::new(move |prev: Option<String>| {
-        let current = agent_id.get();
+    Effect::new(move |prev: Option<(String, u64)>| {
+        let current = (agent_id.get(), state.connection_epoch.get());
         if let Some(p) = prev.as_ref() {
             if *p != current {
                 // Reset reactive signals
-                set_selected_node.set(None);
+                mem.selected_node.set(None);
+                selected_node.set(None);
                 search_query.set(String::new());
                 set_fold_threshold.set(DEFAULT_FOLD);
                 // Clear 3D galaxy signals so the new agent's galaxy rebuilds from scratch.
                 // The galaxy-build Effect repopulates galaxy_data when it re-runs.
                 galaxy_data.set(None);
+                addresses.update(HashMap::clear);
+                detail_panel_excerpts.update(HashMap::clear);
                 truncation.set(None);
                 focus_request.set(None);
                 highlight_request.set(None);
@@ -207,18 +208,43 @@ fn GalaxyCanvasView() -> impl IntoView {
     Effect::new(move || {
         graph_nonce.get();
         reload_nonce.get();
-        if !state.is_connected.get() {
+        let agent = agent_id.get();
+        let connected = state.is_connected.get();
+        let epoch = state.connection_epoch.get();
+        let version = graph_version.get_untracked().wrapping_add(1);
+        graph_version.set(version);
+        loading.set(true);
+        load_error.set(None);
+        if !connected {
+            mem.selected_node.set(None);
+            detail_panel_excerpts.update(HashMap::clear);
+            addresses.update(HashMap::clear);
+            galaxy_data.set(None);
+            truncation.set(None);
             return;
         }
-        let agent = agent_id.get();
-
-        loading.set(true);
         spawn_local(async move {
-            match GraphApi::query(&state, &agent, 500).await {
+            let response = GraphApi::query(&state, &agent, 500).await;
+            if graph_version.try_get_untracked() != Some(version)
+                || state.connection_epoch.get_untracked() != epoch
+                || agent_id.get_untracked() != agent
+                || !state.is_connected.get_untracked()
+            {
+                return;
+            }
+            match response {
                 Ok(r) => {
                     load_error.set(None);
                     notice.set(None);
                     // Build deterministic 3D galaxy seed from full-graph topology.
+                    addresses.set(
+                        r.nodes
+                            .iter()
+                            .filter_map(|node| {
+                                node.address().map(|address| (node.id.clone(), address))
+                            })
+                            .collect(),
+                    );
                     galaxy_data.set(Some(build_galaxy(&r)));
                     // Surface a "showing top N of M" badge when the query truncated.
                     truncation.set(
@@ -270,13 +296,17 @@ fn GalaxyCanvasView() -> impl IntoView {
     // -----------------------------------------------------------------------
     let on_event = move |event: CanvasEvent| match event {
         CanvasEvent::SelectNode(id) => {
-            set_selected_node.set(Some(id.clone()));
-            // Record the visit so NodeDetailPanel's "Recently visited" list accrues.
-            mem.push_recent(id.clone());
+            let address = addresses.with_untracked(|items| items.get(&id).cloned());
+            mem.selected_node.set(address.clone());
+            if let Some(address) = address {
+                mem.push_recent(address);
+            }
+            selected_node.set(Some(id.clone()));
             focus_and_highlight(&id);
         }
         CanvasEvent::DeselectNode => {
-            set_selected_node.set(None);
+            mem.selected_node.set(None);
+            selected_node.set(None);
             // Clear highlight when deselecting.
             highlight_request.set(None);
             highlight_edges_request.set(None);
@@ -300,26 +330,41 @@ fn GalaxyCanvasView() -> impl IntoView {
     // On a match, drive the 3D galaxy's intent channels: fly-to + highlight + open
     // panel. Zero matches and RPC failures used to be entirely invisible — both
     // now land in the notice strip.
-    Effect::new(move || {
-        mem.search_nonce.get(); // subscribe to Enter-submit pulses only
+    Effect::new(move |previous: Option<u32>| {
+        let submit = mem.search_nonce.get();
+        let agent = agent_id.get();
+        let connected = state.is_connected.get();
+        let epoch = state.connection_epoch.get();
+        let version = search_version.get_untracked().wrapping_add(1);
+        search_version.set(version);
         let query = search_query.get_untracked();
-        if query.is_empty() {
-            return;
+        if !connected || previous == Some(submit) || submit == 0 || query.is_empty() {
+            return submit;
         }
-        let agent = agent_id.get_untracked();
         // Translate before the round-trip: the reactive read belongs in the Effect.
         let no_match = t_string!(i18n, memory.search_no_match).to_string();
         let failed = t_string!(i18n, memory.graph_error).to_string();
         notice.set(None);
         spawn_local(async move {
-            match GraphApi::search(&state, &agent, &query, 20).await {
-                Ok(response) => match response.results.first() {
-                    Some(first) => {
-                        let id = first.id.clone();
-                        focus_and_highlight(&id);
-                        // Open the node detail panel by selecting the node.
-                        mem.selected_node.set(Some(id));
-                    }
+            let response = GraphApi::search(&state, &agent, &query, 20).await;
+            if search_version.try_get_untracked() != Some(version)
+                || state.connection_epoch.get_untracked() != epoch
+                || agent_id.get_untracked() != agent
+                || !state.is_connected.get_untracked()
+                || search_query.get_untracked() != query
+            {
+                return;
+            }
+            match response {
+                Ok(response) => match response
+                    .results
+                    .first()
+                    .filter(|row| !row.agent_id.is_empty())
+                {
+                    Some(first) => mem.selected_node.set(Some(NoteAddress {
+                        agent_id: first.agent_id.clone(),
+                        node_id: first.id.clone(),
+                    })),
                     None => notice.set(Some(no_match)),
                 },
                 Err(e) => {
@@ -332,13 +377,14 @@ fn GalaxyCanvasView() -> impl IntoView {
                 }
             }
         });
+        submit
     });
 
     // -----------------------------------------------------------------------
     // Reverse-link Effect: list → graph cross-link.
     //
     // When the Memory table's "view in graph" button is clicked, `on_locate`
-    // sets `mem.selected_node` and flips `mem.memory_view` to Graph
+    // stores the exact note address and flips `mem.memory_view` to Graph
     // (see views/memory/mod.rs on_locate callback). This Effect detects that
     // and drives the 3D galaxy intent channels to fly to and highlight the node.
     //
@@ -346,18 +392,19 @@ fn GalaxyCanvasView() -> impl IntoView {
     // subscribes to `mem.selected_node` changes, not to memory_view.
     //
     // It ALSO subscribes to `galaxy_data`, and it must: on a fresh mount carrying
-    // a pre-existing selection (phone: note detail → "view in graph" navigates to
-    // /memory/graph with `selected_node` already set), this Effect runs before the
-    // graph has landed. Without the galaxy in its dependency set it would bail on
-    // the `None` arm below and never re-run, so the fly-to would silently never
-    // happen. `in_galaxy` reads the data untracked, so the subscription is here.
+    // a pre-existing selection, this Effect runs before the graph has landed.
+    // Re-check membership when the data arrives, including the partition.
     //
     // A note that is not among the loaded (capped) galaxy nodes used to be a
     // total silent no-op; it now says so, and does not fire dead intent channels.
     // -----------------------------------------------------------------------
     Effect::new(move || {
         galaxy_data.track();
-        let Some(node_id) = mem.selected_node.get() else {
+        let Some(address) = mem.selected_node.get() else {
+            selected_node.set(None);
+            focus_request.set(None);
+            highlight_request.set(None);
+            highlight_edges_request.set(None);
             return;
         };
         // Only act when the memory hub is showing the Graph view; list-originated
@@ -365,17 +412,19 @@ fn GalaxyCanvasView() -> impl IntoView {
         if mem.memory_view.get_untracked() != MemoryView::Graph {
             return;
         }
-        match in_galaxy(&node_id) {
-            // No galaxy loaded yet — this Effect re-runs when it lands (we track
-            // `galaxy_data` above), and the fly-to happens then.
-            None => return,
-            Some(false) => {
-                notice.set(Some(t_string!(i18n, memory.node_not_in_graph).to_string()));
-                return;
-            }
-            Some(true) => notice.set(None),
+        if galaxy_data.with_untracked(Option::is_none) {
+            return;
         }
-        focus_and_highlight(&node_id);
+        if !addresses.with(|items| items.get(&address.node_id) == Some(&address)) {
+            selected_node.set(None);
+            highlight_request.set(None);
+            highlight_edges_request.set(None);
+            notice.set(Some(t_string!(i18n, memory.node_not_in_graph).to_string()));
+            return;
+        }
+        notice.set(None);
+        selected_node.set(Some(address.node_id.clone()));
+        focus_and_highlight(&address.node_id);
     });
 
     // -----------------------------------------------------------------------

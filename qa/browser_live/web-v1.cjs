@@ -127,6 +127,19 @@ async function run(fixturePath) {
       const snapshot = await call(client, 5, 'panel.capabilities.snapshot');
       expect(snapshot?.id === 5 && snapshot?.error?.code !== -32601, 'capability snapshot not mounted on Web v1');
 
+      const graphReads = ['graph.query', 'graph.search', 'graph.node_detail'];
+      const graphWrites = ['graph.update_note', 'graph.rename_note', 'graph.delete_note'];
+      for (const [offset, method] of graphReads.entries()) {
+        const id = 20 + offset;
+        const response = await call(client, id, method);
+        expect(response?.id === id && response?.result?.entered === method, `${method} did not enter Core on Web v1`);
+      }
+      for (const [offset, method] of graphWrites.entries()) {
+        const id = 30 + offset;
+        const response = await call(client, id, method);
+        expect(response?.id === id && response?.error?.code === -32601, `${method} unexpectedly entered Core on Web v1`);
+      }
+
       const legacy = await open('/ws', []);
       expect(legacy !== null, 'legacy WS upgrade failed');
       const oldGate = await call(legacy, 1, 'health', undefined, true);

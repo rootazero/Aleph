@@ -24,6 +24,7 @@ pub(crate) fn entry_to_dto(entry: &NoteIndexEntry) -> NoteNodeDto {
         id: entry.path.clone(),
         name: entry.filename.clone(),
         path: entry.path.clone(),
+        agent_id: Some(entry.agent_id.clone()),
         category: entry.category.clone(),
         tags: entry.tags.clone(),
         link_count: entry.link_count,

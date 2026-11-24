@@ -5,7 +5,7 @@ use aleph_protocol::panel::{
 };
 
 /// Only the host's explicit built-in initialization may populate this namespace.
-pub const BUILTIN_NAMESPACE: &str = "aleph";
+pub use aleph_protocol::panel::PANEL_BUILTIN_NAMESPACE as BUILTIN_NAMESPACE;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RegistryError {

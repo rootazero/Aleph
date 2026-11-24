@@ -152,6 +152,23 @@ async fn desktop_ipc_uses_gateway_and_releases_its_connection() {
         .register("sessions.list", move |req| {
             handle_list_db(req, sessions.clone())
         });
+    for method in [
+        "graph.query",
+        "graph.search",
+        "graph.node_detail",
+        "graph.update_note",
+        "graph.rename_note",
+        "graph.delete_note",
+    ] {
+        gateway
+            .handlers_mut()
+            .register(method, |request| async move {
+                crate::gateway::protocol::JsonRpcResponse::success(
+                    request.id,
+                    serde_json::json!({"entered": request.method}),
+                )
+            });
+    }
     let started = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
     let calls = Arc::new(AtomicUsize::new(0));
@@ -281,6 +298,24 @@ async fn desktop_ipc_uses_gateway_and_releases_its_connection() {
         let snapshot = receive(&mut stream).await;
         assert_eq!(snapshot["id"], 7, "{snapshot}");
         assert_ne!(snapshot["error"]["code"], METHOD_NOT_FOUND);
+        for (offset, (method, mounted)) in [
+            ("graph.query", true),
+            ("graph.search", true),
+            ("graph.node_detail", true),
+            ("graph.update_note", false),
+            ("graph.rename_note", false),
+            ("graph.delete_note", false),
+        ].into_iter().enumerate() {
+            let id = 20 + offset;
+            send(&mut stream, json!({"jsonrpc": "2.0", "method": method, "id": id})).await;
+            let response = receive(&mut stream).await;
+            assert_eq!(response["id"], id);
+            if mounted {
+                assert_eq!(response["result"]["entered"], method, "{response}");
+            } else {
+                assert_eq!(response["error"]["code"], METHOD_NOT_FOUND, "{response}");
+            }
+        }
 
         let held = json!({"jsonrpc":"2.0","method":"health","id":5});
         send(&mut stream, held.clone()).await;

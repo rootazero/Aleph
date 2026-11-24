@@ -29,6 +29,7 @@ use shared_ui_logic::prefs::{self, Binding, PanelPrefs, PrefsRepair};
 #[native_module("aleph/panel")]
 fn native(registry: &mut Registry) {
     registry.module::<PanelModel>();
+    registry.module::<NebulaModel>();
 }
 
 /// One built-in module the TSX shell renders itself.
@@ -73,9 +74,10 @@ const SHELL_PUBLIC_BASE: &str = "shell/";
 
 fn is_shell_module(key: &PanelTabKey) -> bool {
     key.plugin_id == BUILTIN_NAMESPACE
-        && SHELL_MODULES
-            .iter()
-            .any(|module| module.tab_id == key.tab_id)
+        && (key.tab_id == aleph_protocol::memory_graph::NEBULA_TAB_ID
+            || SHELL_MODULES
+                .iter()
+                .any(|module| module.tab_id == key.tab_id))
 }
 
 /// Add the shell's own modules to a Core snapshot as built-in declarations,
@@ -404,9 +406,65 @@ impl PanelModel {
     }
 }
 
+#[module]
+/// Builds non-authoritative graph scene data for the shared NSH renderer.
+pub struct NebulaModel;
+
+#[module]
+impl NebulaModel {
+    /// The graph already came through Core; this is presentation data only.
+    pub fn scene(graph: JsonValue) -> JsonValue {
+        use aleph_protocol::memory_graph::GraphQueryResponse;
+        use shared_ui_logic::nebula::{ForceLayout, NebulaIndex};
+
+        let Ok(graph) = serde_json::from_value::<GraphQueryResponse>(graph) else {
+            return JsonValue::Null;
+        };
+        let index = NebulaIndex::new(&graph.nodes, &graph.edges);
+        let ids: Vec<_> = graph.nodes.iter().map(|node| node.id.clone()).collect();
+        let communities: Vec<_> = graph.nodes.iter().map(|node| node.community_id).collect();
+        let mut layout = ForceLayout::new(ids.len(), &index.springs, &communities);
+        let mut positions = layout.seed(&ids);
+        // The NSH read window is 100 notes. Keep the work bounded per refresh;
+        // the classic renderer still animates the full 3D settling process.
+        for _ in 0..8 {
+            layout.step(&mut positions);
+        }
+        let points: Vec<_> = positions.iter().map(|point| [point.x, point.y]).collect();
+        let edges: Vec<_> = index
+            .relations
+            .iter()
+            .map(|edge| json!({ "from": edge.from, "to": edge.to, "kind": edge.row.kind }))
+            .collect();
+        json!({"points": points, "edges": edges})
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nebula_scene_preserves_similarity_edge_kind() {
+        let node =
+            |id| json!({"id": id, "path": id, "name": id, "category": "concept", "link_count": 0});
+        let scene = NebulaModel::scene(json!({
+            "nodes": [node("a"), node("b")],
+            "edges": [
+                {"from": "a", "to": "b", "kind": "refers"},
+                {"from": "b", "to": "a", "kind": "related_similarity"},
+                {"from": "missing", "to": "a", "kind": "refers"}
+            ]
+        }));
+        assert_eq!(scene["points"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            scene["edges"],
+            json!([
+                {"from": 0, "to": 1, "kind": "refers"},
+                {"from": 1, "to": 0, "kind": "related_similarity"}
+            ])
+        );
+    }
 
     fn community(revision: u64) -> JsonValue {
         json!({
@@ -461,6 +519,42 @@ mod tests {
             ]
         );
         assert_eq!(view["layout"]["active"], "aleph:overview");
+    }
+
+    #[test]
+    fn only_an_enabled_and_valid_nebula_declaration_mounts() {
+        let mut snapshot = community(3);
+        let declaration = &mut snapshot["declarations"][0];
+        declaration["origin"] = json!("builtin");
+        declaration["public_base"] = json!("shell/");
+        declaration["asset_integrity"] = JsonValue::Null;
+        declaration["descriptor"]["key"] =
+            json!({ "plugin_id": "aleph", "tab_id": "memory-nebula" });
+        declaration["descriptor"]["entry"] = json!("shell/memory-nebula");
+        declaration["descriptor"]["trust"] = json!("verified");
+        let has_nebula = |view: &JsonValue| {
+            view["slots"].as_array().unwrap().iter().any(|slot| {
+                slot["key"] == "aleph:memory-nebula"
+                    && slot["state"] == "live"
+                    && slot["renderer"] == "tsx"
+            })
+        };
+        let view = PanelModel::view(snapshot.clone(), None);
+        assert_eq!(view["projectionError"], JsonValue::Null);
+        assert!(has_nebula(&view));
+        let stored = view["stored"].as_str().unwrap().to_owned();
+        assert!(!has_nebula(&PanelModel::view(
+            JsonValue::Null,
+            Some(stored.clone())
+        )));
+        snapshot["declarations"][0]["descriptor"]["status"] = json!("disabled");
+        let view = PanelModel::view(snapshot.clone(), Some(stored.clone()));
+        assert_eq!(view["projectionError"], JsonValue::Null);
+        assert!(!has_nebula(&view));
+        snapshot["declarations"][0]["descriptor"]["trust"] = json!("trusted");
+        let view = PanelModel::view(snapshot, Some(stored));
+        assert_eq!(view["projectionError"], "unacceptable_trust");
+        assert!(!has_nebula(&view));
     }
 
     #[test]

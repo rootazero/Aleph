@@ -223,7 +223,9 @@ export async function createHost(player, env = globalThis) {
     return { result: null };
   };
 
-  connect();
+  // Unsupported embeddings start unavailable without a state transition.
+  // The initial query reports that state; do not emit a synthetic event.
+  if (supported) connect();
 
   // The Panel's text size: the player reads it from the root element's font
   // size (16px is 100%), so set that and ask the player to report it again.

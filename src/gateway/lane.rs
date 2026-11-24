@@ -84,7 +84,9 @@ impl Lane {
             // Read-only ops with no dot-suffix (or whose suffix doesn't
             // match the Query rule).
             "health" | "echo" | "version" | "system.info" | "request.state" => Some(Self::Query),
-            "panel.capabilities.snapshot" => Some(Self::Query),
+            "panel.capabilities.snapshot" | "graph.query" | "graph.node_detail" => {
+                Some(Self::Query)
+            }
             // The handshake. It has no `.`, so the suffix heuristic never ran
             // and it fell through to Mutate — which `needs_idempotency()`.
             // With `require_idempotency_key = true` the server therefore

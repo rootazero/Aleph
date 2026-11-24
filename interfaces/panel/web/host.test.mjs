@@ -265,10 +265,11 @@ test("a_runtime_without_websocket_reports_unavailable", async () => {
   const events = [];
   const player = { hostEvent: (name, data) => events.push({ name, data }) };
   const host = await createHost(player, {});
+  assert.deepEqual(events, [], "initial unavailable state is reported by the query, not an event");
   assert.equal((await host.call("aleph.connection", null)).state, "unavailable");
   assert.equal((await host.call("aleph.rpc", { method: "health", params: {} })).error.code, golden.host_unavailable_code);
   await host.call("aleph.connect", null);
   // Every connect attempt reports its outcome, and none ever opens a socket.
-  assert.ok(events.length >= 1);
+  assert.equal(events.length, 1);
   assert.ok(events.every((event) => event.data.state === "unavailable" && !event.data.pairing));
 });
