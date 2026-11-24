@@ -1,7 +1,7 @@
 // The command palette: a search box over every command the shell knows,
 // ranked by `PanelModel.rankCommands` (the same scoring as the Leptos
 // palette). Running a command closes the palette first.
-import { cleanup, computed, keymap, Overlay, signal, Text, View } from "nsh";
+import { cleanup, computed, keymap, Overlay, Scroll, type ScrollRef, signal, Text, View } from "nsh";
 import { Button, Input } from "nsh/base";
 import { PanelModel } from "aleph/panel";
 import type { Command } from "./commands";
@@ -25,9 +25,22 @@ export function CommandPalette(props: { commands: () => Command[]; keyOf: (id: s
     command.run();
   };
 
+  // Row heights and the visible height, measured as laid out, so a key
+  // press can bring the highlighted row into the middle of the list.
+  let list: ScrollRef | undefined;
+  let listHeight = 0;
+  const rowHeights: number[] = [];
+  const reveal = (index: number) => {
+    const top = rowHeights.slice(0, index).reduce((sum, height) => sum + height, 0);
+    const height = rowHeights[index] ?? 0;
+    list?.scrollTo({ y: Math.max(0, top - (listHeight - height) / 2), animated: false });
+  };
+
   const move = (step: number) => {
     const count = rows().length;
-    if (count > 0) selected.set((selected() + step + count) % count);
+    if (count === 0) return;
+    selected.set((selected() + step + count) % count);
+    reveal(selected());
   };
   // Arrow keys move the selection even while the search box has the focus.
   cleanup(keymap.bind({ up: () => move(-1), down: () => move(1) }, { when: "always" }));
@@ -47,21 +60,28 @@ export function CommandPalette(props: { commands: () => Command[]; keyOf: (id: s
           autoFocus
           class="rounded-(--radius) border border-input px-3 py-2 text-foreground"
         />
-        <Each of={rows()} key={(command) => command.id}>
-          {(command, index) => {
-            const key = () => props.keyOf(command().id);
-            return (
-              <Button
-                onPress={() => run(command())}
-                accessibilityLabel={command().label}
-                class={`flex-row items-center rounded-(--radius) px-3 py-1.5 ${index() === selected() ? "bg-accent" : "active:bg-muted"}`}
-              >
-                <Text class="flex-1 text-popover-foreground">{command().label}</Text>
-                <If when={key()}>{(shown) => <Text class="text-muted-foreground">{keymap.label(shown())}</Text>}</If>
-              </Button>
-            );
-          }}
-        </Each>
+        <Scroll
+          class="max-h-80"
+          ref={(node) => (list = node)}
+          onLayout={({ bounds }) => (listHeight = bounds.size.height)}
+        >
+          <Each of={rows()} key={(command) => command.id}>
+            {(command, index) => {
+              const key = () => props.keyOf(command().id);
+              return (
+                <Button
+                  onPress={() => run(command())}
+                  onLayout={({ bounds }) => (rowHeights[index()] = bounds.size.height)}
+                  accessibilityLabel={command().label}
+                  class={`flex-row items-center rounded-(--radius) px-3 py-1.5 ${index() === selected() ? "bg-accent" : "active:bg-muted"}`}
+                >
+                  <Text class="flex-1 text-popover-foreground">{command().label}</Text>
+                  <If when={key()}>{(shown) => <Text class="text-muted-foreground">{keymap.label(shown())}</Text>}</If>
+                </Button>
+              );
+            }}
+          </Each>
+        </Scroll>
         <If when={rows().length === 0}>
           <Text class="px-3 py-1.5 text-muted-foreground">No matching command</Text>
         </If>

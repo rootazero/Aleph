@@ -249,8 +249,9 @@ test("font_scale_sets_the_root_size_and_reports", async () => {
   await host.call("aleph.fontScale", null);
   assert.equal(env.document.documentElement.style.fontSize, "");
   assert.equal(reports, 2);
-  await assert.rejects(host.call("aleph.fontScale", -1), /font scale must be a positive number/);
-  await assert.rejects(host.call("aleph.fontScale", "big"), /font scale must be a positive number/);
+  for (const bad of [-1, 0.4, 1e300, Number.NaN, "big"]) {
+    await assert.rejects(host.call("aleph.fontScale", bad), /font scale must be a number from 0.5 to 3/);
+  }
   assert.equal(reports, 2);
 });
 

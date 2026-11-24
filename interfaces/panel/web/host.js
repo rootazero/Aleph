@@ -233,10 +233,11 @@ export async function createHost(player, env = globalThis) {
     if (!root) return Promise.reject(new Error("text size is not supported here"));
     if (scale === null) {
       root.style.fontSize = "";
-    } else if (typeof scale === "number" && Number.isFinite(scale) && scale > 0) {
+    } else if (typeof scale === "number" && scale >= 0.5 && scale <= 3) {
       root.style.fontSize = `${16 * scale}px`;
     } else {
-      return Promise.reject(new Error("font scale must be a positive number"));
+      // The same bounds as the Desktop host (desktop/nsh-shell/src/panel_surface.rs).
+      return Promise.reject(new Error("font scale must be a number from 0.5 to 3"));
     }
     player.environmentChanged?.();
     return Promise.resolve(null);

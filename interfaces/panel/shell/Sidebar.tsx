@@ -1,7 +1,7 @@
 // The fixed left column: one entry per menu slot (the user's layout, from
 // `PanelModel.view`), then the connection state and Settings at the bottom.
 // Settings is not a tab: it stays reachable with no Gateway and no layout.
-import { Text, View } from "nsh";
+import { Scroll, Text, View } from "nsh";
 import { Button } from "nsh/base";
 import { DENSITY_CLASSES, type Density } from "./prefs";
 import type { ConnectionState } from "./sdk";
@@ -40,24 +40,27 @@ export function Sidebar(props: {
     <View
       class={`${props.compact() ? "w-14" : "w-52"} border-r border-sidebar-border bg-sidebar p-2 ${DENSITY_CLASSES[props.density()].gap}`}
     >
-      <View class={`flex-1 ${DENSITY_CLASSES[props.density()].gap}`}>
-        <Each of={props.view()?.slots ?? []} key={(slot) => `${slot.key}#${slot.state}`}>
-          {(slot) => (
-            <If
-              when={slot().state === "live"}
-              else={<Text class={`${row()} text-muted-foreground`}>{shown(`${slot().key} · unavailable`)}</Text>}
-            >
-              <Button
-                onPress={() => props.onOpen(slot().key)}
-                accessibilityLabel={`Open ${label(slot().key)}`}
-                class={`${row()} ${selected(!props.settingsOpen() && slot().key === props.view()?.layout.active)}`}
+      {/* Only the menu scrolls; the connection state and Settings stay put. */}
+      <Scroll class="flex-1">
+        <View class={DENSITY_CLASSES[props.density()].gap}>
+          <Each of={props.view()?.slots ?? []} key={(slot) => `${slot.key}#${slot.state}`}>
+            {(slot) => (
+              <If
+                when={slot().state === "live"}
+                else={<Text class={`${row()} text-muted-foreground`}>{shown(`${slot().key} · unavailable`)}</Text>}
               >
-                <Text class="text-sidebar-foreground">{shown(label(slot().key))}</Text>
-              </Button>
-            </If>
-          )}
-        </Each>
-      </View>
+                <Button
+                  onPress={() => props.onOpen(slot().key)}
+                  accessibilityLabel={`Open ${label(slot().key)}`}
+                  class={`${row()} ${selected(!props.settingsOpen() && slot().key === props.view()?.layout.active)}`}
+                >
+                  <Text class="text-sidebar-foreground">{shown(label(slot().key))}</Text>
+                </Button>
+              </If>
+            )}
+          </Each>
+        </View>
+      </Scroll>
       <View
         class={`flex-row items-center gap-2 ${row()}`}
         accessibilityLabel={`Connection: ${CONNECTION_LABELS[props.connection().state]}`}

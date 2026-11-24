@@ -11,7 +11,7 @@
 
 use std::cell::RefCell;
 use std::rc::{Rc, Weak};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::OnceLock;
 
 use nsh_engine::HostChannel;
@@ -46,11 +46,18 @@ static LIVE: AtomicBool = AtomicBool::new(false);
 
 /// The host function that sets the Panel's text size.
 const FONT_SCALE: &str = "aleph.fontScale";
+/// The text sizes `aleph.fontScale` accepts, as factors of the system's.
+const FONT_SCALE_RANGE: std::ops::RangeInclusive<f64> = 0.5..=3.0;
+const FONT_SCALE_ERROR: &str = "font scale must be a number from 0.5 to 3";
+
+/// Numbers each surface, so a text-size change queued for one surface never
+/// reaches the next.
+static SURFACE_NUMBER: AtomicU64 = AtomicU64::new(0);
 
 thread_local! {
-    /// The live surface's view, on the main thread, where `aleph.fontScale`
-    /// reaches it (host functions run on the engine thread).
-    static SURFACE_VIEW: RefCell<Weak<AppView>> = const { RefCell::new(Weak::new()) };
+    /// The live surface's number and view, on the main thread, where
+    /// `aleph.fontScale` reaches it (host functions run on the engine thread).
+    static SURFACE_VIEW: RefCell<(u64, Weak<AppView>)> = const { RefCell::new((0, Weak::new())) };
 }
 
 /// Installs the Panel's UI sets and the surface component, once, before the
@@ -94,8 +101,11 @@ fn make_surface(context: ComponentContext) -> Box<dyn NativeComponent> {
         .unwrap_or(panel_host::Target::Unavailable(
             "the Panel surface is not registered",
         ));
+    let surface_number = SURFACE_NUMBER.fetch_add(1, Ordering::Relaxed) + 1;
     let channel = HostChannel::default();
-    channel.handle(FONT_SCALE, handle_font_scale);
+    channel.handle(FONT_SCALE, move |call| {
+        handle_font_scale(surface_number, call)
+    });
     let host = match panel_host::Handle::start(channel.clone(), target) {
         Ok(host) => Some(host),
         Err(error) => {
@@ -111,7 +121,7 @@ fn make_surface(context: ComponentContext) -> Box<dyn NativeComponent> {
             ..AppOptions::default()
         },
     );
-    SURFACE_VIEW.with(|surface| *surface.borrow_mut() = Rc::downgrade(&view));
+    SURFACE_VIEW.with(|surface| *surface.borrow_mut() = (surface_number, Rc::downgrade(&view)));
     match Bundle::source(BUNDLE.to_owned()).with_capabilities_json(Some(CAPABILITIES)) {
         Ok(bundle) => view.load(bundle.with_app_id(Some(PANEL_APP_ID)).into()),
         Err(error) => eprintln!("NSH TSX Panel bundle refused: {error}"),
@@ -124,16 +134,22 @@ fn make_surface(context: ComponentContext) -> Box<dyn NativeComponent> {
     })
 }
 
-/// `aleph.fontScale(scale)`: a positive factor of the system's text size, or
-/// `null` to follow the system again. The answer does not wait for the main
-/// thread; a surface that went away in between ignores the change.
-fn handle_font_scale(call: nsh_engine::HostCall) {
+/// `aleph.fontScale(scale)`: a factor of the system's text size (0.5 to 3),
+/// or `null` to follow the system again. The answer does not wait for the
+/// main thread; a change for a surface that went away in between is dropped,
+/// even when a new surface took its place.
+fn handle_font_scale(surface_number: u64, call: nsh_engine::HostCall) {
     let scale = match parse_font_scale(call.data()) {
         Ok(scale) => scale,
         Err(message) => return call.reject(message),
     };
     dispatch2::DispatchQueue::main().exec_async(move || {
-        let view = SURFACE_VIEW.with(|surface| surface.borrow().upgrade());
+        let view = SURFACE_VIEW.with(|surface| {
+            let (live_number, view) = &*surface.borrow();
+            (*live_number == surface_number)
+                .then(|| view.upgrade())
+                .flatten()
+        });
         if let Some(view) = view {
             view.set_font_scale(scale);
         }
@@ -146,8 +162,8 @@ fn parse_font_scale(data: &Value) -> Result<Option<f32>, &'static str> {
         return Ok(None);
     }
     match data.as_f64() {
-        Some(scale) if scale.is_finite() && scale > 0.0 => Ok(Some(scale as f32)),
-        _ => Err("font scale must be a positive number"),
+        Some(scale) if FONT_SCALE_RANGE.contains(&scale) => Ok(Some(scale as f32)),
+        _ => Err(FONT_SCALE_ERROR),
     }
 }
 
@@ -173,7 +189,7 @@ impl Drop for PanelSurface {
     fn drop(&mut self) {
         self.view.stop();
         self.channel.remove_handler(FONT_SCALE);
-        SURFACE_VIEW.with(|surface| *surface.borrow_mut() = Weak::new());
+        SURFACE_VIEW.with(|surface| *surface.borrow_mut() = (0, Weak::new()));
     }
 }
 
@@ -219,14 +235,19 @@ mod tests {
     }
 
     #[test]
-    fn font_scale_accepts_a_positive_factor_or_null() {
+    fn font_scale_accepts_a_bounded_factor_or_null() {
         assert_eq!(parse_font_scale(&json!(1.25)), Ok(Some(1.25)));
+        assert_eq!(parse_font_scale(&json!(3)), Ok(Some(3.0)));
         assert_eq!(parse_font_scale(&Value::Null), Ok(None));
-        for bad in [json!(0), json!(-1), json!("big"), json!(true)] {
-            assert_eq!(
-                parse_font_scale(&bad),
-                Err("font scale must be a positive number")
-            );
+        for bad in [
+            json!(0),
+            json!(-1),
+            json!(0.4),
+            json!(1e300),
+            json!("big"),
+            json!(true),
+        ] {
+            assert_eq!(parse_font_scale(&bad), Err(FONT_SCALE_ERROR));
         }
     }
 }
