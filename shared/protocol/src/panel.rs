@@ -174,6 +174,7 @@ pub fn supported_community_permission(permission: &str) -> bool {
         "pty.list"
             | "pty.spawn"
             | "pty.attach"
+            | "pty.history"
             | "pty.input"
             | "pty.resize"
             | "pty.close"

@@ -10,10 +10,11 @@ use aleph_protocol::panel::{
 };
 use std::cell::RefCell;
 
-const TERMINAL_METHOD_PERMISSIONS: [&str; 7] = [
+const TERMINAL_METHOD_PERMISSIONS: [&str; 8] = [
     "pty.list",
     "pty.spawn",
     "pty.attach",
+    "pty.history",
     "pty.input",
     "pty.resize",
     "pty.close",

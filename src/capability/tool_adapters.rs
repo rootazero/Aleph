@@ -324,6 +324,31 @@ impl TerminalCapabilitySource {
                     .write_at(owned.generation(), session_id, &bytes)
                     .map(|()| json!({"ok": true}))
             }
+            aleph_protocol::capability::PtyOperation::History { before, limit } => {
+                use aleph_protocol::pty::{PtyHistoryError, PtyHistoryRequest};
+                return manager
+                    .history_at(
+                        owned.generation(),
+                        &PtyHistoryRequest {
+                            session_id: session_id.to_owned(),
+                            before,
+                            limit,
+                        },
+                    )
+                    .map_err(|error| match error {
+                        PtyHistoryError::InvalidLimit | PtyHistoryError::InvalidCursor => {
+                            CapabilityDispatchError::InvalidInput(error.to_string())
+                        }
+                        PtyHistoryError::Unavailable => CapabilityDispatchError::Unavailable,
+                        PtyHistoryError::RowTooLarge => {
+                            CapabilityDispatchError::Execution(error.to_string())
+                        }
+                    })
+                    .and_then(|page| {
+                        serde_json::to_value(page)
+                            .map_err(|error| CapabilityDispatchError::Execution(error.to_string()))
+                    });
+            }
             aleph_protocol::capability::PtyOperation::Attach => manager
                 .attach_snapshot_at(owned.generation(), session_id)
                 .and_then(|snapshot| {
@@ -372,6 +397,7 @@ impl TerminalCapabilitySource {
             let session_id = match &params {
                 PtyToolParams::Input { session_id, .. }
                 | PtyToolParams::Attach { session_id }
+                | PtyToolParams::History { session_id, .. }
                 | PtyToolParams::Resize { session_id, .. }
                 | PtyToolParams::Close { session_id } => Some(session_id),
                 PtyToolParams::Spawn { .. } | PtyToolParams::List {} => None,
@@ -412,6 +438,23 @@ impl TerminalCapabilitySource {
                     PtyInvokeParams {
                         session_id,
                         operation: aleph_protocol::capability::PtyOperation::Input { data, base64 },
+                    },
+                    cancel,
+                )
+                .await
+            }
+            PtyToolParams::History {
+                session_id,
+                before,
+                limit,
+            } => {
+                self.invoke_params(
+                    aleph_protocol::capability::PtyInvokeParams {
+                        session_id,
+                        operation: aleph_protocol::capability::PtyOperation::History {
+                            before,
+                            limit,
+                        },
                     },
                     cancel,
                 )

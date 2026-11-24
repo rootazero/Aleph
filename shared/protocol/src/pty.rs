@@ -358,3 +358,170 @@ mod tests {
         }
     }
 }
+
+/// History indices and cursors stay decimal strings across JavaScript transports.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PtyHistoryRequest {
+    pub session_id: String,
+    #[serde(default)]
+    pub before: Option<String>,
+    #[serde(default = "default_history_limit")]
+    #[schemars(range(min = 1, max = 64))]
+    pub limit: u16,
+}
+
+pub const PTY_HISTORY_MAX_BYTES: usize = 262_144;
+pub const PTY_HISTORY_MAX_ROWS: u16 = 64;
+pub const fn default_history_limit() -> u16 {
+    32
+}
+
+/// Syntax validation shared by the RPC, Tool and screen boundary.
+pub fn validate_history(before: Option<&str>, limit: u16) -> Result<Option<u64>, PtyHistoryError> {
+    if !(1..=PTY_HISTORY_MAX_ROWS).contains(&limit) {
+        return Err(PtyHistoryError::InvalidLimit);
+    }
+    before
+        .map(|cursor| {
+            if cursor.is_empty()
+                || !cursor.bytes().all(|b| b.is_ascii_digit())
+                || (cursor.len() > 1 && cursor.starts_with('0'))
+            {
+                return Err(PtyHistoryError::InvalidCursor);
+            }
+            cursor.parse().map_err(|_| PtyHistoryError::InvalidCursor)
+        })
+        .transpose()
+}
+
+impl PtyHistoryRequest {
+    pub fn validate(&self) -> Result<Option<u64>, PtyHistoryError> {
+        validate_history(self.before.as_deref(), self.limit)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PtyHistoryRow {
+    pub index: String,
+    pub runs: Vec<PtyStyleRun>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PtyHistoryResponse {
+    pub rows: Vec<PtyHistoryRow>,
+    pub older_before: Option<String>,
+    pub evicted: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PtyHistoryError {
+    InvalidLimit,
+    InvalidCursor,
+    RowTooLarge,
+    Unavailable,
+}
+
+impl PtyHistoryError {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::InvalidLimit => "PTY history limit must be between 1 and 64",
+            Self::InvalidCursor => "invalid PTY history cursor",
+            Self::RowTooLarge => "PTY history row exceeds page byte budget",
+            Self::Unavailable => "PTY history is unavailable",
+        }
+    }
+}
+
+impl std::fmt::Display for PtyHistoryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+impl std::error::Error for PtyHistoryError {}
+
+#[cfg(test)]
+mod history_tests {
+    use super::*;
+
+    #[test]
+    fn pty_history_rpc_and_capability_share_validation() {
+        use crate::capability::{PtyOperation, PtyToolParams};
+        let tool: PtyToolParams = serde_json::from_value(serde_json::json!({
+            "operation": "history", "session_id": "s"
+        }))
+        .unwrap();
+        assert_eq!(
+            tool,
+            PtyToolParams::History {
+                session_id: "s".into(),
+                before: None,
+                limit: 32
+            }
+        );
+        for (before, limit) in [
+            (None, 0),
+            (None, 65),
+            (Some("+1"), 32),
+            (Some("18446744073709551615"), 64),
+        ] {
+            let request = PtyHistoryRequest {
+                session_id: "s".into(),
+                before: before.map(str::to_owned),
+                limit,
+            };
+            let operation = PtyOperation::History {
+                before: request.before.clone(),
+                limit,
+            };
+            assert_eq!(
+                request
+                    .validate()
+                    .map(|_| ())
+                    .map_err(PtyHistoryError::as_str),
+                operation.validate()
+            );
+        }
+        assert!(
+            serde_json::from_value::<PtyHistoryRequest>(serde_json::json!({
+                "session_id":"s", "before":9007199254740993u64
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn pty_history_validates_lossless_cursors_and_limits() {
+        let request: PtyHistoryRequest =
+            serde_json::from_str(r#"{"session_id":"s","before":"18446744073709551615"}"#).unwrap();
+        assert_eq!(request.limit, 32);
+        assert_eq!(request.validate().unwrap(), Some(u64::MAX));
+        for before in ["", "-1", "+1", "01", " 1", "1.0", "18446744073709551616"] {
+            assert!(
+                PtyHistoryRequest {
+                    before: Some(before.into()),
+                    ..request.clone()
+                }
+                .validate()
+                .is_err(),
+                "{before}"
+            );
+        }
+        for limit in [0, 65] {
+            assert!(PtyHistoryRequest {
+                limit,
+                ..request.clone()
+            }
+            .validate()
+            .is_err());
+        }
+        let row = PtyHistoryRow {
+            index: u64::MAX.to_string(),
+            runs: vec![],
+        };
+        assert_eq!(
+            serde_json::to_value(row).unwrap()["index"],
+            "18446744073709551615"
+        );
+    }
+}
