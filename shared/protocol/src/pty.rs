@@ -384,10 +384,7 @@ pub fn validate_history(before: Option<&str>, limit: u16) -> Result<Option<u64>,
     }
     before
         .map(|cursor| {
-            if cursor.is_empty()
-                || !cursor.bytes().all(|b| b.is_ascii_digit())
-                || (cursor.len() > 1 && cursor.starts_with('0'))
-            {
+            if cursor.is_empty() || !cursor.bytes().all(|b| b.is_ascii_digit()) {
                 return Err(PtyHistoryError::InvalidCursor);
             }
             cursor.parse().map_err(|_| PtyHistoryError::InvalidCursor)
@@ -496,7 +493,16 @@ mod history_tests {
             serde_json::from_str(r#"{"session_id":"s","before":"18446744073709551615"}"#).unwrap();
         assert_eq!(request.limit, 32);
         assert_eq!(request.validate().unwrap(), Some(u64::MAX));
-        for before in ["", "-1", "+1", "01", " 1", "1.0", "18446744073709551616"] {
+        let one = PtyHistoryRequest {
+            before: Some("1".into()),
+            ..request.clone()
+        };
+        let padded = PtyHistoryRequest {
+            before: Some("01".into()),
+            ..request.clone()
+        };
+        assert_eq!(padded.validate().unwrap(), one.validate().unwrap());
+        for before in ["", "-1", "+1", " 1", "1.0", "١", "18446744073709551616"] {
             assert!(
                 PtyHistoryRequest {
                     before: Some(before.into()),
