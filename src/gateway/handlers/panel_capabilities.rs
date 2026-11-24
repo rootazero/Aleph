@@ -2,10 +2,10 @@ use aleph_protocol::memory_graph::NEBULA_TAB_ID;
 use aleph_protocol::panel::{
     PanelTabDescriptor, PanelTabKey, PanelTabStatus, PanelUiCapabilityDeclaration,
     PanelUiCapabilityOrigin, PanelUiCapabilitySnapshot, PanelUiContextSnapshot, PanelUiTrust,
-    PANEL_PROJECT_SELECT_METHOD, PANEL_UI_API_MAJOR, PANEL_UI_CAPABILITY_SNAPSHOT_METHOD,
+    PANEL_BUILTIN_NAMESPACE, PANEL_PROJECT_SELECT_METHOD, PANEL_UI_API_MAJOR,
+    PANEL_UI_CAPABILITY_SNAPSHOT_METHOD,
 };
 use serde::Deserialize;
-use shared_ui_logic::panel::registry::BUILTIN_NAMESPACE;
 
 use crate::gateway::handlers::plugins::get_extension_manager;
 use crate::gateway::panel_project_context::PanelRequestContext;
@@ -19,7 +19,7 @@ pub(crate) fn with_memory_nebula(
     mounted: bool,
 ) -> PanelUiCapabilitySnapshot {
     let key = PanelTabKey {
-        plugin_id: BUILTIN_NAMESPACE.into(),
+        plugin_id: PANEL_BUILTIN_NAMESPACE.into(),
         tab_id: NEBULA_TAB_ID.into(),
     };
     if !mounted

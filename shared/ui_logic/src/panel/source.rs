@@ -1,7 +1,8 @@
 //! Immutable Panel UI capability snapshots; no plugin lifecycle or asset loading.
 
 use aleph_protocol::panel::{
-    PanelTabDescriptor, PanelTabKey, PanelTabStatus, PanelUiTrust, PANEL_UI_API_MAJOR,
+    PanelTabDescriptor, PanelTabKey, PanelTabStatus, PanelUiTrust, PANEL_BUILTIN_NAMESPACE,
+    PANEL_UI_API_MAJOR,
 };
 pub use aleph_protocol::panel::{
     PanelUiCapabilityDeclaration, PanelUiCapabilityOrigin, PanelUiCapabilitySnapshot,
@@ -95,7 +96,7 @@ pub fn community_fixture_snapshot() -> PanelUiCapabilitySnapshot {
 
 pub(super) fn terminal_key() -> PanelTabKey {
     PanelTabKey {
-        plugin_id: "aleph".into(),
+        plugin_id: PANEL_BUILTIN_NAMESPACE.into(),
         #[cfg(feature = "panel-tab-spike")]
         tab_id: "terminal-pilot".into(),
         #[cfg(not(feature = "panel-tab-spike"))]
