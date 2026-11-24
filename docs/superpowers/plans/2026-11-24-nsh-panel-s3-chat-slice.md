@@ -62,3 +62,12 @@
 - 覆盖 spec §5.1–§5.5、§7、§7a 全部条目；B2（重新配对）不需代码，B4 为已知限制写入回执。
 - 不新增 registry/全局；`V1_EVENT_TOPICS` 与 `V1_METHODS` 同文件同形态。
 - 风险：Web v1 循环重写会改变请求时序——保持 `max_inflight_requests: 1`，现有 `web_v1/tests.rs` 全绿为门槛。
+
+## Implementation deviations / 实施偏差 (recorded during T4)
+
+- **Event feed source.** Design §5.2 named `PerClientBuffer` + `forward_bus_to_client`. The v1 feed (`V1EventFeed` in `src/gateway/server/connection/event_admission.rs`) subscribes to the event bus directly instead: one hop, so every lost frame surfaces as `Lagged` on the connection's own receiver, and no forwarder task or ping-tick overflow watchdog is needed. Legacy `/ws` is unchanged.
+  v1 事件流直接订阅事件总线（单跳），丢帧都体现在本连接的 `Lagged` 上，不需要转发任务与 ping 周期看门狗；旧 `/ws` 不变。
+- **Web v1 stays sequential.** Instead of `socket.split()`, the Web v1 loop selects between the next event and the next request; requests still execute one at a time (`max_inflight_requests: 1`), and events wait in the receiver while one runs.
+  Web v1 不拆分 socket：在"下一事件 / 下一请求"之间 select，请求仍串行执行，执行期间事件在接收端排队。
+- **Known flake (pre-existing, not S3):** `gateway::server::tests::mcp_route_is_mounted_only_when_a_face_and_auth_handles_are_set` intermittently fails with `snapshot store init: disk I/O error` (SQLite default snapshot store under concurrent processes); 1 of ~10 suite runs.
+  已知抖动（既有，与 S3 无关）：上述测试在并发进程下偶发 SQLite `disk I/O error`。

@@ -9,12 +9,13 @@
 //! Moved verbatim out of the legacy `/ws` event arm; only control flow changed
 //! (`continue` → [`EventVerdict::Skip`], socket writes → returned verdicts).
 
-use tracing::{debug, info};
+use tokio::sync::broadcast::{self, error::RecvError};
+use tracing::{debug, info, warn};
 
 use super::{
     device_revoked_id, device_revoked_should_close, event_wire_form, extract_topic_and_data,
-    is_token_rotated_frame, rotated_should_close_remote, ui_display_admits_connection, wall_admits,
-    ConnectionContext,
+    is_token_rotated_frame, overflow_warning_frame, rotated_should_close_remote,
+    ui_display_admits_connection, v1_event_admitted, wall_admits, ConnectionContext,
 };
 
 /// What a connection does with one bus frame.
@@ -246,6 +247,104 @@ pub(super) async fn admit_event(
     })
 }
 
+/// What a v1 endpoint does with one received bus frame.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum V1Event {
+    /// Write this frame and keep serving.
+    Send(String),
+    /// Write this warning, then end the connection: frames were lost and the
+    /// client must resynchronize from a snapshot.
+    Lost(String),
+    /// End the connection without writing (revocation kick, bus closed).
+    Close(&'static str),
+}
+
+/// The live event plane of ONE v1 connection (Desktop IPC or Web `/v1/ws`)
+/// that negotiated `live_events`.
+///
+/// It subscribes to the bus directly — one hop, so every lost frame surfaces
+/// as `Lagged` on this receiver; legacy `/ws`'s bus→buffer forwarder needs a
+/// ping-tick watchdog for losses on its first hop, this does not. Every frame
+/// goes through the shared [`admit_event`], then the v1 topic list, then the
+/// endpoint's frame limit.
+///
+/// Use: select on `receiver.recv()` (cancel-safe) and pass the result to
+/// [`V1EventFeed::admit`] in the branch body, never inside the select — the
+/// admission awaits, and a cancelled admission would drop a frame silently.
+pub(super) struct V1EventFeed {
+    pub(super) receiver: broadcast::Receiver<String>,
+    conn_id: String,
+    device_id: Option<String>,
+    max_frame_bytes: usize,
+    overflow: u64,
+}
+
+impl V1EventFeed {
+    pub(super) fn subscribe(
+        ctx: &ConnectionContext,
+        conn_id: String,
+        device_id: Option<String>,
+        max_frame_bytes: usize,
+    ) -> Self {
+        Self {
+            receiver: ctx.event_bus.subscribe(),
+            conn_id,
+            device_id,
+            max_frame_bytes,
+            overflow: 0,
+        }
+    }
+
+    /// Decide one received frame. `None`: nothing to write for it.
+    pub(super) async fn admit(
+        &mut self,
+        ctx: &ConnectionContext,
+        received: Result<String, RecvError>,
+    ) -> Option<V1Event> {
+        let event_json = match received {
+            Ok(event_json) => event_json,
+            Err(RecvError::Lagged(dropped)) => {
+                self.overflow += dropped;
+                warn!(conn_id = %self.conn_id, dropped, "v1 event receiver lagged; closing");
+                return Some(V1Event::Lost(overflow_warning_frame(
+                    dropped,
+                    self.overflow,
+                )));
+            }
+            Err(RecvError::Closed) => return Some(V1Event::Close("event bus closed")),
+        };
+        let verdict = admit_event(ctx, &self.conn_id, self.device_id.as_deref(), event_json).await;
+        let wire = match verdict {
+            EventVerdict::Skip => return None,
+            EventVerdict::Close(reason) => return Some(V1Event::Close(reason)),
+            EventVerdict::Send(wire) => wire,
+        };
+        if !v1_event_admitted(&wire) {
+            return None;
+        }
+        // A frame the client cannot accept is one lost frame on a live
+        // connection: say so (the client marks its view stale and refetches)
+        // and keep serving. Same shape bounds the receiver enforces.
+        if wire.len() > self.max_frame_bytes
+            || aleph_client::local_ipc::parse_payload(&wire).is_err()
+        {
+            self.overflow += 1;
+            return Some(V1Event::Send(overflow_warning_frame(1, self.overflow)));
+        }
+        Some(V1Event::Send(wire))
+    }
+}
+
+/// The next received bus frame of a connection's feed, or never when the
+/// connection did not negotiate `live_events`. Cancel-safe: it only awaits
+/// `broadcast::Receiver::recv`.
+pub(super) async fn next_received(feed: &mut Option<V1EventFeed>) -> Result<String, RecvError> {
+    match feed {
+        Some(feed) => feed.receiver.recv().await,
+        None => std::future::pending().await,
+    }
+}
+
 /// Characterization of the legacy `/ws` event arm, pinned against the shared
 /// function it was moved into. Each case is a behavior the arm had before the
 /// move; a change here is a change for every connection kind at once.
@@ -405,6 +504,22 @@ mod tests {
         let fixture = fixture(false);
         let verdict = admit_event(&fixture.ctx, "alice", None, "not json".into()).await;
         assert_eq!(verdict, EventVerdict::Send("not json".into()));
+    }
+
+    /// v1 narrows by the topic of the frame AS SENT: the bare stream form and
+    /// the wrapped `event` form are both read through `extract_topic_and_data`,
+    /// and anything off the list — or unnameable — stays off the v1 wire.
+    #[test]
+    fn v1_topics_narrow_by_the_wire_frames_own_topic() {
+        use crate::gateway::server::connection::{overflow_warning_frame, v1_event_admitted};
+        let chunk = stream("stream.response_chunk", json!({"run_id": "r"}));
+        assert!(v1_event_admitted(&chunk.to_string()));
+        assert!(v1_event_admitted(&overflow_warning_frame(1, 1)));
+        let reasoning = stream("stream.reasoning", json!({"run_id": "r"}));
+        assert!(!v1_event_admitted(&reasoning.to_string()));
+        let wrapped = json!({"jsonrpc": "2.0", "method": "event", "params": {"topic": "session.created", "data": {}}});
+        assert!(!v1_event_admitted(&wrapped.to_string()));
+        assert!(!v1_event_admitted("not json"));
     }
 
     #[tokio::test]

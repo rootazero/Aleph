@@ -97,19 +97,57 @@ mod rpc;
 pub mod upgrade;
 pub(super) mod web_v1;
 
-/// The read-only methods both v1 entries (Desktop IPC and Web `/v1/ws`)
-/// mount. One list so the two entries cannot drift apart; everything else
-/// is rejected with `METHOD_NOT_FOUND` before it reaches Core. Mutating
-/// methods such as `panel.project.select` stay off until a later stage
-/// approves them.
+/// The methods both v1 entries (Desktop IPC and Web `/v1/ws`) mount. One
+/// list so the two entries cannot drift apart; everything else is rejected
+/// with `METHOD_NOT_FOUND` before it reaches Core. The `chat.*` trio is the
+/// S3 chat slice: each runs through the same dispatch, ownership check and
+/// idempotency cache as on legacy `/ws`. Other mutating methods such as
+/// `panel.project.select` stay off until a later stage approves them.
 pub(super) const V1_METHODS: &[&str] = &[
     "health",
     "sessions.list",
     aleph_protocol::panel::PANEL_UI_CAPABILITY_SNAPSHOT_METHOD,
+    "chat.history",
+    "chat.send",
+    "chat.abort",
 ];
 
 pub(super) fn v1_mounted(method: &str) -> bool {
     V1_METHODS.contains(&method)
+}
+
+/// The optional `system.hello` features both v1 entries implement. Granted
+/// only when the client also requests them; see
+/// [`event_admission::V1EventFeed`] for what `live_events` delivers.
+pub(super) const V1_FEATURES: &[aleph_protocol::system_hello::Feature] =
+    &[aleph_protocol::system_hello::Feature::LiveEvents];
+
+/// The event topics a v1 connection may receive once it negotiated
+/// `live_events`. This list only NARROWS: a frame must first pass the shared
+/// [`event_admission::admit_event`] decision (identity, scope, ownership,
+/// projection) and then name one of these topics. It is the chat slice's
+/// run lifecycle plus the overflow warning; widening it is a contract change
+/// for every v1 client, not a filter tweak.
+pub(super) const V1_EVENT_TOPICS: &[&str] = &[
+    "stream.run_accepted",
+    "stream.response_chunk",
+    "stream.run_complete",
+    "stream.run_error",
+    "connection.warning",
+];
+
+/// Whether an already-admitted wire frame (the exact bytes [`admit_event`]
+/// returned) names a v1 topic. Reads the topic from the frame as sent, with
+/// the same [`extract_topic_and_data`] every admission term uses, so a
+/// wrapped `event` notification and a bare `stream.*` notification are both
+/// judged by their real topic. An unparsable frame is refused: v1 sends
+/// nothing it cannot name.
+///
+/// [`admit_event`]: event_admission::admit_event
+pub(super) fn v1_event_admitted(wire: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(wire)
+        .ok()
+        .is_some_and(|frame| V1_EVENT_TOPICS.contains(&extract_topic_and_data(&frame).0))
 }
 
 // Bring every helper used by the orchestrator into this module's scope.
