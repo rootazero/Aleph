@@ -61,7 +61,7 @@ Errors: `-32004` (id not found), `-32030` (duplicate path),
 
 ### Storage
 
-- Endpoint table: `webhook_endpoints` (SQLite under `~/.aleph/data/`)
+- Proposed storage: an inbound webhook endpoint table in SQLite under `~/.aleph/data/`.
   with columns mirroring `WebhookEndpointConfig` plus
   `created_at_unix / updated_at_unix`.
 - Delivery log: ring buffer of last N deliveries per endpoint
@@ -72,11 +72,11 @@ Errors: `-32004` (id not found), `-32030` (duplicate path),
 
 ### Sequence to fill the gap
 
-1. Mount `webhook_router` from the gateway `build_router` (the
+1. Mount an inbound subscription router in Gateway's `build_router` (the
    `webhooks.enabled` config key was removed with the module and has to come
    back with it). Backfill loads from SQLite into the in-memory
    `WebhookHandlerState` at boot.
-2. Add a `webhooks_admin` handler module under `src/gateway/handlers/` with
+2. Add an administrative handler module for the proposed subscription RPCs under `src/gateway/handlers/` with
    the 7 RPCs above.
 3. Wire the existing `interfaces/cli/src/commands/webhook_cmd.rs`
    stubs to call those RPCs.
@@ -121,7 +121,7 @@ proxy.clear    →  { cleared: true }
 proxy.providers →  { overrides: { provider: ProxyConfig } }  // per-provider future
 ```
 
-`ProxyConfig`:
+Proposed proxy settings:
 
 ```rust
 struct ProxyConfig {
@@ -134,17 +134,17 @@ struct ProxyConfig {
 
 ### Storage
 
-- One row in a new `proxy_config` table (SQLite). Single-tenant —
+- One row in a dedicated table for persisted proxy settings (SQLite). Single-tenant —
   there is one effective config at a time.
 - Auth credentials in the existing vault under
   `proxy:{key}:password`; never inlined in the SQLite row.
-- A `runtime_overrides` in-memory layer above the persisted config so
+- An in-memory override layer above the persisted config so
   `proxy.set` takes effect immediately without disk I/O.
 
 ### Sequence
 
-1. Define `ProxyConfig` schema + SQLite migration.
-2. Plumb a `ProxyResolver` into every long-lived `reqwest::Client`
+1. Define the proxy settings schema and SQLite migration.
+2. Wire one proxy-policy resolver into each long-lived `reqwest::Client`
    constructor (`src/providers/*`, `gateway/clawhub`, MCP transports).
    Resolver returns `(url, optional auth)` for a given host.
 3. Add 4 RPCs above + wire `interfaces/cli/src/commands/proxy_cmd.rs`

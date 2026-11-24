@@ -1,3 +1,4 @@
+use aleph_protocol::memory_graph::NoteAddress;
 use leptos::prelude::*;
 
 use crate::platform::wide::views::memory::note_links::OutgoingLinks;
@@ -15,7 +16,6 @@ use crate::state::memory::{MemoryState, MemoryView};
 /// Pre-fetched body excerpt for a single node.
 #[derive(Clone)]
 pub struct NodeExcerpt {
-    pub id: String,
     pub name: String,
     pub category: String,
     pub tags: Vec<String>,
@@ -48,9 +48,8 @@ fn breadcrumb_from_path(path: &str) -> Vec<String> {
 /// JSON-RPC to the server (R4).
 #[component]
 pub fn NodeDetailPanel(
-    /// Body-excerpt cache keyed by node id. Populated by this component's
-    /// fetch Effect and updated optimistically on save.
-    excerpts: RwSignal<HashMap<String, NodeExcerpt>>,
+    /// Excerpts are keyed by the exact partition and note ID.
+    excerpts: RwSignal<HashMap<NoteAddress, NodeExcerpt>>,
     /// Galaxy-invalidation pulse: bumped after every successful note mutation
     /// so the canvas host re-fetches the graph. Without it a deleted note's
     /// star (and its edges) keeps rendering, and a renamed note's new id is
@@ -60,21 +59,40 @@ pub fn NodeDetailPanel(
     let mem = expect_context::<MemoryState>();
     let state = expect_context::<DashboardState>();
 
-    // Fetch detail (raw markdown) when the selection changes; skip if already
-    // cached. Mirrors the existing `node_detail` RPC shape used by the canvas.
+    let version = RwSignal::new(0u32);
+    let detail_error = RwSignal::new(None::<String>);
     Effect::new(move |_| {
-        let Some(id) = mem.selected_node.get() else {
-            return;
-        };
-        if excerpts.with(|m| m.contains_key(&id)) {
+        let request = version.get_untracked().wrapping_add(1);
+        version.set(request);
+        detail_error.set(None);
+        let selector = mem.agent_id.get();
+        let epoch = state.connection_epoch.get();
+        graph_nonce.get();
+        let selected = mem.selected_node.get();
+        if !state.is_connected.get() {
             return;
         }
-        let agent = mem.agent_id.get_untracked();
+        let Some(address) = selected else {
+            return;
+        };
+        if excerpts.with_untracked(|m| m.contains_key(&address)) {
+            return;
+        }
         spawn_local(async move {
-            match GraphApi::node_detail(&state, &agent, &id).await {
+            let reply = GraphApi::node_detail(&state, &address.agent_id, &address.node_id).await;
+            if version.try_get_untracked() != Some(request)
+                || state.connection_epoch.get_untracked() != epoch
+                || mem.agent_id.get_untracked() != selector
+                || mem
+                    .selected_node
+                    .with_untracked(|node| node.as_ref() != Some(&address))
+                || !state.is_connected.get_untracked()
+            {
+                return;
+            }
+            match reply {
                 Ok(detail) => {
                     let ex = NodeExcerpt {
-                        id: detail.node.id.clone(),
                         name: detail.node.name,
                         category: detail.node.category,
                         tags: detail.node.tags,
@@ -84,13 +102,11 @@ pub fn NodeDetailPanel(
                         outgoing: detail.outgoing,
                     };
                     excerpts.update(|m| {
-                        m.insert(id, ex);
+                        m.insert(address, ex);
                     });
                 }
                 Err(e) => {
-                    web_sys::console::warn_1(
-                        &format!("NodeDetailPanel: node_detail fetch failed for {id}: {e}").into(),
-                    );
+                    detail_error.set(Some(e.to_string()));
                 }
             }
         });
@@ -100,12 +116,14 @@ pub fn NodeDetailPanel(
         <div class="flex-1 min-h-0 overflow-y-auto px-3 py-2">
             {move || {
                 let selected = mem.selected_node.get();
-                if let Some(id) = selected {
-                    if let Some(ex) = excerpts.with(|m| m.get(&id).cloned()) {
-                        view! { <DetailFor excerpt=ex excerpts=excerpts graph_nonce=graph_nonce /> }
+                if let Some(address) = selected {
+                    if let Some(ex) = excerpts.with(|m| m.get(&address).cloned()) {
+                        view! { <DetailFor address=address excerpt=ex excerpts=excerpts graph_nonce=graph_nonce /> }
                             .into_any()
+                    } else if let Some(error) = detail_error.get() {
+                        view! { <p role="alert">{error}</p> }.into_any()
                     } else {
-                        view! { <DetailLoading id=id /> }.into_any()
+                        view! { <DetailLoading id=address.node_id /> }.into_any()
                     }
                 } else {
                     view! { <RecentVisitedList /> }.into_any()
@@ -117,10 +135,9 @@ pub fn NodeDetailPanel(
 
 #[component]
 fn DetailFor(
+    address: NoteAddress,
     excerpt: NodeExcerpt,
-    /// Shared cache — updated optimistically when an edit is saved so the
-    /// read view re-renders with the new content (no extra round-trip).
-    excerpts: RwSignal<HashMap<String, NodeExcerpt>>,
+    excerpts: RwSignal<HashMap<NoteAddress, NodeExcerpt>>,
     /// Bumped in every mutation's Ok arm — the galaxy is rebuilt from the
     /// server's new topology (link edges change on every body edit, and a
     /// delete removes a star outright).
@@ -135,9 +152,20 @@ fn DetailFor(
     let breadcrumb = excerpt.breadcrumb.clone();
     let tags = excerpt.tags.clone();
     let backlinks = excerpt.backlinks.clone();
-    let outgoing = excerpt.outgoing.clone();
-    let node_id = excerpt.id.clone();
-    let node_id_for_list = excerpt.id.clone();
+    let outgoing = StoredValue::new(excerpt.outgoing.clone());
+    let address_for_list = address.clone();
+    let partition = StoredValue::new(address.agent_id.clone());
+    let address = StoredValue::new(address);
+    let same_selection = move |target: &NoteAddress| {
+        mem.selected_node
+            .with_untracked(|node| node.as_ref() == Some(target))
+    };
+    let same_scope = move |selector: &str, epoch| {
+        graph_nonce.try_get_untracked().is_some()
+            && state.is_connected.get_untracked()
+            && state.connection_epoch.get_untracked() == epoch
+            && mem.agent_id.get_untracked() == selector
+    };
     let title = excerpt.name.clone();
     let body_markdown = excerpt.body_markdown;
 
@@ -171,40 +199,46 @@ fn DetailFor(
     };
 
     let save_edit = {
-        let node_id = node_id.clone();
         move |_| {
             if is_saving.get_untracked() {
                 return;
             }
             let content = draft.get_untracked();
-            let id = node_id.clone();
-            let agent = mem.agent_id.get_untracked();
+            let target = address.get_value();
+            let selector = mem.agent_id.get_untracked();
+            let epoch = state.connection_epoch.get_untracked();
             is_saving.set(true);
             error.set(None);
             spawn_local(async move {
-                match GraphApi::update_note(&state, &agent, &id, &content).await {
+                let result =
+                    GraphApi::update_note(&state, &target.agent_id, &target.node_id, &content)
+                        .await;
+                if !same_scope(&selector, epoch) {
+                    return;
+                }
+                match result {
                     Ok(()) => {
-                        // Optimistic: write_note_raw persists verbatim, so the
-                        // cached body equals what the server now holds. Updating
-                        // the cache remounts DetailFor in read mode with the new
-                        // content — no second fetch needed.
+                        // Reload the body and resolved links together.
                         excerpts.update(|m| {
-                            if let Some(ex) = m.get_mut(&id) {
-                                ex.body_markdown = content;
-                            }
+                            m.remove(&target);
                         });
-                        // Body edits change wikilinks — rebuild the galaxy.
                         graph_nonce.update(|n| *n += 1);
-                        is_saving.set(false);
-                        is_editing.set(false);
+                        if is_editing.try_get_untracked().is_some() {
+                            is_saving.set(false);
+                            is_editing.set(false);
+                        }
                     }
                     Err(e) => {
-                        is_saving.set(false);
-                        error.set(Some(
-                            crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
-                                e.to_string()
-                            }),
-                        ));
+                        if same_selection(&target) && is_saving.try_get_untracked().is_some() {
+                            is_saving.set(false);
+                            error.set(Some(
+                                crate::components::admin_refusal::settings_write_error(
+                                    i18n,
+                                    &e,
+                                    |e| e.to_string(),
+                                ),
+                            ));
+                        }
                     }
                 }
             });
@@ -212,7 +246,6 @@ fn DetailFor(
     };
 
     let do_rename = {
-        let node_id = node_id.clone();
         move |_| {
             if is_saving.get_untracked() {
                 return;
@@ -222,31 +255,44 @@ fn DetailFor(
                 error.set(Some("Title cannot be empty".to_string()));
                 return;
             }
-            let id = node_id.clone();
-            let agent = mem.agent_id.get_untracked();
+            let target = address.get_value();
+            let selector = mem.agent_id.get_untracked();
+            let epoch = state.connection_epoch.get_untracked();
             is_saving.set(true);
             error.set(None);
             spawn_local(async move {
-                match GraphApi::rename_note(&state, &agent, &id, &new_title).await {
+                let result =
+                    GraphApi::rename_note(&state, &target.agent_id, &target.node_id, &new_title)
+                        .await;
+                if !same_scope(&selector, epoch) {
+                    return;
+                }
+                match result {
                     Ok(new_id) => {
-                        // Clear old excerpt cache, update selected node to new_id
+                        let renamed = NoteAddress {
+                            agent_id: target.agent_id.clone(),
+                            node_id: new_id,
+                        };
                         excerpts.update(|m| {
-                            m.remove(&id);
+                            m.remove(&target);
+                            m.remove(&renamed);
                         });
-                        // The old id is gone from the store — rebuild the galaxy
-                        // so the new id is in its index and fly-to can find it.
                         graph_nonce.update(|n| *n += 1);
-                        mem.selected_node.set(Some(new_id));
-                        is_saving.set(false);
-                        is_renaming.set(false);
+                        if same_selection(&target) && is_renaming.try_get_untracked().is_some() {
+                            mem.selected_node.set(Some(renamed));
+                        }
                     }
                     Err(e) => {
-                        is_saving.set(false);
-                        error.set(Some(
-                            crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
-                                e.to_string()
-                            }),
-                        ));
+                        if same_selection(&target) && is_saving.try_get_untracked().is_some() {
+                            is_saving.set(false);
+                            error.set(Some(
+                                crate::components::admin_refusal::settings_write_error(
+                                    i18n,
+                                    &e,
+                                    |e| e.to_string(),
+                                ),
+                            ));
+                        }
                     }
                 }
             });
@@ -254,7 +300,6 @@ fn DetailFor(
     };
 
     let do_delete = {
-        let node_id = node_id;
         move |_| {
             if is_saving.get_untracked() || !confirm_delete.get_untracked() {
                 // First tap: arm the confirm
@@ -262,26 +307,34 @@ fn DetailFor(
                 return;
             }
             // Second tap: execute delete
-            let id = node_id.clone();
-            let agent = mem.agent_id.get_untracked();
+            let target = address.get_value();
+            let selector = mem.agent_id.get_untracked();
+            let epoch = state.connection_epoch.get_untracked();
             is_saving.set(true);
             error.set(None);
             spawn_local(async move {
-                match GraphApi::delete_note(&state, &agent, &id).await {
+                let result = GraphApi::delete_note(&state, &target.agent_id, &target.node_id).await;
+                if !same_scope(&selector, epoch) {
+                    return;
+                }
+                match result {
                     Ok(()) => {
                         // Purge the stale cache entry so re-selecting this id
                         // (recent-visited, backlinks) can't show deleted content.
                         excerpts.update(|m| {
-                            m.remove(&id);
+                            m.remove(&target);
                         });
-                        // The star and its edges must stop rendering.
                         graph_nonce.update(|n| *n += 1);
-                        mem.selected_node.set(None);
-                        is_saving.set(false);
+                        if same_selection(&target) && confirm_delete.try_get_untracked().is_some() {
+                            mem.selected_node.set(None);
+                        }
                     }
                     Err(e) => {
+                        if !same_selection(&target) || is_saving.try_get_untracked().is_none() {
+                            return;
+                        }
                         is_saving.set(false);
-                        confirm_delete.set(false); // reset on error
+                        confirm_delete.set(false);
                         error.set(Some(
                             crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
                                 e.to_string()
@@ -308,7 +361,7 @@ fn DetailFor(
                 class="node-detail-btn"
                 style="margin:0 0 8px"
                 on:click=move |_| {
-                    mem.highlight_note_id.set(Some(node_id_for_list.clone()));
+                    mem.highlight_note.set(Some(address_for_list.clone()));
                     mem.memory_view.set(MemoryView::Table);
                 }
             >
@@ -400,7 +453,14 @@ fn DetailFor(
                                         inner_html=html
                                         on:click=move |ev| {
                                             if let Some(t) = crate::memory_graph::markdown_excerpt::wikilink_click_target(&ev) {
-                                                navigate_wl(&state, &mem, t);
+                                                let source = address.get_value();
+                                                let target = outgoing.with_value(|links| wikilink_address(&source, links, &t));
+                                                if mem.selected_node.get_untracked().as_ref() == Some(&source) {
+                                                    if let Some(target) = target {
+                                                        mem.push_recent(target.clone());
+                                                        mem.selected_node.set(Some(target));
+                                                    }
+                                                }
                                             }
                                         }
                                     ></div>
@@ -460,7 +520,7 @@ fn DetailFor(
                                 view! {
                                     <li
                                         style="font-size:11px;color:var(--cat-reference);padding:3px 6px;border-radius:4px;background:rgba(96,165,250,0.08);cursor:pointer"
-                                        on:click=move |_| mem.selected_node.set(Some(id_click.clone()))
+                                        on:click=move |_| mem.selected_node.set(Some(NoteAddress { agent_id: partition.get_value(), node_id: id_click.clone() }))
                                     >
                                         {id}
                                     </li>
@@ -471,8 +531,8 @@ fn DetailFor(
                 }
             })}
             <OutgoingLinks
-                links=Signal::derive(move || outgoing.clone())
-                on_navigate=Callback::new(move |id: String| mem.selected_node.set(Some(id)))
+                links=Signal::derive(move || outgoing.get_value())
+                on_navigate=Callback::new(move |id: String| mem.selected_node.set(Some(NoteAddress { agent_id: partition.get_value(), node_id: id })))
             />
         </div>
     }
@@ -500,7 +560,7 @@ fn RecentVisitedList() -> impl IntoView {
             </div>
             {move || {
                 mem.recent_visited.with(|q| {
-                    let top: Vec<String> = q.iter().take(5).cloned().collect();
+                    let top: Vec<NoteAddress> = q.iter().take(5).cloned().collect();
                     if top.is_empty() {
                         view! {
                             <p style="color:var(--text-meta);font-size:11px;font-style:italic">
@@ -519,7 +579,7 @@ fn RecentVisitedList() -> impl IntoView {
                                                 mem.selected_node.set(Some(id_for_click.clone()));
                                             }
                                         >
-                                            {id}
+                                            {id.node_id}
                                         </li>
                                     }
                                 }).collect_view()}
@@ -532,32 +592,50 @@ fn RecentVisitedList() -> impl IntoView {
     }
 }
 
-/// Resolve a clicked wikilink target to a node id and select it.
-/// Path-form targets navigate directly; bare names resolve via graph.search
-/// (first hit — same resolution surface the sidebar search uses).
-fn navigate_wl(state: &DashboardState, mem: &MemoryState, target: String) {
-    let state = *state;
-    let mem = *mem;
-    spawn_local(async move {
-        let id = if target.contains('/') {
-            Some(target)
-        } else {
-            let agent = mem.agent_id.get_untracked();
-            GraphApi::search(&state, &agent, &target, 1)
-                .await
-                .ok()
-                .and_then(|r| r.results.first().map(|f| f.id.clone()))
-        };
-        if let Some(id) = id {
-            mem.push_recent(id.clone());
-            mem.selected_node.set(Some(id));
-        }
-    });
+/// Follow the Core-resolved link in the source partition, never a search hit.
+fn wikilink_address(
+    source: &NoteAddress,
+    links: &[OutgoingLinkDto],
+    target: &str,
+) -> Option<NoteAddress> {
+    let link = links
+        .iter()
+        .find(|link| link.raw == target && link.status == "active")?;
+    Some(NoteAddress {
+        agent_id: source.agent_id.clone(),
+        node_id: link.to.clone(),
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::breadcrumb_from_path;
+    use super::{breadcrumb_from_path, wikilink_address, NoteAddress, OutgoingLinkDto};
+
+    #[test]
+    fn bare_wikilink_follows_an_active_resolution_in_the_source_partition() {
+        let source = NoteAddress {
+            agent_id: "main".into(),
+            node_id: "concept/Source".into(),
+        };
+        let mut outgoing = OutgoingLinkDto {
+            to: "references/Target".into(),
+            raw: "Target".into(),
+            relation: None,
+            label: None,
+            confidence: 1.0,
+            resolved_by: None,
+            status: "active".into(),
+        };
+        assert_eq!(
+            wikilink_address(&source, &[outgoing.clone()], "Target"),
+            Some(NoteAddress {
+                agent_id: "main".into(),
+                node_id: "references/Target".into(),
+            })
+        );
+        outgoing.status = "dangling".into();
+        assert_eq!(wikilink_address(&source, &[outgoing], "Target"), None);
+    }
 
     #[test]
     fn breadcrumb_strips_filename_and_splits_dirs() {

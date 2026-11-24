@@ -14,7 +14,7 @@ This guide establishes the principles and patterns for organizing Rust code in A
 - [4. Standard Module Patterns](#4-standard-module-patterns)
 - [5. Anti-Patterns (Real Examples)](#5-anti-patterns-real-examples)
 - [6. Reference Examples](#6-reference-examples)
-- [7. Refactoring Backlog](#7-refactoring-backlog)
+- [7. Historical refactoring backlog](#7-historical-refactoring-backlog)
 
 ---
 
@@ -69,7 +69,7 @@ These names carry semantic meaning across the codebase. Use them consistently:
 
 - **Line count ≥ 500** and the file contains more than one logical concept
 - **Multiple `impl Trait for T` blocks** for different traits on different types in one file
-- **Production code mixed with test doubles** — `MockFoo` living next to `Foo`
+- **Production code mixed with test doubles** — e.g., defining a fake transport in a production module
 - **God Object** — a single struct with 20+ public methods spanning unrelated concerns
 
 ### Soft Triggers (should consider splitting)
@@ -99,7 +99,7 @@ my_module/
 └── error.rs        # MyModuleError enum
 ```
 
-**Example**: `dispatcher/executor/` — `Executor` struct with `ExecutorConfig` and `ExecutorError`.
+**Example**: `src/memory/note_retrieval/` separates `NoteFactRetrieval` from pipeline stages, graph expansion and tests.
 
 ### Pattern B: Domain Model Module
 
@@ -188,7 +188,7 @@ impl ExtensionManager {
 
 **Problem**: Skills, services, plugins, and MCP are independent concerns. A change to service management requires touching the same file as skill execution.
 
-**Fix**: Apply Pattern C — `ExtensionManager` becomes a facade delegating to `PluginExecutor`, `ServiceController`, and `SkillRegistry`.
+**Fix**: Apply Pattern C — keep orchestration on the facade and delegate plugin execution, services and skill registry responsibilities to their own modules.
 
 ---
 
@@ -213,7 +213,7 @@ pub async fn start_server(args: StartArgs) -> Result<()> {
 
 **Problem**: Impossible to test subsystems in isolation. A change to tool registration risks breaking signal handling.
 
-**Fix**: Apply Pattern D — `ServerBuilder` in `src/bin/aleph-server/commands/start/builder/` where each subsystem has its own initialization method.
+**Fix**: Apply Pattern D — split startup phases into `src/bin/aleph-server/commands/start/builder/`; put each subsystem initializer at its own named entry point.
 
 ---
 
@@ -236,7 +236,7 @@ pub struct FactStats { ... }      // statistics
 
 **Problem**: `MemoryFact` (the aggregate root) is buried among 13 other types. Finding where to add business logic requires reading through enum boilerplate.
 
-**Fix**: Apply Pattern B — `types.rs` for the 6 classification enums, `model.rs` for `MemoryFact` + `CompressionSession`, `anchor.rs` for `ContextAnchor` + `MemoryEntry`.
+**Fix**: Apply Pattern B — put the persisted models together and separate classification, indexing and context projection by responsibility.
 
 ---
 
@@ -269,8 +269,7 @@ Every way of doing it anyway costs a layer that buys nothing on its own:
 - 53 delegating wrappers (`lock; call a free fn in a topic module`) — the SQL
   becomes unit-testable against a bare `Connection`, at the price of a second
   name for every method;
-- splitting `NoteStore` itself into `NoteIndexStore` / `NoteLinkStore` /
-  `NoteVectorStore` / `NoteGraphStore` / `NoteGovernanceStore` — architecturally
+- splitting `NoteStore` itself into separate index, link, vector, graph and governance traits — architecturally
   the right shape (P5, interface minimisation) and the only one with no wrapper
   layer, but it touches 25 `dyn NoteStore` consumers and every test mock.
 
@@ -354,7 +353,7 @@ the language forbids mechanically extracting). See
 
 ---
 
-## 7. Refactoring Backlog
+## 7. Historical refactoring backlog
 
 Files identified for refactoring, ordered by priority. Each item links to the pattern that should be applied.
 

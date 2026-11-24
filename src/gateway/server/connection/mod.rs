@@ -40,6 +40,7 @@ use crate::gateway::state_version::StateVersionTracker;
 use super::per_client_buffer::PerClientBuffer;
 use super::ConnectionState;
 use crate::gateway::security::SecurityStore;
+use event_admission::EventVerdict;
 
 /// UI display events are delivered only to the connection that owns the surface.
 /// The event bus itself is process-wide, so this check belongs at the transport
@@ -87,6 +88,7 @@ mod acknowledged_effects;
 pub mod auth;
 pub mod cleanup;
 pub mod dispatch;
+mod event_admission;
 pub mod forward;
 #[cfg(any(unix, windows))]
 pub(super) mod local_ipc;
@@ -95,19 +97,60 @@ mod rpc;
 pub mod upgrade;
 pub(super) mod web_v1;
 
-/// The read-only methods both v1 entries (Desktop IPC and Web `/v1/ws`)
-/// mount. One list so the two entries cannot drift apart; everything else
-/// is rejected with `METHOD_NOT_FOUND` before it reaches Core. Mutating
-/// methods such as `panel.project.select` stay off until a later stage
-/// approves them.
+/// The methods both v1 entries (Desktop IPC and Web `/v1/ws`) mount. One
+/// list so the two entries cannot drift apart; everything else is rejected
+/// with `METHOD_NOT_FOUND` before it reaches Core. The `chat.*` trio is the
+/// S3 chat slice: each runs through the same dispatch, ownership check and
+/// idempotency cache as on legacy `/ws`. Other mutating methods such as
+/// `panel.project.select` stay off until a later stage approves them.
 pub(super) const V1_METHODS: &[&str] = &[
     "health",
     "sessions.list",
     aleph_protocol::panel::PANEL_UI_CAPABILITY_SNAPSHOT_METHOD,
+    aleph_protocol::memory_graph::GRAPH_QUERY_METHOD,
+    aleph_protocol::memory_graph::GRAPH_SEARCH_METHOD,
+    aleph_protocol::memory_graph::GRAPH_NODE_DETAIL_METHOD,
+    "chat.history",
+    "chat.send",
+    "chat.abort",
 ];
 
 pub(super) fn v1_mounted(method: &str) -> bool {
     V1_METHODS.contains(&method)
+}
+
+/// The optional `system.hello` features both v1 entries implement. Granted
+/// only when the client also requests them; see
+/// [`event_admission::V1EventFeed`] for what `live_events` delivers.
+pub(super) const V1_FEATURES: &[aleph_protocol::system_hello::Feature] =
+    &[aleph_protocol::system_hello::Feature::LiveEvents];
+
+/// The event topics a v1 connection may receive once it negotiated
+/// `live_events`. This list only NARROWS: a frame must first pass the shared
+/// [`event_admission::admit_event`] decision (identity, scope, ownership,
+/// projection) and then name one of these topics. It is the chat slice's
+/// run lifecycle plus the overflow warning; widening it is a contract change
+/// for every v1 client, not a filter tweak.
+pub(super) const V1_EVENT_TOPICS: &[&str] = &[
+    "stream.run_accepted",
+    "stream.response_chunk",
+    "stream.run_complete",
+    "stream.run_error",
+    "connection.warning",
+];
+
+/// Whether an already-admitted wire frame (the exact bytes [`admit_event`]
+/// returned) names a v1 topic. Reads the topic from the frame as sent, with
+/// the same [`extract_topic_and_data`] every admission term uses, so a
+/// wrapped `event` notification and a bare `stream.*` notification are both
+/// judged by their real topic. An unparsable frame is refused: v1 sends
+/// nothing it cannot name.
+///
+/// [`admit_event`]: event_admission::admit_event
+pub(super) fn v1_event_admitted(wire: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(wire)
+        .ok()
+        .is_some_and(|frame| V1_EVENT_TOPICS.contains(&extract_topic_and_data(&frame).0))
 }
 
 // Bring every helper used by the orchestrator into this module's scope.
@@ -1339,209 +1382,30 @@ pub async fn handle_connection(
             event = client_event_rx.recv() => {
                 match event {
                     Ok(event_json) => {
-                        // Token rotation kick: close remote (token-authorized)
-                        // sessions so they re-authenticate; never forward this
-                        // frame to clients verbatim, and never close loopback.
-                        if rotated_should_close_remote(&event_json, ctx.client_is_local) {
-                            info!("token rotated — closing remote session {}", conn_id);
-                            let _ = write
-                                .send(WsMessage::Close(Some(CloseFrame {
-                                    code: 4001,
-                                    reason: "token_rotated".into(),
-                                })))
-                                .await;
-                            break;
-                        }
-                        // Loopback receives token_rotated: swallow silently, do not forward.
-                        if is_token_rotated_frame(&event_json) {
-                            continue;
-                        }
-                        // Per-device revocation kick: close only the sessions bound
-                        // to the revoked device. `gateway.devices.revoke` already
-                        // downgraded this connection to the login wall synchronously
-                        // (`invalidate_device_sessions`), so anything pipelined ahead
-                        // of this frame is refused rather than served; this closes the
-                        // socket so the client stops holding a dead session open.
-                        if device_revoked_should_close(&event_json, session_device_id.as_deref()) {
-                            info!("device revoked — closing session {}", conn_id);
-                            let _ = write
-                                .send(WsMessage::Close(Some(CloseFrame {
-                                    code: 4001,
-                                    reason: "device_revoked".into(),
-                                })))
-                                .await;
-                            break;
-                        }
-                        // Everyone else: the revocation names another device (or none
-                        // of ours). Never forwarded — it carries a device id and no
-                        // client renders it.
-                        if device_revoked_id(&event_json).is_some() {
-                            continue;
-                        }
-                        // Parse ONCE. This value is what the filter chain reads
-                        // and what the wire-form step below rewrites/wraps —
-                        // it used to be parsed a second time purely to decide
-                        // whether to wrap, which is what paid for the payload
-                        // projection now folded in here.
-                        let parsed = serde_json::from_str::<serde_json::Value>(&event_json).ok();
-                        // Try to extract topic from event for filtering
-                        let (should_forward, projected_payload) = if let Some(event_obj) = parsed.as_ref() {
-                            let (topic, event_data) = extract_topic_and_data(event_obj);
-                            if !crate::gateway::pty::manager::frame_admits(topic, event_data) {
-                                continue;
-                            }
-                            // The event bus is process-wide; enforce UI ownership at
-                            // this transport boundary before the generic subscriber
-                            // receives the payload. Panel surface-id filtering is only
-                            // a second line of defense.
-                            if !ui_display_admits_connection(topic, event_data, &conn_id)
-                                || (topic == "capabilities.ui.display" && !crate::gateway::capability_ui::display_mount_admits(event_data, &conn_id)) {
-                                continue;
-                            }
-
-                            // The login wall + permission-based scope guard check +
-                            // surface audience + caller identity for the owner-scoped
-                            // event filter (P1, spec §5.4). All four read the same
-                            // ConnectionState under one lock — extend the tuple, don't
-                            // take the lock twice.
-                            let (
-                                wall_ok,
-                                scope_allowed,
-                                channel_kind,
-                                event_caller_user,
-                                event_caller_role,
-                            ) = {
-                                let conns = ctx.connections.read().await;
-                                match conns.get(&conn_id) {
-                                    Some(s) => (
-                                        // 0th term: the login wall, the same predicate
-                                        // and the same `caller_role` field the request
-                                        // arm evaluates at the top of the dispatch loop
-                                        // — so a live demotion through
-                                        // `restamp_live_connections` closes the event
-                                        // plane in the same instant it closes the RPC
-                                        // plane. The method argument is `""`: there is
-                                        // no `connect` exemption to grant here, because
-                                        // an event is never the frame that authorizes a
-                                        // connection.
-                                        wall_admits(Some(s.caller_role.as_str()), ""),
-                                        ctx.event_scope_guard.can_receive(topic, &s.permissions),
-                                        s.channel_kind,
-                                        s.caller_user.clone(),
-                                        // The 5th term reads the role too: a
-                                        // fleet-scoped frame has no owner to
-                                        // compare against, and the topic-prefix
-                                        // term above cannot tell it apart from
-                                        // its session-scoped siblings.
-                                        s.caller_role.clone(),
-                                    ),
-                                    None => (false, false, None, None, String::new()),
+                        // One shared admission decision for every connection kind;
+                        // see `event_admission::admit_event`.
+                        match event_admission::admit_event(
+                            &ctx,
+                            &conn_id,
+                            session_device_id.as_deref(),
+                            event_json,
+                        )
+                        .await
+                        {
+                            EventVerdict::Skip => continue,
+                            EventVerdict::Send(wire_json) => {
+                                if let Err(e) = write.send(WsMessage::Text(wire_json.into())).await {
+                                    error!("Failed to send event to {}: {}", conn_id, e);
+                                    break;
                                 }
-                            };
-
-                            // The owner-scoped filter needs the frame's OWN fields
-                            // (run_id/session_key), which for stream.* notifications
-                            // live directly under `.params` — `event_data` above only
-                            // resolves for the TopicEvent `.data` and the
-                            // double-wrapped `TopicEvent::to_notification()`
-                            // `.params.data` shapes (both handled by
-                            // `extract_topic_and_data`), not the bare stream-form
-                            // `.params` (no `GatewayEventFrame` stream.* variant
-                            // nests a second `.data` inside it), so fall back to the
-                            // raw `.params` object for that one remaining case.
-                            let visibility_payload =
-                                event_data.or_else(|| event_obj.get("params"));
-
-                            // `note_frame` runs unconditionally, before the filter —
-                            // every connection's loop keeps the shared, process-wide
-                            // index warm (first writer wins) regardless of whether
-                            // THIS connection ends up receiving the frame.
-                            ctx.event_visibility
-                                .note_frame(topic, visibility_payload)
-                                .await;
-
-                            let mut admits = wall_ok
-                                && scope_allowed
-                                && crate::gateway::surface::delivery::audience_allows(
-                                    event_data,
-                                    channel_kind,
-                                )
-                                && ctx.subscription_manager.should_receive(&conn_id, topic, event_data).await
-                                && match ctx.session_store.as_ref() {
-                                    Some(store) => {
-                                        ctx.event_visibility
-                                            .event_admits_for(
-                                                topic,
-                                                visibility_payload,
-                                                event_caller_user.as_deref(),
-                                                Some(event_caller_role.as_str()),
-                                                store,
-                                                ctx.team_store.as_ref(),
-                                            )
-                                            .await
-                                    }
-                                    // No store wired (probe/legacy wiring): skip the
-                                    // 4th term entirely — zero-change guarantee, see
-                                    // `GatewaySharedState::session_store`.
-                                    None => !matches!(topic, "capability.event" | "capability.event.status" | "capabilities.ui.display"),
-                                };
-                            if admits && matches!(topic, "capability.event" | "capability.event.status" | "capabilities.ui.display") {
-                                // Session I/O cannot bless an identity restamped while
-                                // it was in flight. Selection and authority stay separate.
-                                admits = ctx.connections.read().await.get(&conn_id).is_some_and(|state| {
-                                    !state.first_message && state.caller_user == event_caller_user
-                                        && state.caller_role == event_caller_role
-                                        && wall_admits(Some(&state.caller_role), "")
-                                        && ctx.event_scope_guard.can_receive(topic, &state.permissions)
-                                        && crate::gateway::surface::delivery::audience_allows(event_data, state.channel_kind)
-                                }) && (topic != "capabilities.ui.display" || crate::gateway::capability_ui::display_mount_admits(event_data, &conn_id));
                             }
-
-                            // 5th term, and the only one that is not pass/fail:
-                            // one frame (`stream.running_set_changed`) carries a
-                            // set spanning every user, so it is admitted whole and
-                            // its ARRAY is narrowed for this connection instead.
-                            // `None` for every other topic — see
-                            // `EventVisibilityIndex::project_for`, including why a
-                            // narrowed-to-empty frame must still be SENT.
-                            let projected = match (admits, ctx.session_store.as_ref()) {
-                                (true, Some(store)) => {
-                                    ctx.event_visibility
-                                        .project_for(
-                                            topic,
-                                            visibility_payload,
-                                            event_caller_user.as_deref(),
-                                            store,
-                                        )
-                                        .await
-                                }
-                                _ => None,
-                            };
-                            (admits, projected)
-                        } else {
-                            // Can't parse event, forward by default
-                            (true, None)
-                        };
-
-                        if should_forward {
-                            // Subscription/visibility checks await; revalidate at transport admission.
-                            if parsed.as_ref().is_some_and(|event| {
-                                let (topic, data) = extract_topic_and_data(event);
-                                !crate::gateway::pty::manager::frame_admits(topic, data)
-                            }) {
-                                continue;
-                            }
-                            debug!("Forwarding event to {}", conn_id);
-                            // Apply the projection (if any) and wrap the bare
-                            // TopicEvent form — see `event_wire_form`.
-                            let wire_json = match parsed {
-                                Some(event_obj) => {
-                                    event_wire_form(event_obj, projected_payload, event_json)
-                                }
-                                None => event_json,
-                            };
-                            if let Err(e) = write.send(WsMessage::Text(wire_json.into())).await {
-                                error!("Failed to send event to {}: {}", conn_id, e);
+                            EventVerdict::Close(reason) => {
+                                let _ = write
+                                    .send(WsMessage::Close(Some(CloseFrame {
+                                        code: 4001,
+                                        reason: reason.into(),
+                                    })))
+                                    .await;
                                 break;
                             }
                         }

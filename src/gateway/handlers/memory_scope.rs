@@ -83,9 +83,9 @@ pub fn read_partitions(agent_id: &str) -> Vec<String> {
 
 /// The single partition an enumerating RPC must read when the surface it feeds
 /// cannot represent more than one — today only the galaxy graph, whose
-/// `NoteNodeDto` carries no `agent_id`, so two partitions holding the same
-/// `category/filename` would collide into one node with no way to tell them
-/// apart.
+/// Graph edges and insights still address endpoints by path within one
+/// partition. The node's exact partition is returned for follow-up reads and
+/// mutations, not to make this a union feed.
 ///
 /// This is the session's OWN partition (`session_write_id`), not the org tier:
 /// of the two members of [`read_partitions`] it is the one that actually holds

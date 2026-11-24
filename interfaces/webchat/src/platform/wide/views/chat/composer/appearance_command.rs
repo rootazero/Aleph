@@ -1,6 +1,6 @@
 //! Interface-local appearance commands. Never forward these to the chat service.
 
-use crate::appearance::ThemeMode;
+use crate::appearance::{AppearanceLabel, ThemeMode};
 use crate::i18n::{t_string, use_i18n};
 use leptos::prelude::*;
 

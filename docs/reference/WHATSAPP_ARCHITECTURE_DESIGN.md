@@ -14,7 +14,7 @@ WhatsApp channel uses `whatsapp-rust` crate (wacore) directly — **no Go bridge
 - `WaAuthManager` (wa_auth/) — persists creds in `SecretVault` (production) or injected vault (tests, via `with_vault_and_crypto`)
 - `WhatsAppConfig` (config.rs) — flat config with sub-structs (`AccessConfig`, `DeliveryConfig`, `ReactionConfig`)
 - `InboundPolicy` (wa_inbound/) — DM/Group allow + pairing gate; with `dm_policy = "pairing"` only numbers listed in `WhatsAppConfig::paired_numbers` reach the agent, every other DM is dropped with a warning
-- `OutboundAdapter` (wa_outbound/) — text chunking + media + reactions + typing/read
+- `WaOutbound` (`wa_outbound/sender.rs`) — outbound message dispatch; adjacent modules handle chunking and media.
 - `WhatsAppConfig::reactions` (config.rs) — consumed in event loop via `ReactionHandler`
 - `WhatsAppConfig::history` (config.rs) — `GroupHistoryBuffer::absorb` runs in the event loop on every policy-accepted group message, so earlier unanswered group messages are prepended to the next inbound
 - `FakeWaRuntime` (wa_runtime/fake.rs) — test double for `trait WaRuntime`; 4 end-to-end scenarios
@@ -46,7 +46,7 @@ WhatsApp channel uses `whatsapp-rust` crate (wacore) directly — **no Go bridge
 | Decision | Rationale | Source |
 |----------|-----------|--------|
 | `PairingState` single source of truth; `ConnectionState` removed | Avoided CLAUDE.md §0 (orphan structure) + §8 (fail-closed) — `Channel::status()` now reads `PairingState::to_channel_status()` | spec §3.1 D1 |
-| `WhatsAppAccountRegistry` CUT (deleted) | No product need for multi-account; CLAUDE.md §0/§19 favor simplification; full implementation is 5–7 PR | spec §3.3 D3 |
+| Single account | The multi-account registry proposed in the April draft was removed. | No product need for multi-account; avoid adding a second account lifecycle. | spec §3.3 D3 |
 | `config.reactions` + `config.history` fields now consumed | Were parsed-then-dropped (CLAUDE.md §11 no-op) | spec §3.2 D2 |
 | `trait WaRuntime` extracted | Testability — `FakeWaRuntime` for end-to-end scenarios without wacore connection | spec §3.4 D4 |
 | `MediaProcessor` conservative (size + MIME only) | Avoid `image` crate per R3; real-encode deferred to R2 | spec §3.5 D5 |

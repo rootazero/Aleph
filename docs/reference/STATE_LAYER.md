@@ -30,7 +30,7 @@ The directory name is preserved for now — renaming would touch 28 consumers'
 
 `StateDatabase` (defined at `src/resilience/database/state_database/mod.rs:20`)
 is a single-connection multi-tenant SQLite Repository — the Rust equivalent of
-Rails' `ApplicationRecord` or Django's shared `Connection`.
+an application-wide database connection in a Rails or Django app.
 
 **Shape:**
 

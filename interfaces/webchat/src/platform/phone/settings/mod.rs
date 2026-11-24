@@ -118,7 +118,10 @@ fn live_value(
     i18n: leptos_i18n::I18nContext<crate::i18n::Locale>,
 ) -> Option<String> {
     match tab {
-        SettingsTab::Appearance => Some(crate::appearance::read_mode().label(i18n)),
+        SettingsTab::Appearance => Some(crate::appearance::AppearanceLabel::label(
+            crate::appearance::read_mode(),
+            i18n,
+        )),
         SettingsTab::Network => {
             let host = self::connection::current_host();
             if host.is_empty() {

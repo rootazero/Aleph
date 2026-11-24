@@ -34,3 +34,15 @@ would otherwise capture a thumbnail). `osascript` needs Accessibility permission
 terminal, and `screencapture` needs Screen Recording permission.
 
 桌面阶段会依次打开并前置 Aleph 窗口数秒；终端需要“辅助功能”与“屏幕录制”权限。
+
+## Memory Nebula fixtures / 记忆星云夹具
+
+Append `--nebula normal` to the replay above. Use fresh output directories with `--nebula dense` and `--nebula off` to check dense links and a mounted-but-unavailable runtime. `--web-only` omits the `--shell` and `--winlist` requirements and runs real Gateway + Chrome on hosts without the macOS embedding. Use `ALEPH_BROWSER_LIVE_CHROME_PATH` to name the installed Chrome and pass the package directory containing `index.html` to `--web`.
+
+Normal and dense fixtures put same-path notes in separate partitions. The driver checks the 100-note window, samples Chrome animation-frame intervals over 12 zoom-in/out cycles, clicks an actual painted node, searches and opens the exact personal note, verifies foreign notes are absent, and records framed graph/detail byte counts. The oversized detail must return one bounded error without a body or retry. Animation-frame intervals include idle/vsync time and are not GPU timings. No user notes, existing pairing credentials or running Gateway are used.
+
+普通与密集用例使用隔离的同路径笔记夹具；停用用例验证入口仍存在、读取明确失败。`--web-only` 是浏览器证据，不代替 macOS Desktop IPC 证据。绘图预算、拾取与相似边的快速回归可用 Node.js 22.18+ 运行：
+
+```bash
+node --test interfaces/panel/modules/nebulaViewport.test.mjs
+```

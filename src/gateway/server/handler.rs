@@ -2045,17 +2045,26 @@ mod tests {
     /// first test module) and the needles are assembled at runtime, so neither
     /// the tests above nor this one can count as a match.
     ///
-    /// NOTE: The actual delivery loop lives in `connection/mod.rs` — the
-    /// parse needle and `project_for(` call site are both in that file's
-    /// production code. Reading `connection/mod.rs` up to its test boundary
-    /// captures the real event loop.
+    /// NOTE: The admission decision lives in `connection/event_admission.rs`
+    /// (`admit_event`, shared by legacy `/ws`, Desktop IPC and Web `/v1/ws`);
+    /// the parse needle and the `project_for(` call site are both in that
+    /// file's production half. A third needle pins that the legacy `/ws` loop
+    /// in `connection/mod.rs` actually calls it.
     #[test]
     fn the_delivery_loop_parses_each_event_once_and_projects_it() {
-        let src = include_str!("connection/mod.rs");
-        let production = src
-            .split(&format!("#[cfg{}]", "(test)"))
-            .next()
-            .expect("the file has a production half");
+        let production_half = |src: &'static str| {
+            src.split(&format!("#[cfg{}]", "(test)"))
+                .next()
+                .expect("the file has a production half")
+        };
+        let production = production_half(include_str!("connection/event_admission.rs"));
+        let legacy_loop = production_half(include_str!("connection/mod.rs"));
+        let admit_needle = format!("event_admission::{}_event(", "admit");
+        assert_eq!(
+            legacy_loop.matches(&admit_needle).count(),
+            1,
+            "the legacy `/ws` event arm must delegate to the shared admission"
+        );
 
         let parse_needle = format!(
             "serde_json::from_str::<serde_json::Value>(&{}_json)",

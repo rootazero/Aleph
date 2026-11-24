@@ -285,6 +285,23 @@ async fn web_socket_requires_hello_and_keeps_member_scope() {
         .register("sessions.list", move |request| {
             handle_list_db(request, sessions.clone())
         });
+    for method in [
+        "graph.query",
+        "graph.search",
+        "graph.node_detail",
+        "graph.update_note",
+        "graph.rename_note",
+        "graph.delete_note",
+    ] {
+        gateway
+            .handlers_mut()
+            .register(method, |request| async move {
+                crate::gateway::protocol::JsonRpcResponse::success(
+                    request.id,
+                    serde_json::json!({"entered": request.method}),
+                )
+            });
+    }
     let context = Arc::new(connect::ConnectContext {
         state_versions: gateway.state_versions.clone(),
         transport_policy: crate::gateway::handlers::auth::TransportPolicy::defaults(),

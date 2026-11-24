@@ -1,4 +1,4 @@
-# BROWSER_LIVE_VIEWER.md — 浏览器实时查看器 (Browser Live Viewer)
+# BROWSER_LIVE_VIEWER.md — 浏览器实时查看器历史记录 (Browser Live Viewer)
 > **状态：历史文档（point-in-time）** — 本文记录的是 2026-10 验收实证，不代表当前架构。当前状态以代码为准。
 
 > **Final off-loop hardening (2026-10-13; targeted):** the final safe run passed 20/20 with 0 warnings, including the rescan generation-fence regression test and the existing off-loop/handler tests. A late older skill rescan can no longer replace a newer published registry, and cancelled shared initialization does not latch `INIT_CELL` as successful. This remains targeted evidence; D1 is still partial because residual synchronous extension/mount work remains and no real cold `extensions.catalog` timing was run.
@@ -74,7 +74,7 @@
 | ② Gateway grant issuer / viewer transport | `src/browser/live/{grant,issuer,viewer_backend}.rs` · `src/gateway/handlers/browser_viewer.rs` · `src/gateway/server/browser_viewer_route.rs` · `shared/protocol/src/browser_live.rs` | 签发 / 撤销 grant（RPC）；`/viewer/browser/{consume,exchange,ws}` 认证与帧传输；wire 契约单一源。Issue/revoke grants (RPC); authenticated `consume`/`exchange`/`ws`; single-source wire contract. |
 | ③ Panel / TUI presentation | `interfaces/webchat/src/platform/wide/views/browser/{model,viewer}.rs` · `interfaces/webchat/src/components/workspace_panel.rs` · `interfaces/tui/src/viewer_launcher.rs` | 只渲染与本地输入收集（R2/R4）；Panel 是 `WorkspaceBody::Browser`，TUI 只有本地 launch seam。Render + local input only (R2/R4). |
 
-## 2. 当前调用链 / Current call chains
+## 2. 验收时的调用链 / Call chains at verification time
 
 **Agent → 资源 / resource**
 

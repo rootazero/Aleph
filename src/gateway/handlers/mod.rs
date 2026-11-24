@@ -1261,7 +1261,8 @@ impl HandlerRegistry {
     /// The response from the handler, or a method not found error
     pub async fn handle(&self, request: &JsonRpcRequest) -> JsonRpcResponse {
         if let Some(handler) = self.handlers.get(&request.method) {
-            handler(request.clone()).await
+            let response = handler(request.clone()).await;
+            self.project_panel_snapshot(request, response)
         } else {
             JsonRpcResponse::error(
                 request.id.clone(),
@@ -1279,9 +1280,40 @@ impl HandlerRegistry {
         if self.has_method(&request.method)
             && panel_capabilities::is_context_method(&request.method)
         {
-            return panel_capabilities::handle_with_context(request.clone(), context).await;
+            let response = panel_capabilities::handle_with_context(request.clone(), context).await;
+            return self.project_panel_snapshot(request, response);
         }
         self.handle(request).await
+    }
+
+    fn memory_nebula_mounted(&self) -> bool {
+        use aleph_protocol::memory_graph::{
+            GRAPH_NODE_DETAIL_METHOD, GRAPH_QUERY_METHOD, GRAPH_SEARCH_METHOD,
+        };
+
+        [
+            GRAPH_QUERY_METHOD,
+            GRAPH_SEARCH_METHOD,
+            GRAPH_NODE_DETAIL_METHOD,
+        ]
+        .into_iter()
+        .all(|method| self.has_method(method))
+    }
+
+    fn project_panel_snapshot(
+        &self,
+        request: &JsonRpcRequest,
+        mut response: JsonRpcResponse,
+    ) -> JsonRpcResponse {
+        if request.method == aleph_protocol::panel::PANEL_UI_CAPABILITY_SNAPSHOT_METHOD
+            && response.error.is_none()
+            && self.memory_nebula_mounted()
+        {
+            if let Some(result) = response.result.as_mut() {
+                panel_capabilities::project_memory_nebula(result);
+            }
+        }
+        response
     }
 
     /// Check if a method is registered

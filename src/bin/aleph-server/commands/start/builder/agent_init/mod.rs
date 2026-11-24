@@ -1642,7 +1642,8 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 fallback_agent_registry,
                 simple_adapter,
             )
-            .with_app_config(app_config_arc.clone()),
+            .with_app_config(app_config_arc.clone())
+            .with_session_store(session_store.clone()),
         );
         let run_manager_clone = fallback_run_manager.clone();
         server.handlers_mut().register("agent.run", move |req| {

@@ -33,7 +33,7 @@ As APIs evolve, function signatures can accumulate many parameters, making them:
 
 The **Context Pattern** groups related parameters into a dedicated struct, reducing parameter count and improving API ergonomics.
 
-### Implementation: RunContext
+### Illustration: grouping run parameters
 
 **Before (7 parameters):**
 ```rust
@@ -138,7 +138,7 @@ Apply the Context Pattern when:
 
 ### Locations in Codebase
 
-- `HarnessDeps` / `FlowRequest` - Agent harness execution parameters (replaces legacy `agent_loop::RunContext`)
+- `HarnessDeps` / `FlowRequest` - Agent harness execution parameters
 - Future candidates: Tool execution contexts, configuration contexts
 
 ---
@@ -289,7 +289,7 @@ All Newtypes should implement:
 
 **Optional:**
 - `FromStr` - For parsing from strings
-- `FromIterator` - For collection types
+- [FromIterator](https://doc.rust-lang.org/std/iter/trait.FromIterator.html) — For collection types
 - `Default` - If there's a sensible default
 
 ### Newtype Catalog
@@ -297,10 +297,7 @@ All Newtypes should implement:
 | Type | Inner Type | Purpose | Location |
 |------|-----------|---------|----------|
 | **IDs** |
-| `ExperimentId` | `String` | AB testing experiment identifier | `dispatcher/model_router/advanced/ab_testing/types.rs` |
-| `VariantId` | `String` | AB testing variant identifier | `dispatcher/model_router/advanced/ab_testing/types.rs` |
-| `ContextId` | `String` | Browser context identifier | `browser/context_registry.rs` |
-| `TaskId` | `String` | Browser task identifier | `browser/context_registry.rs` |
+| `RunId` | `String` | Capability ownership run identifier | `src/capability/ownership.rs` |
 | `SubscriptionId` | `String` | Event bus subscription identifier | `src/event/global_bus.rs` |
 | **Collections** |
 | `Ruleset` | `Vec<PermissionRule>` | Permission rule collection | `permission/rule.rs` |
@@ -367,12 +364,11 @@ let status = config.get("status")?.parse::<TaskStatus>()?;
 
 ### Types with FromStr
 
-- `FactType`, `FactSpecificity`, `TemporalScope`
+- `FactSpecificity`, `TemporalScope`
 - `HookKind`, `HookPriority`, `PromptScope`
-- `DeviceType`, `DeviceRole`
 - `TaskStatus`, `RiskLevel`, `Lane`
-- `SessionStatus`, `TraceRole`
-- `RuntimeKind`, `EvolutionStatus`, `EventType`
+- `SessionStatus`
+- `RuntimeKind`, `EventType`
 
 ---
 
@@ -421,7 +417,7 @@ let context = RunContext::new(request, ctx, tools, identity)
 
 ### Context + Builder
 
-`RunContext` combines both patterns:
+This example combines both patterns:
 - Context Pattern: Groups related parameters
 - Builder Pattern: Ergonomic optional parameters
 

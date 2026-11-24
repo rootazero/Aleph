@@ -143,6 +143,8 @@
 | S5 剩余模块 | 按迁移台账迁移既有页面/贡献，连接可复用能力；清理已无消费者的原型 | 每个页面保留功能映射与默认挂载证明，模块禁用/替换验证通过；生成 UI 按 §6 独立登记状态 |
 | S6 收口 | docs/reference、FEATURE_LOCATOR、测试证据、本地提交 | S4 必须通过才算完整迁移；旧 UI 源只在对应替代品验收后删除；保留仍需的客户端回退 |
 
+**插入切片：两栏外壳与个人偏好 / Inserted slice: two-column shell and preferences (2026-11-24).** 在 S3 之后、S4 之前插入，不改变 S4–S6 的退出条件：固定两栏外壳、客户端本地外观偏好、可改绑快捷键与命令面板（模块经 SDK `commands.register` 贡献命令，受 owner/generation 约束）。设置不是 tab，布局与偏好都不授予权限（§4）。设计 [`2026-11-24-nsh-panel-prefs-design.md`](2026-11-24-nsh-panel-prefs-design.md)，[真机回执](../runs/2026-11-24-nsh-panel-prefs-receipt.md)。Inserted after S3 without changing S4–S6 exit criteria; Settings is not a tab, and neither layout nor preferences grant permissions.
+
 **恢复范围 / Recovery boundary.** 以真实会话／任务视图为消费者，复用 `SessionEventStore::load_events_range`、现有 actor / 业务投影和授权规则；没有一致切点就明确是缺口，不把 actor broadcast 或 `events.subscribe` 当持久源。快照和 watermark 必须同一逻辑切点；回放按获授权的 `(scope, sequence)` 顺序，游标按已应用的连续前缀推进，接 live 不留竞态窗口；历史不可用或无法证明连续性时要求重取快照。验证在快照/订阅交界写入、断线与服务重启、可见性变化与历史耗尽，且不重复执行写请求。这是 Accepted ADR-002 / Web amendment 的观察恢复，不预选 Proposed ADR-007 的通用事件架构或承诺任意 Capability 的 durable replay。
 
 任何阶段都不以 `panel-modular` feature 存在、prototype 方法存在或编译通过替代 production mount 证明。不得提前删除 Tauri：原三平台替代与真实共同 14 天双轨门槛仍适用。

@@ -1,6 +1,6 @@
 #[cfg(feature = "panel-modular")]
 use crate::i18n::t_string;
-use crate::i18n::{I18nContextProvider, use_i18n};
+use crate::i18n::{use_i18n, I18nContextProvider};
 use crate::state::memory::MemoryState;
 use aleph_protocol::browser_live::{CLOSED_TOPIC, RESOURCE_TOPIC};
 use leptos::prelude::*;
@@ -14,7 +14,7 @@ mod shell_bridge;
 // Views
 use crate::views::agent_trace::AgentTrace;
 use crate::views::browser::{
-    BrowserWorkspace, SeedOutcome, apply_browser_event, seed_from_gateway,
+    apply_browser_event, seed_from_gateway, BrowserWorkspace, SeedOutcome,
 };
 use crate::views::chat::ChatView;
 use crate::views::cron::CronView;
@@ -39,15 +39,13 @@ use crate::views::usage::UsageView;
 use crate::api::BehaviorConfigApi;
 use crate::components::boot_check_gate::BootCheckGate;
 use crate::components::command_palette::CommandPalette;
-use crate::components::mode_sidebar::{ModeSidebar, PanelMode, is_subagent_tree_route};
+use crate::components::mode_sidebar::{is_subagent_tree_route, ModeSidebar, PanelMode};
 use crate::components::notification_center::NotificationCenter;
 use crate::components::right_pane::RightPane;
 use crate::components::service_blocking_gate::ServiceBlockingGate;
 use crate::components::token_wall::TokenWall;
 use crate::components::workspace_panel::WorkspacePanel;
 use crate::context::{DashboardContext, DashboardState};
-#[cfg(feature = "panel-modular")]
-use shared_ui_logic::panel::discovery::{PanelDiscoveryState, PanelDiscoveryStatus};
 use crate::platform::phone::agents::PhoneAgents;
 use crate::platform::phone::chat::PhoneChat;
 use crate::platform::phone::dashboard::PhoneDashboard;
@@ -59,20 +57,22 @@ use crate::platform::phone::settings::connection::PhoneConnection;
 use crate::platform::phone::settings::embeddings::PhoneEmbeddings;
 use crate::platform::phone::settings::providers::PhoneProviders;
 use crate::platform::phone::settings::{
-    NativeScreen, PhoneSettings, PhoneSettingsScreen, screen_for_path as phone_settings_screen,
-    title_for_path as phone_settings_title,
+    screen_for_path as phone_settings_screen, title_for_path as phone_settings_title, NativeScreen,
+    PhoneSettings, PhoneSettingsScreen,
 };
 use crate::platform::phone::shell::PhoneShell;
 use crate::platform::phone::teams::PhoneTeams;
 use crate::state::hotkey::{self as hotkey, HotkeyState};
-use crate::state::layout::{LayoutMode, WorkspaceState, flex_path_enabled};
+use crate::state::layout::{flex_path_enabled, LayoutMode, WorkspaceState};
 use crate::state::notifications::NotificationsState;
 use crate::state::sessions::SessionMap;
 use crate::state::typewriter::TypewriterClock;
 use crate::state::viewport::{FormFactor, FormFactorState};
-use crate::views::chat::ChatState;
 use crate::views::chat::events::subscribe_run_events;
+use crate::views::chat::ChatState;
 use crate::views::voice::{ImmersiveVoiceView, VoiceMode};
+#[cfg(feature = "panel-modular")]
+use shared_ui_logic::panel::discovery::{PanelDiscoveryState, PanelDiscoveryStatus};
 
 #[component]
 #[must_use]
@@ -763,7 +763,7 @@ fn explicit_community_panel(
         }
     };
 
-    let snapshot = match discovery.snapshot() {
+    let mut snapshot = match discovery.snapshot() {
         Some(snapshot) => {
             leptos::logging::log!(
                 "🔍 [routing] Step 3 PASS: snapshot exists, revision={}",
@@ -777,17 +777,25 @@ fn explicit_community_panel(
         }
     };
 
-    let projection =
-        match shared_ui_logic::panel::projection::PanelProjection::from_snapshot(snapshot.clone()) {
-            Ok(projection) => {
-                leptos::logging::log!("🔍 [routing] Step 4 PASS: from_snapshot succeeded");
-                projection
-            }
-            Err(error) => {
-                leptos::logging::log!("🔍 [routing] Step 4 FAIL: from_snapshot error: {:?}", error);
-                return None;
-            }
-        };
+    // Nebula uses the TSX renderer. Exclude it before building the DOM
+    // registry, including the tabs of other explicitly selected modules.
+    snapshot.declarations.retain(|declaration| {
+        let key = &declaration.descriptor.key;
+        key.plugin_id != shared_ui_logic::panel::registry::BUILTIN_NAMESPACE
+            || key.tab_id != aleph_protocol::memory_graph::NEBULA_TAB_ID
+    });
+    let projection = match shared_ui_logic::panel::projection::PanelProjection::from_snapshot(
+        snapshot.clone(),
+    ) {
+        Ok(projection) => {
+            leptos::logging::log!("🔍 [routing] Step 4 PASS: from_snapshot succeeded");
+            projection
+        }
+        Err(error) => {
+            leptos::logging::log!("🔍 [routing] Step 4 FAIL: from_snapshot error: {:?}", error);
+            return None;
+        }
+    };
 
     match projection.select_explicit(&key, snapshot.revision) {
         Ok(descriptor) => {

@@ -1,0 +1,144 @@
+{
+  "receipt": "nsh-panel-prefs",
+  "date": "2026-11-24",
+  "branch": "nsh-panel-prefs",
+  "tested_tree": "fd9cbc15f",
+  "main": "49fdf8090",
+  "platform": {
+    "os": "macOS 27.2.1",
+    "arch": "arm64",
+    "rust": "1.99.1",
+    "node": "26.13.0",
+    "chromium": "Playwright headless",
+    "nsh": "0.6.0 (5541637)",
+    "input_source": "com.apple.inputmethod.SCIM.Shuangpin"
+  },
+  "interfaces_panel_tree": "b590b319fbfadb5d582812120cefbb149223d3fe",
+  "bundle_js_sha256": "b74ca458f10fbc040b8d92c3f5065d381d730fd7f3ad53782da32fd05017bb45",
+  "capabilities_json_sha256": "765d538098ce92b7d30964f12bc1edbcf8a07ab6b1a5bf1e358170bbdbe34a21",
+  "server_sha256": "185316c62ccf885e9ecb3d7f79292dcbaa1c5fde082527b40d0ee817e54ba1eb",
+  "shell_tsx_sha256": "36b350a0fba9c0eb0c41daf7481ebc856123ca6d0d14b80af24e0448ad91acf7",
+  "web_index_sha256": "a46dfb9f639f1893c30755a34732cc66385bead16e02fca4f8a611ed99ab1430",
+  "gateway_exit": 0,
+  "desktop": {
+    "phases": [
+      {
+        "phase": "edit",
+        "window": {
+          "width": 1180,
+          "height": 832,
+          "name": "Aleph"
+        },
+        "threads": 22,
+        "screenshot": "desktop-edit.png"
+      },
+      {
+        "phase": "restored",
+        "window": {
+          "width": 1180,
+          "height": 832,
+          "name": "Aleph"
+        },
+        "threads": 19,
+        "screenshot": "desktop-restored.png"
+      },
+      {
+        "phase": "offline",
+        "window": {
+          "width": 1180,
+          "height": 832,
+          "name": "Aleph"
+        },
+        "threads": 16,
+        "screenshot": "desktop-offline.png"
+      },
+      {
+        "phase": "chat",
+        "window": {
+          "width": 1180,
+          "height": 832,
+          "name": "Aleph"
+        },
+        "threads": 12,
+        "screenshot": "desktop-chat.png"
+      }
+    ],
+    "edited_prefs": {
+      "version": 1,
+      "appearance": {
+        "mode": "dark",
+        "accent": "ocean",
+        "fontScale": "large",
+        "roundness": "round",
+        "density": "compact"
+      },
+      "keybindings": {}
+    },
+    "final_prefs": {
+      "version": 1,
+      "appearance": {
+        "mode": "dark",
+        "accent": "ocean",
+        "fontScale": "large",
+        "roundness": "round",
+        "density": "cozy"
+      },
+      "keybindings": {}
+    },
+    "checked_by_screenshot": [
+      "palette from launch",
+      "palette runs Open Capabilities",
+      "restore after relaunch",
+      "mod+j rebinding",
+      "reserved mod+q disables only itself",
+      "conflict text",
+      "offline Settings",
+      "IME typing opens nothing",
+      "mod+k from focused composer"
+    ]
+  },
+  "web": {
+    "steps": [
+      "paired_two_column",
+      "appearance_edited",
+      "appearance_restored_after_reload",
+      "palette_filter_runs_open_capabilities",
+      "rebound_palette_to_mod_j",
+      "conflict_named_on_later_row",
+      "invalid_shortcut_refused",
+      "reset_restores_defaults",
+      "settings_work_offline"
+    ],
+    "console": [
+      "error: WebSocket connection to 'wss://127.0.0.1:56494/v1/ws' failed: HTTP Authentication failed; no valid credentials available"
+    ]
+  },
+  "replayed": {
+    "qa/nsh_s2_shell/run.py": "PASS (Chrome driver uses Settings > Menu)",
+    "qa/nsh_s3_chat/run.py": "PASS"
+  },
+  "fixed_on_device": [
+    "f7acf56b8 Panel takes keyboard focus on first sized layout",
+    "f7acf56b8 shortcut field placeholder",
+    "fd9cbc15f button text colour on dark theme"
+  ],
+  "not_verified": [
+    "Linux",
+    "Windows",
+    "release size",
+    "headed Chrome browser menus",
+    "Desktop shortcut typing under IME",
+    "community module palette entries",
+    "text size host without aleph.fontScale on device"
+  ],
+  "rerun_after_review": {
+    "result": "pass",
+    "shell_tsx_sha256": "139a9079ba0f6217157bd509e8740cee26120e7ff306ee128c612f936d521aa9",
+    "web_index_sha256": "c4002fcc918983b5c8f6e9e1739c901924ba94461d8a8870e738fa7ed0472529",
+    "gateway_exit": 0,
+    "not_rechecked_on_device": [
+      "storage that refuses writes",
+      "surface rebuilt while a text-size change is queued"
+    ]
+  }
+}

@@ -1,0 +1,127 @@
+{
+  "platform": "darwin",
+  "server_sha256": "185316c62ccf885e9ecb3d7f79292dcbaa1c5fde082527b40d0ee817e54ba1eb",
+  "shell_sha256": "36b350a0fba9c0eb0c41daf7481ebc856123ca6d0d14b80af24e0448ad91acf7",
+  "web_index_sha256": "a46dfb9f639f1893c30755a34732cc66385bead16e02fca4f8a611ed99ab1430",
+  "input_source": "(\n        {\n        \"Bundle ID\" = \"com.apple.inputmethod.SCIM\";\n        \"Input Mode\" = \"com.apple.inputmethod.SCIM.Shuangpin\";\n        InputSourceKind = \"Input Mode\";\n    }\n)",
+  "desktop": {
+    "phases": [
+      {
+        "phase": "edit",
+        "window": {
+          "width": 1180,
+          "height": 832,
+          "name": "Aleph"
+        },
+        "threads": 22,
+        "screenshot": "desktop-edit.png"
+      },
+      {
+        "phase": "restored",
+        "window": {
+          "width": 1180,
+          "height": 832,
+          "name": "Aleph"
+        },
+        "threads": 19,
+        "screenshot": "desktop-restored.png"
+      },
+      {
+        "phase": "offline",
+        "window": {
+          "width": 1180,
+          "height": 832,
+          "name": "Aleph"
+        },
+        "threads": 16,
+        "screenshot": "desktop-offline.png"
+      },
+      {
+        "phase": "chat",
+        "window": {
+          "width": 1180,
+          "height": 832,
+          "name": "Aleph"
+        },
+        "threads": 12,
+        "screenshot": "desktop-chat.png"
+      }
+    ],
+    "shots": [
+      "desktop-edit-start.png",
+      "desktop-edit-palette.png",
+      "desktop-edit-palette-ran.png",
+      "desktop-edit-settings.png",
+      "desktop-restored-start.png",
+      "desktop-restored-mod-k.png",
+      "desktop-restored-mod-j.png",
+      "desktop-offline-start.png",
+      "desktop-chat-typed.png"
+    ],
+    "edited_prefs": {
+      "version": 1,
+      "appearance": {
+        "mode": "dark",
+        "accent": "ocean",
+        "fontScale": "large",
+        "roundness": "round",
+        "density": "compact"
+      },
+      "keybindings": {}
+    },
+    "final_prefs": {
+      "version": 1,
+      "appearance": {
+        "mode": "dark",
+        "accent": "ocean",
+        "fontScale": "large",
+        "roundness": "round",
+        "density": "cozy"
+      },
+      "keybindings": {}
+    }
+  },
+  "web": {
+    "console": [
+      "error: WebSocket connection to 'wss://127.0.0.1:56494/v1/ws' failed: HTTP Authentication failed; no valid credentials available"
+    ],
+    "steps": [
+      {
+        "name": "paired_two_column"
+      },
+      {
+        "name": "appearance_edited",
+        "appearance": {
+          "mode": "dark",
+          "accent": "ocean",
+          "fontScale": "large",
+          "roundness": "round",
+          "density": "cozy"
+        },
+        "rootFontSize": "20px"
+      },
+      {
+        "name": "appearance_restored_after_reload"
+      },
+      {
+        "name": "palette_filter_runs_open_capabilities"
+      },
+      {
+        "name": "rebound_palette_to_mod_j"
+      },
+      {
+        "name": "conflict_named_on_later_row"
+      },
+      {
+        "name": "invalid_shortcut_refused"
+      },
+      {
+        "name": "reset_restores_defaults"
+      },
+      {
+        "name": "settings_work_offline"
+      }
+    ]
+  },
+  "gateway_exit": 0
+}

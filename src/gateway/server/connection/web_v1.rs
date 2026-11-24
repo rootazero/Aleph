@@ -5,7 +5,7 @@ use std::{collections::HashMap, net::SocketAddr, sync::Mutex, time::Duration};
 use aleph_client::local_ipc::parse_payload;
 use aleph_protocol::{
     framing::{encode_header, split_frame, HEADER_BYTES},
-    system_hello::HelloLimits,
+    system_hello::{Feature, HelloLimits},
 };
 use axum::{
     extract::{
@@ -28,6 +28,7 @@ use uuid::Uuid;
 use super::{
     cleanup,
     dispatch::{CallerSnapshot, DispatchPeer},
+    event_admission::{next_received, V1Event, V1EventFeed},
     rpc, ConnectionContext,
 };
 use crate::{
@@ -419,7 +420,7 @@ async fn serve(
         .as_ref()
         .expect("reserved before upgrade")
         .clone();
-    let hello = if request.method == "system.hello" {
+    let (hello, granted) = if request.method == "system.hello" {
         system_hello::negotiate(
             request,
             conn_id.clone(),
@@ -431,9 +432,13 @@ async fn serve(
                 .security_store
                 .as_deref()
                 .and_then(|store| system_hello::subject_for(store, &binding.user)),
+            super::V1_FEATURES,
         )
     } else {
-        JsonRpcResponse::error(request.id, AUTH_REQUIRED, "system.hello must be first")
+        (
+            JsonRpcResponse::error(request.id, AUTH_REQUIRED, "system.hello must be first"),
+            Vec::new(),
+        )
     };
     if hello.error.is_some() {
         let _ = send_response(socket, &hello).await;
@@ -457,6 +462,16 @@ async fn serve(
         expected
     };
     let ctx = ConnectionContext::from_shared(gateway, ChannelClass::Bot, addr.ip(), false);
+    // Subscribed before the hello reply is written, so no frame published
+    // after the client learns it may expect events is missed.
+    let mut events = granted.contains(&Feature::LiveEvents).then(|| {
+        V1EventFeed::subscribe(
+            &ctx,
+            conn_id.clone(),
+            expected.device_id.clone(),
+            MAX_MESSAGE as usize,
+        )
+    });
     let expires = binding.expires;
     let peer = DispatchPeer::web(
         gateway.connections.clone(),
@@ -472,7 +487,33 @@ async fn serve(
     };
     let traffic = async {
         send_response(socket, &hello).await?;
-        while let Some((text, request)) = read(socket).await {
+        loop {
+            // One request at a time (`max_inflight_requests: 1`): events are
+            // written between requests and wait in the receiver while one
+            // executes. Admission runs in the branch body so a request
+            // arriving mid-admission never drops a frame.
+            let (text, request) = tokio::select! {
+                biased;
+                received = next_received(&mut events) => {
+                    let feed = events.as_mut().expect("only a feed yields frames");
+                    match feed.admit(&ctx, received).await {
+                        None => continue,
+                        Some(V1Event::Send(frame)) => {
+                            send(socket, &frame, None, INTERNAL_ERROR).await?;
+                            continue;
+                        }
+                        Some(V1Event::Lost(warning)) => {
+                            let _ = send(socket, &warning, None, INTERNAL_ERROR).await;
+                            break;
+                        }
+                        Some(V1Event::Close(_)) => break,
+                    }
+                }
+                frame = read(socket) => match frame {
+                    Some(frame) => frame,
+                    None => break,
+                },
+            };
             let Some(caller) = peer.snapshot().await else {
                 break;
             };
@@ -502,7 +543,7 @@ async fn serve(
             match rpc::prepare(&request, &caller, gateway.require_idempotency_key) {
                 Ok(plan) => {
                     let response = executor
-                        .execute(&text, &request, plan.without_cache(), &peer, &caller)
+                        .execute(&text, &request, plan, &peer, &caller)
                         .await;
                     if peer.snapshot().await.is_none() {
                         break;

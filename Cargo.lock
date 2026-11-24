@@ -330,6 +330,7 @@ dependencies = [
  "aleph-desktop-host",
  "aleph-panel-ui",
  "aleph-protocol",
+ "dispatch2",
  "futures-util",
  "log",
  "nsh-base",

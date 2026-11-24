@@ -107,7 +107,7 @@ loop {
 
 - **协议解析** — 把 provider 的 chunk/stream 解析为 `UnifiedMessage` / `ContentBlock`
 - **事件追加** — 把 turn 写入 `SessionEvent` 流（事件溯源）
-- **回调触发** — 触发 `HarnessCallback` / `LoopCallback` 让 UI 流式渲染
+- **回调触发** — 触发 `HarnessCallback` 让 UI 流式渲染
 - **取消信号** — 监听 `CancellationToken`，模型不停用户也能停
 - **预算询问** — 调用 `context_budget.before_turn(...)`，但**不自己**决定何时压缩
 - **停止钩子** — 调用 `stop_hooks.consult(...)`，但**不自己**决定接受/拒绝
@@ -146,7 +146,7 @@ src/harness/                  # 笨循环编排核心 (Thin Core)
 
 > ⚠️ **"顶层"二字是口径的全部**。本表上一版写着 `agent.rs (212)` / `TOTAL 5077`，那是**错的**：`agent.rs` 在生产 `impl` 中间挂着一个**缩进的** `#[cfg(test)]`（4 行测试专用取值器），朴素的"第一个 `#[cfg(test)]`"读法在那里截断，静默丢掉 846 行生产代码。当年"超红线 177 行"的结论因此是粉饰过的。**这些数字现在一律由 `src/harness/tests/budget.rs` 实测产出，不再手算**——那个测试就是这些数字的唯一来源。
 
-**已不存在 `loop_callback.rs`**——本节此前记为第 9 个文件（`LoopCallback` turn 级钩子），该类型已在更早的重构中删除/合并进 `callback.rs`，此前的表格是未跟进的过时残留，2026-07-04 一并订正。
+**已不存在 `loop_callback.rs`**——本节此前记为第 9 个文件（旧 turn 级回调），该类型已在更早的重构中删除/合并进 `callback.rs`，此前的表格是未跟进的过时残留，2026-07-04 一并订正。
 
 **honest 现值：`src/harness/tests/budget.rs` 的 `CEILING`**——实测棘轮，本文**刻意不抄那个数字**（这里此前钉着 2026-07-15 的 `5043`，代码早已走到别处；同一形状在 `src/harness/CLAUDE.md` 也复发过两次，2026-09-03 一并改成指针）。**旧的 ~4900 红线已退休**：它是一次手算口径事故（上方警告所述缩进 `#[cfg(test)]` 截断 `agent.rs`、静默漏计 846 行）的残值，从不是实测地板，循环不再背那个不存在的"137 行债"。红线现在就是**棘轮机制本身**——只减不增，增必答 3 问。
 
@@ -192,12 +192,12 @@ dissolution 过程中识别并删除了 **~5,200 行无消费者的死代码**�
 - ❌ 旧 `prompt` 模块 (747 行) — 删除（消费链全死）
 - ❌ 旧 `payload` 模块 (~1,700 行) — 删除（test-only 闭环）
 - ❌ `src/capability/` (~2,500 行) — 删除（test-only 闭环）
-- ❌ 旧 `prompt_assembly` 模块 (289 行) — 删除（P0 临时占位，无消费者）
+- ❌ 旧提示词组装占位模块 (289 行) — 删除（P0 临时占位，无消费者）
 - ❌ 旧 `permission` 模块 — 删除（孤儿代码，零消费者）
 - ❌ `VerifyStopHook` (194 行) — 删除（孤儿代码，零生产实例化）
 - ❌ 旧 `compressor` 模块 — 删除（已证实死代码）
-- ❌ `PromptAssembler` / `Section` / `PromptLayer` trait — 撤回（与现有 PromptLayer/PromptPipeline 重复）
-- ❌ `SubagentOrchestrator` trait + Fork/Handoff/Graph 模式 — 撤回（零消费者，违反 R3）
+- ❌ 另起一套提示词组装器、段落与层接口 — 撤回（与现有 `PromptLayer` / `PromptPipeline` 重复）
+- ❌ 新增子代理编排接口及 Fork/Handoff/Graph 模式 — 撤回（零消费者，违反 R3）
 - ❌ 拟议的 session checkpoint Git 风格 trait — 撤回（事件溯源已覆盖）
 - ❌ 拟议的 runtime boot 模块 — 撤回（实际 boot 在 `src/bin/aleph-server/commands/start/` 6,194 行，无重写动机）
 

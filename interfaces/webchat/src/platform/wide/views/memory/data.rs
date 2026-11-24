@@ -245,10 +245,18 @@ pub fn locate_note(
     path: &str,
     page_size: u32,
 ) -> Option<(MemoryFacet, u32)> {
-    let note = window.iter().find(|f| f.path == path)?;
+    locate_note_where(window, page_size, |fact| fact.path == path)
+}
+
+pub fn locate_note_where(
+    window: &[CompressedFact],
+    page_size: u32,
+    matches: impl Fn(&CompressedFact) -> bool,
+) -> Option<(MemoryFacet, u32)> {
+    let note = window.iter().find(|fact| matches(fact))?;
     let facet = fact_facet(&note.category);
     let slice = facet_slice(window, facet);
-    let pos = slice.iter().position(|f| f.path == path)?;
+    let pos = slice.iter().position(|fact| matches(fact))?;
     Some((facet, (pos as u32) / page_size))
 }
 
@@ -455,6 +463,20 @@ mod tests {
         );
         // Unknown path → None.
         assert_eq!(locate_note(&window, "missing", 50), None);
+    }
+
+    #[test]
+    fn reverse_locate_uses_the_matching_partition_on_a_different_page() {
+        let mut personal = fact_p("preference", "same");
+        personal.agent_id = "personal".into();
+        let mut shared = personal.clone();
+        shared.agent_id = "org".into();
+        let window = vec![personal, shared];
+        assert_eq!(
+            locate_note_where(&window, 1, |fact| fact.path == "same"
+                && fact.agent_id == "org"),
+            Some((MemoryFacet::Facts, 1))
+        );
     }
 
     #[test]

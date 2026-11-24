@@ -250,8 +250,8 @@ static CHANNEL_CONFIG_SNAPSHOT: CapabilitySlot<Arc<ChannelPolicyProjection>> = C
     MissingSemantics::IndistinguishableDefault {
         reads_as: "ChannelConfig::default() -- the guest floor with NO per-channel \
                        tool-deny layer, identical to an unconfigured channel",
-        },
-    );
+    },
+);
 
 /// The handle above, type-erased for the roster — see
 /// [`crate::spend::global_ledger_slot`] for why this shape.

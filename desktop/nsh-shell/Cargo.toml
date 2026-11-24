@@ -9,6 +9,8 @@ qa-service = ["aleph-client/qa-service"]
 # Opt-in embedded TSX Panel (macOS only in S2): runs `interfaces/panel` in an
 # NSH AppView when launched with ALEPH_SHELL_PANEL=tsx. Needs the Panel
 # bundle first: `just panel-tsx-bundle`.
+# No `nsh-platform-macos/crypto`: it adds 16 crates (RSA, elliptic curves,
+# simd-json) and the Panel must not name the `crypto` global (S3).
 tsx-panel = ["dep:aleph-panel-ui", "nsh-platform-macos/js"]
 
 [dependencies]
@@ -26,6 +28,9 @@ uuid = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 nsh-platform-macos = { version = "=0.6.0", default-features = false }
+# Already in the build through nsh-platform-macos (same version and features):
+# the Panel's text size is applied on the main queue.
+dispatch2 = "0.3.1"
 objc2 = { version = "0.6.5", default-features = false, features = ["std"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSBundle", "NSString"] }
 objc2-service-management = { version = "0.3.2", default-features = false, features = ["std", "SMAppService", "objc2", "objc2-foundation"] }

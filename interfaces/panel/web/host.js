@@ -8,8 +8,12 @@
 //   "aleph.pair"       { bootstrap_ticket } | { device_token } -> { result: null } | { error }
 //   "aleph.connect"    null -> opens a new socket (after a drop)
 //   "aleph.connection" null -> the current connection state
-// Host event:
+// Host events:
 //   "aleph.connection" { state, endpoint, subject, pairing }
+//   "aleph.event"      { topic, data } — a live frame the Gateway pushed after
+//                      `live_events` was negotiated: `stream.<type>` frames
+//                      carry the event as `data`, `event` frames their own
+//                      `{ topic, data }`. Same shape as the desktop host.
 //
 // Wire: binary WebSocket messages, each one frame of a 4-byte big-endian
 // payload length and UTF-8 JSON (`shared/protocol/src/framing.rs`), first
@@ -56,7 +60,7 @@ export function helloPayload(id) {
     params: {
       protocol: { major: 1, minor: 0 },
       client: { name: "aleph-panel", version: "0.1.0", platform: "web", ui_runtime: "nsh" },
-      features: [],
+      features: ["live_events"],
     },
   });
 }
@@ -107,7 +111,23 @@ export async function createHost(player, env = globalThis) {
     }
   };
 
+  // A pushed frame: a notification (no id) after hello. Anything without a
+  // topic is unreadable and ends the connection, like any other bad frame.
+  const deliver = (message) => {
+    const params = message.params;
+    const event =
+      message.method === "event"
+        ? { topic: params?.topic, data: params?.data ?? null }
+        : { topic: message.method, data: params ?? null };
+    if (typeof event.topic !== "string") throw new Error("event without a topic");
+    player.hostEvent("aleph.event", event);
+  };
+
   const answer = (message) => {
+    if (state.state === "connected" && typeof message.method === "string" && !("id" in message)) {
+      deliver(message);
+      return;
+    }
     if (state.state === "connecting") {
       if (message.id !== HELLO_ID) throw new Error("answer before hello");
       if (message.error) {
@@ -203,7 +223,27 @@ export async function createHost(player, env = globalThis) {
     return { result: null };
   };
 
-  connect();
+  // Unsupported embeddings start unavailable without a state transition.
+  // The initial query reports that state; do not emit a synthetic event.
+  if (supported) connect();
+
+  // The Panel's text size: the player reads it from the root element's font
+  // size (16px is 100%), so set that and ask the player to report it again.
+  // `null` goes back to the browser's own size.
+  const setFontScale = (scale) => {
+    const root = env.document?.documentElement;
+    if (!root) return Promise.reject(new Error("text size is not supported here"));
+    if (scale === null) {
+      root.style.fontSize = "";
+    } else if (typeof scale === "number" && scale >= 0.5 && scale <= 3) {
+      root.style.fontSize = `${16 * scale}px`;
+    } else {
+      // The same bounds as the Desktop host (desktop/nsh-shell/src/panel_surface.rs).
+      return Promise.reject(new Error("font scale must be a number from 0.5 to 3"));
+    }
+    player.environmentChanged?.();
+    return Promise.resolve(null);
+  };
 
   return {
     call(name, data) {
@@ -217,6 +257,8 @@ export async function createHost(player, env = globalThis) {
           return Promise.resolve(null);
         case "aleph.connection":
           return Promise.resolve(state);
+        case "aleph.fontScale":
+          return setFontScale(data);
         default:
           throw new Error(`no host function ${name}`);
       }

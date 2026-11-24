@@ -43,7 +43,7 @@ def fixture_port():
             return port
 
 
-def write_config(aleph, port, panel_web_dir):
+def write_config(aleph, port, panel_web_dir, memory_enabled=False):
     (aleph / 'config.toml').write_text(f'''[gateway]
 host = "127.0.0.1"
 port = {port}
@@ -56,7 +56,7 @@ id = "main"
 default = true
 name = "Main Agent"
 [memory]
-enabled = false
+enabled = {'true' if memory_enabled else 'false'}
 [memory.dreaming]
 enabled = false
 [memory.profile]
@@ -79,6 +79,25 @@ enabled = false
 ''', encoding='utf-8')
 
 
+def seed_nebula(aleph, dense):
+    root = aleph / 'memory/note'
+    categories = ('main', 'main__u-owner', 'main__u-nebula-foreign')
+    frontmatter = '---\ncategory: reference\ntags: [nebulaqa]\ncreated: 2026-04-01\nupdated: 2026-04-10\n---\n\n'
+    for partition in categories:
+        (root / partition / 'reference').mkdir(parents=True)
+    own = root / 'main__u-owner/reference'
+    for source in range(100):
+        count = 24 if dense else 1
+        links = ' '.join(f'[[reference/nebula-{(source + offset) % 100:03d}]]'
+                         for offset in range(1, count + 1))
+        body = 'Personal note fixture only.\n' if source == 0 else ''
+        (own / f'nebula-{source:03d}.md').write_text(frontmatter + body + links, encoding='utf-8')
+    for partition, body in [('main', 'Organization twin.'), ('main__u-nebula-foreign', 'Foreign twin.')]:
+        (root / partition / 'reference/nebula-000.md').write_text(frontmatter + body, encoding='utf-8')
+    oversized = frontmatter + ('星云 "\\" ' * 160_000)
+    (own / 'nebula-oversize.md').write_text(oversized, encoding='utf-8')
+
+
 def stop(child, timeout=15):
     if child.poll() is None:
         child.send_signal(signal.SIGTERM)
@@ -97,22 +116,22 @@ class Gateway:
         self.child = None
         self.endpoint = None
 
-    def start(self, name):
-        self.endpoint = self.root / name
-        argv = [
-            str(self.server), '--bind', '127.0.0.1', '--port', str(self.port),
-            '--bundled-content-only', '--desktop-ipc', str(self.endpoint), 'start',
-        ]
+    def start(self, name=None):
+        self.endpoint = self.root / name if name else None
+        argv = [str(self.server), '--bind', '127.0.0.1', '--port', str(self.port), '--bundled-content-only']
+        if self.endpoint is not None:
+            argv += ['--desktop-ipc', str(self.endpoint)]
+        argv.append('start')
         self.child = subprocess.Popen(
             argv, cwd=self.root, env=self.env, stdout=self.log, stderr=subprocess.STDOUT,
             start_new_session=True,
         )
         deadline = time.monotonic() + 120
         while time.monotonic() < deadline and self.child.poll() is None:
-            if self.endpoint.exists() and self.https_ready():
+            if (self.endpoint is None or self.endpoint.exists()) and self.https_ready():
                 return
             time.sleep(0.2)
-        raise RuntimeError('isolated Gateway did not mount IPC and HTTPS')
+        raise RuntimeError('isolated Gateway did not mount required listeners')
 
     def https_ready(self):
         try:
@@ -150,7 +169,9 @@ class Desktop:
         result = subprocess.run(['ps', '-M', '-p', str(pid)], capture_output=True, text=True, timeout=10)
         return max(len(result.stdout.splitlines()) - 1, 0)
 
-    def run(self, name, extra_env, settle):
+    def run(self, name, extra_env, settle, action=None):
+        """One launch: wait for the main window, bring it to the front, let it
+        settle, run `action(pid)` if given (S3 types into it), capture it."""
         log = (self.out / f'desktop-{name}.log').open('w', encoding='utf-8')
         child = subprocess.Popen(
             [str(self.shell)], cwd=self.root, env={**self.env, **extra_env},
@@ -165,6 +186,8 @@ class Desktop:
             require(window is not None, f'{name}: the shell opened no main window')
             self.bring_to_front(child.pid)
             time.sleep(settle)
+            if action is not None:
+                action(child.pid)
             window = self.main_window(child.pid)
             require(window and window['onscreen'] and window['width'] >= 400,
                     f'{name}: the main window is not in front: {window}')
@@ -215,16 +238,19 @@ def receipt(args):
     report = {
         'platform': sys.platform,
         'server_sha256': sha256(args.server),
-        'shell_sha256': sha256(args.shell),
+        'shell_sha256': sha256(args.shell) if args.shell else None,
+        'nebula_fixture': args.nebula,
         'web_index_sha256': sha256(args.web / 'index.html'),
     }
-    with tempfile.TemporaryDirectory(prefix='aleph-s2-', dir='/tmp') as directory:
+    with tempfile.TemporaryDirectory(prefix='aleph-s2-', dir=None if args.web_only else '/tmp') as directory:
         root = Path(directory)
         home, aleph = root / 'home', root / 'aleph'
         home.mkdir(mode=0o700)
         aleph.mkdir(mode=0o700)
         port = fixture_port()
-        write_config(aleph, port, args.web)
+        write_config(aleph, port, args.web, memory_enabled=args.nebula in ('normal', 'dense'))
+        if args.nebula in ('normal', 'dense'):
+            seed_nebula(aleph, args.nebula == 'dense')
         env = {
             'PATH': os.environ['PATH'],
             'HOME': str(home),
@@ -232,49 +258,23 @@ def receipt(args):
             'RUST_LOG': 'info',
             'NO_PROXY': '127.0.0.1,localhost',
         }
+        if os.name == 'nt':
+            for name in ('SystemRoot', 'WINDIR', 'TEMP', 'TMP', 'COMSPEC'):
+                if name in os.environ:
+                    env[name] = os.environ[name]
+            for name in ('USERPROFILE', 'LOCALAPPDATA', 'APPDATA'):
+                env[name] = str(home)
         shell_env = {**env, 'ALEPH_SHELL_PANEL': 'tsx', 'ALEPH_SHELL_HOTKEY': 'disabled'}
-        desktop = Desktop(args.shell, args.winlist, root, shell_env, out)
+        desktop = None if args.web_only else Desktop(args.shell, args.winlist, root, shell_env, out)
         with (out / 'gateway.log').open('w', encoding='utf-8') as log:
             gateway = Gateway(args.server, root, env, port, log)
             phases = []
             try:
-                # Desktop without a Desktop IPC target: an honest unavailable state.
-                phases.append(desktop.run('unavailable', {}, settle=4))
-
-                gateway.start('gw-1.sock')
-                phases.append(desktop.run('connected', {'ALEPH_SHELL_PANEL_IPC': str(gateway.endpoint)}, settle=8))
-                key, first = desktop.layout()
-                require(first['order'] == tabs('overview', 'sessions', 'capabilities'),
-                        'default desktop layout is not the shell module order')
-
-                # Open the Sessions module through the stored layout (the edit UI
-                # itself is driven in Chrome and by `nsh test`).
-                sessions = {**first, 'active': tabs('sessions')[0]}
-                desktop.write_layout(key, sessions)
-                phases.append(desktop.run('sessions', {'ALEPH_SHELL_PANEL_IPC': str(gateway.endpoint)}, settle=8))
-                require(desktop.layout() == (key, sessions), 'the shell rewrote the stored layout')
-
-                # Reorder and hide while the shell is down, restart the Gateway on a
-                # fresh socket path (as every Desktop IPC start does), and relaunch.
-                edited = {
-                    'version': 1,
-                    'order': tabs('capabilities', 'overview', 'sessions'),
-                    'hidden': tabs('sessions'),
-                    'active': tabs('capabilities')[0],
-                }
-                desktop.write_layout(key, edited)
-                require(gateway.stop() == 0, 'Gateway did not stop cleanly between desktop runs')
-                gateway.start('gw-2.sock')
-                phases.append(desktop.run('restored', {'ALEPH_SHELL_PANEL_IPC': str(gateway.endpoint)}, settle=8))
-                require(desktop.layout() == (key, edited),
-                        'the layout key or the stored layout changed across a Gateway restart')
-                report['desktop'] = {
-                    'phases': phases,
-                    'layout_key': key,
-                    'default_layout': first,
-                    'restored_layout': edited,
-                }
-                print('PASS desktop: unavailable, connected, restored after relaunch and Gateway restart', flush=True)
+                if desktop is None:
+                    gateway.start()
+                    report['desktop'] = 'not run (web-only)'
+                else:
+                    key = desktop_phases(desktop, gateway, phases, report, args.nebula)
 
                 # Web: the same TSX source from /v1/panel/ in Chrome.
                 fixture = {
@@ -282,6 +282,7 @@ def receipt(args):
                     'certificate': (aleph / 'data/tls/cert.pem').read_text(encoding='utf-8'),
                     'ticket': pairing_ticket(args.server, root, env),
                     'out': str(out),
+                    'nebula': args.nebula,
                 }
                 fixture_path = root / 'web-fixture.json'
                 fixture_path.write_text(json.dumps(fixture), encoding='utf-8')
@@ -294,7 +295,8 @@ def receipt(args):
                 require(web.returncode == 0, 'web driver failed; see web.log')
                 web_report = json.loads((out / 'web-report.json').read_text(encoding='utf-8'))
                 web_key = next(step['key'] for step in web_report['steps'] if step['name'] == 'layout_edited')
-                report['subject_matches_desktop'] = web_key.rsplit(':', 1)[1] == key.rsplit(':', 1)[1]
+                if desktop is not None:
+                    report['subject_matches_desktop'] = web_key.rsplit(':', 1)[1] == key.rsplit(':', 1)[1]
                 print('PASS web: pairing, modules, layout restore, cookie loss', flush=True)
             finally:
                 if gateway.child is not None:
@@ -303,19 +305,69 @@ def receipt(args):
     print(json.dumps(report), flush=True)
 
 
+def desktop_phases(desktop, gateway, phases, report, nebula):
+    # Desktop without a Desktop IPC target: an honest unavailable state.
+    phases.append(desktop.run('unavailable', {}, settle=4))
+
+    gateway.start('gw-1.sock')
+    phases.append(desktop.run('connected', {'ALEPH_SHELL_PANEL_IPC': str(gateway.endpoint)}, settle=8))
+    key, first = desktop.layout()
+    shell_tabs = tabs('overview', 'sessions', 'chat', 'capabilities')
+    require([tab for tab in first['order'] if tab in shell_tabs] == shell_tabs,
+            'default desktop layout is not the shell module order')
+    if nebula:
+        require(tabs('memory-nebula')[0] in first['order'], 'Nebula capability was not published')
+        desktop.write_layout(key, {**first, 'active': tabs('memory-nebula')[0]})
+        phases.append(desktop.run('memory-nebula', {'ALEPH_SHELL_PANEL_IPC': str(gateway.endpoint)}, settle=8))
+
+    # Open the Sessions module through the stored layout (the edit UI
+    # itself is driven in Chrome and by `nsh test`).
+    sessions = {**first, 'active': tabs('sessions')[0]}
+    desktop.write_layout(key, sessions)
+    phases.append(desktop.run('sessions', {'ALEPH_SHELL_PANEL_IPC': str(gateway.endpoint)}, settle=8))
+    require(desktop.layout() == (key, sessions), 'the shell rewrote the stored layout')
+
+    # Reorder and hide while the shell is down, restart the Gateway on a
+    # fresh socket path (as every Desktop IPC start does), and relaunch.
+    edited = {
+        'version': 1,
+        'order': tabs('capabilities', 'overview', 'sessions', 'chat')
+        + [tab for tab in first['order'] if tab not in shell_tabs],
+        'hidden': tabs('sessions'),
+        'active': tabs('capabilities')[0],
+    }
+    desktop.write_layout(key, edited)
+    require(gateway.stop() == 0, 'Gateway did not stop cleanly between desktop runs')
+    gateway.start('gw-2.sock')
+    phases.append(desktop.run('restored', {'ALEPH_SHELL_PANEL_IPC': str(gateway.endpoint)}, settle=8))
+    require(desktop.layout() == (key, edited),
+            'the layout key or the stored layout changed across a Gateway restart')
+    report['desktop'] = {
+        'phases': phases,
+        'layout_key': key,
+        'default_layout': first,
+        'restored_layout': edited,
+    }
+    print('PASS desktop: unavailable, connected, restored after relaunch and Gateway restart', flush=True)
+    return key
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--server', type=Path, required=True)
-    parser.add_argument('--shell', type=Path, required=True, help='aleph-nsh-shell built with --features tsx-panel')
+    parser.add_argument('--shell', type=Path, help='aleph-nsh-shell built with --features tsx-panel')
+    parser.add_argument('--web-only', action='store_true', help='skip macOS desktop; run real Chromium Web v1')
+    parser.add_argument('--nebula', choices=('normal', 'dense', 'off'), help='exercise Memory Nebula with isolated files')
     parser.add_argument('--web', type=Path, required=True, help='interfaces/panel/out-web/Aleph Panel')
-    parser.add_argument('--winlist', type=Path, required=True, help='compiled winlist.swift')
+    parser.add_argument('--winlist', type=Path, help='compiled winlist.swift')
     parser.add_argument('--node-modules', type=Path, required=True, help='node_modules holding playwright')
     parser.add_argument('--out', type=Path, required=True, help='new directory for evidence')
     args = parser.parse_args()
-    if sys.platform != 'darwin':
-        parser.error('the S2 desktop surface is macOS-only')
+    if not args.web_only and (sys.platform != 'darwin' or not (args.shell and args.winlist)):
+        parser.error('desktop QA requires macOS, --shell and --winlist; use --web-only otherwise')
     for name in ('server', 'shell', 'web', 'winlist', 'node_modules'):
-        setattr(args, name, getattr(args, name).resolve(strict=True))
+        if path := getattr(args, name):
+            setattr(args, name, path.resolve(strict=True))
     receipt(args)
 
 

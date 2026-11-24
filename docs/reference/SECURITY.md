@@ -93,6 +93,15 @@ English: Probe each identity column before ALTER. A partially completed migratio
   via `SharedTokenManager::validate` — stamps `ConnectionState.caller_role`
   (`operator` / `guest`), and echoes `role` / `authorized` / `needs_token` so
   the Panel renders the wall or unlocks the full app.
+- **Protocol v1 entrances** (`server/connection/{local_ipc,web_v1}.rs`, both
+  opt-in) never see `connect`: the principal is bound before `system.hello`.
+  Desktop IPC admits a same-account peer (kernel credentials) as the
+  instance's live Desktop owner; Web v1 admits a short-lived host-only Cookie
+  minted by an explicit same-origin pairing exchange, re-checked against the
+  device/ticket owner on every request. Both stamp `ConnectionState`, accept
+  only `V1_METHODS` through the shared RPC executor (method visibility, rate,
+  idempotency) and receive pushed frames only through `admit_event` (below).
+  Details: [DESKTOP_SHELL.md §NSH Panel migration](DESKTOP_SHELL.md#nsh-panel-migration--panel-迁移).
 - **Channel tool gate** (`src/tools/scoped/dispatch.rs` +
   `method_authz::tool_requires_operator`): governs **channels only**. The
   inbound router stamps each channel run's `caller_role` from its
@@ -128,7 +137,7 @@ LAN-trust revert:
 
 - **Legacy `PolicyEngine`** — the
   per-tool `Owner` / `Guest` / `Anonymous` permission checker. Gone.
-- **`InvitationManager`**
+- **The former file-backed invitation manager**
   and the `aleph guests invite / list / revoke` CLI — guest invitation
   lifecycle. Gone.
 
@@ -270,7 +279,7 @@ It fires only on the tier's *own* `Deny`, never on a composed one, so
 `Plan` carve-outs plus every idempotent tool fall straight through to rung 1 —
 an operator's explicit `deny` on `ctx_search` still denies while planning.
 This deliberately **inverts** the tier's shipped behaviour, whose test
-`an_explicit_entry_still_outranks_the_plan_tier` asserted the opposite; the
+An earlier regression test asserted the opposite; the
 three replacement tests in `exec_tier.rs` pin the scope of the inversion.
 
 ⚠️ **`Full` means "the tier gates nothing", not "nothing is gated."** The
@@ -664,8 +673,7 @@ same action on an `unattended` service is refused. A reorder turns that
 
 ## Exec primitives (`src/exec/`)
 
-There is **no** monolithic `ExecKernel` with a single `execute()` pipeline, and
-no separate `RiskAnalyzer` / `Allowlist` subsystem — earlier revisions of this
+There is no single execution pipeline or separate risk-classifier subsystem — earlier revisions of this
 doc described a design that was never built. Shell-command safety is enforced by
 two real layers documented above:
 
@@ -1174,7 +1182,7 @@ Aleph names its session after the *profile*, so the common name is literally
 logged-in browser driven by another instance**. That is a collision *between
 principals the local-user boundary was never meant to merge*, so it is a real
 gap rather than a consequence of the boundary above. Mechanism, the measured
-evidence, the proposed `instance_tag` fix and its two-server falsifier are in
+evidence, the proposal to tag the browser instance and its two-server validation are in
 [FEATURE_LOCATOR.md](FEATURE_LOCATOR.md) §3.12 第七轮 ⑤.
 
 ### Browser live viewer grants (2026-10-07 checkpoint)
@@ -2457,9 +2465,12 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
   role-based and default-allow for ordinary session/run events, so without
   this every connected member would receive every OTHER user's live run
   stream. `EventVisibilityIndex` is the last `&&` term of the
-  `should_forward` chain in `server/connection/mod.rs::handle_connection`
+  admission chain in `server/connection/event_admission.rs::admit_event`
   (`wall_admits` && `EventScopeGuard::can_receive` && `audience_allows` &&
-  `should_receive` && `event_admits_for`) — it classifies each delivered frame's
+  `should_receive` && `event_admits_for`), the one function legacy `/ws`
+  (`handle_connection`) and both Protocol v1 endpoints (Desktop IPC, Web v1,
+  after `live_events` is negotiated) call per frame; v1 then only narrows to
+  `V1_EVENT_TOPICS` — it classifies each delivered frame's
   identity (`session_identity_of`: by session key directly, by `run_id`
   through a seeded run→session cache, by `team_id` for the `team.<id>.*`
   plane, or `Global` for org-level infrastructure) and then resolves that
@@ -3060,7 +3071,7 @@ attribution, and a bound workspace as the room's default cwd.
   names the working verb is the only kind that is actionable.
 
   **The comparison that produced this** (2026-08-09, vs rowboat's
-  `DeleteProjectUseCase`): rowboat answers "who can still reach this after the
+  its project-deletion use case): rowboat answers "who can still reach this after the
   row is gone" with an explicit cascade over ten repositories — api keys, data
   sources, Qdrant vectors, conversations, jobs, two kinds of job rule, members,
   the project. Aleph adopts the QUESTION and rejects the shape: a cascade would
@@ -3936,7 +3947,7 @@ from the pre-revert build:
 
 ---
 
-## Gap analysis: exec tiers vs codex / hermes-agent / pi {#exec-tier-gap-analysis}
+## Historical comparison: exec tiers vs codex / hermes-agent / pi {#exec-tier-gap-analysis}
 
 > Same convention as the **openclaw 对照映射表** in [CLUSTER.md](CLUSTER.md):
 > per-dimension verdicts, anchored to real code. **Read this before re-comparing
@@ -4062,10 +4073,7 @@ from the pre-revert build:
   transport on the RPC surface). `file_ops` — the one destructive multiplexer —
   is now denied outright there, but the general gap remains for any future
   argument-gated tool.
-- The `FullRead` / `FullWrite` / `ProxyOnly` sandbox-policy variants and the
-  managed per-host proxy subsystem remain dead (no producer sets them); pruning
-  them is deferred (cross-platform driver match-arm surgery — track with the
-  network-proxy decision).
+- Only the network modes implemented by the driver are available; see [Sandbox network filtering](SANDBOX.md#network-filtering). The former proxy-only policy is not a config option.
 - No user-editable floor under `Full` in hermes' sense (an `approvals.deny` glob
   that survives yolo). `[policies.tool_permissions]` `deny` overrides already
   cover ~80% of it, since an explicit entry beats the tier.

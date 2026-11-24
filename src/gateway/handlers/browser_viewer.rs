@@ -364,7 +364,10 @@ mod tests {
         let frames_only: aleph_protocol::browser_live::IssueViewerGrantResponse =
             serde_json::from_value(frames_only.result.unwrap()).unwrap();
         assert_eq!(
-            f.grants.grant_info(&frames_only.grant_id).unwrap().permissions,
+            f.grants
+                .grant_info(&frames_only.grant_id)
+                .unwrap()
+                .permissions,
             [aleph_protocol::browser_live::ViewerPermission::Frames]
         );
         let revoke = json!({"grant_id":issued.grant_id});

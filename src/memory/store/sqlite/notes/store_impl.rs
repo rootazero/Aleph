@@ -862,7 +862,7 @@ impl NoteStore for SqliteMemoryBackend {
                  (SELECT COUNT(*) FROM notes_links WHERE from_note = n.path AND agent_id = n.agent_id) AS link_count \
                  FROM notes_index n \
                  WHERE n.agent_id = ?1 \
-                 ORDER BY link_count DESC, n.updated_at DESC \
+                 ORDER BY link_count DESC, n.updated_at DESC, n.path ASC \
                  LIMIT ?2",
             )
             .map_err(|e| AlephError::config(format!("get_graph_data nodes prepare: {e}")))?;

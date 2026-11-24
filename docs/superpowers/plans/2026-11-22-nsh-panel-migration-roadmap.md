@@ -15,7 +15,7 @@
 | [S1-B Desktop](2026-11-23-nsh-panel-s1b-desktop-ipc.md) | 本地 UDS/Named Pipe endpoint，宿主通过 Client 使用它 | macOS/Linux UDS、Windows Named Pipe 真机验证；用户身份、帧边界、并发/关闭；不回退 TCP/WS。当前进度见 [S1-B 回执](../runs/2026-11-23-nsh-panel-s1b-desktop-ipc-verification.md)，平台门槛未关闭 |
 | [S1-C Web](2026-11-23-nsh-panel-s1c-web-v1.md) | 原生 TLS 上的同源显式 HTTPS 凭据交换与只读 `/v1/ws` | [S1-C 回执](../runs/2026-11-23-nsh-panel-s1c-web-v1-verification.md)：Chrome 以原成员主体完成 hello/只读 RPC；缺凭据、跨端口、撤销和旧 `/ws` 在真实 TLS 挂载上验证，过期经绑定测试验证。未切换 Panel |
 | [S2 可定制壳](2026-11-23-nsh-panel-s2-customizable-shell.md) | 共用 TSX 壳、稳定 ID 布局、已有贡献投影及挂载清理 | 两端真实渲染同一源码；显示/隐藏/排序/重启恢复；取消异步加载后资源归零，旧 SDK 拒绝。当前进度见 [S2 回执](../runs/2026-11-23-nsh-panel-s2-shell-receipt.md)：macOS 桌面与 Chrome 真机通过，仅显式启用；生产面重复挂载的资源归零只由探针证明，Linux/Windows 未做 |
-| S3 会话纵切 | 会话/聊天/取消，真实 Native Component 与 Web fallback，替换同一能力的呈现 | 真实 Core 结果与后端身份；中文/日文 IME、流式、长列表；早期重取快照可用但不算 replay |
+| [S3 会话纵切](2026-11-24-nsh-panel-s3-chat-slice.md) | 会话/聊天/取消，真实 Native Component 与 Web fallback，替换同一能力的呈现 | 真实 Core 结果与后端身份；中文/日文 IME、流式、长列表；早期重取快照可用但不算 replay。当前进度见 [S3 回执](../runs/2026-11-24-nsh-panel-s3-chat-receipt.md)：macOS 桌面（双拼输入法下首个回车只上屏）与 Chrome 真机完成发送、流式、Stop（仅 Web）、Gateway 重启后重新配对取回历史；v1 `live_events` 推送无 replay。日文 IME、Chrome 内真实输入法、长列表、Linux/Windows 未做 |
 | S4 观察恢复 | 已授权会话/任务的一致快照、持久补读与 live 接续 | Desktop 重启 / Web 重连、并发写入、去重、有界队列和历史耗尽，证明不重做业务效果 |
 | S5 迁移剩余页面 | 按台账逐页移植和退场；Generated UI 单独探针 | 每个页面真实挂载与效果到达；待移植模块及 Generated UI 未通过端保持可用旧路径或明确 unavailable |
 | S6 收口 | 更新参考、测试回执、本地提交与已证明无消费者的清理 | S4 通过、页面退场逐项批准；默认切换和移除 Tauri 不由本计划自动触发 |

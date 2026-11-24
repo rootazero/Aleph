@@ -1820,6 +1820,7 @@ mod tests {
                 context.clone(),
             ))
         });
+        let bus = gateway.event_bus.clone();
         let app = gateway.build_router();
         let (stop, stopped) = tokio::sync::oneshot::channel();
         let server = tokio::spawn(async move {
@@ -1885,6 +1886,24 @@ mod tests {
                         }
                         other => panic!("unexpected frame: {other:?}"),
                     }
+                }
+            }
+            // The event arm delivers through the shared admission: a bare
+            // TopicEvent published on the bus arrives wrapped as `event`.
+            let published = json!({"topic": "characterization.global", "data": {"n": 1}});
+            bus.publish(published.to_string());
+            loop {
+                match bound.next().await.unwrap().unwrap() {
+                    Message::Ping(data) => bound.send(Message::Pong(data)).await.unwrap(),
+                    Message::Text(text) => {
+                        let frame: Value = serde_json::from_str(&text).unwrap();
+                        if frame["method"] != "event" {
+                            continue;
+                        }
+                        assert_eq!(frame["params"], published);
+                        break;
+                    }
+                    other => panic!("unexpected frame: {other:?}"),
                 }
             }
             bound.close(None).await.unwrap();

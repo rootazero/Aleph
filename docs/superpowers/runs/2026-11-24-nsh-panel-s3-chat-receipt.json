@@ -1,0 +1,122 @@
+{
+  "receipt": "nsh-panel-s3-chat",
+  "date": "2026-11-24",
+  "branch": "nsh-panel-s3-chat",
+  "tested_tree": "c56b01837",
+  "main": "b2c00e624",
+  "platform": {
+    "os": "macOS 27.2.1",
+    "arch": "arm64",
+    "rust": "1.99.1",
+    "node": "26.13.0",
+    "chromium": "145.0.7632.6",
+    "nsh": "0.6.0 (5541637)",
+    "input_source": "com.apple.inputmethod.SCIM.Shuangpin"
+  },
+  "interfaces_panel_tree": "e283127929393949efd99635fd0f366eb2624c64",
+  "bundle_js_sha256": "d2d94efbd4b3c2192255179ff56215e46726dd49be971f4b2fbfa1338f6d9c3a",
+  "capabilities_json_sha256": "facfd1b500b68e2863a8f35104abafcebf5e32dbca44b36a161dd42a04c4c3f2",
+  "web_index_sha256": "dd60b8d456bda7582e6a7121f4185dee284ea88c6cc8a4be13174c389c9922cb",
+  "server_sha256": "7abfa66d13e230a4565332f295eeee74b7149fab1cbbfc6dccf34ba08f91389f",
+  "shell_tsx_sha256": "742ba37cb94d211e299df203f4072a6ceb68966a803c0244465894dad2c4fb2e",
+  "shell_tsx_debug_bytes": 136025904,
+  "desktop": {
+    "phases": [
+      {
+        "phase": "connected",
+        "window": {
+          "width": 1180,
+          "height": 832,
+          "name": "Aleph"
+        },
+        "threads": 13,
+        "screenshot": "desktop-connected.png"
+      },
+      {
+        "phase": "chat-sent",
+        "window": {
+          "width": 1180,
+          "height": 832,
+          "name": "Aleph"
+        },
+        "threads": 16,
+        "screenshot": "desktop-chat-sent.png"
+      }
+    ],
+    "layout_key": "aleph.panel.layout.v1:desktop-ipc:8c2d20e74df3150f9eac32539083d9b6"
+  },
+  "web_steps": [
+    {
+      "name": "paired_live_events_granted",
+      "features": [
+        "live_events"
+      ],
+      "subject": "8c2d20e74df3150f9eac32539083d9b6"
+    },
+    {
+      "name": "cross_surface_history",
+      "row": "Open chat S3desktophello",
+      "desktop_message_copies": 1
+    },
+    {
+      "name": "ime_return_does_not_send",
+      "committed": "你好\n"
+    },
+    {
+      "name": "send_streams_and_completes",
+      "topics": {
+        "stream.run_accepted": 2,
+        "stream.response_chunk": 4,
+        "stream.run_complete": 1
+      },
+      "methods_after_send": {
+        "chat.send": 1,
+        "chat.history": 1
+      },
+      "idempotency_key_present": true
+    },
+    {
+      "name": "stop_probe",
+      "outcome": "stop_pressed",
+      "abort_sent": true,
+      "topics": {
+        "stream.run_accepted": 2,
+        "stream.run_error": 1
+      }
+    },
+    {
+      "name": "gateway_restart_repair_restores_history",
+      "row": "Open chat S3desktophello"
+    }
+  ],
+  "web_console": [
+    "error: WebSocket connection to 'wss://127.0.0.1:52474/v1/ws' failed: HTTP Authentication failed; no valid credentials available",
+    "error: WebSocket connection to 'wss://127.0.0.1:52474/v1/ws' failed: HTTP Authentication failed; no valid credentials available"
+  ],
+  "gateway_exit": 0,
+  "device_fix": {
+    "commit": "c56b01837",
+    "symptom": "crypto is not defined",
+    "decision": "Panel stops naming the crypto global; Math.random v4 idempotency key; nsh-platform-macos/crypto rejected (+16 crates)"
+  },
+  "automated": {
+    "panel_nsh_test": "22 passed",
+    "nsh_check": "clean",
+    "host_test_mjs": "11 passed",
+    "aleph_protocol": "439 passed",
+    "aleph_client": "69 passed",
+    "aleph_nsh_shell_tsx_panel": "35 passed",
+    "gateway_lib_subset": "343 passed, 1 ignored",
+    "s2_replay": "pass"
+  },
+  "not_verified": [
+    "linux",
+    "windows",
+    "real IME in Chrome",
+    "desktop Stop",
+    "connection.warning/stale on device",
+    "real providers",
+    "release size",
+    "replay (S4)"
+  ]
+}
