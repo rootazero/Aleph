@@ -346,6 +346,10 @@ impl Recovery {
             return;
         }
         self.effect = None;
+        // An old gesture may settle after the replacement epoch's list. Its
+        // payload is stale, but its possible server-side mutation is not.
+        self.mutation_revision = self.mutation_revision.wrapping_add(1);
+        self.list_dirty = true;
         if !self.connection.connected || request.fence.epoch != self.connection.epoch {
             return;
         }
@@ -369,8 +373,6 @@ impl Recovery {
                 }
             })
         };
-        self.mutation_revision = self.mutation_revision.wrapping_add(1);
-        self.list_dirty = true;
         if let Err(error) = result {
             if request.fence == self.fence() {
                 self.error = Some(error);
@@ -646,6 +648,74 @@ mod tests {
         assert_eq!(c.screen.as_ref().unwrap().row_text(0), "other paint");
         assert_eq!(c.next(0).unwrap().kind, RequestKind::List);
     }
+    #[test]
+    fn old_epoch_effect_settlement_refreshes_once_without_adopting_its_result() {
+        for close in [false, true] {
+            for failure in [false, true] {
+                let mut c = ready();
+                let effect = c.gesture(close.then(|| "s".to_string())).unwrap();
+                c.connect(TerminalConnection {
+                    connected: true,
+                    epoch: 2,
+                });
+                listed(&mut c);
+                complete(&mut c, snapshot(20, "current epoch"), 0);
+                let tabs = c.tabs.clone();
+                let paint_revision = c.paint_revision;
+                let result = if failure {
+                    Err("old effect outcome unknown".to_string())
+                } else if close {
+                    Ok(json!({}))
+                } else {
+                    Ok(json!({"session_id":"old-spawn","shell":"sh","seq":0,"rows":24,"cols":80}))
+                };
+                c.complete_effect(effect.clone(), result.clone());
+                assert!(!c.effect_pending());
+                assert_eq!(c.tabs, tabs);
+                assert_eq!(c.paint_revision, paint_revision);
+                assert_eq!(c.screen.as_ref().unwrap().row_text(0), "current epoch");
+                assert!(c.ready);
+                assert!(c.error.is_none());
+                let refresh = c
+                    .next(0)
+                    .expect("old effect may have settled after replacement list");
+                assert_eq!(refresh.kind, RequestKind::List);
+                c.complete_effect(effect, result);
+                c.complete(refresh, Ok(json!({"sessions":[{"session_id":"s","shell":"sh","created_at":0,"closed":false}]})), 0);
+                assert!(
+                    c.next(10_000).is_none(),
+                    "refresh once, never replay an effect"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn old_epoch_effect_invalidates_a_replacement_list_still_in_flight() {
+        for failure in [false, true] {
+            let mut c = ready();
+            let effect = c.gesture(None).unwrap();
+            c.connect(TerminalConnection {
+                connected: true,
+                epoch: 2,
+            });
+            complete(&mut c, json!(null), 0);
+            let list = c.next(0).unwrap();
+            c.complete_effect(
+                effect,
+                if failure {
+                    Err("ambiguous".into())
+                } else {
+                    Ok(json!({"session_id":"old-spawn","shell":"sh","seq":0,"rows":24,"cols":80}))
+                },
+            );
+            c.complete(list, Ok(json!({"sessions":[]})), 0);
+            assert_eq!(c.selected_id(), Some("s"));
+            assert!(c.error.is_none());
+            assert_eq!(c.next(0).unwrap().kind, RequestKind::List);
+        }
+    }
+
     #[test]
     fn failed_live_list_requires_attach_before_reenabling_input() {
         let mut c = ready();

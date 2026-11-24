@@ -143,7 +143,64 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
                 }
                 last_connection = connection;
             }
-            for (request, result) in inbox.borrow_mut().drain(..) {
+            let (subscriptions, replies): (Vec<_>, Vec<_>) = inbox
+                .borrow_mut()
+                .drain(..)
+                .partition(|(request, _)| request.kind == crate::recovery::RequestKind::Subscribe);
+            // Coverage must be accepted before draining its streams. All queued
+            // frames/loss must then reach the active stage before an attach reply
+            // can commit, including when the response is the only wake-up.
+            for (request, result) in subscriptions {
+                let result = result.map_err(|message| read_error(&services.text, &message));
+                controller.update_value(|c| c.complete(request, result, now));
+            }
+            let mut loss = None;
+            let mut events = Vec::new();
+            for stream in event_streams.borrow().iter() {
+                match (stream.drain)() {
+                    Ok(batch) => events.extend(batch),
+                    Err(message) => {
+                        loss = Some(message);
+                        break;
+                    }
+                }
+            }
+            if let Some(message) = loss {
+                controller.update_value(|c| c.loss(now, message));
+                for stream in event_streams.borrow_mut().drain(..) {
+                    (stream.dispose)();
+                }
+            } else {
+                for event in events {
+                    let result = controller.try_update_value(|c| {
+                        if event.topic == PTY_EXIT_TOPIC {
+                            if let Some(sid) = event
+                                .data
+                                .get("session_id")
+                                .and_then(serde_json::Value::as_str)
+                            {
+                                c.exited(sid);
+                                return Ok(());
+                            }
+                        } else if event.topic == PTY_SCREEN_TOPIC {
+                            if let Ok(frame) = serde_json::from_value::<PtyScreenFrame>(event.data)
+                            {
+                                c.frame(frame, now);
+                                return Ok(());
+                            }
+                        }
+                        Err("Terminal event could not be decoded".to_string())
+                    });
+                    if let Some(Err(message)) = result {
+                        controller.update_value(|c| c.loss(now, message));
+                        for stream in event_streams.borrow_mut().drain(..) {
+                            (stream.dispose)();
+                        }
+                        break;
+                    }
+                }
+            }
+            for (request, result) in replies {
                 let effect = matches!(
                     request.kind,
                     crate::recovery::RequestKind::Spawn | crate::recovery::RequestKind::Close
@@ -193,52 +250,6 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
             } else {
                 None
             };
-            let mut loss = None;
-            let mut events = Vec::new();
-            for stream in event_streams.borrow().iter() {
-                match (stream.drain)() {
-                    Ok(batch) => events.extend(batch),
-                    Err(message) => {
-                        loss = Some(message);
-                        break;
-                    }
-                }
-            }
-            if let Some(message) = loss {
-                controller.update_value(|c| c.loss(now, message));
-                for stream in event_streams.borrow_mut().drain(..) {
-                    (stream.dispose)();
-                }
-            } else {
-                for event in events {
-                    let result = controller.try_update_value(|c| {
-                        if event.topic == PTY_EXIT_TOPIC {
-                            if let Some(sid) = event
-                                .data
-                                .get("session_id")
-                                .and_then(serde_json::Value::as_str)
-                            {
-                                c.exited(sid);
-                                return Ok(());
-                            }
-                        } else if event.topic == PTY_SCREEN_TOPIC {
-                            if let Ok(frame) = serde_json::from_value::<PtyScreenFrame>(event.data)
-                            {
-                                c.frame(frame, now);
-                                return Ok(());
-                            }
-                        }
-                        Err("Terminal event could not be decoded".to_string())
-                    });
-                    if let Some(Err(message)) = result {
-                        controller.update_value(|c| c.loss(now, message));
-                        for stream in event_streams.borrow_mut().drain(..) {
-                            (stream.dispose)();
-                        }
-                        break;
-                    }
-                }
-            }
             let request = controller.try_update_value(|c| c.next(now)).flatten();
             for request in effect.into_iter().chain(request) {
                 let services = Rc::clone(&services);
@@ -401,16 +412,24 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
         let size_px = font_size_px.get_value();
         #[cfg(not(test))]
         request_animation_frame(move || {
-            let Some((_canvas, ctx)) = canvas_ctx(canvas_ref) else {
+            let Some((canvas, ctx)) = canvas_ctx(canvas_ref) else {
                 return;
             };
-            let m = render::measure(&ctx, &family, size_px);
-            if !m.is_usable() {
-                return;
-            }
             controller.with_value(|c| {
+                let theme = render::Theme::dark();
                 if let Some(s) = &c.screen {
-                    render::paint(&ctx, s, m, &render::Theme::dark());
+                    let m = render::measure(&ctx, &family, size_px);
+                    render::paint(&ctx, s, m, &theme);
+                } else {
+                    // Authoritative empty/last close must erase the old paint
+                    // even when the backing-store geometry has not changed.
+                    ctx.set_fill_style_str(theme.bg);
+                    ctx.fill_rect(
+                        0.0,
+                        0.0,
+                        f64::from(canvas.width()),
+                        f64::from(canvas.height()),
+                    );
                 }
             });
         });
@@ -841,6 +860,86 @@ mod tests {
         assert!(futures::executor::block_on(open_terminal_streams(services, 1, stopped)).is_err());
         assert_eq!(calls.get(), 1);
         assert_eq!(disposed.get(), 1);
+    }
+
+    #[test]
+    fn mounted_attach_drains_queued_gap_before_committing_reply() {
+        let _ = any_spawner::Executor::init_futures_executor();
+        let owner = Owner::new();
+        let queue = Rc::new(RefCell::new(Vec::new()));
+        let attach_calls = Rc::new(Cell::new(0));
+        let (reply, response) = futures::channel::oneshot::channel();
+        let response = Rc::new(RefCell::new(Some(response)));
+        let invoke = {
+            let attach_calls = Rc::clone(&attach_calls);
+            Rc::new(move |method: String, _params| {
+                let response = Rc::clone(&response);
+                let attach_calls = Rc::clone(&attach_calls);
+                async move {
+                    match method.as_str() {
+                        "pty.list" => Ok(json!({"sessions":[{"session_id":"s","shell":"sh","created_at":0,"closed":false}]})),
+                        "pty.attach" => {
+                            attach_calls.set(attach_calls.get() + 1);
+                            let response = response.borrow_mut().take();
+                            if let Some(response) = response {
+                                Ok(response.await.unwrap())
+                            } else {
+                                futures::future::pending().await
+                            }
+                        }
+                        _ => Ok(json!({})),
+                    }
+                }.boxed_local()
+            })
+        };
+        let subscribe = {
+            let queue = Rc::clone(&queue);
+            Rc::new(move |topic: String| {
+                let queue = Rc::clone(&queue);
+                async move {
+                    Ok(TerminalEventStream::new(
+                        1,
+                        Rc::new(move || {
+                            Ok(if topic == PTY_SCREEN_TOPIC {
+                                queue.borrow_mut().drain(..).collect()
+                            } else {
+                                Vec::new()
+                            })
+                        }),
+                        Rc::new(|| {}),
+                    ))
+                }
+                .boxed_local()
+            })
+        };
+        owner.with(|| {
+            let state = crate::terminal_state(TerminalServices {
+                invoke,
+                subscribe,
+                connection: Signal::derive(|| TerminalConnection {
+                    connected: true,
+                    epoch: 1,
+                }),
+                text: test_text(),
+            });
+            let _mounted = TerminalContent(TerminalContentProps { state }).into_view();
+        });
+        any_spawner::Executor::poll_local();
+        assert_eq!(attach_calls.get(), 1);
+        for seq in [12, 14] {
+            queue.borrow_mut().push(crate::host::TerminalEvent {
+                topic: PTY_SCREEN_TOPIC.to_string(),
+                data: json!({"session_id":"s","seq":seq,"rows":24,"cols":80,"patch":{"rows":[{"row":0,"runs":[{"text":"must not commit"}]}]}}),
+            });
+        }
+        reply.send(json!({"seq":11,"rows":24,"cols":80,"patch":{"rows":[{"row":0,"runs":[{"text":"snapshot"}]}]},"scrollback_len":0})).unwrap();
+        any_spawner::Executor::poll_local();
+        assert_eq!(
+            attach_calls.get(),
+            1,
+            "a queued replay gap must back off, not commit then immediately attach again"
+        );
+        owner.cleanup();
     }
 
     #[test]
