@@ -32,9 +32,9 @@ use cards::{CardListShell, NoteCard, RawCard};
 use corrections::CorrectionQueue;
 use curated::CuratedPanel;
 use data::{
-    bucket_counts, facet_slice, filter_notes, locate_note, notes_to_markdown, page_slice,
-    raws_to_markdown, stage_raw_export, Loadable, MemoryFacet, NoteExport, RawExport, EXPORT_MAX,
-    NOTE_WINDOW, PAGE_SIZE,
+    bucket_counts, facet_slice, filter_notes, locate_note, locate_note_where, notes_to_markdown,
+    page_slice, raws_to_markdown, stage_raw_export, Loadable, MemoryFacet, NoteExport, RawExport,
+    EXPORT_MAX, NOTE_WINDOW, PAGE_SIZE,
 };
 use drawer::{DetailDrawer, DrawerTarget};
 use facets::FacetBar;
@@ -90,7 +90,7 @@ pub fn Memory() -> impl IntoView {
     let search_live = RwSignal::new(false);
     let selected = RwSignal::new(AgentSelection::default());
     let drawer_target = RwSignal::new(None::<DrawerTarget>);
-    let highlight_id = RwSignal::new(None::<String>);
+    let highlight_id = RwSignal::new(None::<aleph_protocol::memory_graph::NoteAddress>);
     let exporting = RwSignal::new(None::<(usize, usize)>);
     let toast_slot = RwSignal::new(None::<ToastMsg>);
     let refresh_nonce = RwSignal::new(0u32);
@@ -320,8 +320,11 @@ pub fn Memory() -> impl IntoView {
             Some((f, pg)) => {
                 facet.set(f);
                 page.set(pg);
-                highlight_id.set(Some(path.clone()));
                 if let Some(found) = window.facts.iter().find(|x| x.path == path) {
+                    highlight_id.set(Some(aleph_protocol::memory_graph::NoteAddress {
+                        agent_id: found.agent_id.clone(),
+                        node_id: found.path.clone(),
+                    }));
                     drawer_target.set(Some(DrawerTarget::Note {
                         agent: found.agent_id.clone(),
                         fact: found.clone(),
@@ -345,36 +348,31 @@ pub fn Memory() -> impl IntoView {
 
     // Reverse link from the galaxy's node detail panel.
     Effect::new(move || {
-        let Some(path) = mem.highlight_note_id.get() else {
+        let Some(address) = mem.highlight_note.get() else {
             return;
         };
         let Some(window) = notes.get().as_ready().cloned() else {
             return;
         };
-        // Same split as the `?note=` handler above: the row knows its partition,
-        // a bare path does not. The galaxy only ever draws
-        // `memory_scope::primary_read_partition`, so a node that misses the
-        // window is in that one — but the Panel is not told which id that is,
-        // and inventing the suffix client-side would be a second, drifting copy
-        // of a derivation the server owns.
-        let agent = mem.agent_id.get_untracked();
-        if let Some((f, pg)) = locate_note(&window.facts, &path, page_size.get()) {
+        let matches = |fact: &CompressedFact| {
+            fact.path == address.node_id && fact.agent_id == address.agent_id
+        };
+        if let Some((f, pg)) = locate_note_where(&window.facts, page_size.get(), matches) {
             facet.set(f);
             page.set(pg);
-            highlight_id.set(Some(path.clone()));
-            if let Some(found) = window.facts.iter().find(|x| x.path == path) {
-                drawer_target.set(Some(DrawerTarget::Note {
-                    agent: found.agent_id.clone(),
-                    fact: found.clone(),
-                }));
-            }
-        } else {
-            drawer_target.set(Some(DrawerTarget::Note {
-                agent: agent.clone(),
-                fact: CompressedFact::stub_from_path(&agent, &path),
-            }));
+            highlight_id.set(Some(address.clone()));
         }
-        mem.highlight_note_id.set(None);
+        let fact = window
+            .facts
+            .iter()
+            .find(|fact| matches(fact))
+            .cloned()
+            .unwrap_or_else(|| CompressedFact::stub_from_path(&address.agent_id, &address.node_id));
+        drawer_target.set(Some(DrawerTarget::Note {
+            agent: address.agent_id,
+            fact,
+        }));
+        mem.highlight_note.set(None);
     });
 
     // ── Derived rows ────────────────────────────────────────────────────────
@@ -711,15 +709,18 @@ pub fn Memory() -> impl IntoView {
                                 let owner_open = fact.agent_id.clone();
                                 let p_sel = path.clone();
                                 let p_tog = path.clone();
-                                let p_hl = path.clone();
-                                let p_loc = path.clone();
+                                let p_loc = aleph_protocol::memory_graph::NoteAddress {
+                                    agent_id: fact.agent_id.clone(),
+                                    node_id: path.clone(),
+                                };
+                                let p_hl = p_loc.clone();
                                 let p_link = path.clone();
                                 let fact_open = fact.clone();
                                 view! {
                                     <NoteCard
                                         fact=fact
                                         checked=Signal::derive(move || selected.get().contains(&mem.agent_id.get(), &owner_sel, &p_sel))
-                                        highlighted=Signal::derive(move || highlight_id.get().as_deref() == Some(p_hl.as_str()))
+                                        highlighted=Signal::derive(move || highlight_id.get().as_ref() == Some(&p_hl))
                                         on_toggle=move || selected.update(|s| s.toggle(&mem.agent_id.get_untracked(), RowRef::new(&owner_tog, &p_tog)))
                                         on_open=move || drawer_target.set(Some(DrawerTarget::Note {
                                             // The row's own partition, latched at

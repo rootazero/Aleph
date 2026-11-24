@@ -263,7 +263,7 @@ fn NoteDetail(
                     Ok(()) => {
                         target.set(None);
                         is_saving.set(false);
-                        mem.highlight_note_id.set(None);
+                        mem.highlight_note.set(None);
                         push_toast(
                             toast_slot,
                             t_string!(i18n, memory.toast_deleted).to_string(),

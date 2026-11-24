@@ -3,6 +3,7 @@
 //! both read and mutate it.
 
 use crate::api::agents::AgentSummary;
+use aleph_protocol::memory_graph::NoteAddress;
 use leptos::prelude::*;
 use std::collections::VecDeque;
 
@@ -50,11 +51,11 @@ pub struct MemoryState {
     pub agents: RwSignal<Vec<AgentSummary>>,
     pub search_query: RwSignal<String>,
     pub fold_threshold: RwSignal<usize>,
-    pub selected_node: RwSignal<Option<String>>,
-    pub recent_visited: RwSignal<VecDeque<String>>,
+    pub selected_node: RwSignal<Option<NoteAddress>>,
+    pub recent_visited: RwSignal<VecDeque<NoteAddress>>,
     pub sidebar_collapsed: RwSignal<bool>,
     pub memory_view: RwSignal<MemoryView>,
-    pub highlight_note_id: RwSignal<Option<String>>,
+    pub highlight_note: RwSignal<Option<NoteAddress>>,
     pub search_nonce: RwSignal<u32>,
 }
 
@@ -88,7 +89,7 @@ impl MemoryState {
             recent_visited: RwSignal::new(VecDeque::with_capacity(RECENT_VISITED_CAPACITY)),
             sidebar_collapsed,
             memory_view: RwSignal::new(MemoryView::Graph),
-            highlight_note_id: RwSignal::new(None),
+            highlight_note: RwSignal::new(None),
             search_nonce: RwSignal::new(0),
         }
     }
@@ -96,7 +97,7 @@ impl MemoryState {
     /// Push `id` to the front of `recent_visited`, dropping oldest beyond capacity 8.
     /// De-duplicates: existing copies are removed first so the most-recent entry
     /// always sits at the front.
-    pub fn push_recent(&self, id: String) {
+    pub fn push_recent(&self, id: NoteAddress) {
         self.recent_visited.update(|q| {
             push_recent_into(q, id);
         });
@@ -115,7 +116,7 @@ impl Default for MemoryState {
 // by both production code and the unit tests below.
 // ---------------------------------------------------------------------------
 
-pub(crate) fn push_recent_into(q: &mut VecDeque<String>, id: String) {
+pub(crate) fn push_recent_into<T: PartialEq>(q: &mut VecDeque<T>, id: T) {
     q.retain(|x| x != &id);
     q.push_front(id);
     while q.len() > RECENT_VISITED_CAPACITY {
@@ -126,6 +127,22 @@ pub(crate) fn push_recent_into(q: &mut VecDeque<String>, id: String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recent_notes_with_the_same_path_keep_both_partitions() {
+        let owned = NoteAddress {
+            node_id: "wiki/n".into(),
+            agent_id: "owned".into(),
+        };
+        let shared = NoteAddress {
+            node_id: "wiki/n".into(),
+            agent_id: "org".into(),
+        };
+        let mut recent = VecDeque::new();
+        push_recent_into(&mut recent, owned.clone());
+        push_recent_into(&mut recent, shared.clone());
+        assert_eq!(recent, VecDeque::from([shared, owned]));
+    }
 
     #[test]
     fn push_recent_caps_at_8_and_dedupes() {
