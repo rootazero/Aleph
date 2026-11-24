@@ -194,10 +194,11 @@ pub(super) fn apply_event(tabs: &mut TabTable, ev: &CdpEvent) -> bool {
         // NOTHING loader-based can see a click-driven navigation — not this
         // arm, not `PageState::build`'s reset, not `navigate()`'s boundary.
         // Re-measured 2026-11-25 on v0.2.7 (`qa/browser_dual` caps stage,
-        // premise 3): the stale loader did not reproduce — the frame tree held
-        // the new loader, and the main-frame event either carried it or did not
-        // arrive. That is one reading on one build, and v0.2.2 can still be
-        // pinned, so the other layer below stays load-bearing.
+        // premise 3, and the `click` stage): the stale loader did not reproduce
+        // — the frame tree held the new loader and the main-frame event carried
+        // it, though often on a session Aleph never attached, which is why
+        // `tab_for_event` routes this one event by frame id. v0.2.2 can still
+        // be pinned, so the other layer below stays load-bearing.
         //
         // That case is covered by the OTHER layer, and this comment names it so
         // the next reader does not conclude the document layer handles it:
@@ -228,7 +229,8 @@ pub(super) fn apply_event(tabs: &mut TabTable, ev: &CdpEvent) -> bool {
         // Chrome 153.0.8010.48: a script-initiated navigation on either engine,
         // and every navigation on Chrome including the click-driven one.
         // `parentId` absent and a fresh `loaderId` in all of those. The one
-        // measured hole is obscura's click-driven route, above.
+        // measured hole is obscura v0.2.2's click-driven route, above; on
+        // v0.2.7 (2026-11-25) the click-driven route fires here too.
         "Page.frameNavigated" => {
             let frame = &ev.params["frame"];
             if frame.get("parentId").is_some() {

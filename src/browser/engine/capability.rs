@@ -187,6 +187,15 @@ static OBSCURA: EngineCapabilities = EngineCapabilities {
     // `Unsupported` is the fail-closed answer, so the VALUE is right under
     // both witnesses. What is being recorded here is that it is right on one
     // of them, not two.
+    //
+    //  3. **Measured 2026-11-25 on v0.2.7 (arm64 macOS), by effect** —
+    //     `qa/browser_dual`'s caps stage opens alert / confirm / prompt from
+    //     the page: no `Page.javascriptDialogOpening` within 2 s,
+    //     `handleJavaScriptDialog` answers `-32601 No dialog is showing`, and
+    //     the page reads confirm → false, prompt → null (answered without
+    //     asking). Witness 1 is stale on this build — both CDP names now exist,
+    //     but only for `beforeunload` on `Page.close` — and this witness
+    //     replaces it: the value now rests on a measured absence.
     js_dialogs: Cap::Unsupported,
     // **Supported on a MEASUREMENT (2026-11-25, pinned v0.2.7, arm64 macOS)
     // — `qa/browser_dual`'s caps stage, by effect.** `browser_drag` does NOT
@@ -223,7 +232,8 @@ static OBSCURA: EngineCapabilities = EngineCapabilities {
     // they were readings of two different facts, and only one of them is the
     // one `browser_upload` meets. (The OTHER upload route,
     // `Page.setInterceptFileChooserDialog`, is a NOOP at
-    // `domains/page.rs:1382` and no verb uses it.)
+    // `domains/page.rs:1382` and no verb uses it.) Re-measured 2026-11-25 on
+    // v0.2.7 (arm64 macOS) by `qa/browser_dual`'s caps line: still gated.
     file_upload: Cap::Unsupported,
     // `Page.printToPDF` → `domains/pdf.rs` (`page.rs:1534`), render feature —
     // which the ledger's chosen archive carries. `browser_pdf`'s route.
@@ -291,6 +301,11 @@ static OBSCURA: EngineCapabilities = EngineCapabilities {
     // spent the other way). What would flip it: a build whose navigation
     // pauses HOLD (link 2) and whose subresource events are reliable
     // (link 4) — re-run the probe.
+    //
+    // Re-measured 2026-11-25 on v0.2.7 (arm64 macOS) by `qa/browser_dual`'s
+    // caps line only (`fetch-probe.mjs` was not re-run): the navigation pause
+    // now HOLDS and `fulfillRequest` answers ok, but the page renders an EMPTY
+    // body, not the mock — a different failure at link 3, same verdict.
     network_interception: Cap::Unsupported,
     // **Supported on a MEASUREMENT (2026-09-30, pinned v0.2.2, x86_64-linux),
     // upgraded from the fail-closed NOT_PROBED answer the row shipped with.**
@@ -302,7 +317,8 @@ static OBSCURA: EngineCapabilities = EngineCapabilities {
     // `stopScreencast` actually stopped the stream (0 frames after). The
     // same build whose Fetch pauses are advisory serves a sound screencast —
     // capability is per-domain, not per-binary, which is why these are two
-    // rows and not one.
+    // rows and not one. Re-measured 2026-11-25 on v0.2.7 (arm64 macOS) by
+    // `qa/browser_dual`'s caps line: usable frames arrive, still Supported.
     screencast: Cap::Supported,
     // **Unsupported on a MEASUREMENT (2026-10-01, pinned v0.2.2, x86_64-linux)
     // — the fail-closed NOT_PROBED answer the row shipped with is spent.**
@@ -316,6 +332,9 @@ static OBSCURA: EngineCapabilities = EngineCapabilities {
     // (see the `js_dialogs` row) is now a pattern, not an anecdote: this
     // build does not broadcast its Runtime-domain page faults. What flips
     // the row: a build that emits the event — re-run the caps line.
+    // Re-run 2026-11-25 on v0.2.7 (arm64 macOS): v0.2.7's source has an
+    // `exceptionThrown` emit path, yet the caps line's async throw still
+    // produced no event within 10 s, so the row stays measured NO.
     error_events: Cap::Unsupported,
     // **Derived, never spelled.** `runtimes::specs` owns the pinned tag
     // (`obscura_tag!` / `OBSCURA_TAG`) and its doc says "bump this — and only

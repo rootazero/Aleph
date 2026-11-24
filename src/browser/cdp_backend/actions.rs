@@ -772,7 +772,11 @@ async fn send_mouse(
 /// engine, sitting where both arrive, is read as a claim about both). Measured
 /// on obscura v0.2.2: `alert()` produces **zero** unsolicited frames, a
 /// following `Runtime.evaluate` answers in ~0.01 s so the renderer never
-/// blocks, and `Page.handleJavaScriptDialog` answers `-32601`. So on obscura
+/// blocks, and `Page.handleJavaScriptDialog` answers `-32601`. Re-measured on
+/// v0.2.7 (2026-11-25, `qa/browser_dual` caps stage): still no
+/// `Page.javascriptDialogOpening` for alert/confirm/prompt (v0.2.7 emits it only
+/// for `beforeunload`), and `handleJavaScriptDialog` answers `-32601 No dialog
+/// is showing`. So on obscura
 /// the `select!` below always resolves on its dispatch arm and the dialog arm
 /// is dead code — benign **because** the premise is false there, which is
 /// exactly the shape that stops being benign the day it changes.
