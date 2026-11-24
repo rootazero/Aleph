@@ -60,6 +60,14 @@ caps stage: table == measurement on all 10 rows, `measured_on` == binary (`v0.2.
 | switch | 29 | 0 | |
 | escape | 14 | 0 | |
 
+## Independent review / 独立审查
+
+A read-only branch review (openai-codex/gpt-6.1-sol, 2026-11-25) blocked the merge on one P1 and raised one P2. Both are fixed.
+
+- **P1 — iframe read-back in the wrong realm.** The install runs `Runtime.callFunctionOn` on the target node, so its `window` is the node's realm. For a target in a same-renderer iframe or `srcdoc` frame, which `resolve_target` admits, that realm is the frame's own global. The read-back was a page-level `Runtime.evaluate`, so it read the main frame and found no nonce. Every iframe action was therefore reported `Skipped`, real misses included, and the frame-side listeners were never removed. Fix: `ArmedProbe { nonce, object_id }` in `src/browser/cdp_backend/actions.rs`; the read-back is now a `Runtime.callFunctionOn` on that same node. A node whose document navigated away still ends `Unknown` → `Skipped`, through either a call error or `otherDocument`. Test: `the_readback_runs_in_the_realm_the_probe_was_installed_in`. Real Chrome 158 check, a `srcdoc` iframe button probed by raw CDP: the old main-frame read gave `{otherDocument: true}` on both a hit and a miss; the read on the node gave `click` and `null`.
+- **P2 — the geometry reading could not fail caps.** `qa/browser_dual/caps.py` now `led.check`s `geometry_agrees`, which pins the "no screenshot coordinate warning" conclusion.
+- After the fixes: `cargo test -p alephcore --lib -- browser::cdp_backend` 186 passed; clippy clean; QA on v0.2.7: click 26, caps 35, switch 29, escape 14, open 19, snapshot 12, all with 0 FAIL.
+
 ## Deliberately not done / 刻意不做
 
 - No automatic engine switching; the model still decides (R7/R10).
