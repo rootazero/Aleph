@@ -130,5 +130,15 @@
     "Desktop shortcut typing under IME",
     "community module palette entries",
     "text size host without aleph.fontScale on device"
-  ]
+  ],
+  "rerun_after_review": {
+    "result": "pass",
+    "shell_tsx_sha256": "139a9079ba0f6217157bd509e8740cee26120e7ff306ee128c612f936d521aa9",
+    "web_index_sha256": "c4002fcc918983b5c8f6e9e1739c901924ba94461d8a8870e738fa7ed0472529",
+    "gateway_exit": 0,
+    "not_rechecked_on_device": [
+      "storage that refuses writes",
+      "surface rebuilt while a text-size change is queued"
+    ]
+  }
 }

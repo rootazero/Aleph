@@ -144,7 +144,7 @@ pub enum Binding { Key(String), Cleared }   // absent = default
 | 明暗 | `setColorScheme` | `setColorScheme` |
 | 强调色、圆角 | `setTheme(theme_tokens(...))` | 同左 |
 | 字号 | `host.call("aleph.fontScale", n)` → `panel_surface` 注册的处理函数 → 主线程 → `AppView::set_font_scale` | `web/host.js` 处理同名调用，设置根元素字号（NSH Web 播放器由它推出 `fontScale`，`nsh.js:2111-2121`） |
-| 密度 | Panel 自己的间距 token；只作用于外壳与内置模块 | 同左 |
+| 密度 | Panel 自己的间距 token；目前只作用于外壳（侧栏与设置页），内置模块尚未使用 | 同左 |
 
 Desktop 字号这条路要改四处：
 

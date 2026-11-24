@@ -80,17 +80,32 @@ preferences are asserted from the shell's storage file; the rest was checked on 
 
 ## Observations, not fixed / 观察到但未修改
 
-- A conflict goes to the later command in list order, not to the default. Rebinding "Toggle light
-  and dark" (listed earlier) to mod+2 takes the key away from "Open menu entry 2", and that row
-  says so. This is the rule as designed (`resolve_bindings`). The palette shows no key for the
+- In a conflict the command earlier in the list keeps the key and the later one loses it, whichever
+  of them was rebound. Rebinding "Toggle light and dark" (listed earlier) to mod+2 takes the key
+  away from "Open menu entry 2", and that row says so. This is the rule as designed (`resolve_bindings`). The palette shows no key for the
   losing command, but Settings' key column still shows ⌘2 on its row above the conflict text.
-  冲突按列表顺序归后者：把排在前面的命令改绑为 mod+2 会使“Open menu entry 2”失效，该行有提示。符合设计规则。
+  冲突时列表中靠前的命令保留按键、靠后的失去该键（与哪条被改绑无关）：把排在前面的命令改绑为 mod+2 会使“Open menu entry 2”失效，该行有提示。符合设计规则。
 - After a disconnect, Web keeps the last menu and Settings → Menu stays editable (the layout is
   local); a Desktop launch with no Gateway shows an empty menu. / 断线后 Web 保留上次菜单；无 Gateway 启动的 Desktop 菜单为空。
 - The pre-pairing `/v1/ws` attempt logs "HTTP Authentication failed" in the browser console, as in
   the S2 and S3 runs. / 配对前的 WebSocket 认证失败日志与 S2/S3 相同，属已有行为。
 - Web has no default keys for "Open menu entry 1…9" (Chrome keeps mod+1…9); their rows show
   "None". / Web 上 mod+1…9 无默认键（Chrome 自用）。
+
+## Re-run after the independent review / 独立审阅后的复跑
+
+An independent review (no P0/P1) led to fixes on this branch: preference edits show at once, are
+written in order and a refused write is reported instead of leaving the Panel blank; module
+commands stay rebindable in Settings; each accent carries a text colour that reaches 4.5:1; the
+menu and the palette results scroll; a queued text-size change only reaches the surface it was
+made for, and both hosts accept factors 0.5 to 3. The same `qa/nsh_prefs/run.py` passed again on
+the Mac (desktop phases edit, restored, offline, chat and the Web steps; Gateway exit 0; shell
+sha256 `139a9079…`, web index sha256 `c4002fcc…`). Not re-checked on device: a storage that
+refuses writes (the test runner cannot simulate one), a surface rebuilt while a text-size change
+is queued.
+独立审阅（无 P0/P1）后的修复已在本分支：偏好编辑即时生效、顺序写入，写入被拒时提示而不白屏；模块命令可在设置中改绑；
+各强调色自带满足 4.5:1 的文字色；菜单与命令结果可滚动；排队中的字号变更只作用于发起它的表面，两端字号范围 0.5–3。
+`qa/nsh_prefs/run.py` 在 Mac 上复跑通过。未在真机复核：拒绝写入的存储、字号变更排队时重建表面。
 
 ## Not verified / 未验证
 
