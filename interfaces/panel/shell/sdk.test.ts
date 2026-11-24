@@ -1,26 +1,36 @@
 // The SDK's generation and dispose rules, against a stand-in shell.
 import { expect, test } from "nsh/test";
-import { type ConnectionState, createSdk, type ShellAccess } from "./sdk";
+import { type ConnectionState, createSdk, type PanelEvent, type ShellAccess } from "./sdk";
 
 const CONNECTED: ConnectionState = { state: "connected", endpoint: "https://aleph.test", subject: null, pairing: false };
 
 function standIn() {
   let generation = 1;
   const listeners = new Set<(state: ConnectionState) => void>();
+  const events = new Set<(event: PanelEvent) => void>();
   const pending: ((value: unknown) => void)[] = [];
   const shell: ShellAccess = {
     rpc: () => new Promise((resolve) => pending.push(resolve)),
     generation: () => generation,
     connection: () => CONNECTED,
     navigate: () => {},
+    intent: () => null,
     onConnection(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);
+    },
+    onEvent(listener) {
+      events.add(listener);
+      return () => events.delete(listener);
     },
   };
   return {
     shell,
     listeners,
+    events,
+    push: (event: PanelEvent) => {
+      for (const listener of [...events]) listener(event);
+    },
     answer: (value: unknown) => pending.shift()?.(value),
     reconnect: () => {
       generation += 1;
@@ -63,4 +73,30 @@ test("dispose releases every subscription", () => {
   sdk.dispose();
   expect(fake.listeners.size).toBe(0);
   expect(() => sdk.subscribe(() => {})).toThrow("disposed");
+});
+
+test("live events reach a module by topic prefix", () => {
+  const fake = standIn();
+  const sdk = createSdk("aleph:chat", 1, fake.shell);
+  const heard: string[] = [];
+  sdk.on("stream.", (event) => heard.push(event.topic));
+  fake.push({ topic: "stream.response_chunk", data: {} });
+  fake.push({ topic: "connection.warning", data: {} });
+  expect(heard).toEqual(["stream.response_chunk"]);
+});
+
+test("live events from an older generation or after dispose are dropped", () => {
+  const fake = standIn();
+  const sdk = createSdk("aleph:chat", 1, fake.shell);
+  const heard: string[] = [];
+  const release = sdk.on("", (event) => heard.push(event.topic));
+  fake.reconnect();
+  fake.push({ topic: "stream.run_complete", data: {} });
+  expect(heard).toEqual([]);
+  release();
+  expect(fake.events.size).toBe(0);
+  sdk.on("", () => {});
+  sdk.dispose();
+  expect(fake.events.size).toBe(0);
+  expect(() => sdk.on("", () => {})).toThrow("disposed");
 });

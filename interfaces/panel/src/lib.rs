@@ -37,7 +37,7 @@ struct ShellModule {
 /// Tabs this renderer implements in TSX (`interfaces/panel/modules/`). Every
 /// other tab in a snapshot targets the DOM module ABI of the Leptos Panel and
 /// is shown as unavailable here.
-const SHELL_MODULES: [ShellModule; 3] = [
+const SHELL_MODULES: [ShellModule; 4] = [
     ShellModule {
         tab_id: "overview",
         label: "Overview",
@@ -49,6 +49,12 @@ const SHELL_MODULES: [ShellModule; 3] = [
         label: "Sessions",
         icon: "messages-square",
         order: -20,
+    },
+    ShellModule {
+        tab_id: "chat",
+        label: "Chat",
+        icon: "message-circle",
+        order: -15,
     },
     ShellModule {
         tab_id: "capabilities",
@@ -313,6 +319,7 @@ mod tests {
             vec![
                 ("aleph:overview".to_owned(), "tsx".to_owned()),
                 ("aleph:sessions".to_owned(), "tsx".to_owned()),
+                ("aleph:chat".to_owned(), "tsx".to_owned()),
                 ("aleph:capabilities".to_owned(), "tsx".to_owned()),
                 ("community.fixture:notes".to_owned(), "dom".to_owned()),
             ]
@@ -326,7 +333,7 @@ mod tests {
         bad["declarations"][0]["source_revision"] = json!(2);
         let view = PanelModel::view(bad, None);
         assert_eq!(view["projectionError"], "revision_mismatch");
-        assert_eq!(view["slots"].as_array().unwrap().len(), 3);
+        assert_eq!(view["slots"].as_array().unwrap().len(), 4);
 
         let view = PanelModel::view(json!({ "nope": true }), None);
         assert_eq!(view["projectionError"], "invalid_snapshot");
@@ -357,10 +364,15 @@ mod tests {
         let view = PanelModel::view(JsonValue::Null, Some(hidden.clone()));
         assert_eq!(
             view["layout"]["order"],
-            json!(["aleph:overview", "aleph:capabilities", "aleph:sessions"])
+            json!([
+                "aleph:overview",
+                "aleph:sessions",
+                "aleph:capabilities",
+                "aleph:chat"
+            ])
         );
         assert_eq!(view["layout"]["hidden"], json!(["aleph:overview"]));
-        assert_eq!(view["layout"]["active"], "aleph:capabilities");
+        assert_eq!(view["layout"]["active"], "aleph:sessions");
 
         assert_eq!(
             PanelModel::select(hidden.clone(), "aleph:overview".into()),

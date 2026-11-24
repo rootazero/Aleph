@@ -1,5 +1,7 @@
-// The caller's sessions (`sessions.list`, already scoped by the Gateway).
+// The caller's sessions (`sessions.list`, already scoped by the Gateway). A
+// row opens that session in the Chat tab.
 import { List, signal, Text, View } from "nsh";
+import { Button } from "nsh/base";
 import type { PanelSdk } from "../shell/sdk";
 
 type SessionRow = {
@@ -32,10 +34,14 @@ export function Sessions(props: { sdk: PanelSdk }) {
             class="flex-1"
           >
             {(row) => (
-              <View class="flex-row justify-between gap-3 py-2">
+              <Button
+                onPress={() => props.sdk.navigate("aleph:chat", { session_key: row().key })}
+                accessibilityLabel={`Open chat ${row().label || row().topic || row().key}`}
+                class="flex-row justify-between gap-3 rounded-(--radius) px-2 py-2 active:bg-muted"
+              >
                 <Text class="flex-1 text-foreground">{row().label || row().topic || row().key}</Text>
                 <Text class="text-muted-foreground">{row().message_count ?? 0} messages</Text>
-              </View>
+              </Button>
             )}
           </List>
         )}

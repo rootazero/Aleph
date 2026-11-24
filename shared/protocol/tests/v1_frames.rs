@@ -9,7 +9,7 @@
 use aleph_protocol::framing::{encode_header, split_frame, HEADER_BYTES};
 use aleph_protocol::jsonrpc::{JsonRpcRequest, JsonRpcResponse};
 use aleph_protocol::panel::PANEL_HOST_UNAVAILABLE;
-use aleph_protocol::system_hello::HelloParams;
+use aleph_protocol::system_hello::{Feature, HelloParams};
 use serde_json::{json, Value};
 
 /// The Web v1 endpoint's payload cap (`MAX_MESSAGE` in
@@ -17,10 +17,12 @@ use serde_json::{json, Value};
 const WEB_V1_MAX_PAYLOAD: u32 = 1024 * 1024;
 
 /// The first frame the TSX Panel web host sends, byte for byte.
-const HELLO: &str = r#"{"jsonrpc":"2.0","id":1,"method":"system.hello","params":{"protocol":{"major":1,"minor":0},"client":{"name":"aleph-panel","version":"0.1.0","platform":"web","ui_runtime":"nsh"},"features":[]}}"#;
+const HELLO: &str = r#"{"jsonrpc":"2.0","id":1,"method":"system.hello","params":{"protocol":{"major":1,"minor":0},"client":{"name":"aleph-panel","version":"0.1.0","platform":"web","ui_runtime":"nsh"},"features":["live_events"]}}"#;
 const CALL: &str = r#"{"jsonrpc":"2.0","id":2,"method":"sessions.list","params":{}}"#;
 /// Multi-byte UTF-8: the length prefix counts bytes, not UTF-16 units.
 const RESULT: &str = r#"{"jsonrpc":"2.0","result":{"label":"会话 ✓"},"id":2}"#;
+/// A frame the Gateway pushes after `live_events` was negotiated (no id).
+const EVENT: &str = r#"{"jsonrpc":"2.0","method":"stream.response_chunk","params":{"type":"response_chunk","run_id":"r-1","seq":2,"delta":"你好","content":"你好","chunk_index":0,"is_final":false}}"#;
 const ERROR: &str =
     r#"{"jsonrpc":"2.0","error":{"code":-32601,"message":"method unavailable on Web v1"},"id":3}"#;
 
@@ -42,6 +44,7 @@ fn fixture() -> Value {
         ("call", CALL),
         ("result", RESULT),
         ("error", ERROR),
+        ("event", EVENT),
     ]
     .iter()
     .map(|(name, payload)| {
@@ -69,7 +72,7 @@ fn golden_payloads_are_the_types_they_claim() {
     assert_eq!(hello.method, "system.hello");
     let params: HelloParams = serde_json::from_value(hello.params.unwrap()).unwrap();
     assert_eq!((params.protocol.major, params.protocol.minor), (1, 0));
-    assert!(params.features.is_empty());
+    assert_eq!(params.features, vec![Feature::LiveEvents]);
 
     let call: JsonRpcRequest = serde_json::from_str(CALL).unwrap();
     assert_eq!(call.id, Some(json!(2)));
@@ -77,6 +80,8 @@ fn golden_payloads_are_the_types_they_claim() {
     assert!(result.error.is_none());
     let error: JsonRpcResponse = serde_json::from_str(ERROR).unwrap();
     assert_eq!(error.error.unwrap().code, -32601);
+    let event: JsonRpcRequest = serde_json::from_str(EVENT).unwrap();
+    assert_eq!((event.method.as_str(), event.id), ("stream.response_chunk", None));
 }
 
 #[test]

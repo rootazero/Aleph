@@ -133,3 +133,122 @@ test("a refused session shows the pairing form and pairs", async () => {
   const pair = app.host.calls().find((call) => call.name === "aleph.pair");
   expect(pair?.data).toEqual({ bootstrap_ticket: "ticket-123" });
 });
+
+// Chat: a stand-in Gateway whose transcript grows once a run completes.
+function chatGateway() {
+  const transcript = [{ role: "assistant", content: "Earlier answer", timestamp: "t0" }];
+  let active: string | null = null;
+  const handlers = gateway({
+    "chat.history": () => ({ session_key: "s-1", messages: [...transcript], active_run: active }),
+    "chat.send": (params) => {
+      const { message } = params as { message: string };
+      transcript.push({ role: "user", content: message, timestamp: "t1" });
+      active = "r-1";
+      return { run_id: "r-1", session_key: "s-1", streaming: true };
+    },
+    "chat.abort": () => ({ aborted: true }),
+  });
+  const complete = (text: string) => {
+    transcript.push({ role: "assistant", content: text, timestamp: "t2" });
+    active = null;
+  };
+  return { handlers, complete };
+}
+
+const rpcParams = (app: { host: { calls(): { name: string; data: unknown }[] } }, method: string) =>
+  app.host
+    .calls()
+    .filter((call) => call.name === "aleph.rpc" && (call.data as { method: string }).method === method)
+    .map((call) => (call.data as { params: Record<string, unknown> }).params);
+
+const chunk = (delta: string) => ({ topic: "stream.response_chunk", data: { type: "response_chunk", run_id: "r-1", delta } });
+
+async function openChat(handlers: ReturnType<typeof gateway>) {
+  const app = await open("./App.tsx", { host: { handlers } });
+  await app.waitFor("label:Open Sessions");
+  await app.press("label:Open Sessions");
+  await app.press("label:Open chat Release notes");
+  await app.waitFor("Earlier answer");
+  return app;
+}
+
+test("a session opens in chat and its reply streams in, then history takes over", async () => {
+  const { handlers, complete } = chatGateway();
+  const app = await openChat(handlers);
+  expect(rpcParams(app, "chat.history")[0]).toEqual({ session_key: "s-1", limit: 200 });
+
+  await app.type("label:Message", "你好");
+  await app.press("Send");
+  await app.waitFor("Stop");
+  const [sent] = rpcParams(app, "chat.send");
+  expect(sent.message).toBe("你好");
+  expect(sent.session_key).toBe("s-1");
+  expect(sent.channel).toBe("gui:chat");
+  expect(sent.stream).toBe(true);
+  expect(String(sent.idempotency_key)).toMatch(/^[0-9a-f-]{36}$/);
+
+  await app.host.send("aleph.event", chunk("Hel"));
+  await app.host.send("aleph.event", { topic: "stream.response_chunk", data: { run_id: "other", delta: "nope" } });
+  await app.host.send("aleph.event", chunk("lo"));
+  await app.waitFor("Hello");
+  expect(app.shows("nope")).toBe(false);
+
+  complete("Hello, world");
+  const loads = rpcParams(app, "chat.history").length;
+  await app.host.send("aleph.event", { topic: "stream.run_complete", data: { type: "run_complete", run_id: "r-1" } });
+  await app.waitFor("Hello, world");
+  await app.waitFor("Stop", { state: "gone" });
+  expect(rpcParams(app, "chat.history").length).toBe(loads + 1);
+});
+
+test("stop aborts the running reply", async () => {
+  const { handlers } = chatGateway();
+  const app = await openChat(handlers);
+  await app.type("label:Message", "long task");
+  await app.press("Send");
+  await app.press("Stop");
+  await app.waitUntil(() => rpcParams(app, "chat.abort").length === 1);
+  expect(rpcParams(app, "chat.abort")[0]).toEqual({ run_id: "r-1", session_key: "s-1" });
+});
+
+// Return in the middle of a composition is the platform's (the input method
+// commits the candidate); the harness's `submit` focuses the input first,
+// which commits, so that case is checked on a real Mac. Here: a composition
+// that ended must not leave the composer refusing to send.
+test("an ended composition does not block sending", async () => {
+  const { handlers } = chatGateway();
+  const app = await openChat(handlers);
+  await app.type("label:Message", "你");
+  await app.compose("label:Message", "hao");
+  await app.compose("label:Message", "");
+  expect(app.value("label:Message")).toBe("你");
+  expect(rpcParams(app, "chat.send").length).toBe(0);
+  await app.submit("label:Message");
+  await app.waitUntil(() => rpcParams(app, "chat.send").length === 1);
+  expect(rpcParams(app, "chat.send")[0].message).toBe("你");
+});
+
+test("an interrupted live feed refetches the transcript", async () => {
+  const { handlers } = chatGateway();
+  const app = await openChat(handlers);
+  const loads = rpcParams(app, "chat.history").length;
+  await app.host.send("aleph.event", { topic: "connection.stale", data: { dropped: 3 } });
+  await app.waitFor("Live updates were interrupted; reloaded from Aleph.");
+  await app.waitUntil(() => rpcParams(app, "chat.history").length === loads + 1);
+});
+
+test("a send whose answer was lost is reported unknown, not retried", async () => {
+  const { handlers } = chatGateway();
+  const base = handlers["aleph.rpc"];
+  const lossy = {
+    ...handlers,
+    "aleph.rpc": async (call: { method: string; params: unknown }) =>
+      call.method === "chat.send" ? { error: { code: -32090, message: "disconnected" } } : base(call),
+  };
+  const app = await openChat(lossy);
+  await app.type("label:Message", "did it arrive?");
+  await app.press("Send");
+  await app.waitFor("Connection lost while sending: the message may or may not have reached Aleph. Check the transcript before sending again.");
+  await app.wait(100);
+  expect(app.host.calls().filter((call) => (call.data as { method?: string })?.method === "chat.send").length).toBe(1);
+});
