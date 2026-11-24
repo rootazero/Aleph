@@ -113,6 +113,20 @@ async function verifyNebula(page, fixture, frames, step, shot) {
   await page.getByLabel('Zoom in').click();
   const point = await graphPixel(canvas, [0x93, 0xc5, 0xfd]);
   assert.ok(point, 'the zoomed canvas must contain rendered nodes');
+  await canvas.evaluate((element) => {
+    const context = element.getContext('2d');
+    const stroke = context.stroke;
+    element.dataset.nebulaIncidentStrokes = '0';
+    // Arm after sampling so the drawing-path assertion does not affect timings.
+    context.stroke = function (...args) {
+      if (this.strokeStyle === '#7dd3fc') {
+        element.dataset.nebulaIncidentStrokes = String(Number(element.dataset.nebulaIncidentStrokes) + 1);
+        // One highlighted real edge is enough; leave subsequent frames untouched.
+        this.stroke = stroke;
+      }
+      return stroke.apply(this, args);
+    };
+  });
   await page.mouse.click(point.x, point.y);
   await page.waitForFunction(() => {
     const canvas = document.querySelector('[aria-label="Memory graph"] canvas, canvas[aria-label="Memory graph"]');
@@ -122,6 +136,7 @@ async function verifyNebula(page, fixture, frames, step, shot) {
     }
     return false;
   });
+  await page.waitForFunction(() => document.querySelector('canvas[data-nebula-incident-strokes="1"]') !== null);
   await page.getByText('Loading note…').waitFor({ state: 'hidden' });
   const picked = frames.find(({ request }) => request.method === 'graph.node_detail');
   assert.equal(picked?.request.params.agent_id, 'main__u-owner');

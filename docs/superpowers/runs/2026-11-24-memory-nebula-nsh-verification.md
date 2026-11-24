@@ -19,6 +19,8 @@ Base `b2c00e624`; worktree branch `refactor/memory-nebula-nsh`. Core's shared re
 
 Use the [isolated fixture recipe](../../../qa/nsh_s2_shell/README.md). The `normal` and `dense` datasets are identical except for one versus 24 outgoing links per ordinary note. The fixtures carry personal, organization and foreign notes with the same path, plus a deliberately oversized escaped UTF-8 note. The `off` dataset keeps the three reads mounted while the runtime is disabled. Real browser timings here are not interchangeable with the classic 3D renderer; the prior NSH shell had no Nebula canvas.
 
+An isolated preflight routed only the graph replies through a scripted fixture while the previous Gateway served the packaged UI and handled real pairing. Chrome painted the 100-node scene, selected a node by its zoomed pixel, and the actual Canvas stroke reached the incident-edge highlight color. This proves the Web drawing and interaction path, not candidate Core data, authorization, or wire-size behavior. / 脚本响应预检验证了真实 Chrome 绘制、缩放后拾取与选中边高亮，不作 Core 或传输证据。
+
 **Pending at this checkpoint:** Candidate Gateway startup and all three browser runs. The previous Gateway binary with the final Web package passed the isolated pairing, modules, persisted layout, and cookie-loss flow. It was also used to preflight fixture indexing (2,400 active dense links), not to verify the new graph capability. / 候选 Gateway 的实际回放待完成；基线 Gateway 仅验证夹具和原有壳流程。
 
 ## 评审和未覆盖门禁 / Review and outstanding gates
