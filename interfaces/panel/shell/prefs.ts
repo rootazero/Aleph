@@ -42,18 +42,36 @@ export const DENSITY_CLASSES: Record<Density, { row: string; gap: string }> = {
   spacious: { row: "px-3 py-2", gap: "gap-2" },
 };
 
-/** Read stored preferences; a repaired form is written back at once. */
-export async function loadPrefs(): Promise<Prefs> {
-  const stored = await Storage.getItem(PREFS_KEY);
-  const prefs = PanelModel.prefs(stored) as Prefs;
-  if (stored !== null && prefs.stored !== stored) await Storage.setItem(PREFS_KEY, prefs.stored);
-  return prefs;
+/** The stored preferences text, or `null` when there is none or it cannot be read. */
+export async function loadStored(): Promise<string | null> {
+  try {
+    return await Storage.getItem(PREFS_KEY);
+  } catch {
+    return null;
+  }
 }
 
-/** Save a stored form the model returned and read it back. */
-export async function savePrefs(stored: string): Promise<Prefs> {
-  await Storage.setItem(PREFS_KEY, stored);
+/** The preferences a stored text (or none) gives, repaired if needed. */
+export function readPrefs(stored: string | null): Prefs {
   return PanelModel.prefs(stored) as Prefs;
+}
+
+// Writes run one after another, so the last edit is the one that stays
+// stored even when an earlier write is still pending.
+let pendingWrite: Promise<unknown> = Promise.resolve();
+
+/**
+ * Store a stored form the model returned. Resolves `false` when the device
+ * refused it (storage full, unavailable); the edit still shows until the
+ * Panel restarts.
+ */
+export function persistPrefs(stored: string): Promise<boolean> {
+  const write = pendingWrite.then(() => Storage.setItem(PREFS_KEY, stored)).then(
+    () => true,
+    () => false,
+  );
+  pendingWrite = write;
+  return write;
 }
 
 /**

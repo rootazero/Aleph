@@ -67,7 +67,10 @@ export function menuCommands(view: PanelView | null, open: (key: string) => void
 }
 
 /** Each command's key for the stored preferences. */
-export function resolveKeys(commands: Command[], stored: string): ResolvedKey[] {
+/** What key resolution needs of a command: no callback. */
+export type KeyedCommand = Pick<Command, "id" | "label" | "defaultKey">;
+
+export function resolveKeys(commands: KeyedCommand[], stored: string): ResolvedKey[] {
   const listed = commands.map((command) => ({ id: command.id, defaultKey: command.defaultKey ?? null }));
   return PanelModel.resolveBindings(listed, stored, APPLE) as ResolvedKey[];
 }

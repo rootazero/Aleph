@@ -81,6 +81,7 @@ const AXES: Axis[] = [
 export function Settings(props: {
   prefs: () => Prefs;
   fontScaleSupported: () => boolean;
+  saveFailed: () => boolean;
   onAppearance: (axis: string, value: string) => void;
   view: () => PanelView | null;
   onMove: (key: string, forward: boolean) => void;
@@ -93,6 +94,9 @@ export function Settings(props: {
   return (
     <Scroll class="flex-1">
       <View class={`p-4 ${gap()}`}>
+        <If when={props.saveFailed()}>
+          <Text class="text-destructive">This device did not save your settings; they last until the Panel restarts.</Text>
+        </If>
         <Text class="text-lg text-foreground">Appearance</Text>
         <Each of={AXES} key={(axis) => axis.axis}>
           {(axis) => (

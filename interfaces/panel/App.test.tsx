@@ -135,7 +135,10 @@ test("settings open while disconnected", async () => {
   await app.press("label:Settings");
   await app.press("label:Accent ocean");
   await app.waitFor("Ocean ✓");
-  expect(JSON.parse((await app.storage())[PREFS_KEY]).appearance.accent).toBe("ocean");
+  await app.press("label:Corners sharp");
+  await app.waitFor("Sharp ✓");
+  const stored = JSON.parse((await app.storage())[PREFS_KEY]);
+  expect([stored.appearance.accent, stored.appearance.roundness]).toEqual(["ocean", "sharp"]);
   await app.waitFor("Connect to Aleph to arrange the menu.");
 });
 
@@ -388,4 +391,21 @@ test("chat stop is in the palette only while chat is mounted", async () => {
   await app.keyboard.press("mod+k");
   await app.type("label:Command search", "stop");
   await app.waitFor("No matching command");
+});
+
+test("a module command can be rebound in Settings, which unmounts the module", async () => {
+  const { handlers } = chatGateway();
+  const app = await openChat(handlers);
+  await app.press("label:Settings");
+  await app.type("label:Shortcut for Stop reply", "mod+j");
+  await app.submit("label:Shortcut for Stop reply");
+  await app.waitFor("⌘J");
+  expect(JSON.parse((await app.storage())[PREFS_KEY]).keybindings["aleph:chat/stop"]).toEqual({ key: "mod+j" });
+  await app.press("label:Open Sessions");
+  await app.press("label:Open chat Release notes");
+  await app.waitFor("Earlier answer");
+  await app.type("label:Message", "long task");
+  await app.press("Send");
+  await app.keyboard.press("mod+j");
+  await app.waitUntil(() => rpcParams(app, "chat.abort").length === 1);
 });

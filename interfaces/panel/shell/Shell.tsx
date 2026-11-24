@@ -11,9 +11,9 @@ import { Chat } from "../modules/Chat";
 import { Overview } from "../modules/Overview";
 import { Sessions } from "../modules/Sessions";
 import { CommandPalette } from "./CommandPalette";
-import { bindCommands, type Command, menuCommands, resolveKeys, shellCommands } from "./commands";
+import { bindCommands, type Command, type KeyedCommand, menuCommands, resolveKeys, shellCommands } from "./commands";
 import { PairingForm } from "./PairingForm";
-import { applyPrefs, type Binding, loadPrefs, type Prefs, savePrefs } from "./prefs";
+import { applyPrefs, type Binding, loadStored, persistPrefs, type Prefs, readPrefs } from "./prefs";
 import { type CommandSpec, type ConnectionState, createSdk, type Intent, type PanelEvent, type PanelSdk, RpcError, type ShellAccess } from "./sdk";
 import { Settings } from "./Settings";
 import { Sidebar } from "./Sidebar";
@@ -37,9 +37,14 @@ export function Shell() {
   const settingsOpen = signal(false);
   const prefs = signal<Prefs | null>(null);
   const fontScaleSupported = signal(true);
+  const prefsSaveFailed = signal(false);
   const paletteOpen = signal(false);
   // Commands the mounted module registered (already prefixed with its key).
   const moduleCommands = signal<CommandSpec[]>([]);
+  // Every module command seen this session, kept after its module unmounts
+  // so Settings (which unmounts the module) can still list and rebind it.
+  // Only names and default keys are kept, never the callbacks.
+  const seenModuleCommands = signal<Map<string, KeyedCommand>>(new Map());
   // Keys the platform refused to bind, by command id.
   const keyFailures = signal<Map<string, string>>(new Map());
   const listeners = new Set<(state: ConnectionState) => void>();
@@ -112,6 +117,9 @@ export function Shell() {
     },
     registerCommand(spec) {
       moduleCommands.update((list) => [...list.filter((command) => command.id !== spec.id), spec]);
+      seenModuleCommands.update((seen) =>
+        new Map(seen).set(spec.id, { id: spec.id, label: spec.label, defaultKey: spec.defaultKey }),
+      );
       return () => moduleCommands.update((list) => list.filter((command) => command !== spec));
     },
   };
@@ -126,27 +134,38 @@ export function Shell() {
     fontScaleSupported.set(applied.fontScale === "applied");
   };
 
-  const changeAppearance = async (axis: string, value: string) => {
+  // An edit shows at once and is then stored; the next edit starts from it,
+  // not from what storage holds yet.
+  const keepPrefs = (stored: string) => {
+    void showPrefs(readPrefs(stored));
+    void persistPrefs(stored).then((saved) => prefsSaveFailed.set(!saved));
+  };
+
+  const changeAppearance = (axis: string, value: string) => {
     const current = prefs();
     if (!current) return;
     const stored = PanelModel.setAppearance(current.stored, axis, value);
-    if (!stored) return;
-    await showPrefs(await savePrefs(stored));
+    if (stored) keepPrefs(stored);
   };
 
-  void loadPrefs().then(showPrefs);
+  // A stored form that needed repair is written back, but the Panel shows
+  // either way: storage that refuses the write must not leave it blank.
+  void loadStored().then((stored) => {
+    const loaded = readPrefs(stored);
+    void showPrefs(loaded);
+    if (stored !== null && loaded.stored !== stored) keepPrefs(loaded.stored);
+  });
 
   const openModule = (key: string) => {
     settingsOpen.set(false);
     access.navigate(key);
   };
 
-  const changeBinding = async (id: string, binding: Binding | null) => {
+  const changeBinding = (id: string, binding: Binding | null) => {
     const current = prefs();
     if (!current) return;
     const stored = PanelModel.setBinding(current.stored, id, binding);
-    if (!stored) return;
-    await showPrefs(await savePrefs(stored));
+    if (stored) keepPrefs(stored);
   };
 
   const commands = computed<Command[]>(() => [
@@ -169,11 +188,19 @@ export function Shell() {
     ...menuCommands(view(), openModule),
     ...moduleCommands().map((command) => ({ ...command, group: "module" as const })),
   ]);
+  // Keys resolve over the live commands and the module commands seen
+  // earlier, once, so Settings and the bound keys agree on every conflict.
+  const keyedCommands = computed<KeyedCommand[]>(() => {
+    const live = commands();
+    const liveIds = new Set(live.map((command) => command.id));
+    const away = [...seenModuleCommands().values()].filter((command) => !liveIds.has(command.id));
+    return [...live, ...away];
+  });
   const keys = computed(() => {
     const current = prefs();
-    return current ? resolveKeys(commands(), current.stored) : [];
+    return current ? resolveKeys(keyedCommands(), current.stored) : [];
   });
-  const labelOf = (id: string) => commands().find((command) => command.id === id)?.label ?? id;
+  const labelOf = (id: string) => keyedCommands().find((command) => command.id === id)?.label ?? id;
   const keyOf = (id: string) => {
     const entry = keys().find((candidate) => candidate.id === id);
     return entry?.key && !entry.problem && !keyFailures().has(id) ? entry.key : null;
@@ -260,7 +287,8 @@ export function Shell() {
               <Settings
                 prefs={current}
                 fontScaleSupported={fontScaleSupported}
-                onAppearance={(axis, value) => void changeAppearance(axis, value)}
+                saveFailed={prefsSaveFailed}
+                onAppearance={changeAppearance}
                 view={view}
                 onMove={(key, forward) => edit((stored) => PanelModel.moveTab(stored, key, forward))}
                 onHidden={(key, hidden) => edit((stored) => PanelModel.setHidden(stored, key, hidden))}
@@ -273,7 +301,7 @@ export function Shell() {
                   }))
                 }
                 labelOf={labelOf}
-                onBinding={(id, binding) => void changeBinding(id, binding)}
+                onBinding={changeBinding}
               />
             </If>
           </View>
