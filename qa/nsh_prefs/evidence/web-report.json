@@ -1,0 +1,42 @@
+{
+  "console": [
+    "error: WebSocket connection to 'wss://127.0.0.1:56494/v1/ws' failed: HTTP Authentication failed; no valid credentials available"
+  ],
+  "steps": [
+    {
+      "name": "paired_two_column"
+    },
+    {
+      "name": "appearance_edited",
+      "appearance": {
+        "mode": "dark",
+        "accent": "ocean",
+        "fontScale": "large",
+        "roundness": "round",
+        "density": "cozy"
+      },
+      "rootFontSize": "20px"
+    },
+    {
+      "name": "appearance_restored_after_reload"
+    },
+    {
+      "name": "palette_filter_runs_open_capabilities"
+    },
+    {
+      "name": "rebound_palette_to_mod_j"
+    },
+    {
+      "name": "conflict_named_on_later_row"
+    },
+    {
+      "name": "invalid_shortcut_refused"
+    },
+    {
+      "name": "reset_restores_defaults"
+    },
+    {
+      "name": "settings_work_offline"
+    }
+  ]
+}

@@ -66,14 +66,15 @@ async function run(fixturePath) {
     await page.screenshot({ path: shot('capabilities') });
     step('capabilities_open', { texts: (await page.locator('body').innerText()).split('\n').filter(Boolean) });
 
-    // 3. Customize: Capabilities first, Sessions hidden.
-    await page.getByText('Customize').click();
+    // 3. Settings → Menu: Capabilities first, Sessions hidden.
+    await page.getByLabel('Settings', { exact: true }).first().click();
     // Default order: Overview, Sessions, Chat (S3), Capabilities.
     for (let moves = 0; moves < 3; moves += 1) {
       await page.getByLabel('Move Capabilities up').click();
     }
     await page.getByLabel('Hide Sessions').click();
-    await page.getByText('Done').click();
+    // The menu entry comes first; Settings also lists its shortcut row.
+    await page.getByLabel('Open Capabilities', { exact: true }).first().click();
     await page.waitForTimeout(500);
     const edited = await layoutEntries(page);
     const [key] = Object.keys(edited);
