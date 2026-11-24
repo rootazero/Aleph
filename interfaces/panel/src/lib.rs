@@ -23,7 +23,8 @@ use shared_ui_logic::panel::registry::BUILTIN_NAMESPACE;
 use shared_ui_logic::prefs::commands::{
     rank, resolve_bindings, CommandKey, KeyProblem, KeySource, RankItem,
 };
-use shared_ui_logic::prefs::{self, appearance::theme_tokens, Binding, PanelPrefs, PrefsRepair};
+use shared_ui_logic::prefs::appearance::{theme_tokens, FontScale};
+use shared_ui_logic::prefs::{self, Binding, PanelPrefs, PrefsRepair};
 
 #[native_module("aleph/panel")]
 fn native(registry: &mut Registry) {
@@ -295,10 +296,15 @@ impl PanelModel {
     /// Personal preferences read from storage:
     /// `{ appearance, keybindings, stored, repair, theme, fontFactor, density }`.
     /// `stored` is what the shell writes back; `theme` is the `setTheme`
-    /// payload and `fontFactor` the host text-size multiplier.
+    /// payload and `fontFactor` the host text-size multiplier (`null` for
+    /// the default size, which follows the system setting).
     pub fn prefs(stored: Option<String>) -> JsonValue {
         let restored = prefs::restore(stored.as_deref());
         let prefs = &restored.prefs;
+        // The default text size follows the system setting, so it sends no
+        // factor rather than 1.0 (which would override that setting).
+        let font_scale = prefs.appearance.font_scale;
+        let font_factor = (font_scale != FontScale::Default).then(|| font_scale.factor());
         let repair = restored.repair.map(|repair| match repair {
             PrefsRepair::Corrupt => "corrupt",
             PrefsRepair::UnknownVersion(_) => "unknown_version",
@@ -309,7 +315,7 @@ impl PanelModel {
             "stored": prefs.to_json(),
             "repair": repair,
             "theme": theme_tokens(&prefs.appearance),
-            "fontFactor": prefs.appearance.font_scale.factor(),
+            "fontFactor": font_factor,
             "density": prefs.appearance.density,
         })
     }
@@ -537,7 +543,7 @@ mod tests {
         assert_eq!(prefs["repair"], JsonValue::Null);
         assert_eq!(prefs["stored"], default_stored());
         assert_eq!(prefs["appearance"]["accent"], "mauve");
-        assert_eq!(prefs["fontFactor"], 1.0);
+        assert_eq!(prefs["fontFactor"], JsonValue::Null);
         assert_eq!(prefs["density"], "compact");
         assert!(prefs["theme"]["cssVars"]["dark"]["primary"].is_string());
 

@@ -5,7 +5,7 @@
   "build": 1,
   "rust": ".",
   "capabilities": {
-    "host": ["aleph.rpc", "aleph.pair", "aleph.connect", "aleph.connection"]
+    "host": ["aleph.rpc", "aleph.pair", "aleph.connect", "aleph.connection", "aleph.fontScale"]
   },
   "web": {
     "host": "./web/host.js"

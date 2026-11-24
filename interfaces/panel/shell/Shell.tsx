@@ -1,16 +1,20 @@
-// The Panel shell: connection, the capability snapshot, the user's layout and
-// the one mounted module. Layout and projection rules live in Rust
-// (`aleph/panel`, shared with the Leptos Panel); this file only wires them.
-import { batch, cleanup, computed, host, signal, Storage, Text, View } from "nsh";
+// The Panel shell: a fixed two-column frame (menu on the left, the mounted
+// module or Settings on the right), connection, the capability snapshot, the
+// user's layout and personal preferences. Layout, projection and preference
+// rules live in Rust (`aleph/panel`, shared with the Leptos Panel); this file
+// only wires them.
+import { batch, cleanup, computed, horizontalSizeClass, host, signal, Storage, Text, View } from "nsh";
 import { Button } from "nsh/base";
 import { PanelModel } from "aleph/panel";
 import { Capabilities } from "../modules/Capabilities";
 import { Chat } from "../modules/Chat";
 import { Overview } from "../modules/Overview";
 import { Sessions } from "../modules/Sessions";
-import { LayoutEditor } from "./LayoutEditor";
 import { PairingForm } from "./PairingForm";
+import { applyPrefs, loadPrefs, type Prefs, savePrefs } from "./prefs";
 import { type ConnectionState, createSdk, type Intent, type PanelEvent, type PanelSdk, RpcError, type ShellAccess } from "./sdk";
+import { Settings } from "./Settings";
+import { Sidebar } from "./Sidebar";
 import type { PanelTab, PanelView, Slot } from "./view";
 
 const INITIAL: ConnectionState = { state: "connecting", endpoint: "", subject: null, pairing: false };
@@ -28,7 +32,9 @@ export function Shell() {
   const generation = signal(0);
   const view = signal<PanelView | null>(null);
   const notice = signal<string | null>(null);
-  const editing = signal(false);
+  const settingsOpen = signal(false);
+  const prefs = signal<Prefs | null>(null);
+  const fontScaleSupported = signal(true);
   const listeners = new Set<(state: ConnectionState) => void>();
   const eventListeners = new Set<(event: PanelEvent) => void>();
   // What a module handed the one it navigated to (by tab key), for this run
@@ -103,6 +109,27 @@ export function Shell() {
     for (const listener of [...eventListeners]) listener(event);
   };
 
+  const showPrefs = async (next: Prefs) => {
+    prefs.set(next);
+    const applied = await applyPrefs(next);
+    fontScaleSupported.set(applied.fontScale === "applied");
+  };
+
+  const changeAppearance = async (axis: string, value: string) => {
+    const current = prefs();
+    if (!current) return;
+    const stored = PanelModel.setAppearance(current.stored, axis, value);
+    if (!stored) return;
+    await showPrefs(await savePrefs(stored));
+  };
+
+  void loadPrefs().then(showPrefs);
+
+  const openModule = (key: string) => {
+    settingsOpen.set(false);
+    access.navigate(key);
+  };
+
   if (host.available()) {
     cleanup(host.on<ConnectionState>("aleph.connection", applyConnection));
     cleanup(host.on<PanelEvent>("aleph.event", applyEvent));
@@ -121,55 +148,55 @@ export function Shell() {
     return slot ? [{ slot, generation: generation() }] : [];
   });
 
+  // Nothing until preferences are read, so the first frame has the user's
+  // colours and density.
   return (
-    <View class="flex-1 bg-background">
-      <If when={connection().state === "connected"} else={<Offline connection={connection} />}>
-        <View class="flex-row flex-wrap items-center gap-1 border-b border-border px-3 py-2">
-          <Each of={view()?.slots ?? []} key={(slot) => `${slot.key}#${slot.state}`}>
-            {(slot) => (
-              <If
-                when={slot().state === "live"}
-                else={<Text class="px-3 py-1 text-muted-foreground">{slot().key} · unavailable</Text>}
-              >
-                <Button
-                  onPress={() => access.navigate(slot().key)}
-                  accessibilityLabel={`Open ${tabOf(slot().key)?.label ?? slot().key}`}
-                  class="rounded-(--radius) px-3 py-1 active:bg-muted"
-                >
-                  <Text class={slot().key === view()?.layout.active ? "text-foreground" : "text-muted-foreground"}>
-                    {tabOf(slot().key)?.label ?? slot().key}
-                  </Text>
-                </Button>
-              </If>
-            )}
-          </Each>
-          <Button onPress={() => editing.update((open) => !open)} class="px-3 py-1 active:bg-muted">
-            <Text class="text-muted-foreground">{editing() ? "Done" : "Customize"}</Text>
-          </Button>
+    <If when={prefs()} else={<View class="flex-1 bg-background" />}>
+      {(current) => (
+        <View class="flex-1 flex-row bg-background">
+          <Sidebar
+            view={view}
+            connection={connection}
+            settingsOpen={settingsOpen}
+            compact={() => horizontalSizeClass() === "compact"}
+            density={() => current().density}
+            onOpen={openModule}
+            onSettings={() => settingsOpen.update((open) => !open)}
+          />
+          <View class="flex-1">
+            <If when={notice()}>
+              <Text class="px-3 py-2 text-destructive">{notice()}</Text>
+            </If>
+            <If
+              when={settingsOpen()}
+              else={
+                <If when={connection().state === "connected"} else={<Offline connection={connection} />}>
+                  <View class="flex-1">
+                    <Each of={mounted()} key={(item) => `${item.slot.key}#${item.slot.renderer}#${item.generation}`}>
+                      {(item) => {
+                        const sdk = createSdk(item().slot.key, item().generation, access);
+                        cleanup(() => sdk.dispose());
+                        return <ModuleSlot slot={item().slot} tab={tabOf(item().slot.key)} tabs={view()?.tabs ?? []} sdk={sdk} />;
+                      }}
+                    </Each>
+                  </View>
+                </If>
+              }
+            >
+              <Settings
+                prefs={current}
+                fontScaleSupported={fontScaleSupported}
+                onAppearance={(axis, value) => void changeAppearance(axis, value)}
+                view={view}
+                onMove={(key, forward) => edit((stored) => PanelModel.moveTab(stored, key, forward))}
+                onHidden={(key, hidden) => edit((stored) => PanelModel.setHidden(stored, key, hidden))}
+                shortcuts={<View />}
+              />
+            </If>
+          </View>
         </View>
-        <If when={notice()}>
-          <Text class="px-3 py-2 text-destructive">{notice()}</Text>
-        </If>
-        <If when={editing() ? view() : null}>
-          {(current) => (
-            <LayoutEditor
-              view={current()}
-              onMove={(key, forward) => edit((stored) => PanelModel.moveTab(stored, key, forward))}
-              onHidden={(key, hidden) => edit((stored) => PanelModel.setHidden(stored, key, hidden))}
-            />
-          )}
-        </If>
-        <View class="flex-1">
-          <Each of={mounted()} key={(item) => `${item.slot.key}#${item.slot.renderer}#${item.generation}`}>
-            {(item) => {
-              const sdk = createSdk(item().slot.key, item().generation, access);
-              cleanup(() => sdk.dispose());
-              return <ModuleSlot slot={item().slot} tab={tabOf(item().slot.key)} tabs={view()?.tabs ?? []} sdk={sdk} />;
-            }}
-          </Each>
-        </View>
-      </If>
-    </View>
+      )}
+    </If>
   );
 }
 
