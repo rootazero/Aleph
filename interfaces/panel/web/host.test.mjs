@@ -237,6 +237,29 @@ test("unknown_host_functions_throw", async () => {
   assert.throws(() => host.call("fs.read", {}), /no host function fs.read/);
 });
 
+test("font_scale_sets_the_root_size_and_reports", async () => {
+  const { player, env } = harness();
+  let reports = 0;
+  player.environmentChanged = () => (reports += 1);
+  env.document = { documentElement: { style: { fontSize: "" } } };
+  const host = await createHost(player, env);
+  assert.equal(await host.call("aleph.fontScale", 1.25), null);
+  assert.equal(env.document.documentElement.style.fontSize, "20px");
+  assert.equal(reports, 1);
+  await host.call("aleph.fontScale", null);
+  assert.equal(env.document.documentElement.style.fontSize, "");
+  assert.equal(reports, 2);
+  await assert.rejects(host.call("aleph.fontScale", -1), /font scale must be a positive number/);
+  await assert.rejects(host.call("aleph.fontScale", "big"), /font scale must be a positive number/);
+  assert.equal(reports, 2);
+});
+
+test("font_scale_without_a_page_is_unsupported", async () => {
+  const { player, env } = harness();
+  const host = await createHost(player, env);
+  await assert.rejects(host.call("aleph.fontScale", 1.25), /not supported here/);
+});
+
 test("a_runtime_without_websocket_reports_unavailable", async () => {
   const events = [];
   const player = { hostEvent: (name, data) => events.push({ name, data }) };

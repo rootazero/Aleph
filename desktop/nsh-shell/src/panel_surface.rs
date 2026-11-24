@@ -5,8 +5,12 @@
 //! The bundle is compiled into the shell (`include_str!`), so it is as trusted
 //! as the shell's own code; it loads as JS source, not bytecode. At most one
 //! surface lives at a time: a second one stays empty.
+//!
+//! The surface also serves `aleph.fontScale` (the Panel's text size), since
+//! it owns the `AppView`; the other host functions are `panel_host`'s.
 
-use std::rc::Rc;
+use std::cell::RefCell;
+use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 
@@ -39,6 +43,15 @@ const CAPABILITIES: &str = include_str!(concat!(
 
 static TARGET: OnceLock<panel_host::Target> = OnceLock::new();
 static LIVE: AtomicBool = AtomicBool::new(false);
+
+/// The host function that sets the Panel's text size.
+const FONT_SCALE: &str = "aleph.fontScale";
+
+thread_local! {
+    /// The live surface's view, on the main thread, where `aleph.fontScale`
+    /// reaches it (host functions run on the engine thread).
+    static SURFACE_VIEW: RefCell<Weak<AppView>> = const { RefCell::new(Weak::new()) };
+}
 
 /// Installs the Panel's UI sets and the surface component, once, before the
 /// shell's `run_app` (both registrations are process-wide).
@@ -82,6 +95,7 @@ fn make_surface(context: ComponentContext) -> Box<dyn NativeComponent> {
             "the Panel surface is not registered",
         ));
     let channel = HostChannel::default();
+    channel.handle(FONT_SCALE, handle_font_scale);
     let host = match panel_host::Handle::start(channel.clone(), target) {
         Ok(host) => Some(host),
         Err(error) => {
@@ -93,25 +107,56 @@ fn make_surface(context: ComponentContext) -> Box<dyn NativeComponent> {
         mtm,
         AppOptions {
             app_id: PANEL_APP_ID.to_owned(),
-            host: channel,
+            host: channel.clone(),
             ..AppOptions::default()
         },
     );
+    SURFACE_VIEW.with(|surface| *surface.borrow_mut() = Rc::downgrade(&view));
     match Bundle::source(BUNDLE.to_owned()).with_capabilities_json(Some(CAPABILITIES)) {
         Ok(bundle) => view.load(bundle.with_app_id(Some(PANEL_APP_ID)).into()),
         Err(error) => eprintln!("NSH TSX Panel bundle refused: {error}"),
     }
     Box::new(PanelSurface {
         view,
+        channel,
         _host: host,
         _claim: claim,
     })
+}
+
+/// `aleph.fontScale(scale)`: a positive factor of the system's text size, or
+/// `null` to follow the system again. The answer does not wait for the main
+/// thread; a surface that went away in between ignores the change.
+fn handle_font_scale(call: nsh_engine::HostCall) {
+    let scale = match parse_font_scale(call.data()) {
+        Ok(scale) => scale,
+        Err(message) => return call.reject(message),
+    };
+    dispatch2::DispatchQueue::main().exec_async(move || {
+        let view = SURFACE_VIEW.with(|surface| surface.borrow().upgrade());
+        if let Some(view) = view {
+            view.set_font_scale(scale);
+        }
+    });
+    call.resolve(Value::Null);
+}
+
+fn parse_font_scale(data: &Value) -> Result<Option<f32>, &'static str> {
+    if data.is_null() {
+        return Ok(None);
+    }
+    match data.as_f64() {
+        Some(scale) if scale.is_finite() && scale > 0.0 => Ok(Some(scale as f32)),
+        _ => Err("font scale must be a positive number"),
+    }
 }
 
 /// Fields drop in order after `drop`: the app stops first, then its host
 /// functions go, then the claim is released.
 struct PanelSurface {
     view: Rc<AppView>,
+    /// Kept to remove `aleph.fontScale` when the surface goes.
+    channel: HostChannel,
     _host: Option<panel_host::Handle>,
     _claim: Claim,
 }
@@ -127,6 +172,8 @@ impl NativeComponent for PanelSurface {
 impl Drop for PanelSurface {
     fn drop(&mut self) {
         self.view.stop();
+        self.channel.remove_handler(FONT_SCALE);
+        SURFACE_VIEW.with(|surface| *surface.borrow_mut() = Weak::new());
     }
 }
 
@@ -169,5 +216,17 @@ mod tests {
         assert!(Claim::acquire().is_none());
         drop(first);
         assert!(Claim::acquire().is_some());
+    }
+
+    #[test]
+    fn font_scale_accepts_a_positive_factor_or_null() {
+        assert_eq!(parse_font_scale(&json!(1.25)), Ok(Some(1.25)));
+        assert_eq!(parse_font_scale(&Value::Null), Ok(None));
+        for bad in [json!(0), json!(-1), json!("big"), json!(true)] {
+            assert_eq!(
+                parse_font_scale(&bad),
+                Err("font scale must be a positive number")
+            );
+        }
     }
 }
