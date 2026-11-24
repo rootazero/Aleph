@@ -157,11 +157,12 @@
 //!   (`server_init.rs::handle_chat_send_with_engine`) sends session
 //!   resolution through `visibility::existing_session_is_visible` before the
 //!   run starts (a session that doesn't exist yet is not a denial — see that
-//!   fn's doc); registered here as **KeyChecked** on that basis. **Carve-out:
-//!   the Simulated-execution fallback path** (`chat_handlers::handle_send` →
+//!   fn's doc); registered here as **KeyChecked** on that basis. The
+//!   Simulated-execution fallback path (`chat_handlers::handle_send` →
 //!   `AgentRunManager::start_run`, used only when no LLM provider is
-//!   configured) is NOT covered — `AgentRunManager` has no `SessionStore`
-//!   dependency, and this table must not overstate what's actually enforced.
+//!   configured) runs the same predicate at the same point via
+//!   `AgentRunManager::with_session_store` (pinned by
+//!   `simulated_run_refuses_a_session_owned_by_someone_else`).
 //! - `chat.abort`, `chat.history`, `chat.clear`, `chat.rewind` →
 //!   `KeyChecked`, same pattern. `chat.abort` is the one with two addressed
 //!   identifiers: its `session_key` is optional and checked when present, and
@@ -233,12 +234,10 @@
 //!   (`server_init.rs::handle_run_with_engine`) now runs session resolution
 //!   through `visibility::existing_session_is_visible` immediately after
 //!   `router.route` and before the run starts — byte-identical placement and
-//!   semantics to its `chat.send` twin in the same file. **Same Simulated-
-//!   execution carve-out as `chat.send`**: the no-provider fallback path
-//!   (`handlers::agent::handle_run` → `AgentRunManager::start_run`,
-//!   registered at `agent_init/mod.rs`'s simulated branch) is NOT covered,
-//!   for the identical reason — `AgentRunManager` has no `SessionStore`
-//!   dependency — and this table must not overstate what is enforced.
+//!   semantics to its `chat.send` twin in the same file. The no-provider
+//!   fallback path (`handlers::agent::handle_run` →
+//!   `AgentRunManager::start_run`, registered at `agent_init/mod.rs`'s
+//!   simulated branch) runs the same predicate, exactly as for `chat.send`.
 //!
 //! ## What `KeyChecked` on `agent.run` / `chat.send` does NOT cover
 //!
