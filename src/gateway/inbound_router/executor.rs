@@ -31,15 +31,14 @@ use super::InboundMessageRouter;
 /// channel's tool permission override — both stamped into run metadata so the
 /// execution engine dispatches without re-reading channel config.
 fn channel_run_identity(
-    configs: &HashMap<String, ChannelConfig>,
-    channel_id: &str,
+    config: Option<ChannelConfig>,
 ) -> (
     &'static str,
     Option<PathBuf>,
     &'static str,
     Option<crate::config::types::policies::ToolPermissionsConfig>,
 ) {
-    let cfg = configs.get(channel_id).cloned().unwrap_or_default();
+    let cfg = config.unwrap_or_default();
     (
         cfg.caller_role_str(),
         cfg.resolved_default_workspace(),
@@ -321,7 +320,7 @@ impl InboundMessageRouter {
         // treated as operator. An operator opts a channel up to Config tier via
         // `permission_level = "config"` in its config block.
         let (caller_role, channel_workspace, busy_input_mode, channel_tool_permissions) =
-            channel_run_identity(&self.channel_configs, ctx.message.channel_id.as_str());
+            channel_run_identity(self.channel_policy.get(ctx.message.channel_id.as_str()));
         metadata.insert("caller_role".to_string(), caller_role.to_string());
         // P1 data isolation: stamp the run's owner/scope attribution from the
         // P0 sender→user link (`pairing_store`), not any task-local — channel
@@ -1116,8 +1115,8 @@ mod public_reply_sink_tests {
 #[cfg(test)]
 mod permission_wiring_tests {
     use super::channel_run_identity;
+    use crate::gateway::channel_policy::ChannelPolicyProjection;
     use crate::gateway::inbound_router::types::{ChannelConfig, ChannelPermissionLevel};
-    use std::collections::HashMap;
     use std::path::PathBuf;
 
     /// THE security line: a channel with no registered config runs as the gated
@@ -1125,19 +1124,18 @@ mod permission_wiring_tests {
     /// the external-channel over-permission hole.
     #[test]
     fn unconfigured_channel_defaults_to_guest_with_no_workspace() {
-        let empty: HashMap<String, ChannelConfig> = HashMap::new();
+        let configs = ChannelPolicyProjection::default();
         // Unconfigured → guest, no workspace, the safe `steer` busy default,
         // and no channel tool-permission layer.
         assert_eq!(
-            channel_run_identity(&empty, "telegram"),
+            channel_run_identity(configs.get("telegram")),
             ("guest", None, "steer", None)
         );
 
         // Unknown id in a populated map → still the safe default.
-        let mut configs = HashMap::new();
-        configs.insert("slack".to_string(), ChannelConfig::default());
+        configs.set_config("slack", ChannelConfig::default());
         assert_eq!(
-            channel_run_identity(&configs, "telegram"),
+            channel_run_identity(configs.get("telegram")),
             ("guest", None, "steer", None)
         );
     }
@@ -1147,9 +1145,9 @@ mod permission_wiring_tests {
     #[test]
     fn chat_tier_channel_locks_to_default_workspace() {
         let ws = std::env::temp_dir(); // absolute + existing
-        let mut configs = HashMap::new();
-        configs.insert(
-            "telegram".to_string(),
+        let configs = ChannelPolicyProjection::default();
+        configs.set_config(
+            "telegram",
             ChannelConfig {
                 permission_level: ChannelPermissionLevel::Chat,
                 default_workspace: Some(ws.clone()),
@@ -1157,7 +1155,7 @@ mod permission_wiring_tests {
             },
         );
         assert_eq!(
-            channel_run_identity(&configs, "telegram"),
+            channel_run_identity(configs.get("telegram")),
             ("guest", Some(ws), "steer", None)
         );
     }
@@ -1168,15 +1166,15 @@ mod permission_wiring_tests {
     #[test]
     fn interrupt_busy_mode_is_stamped() {
         use crate::gateway::execution_engine::BusyInputMode;
-        let mut configs = HashMap::new();
-        configs.insert(
-            "ops-bot".to_string(),
+        let configs = ChannelPolicyProjection::default();
+        configs.set_config(
+            "ops-bot",
             ChannelConfig {
                 busy_input_mode: BusyInputMode::Interrupt,
                 ..Default::default()
             },
         );
-        let (_role, _ws, busy, _perms) = channel_run_identity(&configs, "ops-bot");
+        let (_role, _ws, busy, _perms) = channel_run_identity(configs.get("ops-bot"));
         assert_eq!(busy, "interrupt");
     }
 
@@ -1194,15 +1192,15 @@ mod permission_wiring_tests {
                 .into_iter()
                 .collect(),
         };
-        let mut configs = HashMap::new();
-        configs.insert(
-            "group-bot".to_string(),
+        let configs = ChannelPolicyProjection::default();
+        configs.set_config(
+            "group-bot",
             ChannelConfig {
                 tool_permissions: Some(perms),
                 ..Default::default()
             },
         );
-        let (_role, _ws, _busy, channel_perms) = channel_run_identity(&configs, "group-bot");
+        let (_role, _ws, _busy, channel_perms) = channel_run_identity(configs.get("group-bot"));
         let channel_perms = channel_perms.expect("configured override must surface");
         assert_eq!(channel_perms.resolve("bash"), PermissionAction::Deny);
         assert_eq!(channel_perms.resolve("read_file"), PermissionAction::Allow);
@@ -1212,15 +1210,15 @@ mod permission_wiring_tests {
     /// default_workspace set it carries no lock (the agent default applies).
     #[test]
     fn config_tier_channel_maps_to_operator() {
-        let mut configs = HashMap::new();
-        configs.insert(
-            "ops-bot".to_string(),
+        let configs = ChannelPolicyProjection::default();
+        configs.set_config(
+            "ops-bot",
             ChannelConfig {
                 permission_level: ChannelPermissionLevel::Config,
                 ..Default::default()
             },
         );
-        let (role, workspace, busy, _perms) = channel_run_identity(&configs, "ops-bot");
+        let (role, workspace, busy, _perms) = channel_run_identity(configs.get("ops-bot"));
         assert_eq!(role, "operator");
         assert_eq!(workspace, None::<PathBuf>);
         // Config tier inherits the safe steer default unless explicitly opted in.

@@ -11,10 +11,11 @@ use tokio::sync::RwLock;
 
 use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::gateway::channel::{ChannelId, ChannelInfo, ChannelStatus, OutboundMessage};
-use crate::gateway::channel_registry::ChannelRegistry;
+use crate::gateway::channel_policy::{parse_channel_activation_policy, ChannelPolicyProjection};
+use crate::gateway::channel_registry::{ChannelRegistry, ChannelStatusSummary};
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::gateway::security::SharedTokenManager;
-use crate::Config;
+use crate::{ChannelInstanceConfig, Config};
 
 // ── Vault helpers for channel secrets ────────────���───────────────────────────
 
@@ -43,6 +44,7 @@ pub fn inject_channel_secrets(channel_id: &str, config: &mut Value, vault: &Shar
         Some(o) => o,
         None => return,
     };
+    tracing::debug!(channel_id, "Resolving channel credentials from vault");
     for &field in CHANNEL_SECRET_FIELDS {
         // Skip if already present and non-empty in config
         if let Some(existing) = obj.get(field) {
@@ -168,6 +170,39 @@ pub fn store_and_strip_channel_secrets(
     count
 }
 
+/// Cold create cannot fall back to plaintext. Only top-level credentials
+/// supported by the existing vault hydrator can be accepted here.
+fn extract_cold_channel_secrets(
+    channel_id: &str,
+    config: &mut Value,
+) -> Result<Vec<ChannelSecret>, &'static str> {
+    fn has_unsupported_secret(value: &Value, root: bool) -> bool {
+        const UNMAPPED_FIELDS: &[&str] = &[
+            "verification_token",
+            "encrypt_key",
+            "channel_access_token",
+            "channel_secret",
+            "token",
+        ];
+        match value {
+            Value::Object(object) => object.iter().any(|(field, value)| {
+                let nonempty = !value.is_null() && value.as_str() != Some("");
+                let mapped = CHANNEL_SECRET_FIELDS.contains(&field.as_str());
+                let unsupported = UNMAPPED_FIELDS.contains(&field.as_str())
+                    || (mapped && (!root || !value.is_string()));
+                (nonempty && unsupported) || has_unsupported_secret(value, false)
+            }),
+            Value::Array(items) => items.iter().any(|item| has_unsupported_secret(item, false)),
+            _ => false,
+        }
+    }
+
+    if has_unsupported_secret(config, true) {
+        return Err("Channel contains a credential this vault layout cannot store");
+    }
+    Ok(extract_channel_secrets(channel_id, config))
+}
+
 /// Cached `ToolCatalog` for Telegram channel recreation.
 ///
 /// When `channel.start` RPC recreates a Telegram channel from config,
@@ -219,7 +254,7 @@ pub(crate) struct ChannelInfoResponse {
     pub capabilities: CapabilitiesResponse,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(crate) struct CapabilitiesResponse {
     pub attachments: bool,
     pub images: bool,
@@ -274,6 +309,27 @@ fn status_to_string(status: ChannelStatus) -> String {
     .to_string()
 }
 
+fn configured_channel_info(id: &str, config: &Value) -> ChannelInfoResponse {
+    let disabled = ChannelInstanceConfig::is_explicitly_disabled(config);
+    let channel_type = if disabled {
+        ChannelInstanceConfig::declared_type(id, config)
+    } else {
+        config.get("type").and_then(Value::as_str)
+    };
+    ChannelInfoResponse {
+        id: id.to_owned(),
+        name: id.to_owned(),
+        channel_type: channel_type.unwrap_or("unknown").to_owned(),
+        status: if disabled {
+            "disabled"
+        } else {
+            "pending_config"
+        }
+        .to_owned(),
+        capabilities: CapabilitiesResponse::default(),
+    }
+}
+
 /// Handle channels.list RPC request
 ///
 /// Returns a list of all channels — both registered (running/stopped) instances
@@ -289,48 +345,26 @@ pub async fn handle_list(
     let channels = registry.list().await;
     let mut infos: Vec<ChannelInfoResponse> =
         channels.iter().map(ChannelInfoResponse::from).collect();
-    let summary = registry.status_summary().await;
+    let mut summary = ChannelStatusSummary::default();
+    for channel in &channels {
+        summary.record(channel.status);
+    }
 
-    // Merge channels from config that aren't in the registry (pending_config)
+    // Count runtime and cold rows from the same view; pending rows retain the
+    // existing list-only behavior.
     {
         let cfg = app_config.read().await;
-        let registered_ids: std::collections::HashSet<String> =
-            infos.iter().map(|i| i.id.clone()).collect();
-
-        let pending: Vec<ChannelInfoResponse> = cfg
-            .channels
-            .iter()
-            .filter(|(id, _)| !registered_ids.contains(id.as_str()))
-            .map(|(id, val)| {
-                let channel_type = val
-                    .get("type")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown")
-                    .to_string();
-                ChannelInfoResponse {
-                    id: id.clone(),
-                    name: id.clone(),
-                    channel_type,
-                    status: "pending_config".to_string(),
-                    capabilities: CapabilitiesResponse {
-                        attachments: false,
-                        images: false,
-                        audio: false,
-                        video: false,
-                        reactions: false,
-                        replies: false,
-                        editing: false,
-                        deletion: false,
-                        typing_indicator: false,
-                        read_receipts: false,
-                        rich_text: false,
-                        max_message_length: 0,
-                        max_attachment_size: 0,
-                    },
-                }
-            })
-            .collect();
-        infos.extend(pending);
+        let registered_ids: std::collections::HashSet<&str> =
+            channels.iter().map(|channel| channel.id.as_str()).collect();
+        for (id, config) in &cfg.channels {
+            if registered_ids.contains(id.as_str()) {
+                continue;
+            }
+            if ChannelInstanceConfig::is_explicitly_disabled(config) {
+                summary.record(ChannelStatus::Disabled);
+            }
+            infos.push(configured_channel_info(id, config));
+        }
     }
 
     // Durable outbound delivery queue depth (R8: the backlog is inspectable).
@@ -379,6 +413,7 @@ pub async fn handle_list(
 pub async fn handle_status(
     request: JsonRpcRequest,
     registry: Arc<ChannelRegistry>,
+    app_config: Arc<RwLock<Config>>,
 ) -> JsonRpcResponse {
     let channel_id = match &request.params {
         Some(Value::Object(map)) => map.get("channel_id").and_then(|v| v.as_str()),
@@ -394,20 +429,23 @@ pub async fn handle_status(
 
     debug!("Handling channels.status for {}", channel_id);
 
-    match registry.get(&channel_id).await {
-        Some(channel_arc) => {
-            let channel = channel_arc.read().await;
-            let mut live_info = channel.info().clone();
-            live_info.status = channel.status(); // override with live status
-            let info = ChannelInfoResponse::from(&live_info);
-            JsonRpcResponse::success(request.id, json!(info))
-        }
-        None => JsonRpcResponse::error(
-            request.id,
-            INVALID_PARAMS,
-            format!("Channel not found: {channel_id}"),
-        ),
+    if let Some(info) = registry.channel_info(&channel_id).await {
+        return JsonRpcResponse::success(request.id, json!(ChannelInfoResponse::from(&info)));
     }
+    let cfg = app_config.read().await;
+    if let Some(config) = cfg.channels.get(channel_id.as_str()) {
+        if ChannelInstanceConfig::is_explicitly_disabled(config) {
+            return JsonRpcResponse::success(
+                request.id,
+                json!(configured_channel_info(channel_id.as_str(), config)),
+            );
+        }
+    }
+    JsonRpcResponse::error(
+        request.id,
+        INVALID_PARAMS,
+        format!("Channel not found: {channel_id}"),
+    )
 }
 
 /// Handle channel.start RPC request
@@ -420,6 +458,7 @@ pub async fn handle_start(
     registry: Arc<ChannelRegistry>,
     app_config: Arc<RwLock<Config>>,
     vault: Arc<SharedTokenManager>,
+    policy: Arc<ChannelPolicyProjection>,
 ) -> JsonRpcResponse {
     let channel_id = match &request.params {
         Some(Value::Object(map)) => map.get("channel_id").and_then(|v| v.as_str()),
@@ -435,16 +474,23 @@ pub async fn handle_start(
 
     debug!("Handling channel.start for {}", channel_id);
 
-    // Re-create channel with latest config from app config (Panel UI saves here)
-    let (channel_type, mut clean_config) = {
+    let config_only = !registry.contains(&channel_id).await;
+    // Use one config snapshot for both transport and policy. No vault or
+    // factory work occurs while holding the config lock.
+    let (channel_type, declared_config) = {
         let config_snapshot = app_config.read().await;
         match config_snapshot.channels.get(channel_id.as_str()) {
             Some(channel_config) => {
-                // Resolve channel type: explicit "type" field, or fall back to the channel id
-                let channel_type = channel_config
-                    .get("type")
-                    .and_then(|v| v.as_str())
-                    .map_or_else(|| channel_id.as_str().to_string(), |s| s.to_string());
+                let channel_type =
+                    ChannelInstanceConfig::declared_type(channel_id.as_str(), channel_config);
+                if config_only && channel_type.is_none() {
+                    return JsonRpcResponse::error(
+                        request.id,
+                        INVALID_PARAMS,
+                        "Missing channel type",
+                    );
+                }
+                let channel_type = channel_type.unwrap_or(channel_id.as_str()).to_owned();
 
                 // Strip the "type" field from config before passing to constructor
                 let mut clean_config = channel_config.clone();
@@ -464,34 +510,67 @@ pub async fn handle_start(
         }
     };
 
-    // Inject secrets from vault into the config
-    inject_channel_secrets(channel_id.as_str(), &mut clean_config, &vault);
+    let mut runtime_config = declared_config.clone();
+    inject_channel_secrets(channel_id.as_str(), &mut runtime_config, &vault);
 
-    if let Some(mut new_channel) =
-        create_channel_from_config(channel_id.as_str(), &channel_type, clean_config.clone()).await
-    {
+    let activation_policy = if config_only {
+        match parse_channel_activation_policy(&channel_type, &runtime_config, &declared_config) {
+            Ok(policy) => Some(policy),
+            Err(error) => {
+                return JsonRpcResponse::error(request.id, INVALID_PARAMS, error.to_string())
+            }
+        }
+    } else {
+        None
+    };
+
+    let mut channel =
+        create_channel_from_config(channel_id.as_str(), &channel_type, runtime_config.clone())
+            .await;
+    if let Some(new_channel) = channel.as_mut() {
         // Re-attach ToolCatalog for telegram channels so slash commands are registered
         if channel_type == "telegram" {
             use crate::gateway::interfaces::telegram::{
                 parse_telegram_channel_config, TelegramChannel,
             };
-            if let Ok(tg_config) = parse_telegram_channel_config(clean_config) {
+            if let Ok(tg_config) = parse_telegram_channel_config(runtime_config) {
                 let mut tg_channel = TelegramChannel::new(channel_id.as_str(), tg_config);
                 if let Some(reg) = get_telegram_tool_registry() {
                     tg_channel.set_tool_registry(reg);
                 }
-                new_channel = Box::new(tg_channel);
+                *new_channel = Box::new(tg_channel);
             }
         }
-        // Replace old channel with freshly configured one
-        registry.register(new_channel).await;
-        debug!(
-            "Replaced channel {} with fresh config from app config",
-            channel_id
-        );
     }
 
-    match registry.start_channel(&channel_id).await {
+    let result = if let Some((config, pair_loop)) = activation_policy {
+        let Some(channel) = channel else {
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                "Could not construct channel from configuration",
+            );
+        };
+        if channel.info().id != channel_id {
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                "Channel factory returned a different instance ID",
+            );
+        }
+        registry
+            .register_and_start_vacant(channel, |id| {
+                policy.set_activation(id.as_str(), config, pair_loop);
+            })
+            .await
+    } else {
+        if let Some(channel) = channel {
+            registry.register(channel).await;
+        }
+        registry.start_channel(&channel_id).await
+    };
+
+    match result {
         Ok(()) => JsonRpcResponse::success(
             request.id,
             json!({
@@ -688,7 +767,7 @@ pub async fn handle_send(
 
 /// Handle channel.create RPC request
 ///
-/// Creates a new channel instance, saves to config, registers, and auto-starts.
+/// Persist a declaration; construct and auto-start only when not explicitly disabled.
 pub async fn handle_create(
     request: JsonRpcRequest,
     registry: Arc<ChannelRegistry>,
@@ -725,25 +804,26 @@ pub async fn handle_create(
 
     // Check if channel already exists
     let channel_id = ChannelId::new(&id);
-    if registry.get(&channel_id).await.is_some() {
-        return JsonRpcResponse::error(
-            request.id,
-            INVALID_PARAMS,
-            format!("Channel '{id}' already exists"),
-        );
-    }
-
-    // Store secrets in vault and strip from config before persisting
-    let mut config_with_secrets = config.clone();
+    let disabled = ChannelInstanceConfig::is_explicitly_disabled(&config);
     let mut config_to_persist = config.clone();
-    store_and_strip_channel_secrets(&id, &mut config_to_persist, &vault);
-
-    // Inject secrets back for runtime channel creation
-    inject_channel_secrets(&id, &mut config_with_secrets, &vault);
-
-    // Save secret-free config to app config and persist to disk
     {
         let mut app_cfg = app_config.write().await;
+        if app_cfg.channels.contains_key(&id) || registry.contains(&channel_id).await {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                format!("Channel '{id}' already exists"),
+            );
+        }
+        let pending_secrets = if disabled {
+            match extract_cold_channel_secrets(&id, &mut config_to_persist) {
+                Ok(secrets) => secrets,
+                Err(message) => return JsonRpcResponse::error(request.id, INVALID_PARAMS, message),
+            }
+        } else {
+            store_and_strip_channel_secrets(&id, &mut config_to_persist, &vault);
+            Vec::new()
+        };
         let mut config_to_save = if let Value::Object(ref map) = config_to_persist {
             map.clone()
         } else {
@@ -762,7 +842,35 @@ pub async fn handle_create(
                 "Failed to persist channel configuration",
             );
         }
+        if let Err(error) = vault.store_secret_batch(
+            pending_secrets.iter().map(|secret| (secret.key.as_str(), secret.value.as_str())),
+        ) {
+            tracing::error!(channel = id, %error, "Could not store cold channel credentials");
+            if let Some(declaration) = app_cfg.channels.remove(&id) {
+                if let Err(error) = app_cfg.save_incremental(&["channels"]) {
+                    // Keep the secret-free declaration visible if we could
+                    // not remove its on-disk counterpart.
+                    app_cfg.channels.insert(id.clone(), declaration);
+                    tracing::error!(channel = id, %error, "Could not remove the saved cold declaration");
+                }
+            }
+            return JsonRpcResponse::error(request.id, INTERNAL_ERROR, "Failed to store channel credentials");
+        }
     }
+
+    if disabled {
+        return JsonRpcResponse::success(
+            request.id,
+            json!({
+                "id": id,
+                "type": channel_type,
+                "status": "disabled",
+            }),
+        );
+    }
+
+    let mut config_with_secrets = config;
+    inject_channel_secrets(&id, &mut config_with_secrets, &vault);
 
     // Try to create and register channel instance (with secrets injected).
     // If config is incomplete (e.g. missing bot_token), we still succeed
@@ -901,6 +1009,285 @@ mod tests {
         let failure_path = &handler[persist..create];
         assert!(failure_path.contains("app_cfg.channels.remove(&id)"));
         assert!(failure_path.contains("return JsonRpcResponse::error("));
+    }
+
+    #[tokio::test]
+    async fn cold_signal_create_and_activate_uses_latest_policy() {
+        use std::time::Duration;
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let registry = Arc::new(ChannelRegistry::new());
+        let config = Arc::new(RwLock::new(Config::default()));
+        let (_scratch, dir) = crate::utils::scratch::scratch_root();
+        let vault = Arc::new(SharedTokenManager::new(
+            Arc::new(crate::gateway::security::SecurityStore::in_memory().unwrap()),
+            dir.join("test.vault"),
+        ));
+        crate::gateway::interfaces::register_channel_plugins();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let make_request = |phone: &str| {
+            JsonRpcRequest::with_id(
+                "channel.create",
+                Some(json!({"id": "cold-signal", "type": "signal", "config": {
+                    "enabled": false,
+                    "api_url": format!("http://{}", listener.local_addr().unwrap()),
+                    "phone_number": phone,
+                }})),
+                json!(1),
+            )
+        };
+        let created = handle_create(
+            make_request("+15550000001"),
+            registry.clone(),
+            config.clone(),
+            vault.clone(),
+        )
+        .await;
+        assert_eq!(created.result.unwrap()["status"], "disabled");
+        assert!(registry.list().await.is_empty());
+        let duplicate = handle_create(
+            make_request("+15550000002"),
+            registry.clone(),
+            config.clone(),
+            vault.clone(),
+        )
+        .await;
+        assert!(duplicate.error.is_some());
+        let stored = Config::load().unwrap();
+        assert_eq!(
+            stored.channels["cold-signal"]["phone_number"],
+            "+15550000001"
+        );
+        let list_request = || JsonRpcRequest::with_id("channels.list", None, json!(2));
+        let channel_request = |method: &str| {
+            JsonRpcRequest::with_id(method, Some(json!({"channel_id": "cold-signal"})), json!(3))
+        };
+        let listed = handle_list(list_request(), registry.clone(), config.clone())
+            .await
+            .result
+            .unwrap();
+        let status = handle_status(
+            channel_request("channels.status"),
+            registry.clone(),
+            config.clone(),
+        )
+        .await
+        .result
+        .unwrap();
+        assert_eq!(listed["channels"], json!([status.clone()]));
+        assert_eq!(status["status"], "disabled");
+        assert_eq!(status["channel_type"], "signal");
+        assert_eq!(listed["summary"]["disabled"], 1);
+        assert_eq!(listed["summary"]["total"], 1);
+
+        let policy = Arc::new(ChannelPolicyProjection::default());
+        config
+            .write()
+            .await
+            .channels
+            .get_mut("cold-signal")
+            .unwrap()["allow_admin_from"] = json!("invalid");
+        let rejected = handle_start(
+            channel_request("channel.start"),
+            registry.clone(),
+            config.clone(),
+            vault.clone(),
+            policy.clone(),
+        )
+        .await;
+        assert!(rejected.error.is_some());
+        assert!(registry.list().await.is_empty());
+        assert!(policy.get("cold-signal").is_none());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), listener.accept())
+                .await
+                .is_err()
+        );
+
+        config
+            .write()
+            .await
+            .channels
+            .get_mut("cold-signal")
+            .unwrap()["allow_admin_from"] = json!(["+15550000003"]);
+        let mut inbound = registry.take_inbound_receiver().unwrap();
+        let started = handle_start(
+            channel_request("channel.start"),
+            registry.clone(),
+            config.clone(),
+            vault,
+            policy.clone(),
+        )
+        .await;
+        assert_eq!(started.result.unwrap()["status"], "started");
+        let (stream, _) = tokio::time::timeout(Duration::from_secs(5), listener.accept())
+            .await
+            .unwrap()
+            .unwrap();
+        let mut stream = BufReader::new(stream);
+        let mut line = String::new();
+        tokio::time::timeout(Duration::from_secs(5), stream.read_line(&mut line))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(line.trim_end(), "GET /v1/receive/+15550000001 HTTP/1.1");
+        let event =
+            json!({"envelope": {"source": "+15550000004", "dataMessage": {"message": "/model"}}});
+        let response =
+            format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\ndata: {event}\n\n");
+        stream
+            .get_mut()
+            .write_all(response.as_bytes())
+            .await
+            .unwrap();
+        let first = tokio::time::timeout(Duration::from_secs(5), inbound.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let active = policy.get(first.channel_id.as_str()).unwrap();
+        assert!(
+            !active
+                .slash_command_gate(first.sender_id.as_str(), &first.text, false)
+                .allowed
+        );
+        assert_eq!(first.channel_id.as_str(), "cold-signal");
+        assert_eq!(
+            Config::load().unwrap().channels["cold-signal"]["enabled"],
+            false
+        );
+        let listed = handle_list(list_request(), registry.clone(), config)
+            .await
+            .result
+            .unwrap();
+        assert_eq!(listed["channels"].as_array().unwrap().len(), 1);
+        assert_eq!(listed["summary"]["connected"], 1);
+        assert_eq!(listed["summary"]["disabled"], 0);
+        registry.stop_all().await;
+    }
+
+    #[tokio::test]
+    async fn cold_create_keeps_plaintext_out_of_saved_config() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let registry = Arc::new(ChannelRegistry::new());
+        let config = Arc::new(RwLock::new(Config::default()));
+        let (_scratch, dir) = crate::utils::scratch::scratch_root();
+        std::fs::create_dir_all(&dir).unwrap();
+        let vault = Arc::new(SharedTokenManager::new(
+            Arc::new(crate::gateway::security::SecurityStore::in_memory().unwrap()),
+            dir.join("test.vault"),
+        ));
+        let create = |id, settings| {
+            handle_create(
+                JsonRpcRequest::with_id(
+                    "channel.create",
+                    Some(json!({
+                        "id": id, "type": "telegram", "config": settings,
+                    })),
+                    json!(1),
+                ),
+                registry.clone(),
+                config.clone(),
+                vault.clone(),
+            )
+        };
+        let flat = json!({"enabled": false, "bot_token": "12345:fixture"});
+        let without_vault_key = create("cold-telegram-unavailable", flat.clone()).await;
+        assert_eq!(without_vault_key.error.unwrap().code, INTERNAL_ERROR);
+
+        vault.generate_token().unwrap();
+        let config_path = Config::effective_path();
+        let backed_up_config = config_path.with_extension("qa-backup");
+        let new_key = channel_vault_key("cold-telegram-retry", "bot_token");
+        let old_key = channel_vault_key("cold-telegram-existing", "bot_token");
+        vault.store_secret(&old_key, "67890:previous").unwrap();
+        std::fs::rename(&config_path, &backed_up_config).unwrap();
+        std::fs::create_dir(&config_path).unwrap();
+        for id in ["cold-telegram-retry", "cold-telegram-existing"] {
+            let failed = create(id, flat.clone()).await;
+            assert_eq!(failed.error.unwrap().message, "Failed to persist channel configuration");
+        }
+        assert!(vault.get_secret(&new_key).unwrap().is_none());
+        assert_eq!(vault.get_secret(&old_key).unwrap().unwrap().expose(), "67890:previous");
+        std::fs::remove_dir(&config_path).unwrap();
+        std::fs::rename(backed_up_config, config_path).unwrap();
+        let retried = create("cold-telegram-retry", json!({"enabled": false})).await;
+        assert_eq!(retried.result.unwrap()["status"], "disabled");
+        assert!(vault.get_secret(&new_key).unwrap().is_none());
+
+        let nested = create(
+            "cold-telegram-nested",
+            json!({
+                "enabled": false,
+                "accounts": [{"id": "main", "bot_token": "12345:nested-fixture"}],
+            }),
+        )
+        .await;
+        assert_eq!(nested.error.unwrap().code, INVALID_PARAMS);
+        assert_eq!(
+            create("cold-telegram-flat", flat).await.result.unwrap()["status"],
+            "disabled"
+        );
+
+        let stored = Config::load().unwrap();
+        assert!(!stored.channels.contains_key("cold-telegram-unavailable"));
+        assert!(!stored.channels.contains_key("cold-telegram-nested"));
+        assert!(stored.channels["cold-telegram-flat"]
+            .get("bot_token")
+            .is_none());
+        let secret = vault
+            .get_secret(&channel_vault_key("cold-telegram-flat", "bot_token"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(secret.expose(), "12345:fixture");
+        assert!(registry.list().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn cold_telegram_start_rejects_invalid_v2_policy_with_legacy_vault_token() {
+        let registry = Arc::new(ChannelRegistry::new());
+        let mut settings = Config::default();
+        settings.channels.insert(
+            "cold-telegram-mixed".into(),
+            json!({
+                "type": "telegram", "enabled": false,
+                "accounts": [{"id": "main", "bot_token": "12345:fixture", "dm_policy": "invalid"}],
+            }),
+        );
+        let config = Arc::new(RwLock::new(settings));
+        let (_scratch, dir) = crate::utils::scratch::scratch_root();
+        std::fs::create_dir_all(&dir).unwrap();
+        let vault = Arc::new(SharedTokenManager::new(
+            Arc::new(crate::gateway::security::SecurityStore::in_memory().unwrap()),
+            dir.join("test.vault"),
+        ));
+        vault.generate_token().unwrap();
+        vault
+            .store_secret(
+                &channel_vault_key("cold-telegram-mixed", "bot_token"),
+                "67890:legacy-fixture",
+            )
+            .unwrap();
+        let projection = Arc::new(ChannelPolicyProjection::default());
+        let reply = handle_start(
+            JsonRpcRequest::with_id(
+                "channel.start",
+                Some(json!({
+                    "channel_id": "cold-telegram-mixed",
+                })),
+                json!(1),
+            ),
+            registry.clone(),
+            config,
+            vault,
+            projection.clone(),
+        )
+        .await;
+        let error = reply.error.unwrap();
+        assert_eq!(error.code, INVALID_PARAMS);
+        assert!(error.message.contains("Invalid channel transport policy"));
+        assert!(registry.list().await.is_empty());
+        assert!(projection.get("cold-telegram-mixed").is_none());
     }
 
     #[test]

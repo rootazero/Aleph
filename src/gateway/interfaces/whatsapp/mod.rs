@@ -786,11 +786,11 @@ pub fn register_with_plugin() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gateway::channel_policy::DmPolicy;
     use crate::gateway::interfaces::whatsapp::pairing::PairingState;
 
     #[tokio::test]
     async fn allowed_chats_intersects_access_policy() {
-        use crate::gateway::channel_policy::DmPolicy;
         use std::time::Duration;
 
         for allowed in [vec!["111@s.whatsapp.net".to_string()], vec![]] {
@@ -841,22 +841,23 @@ mod tests {
         channel.stop().await.unwrap();
     }
 
-    /// W-01: with the default `dm_policy = "pairing"`, a DM from a number
+    /// W-01: with `dm_policy = "pairing"`, a DM from a number
     /// absent from `paired_numbers` is dropped before the agent sees it,
     /// while an approved number still gets through.
     #[tokio::test]
     async fn pairing_drops_dm_from_unpaired_number() {
         use std::time::Duration;
 
-        let config = WhatsAppConfig {
+        let mut config = WhatsAppConfig {
             paired_numbers: vec!["+15550001111".to_string()],
             ..WhatsAppConfig::default()
         };
+        config.access.dm_policy = DmPolicy::Pairing;
         let (mut channel, fake) = WhatsAppChannel::for_test_with_fake("wa-test", config);
         let mut rx = channel.inbound_subscribe();
         channel.start().await.unwrap();
 
-        fake.emit_text_message("15550000000@s.whatsapp.net", "mallory", "unpaired")
+        fake.emit_text_message("15550000000@s.whatsapp.net", "15550000000", "unpaired")
             .await
             .unwrap();
         assert!(
@@ -866,13 +867,14 @@ mod tests {
             "an unpaired DM must never reach the agent"
         );
 
-        fake.emit_text_message("15550001111@s.whatsapp.net", "owner", "paired")
+        fake.emit_text_message("15550001111@s.whatsapp.net", "15550001111", "paired")
             .await
             .unwrap();
         let msg = tokio::time::timeout(Duration::from_secs(1), rx.recv())
             .await
             .unwrap()
             .unwrap();
+        assert_eq!(msg.sender_id.as_str(), "15550001111@s.whatsapp.net");
         assert_eq!(msg.text, "paired");
         channel.stop().await.unwrap();
     }

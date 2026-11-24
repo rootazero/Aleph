@@ -692,6 +692,53 @@ impl ChannelRegistry {
         channel_id
     }
 
+    /// Publish and start a config-only declaration without replacing an incumbent.
+    /// Project its policy under the same publication gate before adapter startup.
+    pub(crate) async fn register_and_start_vacant(
+        &self,
+        channel: Box<dyn Channel>,
+        before_publish: impl FnOnce(&ChannelId) + Send,
+    ) -> ChannelResult<()> {
+        let id = channel.info().id.clone();
+        let marker = Arc::new(());
+        let entry = {
+            let _publication = self.source_publication_sync.lock().await;
+            let _lifecycle = self.lifecycle_sync.lock().await;
+            let mut channels = self.channels.write().await;
+            if channels.contains_key(&id) {
+                return Err(ChannelError::Busy(format!(
+                    "Channel already registered: {id}"
+                )));
+            }
+            self.next_bound_revision()
+                .map_err(|error| ChannelError::Internal(error.to_string()))?;
+            self.observe_delivery_policy(&id, channel.outbound_delivery_policy())?;
+            let mut desired = self.desired_state.write().await;
+            let publication_revision = self
+                .try_advance_source_revision()
+                .map_err(|error| ChannelError::Internal(error.to_string()))?;
+            let entry = Arc::new(ChannelRegistrationEntry {
+                channel: Arc::new(RwLock::new(channel)),
+                registration: ChannelRegistration::Legacy {
+                    publication_revision,
+                },
+                runtime: Mutex::new(binding::EntryRuntime {
+                    operation: Some(marker.clone()),
+                    ..Default::default()
+                }),
+                drained: tokio::sync::Notify::new(),
+                forwarder_task: Mutex::new(None),
+            });
+            before_publish(&id);
+            channels.insert(id.clone(), entry.clone());
+            desired.insert(id.clone(), DesiredChannelState::Stopped);
+            entry
+        };
+        let result = self.start_channel_inner(&id, &entry).await;
+        self.finish_legacy_operation(&entry, &marker).await;
+        result
+    }
+
     /// Tear down the current channel before replacing or removing it.
     /// The entry operation marker serializes the same channel while the shared
     /// lifecycle gate remains available to unrelated channels.
@@ -1123,6 +1170,19 @@ impl ChannelRegistry {
         {
             runtime.operation = None;
         }
+    }
+
+    pub(crate) async fn contains(&self, id: &ChannelId) -> bool {
+        self.channels.read().await.contains_key(id)
+    }
+
+    /// Read either kind of registration without exposing a bound channel handle.
+    pub(crate) async fn channel_info(&self, id: &ChannelId) -> Option<ChannelInfo> {
+        let entry = self.channels.read().await.get(id).cloned()?;
+        let channel = entry.channel.read().await;
+        let mut info = channel.info().clone();
+        info.status = channel.status();
+        Some(info)
     }
 
     /// Get a legacy channel by ID. Bound handles remain source-private.
@@ -2087,15 +2147,7 @@ impl ChannelRegistry {
 
         for entry in channels.values() {
             let channel = entry.channel.read().await;
-            summary.total += 1;
-            match channel.status() {
-                ChannelStatus::Connected => summary.connected += 1,
-                ChannelStatus::Connecting => summary.connecting += 1,
-                ChannelStatus::Pairing => summary.pairing += 1,
-                ChannelStatus::Disconnected => summary.disconnected += 1,
-                ChannelStatus::Error => summary.error += 1,
-                ChannelStatus::Disabled => summary.disabled += 1,
-            }
+            summary.record(channel.status());
         }
 
         summary
@@ -2379,6 +2431,20 @@ pub struct ChannelStatusSummary {
     pub disconnected: usize,
     pub error: usize,
     pub disabled: usize,
+}
+
+impl ChannelStatusSummary {
+    pub(crate) fn record(&mut self, status: ChannelStatus) {
+        self.total += 1;
+        match status {
+            ChannelStatus::Connected => self.connected += 1,
+            ChannelStatus::Connecting => self.connecting += 1,
+            ChannelStatus::Pairing => self.pairing += 1,
+            ChannelStatus::Disconnected => self.disconnected += 1,
+            ChannelStatus::Error => self.error += 1,
+            ChannelStatus::Disabled => self.disabled += 1,
+        }
+    }
 }
 
 /// One channel's lifecycle facts, as the health monitor sees them.
@@ -3703,6 +3769,7 @@ mod tests {
         terminal: bool,
         delivery_policy: OutboundDeliveryPolicy,
         retry_after_secs: u64,
+        check_start: Option<Box<dyn Fn() -> ChannelResult<()> + Send + Sync>>,
     }
 
     impl FlakyChannel {
@@ -3723,6 +3790,7 @@ mod tests {
                 terminal,
                 delivery_policy: OutboundDeliveryPolicy::Automatic,
                 retry_after_secs: 0,
+                check_start: None,
             }
         }
     }
@@ -3739,7 +3807,7 @@ mod tests {
             self.delivery_policy
         }
         async fn start(&mut self) -> ChannelResult<()> {
-            Ok(())
+            self.check_start.as_ref().map_or(Ok(()), |check| check())
         }
         async fn stop(&mut self) -> ChannelResult<()> {
             Ok(())
@@ -3763,6 +3831,129 @@ mod tests {
                 })
             })
         }
+    }
+
+    #[tokio::test]
+    async fn vacant_activation_publishes_policy_before_start() {
+        use crate::gateway::{
+            channel_policy::ChannelPolicyProjection, inbound_router::GroupPolicy,
+        };
+
+        let registry = ChannelRegistry::new();
+        let policy = Arc::new(ChannelPolicyProjection::default());
+        let check = policy.clone();
+        let mut channel = FlakyChannel::new(0, false, Arc::new(AtomicU32::new(0)));
+        channel.check_start = Some(Box::new(move || {
+            assert_eq!(
+                check.get("flaky").unwrap().group_policy,
+                GroupPolicy::Disabled
+            );
+            Ok(())
+        }));
+        registry
+            .register_and_start_vacant(Box::new(channel), |id| {
+                policy.set_activation(
+                    id.as_str(),
+                    crate::gateway::inbound_router::ChannelConfig {
+                        group_policy: GroupPolicy::Disabled,
+                        ..Default::default()
+                    },
+                    None,
+                );
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            registry.health_states().await[0].desired,
+            DesiredChannelState::Running
+        );
+    }
+
+    #[tokio::test]
+    async fn vacant_activation_refuses_incumbent_without_publishing() {
+        let registry = ChannelRegistry::new();
+        let starts = Arc::new(AtomicU32::new(0));
+        let start_count = starts.clone();
+        let mut incumbent = FlakyChannel::new(0, false, Arc::new(AtomicU32::new(0)));
+        incumbent.check_start = Some(Box::new(move || {
+            start_count.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }));
+        let id = registry.register(Box::new(incumbent)).await;
+        let old = registry.get(&id).await.unwrap();
+        let replacement = FlakyChannel::new(0, false, Arc::new(AtomicU32::new(0)));
+        let result = registry
+            .register_and_start_vacant(Box::new(replacement), |_| {
+                panic!("refused registration must not publish policy");
+            })
+            .await;
+        assert!(matches!(result, Err(ChannelError::Busy(_))));
+        assert_eq!(starts.load(Ordering::Relaxed), 0);
+        assert!(Arc::ptr_eq(&old, &registry.get(&id).await.unwrap()));
+    }
+
+    #[tokio::test]
+    async fn vacant_activation_persists_delivery_policy_before_start() {
+        use super::super::delivery_queue::{DeliveryQueueConfig, DeliveryStore, EnqueueOutcome};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("delivery.sqlite");
+        let store = Arc::new(DeliveryStore::open(&path, DeliveryQueueConfig::default()).unwrap());
+        let registry = ChannelRegistry::new().with_delivery_store(store.clone());
+        let message = OutboundMessage::text("room", "old automatic delivery");
+        assert!(matches!(
+            store
+                .enqueue_fresh("flaky", &message, "offline", 0)
+                .unwrap(),
+            EnqueueOutcome::Queued(_)
+        ));
+
+        let mut incoming = FlakyChannel::new(0, false, Arc::new(AtomicU32::new(0)));
+        incoming.delivery_policy = OutboundDeliveryPolicy::ExplicitOnly;
+        let observed = store.clone();
+        incoming.check_start = Some(Box::new(move || {
+            assert!(observed.is_explicit_only_channel("flaky").unwrap());
+            assert_eq!(observed.len().unwrap(), 0);
+            Ok(())
+        }));
+        registry
+            .register_and_start_vacant(Box::new(incoming), |_| {})
+            .await
+            .unwrap();
+        assert!(matches!(
+            store
+                .enqueue_fresh("flaky", &message, "offline", 0)
+                .unwrap(),
+            EnqueueOutcome::PolicyRefused
+        ));
+    }
+
+    #[tokio::test]
+    async fn vacant_activation_does_not_publish_when_delivery_policy_fails() {
+        use super::super::delivery_queue::{DeliveryQueueConfig, DeliveryStore};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("delivery.sqlite");
+        let store = Arc::new(DeliveryStore::open(&path, DeliveryQueueConfig::default()).unwrap());
+        let registry = ChannelRegistry::new().with_delivery_store(store);
+        rusqlite::Connection::open(path)
+            .unwrap()
+            .execute_batch(
+                "CREATE TRIGGER reject_cold_policy BEFORE INSERT ON explicit_only_channels
+             BEGIN SELECT RAISE(ABORT, 'fixture policy observation rejected'); END;",
+            )
+            .unwrap();
+
+        let mut incoming = FlakyChannel::new(0, false, Arc::new(AtomicU32::new(0)));
+        incoming.delivery_policy = OutboundDeliveryPolicy::ExplicitOnly;
+        incoming.check_start = Some(Box::new(|| panic!("failed observation must not start")));
+        let result = registry
+            .register_and_start_vacant(Box::new(incoming), |_| {
+                panic!("failed observation must not publish policy");
+            })
+            .await;
+        assert!(matches!(result, Err(ChannelError::Internal(_))));
+        assert!(registry.list().await.is_empty());
     }
 
     async fn registry_with(channel: FlakyChannel, policy: SendRetryPolicy) -> ChannelRegistry {

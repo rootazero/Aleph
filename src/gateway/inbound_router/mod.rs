@@ -27,6 +27,7 @@ use tracing::{error, info, warn};
 
 use super::agent_instance::AgentRegistry;
 use super::channel::{InboundMessage, OutboundMessage, CB_MESSAGE_ID_PREFIX};
+use super::channel_policy::ChannelPolicyProjection;
 use super::channel_registry::ChannelRegistry;
 use super::execution_adapter::ExecutionAdapter;
 use super::handlers::group_chat::SharedOrchestrator;
@@ -82,8 +83,7 @@ pub struct InboundMessageRouter {
     pub(super) channel_registry: Arc<ChannelRegistry>,
     pub(super) pairing_store: Arc<dyn PairingStore>,
     pub(super) config: RoutingConfig,
-    /// Channel-specific configs (keyed by `channel_id`)
-    pub(super) channel_configs: HashMap<String, ChannelConfig>,
+    pub(super) channel_policy: Arc<ChannelPolicyProjection>,
     /// Agent registry for looking up agent instances
     pub(super) agent_registry: Option<Arc<AgentRegistry>>,
     /// Execution adapter for running agents
@@ -103,9 +103,6 @@ pub struct InboundMessageRouter {
     /// Router-wide pair-loop-guard default, used when the message's channel
     /// declares no override.
     pair_loop_config: PairLoopGuardConfig,
-    /// Per-channel pair-loop-guard overrides, keyed by the channel id the
-    /// inbound message reports (the same key `channel_configs` uses).
-    pair_loop_overrides: HashMap<String, PairLoopGuardConfig>,
     /// Group chat orchestrator
     pub(super) group_chat_orch: Option<SharedOrchestrator>,
     /// Group chat executor
@@ -171,7 +168,7 @@ impl InboundMessageRouter {
             channel_registry,
             pairing_store,
             config,
-            channel_configs: HashMap::new(),
+            channel_policy: Arc::new(ChannelPolicyProjection::default()),
             agent_registry: None,
             execution_adapter: None,
             workspace_manager: None,
@@ -181,7 +178,6 @@ impl InboundMessageRouter {
             dedup_tracker: Mutex::new(InboundDedupTracker::new()),
             pair_loop_guard: Arc::new(PairLoopGuard::new()),
             pair_loop_config: PairLoopGuardConfig::default(),
-            pair_loop_overrides: HashMap::new(),
             group_chat_orch: None,
             group_chat_executor: None,
             active_group_sessions: Mutex::new(HashMap::new()),
@@ -361,9 +357,15 @@ impl InboundMessageRouter {
         self
     }
 
-    /// Register channel-specific configuration
+    /// Use the policy handle also held by the runtime activation handler.
+    pub fn with_channel_policy(mut self, policy: Arc<ChannelPolicyProjection>) -> Self {
+        self.channel_policy = policy;
+        self
+    }
+
+    /// Register channel-specific configuration at boot.
     pub fn register_channel_config(&mut self, channel_id: &str, config: ChannelConfig) {
-        self.channel_configs.insert(channel_id.to_string(), config);
+        self.channel_policy.set_config(channel_id, config);
     }
     /// Register a per-channel pair-loop-guard override.
     ///
@@ -372,27 +374,16 @@ impl InboundMessageRouter {
     /// or disable the guard without changing every other channel. Channels
     /// without an override keep the router-wide default.
     pub fn register_pair_loop_override(&mut self, channel_id: &str, config: PairLoopGuardConfig) {
-        self.pair_loop_overrides
-            .insert(channel_id.to_string(), config);
+        self.channel_policy.set_pair_loop(channel_id, config);
     }
     /// Effective pair-loop-guard config for one inbound message: the
     /// channel's override when it declares one, else the router-wide default.
     fn pair_loop_config_for(&self, channel_id: &str) -> PairLoopGuardConfig {
         resolve_pair_loop_settings(
-            self.pair_loop_overrides.get(channel_id),
+            self.channel_policy.pair_loop(channel_id).as_ref(),
             Some(&self.pair_loop_config),
             true,
         )
-    }
-
-    /// Clone the fully-assembled `channel_id → ChannelConfig` map. Called once
-    /// at the end of boot to publish the process-global snapshot that
-    /// system-initiated continuations (goal wake / resume) read via
-    /// [`crate::gateway::channel_policy::system_continuation_identity`] — the map
-    /// is otherwise private to this router and unreachable from those paths.
-    #[must_use]
-    pub fn channel_configs_snapshot(&self) -> HashMap<String, ChannelConfig> {
-        self.channel_configs.clone()
     }
 
     /// Start consuming inbound messages
@@ -1027,7 +1018,7 @@ impl InboundMessageRouter {
                     // /groupchat and /new used to early-return ahead of this
                     // check, so a configured gate silently never applied to
                     // them.
-                    if let Some(cfg) = self.channel_configs.get(ctx.message.channel_id.as_str()) {
+                    if let Some(cfg) = self.channel_policy.get(ctx.message.channel_id.as_str()) {
                         let decision = cfg.slash_command_gate(
                             &ctx.sender_normalized,
                             &parsed.command_name,
@@ -1596,6 +1587,78 @@ mod tests {
     };
     use crate::gateway::pairing_store::SqlitePairingStore;
     use crate::gateway::routing_config::DmScope;
+
+    #[tokio::test]
+    async fn cold_telegram_account_overlay_preserves_shared_slash_policy() {
+        use crate::gateway::channel_policy::parse_channel_activation_policy;
+        use crate::gateway::inbound_context::{InboundContext, ReplyRoute};
+        use crate::gateway::interfaces::telegram::{
+            config::parse_activation_config, TelegramChannel,
+        };
+        use crate::routing::session_key::SessionKey;
+        use serde_json::json;
+
+        let config = json!({
+            "enabled": false,
+            "accounts": [
+                {"id": "silent", "bot_token": "111:fixture", "dm_policy": "disabled"},
+                {"id": "talk", "bot_token": "222:fixture", "dm_policy": "open"}
+            ],
+            "allow_admin_from": ["7"],
+            "tool_permissions": {"overrides": {"bash": "deny"}}
+        });
+        let (policy, pair_loop) =
+            parse_channel_activation_policy("telegram", &config, &config).unwrap();
+        let projection = Arc::new(ChannelPolicyProjection::default());
+        projection.set_activation("telegram-cold", policy, pair_loop);
+        let registry = Arc::new(ChannelRegistry::new());
+        registry
+            .register(Box::new(TelegramChannel::new(
+                "telegram-cold",
+                parse_activation_config(config).unwrap(),
+            )))
+            .await;
+        let router = InboundMessageRouter::new(
+            registry,
+            Arc::new(SqlitePairingStore::in_memory().unwrap()),
+            RoutingConfig::default(),
+        )
+        .with_channel_policy(projection);
+        for (account, allowed) in [("silent", false), ("talk", true)] {
+            let mut message = cb_message();
+            message.channel_id = ChannelId::new("telegram-cold");
+            message.conversation_id = ConversationId::new("42");
+            message.sender_id = UserId::new("42");
+            message.is_group = false;
+            message.text = "/new".into();
+            message.raw = Some(json!({"_aleph_telegram_account": account}));
+            let route =
+                ReplyRoute::new(message.channel_id.clone(), message.conversation_id.clone());
+            let result = router
+                .check_permission(InboundContext::new(
+                    message,
+                    route,
+                    SessionKey::ephemeral("telegram-cold"),
+                ))
+                .await;
+            assert_eq!(result.is_ok(), allowed);
+            if let Ok(context) = result {
+                let policy = router
+                    .channel_policy
+                    .get(context.message.channel_id.as_str())
+                    .unwrap();
+                assert!(
+                    !policy
+                        .slash_command_gate(context.sender_normalized.as_str(), "/new", false)
+                        .allowed
+                );
+                assert_eq!(
+                    policy.tool_permissions.unwrap().overrides["bash"],
+                    crate::extension::PermissionAction::Deny,
+                );
+            }
+        }
+    }
 
     #[tokio::test]
     async fn line_policy_bridge_is_enforced_by_core_under_runtime_id() {

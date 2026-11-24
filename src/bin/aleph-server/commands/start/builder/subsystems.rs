@@ -14,6 +14,9 @@
 use alephcore::memory::notes::watcher::NoteVaultWatcher;
 use alephcore::sync_primitives::{Arc, RwLock};
 
+use alephcore::gateway::channel_policy::{
+    install_channel_policy_projection, ChannelPolicyProjection,
+};
 use alephcore::gateway::handlers::auth as auth_handlers;
 use alephcore::gateway::interfaces::telegram::offset::OffsetTracker;
 use alephcore::gateway::interfaces::telegram::parse_telegram_channel_config;
@@ -24,6 +27,7 @@ use alephcore::gateway::interfaces::TelegramChannel;
 use alephcore::gateway::telecom::operator_control::OperatorControl;
 use alephcore::gateway::GatewayServer;
 use alephcore::gateway::{AgentRegistry, ChannelRegistry, InboundMessageRouter, RoutingConfig};
+use alephcore::ChannelInstanceConfig;
 
 use super::register_channel_handlers;
 
@@ -295,6 +299,7 @@ pub(in crate::commands::start) async fn initialize_channels(
     vault: Arc<alephcore::gateway::security::SharedTokenManager>,
     delivery_cfg: alephcore::gateway::delivery_queue::DeliveryQueueConfig,
     send_retry: alephcore::gateway::channel_registry::SendRetryPolicy,
+    policy: &Arc<ChannelPolicyProjection>,
 ) -> Arc<ChannelRegistry> {
     use alephcore::gateway::handlers::channel::{
         create_channel_from_config, inject_channel_secrets,
@@ -470,8 +475,11 @@ pub(in crate::commands::start) async fn initialize_channels(
         );
     }
 
-    // Create and register all channel instances
+    // Disabled declarations remain in Config without allocating an adapter.
     for inst in &instances {
+        if ChannelInstanceConfig::is_explicitly_disabled(&inst.config) {
+            continue;
+        }
         if inst.channel_type == "imessage" {
             match serde_json::from_value::<IMessageConfig>(inst.config.clone()) {
                 Ok(imessage_config) => {
@@ -652,18 +660,7 @@ pub(in crate::commands::start) async fn initialize_channels(
                 }
             }
 
-            // `enabled` is a boot request owned by the registry. An explicit
-            // false leaves the channel registered but prevents `Channel::start`;
-            // token requests, listener/WS/emitter runtime, webhook mounts, and
-            // API-handle publication therefore remain absent until explicit
-            // lifecycle activation.
-            let boot_enabled = config_with_secrets
-                .get("enabled")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(true);
-            let channel_id = channel_registry
-                .register_for_boot(channel, boot_enabled)
-                .await;
+            let channel_id = channel_registry.register_for_boot(channel, true).await;
             if !daemon {
                 println!("Registered channel: {} ({})", channel_id, inst.channel_type);
             }
@@ -676,7 +673,7 @@ pub(in crate::commands::start) async fn initialize_channels(
         }
     }
 
-    register_channel_handlers(server, &channel_registry, app_config_arc, &vault);
+    register_channel_handlers(server, &channel_registry, app_config_arc, &vault, policy);
 
     // Auto-start all registered channels
     let start_results = channel_registry.start_all().await;
@@ -729,6 +726,7 @@ pub(in crate::commands::start) async fn initialize_channels(
 #[allow(clippy::too_many_arguments)]
 pub(in crate::commands::start) async fn initialize_inbound_router(
     channel_registry: Arc<ChannelRegistry>,
+    policy: Arc<ChannelPolicyProjection>,
     execution_adapter: Option<Arc<dyn alephcore::gateway::ExecutionAdapter>>,
     agent_registry: Option<Arc<AgentRegistry>>,
     pairing_store: Arc<dyn alephcore::gateway::pairing_store::PairingStore>,
@@ -793,7 +791,8 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
             pairing_store.clone(),
             routing_config,
         )
-    };
+    }
+    .with_channel_policy(policy.clone());
 
     // Wire approval-button callback dispatch (Telegram approve/deny)
     if let Some(sink) = approval_callback_sink {
@@ -839,6 +838,7 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
             let cfg = cfg_arc.read().await;
             cfg.channels
                 .iter()
+                .filter(|(_, val)| !ChannelInstanceConfig::is_explicitly_disabled(val))
                 .find_map(|(_, val)| {
                     parse_telegram_channel_config(val.clone())
                         .ok()
@@ -851,6 +851,20 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
         inbound_router = inbound_router.with_coalescer(coalescing_config);
         if !daemon {
             println!("  Inbound router: message coalescing enabled");
+        }
+    }
+
+    let instances = if let Some(cfg) = &app_config {
+        cfg.read().await.resolved_channels()
+    } else {
+        Vec::new()
+    };
+    let mut boot_instances = Vec::new();
+    for inst in instances {
+        if ChannelInstanceConfig::is_explicitly_disabled(&inst.config) {
+            policy.project_cold_declaration(&inst.id, &inst.config);
+        } else {
+            boot_instances.push(inst);
         }
     }
 
@@ -868,9 +882,8 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
     // require-mention/slash-admin gating — the `From<&IMessageConfig>` conversion
     // is already cross-platform (a local-only transport simply never registers a
     // live "imessage" channel off-macOS, so its gating config is a harmless no-op).
-    if let Some(ref cfg_arc) = app_config {
-        let cfg = cfg_arc.read().await;
-        for inst in cfg.resolved_channels() {
+    {
+        for inst in &boot_instances {
             if inst.channel_type != "imessage" {
                 continue;
             }
@@ -934,9 +947,8 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
     // authoritative pairing flow. Previously the router fell back to
     // `ChannelConfig::default()` (Pairing / Open) for Telegram, ignoring the
     // operator's configured access policy.
-    if let Some(ref cfg_arc) = app_config {
-        let cfg = cfg_arc.read().await;
-        for inst in cfg.resolved_channels() {
+    {
+        for inst in &boot_instances {
             if inst.channel_type != "telegram" {
                 continue;
             }
@@ -985,9 +997,8 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
     // `groups_allowed`, `group_policy`, `group_allowlist` and `require_mention`
     // and the router decided with `ChannelConfig::default()` instead. See the
     // `From<&FeishuConfig>` impl for why every arm of that mapping narrows.
-    if let Some(ref cfg_arc) = app_config {
-        let instances = cfg_arc.read().await.resolved_channels();
-        for inst in instances {
+    {
+        for inst in &boot_instances {
             if inst.channel_type != "feishu" {
                 continue;
             }
@@ -1044,9 +1055,8 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
     // channel keeps the router-wide default. Before this wiring the key was
     // parsed and never read, so an operator could not widen or disable the
     // hard-coded 20-per-60s budget for a single noisy channel.
-    if let Some(ref cfg_arc) = app_config {
-        let instances = cfg_arc.read().await.resolved_channels();
-        for inst in instances {
+    {
+        for inst in &boot_instances {
             let Some(override_config) =
                 alephcore::gateway::pair_loop_guard::PairLoopGuardConfig::from_channel_config(
                     &inst.config,
@@ -1096,9 +1106,8 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
     // `SlashAccessConfig`; we skip registration entirely so `channel_configs`
     // stays empty for it and `permission.rs` keeps its allow-all default —
     // byte-identical to pre-tiering behavior. Gating only activates on opt-in.
-    if let Some(ref cfg_arc) = app_config {
-        let instances = cfg_arc.read().await.resolved_channels();
-        for inst in instances {
+    {
+        for inst in &boot_instances {
             if matches!(
                 inst.channel_type.as_str(),
                 "imessage" | "telegram" | "feishu"
@@ -1306,14 +1315,8 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
         inbound_router = inbound_router.with_workflow_clarify(store, signal);
     }
 
-    // Publish the boot channel-config snapshot now that every
-    // `register_channel_config` above has run — this is the ONLY source
-    // system-initiated continuations (goal wait-barrier wake / boot resume) can
-    // read the per-channel deny layer from (the live map is private to this
-    // router). Set before the router is sealed; the map is immutable hereafter.
-    alephcore::gateway::channel_policy::set_channel_config_snapshot(
-        inbound_router.channel_configs_snapshot(),
-    );
+    // Continuations and live ingress consult the same policy projection.
+    install_channel_policy_projection(policy);
 
     let inbound_router = Arc::new(inbound_router);
 
