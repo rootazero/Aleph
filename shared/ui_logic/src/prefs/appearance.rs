@@ -60,14 +60,22 @@ pub enum Accent {
     Rose,
 }
 
-/// The two accent colours a palette contributes per colour scheme.
+/// The colours a palette contributes per colour scheme.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AccentPalette {
     /// Primary action colour (`--color-primary` in the Leptos stylesheet).
     pub primary: &'static str,
     /// Selected-row tint (`--color-sidebar-active` in the Leptos stylesheet).
     pub selected: &'static str,
+    /// Text drawn on the primary colour, chosen per palette so the pair
+    /// reaches the 4.5:1 contrast normal text needs.
+    pub on_primary: &'static str,
 }
+
+/// Near-white text for a dark primary colour.
+const LIGHT_TEXT: &str = "oklch(0.985 0 0)";
+/// Near-black text for a light primary colour.
+const DARK_TEXT: &str = "oklch(0.205 0 0)";
 
 impl Accent {
     pub const ALL: [Self; 5] = [
@@ -125,19 +133,23 @@ impl Accent {
     /// Palette colours for the light (`dark == false`) or dark scheme.
     #[must_use]
     pub const fn palette(self, dark: bool) -> AccentPalette {
-        let (primary, selected) = match (self, dark) {
-            (Self::Mauve, false) => ("oklch(0.55 0.120 310)", "oklch(0.95 0.015 310)"),
-            (Self::Mauve, true) => ("oklch(0.65 0.120 310)", "oklch(0.22 0.035 310)"),
-            (Self::Ocean, false) => ("oklch(0.55 0.130 250)", "oklch(0.95 0.022 250)"),
-            (Self::Ocean, true) => ("oklch(0.68 0.130 250)", "oklch(0.24 0.040 250)"),
-            (Self::Forest, false) => ("oklch(0.53 0.115 150)", "oklch(0.95 0.022 150)"),
-            (Self::Forest, true) => ("oklch(0.66 0.120 150)", "oklch(0.24 0.038 150)"),
-            (Self::Sunset, false) => ("oklch(0.62 0.135 60)", "oklch(0.95 0.025 60)"),
-            (Self::Sunset, true) => ("oklch(0.74 0.135 65)", "oklch(0.26 0.040 65)"),
-            (Self::Rose, false) => ("oklch(0.57 0.150 15)", "oklch(0.95 0.025 15)"),
-            (Self::Rose, true) => ("oklch(0.70 0.150 15)", "oklch(0.25 0.045 15)"),
+        let (primary, selected, on_primary) = match (self, dark) {
+            (Self::Mauve, false) => ("oklch(0.55 0.120 310)", "oklch(0.95 0.015 310)", LIGHT_TEXT),
+            (Self::Mauve, true) => ("oklch(0.65 0.120 310)", "oklch(0.22 0.035 310)", DARK_TEXT),
+            (Self::Ocean, false) => ("oklch(0.55 0.130 250)", "oklch(0.95 0.022 250)", LIGHT_TEXT),
+            (Self::Ocean, true) => ("oklch(0.68 0.130 250)", "oklch(0.24 0.040 250)", DARK_TEXT),
+            (Self::Forest, false) => ("oklch(0.53 0.115 150)", "oklch(0.95 0.022 150)", LIGHT_TEXT),
+            (Self::Forest, true) => ("oklch(0.66 0.120 150)", "oklch(0.24 0.038 150)", DARK_TEXT),
+            (Self::Sunset, false) => ("oklch(0.62 0.135 60)", "oklch(0.95 0.025 60)", DARK_TEXT),
+            (Self::Sunset, true) => ("oklch(0.74 0.135 65)", "oklch(0.26 0.040 65)", DARK_TEXT),
+            (Self::Rose, false) => ("oklch(0.57 0.150 15)", "oklch(0.95 0.025 15)", LIGHT_TEXT),
+            (Self::Rose, true) => ("oklch(0.70 0.150 15)", "oklch(0.25 0.045 15)", DARK_TEXT),
         };
-        AccentPalette { primary, selected }
+        AccentPalette {
+            primary,
+            selected,
+            on_primary,
+        }
     }
 }
 
@@ -329,9 +341,6 @@ pub struct Appearance {
 /// NSH default corner radius, in rem. Roundness multiplies it.
 const BASE_RADIUS_REM: f32 = 0.625;
 
-/// Foreground drawn on top of the primary colour in both schemes.
-const ON_PRIMARY: &str = "oklch(0.985 0 0)";
-
 /// The NSH `setTheme` payload for `appearance`: a partial theme over the
 /// shadcn tokens, carrying both colour schemes so switching light/dark needs
 /// no second call. Mode itself is applied through `setColorScheme`.
@@ -354,7 +363,7 @@ fn scheme_tokens(palette: AccentPalette) -> Value {
     }
     tokens.insert("sidebar-accent".to_owned(), Value::from(palette.selected));
     for name in ["primary-foreground", "sidebar-primary-foreground"] {
-        tokens.insert(name.to_owned(), Value::from(ON_PRIMARY));
+        tokens.insert(name.to_owned(), Value::from(palette.on_primary));
     }
     Value::Object(tokens)
 }
@@ -431,7 +440,8 @@ mod tests {
         assert_eq!(vars["light"]["primary"], "oklch(0.55 0.130 250)");
         assert_eq!(vars["dark"]["primary"], "oklch(0.68 0.130 250)");
         assert_eq!(vars["light"]["sidebar-accent"], "oklch(0.95 0.022 250)");
-        assert_eq!(vars["dark"]["primary-foreground"], ON_PRIMARY);
+        assert_eq!(vars["light"]["primary-foreground"], LIGHT_TEXT);
+        assert_eq!(vars["dark"]["primary-foreground"], DARK_TEXT);
         assert_eq!(vars["theme"]["radius"], "0.625rem");
 
         let sharp = Appearance {
@@ -456,5 +466,37 @@ mod tests {
             value,
             json!({"mode":"system","accent":"mauve","fontScale":"default","roundness":"default","density":"compact"})
         );
+    }
+
+    /// WCAG relative luminance of an `oklch(L C h)` colour, clamped to sRGB.
+    fn luminance(oklch: &str) -> f64 {
+        let inner = oklch.trim_start_matches("oklch(").trim_end_matches(')');
+        let parts: Vec<f64> = inner
+            .split_whitespace()
+            .map(|part| part.parse().unwrap())
+            .collect();
+        let (lightness, chroma, hue) = (parts[0], parts[1], parts[2].to_radians());
+        let (a, b) = (chroma * hue.cos(), chroma * hue.sin());
+        let l = (lightness + 0.396_337_777_4 * a + 0.215_803_757_3 * b).powi(3);
+        let m = (lightness - 0.105_561_345_8 * a - 0.063_854_172_8 * b).powi(3);
+        let s = (lightness - 0.089_484_177_5 * a - 1.291_485_548_0 * b).powi(3);
+        let red = 4.076_741_662_1 * l - 3.307_711_591_3 * m + 0.230_969_929_2 * s;
+        let green = -1.268_438_004_6 * l + 2.609_757_401_1 * m - 0.341_319_396_5 * s;
+        let blue = -0.004_196_086_3 * l - 0.703_418_614_7 * m + 1.707_614_701_0 * s;
+        0.2126 * red.clamp(0.0, 1.0)
+            + 0.7152 * green.clamp(0.0, 1.0)
+            + 0.0722 * blue.clamp(0.0, 1.0)
+    }
+
+    #[test]
+    fn text_on_every_primary_reaches_normal_text_contrast() {
+        for accent in Accent::ALL {
+            for dark in [false, true] {
+                let palette = accent.palette(dark);
+                let (first, second) = (luminance(palette.primary), luminance(palette.on_primary));
+                let ratio = (first.max(second) + 0.05) / (first.min(second) + 0.05);
+                assert!(ratio >= 4.5, "{accent:?} dark={dark}: {ratio:.2}:1");
+            }
+        }
     }
 }
