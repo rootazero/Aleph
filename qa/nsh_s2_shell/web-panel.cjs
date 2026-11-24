@@ -68,8 +68,10 @@ async function run(fixturePath) {
 
     // 3. Customize: Capabilities first, Sessions hidden.
     await page.getByText('Customize').click();
-    await page.getByLabel('Move Capabilities up').click();
-    await page.getByLabel('Move Capabilities up').click();
+    // Default order: Overview, Sessions, Chat (S3), Capabilities.
+    for (let moves = 0; moves < 3; moves += 1) {
+      await page.getByLabel('Move Capabilities up').click();
+    }
     await page.getByLabel('Hide Sessions').click();
     await page.getByText('Done').click();
     await page.waitForTimeout(500);
