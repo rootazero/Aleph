@@ -187,7 +187,7 @@ function ShortcutEditor(props: {
           onPress={() => props.onBinding(props.row().id, "cleared")}
           class="px-2"
         >
-          <Text>Clear</Text>
+          <Text class="text-foreground">Clear</Text>
         </Button>
         <If when={props.row().resolved.source !== "default"}>
           <Button
@@ -195,7 +195,7 @@ function ShortcutEditor(props: {
             onPress={() => props.onBinding(props.row().id, null)}
             class="px-2"
           >
-            <Text>Reset</Text>
+            <Text class="text-foreground">Reset</Text>
           </Button>
         </If>
       </View>

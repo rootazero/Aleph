@@ -19,17 +19,17 @@ export function LayoutEditor(props: {
             <View class="flex-row items-center gap-2">
               <Text class={hidden() ? "flex-1 text-muted-foreground" : "flex-1 text-foreground"}>{label(key())}</Text>
               <Button accessibilityLabel={`Move ${label(key())} up`} onPress={() => props.onMove(key(), true)} class="px-2">
-                <Text>↑</Text>
+                <Text class="text-foreground">↑</Text>
               </Button>
               <Button accessibilityLabel={`Move ${label(key())} down`} onPress={() => props.onMove(key(), false)} class="px-2">
-                <Text>↓</Text>
+                <Text class="text-foreground">↓</Text>
               </Button>
               <Button
                 accessibilityLabel={`${hidden() ? "Show" : "Hide"} ${label(key())}`}
                 onPress={() => props.onHidden(key(), !hidden())}
                 class="px-2"
               >
-                <Text>{hidden() ? "Show" : "Hide"}</Text>
+                <Text class="text-foreground">{hidden() ? "Show" : "Hide"}</Text>
               </Button>
             </View>
           );
