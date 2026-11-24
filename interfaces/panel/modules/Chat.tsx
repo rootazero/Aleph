@@ -15,6 +15,19 @@ import { type PanelEvent, type PanelSdk, RpcError } from "../shell/sdk";
 const HOST_UNAVAILABLE = -32090;
 const HISTORY_LIMIT = 200;
 
+/**
+ * A random version-4 UUID for `idempotency_key`. Not `crypto.randomUUID()`:
+ * the desktop shell's embedded runtime has no Web Crypto (enabling it pulls
+ * in RSA and elliptic-curve crates). The key only has to be unique within
+ * this caller's namespace while the Gateway caches it, not unguessable.
+ */
+function newIdempotencyKey(): string {
+  const hex = (digits: number) =>
+    Array.from({ length: digits }, () => Math.floor(Math.random() * 16).toString(16)).join("");
+  const variant = (8 + Math.floor(Math.random() * 4)).toString(16);
+  return `${hex(8)}-${hex(4)}-4${hex(3)}-${variant}${hex(3)}-${hex(12)}`;
+}
+
 type Message = { role: string; content: string; timestamp?: string; run_id?: string };
 type History = { session_key: string; messages?: Message[]; active_run?: string | null };
 type SendResult = { run_id: string; session_key: string };
@@ -101,21 +114,21 @@ export function Chat(props: { sdk: PanelSdk }) {
     const text = draft().trim();
     if (!text || composing || sending() || activeRun()) return;
     const key = sessionKey();
+    const params: Record<string, unknown> = {
+      message: text,
+      channel: "gui:chat",
+      stream: true,
+      // One key per attempt: a retry of this exact send is answered from
+      // the Gateway's cache instead of starting a second run.
+      idempotency_key: newIdempotencyKey(),
+    };
+    if (key) params.session_key = key;
     sending.set(true);
     notice.set(null);
     early.clear();
     messages.update((list) => [...list, { role: "user", content: text }]);
     draft.set("");
     try {
-      const params: Record<string, unknown> = {
-        message: text,
-        channel: "gui:chat",
-        stream: true,
-        // One key per attempt: a retry of this exact send is answered from
-        // the Gateway's cache instead of starting a second run.
-        idempotency_key: crypto.randomUUID(),
-      };
-      if (key) params.session_key = key;
       const result = (await sdk.invoke("chat.send", params)) as SendResult;
       if (!key) sessionKey.set(result.session_key);
       const held = early.get(result.run_id);
@@ -190,6 +203,7 @@ export function Chat(props: { sdk: PanelSdk }) {
           submitBehavior="submit"
           placeholder="Message Aleph"
           accessibilityLabel="Message"
+          autoFocus
           class="flex-1 rounded-(--radius) border border-input px-3 py-2 text-foreground"
         />
         <If

@@ -185,7 +185,7 @@ test("a session opens in chat and its reply streams in, then history takes over"
   expect(sent.session_key).toBe("s-1");
   expect(sent.channel).toBe("gui:chat");
   expect(sent.stream).toBe(true);
-  expect(String(sent.idempotency_key)).toMatch(/^[0-9a-f-]{36}$/);
+  expect(String(sent.idempotency_key)).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
 
   await app.host.send("aleph.event", chunk("Hel"));
   await app.host.send("aleph.event", { topic: "stream.response_chunk", data: { run_id: "other", delta: "nope" } });
