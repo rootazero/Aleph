@@ -324,14 +324,17 @@ async def probe_obscura(ws_url, page_url, led):
             "document.getElementById('txt').value === 'caps-probe'") else "unsupported"
 
         # Screenshot geometry (design §4.5): is a pixel in obscura's image at
-        # the CSS position the DOM reports? Logged for the receipt and asserted
-        # against `browser_screenshot`'s behaviour, not the table.
+        # the CSS position the DOM reports? Not a table row: it pins the
+        # v0.2.7 conclusion that `browser_screenshot` needs no coordinate
+        # warning for obscura. A build that breaks the agreement fails this
+        # stage, and that conclusion has to be revisited (a note in
+        # src/builtin_tools/browser_tools/screenshot.rs), not silently kept.
         geometry = await measure_geometry(cdp, s, root)
         led.log(f"  geometry #geo (x, y, w, h in CSS px; fixture says 137, 211, 53, 29): "
                 f"{json.dumps(geometry)}")
-        led.log("  geometry verdict: " + ("the screenshot agrees with the DOM within 1 CSS px"
-                                         if geometry_agrees(geometry) else
-                                         "the screenshot does NOT agree with the DOM"))
+        led.check("the screenshot, the box model and getBoundingClientRect agree on #geo "
+                  "within 1 CSS px — browser_screenshot needs no coordinate warning",
+                  geometry_agrees(geometry), json.dumps(geometry))
 
         # The carried finding, measured here because this is the connection that
         # can measure it: obscura emits no dialog event AND does not block its
