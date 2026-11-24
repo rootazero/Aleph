@@ -447,11 +447,9 @@ pub async fn handle_stats(
         None => db.count_all_notes().await.unwrap_or(0),
     };
 
-    // The galaxy is the one surface that cannot represent a union — its
-    // `NoteNodeDto` carries no `agent_id`, so two partitions holding the same
-    // `category/filename` would collide into one node. These two counts label
-    // THAT graph, so they must be scoped exactly as `graph.query` is, or the
-    // stat card would describe a picture the galaxy never draws.
+    // These counts describe the same single-partition graph as `graph.query`.
+    // Note addresses carry a partition for follow-up calls, but graph edges
+    // and insights still identify their endpoints by path within that window.
     let graph_partition = agent
         .as_deref()
         .map(super::memory_scope::primary_read_partition);

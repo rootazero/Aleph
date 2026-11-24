@@ -47,15 +47,10 @@ pub async fn handle_query_impl(req: JsonRpcRequest, db: MemoryBackend) -> JsonRp
         };
     }
 
-    // The galaxy is the one enumerating surface that cannot represent a union:
-    // `NoteNodeDto` carries no `agent_id`, so two partitions holding the same
-    // `category/filename` would collide into one node with no way to tell them
-    // apart, and the edge list is keyed by those same paths. So this reads the
-    // ONE partition this session writes to rather than the union its sibling
-    // readers use — the org tier being invisible here is a narrower, recorded
-    // gap (FEATURE_LOCATOR §6.7), not the defect `memory_scope` closes.
-    // `memory.stats` scopes its two graph counts the same way, so the stat card
-    // describes the picture actually drawn.
+    // Edge and insight endpoints are paths within one partition. Read the
+    // session's write partition and return its exact address on each node;
+    // unlike search, this window does not include the org tier. `memory.stats`
+    // scopes its graph counts the same way.
     let graph_partition = crate::gateway::handlers::memory_scope::primary_read_partition(agent_id);
     let agent_id = graph_partition.as_str();
 
@@ -233,6 +228,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn graph_node_address_is_the_partition_actually_read() {
+        use crate::gateway::caller_identity::CALLER_USER;
+        use crate::gateway::handlers::graph::handle_node_detail_impl;
+        use crate::scope::{with_scope, ScopeAttribution};
+
+        let (_scratch, db) = make_db();
+        let mut note = make_note("SharedPath", "concept", vec![]);
+        note.tags = vec!["org".to_owned()];
+        db.index_note(&note, "main", "concept").await.unwrap();
+        note.tags = vec!["personal".to_owned()];
+        db.index_note(&note, "main__u-alice", "concept")
+            .await
+            .unwrap();
+
+        CALLER_USER
+            .scope(Some("u-alice".to_owned()), async {
+                with_scope(Some(ScopeAttribution::personal("u-alice")), async {
+                    let response =
+                        handle_query_impl(query_request(50, Some("main")), db.clone()).await;
+                    let result = response.result.expect("graph.query result");
+                    let node = &result["nodes"][0];
+                    assert_eq!(node["agent_id"], "main__u-alice");
+                    let params = serde_json::json!({
+                        "agent_id": node["agent_id"],
+                        "node_id": node["id"],
+                    });
+                    let request = JsonRpcRequest {
+                        jsonrpc: "2.0".into(),
+                        method: "graph.node_detail".into(),
+                        params: Some(params),
+                        id: Some(serde_json::json!(2)),
+                    };
+                    let detail = handle_node_detail_impl(request, db).await;
+                    let selected = detail.result.expect("graph.node_detail result");
+                    assert_eq!(selected["node"]["id"], node["id"]);
+                    assert_eq!(selected["node"]["agent_id"], node["agent_id"]);
+                    assert_eq!(selected["node"]["tags"], serde_json::json!(["personal"]));
+                })
+                .await;
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn graph_window_ties_use_path_order() {
+        let (_scratch, db) = make_db();
+        for title in ["Zulu", "Bravo", "Alpha"] {
+            let note = make_note(title, "concept", vec![]);
+            db.index_note(&note, "main", "concept").await.unwrap();
+        }
+        let (nodes, _) = db.get_graph_data("main", 2).await.unwrap();
+        let paths: Vec<_> = nodes.iter().map(|node| node.path.as_str()).collect();
+        assert_eq!(paths, ["concept/Alpha", "concept/Bravo"]);
+    }
+
+    #[tokio::test]
     async fn graph_query_falls_back_to_default_agent_when_omitted() {
         let (_scratch, db) = make_db();
         // Seed both default agent and a non-default agent. When agent_id is
@@ -327,9 +378,15 @@ mod tests {
 
         let resp = CALLER_USER
             .scope(Some("u-bob".to_string()), async {
-                handle_query_impl(query_request(50, Some("main__u-alice")), db).await
+                handle_query_impl(query_request(50, Some("main__u-alice")), db.clone()).await
             })
             .await;
+        let absent = CALLER_USER
+            .scope(Some("u-bob".to_string()), async {
+                handle_query_impl(query_request(50, Some("main__u-bob")), db).await
+            })
+            .await;
+        assert_eq!(resp.result, absent.result);
         assert!(
             resp.error.is_none(),
             "success, not an error: {:?}",
