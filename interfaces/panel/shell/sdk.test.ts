@@ -7,9 +7,9 @@ const CONNECTED: ConnectionState = { state: "connected", endpoint: "https://alep
 function standIn() {
   let generation = 1;
   const listeners = new Set<(state: ConnectionState) => void>();
-  const pending: ((value: unknown) => void)[] = [];
+  const pending: { resolve(value: unknown): void; reject(error: Error): void }[] = [];
   const shell: ShellAccess = {
-    rpc: () => new Promise((resolve) => pending.push(resolve)),
+    rpc: () => new Promise((resolve, reject) => pending.push({ resolve, reject })),
     generation: () => generation,
     connection: () => CONNECTED,
     navigate: () => {},
@@ -21,7 +21,8 @@ function standIn() {
   return {
     shell,
     listeners,
-    answer: (value: unknown) => pending.shift()?.(value),
+    answer: (value: unknown) => pending.shift()?.resolve(value),
+    fail: () => pending.shift()?.reject(new Error("request failed")),
     reconnect: () => {
       generation += 1;
     },
@@ -50,6 +51,15 @@ test("a result from an older generation is dropped", async () => {
   const call = sdk.invoke("sessions.list");
   fake.reconnect();
   fake.answer({ sessions: [] });
+  await expect(call).rejects.toThrow("disposed");
+});
+
+test("a rejection from an older generation is dropped", async () => {
+  const fake = standIn();
+  const sdk = createSdk("aleph:memory-nebula", 1, fake.shell);
+  const call = sdk.invoke("graph.node_detail");
+  fake.reconnect();
+  fake.fail();
   await expect(call).rejects.toThrow("disposed");
 });
 

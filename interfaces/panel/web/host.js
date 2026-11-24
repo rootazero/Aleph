@@ -203,7 +203,9 @@ export async function createHost(player, env = globalThis) {
     return { result: null };
   };
 
-  connect();
+  // Unsupported embeddings start unavailable without a state transition.
+  // The initial query reports that state; do not emit a synthetic event.
+  if (supported) connect();
 
   return {
     call(name, data) {

@@ -5,6 +5,7 @@ import { batch, cleanup, computed, host, signal, Storage, Text, View } from "nsh
 import { Button } from "nsh/base";
 import { PanelModel } from "aleph/panel";
 import { Capabilities } from "../modules/Capabilities";
+import { MemoryNebula } from "../modules/MemoryNebula";
 import { Overview } from "../modules/Overview";
 import { Sessions } from "../modules/Sessions";
 import { LayoutEditor } from "./LayoutEditor";
@@ -57,13 +58,21 @@ export function Shell() {
   };
 
   const applyConnection = (next: ConnectionState) => {
-    const reconnected = next.state === "connected" && connection().state !== "connected";
+    const previous = connection();
+    const changed = next.state !== previous.state || next.endpoint !== previous.endpoint || next.subject !== previous.subject;
     batch(() => {
       connection.set(next);
-      if (reconnected) generation.update((value) => value + 1);
+      if (changed) {
+        generation.update((value) => value + 1);
+        snapshot = null;
+        storageKey = null;
+        view.set(null);
+        notice.set(null);
+        editing.set(false);
+      }
     });
     for (const listener of [...listeners]) listener(next);
-    if (reconnected) void load(generation());
+    if (changed && next.state === "connected") void load(generation());
   };
 
   const edit = (change: (stored: string) => string | null | undefined) => {
@@ -86,9 +95,16 @@ export function Shell() {
     },
   };
 
+  const applyInitialConnection = (state: ConnectionState) => {
+    // A real transition may arrive before the initial query returns.
+    if (generation() === 0) applyConnection(state);
+  };
   if (host.available()) {
     cleanup(host.on<ConnectionState>("aleph.connection", applyConnection));
-    void host.call("aleph.connection", null).then((state) => applyConnection(state as ConnectionState));
+    void host.call("aleph.connection", null).then(
+      (state) => applyInitialConnection(state as ConnectionState),
+      () => applyInitialConnection({ ...INITIAL, state: "unavailable" }),
+    );
   } else {
     connection.set({ ...INITIAL, state: "unavailable" });
   }
@@ -169,6 +185,8 @@ function ModuleSlot(props: { slot: Slot; tab: PanelTab | undefined; tabs: PanelT
       return <Sessions sdk={sdk} />;
     case "aleph:capabilities":
       return <Capabilities tabs={props.tabs} />;
+    case "aleph:memory-nebula":
+      return <MemoryNebula sdk={sdk} />;
     default:
       return <Unavailable title={slot.key} detail="This renderer has no module for this tab." />;
   }

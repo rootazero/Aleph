@@ -133,3 +133,63 @@ test("a refused session shows the pairing form and pairs", async () => {
   const pair = app.host.calls().find((call) => call.name === "aleph.pair");
   expect(pair?.data).toEqual({ bootstrap_ticket: "ticket-123" });
 });
+
+const NEBULA_TAB = {
+  ...COMMUNITY_TAB,
+  descriptor: {
+    ...COMMUNITY_TAB.descriptor,
+    key: { plugin_id: "aleph", tab_id: "memory-nebula" },
+    label: "Memory Nebula",
+    entry: "shell/memory-nebula",
+    trust: "verified",
+  },
+  origin: "builtin",
+  asset_integrity: null,
+  public_base: "shell/",
+};
+
+function nebulaSnapshot(declarations: unknown[]) {
+  return { revision: 4, declarations, project_context: { project_id: null, generation: 0 } };
+}
+
+test("Nebula opens exact search addresses without assuming graph membership", async () => {
+  const inGraph = { id: "concept/same", path: "concept/same", tags: [], link_count: 0, agent_id: "org-a", name: "In graph", category: "concept" };
+  const outside = { ...inGraph, agent_id: "org-b", name: "Search only" };
+  const paramsSeen: unknown[] = [];
+  const app = await open("./App.tsx", { host: { handlers: gateway({
+    "panel.capabilities.snapshot": () => nebulaSnapshot([NEBULA_TAB]),
+    "graph.query": () => ({ nodes: [inGraph], edges: [] }),
+    "graph.search": () => ({ results: [outside] }),
+    "graph.node_detail": (params) => {
+      paramsSeen.push(params);
+      return { node: outside, content: "Body from org-b", backlinks: [], outgoing: [] };
+    },
+  }) } });
+  await app.waitFor("label:Open Memory Nebula");
+  await app.press("label:Open Memory Nebula");
+  await app.waitFor("In graph");
+  await app.type("text:Search notes", "same");
+  await app.press("Search");
+  await app.waitFor("Search only");
+  await app.press("Search only");
+  await app.waitFor("Body from org-b");
+  expect(app.texts()).toContain("Not in the current graph");
+  expect(paramsSeen).toEqual([{ agent_id: "org-b", node_id: "concept/same" }]);
+});
+
+test("Nebula discovery is not carried across connection identities", async () => {
+  let declarations: unknown[] = [NEBULA_TAB];
+  const note = { id: "concept/private", path: "concept/private", tags: [], link_count: 0, agent_id: "org-a", name: "Original note", category: "concept" };
+  const app = await open("./App.tsx", { host: { handlers: gateway({
+    "panel.capabilities.snapshot": () => nebulaSnapshot(declarations),
+    "graph.query": () => ({ nodes: [note], edges: [] }),
+  }) } });
+  await app.waitFor("label:Open Memory Nebula");
+  await app.press("label:Open Memory Nebula");
+  await app.waitFor("Original note");
+  declarations = [];
+  await app.host.send("aleph.connection", { ...CONNECTED, subject: "fedcba9876543210fedcba9876543210" });
+  await app.waitFor("label:Open Memory Nebula", { state: "gone" });
+  await app.waitFor("Gateway: healthy");
+  expect(rpcCalls(app, "graph.query")).toBe(1);
+});
