@@ -84,13 +84,12 @@ NSH Panel 的第五轮迭代。S1–S3 已合入 main，分别交付传输层、
 
 | Rust 表字段 | NSH token | Leptos 变量 |
 |---|---|---|
-| `primary` | `primary` | `--color-primary` |
-| `primary`（同值） | `sidebar-primary` | `--color-sidebar-active` |
-| `ring` | `ring` | `--color-ring`（Leptos 另加 `/ 0.35` 透明度，比对时去掉） |
-| `chart_1` | `chart-1` | `--color-chart-1` |
+| `primary` | `primary`、`sidebar-primary`、`ring`、`chart-1` | `--color-primary`、`--color-chart-1`、`--color-ring`（Leptos 另加 `/ 0.35` 透明度，比对时去掉） |
+| `selected` | `sidebar-accent` | `--color-sidebar-active` |
+| 固定 `oklch(0.985 0 0)` | `primary-foreground`、`sidebar-primary-foreground` | —（Leptos 无此变量，不比对） |
 | —（只在 Leptos） | — | `--color-primary-hover`、`--color-primary-subtle`、`--color-sidebar-accent`：不进 Rust 表，不比对 |
 
-`--color-sidebar-accent` 在 Leptos 是强调色，但在 NSH 使用的 shadcn token 里 `sidebar-accent` 是悬停底色，含义不同，所以不映射。
+名字交叉：Leptos 的 `--color-sidebar-active` 是选中项的浅色底，对应 shadcn 的 `sidebar-accent`（悬停/选中底色）；Leptos 的 `--color-sidebar-accent` 是强调色本身，与 `primary` 接近但个别档位不同，不映射。前景色固定为近白，因为强调色都是中等明度，NSH 默认主题在深色下的 `primary-foreground` 是近黑。（2026-11-24 计划阶段核对 `tailwind.css` 后修正。）
 
 ## 5. 设计 / Design
 
@@ -144,13 +143,13 @@ pub enum Binding { Key(String), Cleared }   // absent = default
 |---|---|---|
 | 明暗 | `setColorScheme` | `setColorScheme` |
 | 强调色、圆角 | `setTheme(theme_tokens(...))` | 同左 |
-| 字号 | `host.call("aleph.fontScale", n)` → `panel_host` → 主线程 → `AppView::set_font_scale` | `web/host.js` 处理同名调用，设置根元素字号（NSH Web 播放器由它推出 `fontScale`，`nsh.js:2111-2121`） |
+| 字号 | `host.call("aleph.fontScale", n)` → `panel_surface` 注册的处理函数 → 主线程 → `AppView::set_font_scale` | `web/host.js` 处理同名调用，设置根元素字号（NSH Web 播放器由它推出 `fontScale`，`nsh.js:2111-2121`） |
 | 密度 | Panel 自己的间距 token；只作用于外壳与内置模块 | 同左 |
 
 Desktop 字号这条路要改四处：
 
 1. `interfaces/panel/nsh.json` 的 `capabilities.host` 加 `aleph.fontScale`（否则 `host.call` 返回 `ERR_ACCESS_DENIED`）。
-2. `desktop/nsh-shell/src/panel_host.rs` 的 `FUNCTIONS` 加这个名字并实现处理函数。
+2. `desktop/nsh-shell/src/panel_surface.rs` 在同一个 `HostChannel` 上注册这个处理函数，表面释放时移除。不放进 `panel_host.rs` 的 `FUNCTIONS`：那里管 Gateway 连接，而字号属于持有 `AppView` 的表面（计划阶段修正）。
 3. `interfaces/panel/web/host.js` 的 `switch`（`:231-241`）加同名分支。
 4. 主线程交接：处理函数在引擎线程运行，`panel_host::Handle` 又在 `AppView` 创建之前启动（`panel_surface.rs:85-97`）。因此 `panel_surface` 在 `AppView::new` 之后把 `Weak<AppView>` 放进主线程的 thread-local，处理函数把字号投递到主线程，由主线程取 `Weak` 调用 `set_font_scale`。
 
