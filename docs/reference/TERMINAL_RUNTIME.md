@@ -99,6 +99,14 @@ cargo test -p alephcore --lib gateway::pty
 cargo test -p aleph-panel --lib
 ```
 
+Run `cargo test -p alephcore --lib gateway::capability_terminal_tests` for
+Terminal Capability wiring. Tests that bind a source to the real process-global
+manager run in an exact-match child process and require their own completion
+receipt. A shared test lock orders access but does not undo a one-shot binding.
+
+验证 Terminal Capability 接线时运行 `cargo test -p alephcore --lib gateway::capability_terminal_tests`。
+测试若要给真实的进程全局 manager 绑定 source，应在精确匹配用例的子进程中运行，并校验该用例的完成回执；共享测试锁只能约束访问顺序，不能撤销一次性绑定。
+
 Panel host acceptance additionally runs from `interfaces/webchat`:
 
 ```text
