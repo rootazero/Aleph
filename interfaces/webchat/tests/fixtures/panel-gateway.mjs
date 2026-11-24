@@ -25,6 +25,8 @@ export async function createPanelGatewayFixture(staged, options = {}) {
     created_at: 1700000001,
     closed: false,
   }];
+  const project = options.project;
+  let projectContext = { project_id: null, generation: 0 };
   const state = {
     httpPaths: [],
     httpResponses: [],
@@ -109,6 +111,23 @@ export async function createPanelGatewayFixture(staged, options = {}) {
       const params = request.params ?? {};
       if (request.method === 'connect') {
         reply(client, request.id, { authorized: true, needs_token: false, user: { id: 'production-fixture-user' } });
+        return;
+      }
+      if (project && request.method === 'projects.list') {
+        reply(client, request.id, { projects: [project] });
+        return;
+      }
+      if (project && request.method === 'panel.project.select') {
+        if (params.project_id !== project.id) {
+          reject(client, request.id, 'unknown fixture project');
+          return;
+        }
+        projectContext = { project_id: project.id, generation: projectContext.generation + 1 };
+        reply(client, request.id, projectContext);
+        return;
+      }
+      if (project && request.method === 'panel.capabilities.snapshot') {
+        reply(client, request.id, { revision: 1, declarations: [], project_context: projectContext });
         return;
       }
       if (request.method === 'pty.list') {

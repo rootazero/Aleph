@@ -809,6 +809,7 @@ fn explicit_community_panel(
 
 #[component]
 fn LegacyMainContent() -> impl IntoView {
+    let terminal_selection = crate::views::terminal::TerminalSelection::default();
     let location = use_location();
     let mode = Memo::new(move |_| PanelMode::from_path(&location.pathname.get()));
     let form_factor = expect_context::<FormFactorState>();
@@ -863,13 +864,9 @@ fn LegacyMainContent() -> impl IntoView {
         // Embedded terminal (Task 14) — desktop/wide only, same treatment as
         // Projects above: no phone screen exists yet, so a narrow viewport
         // resolves the route but renders nothing rather than the wide view.
-        <div style:display=move || if mode.get() == PanelMode::Terminal { "contents" } else { "none" }>
-            {move || if form_factor.form_factor.get() == FormFactor::Phone {
-                ().into_any()
-            } else {
-                view! { <TerminalView /> }.into_any()
-            }}
-        </div>
+        <Show when=move || mode.get() == PanelMode::Terminal && form_factor.form_factor.get() != FormFactor::Phone>
+            <TerminalView selection=terminal_selection />
+        </Show>
         <div style:display=move || if mode.get() == PanelMode::Extensions { "contents" } else { "none" }>
             {move || if form_factor.form_factor.get() == FormFactor::Phone {
                 view! { <PhoneExtensions /> }.into_any()

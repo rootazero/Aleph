@@ -24,19 +24,8 @@ use aleph_protocol::pty::{
     PtyAttachResponse, PtyListResponse, PtyScreenFrame, PtyScreenPatch, PtySessionInfo, PtyStyleRun,
 };
 
-/// What came back from asking the server which sessions exist.
-///
-/// Two outcomes, and the split is the whole point: "the server was understood"
-/// and "I could not get an answer" are different facts, and only the first one
-/// can license creating a shell. Folding them together is how a client ends up
-/// running a second shell beside a live one whose screen is still on the
-/// server, with nothing on the page pointing at it.
-///
-/// This replaces the earlier `AttachDecision`, which additionally picked WHICH
-/// session to adopt (the first open one). That half is now `TabModel`'s — the
-/// tab strip decides what is showing — and leaving a second selector here
-/// would be two answers to one question (判据 §1). The classification rule and
-/// its tests are unchanged and carried over verbatim below.
+/// A readable authorized list and a failed read are distinct facts.
+/// Neither result authorizes creating a shell; creation requires a gesture.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ListOutcome {
     /// The response was READ. The rows are exactly what the server said, open
@@ -48,41 +37,7 @@ pub enum ListOutcome {
     Fail(String),
 }
 
-/// May the view create a shell?
-///
-/// Only ever called on the rows inside a [`ListOutcome::Read`] — a `Fail`
-/// carries none, so there is no way to reach this function with a list that
-/// was never read. That is the "an `Err` is never a spawn" rule expressed in
-/// the type rather than in a reviewer's memory (判据 §8).
-#[must_use]
-pub fn should_spawn(sessions: &[PtySessionInfo]) -> bool {
-    !sessions.iter().any(|s| !s.closed)
-}
-
-/// Classify the result of a `pty.list` call.
-///
-/// Pure, and separated from the view for exactly that reason: the interesting
-/// behaviour here is a classification that a Leptos effect cannot be asked
-/// about in a unit test.
-///
-/// **A `pty.list` that did not SUCCEED never justifies a spawn.** Every `Err`
-/// — transport or decode — is a `Fail`. Only an `Ok` that was decoded and
-/// held nothing open yields `Spawn`.
-///
-/// The tempting weaker rule is "a transport error means the call never
-/// landed, so the spawn after it will fail too and nothing is silently
-/// duplicated". That is false, and `send_rpc`'s own doc says why: its 30s
-/// timeout branch exists to cover *"a server that accepts the request and
-/// then never replies without closing the socket"*. There the request DID
-/// land, the socket is still open, and the `pty.spawn` that follows can
-/// succeed — producing exactly the silent second shell beside a live one
-/// that this function exists to prevent. `Err` only ever says "I do not
-/// know", and "I do not know" is never grounds to create a second shell
-/// (判据 §8).
-///
-/// This uniformity is also why no error CODE is consulted. `rpc_call` drops
-/// `RpcFailure.code` and `rpc_call_with_code` would keep it, but with one
-/// answer for every `Err` there is nothing to branch on.
+/// Classify a list without treating transport or decode failure as emptiness.
 #[must_use]
 pub fn resolve_session_list(list_result: Result<serde_json::Value, String>) -> ListOutcome {
     let value = match list_result {
@@ -159,34 +114,18 @@ pub enum ApplyOutcome {
     WrongSession,
 }
 
-/// The result of [`ClientScreen::finish_attach`]: adopting a snapshot, then
-/// replaying whatever had buffered while the attach was in flight.
-///
-/// This is a separate type from [`ApplyOutcome`] rather than reusing it:
-/// `finish_attach` can never buffer (there is no attach nested inside an
-/// attach) or discard a live frame (buffered frames are filtered against the
-/// snapshot's `seq`, not reported one at a time) or see a foreign session
-/// (that filter already ran when the frame was buffered, in `apply`), so
-/// `Buffered`, `Discarded`, and `WrongSession` are not states this method can
-/// be in. A type that can only ever be constructed as one of two variants
-/// says that at the type level instead of by convention.
+/// A whole contiguous capture, or a request for another snapshot. Failure
+/// preserves every part of the previous confirmed paint and sequence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AttachOutcome {
     /// The snapshot was adopted, and every frame buffered while the attach
     /// was in flight — if any — replayed with `seq` advancing by exactly one
     /// each time. There is nothing for the caller to do.
     Resynced,
-    /// Replay hit a hole: a buffered frame's `seq` was more than one past
-    /// the last applied `seq`, meaning a frame between them was dropped by
-    /// the broadcast bus while this attach was in flight. Replay stops at
-    /// the hole rather than skipping over it — `seq` is left at the frame
-    /// just before it, not advanced past it — so the screen never reports
-    /// itself more current than it actually is. The rows only the missing
-    /// frame would have touched are wrong until the caller re-attaches;
-    /// the next live [`ClientScreen::apply`] call would also report this
-    /// same gap on its own, but the caller may prefer to re-attach
-    /// immediately rather than wait for one.
+    /// No part of an incomplete replay is published.
     Gap { expected: u64, got: u64 },
+    /// Staging overflowed or the snapshot predates the confirmed screen.
+    RecoveryRequired,
 }
 
 pub struct ClientScreen {
@@ -214,6 +153,8 @@ pub struct ClientScreen {
     /// the grid, because the snapshot they must be ordered against has not
     /// arrived yet.
     pending: Option<Vec<PtyScreenFrame>>,
+    pending_bytes: usize,
+    pending_lost: bool,
 }
 
 impl ClientScreen {
@@ -243,6 +184,8 @@ impl ClientScreen {
             cursor_visible: true,
             bracketed_paste: None,
             pending: None,
+            pending_bytes: 0,
+            pending_lost: false,
         }
     }
 
@@ -302,83 +245,48 @@ impl ClientScreen {
     }
 
     pub fn begin_attach(&mut self) {
-        self.pending.get_or_insert_with(Vec::new);
+        self.pending = Some(Vec::new());
+        self.pending_bytes = 0;
+        self.pending_lost = false;
     }
 
-    /// Abort an in-flight attach and discard frames buffered for its snapshot.
     pub fn abort_attach(&mut self) {
         self.pending = None;
+        self.pending_bytes = 0;
+        self.pending_lost = false;
     }
 
-    /// Adopt the snapshot, then replay every buffered frame newer than it —
-    /// stopping at the first hole rather than skipping over it. See
-    /// [`AttachOutcome`] for what the caller should do with the result.
-    ///
-    /// A buffered frame at or below `resp.seq` is already represented in the
-    /// snapshot (it was captured on the server after that frame was
-    /// produced); replaying it would double-apply, so it is dropped here —
-    /// same rule as [`ApplyOutcome::Discarded`], applied on the way out of
-    /// the buffer instead of on the way in.
+    /// Validate the entire replay before publishing any of it. The old grid
+    /// remains authoritative paint until a contiguous capture is available.
     #[must_use]
     pub fn finish_attach(&mut self, resp: PtyAttachResponse) -> AttachOutcome {
-        if resp.seq < self.seq {
-            // The snapshot predates what this screen already has. This
-            // should not happen in normal operation — `seq` is per-session
-            // and monotonic on the server, and only one attach is meant to
-            // be in flight at a time — but `resp` is wire input, not a local
-            // invariant, so it is guarded rather than trusted. Adopting it
-            // would move `seq` (and grid content) backward, which is exactly
-            // what the monotonic counter exists to prevent. The attach is
-            // still resolved — `pending` is cleared so buffered frames are
-            // not held forever — but they are dropped rather than replayed:
-            // once the snapshot they were meant to be ordered against is
-            // rejected, there is no `expected` left to replay them against.
-            //
-            // This branch is only reachable for an out-of-order or duplicate
-            // attach response — under the "one attach in flight at a time"
-            // invariant, `self.seq` cannot outrun a fresh snapshot, so `resp`
-            // must be a stale or repeated reply reaching this screen late.
-            // Dropping the buffer instead of replaying it against a rejected
-            // snapshot is deliberate: once the snapshot's own validity is
-            // rejected, there is no basis left to replay against, and
-            // replaying anyway would reintroduce the exact silent-drop bug
-            // this type split was meant to fix. Reporting `Resynced` here
-            // rather than adding a third `AttachOutcome` variant is also
-            // deliberate, not an oversight: this outcome is not quite "the
-            // snapshot was adopted" (nothing was adopted) and not quite a
-            // resync failure either (there is nothing to resync from, and
-            // nothing broken to signal). A third variant would give every
-            // caller a branch it does not know how to act on, for a path
-            // that self-heals on its own: `seq` did not move, so the very
-            // next live frame either applies normally or reports its own
-            // ordinary `Gap` — the same outcome a dedicated variant would
-            // have driven the caller toward anyway.
-            self.pending = None;
-            return AttachOutcome::Resynced;
-        }
-        self.seq = resp.seq;
-        self.settle(resp.rows, resp.cols, &resp.patch);
+        let lost = self.pending_lost;
         let buffered = self.pending.take().unwrap_or_default();
-        for frame in buffered {
-            if frame.seq <= self.seq {
-                // Already represented in the snapshot (or in an earlier
-                // replayed frame); drop and keep scanning — a hole can still
-                // exist later in the buffer.
+        self.abort_attach();
+        if lost || resp.seq < self.seq {
+            return AttachOutcome::RecoveryRequired;
+        }
+        let mut seq = resp.seq;
+        for frame in &buffered {
+            if frame.seq <= seq {
                 continue;
             }
-            let expected = self.seq.saturating_add(1);
+            let expected = seq.saturating_add(1);
             if frame.seq != expected {
-                // A hole: the broadcast bus dropped a frame while this
-                // attach was in flight. Stop here rather than skipping over
-                // it — `seq` stays at the last frame actually applied, so it
-                // never claims to be more current than it is.
                 return AttachOutcome::Gap {
                     expected,
                     got: frame.seq,
                 };
             }
-            self.seq = frame.seq;
-            self.settle(frame.rows, frame.cols, &frame.patch);
+            seq = frame.seq;
+        }
+        self.seq = resp.seq;
+        self.settle(resp.rows, resp.cols, &resp.patch);
+        for frame in buffered {
+            if frame.seq > self.seq {
+                self.seq = frame.seq;
+                self.settle(frame.rows, frame.cols, &frame.patch);
+            }
         }
         AttachOutcome::Resynced
     }
@@ -404,6 +312,20 @@ impl ClientScreen {
             return ApplyOutcome::WrongSession;
         }
         if let Some(buf) = &mut self.pending {
+            let bytes = serde_json::to_vec(&frame).map_or(usize::MAX, |v| v.len());
+            if self.pending_lost
+                || buf.len() >= 256
+                || bytes > (8 * 1024 * 1024_usize).saturating_sub(self.pending_bytes)
+            {
+                buf.clear();
+                self.pending_bytes = 0;
+                self.pending_lost = true;
+                return ApplyOutcome::Gap {
+                    expected: self.seq.saturating_add(1),
+                    got: frame.seq,
+                };
+            }
+            self.pending_bytes += bytes;
             buf.push(frame);
             return ApplyOutcome::Buffered;
         }
@@ -758,6 +680,65 @@ mod tests {
     /// flight. Without buffer-and-replay those frames are lost and the screen
     /// is silently wrong with no error anywhere.
     #[test]
+    fn attach_staging_count_and_byte_overflow_are_bounded_and_sticky() {
+        for bytes in [false, true] {
+            let mut s = ClientScreen::new(4, 20, 10, SID);
+            let _ = s.apply(frame(11, 0, "old"));
+            s.begin_attach();
+            if bytes {
+                assert!(matches!(
+                    s.apply(frame(12, 0, &"x".repeat(8 * 1024 * 1024))),
+                    ApplyOutcome::Gap { .. }
+                ));
+            } else {
+                for seq in 12..268 {
+                    assert_eq!(s.apply(frame(seq, 0, "x")), ApplyOutcome::Buffered);
+                }
+                assert!(matches!(
+                    s.apply(frame(268, 0, "overflow")),
+                    ApplyOutcome::Gap { .. }
+                ));
+            }
+            assert_eq!(s.pending.as_ref().unwrap().len(), 0);
+            assert_eq!(s.pending_bytes, 0);
+            let _ = s.apply(frame(269, 0, "not restored"));
+            assert_eq!(s.pending.as_ref().unwrap().len(), 0);
+            assert_eq!(
+                s.finish_attach(PtyAttachResponse {
+                    seq: 269,
+                    rows: 4,
+                    cols: 20,
+                    patch: PtyScreenPatch::default(),
+                    scrollback_len: 0,
+                }),
+                AttachOutcome::RecoveryRequired
+            );
+            assert_eq!(s.row_text(0), "old");
+        }
+    }
+
+    #[test]
+    fn quiet_replay_gap_preserves_old_paint() {
+        let mut s = ClientScreen::new(4, 20, 10, SID);
+        let _ = s.apply(frame(11, 0, "old"));
+        s.begin_attach();
+        let _ = s.apply(frame(12, 0, "partial"));
+        let _ = s.apply(frame(14, 0, "gap"));
+        assert!(matches!(
+            s.finish_attach(PtyAttachResponse {
+                seq: 11,
+                rows: 4,
+                cols: 20,
+                patch: PtyScreenPatch::default(),
+                scrollback_len: 0,
+            }),
+            AttachOutcome::Gap { .. }
+        ));
+        assert_eq!(s.row_text(0), "old");
+        assert_eq!(s.seq(), 11);
+    }
+
+    #[test]
     fn frames_arriving_during_attach_are_replayed_after_the_snapshot() {
         let mut s = ClientScreen::new(4, 20, 0, SID);
         s.begin_attach();
@@ -819,7 +800,7 @@ mod tests {
     /// again with nothing to show a live frame ever gapped on, so whatever
     /// only frame 102 touched would be wrong forever with no error anywhere.
     #[test]
-    fn a_hole_inside_the_replay_buffer_is_reported_and_does_not_advance_past_it() {
+    fn a_hole_inside_replay_preserves_entire_confirmed_capture() {
         let mut s = ClientScreen::new(4, 20, 0, SID);
         s.begin_attach();
         assert!(matches!(
@@ -844,15 +825,15 @@ mod tests {
         }
         assert_eq!(
             s.row_text(1),
-            "a",
-            "the frame before the hole must still apply"
+            "",
+            "an incomplete capture must not publish even its contiguous prefix"
         );
         assert_eq!(
             s.row_text(2),
             "",
             "the frame after the hole must not be applied"
         );
-        assert_eq!(s.seq(), 101, "seq must not advance past the hole");
+        assert_eq!(s.seq(), 0, "an incomplete capture preserves the old seq");
     }
 
     #[test]
@@ -905,7 +886,7 @@ mod tests {
             scrollback_len: 0,
         });
         assert!(
-            matches!(outcome, AttachOutcome::Resynced),
+            matches!(outcome, AttachOutcome::RecoveryRequired),
             "got {outcome:?}"
         );
         assert_eq!(
@@ -1160,45 +1141,8 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["dead", "live"]
         );
-        assert!(
-            !should_spawn(&sessions),
-            "a live session is exactly what must NOT produce a second shell"
-        );
     }
 
-    /// A decoded list with nothing live is the one case that is genuinely an
-    /// answer: the server was understood and it said there is nothing to
-    /// adopt. Only here may the view spawn.
-    #[test]
-    fn a_decoded_list_with_no_live_session_is_the_only_confirmed_spawn() {
-        let outcome = resolve_session_list(Ok(serde_json::json!({
-            "sessions": [
-                { "session_id": "dead", "shell": "zsh", "cwd": "", "created_at": 1, "closed": true },
-            ]
-        })));
-        let ListOutcome::Read(sessions) = outcome else {
-            panic!("a readable list must be Read, got {outcome:?}");
-        };
-        assert!(should_spawn(&sessions));
-
-        let empty = resolve_session_list(Ok(serde_json::json!({ "sessions": [] })));
-        let ListOutcome::Read(sessions) = empty else {
-            panic!("an empty list is an ANSWER, not a failure");
-        };
-        assert!(should_spawn(&sessions));
-    }
-
-    /// A transport error is not "there are no sessions" either, and the
-    /// reasoning that once said otherwise here was wrong on the codebase's
-    /// own terms: `send_rpc`'s 30s timeout branch covers "a server that
-    /// accepts the request and then never replies without closing the
-    /// socket". The request landed, the socket is open, and the `pty.spawn`
-    /// after it can succeed — the silent duplicate shell, reached by the
-    /// arm that was supposed to be the safe one.
-    ///
-    /// So the rule has no exceptions: anything that is not a decoded `Ok`
-    /// is a `Fail`. Both `Err` arms are asserted the same way on purpose —
-    /// there is no asymmetry left to pin.
     #[test]
     fn a_transport_error_is_a_failure_not_a_spawn() {
         for message in ["connection reset", "Request timed out", "Not connected"] {
@@ -1208,9 +1152,6 @@ mod tests {
                     msg.contains(message),
                     "the error must name what went wrong; got {msg:?}"
                 ),
-                // `Fail` carries no rows, so there is no way to hand this to
-                // `should_spawn` at all — the rule is enforced by the type,
-                // not by remembering to check here.
                 other => panic!("{message:?} must not become {other:?}"),
             }
         }

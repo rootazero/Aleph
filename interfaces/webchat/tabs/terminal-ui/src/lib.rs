@@ -5,15 +5,18 @@
 //! boundary.
 
 mod host;
+mod input;
 mod keymap;
+mod recovery;
 mod render;
 mod session;
 mod tabs;
 mod view;
 
 pub use host::{
-    terminal_state, TerminalConnection, TerminalEvent, TerminalEventStream, TerminalServices,
-    TerminalState, TerminalText,
+    terminal_state, terminal_state_with_mutations, terminal_state_with_selection,
+    TerminalConnection, TerminalEvent, TerminalEventStream, TerminalMutationScope,
+    TerminalSelection, TerminalServices, TerminalState, TerminalText,
 };
 pub use view::{TerminalContent, TerminalContentProps, TerminalSidebar};
 
@@ -55,6 +58,8 @@ mod tests {
             text: super::TerminalText {
                 new_tab: "new".to_string(),
                 close_tab: "close".to_string(),
+                reconnecting: "Reconnecting…".to_string(),
+                retry: "Retry".to_string(),
                 read_refusal: "read".to_string(),
                 write_refusal: "write".to_string(),
             },
