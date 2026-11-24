@@ -3838,14 +3838,20 @@ mod tests {
     fn effect_probe_scripts_carry_the_same_nonce() {
         let install = super::effect_probe_install_js("e7", "n1");
         let readback = super::effect_probe_readback_js("n1");
-        assert!(install.contains(r#"window.__alephProbeDoc = "n1";"#), "{install}");
+        assert!(
+            install.contains(r#"window.__alephProbeDoc = "n1";"#),
+            "{install}"
+        );
         assert!(
             readback.contains(r#"window.__alephProbeDoc !== "n1""#),
             "{readback}"
         );
         assert!(readback.contains("otherDocument"), "{readback}");
         let hostile = super::effect_probe_readback_js(r#"a"b"#);
-        assert!(hostile.contains(r#""a\"b""#), "the nonce is JSON-escaped: {hostile}");
+        assert!(
+            hostile.contains(r#""a\"b""#),
+            "the nonce is JSON-escaped: {hostile}"
+        );
     }
 
     /// A click whose default action navigates runs the read-back on the NEW

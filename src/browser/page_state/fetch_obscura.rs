@@ -2947,10 +2947,8 @@ mod tests {
     /// else: the flags are intact, so visibility and refs are still decided.
     #[tokio::test]
     async fn a_fabricated_box_reply_yields_rect_none_and_keeps_the_flags() {
-        let raw = fetch_with_every_box_answered(Responder::Reply(box_model(
-            8.0, 8.0, 100.0, 20.0,
-        )))
-        .await;
+        let raw =
+            fetch_with_every_box_answered(Responder::Reply(box_model(8.0, 8.0, 100.0, 20.0))).await;
         assert!(raw.frames[0].nodes.iter().all(|n| n.rect.is_none()));
         assert!(raw.frames[0].nodes.iter().any(|n| n.computed.is_some()));
     }
