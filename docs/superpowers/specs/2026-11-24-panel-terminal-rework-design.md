@@ -1,6 +1,6 @@
 # Panel 终端可靠性与交互重构 / Panel terminal recovery and interaction
 
-> 设计提案，待用户批准。本文描述目标行为，不是当前架构契约。 / Proposed design, pending user approval. This document describes intended behavior, not the current architecture contract.
+> 设计于 2026-11-24 获批。本文描述目标行为，不是当前架构契约。 / Design approved on 2026-11-24. This document describes intended behavior, not the current architecture contract.
 
 ## 目标与范围 / Intent and scope
 
