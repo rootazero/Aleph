@@ -112,18 +112,27 @@ const pageHtml = (base, denied, empty) => `<!doctype html>
         state.spawnCount += 1;
         const session = { session_id: 'spawned-' + state.nextSession++, shell: 'fixture-shell', cwd: '', created_at: 1700000001, closed: false };
         sessions.push(session);
+        if (state.ambiguousSpawn) throw Error('fixture spawn outcome unknown');
         return { session_id: session.session_id, shell: session.shell, seq: 0, rows: params.rows, cols: params.cols };
       }
-      if (method === 'pty.input' || method === 'pty.resize' || method === 'pty.close') return {};
+      if (method === 'pty.close') {
+        const index = sessions.findIndex((session) => session.session_id === params.session_id);
+        if (index >= 0) sessions.splice(index, 1);
+        if (state.ambiguousClose) throw Error('fixture close outcome unknown');
+        return {};
+      }
+      if (method === 'pty.input' || method === 'pty.resize') return {};
       if (method === 'config.get') return { terminal: { font_family: 'monospace', font_size_px: 14 } };
       throw Error('unexpected method ' + method);
     };
 
-    const subscribe = async (topic) => {
+    const subscribeTerminal = async (topic) => {
       record('subscribe', topic);
       const subscription = { topic, queue: [], disposed: false };
       state.subscriptions.push(subscription);
+      const coverageEpoch = String(state.epoch);
       return {
+        coverageEpoch: () => coverageEpoch,
         drain() {
           return subscription.disposed ? [] : subscription.queue.splice(0);
         },
@@ -138,7 +147,7 @@ const pageHtml = (base, denied, empty) => `<!doctype html>
 
     const sdk = {
       invoke,
-      subscribe,
+      subscribeTerminal,
       connection: () => ({ connected: state.connected, epoch: state.epoch }),
       locale: () => 'en',
     };
@@ -297,7 +306,8 @@ async function runHappyPath(base) {
   await waitFor(page, (previous) => document.querySelector('canvas').toDataURL() !== previous, firstPaint);
 
   await page.evaluate(() => __fixture.emit({ topic: 'pty.screen', data: { session_id: 'disposable-fixture', seq: 3, rows: 24, cols: 80, patch: { rows: [{ row: 0, runs: [{ text: 'gap marker' }] }] } } }));
-  await waitFor(page, () => __fixture.state.attachCount >= 2);
+  await waitFor(page, () => __fixture.state.attachCount >= 2 && document.querySelector('[data-terminal-status]')?.textContent.trim() === '');
+  await waitFor(page, () => __fillTexts.includes('恢复屏幕 Unicode ✓'));
   assert.equal((await callValues(page, 'pty.attach')).length, 2, 'sequence gap must trigger attach recovery');
 
   await page.locator('canvas').focus();
@@ -344,12 +354,16 @@ async function runHappyPath(base) {
   assert.equal(await page.evaluate(() => __fixture.state.subscriptions.filter((item) => !item.disposed).length), 2, 'remount must keep one pair of active listeners');
   assert.equal(await page.evaluate(() => __fixture.state.subscriptionDisposes >= 2), true, 'old subscriptions must be disposed before remount');
 
-  const subscriptionsBeforeEpoch = await page.evaluate(() => __fixture.state.subscriptions.filter((item) => !item.disposed).length);
+  const subscriptionsBeforeEpoch = await page.evaluate(() => ({
+    active: __fixture.state.subscriptions.filter((item) => !item.disposed).length,
+    calls: __fixture.state.calls.filter((call) => call.kind === 'subscribe').length,
+    attaches: __fixture.state.attachCount,
+  }));
   const beforeReconnectPaint = await page.locator('canvas').evaluate((canvas) => canvas.toDataURL());
   await page.evaluate(() => __fixture.setEpoch(2));
-  await waitFor(page, (before) => __fixture.state.subscriptions.filter((item) => !item.disposed).length === before && __fixture.state.calls.filter((call) => call.kind === 'subscribe').length >= 4, subscriptionsBeforeEpoch);
+  await waitFor(page, (before) => __fixture.state.subscriptions.filter((item) => !item.disposed).length === before.active && __fixture.state.calls.filter((call) => call.kind === 'subscribe').length === before.calls + 2 && __fixture.state.attachCount > before.attaches && document.querySelector('[data-terminal-status]')?.textContent.trim() === '', subscriptionsBeforeEpoch);
   assert.equal(await page.evaluate(() => __fixture.state.subscriptionDisposes >= 2), true, 'connection epoch must dispose old subscriptions');
-  await page.evaluate(() => __fixture.emit({ topic: 'pty.screen', data: { session_id: 'sibling-fixture', seq: 1, rows: 24, cols: 80, patch: { rows: [{ row: 0, runs: [{ text: 'reconnect coverage' }] }] } } }));
+  await page.evaluate(() => __fixture.emit({ topic: 'pty.screen', data: { session_id: 'sibling-fixture', seq: 3, rows: 24, cols: 80, patch: { rows: [{ row: 0, runs: [{ text: 'reconnect coverage' }] }] } } }));
   await waitFor(page, (previous) => document.querySelector('canvas').toDataURL() !== previous, beforeReconnectPaint);
 
   await page.evaluate(() => __fixture.setDelayList(250));
@@ -360,6 +374,7 @@ async function runHappyPath(base) {
   assert.equal(await page.locator('#sidebar').textContent(), '');
   assert.equal(await page.locator('#content').textContent(), '');
   assert.equal(await page.evaluate(() => __fixture.state.calls.some((call) => call.kind === 'invoke' && call.value.method === 'pty.close')), false);
+  assert.equal(await page.evaluate(() => __fixture.state.spawnCount), 0, 'load, reconnect, exit and hide must never spawn');
   await page.close();
 }
 
@@ -380,8 +395,11 @@ async function runSpawnPath() {
   assert.ok(Number.isFinite(fillTextCount) && fillTextCount >= 0,
     'Native Canvas counter initialization is a fixture precondition before Terminal mount');
   await page.getByRole('button', { name: 'Terminal' }).click();
-  await waitFor(page, () => __fixture.state.spawnCount >= 1 && document.querySelector('canvas') !== null);
-  assert.equal(await page.evaluate(() => __fixture.state.spawnCount), 1, 'empty list must spawn exactly one PTY');
+  await waitFor(page, () => __fixture.state.calls.some((call) => call.kind === 'invoke' && call.value.method === 'pty.list') && document.querySelector('canvas') !== null);
+  assert.equal(await page.evaluate(() => __fixture.state.spawnCount), 0, 'empty load must not spawn a PTY');
+  await page.locator('[data-terminal-tabs] button[aria-label="New terminal"]').click();
+  await waitFor(page, () => __fixture.state.spawnCount === 1 && __fixture.state.attachCount >= 1);
+  assert.equal(await page.evaluate(() => __fixture.state.spawnCount), 1, 'explicit New must spawn exactly one PTY');
   assert.ok((await callValues(page, 'pty.attach')).length >= 1, 'spawned PTY must be attached');
   try {
     await waitFor(page, () => globalThis.__fillTextCount > 0);
@@ -469,6 +487,27 @@ async function runSpawnPath() {
     }
     throw originalFailure;
   }
+  await page.locator('[data-terminal-tabs] button[aria-label="Close terminal"]').click();
+  await waitFor(page, () => document.querySelectorAll('[data-terminal-tabs] [role="tab"]').length === 0);
+  await page.getByRole('button', { name: 'Chat' }).click();
+  await page.getByRole('button', { name: 'Terminal' }).click();
+  await waitFor(page, () => document.querySelector('canvas') !== null && __fixture.state.subscriptions.filter((item) => !item.disposed).length === 2);
+  assert.equal(await page.evaluate(() => __fixture.state.spawnCount), 1, 'last close and remount must not spawn');
+  await waitFor(page, () => document.querySelector('[data-terminal-status]')?.textContent.trim() === '');
+  const listsBeforeAmbiguous = (await callValues(page, 'pty.list')).length;
+  await page.evaluate(() => { __fixture.state.ambiguousSpawn = true; });
+  await page.locator('[data-terminal-tabs] button[aria-label="New terminal"]').click();
+  await waitFor(page, () => __fixture.state.spawnCount === 2 && document.querySelectorAll('[data-terminal-tabs] [role="tab"]').length === 1);
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal(await page.evaluate(() => __fixture.state.spawnCount), 2, 'ambiguous spawn is never replayed');
+  assert.equal((await callValues(page, 'pty.list')).length, listsBeforeAmbiguous + 1, 'ambiguous spawn reconciles once');
+  await page.evaluate(() => { __fixture.state.ambiguousClose = true; });
+  const closesBeforeAmbiguous = (await callValues(page, 'pty.close')).length;
+  await page.locator('[data-terminal-tabs] button[aria-label="Close terminal"]').click();
+  await waitFor(page, () => document.querySelectorAll('[data-terminal-tabs] [role="tab"]').length === 0);
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal((await callValues(page, 'pty.close')).length, closesBeforeAmbiguous + 1, 'ambiguous close is never replayed');
+  assert.equal(await page.evaluate(() => __fixture.state.spawnCount), 2, 'ambiguous last close must not spawn');
   await page.close();
 }
 
@@ -497,7 +536,7 @@ try {
       'exact pty.screen/pty.exit subscriptions and sequence-gap attach recovery',
       'UTF-8 Ctrl-C and bracketed-paste payload boundaries',
       'selected-session exit selects a surviving PTY without closing it',
-      'empty list performs one spawn and attaches the returned session',
+      'empty list stays empty until explicit New, then attaches once',
       'Canvas uses native fillText and wrong-topic events do not repaint',
       'resize changes geometry after the baseline report',
       'connection epoch replacement keeps new screen coverage',

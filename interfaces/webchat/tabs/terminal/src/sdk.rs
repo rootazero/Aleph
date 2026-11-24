@@ -207,6 +207,8 @@ mod browser {
             TerminalText {
                 new_tab: "新建终端".to_string(),
                 close_tab: "关闭终端".to_string(),
+                reconnecting: "正在重新连接…".to_string(),
+                retry: "重试".to_string(),
                 read_refusal: "该设置页需要 operator 权限,当前连接的角色无法读取服务器全局配置。"
                     .to_string(),
                 write_refusal: "该改动需要 operator 权限,当前连接的角色无法修改服务器全局设置。"
@@ -216,6 +218,8 @@ mod browser {
             TerminalText {
                 new_tab: "New terminal".to_string(),
                 close_tab: "Close terminal".to_string(),
+                reconnecting: "Reconnecting…".to_string(),
+                retry: "Retry".to_string(),
                 read_refusal: "This settings page needs operator privileges — the role this connection holds cannot read server-wide configuration.".to_string(),
                 write_refusal: "This change needs operator privileges — the role this connection holds cannot modify server-wide settings.".to_string(),
             }

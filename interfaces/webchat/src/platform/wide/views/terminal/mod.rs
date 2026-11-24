@@ -6,13 +6,18 @@
 use leptos::prelude::*;
 
 #[cfg(feature = "legacy-terminal")]
+pub use aleph_terminal_ui::TerminalSelection;
+#[cfg(not(feature = "legacy-terminal"))]
+pub type TerminalSelection = ();
+
+#[cfg(feature = "legacy-terminal")]
 mod legacy {
     use super::*;
     use crate::context::{DashboardState, TerminalEventQueue};
     use crate::i18n::{t_string, use_i18n};
     use aleph_terminal_ui::{
-        terminal_state, TerminalConnection, TerminalEvent, TerminalEventStream, TerminalServices,
-        TerminalText,
+        terminal_state_with_selection, TerminalConnection, TerminalEvent, TerminalEventStream,
+        TerminalServices, TerminalText,
     };
     use futures::FutureExt;
     use serde_json::Value;
@@ -280,12 +285,14 @@ mod legacy {
     }
 
     #[component]
-    pub fn TerminalView() -> impl IntoView {
+    pub fn TerminalView(selection: TerminalSelection) -> impl IntoView {
         let dashboard = expect_context::<DashboardState>();
         let i18n = use_i18n();
         let text = TerminalText {
             new_tab: t_string!(i18n, terminal.new_tab).to_string(),
             close_tab: t_string!(i18n, terminal.close_tab).to_string(),
+            reconnecting: t_string!(i18n, terminal.reconnecting).to_string(),
+            retry: t_string!(i18n, terminal.retry).to_string(),
             read_refusal: t_string!(i18n, settings.admin_refusal.read_config).to_string(),
             write_refusal: t_string!(i18n, settings.admin_refusal.write_config).to_string(),
         };
@@ -307,12 +314,10 @@ mod legacy {
             connected: dashboard.is_connected.get(),
             epoch: dashboard.connection_epoch.get(),
         });
-        let state = terminal_state(TerminalServices {
-            invoke,
-            subscribe,
-            connection,
-            text,
-        });
+        let state = terminal_state_with_selection(
+            TerminalServices { invoke, subscribe, connection, text },
+            selection,
+        );
         aleph_terminal_ui::TerminalContent(aleph_terminal_ui::TerminalContentProps { state })
     }
 }
@@ -322,6 +327,7 @@ pub use legacy::TerminalView;
 
 #[cfg(not(feature = "legacy-terminal"))]
 #[component]
-pub fn TerminalView() -> impl IntoView {
+pub fn TerminalView(selection: TerminalSelection) -> impl IntoView {
+    let _ = selection;
     ().into_view()
 }

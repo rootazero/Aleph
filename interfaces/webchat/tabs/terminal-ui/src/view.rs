@@ -15,10 +15,7 @@
 //!
 //! The terminal view is driven by PTY session snapshots and exit events.
 
-use aleph_protocol::pty::{
-    PtyAttachResponse, PtyScreenFrame, PtySpawnResponse, PTY_EXIT_TOPIC, PTY_LIST_METHOD,
-    PTY_SCREEN_TOPIC,
-};
+use aleph_protocol::pty::{PtyScreenFrame, PTY_EXIT_TOPIC, PTY_SCREEN_TOPIC};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 #[cfg(not(test))]
@@ -27,11 +24,10 @@ use wasm_bindgen::JsCast;
 use web_sys::CanvasRenderingContext2d;
 
 use crate::host::{TerminalEventStream, TerminalServices, TerminalState, TerminalText};
-use crate::session::{ApplyOutcome, AttachOutcome, ClientScreen};
+use crate::session::ClientScreen;
 use crate::tabs::TabBar;
 use crate::{keymap, render, session};
-use futures::future::LocalBoxFuture;
-use futures::FutureExt;
+use futures::{FutureExt, StreamExt};
 #[cfg(not(test))]
 use gloo_timers::future::TimeoutFuture;
 use std::cell::{Cell, RefCell};
@@ -47,6 +43,16 @@ async fn terminal_event_tick() {
     TimeoutFuture::new(16).await;
 }
 
+#[cfg(not(test))]
+fn terminal_now_ms() -> u64 {
+    js_sys::Date::now().max(0.0) as u64
+}
+
+#[cfg(test)]
+fn terminal_now_ms() -> u64 {
+    0
+}
+
 // single-threaded browser runtime. This marker keeps local WASM resources in
 // that hook; no instance is ever sent to another thread.
 struct LocalCleanup<T>(T);
@@ -58,13 +64,27 @@ unsafe impl<T> Send for LocalCleanup<T> {}
 // UI event loop in browser/WASM.
 unsafe impl<T> Sync for LocalCleanup<T> {}
 
-impl LocalCleanup<(Rc<Cell<bool>>, Rc<RefCell<Vec<TerminalEventStream>>>)> {
+impl
+    LocalCleanup<(
+        Rc<Cell<bool>>,
+        Rc<RefCell<Vec<TerminalEventStream>>>,
+        futures::channel::mpsc::UnboundedSender<()>,
+    )>
+{
     fn dispose(self) {
-        let (stop, streams) = self.0;
+        let (stop, streams, wake) = self.0;
         stop.set(true);
+        let _ = wake.unbounded_send(());
         for stream in streams.borrow_mut().drain(..) {
             (stream.dispose)();
         }
+    }
+}
+
+#[cfg(not(test))]
+impl LocalCleanup<(web_sys::ResizeObserver, Closure<dyn FnMut(js_sys::Array)>)> {
+    fn dispose(self) {
+        self.0 .0.disconnect();
     }
 }
 
@@ -76,460 +96,226 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
     let new_request = state.new_request;
     let close_request = state.close_request;
     let canvas_ref = NodeRef::<leptos::html::Canvas>::new();
-    // `StoredValue` rather than a signal: the screen is mutated from an event
-    // callback on every frame, and a signal write per frame would re-run every
-    // subscriber 60 times a second for a canvas that repaints itself anyway.
-    let screen = StoredValue::new(None::<ClientScreen>);
+    let controller = StoredValue::new(crate::recovery::Recovery::new(tabs.get_untracked()));
     let session_id = StoredValue::new(None::<String>);
-    let attach_generation = RwSignal::new(0_u64);
-    let first_load = StoredValue::new(true);
-    // A signal, unlike `screen`: the tab strip is a view of it, so a change
-    // here has to re-render. It changes on a session list, an exit and a
-    // title — human-paced events, not the 60/s frame rate that made `screen`
-    // a `StoredValue`.
+    let alive = StoredValue::new(true);
     let repaint_tick = RwSignal::new(0_u32);
     let error = RwSignal::new(None::<String>);
-    // Server-configured canvas font (`[policies.terminal]`). Seeded with the
-    // same last-resort literal `render::apply_font` falls back to -- NOT a
-    // Nerd Font stack of our own (see `FALLBACK_FONT_FAMILY`'s doc for why
-    // the Panel must not hold that opinion). A config fetch that has not
-    // resolved yet, one that fails, and one that is refused all render
-    // identically -- plain `monospace` -- which is correct: the terminal
-    // has to draw something before the RPC round trip finishes regardless
-    // of why, and the real default (with Nerd Font names) lives exactly
-    // once, in `alephcore`'s `TerminalConfig`, and reaches here as the
-    // server's EFFECTIVE config, defaults already applied.
+    let status = RwSignal::new(false);
+    let retry_request = RwSignal::new(false);
+    let actions_disabled = state.actions_disabled;
+    actions_disabled.set(true);
     let font_family = StoredValue::new(render::FALLBACK_FONT_FAMILY.to_string());
     let font_size_px = StoredValue::new(render::FALLBACK_FONT_SIZE_PX);
 
-    // Re-attach: the one recovery path. A gap means the bounded broadcast
-    // dropped a frame for this subscriber; the screen is on the server, so the
-    // fix is to ask for it again rather than to guess.
-    let resync_services = Rc::clone(&services);
-    let resync: Rc<dyn Fn(String, u64)> = Rc::new(move |sid: String, generation: u64| {
-        let services = Rc::clone(&resync_services);
-        spawn_local(async move {
-            if first_load.try_get_value().is_none() {
-                return;
-            }
-            let (Some(current_generation), Some(current_session)) = (
-                attach_generation.try_get_untracked(),
-                session_id.try_get_value(),
-            ) else {
-                return;
-            };
-            if current_generation != generation || current_session.as_deref() != Some(sid.as_str())
-            {
-                return;
-            }
-            screen.update_value(|s| {
-                if let Some(s) = s {
-                    s.begin_attach();
-                }
-            });
-            let result = (services.invoke)(
-                "pty.attach".to_string(),
-                serde_json::json!({ "session_id": sid.clone() }),
-            )
-            .await;
-            if first_load.try_get_value().is_none() {
-                return;
-            }
-            let (Some(current_generation), Some(current_session)) = (
-                attach_generation.try_get_untracked(),
-                session_id.try_get_value(),
-            ) else {
-                return;
-            };
-            if current_generation != generation || current_session.as_deref() != Some(sid.as_str())
-            {
-                return;
-            }
-            match result {
-                Ok(v) => match serde_json::from_value::<PtyAttachResponse>(v) {
-                    Ok(resp) => {
-                        // `finish_attach` reports whether the replay of
-                        // frames buffered during this RPC hit a hole. It
-                        // stops AT the hole rather than skipping it, so the
-                        // screen never claims to be more current than it is.
-                        let outcome =
-                            screen.try_update_value(|s| s.as_mut().map(|s| s.finish_attach(resp)));
-                        repaint_tick.update(|n| *n = n.wrapping_add(1));
-                        // Deliberately NOT a re-attach from here. `resync` is
-                        // a closure and cannot call itself, and an immediate
-                        // retry is the shape that loops when the bus is
-                        // dropping faster than we attach. `finish_attach`
-                        // leaves `seq` at the last frame it actually applied,
-                        // so the next live frame gaps on its own and the frame
-                        // handler's existing `Gap` arm re-attaches -- one path,
-                        // already tested.
-                        //
-                        // The honest cost: on a terminal that goes quiet right
-                        // after the hole, no live frame arrives, so the rows
-                        // the missing frame would have touched stay wrong until
-                        // it speaks again. Worth knowing, not worth a retry
-                        // loop; if it ever matters the fix is a one-shot
-                        // re-attach guarded by a flag, not recursion.
-                        if let Some(Some(AttachOutcome::Gap { expected, got })) = outcome {
-                            leptos::logging::log!(
-                                "pty attach replay hit a hole: expected {expected}, got {got}"
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        screen.update_value(|s| {
-                            if let Some(s) = s {
-                                s.abort_attach();
-                            }
-                        });
-                        error.set(Some(read_error(&services.text, &e.to_string())));
-                    }
-                },
-                // An Err is never read as an empty screen: the server said
-                // something, and what it said is not "the terminal is idle".
-                // `settings_load_error` replaces only the generic
-                // admin-privilege refusal (`pty.*` is fully admin-gated);
-                // every other message -- including the policy gate's own
-                // "[policies.terminal] enabled = false" text -- passes
-                // through verbatim, which is what names the remedy.
-                Err(e) => {
-                    screen.update_value(|s| {
-                        if let Some(s) = s {
-                            s.abort_attach();
-                        }
-                    });
-                    error.set(Some(read_error(&services.text, &e)));
-                }
-            }
-        });
-    });
-
-    // Point this view at one session: seat a fresh `ClientScreen` for it,
-    // report our viewport, and attach.
-    //
-    // A no-op when it is already the showing session unless the caller is
-    // recovering a connection, which must refresh the server-side attach
-    // state even when the selected id did not change. That makes it safe to
-    // call from every place that can settle on a selection (mount, a tab
-    // click, an exit falling to a neighbour, or a reconnect) without any of
-    // them having to know what the others did.
-    //
-    // The 24x80 is a placeholder that is never observed: `finish_attach`
-    // re-seats both the geometry and `seq` from the attach response, and
-    // `measure_and_report` corrects the server's idea of our viewport in the
-    // same breath. Setting the id BEFORE the RPC matters — the frame handler
-    // DROPS frames whose session it cannot name, and a dropped frame is not a
-    // buffered one.
-    // `try_` on every read, and all three up front so nothing is written
-    // before the bail: this closure runs from two `spawn_local` continuations
-    // on the far side of an `.await` (`pty.spawn`, `pty.list`) and from the
-    // exit event's callback. `StoredValue::get_value` unwraps, so a disposed
-    // owner panics and the whole page goes to the recovery overlay
-    // (`crate::disposed_reads`). The window is ordinary — the user leaves this
-    // view while the RPC is in flight. The scope that owns these is gone, so
-    // there is no view left to point at a session.
-    let attach_services = Rc::clone(&services);
-    let attach_resync = Rc::clone(&resync);
-    let attach_to: Rc<dyn Fn(String, bool)> = Rc::new(move |sid: String, force: bool| {
-        let services = Rc::clone(&attach_services);
-        let (Some(current), Some(family), Some(size)) = (
-            session_id.try_get_value(),
-            font_family.try_get_value(),
-            font_size_px.try_get_value(),
-        ) else {
-            return;
-        };
-        if !force && current.as_deref() == Some(sid.as_str()) {
-            return;
-        }
-        attach_generation.update(|generation| *generation = generation.wrapping_add(1));
-        let generation = attach_generation.get_untracked();
-        screen.set_value(Some(ClientScreen::new(24, 80, 0, sid.clone())));
-        session_id.set_value(Some(sid.clone()));
-        measure_and_report(
-            canvas_ref,
-            Rc::clone(&services),
-            Some(sid.clone()),
-            family,
-            size,
-            repaint_tick,
-            first_load,
-        );
-        attach_resync(sid, generation);
-    });
-
-    // Open a new shell.
-    //
-    // The spawn response is adopted straight into the tab model rather than
-    // re-listing to discover what we just created: that second round trip can
-    // itself fail, and a running shell with no tab pointing at it is exactly
-    // the shape D2 was.
-    let spawn_services = Rc::clone(&services);
-    let spawn_attach = Rc::clone(&attach_to);
-    let spawn_new: Rc<dyn Fn()> = Rc::new(move || {
-        let services = Rc::clone(&spawn_services);
-        let spawn_attach = Rc::clone(&spawn_attach);
-        spawn_local(async move {
-            let result = (services.invoke)(
-                "pty.spawn".to_string(),
-                serde_json::json!({ "rows": 24, "cols": 80 }),
-            )
-            .await;
-            if first_load.try_get_value().is_none() {
-                return;
-            }
-            match result {
-                Ok(v) => match serde_json::from_value::<PtySpawnResponse>(v) {
-                    Ok(resp) => {
-                        tabs.update(|m| m.adopt_spawned(&resp.session_id, &resp.shell));
-                        spawn_attach(resp.session_id, false);
-                    }
-                    Err(e) => error.set(Some(write_error(&services.text, &e.to_string()))),
-                },
-                // Covers both refusals that have a way out: the gate
-                // ([policies.terminal] enabled = false) and the cwd jail. The
-                // server's message names the remedy; show it verbatim.
-                // `settings_write_error` replaces only the generic
-                // admin-privilege refusal (`pty.*` is fully admin-gated) --
-                // every other message, gate and jail included, passes through
-                // unframed.
-                Err(e) => error.set(Some(write_error(&services.text, &e))),
-            }
-        });
-    });
-
-    // Ask the server what exists and rebuild the tab strip from it.
-    //
-    // `allow_spawn` is only true on the first pass. A later refresh that finds
-    // nothing open means the user closed everything, and re-opening a shell
-    // they just closed would be the page arguing with them.
-    let refresh_services = Rc::clone(&services);
-    let refresh_attach = Rc::clone(&attach_to);
-    let refresh_spawn = Rc::clone(&spawn_new);
-    let refresh_tabs: Rc<dyn Fn(bool, bool)> =
-        Rc::new(move |allow_spawn: bool, force_attach: bool| {
-            let services = Rc::clone(&refresh_services);
-            let refresh_attach = Rc::clone(&refresh_attach);
-            let refresh_spawn = Rc::clone(&refresh_spawn);
-            spawn_local(async move {
-                // "Nothing to adopt" and "I could not get an answer" are different
-                // facts, and only the first may create a shell. The classification
-                // lives in `session::resolve_session_list` (pure, unit-tested
-                // there); the "may I spawn" half is `session::should_spawn`, which
-                // a `Fail` cannot even be handed because it carries no rows.
-                let list_result =
-                    (services.invoke)(PTY_LIST_METHOD.to_string(), serde_json::json!({})).await;
-                if first_load.try_get_value().is_none() {
-                    return;
-                }
-                let sessions = match session::resolve_session_list(list_result) {
-                    session::ListOutcome::Read(sessions) => sessions,
-                    session::ListOutcome::Fail(msg) => {
-                        error.set(Some(read_error(&services.text, &msg)));
-                        return;
-                    }
-                };
-
-                tabs.update(|m| m.reconcile(&sessions));
-
-                match tabs
-                    .try_with_untracked(|m| m.selected_id().map(str::to_string))
-                    .flatten()
-                {
-                    Some(sid) => refresh_attach(sid, force_attach),
-                    None if allow_spawn && session::should_spawn(&sessions) => refresh_spawn(),
-                    None => {}
-                }
-            });
-        });
-
-    // Ask the server to end a session.
-    //
-    // Deliberately does NOT remove the tab here. `pty.exit` is what says the
-    // shell is gone; a tab removed optimistically on a close that was refused
-    // would hide a shell that is still running (判据 §8 — the request is not
-    // the outcome).
-    let close_services = Rc::clone(&services);
-    let close_tab = move |sid: String| {
-        let services = Rc::clone(&close_services);
-        spawn_local(async move {
-            let result = (services.invoke)(
-                "pty.close".to_string(),
-                serde_json::json!({ "session_id": sid }),
-            )
-            .await;
-            if first_load.try_get_value().is_none() {
-                return;
-            }
-            if let Err(e) = result {
-                error.set(Some(write_error(&services.text, &e)));
-            }
-        });
-    };
-
-    // Subscribe through the host-owned exact-topic streams. Each stream is
-    // drained locally so the reusable view never reaches into DashboardState.
-    let mut last_connection = services.connection.get_untracked();
     let stop_events = Rc::new(Cell::new(false));
     let event_streams = Rc::new(RefCell::new(Vec::<TerminalEventStream>::new()));
-    let stop_for_cleanup = Rc::clone(&stop_events);
-    let streams_for_cleanup = Rc::clone(&event_streams);
-    let cleanup_state = LocalCleanup((stop_for_cleanup, streams_for_cleanup));
-    on_cleanup(move || cleanup_state.dispose());
-
-    let subscribe_all: Rc<
-        dyn Fn() -> LocalBoxFuture<'static, Result<Vec<TerminalEventStream>, String>>,
-    > = {
-        let services = Rc::clone(&services);
-        Rc::new(move || {
-            let services = Rc::clone(&services);
-            async move { open_terminal_streams(services).await }.boxed_local()
-        })
-    };
-
+    let (wake, mut wake_rx) = futures::channel::mpsc::unbounded::<()>();
+    let cleanup_state = LocalCleanup((
+        Rc::clone(&stop_events),
+        Rc::clone(&event_streams),
+        wake.clone(),
+    ));
+    on_cleanup(move || {
+        actions_disabled.try_set(true);
+        cleanup_state.dispose();
+    });
+    // Gestures are consumed before dispatch, never replayed by a new owner.
+    new_request.set(0);
+    selection_request.set(None);
+    close_request.set(None);
     let services_for_events = Rc::clone(&services);
-    let streams_for_events = Rc::clone(&event_streams);
-    let stop_for_events = Rc::clone(&stop_events);
-    {
-        let services = Rc::clone(&services_for_events);
-        let streams = Rc::clone(&streams_for_events);
-        let stop = Rc::clone(&stop_for_events);
-        let subscribe_all = Rc::clone(&subscribe_all);
-        spawn_local(async move {
-            let opened = match subscribe_all().await {
-                Ok(opened) => opened,
-                Err(subscription_error) => {
-                    if first_load.try_get_value().is_some() {
-                        error.set(Some(read_error(&services.text, &subscription_error)));
-                    }
-                    return;
-                }
-            };
-            if first_load.try_get_value().is_none() || stop.get() {
-                for stream in opened {
+    let inbox = Rc::new(RefCell::new(Vec::<(
+        crate::recovery::Request,
+        Result<serde_json::Value, String>,
+    )>::new()));
+    spawn_local(async move {
+        let mut painted_revision = 0_u64;
+        let services = services_for_events;
+        let mut last_connection = services.connection.get_untracked();
+        while !stop_events.get() && alive.try_get_value().is_some() {
+            let now = terminal_now_ms();
+            let connection = services.connection.get_untracked();
+            controller.update_value(|c| c.connect(connection));
+            if connection != last_connection {
+                for stream in event_streams.borrow_mut().drain(..) {
                     (stream.dispose)();
                 }
-                return;
+                last_connection = connection;
             }
-            streams.borrow_mut().extend(opened);
-            let Some(allow_spawn) = first_load.try_get_value() else {
-                return;
-            };
-            refresh_tabs(allow_spawn, !allow_spawn);
-            first_load.try_update_value(|first| *first = false);
-
-            let mut seen_new_request = 0_u64;
-            while !stop.get() {
-                let connection = services.connection.get_untracked();
-                if connection.connected && connection.epoch != last_connection.epoch {
-                    last_connection = connection;
-                    let old_streams = streams.borrow_mut().drain(..).collect::<Vec<_>>();
-                    for stream in old_streams {
-                        (stream.dispose)();
+            for (request, result) in inbox.borrow_mut().drain(..) {
+                let effect = matches!(
+                    request.kind,
+                    crate::recovery::RequestKind::Spawn | crate::recovery::RequestKind::Close
+                );
+                let attached = request.kind == crate::recovery::RequestKind::Attach
+                    && controller.with_value(|c| c.accepts(&request));
+                let result = result.map_err(|message| {
+                    if effect {
+                        write_error(&services.text, &message)
+                    } else {
+                        read_error(&services.text, &message)
                     }
-                    match subscribe_all().await {
-                        Ok(opened) if first_load.try_get_value().is_some() && !stop.get() => {
-                            streams.borrow_mut().extend(opened);
-                            refresh_tabs(false, true);
+                });
+                controller.update_value(|c| {
+                    if effect {
+                        c.complete_effect(request, result);
+                    } else {
+                        c.complete(request, result, now);
+                    }
+                });
+                if attached && controller.with_value(|c| c.ready) {
+                    measure_and_report(
+                        canvas_ref,
+                        Rc::clone(&services),
+                        controller.with_value(|c| c.selected_id().map(str::to_string)),
+                        font_family.get_value(),
+                        font_size_px.get_value(),
+                        repaint_tick,
+                        alive,
+                    );
+                }
+            }
+            if retry_request.get_untracked() {
+                retry_request.set(false);
+                controller.update_value(|c| c.retry());
+            }
+            if let Some(sid) = selection_request.get_untracked() {
+                selection_request.set(None);
+                controller.update_value(|c| c.select(&sid));
+            }
+            let close = close_request.get_untracked();
+            close_request.set(None);
+            let new = new_request.get_untracked() != 0;
+            new_request.set(0);
+            let effect = if close.is_some() || new {
+                controller.try_update_value(|c| c.gesture(close)).flatten()
+            } else {
+                None
+            };
+            let mut loss = None;
+            let mut events = Vec::new();
+            for stream in event_streams.borrow().iter() {
+                match (stream.drain)() {
+                    Ok(batch) => events.extend(batch),
+                    Err(message) => {
+                        loss = Some(message);
+                        break;
+                    }
+                }
+            }
+            if let Some(message) = loss {
+                controller.update_value(|c| c.loss(now, message));
+                for stream in event_streams.borrow_mut().drain(..) {
+                    (stream.dispose)();
+                }
+            } else {
+                for event in events {
+                    let result = controller.try_update_value(|c| {
+                        if event.topic == PTY_EXIT_TOPIC {
+                            if let Some(sid) = event
+                                .data
+                                .get("session_id")
+                                .and_then(serde_json::Value::as_str)
+                            {
+                                c.exited(sid);
+                                return Ok(());
+                            }
+                        } else if event.topic == PTY_SCREEN_TOPIC {
+                            if let Ok(frame) = serde_json::from_value::<PtyScreenFrame>(event.data)
+                            {
+                                c.frame(frame, now);
+                                return Ok(());
+                            }
                         }
-                        Ok(opened) => {
+                        Err("Terminal event could not be decoded".to_string())
+                    });
+                    if let Some(Err(message)) = result {
+                        controller.update_value(|c| c.loss(now, message));
+                        for stream in event_streams.borrow_mut().drain(..) {
+                            (stream.dispose)();
+                        }
+                        break;
+                    }
+                }
+            }
+            let request = controller.try_update_value(|c| c.next(now)).flatten();
+            for request in effect.into_iter().chain(request) {
+                let services = Rc::clone(&services);
+                let inbox = Rc::clone(&inbox);
+                let stop = Rc::clone(&stop_events);
+                let streams = Rc::clone(&event_streams);
+                let wake = wake.clone();
+                spawn_local(async move {
+                    if stop.get() {
+                        return;
+                    }
+                    let (result, opened) =
+                        if request.kind == crate::recovery::RequestKind::Subscribe {
+                            match open_terminal_streams(
+                                Rc::clone(&services),
+                                request.fence.epoch,
+                                Rc::clone(&stop),
+                            )
+                            .await
+                            {
+                                Ok(streams) => (Ok(serde_json::Value::Null), Some(streams)),
+                                Err(message) => (Err(message), None),
+                            }
+                        } else {
+                            let (method, params) = request.rpc();
+                            ((services.invoke)(method.to_string(), params).await, None)
+                        };
+                    if let Some(opened) = opened {
+                        let current = !stop.get()
+                            && services.connection.get_untracked().epoch == request.fence.epoch
+                            && controller
+                                .try_with_value(|c| c.accepts(&request))
+                                .unwrap_or(false);
+                        if current {
+                            for stream in streams.borrow_mut().drain(..) {
+                                (stream.dispose)();
+                            }
+                            streams.borrow_mut().extend(opened);
+                        } else {
                             for stream in opened {
                                 (stream.dispose)();
                             }
-                            return;
-                        }
-                        Err(subscription_error) => {
-                            if first_load.try_get_value().is_some() {
-                                error.set(Some(read_error(&services.text, &subscription_error)));
-                            }
-                            return;
                         }
                     }
-                } else if !connection.connected {
-                    last_connection = connection;
-                }
-                if let Some(session_id) = selection_request.try_get_untracked().flatten() {
-                    selection_request.set(None);
-                    attach_to(session_id, false);
-                }
-                let requested_new = new_request.get_untracked();
-                if requested_new != seen_new_request {
-                    seen_new_request = requested_new;
-                    spawn_new();
-                }
-                if let Some(session_id) = close_request.try_get_untracked().flatten() {
-                    close_request.set(None);
-                    close_tab(session_id);
-                }
-                let events = streams
-                    .borrow()
-                    .iter()
-                    .flat_map(|stream| (stream.drain)().unwrap_or_default())
-                    .collect::<Vec<_>>();
-                for event in events {
-                    if event.topic == PTY_EXIT_TOPIC {
-                        let Some(sid) = event
-                            .data
-                            .get("session_id")
-                            .and_then(serde_json::Value::as_str)
-                            .map(str::to_string)
-                        else {
-                            continue;
-                        };
-                        tabs.update(|model| model.on_exit(&sid));
-                        if let Some(next) = tabs
-                            .try_with_untracked(|model| model.selected_id().map(str::to_string))
-                            .flatten()
-                        {
-                            attach_to(next, false);
-                        }
-                        refresh_tabs(false, false);
-                        continue;
+                    if !stop.get() {
+                        inbox.borrow_mut().push((request, result));
+                        let _ = wake.unbounded_send(());
                     }
-                    let Ok(frame) = serde_json::from_value::<PtyScreenFrame>(event.data) else {
-                        continue;
-                    };
-                    let outcome = screen.try_update_value(|current| {
-                        current
-                            .as_mut()
-                            .map_or(ApplyOutcome::Buffered, |current| current.apply(frame))
-                    });
-                    match outcome {
-                        Some(ApplyOutcome::Applied) => {
-                            repaint_tick.update(|tick| *tick = tick.wrapping_add(1));
-                            if let (Some(sid), Some(title)) = (
-                                session_id.try_get_value().flatten(),
-                                screen.with_value(|current| {
-                                    current
-                                        .as_ref()
-                                        .and_then(|screen| screen.title().map(str::to_string))
-                                }),
-                            ) {
-                                if tabs
-                                    .try_with_untracked(|model| {
-                                        model.osc_title_differs(&sid, &title)
-                                    })
-                                    .unwrap_or(false)
-                                {
-                                    tabs.update(|model| model.on_title(&sid, &title));
-                                }
-                            }
-                        }
-                        Some(ApplyOutcome::Gap { .. }) => {
-                            if let (Some(mine), Some(generation)) = (
-                                session_id.try_get_value().flatten(),
-                                attach_generation.try_get_untracked(),
-                            ) {
-                                resync(mine, generation);
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                terminal_event_tick().await;
+                });
             }
-        });
-    }
+            controller.with_value(|c| {
+                if tabs.get_untracked() != c.tabs {
+                    tabs.set(c.tabs.clone());
+                }
+                let selected = c.selected_id().map(str::to_string);
+                if session_id.get_value() != selected {
+                    session_id.set_value(selected);
+                }
+                if error.get_untracked() != c.error {
+                    error.set(c.error.clone());
+                }
+                if status.get_untracked() != c.ready {
+                    status.set(c.ready);
+                }
+                let disabled =
+                    c.effect_pending() || !c.covered || !c.current_connection().connected;
+                if actions_disabled.get_untracked() != disabled {
+                    actions_disabled.set(disabled);
+                }
+                if painted_revision != c.paint_revision {
+                    painted_revision = c.paint_revision;
+                    repaint_tick.update(|tick| *tick = tick.wrapping_add(1));
+                }
+            });
+            futures::future::select(terminal_event_tick().boxed_local(), wake_rx.next()).await;
+        }
+    });
 
     // Font config: read `[policies.terminal]`'s font fields once at mount.
     //
@@ -562,7 +348,7 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
             else {
                 return;
             };
-            if first_load.try_get_value().is_none() {
+            if alive.try_get_value().is_none() {
                 return;
             }
             let Some(v) = policies.get("terminal") else {
@@ -600,7 +386,7 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
                 family,
                 size,
                 repaint_tick,
-                first_load,
+                alive,
             );
         });
     });
@@ -622,8 +408,8 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
             if !m.is_usable() {
                 return;
             }
-            screen.with_value(|s| {
-                if let Some(s) = s {
+            controller.with_value(|c| {
+                if let Some(s) = &c.screen {
                     render::paint(&ctx, s, m, &render::Theme::dark());
                 }
             });
@@ -649,7 +435,7 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
             font_family.get_value(),
             font_size_px.get_value(),
             repaint_tick,
-            first_load,
+            alive,
         );
 
         #[cfg(not(test))]
@@ -664,16 +450,16 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
                         font_family.get_value(),
                         font_size_px.get_value(),
                         repaint_tick,
-                        first_load,
+                        alive,
                     );
                 });
             if let Some((canvas, _ctx)) = canvas_ctx(canvas_ref) {
                 if let Ok(observer) = web_sys::ResizeObserver::new(cb.as_ref().unchecked_ref()) {
                     observer.observe(&canvas);
-                    on_cleanup(move || observer.disconnect());
+                    let cleanup = LocalCleanup((observer, cb));
+                    on_cleanup(move || cleanup.dispose());
                 }
             }
-            cb.forget();
         }
     });
 
@@ -687,7 +473,12 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
     // call, and a second copy of it is where the two would drift.
     let send_services = Rc::clone(&services);
     let send_bytes: Rc<dyn Fn(Vec<u8>)> = Rc::new(move |bytes: Vec<u8>| {
-        let Some(sid) = session_id.get_value() else {
+        let connection = send_services.connection.get_untracked();
+        let Some(sid) = controller.with_value(|c| {
+            (c.ready && c.current_connection() == connection)
+                .then(|| c.selected_id().map(str::to_string))
+                .flatten()
+        }) else {
             return;
         };
         let data = encode_base64(&bytes);
@@ -745,11 +536,15 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
         // Read synchronously, inside the event handler, and passed to
         // `send_bytes` as a value: the mode belongs to the screen as it is
         // NOW, not as it may be by the time the `pty.input` RPC resolves.
-        let bracketed = screen.with_value(|s| s.as_ref().and_then(ClientScreen::bracketed_paste));
+        let bracketed =
+            controller.with_value(|c| c.screen.as_ref().and_then(ClientScreen::bracketed_paste));
         ev.prevent_default();
         paste_send_bytes(session::encode_paste(&text, bracketed));
     };
 
+    let reconnecting = services.text.reconnecting.clone();
+    let retry_label = services.text.retry.clone();
+    let new_label = services.text.new_tab.clone();
     view! {
         // `data-terminal-view=""`: anchor for Part 2's `qa/terminal`
         // real-device rig. Zero in-crate consumers today -- keep it anyway.
@@ -772,6 +567,7 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
         // below for the guard.
         <div class="flex flex-1 min-w-0 min-h-0 h-full flex-col" data-terminal-view="">
             <TabBar
+                disabled=Signal::derive(move || actions_disabled.get())
                 tabs=Signal::derive(move || tabs.get().tabs().to_vec())
                 selected=Signal::derive(move || tabs.get().selected_id().map(str::to_string))
                 new_tab_label=services.text.new_tab.clone()
@@ -779,14 +575,20 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
                 // Selection belongs to the local tab model. A click is accepted
                 // only when the existing tab is open, then the view attaches to it.
                 on_select=Callback::new(move |sid: String| {
-                    let accepted = tabs.try_update(|m| m.select(&sid)).unwrap_or(false);
-                    if accepted {
-                        selection_request.set(Some(sid));
-                    }
+                    selection_request.set(Some(sid));
                 })
                 on_close=Callback::new(move |sid: String| close_request.set(Some(sid)))
                 on_new=Callback::new(move |(): ()| new_request.update(|request| *request += 1))
             />
+            <Show when=move || tabs.get().tabs().is_empty()>
+                <button type="button" class="px-3 py-2 text-sm" disabled=move || actions_disabled.get() on:click=move |_| new_request.update(|n| *n += 1)>{new_label.clone()}</button>
+            </Show>
+            <div class="px-3 py-1 text-sm" role="status" data-terminal-status="">
+                {move || if status.get() { String::new() } else { reconnecting.clone() }}
+                <Show when=move || !status.get() && error.get().is_some()>
+                    <button type="button" on:click=move |_| retry_request.set(true)>{retry_label.clone()}</button>
+                </Show>
+            </div>
             {move || error.get().map(|e| view! {
                 <div class="px-3 py-2 text-sm text-danger" role="alert">{e}</div>
             })}
@@ -878,13 +680,23 @@ fn measure_and_report(
 
 async fn open_terminal_streams(
     services: Rc<TerminalServices>,
+    expected_epoch: u64,
+    stopped: Rc<Cell<bool>>,
 ) -> Result<Vec<TerminalEventStream>, String> {
-    let expected_epoch = services.connection.get_untracked().epoch;
+    if stopped.get() {
+        return Err("Terminal view disposed".into());
+    }
+    let connection = services.connection.get_untracked();
+    if stopped.get() || !connection.connected || connection.epoch != expected_epoch {
+        return Err("Terminal connection changed".into());
+    }
     let mut opened = Vec::new();
     for topic in [PTY_SCREEN_TOPIC, PTY_EXIT_TOPIC] {
         match (services.subscribe)(topic.to_string()).await {
             Ok(stream)
-                if stream.coverage_epoch == expected_epoch
+                if !stopped.get()
+                    && stream.coverage_epoch == expected_epoch
+                    && services.connection.get_untracked().connected
                     && services.connection.get_untracked().epoch == expected_epoch =>
             {
                 opened.push(stream);
@@ -906,7 +718,7 @@ async fn open_terminal_streams(
             }
         }
     }
-    if services.connection.get_untracked().epoch != expected_epoch {
+    if stopped.get() || services.connection.get_untracked().epoch != expected_epoch {
         for stream in opened {
             (stream.dispose)();
         }
@@ -942,6 +754,8 @@ mod tests {
         TerminalText {
             new_tab: "new".to_string(),
             close_tab: "close".to_string(),
+            reconnecting: "Reconnecting…".to_string(),
+            retry: "Retry".to_string(),
             read_refusal: "read".to_string(),
             write_refusal: "write".to_string(),
         }
@@ -985,10 +799,48 @@ mod tests {
             }),
             text: test_text(),
         });
-        let result = futures::executor::block_on(open_terminal_streams(services));
+        let result = futures::executor::block_on(open_terminal_streams(
+            services,
+            1,
+            Rc::new(Cell::new(false)),
+        ));
         assert!(result.is_err());
         assert_eq!(calls.get(), 2);
         assert_eq!(disposed.get(), 2);
+    }
+
+    #[test]
+    fn service_subscription_canceled_after_first_lease_rolls_back_without_second_acquire() {
+        let stopped = Rc::new(Cell::new(false));
+        let disposed = Rc::new(Cell::new(0));
+        let calls = Rc::new(Cell::new(0));
+        let subscribe = {
+            let stopped = Rc::clone(&stopped);
+            let disposed = Rc::clone(&disposed);
+            let calls = Rc::clone(&calls);
+            Rc::new(move |_: String| {
+                calls.set(calls.get() + 1);
+                let stopped = Rc::clone(&stopped);
+                let disposed = Rc::clone(&disposed);
+                async move {
+                    stopped.set(true);
+                    Ok(test_stream(1, disposed))
+                }
+                .boxed_local()
+            })
+        };
+        let services = Rc::new(TerminalServices {
+            invoke: Rc::new(|_, _| async { Ok(json!({})) }.boxed_local()),
+            subscribe,
+            connection: Signal::derive(|| TerminalConnection {
+                connected: true,
+                epoch: 1,
+            }),
+            text: test_text(),
+        });
+        assert!(futures::executor::block_on(open_terminal_streams(services, 1, stopped)).is_err());
+        assert_eq!(calls.get(), 1);
+        assert_eq!(disposed.get(), 1);
     }
 
     #[test]
@@ -1042,7 +894,7 @@ mod tests {
         assert_eq!(disposed.get(), 0);
         owner.cleanup();
         assert_eq!(disposed.get(), 2);
-        assert_eq!(calls.borrow().first().map(String::as_str), Some("pty.list"));
+        assert!(calls.borrow().iter().any(|method| method == "pty.list"));
         assert!(!calls.borrow().iter().any(|method| method == "pty.spawn"));
     }
 
@@ -1112,9 +964,7 @@ fn write_error(text: &TerminalText, error: &str) -> String {
 
 fn encode_base64(bytes: &[u8]) -> String {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let lookup = |idx: usize| -> char {
-        TABLE.get(idx).map(|&b| b as char).unwrap_or('=')
-    };
+    let lookup = |idx: usize| -> char { TABLE.get(idx).map(|&b| b as char).unwrap_or('=') };
     let mut output = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
         let first = chunk.first().copied().unwrap_or(0);
@@ -1143,17 +993,17 @@ pub fn TerminalSidebar(state: TerminalState) -> impl IntoView {
     let new_request = state.new_request;
     let close_request = state.close_request;
     let text = state.services.text;
+    let actions_disabled = state.actions_disabled;
     view! {
         <aside class="flex flex-col min-w-0" data-terminal-sidebar="">
             <TabBar
+                disabled=Signal::derive(move || actions_disabled.get())
                 tabs=Signal::derive(move || tabs.get().tabs().to_vec())
                 selected=Signal::derive(move || tabs.get().selected_id().map(str::to_string))
                 new_tab_label=text.new_tab
                 close_tab_label=text.close_tab
                 on_select=Callback::new(move |sid: String| {
-                    if tabs.try_update(|model| model.select(&sid)).unwrap_or(false) {
-                        selection_request.set(Some(sid));
-                    }
+                    selection_request.set(Some(sid));
                 })
                 on_close=Callback::new(move |sid: String| close_request.set(Some(sid)))
                 on_new=Callback::new(move |(): ()| new_request.update(|request| *request += 1))

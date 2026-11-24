@@ -75,8 +75,29 @@ pub struct TerminalServices {
 pub struct TerminalText {
     pub new_tab: String,
     pub close_tab: String,
+    pub reconnecting: String,
+    pub retry: String,
     pub read_refusal: String,
     pub write_refusal: String,
+}
+
+/// Only the tab/selection model survives a default-route unmount.
+#[derive(Clone, Copy)]
+pub struct TerminalSelection(RwSignal<TabModel>);
+
+impl Default for TerminalSelection {
+    fn default() -> Self {
+        Self(RwSignal::new(TabModel::default()))
+    }
+}
+
+pub fn terminal_state_with_selection(
+    services: TerminalServices,
+    selection: TerminalSelection,
+) -> TerminalState {
+    let mut state = terminal_state(services);
+    state.tabs = selection.0;
+    state
 }
 
 #[derive(Clone)]
@@ -86,6 +107,7 @@ pub struct TerminalState {
     pub(crate) selection_request: RwSignal<Option<String>>,
     pub(crate) new_request: RwSignal<u64>,
     pub(crate) close_request: RwSignal<Option<String>>,
+    pub(crate) actions_disabled: RwSignal<bool>,
 }
 
 #[must_use]
@@ -96,5 +118,6 @@ pub fn terminal_state(services: TerminalServices) -> TerminalState {
         selection_request: RwSignal::new(None),
         new_request: RwSignal::new(0),
         close_request: RwSignal::new(None),
+        actions_disabled: RwSignal::new(true),
     }
 }
