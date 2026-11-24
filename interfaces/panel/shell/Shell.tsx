@@ -3,7 +3,7 @@
 // user's layout and personal preferences. Layout, projection and preference
 // rules live in Rust (`aleph/panel`, shared with the Leptos Panel); this file
 // only wires them.
-import { batch, cleanup, colorScheme, computed, effect, horizontalSizeClass, host, platform, signal, Storage, Text, View } from "nsh";
+import { batch, cleanup, colorScheme, computed, effect, horizontalSizeClass, host, platform, signal, Storage, Text, View, type ViewRef } from "nsh";
 import { Button } from "nsh/base";
 import { PanelModel } from "aleph/panel";
 import { Capabilities } from "../modules/Capabilities";
@@ -203,12 +203,31 @@ export function Shell() {
     return slot ? [{ slot, generation: generation() }] : [];
   });
 
+  // The Panel's shortcuts only hear keys while the keyboard focus is in the
+  // Panel. On Desktop it is embedded in the shell's window, whose own root
+  // has the focus at launch, so the Panel takes it once it is laid out in
+  // that window (its first render comes earlier, when a `focus()` does
+  // nothing). A focused field that goes away hands it back to the Panel's
+  // root.
+  let root: ViewRef | undefined;
+  let focusTaken = false;
+  const takeFocus = (bounds: { size: { width: number; height: number } }) => {
+    if (focusTaken || !root || bounds.size.width === 0 || bounds.size.height === 0) return;
+    focusTaken = true;
+    root.focus();
+  };
+
   // Nothing until preferences are read, so the first frame has the user's
   // colours and density.
   return (
     <If when={prefs()} else={<View class="flex-1 bg-background" />}>
       {(current) => (
-        <View class="flex-1 flex-row bg-background">
+        <View
+          ref={(node) => (root = node)}
+          focusable
+          onLayout={({ bounds }) => takeFocus(bounds)}
+          class="flex-1 flex-row bg-background"
+        >
           <Sidebar
             view={view}
             connection={connection}

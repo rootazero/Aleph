@@ -178,9 +178,9 @@ function ShortcutEditor(props: {
           value={draft()}
           onChange={({ value }) => draft.set(value)}
           onSubmit={submit}
-          placeholder="mod+k"
+          placeholder="New shortcut"
           accessibilityLabel={`Shortcut for ${props.row().label}`}
-          class="w-28 rounded-(--radius) border border-input px-2 py-1 text-foreground"
+          class="w-32 rounded-(--radius) border border-input px-2 py-1 text-foreground"
         />
         <Button
           accessibilityLabel={`Clear shortcut for ${props.row().label}`}
