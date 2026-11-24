@@ -8,20 +8,25 @@
 //! - `aleph.connect` -> opens a new Desktop IPC connection (after a drop)
 //! - `aleph.connection` -> the current connection state
 //! - event `aleph.connection` `{ state, endpoint, subject, pairing }`
+//! - event `aleph.event` `{ topic, data }`: a live Gateway event (negotiated
+//!   `live_events`), or the host's own `connection.stale` when the client
+//!   dropped frames — the Panel then refetches instead of trusting its view
 //!
 //! The desktop Panel reaches only a local Gateway over Desktop IPC, never a
 //! WebSocket: any other target reports `unavailable`.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::Duration;
 
-use aleph_client::{AlephClient, CliError, CliResult};
+use aleph_client::{AlephClient, CliError, CliResult, TopicEvent};
 use aleph_protocol::panel::PANEL_HOST_UNAVAILABLE;
-use aleph_protocol::system_hello::{ClientHello, HelloParams, ProtocolVersion};
+use aleph_protocol::system_hello::{ClientHello, Feature, HelloParams, ProtocolVersion};
+use aleph_protocol::StreamEvent;
 use nsh_engine::{HostCall, HostChannel};
 use serde_json::{json, Value};
+use tokio::sync::mpsc;
 
 /// The Desktop IPC socket of an already-running Gateway (an absolute path).
 pub(crate) const IPC_ENV: &str = "ALEPH_SHELL_PANEL_IPC";
@@ -38,6 +43,10 @@ const FUNCTIONS: [&str; 4] = [
 ];
 
 const CALL_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How often an idle connection is checked for loss. Without it a Panel
+/// waiting on events would learn of a Gateway restart only at its next call.
+const LIVENESS_TICK: Duration = Duration::from_secs(1);
 
 /// Where the desktop Panel's calls go.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -222,11 +231,19 @@ impl Shared {
                 return;
             }
             match outcome {
-                // The stream events are not used: the Panel only calls.
-                Ok((client, _events)) => {
+                Ok((client, events)) => {
+                    let topics = client.take_topic_events();
+                    let client = Arc::new(client);
                     link.state = "connected";
                     link.subject = client.hello_subject();
-                    link.client = Some(Arc::new(client));
+                    link.client = Some(client.clone());
+                    shared.runtime.spawn(forward_events(
+                        Arc::downgrade(&shared),
+                        Arc::downgrade(&client),
+                        attempt,
+                        events,
+                        topics,
+                    ));
                 }
                 Err(error) => {
                     eprintln!("NSH TSX Panel Desktop IPC connect failed: {error}");
@@ -236,6 +253,13 @@ impl Shared {
             drop(link);
             shared.publish();
         });
+    }
+
+    /// Whether `attempt` still owns the link: a replaced or closed connection
+    /// must not deliver events into the Panel's current generation.
+    fn is_current(&self, attempt: u64) -> bool {
+        let link = self.link();
+        !link.closed && link.attempt == attempt && link.client.is_some()
     }
 
     /// The client is gone: report `disconnected` once (unless a newer
@@ -277,6 +301,67 @@ impl Shared {
     }
 }
 
+/// Forwards one connection's live events to the Panel until the connection
+/// is replaced, lost, or the host stops. Holds only weak references, so it
+/// never keeps a dropped client (and with it the event channels) alive.
+async fn forward_events(
+    shared: Weak<Shared>,
+    client: Weak<AlephClient>,
+    attempt: u64,
+    mut stream: mpsc::Receiver<StreamEvent>,
+    mut topics: Option<mpsc::Receiver<TopicEvent>>,
+) {
+    let mut reported_drops = 0;
+    let mut ticks = tokio::time::interval(LIVENESS_TICK);
+    loop {
+        let event = tokio::select! {
+            Some(event) = stream.recv() => stream_event_payload(&event),
+            Some(event) = next_topic(&mut topics) => Some(topic_event_payload(event)),
+            _ = ticks.tick() => None,
+        };
+        let (Some(shared), Some(client)) = (shared.upgrade(), client.upgrade()) else {
+            return;
+        };
+        if !shared.is_current(attempt) {
+            return;
+        }
+        // The client counts frames its full queue refused. Any new loss
+        // makes the Panel's view untrustworthy: say so before the next event.
+        let drops = client.stream_continuity().dropped_events;
+        if drops > reported_drops {
+            reported_drops = drops;
+            let stale = json!({ "topic": "connection.stale", "data": { "dropped": drops } });
+            let _ = shared.host.send("aleph.event", stale);
+        }
+        if let Some(event) = event {
+            let _ = shared.host.send("aleph.event", event);
+        }
+        if !client.is_connected() {
+            shared.lost(&client);
+            return;
+        }
+    }
+}
+
+async fn next_topic(topics: &mut Option<mpsc::Receiver<TopicEvent>>) -> Option<TopicEvent> {
+    match topics {
+        Some(topics) => topics.recv().await,
+        None => std::future::pending().await,
+    }
+}
+
+/// `{ topic, data }` for a stream event: the topic is its wire method
+/// (`stream.<type>`) and the data its wire params, including `type`.
+fn stream_event_payload(event: &StreamEvent) -> Option<Value> {
+    let data = serde_json::to_value(event).ok()?;
+    let topic = format!("stream.{}", data.get("type")?.as_str()?);
+    Some(json!({ "topic": topic, "data": data }))
+}
+
+fn topic_event_payload(event: TopicEvent) -> Value {
+    json!({ "topic": event.topic, "data": event.data })
+}
+
 fn hello() -> HelloParams {
     HelloParams {
         protocol: ProtocolVersion { major: 1, minor: 0 },
@@ -286,7 +371,7 @@ fn hello() -> HelloParams {
             platform: std::env::consts::OS.into(),
             ui_runtime: "nsh".into(),
         },
-        features: vec![],
+        features: vec![Feature::LiveEvents],
     }
 }
 
@@ -330,6 +415,31 @@ mod tests {
             "Connection closed by peer".into(),
         )));
         assert_eq!(lost["error"]["code"], json!(PANEL_HOST_UNAVAILABLE));
+    }
+
+    /// The Panel sees the same `{ topic, data }` for a stream frame as the
+    /// Web host builds from the wire: topic `stream.<type>`, data the params.
+    #[test]
+    fn live_events_reach_the_panel_as_topic_and_wire_params() {
+        let chunk: StreamEvent = serde_json::from_value(json!({
+            "type": "run_accepted", "run_id": "r-1", "session_key": "k", "accepted_at": "t"
+        }))
+        .unwrap();
+        assert_eq!(
+            stream_event_payload(&chunk).unwrap(),
+            json!({ "topic": "stream.run_accepted", "data": {
+                "type": "run_accepted", "run_id": "r-1", "session_key": "k", "accepted_at": "t"
+            } })
+        );
+        let warning = TopicEvent {
+            topic: "connection.warning".into(),
+            data: json!({ "reason": "events_overflow" }),
+        };
+        assert_eq!(
+            topic_event_payload(warning),
+            json!({ "topic": "connection.warning", "data": { "reason": "events_overflow" } })
+        );
+        assert_eq!(hello().features, vec![Feature::LiveEvents]);
     }
 
     #[test]

@@ -47,8 +47,16 @@ type LocalWriter = tokio::io::WriteHalf<NamedPipeClient>;
 
 enum SocketReader {
     WebSocket(WsReader),
+    /// Desktop IPC. `live_events`: the hello requested the `live_events`
+    /// feature, so id-less notifications are expected after the hello
+    /// response. Decided from the request, not the result, because the
+    /// server subscribes before it answers and may push right after; the
+    /// result is then checked to grant nothing beyond the request.
     #[cfg(any(unix, windows))]
-    Local(LocalReader),
+    Local {
+        read: LocalReader,
+        live_events: bool,
+    },
 }
 
 enum SocketWriter {
@@ -515,14 +523,19 @@ impl AlephClient {
         endpoint: &std::path::Path,
         hello: &aleph_protocol::system_hello::HelloParams,
     ) -> CliResult<(Self, mpsc::Receiver<StreamEvent>)> {
-        use aleph_protocol::system_hello::HelloResult;
+        use aleph_protocol::system_hello::{Feature, HelloResult};
 
         #[cfg(unix)]
         let (read, write) = local_ipc::unix::connect(endpoint).await?.into_split();
         #[cfg(windows)]
         let (read, write) = tokio::io::split(local_ipc::windows::connect(endpoint).await?);
         let socket = Socket::new(SocketWriter::Local(write));
-        let (client, events) = Self::with_socket(None, socket.clone(), SocketReader::Local(read));
+        let live_events = hello.features.contains(&Feature::LiveEvents);
+        let (client, events) = Self::with_socket(
+            None,
+            socket.clone(),
+            SocketReader::Local { read, live_events },
+        );
         let result: HelloResult = client
             .request(
                 &socket,
@@ -535,7 +548,12 @@ impl AlephClient {
         if result.protocol.major != hello.protocol.major
             || result.protocol.minor > hello.protocol.minor
             || result.connection_id.is_empty()
-            || !result.features.is_empty()
+            // The only optional feature this client implements on IPC is
+            // `live_events`, and only when it asked for it.
+            || !result
+                .features
+                .iter()
+                .all(|feature| *feature == Feature::LiveEvents && hello.features.contains(feature))
             || result.limits.max_message_bytes != u64::from(local_ipc::MAX_FRAME_BYTES)
             || !(1..=local_ipc::MAX_INFLIGHT).contains(&result.limits.max_inflight_requests)
         {
@@ -740,12 +758,29 @@ impl AlephClient {
         let mut read = match read {
             SocketReader::WebSocket(read) => read,
             #[cfg(any(unix, windows))]
-            SocketReader::Local(mut read) => {
+            SocketReader::Local {
+                mut read,
+                live_events,
+            } => {
                 while let Ok(Some(text)) = local_ipc::read_frame(&mut read).await {
                     let Ok(value) = local_ipc::parse_payload(&text) else {
                         break;
                     };
-                    // S1-B admits only responses, not notifications or reverse RPCs.
+                    // With `live_events`, an id-less notification takes the
+                    // same classification and delivery as on a WebSocket.
+                    // Reverse RPCs (a method WITH an id) stay refused.
+                    if live_events
+                        && value.get("jsonrpc").and_then(Value::as_str) == Some("2.0")
+                        && value.get("method").is_some()
+                        && value.get("id").is_none()
+                    {
+                        let Some(delivery) = delivery.upgrade() else {
+                            break;
+                        };
+                        Self::handle_message(&text, socket, &delivery).await;
+                        continue;
+                    }
+                    // Otherwise only responses are admitted.
                     if value.get("jsonrpc").and_then(Value::as_str) != Some("2.0")
                         || value.get("method").is_some()
                         || value.get("result").is_some() == value.get("error").is_some()
