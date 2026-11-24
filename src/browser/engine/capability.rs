@@ -272,8 +272,14 @@ static OBSCURA: EngineCapabilities = EngineCapabilities {
     // v0.2.7 the read-back still answers a clean null after a self-navigating
     // click, but the caps stage measured the nonce GONE on the new document
     // (premises 1-2 still TRUE), so that null is no longer read as a miss.
-    // If a future build preserves `window` globals across a navigation, the
-    // nonce survives with them and this row has to close again.
+    // Since 2026-11-25 the production read-back runs on the INSTALLED NODE
+    // (`Runtime.callFunctionOn` on the install's object id, so an iframe
+    // target is read in its own realm); premise 3 now reads back the same
+    // way, and on v0.2.7 that call ERRORS after the navigation (Unknown →
+    // Skipped, 3 of 3 caps runs). The unsound answer would be a clean null
+    // from a realm that still carries the nonce; caps refuses the row on it.
+    // If a future build keeps the old object callable in a realm that kept
+    // the nonce, this row has to close again.
     effect_probe: Cap::Supported,
     // A pure lookup against Aleph's own per-tab `RefTable` — no engine
     // round-trip, so nothing to measure per engine (see the field doc).

@@ -404,7 +404,14 @@ async def probe_obscura(ws_url, page_url, led):
         # The probe now carries a document nonce (`window.__alephProbeDoc`),
         # so the question this premise asks is whether a navigation is
         # DETECTABLE: a null on a document without the nonce is Skipped.
-        # `qa/browser_dual`'s `click` stage is the end-to-end witness.
+        # Since 2026-11-25 production reads back ON THE INSTALLED NODE
+        # (`Runtime.callFunctionOn` with the install's object id — the node's
+        # realm, which an iframe target needs), so this premise does the same:
+        # install on the link's object, click, read back through that object.
+        # The answer that would be unsound is a clean null in a realm that
+        # still carries the nonce (`NoHit` → a false `EffectNotDelivered` on a
+        # click that navigated). An error, `otherDocument`, or the hit are all
+        # sound. `qa/browser_dual`'s `click` stage is the end-to-end witness.
         await ev("var a = document.createElement('a'); a.id = 'navlink';"
                  "a.href = 'index.html'; a.textContent = 'nav';"
                  "a.style.display = 'block'; a.style.width = '100px'; a.style.height = '30px';"
@@ -423,9 +430,24 @@ async def probe_obscura(ws_url, page_url, led):
             # The ⑦b reading behind `cdp_backend::navigate`'s comment: does an
             # input-driven navigation announce, and then report, a NEW loader?
             loader_before = await frame_tree_loader()
-            # The document nonce `cdp_backend::actions::arm_effect_probe` installs
-            # beside the flag; the read-back compares it before trusting a null.
-            await ev("window.__alephProbeDoc = 'caps-probe-doc'")
+            # The install `cdp_backend::actions::arm_effect_probe` performs: on
+            # the node's object, a document nonce beside a one-shot capture
+            # listener that records the event type.
+            link = await cdp.call("Runtime.evaluate",
+                                  {"expression": "document.getElementById('navlink')"}, s)
+            link_obj = link.get("result", {}).get("result", {}).get("objectId")
+            installed = await cdp.call("Runtime.callFunctionOn", {
+                "objectId": link_obj, "returnByValue": True,
+                "functionDeclaration":
+                    "function() { window.__alephProbeDoc = 'caps-probe-doc';"
+                    " window.__alephProbeHit = null;"
+                    " this.addEventListener('click', (e) => { window.__alephProbeHit = e.type; },"
+                    " { capture: true, once: true }); return true; }"}, s)
+            # Without a live install an error on the read-back would read as
+            # "sound" for the wrong reason (判据 §2).
+            led.check("premise 3's integrity: the probe installed on the link's own object",
+                      installed.get("result", {}).get("result", {}).get("value") is True,
+                      json.dumps(installed)[:200])
             cdp.events = [e for e in cdp.events if e.get("method") != "Page.frameNavigated"]
             for mtype, cc in (("mouseMoved", 0), ("mousePressed", 1), ("mouseReleased", 1)):
                 await cdp.call("Input.dispatchMouseEvent",
@@ -439,6 +461,20 @@ async def probe_obscura(ws_url, page_url, led):
             landed_path = landed.get("result", {}).get("result", {}).get("value")
             navhit = r.get("result", {}).get("result", {}).get("value") if "error" not in r else "<error>"
             same_doc = await ev("window.__alephProbeDoc === 'caps-probe-doc'")
+            # The production read-back's shape, run through the installed
+            # node's object exactly as `read_effect_probe` does.
+            node_read = await cdp.call("Runtime.callFunctionOn", {
+                "objectId": link_obj, "returnByValue": True,
+                "functionDeclaration":
+                    "function() { if (window.__alephProbeDoc !== 'caps-probe-doc')"
+                    " return { otherDocument: true }; return window.__alephProbeHit; }"}, s)
+            if "error" in node_read or "exceptionDetails" in node_read.get("result", {}):
+                node_answer = "error"
+            else:
+                node_answer = node_read.get("result", {}).get("result", {}).get("value")
+            led.log(f"  effect_probe premise 3, read-back on the installed node: "
+                    f"{json.dumps(node_answer)} (error / otherDocument → Skipped; "
+                    f"'click' → Verified; null → a false EffectNotDelivered)")
             announced = [e["params"]["frame"].get("loaderId") for e in cdp.events
                          if e.get("method") == "Page.frameNavigated" and e.get("sessionId") == s
                          and "parentId" not in e["params"]["frame"]]
@@ -472,7 +508,8 @@ async def probe_obscura(ws_url, page_url, led):
             led.log(f"  effect_probe premise 3, nonce: the probe's document nonce "
                     + ("SURVIVED the navigation (a null there is indistinguishable)"
                        if same_doc else "is gone on the new document (detectable)"))
-            nav_sound = "error" in r or navhit == "click" or same_doc is False
+            # The verdict reads the production path: anything but a clean null.
+            nav_sound = node_answer is not None
         found["effect_probe"] = (
             "supported" if persist and delivered and nav_sound else "unsupported")
 

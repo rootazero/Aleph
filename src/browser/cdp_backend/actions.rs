@@ -1067,10 +1067,16 @@ enum ProbeReadback {
 /// nonce there and reported every iframe action `Skipped` — a real miss
 /// included — and never ran the iframe-side cleanup.
 ///
-/// When the dispatch navigated the node's document away, Chromium refuses the
-/// call on the dead object (an error → [`ProbeReadback::Unknown`]); an engine
-/// that still answers runs it in a realm without the nonce, which answers
-/// `{ otherDocument: true }` (the same `Unknown`).
+/// When the dispatch navigated the node's document away, measured 2026-11-25:
+/// Chrome 158 (main-frame link) and obscura v0.2.7 (`qa/browser_dual` caps,
+/// premise 3) both refuse the call on the dead object — an error →
+/// [`ProbeReadback::Unknown`]. A `srcdoc` iframe link on Chrome 158 still
+/// answered from the old realm with the hit (`click` → Verified, correct: the
+/// listener saw it). A realm without the nonce answers `{ otherDocument: true }`
+/// (the same `Unknown`). NOT guaranteed: a realm that outlives the navigation
+/// WITH the nonce and without the hit would read as `NoHit` — a false
+/// `EffectNotDelivered`. Neither engine produced it; caps premise 3 is the
+/// check that refuses obscura's row if a build ever does.
 struct ArmedProbe {
     nonce: String,
     object_id: String,
