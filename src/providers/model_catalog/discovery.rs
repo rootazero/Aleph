@@ -70,6 +70,9 @@ pub enum DiscoveryError {
     /// 404 or rate-limit the listing route.
     #[error("provider '{0}' does not expose a model listing")]
     Unsupported(String),
+    /// The requested provider does not have a linked configuration.
+    #[error("provider '{0}' is not configured")]
+    NotConfigured(String),
     /// No API key was available for the provider.
     #[error("no credential configured for provider '{0}'")]
     MissingCredential(String),
@@ -241,7 +244,7 @@ pub(crate) fn listing_address(
     let pc = config
         .providers
         .get(provider)
-        .ok_or_else(|| DiscoveryError::MissingCredential(provider.into()))?;
+        .ok_or_else(|| DiscoveryError::NotConfigured(provider.into()))?;
     if !crate::providers::probe::supports_model_listing(provider) {
         return Err(DiscoveryError::Unsupported(provider.into()));
     }
