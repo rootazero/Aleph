@@ -1,4 +1,4 @@
-# Sandbox — Phase 3 Reference
+# Sandbox — 进程隔离 / Process Isolation
 
 > Where exec-class tools actually run. Introduced in the managed-agents Phase 3
 > refactor. See [GLOSSARY.md](./GLOSSARY.md#sandbox) for the term's Anthropic
@@ -6,30 +6,22 @@
 
 ## Overview
 
-The `Sandbox` trait (`src/sandbox/mod.rs`) is the one-method seam between an
-exec-class tool and the operating system:
+`src/sandbox/mod.rs::Sandbox` is the execution interface for the existing exec
+Tool Capabilities. The factory mounts `WorkspaceSandbox` when enabled and a
+reject-only sandbox when disabled. `summary()` describes configured policy;
+`managed()` exposes managed launches when the backend supports them.
 
-```rust
-#[async_trait]
-pub trait Sandbox: Send + Sync + 'static {
-    async fn execute(
-        &self,
-        command: SandboxCommand,
-    ) -> Result<SandboxOutput, SandboxError>;
-}
-```
+Team 与子 Agent 的受管 Git worktree 只提供受信工作区，不替换执行器；
+Bash、Code Exec 和 Code Check 仍走同一生产 OS 沙箱。未配置的后端不降级为宿主直跑。
 
-Production boot wires an `Arc<dyn Sandbox>` pointing at `WorkspaceSandbox`
-(`src/sandbox/workspace/mod.rs`). `WorkspaceSandbox` owns three concerns:
-
-1. **Workspace provisioning** — materialize `~/.aleph/workspaces/{hash(session_id)}/`
-   on first exec, keep it alive for the session, reuse on subsequent calls.
-2. **Capability enforcement** — classify every `SandboxCommand` against the
-   session's baseline `SandboxCapabilities`, escalate out-of-baseline requests
-   through `ApprovalGate`, cache per-session grants.
-3. **OS isolation** — delegate the actual subprocess launch to an
-   `OsSandboxDriverTrait` implementation (today: macOS `sandbox-exec` via
-   `OsSandboxDriver` in `src/sandbox/driver.rs`).
+1. **Workspace provisioning** — use the authorized workspace when provided;
+   otherwise provision `~/.aleph/workspaces/{hash(session_id)}/` on first exec.
+   Owned worktrees must already exist and are never recreated by the sandbox.
+2. **Capability enforcement** — compare requested `SandboxCapabilities` with the
+   session baseline, escalate through `ApprovalGate`, and cache granted elevations
+   by session and workspace.
+3. **OS isolation** — launch through the configured native driver: macOS
+   Seatbelt, Linux bubblewrap, or Windows restricted token with optional AppContainer.
 
 The relationship at a glance:
 
@@ -41,20 +33,15 @@ WorkspaceSandbox   ──► ApprovalGate (capability elevation)
         │
         │   OsSandboxDriverTrait
         ▼
-OsSandboxDriver    ──► macOS sandbox-exec binary
+native driver     ──► macOS Seatbelt / Linux bwrap / Windows restricted token
 ```
 
 ## Lifecycle — per-session workspace
 
-`WorkspaceSandbox` keeps a `HashMap<SessionId, Arc<SessionWorkspace>>` behind
-an `RwLock`. `for_session(&sid)` is the entry point:
-
-- **Fast path:** `read().await` → cache hit → return the existing
-  `Arc<SessionWorkspace>`.
-- **Slow path:** `write().await` → double-check (another task may have created
-  it) → `tokio::fs::create_dir_all(cwd)` → insert into the map.
-
-The on-disk path is deterministic:
+`WorkspaceSandbox::for_session` caches approvals by `(SessionId, PathBuf)`,
+so the same session does not carry approvals across different workspace roots.
+An owned worktree is validated before using its cached entry. The deterministic
+on-disk fallback, used only without a trusted run workspace, is:
 
 ```
 workspace_root / session_key_to_filename(session_id)
@@ -68,20 +55,18 @@ the characters those variants may carry.
 Each `SessionWorkspace` carries:
 
 - `cwd: PathBuf` — the materialized directory
-- `baseline: SandboxCapabilities` — policy ceiling (today: `::strict()`)
+- `baseline: SandboxCapabilities` — default `::session_baseline()` policy
 - `granted_elevations: RwLock<HashSet<SandboxCapabilities>>` — per-session
   cache of approvals the user has already granted
 
-## The six-step `execute` pipeline
+## Execution pipeline / 执行顺序
 
-`WorkspaceSandbox::execute` (`src/sandbox/workspace/mod.rs:124`) implements the
-spec §8 pipeline:
-
-1. **Session resolve** — `self.for_session(&cmd.session_id)` → lazy dir
-   creation if first call; cached `Arc<SessionWorkspace>` otherwise.
-2. **cwd validate** — `cmd.cwd` is either `None` (defaults to workspace root)
-   or a path that must `starts_with(&ws.cwd)`. Anything else returns
-   `SandboxError::CapabilityDenied { reason: "cwd outside workspace root" }`.
+1. **Readiness** — ordinary exec performs a cheap backend support check before
+   workspace preparation. `BackendUnavailable` and `Disabled` are refusals;
+   successful preflight does not prove that the OS applied a profile.
+2. **Workspace and cwd** — validate a trusted owned checkout, apply admission
+   hooks, then canonicalize and check any explicit cwd against the selected
+   workspace. Without a cwd, launch at the workspace root.
 3. **Capability check** —
    `cmd.capabilities.is_within(&ws.baseline)` is the fast path (no approval).
    Otherwise consult `granted_elevations`; if the request is within a prior
@@ -89,8 +74,10 @@ spec §8 pipeline:
    - `ApprovalOutcome::Approved` → insert `cmd.capabilities` into
      `granted_elevations` (future same-or-narrower requests are cached).
    - `ApprovalOutcome::Denied` | `Timeout` → `SandboxError::CapabilityDenied`.
-4. **Profile generate** — `os_driver.profile_for(&caps, &cwd)` returns an
-   opaque `OsSandboxProfile` (on macOS, SBPL profile text).
+4. **Prepare profile** — after approval, recheck the owned checkout and launch
+   cwd. The worktree root determines the profile; a checked child cwd determines
+   only where the process starts. Owned worktrees set `CARGO_TARGET_DIR` to
+   `<worktree>/target`. Ordinary runs retain their existing cwd policy.
 5. **Run** — `os_driver.run(program, args, env, stdin, cwd, profile, timeout,
    max_output_bytes)`. Default timeout 60s, default output budget 1 MB (split
    stdout + stderr). Both override-able on the `WorkspaceSandbox` via
@@ -108,6 +95,24 @@ spec §8 pipeline:
    carrying `session_id`, `program`, `caps`, `exit_code`, `signal`,
    `duration_ms`. This is the capability-ledger hook; downstream tracing
    subscribers can sink it to whatever store is desired.
+
+**Worktree lifetime / 工作树寿命。** Team selects its source from the authorized
+project, not the daemon cwd. A project bound to a Git subdirectory must be
+rebound to the checkout root; Aleph neither expands that binding nor falls back.
+An explicit nested subagent worktree starts from its trusted parent's committed
+HEAD. An owned checkout cannot start detached Bash jobs, browser companions,
+background subagents, or resumable named-session sends. Team timeout signals
+cancellation and waits up to 250 ms for Rust harness completion. If it has
+not finished, Aleph aborts the Rust task and defers removal until the last
+active checkout owner releases it. This does not confirm native process-tree
+termination. Active-run status does not retain the checkout, and durable project
+fields never contain its temporary path. Team recovery provisions a checkout
+through its own scheduler rather than replaying the old path. Parent checkout
+paths are not added as grants; existing approved elevations and platform scratch
+rules still apply. This is not a claim of read isolation or of exclusive writes
+inside a platform's pre-existing scratch area.
+
+Team 只从已授权项目选择源目录。超时后最多等待 250 ms 让 Rust harness 响应取消，最后一个持有者退出后才清理工作树；这不证明原生进程树已回收。临时路径不写入持久项目字段，Team 恢复时走自己的调度与工作树创建流程。现有显式审批和系统临时目录规则保持不变。
 
 Inside the pipeline, `SandboxCapabilities::is_within` (`src/sandbox/capabilities.rs:36`)
 enforces four monotonic checks: `fs_read` ⊆ (prefix), `fs_write` ⊆ (prefix),
@@ -132,10 +137,9 @@ pub enum NetworkPolicy {
 }
 ```
 
-`::strict()` (equivalent to `::default()`) is the workspace baseline: no fs
-access outside the cwd (which the OS driver auto-grants via the seatbelt
-profile), no network, no subprocess spawn. Any command that needs more must
-escalate via `ApprovalGate`.
+`::session_baseline()` is the runtime baseline. The driver combines that
+baseline with the selected policy root and platform rules. Additional capabilities
+requested by a tool are checked by `ApprovalGate`.
 
 ## Task-local `SESSION_ID`
 
@@ -270,7 +274,7 @@ returns `NoopSandbox`.
 | `src/sandbox/driver.rs` | `OsSandboxDriverTrait` + `OsSandboxProfile` |
 | `src/sandbox/factory.rs` | `build_sandbox` + `NoopSandbox` |
 | `src/sandbox/config.rs` | `SandboxConfig` (boot-time tunables) |
-| `src/sandbox/context.rs` | `SESSION_ID` task-local + `current_session()` |
+| `src/sandbox/context.rs` | `SESSION_ID` and typed `ExecWorkspace` task-local binding |
 | `src/sandbox/driver.rs` | `OsSandboxDriver` (macOS `sandbox-exec` driver) |
 | `src/session/tool_trace.rs` | `invoke_with_session_trace` — sets `SESSION_ID.scope(...)` |
 | `tests/sandbox_capability_approval.rs` | End-to-end capability approval flow |
@@ -1100,6 +1104,9 @@ audits a slightly larger suspicious set; it never reasons about model intent.
 
 ## Cycle 8 — background-exec lifecycle & the two-phase cwd gate (2026-08-10)
 
+> 历史记录 / Historical. On 2026-11-25 the standalone `WorktreeSandbox`
+> launcher was removed; the three native drivers still share the drain path.
+
 Findings from an audit against Cloudflare `computer` (Workspace VFS +
 pluggable execution backends). The portable part turned out to be contracts
 and discipline, not code — see FEATURE_LOCATOR §3.15 for the full ledger,
@@ -1205,8 +1212,8 @@ developer dir (`/Library/Developer/CommandLineTools`, beside the existing
 run on CLT-only Macs.
 
 **Trade-off.** The agent gets the system builds — `/bin/bash` is 3.2 on macOS
-(no `declare -A`, `mapfile`, `${x,,}`) — also on the unsandboxed
-`WorktreeSandbox` path, because one process answers "which shell" once.
+(no `declare -A`, `mapfile`, `${x,,}`) — including owned worktrees, which
+use the same native launch path.
 Homebrew tools named *inside* the shell stay unreachable under the
 workspace-only profile; granting the Homebrew prefix is a user decision.
 
