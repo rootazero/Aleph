@@ -19,9 +19,7 @@ use tokio::sync::broadcast;
 #[serde(rename_all = "snake_case")]
 pub enum CapabilityEventType {
     Created,
-    Attached,
     Activated,
-    Detaching,
     Invoked,
     Revoked,
     ConstraintViolation,
@@ -47,18 +45,12 @@ pub enum CapabilityEvent {
         owner: OwnerRef,
         visibility: Box<VisibilityScope>,
     },
-    CapabilityAttached {
-        id: CapabilityId,
-    },
     /// `lease_id` is an audit correlation UUID, NOT an authorization token.
     /// `constraints_applied` is the number of successfully evaluated constraints.
     CapabilityActivated {
         id: CapabilityId,
         lease_id: String,
         constraints_applied: usize,
-    },
-    CapabilityDetaching {
-        id: CapabilityId,
     },
     CapabilityInvoked {
         id: CapabilityId,
@@ -88,9 +80,7 @@ impl CapabilityEvent {
     pub fn id(&self) -> &CapabilityId {
         match self {
             Self::CapabilityCreated { id, .. }
-            | Self::CapabilityAttached { id }
             | Self::CapabilityActivated { id, .. }
-            | Self::CapabilityDetaching { id }
             | Self::CapabilityInvoked { id, .. }
             | Self::CapabilityRevoked { id, .. }
             | Self::ConstraintViolation { id, .. }
@@ -102,9 +92,7 @@ impl CapabilityEvent {
     pub const fn event_type(&self) -> CapabilityEventType {
         match self {
             Self::CapabilityCreated { .. } => CapabilityEventType::Created,
-            Self::CapabilityAttached { .. } => CapabilityEventType::Attached,
             Self::CapabilityActivated { .. } => CapabilityEventType::Activated,
-            Self::CapabilityDetaching { .. } => CapabilityEventType::Detaching,
             Self::CapabilityInvoked { .. } => CapabilityEventType::Invoked,
             Self::CapabilityRevoked { .. } => CapabilityEventType::Revoked,
             Self::ConstraintViolation { .. } => CapabilityEventType::ConstraintViolation,
@@ -912,86 +900,6 @@ impl crate::capability::facade::Zahir for AuditedZahir {
         scope: crate::capability::facade::Scope,
     ) -> crate::capability::facade::Projection {
         self.inner.project(target, scope)
-    }
-}
-
-/// Activation metadata is observational only and shared unchanged by controller clones.
-#[derive(Debug, Clone)]
-pub(crate) struct ActivationEventHook {
-    pub id: CapabilityId,
-    pub actor: OwnerRef,
-    pub emitter: CapabilityEventEmitter,
-    lease_id: String,
-    constraints_applied: usize,
-}
-
-impl ActivationEventHook {
-    /// Test-only constructor: the observed activation path is not mounted in
-    /// production (2026-11-20 severed-wire audit).
-    #[cfg(test)]
-    pub fn new(
-        descriptor: &crate::capability::descriptor::CapabilityDescriptor,
-        constraints_applied: usize,
-        emitter: CapabilityEventEmitter,
-    ) -> Self {
-        emitter.emit(
-            descriptor.owner.clone(),
-            CapabilityEvent::CapabilityCreated {
-                id: descriptor.id.clone(),
-                owner: descriptor.owner.clone(),
-                visibility: Box::new(descriptor.visibility.clone()),
-            },
-        );
-        Self {
-            id: descriptor.id.clone(),
-            actor: descriptor.owner.clone(),
-            emitter,
-            lease_id: uuid::Uuid::new_v4().to_string(),
-            constraints_applied,
-        }
-    }
-
-    pub fn violation(&self, violation: &crate::capability::constraints::ConstraintViolation) {
-        use crate::capability::constraints::ConstraintViolation;
-        let constraint_type = match violation {
-            ConstraintViolation::InvalidTimeWindow { .. }
-            | ConstraintViolation::TimeWindowClosed { .. } => "time",
-            ConstraintViolation::ResourceLimitExceeded { .. } => "resource",
-            ConstraintViolation::ConditionNotMet { .. } => "conditional",
-            ConstraintViolation::InvalidContext { .. } | ConstraintViolation::ClockUnavailable => {
-                "context"
-            }
-        };
-        self.emitter.emit(
-            self.actor.clone(),
-            CapabilityEvent::ConstraintViolation {
-                id: self.id.clone(),
-                constraint_type: constraint_type.into(),
-            },
-        );
-    }
-}
-
-impl crate::capability::activation::ActivationHook for ActivationEventHook {
-    fn after_activation(&self, _: &crate::capability::constraints::ConstraintContext) {
-        self.emitter.emit(
-            self.actor.clone(),
-            CapabilityEvent::CapabilityActivated {
-                id: self.id.clone(),
-                lease_id: self.lease_id.clone(),
-                constraints_applied: self.constraints_applied,
-            },
-        );
-    }
-
-    fn after_revocation(&self) {
-        self.emitter.emit(
-            self.actor.clone(),
-            CapabilityEvent::CapabilityRevoked {
-                id: self.id.clone(),
-                reason: "requested".into(),
-            },
-        );
     }
 }
 

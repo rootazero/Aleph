@@ -1489,7 +1489,6 @@ impl ScopedToolService {
         ),
         ToolError,
     > {
-        self.validate_compatibility_activation(name, lease.owner_generation)?;
         // Only the immutable Core registration owns the typed domain policy seam.
         // Approval, compatibility, canonical capture and lease checks stay here.
         if domain_policy.is_some() {
@@ -1526,36 +1525,6 @@ impl ScopedToolService {
             crate::gateway::caller_identity::current_caller_conn_id(),
             call_id.into(),
         )
-    }
-
-    /// Preserve the old opt-in API through the same activation evaluator used
-    /// by PolicyRuntime. Production does not install a per-name policy here.
-    fn validate_compatibility_activation(
-        &self,
-        name: &str,
-        current_generation: crate::capability::ownership::OwnerGeneration,
-    ) -> Result<(), ToolError> {
-        let Some(activation) = self.capability_activations.get(name) else {
-            return Ok(());
-        };
-        let source = self.capability_constraint_context.as_ref().ok_or_else(|| {
-            ToolError::PermissionDenied {
-                name: name.to_string(),
-                reason:
-                    "capability runtime restriction requires an invocation-owner context source"
-                        .into(),
-            }
-        })?;
-        let context = source(name).map_err(|error| ToolError::PermissionDenied {
-            name: name.to_string(),
-            reason: format!("capability runtime context unavailable: {error}"),
-        })?;
-        activation
-            .validate_runtime(current_generation, &context)
-            .map_err(|error| ToolError::PermissionDenied {
-                name: name.to_string(),
-                reason: format!("capability runtime restriction denied invocation: {error}"),
-            })
     }
 
     fn validate_plugin_capture(
