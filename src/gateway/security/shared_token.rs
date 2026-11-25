@@ -9,6 +9,7 @@
 use super::crypto::{generate_secret, hmac_sign};
 use super::store::SecurityStore;
 use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
+use crate::providers::model_catalog::discovery_authority;
 use crate::secrets::crypto::SecretsCrypto;
 use crate::secrets::types::{DecryptedSecret, EncryptedEntry, EntryMetadata, SecretError};
 use crate::secrets::vault::SecretVault;
@@ -150,7 +151,9 @@ impl SharedTokenManager {
             .map_err(|e| SharedTokenError::Storage(e.to_string()))?;
 
         let mut current = self.current_token.lock().unwrap_or_else(|e| e.into_inner());
+        let mut fence = discovery_authority::mutation_fence();
         *current = Some(token.to_owned());
+        fence.advance();
         Ok(())
     }
 
@@ -185,7 +188,11 @@ impl SharedTokenManager {
             Ok(true) => {
                 tracing::info!("SharedTokenManager: loaded existing token from DB");
                 let mut current = self.current_token.lock().unwrap_or_else(|e| e.into_inner());
-                *current = Some(token.clone());
+                if current.as_deref() != Some(token.as_str()) {
+                    let mut fence = discovery_authority::mutation_fence();
+                    *current = Some(token.clone());
+                    fence.advance();
+                }
                 Some(token)
             }
             Ok(false) => {
@@ -316,8 +323,8 @@ impl SharedTokenManager {
 
     /// Get a decrypted secret from the vault.
     pub fn get_secret(&self, name: &str) -> Result<Option<DecryptedSecret>, SharedTokenError> {
-        let crypto = self.crypto()?;
         let vault = self.vault.read().unwrap_or_else(|e| e.into_inner());
+        let crypto = self.crypto()?;
         match vault.get(name) {
             Ok(entry) => {
                 let decrypted = crypto

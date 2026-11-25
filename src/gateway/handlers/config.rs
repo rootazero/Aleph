@@ -2,6 +2,7 @@
 //!
 //! RPC handlers for configuration operations: reload, get, validate, schema.
 
+use crate::providers::model_catalog::discovery_authority;
 use crate::sync_primitives::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -104,7 +105,7 @@ pub async fn handle_reload_with_subsystems(
 
             {
                 let mut config_guard = app_config.write().await;
-                *config_guard = new_app_config;
+                discovery_authority::replace_config(&mut config_guard, new_app_config);
             }
             let live_applied = {
                 // Release the installation write before joining the source.

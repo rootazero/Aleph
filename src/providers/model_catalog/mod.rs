@@ -31,6 +31,7 @@
 pub mod alias;
 pub mod capabilities;
 pub mod discovery;
+pub mod discovery_authority;
 pub mod endpoint;
 pub mod lifecycle;
 pub mod record;

@@ -7,6 +7,7 @@
 //! `api_key` is stored directly in `aleph.toml` (plaintext), consistent
 //! with how the Settings UI manages provider credentials.
 
+use crate::providers::model_catalog::discovery_authority;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -225,6 +226,8 @@ async fn update_config_api_key(
     } else if let Some(provider) = cfg.providers.get_mut(provider_name) {
         provider.api_key = None;
     }
+
+    discovery_authority::mutation_fence().advance();
 
     if let Err(e) = cfg.save_incremental(&["providers"]) {
         warn!(error = %e, "Failed to persist config after OAuth update");

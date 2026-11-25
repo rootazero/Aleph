@@ -1,5 +1,6 @@
 //! Provider RPC handler functions.
 
+use crate::providers::model_catalog::discovery_authority;
 use crate::sync_primitives::Arc;
 use serde_json::json;
 use tokio::sync::RwLock;
@@ -268,7 +269,7 @@ async fn update_provider_inner(
                 format!("Failed to save config: {e}"),
             );
         }
-        *cfg = cfg_candidate;
+        discovery_authority::replace_config(&mut cfg, cfg_candidate);
 
         // Publish the provider we already validated into the live registry.
         if let (Some(registry), Some((name, provider))) = (&multi_registry, built_provider) {
@@ -426,7 +427,7 @@ async fn create_provider_inner(
                 format!("Failed to save config: {e}"),
             );
         }
-        *cfg = cfg_candidate;
+        discovery_authority::replace_config(&mut cfg, cfg_candidate);
     }
 
     let mut constructed = false;
@@ -560,7 +561,7 @@ async fn delete_provider_inner(
                 format!("Failed to save config: {e}"),
             );
         }
-        *cfg = cfg_candidate;
+        discovery_authority::replace_config(&mut cfg, cfg_candidate);
 
         // Config is durably committed; now remove the API key from the vault.
         // A failure here is logged but does not roll back — the provider is
@@ -695,7 +696,10 @@ pub async fn handle_test(
         if let Some(ref name) = provider_name {
             let mut cfg = config_store.write().await;
             if let Some(p) = cfg.providers.get_mut(name) {
-                p.verified = true;
+                if !p.verified {
+                    p.verified = true;
+                    discovery_authority::mutation_fence().advance();
+                }
                 if let Err(e) = save_config(&cfg, &["providers"]).await {
                     error!(error = %e, "Failed to save config after test");
                 }
@@ -1183,7 +1187,7 @@ async fn set_default_provider_inner(
                 format!("Failed to save config: {e}"),
             );
         }
-        *cfg = cfg_candidate;
+        discovery_authority::replace_config(&mut cfg, cfg_candidate);
     }
 
     let mut constructed = false;

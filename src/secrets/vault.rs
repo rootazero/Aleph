@@ -6,6 +6,7 @@
 //! This is a pure storage container — encryption/decryption is the caller's
 //! responsibility (handled by `SharedTokenManager`).
 
+use crate::providers::model_catalog::discovery_authority;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -252,6 +253,7 @@ impl SecretVault {
         }
         entry.updated_at = now;
 
+        let mut fence = discovery_authority::mutation_fence();
         let previous = self.data.entries.insert(name.to_string(), entry);
         if let Err(e) = self.save() {
             if let Some(previous) = previous {
@@ -262,12 +264,15 @@ impl SecretVault {
             return Err(e);
         }
 
+        fence.advance();
+        drop(fence);
         info!(name = name, "Secret stored in vault");
         Ok(())
     }
 
     /// Delete a secret by name.
     pub fn delete(&mut self, name: &str) -> Result<bool, SecretError> {
+        let mut fence = discovery_authority::mutation_fence();
         let Some(previous) = self.data.entries.remove(name) else {
             return Ok(false);
         };
@@ -277,6 +282,8 @@ impl SecretVault {
             return Err(e);
         }
 
+        fence.advance();
+        drop(fence);
         info!(name = name, "Secret deleted from vault");
         Ok(true)
     }
@@ -307,11 +314,13 @@ impl SecretVault {
         // Put the previous map back when the write fails: the in-memory vault
         // and the file must agree, otherwise the process keeps serving
         // ciphertexts the on-disk copy no longer holds.
+        let mut fence = discovery_authority::mutation_fence();
         let previous = std::mem::replace(&mut self.data.entries, entries);
         if let Err(e) = self.save() {
             self.data.entries = previous;
             return Err(e);
         }
+        fence.advance();
         Ok(())
     }
 
