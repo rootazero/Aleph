@@ -174,6 +174,28 @@ impl SelectableModelsSnapshot {
         }
     }
 
+    /// Return only bindings this publication can select, in provider/model order.
+    pub fn choices(&self) -> Vec<aleph_protocol::providers::ChatModelChoice> {
+        let mut choices = Vec::new();
+        for (provider, entry) in &self.providers {
+            if !entry.available || !entry.authenticated {
+                continue;
+            }
+            let provider_label = presets::get_preset(provider)
+                .and_then(|preset| preset.display_name)
+                .unwrap_or(provider);
+            choices.extend(entry.models.union(&entry.discovered).map(|model| {
+                aleph_protocol::providers::ChatModelChoice {
+                    provider: provider.clone(),
+                    model: model.clone(),
+                    provider_label: provider_label.to_owned(),
+                    model_label: model.clone(),
+                }
+            }));
+        }
+        choices
+    }
+
     /// Runtime readiness in this publication, used when another provider reloads.
     pub fn provider_is_available(&self, provider: &str) -> bool {
         self.providers
