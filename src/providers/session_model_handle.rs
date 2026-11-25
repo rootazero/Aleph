@@ -440,8 +440,14 @@ pub(crate) fn publish_discovered(
     update_discovered(|snapshot| *snapshot = snapshot.replace_discovered(provider, models));
 }
 
-pub(crate) fn revoke_discovered(affected: impl Fn(&str) -> bool) {
-    update_discovered(|snapshot| snapshot.revoke_discovered(affected, false));
+pub(crate) fn revoke_config_selection(
+    affected: impl Fn(&str) -> bool,
+    unavailable: impl Fn(&str) -> bool,
+) {
+    update_discovered(|snapshot| {
+        snapshot.revoke_discovered(affected, false);
+        snapshot.mark_unavailable(unavailable);
+    });
 }
 
 pub(crate) fn revoke_vault_discovery(affected: impl Fn(&str) -> bool) {

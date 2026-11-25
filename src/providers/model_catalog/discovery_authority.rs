@@ -47,7 +47,7 @@ impl MutationFence {
     }
     pub(crate) fn provider_changed(&mut self, provider: &str) {
         self.advance();
-        super::discovery::revoke_inventory(|name| name == provider);
+        super::discovery::revoke_inventory(|name| name == provider, |_| false);
     }
 
     pub(crate) fn vault_changed(&mut self, affected: impl Fn(&str) -> bool) {
@@ -82,7 +82,12 @@ pub(crate) fn config_replaced(previous: &Config, next: &Config) {
     {
         let mut fence = mutation_fence();
         fence.advance();
-        super::discovery::revoke_inventory(affected);
+        super::discovery::revoke_inventory(affected, |name| {
+            !next
+                .providers
+                .get(name)
+                .is_some_and(|provider| provider.enabled)
+        });
     }
 }
 

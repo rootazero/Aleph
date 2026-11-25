@@ -166,6 +166,17 @@ impl SelectableModelsSnapshot {
         }
     }
 
+    /// Unpublish disabled or removed providers before the asynchronous reload.
+    /// Keep their configured IDs until the rebuild: a disabled duplicate must
+    /// not turn an ambiguous raw request into an implicit route switch.
+    pub(super) fn mark_unavailable(&mut self, unavailable: impl Fn(&str) -> bool) {
+        for (name, entry) in &mut self.providers {
+            if unavailable(name) {
+                entry.available = false;
+            }
+        }
+    }
+
     pub(super) fn revoke_discovered(&mut self, affected: impl Fn(&str) -> bool, vault_only: bool) {
         for (name, entry) in &mut self.providers {
             if affected(name) && (!vault_only || entry.discovery_vault_backed) {

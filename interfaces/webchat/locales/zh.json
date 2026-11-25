@@ -2344,7 +2344,7 @@
     "fallback_chain": "智能体回退链",
     "load_failed": "无法加载聊天模型。请重新打开选模器重试。",
     "loading_catalog": "正在加载聊天模型…",
-    "no_providers": "当前没有可用的聊天模型。"
+    "no_providers": "当前没有可用的聊天模型。",
     "pick_model_title": "为本轮选择模型",
     "filter_placeholder": "过滤 Provider 与模型…",
     "no_match": "没有匹配的模型",

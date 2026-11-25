@@ -203,13 +203,16 @@ fn scope_epoch_current(provider: &str, expected: u64) -> bool {
 }
 
 /// Called under the mutation epoch; only matching providers lose inventory.
-pub(super) fn revoke_inventory(affected: impl Fn(&str) -> bool) {
+pub(super) fn revoke_inventory(
+    affected: impl Fn(&str) -> bool,
+    unavailable: impl Fn(&str) -> bool,
+) {
     bump_scope_epochs(&affected, false);
     INVENTORIES
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .retain(|name, _| !affected(name));
-    crate::providers::session_model_handle::revoke_discovered(affected);
+    crate::providers::session_model_handle::revoke_config_selection(affected, unavailable);
 }
 
 pub(super) fn revoke_vault_inventory(affected: impl Fn(&str) -> bool) {
@@ -1401,9 +1404,8 @@ mod tests {
             removed.providers.remove(PROVIDER);
             super::super::discovery_authority::replace_config(&mut live, removed);
             drop(live);
-            assert!(!member_models()
-                .iter()
-                .any(|item| item.provider == PROVIDER && item.model == MODEL));
+            assert!(!member_models().iter().any(|item| item.provider == PROVIDER));
+            assert!(!selectable(PROVIDER, "operator-model"));
             let refused = agent::build_run_request(
                 "second".into(),
                 &key,
