@@ -228,6 +228,33 @@ async fn start_server_body(
     // it only because `[security]` is on the app config, not the gateway one.
     install_mask_patterns(&loaded_app_config);
 
+    // Bind the shared macOS bridge before the builtin tools construct a platform.
+    // Canonicalize the existing data directory, not the lazily created media root.
+    #[cfg(target_os = "macos")]
+    let offline_speech_root = {
+        let data_dir = alephcore::utils::paths::get_data_dir()
+            .map_err(|error| error.to_string())
+            .and_then(|dir| {
+                std::fs::canonicalize(dir)
+                    .map_err(|error| format!("cannot canonicalize data directory: {error}"))
+            });
+        match data_dir {
+            Ok(data_dir) => {
+                let root = data_dir.join("_media");
+                if aleph_desktop_macos::configure_offline_speech_root(&root) {
+                    Some(root)
+                } else {
+                    tracing::warn!("offline speech unavailable: shared bridge root not configured");
+                    None
+                }
+            }
+            Err(error) => {
+                tracing::warn!(%error, "offline speech unavailable");
+                None
+            }
+        }
+    };
+
     // Install the process-wide `[policies.spend]` handle. UNCONDITIONAL —
     // including on a box with no ceiling configured (`enabled() == false`).
     // `spend::update_policy` (the live-apply path) returns `false`, and the
@@ -2244,6 +2271,8 @@ async fn start_server_body(
         app_config.clone(),
         agent_result.generation_registry.clone(),
         auth_bundle.auth_ctx.shared_token_mgr.clone(),
+        #[cfg(target_os = "macos")]
+        offline_speech_root,
     );
 
     register_session_handlers(

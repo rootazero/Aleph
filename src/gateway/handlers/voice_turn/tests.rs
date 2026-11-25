@@ -664,6 +664,49 @@ fn scratch_is_empty(scratch: &tempfile::TempDir) -> bool {
 }
 
 #[tokio::test]
+async fn voice_turn_scratch_survives_offline_recognition_task_abort() {
+    for abort in [false, true] {
+        let scratch = tempfile::tempdir().unwrap();
+        let engine = Arc::new(FakeOfflineEngine {
+            release_gate: Some(tokio::sync::Semaphore::new(0)),
+            ..Default::default()
+        });
+        let adapter = offline_adapter(&engine, &scratch);
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let recognition = {
+            let cancel = cancel.clone();
+            tokio::spawn(async move { adapter.recognize(&wav(1), None, cancel).await })
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            engine.wait_started().await;
+            cancel.cancel();
+            engine.wait_cancelled().await;
+        })
+        .await
+        .expect("recognizer did not reach the release gate");
+        let clip = engine.clip.lock().unwrap().clone().unwrap();
+        assert!(clip.is_file(), "clip missing before engine release");
+
+        if abort {
+            // Abort recognition itself, not the RPC waiter, without allowing release.
+            recognition.abort();
+            assert!(recognition.await.unwrap_err().is_cancelled());
+            assert!(clip.is_file(), "task abort deleted an unreleased clip");
+        } else {
+            engine.release();
+            assert_eq!(
+                recognition.await.unwrap(),
+                Err(aleph_protocol::panel_voice::VoiceErrorKind::ProviderFailed)
+            );
+            assert!(
+                scratch_is_empty(&scratch),
+                "clip leaked after normal release"
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn offline_stt_policy_matrix() {
     const BUDGET: usize = 1024 * 1024;
     let desktop = TestConnection::new(VoiceIngress::DesktopIpc, "desktop-conn");

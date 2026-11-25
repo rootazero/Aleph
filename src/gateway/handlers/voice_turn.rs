@@ -253,7 +253,7 @@ impl OfflineSpeechAdapter {
         result
     }
 
-    async fn recognize(
+    pub(super) async fn recognize(
         &self,
         wav: &[u8],
         language: Option<&str>,
@@ -266,16 +266,15 @@ impl OfflineSpeechAdapter {
             .platform
             .media()
             .ok_or(VoiceErrorKind::OfflineUnavailable)?;
-        let clip = ScratchClip::stage(&self.scratch_root, wav)
+        let mut clip = ScratchClip::stage(&self.scratch_root, wav)
             .map_err(|_| VoiceErrorKind::OfflineUnavailable)?;
         if cancel.is_cancelled() {
             return Err(VoiceErrorKind::Cancelled);
         }
-        let result = media
-            .speech_to_text_offline(clip.path_str()?, language, cancel)
-            .await;
-        // Only now has the engine let go of the clip.
-        drop(clip);
+        let path = clip.handoff_path()?;
+        let result = media.speech_to_text_offline(path, language, cancel).await;
+        // The adapter contract guarantees release on both success and error.
+        clip.remove();
         result
             .map(|result| result.text)
             .map_err(|error| offline_error_kind(&error))
@@ -294,31 +293,81 @@ fn offline_error_kind(error: &DesktopError) -> VoiceErrorKind {
     }
 }
 
-/// One private, exclusively created WAV for the offline recognizer; removed on drop.
-struct ScratchClip(PathBuf);
+/// One private, exclusively created WAV for the offline recognizer.
+struct ScratchClip {
+    path: PathBuf,
+    remove_on_drop: bool,
+}
 
 impl ScratchClip {
     fn stage(root: &Path, wav: &[u8]) -> io::Result<Self> {
         std::fs::create_dir_all(root)?;
+        // Do not stage into a pre-existing redirected media root. The parent
+        // directory is trusted; this does not lock it against live replacement.
+        if !std::fs::symlink_metadata(root)?.file_type().is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "offline speech staging root must be a directory, not a link",
+            ));
+        }
         let path = root.join(format!("voice-turn-{}.wav", uuid::Uuid::new_v4().simple()));
         let mut options = std::fs::OpenOptions::new();
         options.write(true).create_new(true);
         #[cfg(unix)]
         std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
         let mut file = options.open(&path)?;
-        let clip = Self(path);
+        let clip = Self {
+            path,
+            remove_on_drop: true,
+        };
         file.write_all(wav)?;
         Ok(clip)
     }
 
-    fn path_str(&self) -> Result<&str, VoiceErrorKind> {
-        self.0.to_str().ok_or(VoiceErrorKind::OfflineUnavailable)
+    fn handoff_path(&mut self) -> Result<&str, VoiceErrorKind> {
+        let path = self
+            .path
+            .to_str()
+            .ok_or(VoiceErrorKind::OfflineUnavailable)?;
+        // Retain the private file on abrupt task drop: it does not prove release.
+        self.remove_on_drop = false;
+        Ok(path)
+    }
+
+    fn remove(&self) {
+        let _ = std::fs::remove_file(&self.path);
     }
 }
 
 impl Drop for ScratchClip {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
+        if self.remove_on_drop {
+            self.remove();
+        }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod scratch_tests {
+    use super::ScratchClip;
+
+    #[test]
+    fn voice_turn_scratch_does_not_write_through_a_symlink_root() {
+        let profile = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let linked_root = profile.path().join("_media");
+        std::os::unix::fs::symlink(outside.path(), &linked_root).unwrap();
+
+        let stage = ScratchClip::stage(&linked_root, b"test clip");
+        // Keep the result alive so RAII cannot hide a file written into the target.
+        assert!(std::fs::read_dir(outside.path()).unwrap().next().is_none());
+        assert!(stage.is_err());
+
+        let real_root = profile.path().join("actual-media");
+        let clip = ScratchClip::stage(&real_root, b"test clip").unwrap();
+        assert_eq!(std::fs::read(&clip.path).unwrap(), b"test clip");
+        drop(clip);
+        assert!(std::fs::read_dir(real_root).unwrap().next().is_none());
     }
 }
 

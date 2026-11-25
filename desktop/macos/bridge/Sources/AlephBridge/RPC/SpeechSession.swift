@@ -1,3 +1,5 @@
+import AVFoundation
+import Dispatch
 import Foundation
 import Speech
 
@@ -96,7 +98,7 @@ actor SpeechSession {
 /// The installed recognizer, behind a seam so the offline policy is testable
 /// without TCC or a downloaded on-device model.
 protocol OfflineSpeechEngine: Sendable {
-    func authorize() async -> SFSpeechRecognizerAuthorizationStatus
+    func authorize(completion: @escaping @Sendable (SFSpeechRecognizerAuthorizationStatus) -> Void)
     /// nil when the OS has no recognizer for `locale`.
     func recognizer(locale: Locale) -> OfflineRecognizer?
 }
@@ -104,10 +106,10 @@ protocol OfflineSpeechEngine: Sendable {
 protocol OfflineRecognizer {
     var supportsOnDeviceRecognition: Bool { get }
     var isAvailable: Bool { get }
-    /// Start on-device-only recognition of `url`. `completion` may be called
-    /// more than once; the session uses only the first call.
+    /// Start on-device-only recognition of detached PCM. The session accepts
+    /// at most one terminal callback.
     func start(
-        url: URL,
+        buffer: AVAudioPCMBuffer,
         completion: @escaping @Sendable (Result<String, Error>) -> Void
     ) -> OfflineRecognitionTask
 }
@@ -117,11 +119,9 @@ protocol OfflineRecognitionTask: AnyObject, Sendable {
 }
 
 struct SystemOfflineSpeechEngine: OfflineSpeechEngine {
-    func authorize() async -> SFSpeechRecognizerAuthorizationStatus {
-        await withCheckedContinuation { cont in
-            SFSpeechRecognizer.requestAuthorization { status in
-                cont.resume(returning: status)
-            }
+    func authorize(completion: @escaping @Sendable (SFSpeechRecognizerAuthorizationStatus) -> Void) {
+        SFSpeechRecognizer.requestAuthorization { status in
+            completion(status)
         }
     }
 
@@ -134,6 +134,9 @@ final class SystemOfflineRecognizer: OfflineRecognizer {
     private let recognizer: SFSpeechRecognizer
 
     init(_ recognizer: SFSpeechRecognizer) {
+        let callbackQueue = OperationQueue()
+        callbackQueue.maxConcurrentOperationCount = 1
+        recognizer.queue = callbackQueue
         self.recognizer = recognizer
     }
 
@@ -142,18 +145,21 @@ final class SystemOfflineRecognizer: OfflineRecognizer {
 
     /// The only place the offline request is built: it must never be allowed
     /// to reach Apple's servers.
-    static func makeRequest(url: URL) -> SFSpeechURLRecognitionRequest {
-        let request = SFSpeechURLRecognitionRequest(url: url)
+    static func makeRequest() -> SFSpeechAudioBufferRecognitionRequest {
+        let request = SFSpeechAudioBufferRecognitionRequest()
         request.requiresOnDeviceRecognition = true
         request.shouldReportPartialResults = false
         return request
     }
 
     func start(
-        url: URL,
+        buffer: AVAudioPCMBuffer,
         completion: @escaping @Sendable (Result<String, Error>) -> Void
     ) -> OfflineRecognitionTask {
-        let task = recognizer.recognitionTask(with: Self.makeRequest(url: url)) { result, error in
+        let request = Self.makeRequest()
+        let task = recognizer.recognitionTask(with: request) { [request, buffer] result, error in
+            // Also retain inputs via the native callback if cancel outlives our task handle.
+            defer { withExtendedLifetime((request, buffer)) {} }
             if let error = error {
                 completion(.failure(error))
                 return
@@ -161,15 +167,25 @@ final class SystemOfflineRecognizer: OfflineRecognizer {
             guard let result = result, result.isFinal else { return }
             completion(.success(result.bestTranscription.formattedString))
         }
-        return SystemRecognitionTask(task)
+        request.append(buffer)
+        request.endAudio()
+        return SystemRecognitionTask(task, request: request, buffer: buffer)
     }
 }
 
 final class SystemRecognitionTask: OfflineRecognitionTask, @unchecked Sendable {
     private let task: SFSpeechRecognitionTask
+    private let request: SFSpeechAudioBufferRecognitionRequest
+    private let buffer: AVAudioPCMBuffer
 
-    init(_ task: SFSpeechRecognitionTask) {
+    init(
+        _ task: SFSpeechRecognitionTask,
+        request: SFSpeechAudioBufferRecognitionRequest,
+        buffer: AVAudioPCMBuffer
+    ) {
         self.task = task
+        self.request = request
+        self.buffer = buffer
     }
 
     func cancel() {
@@ -177,12 +193,17 @@ final class SystemRecognitionTask: OfflineRecognitionTask, @unchecked Sendable {
     }
 }
 
+struct OfflineSpeechResult: Sendable {
+    let operationId: String
+    let text: String
+    let language: String
+}
+
 /// Offline-only recognitions keyed by the caller's `operation_id`.
 ///
-/// Unlike `SpeechSession`, a recognition here can be stopped by
-/// `media.speech.cancel`. The recognizer is cancelled before the pending
-/// transcription replies, so once the caller sees that reply nothing here still
-/// reads its clip. The clip itself belongs to the caller.
+/// `media.speech.cancel` withdraws the operation and requests cancellation of
+/// any installed recognition task. The reply classifies the operation outcome;
+/// it does not attest that Speech has released the caller's clip.
 actor OfflineSpeechSession {
     /// `OFFLINE_SPEECH_DEADLINE_MS` in the Rust contract.
     static let deadlineNanoseconds: UInt64 = 30_000_000_000
@@ -196,34 +217,60 @@ actor OfflineSpeechSession {
         data: nil
     )
 
+    private static let timeoutError = RpcError(
+        code: -32004,
+        message: "media.speech.transcribe_file: offline recognition timed out",
+        data: nil
+    )
+
+    private static let preparationError = RpcError(
+        code: -32003,
+        message: "media.speech.transcribe_file: offline audio preparation failed",
+        data: nil
+    )
+
     private final class Operation {
-        var cancelled = false
+        enum Phase {
+            case reserved
+            case authorizing(ResumeOnce<SFSpeechRecognizerAuthorizationStatus>)
+            case preparing
+            case withdrawingPreparation(RpcError)
+            case recognizing(ResumeOnce<String>)
+            case withdrawn(RpcError)
+        }
+
+        var phase: Phase = .reserved
         var task: OfflineRecognitionTask?
-        var finish: ResumeOnce<String>?
         var deadline: Task<Void, Never>?
+        var preparationWaiters: [CheckedContinuation<Void, Never>] = []
     }
 
     private let engine: OfflineSpeechEngine
+    private let loadAudio: @Sendable (String) throws -> OfflineSpeechAudio
     private let deadlineNanoseconds: UInt64
     private var operations: [String: Operation] = [:]
     private var earlyCancels: [String] = []
 
     init(
         engine: OfflineSpeechEngine,
-        deadlineNanoseconds: UInt64 = OfflineSpeechSession.deadlineNanoseconds
+        deadlineNanoseconds: UInt64 = OfflineSpeechSession.deadlineNanoseconds,
+        loadAudio: @escaping @Sendable (String) throws -> OfflineSpeechAudio = {
+            try OfflineSpeechAudio.load(fromTrustedPath: $0)
+        }
     ) {
         self.engine = engine
         self.deadlineNanoseconds = deadlineNanoseconds
+        self.loadAudio = loadAudio
     }
 
-    /// Recognitions currently holding a clip.
+    /// Operations currently reserved, including those awaiting preparation join.
     var activeOperations: Int { operations.count }
 
     func transcribe(
         audioPath: String,
         operationId: String,
         language: String?
-    ) async throws -> (text: String, language: String) {
+    ) async throws -> OfflineSpeechResult {
         if let index = earlyCancels.firstIndex(of: operationId) {
             earlyCancels.remove(at: index)
             throw Self.cancelledError
@@ -235,23 +282,38 @@ actor OfflineSpeechSession {
                 data: nil
             )
         }
-        // Registered before the first suspension so a concurrent cancel finds it.
+        let clock = ContinuousClock()
+        let expiresAt = clock.now.advanced(by: .nanoseconds(deadlineNanoseconds))
         let operation = Operation()
         operations[operationId] = operation
+        operation.deadline = Task { [weak self, weak operation] in
+            do {
+                try await clock.sleep(until: expiresAt, tolerance: nil)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled, let operation else { return }
+            await self?.withdraw(operationId: operationId, operation: operation, error: Self.timeoutError)
+        }
         defer {
             operation.deadline?.cancel()
-            operations[operationId] = nil
+            if operations[operationId] === operation {
+                operations[operationId] = nil
+            }
+            for waiter in operation.preparationWaiters { waiter.resume() }
         }
 
-        guard FileManager.default.fileExists(atPath: audioPath) else {
-            throw RpcError(
-                code: -32602,
-                message: "media.speech.transcribe_file: audio file not found",
-                data: nil
-            )
+        let status: SFSpeechRecognizerAuthorizationStatus = try await withCheckedThrowingContinuation { rawCont in
+            let finish = ResumeOnce(rawCont)
+            operation.phase = .authorizing(finish)
+            engine.authorize { status in
+                finish.resume(returning: status)
+            }
         }
-        let status = await engine.authorize()
-        if operation.cancelled { throw Self.cancelledError }
+        // Authorization may have claimed its continuation before withdrawal,
+        // without the suspended actor turn having resumed yet.
+        if case .withdrawn(let error) = operation.phase { throw error }
+        guard clock.now < expiresAt else { throw Self.timeoutError }
         guard status == .authorized else {
             throw RpcError(
                 code: -32001,
@@ -276,11 +338,31 @@ actor OfflineSpeechSession {
             )
         }
 
-        let deadline = deadlineNanoseconds
+        guard clock.now < expiresAt else { throw Self.timeoutError }
+        operation.phase = .preparing
+        // GCD handles blocking file I/O; the transcribe RPC joins it even when
+        // withdrawn. The continuation is completed only after the loader returns.
+        let loaded: Result<OfflineSpeechAudio, Error> = await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async { [loadAudio] in
+                continuation.resume(returning: Result { try loadAudio(audioPath) })
+            }
+        }
+        if case .withdrawingPreparation(let error) = operation.phase { throw error }
+        guard operations[operationId] === operation, case .preparing = operation.phase else {
+            throw Self.cancelledError
+        }
+        guard clock.now < expiresAt else { throw Self.timeoutError }
+        guard case .success(let audio) = loaded, let buffer = audio.makePCMBuffer() else {
+            throw Self.preparationError
+        }
+
+        guard clock.now < expiresAt else { throw Self.timeoutError }
         let text: String = try await withCheckedThrowingContinuation { rawCont in
             let finish = ResumeOnce(rawCont)
-            operation.finish = finish
-            let task = recognizer.start(url: URL(fileURLWithPath: audioPath)) { result in
+            operation.phase = .recognizing(finish)
+            let task = recognizer.start(buffer: buffer) { result in
+                // Leave late replies to the deadline task so it can cancel the installed task.
+                guard clock.now < expiresAt else { return }
                 switch result {
                 case .success(let text):
                     finish.resume(returning: text)
@@ -293,31 +375,47 @@ actor OfflineSpeechSession {
                 }
             }
             operation.task = task
-            operation.deadline = Task { [weak self] in
-                try? await Task.sleep(nanoseconds: deadline)
-                guard !Task.isCancelled else { return }
-                await self?.expire(operationId: operationId)
-            }
         }
-        return (text, identifier)
+        if case .withdrawn(let error) = operation.phase { throw error }
+        guard clock.now < expiresAt else {
+            withdraw(operationId: operationId, operation: operation, error: Self.timeoutError)
+            throw Self.timeoutError
+        }
+        return OfflineSpeechResult(operationId: operationId, text: text, language: identifier)
     }
 
-    /// The bounded deadline: like `cancel`, on this actor so the recognizer is
-    /// stopped before the pending transcription can reply.
-    private func expire(operationId: String) {
-        // A cancelled deadline belongs to a finished operation, even if a new
-        // one has since reused the id.
-        guard !Task.isCancelled, let operation = operations[operationId] else { return }
-        operation.finish?.resume(throwing: RpcError(
-            code: -32004,
-            message: "media.speech.transcribe_file: offline recognition timed out",
-            data: nil
-        ))
-        operation.task?.cancel()
+    private func withdraw(operationId: String, operation: Operation, error: RpcError) {
+        guard operations[operationId] === operation else { return }
+        let phase = operation.phase
+        switch phase {
+        case .preparing:
+            // The loader might still hold a descriptor. Keep the reservation
+            // and leave both RPCs suspended until the actual read returns.
+            operation.phase = .withdrawingPreparation(error)
+            operation.deadline?.cancel()
+            return
+        case .withdrawingPreparation:
+            return
+        default:
+            break
+        }
+        operations[operationId] = nil
+        operation.deadline?.cancel()
+        operation.phase = .withdrawn(error)
+        // Claim the classification before any cancellation callback can reply.
+        switch phase {
+        case .authorizing(let finish):
+            finish.resume(throwing: error)
+        case .recognizing(let finish):
+            finish.resume(throwing: error)
+            operation.task?.cancel()
+        case .reserved, .preparing, .withdrawingPreparation, .withdrawn:
+            break
+        }
     }
 
-    /// Stop the named recognition. `true` only when one was in flight.
-    func cancel(operationId: String) -> Bool {
+    /// Withdraw the named operation. `true` only when one was in flight.
+    func cancel(operationId: String) async -> Bool {
         guard let operation = operations[operationId] else {
             earlyCancels.append(operationId)
             if earlyCancels.count > Self.maxEarlyCancels {
@@ -325,12 +423,12 @@ actor OfflineSpeechSession {
             }
             return false
         }
-        operation.cancelled = true
-        // Claim the reply first so the recognizer's own cancellation error is
-        // not what the caller sees. The pending transcription resumes on this
-        // actor, so it cannot reply before the recognizer below is stopped.
-        operation.finish?.resume(throwing: Self.cancelledError)
-        operation.task?.cancel()
+        withdraw(operationId: operationId, operation: operation, error: Self.cancelledError)
+        if case .withdrawingPreparation = operation.phase {
+            await withCheckedContinuation { continuation in
+                operation.preparationWaiters.append(continuation)
+            }
+        }
         return true
     }
 }

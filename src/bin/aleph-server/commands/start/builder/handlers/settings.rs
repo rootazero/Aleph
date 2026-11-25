@@ -1033,6 +1033,7 @@ pub(in crate::commands::start) fn register_voice_capability_handlers(
         Arc<alephcore::sync_primitives::RwLock<alephcore::generation::GenerationProviderRegistry>>,
     >,
     shared_token_mgr: Arc<alephcore::gateway::security::SharedTokenManager>,
+    #[cfg(target_os = "macos")] offline_speech_root: Option<std::path::PathBuf>,
 ) {
     use alephcore::gateway::handlers::voice;
     use alephcore::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, SERVICE_UNAVAILABLE};
@@ -1070,18 +1071,17 @@ pub(in crate::commands::start) fn register_voice_capability_handlers(
     // Whole-turn STT. With no configured provider, owner Desktop IPC may use the
     // host's installed recognizer, reading a clip staged under the media root
     // the platform bridge permits.
-    let offline = match alephcore::utils::paths::get_data_dir() {
-        Ok(data_dir) => Some(
-            alephcore::gateway::handlers::voice_turn::OfflineSpeechAdapter::new(
-                platform.clone(),
-                data_dir.join("_media"),
-            ),
-        ),
+    #[cfg(not(target_os = "macos"))]
+    let offline_speech_root = match alephcore::utils::paths::get_data_dir() {
+        Ok(data_dir) => Some(data_dir.join("_media")),
         Err(error) => {
             tracing::warn!(%error, "offline speech unavailable: no data directory");
             None
         }
     };
+    let offline = offline_speech_root.map(|root| {
+        alephcore::gateway::handlers::voice_turn::OfflineSpeechAdapter::new(platform.clone(), root)
+    });
     alephcore::gateway::handlers::voice_turn::register_transcription(
         server.handlers_mut(),
         config.clone(),

@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Speech
 
@@ -10,9 +11,10 @@ import Speech
 func registerSpeechHandlers(_ router: Router) async {
     let session = SpeechSession()
     let offline = OfflineSpeechSession(engine: SystemOfflineSpeechEngine())
+    let offlineStagingRoot = ProcessInfo.processInfo.environment["ALEPH_OFFLINE_STT_ROOT"]
 
     await router.register("media.speech.transcribe_file") { params in
-        switch try transcribeRequest(from: params) {
+        switch try transcribeRequest(from: params, offlineStagingRoot: offlineStagingRoot) {
         case .legacy(let path, let language):
             let text = try await session.transcribe(audioPath: path, language: language)
             return .object([
@@ -25,10 +27,7 @@ func registerSpeechHandlers(_ router: Router) async {
                 operationId: operationId,
                 language: language
             )
-            return .object([
-                "text": .string(result.text),
-                "language": .string(result.language),
-            ])
+            return result.rpcResult
         }
     }
 
@@ -46,6 +45,17 @@ func registerSpeechHandlers(_ router: Router) async {
     }
 }
 
+extension OfflineSpeechResult {
+    var rpcResult: JSONValue {
+        .object([
+            "operation_id": .string(operationId),
+            "input_release": .string("detached"),
+            "text": .string(text),
+            "language": .string(language),
+        ])
+    }
+}
+
 enum TranscribeRequest: Equatable {
     /// The original request: `language` is required and the recognizer may use
     /// the network.
@@ -54,7 +64,10 @@ enum TranscribeRequest: Equatable {
     case offline(path: String, operationId: String, language: String?)
 }
 
-func transcribeRequest(from params: JSONValue?) throws -> TranscribeRequest {
+func transcribeRequest(
+    from params: JSONValue?,
+    offlineStagingRoot: String? = nil
+) throws -> TranscribeRequest {
     guard case .object(let o) = params ?? .null,
           case .string(let path) = o["audio_path"] ?? .null else {
         throw RpcError(
@@ -100,7 +113,62 @@ func transcribeRequest(from params: JSONValue?) throws -> TranscribeRequest {
     case .string(let tag): language = tag
     default: throw invalidPolicy
     }
-    return .offline(path: try permittedAudioPath(path), operationId: operationId, language: language)
+    return .offline(
+        path: try permittedOfflineAudioPath(path, stagingRoot: offlineStagingRoot),
+        operationId: operationId,
+        language: language
+    )
+}
+
+private func permittedOfflineAudioPath(_ path: String, stagingRoot: String?) throws -> String {
+    let invalidPath = RpcError(
+        code: -32602,
+        message: "media.speech.transcribe_file: 'audio_path' must be a staged offline clip",
+        data: nil
+    )
+    let bytes = path.utf8
+    let slash: UInt8 = 0x2f
+    var rootInfo = stat()
+    guard bytes.first == slash,
+          !bytes.contains(0),
+          !bytes.split(separator: slash).contains(where: {
+              $0.elementsEqual(".".utf8) || $0.elementsEqual("..".utf8)
+          }),
+          let lastSlash = bytes.lastIndex(of: slash),
+          let stagingRoot,
+          let root = resolvedAbsolutePath(stagingRoot),
+          root.utf8.elementsEqual(stagingRoot.utf8),
+          lstat(root, &rootInfo) == 0,
+          (rootInfo.st_mode & mode_t(S_IFMT)) == mode_t(S_IFDIR) else {
+        throw invalidPath
+    }
+
+    let name = String(decoding: bytes[bytes.index(after: lastSlash)...], as: UTF8.self)
+    // Core's ScratchClip uses a lowercase simple v4 UUID, not the RPC operation id.
+    let stagedName = #/voice-turn-[0-9a-f]{12}4[0-9a-f]{3}[89ab][0-9a-f]{15}\.wav/#
+    let parent = String(decoding: bytes[..<lastSlash], as: UTF8.self)
+    guard name.wholeMatch(of: stagedName) != nil,
+          let resolvedParent = resolvedAbsolutePath(parent.isEmpty ? "/" : parent),
+          resolvedParent.utf8.elementsEqual(root.utf8) else {
+        throw invalidPath
+    }
+
+    let clip = (root == "/" ? root : root + "/") + name
+    // This admission check is not the read boundary: the loader independently
+    // opens without following a leaf symlink and checks the descriptor.
+    var info = stat()
+    guard lstat(clip, &info) == 0, (info.st_mode & mode_t(S_IFMT)) == mode_t(S_IFREG) else {
+        throw invalidPath
+    }
+    return clip
+}
+
+private func resolvedAbsolutePath(_ path: String) -> String? {
+    guard path.utf8.first == 0x2f, !path.utf8.contains(0), let resolved = realpath(path, nil) else {
+        return nil
+    }
+    defer { free(resolved) }
+    return String(validatingCString: resolved)
 }
 
 /// Accept only files inside `~/.aleph/data/_media/`.
