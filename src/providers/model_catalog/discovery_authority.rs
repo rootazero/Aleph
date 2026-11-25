@@ -50,7 +50,8 @@ impl MutationFence {
 /// Call under the live config write lock after an accepted replacement. Only
 /// fields affecting listing identity or eligibility need to invalidate fetches.
 pub(crate) fn config_replaced(previous: &Config, next: &Config) {
-    if previous.providers.len() != next.providers.len()
+    if previous.presets_override.providers != next.presets_override.providers
+        || previous.providers.len() != next.providers.len()
         || previous.providers.iter().any(|(name, old)| {
             next.providers.get(name).is_none_or(|new| {
                 old.base_url != new.base_url
@@ -128,6 +129,27 @@ mod tests {
         removed.providers.clear();
         replace_config(&mut *live.write().await, removed);
         replace_config(&mut *live.write().await, original);
+        assert_invalidated(&live, a).await;
+    }
+
+    #[tokio::test]
+    async fn preset_only_reload_aba_rejects_stale_commit() {
+        let original = configured();
+        let live = RwLock::new(original.clone());
+        let a = discovery_revision(&live.read().await);
+        let mut reloaded = original.clone();
+        reloaded.presets_override.providers.insert(
+            "tenant".into(),
+            crate::config::presets_override::PartialProviderPreset {
+                base_url: Some("https://override.invalid/v1".into()),
+                protocol: Some("anthropic".into()),
+                ..Default::default()
+            },
+        );
+        replace_config(&mut *live.write().await, reloaded);
+        let b = assert_invalidated(&live, a).await;
+        replace_config(&mut *live.write().await, original);
+        assert_invalidated(&live, b).await;
         assert_invalidated(&live, a).await;
     }
 

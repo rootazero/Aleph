@@ -35,32 +35,31 @@ async fn refresh_selectable_publication(
     constructed: bool,
 ) {
     use crate::providers::session_model_handle as selection;
-    let Some(previous) = selection::selectable_models() else {
-        return;
-    };
     let config = config.read().await;
-    let available: std::collections::BTreeSet<String> = registry
-        .map(|registry| registry.list_providers())
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|name| {
-            if name == changed {
-                constructed
-            } else {
-                previous.provider_is_available(name)
-            }
+    selection::refresh_selectable_models(&config, |previous, routable| {
+        let available: std::collections::BTreeSet<String> = registry
+            .map(|registry| registry.list_providers())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|name| {
+                if name == changed {
+                    constructed
+                } else {
+                    previous.provider_is_available(name)
+                }
+            })
+            .collect();
+        // Authentication is only a selectable-model validation input. It must not
+        // synthesize routing availability or restore learned/semantic routing.
+        let env_provider = crate::gateway::available_provider_from_env();
+        selection::SelectableModelsSnapshot::from_config(&config, routable, &available, |name| {
+            vault.is_some_and(|vault| resolve_api_key(name, vault).is_some())
+                || config
+                    .providers
+                    .get(name)
+                    .is_some_and(|pc| pc.protocol() == "ollama")
+                || (name != changed && available.contains(name) && env_provider == Some(name))
         })
-        .collect();
-    // Authentication is only a selectable-model validation input. It must not
-    // synthesize routing availability or restore learned/semantic routing.
-    let env_provider = crate::gateway::available_provider_from_env();
-    selection::refresh_selectable_models(&config, &available, |name| {
-        vault.is_some_and(|vault| resolve_api_key(name, vault).is_some())
-            || config
-                .providers
-                .get(name)
-                .is_some_and(|pc| pc.protocol() == "ollama")
-            || (name != changed && available.contains(name) && env_provider == Some(name))
     });
 }
 

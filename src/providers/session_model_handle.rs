@@ -436,20 +436,42 @@ pub fn publish_selectable_models(snapshot: SelectableModelsSnapshot) {
 /// routable keys remain those actually wired by the run builder at boot.
 /// No boot publication means no permission to install one via a config write.
 pub fn refresh_selectable_models(
-    config: &crate::config::Config,
-    available: &std::collections::BTreeSet<String>,
-    authenticated: impl Fn(&str) -> bool,
+    config: &tokio::sync::RwLockReadGuard<'_, crate::config::Config>,
+    prepare: impl Fn(
+        &SelectableModelsSnapshot,
+        std::collections::BTreeSet<String>,
+    ) -> SelectableModelsSnapshot,
 ) {
+    use crate::providers::model_catalog::discovery_authority;
     let Some(handle) = PINNABLE_PROVIDERS.get() else {
         return;
     };
-    let mut guard = handle.write().unwrap_or_else(|e| e.into_inner());
-    *guard = std::sync::Arc::new(SelectableModelsSnapshot::from_config(
-        config,
-        guard.routable.clone(),
-        available,
-        authenticated,
-    ));
+    loop {
+        let revision = discovery_authority::discovery_revision(config);
+        let previous = handle.read().unwrap_or_else(|e| e.into_inner()).clone();
+        // Credential resolution and snapshot construction must precede the
+        // epoch/slot critical section; vault mutations take vault -> epoch.
+        let next = std::sync::Arc::new(prepare(&previous, previous.routable.clone()));
+        if discovery_authority::commit_if_current(config, revision, || {
+            replace_selectable_if_unchanged(handle, &previous, next)
+        }) == Some(true)
+        {
+            return;
+        }
+    }
+}
+
+fn replace_selectable_if_unchanged(
+    handle: &RwLock<std::sync::Arc<SelectableModelsSnapshot>>,
+    previous: &std::sync::Arc<SelectableModelsSnapshot>,
+    next: std::sync::Arc<SelectableModelsSnapshot>,
+) -> bool {
+    let mut current = handle.write().unwrap_or_else(|e| e.into_inner());
+    if !std::sync::Arc::ptr_eq(&current, previous) {
+        return false;
+    }
+    *current = next;
+    true
 }
 
 /// Record a provider-less boot; selection still fails closed.
@@ -764,4 +786,31 @@ mod tests {
              means re-reading them, not re-typing this line"
         );
     }
+}
+
+#[cfg(test)]
+#[test]
+fn selectable_slot_rejects_a_prepared_snapshot_from_an_older_publication() {
+    fn snapshot() -> std::sync::Arc<SelectableModelsSnapshot> {
+        std::sync::Arc::new(SelectableModelsSnapshot::from_config(
+            &crate::config::Config::default(),
+            Default::default(),
+            &Default::default(),
+            |_| false,
+        ))
+    }
+    let earlier = snapshot();
+    let slot = RwLock::new(earlier.clone());
+    let published = snapshot();
+    assert!(replace_selectable_if_unchanged(
+        &slot,
+        &earlier,
+        published.clone()
+    ));
+    assert!(!replace_selectable_if_unchanged(
+        &slot,
+        &earlier,
+        snapshot()
+    ));
+    assert!(std::sync::Arc::ptr_eq(&slot.read().unwrap(), &published));
 }
