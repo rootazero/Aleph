@@ -1,6 +1,6 @@
 # Harness 八场景端到端验证与连线修复 / Harness E2E Verification & Wiring
 
-- 状态 / Status: 草案，待用户批准 / Draft, awaiting approval
+- 状态 / Status: 已批准（2026-11-26）/ Approved
 - 分支 / Branch: `harness-e2e-wiring`（worktree `.worktrees/harness-e2e-wiring`，基于 main `961f38dc1`）
 - 参考 / Reference: `deepseek-harness`（下称 dsh）的同名场景实现，仅借鉴纪律，不搬工具
 
@@ -72,8 +72,8 @@ Aleph 实际顺序（源码）：
 - 真机装置贵且慢（每个阶段都要起服务）；它们是手动触发的，不进 CI，因此可能再次过期（`plan_handoff` 就是先例）。缓解：每个新阶段的关键断言同时落一条可进 CI 的集成测试。
 - 沿用多写者语义（F8）意味着要证明 actor 串行化在并发下成立；若测出交错写入，修复会触及 `src/session/in_process.rs`，风险高于单写者锁。
 
-## 8. 待用户决定 / Open questions
+## 8. 用户决定 / Resolved decisions (2026-11-26)
 
-1. **F8**：确认"多端都可写、gateway 排队"的语义（当前假设）。
-2. **F7**：是否需要子代理命中**父会话**的缓存？若需要，单独立项（改子代理 prompt 组装方式），本轮不做。
-3. **F6**：是否接受"没有能越过底线的 YOLO"这一偏离？本轮默认接受。
+1. **F8**：沿用"多端都可写、gateway 排队"的语义。
+2. **F7**：子代理命中**父会话**缓存另开一轮（改子代理 prompt 组装方式），本轮只验证 fork 兄弟间与同角色跨轮次的前缀。
+3. **F6**：接受"没有能越过底线的 YOLO"，本轮只加顺序回归单测，不改行为。
