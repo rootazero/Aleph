@@ -18,7 +18,74 @@
 use super::capabilities::capabilities_for;
 use super::lifecycle::lifecycle_for;
 use crate::pricing::rate_card;
-use crate::providers::presets::{get_preset, ProviderPreset, PRESETS};
+use crate::providers::presets::{
+    append_catalog_models, get_preset, model_ladder, ProviderPreset, PRESETS,
+};
+
+#[test]
+fn verified_direct_records_are_catalog_only_and_transport_scoped() {
+    use super::{ModelLifecycle, ModelSource};
+
+    for (provider, protocol, endpoint, reference) in [
+        (
+            "claude",
+            "anthropic",
+            "https://api.anthropic.com",
+            &[
+                ("claude-opus-5-5", 1_000_000, 128_000, Some(4.0)),
+                ("claude-sonnet-5-5", 1_000_000, 128_000, Some(2.0)),
+                ("claude-haiku-5-5", 1_000_000, 128_000, None),
+            ][..],
+        ),
+        (
+            "deepseek",
+            "openai",
+            "https://api.deepseek.com",
+            &[("deepseek-flash", 1_048_576, 393_216, None)][..],
+        ),
+    ] {
+        let mut roster = Vec::new();
+        append_catalog_models(&mut roster, provider, Some(endpoint), Some(protocol));
+        assert_eq!(roster.len(), reference.len());
+        for (row, &(id, context, output, input_price)) in roster.iter().zip(reference) {
+            assert_eq!(row.id, id);
+            assert_eq!(row.source, ModelSource::PresetCatalog);
+            assert_eq!(row.lifecycle, ModelLifecycle::ACTIVE);
+            let capabilities = row.capabilities.as_ref().unwrap();
+            assert_eq!(
+                (capabilities.context_window, capabilities.max_output_tokens),
+                (context, output)
+            );
+            assert!(
+                capabilities.supports_tools
+                    && capabilities.supports_vision
+                    && capabilities.supports_reasoning
+            );
+            assert_eq!(
+                row.cost.as_ref().and_then(|cost| cost.input_per_mtok),
+                input_price
+            );
+        }
+        let preset = get_preset(provider).unwrap();
+        assert_eq!(
+            model_ladder(
+                provider,
+                vec![preset.default_model.to_owned()],
+                Some(endpoint)
+            ),
+            preset.fallback_models
+        );
+        roster.clear();
+        append_catalog_models(
+            &mut roster,
+            provider,
+            Some("https://relay.example"),
+            Some(protocol),
+        );
+        append_catalog_models(&mut roster, provider, Some(endpoint), Some("ollama"));
+        assert!(roster.is_empty());
+    }
+}
 
 /// Providers whose model families Aleph carries no verified capability data
 /// for. They fall back to `CONSERVATIVE_CONTEXT_WINDOW`, which is a real (if

@@ -84,8 +84,14 @@ impl ModelRecord {
         source: ModelSource,
         model_def: Option<&ModelDef>,
     ) -> Self {
-        let base_caps = capabilities_for(model);
-        let base_cost = rate_card(provider, model);
+        // Only the reference roster has certified both endpoint and protocol.
+        let direct = (source == ModelSource::PresetCatalog)
+            .then(|| direct_model_facts(provider, base_url, model))
+            .flatten();
+        let (base_caps, base_cost) = match direct {
+            Some((capabilities, cost)) => (Some(capabilities), cost),
+            None => (capabilities_for(model), rate_card(provider, model)),
+        };
 
         let capabilities = apply_cap_override(base_caps, model_def);
         let cost = merge_cost_override(base_cost, model_def.and_then(|d| d.cost.as_ref()));
@@ -110,6 +116,53 @@ impl ModelRecord {
     pub const fn is_unknown(&self) -> bool {
         self.capabilities.is_none() && self.cost.is_none()
     }
+}
+
+// Exact official API records. Do not turn them into vendor-prefix rows:
+// deployed aliases or relay offers need not share context limits or pricing.
+fn direct_model_facts(
+    provider: &str,
+    base_url: Option<&str>,
+    model: &str,
+) -> Option<(ModelCapabilities, Option<RateCard>)> {
+    let preset = crate::providers::presets::get_preset(provider)?;
+    if base_url.is_some_and(|url| url.trim_end_matches('/') != preset.base_url) {
+        return None;
+    }
+    let standard_rate = |input, output, read, write| RateCard {
+        input_per_mtok: Some(input),
+        output_per_mtok: Some(output),
+        cache_read_per_mtok: Some(read),
+        cache_creation_per_mtok: Some(write),
+        reasoning_per_mtok: None,
+        basis: RateBasis::Direct,
+    };
+    let (context_window, max_output_tokens, cost) = match (preset.base_url, model) {
+        ("https://api.anthropic.com", "claude-opus-5-5") => (
+            1_000_000,
+            128_000,
+            Some(standard_rate(4.0, 20.0, 0.20, 5.0)),
+        ),
+        ("https://api.anthropic.com", "claude-sonnet-5-5") => (
+            1_000_000,
+            128_000,
+            Some(standard_rate(2.0, 10.0, 0.10, 2.50)),
+        ),
+        // RateCard cannot express the long-context step or peak schedule.
+        ("https://api.anthropic.com", "claude-haiku-5-5") => (1_000_000, 128_000, None),
+        ("https://api.deepseek.com", "deepseek-flash") => (1_048_576, 393_216, None),
+        _ => return None,
+    };
+    Some((
+        ModelCapabilities {
+            context_window,
+            max_output_tokens,
+            supports_vision: true,
+            supports_tools: true,
+            supports_reasoning: true,
+        },
+        cost,
+    ))
 }
 
 /// Apply operator overrides on top of a catalog-derived capability row.

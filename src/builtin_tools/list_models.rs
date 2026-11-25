@@ -422,6 +422,18 @@ impl crate::tools::AlephTool for ListModelsTool {
             } else {
                 Vec::new()
             };
+            let effective =
+                crate::providers::presets::get_merged_preset(entry.name, &guard.presets_override);
+            let catalog = if configured {
+                preset.catalog_models_for(
+                    cfg.and_then(|c| c.base_url.as_deref())
+                        .or_else(|| effective.as_ref().map(|preset| preset.base_url.as_str())),
+                    cfg.and_then(|c| c.protocol.as_deref())
+                        .or_else(|| effective.as_ref().map(|preset| preset.protocol.as_str())),
+                )
+            } else {
+                &[]
+            };
             let candidates: Vec<(String, ModelSource)> =
                 std::iter::once((preset.default_model.to_string(), ModelSource::PresetDefault))
                     .chain(curated)
@@ -443,10 +455,14 @@ impl crate::tools::AlephTool for ListModelsTool {
                             .flatten()
                             .map(|m| (m.clone(), ModelSource::Discovered)),
                     )
+                    .chain(
+                        catalog
+                            .iter()
+                            .map(|m| (m.to_string(), ModelSource::PresetCatalog)),
+                    )
                     .collect();
 
-            // First mention wins, so an id keeps its most authoritative
-            // provenance (default ▸ fallback ▸ aux ▸ configured ▸ discovered).
+            // Reference-only entries come after configured and discovered IDs.
             let mut seen = std::collections::HashSet::new();
             for (model, source) in candidates {
                 let key = model.to_ascii_lowercase();

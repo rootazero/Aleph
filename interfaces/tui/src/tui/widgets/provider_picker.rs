@@ -278,6 +278,7 @@ const fn source_note(source: ModelSource) -> &'static str {
         ModelSource::PresetDefault => "preset default",
         ModelSource::PresetFallback => "preset",
         ModelSource::PresetAux => "preset aux",
+        ModelSource::PresetCatalog => "catalog reference",
         ModelSource::Configured => "configured",
         ModelSource::Discovered => "discovered",
     }

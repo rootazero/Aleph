@@ -1185,11 +1185,10 @@ pub async fn handle_catalog(
 
     let config_guard = config.read().await;
     let default_provider = config_guard.general.default_provider.clone();
-    // Snapshot the provider map and release the read guard before the
-    // discovery-cache reads below. Those are file I/O; holding a config lock
-    // across an await would block every writer of the config for the whole
-    // catalogue build, and the map is the only thing the two arms need.
+    // Read inventory against the same configuration as the roster; the
+    // process-local lookup never fetches from the vendor.
     let providers = config_guard.providers.clone();
+    let preset_overrides = config_guard.presets_override.clone();
     let discovered: std::collections::HashMap<_, Vec<_>> = providers
         .keys()
         .filter_map(|name| {
@@ -1269,13 +1268,7 @@ pub async fn handle_catalog(
             None,
         );
 
-        // The picker roster merges through the same leaf the failover
-        // walk uses (`presets::model_roster`), seeded with the operator's
-        // `models` or, when none are listed, the preset default. This is
-        // what stops the picker from recommending curated ids on a relay
-        // whose base_url the operator moved — they would 400 there.
-        //
-        let roster = chat_presets::model_roster(
+        let mut roster = chat_presets::model_roster(
             entry.name,
             if models.is_empty() {
                 let d = preset.default_model;
@@ -1299,6 +1292,16 @@ pub async fn handle_catalog(
             cfg.and_then(|c| c.base_url.as_deref()),
             cfg.map_or(&[], |c| c.model_defs.as_slice()),
         );
+        if let Some(effective) = chat_presets::get_merged_preset(entry.name, &preset_overrides) {
+            chat_presets::append_catalog_models(
+                &mut roster,
+                entry.name,
+                cfg.and_then(|c| c.base_url.as_deref())
+                    .or(Some(&effective.base_url)),
+                cfg.and_then(|c| c.protocol.as_deref())
+                    .or(Some(&effective.protocol)),
+            );
+        }
 
         items.push(CatalogEntry {
             id: entry.name.to_string(),
