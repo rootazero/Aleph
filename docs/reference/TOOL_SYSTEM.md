@@ -394,11 +394,23 @@ string in that tree is printed through one helper, `render::quote`, so a page ca
 | `browser_session` | `action:"capabilities"` | the per-engine support table, as a tool result: rendered text plus a JSON form, each row stamped with the engine version it was measured on. |
 | `browser_session` | `action:"switch_engine", engine, migrate?` | move a live profile to the other engine, carrying cookies, tab URLs + scroll, and per-origin localStorage. Returns the new page tree; every earlier `ref` is dead. |
 
-Engine capabilities are a constant table (`src/browser/engine/capability.rs`) of exactly five rows —
-`js_dialogs`, `drag`, `file_upload`, `pdf`, `insert_text` — and **every row names the `browser_*`
-verb that dispatches it**. That rule is what keeps the table a menu rather than a brochure: a row
-with no verb behind it advertises a capability no tool can reach (判据 §9), which is why `touch`,
-`screencast`, `network_interception` and `multi_connection` are not rows.
+Engine capabilities are a constant table (`src/browser/engine/capability.rs`, walked through
+`CAP_FIELDS`) of ten rows — `js_dialogs` (`browser_dialog`), `drag` (`browser_drag`), `file_upload`
+(`browser_upload`), `pdf` (`browser_pdf`), `insert_text` (`browser_type`),
+`effect_probe` (the effect-arrival check behind `browser_click` / `browser_type` /
+`browser_fill_form`), `ref_precheck` (the stale-ref check before ref-taking verbs),
+`network_interception` (`browser_network` mock actions), `screencast` (`browser_record`) and
+`error_events` (`browser_qa` `check_errors`) — and **every row names the `browser_*` verb that
+dispatches it**. That rule is what keeps the table a menu rather than a brochure: a row with no verb
+behind it advertises a capability no tool can reach (判据 §9), which is why `touch` and
+`multi_connection` are not rows; `network_interception` and `screencast` were cut on the same rule
+and restored when `browser_network` mocks and `browser_record` arrived to dispatch them.
+
+As measured on obscura v0.2.7 (2026-11-25, receipt
+`docs/superpowers/runs/2026-11-24-browser-obscura-v027-receipt.md`), obscura is `Unsupported` for
+`js_dialogs`, `file_upload`, `network_interception` and `error_events` and `Supported` for the other
+six; `drag` there means pointer-event drags (obscura fires no HTML5 drag events). Chromium supports
+every row.
 
 The table reaches the model **as a tool result, not as description bytes** — `browser_session`'s
 `DESCRIPTION` carries one sentence pointing at `action:"capabilities"`, and nothing in this tree

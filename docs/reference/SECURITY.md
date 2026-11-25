@@ -1749,7 +1749,7 @@ Aleph's SSRF engine validates ALL outbound HTTP requests before they leave the s
 
 ```
 src/security/ssrf/
-├── mod.rs        — Public API: validate_url_async, safe_fetch, SsrfError
+├── mod.rs        — Public API: validate_url_with_pinned, SsrfError (safe_fetch lives in fetch.rs)
 ├── policy.rs     — SsrfPolicy configuration struct
 ├── ip.rs         — IPv4/IPv6 classification against blocked ranges
 ├── hostname.rs   — Hostname blocklist, allowlist, legacy IP detection
@@ -1889,11 +1889,11 @@ All outbound HTTP requests go through the SSRF engine:
 | Media downloader | `gateway/pipeline/media_download.rs` | `safe_fetch()` |
 | MCP HTTP transport | `src/mcp/transport/http.rs` | `safe_fetch()` |
 | MCP SSE transport | `src/mcp/transport/sse.rs` | `validate_url_with_pinned()` |
-| MCP preflight probe | `src/mcp/preflight.rs` | `validate_url_async()` + pinned `resolve()` |
-| A2A push webhook | `src/a2a/service/notification.rs` | `validate_url_async()` at register, `safe_fetch()` at send |
+| MCP preflight probe | `src/mcp/preflight.rs` | `validate_url_with_pinned()` + pinned `resolve()` |
+| A2A push webhook | `src/a2a/service/notification.rs` | `validate_url_with_pinned()` at register, `safe_fetch()` at send |
 | ~~Fetch providers (crawl4ai/firecrawl)~~ | **removed from runtime** (BT-D-R4-22) | The `[fetch]` provider chain was excised: a provider re-resolves DNS and follows redirects from **its own** network position, so the Aleph-side DNS pin cannot cross the process boundary — validate-then-delegate was exactly the audited High-severity gap. Config surface kept (`[fetch]` section, `fetch_config.get/update/test` RPC); boot logs a one-time warn via `inert_fetch_backend_names` for every backend configured in `[fetch]` (the section has no routing knob: `enabled`/`default_provider`/`fallback_providers` were cut because nothing read them). `web_fetch` uses the built-in `safe_fetch()` path only |
-| Media pipeline URLs | `src/media/pipeline.rs` | `validate_url_async()` |
-| Browser navigation | `src/browser/network_policy.rs` | `validate_url_async()` via `BrowserSsrfGuard` |
+| Media pipeline URLs | `src/media/pipeline.rs` | `validate_url_with_pinned()` |
+| Browser navigation | `src/browser/network_policy.rs` | `validate_url_with_pinned()` via `BrowserSsrfGuard` |
 
 ### Browser SSRF Guard
 
@@ -1909,8 +1909,8 @@ pub struct BrowserSsrfGuard {
 }
 
 impl BrowserSsrfGuard {
-    pub fn check_url(&self, url: &str) -> Result<(), PolicyViolation> {
-        // Delegates to ssrf::validate_url_async() with converted policy
+    pub async fn check_url(&self, url_str: &str) -> Result<(), PolicyViolation> {
+        // Delegates to ssrf::validate_url_with_pinned() with converted policy
         // Adds browser-specific allowlist-only mode
     }
 }
@@ -2049,9 +2049,9 @@ blocked_hosts = ["*.malware.com"]
 ### For Developers
 
 1. **Always use `safe_fetch()`** for outbound HTTP requests — never use `reqwest::Client` directly
-2. **Use `validate_url_async()`** for URL-only validation without fetching (e.g., browser navigation)
+2. **Use `validate_url_with_pinned()`** for URL-only validation without fetching (e.g., browser navigation); when you do fetch afterwards, pin the returned `SocketAddr` on the client
 3. **Construct caller-specific policies** — tools and webhooks may have different `allow_private_network` settings based on user configuration
-4. **Add new callers** — any new outbound HTTP code must go through `safe_fetch()` or `validate_url_async()`
+4. **Add new callers** — any new outbound HTTP code must go through `safe_fetch()` or `validate_url_with_pinned()`
 5. **Test coverage** — add tests for new IP ranges or bypass vectors in `ip.rs` and `hostname.rs`
 
 ---

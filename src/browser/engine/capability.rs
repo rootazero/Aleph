@@ -84,8 +84,8 @@ pub struct EngineCapabilities {
     pub js_dialogs: Cap,
     /// `browser_drag`.
     ///
-    /// **The one row whose two engines disagree, so it states its rule here
-    /// rather than twice (判据 §9 — one verb, several faces, ONE derivation).**
+    /// **The row states its rule here rather than once per engine (判据 §9 —
+    /// one verb, several faces, ONE derivation).**
     /// The rule: this row is `Supported` only where an **effect** reading
     /// exists for the method `browser_drag` actually sends
     /// (`Input.dispatchMouseEvent`) on that engine. A protocol `ok` does not
@@ -93,11 +93,12 @@ pub struct EngineCapabilities {
     /// `DOM.removeNode` with `effect: false` (T0), so on this engine "ok" is a
     /// measured report-success-no-op candidate, not evidence.
     ///
-    /// Applied: Chromium has such a reading and obscura does not. Both arms
+    /// Applied: both engines now have such a reading — Chromium from
+    /// `qa/browser_managed`, obscura since the 2026-11-25 v0.2.7 caps run
+    /// (`dropped:mouseup`; obscura fires no HTML5 drag events). Both arms
     /// carry the citation beside their value, and
-    /// `the_disagreeing_row_cites_the_effect_reading_that_separates_the_engines`
-    /// `every_matrix_exempt_disagreement_cites_its_reading` keeps the Chromium
-    /// citation from becoming a dead reference.
+    /// `every_matrix_exempt_disagreement_cites_its_reading` keeps those
+    /// citations from becoming dead references.
     pub drag: Cap,
     /// `browser_upload` — `DOM.setFileInputFiles`. (The other upload route,
     /// the file-chooser interception, is a NOOP on obscura and no verb uses
@@ -108,13 +109,16 @@ pub struct EngineCapabilities {
     pub file_upload: Cap,
     /// `browser_pdf` — `Page.printToPDF`.
     pub pdf: Cap,
-    /// `browser_type` and `browser_fill` — `Input.insertText`.
+    /// `browser_type` — `Input.insertText`. (`browser_fill_form` sets values
+    /// through a page script, not this method, so it is not gated here.)
     pub insert_text: Cap,
     /// `browser_click`, `browser_type` and `browser_fill_form` — the
     /// effect-arrival probe: a one-shot capture listener installed on the
     /// resolved node via `Runtime.callFunctionOn` BEFORE dispatch, read back
-    /// via `Runtime.evaluate` after. It needs the engine's page-global JS
-    /// state to persist across those two calls, and its synthetic
+    /// after through the SAME node object (so the read runs in the node's
+    /// realm — an iframe's, not the main frame's). It needs the node's realm
+    /// to keep its JS state across those two calls, a per-arm document nonce
+    /// to tell a replaced document from a miss, and the engine's synthetic
     /// `Input.dispatch*` events to reach page-installed listeners.
     pub effect_probe: Cap,
     /// `browser_click`, `browser_type`, `browser_fill_form`, `browser_select`

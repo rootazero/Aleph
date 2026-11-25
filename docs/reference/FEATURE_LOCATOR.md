@@ -1432,9 +1432,9 @@ The dictionary below preserves round-specific implementation evidence and earlie
 
 ### 3.12 浏览器自动化 (Browser Automation)
 - **口语关键词**：browser、浏览器、screenshot、Chrome MCP、Playwright、网络策略、batch、批量操作、一次性填完表单、等待文字消失、固定延时等待、browser_exec、一次调用跑完一个流程、截图看不见、浏览器工具全被拒
-- **当前代码入口**：`src/builtin_tools/browser_tools/`（工具与恢复契约）；`src/browser/backend.rs`（共用后端契约）；`src/browser/{manager,tab_registry,network_policy}.rs`（profile、标签页、网络策略）；`src/browser/cdp_backend/` 与 Chrome MCP、Playwright CLI 适配器。
+- **当前代码入口**：`src/builtin_tools/browser_tools/`（工具与恢复契约）；`src/browser/backend.rs`（共用后端契约）；`src/browser/{manager,tab_registry,network_policy}.rs`（profile、标签页、网络策略）；`src/browser/cdp_backend/`（默认 driver `cdp`：一个 `BrowserBackend` 同时驱动两种引擎，含引擎切换迁移 `migration.rs`）；`src/browser/engine/`（`Engine` 是谁跑页面、`BrowserDriver`（`src/browser/profile.rs`）是怎么跟它说话，二者正交；`capability.rs` 每引擎能力表——行由 `qa/browser_dual` caps 阶段按效果实测，`obscura.rs` / `chromium.rs` / `process.rs` 进程与孤儿清扫）；`src/browser/page_state/`（快照：`fetch_obscura.rs` 绕开 obscura 伪造几何的 `DOMSnapshot`、`fetch_chromium.rs`）；`crates/aleph-cdp/`（CDP 连接与类型化方法）；obscura 版本钉在 `src/runtimes/specs.rs` 的 `obscura_tag!`（当前 v0.2.7，改钉必须重跑 `qa/browser_dual`）。旧 driver：`managed`（Playwright CLI 附着自启 Chromium）、`existing_session`（Chrome MCP 附着用户 Chrome）。默认引擎 obscura、Chromium 为逃生舱；换引擎只经 `browser_session{switch_engine}` 由模型决定，不做自动切换（R7/R10）。
 - **职责**：统一导航、观察与交互工具；工具层和后端的职责分开。工作区实时查看器另见 §3.12a。
-#### Historical / 历史记录：浏览器加固轮与真机 QA（2026-06 至 2026-10）
+#### Historical / 历史记录：浏览器加固轮与真机 QA（2026-06 至 2026-11）
 
 - **状态**：✅ 已实现。**硬化（2026-06-26）**：① **wait 超时钳制（修 panic）**——`browser_wait_for` 的 `timeout_ms` 此前无界透传两后端：Playwright backend `Instant::now() + Duration::from_millis(timeout_ms)` 在 `u64::MAX` 时**溢出 panic**，Chrome MCP 则把巨值直接喂给 MCP 把 tab 占满整会话；现 `wait_for.rs::clamp_timeout` 在系统边界钳到 `500..=120_000`（对齐 openclaw `resolveActWaitTimeoutMs`，schema doc 同步标注有效区间）；② **截图体积预算（补对称缺口）**——文本读早有 `bound_content` 30k 字符封顶，截图却原始 PNG 字节无界，`full_page` 可数千 px 高 → base64 灌爆模型请求；现 `browser_tools/mod.rs::bound_screenshot_png` 复用 `file_ops/image_read` 已验证的 `image` 0.25 缩放路径，把最长边钳到 `MAX_SCREENSHOT_EDGE=1568`（Anthropic 服务端阈值，超此服务端必缩，多传纯烧 token），保持 PNG 格式契约（vision bridge 仍走 `ImageFormat::Png`），已在预算内/解码失败则**原样返回**（后处理绝不把成功截图变失败）。
 - **深度重构（2026-07-30，对标 openclaw browser extension / codex / open-codex-computer-use 的 Gap Analysis）**：
