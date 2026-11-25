@@ -40,6 +40,9 @@ caps stage: table == measurement on all 10 rows, `measured_on` == binary (`v0.2.
 - **Two sessions per page:** `<target>-session` (createTarget) and `<target>-session-<n>` (attachToTarget); page-started navigation lands on either. Before the fix, `click` failed 7 of 11 runs; after it, 6 of 6 on v0.2.7, 0 fails on v0.2.2.
 - **Visibility:** v0.2.7 resolves inherited `visibility` (upstream f019ebe), so Aleph's own cascade of it was removed. An operator-pinned v0.2.2 loses that cascade (documented in `fetch_obscura.rs`).
 - **`DOM.disable`:** v0.2.7 accepts it; v0.2.2 answers -32601. Box-model / resolveNode still work after it.
+- **Fabricated / fractional boxes on real pages (2026-11-25, plan Task 4 Step 5):** `DOM.getBoxModel` on every element of the four QA pages (`caps.html` 11, `index.html` 21, `second.html` 5, `stall.html` 6): 0 fabricated fallback boxes, 0 no-box replies, and 3 elements on `index.html` with a fractional width or height. The fractional-size decode fix is therefore hit on ordinary pages; the fabricated-box guard is a backstop that none of these pages trigger.
+- **`qa-events-probe.mjs` (3 runs, identical):** `Runtime.exceptionThrown` never arrived (the throwing callback ran); `Target.targetDestroyed` arrived for both `closeTarget` and `Page.close`. Verdict PARTIAL — matches `error_events: Unsupported`.
+- **`fetch-probe.mjs`:** unmodified, it times out on its own `await Page.navigate` (v0.2.7 now holds the navigation, and obscura answers neither `Page.navigate` nor `Runtime.evaluate` while a pause is held — the probe was written for v0.2.2's non-holding pause). A scratch copy that awaits the navigate only after the fulfill, and that tolerates the evaluate timeout during the hold, measured 3 runs: enable ok, navigation pause arrives, holds, and the fulfill serves the mock body 3/3; the subresource (`fetch()`) pause arrived on our session 1/3. Listening on every session (6 runs): the subresource pause landed on `<target>-session` (the createTarget session) 3/6 and on ours 3/6, and fulfilling it on OUR session served the mock 6/6. So v0.2.7's Fetch pipeline works; what fails is the same two-sessions-per-page routing as the click fix. Aleph's Fetch dispatcher (`src/browser/live/mod.rs` `on_fetch`) matches by session only, so the row stays `Unsupported`; no request can hang today because `route_add` refuses on obscura before `Fetch.enable` is ever sent.
 
 ## Verification / 验证
 
@@ -73,6 +76,6 @@ A read-only branch review (openai-codex/gpt-6.1-sol, 2026-11-25) blocked the mer
 - No automatic engine switching; the model still decides (R7/R10).
 - No upstream obscura patches; no `--allow-file-access`.
 - `fetch_obscura.rs` stays: v0.2.7 `DOMSnapshot` still fabricates geometry (`y = i*18`).
-- `fetch-probe.mjs` / `qa-events-probe.mjs` were not re-run; network_interception and error_events rest on the caps line.
+- `network_interception` was not flipped although the engine side now works (see Other readings): the dispatcher would need the same foreign-session fallback as `Page.frameNavigated`, plus a caps probe that measures the Aleph-attached path.
 - No Linux / Windows run; x86_64 assets are the same names but unmeasured.
 - A failed background install is not written to the server log — only the job outcome carries it. Noted, not changed.
