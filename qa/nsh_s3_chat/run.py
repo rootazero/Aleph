@@ -234,6 +234,9 @@ def receipt(args):
         aleph.mkdir(mode=0o700)
         port = s2.fixture_port()
         s2.write_config(aleph, port, args.web)
+        if args.continuity:
+            subprocess.run([sys.executable, str(HERE.parent / 'session_order/patch_backend.py'),
+                            str(aleph / 'config.toml'), 'sqlite'], check=True, timeout=15)
         desktop_ready = root / 'desktop-reply-ready'
         desktop_release = root / 'release-desktop-reply'
         web_release = root / 'release-web-reply'
