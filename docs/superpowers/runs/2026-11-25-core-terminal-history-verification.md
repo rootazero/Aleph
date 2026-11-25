@@ -1,6 +1,6 @@
 # Core-side terminal history evidence / Core 侧终端历史证据
 
-Linux x86_64, 2026-11-25. This is a run receipt for the core-side `pty.history` path on `main` at `684d3878b`; it is not the terminal architecture reference. / 这是 `main`（`684d3878b`）上 core 侧 `pty.history` 链路的验证回执，不是终端架构参考。
+Linux x86_64, 2026-11-25. This is a run receipt for the core-side `pty.history` path on `main` at `d8af6c6f2`; it is not the terminal architecture reference. / 这是 `main`（`d8af6c6f2`）上 core 侧 `pty.history` 链路的验证回执，不是终端架构参考。
 
 | Original failure / 原失败 | Repair / 修复 |
 | --- | --- |
@@ -11,10 +11,11 @@ Linux x86_64, 2026-11-25. This is a run receipt for the core-side `pty.history` 
 ## Verification / 验证
 
 - `cargo check --locked -p alephcore --lib --tests` exited 0 on the repaired sources. / 修复后的源码编译通过。
-- `cargo test --locked -p alephcore --lib history_` exited 0: **79 passed, 0 failed**, 22,278 filtered out. Before the repair the same filter reported 77 passed and 2 failed. / 修复前同一过滤器是 77 通过 2 失败，修复后 79 通过 0 失败。
+- `cargo test --locked -p alephcore --lib history_` exited 0: **79 passed, 0 failed**, 22,289 filtered out. Before the repair the same filter reported 77 passed and 2 failed. / 修复前同一过滤器是 77 通过 2 失败，修复后 79 通过 0 失败。
 - `cargo test --locked -p alephcore --lib gateway::pty` exited 0: **154 passed, 0 failed**. / 154 通过 0 失败。
 - `cargo test --locked -p alephcore --lib gateway::capability_terminal_tests` exited 0: **23 passed, 0 failed**. Before the repair the same scope reported 6 failures, all of them the cascade described above. / 修复前同一范围 6 个失败，全部是上表的级联。
 - `cargo test --locked -p alephcore --lib gateway::` exited 0: **5,199 passed, 0 failed, 3 ignored** — no regression in the gateway suite from the two production changes. / 回归门全绿。
+- The four scopes above were run twice: once on the repair branch and once after `main` merged the upstream context-recovery work (`7807cf09c`), and the second run produced the counts recorded here. / 上述四个范围跑了两轮：一轮在修复分支上，一轮在 `main` 合入上游 context-recovery 改动（`7807cf09c`）之后；此处记录的是第二轮结果。
 - The refusal the model now sees for an unresolved terminal capability is `tool terminal_capability execution failed: <<<EXTERNAL_UNTRUSTED_CONTENT ...>>> special capability resolution failed: Unknown <<<END_EXTERNAL_UNTRUSTED_CONTENT ...>>`, the same class for a foreign owner and for a session that does not exist. / 模型看到的拒绝文本对「非属主」与「不存在」已是同一类别。
 
 Not covered: the UI capability surface (`src/gateway/capability_ui.rs`) still names the internal resolve variant in its error text; it is a separate surface from the tool and RPC paths, which already fold the variant. External chat services, other platforms, and the full workspace suite were not exercised. No authorization rule, channel policy default, reconnect interval, or terminal capability semantics changed. / 未覆盖：UI 能力面（`capability_ui.rs`）的错误文本仍带内部解析变体，它与工具面、RPC 面是不同面（后两者已折叠）；外部聊天服务、其他平台与全工作区套件均未验证；未改变授权规则、通道默认策略、重连间隔或终端能力语义。
