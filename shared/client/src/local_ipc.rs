@@ -24,7 +24,8 @@ pub const HELLO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5)
 
 const MAX_DEPTH: usize = 64;
 const MAX_ITEMS: usize = 4096;
-const MAX_STRING_BYTES: usize = 65_536;
+/// Maximum UTF-8 byte length of ordinary strings in a v1 JSON payload.
+pub const MAX_STRING_BYTES: usize = 65_536;
 
 /// EOF before a new header is clean; EOF within a frame is an error.
 /// If cancelled, discard the stream rather than restarting at a partial frame.

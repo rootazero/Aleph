@@ -321,6 +321,14 @@ fn response_id_key(id: &Value) -> Option<std::borrow::Cow<'_, str>> {
     }
 }
 
+#[cfg(any(unix, windows))]
+fn parse_desktop_reply(text: &str, requests: &RequestState) -> std::io::Result<Value> {
+    local_ipc::parse_voice_response_payload(text, local_ipc::MAX_FRAME_BYTES as usize, |id| {
+        id.as_str()
+            .is_some_and(|id| requests.expects_voice_synthesis(id))
+    })
+}
+
 fn classify_value(value: Value) -> Inbound {
     // A JSON-RPC notification carries no id, and a response to a request this
     // client never sent is indistinguishable from one it did — so `null` is
@@ -769,14 +777,7 @@ impl AlephClient {
                 live_events,
             } => {
                 while let Ok(Some(text)) = local_ipc::read_frame(&mut read).await {
-                    let Ok(value) = local_ipc::parse_voice_response_payload(
-                        &text,
-                        local_ipc::MAX_FRAME_BYTES as usize,
-                        |id| {
-                            response_id_key(id)
-                                .is_some_and(|id| socket.requests.expects_voice_synthesis(&id))
-                        },
-                    ) else {
+                    let Ok(value) = parse_desktop_reply(&text, &socket.requests) else {
                         break;
                     };
                     // With `live_events`, an id-less notification takes the
@@ -1807,6 +1808,30 @@ mod tests {
 #[cfg(test)]
 mod wire_contract {
     use super::{classify_frame, Inbound};
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn voice_turn_desktop_large_reply_requires_exact_wire_id() {
+        use super::{classify_value, local_ipc, parse_desktop_reply, RequestState};
+        use aleph_protocol::panel_voice::VOICE_TURN_SYNTHESIZE_METHOD;
+        use std::sync::Arc;
+
+        let requests = Arc::new(RequestState::new());
+        assert!(requests.mark_ready());
+        let _pending = requests
+            .reserve("1".into(), VOICE_TURN_SYNTHESIZE_METHOD, false)
+            .unwrap();
+        let mut reply = json!({"jsonrpc":"2.0", "id":1, "result":{"audio_base64":"AA=="}});
+        let ordinary_reply = parse_desktop_reply(&reply.to_string(), &requests).unwrap();
+        assert!(
+            matches!(classify_value(ordinary_reply), Inbound::Response { id, .. } if id == "1")
+        );
+
+        reply["result"]["audio_base64"] = json!("A".repeat(local_ipc::MAX_STRING_BYTES + 4));
+        assert!(parse_desktop_reply(&reply.to_string(), &requests).is_err());
+        reply["id"] = json!("1");
+        assert!(parse_desktop_reply(&reply.to_string(), &requests).is_ok());
+    }
     use aleph_protocol::{JsonRpcRequest, StreamEvent};
     use serde_json::json;
 

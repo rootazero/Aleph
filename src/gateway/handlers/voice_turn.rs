@@ -2,6 +2,7 @@
 
 use std::io::{self, Write};
 
+use aleph_client::local_ipc::MAX_STRING_BYTES;
 use aleph_protocol::panel_voice::{
     VoiceErrorKind, MAX_PCM_BYTES, MAX_WAV_BASE64_BYTES, SAMPLE_RATE_HZ,
     VOICE_TURN_SYNTHESIZE_METHOD, VOICE_TURN_TRANSCRIBE_METHOD, WAV_HEADER_BYTES,
@@ -169,7 +170,7 @@ pub fn register_transcription(
             if text.is_empty() {
                 return Err(VoiceErrorKind::NoSpeech);
             }
-            if text.len() > context.response_budget {
+            if text.len() > MAX_STRING_BYTES || text.len() > context.response_budget {
                 return Err(VoiceErrorKind::TooLarge);
             }
             let response = JsonRpcResponse::success(request.id, json!({ "text": text }));

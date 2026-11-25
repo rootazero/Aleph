@@ -58,6 +58,10 @@ pub(crate) struct SttFixture {
 
 impl SttFixture {
     pub(crate) async fn new() -> Self {
+        Self::with_transcript(" fixture ".to_owned()).await
+    }
+
+    async fn with_transcript(transcript: String) -> Self {
         use axum::{
             extract::State,
             http::{HeaderMap, StatusCode},
@@ -72,15 +76,18 @@ impl SttFixture {
             .route(
                 "/v1/audio/transcriptions",
                 post(
-                    |State((calls, _)): State<(Arc<AtomicUsize>, Arc<AtomicUsize>)>,
-                     headers: HeaderMap,
-                     body: axum::body::Bytes| async move {
-                        assert!(!headers.contains_key("authorization"), "BYO has no key");
-                        assert!(body
-                            .windows(12)
-                            .any(|chunk| &chunk[..4] == b"RIFF" && &chunk[8..] == b"WAVE"));
-                        calls.fetch_add(1, Ordering::SeqCst);
-                        (StatusCode::OK, Json(json!({"text":" fixture "})))
+                    move |State((calls, _)): State<(Arc<AtomicUsize>, Arc<AtomicUsize>)>,
+                          headers: HeaderMap,
+                          body: axum::body::Bytes| {
+                        let transcript = transcript.clone();
+                        async move {
+                            assert!(!headers.contains_key("authorization"), "BYO has no key");
+                            assert!(body
+                                .windows(12)
+                                .any(|chunk| &chunk[..4] == b"RIFF" && &chunk[8..] == b"WAVE"));
+                            calls.fetch_add(1, Ordering::SeqCst);
+                            (StatusCode::OK, Json(json!({"text":transcript})))
+                        }
                     },
                 ),
             )
@@ -169,6 +176,30 @@ async fn invoke(registry: &HandlerRegistry, request: Value, budget: usize) -> Js
             )),
         )
         .await
+}
+
+#[tokio::test]
+async fn voice_turn_transcript_limited_to_v1_string_bytes() {
+    use aleph_client::local_ipc::{parse_payload, MAX_STRING_BYTES};
+
+    // A unique prefix keeps the provider's repetition filter from blanking the fixture.
+    let exact = format!("STT {}", "é".repeat((MAX_STRING_BYTES - 4) / 2));
+    assert_eq!(exact.len(), 65_536);
+    for (text, expected_error) in [(exact.clone(), false), (format!("{exact}a"), true)] {
+        let provider = SttFixture::with_transcript(text.clone()).await;
+        let mut registry = HandlerRegistry::empty();
+        provider.mount(&mut registry);
+        let reply = invoke(&registry, transcribe_request(), 1024 * 1024).await;
+        let value = parse_payload(&serde_json::to_string(&reply).unwrap()).unwrap();
+        assert_eq!(provider.calls(), 1);
+        if expected_error {
+            assert_eq!(value["error"]["data"]["kind"], "too_large");
+            assert!(value.get("result").is_none());
+        } else {
+            assert_eq!(value.get("error"), None);
+            assert!(value["result"]["text"].as_str() == Some(&text));
+        }
+    }
 }
 
 #[tokio::test]
