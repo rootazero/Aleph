@@ -539,19 +539,15 @@ async fn delete_provider_inner(
         if let Err(e) = vault.delete_secret(&vault_key(&params.name)) {
             tracing::warn!(provider = %params.name, error = %e, "Failed to delete API key from vault");
         }
-    }
 
-    // Drop the provider from the live registry so it stops being dialed (as an
-    // auto-derived failover fallback) without a restart. The registry refuses
-    // to remove its last provider — harmless here since the default provider
-    // (guarded above) can never be the one being deleted.
-    if let Some(registry) = &multi_registry {
-        if let Err(e) = registry.remove(&params.name) {
-            tracing::warn!(provider = %params.name, error = %e, "Failed to remove provider from live registry");
+        // replace_config already withdrew selectable rows. Remove the live
+        // transport before a concurrent create can reuse the same name.
+        if let Some(registry) = &multi_registry {
+            if let Err(e) = registry.remove(&params.name) {
+                tracing::warn!(provider = %params.name, error = %e, "Failed to remove provider from live registry");
+            }
         }
     }
-
-    refresh_selectable_publication(&config, multi_registry.as_ref(), &params.name, false).await;
 
     // Broadcast event
     let timestamp = std::time::SystemTime::now()
@@ -1077,6 +1073,8 @@ async fn set_default_provider_inner(
         // and transport. Publish the transport built under this write guard
         // before releasing it, or an older bearer could overwrite a renewal.
         if let (Some(registry), Some(new_provider)) = (multi_registry, built_provider) {
+            #[cfg(test)]
+            default_promotion_tests::assert_promotion_holds_write_lock(config);
             registry.register(name.clone(), new_provider);
             match registry.set_default(&name) {
                 Ok(()) => (true, Some((registry, name))),
@@ -1128,6 +1126,19 @@ mod default_promotion_tests {
     use crate::gateway::security::store::SecurityStore;
     use crate::providers::DefaultProviderHandle;
 
+    tokio::task_local! {
+        static CHECK_PROMOTION_LOCK: ();
+    }
+
+    pub(super) fn assert_promotion_holds_write_lock(config: &RwLock<Config>) {
+        if CHECK_PROMOTION_LOCK.try_with(|_| ()).is_ok() {
+            assert!(
+                config.try_read().is_err(),
+                "transport published outside Config write lock"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn waiting_renewal_observes_promotion_before_installing_new_bearer() {
         const PROVIDER: &str = "chatgpt";
@@ -1144,6 +1155,7 @@ mod default_promotion_tests {
             .unwrap();
         let mut provider = crate::config::ProviderConfig::test_config("org/model");
         provider.api_key = None;
+        provider.protocol = Some("openai".into());
         provider.base_url = Some("http://127.0.0.1:1/v1".into());
         provider.verified = true;
         let transport = |bearer: &str| {
@@ -1181,12 +1193,13 @@ mod default_promotion_tests {
         );
         let verify_and_renew = async {
             persisted.await.unwrap();
-            let acquire = config.read();
-            tokio::pin!(acquire);
-            assert!(futures::poll!(&mut acquire).is_pending());
+            assert!(config.try_read().is_err());
             assert!(Arc::ptr_eq(&registry.current(), &boot));
             release.send(()).unwrap();
-            let config = acquire.await;
+            // With no queued readers or writers, the registration probe
+            // distinguishes the write guard from an unlocked Config.
+            tokio::task::yield_now().await;
+            let config = config.read().await;
             let mounted = registry.current();
             assert!(mounted
                 .as_http_provider()
@@ -1210,7 +1223,8 @@ mod default_promotion_tests {
                 Some(())
             );
         };
-        let (response, ()) = tokio::join!(promote, verify_and_renew);
+        let (response, ()) =
+            tokio::join!(biased; CHECK_PROMOTION_LOCK.scope((), promote), verify_and_renew);
         assert!(response.error.is_none(), "{:?}", response.error);
         assert!(registry
             .current()
