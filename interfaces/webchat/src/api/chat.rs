@@ -253,6 +253,16 @@ pub fn parse_history_last_run(result: &Value) -> Option<aleph_protocol::LastRunS
 pub struct ChatApi;
 
 impl ChatApi {
+    /// Model choices available to the current member, not the admin catalog.
+    pub async fn models(
+        state: &DashboardState,
+    ) -> Result<Vec<aleph_protocol::providers::ChatModelChoice>, String> {
+        let result = state.rpc_call("chat.models.list", Value::Null).await?;
+        serde_json::from_value::<aleph_protocol::providers::ChatModelsListResult>(result)
+            .map(|result| result.items)
+            .map_err(|error| format!("Failed to parse model choices: {error}"))
+    }
+
     /// Send a message and start an agent run.
     ///
     /// `agent_id` — explicit target agent (bypasses channel binding resolution).
