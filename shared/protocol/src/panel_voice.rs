@@ -11,6 +11,7 @@ pub const MAX_WAV_BASE64_BYTES: usize = MAX_WAV_BYTES.div_ceil(3) * 4;
 pub const VOICE_TAB_ID: &str = "voice";
 pub const VOICE_TURN_TRANSCRIBE_METHOD: &str = "voice.turn.transcribe";
 pub const VOICE_TURN_SYNTHESIZE_METHOD: &str = "voice.turn.synthesize";
+pub const VOICE_TURN_CANCEL_METHOD: &str = "voice.turn.cancel";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

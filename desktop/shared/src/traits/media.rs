@@ -73,6 +73,23 @@ pub trait MediaCapability: Send + Sync {
         ))
     }
 
+    /// Recognize with the installed on-device engine only; never fall back to a
+    /// network recognizer. `language` absent means the OS locale. The caller
+    /// owns `audio_path` and deletes it once this returns, so implementations
+    /// must stop the engine and release the file before returning, including
+    /// after `cancel` fires. `NotImplemented` means no offline engine.
+    async fn speech_to_text_offline(
+        &self,
+        audio_path: &str,
+        language: Option<&str>,
+        cancel: crate::CancellationToken,
+    ) -> Result<SpeechToTextResult> {
+        let _ = (audio_path, language, cancel);
+        Err(crate::DesktopError::NotImplemented(
+            "offline speech recognition not available on this platform".into(),
+        ))
+    }
+
     // `mic_level()` and its `MicMeterSample` were removed on 2026-08-09 along
     // with their only caller, the `tasks::mic_level` reporter. The macOS limb
     // behind it kept a long-lived `AVAudioEngine` tap warm in the helper — a

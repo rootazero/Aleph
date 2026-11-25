@@ -24,6 +24,7 @@ pub const METHOD_AUDIO_RECORD_STOP: &str = "media.audio.record_stop";
 // event: there is no older helper left speaking it.
 
 pub const METHOD_SPEECH_TRANSCRIBE_FILE: &str = "media.speech.transcribe_file";
+pub const METHOD_SPEECH_CANCEL: &str = "media.speech.cancel";
 
 // ── Deadlines ────────────────────────────────────────────────────────────────
 
@@ -47,10 +48,18 @@ pub const TIMEOUT_MS_LIST_DEVICES: u64 = 5_000;
 /// Stopping an open-ended recording finalises the encoder before replying.
 pub const TIMEOUT_MS_RECORD_STOP: u64 = 15_000;
 
+/// Recognizer deadline the helper enforces for one offline whole-turn clip
+/// (at most 20 s of audio). The Rust limb waits this plus reply headroom.
+pub const OFFLINE_SPEECH_DEADLINE_MS: u64 = 30_000;
+
+/// Cancel only signals the recognizer and replies; it never waits on audio.
+pub const TIMEOUT_MS_SPEECH_CANCEL: u64 = 5_000;
+
 pub const TIMEOUT_OVERRIDES_MS: &[(&str, u64)] = &[
     (METHOD_CAMERA_SNAP, TIMEOUT_MS_SNAP),
     (METHOD_AUDIO_LIST_DEVICES, TIMEOUT_MS_LIST_DEVICES),
     (METHOD_AUDIO_RECORD_STOP, TIMEOUT_MS_RECORD_STOP),
+    (METHOD_SPEECH_CANCEL, TIMEOUT_MS_SPEECH_CANCEL),
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -141,9 +150,35 @@ pub struct RecordStopParams {}
 pub struct TranscribeFileParams {
     /// Absolute path to the audio file (m4a / wav / mp3 supported by `SFSpeechRecognizer`).
     pub audio_path: String,
-    /// BCP-47 language tag (e.g. "en-US", "zh-Hans"). Helper rejects unknown
-    /// locales with `ERR_INVALID_PARAMS`.
-    pub language: String,
+    /// Legacy recognizer language. Do not send this field for an offline request:
+    /// older helpers would otherwise ignore the policy and might use the network.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offline_only: Option<OfflineSpeechPolicy>,
+}
+
+/// On-device-only recognition. The helper must refuse rather than use a
+/// network recognizer, and must stop recognizing when `operation_id` is
+/// cancelled via [`METHOD_SPEECH_CANCEL`].
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct OfflineSpeechPolicy {
+    /// Unguessable id minted by the Rust limb for this one recognition.
+    pub operation_id: String,
+    /// BCP-47 tag; absent means the helper resolves the OS locale.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CancelSpeechParams {
+    pub operation_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CancelSpeechResult {
+    /// `true` when a live recognition for the id was stopped.
+    pub cancelled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -273,12 +308,26 @@ mod tests {
     fn transcribe_params_roundtrip() {
         let p = TranscribeFileParams {
             audio_path: "/tmp/a.m4a".into(),
-            language: "en-US".into(),
+            language: Some("en-US".into()),
+            offline_only: None,
         };
         let j = serde_json::to_string(&p).unwrap();
         let back: TranscribeFileParams = serde_json::from_str(&j).unwrap();
         assert_eq!(back.audio_path, "/tmp/a.m4a");
-        assert_eq!(back.language, "en-US");
+        assert_eq!(back.language.as_deref(), Some("en-US"));
+        assert!(back.offline_only.is_none());
+    }
+
+    #[test]
+    fn speech_offline_policy_is_not_silently_dropped() {
+        let old = serde_json::json!({"audio_path":"/tmp/a.wav","language":"en-US"});
+        let offline = serde_json::json!({"audio_path":"/tmp/a.wav","offline_only":{
+            "operation_id":"a20f4b00-d3ef-4278-a313-f75fe1293b90","language":"en-US"
+        }});
+        for wire in [old, offline] {
+            let request: TranscribeFileParams = serde_json::from_value(wire.clone()).unwrap();
+            assert_eq!(serde_json::to_value(request).unwrap(), wire);
+        }
     }
 
     #[test]

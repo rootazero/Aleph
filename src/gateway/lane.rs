@@ -87,7 +87,8 @@ impl Lane {
             // Media transforms do not persist a write. Run each against its
             // live connection and frame budget rather than caching a result.
             aleph_protocol::panel_voice::VOICE_TURN_TRANSCRIBE_METHOD
-            | aleph_protocol::panel_voice::VOICE_TURN_SYNTHESIZE_METHOD => Some(Self::Query),
+            | aleph_protocol::panel_voice::VOICE_TURN_SYNTHESIZE_METHOD
+            | aleph_protocol::panel_voice::VOICE_TURN_CANCEL_METHOD => Some(Self::Query),
             "panel.capabilities.snapshot" | "graph.query" | "graph.node_detail" => {
                 Some(Self::Query)
             }

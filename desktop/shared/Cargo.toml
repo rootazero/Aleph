@@ -13,6 +13,7 @@ readme = "README.md"
 [dependencies]
 # Async runtime
 tokio = { workspace = true }
+tokio-util.workspace = true
 async-trait = { workspace = true }
 
 # Serialization

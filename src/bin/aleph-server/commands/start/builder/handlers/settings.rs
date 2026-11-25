@@ -686,12 +686,6 @@ pub(in crate::commands::start) fn register_config_handlers(
         shared_token_mgr
     );
 
-    alephcore::gateway::handlers::voice_turn::register_transcription(
-        server.handlers_mut(),
-        config.clone(),
-        shared_token_mgr.clone(),
-    );
-
     // Streaming STT: Panel frames → backend WS → voice.transcribe.delta events.
     // One shared registry tracks all active streams (Arc for the macro's clone).
     let stream_registry = Arc::new(alephcore::gateway::voice::streaming::StreamRegistry::default());
@@ -1038,6 +1032,7 @@ pub(in crate::commands::start) fn register_voice_capability_handlers(
     generation_registry: Option<
         Arc<alephcore::sync_primitives::RwLock<alephcore::generation::GenerationProviderRegistry>>,
     >,
+    shared_token_mgr: Arc<alephcore::gateway::security::SharedTokenManager>,
 ) {
     use alephcore::gateway::handlers::voice;
     use alephcore::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, SERVICE_UNAVAILABLE};
@@ -1071,6 +1066,29 @@ pub(in crate::commands::start) fn register_voice_capability_handlers(
         voice::handle_record_stop,
         platform
     );
+
+    // Whole-turn STT. With no configured provider, owner Desktop IPC may use the
+    // host's installed recognizer, reading a clip staged under the media root
+    // the platform bridge permits.
+    let offline = match alephcore::utils::paths::get_data_dir() {
+        Ok(data_dir) => Some(
+            alephcore::gateway::handlers::voice_turn::OfflineSpeechAdapter::new(
+                platform.clone(),
+                data_dir.join("_media"),
+            ),
+        ),
+        Err(error) => {
+            tracing::warn!(%error, "offline speech unavailable: no data directory");
+            None
+        }
+    };
+    alephcore::gateway::handlers::voice_turn::register_transcription(
+        server.handlers_mut(),
+        config.clone(),
+        shared_token_mgr,
+        offline,
+    );
+    alephcore::gateway::handlers::voice_turn::register_cancel(server.handlers_mut());
 
     alephcore::gateway::handlers::voice_turn::register_synthesis(
         server.handlers_mut(),

@@ -218,6 +218,12 @@ const CAPTURE_TIMEOUT_MARGIN_SECS: f64 = 30.0;
 /// known to the Rust side, so this is bounded generously rather than derived.
 const SPEECH_TRANSCRIBE_TIMEOUT: Duration = Duration::from_mins(5);
 
+/// The helper enforces the offline recognizer deadline itself; this leaves
+/// headroom for its reply so the Rust side never abandons a live recognition.
+const OFFLINE_SPEECH_TIMEOUT: Duration = Duration::from_millis(
+    aleph_protocol::desktop_bridge::methods::media::OFFLINE_SPEECH_DEADLINE_MS + 15_000,
+);
+
 // ---------------------------------------------------------------------------
 // MediaCapability: camera + audio + speech proxied via the Swift helper.
 // All method bodies are thin RPC forwarders — no native AVFoundation /
@@ -390,12 +396,64 @@ impl MediaCapability for MacOSPlatform {
                 METHOD_SPEECH_TRANSCRIBE_FILE,
                 TranscribeFileParams {
                     audio_path: audio_path.to_string(),
-                    language: config.language.clone(),
+                    language: Some(config.language.clone()),
+                    offline_only: None,
                 },
                 SPEECH_TRANSCRIBE_TIMEOUT,
             )
             .await
             .map_err(|e| preserve_typed("media.speech.transcribe_file", e))?;
+        Ok(SpeechToTextResult {
+            text: rpc.text,
+            language: rpc.language,
+        })
+    }
+
+    async fn speech_to_text_offline(
+        &self,
+        audio_path: &str,
+        language: Option<&str>,
+        cancel: aleph_desktop::CancellationToken,
+    ) -> Result<SpeechToTextResult> {
+        use aleph_protocol::desktop_bridge::methods::media::{
+            CancelSpeechParams, CancelSpeechResult, OfflineSpeechPolicy, TranscribeFileParams,
+            TranscribeFileResult, METHOD_SPEECH_CANCEL, METHOD_SPEECH_TRANSCRIBE_FILE,
+        };
+        // Neither the path nor the language is logged: both describe a user turn.
+        let operation_id = uuid::Uuid::new_v4().to_string();
+        let recognize = self.bridge.call_with_timeout::<_, TranscribeFileResult>(
+            METHOD_SPEECH_TRANSCRIBE_FILE,
+            TranscribeFileParams {
+                audio_path: audio_path.to_string(),
+                // Only the policy carries the language: a helper that predates
+                // it rejects the request instead of recognizing over the network.
+                language: None,
+                offline_only: Some(OfflineSpeechPolicy {
+                    operation_id: operation_id.clone(),
+                    language: language.map(str::to_owned),
+                }),
+            },
+            OFFLINE_SPEECH_TIMEOUT,
+        );
+        tokio::pin!(recognize);
+        let rpc = tokio::select! {
+            biased;
+            rpc = &mut recognize => rpc,
+            () = cancel.cancelled() => {
+                // Dropping the RPC would leave the helper reading the clip. Stop
+                // the recognizer by id, then wait for the helper to answer the
+                // recognition so the caller deletes the clip only afterwards.
+                let _: Result<CancelSpeechResult> = self
+                    .bridge
+                    .call(METHOD_SPEECH_CANCEL, CancelSpeechParams { operation_id })
+                    .await;
+                let _ = recognize.await;
+                return Err(aleph_desktop::DesktopError::PlatformError(
+                    "offline speech recognition cancelled".into(),
+                ));
+            }
+        }
+        .map_err(|e| preserve_typed(METHOD_SPEECH_TRANSCRIBE_FILE, e))?;
         Ok(SpeechToTextResult {
             text: rpc.text,
             language: rpc.language,

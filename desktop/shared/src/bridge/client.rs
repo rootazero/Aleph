@@ -30,7 +30,7 @@ use tokio::sync::{oneshot, Mutex};
 use aleph_protocol::desktop_bridge::envelope::{Message, Request, RpcError};
 use aleph_protocol::desktop_bridge::errors::{
     ERR_BRIDGE_DISABLED, ERR_HELPER_CRASHED, ERR_NOT_IMPLEMENTED, ERR_PERMISSION_DENIED,
-    ERR_PLATFORM, ERR_TIMEOUT,
+    ERR_PLATFORM, ERR_TIMEOUT, ERR_UNSUPPORTED_LANGUAGE,
 };
 use aleph_protocol::desktop_bridge::methods::perm::PermissionGuide;
 use aleph_protocol::desktop_bridge::methods::suggested_timeout_ms;
@@ -64,6 +64,7 @@ fn map_bridge_error(e: RpcError) -> DesktopError {
             DesktopError::BridgeFailed(format!("bridge error {}: {}", e.code, e.message))
         }
         ERR_NOT_IMPLEMENTED => DesktopError::NotImplemented(e.message),
+        ERR_UNSUPPORTED_LANGUAGE => DesktopError::UnsupportedLanguage(e.message),
         ERR_PLATFORM => DesktopError::PlatformError(e.message),
         ERR_TIMEOUT => DesktopError::BridgeTimeout(e.message),
         ERR_BRIDGE_DISABLED => DesktopError::BridgeDisabled(e.message),
@@ -622,6 +623,10 @@ done
         assert!(matches!(
             map_bridge_error(err(ERR_NOT_IMPLEMENTED)),
             DesktopError::NotImplemented(_)
+        ));
+        assert!(matches!(
+            map_bridge_error(err(ERR_UNSUPPORTED_LANGUAGE)),
+            DesktopError::UnsupportedLanguage(_)
         ));
         assert!(matches!(
             map_bridge_error(err(ERR_PLATFORM)),

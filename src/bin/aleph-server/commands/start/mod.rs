@@ -2243,6 +2243,7 @@ async fn start_server_body(
         &mut server,
         app_config.clone(),
         agent_result.generation_registry.clone(),
+        auth_bundle.auth_ctx.shared_token_mgr.clone(),
     );
 
     register_session_handlers(

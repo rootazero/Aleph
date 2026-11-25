@@ -6,11 +6,13 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use aleph_protocol::panel_voice::{VOICE_TURN_SYNTHESIZE_METHOD, VOICE_TURN_TRANSCRIBE_METHOD};
+use aleph_protocol::panel_voice::{
+    VOICE_TURN_CANCEL_METHOD, VOICE_TURN_SYNTHESIZE_METHOD, VOICE_TURN_TRANSCRIBE_METHOD,
+};
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
-use crate::gateway::handlers::voice_turn::{VoiceIngress, VoiceRequestContext};
+use crate::gateway::handlers::voice_turn::{VoiceIngress, VoiceRequestContext, VoiceTurnScopes};
 
 use crate::gateway::middleware::MiddlewareChain;
 use crate::gateway::panel_project_context::{PanelCallerContext, PanelRequestContext};
@@ -137,6 +139,8 @@ struct BoundPeer {
     expected: CallerSnapshot,
     authority: BoundAuthority,
     cancellation: CancellationToken,
+    /// This connection's whole-turn scopes; shared by every request it sends.
+    turns: Arc<VoiceTurnScopes>,
 }
 
 #[derive(Clone)]
@@ -183,6 +187,7 @@ impl DispatchPeer {
                 expected,
                 authority: BoundAuthority::Web(binding),
                 cancellation,
+                turns: Default::default(),
             }),
             ..Self::legacy(connections, conn_id, false)
         }
@@ -205,6 +210,7 @@ impl DispatchPeer {
                 },
                 authority: BoundAuthority::Desktop(owner_store),
                 cancellation,
+                turns: Default::default(),
             }),
             ..Self::legacy(connections, conn_id, false)
         }
@@ -222,6 +228,7 @@ impl DispatchPeer {
                 expected,
                 authority: BoundAuthority::Fixture,
                 cancellation: CancellationToken::new(),
+                turns: Default::default(),
             }),
             ..Self::legacy(connections, conn_id, false)
         }
@@ -302,7 +309,7 @@ impl<'a> PeerView<'a> {
     fn voice_context_after_validation(&self, method: &str) -> Option<VoiceRequestContext> {
         if !matches!(
             method,
-            VOICE_TURN_TRANSCRIBE_METHOD | VOICE_TURN_SYNTHESIZE_METHOD
+            VOICE_TURN_TRANSCRIBE_METHOD | VOICE_TURN_SYNTHESIZE_METHOD | VOICE_TURN_CANCEL_METHOD
         ) {
             return None;
         }
@@ -322,6 +329,7 @@ impl<'a> PeerView<'a> {
             self.conn_id.to_owned(),
             budget as usize,
             bound.cancellation.child_token(),
+            bound.turns.clone(),
         ))
     }
 }

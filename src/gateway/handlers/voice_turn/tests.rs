@@ -148,7 +148,21 @@ impl SttFixture {
     }
 
     pub(crate) fn mount(&self, handlers: &mut HandlerRegistry) {
-        voice_turn::register_transcription(handlers, self.config.clone(), self.vault.clone());
+        voice_turn::register_transcription(handlers, self.config.clone(), self.vault.clone(), None);
+    }
+
+    fn mount_with_offline(
+        &self,
+        handlers: &mut HandlerRegistry,
+        offline: voice_turn::OfflineSpeechAdapter,
+    ) {
+        voice_turn::register_transcription(
+            handlers,
+            self.config.clone(),
+            self.vault.clone(),
+            Some(offline),
+        );
+        voice_turn::register_cancel(handlers);
     }
 
     pub(crate) fn calls(&self) -> usize {
@@ -163,16 +177,51 @@ impl Drop for SttFixture {
 }
 
 async fn invoke(registry: &HandlerRegistry, request: Value, budget: usize) -> JsonRpcResponse {
+    invoke_on(
+        registry,
+        request,
+        &TestConnection::new(VoiceIngress::WebV1, "test-conn"),
+        budget,
+    )
+    .await
+}
+
+/// One live connection: its teardown token and its turn table.
+struct TestConnection {
+    ingress: VoiceIngress,
+    id: &'static str,
+    cancellation: tokio_util::sync::CancellationToken,
+    turns: Arc<voice_turn::VoiceTurnScopes>,
+}
+
+impl TestConnection {
+    fn new(ingress: VoiceIngress, id: &'static str) -> Self {
+        Self {
+            ingress,
+            id,
+            cancellation: Default::default(),
+            turns: Default::default(),
+        }
+    }
+}
+
+async fn invoke_on(
+    registry: &HandlerRegistry,
+    request: Value,
+    connection: &TestConnection,
+    budget: usize,
+) -> JsonRpcResponse {
     let request: JsonRpcRequest = serde_json::from_value(request).unwrap();
     registry
         .handle_with_context(
             &request,
             None,
             Some(VoiceRequestContext::new(
-                VoiceIngress::WebV1,
-                "test-conn".to_owned(),
+                connection.ingress,
+                connection.id.to_owned(),
                 budget,
-                Default::default(),
+                connection.cancellation.child_token(),
+                connection.turns.clone(),
             )),
         )
         .await
@@ -458,4 +507,306 @@ async fn voice_turn_synthesis_attempts_primary_and_secondary_at_most_once() {
         assert_eq!(secondary.load(Ordering::SeqCst), 1);
         assert_eq!(untried.load(Ordering::SeqCst), 0);
     }
+}
+
+/// The host's installed recognizer, faked: counts calls and, when `reply` is
+/// `None`, holds the clip until cancelled.
+#[derive(Default)]
+struct FakeOfflineEngine {
+    calls: AtomicUsize,
+    reply: std::sync::Mutex<Option<String>>,
+    started: tokio::sync::Notify,
+    clip: std::sync::Mutex<Option<std::path::PathBuf>>,
+    /// Whether the clip still existed when the cancel reached the engine.
+    clip_present_at_cancel: std::sync::Mutex<Option<bool>>,
+    returned: tokio::sync::Notify,
+}
+
+impl FakeOfflineEngine {
+    fn replying(text: &str) -> Arc<Self> {
+        let engine = Self::default();
+        *engine.reply.lock().unwrap() = Some(text.to_owned());
+        Arc::new(engine)
+    }
+
+    fn calls(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
+}
+
+#[async_trait::async_trait]
+impl aleph_desktop::traits::MediaCapability for FakeOfflineEngine {
+    async fn speech_to_text_offline(
+        &self,
+        audio_path: &str,
+        language: Option<&str>,
+        cancel: tokio_util::sync::CancellationToken,
+    ) -> aleph_desktop::Result<aleph_desktop::media_types::SpeechToTextResult> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        let clip = std::path::PathBuf::from(audio_path);
+        assert!(clip.is_file(), "the clip is staged before the engine runs");
+        *self.clip.lock().unwrap() = Some(clip.clone());
+        let reply = self.reply.lock().unwrap().clone();
+        let result = match reply {
+            Some(text) => Ok(aleph_desktop::media_types::SpeechToTextResult {
+                text,
+                language: language.unwrap_or("os-locale").to_owned(),
+            }),
+            None => {
+                self.started.notify_one();
+                cancel.cancelled().await;
+                *self.clip_present_at_cancel.lock().unwrap() = Some(clip.is_file());
+                // The engine is still holding the clip for a moment after cancel.
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                assert!(clip.is_file(), "clip released while the engine held it");
+                Err(aleph_desktop::DesktopError::PlatformError(
+                    "offline speech recognition cancelled".into(),
+                ))
+            }
+        };
+        self.returned.notify_one();
+        result
+    }
+}
+
+struct FakePlatform(Arc<FakeOfflineEngine>);
+
+impl aleph_desktop::DesktopPlatform for FakePlatform {
+    fn platform_name(&self) -> &str {
+        "fake"
+    }
+    fn screen(&self) -> Option<&dyn aleph_desktop::traits::ScreenCapability> {
+        None
+    }
+    fn pim(&self) -> Option<&dyn aleph_desktop::traits::PimCapability> {
+        None
+    }
+    fn system(&self) -> Option<&dyn aleph_desktop::traits::SystemCapability> {
+        None
+    }
+    fn automation(&self) -> Option<&dyn aleph_desktop::traits::AutomationCapability> {
+        None
+    }
+    fn permission(&self) -> Option<&dyn aleph_desktop::traits::PermissionCapability> {
+        None
+    }
+    fn media(&self) -> Option<&dyn aleph_desktop::traits::MediaCapability> {
+        Some(&*self.0)
+    }
+}
+
+fn offline_adapter(
+    engine: &Arc<FakeOfflineEngine>,
+    scratch: &tempfile::TempDir,
+) -> voice_turn::OfflineSpeechAdapter {
+    voice_turn::OfflineSpeechAdapter::new(
+        Arc::new(FakePlatform(engine.clone())),
+        scratch.path().to_owned(),
+    )
+}
+
+async fn remove_stt_providers(provider: &SttFixture) {
+    let mut cfg = provider.config.write().await;
+    cfg.generation.default_transcription_provider = None;
+    cfg.generation.transcription_providers.clear();
+}
+
+fn cancel_request(turn_id: &str) -> Value {
+    json!({"jsonrpc":"2.0","id":"cancel","method":"voice.turn.cancel","params":{"turn_id":turn_id}})
+}
+
+fn error_kind(response: JsonRpcResponse) -> Value {
+    serde_json::to_value(response).unwrap()["error"]["data"]["kind"].clone()
+}
+
+fn scratch_is_empty(scratch: &tempfile::TempDir) -> bool {
+    std::fs::read_dir(scratch.path()).unwrap().next().is_none()
+}
+
+#[tokio::test]
+async fn offline_stt_policy_matrix() {
+    const BUDGET: usize = 1024 * 1024;
+    let desktop = TestConnection::new(VoiceIngress::DesktopIpc, "desktop-conn");
+    let web = TestConnection::new(VoiceIngress::WebV1, "web-conn");
+    let scratch = tempfile::tempdir().unwrap();
+
+    // A configured local endpoint is used, and the installed engine is never asked.
+    let engine = FakeOfflineEngine::replying("offline");
+    let provider = SttFixture::new().await;
+    let mut registry = HandlerRegistry::empty();
+    provider.mount_with_offline(&mut registry, offline_adapter(&engine, &scratch));
+    let reply = invoke_on(&registry, transcribe_request(), &desktop, BUDGET).await;
+    assert_eq!(reply.result.unwrap()["text"], "fixture");
+    assert_eq!((provider.calls(), engine.calls()), (1, 0));
+
+    // A configured cloud provider likewise.
+    provider
+        .config
+        .write()
+        .await
+        .generation
+        .default_transcription_provider = Some("fallback".to_owned());
+    let reply = invoke_on(&registry, transcribe_request(), &desktop, BUDGET).await;
+    assert_eq!(reply.result.unwrap()["text"], "should not reach fallback");
+    assert_eq!((provider.calls(), engine.calls()), (2, 0));
+
+    // A configured provider that fails after dispatch never falls through.
+    {
+        let mut cfg = provider.config.write().await;
+        cfg.generation.default_transcription_provider = Some("fixture".to_owned());
+        let url = cfg
+            .generation
+            .transcription_providers
+            .get_mut("fixture")
+            .unwrap()
+            .base_url
+            .as_mut()
+            .unwrap();
+        *url = url.replace("/v1", "/fail");
+    }
+    let reply = invoke_on(&registry, transcribe_request(), &desktop, BUDGET).await;
+    assert_eq!(error_kind(reply), "provider_failed");
+    assert_eq!((provider.calls(), engine.calls()), (3, 0));
+
+    // No provider at all: owner Desktop IPC asks the installed engine exactly once.
+    remove_stt_providers(&provider).await;
+    let reply = invoke_on(&registry, transcribe_request(), &desktop, BUDGET).await;
+    assert_eq!(reply.result.unwrap()["text"], "offline");
+    assert_eq!((provider.calls(), engine.calls()), (3, 1));
+    assert!(
+        scratch_is_empty(&scratch),
+        "clip deleted after the engine returned"
+    );
+
+    // Malformed PCM is rejected before any engine.
+    let mut malformed = transcribe_request();
+    malformed["params"]["audio_base64"] = json!("!!!");
+    let reply = invoke_on(&registry, malformed, &desktop, BUDGET).await;
+    assert_eq!(error_kind(reply), "invalid_audio");
+    assert_eq!(engine.calls(), 1);
+
+    // Web (whatever its socket) and legacy never reach the installed engine.
+    let reply = invoke_on(&registry, transcribe_request(), &web, BUDGET).await;
+    assert_eq!(error_kind(reply), "not_configured");
+    let legacy = serde_json::from_value(transcribe_request()).unwrap();
+    let reply = registry.handle(&legacy).await;
+    assert_eq!(error_kind(reply), "permission_denied");
+    assert_eq!(engine.calls(), 1);
+
+    // No adapter mounted on this host: typed unavailability, not a guess.
+    let mut bare = HandlerRegistry::empty();
+    provider.mount(&mut bare);
+    let reply = invoke_on(&bare, transcribe_request(), &desktop, BUDGET).await;
+    assert_eq!(error_kind(reply), "offline_unavailable");
+
+    // An empty offline transcript is no speech.
+    let blank = FakeOfflineEngine::replying("  ");
+    let mut registry = HandlerRegistry::empty();
+    provider.mount_with_offline(&mut registry, offline_adapter(&blank, &scratch));
+    let reply = invoke_on(&registry, transcribe_request(), &desktop, BUDGET).await;
+    assert_eq!(error_kind(reply), "no_speech");
+    assert_eq!(blank.calls(), 1);
+
+    // Cancel stops the engine, which is not retried and releases the clip only
+    // after it returned.
+    let held = Arc::new(FakeOfflineEngine::default());
+    let mut registry = HandlerRegistry::empty();
+    provider.mount_with_offline(&mut registry, offline_adapter(&held, &scratch));
+    let registry = Arc::new(registry);
+    let turn = {
+        let registry = registry.clone();
+        let desktop = TestConnection {
+            cancellation: desktop.cancellation.clone(),
+            turns: desktop.turns.clone(),
+            ..TestConnection::new(VoiceIngress::DesktopIpc, "desktop-conn")
+        };
+        tokio::spawn(
+            async move { invoke_on(&registry, transcribe_request(), &desktop, BUDGET).await },
+        )
+    };
+    held.started.notified().await;
+    let returned = held.returned.notified();
+    let reply = invoke_on(&registry, cancel_request(TURN_ID), &desktop, BUDGET).await;
+    assert_eq!(reply.result.unwrap()["cancelled"], true);
+    assert_eq!(error_kind(turn.await.unwrap()), "cancelled");
+    returned.await;
+    assert_eq!(*held.clip_present_at_cancel.lock().unwrap(), Some(true));
+    wait_until(|| scratch_is_empty(&scratch)).await;
+    assert_eq!((provider.calls(), held.calls()), (3, 1));
+
+    // The cancelled turn cannot be started again on this connection.
+    let reply = invoke_on(&registry, transcribe_request(), &desktop, BUDGET).await;
+    assert_eq!(error_kind(reply), "cancelled");
+    assert_eq!(held.calls(), 1);
+}
+
+async fn wait_until(mut done: impl FnMut() -> bool) {
+    for _ in 0..200 {
+        if done() {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!("condition not reached");
+}
+
+#[tokio::test]
+async fn voice_turn_cancel_is_denied_to_other_connections() {
+    const BUDGET: usize = 1024 * 1024;
+    let scratch = tempfile::tempdir().unwrap();
+    let provider = SttFixture::new().await;
+    remove_stt_providers(&provider).await;
+    let held = Arc::new(FakeOfflineEngine::default());
+    let mut registry = HandlerRegistry::empty();
+    provider.mount_with_offline(&mut registry, offline_adapter(&held, &scratch));
+    let registry = Arc::new(registry);
+    let owner = TestConnection::new(VoiceIngress::DesktopIpc, "owner-conn");
+    let other = TestConnection::new(VoiceIngress::DesktopIpc, "other-conn");
+
+    let turn = {
+        let registry = registry.clone();
+        let owner = TestConnection {
+            cancellation: owner.cancellation.clone(),
+            turns: owner.turns.clone(),
+            ..TestConnection::new(VoiceIngress::DesktopIpc, "owner-conn")
+        };
+        tokio::spawn(
+            async move { invoke_on(&registry, transcribe_request(), &owner, BUDGET).await },
+        )
+    };
+    held.started.notified().await;
+
+    // Same turn id, another connection: nothing of its own to cancel.
+    let reply = invoke_on(&registry, cancel_request(TURN_ID), &other, BUDGET).await;
+    assert_eq!(reply.result.unwrap()["cancelled"], false);
+    assert!(!turn.is_finished());
+    assert_eq!(*held.clip_present_at_cancel.lock().unwrap(), None);
+    // Legacy has no connection identity to cancel with.
+    let legacy = serde_json::from_value(cancel_request(TURN_ID)).unwrap();
+    assert_eq!(
+        error_kind(registry.handle(&legacy).await),
+        "permission_denied"
+    );
+    assert!(!turn.is_finished());
+
+    // Connection teardown cancels its turns through the same engine path.
+    let returned = held.returned.notified();
+    owner.cancellation.cancel();
+    assert_eq!(error_kind(turn.await.unwrap()), "cancelled");
+    returned.await;
+    assert_eq!(*held.clip_present_at_cancel.lock().unwrap(), Some(true));
+    wait_until(|| scratch_is_empty(&scratch)).await;
+    assert_eq!(held.calls(), 1);
+
+    // A cancel that arrives first refuses the late start without the engine.
+    let late = "2b63aa6b-0688-4be3-991f-e6994e0f795c";
+    let reply = invoke_on(&registry, cancel_request(late), &other, BUDGET).await;
+    assert_eq!(reply.result.unwrap()["cancelled"], false);
+    let mut request = transcribe_request();
+    request["params"]["turn_id"] = json!(late);
+    assert_eq!(
+        error_kind(invoke_on(&registry, request, &other, BUDGET).await),
+        "cancelled"
+    );
+    assert_eq!(held.calls(), 1);
 }
