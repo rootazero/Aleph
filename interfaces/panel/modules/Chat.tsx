@@ -1,15 +1,14 @@
 // Core owns committed history. Rust folds authorized live presentation into
 // the same list, while TSX owns RPC lifetimes and composer interaction.
-import { cleanup, signal, type Signal, Text, View } from "nsh";
+import { batch, cleanup, signal, type Signal, Text, View } from "nsh";
 import { Button, Input } from "nsh/base";
 import { ChatModel } from "aleph/panel";
-import { type PanelEvent, type PanelSdk, RpcError } from "../shell/sdk";
+import { HOST_UNAVAILABLE, RESOURCE_NOT_FOUND, type PanelEvent, type PanelSdk, RpcError } from "../shell/sdk";
 import { TranscriptList } from "./chat/TranscriptList";
 import { ContextSheet } from "./chat/ContextSheet";
 import type { Change } from "./chat/Diff";
 import type { Diagram } from "./chat/MessageBody";
 
-const HOST_UNAVAILABLE = -32090;
 const HISTORY_LIMIT = 200;
 const COMMIT_REREAD_MS = 350;
 const DETAIL_RUN_LIMIT = 12;
@@ -27,7 +26,6 @@ type History = {
   messages?: { run_id?: string }[];
   active_run?: string | null;
 };
-type SendResult = { run_id: string; session_key: string };
 
 type TextRow = { kind: "text"; key: string; role: string; text: string; streaming: boolean };
 export type ToolRow = {
@@ -72,6 +70,8 @@ export function Chat(props: { sdk: PanelSdk; setReaderMode: (active: boolean) =>
   const keys = signal<string[]>([]);
   const rows = new Map<string, Signal<ChatRow>>();
   const loading = signal(sessionKey() !== null);
+  const waitingForAdmission = signal(sessionKey() !== null);
+  const historyFailed = signal(false);
   const activeRun = signal<string | null>(null);
   const missingPrefix = signal(false);
   const unconfirmed = signal(false);
@@ -121,10 +121,13 @@ export function Chat(props: { sdk: PanelSdk; setReaderMode: (active: boolean) =>
     if (!key) return;
     const request = ++historyRequest;
     const revision = liveRevision;
-    const current = () => request === historyRequest && key === sessionKey();
+    const current = () => sdk.active() && request === historyRequest && key === sessionKey();
     try {
       const history = (await sdk.invoke("chat.history", { session_key: key, limit: HISTORY_LIMIT })) as History;
       if (!current()) return;
+      if (history?.session_key !== key || !Array.isArray(history.messages)) throw new Error("Unable to read conversation history.");
+      waitingForAdmission.set(false);
+      historyFailed.set(false);
       // Attach immediately so new chunks can land while the optional details
       // read runs. Later reconciliations replace a completed run in one pass.
       const observedHistory = () => ({ ...history, live_status_stale: liveRevision !== revision });
@@ -155,7 +158,11 @@ export function Chat(props: { sdk: PanelSdk; setReaderMode: (active: boolean) =>
         setTimeout(() => { if (current()) void load(); }, COMMIT_REREAD_MS);
       }
     } catch (failure) {
-      if (current()) report(failure);
+      if (current()) {
+        if (failure instanceof RpcError && failure.code === RESOURCE_NOT_FOUND) waitingForAdmission.set(true);
+        historyFailed.set(true);
+        report(failure);
+      }
     } finally {
       if (current()) loading.set(false);
     }
@@ -196,9 +203,30 @@ export function Chat(props: { sdk: PanelSdk; setReaderMode: (active: boolean) =>
   });
   void load();
 
+  const startNewConversation = () => {
+    if (sending() || !sdk.rememberChat(null)) return;
+    ++historyRequest;
+    hasHistory = false;
+    model.reset("");
+    batch(() => {
+      sessionKey.set(null);
+      rows.clear();
+      keys.set([]);
+      loading.set(false);
+      waitingForAdmission.set(false);
+      historyFailed.set(false);
+      runState({ activeRun: null, missingPrefix: false, unconfirmed: false, droppedUnconfirmed: false, canResume: false });
+      limited.set(false);
+      notice.set(null);
+      draft.set("");
+      showContext.set(false);
+      setFullscreen(null);
+    });
+  };
+
   const send = async () => {
     const text = draft().trim();
-    if (!text || composing || sending() || activeRun()) return;
+    if (!text || composing || sending() || activeRun() || waitingForAdmission()) return;
     const key = sessionKey();
     const params: Record<string, unknown> = {
       message: text, channel: "gui:chat", stream: true, idempotency_key: newIdempotencyKey(),
@@ -211,23 +239,28 @@ export function Chat(props: { sdk: PanelSdk; setReaderMode: (active: boolean) =>
     apply(model.beginSend(text, Date.now()) as Patch);
     draft.set("");
     try {
-      const result = (await sdk.invoke("chat.send", params)) as SendResult;
+      const result = await sdk.sendChat(params);
+      if (!sdk.rememberChat(result.session_key)) return;
       ++historyRequest;
       sessionKey.set(result.session_key);
       apply(model.resolveSend(result.session_key, result.run_id, Date.now()) as Patch);
     } catch (failure) {
+      if (!sdk.active()) return;
       apply(model.resolveSend(key ?? "", null, Date.now()) as Patch);
-      if (failure instanceof RpcError && failure.code === HOST_UNAVAILABLE) {
-        notice.set("Connection lost while sending: the message may or may not have reached Aleph. Check the transcript before sending again.");
-        void load();
-      } else if (failure instanceof RpcError) {
+      if (failure instanceof RpcError && failure.code !== HOST_UNAVAILABLE) {
+        if (failure.code === RESOURCE_NOT_FOUND && key) {
+          waitingForAdmission.set(true);
+          historyFailed.set(true);
+        }
         draft.set(text);
         notice.set(failure.message);
+      } else if (sdk.chatSendUnknown()) {
+        void load();
       } else {
         report(failure);
       }
     } finally {
-      sending.set(false);
+      if (sdk.active()) sending.set(false);
     }
   };
 
@@ -247,10 +280,18 @@ export function Chat(props: { sdk: PanelSdk; setReaderMode: (active: boolean) =>
       <If when={!fullscreen()}>
         <View class="flex-row items-center justify-between">
           <Text class="text-muted-foreground">{sessionKey() ?? "New conversation"}</Text>
-          <If when={sessionKey() && !showContext()}>
-            <Button class="rounded px-2 py-1 hover:bg-muted focus-visible:bg-muted" onPress={() => showContext.set(true)}>
-              <Text>Context</Text>
-            </Button>
+          <If when={sessionKey()}>
+            <View class="flex-row gap-2">
+              <Button accessibilityLabel="Start new conversation" disabled={sending()} onPress={startNewConversation}
+                class="rounded px-2 py-1 hover:bg-muted focus-visible:bg-muted">
+                <Text>New conversation</Text>
+              </Button>
+              <If when={!waitingForAdmission() && !showContext()}>
+                <Button class="rounded px-2 py-1 hover:bg-muted focus-visible:bg-muted" onPress={() => showContext.set(true)}>
+                  <Text>Context</Text>
+                </Button>
+              </If>
+            </View>
           </If>
         </View>
       </If>
@@ -290,6 +331,19 @@ export function Chat(props: { sdk: PanelSdk; setReaderMode: (active: boolean) =>
       <If when={droppedUnconfirmed()}><Text class="text-muted-foreground">The oldest unconfirmed turn exceeded the preview limit.</Text></If>
       <If when={limited()}><Text class="text-muted-foreground">Some earlier tool details are unavailable.</Text></If>
       <If when={notice()}><Text class="text-destructive">{notice()}</Text></If>
+      <If when={!fullscreen() && historyFailed()}>
+        <Button onPress={() => { notice.set(null); void load(); }} class="self-start rounded px-2 py-1 hover:bg-muted focus-visible:bg-muted">
+          <Text>Retry history</Text>
+        </Button>
+      </If>
+      <If when={!fullscreen() && sdk.chatSendUnknown()}>
+        <View class="flex-row items-center gap-2">
+          <Text class="text-muted-foreground">A send may have reached Aleph. Check Sessions before sending again.</Text>
+          <Button accessibilityLabel="Dismiss send notice" onPress={sdk.dismissChatSendUnknown} class="rounded px-2 py-1 hover:bg-muted focus-visible:bg-muted">
+            <Text>Dismiss</Text>
+          </Button>
+        </View>
+      </If>
       <View class={fullscreen() ? "hidden" : "flex-row items-end gap-2"}>
         <Input
           value={draft()}
@@ -304,7 +358,7 @@ export function Chat(props: { sdk: PanelSdk; setReaderMode: (active: boolean) =>
           class="flex-1 rounded-(--radius) border border-input px-3 py-2 text-foreground"
         />
         <If when={activeRun()} else={
-          <Button disabled={sending() || !draft().trim()} onPress={() => void send()}
+          <Button disabled={sending() || waitingForAdmission() || !draft().trim()} onPress={() => void send()}
             class="rounded-(--radius) bg-primary px-4 py-2 disabled:opacity-40">
             <Text class="text-primary-foreground">Send</Text>
           </Button>

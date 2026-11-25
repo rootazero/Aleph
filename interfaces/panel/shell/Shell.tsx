@@ -51,9 +51,16 @@ export function Shell() {
   const keyFailures = signal<Map<string, string>>(new Map());
   const listeners = new Set<(state: ConnectionState) => void>();
   const eventListeners = new Set<(event: PanelEvent) => void>();
-  // What a module handed the one it navigated to (by tab key), for this run
-  // of the shell only: a reload starts every module without one.
+  // Keep only the last confirmed identity, never a cache of previous identities.
   const intents = new Map<string, Intent>();
+  let identity: { endpoint: string; subject: string } | null = null;
+  const sendUnknown = signal(false);
+  let pendingSend: ((unknown: boolean) => void) | null = null;
+  const clearContinuity = () => {
+    intents.clear();
+    sendUnknown.set(false);
+    identity = null;
+  };
   // The snapshot and storage key the current view was made from.
   let snapshot: unknown = null;
   let storageKey: string | null = null;
@@ -85,8 +92,13 @@ export function Shell() {
     const previous = connection();
     const changed = next.state !== previous.state || next.endpoint !== previous.endpoint || next.subject !== previous.subject;
     batch(() => {
-      connection.set(next);
       if (changed) {
+        pendingSend?.(true);
+        if (!identity || (next.endpoint && next.endpoint !== identity.endpoint)) clearContinuity();
+        if (next.state === "connected") {
+          if (next.subject !== identity?.subject || next.endpoint !== identity?.endpoint) clearContinuity();
+          identity = next.subject && next.endpoint ? { endpoint: next.endpoint, subject: next.subject } : null;
+        }
         generation.update((value) => value + 1);
         snapshot = null;
         storageKey = null;
@@ -94,6 +106,7 @@ export function Shell() {
         notice.set(null);
         settingsOpen.set(false);
       }
+      connection.set(next);
     });
     for (const listener of [...listeners]) listener(next);
     if (changed && next.state === "connected") void load(generation());
@@ -113,10 +126,37 @@ export function Shell() {
     generation: () => generation(),
     connection: () => connection(),
     navigate(key, intent) {
+      const current = view();
+      if (!current || !storageKey || connection().state !== "connected") return false;
+      const stored = PanelModel.select(current.stored, key);
+      if (!stored) return false;
+      const next = PanelModel.view(snapshot, stored) as PanelView;
+      if (next.layout.active !== key) return false;
+      if (intent && !next.slots.some((slot) => slot.key === key && slot.state === "live")) return false;
       if (intent) intents.set(key, intent);
-      edit((stored) => PanelModel.select(stored, key));
+      view.set(next);
+      void Storage.setItem(storageKey, stored);
+      return true;
     },
-    intent: (key) => intents.get(key) ?? null,
+    intent: (key) => connection().state === "connected" ? intents.get(key) ?? null : null,
+    rememberChat(sessionKey) {
+      if (connection().state !== "connected") return false;
+      if (sessionKey === null) intents.delete("aleph:chat");
+      else intents.set("aleph:chat", { session_key: sessionKey });
+      return true;
+    },
+    beginChatSend() {
+      if (connection().state !== "connected" || pendingSend) return null;
+      const finish = (unknown: boolean) => {
+        if (pendingSend !== finish) return;
+        pendingSend = null;
+        if (unknown) sendUnknown.set(true);
+      };
+      pendingSend = finish;
+      return finish;
+    },
+    chatSendUnknown: () => sendUnknown(),
+    dismissChatSendUnknown: () => sendUnknown.set(false),
     onConnection(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);
