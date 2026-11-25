@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust（tokio、serde、thiserror），crate `alephcore`，extism WASM 运行时。
 
-**Spec:** `docs/superpowers/specs/2026-11-25-zahir-capability-convergence-design.md`（已批准；段 S 的修正见下文 §S0，待用户确认）
+**Spec:** `docs/superpowers/specs/2026-11-25-zahir-capability-convergence-design.md`（已批准；段 S 的修正见下文 §S0，用户已于 2026-11-25 确认）
 
 ## Global Constraints
 
@@ -165,7 +165,7 @@
 
 ## 段 S：插件重载「先验后拆」/ Preflight-before-teardown reload（可单独回退）
 
-### S0：相对设计 §6.3 的修正（待用户确认）
+### S0：相对设计 §6.3 的修正（用户已于 2026-11-25 确认）
 
 源码复核（`src/extension/lifecycle.rs:290-305,907-1228`，`src/extension/loader.rs:200-248,622-650`）表明设计 §6.3 的双实例提交不成立：
 
