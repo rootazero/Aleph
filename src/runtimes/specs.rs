@@ -91,12 +91,15 @@ pub const OBSCURA_RUNTIME: &str = aleph_protocol::browser::OBSCURA_RUNTIME_WIRE;
 /// looked for (判据 §3: a guard's green only covers the shape it recognises).
 macro_rules! obscura_tag {
     () => {
-        "v0.2.2"
+        "v0.2.7"
     };
 }
 
-/// The pinned obscura release. Bump this — and only this — when the upstream
-/// `DOMSnapshot` layout fix lands (spec §6.1); everything else follows.
+/// The pinned obscura release. Bump this — and only this — to adopt a new
+/// upstream release; everything else follows. A bump is not finished until
+/// `qa/browser_dual`'s stages and `caps` probe have been re-run against the
+/// new binary, because `engine::capability`'s obscura row is stamped with this
+/// tag and publishes its values to the model as "measured on" it.
 pub const OBSCURA_TAG: &str = obscura_tag!();
 
 /// The five-platform release matrix: measured for `aarch64-macos`, inferred by

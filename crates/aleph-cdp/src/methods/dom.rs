@@ -44,8 +44,29 @@ pub struct BoxModel {
     pub padding: [f64; 8],
     pub border: [f64; 8],
     pub margin: [f64; 8],
+    #[serde(deserialize_with = "whole_css_px")]
     pub width: i64,
+    #[serde(deserialize_with = "whole_css_px")]
     pub height: i64,
+}
+
+/// The protocol types `width`/`height` as integers and Chrome sends integers, but obscura
+/// (v0.2.2 and v0.2.7, `coord_value` in `obscura-cdp/src/domains/dom.rs`) sends a fractional
+/// layout size as a JSON float — `100.5`, not `100`. Decoded strictly as `i64`, that reply
+/// fails as a whole, and the element's four quads, which are already `f64` and perfectly
+/// usable, are lost with it. Rounded to the nearest whole CSS pixel instead: these two fields
+/// are a size summary, and the quads carry the exact geometry.
+fn whole_css_px<'de, D>(deserializer: D) -> std::result::Result<i64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let px = f64::deserialize(deserializer)?;
+    if !px.is_finite() {
+        return Err(serde::de::Error::custom(format!(
+            "box size {px} is not a number of pixels"
+        )));
+    }
+    Ok(px.round() as i64)
 }
 
 /// The code Chrome answers with when an element generates no layout box.
@@ -89,11 +110,12 @@ pub const NO_BOX_MESSAGE: &str = "Could not compute box model";
 /// [`disable`], which carries the measurements.
 ///
 /// ⚠️ **That pairing is engine-specific, and following it blindly breaks the other engine.**
-/// Measured twice, independently, on obscura v0.2.2: `DOM.getDocument(-1, true)` turns on **no**
-/// event stream there (0 unsolicited `DOM.*` events), and `DOM.disable` answers **`-32601 Unknown
-/// DOM method: disable`** — it is absent, not a no-op. So on obscura there is nothing to disable
-/// and nothing to disable it with, and an engine-blind "always pair them" makes every snapshot on
-/// the default engine fail. `alephcore`'s
+/// On obscura `DOM.getDocument(-1, true)` turns on **no** event stream (0 unsolicited `DOM.*`
+/// events — measured twice on v0.2.2, and again on v0.2.7 after a DOM mutation), so there is
+/// nothing to disable. `DOM.disable` itself moved between builds: v0.2.2 answers **`-32601 Unknown
+/// DOM method: disable`**; v0.2.7 accepts it (`{}`, and `backendNodeId` lookups still answer
+/// afterwards, measured). An engine-blind "always pair them" therefore fails every snapshot on an
+/// operator-pinned v0.2.2 and buys nothing on v0.2.7. `alephcore`'s
 /// `only_the_two_page_state_fetchers_touch_a_sessions_dom_agent` is what keeps that from being
 /// written by accident; this crate cannot enforce it, so it says it. That name is a second copy
 /// living where nothing can check it, so if it has rotted, the guard is whatever asserts on

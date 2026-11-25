@@ -164,7 +164,10 @@ def sidecar_listing():
 # `PIN_OBSCURA_BUILD` is imported from `drive.py` rather than written again:
 # "which obscura build was measured" already has an author on this branch, and a
 # second copy of it is the defect this file spends forty lines avoiding.
-PIN_MEASURED_AT = "2026-09-20"
+# Re-measured 2026-11-25 on v0.2.7: the same two chromium-only nodes, nothing
+# obscura-only — the difference did not move with the build (first measured
+# 2026-09-20 on v0.2.2).
+PIN_MEASURED_AT = "2026-11-25"
 PIN_OBSCURA_BUILD = MEASURED_ON
 # What chromium offers and obscura does not, exactly. Two instances of ONE
 # class, kept distinguishable on purpose:

@@ -62,14 +62,23 @@ ALEPH_QA_DRIVER=cdp ./qa/browser_managed/run.sh tools   # the same verbs over Al
                                    # layer (stale-ref refusal + recovery trailer),
                                    # effect_probe by three raw-CDP premises; obscura's
                                    # effect_probe measured Unsupported on v0.2.2 — the
-                                   # read-back cannot survive a self-navigating click;
+                                   # read-back cannot survive a self-navigating click,
+                                   # Supported since 2026-11-25 (v0.2.7): the probe's
+                                   # document nonce detects that navigation;
                                    # round-2/C1's network_interception probed since
                                    # 2026-09-27 by the Fetch handshake link by link —
                                    # enable, the pause ARRIVING and actually HOLDING
                                    # (about:blank must still be the document), the page
                                    # receiving the mock body — and measured Unsupported
                                    # on v0.2.2: navigation pauses are advisory, so the
-                                   # real page completes unanswered;
+                                   # real page completes unanswered; Supported since
+                                   # 2026-11-25 (v0.2.7), re-probed by EFFECT on a
+                                   # subresource fetch() both raw and through
+                                   # browser_network{mock_add} (pauses on the page's
+                                   # other session reach Aleph by frameId). The tool
+                                   # face also verifies a same-origin iframe's own
+                                   # fetch() and a top-level navigation whose final
+                                   # DOM renders the mock document;
                                    # round-2/C2's screencast probed since 2026-09-30
                                    # under the C1-tightened criterion (arrival alone is
                                    # not usability): >=3 frames, EVERY one base64-
@@ -86,7 +95,17 @@ ALEPH_QA_DRIVER=cdp ./qa/browser_managed/run.sh tools   # the same verbs over Al
                                    # (the event NEVER arrives, the second silent-miss
                                    # of its kind after Page.javascriptDialogOpening);
                                    # the tool face ([error] in the console ring) is
-                                   # asserted only when the engine half delivers)
+                                   # asserted only when the engine half delivers);
+                                   # 2026-11-25 re-run on v0.2.7 (the tag is read
+                                   # from src/runtimes/specs.rs, never spelled here):
+                                   # js_dialogs and drag now probed BY EFFECT —
+                                   # dialogs still Unsupported (only beforeunload
+                                   # emits javascriptDialogOpening), drag Supported
+                                   # (browser_drag's six mouse events: press on the
+                                   # source, mouseup on the target, NO HTML5 drop);
+                                   # network_interception, error_events, file_upload
+                                   # unchanged; screenshot pixels vs box model vs
+                                   # client rect logged for one absolute box (agree)
 ./qa/browser_dual/run.sh escape    # the host this branch is BUILT for: no playwright-cli
                                    # anywhere (PATH scrubbed, fnm env unset, scratch
                                    # ledger). obscura still opens AND so does a Chrome
@@ -957,7 +976,8 @@ processes on one vault is a documented way to lose vault data
 ## `browser_dual` — the dual-engine stack against a real obscura
 
 `browser_dual` needs two real binaries and says so at second zero: an obscura
-(`ALEPH_QA_OBSCURA`, else `~/.aleph/runtimes/obscura/v0.2.2/obscura`, else
+(`ALEPH_QA_OBSCURA`, else `~/.aleph/runtimes/obscura/<pinned tag>/obscura` — the
+tag `run.sh` reads from `obscura_tag!` in `src/runtimes/specs.rs` — else
 PATH — **obscura is never put on PATH**, so a bare `command -v` finds nothing on
 a machine that installed it through Aleph) and — for `open`, `reap` and
 `switch` — a Chrome (`ALEPH_QA_CHROME`). A missing one exits **69, not 0**. `provision`
@@ -990,6 +1010,14 @@ document, and the read-back answers a clean null on the new document —
 indistinguishable from "never landed"). So obscura's row stays `Unsupported`,
 now as a measured verdict on v0.2.2 rather than a fail-closed unknown, and its
 probe asserts the refusal reaches the model, never a fabricated verification.
+**2026-11-25 (v0.2.7):** the read-back still answers a clean null there, but
+the production probe now writes a per-arm document nonce
+(`window.__alephProbeDoc`) and premise 3 measures it GONE on the new document,
+so the null is detected and the action is reported Skipped, not
+`EffectNotDelivered` — the row flipped to `Supported` on that reading. The same
+re-run moved `drive.py`'s `MEASURED_ON` to 0.2.7: a click-driven navigation now
+turns the loader over (the refusal names the navigation), and the inline link
+now has a box and is clickable by ref.
 Round-2/C2 (2026-09-30) added the `screencast` row: `Page.startScreencast{jpeg}`
 is fired at the Aleph-launched obscura and the frames are READ, under the
 C1-tightened criterion — arrival alone is not usability, a frame counts only

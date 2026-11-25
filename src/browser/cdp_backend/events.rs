@@ -30,7 +30,7 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 
-use aleph_cdp::{CdpEvent, SessionId};
+use aleph_cdp::CdpEvent;
 
 use crate::browser::engine::{EngineHandle, TabEntry, TabTable};
 use crate::browser::error::BrowserError;
@@ -51,12 +51,50 @@ fn push_bounded(ring: &mut VecDeque<String>, line: String) {
     }
 }
 
-fn tab_for_session<'a>(
-    tabs: &'a mut TabTable,
-    session: Option<&SessionId>,
-) -> Option<&'a mut TabEntry> {
-    let s = session?;
-    tabs.entries.values_mut().find(|e| &e.session == s)
+/// The tab an event belongs to: the one attached with the event's session,
+/// or — for a MAIN-frame `Page.frameNavigated` only — the tab whose target id
+/// is the frame's id.
+///
+/// The second route exists because obscura v0.2.7 opens TWO sessions on every
+/// page Aleph drives: `Target.createTarget` registers `<targetId>-session`
+/// (announced only by a browser-level `Target.attachedToTarget`), and
+/// Aleph's own `Target.attachToTarget` adds `<targetId>-session-<n>`. A
+/// navigation the PAGE starts is then reported on whichever of the two a
+/// `HashMap` scan meets first (`take_live_pending_navigation` in
+/// `obscura-cdp/src/server.rs`) — measured 2026-11-25 with a raw-CDP probe:
+/// 4 of 6 fresh processes reported a script-driven navigation on the
+/// session Aleph never attached, and `qa/browser_dual/run.sh click` failed
+/// its "refusal names the navigation" claim intermittently (7 of 11 runs).
+/// v0.2.2 passed it 4 of 4.
+///
+/// Matching by frame id is safe in the direction that matters: a main-frame
+/// navigation of our target, whichever session reports it, means our tab's
+/// document changed, and the only effect is `reset_for_document` retiring
+/// refs — never minting or reviving one. The main frame's id is the target id
+/// on both engines (Chrome by definition, obscura's `page.frame_id`). Other
+/// events stay session-scoped: console and network lines from a session we
+/// do not own are not attributed by guesswork.
+fn tab_for_event<'a>(tabs: &'a mut TabTable, ev: &CdpEvent) -> Option<&'a mut TabEntry> {
+    let session = ev.session.as_ref()?;
+    let by_session = tabs
+        .entries
+        .iter()
+        .find(|(_, entry)| &entry.session == session)
+        .map(|(target_id, _)| target_id.clone());
+    let target_id = by_session.or_else(|| {
+        if ev.method != "Page.frameNavigated" {
+            return None;
+        }
+        let frame = &ev.params["frame"];
+        if frame.get("parentId").is_some() {
+            return None;
+        }
+        let frame_id = frame["id"].as_str()?;
+        tabs.entries
+            .contains_key(frame_id)
+            .then(|| frame_id.to_string())
+    })?;
+    tabs.entries.get_mut(&target_id)
 }
 
 /// Render one `Runtime.consoleAPICalled` argument.
@@ -92,7 +130,7 @@ fn render_arg(arg: &serde_json::Value) -> String {
 /// what makes "the event was for a session we do not know" observable rather
 /// than silent.
 pub(super) fn apply_event(tabs: &mut TabTable, ev: &CdpEvent) -> bool {
-    let Some(entry) = tab_for_session(tabs, ev.session.as_ref()) else {
+    let Some(entry) = tab_for_event(tabs, ev) else {
         return false;
     };
     match ev.method.as_str() {
@@ -155,6 +193,12 @@ pub(super) fn apply_event(tabs: &mut TabTable, ev: &CdpEvent) -> bool {
         // `Runtime.evaluate` turns the loader over properly. So on that engine
         // NOTHING loader-based can see a click-driven navigation — not this
         // arm, not `PageState::build`'s reset, not `navigate()`'s boundary.
+        // Re-measured 2026-11-25 on v0.2.7 (`qa/browser_dual` caps stage,
+        // premise 3, and the `click` stage): the stale loader did not reproduce
+        // — the frame tree held the new loader and the main-frame event carried
+        // it, though often on a session Aleph never attached, which is why
+        // `tab_for_event` routes this one event by frame id. v0.2.2 can still
+        // be pinned, so the other layer below stays load-bearing.
         //
         // That case is covered by the OTHER layer, and this comment names it so
         // the next reader does not conclude the document layer handles it:
@@ -185,7 +229,8 @@ pub(super) fn apply_event(tabs: &mut TabTable, ev: &CdpEvent) -> bool {
         // Chrome 153.0.8010.48: a script-initiated navigation on either engine,
         // and every navigation on Chrome including the click-driven one.
         // `parentId` absent and a fresh `loaderId` in all of those. The one
-        // measured hole is obscura's click-driven route, above.
+        // measured hole is obscura v0.2.2's click-driven route, above; on
+        // v0.2.7 (2026-11-25) the click-driven route fires here too.
         "Page.frameNavigated" => {
             let frame = &ev.params["frame"];
             if frame.get("parentId").is_some() {
@@ -917,6 +962,55 @@ mod tests {
             "a ref from the previous document must now read as Navigated"
         );
         assert_eq!(tabs.entries["T1"].refs.document(), Some("L2"));
+    }
+
+    /// obscura v0.2.7 reports a page-started navigation on whichever of the
+    /// page's two sessions it meets first, one of which Aleph never attached
+    /// (`tab_for_event`'s doc). A MAIN-frame navigation of our target must
+    /// retire the refs whichever session carries it; anything else from a
+    /// foreign session — a subframe, a frame that is not our target, a console
+    /// line — must still change nothing.
+    #[test]
+    fn a_main_frame_navigation_on_a_foreign_session_still_retires_our_refs() {
+        let (mut tabs, _session) = table_with_one_tab();
+        let old = seed_ref_at_l1(&mut tabs);
+        let foreign = SessionId("T1-session".into());
+        let navigated = |frame: serde_json::Value| {
+            ev(&foreign, "Page.frameNavigated", json!({ "frame": frame }))
+        };
+
+        let changed = apply_event(
+            &mut tabs,
+            &navigated(json!({ "id": "OTHER", "loaderId": "L2", "url": "https://example/2" })),
+        );
+        assert!(!changed, "a frame that is not our target is not ours");
+        let changed = apply_event(
+            &mut tabs,
+            &navigated(
+                json!({ "id": "T1", "parentId": "F0", "loaderId": "L2", "url": "https://example/2" }),
+            ),
+        );
+        assert!(!changed, "a subframe navigation never ends the document");
+        let changed = apply_event(
+            &mut tabs,
+            &ev(
+                &foreign,
+                "Runtime.consoleAPICalled",
+                json!({ "type": "log", "args": [] }),
+            ),
+        );
+        assert!(!changed, "only frameNavigated is routed by frame id");
+        assert!(tabs.entries["T1"].refs.resolve(&old).is_ok());
+
+        let changed = apply_event(
+            &mut tabs,
+            &navigated(json!({ "id": "T1", "loaderId": "L2", "url": "https://example/2" })),
+        );
+        assert!(changed, "our target's main frame navigated");
+        assert_eq!(
+            tabs.entries["T1"].refs.resolve(&old),
+            Err(crate::browser::page_state::StaleReason::Navigated)
+        );
     }
 
     /// A SUBFRAME navigation does not end the tab's document, and resetting on

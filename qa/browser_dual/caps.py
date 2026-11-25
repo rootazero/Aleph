@@ -24,14 +24,23 @@ import glob
 import json
 import os
 import re
+import struct
 import subprocess
 import sys
+import zlib
+from urllib.parse import urljoin
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "browser_managed"))
 from qa_rpc import Ledger, Rpc, ran, ws_connect  # noqa: E402
+from drive import pinned_obscura_tag  # noqa: E402
 import websockets  # noqa: E402
 
-MEASURED_ON = "v0.2.2"
+
+
+# The table's `measured_on` must name the pinned build: read from the ledger's
+# one author, so a bump cannot leave this probe comparing the table against the
+# previous build's tag (判据 §1).
+MEASURED_ON = pinned_obscura_tag()
 
 
 class Raw:
@@ -60,7 +69,9 @@ class Raw:
     async def wait_event(self, method, session, timeout=15):
         """The next `method` event on `session` — stash first, then the wire.
 
-        Never concurrent with `call` (both read the socket); the probes below
+        `session=None` takes the event from ANY session (the event's own
+        `sessionId` is then under the returned params' `__session`). Never
+        concurrent with `call` (both read the socket); the probes below
         sequence them.
         """
         loop = asyncio.get_running_loop()
@@ -76,8 +87,118 @@ class Raw:
                     m = json.loads(await asyncio.wait_for(self.ws.recv(), timeout=remaining))
                 except asyncio.TimeoutError:
                     return None
-            if m.get("method") == method and m.get("sessionId") == session:
+            if m.get("method") != method:
+                continue
+            if session is None:
+                return {**m.get("params", {}), "__session": m.get("sessionId")}
+            if m.get("sessionId") == session:
                 return m.get("params", {})
+
+
+def png_color_box(png, rgb):
+    """The pixel bounding box `[x0, y0, x1, y1)` of every pixel exactly `rgb`.
+
+    Pure Python on purpose — no PIL in the QA venv: chunk walk, IDAT inflate,
+    the five PNG row filters, 8-bit RGB/RGBA only (what both engines emit).
+    `None` when no pixel matches or the format is one this does not decode.
+    """
+    if png[:8] != b"\x89PNG\r\n\x1a\n":
+        return None
+    pos, idat, width = 8, b"", 0
+    while pos < len(png):
+        length, kind = struct.unpack(">I4s", png[pos:pos + 8])
+        body = png[pos + 8:pos + 8 + length]
+        if kind == b"IHDR":
+            width, height, depth, color_type, _, _, interlace = struct.unpack(">IIBBBBB", body)
+            if depth != 8 or color_type not in (2, 6) or interlace:
+                return None
+            channels = 3 if color_type == 2 else 4
+        elif kind == b"IDAT":
+            idat += body
+        pos += 12 + length
+    raw = zlib.decompress(idat)
+    stride = width * channels
+    previous = bytearray(stride)
+    box = None
+    for y in range(height):
+        start = y * (stride + 1)
+        kind, line = raw[start], bytearray(raw[start + 1:start + 1 + stride])
+        for i in range(stride):
+            left = line[i - channels] if i >= channels else 0
+            up = previous[i]
+            up_left = previous[i - channels] if i >= channels else 0
+            if kind == 1:
+                line[i] = (line[i] + left) & 0xFF
+            elif kind == 2:
+                line[i] = (line[i] + up) & 0xFF
+            elif kind == 3:
+                line[i] = (line[i] + (left + up) // 2) & 0xFF
+            elif kind == 4:
+                guess = left + up - up_left
+                pa, pb, pc = abs(guess - left), abs(guess - up), abs(guess - up_left)
+                predictor = left if pa <= pb and pa <= pc else (up if pb <= pc else up_left)
+                line[i] = (line[i] + predictor) & 0xFF
+        for x in range(width):
+            if tuple(line[x * channels:x * channels + 3]) == rgb:
+                if box is None:
+                    box = [x, y, x + 1, y + 1]
+                else:
+                    box = [min(box[0], x), min(box[1], y), max(box[2], x + 1), max(box[3], y + 1)]
+        previous = line
+    return box
+
+
+async def measure_geometry(cdp, s, root):
+    """Where `#geo` is, three ways, in CSS px: `DOM.getBoxModel`'s border quad
+    (what `rect_from` turns into a snapshot rect and a click point),
+    `getBoundingClientRect`, and the `#ff00ff` pixels of
+    `Page.captureScreenshot` scaled by screenshot width / CSS viewport width.
+
+    A reading, not a table row: whether the three agree decides whether
+    `browser_screenshot` needs a geometry note on this engine. Engine-neutral,
+    so the same call is the decoder's control on chromium.
+    """
+    reading = {}
+    geo_id = find_node(root, "div", "geo")
+    bm = await cdp.call("DOM.getBoxModel", {"backendNodeId": geo_id}, s) if geo_id else {}
+    quad = bm.get("result", {}).get("model", {}).get("border")
+    if quad:
+        xs, ys = quad[0::2], quad[1::2]
+        reading["box_model"] = [min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys)]
+    r = await cdp.call("Runtime.evaluate", {
+        "expression": "(function(){ var r = document.getElementById('geo')"
+                      ".getBoundingClientRect(); return [r.x, r.y, r.width, r.height]; })()",
+        "returnByValue": True}, s)
+    reading["client_rect"] = r.get("result", {}).get("result", {}).get("value")
+    metrics = (await cdp.call("Page.getLayoutMetrics", {}, s)).get("result", {})
+    viewport = metrics.get("cssVisualViewport") or metrics.get("visualViewport") or {}
+    shot = await cdp.call("Page.captureScreenshot", {"format": "png"}, s)
+    data = shot.get("result", {}).get("data")
+    if not data:
+        reading["screenshot"] = f"no image: {json.dumps(shot.get('error'))[:160]}"
+        return reading
+    png = base64.b64decode(data)
+    width = struct.unpack(">I", png[16:20])[0] if png[:8] == b"\x89PNG\r\n\x1a\n" else 0
+    box = png_color_box(png, (0xFF, 0x00, 0xFF))
+    css_width = viewport.get("clientWidth")
+    reading["screenshot_px"] = {"image_width": width, "css_viewport_width": css_width,
+                                "magenta_box": box}
+    if box and width and css_width:
+        scale = width / css_width
+        x0, y0, x1, y1 = (v / scale for v in box)
+        reading["screenshot"] = [x0, y0, x1 - x0, y1 - y0]
+    else:
+        reading["screenshot"] = None
+    return reading
+
+
+def geometry_agrees(reading, tolerance=1.0):
+    """All three rectangles present and within `tolerance` CSS px of each other."""
+    rects = [reading.get(k) for k in ("box_model", "client_rect", "screenshot")]
+    if not all(isinstance(r, list) and len(r) == 4 for r in rects):
+        return False
+    return all(abs(a[i] - b[i]) <= tolerance
+               for a in rects for b in rects for i in range(4))
 
 
 def find_node(node, tag, ident):
@@ -115,16 +236,64 @@ async def probe_obscura(ws_url, page_url, led):
 
         found = {}
 
-        # js_dialogs. Probed by dispatch rather than by effect on purpose: an
-        # engine with no dialogs never opens one, so there is no state to read.
-        # The refusal IS the observation here, and the next claim checks that
-        # the engine does not merely refuse the handler but never blocks either.
-        r = await cdp.call("Page.handleJavaScriptDialog", {"accept": True}, s)
-        found["js_dialogs"] = "unsupported" if "error" in r else "supported"
+        # js_dialogs, by effect, the way `browser_dialog` meets a dialog: the
+        # page opens one, `Page.javascriptDialogOpening` must ARRIVE (that is
+        # what sets the tab's pending-dialog latch the model is told about),
+        # `Page.handleJavaScriptDialog` must be accepted, and the page must
+        # then hold what the handler sent — `true` from confirm, the typed
+        # text from prompt. A handler that answers `{}` while the page reads
+        # its default would otherwise certify a no-op (判据 §11). obscura
+        # v0.2.7 emits the event only for `beforeunload` on `Page.close`
+        # (crates/obscura-cdp/src/domains/page.rs) and answers confirm/prompt
+        # noninteractively in JS, so all three kinds are measured here rather
+        # than inferred from that source reading.
+        dialogs_ok = True
+        for kind in ("alert", "confirm", "prompt"):
+            await ev(f"window.openDialog('{kind}')")
+            opened = await cdp.wait_event("Page.javascriptDialogOpening", s, timeout=2)
+            handled = await cdp.call("Page.handleJavaScriptDialog",
+                                     {"accept": True, "promptText": "caps-typed"}, s)
+            await asyncio.sleep(0.3)
+            got = await ev(f"window.__dlg['{kind}']")
+            want = {"alert": "returned", "confirm": True, "prompt": "caps-typed"}[kind]
+            led.log(f"  js_dialogs {kind}: opening event={'yes' if opened else 'none in 2s'}, "
+                    f"handle={json.dumps(handled.get('error') or 'ok')[:120]}, "
+                    f"page read {got!r} (accepted value {want!r})")
+            dialogs_ok = dialogs_ok and bool(opened) and "error" not in handled and got == want
+        found["js_dialogs"] = "supported" if dialogs_ok else "unsupported"
 
-        r = await cdp.call("Input.dispatchDragEvent",
-                           {"type": "dragOver", "x": 10, "y": 10, "data": {"items": []}}, s)
-        found["drag"] = "supported" if "error" not in r and await ev("window.__dragged") else "unsupported"
+        # drag, by effect, with the gesture `browser_drag` actually sends:
+        # six Input.dispatchMouseEvent calls (move, press, three interpolated
+        # moves, release — `cdp_backend::actions::drag`). The earlier probe
+        # sent Input.dispatchDragEvent, a method no Aleph verb dispatches, so
+        # it measured nothing about this row. Supported means the same thing
+        # qa/browser_managed's drag stage accepts on chromium (an HTML5 drop or
+        # a mouseup on the target), AND the press landed on the source — a
+        # bare mouseup with no press is a pointer release, not a drag.
+        drect = await ev(
+            "(function(){ function c(id){ var r = document.getElementById(id)"
+            ".getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; }"
+            " return {from: c('src'), to: c('dst')}; })()")
+        if drect:
+            (fx, fy), (tx, ty) = drect["from"], drect["to"]
+            gesture = [("mouseMoved", fx, fy, 0), ("mousePressed", fx, fy, 1)]
+            gesture += [("mouseMoved", fx + (tx - fx) * t / 3, fy + (ty - fy) * t / 3, 0)
+                        for t in (1, 2, 3)]
+            gesture += [("mouseReleased", tx, ty, 1)]
+            for mtype, x, y, cc in gesture:
+                # The mask `aleph_cdp::methods::input::dispatch_mouse_event`
+                # derives: 0 on release, the left button's 1 on everything else.
+                params = {"type": mtype, "x": x, "y": y, "button": "left", "clickCount": cc,
+                          "modifiers": 0, "buttons": 0 if mtype == "mouseReleased" else 1}
+                r = await cdp.call("Input.dispatchMouseEvent", params, s)
+                if "error" in r:
+                    led.log(f"  drag: Input.dispatchMouseEvent {mtype} errored: {json.dumps(r)[:200]}")
+            await asyncio.sleep(0.5)
+        state = await ev("({dragged: window.__dragged, pressed: window.__pressedSource,"
+                         " moves: window.__moves})") or {}
+        led.log(f"  drag (browser_drag's six mouse events, src→dst): {state} (rect={drect})")
+        found["drag"] = ("supported" if state.get("pressed") and
+                         state.get("dragged", "dropped:no") != "dropped:no" else "unsupported")
 
         # `touch` and `multi_connection` are NOT probed here,
         # and their absence is the point: R39 cut them from the capability
@@ -160,6 +329,19 @@ async def probe_obscura(ws_url, page_url, led):
         await cdp.call("Input.insertText", {"text": "caps-probe"}, s)
         found["insert_text"] = "supported" if await ev(
             "document.getElementById('txt').value === 'caps-probe'") else "unsupported"
+
+        # Screenshot geometry (design §4.5): is a pixel in obscura's image at
+        # the CSS position the DOM reports? Not a table row: it pins the
+        # v0.2.7 conclusion that `browser_screenshot` needs no coordinate
+        # warning for obscura. A build that breaks the agreement fails this
+        # stage, and that conclusion has to be revisited (a note in
+        # src/builtin_tools/browser_tools/screenshot.rs), not silently kept.
+        geometry = await measure_geometry(cdp, s, root)
+        led.log(f"  geometry #geo (x, y, w, h in CSS px; fixture says 137, 211, 53, 29): "
+                f"{json.dumps(geometry)}")
+        led.check("the screenshot, the box model and getBoundingClientRect agree on #geo "
+                  "within 1 CSS px — browser_screenshot needs no coordinate warning",
+                  geometry_agrees(geometry), json.dumps(geometry))
 
         # The carried finding, measured here because this is the connection that
         # can measure it: obscura emits no dialog event AND does not block its
@@ -225,8 +407,18 @@ async def probe_obscura(ws_url, page_url, led):
         # from "never landed" — measured 2026-09-26 (v0.2.2, x86_64-linux):
         # a click on a real link navigated (the default action fires) and the
         # read-back came back null, i.e. arming the probe on this engine
-        # turns every navigating click into a false `EffectNotDelivered`.
-        # `qa/browser_dual`'s `click` stage is the end-to-end witness.
+        # turned every navigating click into a false `EffectNotDelivered`.
+        # The probe now carries a document nonce (`window.__alephProbeDoc`),
+        # so the question this premise asks is whether a navigation is
+        # DETECTABLE: a null on a document without the nonce is Skipped.
+        # Since 2026-11-25 production reads back ON THE INSTALLED NODE
+        # (`Runtime.callFunctionOn` with the install's object id — the node's
+        # realm, which an iframe target needs), so this premise does the same:
+        # install on the link's object, click, read back through that object.
+        # The answer that would be unsound is a clean null in a realm that
+        # still carries the nonce (`NoHit` → a false `EffectNotDelivered` on a
+        # click that navigated). An error, `otherDocument`, or the hit are all
+        # sound. `qa/browser_dual`'s `click` stage is the end-to-end witness.
         await ev("var a = document.createElement('a'); a.id = 'navlink';"
                  "a.href = 'index.html'; a.textContent = 'nav';"
                  "a.style.display = 'block'; a.style.width = '100px'; a.style.height = '30px';"
@@ -236,7 +428,34 @@ async def probe_obscura(ws_url, page_url, led):
         navrect = await ev("(function(){ var r = document.getElementById('navlink').getBoundingClientRect(); "
                            "return {x: r.x + r.width / 2, y: r.y + r.height / 2}; })()")
         nav_sound = False
+
+        async def frame_tree_loader():
+            tree = await cdp.call("Page.getFrameTree", {}, s)
+            return tree.get("result", {}).get("frameTree", {}).get("frame", {}).get("loaderId")
+
         if navrect:
+            # The ⑦b reading behind `cdp_backend::navigate`'s comment: does an
+            # input-driven navigation announce, and then report, a NEW loader?
+            loader_before = await frame_tree_loader()
+            # The install `cdp_backend::actions::arm_effect_probe` performs: on
+            # the node's object, a document nonce beside a one-shot capture
+            # listener that records the event type.
+            link = await cdp.call("Runtime.evaluate",
+                                  {"expression": "document.getElementById('navlink')"}, s)
+            link_obj = link.get("result", {}).get("result", {}).get("objectId")
+            installed = await cdp.call("Runtime.callFunctionOn", {
+                "objectId": link_obj, "returnByValue": True,
+                "functionDeclaration":
+                    "function() { window.__alephProbeDoc = 'caps-probe-doc';"
+                    " window.__alephProbeHit = null;"
+                    " this.addEventListener('click', (e) => { window.__alephProbeHit = e.type; },"
+                    " { capture: true, once: true }); return true; }"}, s)
+            # Without a live install an error on the read-back would read as
+            # "sound" for the wrong reason (判据 §2).
+            led.check("premise 3's integrity: the probe installed on the link's own object",
+                      installed.get("result", {}).get("result", {}).get("value") is True,
+                      json.dumps(installed)[:200])
+            cdp.events = [e for e in cdp.events if e.get("method") != "Page.frameNavigated"]
             for mtype, cc in (("mouseMoved", 0), ("mousePressed", 1), ("mouseReleased", 1)):
                 await cdp.call("Input.dispatchMouseEvent",
                                {"type": mtype, "x": navrect["x"], "y": navrect["y"],
@@ -248,6 +467,34 @@ async def probe_obscura(ws_url, page_url, led):
                                     {"expression": "location.pathname", "returnByValue": True}, s)
             landed_path = landed.get("result", {}).get("result", {}).get("value")
             navhit = r.get("result", {}).get("result", {}).get("value") if "error" not in r else "<error>"
+            same_doc = await ev("window.__alephProbeDoc === 'caps-probe-doc'")
+            # The production read-back's shape, run through the installed
+            # node's object exactly as `read_effect_probe` does.
+            node_read = await cdp.call("Runtime.callFunctionOn", {
+                "objectId": link_obj, "returnByValue": True,
+                "functionDeclaration":
+                    "function() { if (window.__alephProbeDoc !== 'caps-probe-doc')"
+                    " return { otherDocument: true }; return window.__alephProbeHit; }"}, s)
+            if "error" in node_read or "exceptionDetails" in node_read.get("result", {}):
+                node_answer = "error"
+            else:
+                node_answer = node_read.get("result", {}).get("result", {}).get("value")
+            led.log(f"  effect_probe premise 3, read-back on the installed node: "
+                    f"{json.dumps(node_answer)} (error / otherDocument → Skipped; "
+                    f"'click' → Verified; null → a false EffectNotDelivered)")
+            announced = [e["params"]["frame"].get("loaderId") for e in cdp.events
+                         if e.get("method") == "Page.frameNavigated" and e.get("sessionId") == s
+                         and "parentId" not in e["params"]["frame"]]
+            loader_after = await frame_tree_loader()
+            if not announced:
+                loader_verdict = "no main-frame Page.frameNavigated arrived"
+            elif announced[-1] != loader_before and loader_after != loader_before:
+                loader_verdict = "the event and the tree both carry a NEW loader"
+            else:
+                loader_verdict = "the OLD loader survives the navigation (⑦b still reproduces)"
+            led.log(f"  loaderId across a click-driven navigation: before={loader_before!r} "
+                    f"frameNavigated={announced!r} getFrameTree after={loader_after!r} — "
+                    + loader_verdict)
             # Fixture integrity, asserted: if the click did NOT navigate, the
             # premise measured nothing and "unsound" would be the wrong
             # conclusion (判据 §2 — a red for the wrong reason is the shape
@@ -258,27 +505,43 @@ async def probe_obscura(ws_url, page_url, led):
                     f"navHit={navhit!r} — "
                     + ("carried the flag or refused to answer (sound)"
                        if ("error" in r or navhit == "click")
-                       else "a CLEAN NULL on the new document — indistinguishable from "
-                            "'never landed' (unsound: a landed click reads as NoHit)"))
-            nav_sound = "error" in r or navhit == "click"
+                       else "a CLEAN NULL on the new document — by itself indistinguishable "
+                            "from 'never landed'; the nonce line below decides"))
+            # Sound if the read-back carries the flag, refuses to answer, or —
+            # since the nonce — can SEE it is reading a different document: the
+            # nonce is gone, so `effect_probe_readback_js` answers
+            # `{otherDocument: true}` and the action is Skipped, not failed. A
+            # null on a document whose nonce SURVIVED is still unsound.
+            led.log(f"  effect_probe premise 3, nonce: the probe's document nonce "
+                    + ("SURVIVED the navigation (a null there is indistinguishable)"
+                       if same_doc else "is gone on the new document (detectable)"))
+            # The verdict reads the production path: anything but a clean null.
+            nav_sound = node_answer is not None
         found["effect_probe"] = (
             "supported" if persist and delivered and nav_sound else "unsupported")
 
         # network_interception — the Fetch handshake Aleph's mock routes are
-        # built on, link by link, on a FRESH target that starts at
-        # about:blank so "the pause actually HELD" is observable: while the
-        # navigation's requestPaused sits unanswered, about:blank must still
-        # be the document. Measured 2026-09-27 on the pinned v0.2.2 (the full
-        # five-link measurement is docs/superpowers/specs/
-        # 2026-09-24-browser-network-mock-design/probes/fetch-probe.mjs):
-        # enable answers, the navigation event ARRIVES but the request is NOT
-        # held (the real page completes while the pause sits unanswered), and
-        # the fulfill is accepted and moot. So the row is supported only when
-        # all three links hold: the event arrives, the pause holds, and the
-        # PAGE ends up showing the mock body. The plan's draft criterion
-        # ("requestPaused arrives ⇒ supported") predates that measurement and
-        # would have certified the advisory pause — a probe that reads the
-        # event count but not the effect is 判据 §11's shape.
+        # built on, measured on a SUBRESOURCE the way `browser_network`
+        # mocks are used: Fetch.enable on OUR session with a pattern that
+        # matches only a URL the fixture server does NOT have, a page script
+        # fetch()es it, and the pause is answered with Fetch.fulfillRequest
+        # on OUR session (the session Aleph's intercept loop answers on). The
+        # row is supported only by the EFFECT: the page's fetch() resolves to
+        # the mock body — a pause that did not hold, or a fulfill that went
+        # nowhere, would have resolved to the server's 404 page (判据 §11).
+        #
+        # The pause is accepted from ANY session and the session it named is
+        # logged: obscura v0.2.7 opens two sessions per page and reports a
+        # pause on whichever a HashMap scan meets first (measured 2026-11-25,
+        # 3 of 6 on the session nobody attached). Aleph's live owner routes
+        # such a pause by its frameId (`on_fetch`, src/browser/live/mod.rs);
+        # this probe asserts the half that routing relies on — the frameId
+        # names our target — and that the fulfill is honoured on our session.
+        #
+        # History: the 2026-09-27 v0.2.2 reading (navigation pause not held,
+        # fulfill moot) used a navigation pause; on v0.2.7 a held navigation
+        # pause also stops obscura answering Page.navigate and Runtime.evaluate
+        # until it is released, which is why this probe no longer uses one.
         ni = "unsupported"
         made2 = await cdp.call("Target.createTarget", {"url": "about:blank"})
         tid2 = made2.get("result", {}).get("targetId")
@@ -296,40 +559,57 @@ async def probe_obscura(ws_url, page_url, led):
 
             await cdp.call("Page.enable", {}, s2)
             await cdp.call("Runtime.enable", {}, s2)
-            en = await cdp.call("Fetch.enable", {"patterns": [{"urlPattern": "*"}]}, s2)
+            await cdp.call("Page.navigate", {"url": page_url}, s2)
+            for _ in range(40):
+                if await ev2("document.readyState") == "complete":
+                    break
+                await asyncio.sleep(0.25)
+            en = await cdp.call("Fetch.enable",
+                                {"patterns": [{"urlPattern": "*caps-mock-target-7f3a*"}]}, s2)
             if "error" in en:
                 led.log(f"  network_interception: Fetch.enable refused: {json.dumps(en)[:200]}")
             else:
-                await cdp.call("Page.navigate", {"url": page_url}, s2)
-                paused_ev = await cdp.wait_event("Fetch.requestPaused", s2, timeout=15)
+                await ev2(
+                    "window.__mock = 'pending';"
+                    "void fetch(new URL('caps-mock-target-7f3a.txt', location.href))"
+                    ".then(r => r.text()).then(t => { window.__mock = t; },"
+                    " e => { window.__mock = 'error:' + e; })")
+                paused_ev = await cdp.wait_event("Fetch.requestPaused", None, timeout=15)
                 if not paused_ev:
                     led.log("  network_interception: no requestPaused within 15s "
                             "(enable is a no-op)")
                 else:
-                    led.check("network_interception's pause names the URL under navigation",
-                              page_url in str(paused_ev.get("request", {}).get("url", "")),
+                    paused_on = paused_ev.get("__session")
+                    led.check("network_interception's pause names the fetched URL",
+                              "caps-mock-target-7f3a" in str(
+                                  paused_ev.get("request", {}).get("url", "")),
                               json.dumps(paused_ev)[:200])
-                    # Deliberately UNANSWERED for a second: a held request
-                    # cannot have delivered its document.
-                    await asyncio.sleep(1.0)
-                    held = bool(await ev2("location.href === 'about:blank'"))
-                    mock = ("<!doctype html><title>caps-mock</title>"
-                            "<body>MOCK-SERVED-7f3a</body>")
+                    frame_routes = paused_on == s2 or paused_ev.get("frameId") == tid2
+                    led.check("network_interception's pause is routable to our target "
+                              "(our session, or a frameId naming our target)",
+                              frame_routes,
+                              f"session={paused_on} ours={s2} frameId="
+                              f"{paused_ev.get('frameId')} target={tid2}")
                     fu = await cdp.call("Fetch.fulfillRequest", {
                         "requestId": paused_ev["requestId"],
                         "responseCode": 200,
                         "responseHeaders": [{"name": "content-type",
-                                             "value": "text/html; charset=utf-8"}],
-                        "body": base64.b64encode(mock.encode()).decode(),
+                                             "value": "text/plain; charset=utf-8"}],
+                        "body": base64.b64encode(b"MOCK-SERVED-7f3a").decode(),
                     }, s2)
-                    await asyncio.sleep(1.5)
-                    served = await ev2("document.body ? document.body.textContent.trim() : ''")
-                    led.log(f"  network_interception: held={held} "
+                    served = None
+                    for _ in range(20):
+                        served = await ev2("window.__mock")
+                        if served != "pending":
+                            break
+                        await asyncio.sleep(0.25)
+                    led.log(f"  network_interception: paused on "
+                            f"{'our session' if paused_on == s2 else paused_on!r} "
                             f"fulfill={'ok' if 'error' not in fu else json.dumps(fu)[:160]} "
-                            f"page={served!r}")
-                    if held and "error" not in fu and served == "MOCK-SERVED-7f3a":
+                            f"fetch()={served!r}")
+                    if frame_routes and "error" not in fu and served == "MOCK-SERVED-7f3a":
                         ni = "supported"
-                    await cdp.call("Fetch.disable", {}, s2)
+                await cdp.call("Fetch.disable", {}, s2)
             await cdp.call("Target.closeTarget", {"targetId": tid2})
         found["network_interception"] = ni
 
@@ -549,6 +829,117 @@ async def main():
             led.log("  error_events tool-face: engine half measured unsupported — the "
                     "[error] fold is not asserted (cannot fold an event that never arrived)")
 
+        # --- network_interception's tool face ------------------------------
+        # The raw probe above answered the pause itself. This half goes
+        # through Aleph end to end: `browser_network{mock_add}` arms the
+        # intercept loop on the managed tab, a page fetch() of a URL the
+        # fixture server does not have must resolve to the rule's body, and
+        # the rule is cleared again. It is where the live owner's frameId
+        # route (`on_fetch`) is exercised against the real engine: on obscura
+        # the pause may arrive on the page's other session, and a dropped
+        # pause would leave the fetch() pending forever. The direction follows
+        # the TABLE, because the tool gate does: a row claiming unsupported
+        # must make mock_add refuse rather than arm nothing (判据 §11).
+        mock_body = "MOCK-TOOL-7f3a"
+        ok, body = await rpc.invoke("browser_network", {
+            "profile": "default", "action": "mock_add",
+            "url_contains": "caps-mock-target-7f3a", "body": mock_body,
+            "headers": {"content-type": "text/plain"},
+        })
+        add_blob = json.dumps(body)
+        network_supported = table.get("obscura", {}).get("network_interception") == "supported"
+        if network_supported:
+            led.check("browser_network mock_add arms on obscura", ran(ok, body), add_blob[:300])
+            fetched = []
+            for attempt in range(3):
+                key = f"__toolMock{attempt}"
+                # An arrow function: browser_evaluate wraps the script as an
+                # EXPRESSION (`as_call_expression`), so statements must sit in
+                # a function body it then calls.
+                ok, res = await rpc.invoke("browser_evaluate", {
+                    "profile": "default",
+                    "script": (f"() => {{ window.{key} = 'pending';"
+                               " void fetch(new URL('caps-mock-target-7f3a.txt?n="
+                               f"{attempt}', location.href)).then(r => r.text())"
+                               f".then(t => {{ window.{key} = t; }},"
+                               f" e => {{ window.{key} = 'error:' + e; }});"
+                               " return 'fetch-started'; }"),
+                })
+                led.check(f"the tool-face fetch #{attempt} was started on the managed tab",
+                          ran(ok, res) and "fetch-started" in json.dumps(res),
+                          json.dumps(res)[:200])
+                got = None
+                for _ in range(20):
+                    ok, res = await rpc.invoke("browser_evaluate", {
+                        "profile": "default", "script": f"window.{key}"})
+                    got = json.dumps(res)
+                    if "pending" not in got:
+                        break
+                    await asyncio.sleep(0.25)
+                fetched.append(mock_body in (got or ""))
+                led.log(f"  network_interception tool-face fetch #{attempt}: "
+                        f"{mock_body if fetched[-1] else (got or '')[-200:]}")
+            led.check("…and every page fetch() of the mocked URL resolves to the rule's body",
+                      all(fetched), str(fetched))
+
+            # The fixture's script runs inside the child frame. The parent
+            # accepts the response only from that same-origin child window.
+            ok, body = await rpc.invoke("browser_evaluate", {
+                "profile": "default",
+                "script": ("() => { const frame = document.createElement('iframe');"
+                           " window.__iframeMock = 'pending';"
+                           " window.addEventListener('message', event => {"
+                           " if (event.source === frame.contentWindow &&"
+                           " event.origin === location.origin) window.__iframeMock = event.data;"
+                           " }); frame.src = 'caps-iframe.html'; document.body.append(frame);"
+                           " return 'iframe-attached'; }"),
+            })
+            led.check("the same-origin iframe was attached to the managed tab",
+                      ran(ok, body) and "iframe-attached" in (body.get("result") or ""),
+                      json.dumps(body)[:200])
+            for _ in range(20):
+                ok, body = await rpc.invoke("browser_evaluate", {
+                    "profile": "default", "script": "window.__iframeMock"})
+                result = (body or {}).get("result") or ""
+                if "\npending\n" not in result:
+                    break
+                await asyncio.sleep(0.25)
+            led.check("the iframe's own fetch() receives the mock status and body",
+                      ran(ok, body) and f"\n200:{mock_body}\n" in result, result[:300])
+
+            ok, body = await rpc.invoke("browser_network", {
+                "profile": "default", "action": "mock_clear", "scope": "tab"})
+            led.check("…and mock_clear answers", ran(ok, body), json.dumps(body)[:200])
+            # By effect, not by the reply: the rule is gone from the list AND a
+            # fresh fetch() of the same URL now reaches the fixture server.
+            ok, body = await rpc.invoke("browser_network", {
+                "profile": "default", "action": "mock_list"})
+            led.check("…and mock_list no longer carries the rule",
+                      ran(ok, body) and "caps-mock-target-7f3a" not in json.dumps(body),
+                      json.dumps(body)[:200])
+            await rpc.invoke("browser_evaluate", {
+                "profile": "default",
+                "script": ("() => { window.__toolMockAfter = 'pending';"
+                           " void fetch(new URL('caps-mock-target-7f3a.txt?n=after',"
+                           " location.href)).then(r => { window.__toolMockAfter ="
+                           " 'status:' + r.status; }, e => { window.__toolMockAfter ="
+                           " 'error:' + e; }); return 'fetch-started'; }"),
+            })
+            after = ""
+            for _ in range(20):
+                ok, res = await rpc.invoke("browser_evaluate", {
+                    "profile": "default", "script": "window.__toolMockAfter"})
+                after = json.dumps(res)
+                if "pending" not in after:
+                    break
+                await asyncio.sleep(0.25)
+            led.check("…and a fetch() after the clear reaches the server (404), not the mock",
+                      "status:404" in after, after[-200:])
+        else:
+            led.check("browser_network mock_add on obscura REFUSES rather than arming nothing",
+                      not ran(ok, body), add_blob[:300])
+            led.check("…and the refusal names the engine", "obscura" in add_blob, add_blob[:300])
+
         # --- ref_precheck (round-1 B4), probed at the GATEWAY layer ---------
         # The check lives in `browser_tools::mod::precheck_ref`, one layer ABOVE
         # the engine: a ref minted before a navigation must be refused before
@@ -596,6 +987,38 @@ async def main():
                 "supported" if refused and category == "stale_ref" else "unsupported")
         else:
             measured["ref_precheck"] = "unsupported"
+
+        if network_supported:
+            # This nonexistent fixture path can only render the marker if
+            # Aleph fulfills the top-level document while goto is waiting.
+            document_path = "/caps-mock-document-7f3a.html"
+            document_marker = "MOCK-NAV-DOCUMENT-7f3a"
+            ok, body = await rpc.invoke("browser_network", {
+                "profile": "default", "action": "mock_add",
+                "url_contains": document_path,
+                "body": f"<!doctype html><p id='mock-document'>{document_marker}</p>",
+                "headers": {"content-type": "text/html; charset=utf-8"},
+            })
+            led.check("browser_network adds a top-level document mock",
+                      ran(ok, body), json.dumps(body)[:250])
+            ok, body = await rpc.invoke("browser_navigate", {
+                "profile": "default",
+                "action": {"goto": {"url": urljoin(a.page_url, document_path)}},
+            })
+            led.check("browser_navigate completes while its document is intercepted",
+                      ran(ok, body), json.dumps(body)[:250])
+            ok, body = await rpc.invoke("browser_evaluate", {
+                "profile": "default",
+                "script": "location.pathname + ':' + document.querySelector('#mock-document')?.textContent",
+            })
+            result = (body or {}).get("result") or ""
+            led.check("the final URL's top-level DOM renders the mock document",
+                      ran(ok, body) and f"\n{document_path}:{document_marker}\n" in result,
+                      result[:300])
+            ok, body = await rpc.invoke("browser_network", {
+                "profile": "default", "action": "mock_clear", "scope": "tab"})
+            led.check("mock_clear answers for the document rule", ran(ok, body),
+                      json.dumps(body)[:200])
 
     claimed = table.get("obscura", {})
     for name, got in sorted(measured.items()):

@@ -1,14 +1,52 @@
 <!doctype html>
-<html><head><title>caps</title></head>
+<html><head><title>caps</title>
+<style>
+  #src, #dst { width: 160px; height: 40px; }
+  #src { background: #dfd; }
+  #dst { background: #ddf; margin-top: 30px; }
+  /* The geometry probe's target: a solid colour nothing else on the page uses,
+     at fractional-free CSS coordinates no default margin produces, so the
+     screenshot's pixel box, getBoundingClientRect and DOM.getBoxModel can be
+     compared without guessing which element a pixel belongs to. */
+  #geo { position: absolute; left: 137px; top: 211px; width: 53px; height: 29px;
+         background: #ff00ff; }
+</style>
+</head>
 <body>
   <input id="txt" type="text" value="">
   <input id="file" type="file">
+  <div id="src" draggable="true">DRAGSRC</div>
+  <div id="dst">DROPHERE</div>
+  <div id="geo"></div>
   <script>
-    // Only the drag listener: R39 cut the `touch` capability row (no
-    // `browser_*` verb dispatches `Input.dispatchTouchEvent`), so a touchpad
-    // and a `__touched` flag here would be fixture nobody reads — the same
-    // "exists but has no consumer" shape the row itself was cut for.
-    window.__dragged = false;
-    document.addEventListener('dragover', function () { window.__dragged = true; });
+    // Drag, read the way `browser_drag` meets it: that verb sends six
+    // Input.dispatchMouseEvent calls (move, press, three moves, release) and
+    // never Input.dispatchDragEvent. Same two mechanisms qa/browser_managed's
+    // tools.html records — an HTML5 drop or a bare mouseup on the target —
+    // plus the press on the source, so a mouseup that lands without the
+    // press having landed is not read as a drag.
+    window.__dragged = 'dropped:no';
+    window.__pressedSource = false;
+    window.__moves = 0;
+    var src = document.getElementById('src'), dst = document.getElementById('dst');
+    src.addEventListener('mousedown', function () { window.__pressedSource = true; });
+    document.addEventListener('mousemove', function () { window.__moves += 1; });
+    src.addEventListener('dragstart', function (e) { e.dataTransfer.setData('text/plain', 'X'); });
+    dst.addEventListener('dragover', function (e) { e.preventDefault(); });
+    dst.addEventListener('drop', function (e) { e.preventDefault(); window.__dragged = 'dropped:html5'; });
+    dst.addEventListener('mouseup', function () {
+      if (window.__dragged === 'dropped:no') { window.__dragged = 'dropped:mouseup'; }
+    });
+    // Dialogs: what each one RETURNED to the page, written by the opener, so
+    // an accept that the engine acknowledged but did not deliver reads as
+    // the default value rather than as success.
+    window.__dlg = {};
+    window.openDialog = function (kind) {
+      setTimeout(function () {
+        if (kind === 'alert') { window.alert('caps-alert'); window.__dlg.alert = 'returned'; }
+        if (kind === 'confirm') { window.__dlg.confirm = window.confirm('caps-confirm'); }
+        if (kind === 'prompt') { window.__dlg.prompt = window.prompt('caps-prompt', 'default'); }
+      }, 50);
+    };
   </script>
 </body></html>

@@ -79,7 +79,14 @@ fi
 # `command -v obscura` finds nothing on a machine that installed it through
 # Aleph — obscura is never put on PATH — and the fixture would then have
 # refused to run beside a perfectly good binary.
-OBSCURA_TAG="v0.2.2"
+# Read from the ledger's one author (`obscura_tag!` in src/runtimes/specs.rs)
+# rather than spelled here: a second copy would keep pointing this fixture at
+# the previous build after a bump, with nothing red (判据 §1).
+OBSCURA_TAG="$(sed -n 's/^ *"\(v[0-9][0-9.]*\)"$/\1/p' "$REPO/src/runtimes/specs.rs" | head -1)"
+if [ -z "$OBSCURA_TAG" ]; then
+  echo "could not read the pinned obscura tag from src/runtimes/specs.rs" >&2
+  exit 69
+fi
 OBSCURA_REPO="h4ckf0r0day/obscura"
 # `$HOME` is still the operator's own home here — `qa_redirect_home` runs much
 # further down, and this lookup has to read the machine's real ledger.
@@ -87,6 +94,9 @@ LEDGER_OBSCURA="$HOME/.aleph/runtimes/obscura/$OBSCURA_TAG/obscura"
 OBSCURA_BIN="${ALEPH_QA_OBSCURA:-}"
 if [ -z "$OBSCURA_BIN" ] && [ -x "$LEDGER_OBSCURA" ]; then OBSCURA_BIN="$LEDGER_OBSCURA"; fi
 if [ -z "$OBSCURA_BIN" ]; then OBSCURA_BIN="$(command -v obscura 2>/dev/null)"; fi
+# `provision` needs one too: it compares the bytes it installs against this
+# independently obtained copy. After a tag bump, download the release archive
+# by hand, check its published sha256, and point ALEPH_QA_OBSCURA at it.
 if [ -z "$OBSCURA_BIN" ] || [ ! -x "$OBSCURA_BIN" ]; then
   echo "no obscura binary; set ALEPH_QA_OBSCURA=/path/to/obscura" >&2
   echo "looked at: \$ALEPH_QA_OBSCURA, $LEDGER_OBSCURA, and PATH" >&2
@@ -242,7 +252,7 @@ fi
 [ -x "$BIN" ] || { echo "no binary at $BIN" >&2; exit 1; }
 
 say "serve the page fixture on 127.0.0.1:$PAGE_PORT"
-for f in index second stall caps; do
+for f in index second stall caps caps-iframe; do
   sed -e "s/__MARKER__/$MARKER/g" "$HERE/pages/$f.html" > "$PAGEDIR/$f.html"
 done
 (cd "$PAGEDIR" && python3 -m http.server "$PAGE_PORT" --bind 127.0.0.1) >"$QA_ROOT/page.log" 2>&1 &
@@ -365,6 +375,8 @@ python3 "$MANAGED/add_browser_config.py" "$CONFIG" "${BROWSER_CFG_ARGS[@]}" || e
 # a refusal. `browser_cookies_write` was missing until the `switch` stage became
 # the first to call `browser_cookies`, and it failed three claims about the
 # MIGRATION for a reason that was upstream of it.
+# `browser_network_mock` is for `caps`' network_interception tool face
+# (`browser_network{mock_add}`, which asks for approval on every mock verb).
 #
 # There is deliberately NO `browser_switch_engine` key, and its absence is a
 # claim. `ActionType`'s own doc promises that an operator who wrote
@@ -376,7 +388,8 @@ cat > "$HOME/.aleph/approval-policy.json" <<'JSON'
 {"defaults":{
   "browser_open":"allow","browser_navigate":"allow","browser_click":"allow",
   "browser_type":"allow","browser_evaluate":"allow","browser_dialog":"allow",
-  "browser_session_state":"allow","browser_cookies_write":"allow"
+  "browser_session_state":"allow","browser_cookies_write":"allow",
+  "browser_network_mock":"allow"
 },"allowlist":[],"blocklist":[]}
 JSON
 
@@ -430,8 +443,17 @@ if [ "$STAGE" = "escape" ]; then
   fi
 fi
 
+# `provision` waits on the install job with `bash{process_action:"wait"}` —
+# the only reader of a background job's outcome — and `bash` is denied on the
+# gateway `tools.invoke` surface (src/security/dangerous_tools.rs). Lifted for
+# this stage's isolated server only; every other stage keeps the deny.
+SERVER_ENV=()
+if [ "$STAGE" = "provision" ]; then
+  SERVER_ENV=(ALEPH_GATEWAY_TOOLS_ALLOW=bash)
+fi
+
 say "start server (cwd=$CWD)"
-(cd "$CWD" && "$BIN" start) >"$QA_ROOT/server.log" 2>&1 &
+(cd "$CWD" && env ${SERVER_ENV[@]+"${SERVER_ENV[@]}"} "$BIN" start) >"$QA_ROOT/server.log" 2>&1 &
 SERVER_PID=$!
 for _ in $(seq 1 90); do
   curl -sf -o /dev/null "http://127.0.0.1:$GATEWAY_PORT/health" && break
