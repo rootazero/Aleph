@@ -76,6 +76,8 @@ def seed_history(aleph):
         ).fetchall()
         s2.require(len(matches) == 1, f'expected one committed desktop session: {matches}')
         key = matches[0][0]
+        existing = connection.execute('SELECT COUNT(*) FROM messages WHERE session_key = ?', (key,)).fetchone()[0]
+        s2.require(0 < existing < 200, f'fixture should have a small initial history: {existing}')
         floor = connection.execute('SELECT MIN(id) FROM messages').fetchone()[0]
         # Insert a legacy prefix before the existing projected rows rather than
         # editing their immutable identity or reseeding the desktop send.
@@ -84,25 +86,33 @@ def seed_history(aleph):
             ((floor - 205 + index, key, OLDEST_MARKER if index == 0 else f'Fixture earlier answer {index:03d}')
              for index in range(205)),
         )
-        return key
+        return key, f'Fixture earlier answer {205 + existing - 200:03d}'
 
 
-def native_scrollback(desktop, key, evidence):
+def native_scrollback(desktop, key, first_tail_marker, evidence):
     def action(pid):
         session = native_text(desktop, pid, 'desktop-session-row', re.compile(r'\d+ messages'))
         native_input(desktop, pid, 'click', session)
         marker = re.compile('desktophello$', re.IGNORECASE)
         oldest = re.compile(re.escape(OLDEST_MARKER), re.IGNORECASE)
         tail = native_text(desktop, pid, 'desktop-tail', marker)
+        anchor = re.compile(f'^{re.escape(first_tail_marker)}$')
+        for _ in range(12):
+            native_input(desktop, pid, 'up', tail)
+            time.sleep(0.3)
+            if native_text(desktop, pid, 'desktop-first-tail-row', anchor, timeout=0):
+                break
+        else:
+            raise RuntimeError('first row of the loaded native tail never reached the viewport')
         native_input(desktop, pid, 'up', tail)
-        native_text(desktop, pid, 'desktop-away-from-tail', re.compile('Jump to bottom'))
-        before = native_text(desktop, pid, 'desktop-before-prepend', re.compile(r'^Fixture earlier answer \d{3}$'))
+        time.sleep(0.4)
+        before = native_text(desktop, pid, 'desktop-before-prepend', anchor)
         s2.require(native_text(desktop, pid, 'desktop-oldest-absent', oldest, timeout=0) is None,
                    'native oldest marker was already visible')
         button = native_text(desktop, pid, 'desktop-page-control', re.compile('Load older messages'))
         native_input(desktop, pid, 'click', button)
         native_text(desktop, pid, 'desktop-page-end', re.compile('No earlier messages'))
-        after = native_text(desktop, pid, 'desktop-after-prepend', re.compile(f'^{re.escape(before["text"])}$'))
+        after = native_text(desktop, pid, 'desktop-after-prepend', anchor)
         height = desktop.main_window(pid)['height']
         delta = abs(before['y'] - after['y']) * height
         s2.require(delta <= 3, f'native prepend moved anchor by {delta:.2f} points')
@@ -174,7 +184,7 @@ def input_source():
     return result.stdout.strip()
 
 
-def web_phase(args, gateway, root, env, port, aleph, out, web_release):
+def web_phase(args, gateway, root, env, port, aleph, out, web_release, first_tail_marker):
     """Runs the Chrome driver; restarts the Gateway when the driver asks."""
     fixture = {
         'origin': f'https://127.0.0.1:{port}',
@@ -184,6 +194,7 @@ def web_phase(args, gateway, root, env, port, aleph, out, web_release):
         'rich': args.rich,
         'continuity': args.continuity,
         'oldest_marker': OLDEST_MARKER,
+        'first_tail_marker': first_tail_marker,
         'reply': fixture_provider.REPLY if args.rich else 'This response is from',
         'file': fixture_provider.FILE if args.rich else None,
         'live_tool': {
@@ -281,17 +292,18 @@ def receipt(args):
                                f'real Write/Edit did not produce the expected fixture file: {files}')
                     report['desktop']['updated_fixture'] = str(files[0].relative_to(root))
 
+                first_tail_marker = None
                 if args.continuity:
                     s2.require(gateway.stop() == 0, 'Gateway did not stop cleanly for the fixture seed')
-                    session_key = seed_history(aleph)
+                    session_key, first_tail_marker = seed_history(aleph)
                     gateway.start('gw-1.sock')
                     ipc = {'ALEPH_SHELL_PANEL_IPC': str(gateway.endpoint)}
                     desktop.write_layout(key, {**first, 'active': s2.tabs('sessions')[0]})
                     phases.append(desktop.run('scrollback', ipc, settle=6,
-                                              action=native_scrollback(desktop, session_key, continuity)))
+                                              action=native_scrollback(desktop, session_key, first_tail_marker, continuity)))
                     report['desktop']['continuity'] = continuity
 
-                web = web_phase(args, gateway, root, env, port, aleph, out, web_release)
+                web = web_phase(args, gateway, root, env, port, aleph, out, web_release, first_tail_marker)
                 report['web'] = web
                 if args.rich:
                     files = list(root.rglob(fixture_provider.WEB_FILE))

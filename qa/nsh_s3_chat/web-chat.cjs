@@ -79,6 +79,14 @@ async function openFirstSession(page, expectedText) {
   return label;
 }
 
+async function rowInViewport(row, viewport) {
+  if (await row.count() === 0) return null;
+  const [box, clip] = await Promise.all([row.boundingBox(), viewport.boundingBox()]);
+  if (!box || !clip) return null;
+  const centerY = box.y + box.height / 2;
+  return centerY >= clip.y && centerY <= clip.y + clip.height ? box : null;
+}
+
 async function run(fixturePath) {
   const fixture = JSON.parse(await fs.readFile(fixturePath, 'utf8'));
   assert.equal(new URL(fixture.origin).hostname, '127.0.0.1');
@@ -137,24 +145,20 @@ async function run(fixturePath) {
       assert.equal(await oldest.count(), 0, 'oldest marker already appears in the tail');
       const pager = page.getByText('Load older messages', { exact: true });
       await pager.waitFor();
-      const tail = await desktopRow.boundingBox();
+      const viewport = page.getByTestId('chat-transcript');
+      const tail = await rowInViewport(desktopRow, viewport);
       assert.ok(tail, 'desktop row is not rendered at the tail');
       await page.mouse.move(tail.x + tail.width / 2, tail.y + tail.height / 2);
-      await page.mouse.wheel(0, -5000);
       const jump = page.getByText('Jump to bottom', { exact: true });
-      await jump.waitFor();
-      let anchorText, bounds;
-      await waitFor(async () => {
-        for (const candidate of await page.getByText(/^Fixture earlier answer \d{3}$/).all()) {
-          const box = await candidate.boundingBox();
-          if (box && box.y > 150 && box.y < 520) {
-            anchorText = await candidate.innerText();
-            bounds = box;
-            return true;
-          }
-        }
-        return false;
-      }, 5000, 'a visible history row away from the tail');
+      const anchor = page.getByText(fixture.first_tail_marker, { exact: true });
+      for (let attempt = 0; attempt < 12 && !(await rowInViewport(anchor, viewport)); attempt++) {
+        await page.mouse.wheel(0, -5000);
+        await page.waitForTimeout(250);
+      }
+      await page.mouse.wheel(0, -5000);
+      await page.waitForTimeout(250);
+      const bounds = await rowInViewport(anchor, viewport);
+      assert.ok(bounds, 'the first row of the loaded tail never reached the viewport');
       await page.screenshot({ path: shot('before-prepend') });
       const beforePrepend = frames.length;
       await pager.click();
@@ -162,17 +166,17 @@ async function run(fixturePath) {
       const request = historyRequests(beforePrepend)[0];
       assert.equal(request?.session_key, originalKey);
       assert.ok(request?.scrollback?.before, 'no older request crossed the actual Web bridge');
-      const after = await page.getByText(anchorText, { exact: true }).boundingBox();
+      const after = await rowInViewport(anchor, viewport);
       assert.ok(after && Math.abs(after.y - bounds.y) <= 3, `anchor moved: ${bounds.y} → ${after?.y}`);
       await page.screenshot({ path: shot('after-prepend') });
       await page.mouse.move(after.x + after.width / 2, after.y + after.height / 2);
-      for (let attempt = 0; attempt < 12 && !(await oldest.isVisible()); attempt++) {
+      for (let attempt = 0; attempt < 12 && !(await rowInViewport(oldest, viewport)); attempt++) {
         await page.mouse.wheel(0, -5000);
         await page.waitForTimeout(250);
       }
-      await oldest.waitFor({ timeout: 5000 });
+      assert.ok(await rowInViewport(oldest, viewport), 'oldest fixture row was not rendered inside the viewport');
       await page.screenshot({ path: shot('oldest-marker') });
-      step('web_prepend_preserves_anchor', { session_key: originalKey, anchor: anchorText, before_y: bounds.y, after_y: after.y });
+      step('web_prepend_preserves_anchor', { session_key: originalKey, anchor: fixture.first_tail_marker, before_y: bounds.y, after_y: after.y });
       await jump.click();
       await reply().waitFor();
     }
@@ -328,13 +332,13 @@ async function run(fixturePath) {
     // 6. Gateway restart: the socket drops, Reconnect lands on pairing (the
     // cookie binding was in the old Gateway's memory), pairing again brings
     // the transcript back from disk.
+    const sendsBeforeRestart = sentMethods(frames).filter((method) => method === 'chat.send').length;
     console.log('RESTART_GATEWAY');
     const next = await lines.next();
     assert.ok(!next.done && next.value.startsWith('aleph-bt-'), 'run.py sent no ticket');
     await page.getByText('Disconnected from Aleph').waitFor({ timeout: 60000 });
     await page.screenshot({ path: shot('disconnected') });
     const beforeReconnect = frames.length;
-    const sendsBeforeReconnect = sentMethods(frames).filter((method) => method === 'chat.send').length;
     await page.getByText('Reconnect', { exact: true }).click();
     // The layout kept Chat active: the composer shows once connected.
     await pair(page, next.value.trim(), page.getByRole('textbox', { name: 'Message', exact: true }));
@@ -347,8 +351,10 @@ async function run(fixturePath) {
       await openFirstSession(page, desktopMessage);
     }
     await page.getByText(committed.trim(), { exact: true }).first().waitFor({ timeout: 15000 });
-    assert.equal(sentMethods(frames).filter((method) => method === 'chat.send').length, sendsBeforeReconnect,
-      'reconnect created an extra user send');
+    assert.equal(sentMethods(frames).filter((method) => method === 'chat.send').length, sendsBeforeRestart,
+      'restart or reconnect created an extra user send');
+    assert.equal(await page.getByText(committed.trim(), { exact: true }).count(), 1,
+      'reconnect duplicated the committed user row');
     if (fixture.live_tool) {
       await page.getByLabel(`Expand Write · ${fixture.live_tool.file}`, { exact: true }).waitFor({ timeout: 15000 });
     }
