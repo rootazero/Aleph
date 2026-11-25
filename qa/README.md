@@ -75,7 +75,10 @@ ALEPH_QA_DRIVER=cdp ./qa/browser_managed/run.sh tools   # the same verbs over Al
                                    # 2026-11-25 (v0.2.7), re-probed by EFFECT on a
                                    # subresource fetch() both raw and through
                                    # browser_network{mock_add} (pauses on the page's
-                                   # other session reach Aleph by frameId);
+                                   # other session reach Aleph by frameId). The tool
+                                   # face also verifies a same-origin iframe's own
+                                   # fetch() and a top-level navigation whose final
+                                   # DOM renders the mock document;
                                    # round-2/C2's screencast probed since 2026-09-30
                                    # under the C1-tightened criterion (arrival alone is
                                    # not usability): >=3 frames, EVERY one base64-

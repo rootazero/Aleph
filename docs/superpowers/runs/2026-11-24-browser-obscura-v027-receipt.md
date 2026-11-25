@@ -51,12 +51,12 @@ caps stage: table == measurement on all 10 rows, `measured_on` == binary (`v0.2.
 - `cargo clippy -p alephcore -p aleph-cdp --all-targets -- -D warnings`: clean.
 - `cargo test -p aleph-cdp`: 97 passed.
 - `cargo test -p alephcore --lib -- browser runtimes builtin_tools::browser_tools`: 1355 passed, 4 failed. All four also fail on clean `main` 99090adce (`browser::live::issuer` ×2, `browser::live::owner_registry` ×1, `browser_tools::tabs::no_browser_tool_formats_a_raw_backend_error`) and are not from this branch.
-- After a950296b9: clippy clean; the same filter 1357 passed, the same 4 failed; `qa/browser_dual` caps 43/0 (×3), click 26, switch 29, escape 14, open 19, snapshot 12, all 0 FAIL. Not re-run after it: provision, stall, reap (untouched paths); Chromium mock routes (`qa/browser_managed`) — the new route only fires when no slot matches the event's session, which Chrome never produces.
+- After a950296b9: clippy clean; the same filter 1357 passed, the same 4 failed; `qa/browser_dual` caps 43/0 (×3), click 26, switch 29, escape 14, open 19, snapshot 12, all 0 FAIL. Chromium mock routes (`qa/browser_managed`) were not rerun.
 - `qa/browser_dual/run.sh` on v0.2.7, after b636e01b0:
 
 | Stage | PASS | FAIL | Note |
 |---|---|---|---|
-| provision | 21 | 0 | run at 21d362a2f; later commits touch comments only. Needs a GitHub API budget (unauthenticated, hourly) |
+| provision | 21 | 0 | Initial run at 21d362a2f. The later run below needed the anonymous GitHub API quota to reset. |
 | open | 19 | 0 | |
 | snapshot | 12 | 0 | |
 | click | 26 | 0 | |
@@ -65,6 +65,16 @@ caps stage: table == measurement on all 10 rows, `measured_on` == binary (`v0.2.
 | caps | 34 | 0 | 43 / 0 after a950296b9 (×3), with network_interception tool-face checks |
 | switch | 29 | 0 | |
 | escape | 14 | 0 | |
+
+### Follow-up coverage on macOS arm64 / macOS arm64 补测（2026-11-25）
+
+| Stage | PASS | FAIL | Evidence / 证据 |
+|---|---:|---:|---|
+| caps | 51 × 4 runs | 0 | `browser_navigate` completes for a nonexistent fixture path; the resulting URL and top-level DOM contain the expected path and mock marker. 真实导航完成，顶层 DOM 渲染 mock 文档。 |
+| caps (same runs / 同上) | — | — | A real same-origin iframe issues its own `fetch()` and posts back `200:MOCK-TOOL-7f3a`; the parent verifies the sender and origin. The fixture server received the iframe document and the post-clear control (404), but not the mocked iframe or top-level document requests in the retained HTTP log. iframe 自己发请求，父页校验消息来源并读回状态码和正文。 |
+| provision | 21 | 0 | First attempt was blocked at preflight by unauthenticated GitHub HTTP 403 (exit 69); retry after quota reset passed with the unmodified installer, including binary verification and the unreachable-mirror check. 匿名配额恢复后，真实安装及坏镜像反证均通过。 |
+| stall | 17 | 0 | 2 s timeout and recovery verified; the known busy-as-stopped snapshot message still reproduces. 再现已知提示文案问题。 |
+| reap | 13 | 0 | Replacement server reaped both engine orphans and left the prefix-neighbour process alive. 两个引擎的孤儿进程均被清理，相邻进程保留。 |
 
 ## Independent review / 独立审查
 
@@ -81,6 +91,6 @@ Review of a950296b9 + 3cbc0308e (openai-codex/gpt-6.1-sol, read-only, 2026-11-25
 - No automatic engine switching; the model still decides (R7/R10).
 - No upstream obscura patches; no `--allow-file-access`.
 - `fetch_obscura.rs` stays: v0.2.7 `DOMSnapshot` still fabricates geometry (`y = i*18`).
-- `network_interception` on obscura: only subresource mocks were measured through Aleph. A mock on the tab's own navigation document was measured raw only (scratch `fetch-probe`), and a held navigation pause stops obscura answering `Page.navigate` / `Runtime.evaluate` until it is released — Aleph's loop answers it, but that path has no caps check. Iframe-initiated requests: obscura sends the page's main frame id, so the route covers them, but no iframe case was measured.
+- The Aleph Fetch follow-up covers same-origin iframe subresources and top-level navigation documents; it does not cover cross-origin iframe requests, iframe document navigation, or Chromium mock routes. 未覆盖跨源 iframe 请求、iframe 文档导航或 Chromium mock 路由。
 - No Linux / Windows run; x86_64 assets are the same names but unmeasured.
 - A failed background install is not written to the server log — only the job outcome carries it. Noted, not changed.

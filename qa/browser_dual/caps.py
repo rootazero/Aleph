@@ -28,6 +28,7 @@ import struct
 import subprocess
 import sys
 import zlib
+from urllib.parse import urljoin
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "browser_managed"))
 from qa_rpc import Ledger, Rpc, ran, ws_connect  # noqa: E402
@@ -846,7 +847,8 @@ async def main():
             "headers": {"content-type": "text/plain"},
         })
         add_blob = json.dumps(body)
-        if table.get("obscura", {}).get("network_interception") == "supported":
+        network_supported = table.get("obscura", {}).get("network_interception") == "supported"
+        if network_supported:
             led.check("browser_network mock_add arms on obscura", ran(ok, body), add_blob[:300])
             fetched = []
             for attempt in range(3):
@@ -879,6 +881,32 @@ async def main():
                         f"{mock_body if fetched[-1] else (got or '')[-200:]}")
             led.check("…and every page fetch() of the mocked URL resolves to the rule's body",
                       all(fetched), str(fetched))
+
+            # The fixture's script runs inside the child frame. The parent
+            # accepts the response only from that same-origin child window.
+            ok, body = await rpc.invoke("browser_evaluate", {
+                "profile": "default",
+                "script": ("() => { const frame = document.createElement('iframe');"
+                           " window.__iframeMock = 'pending';"
+                           " window.addEventListener('message', event => {"
+                           " if (event.source === frame.contentWindow &&"
+                           " event.origin === location.origin) window.__iframeMock = event.data;"
+                           " }); frame.src = 'caps-iframe.html'; document.body.append(frame);"
+                           " return 'iframe-attached'; }"),
+            })
+            led.check("the same-origin iframe was attached to the managed tab",
+                      ran(ok, body) and "iframe-attached" in (body.get("result") or ""),
+                      json.dumps(body)[:200])
+            for _ in range(20):
+                ok, body = await rpc.invoke("browser_evaluate", {
+                    "profile": "default", "script": "window.__iframeMock"})
+                result = (body or {}).get("result") or ""
+                if "\npending\n" not in result:
+                    break
+                await asyncio.sleep(0.25)
+            led.check("the iframe's own fetch() receives the mock status and body",
+                      ran(ok, body) and f"\n200:{mock_body}\n" in result, result[:300])
+
             ok, body = await rpc.invoke("browser_network", {
                 "profile": "default", "action": "mock_clear", "scope": "tab"})
             led.check("…and mock_clear answers", ran(ok, body), json.dumps(body)[:200])
@@ -959,6 +987,38 @@ async def main():
                 "supported" if refused and category == "stale_ref" else "unsupported")
         else:
             measured["ref_precheck"] = "unsupported"
+
+        if network_supported:
+            # This nonexistent fixture path can only render the marker if
+            # Aleph fulfills the top-level document while goto is waiting.
+            document_path = "/caps-mock-document-7f3a.html"
+            document_marker = "MOCK-NAV-DOCUMENT-7f3a"
+            ok, body = await rpc.invoke("browser_network", {
+                "profile": "default", "action": "mock_add",
+                "url_contains": document_path,
+                "body": f"<!doctype html><p id='mock-document'>{document_marker}</p>",
+                "headers": {"content-type": "text/html; charset=utf-8"},
+            })
+            led.check("browser_network adds a top-level document mock",
+                      ran(ok, body), json.dumps(body)[:250])
+            ok, body = await rpc.invoke("browser_navigate", {
+                "profile": "default",
+                "action": {"goto": {"url": urljoin(a.page_url, document_path)}},
+            })
+            led.check("browser_navigate completes while its document is intercepted",
+                      ran(ok, body), json.dumps(body)[:250])
+            ok, body = await rpc.invoke("browser_evaluate", {
+                "profile": "default",
+                "script": "location.pathname + ':' + document.querySelector('#mock-document')?.textContent",
+            })
+            result = (body or {}).get("result") or ""
+            led.check("the final URL's top-level DOM renders the mock document",
+                      ran(ok, body) and f"\n{document_path}:{document_marker}\n" in result,
+                      result[:300])
+            ok, body = await rpc.invoke("browser_network", {
+                "profile": "default", "action": "mock_clear", "scope": "tab"})
+            led.check("mock_clear answers for the document rule", ran(ok, body),
+                      json.dumps(body)[:200])
 
     claimed = table.get("obscura", {})
     for name, got in sorted(measured.items()):

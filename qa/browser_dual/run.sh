@@ -252,7 +252,7 @@ fi
 [ -x "$BIN" ] || { echo "no binary at $BIN" >&2; exit 1; }
 
 say "serve the page fixture on 127.0.0.1:$PAGE_PORT"
-for f in index second stall caps; do
+for f in index second stall caps caps-iframe; do
   sed -e "s/__MARKER__/$MARKER/g" "$HERE/pages/$f.html" > "$PAGEDIR/$f.html"
 done
 (cd "$PAGEDIR" && python3 -m http.server "$PAGE_PORT" --bind 127.0.0.1) >"$QA_ROOT/page.log" 2>&1 &
