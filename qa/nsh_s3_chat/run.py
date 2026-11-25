@@ -17,6 +17,8 @@ import sys
 import tempfile
 import time
 
+import fixture_provider
+
 HERE = Path(__file__).resolve().parent
 _spec = importlib.util.spec_from_file_location('s2_shell', HERE.parent / 'nsh_s2_shell' / 'run.py')
 s2 = importlib.util.module_from_spec(_spec)
@@ -36,7 +38,7 @@ def keys(pid, body):
     subprocess.run(['osascript', '-e', script], check=True, capture_output=True, timeout=20)
 
 
-def type_and_send(desktop, text):
+def type_and_send(desktop, text, live_capture=None):
     """Keystrokes into the frontmost shell window (the Chat composer has
     focus). Under an input method the first Return commits the composition
     and must not send; the second sends. With a plain layout the first Return
@@ -52,8 +54,24 @@ def type_and_send(desktop, text):
         subprocess.run(['screencapture', '-x', '-o', f'-l{window["id"]}',
                         str(desktop.out / 'desktop-first-return.png')], check=True, timeout=20)
         keys(pid, '  key code 36')
-        # The simulated run takes well under a second; leave time for the
-        # history refetch that follows its end.
+        if live_capture:
+            ready, release = live_capture
+            try:
+                deadline = time.monotonic() + 20
+                while not ready.exists() and time.monotonic() < deadline:
+                    time.sleep(0.1)
+                if not ready.exists():
+                    window = desktop.main_window(pid)
+                    subprocess.run(['screencapture', '-x', '-o', f'-l{window["id"]}',
+                                    str(desktop.out / 'desktop-unobserved-reply.png')], check=True, timeout=15)
+                    s2.require(False, 'provider did not reach the held desktop reply')
+                time.sleep(0.6)
+                window = desktop.main_window(pid)
+                subprocess.run(['screencapture', '-x', '-o', f'-l{window["id"]}',
+                                str(desktop.out / 'desktop-live-tools.png')], check=True, timeout=15)
+            finally:
+                release.touch()
+        # Let the transcript refetch committed history after the run closes.
         time.sleep(4)
 
     return action
@@ -68,13 +86,22 @@ def input_source():
     return result.stdout.strip()
 
 
-def web_phase(args, gateway, root, env, port, aleph, out):
+def web_phase(args, gateway, root, env, port, aleph, out, web_release):
     """Runs the Chrome driver; restarts the Gateway when the driver asks."""
     fixture = {
         'origin': f'https://127.0.0.1:{port}',
         'certificate': (aleph / 'data/tls/cert.pem').read_text(encoding='utf-8'),
         'ticket': s2.pairing_ticket(args.server, root, env),
-        'desktop_message': DESKTOP_MESSAGE,
+        'desktop_marker': 'desktophello',
+        'rich': args.rich,
+        'reply': fixture_provider.REPLY if args.rich else 'This response is from',
+        'file': fixture_provider.FILE if args.rich else None,
+        'live_tool': {
+            'file': fixture_provider.WEB_FILE,
+            'before': fixture_provider.WEB_BEFORE,
+            'after': fixture_provider.WEB_AFTER,
+            'release': str(web_release),
+        } if args.rich else None,
         'out': str(out),
     }
     fixture_path = root / 'web-fixture.json'
@@ -117,6 +144,12 @@ def receipt(args):
         aleph.mkdir(mode=0o700)
         port = s2.fixture_port()
         s2.write_config(aleph, port, args.web)
+        desktop_ready = root / 'desktop-reply-ready'
+        desktop_release = root / 'release-desktop-reply'
+        web_release = root / 'release-web-reply'
+        provider = fixture_provider.install(
+            aleph, desktop_ready, desktop_release, web_release, out / 'provider.log',
+        ) if args.rich else None
         env = {
             'PATH': os.environ['PATH'],
             'HOME': str(home),
@@ -133,21 +166,37 @@ def receipt(args):
                 ipc = {'ALEPH_SHELL_PANEL_IPC': str(gateway.endpoint)}
                 phases = [desktop.run('connected', ipc, settle=6)]
                 key, first = desktop.layout()
-                s2.require(first['order'] == s2.tabs('overview', 'sessions', 'chat', 'capabilities'),
+                expected = s2.tabs('overview', 'sessions', 'chat', 'capabilities')
+                s2.require([tab for tab in first['order'] if tab in expected] == expected,
                            f'default layout lacks the Chat module: {first}')
 
                 # Open Chat through the stored layout, type a message, Return.
                 desktop.write_layout(key, {**first, 'active': s2.tabs('chat')[0]})
-                phases.append(desktop.run('chat-sent', ipc, settle=6, action=type_and_send(desktop, DESKTOP_MESSAGE)))
+                capture = (desktop_ready, desktop_release) if args.rich else None
+                action = type_and_send(desktop, DESKTOP_MESSAGE, capture)
+                phases.append(desktop.run('chat-sent', ipc, settle=6, action=action))
                 report['desktop'] = {'phases': phases, 'layout_key': key}
                 print('PASS desktop: Chat opened, message typed and sent over Desktop IPC', flush=True)
+                if args.rich:
+                    files = list(root.rglob(fixture_provider.FILE))
+                    s2.require(len(files) == 1 and files[0].read_text(encoding='utf-8') == 's3 edited line\n',
+                               f'real Write/Edit did not produce the expected fixture file: {files}')
+                    report['desktop']['updated_fixture'] = str(files[0].relative_to(root))
 
-                web = web_phase(args, gateway, root, env, port, aleph, out)
+                web = web_phase(args, gateway, root, env, port, aleph, out, web_release)
                 report['web'] = web
+                if args.rich:
+                    files = list(root.rglob(fixture_provider.WEB_FILE))
+                    s2.require(len(files) == 1 and files[0].read_text(encoding='utf-8') == 's3 web line\n',
+                               f'real Web Write did not produce the expected fixture file: {files}')
+                    report['web']['updated_fixture'] = str(files[0].relative_to(root))
                 print('PASS web: cross-surface history, IME hold, live stream, Gateway restart', flush=True)
             finally:
                 if gateway.child is not None:
                     report['gateway_exit'] = gateway.stop()
+                if provider is not None:
+                    provider.shutdown()
+                    provider.server_close()
     (out / 'report.json').write_text(f'{json.dumps(report, indent=2, ensure_ascii=False)}\n', encoding='utf-8')
     print(json.dumps(report, ensure_ascii=False), flush=True)
 
@@ -160,6 +209,7 @@ def main():
     parser.add_argument('--winlist', type=Path, required=True, help='compiled qa/nsh_s2_shell/winlist.swift')
     parser.add_argument('--node-modules', type=Path, required=True, help='node_modules holding playwright')
     parser.add_argument('--out', type=Path, required=True, help='new directory for evidence')
+    parser.add_argument('--rich', action='store_true', help='exercise actual Write/Edit via a loopback scripted provider')
     args = parser.parse_args()
     if sys.platform != 'darwin':
         parser.error('the desktop surface is macOS-only')

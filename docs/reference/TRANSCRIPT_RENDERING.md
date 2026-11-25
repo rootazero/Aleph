@@ -394,6 +394,20 @@ identifier 形状的字段只花一次不会命中的正则，比一条需要人
   （`src/security/dangerous_tools.rs`），一次删除会被渲染成被动的探索。丢掉这一条是 fail-closed 的方向
   （一次只读的 `file_ops` 只是没被折进分组）；把 `is_read_only` 改成认动作则要把原始参数穿过 view model 送进两端。
 
+### 4.1 NSH Chat / NSH 会话
+
+NSH 原生 TSX 与 `/v1/panel/` 共用 [Chat](../../interfaces/panel/modules/Chat.tsx) 和一个虚拟列表。Core 从同一条授权事件流发出正文与最小化工具增量；[Rust Panel 模型](../../shared/ui_logic/src/transcript/chat_panel.rs) 保持到达顺序并按 `(run_id, tool_call_id)` 更新工具行。完成后以 `chat.history` 原子替换临时 run，并附上 `chat.transcript_details` 恢复的工具组，不伪造精确的历史正文/工具交错顺序。
+
+Native NSH and its Web fallback render the same virtual list. Tools start collapsed and expose status, summary and recorded file changes. Fullscreen hides surrounding Panel controls without resizing the OS window or remounting the list. The same card and expansion state remain available. The list follows the latest row only near the tail; when reading elsewhere, use Jump to bottom to return.
+
+- **详情与边界 / Details and limits:** `trace.tool_output` 按会话、run、工具调用地址懒加载，按脱敏后 UTF-8 字节偏移分页；客户端最多保留 256 KiB 预览。过期或不可证明 run 归属的输出不返回正文。旧 blob 存储以会话与调用为命名边界，V1 不额外承诺旧存储的逐次字节来源证明。`trace.by_runs` 不挂载到 V1；不重新读取工作文件来造 diff。 / Pages are masked and byte-bounded; the reader displays saved diffs, not a fresh file read. V1 does not expose raw legacy trace replay.
+- **正文 / Markdown:** [NSH TextView](../../interfaces/panel/modules/chat/MessageBody.tsx) alone parses assistant Markdown, including callouts and bare links. Only explicitly pressed HTTP(S) links open; HTML and remote images do not render. Settled Mermaid uses a bounded typed flowchart scene; unsupported syntax, excessive size and cycles fall back to source. / Mermaid 仅支持有限 TD/LR 流程图，不加载第三方渲染器，也不执行围栏内容。
+- **Context:** [`panel_context_view`](../../shared/ui_logic/src/transcript/context.rs) separates sent System Prompt bytes, pre-trim Skill attribution (part of System Prompt), measured bytes by Tool schema, and estimated Tool result tokens. Provider input is unknown without correlated measurements. / 面板读取最新实测请求，不把估算、裁剪前归因或未知值相加当作实时占用。
+
+Reattach can miss unpersisted live deltas and marks that gap. An idle history snapshot alone does not prove completion. After an interrupted preview and an idle status check, Resume composing is an explicit user action: it keeps the old turn as unconfirmed and never resends it. Up to eight unconfirmed previews retain their prompt and reply until matching committed history arrives. Late frames can still update the labeled preview; a fresh Gateway status can reattach it. A completion-triggered history read may make one delayed follow-up if that exact run remains unconfirmed. Refresh history is also available explicitly. The list skips raw tool-role history. A file card says “No recorded diff” only for a uniquely matched result without change metadata; an unproved or withheld diff is marked unavailable.
+
+重连不补发未持久化增量；历史里没有活跃 run，不等于已发送的 run 结束。预览中断且状态检查确认空闲后，用户可显式恢复输入；旧轮次仍标为未确认，不会自动重发。最多保留八个未确认轮次的提问与回复；迟到的帧仍可更新已标记的预览，Gateway 新状态可重新接回该轮次。该终态轮次仍未确认时，面板至多延后补读一次；也支持手动刷新。列表不渲染历史中的原始工具正文；仅能唯一匹配且没有变更元数据的结果才显示「无记录 diff」。真机复测入口 / QA: [S3 Chat](../../qa/nsh_s3_chat/README.md).
+
 ---
 
 ## 5. Phase A **没有**做的事 / 已知开口
