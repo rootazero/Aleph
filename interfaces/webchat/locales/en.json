@@ -2493,7 +2493,9 @@
   },
   "terminal": {
     "new_tab": "New terminal",
-    "close_tab": "Close terminal"
+    "close_tab": "Close terminal",
+    "reconnecting": "Reconnecting…",
+    "retry": "Retry"
   },
   "browser_viewer": {
     "title": "Browser",

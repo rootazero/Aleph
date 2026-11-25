@@ -434,6 +434,7 @@ dependencies = [
  "js-sys",
  "leptos",
  "serde_json",
+ "shared-ui-logic",
  "unicode-width",
  "wasm-bindgen",
  "web-sys",

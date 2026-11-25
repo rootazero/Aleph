@@ -627,8 +627,26 @@ ESCAPE_ROUTE=system ./qa/browser_dual/run.sh escape   # route 2 — no pin, disc
                                  # the one-line `delegate` / `plan` commands — the tree is a LIVE
                                  # projection, attach the browser BEFORE triggering.
 
-# Embedded terminal QA now covers the pure PTY surface (spawn/list/attach/input/resize/screen/exit).
-# The former herdr-style agent/runtime stages and fixtures were removed.
+# Embedded terminal browser QA (Linux): run after `just wasm` and building aleph-server
+# from the same checkout. Pass a Playwright Chromium executable and absolute paths.
+uv run --no-project --with 'websockets>=15' qa/terminal/panel_live.py \
+  --server "$ALEPH_SERVER" --dist interfaces/webchat/dist \
+  --playwright "$PLAYWRIGHT_ENTRY" --chromium "$CHROMIUM_EXECUTABLE"
+                                 # Owned loopback Gateway + temporary HOME, served WASM hash,
+                                 # explicit shell effects, resize/reconnect, IME and scrollback.
+                                 # 不连个人 Gateway；核对实际服务的 WASM 和终端交互。
+export ALEPH_SERVER              # This must be an absolute path to the test binary.
+unshare --user --map-root-user --net sh -ec '
+  ip link set lo up
+  ip addr add 192.0.2.23/32 dev lo
+  exec uv run --offline --no-project --with "websockets>=15" \
+    qa/terminal/history_access.py --server "$ALEPH_SERVER"
+'
+                                 # Linux only. Reuses the cached Python dependency above.
+                                 # A separate admin and member consume actual device pairing
+                                 # tickets. Owner history reads succeed; foreign reads remain
+                                 # indistinguishable from requests for nonexistent sessions.
+                                 # 非回环地址仅存在于本次测试的私有网络命名空间。
 
 ./qa/channels/run.sh             # both phases below
 ./qa/channels/run.sh reach       # feishu / line / qq really come up; msteams is the control.

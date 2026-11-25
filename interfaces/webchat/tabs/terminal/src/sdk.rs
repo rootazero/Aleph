@@ -7,7 +7,8 @@
 #[cfg(target_arch = "wasm32")]
 mod browser {
     use aleph_terminal_ui::{
-        TerminalConnection, TerminalEvent, TerminalEventStream, TerminalServices, TerminalText,
+        TerminalConnection, TerminalEvent, TerminalEventStream, TerminalMutationScope,
+        TerminalServices, TerminalText,
     };
     use futures::{future::LocalBoxFuture, FutureExt};
     use gloo_timers::future::TimeoutFuture;
@@ -35,14 +36,34 @@ mod browser {
         #[wasm_bindgen(method, catch, js_name = connection)]
         fn sdk_connection(this: &BrowserPanelSdk) -> Result<JsValue, JsValue>;
 
-        #[wasm_bindgen(method, catch, js_name = subscribe)]
-        async fn sdk_subscribe(
+        #[wasm_bindgen(method, catch, js_name = subscribeTerminal)]
+        async fn sdk_subscribe_terminal(
             this: &BrowserPanelSdk,
             topic: String,
         ) -> Result<BrowserPanelSubscription, JsValue>;
 
+        #[wasm_bindgen(method, catch, js_name = terminalMutations)]
+        fn sdk_terminal_mutations(
+            this: &BrowserPanelSdk,
+        ) -> Result<BrowserTerminalMutations, JsValue>;
+
+        type BrowserTerminalMutations;
+        #[wasm_bindgen(method)]
+        fn revision(this: &BrowserTerminalMutations) -> String;
+        #[wasm_bindgen(method)]
+        fn pending(this: &BrowserTerminalMutations) -> bool;
+        #[wasm_bindgen(method)]
+        fn reserve(this: &BrowserTerminalMutations) -> Option<String>;
+        #[wasm_bindgen(method)]
+        fn cancel(this: &BrowserTerminalMutations, ticket: String);
+        #[wasm_bindgen(method)]
+        fn settle(this: &BrowserTerminalMutations, ticket: String);
+
         #[derive(Clone)]
         type BrowserPanelSubscription;
+
+        #[wasm_bindgen(method, catch, js_name = coverageEpoch)]
+        fn subscription_epoch(this: &BrowserPanelSubscription) -> Result<String, JsValue>;
 
         #[wasm_bindgen(method, catch, js_name = drain)]
         fn subscription_drain(this: &BrowserPanelSubscription) -> Result<JsValue, JsValue>;
@@ -52,6 +73,27 @@ mod browser {
 
         #[wasm_bindgen(method, catch, js_name = locale)]
         fn sdk_locale(this: &BrowserPanelSdk) -> Result<String, JsValue>;
+    }
+
+    struct MutationScope(BrowserTerminalMutations);
+    impl TerminalMutationScope for MutationScope {
+        fn revision(&self) -> u64 {
+            self.0.revision().parse().expect("host revision")
+        }
+        fn pending(&self) -> bool {
+            self.0.pending()
+        }
+        fn reserve(&self) -> Option<u64> {
+            self.0
+                .reserve()
+                .map(|ticket| ticket.parse().expect("host ticket"))
+        }
+        fn cancel(&self, ticket: u64) {
+            self.0.cancel(ticket.to_string());
+        }
+        fn settle(&self, ticket: u64) {
+            self.0.settle(ticket.to_string());
+        }
     }
 
     #[derive(Deserialize)]
@@ -68,6 +110,7 @@ mod browser {
 
     pub(crate) struct Adapter {
         pub(crate) services: TerminalServices,
+        pub(crate) mutations: Rc<dyn TerminalMutationScope>,
         active: Rc<Cell<bool>>,
     }
 
@@ -79,6 +122,7 @@ mod browser {
 
     pub(crate) fn make(sdk: JsValue) -> Result<Adapter, JsValue> {
         let sdk: BrowserPanelSdk = sdk.unchecked_into();
+        let mutations = Rc::new(MutationScope(sdk.sdk_terminal_mutations()?));
         let active = Rc::new(Cell::new(true));
         let connection = RwSignal::new(read_connection(&sdk)?);
         let signal = Signal::derive(move || connection.get());
@@ -132,12 +176,22 @@ mod browser {
                     if !active.get() {
                         return Err("terminal module disposed".to_string());
                     }
-                    let epoch = read_connection(&sdk).map_err(js_error)?.epoch;
-                    let subscription = sdk.sdk_subscribe(topic).await.map_err(js_error)?;
+                    let subscription = sdk.sdk_subscribe_terminal(topic).await.map_err(js_error)?;
                     if !active.get() {
                         subscription.subscription_dispose();
                         return Err("terminal module disposed".to_string());
                     }
+                    let epoch = match subscription
+                        .subscription_epoch()
+                        .map_err(js_error)
+                        .and_then(|epoch| epoch.parse::<u64>().map_err(|error| error.to_string()))
+                    {
+                        Ok(epoch) => epoch,
+                        Err(error) => {
+                            subscription.subscription_dispose();
+                            return Err(error);
+                        }
+                    };
                     let disposed = Rc::new(Cell::new(false));
                     let drain_subscription = subscription.clone();
                     let drain_disposed = Rc::clone(&disposed);
@@ -170,6 +224,7 @@ mod browser {
 
         let locale = sdk.sdk_locale().unwrap_or_else(|_| "en".to_string());
         Ok(Adapter {
+            mutations,
             services: TerminalServices {
                 invoke,
                 subscribe,
@@ -194,6 +249,8 @@ mod browser {
             TerminalText {
                 new_tab: "新建终端".to_string(),
                 close_tab: "关闭终端".to_string(),
+                reconnecting: "正在重新连接…".to_string(),
+                retry: "重试".to_string(),
                 read_refusal: "该设置页需要 operator 权限,当前连接的角色无法读取服务器全局配置。"
                     .to_string(),
                 write_refusal: "该改动需要 operator 权限,当前连接的角色无法修改服务器全局设置。"
@@ -203,6 +260,8 @@ mod browser {
             TerminalText {
                 new_tab: "New terminal".to_string(),
                 close_tab: "Close terminal".to_string(),
+                reconnecting: "Reconnecting…".to_string(),
+                retry: "Retry".to_string(),
                 read_refusal: "This settings page needs operator privileges — the role this connection holds cannot read server-wide configuration.".to_string(),
                 write_refusal: "This change needs operator privileges — the role this connection holds cannot modify server-wide settings.".to_string(),
             }

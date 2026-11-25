@@ -221,6 +221,20 @@ fn terminal_tool_domain_with_specials(
     ToolHandlerRegistry,
     CapabilityHandlerRegistry,
 ) {
+    let config = Arc::new(RwLock::new(crate::Config::default()));
+    config.try_write().unwrap().policies.terminal.enabled = true;
+    terminal_tool_domain_with_config(constraints, config)
+}
+
+fn terminal_tool_domain_with_config(
+    constraints: CapabilityConstraintsConfig,
+    config: Arc<RwLock<crate::Config>>,
+) -> (
+    Arc<ZahirFacade>,
+    Arc<TerminalCapabilitySource>,
+    ToolHandlerRegistry,
+    CapabilityHandlerRegistry,
+) {
     let specials = CapabilityHandlerRegistry::new();
     let tools = ToolHandlerRegistry::new();
     let tree = Arc::new(OwnershipTree::new());
@@ -233,13 +247,6 @@ fn terminal_tool_domain_with_specials(
         specials.clone(),
         policy.clone(),
     );
-    let config = Arc::new(RwLock::new(crate::Config::default()));
-    config
-        .try_write()
-        .expect("test config is uncontended")
-        .policies
-        .terminal
-        .enabled = true;
     let source = Arc::new(TerminalCapabilitySource::new(
         specials.clone(),
         policy,
@@ -1332,4 +1339,427 @@ async fn addressed_handler_rejects_stale_generation_before_effect() {
         .await
         .expect("cleanup replacement provider");
     println!("\n{PTY_STALE_HANDLER_COMPLETED}");
+}
+
+async fn history_as<T>(user: &str, future: impl std::future::Future<Output = T>) -> T {
+    // A paired identity remains authoritative even on loopback.
+    crate::gateway::caller_identity::with_verified_caller_identity(
+        Some("operator".into()),
+        Some(user.into()),
+        true,
+        Some("history-test".into()),
+        Some(user.into()),
+        future,
+    )
+    .await
+}
+
+fn history_registry(
+    source: &Arc<TerminalCapabilitySource>,
+) -> crate::gateway::handlers::HandlerRegistry {
+    let mut registry = crate::gateway::handlers::HandlerRegistry::new();
+    let source = Arc::clone(source);
+    registry.register("pty.history", move |request| {
+        crate::gateway::handlers::pty::handle_history_with_source(request, Arc::clone(&source))
+    });
+    registry
+}
+
+#[tokio::test]
+#[serial_test::serial(pty_global_manager)]
+async fn history_uses_live_capability_admission() {
+    let (facade, source, tools, specials) = terminal_tool_domain_with_specials(BTreeMap::new());
+    let manager = pty::manager();
+    manager.deactivate().await.unwrap();
+    let generation = manager
+        .activate(Arc::new(crate::gateway::event_bus::GatewayEventBus::new()))
+        .unwrap();
+    source
+        .bind_manager_handle(manager.provider_handle())
+        .unwrap();
+    let id = manager
+        .spawn_at(
+            generation,
+            &SpawnOptions {
+                command: Some("/bin/cat".into()),
+                rows: 2,
+                cols: 4,
+                created_by: Some("history-owner".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .session_id;
+    source.register_session(&id, Some("history-owner")).unwrap();
+    manager.write_at(generation, &id, b"ABCD\nEFGH\n").unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        // The PTY's default line discipline echoes both lines, then cat writes both.
+        while manager
+            .attach_snapshot_at(generation, &id)
+            .unwrap()
+            .scrollback_len
+            < 3
+        {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(tools
+        .snapshot()
+        .get("terminal_capability")
+        .unwrap()
+        .definition()
+        .input_schema
+        .to_string()
+        .contains("history"));
+    let registry = history_registry(&source);
+    let service = canonical_tool_service(facade, tools);
+    let request = JsonRpcRequest::with_id(
+        "pty.history",
+        Some(json!({"session_id":id})),
+        json!("history-rpc"),
+    );
+    let owned = history_as("history-owner", registry.handle(&request)).await;
+    assert!(owned.error.is_none(), "{owned:?}");
+    let tool = history_as(
+        "history-owner",
+        execute_terminal_tool(
+            &service,
+            "history-tool",
+            json!({"operation":"history","session_id":id}),
+        ),
+    )
+    .await
+    .unwrap();
+    let rpc_page: aleph_protocol::pty::PtyHistoryResponse =
+        serde_json::from_value(owned.result.unwrap()).unwrap();
+    let tool_page: aleph_protocol::pty::PtyHistoryResponse =
+        serde_json::from_value(parse_tool_value(&tool.value)).unwrap();
+    assert_eq!(rpc_page, tool_page);
+    assert!(!rpc_page.rows.is_empty());
+    assert!(rpc_page
+        .rows
+        .iter()
+        .flat_map(|row| &row.runs)
+        .any(|run| run.text.contains("ABCD")));
+
+    let foreign = history_as("history-peer", registry.handle(&request)).await;
+    let absent_request = JsonRpcRequest::with_id(
+        "pty.history",
+        Some(json!({"session_id":"missing"})),
+        json!("history-rpc"),
+    );
+    let absent = history_as("history-peer", registry.handle(&absent_request)).await;
+    assert_eq!(
+        serde_json::to_value(foreign.error).unwrap(),
+        serde_json::to_value(absent.error).unwrap()
+    );
+    let foreign_tool = history_as(
+        "history-peer",
+        execute_terminal_tool(
+            &service,
+            "history-peer",
+            json!({"operation":"history","session_id":id}),
+        ),
+    )
+    .await
+    .unwrap_err();
+    let absent_tool = history_as(
+        "history-peer",
+        execute_terminal_tool(
+            &service,
+            "history-peer",
+            json!({"operation":"history","session_id":"missing"}),
+        ),
+    )
+    .await
+    .unwrap_err();
+    // Tool errors identify their target but must have the identical denial class.
+    assert_eq!(
+        foreign_tool.to_string().replace(&id, "missing"),
+        absent_tool.to_string()
+    );
+
+    for params in [
+        json!({"before":"future"}),
+        json!({"before":"1000"}),
+        json!({"limit":0}),
+        json!({"limit":65}),
+    ] {
+        let mut input = json!({"session_id":id});
+        input
+            .as_object_mut()
+            .unwrap()
+            .extend(params.as_object().unwrap().clone());
+        let invalid = JsonRpcRequest::with_id("pty.history", Some(input.clone()), json!("invalid"));
+        assert_eq!(
+            history_as("history-owner", registry.handle(&invalid))
+                .await
+                .error
+                .unwrap()
+                .code,
+            crate::gateway::protocol::INVALID_PARAMS
+        );
+        input["operation"] = json!("history");
+        assert!(history_as(
+            "history-owner",
+            execute_terminal_tool(&service, "history-invalid", input)
+        )
+        .await
+        .is_err());
+    }
+
+    // Reach the screen through real PTY output, not a replacement screen fixture.
+    manager.write_at(generation, &id, b"\x1b[?1049h\n").unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while manager
+            .attach_snapshot_at(generation, &id)
+            .unwrap()
+            .patch
+            .alt_screen
+            != Some(true)
+        {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        history_as("history-owner", registry.handle(&request))
+            .await
+            .error
+            .unwrap()
+            .code,
+        crate::gateway::protocol::SERVICE_UNAVAILABLE
+    );
+    assert!(history_as(
+        "history-owner",
+        execute_terminal_tool(
+            &service,
+            "history-alt",
+            json!({"operation":"history","session_id":id})
+        )
+    )
+    .await
+    .is_err());
+    let attached = history_as(
+        "history-owner",
+        handle_attach_with_source(
+            JsonRpcRequest::with_id(
+                "pty.attach",
+                Some(json!({"session_id":id})),
+                json!("attach-alt"),
+            ),
+            source.clone(),
+        ),
+    )
+    .await;
+    assert!(
+        attached.error.is_none(),
+        "history must not change attach: {attached:?}"
+    );
+
+    let captured = history_as("history-owner", async {
+        crate::gateway::handlers::pty::require_owned_session_with_source(&id, &source).unwrap()
+    })
+    .await;
+    specials
+        .unregister(&crate::capability::descriptor::CapabilityId {
+            namespace: "aleph/terminal".into(),
+            name: format!("session-{id}"),
+        })
+        .unwrap();
+    assert!(history_as("history-owner", registry.handle(&request))
+        .await
+        .error
+        .is_some());
+    assert!(history_as(
+        "history-owner",
+        execute_terminal_tool(
+            &service,
+            "history-revoked",
+            json!({"operation":"history","session_id":id})
+        )
+    )
+    .await
+    .is_err());
+    manager.deactivate().await.unwrap();
+    manager
+        .activate(Arc::new(crate::gateway::event_bus::GatewayEventBus::new()))
+        .unwrap();
+    assert!(history_as("history-owner", registry.handle(&request))
+        .await
+        .error
+        .is_some());
+    assert!(history_as(
+        "history-owner",
+        execute_terminal_tool(
+            &service,
+            "history-stale-tool",
+            json!({"operation":"history","session_id":id})
+        )
+    )
+    .await
+    .is_err());
+    let stale = history_as(
+        "history-owner",
+        source.invoke_legacy_gateway(
+            PtyToolParams::History {
+                session_id: id,
+                before: None,
+                limit: 32,
+            },
+            "history-stale-capture".into(),
+            tokio_util::sync::CancellationToken::new(),
+            Some(captured),
+        ),
+    )
+    .await;
+    assert!(stale.is_err());
+    manager.deactivate().await.unwrap();
+}
+
+#[tokio::test]
+#[serial_test::serial(pty_global_manager)]
+async fn history_live_policy_denies_both_faces() {
+    let constraints = BTreeMap::from([(
+        "aleph/tools/terminal_capability".into(),
+        CapabilityConstraintRule {
+            required_conditions: BTreeMap::from([("provider_ready".into(), false)]),
+            ..Default::default()
+        },
+    )]);
+    let (facade, source, tools) = terminal_tool_domain(constraints);
+    let manager = pty::manager();
+    manager.deactivate().await.unwrap();
+    let generation = manager
+        .activate(Arc::new(crate::gateway::event_bus::GatewayEventBus::new()))
+        .unwrap();
+    source
+        .bind_manager_handle(manager.provider_handle())
+        .unwrap();
+    let id = manager
+        .spawn_at(generation, &SpawnOptions::default())
+        .unwrap()
+        .session_id;
+    source.register_session(&id, None).unwrap();
+    let registry = history_registry(&source);
+    let service = canonical_tool_service(facade, tools);
+    let request = JsonRpcRequest::with_id(
+        "pty.history",
+        Some(json!({"session_id":id})),
+        json!("history-policy"),
+    );
+    assert!(registry.handle(&request).await.error.is_some());
+    assert!(execute_terminal_tool(
+        &service,
+        "history-policy",
+        json!({"operation":"history","session_id":id})
+    )
+    .await
+    .is_err());
+    manager.close_at(generation, &id).unwrap();
+    manager.deactivate().await.unwrap();
+}
+
+#[tokio::test]
+#[serial_test::serial(pty_global_manager)]
+async fn history_registered_rpc_rejects_stale_capture_before_read() {
+    let (_facade, source, _tools) = terminal_tool_domain(BTreeMap::new());
+    let manager = pty::manager();
+    manager.deactivate().await.unwrap();
+    let generation = manager
+        .activate(Arc::new(crate::gateway::event_bus::GatewayEventBus::new()))
+        .unwrap();
+    source
+        .bind_manager_handle(manager.provider_handle())
+        .unwrap();
+    let id = manager
+        .spawn_at(generation, &SpawnOptions::default())
+        .unwrap()
+        .session_id;
+    source.register_session(&id, None).unwrap();
+    let registry = history_registry(&source);
+    let (_guard, captured, release, stale_observed) = install_handler_handoff_hook();
+    let handler = tokio::spawn(async move {
+        registry
+            .handle(&JsonRpcRequest::with_id(
+                "pty.history",
+                Some(json!({"session_id":id})),
+                json!("history-stale-rpc"),
+            ))
+            .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(5), captured.notified())
+        .await
+        .unwrap();
+    manager.deactivate().await.unwrap();
+    manager
+        .activate(Arc::new(crate::gateway::event_bus::GatewayEventBus::new()))
+        .unwrap();
+    release.notify_one();
+    let response = handler.await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), stale_observed.notified())
+        .await
+        .unwrap();
+    assert!(response.result.is_none());
+    assert_eq!(
+        response.error.unwrap().code,
+        crate::gateway::protocol::SERVICE_UNAVAILABLE
+    );
+    manager.deactivate().await.unwrap();
+}
+
+#[tokio::test]
+#[serial_test::serial(pty_global_manager)]
+async fn history_reads_live_enable_policy_without_attaching_a_viewport() {
+    let config = Arc::new(RwLock::new(crate::Config::default()));
+    config.write().await.policies.terminal.enabled = true;
+    let (facade, source, tools, _) =
+        terminal_tool_domain_with_config(BTreeMap::new(), config.clone());
+    let manager = pty::manager();
+    manager.deactivate().await.unwrap();
+    let generation = manager
+        .activate(Arc::new(crate::gateway::event_bus::GatewayEventBus::new()))
+        .unwrap();
+    source
+        .bind_manager_handle(manager.provider_handle())
+        .unwrap();
+    let id = manager
+        .spawn_at(generation, &SpawnOptions::default())
+        .unwrap()
+        .session_id;
+    source.register_session(&id, None).unwrap();
+    let registry = history_registry(&source);
+    let service = canonical_tool_service(facade, tools);
+    let request = JsonRpcRequest::with_id(
+        "pty.history",
+        Some(json!({"session_id":id})),
+        json!("history-enable-policy"),
+    );
+    config.write().await.policies.terminal.enabled = false;
+    assert!(registry.handle(&request).await.error.is_some());
+    assert!(execute_terminal_tool(
+        &service,
+        "history-disabled",
+        json!({"operation":"history","session_id":id})
+    )
+    .await
+    .is_err());
+    config.write().await.policies.terminal.enabled = true;
+    let before = manager.attach_snapshot_at(generation, &id).unwrap();
+    assert!(registry.handle(&request).await.error.is_none());
+    assert!(execute_terminal_tool(
+        &service,
+        "history-enabled",
+        json!({"operation":"history","session_id":id})
+    )
+    .await
+    .is_ok());
+    assert!(manager.effective_size(&id).is_none());
+    let after = manager.attach_snapshot_at(generation, &id).unwrap();
+    assert_eq!((before.rows, before.cols), (after.rows, after.cols));
+    manager.close_at(generation, &id).unwrap();
+    manager.deactivate().await.unwrap();
 }

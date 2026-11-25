@@ -9,6 +9,7 @@
 pub mod convert;
 pub mod diff;
 pub mod grid;
+mod history;
 pub mod perform;
 mod text;
 pub use diff::{RowPatch, ScreenPatch, StyleRun};

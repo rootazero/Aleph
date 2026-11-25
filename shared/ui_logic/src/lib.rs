@@ -6,6 +6,7 @@ pub mod panel;
 pub mod prefs;
 pub mod safety;
 pub mod state;
+pub mod terminal_mutation;
 pub mod transcript;
 
 pub use connection::connector::{AlephConnector, ConnectionError};

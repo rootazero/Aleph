@@ -453,9 +453,9 @@ Gateway owns CDP; Panel/TUI are I/O only; opt-in only for an explicit valid `[ga
 
 ### Embedded Terminal
 
-终端是纯 PTY 能力面。`pty.*` RPC 负责 session 生命周期、输入、resize、attach 和 screen；不存在 runtime agent 状态表、进程探测、`terminal_sessions_*` 观察工具或 agent panel。
+终端是纯 PTY 能力面。`pty.*` RPC 管理会话、输入、尺寸和 attach 快照；`pty.screen` 和 `pty.exit` 是事件主题，不是 RPC。客户端用 `pty.list` 与这两个事件主题维护标签页和画面。PTY 始终独立检查连接权限和会话归属，不走 exec/sandbox 命令策略。不存在 runtime agent 状态表、进程探测、`terminal_sessions_*` 观察工具或 agent panel。详见 [TERMINAL_RUNTIME.md](TERMINAL_RUNTIME.md)。
 
-客户端通过 `pty.list`、`pty.screen`、`pty.exit` 维护终端 tabs 和画面。PTY 输入仍受 `pty` ownership 与连接权限约束；写入路径不自动获得 exec/sandbox 命令策略权限。详见 [TERMINAL_RUNTIME.md](TERMINAL_RUNTIME.md)。 / The embedded terminal is a pure PTY surface. Its RPCs own session lifecycle, input, resize, attach, and screen delivery; runtime agent detection, observation tools, and the agent panel are removed.
+The embedded terminal is a pure PTY surface. `pty.*` RPCs manage sessions, input, size, and attach snapshots. Clients combine `pty.list` with the `pty.screen` and `pty.exit` event topics to maintain tabs and paint. Connection authorization and PTY ownership are separate from exec/sandbox command policy. The terminal does not detect runtime agents or expose terminal-agent observation tools.
 
 ### Memory Tools
 

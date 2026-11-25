@@ -414,6 +414,7 @@ mod tests {
                 "pty.list",
                 "pty.spawn",
                 "pty.attach",
+                "pty.history",
                 "pty.input",
                 "pty.resize",
                 "pty.close",

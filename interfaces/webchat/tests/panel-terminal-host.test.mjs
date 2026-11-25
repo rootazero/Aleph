@@ -20,11 +20,47 @@ const summarizeRpc = (requests) => requests.map((request) => ({
 }));
 const browser = await chromium.launch({ headless: true });
 
+function holdExplicitSpawn() {
+  const NativeWebSocket = globalThis.WebSocket;
+  let armed = false;
+  let held = null;
+  globalThis.WebSocket = class extends NativeWebSocket {
+    send(data) {
+      if (armed && new URL(this.url).pathname === '/ws' && typeof data === 'string' &&
+          JSON.parse(data).method === 'pty.spawn') {
+        armed = false;
+        held = () => super.send(data);
+        return;
+      }
+      super.send(data);
+    }
+  };
+  globalThis.__terminalFixture = {
+    arm() { armed = true; },
+    held() { return held !== null; },
+    release() {
+      if (!held) return false;
+      const send = held;
+      held = null;
+      send();
+      return true;
+    },
+  };
+}
+
 async function waitFor(predicate) {
   const deadline = Date.now() + 5_000;
   while (!predicate()) {
     assert.ok(Date.now() < deadline, 'timed out waiting for Gateway RPC');
     await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+function assertTerminalCoverageOnce(requests, phase) {
+  for (const topic of ['pty.screen', 'pty.exit']) {
+    const subscribes = requests.filter((request) => request.method === 'events.subscribe' && request.params?.topics?.includes(topic));
+    assert.equal(subscribes.length, 1, `${phase}: exactly one confirmed upstream subscription for ${topic}`);
+    assert.equal(requests.some((request) => request.method === 'events.unsubscribe' && request.params?.topics?.includes(topic)), false, `${phase}: stale disposal must not release current ${topic} coverage`);
   }
 }
 
@@ -53,6 +89,7 @@ async function runHost(publicBase) {
   const gateway = await createPanelGatewayFixture(staged);
   const positiveRoutes = await checkPositiveRoutes(gateway.origin);
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+  await page.route((url) => url.origin !== gateway.origin, (route) => route.abort('blockedbyclient'));
   const pageErrors = [];
   const browserLogs = [];
   const failedRequests = [];
@@ -68,11 +105,12 @@ async function runHost(publicBase) {
   });
   page.on('pageerror', (error) => pageErrors.push(error.name || 'Error'));
   page.on('console', (message) => browserLogs.push(message.type()));
-  page.on('requestfailed', (request) => failedRequests.push({
-    origin: new URL(request.url()).origin,
-    path: new URL(request.url()).pathname,
-    error: request.failure()?.errorText ?? 'unknown',
-  }));
+  page.on('requestfailed', (request) => {
+    const url = new URL(request.url());
+    if (url.origin === gateway.origin) failedRequests.push({
+      origin: url.origin, path: url.pathname, error: request.failure()?.errorText ?? 'unknown',
+    });
+  });
 
   try {
     const startupAssetStart = gateway.state.httpPaths.length;
@@ -80,6 +118,7 @@ async function runHost(publicBase) {
     assert.equal(startupResponse?.status(), 200, 'production host root route must return the staged HTML');
     assert.equal(gateway.state.httpPaths.slice(startupAssetStart).some((path) => path.includes('/tabs/terminal/')), false, 'Chat startup must not request Terminal assets');
 
+    const terminalRpcStart = gateway.state.rpc.length;
     const response = await page.goto(`${gateway.origin}${publicBase}terminal`, { waitUntil: 'networkidle' });
     assert.equal(response?.status(), 200, 'production host route must return the staged HTML');
     await page.waitForSelector('[data-panel-shell="terminal"]', { timeout: 20_000 });
@@ -149,6 +188,8 @@ async function runHost(publicBase) {
     await waitFor(() => gateway.state.rpc.some((request) => request.method === 'pty.attach' && request.params?.session_id === 'production-sibling-session'));
     assert.equal(gateway.state.rpc.some((request) => request.method === 'pty.close'), false, 'fallback must not close a non-test-owned PTY');
 
+    assertTerminalCoverageOnce(gateway.state.rpc.slice(terminalRpcStart), 'initial mount');
+    const reconnectRpcStart = gateway.state.rpc.length;
     const attachCountBeforeReconnect = gateway.state.rpc.filter((request) => request.method === 'pty.attach').length;
     gateway.closeSocket(gateway.state.sockets.indexOf(activeSocket));
     await waitFor(() => gateway.state.sockets.length >= 2 && gateway.state.sockets[0].readyState !== 1 && gateway.state.sockets.slice(1).some((socket) => socket.readyState === 1) && gateway.state.rpc.filter((request) => request.method === 'pty.attach').length > attachCountBeforeReconnect);
@@ -166,6 +207,7 @@ async function runHost(publicBase) {
     });
     await page.waitForFunction((previous) => document.querySelector('canvas')?.toDataURL() !== previous, beforeReconnect);
     await page.waitForFunction(() => globalThis.__fillTexts?.includes('Reconnect marker ✓'), undefined, { timeout: 5_000 });
+    assertTerminalCoverageOnce(gateway.state.rpc.slice(reconnectRpcStart), 'replacement epoch');
 
     assert.deepEqual(failedRequests, [], `production host had failed requests (${publicBase})`);
     assert.ok(gateway.state.httpResponses.every((response) => response.status < 400), `production host had HTTP failures (${publicBase})`);
@@ -192,10 +234,101 @@ async function runHost(publicBase) {
   }
 }
 
+async function checkLateMutation(remount) {
+  const project = remount === 'project' ? {
+    id: 'fixture-project', name: 'Fixture project', owner_user_id: 'production-fixture-user',
+    workspace_path: null, status: 'active', member_ids: ['production-fixture-user'],
+    created_at: 1700000000, updated_at: 1700000000, last_used_at: 1700000000, manageable: true,
+  } : undefined;
+  const gateway = await createPanelGatewayFixture(staged, { empty: true, project });
+  const page = await browser.newPage({ viewport: { width: 1280, height: 800 }, locale: 'en-US' });
+  await page.route((url) => url.origin !== gateway.origin, (route) => route.abort('blockedbyclient'));
+  try {
+    await page.addInitScript(holdExplicitSpawn);
+    assert.equal((await page.goto(`${gateway.origin}/terminal`))?.status(), 200);
+    const view = page.locator('[data-terminal-view]');
+    const newButton = view.getByRole('button', { name: 'New terminal', exact: true }).first();
+    const pilot = page.getByRole('button', { name: 'Terminal pilot', exact: true });
+    await pilot.click();
+    await view.waitFor({ state: 'visible' });
+    await waitFor(() => gateway.state.rpc.some(({ method }) => method === 'pty.list'));
+    assert.deepEqual(gateway.state.sessions, [], 'fixture starts without a shell');
+    await page.evaluate(() => globalThis.__terminalFixture.arm());
+    await newButton.click();
+    await page.waitForFunction(() => globalThis.__terminalFixture.held());
+
+    const navigate = async (path) => {
+      await page.locator('[data-panel-nav-toggle]').click();
+      await page.locator(`[data-panel-nav="${path}"]`).click();
+      await page.waitForURL(`${gateway.origin}${path}`);
+    };
+    if (remount === 'tab') {
+      await page.getByRole('button', { name: 'Close tab', exact: true }).click();
+    } else {
+      await navigate(project ? '/projects' : '/chat');
+    }
+    await view.waitFor({ state: 'detached' });
+    if (project) {
+      const beforeProject = gateway.state.rpc.length;
+      await page.locator(`[data-panel-project-name="${project.name}"]`).click();
+      await waitFor(() => {
+        const calls = gateway.state.rpc.slice(beforeProject);
+        const selection = calls.findIndex(({ method }) => method === 'panel.project.select');
+        return selection >= 0 && calls.slice(selection + 1).some(({ method }) => method === 'panel.capabilities.snapshot');
+      });
+    }
+    const beforeRemount = gateway.state.rpc.length;
+    if (remount !== 'tab') await navigate('/terminal');
+    await pilot.click();
+    await view.waitFor({ state: 'visible' });
+    await waitFor(() => gateway.state.rpc.slice(beforeRemount).some(({ method }) => method === 'pty.list'));
+    assert.deepEqual(gateway.state.sessions, [], 'replacement list precedes the old effect');
+    await page.waitForFunction(() => document.querySelector('[data-terminal-view] canvas'));
+    if (project) {
+      await page.waitForFunction(() => !document.querySelector('[data-terminal-view] button[aria-label="New terminal"]')?.disabled);
+      assert.ok(await newButton.isEnabled(), 'a new project must not inherit the old project lock');
+      const beforeSettle = gateway.state.rpc.length;
+      assert.ok(await page.evaluate(() => globalThis.__terminalFixture.release()));
+      await waitFor(() => gateway.state.sessions.some(({ session_id }) => session_id === 'production-spawned-session'));
+      // Give the real wasm continuation and its 25-ms recovery tick time to run.
+      await page.waitForTimeout(250);
+      assert.deepEqual(gateway.state.rpc.slice(beforeSettle).filter(({ method }) => method.startsWith('pty.'))
+        .map(({ method }) => method), ['pty.spawn'], 'settlement in the old project must not reload the new project');
+      assert.ok(await newButton.isEnabled());
+      return remount;
+    }
+    assert.ok(await newButton.isDisabled(), `${remount}: replacement owner must keep the pending action locked`);
+    await newButton.dispatchEvent('click');
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    assert.equal(gateway.state.rpc.filter(({ method }) => method === 'pty.spawn').length, 0,
+      `${remount}: a synthetic second gesture may not dispatch a shell`);
+
+    const beforeSettle = gateway.state.rpc.length;
+    assert.ok(await page.evaluate(() => globalThis.__terminalFixture.release()));
+    await waitFor(() => gateway.state.rpc.slice(beforeSettle).some(({ method, params }) =>
+      method === 'pty.attach' && params.session_id === 'production-spawned-session'));
+    const after = gateway.state.rpc.slice(beforeSettle);
+    const spawnIndex = after.findIndex(({ method }) => method === 'pty.spawn');
+    const listIndex = after.findIndex(({ method }, index) => index > spawnIndex && method === 'pty.list');
+    const attachIndex = after.findIndex(({ method }) => method === 'pty.attach');
+    assert.ok(spawnIndex >= 0 && listIndex > spawnIndex && attachIndex > listIndex,
+      `${remount}: settlement triggers an authoritative list before attach, not adoption of its old payload`);
+    assert.equal(gateway.state.rpc.filter(({ method }) => method === 'pty.spawn').length, 1);
+    assert.equal(gateway.state.rpc.filter(({ method }) => method === 'pty.close').length, 0);
+    return remount;
+  } finally {
+    await page.close();
+    await gateway.close();
+  }
+}
+
 try {
   const results = [await runHost('/')];
+  const lateMutationRemounts = [];
+  for (const remount of ['tab', 'route', 'project']) lateMutationRemounts.push(await checkLateMutation(remount));
   console.log(JSON.stringify({
     production_host_fixture: 'passed',
+    late_mutation_remounts: lateMutationRemounts,
     bases: results.map((result) => result.base),
     routes: [...new Set(results.flatMap((result) => result.routes))],
     gateway: 'loopback websocket fixture',

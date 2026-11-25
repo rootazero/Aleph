@@ -361,6 +361,7 @@ pub(crate) mod tests {
         ("providers.test", Class::Admin),
         ("providers.update", Class::Admin),
         ("pty.attach", Class::Admin),
+        ("pty.history", Class::Admin),
         ("pty.close", Class::Admin),
         ("pty.input", Class::Admin),
         ("pty.list", Class::Admin),

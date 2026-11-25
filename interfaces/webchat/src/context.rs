@@ -266,6 +266,83 @@ pub struct GatewayEvent {
     pub data: Value,
 }
 
+/// Terminal notifications cannot be partially drained after a local loss.
+/// Generic SDK queues deliberately retain their separate newest-256 policy.
+#[derive(Default)]
+pub(crate) struct TerminalEventQueue {
+    pending: std::collections::VecDeque<GatewayEvent>,
+    bytes: usize,
+    lost: bool,
+}
+
+impl TerminalEventQueue {
+    const MAX_EVENTS: usize = 256;
+    const MAX_BYTES: usize = 8 * 1024 * 1024;
+
+    pub(crate) fn enqueue(&mut self, event: GatewayEvent) {
+        if self.lost {
+            return;
+        }
+        let bytes = terminal_event_serialized_bytes(&event);
+        if self.pending.len() == Self::MAX_EVENTS
+            || bytes
+                .and_then(|bytes| self.bytes.checked_add(bytes))
+                .is_none_or(|total| total > Self::MAX_BYTES)
+        {
+            self.clear();
+            self.lost = true;
+            return;
+        }
+        self.bytes += bytes.unwrap();
+        self.pending.push_back(event);
+    }
+
+    pub(crate) fn drain(&mut self) -> Result<Vec<GatewayEvent>, String> {
+        if std::mem::take(&mut self.lost) {
+            return Err("Terminal event coverage lost".into());
+        }
+        self.bytes = 0;
+        Ok(self.pending.drain(..).collect())
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.pending.clear();
+        self.bytes = 0;
+        self.lost = false;
+    }
+}
+
+fn terminal_event_serialized_bytes(event: &GatewayEvent) -> Option<usize> {
+    #[derive(serde::Serialize)]
+    struct Payload<'a> {
+        topic: &'a str,
+        data: &'a Value,
+    }
+    struct Counter(usize);
+    impl std::io::Write for Counter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 = self
+                .0
+                .checked_add(bytes.len())
+                .ok_or_else(|| std::io::Error::other("Terminal event size overflow"))?;
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut counter = Counter(0);
+    serde_json::to_writer(
+        &mut counter,
+        &Payload {
+            topic: &event.topic,
+            data: &event.data,
+        },
+    )
+    .ok()?;
+    Some(counter.0)
+}
+
 // Event handler callback type
 type EventHandler = Arc<dyn Fn(GatewayEvent) + Send + Sync>;
 
@@ -772,7 +849,6 @@ pub(crate) struct PtyTopicLease {
 }
 
 impl PtyTopicLease {
-    #[cfg(any(test, target_arch = "wasm32"))]
     pub(crate) fn epoch(&self) -> u64 {
         self.coverage.epoch
     }
@@ -858,6 +934,12 @@ fn is_pty_topic(topic: &str) -> bool {
     matches!(topic, "pty.screen" | "pty.exit")
 }
 
+#[cfg(feature = "panel-modular")]
+type TerminalMutationScope = (
+    (u64, u64),
+    Arc<shared_ui_logic::terminal_mutation::TerminalMutationCoordinator>,
+);
+
 #[derive(Clone, Copy)]
 pub struct DashboardState {
     pub is_connected: RwSignal<bool>,
@@ -892,6 +974,10 @@ pub struct DashboardState {
     pub connection_epoch: RwSignal<u64>,
     #[cfg(feature = "panel-modular")]
     pub panel_discovery: RwSignal<PanelDiscoveryState>,
+    // A route can replace PanelShell but not this dashboard. Only in-flight
+    // operations retain older project scopes after the current scope changes.
+    #[cfg(feature = "panel-modular")]
+    pub(crate) terminal_mutations: StoredValue<Mutex<Option<TerminalMutationScope>>>,
 
     // Phase 3: Channel to send RPC requests to message loop
     rpc_tx: StoredValue<Option<mpsc::UnboundedSender<RpcRequest>>>,
@@ -1231,6 +1317,8 @@ impl DashboardState {
             connection_epoch: RwSignal::new(0),
             #[cfg(feature = "panel-modular")]
             panel_discovery: RwSignal::new(PanelDiscoveryState::new()),
+            #[cfg(feature = "panel-modular")]
+            terminal_mutations: StoredValue::new(Mutex::new(None)),
             rpc_tx: StoredValue::new(None),
             next_id: StoredValue::new(Arc::new(Mutex::new(1))),
             event_handlers: StoredValue::new(Arc::new(Mutex::new(Vec::new()))),
@@ -1413,7 +1501,7 @@ impl DashboardState {
     }
 
     /// Dispatch event to all subscribers
-    fn dispatch_event(&self, event: GatewayEvent) {
+    pub(crate) fn dispatch_event(&self, event: GatewayEvent) {
         // Copy the (Arc) handlers out under the lock, then drop the guard
         // before invoking any of them. A handler that synchronously calls
         // subscribe_events / unsubscribe_events on the same `event_handlers`
@@ -1576,17 +1664,46 @@ impl DashboardState {
     }
 
     /// Acquire an exact-topic lease for the currently connected PTY epoch.
-    #[cfg_attr(
-        not(target_arch = "wasm32"),
-        expect(
-            dead_code,
-            reason = "lease acquisition remains covered by lifecycle tests; production subscribe/unsubscribe uses the recorded path until terminal components own leases"
-        )
-    )]
+    #[cfg(feature = "panel-modular")]
     pub(crate) async fn acquire_pty_topic(&self, topic: &str) -> Result<PtyTopicLease, String> {
         self.await_gateway_ready().await?;
         self.acquire_pty_topic_with_io(topic, self.pty_coverage_io())
             .await
+    }
+
+    /// Terminal-only acquisition must never migrate into a replacement connection.
+    pub(crate) async fn acquire_pty_topic_at_epoch(
+        &self,
+        topic: &str,
+        epoch: u64,
+    ) -> Result<PtyTopicLease, String> {
+        self.acquire_pty_topic_at_epoch_with_io(
+            topic,
+            epoch,
+            self.pty_coverage_io(),
+            self.await_gateway_ready(),
+        )
+        .await
+    }
+
+    pub(crate) async fn acquire_pty_topic_at_epoch_with_io(
+        &self,
+        topic: &str,
+        epoch: u64,
+        io: PtyCoverageIo,
+        ready: impl std::future::Future<Output = Result<(), String>>,
+    ) -> Result<PtyTopicLease, String> {
+        self.check_pty_epoch(epoch)?;
+        ready.await?;
+        self.check_pty_epoch(epoch)?;
+        self.acquire_pty_topic_with_io(topic, io).await
+    }
+
+    pub(crate) fn check_pty_epoch(&self, epoch: u64) -> Result<(), String> {
+        if self.current_connection_epoch() != Some(epoch) {
+            return Err("Terminal subscription epoch changed or disconnected".into());
+        }
+        Ok(())
     }
 
     pub(crate) async fn acquire_pty_topic_with_io(
@@ -3327,6 +3444,18 @@ pub(crate) mod tests {
             futures::executor::block_on(pending).unwrap()
         }
 
+        #[cfg(feature = "panel-modular")]
+        pub(crate) fn owner_count_probe(&self) -> impl Fn() -> usize {
+            let slots = self.state.pty_topic_coverage.get_value();
+            let coverage: Vec<_> = slots.lock().unwrap().values().cloned().collect();
+            move || {
+                coverage
+                    .iter()
+                    .map(|slot| slot.owners.load(std::sync::atomic::Ordering::Acquire))
+                    .sum()
+            }
+        }
+
         pub(crate) fn methods(&self) -> Vec<&'static str> {
             self.effects
                 .lock()
@@ -3335,6 +3464,76 @@ pub(crate) mod tests {
                 .map(|(method, _)| *method)
                 .collect()
         }
+    }
+
+    #[test]
+    fn terminal_coverage_exact_epoch_checks_readiness_before_effects_and_allows_retry() {
+        use leptos::prelude::Owner;
+        use futures::FutureExt;
+        use futures::channel::oneshot;
+        Owner::new().with(|| {
+            let state = super::DashboardState::new();
+            let host = PtyHarness::new(state);
+            // A disconnected request must not even poll readiness.
+            assert!(futures::executor::block_on(state.acquire_pty_topic_at_epoch_with_io(
+                "pty.screen", 1, host.io.clone(), async { panic!("waited while disconnected") },
+            )).is_err());
+            assert!(host.methods().is_empty());
+            state.is_connected.set(true);
+            state.connection_epoch.set(1);
+            let (ack, ready) = oneshot::channel();
+            let mut pending = state.acquire_pty_topic_at_epoch_with_io(
+                "pty.screen", 1, host.io.clone(), async { ready.await.unwrap(); Ok(()) },
+            ).boxed_local();
+            assert!(pending.as_mut().now_or_never().is_none());
+            state.connection_epoch.set(2);
+            ack.send(()).unwrap();
+            assert!(futures::executor::block_on(pending).is_err());
+            assert!(host.flush().is_empty());
+            assert!(host.methods().is_empty(), "stale readiness has zero RPC effects");
+            assert!(futures::executor::block_on(state.acquire_pty_topic_at_epoch_with_io(
+                "pty.screen", 1, host.io.clone(), async { Ok(()) },
+            )).is_err());
+            let mut retry = state.acquire_pty_topic_at_epoch_with_io(
+                "pty.screen", 2, host.io.clone(), async { Ok(()) },
+            ).boxed_local();
+            assert!(retry.as_mut().now_or_never().is_none());
+            assert_eq!(host.flush(), [Ok(())]);
+            let lease = futures::executor::block_on(retry).unwrap();
+            assert_eq!(lease.epoch(), 2);
+            state.connection_epoch.set(3);
+            drop(lease);
+            assert_eq!(host.flush(), [Ok(())]);
+            assert_eq!(host.methods(), ["events.subscribe"], "no replacement unsubscribe");
+        });
+    }
+
+    #[test]
+    fn terminal_queue_counts_escaped_serialized_bytes_and_keeps_loss_sticky() {
+        let mut queue = super::TerminalEventQueue::default();
+        let exact = || super::GatewayEvent {
+            topic: "pty.screen".into(),
+            data: serde_json::Value::String("\n".repeat((8 * 1024 * 1024 - 32) / 2)),
+        };
+        queue.enqueue(exact());
+        assert_eq!(queue.drain().unwrap().len(), 1, "exactly 8 MiB is admitted");
+        queue.enqueue(exact());
+        queue.enqueue(super::GatewayEvent {
+            topic: "pty.screen".into(),
+            data: serde_json::Value::Null,
+        });
+        // An ordinary frame after loss must not hide it or escape as partial data.
+        queue.enqueue(super::GatewayEvent {
+            topic: "pty.screen".into(),
+            data: serde_json::json!({"seq":1}),
+        });
+        assert!(queue.drain().is_err());
+        assert!(queue.drain().unwrap().is_empty());
+        queue.enqueue(super::GatewayEvent {
+            topic: "pty.screen".into(),
+            data: serde_json::Value::Null,
+        });
+        assert_eq!(queue.drain().unwrap().len(), 1);
     }
 
     fn pty_fixture() -> (leptos::prelude::Owner, PtyHarness) {
