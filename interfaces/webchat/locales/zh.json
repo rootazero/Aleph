@@ -2342,9 +2342,9 @@
   "model_picker": {
     "default_label": "默认",
     "fallback_chain": "智能体回退链",
-    "load_failed": "错误：{{ error }}",
-    "loading_catalog": "正在加载模型目录…",
-    "no_providers": "尚未配置任何 Provider。请在 设置 → Providers 中添加密钥。",
+    "load_failed": "无法加载聊天模型。请重新打开选模器重试。",
+    "loading_catalog": "正在加载聊天模型…",
+    "no_providers": "当前没有可用的聊天模型。"
     "pick_model_title": "为本轮选择模型",
     "filter_placeholder": "过滤 Provider 与模型…",
     "no_match": "没有匹配的模型",

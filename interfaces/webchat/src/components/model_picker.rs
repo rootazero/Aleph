@@ -95,7 +95,7 @@ pub fn ModelPicker() -> impl IntoView {
     let same_conversation = move || opened_for.get_untracked() == sessions.active_conv();
     let can_pick = move || open.get_untracked() && same_conversation();
     let loading = RwSignal::new(false);
-    let load_error: RwSignal<Option<String>> = RwSignal::new(None);
+    let load_failed = RwSignal::new(false);
     // Live filter term for the popover's search box. Order-preserving substring
     // match (`aleph_protocol::providers::search`); reset when the popover closes.
     let search = RwSignal::new(String::new());
@@ -106,22 +106,34 @@ pub fn ModelPicker() -> impl IntoView {
         opened_for.set(sessions.active_conv());
         entries.set(Vec::new());
         loading.set(true);
-        load_error.set(None);
+        load_failed.set(false);
         spawn_local(async move {
             let result = ChatApi::models(&dashboard).await;
-            if !request_is_current(
-                open.get_untracked(),
-                issued,
-                generation.get_untracked(),
-                same_conversation(),
-            ) {
+            let Some((opened_for, active)) = opened_for
+                .try_get_untracked()
+                .zip(sessions.active.try_get_untracked())
+            else {
+                return;
+            };
+            if !generation.try_get_untracked().is_some_and(|current| {
+                request_is_current(
+                    open.try_get_untracked() == Some(true),
+                    issued,
+                    current,
+                    opened_for == active,
+                )
+            }) {
                 return;
             }
             match result {
-                Ok(items) => entries.set(items),
-                Err(error) => load_error.set(Some(error)),
+                Ok(items) => {
+                    let _ = entries.try_set(items);
+                }
+                Err(_) => {
+                    let _ = load_failed.try_set(true);
+                }
             }
-            loading.set(false);
+            let _ = loading.try_set(false);
         });
     };
 
@@ -398,7 +410,7 @@ pub fn ModelPicker() -> impl IntoView {
                     // different, they disagree about which row a bare Enter
                     // selects.
                     {move || (!loading.get()
-                        && load_error.get().is_none()
+                        && !load_failed.get()
                         && !entries.get().is_empty())
                         .then(|| view! {
                             <input
@@ -443,10 +455,10 @@ pub fn ModelPicker() -> impl IntoView {
                                     {t!(i18n, model_picker.loading_catalog)}
                                 </div>
                             }.into_any()
-                        } else if let Some(err) = load_error.get() {
+                        } else if load_failed.get() {
                             view! {
                                 <div class="px-2.5 py-3 text-xs text-danger/80 text-center">
-                                    {t!(i18n, model_picker.load_failed, error = err)}
+                                    {t!(i18n, model_picker.load_failed)}
                                 </div>
                             }.into_any()
                         } else if entries.get().is_empty() {
