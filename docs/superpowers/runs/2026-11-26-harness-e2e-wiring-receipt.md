@@ -56,6 +56,14 @@ Deviation from the plan: the plan asked to identify the refusing gate by id `pla
 
 Deviations from the plan / 偏离: (1) the model pin is set through the `select_model` tool, not `sessions.patch` — the latter refuses `model_pin` by design (`NOT_PATCHABLE`, `src/gateway/handlers/session/db_handlers/modify.rs`), because the pin has two stores that only `select_model` writes together. (2) `qa/busy_input/mock_anthropic.py` gained a `scripted` plan now rather than in Task 8: the tool-spec list is the whole conversation, entries are consumed only by requests that carry a tool surface (side-channel calls answer plain text), and a list entry emits several `tool_use` blocks in one turn. The existing plans now go through the same `_respond`; `./qa/busy_input/run.sh burst-drain` re-run rc=0 after the change.
 
+### F2 checklist (Task 5) / 执行清单
+
+`KEEP=1 ./qa/thread_continuity/run.sh checklist` → rc=0, 15 claims. Phase `before`: the mock sets an objective, a two-item plan, starts and completes item 0, then tries to finish. `ScratchpadGoalVerifier` vetoes the stop: the next provider request in the SAME run (one run on the server) carries "still has 1 incomplete step(s)" naming `QA_ITEM_B`; the mock then completes item 1 and the run ends. Each list-changing call (`set_plan`, `start_item`, both `complete_item`) reached the attached client as a live `stream.tool_end` frame whose output carries the snapshot; the run's `stream.run_complete` `summary.plan` and `chat.history` `result.plan` both show both items `completed`. Phase `after` (SIGTERM + restart, same `ALEPH_HOME`): `chat.history` returns the identical plan; a run that calls `scratchpad{action: clear}` leaves `result.plan = null`, and its `summary.plan` is an EMPTY snapshot (`items: []`).
+
+Observation / 观察: `clear` itself returns no snapshot. Clients drop the stale list through two documented routes: the Panel hides on the `clear` action (`interfaces/webchat/src/platform/wide/views/chat/plan.rs` `scratchpad_plan_update`), and the TUI waits for the empty `RunSummary.plan` at run end (`interfaces/tui/src/tui/app/mod.rs` `maybe_apply_plan_from_tool`). So the TUI shows the old list until that run ends. This is by design, not a defect.
+
+Deviation from the plan / 偏离: the script also calls `set_objective` first. The verifier is dormant without an objective, so without that call the veto claim would be vacuous.
+
 ## Defect ledger / 缺陷台账
 
 | ID | Scenario | Symptom / 症状 | Root cause / 根因 | Failing test | Fix commit |

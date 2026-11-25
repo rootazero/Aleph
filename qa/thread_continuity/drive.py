@@ -295,9 +295,199 @@ async def reopen_after():
     await client.ws.close()
 
 
+# --- checklist (F2) ----------------------------------------------------------
+
+# The opening of `ScratchpadGoalVerifier`'s veto (src/verification/
+# scratchpad_goal_verifier.rs `veto_reason`): what the model is told when it
+# tries to finish with boxes still unchecked.
+VETO_PHRASE = "incomplete step(s)"
+
+
+async def send_collecting(client, message, session_key=None, budget=180):
+    """`chat.send`, then keep reading the socket until the run finishes.
+
+    Returns (session_key, run_id, frames): every frame that was not the reply,
+    i.e. what a client attached to this conversation was shown live.
+    """
+    params = {"message": message}
+    if session_key:
+        params["session_key"] = session_key
+    else:
+        params["channel"] = f"gui:qa-thread-{STAGE}"
+    client.rid += 1
+    rid = client.rid
+    await rpc(client.ws, "chat.send", params, rid)
+    frames, run_id = [], None
+    slog = SessionLog(DB)
+    end = time.monotonic() + budget
+    while time.monotonic() < end:
+        try:
+            m = json.loads(await asyncio.wait_for(client.ws.recv(), 0.5))
+        except asyncio.TimeoutError:
+            m = None
+        if m is not None:
+            if m.get("id") == rid:
+                if "result" not in m:
+                    check(False, f"chat.send accepted {message!r}", json.dumps(m)[:300])
+                    return None, None, frames
+                session_key = m["result"]["session_key"]
+                run_id = m["result"]["run_id"]
+            else:
+                frames.append(m)
+        if run_id and slog.runs().get(run_id) is not None:
+            break
+    check(run_id is not None and slog.runs().get(run_id) is not None, f"the run for {message!r} finished")
+    # The outcome row can land before the client's `stream.run_complete`
+    # frame; drain briefly so callers can read the run's closing summary.
+    grace = time.monotonic() + 5
+    while run_id and time.monotonic() < grace and run_complete(frames, run_id) is None:
+        try:
+            frames.append(json.loads(await asyncio.wait_for(client.ws.recv(), 0.5)))
+        except asyncio.TimeoutError:
+            pass
+    return session_key, run_id, frames
+
+
+def run_complete(frames, run_id):
+    """The `stream.run_complete` params for `run_id`, or None."""
+    for f in frames:
+        params = f.get("params") or {}
+        if f.get("method") == "stream.run_complete" and params.get("run_id") == run_id:
+            return params
+    return None
+
+
+def flat(obj):
+    """JSON text with nested JSON strings unescaped one level, so a tool
+    result embedded as a string is searchable like the rest of the frame."""
+    return json.dumps(obj).replace('\\"', '"')
+
+
+def frames_mentioning(frames, *needles):
+    return [f for f in frames if all(n in flat(f) for n in needles)]
+
+
+def plan_items(plan):
+    return [(i.get("text"), i.get("status")) for i in (plan or {}).get("items") or []]
+
+
+async def checklist_before():
+    client = await connect("qa-thread-checklist-before")
+    session_key, run_id, frames = await send_collecting(client, "QA_CHECKLIST work the list")
+    if not run_id:
+        return
+
+    vetoed = [r for r in run_requests_carrying(VETO_PHRASE) if "QA_CHECKLIST" in flat(r["body"])]
+    check(
+        bool(vetoed),
+        "finishing with QA_ITEM_B unchecked is vetoed: a later request carries the veto",
+        f"{len(vetoed)} request(s) carry {VETO_PHRASE!r}",
+    )
+    if vetoed:
+        text = flat(vetoed[0]["body"]["messages"])
+        check(
+            "still has 1 incomplete step(s)" in text and "QA_ITEM_B" in text,
+            "the veto names the one remaining item",
+        )
+    check(
+        len(SessionLog(DB).runs()) == 1,
+        "the veto continued the SAME run (exactly one run on the server)",
+        f"runs={SessionLog(DB).runs()}",
+    )
+
+    kinds = sorted({str(f.get("method") or f.get("event") or f.get("type")) for f in frames_mentioning(frames, "QA_ITEM_A")})
+    log(f"{len(frames)} live frames; frames naming QA_ITEM_A: {kinds}")
+    # Every list-changing scratchpad call must hand an attached client the
+    # snapshot in its own completion frame, not just leave it for a later
+    # `chat.history` read.
+    snapshots = {}
+    for frame in frames:
+        if frame.get("method") != "stream.tool_end":
+            continue
+        output = ((frame.get("params") or {}).get("result") or {}).get("output")
+        try:
+            out = json.loads(output) if isinstance(output, str) else None
+        except ValueError:
+            out = None
+        if isinstance(out, dict) and "message" in out:
+            snapshots[out["message"]] = out.get("snapshot")
+    for message in (
+        "Plan set with 2 item(s)",
+        "Item 0 marked in progress (current step)",
+        "Item 0 marked as complete",
+        "Item 1 marked as complete",
+    ):
+        snap = snapshots.get(message)
+        check(
+            message in snapshots and [i for i, _ in plan_items(snap)] == ["QA_ITEM_A", "QA_ITEM_B"],
+            f"the live tool_end frame for {message!r} carries the checklist snapshot",
+            f"snapshot={json.dumps(snap)[:200]}",
+        )
+    final = snapshots.get("Item 1 marked as complete")
+    check(
+        plan_items(final) == [("QA_ITEM_A", "completed"), ("QA_ITEM_B", "completed")],
+        "the final live snapshot shows both items completed",
+        f"items={plan_items(final)}",
+    )
+
+    closing_plan = ((run_complete(frames, run_id) or {}).get("summary") or {}).get("plan")
+    check(
+        plan_items(closing_plan) == [("QA_ITEM_A", "completed"), ("QA_ITEM_B", "completed")],
+        "the run's closing summary carries the finished checklist",
+        f"summary.plan={json.dumps(closing_plan)[:300]}",
+    )
+
+    _, result = await history_session(client, session_key)
+    plan = result.get("plan")
+    log(f"chat.history plan: {json.dumps(plan)}")
+    check(
+        plan_items(plan) == [("QA_ITEM_A", "completed"), ("QA_ITEM_B", "completed")],
+        "chat.history reports both items completed",
+        f"items={plan_items(plan)}",
+    )
+    save_state({"session_key": session_key, "plan": plan})
+    await client.ws.close()
+
+
+async def checklist_after():
+    state = load_state()
+    session_key = state["session_key"]
+    client = await connect("qa-thread-checklist-after")
+
+    _, result = await history_session(client, session_key)
+    check(
+        result.get("plan") == state["plan"] and state["plan"] is not None,
+        "after restart, chat.history reports the same checklist",
+        f"before={json.dumps(state['plan'])[:200]} after={json.dumps(result.get('plan'))[:200]}",
+    )
+
+    _, run_id, frames = await send_collecting(client, "QA_CHECKLIST_CLEAR start over", session_key)
+    _, result = await history_session(client, session_key)
+    plan = result.get("plan")
+    check(
+        plan is None or plan_items(plan) == [],
+        "after `clear`, chat.history shows no checklist, not the old one",
+        f"plan={json.dumps(plan)[:300]}",
+    )
+    # `clear` returns no snapshot, so a client that paints from snapshots
+    # (the TUI) learns about it only from the run's closing summary: an EMPTY
+    # `summary.plan` (shared/protocol/src/events.rs `RunSummary.plan`). The
+    # Panel additionally hides on the `clear` action itself.
+    closing = run_complete(frames, run_id) or {}
+    summary_plan = (closing.get("summary") or {}).get("plan", "absent")
+    check(
+        isinstance(summary_plan, dict) and plan_items(summary_plan) == [],
+        "the cleared run's closing summary carries an EMPTY checklist, so live clients drop the old one",
+        f"run_complete seen={bool(closing)} summary.plan={json.dumps(summary_plan)[:300]}",
+    )
+    await client.ws.close()
+
+
 STAGES = {
     ("reopen", "before"): reopen_before,
     ("reopen", "after"): reopen_after,
+    ("checklist", "before"): checklist_before,
+    ("checklist", "after"): checklist_after,
 }
 
 
