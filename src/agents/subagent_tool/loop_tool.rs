@@ -757,6 +757,18 @@ impl LoopTool for SubagentTool {
             SubagentAction::Run(run_args) => run_args,
         };
 
+        if args.run_in_background
+            && crate::sandbox::context::current_exec_workspace_binding()
+                .is_some_and(|binding| binding.is_owned_worktree())
+        {
+            return ToolResult::Error {
+                error:
+                    "A detached subagent cannot outlive an owned worktree; run in the foreground"
+                        .into(),
+                retryable: false,
+            };
+        }
+
         // `context=fork` — capture the parent transcript ONCE, here, before any
         // branch. Every child of this call then forks the same instant.
         //

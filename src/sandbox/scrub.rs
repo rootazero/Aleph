@@ -142,8 +142,7 @@ pub fn strip_unsafe_invisible(bytes: &[u8]) -> (Cow<'_, [u8]>, usize) {
 /// returns the surrounding context to the model.
 ///
 /// This is the single source of truth for the output floor, shared by every
-/// [`Sandbox`](crate::sandbox::Sandbox) implementation (`WorkspaceSandbox`,
-/// `WorktreeSandbox`). Duplicating it per execution path is exactly how a floor
+/// [`Sandbox`](crate::sandbox::Sandbox) execution path. Duplicating it per path is how a floor
 /// silently diverges — the same defect class as a bare PKCS#8 key slipping one
 /// of two secret catalogs, or a worktree subagent running with no floor at all.
 ///

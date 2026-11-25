@@ -66,8 +66,8 @@
 //!   a reinjected message that silently lost its images is a lie of the same
 //!   kind this module exists to remove. Reference-style attachments
 //!   (`path`/`url`) persist as-is.
-//! * `pending_media` shared buffers and `sandbox_override` handles — neither
-//!   is serializable, and neither is set by the two lane surfaces.
+//! * The `pending_media` shared buffer is in-memory only. Owned worktree
+//!   bindings are not eligible for the queue; ordinary paths retain their wire form.
 //! * The payload is **not** secret-masked: it must round-trip byte-exact or
 //!   the reinjected run answers a different message than the user typed. The
 //!   journal lives under the same trust domain as the session transcript
@@ -164,16 +164,22 @@ impl QueuedRunPayload {
     pub fn from_request(
         request: &crate::gateway::execution_engine::RunRequest,
         locale: crate::gateway::i18n::Locale,
-    ) -> Self {
+    ) -> Option<Self> {
+        use crate::sandbox::context::ExecWorkspace;
+        let workspace_override = match &request.workspace_override {
+            Some(ExecWorkspace::OwnedWorktree(_)) => return None,
+            Some(ExecWorkspace::Directory(path)) => Some(path.clone()),
+            None => None,
+        };
         let lane = crate::gateway::btw::execution_session(&request.session_key, &request.metadata);
-        Self {
+        Some(Self {
             run_id: request.run_id.clone(),
             lane_key: lane.to_key_string(),
             addressed_session_key: request.session_key.to_key_string(),
             input: request.input.clone(),
             metadata: request.metadata.clone(),
             timeout_secs: request.timeout_secs,
-            workspace_override: request.workspace_override.clone(),
+            workspace_override,
             max_iterations_override: request.max_iterations_override,
             model_override: request.model_override.clone(),
             attachments: request.attachments.clone(),
@@ -188,7 +194,7 @@ impl QueuedRunPayload {
             // The single write entry for the telecom marker (census test in
             // `persisted_marker`): both spawn seams reach it only through here.
             telecom_marker: PersistedTelecomMarker::capture(request.telecom_public.as_ref()),
-        }
+        })
     }
 }
 
@@ -449,8 +455,10 @@ where
         metadata,
         attachments: payload.attachments.clone(),
         pending_media: Default::default(),
-        sandbox_override: None,
-        workspace_override: payload.workspace_override.clone(),
+        workspace_override: payload
+            .workspace_override
+            .clone()
+            .map(crate::sandbox::context::ExecWorkspace::Directory),
         max_iterations_override: payload.max_iterations_override,
         model_override: payload.model_override.clone(),
         telecom_public,
@@ -483,8 +491,7 @@ where
 /// fire-time authority (round 11): refused ⇒ tombstoned
 /// (`SettleReason::AuthorityRefused`), unknown ⇒ left journaled for the next
 /// call. What remains has its `RunRequest` rebuilt from the journaled payload
-/// (`pending_media` starts empty, `sandbox_override` is `None` — neither is
-/// set by the two lane surfaces; see the module doc), emits through the
+/// (`pending_media` starts empty; see the module doc), emits through the
 /// gateway bus plus the origin-channel fanout when the session has a bound
 /// route (the same two-arm shape as `ResumeCoordinator::retrigger`, so a
 /// channel user's re-delivered message still answers back to the channel),
@@ -897,7 +904,6 @@ mod tests {
             metadata: HashMap::new(),
             attachments: Vec::new(),
             pending_media: Default::default(),
-            sandbox_override: None,
             workspace_override: None,
             max_iterations_override: None,
             model_override: None,
@@ -931,12 +937,26 @@ mod tests {
     }
 
     #[test]
+    fn owned_worktree_cannot_enter_the_durable_queue() {
+        let mut request = live_request(None);
+        request.workspace_override =
+            Some(crate::sandbox::context::ExecWorkspace::worktree_fixture(
+                "/tmp/owned".into(),
+                "/tmp/repo".into(),
+            ));
+        assert!(
+            QueuedRunPayload::from_request(&request, crate::gateway::i18n::Locale::En).is_none()
+        );
+    }
+
+    #[test]
     fn a_public_context_survives_from_request_serde_and_reinjection() {
         let ctx = sms_context();
         let queued = QueuedRunPayload::from_request(
             &live_request(Some(ctx.clone())),
             crate::gateway::i18n::Locale::En,
-        );
+        )
+        .unwrap();
         assert!(matches!(
             queued.telecom_marker,
             PersistedTelecomMarker::Public(_)
@@ -952,7 +972,8 @@ mod tests {
     #[test]
     fn an_ordinary_request_stays_none_and_is_written_explicitly() {
         let queued =
-            QueuedRunPayload::from_request(&live_request(None), crate::gateway::i18n::Locale::En);
+            QueuedRunPayload::from_request(&live_request(None), crate::gateway::i18n::Locale::En)
+                .unwrap();
         assert_eq!(queued.telecom_marker, PersistedTelecomMarker::Ordinary);
         let back: QueuedRunPayload =
             serde_json::from_slice(&serde_json::to_vec(&queued).unwrap()).unwrap();
@@ -1018,10 +1039,13 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let _g = arm(tmp.path());
         let ctx = sms_context();
-        assert!(record_enqueued(QueuedRunPayload::from_request(
-            &live_request(Some(ctx.clone())),
-            crate::gateway::i18n::Locale::En
-        )));
+        assert!(record_enqueued(
+            QueuedRunPayload::from_request(
+                &live_request(Some(ctx.clone())),
+                crate::gateway::i18n::Locale::En
+            )
+            .unwrap()
+        ));
         let survivor = survivors().pop().unwrap();
         assert_eq!(admit(&survivor).unwrap().telecom_public, Some(ctx));
     }

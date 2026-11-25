@@ -438,7 +438,7 @@ impl AlephTool for TeamDelegateTool {
         // 3. Run the member agent via the shared execution path. G2 —
         // `team_delegate` is the synchronous leader-driven path (one task
         // at a time, leader awaits), so worktree isolation is unnecessary:
-        // pass `false` and keep behaviour identical to pre-G2.
+        // omit the worktree project source.
         let outcome = execute_member_task(
             context,
             &target,
@@ -447,7 +447,7 @@ impl AlephTool for TeamDelegateTool {
             args.task.clone(),
             member_run_id,
             args.timeout_seconds,
-            false,
+            None,
             // team_delegate is the synchronous leader path with no per-step
             // model or effort override — keep the member on its default
             // model and thinking depth.

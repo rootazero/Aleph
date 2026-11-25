@@ -47,6 +47,18 @@ pub trait OsSandboxDriverTrait: Send + Sync + 'static {
     /// Whether the sandbox mechanism is available on the current host.
     fn is_supported(&self) -> bool;
 
+    /// Reject known missing prerequisites; success does not certify native launch.
+    fn execution_preflight(&self) -> Result<(), SandboxError> {
+        if self.is_supported() {
+            Ok(())
+        } else {
+            Err(SandboxError::BackendUnavailable {
+                platform: self.platform(),
+                reason: "required platform or sandbox executable was not found".into(),
+            })
+        }
+    }
+
     fn profile_for(
         &self,
         capabilities: &SandboxCapabilities,

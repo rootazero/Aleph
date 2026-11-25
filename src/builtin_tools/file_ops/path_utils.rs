@@ -1121,7 +1121,7 @@ pub fn resolve_for_removal(
 /// 2. Absolute paths (starting with `/`) - used as-is, then rebased through
 ///    the active [`FsScope`](crate::tools::fs_scope::FsScope) remap when the
 ///    run is worktree-isolated (parent-repo paths land inside the worktree,
-///    mirroring what `WorktreeSandbox` already does for command execution)
+///    matching the trusted root of command execution)
 /// 3. Home paths (starting with `~`) - expanded to home directory
 /// 4. Relative paths - resolved relative to:
 ///    a. the per-run `FsScope` task-local base — per-run truth, immune to a

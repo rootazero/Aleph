@@ -445,8 +445,8 @@ impl InboundMessageRouter {
             metadata,
             attachments: ctx.message.attachments.clone(),
             pending_media: pending_media.clone(),
-            sandbox_override: None,
-            workspace_override: effective_workspace,
+            workspace_override: effective_workspace
+                .map(crate::sandbox::context::ExecWorkspace::Directory),
             max_iterations_override: None,
             model_override,
             // Stamped from the TYPED `MessageMeta::Sms` the SMS interface
@@ -521,9 +521,11 @@ impl InboundMessageRouter {
             let locale = crate::gateway::i18n::Locale::from_config(
                 request.metadata.get("locale").map(String::as_str),
             );
-            crate::gateway::busy_queue::durable::record_enqueued(
-                crate::gateway::busy_queue::QueuedRunPayload::from_request(&request, locale),
-            );
+            if let Some(payload) =
+                crate::gateway::busy_queue::QueuedRunPayload::from_request(&request, locale)
+            {
+                crate::gateway::busy_queue::durable::record_enqueued(payload);
+            }
         }
 
         // Spawn the delivery task (non-blocking). While the session is busy the

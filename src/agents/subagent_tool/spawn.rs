@@ -479,6 +479,7 @@ impl SubagentTool {
             self.tools.parent_tools.clone(),
         )
         .with_parent_agent_id(self.agent_resolution.parent_agent_id.clone());
+        runtime.sandbox_factory = self.sandbox_factory.clone();
         if let Some(w) = self.memory.raw_memory_writer.clone() {
             runtime = runtime.with_raw_memory_writer(w);
         }

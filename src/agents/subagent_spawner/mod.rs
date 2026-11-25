@@ -40,6 +40,9 @@ use crate::tools::service::ToolService;
 /// provider, and the parent's chain context).
 #[derive(Clone)]
 pub struct SpawnerBase {
+    /// The same boot-mounted sandbox factory used by the main prompt.
+    /// Boot-mounted execution boundary used for the child prompt projection.
+    pub sandbox_factory: Option<crate::orchestrator::SandboxFactory>,
     /// Shared session service (same actor as the parent).
     pub session: Arc<dyn SessionService>,
     /// The parent's tool service. The spawner decorates this with an
@@ -221,9 +224,8 @@ pub struct SpawnRequest<'a> {
 ///
 /// # Why each field is set the way it is
 ///
-/// * **`cwd`** — the worktree path for an isolated child (definitive: its exec
-///   tools run under a [`WorktreeSandbox`](crate::sandbox::WorktreeSandbox)
-///   rooted there), otherwise whatever
+/// * **`cwd`** — the worktree path for an isolated child (its exec tools use
+///   that trusted root with the mounted OS sandbox), otherwise whatever
 ///   [`current_exec_workspace`](crate::sandbox::context::current_exec_workspace)
 ///   reports *at this point in the child's own call stack* — which is the same
 ///   value its `WorkspaceSandbox` will read when it jails a command. Reading
@@ -307,9 +309,6 @@ fn child_environment_context(
         None => RuntimeContext::collect_detached(model),
     });
 
-    ctx.sandbox_summary =
-        worktree.map(|path| crate::sandbox::SandboxSummary::isolated_worktree(path.to_path_buf()));
-
     ctx.envelope_parent = parent_session_id
         .filter(|id| !id.is_empty())
         .map(|id| EnvelopeParent {
@@ -336,6 +335,18 @@ fn child_environment_context(
     // single-human deployment's prompt byte-identical.
     ctx.room_roster = crate::thinker::layers::ambient_room_roster_line();
     ctx
+}
+
+fn worktree_source(
+    parent: Option<&crate::sandbox::context::ExecWorkspace>,
+    project_root: Option<std::path::PathBuf>,
+) -> Result<std::path::PathBuf, String> {
+    parent
+        .filter(|binding| binding.is_owned_worktree())
+        .map(|binding| binding.root().to_path_buf())
+        .or(project_root)
+        .or_else(|| parent.map(|binding| binding.root().to_path_buf()))
+        .ok_or_else(|| "sub-agent failed: worktree requires a trusted checkout".into())
 }
 
 /// Build a child ephemeral session, run the harness, and synthesize the
@@ -390,36 +401,20 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
     // P3 Stage H — provision worktree if requested. The handle is held in the
     // outer scope so Drop fires as a safety net on cancel/panic/timeout/error.
     // Explicit cleanup happens on the success path (after harness completes Ok).
-    let worktree_handle: Option<crate::sandbox::WorktreeHandle> = match req.isolation {
+    let worktree_handle = match req.isolation {
         Some(crate::agents::IsolationMode::Worktree) => {
-            // B4-02: anchor on the run's project root, not the daemon's cwd.
-            // `aleph-server` is a long-lived process whose cwd is wherever it
-            // was launched (often `/` under the Tauri shell / launchd, the
-            // operator's shell cwd otherwise) and has no relationship to the
-            // active project. The main run path uses `current_project_root()`
-            // to anchor `FsScope` (and this very function reads the same
-            // value later for `session_write_id`, mod.rs:621), so the correct
-            // anchor is already in scope.
-            //
-            // Fall back to cwd only when no project root is published (e.g.
-            // operator ran the server outside any project). The fallback is
-            // the existing behaviour, preserved to keep `aleph-server` startable
-            // from anywhere — but the project's check_root_eq assertion below
-            // makes the wrong-tree failure visible.
-            let project_root = crate::projects::current_project_root();
-            let repo_root = match project_root.as_deref() {
-                Some(root) => root.to_path_buf(),
-                None => tokio::task::spawn_blocking(std::env::current_dir)
-                    .await
-                    .map_err(|e| format!("sub-agent failed: cwd join: {e}"))?
-                    .map_err(|e| format!("sub-agent failed: cwd: {e}"))?,
-            };
+            let parent = crate::sandbox::context::current_exec_workspace_binding();
+            let repo_root =
+                worktree_source(parent.as_ref(), crate::projects::current_project_root())?;
             let label = &req.agent_def.id;
-            let handle =
+            let mut handle =
                 crate::sandbox::worktree::create(&repo_root, label, base.trace_sink.clone())
                     .await
                     .map_err(|e| format!("sub-agent failed: worktree create: {e}"))?;
-            Some(handle)
+            if let Some(crate::sandbox::context::ExecWorkspace::OwnedWorktree(parent)) = parent {
+                handle.retain_parent(parent);
+            }
+            Some(Arc::new(handle))
         }
         None => None,
     };
@@ -480,16 +475,17 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
     // relative paths anchor at the worktree root and parent-repo absolute
     // paths are rebased into the checkout. Both ends are canonicalized so the
     // remap survives symlinked tmpdirs (macOS `/var` → `/private/var`).
-    // Without a worktree the body runs un-wrapped, inheriting whatever scope
-    // the parent run published — a non-isolated subagent intentionally shares
-    // the parent's workspace.
-    let fs_scope = match worktree_handle.as_ref() {
-        Some(h) => {
+    let exec_workspace = worktree_handle
+        .as_ref()
+        .map(crate::sandbox::WorktreeHandle::exec_workspace)
+        .or_else(crate::sandbox::context::current_exec_workspace_binding);
+    let fs_scope = match exec_workspace.as_ref() {
+        Some(crate::sandbox::context::ExecWorkspace::OwnedWorktree(handle)) => {
             // `canonicalize()` can block on the filesystem; move it off the
             // async runtime thread. Failure to canonicalize is non-fatal — we
             // fall back to the raw worktree/repo paths.
-            let wt = h.path().to_path_buf();
-            let repo = h.repo_root().to_path_buf();
+            let wt = handle.path().to_path_buf();
+            let repo = handle.repo_root().to_path_buf();
             let wt_for_blocking = wt.clone();
             let repo_for_blocking = repo.clone();
             let (wt, repo) = tokio::task::spawn_blocking(move || {
@@ -503,19 +499,8 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             .unwrap_or((wt, repo));
             Some(crate::tools::fs_scope::FsScope::worktree(wt, repo))
         }
-        None => None,
+        _ => None,
     };
-
-    // P3 Stage H — command sandbox override: a worktree-isolated child runs its
-    // exec tools (`bash` / `code_exec` / `code_check`) through a `WorktreeSandbox`
-    // so commands execute at the worktree path with `CARGO_TARGET_DIR` redirected.
-    // Installed as a task-local around `run_body` below (mirrors `fs_scope`);
-    // `None` for a non-isolated child keeps the parent's shared sandbox.
-    let sandbox_override: Option<Arc<dyn crate::sandbox::Sandbox>> =
-        worktree_handle.as_ref().map(|h| {
-            Arc::new(crate::sandbox::WorktreeSandbox::new(h.path().to_path_buf()))
-                as Arc<dyn crate::sandbox::Sandbox>
-        });
 
     let run_body = async {
         // 2. Unique ephemeral session key for this sub-agent.
@@ -595,22 +580,27 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             Some(factor) => token_budget.with_estimate_factor(factor),
             None => token_budget,
         };
+        let mut environment = child_environment_context(
+            resolved_model.as_deref().unwrap_or(base.provider.name()),
+            worktree_handle.as_ref().map(|h| h.path()),
+            base.parent_session_id.as_deref(),
+            req.request_id,
+            base.parent_tools.enforced_exec_tier(),
+        );
+        if let Some(factory) = base.sandbox_factory.as_ref() {
+            let mounted = factory(&child_id.to_key_string())
+                .map_err(|e| format!("sub-agent failed: sandbox handle: {e}"))?;
+            environment.sandbox_summary = crate::sandbox::context::SESSION_ID
+                .scope(child_id.clone(), async { mounted.summary() })
+                .await;
+        }
         let mut builder = PromptBuilder::new(PromptConfig {
             token_budget,
             ..PromptConfig::default()
         })
         .with_agent(req.agent_def.clone())
         .with_chain_context(child_chain.clone())
-        .with_resolved_context(child_environment_context(
-            resolved_model.as_deref().unwrap_or(base.provider.name()),
-            worktree_handle.as_ref().map(|h| h.path()),
-            base.parent_session_id.as_deref(),
-            req.request_id,
-            // The gate the child's calls will actually meet, asked of the
-            // object that enforces it — `parent_tools` IS the service the
-            // child's `AllowlistToolService` delegates every execution to.
-            base.parent_tools.enforced_exec_tier(),
-        ));
+        .with_resolved_context(environment);
         if let Some(strategy) = req.strategy {
             builder = builder.with_strategy(strategy.to_string());
         }
@@ -1068,7 +1058,7 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             }
         }
     };
-    let body = crate::sandbox::context::with_sandbox_override(sandbox_override, run_body);
+    let body = crate::sandbox::context::with_exec_workspace_binding(exec_workspace, run_body);
     let result: Result<LoopRunResult, String> = match fs_scope {
         Some(scope) => crate::tools::fs_scope::with_fs_scope(Some(scope), body).await,
         None => body.await,
@@ -1085,7 +1075,7 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
                 );
             }
         }
-        if let Some(h) = worktree_handle {
+        if let Some(h) = worktree_handle.and_then(|handle| Arc::try_unwrap(handle).ok()) {
             if let Err(e) = h.cleanup().await {
                 tracing::error!(
                     error = %e,

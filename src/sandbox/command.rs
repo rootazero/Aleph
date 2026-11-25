@@ -57,9 +57,8 @@ pub struct SandboxOutput {
     pub stderr_truncated_bytes: u64,
     pub duration_ms: u64,
     /// Set when the OS backend's own denial dialect appeared in `stderr` —
-    /// see [`SandboxDenialHint`]. `None` on every path that runs without an
-    /// OS driver (`WorktreeSandbox`, `NoopSandbox`) and under every backend
-    /// that declares no dialect.
+    /// see [`SandboxDenialHint`]. `None` when the driver declares no dialect
+    /// or no driver denial was detected.
     #[serde(default)]
     pub denial_hint: Option<SandboxDenialHint>,
 }
@@ -109,6 +108,15 @@ impl SandboxDenialHint {
 
 #[derive(Debug, thiserror::Error)]
 pub enum SandboxError {
+    #[error("sandbox disabled: set [sandbox] enabled = true in config to execute commands")]
+    Disabled,
+
+    #[error("sandbox backend {platform} unavailable: {reason}")]
+    BackendUnavailable {
+        platform: &'static str,
+        reason: String,
+    },
+
     #[error("capability denied: {reason}")]
     CapabilityDenied { reason: String },
 

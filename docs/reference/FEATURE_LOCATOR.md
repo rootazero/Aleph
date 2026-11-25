@@ -1741,6 +1741,14 @@ Gateway owns CDP; Panel/TUI are I/O only; opt-in only for an explicit valid `[ga
 - **口语关键词**：后台 bash 跑到一半看不见输出、重启后 poll 说没这个进程、关了 daemon 但 cargo build 还在跑、`deny_read_globs` 设了没用、copy 说成功其实漏了文件、审批等了半天路径被换掉、工具描述字节账不对
 - **代码锚点**：`src/sandbox/live_tail.rs`（**新**：环形尾巴）· `src/sandbox/context.rs::LIVE_TAIL`（第四个 task-local）· `src/sandbox/platforms/common.rs::{run_child_with_drain, drain_bounded}`（唯一 drain 实现）· `src/builtin_tools/process_journal.rs`（**新**：durable 台账）· `src/builtin_tools/process_registry.rs`（`attach_live` / `retire` / `seed_id_floor` / `journaled`）· `src/builtin_tools/bash_exec.rs`（`running_payload` / `recovered_row` / 四个面的单一 resolver）· `src/builtin_tools/partial_output.rs`（**新**，pre-scrub 内容闸的单一源，2026-08-10 第二轮从 `bash_exec::partial_view` 提出）· `src/bin/aleph-server/commands/start/{mod.rs,helpers.rs}`（两条出口的 reaper + boot reconcile）· `src/sandbox/workspace/mod.rs::revalidate_cwd_containment`（两阶段 cwd 闸）· `src/builtin_tools/file_ops/path_utils.rs`（deny glob 接到文件面）
 
+#### 当前执行边界 / Current execution boundary (2026-11-25)
+
+- Team 与子 Agent 通过 `src/sandbox/context.rs::ExecWorkspace` 传递受信工作区，不再替换生产执行器。`src/teams/dispatcher/runner.rs` 从已授权项目选源；`src/agents/subagent_spawner/mod.rs` 继承受管根，显式嵌套从父 checkout 的 committed HEAD 创建。
+- `src/sandbox/workspace/mod.rs` 从受管根生成 OS 策略，已校验的 `cwd` 只控制启动位置。普通 Bash、Code Exec、Code Check 继续共享 boot-mounted sandbox。`SandboxSummary` 是配置声明；`Disabled`、`BackendUnavailable` 是拒绝，不是宿主回退。
+- `src/builtin_tools/bash_exec.rs` 和 `src/builtin_tools/browser_tools/companion/tool.rs` 在受管 worktree 内拒绝新的 detached Bash / companion；Team 取消等待只确认 Rust task，不保证原生进程树回收。平台原有 scratch 和审批规则未放宽。详见 [Sandbox](SANDBOX.md)；§3.8 仍只讲内容安全。
+
+Team and subagents pass a trusted root, not a replacement executor. The historical worktree-only launcher and its override routing below were removed on 2026-11-25.
+
 #### Historical / 历史记录：后台执行生命周期与 VFS 改造记录（2026-08-10）
 
 - **① 关闭钩子从来没被调用过（真 bug，最贵的一条）**：`kill_all_running_background()` **全仓零调用者**，而**两处**文档（`ProcessRegistry::shutdown` 的 doc + 本文件 §3.7）都断言它已接在 daemon shutdown 链路上。后果正是那两处文档预言的：`bash {background:true}` 起的 `cargo build` 会活过 `aleph stop` / `daemon.shutdown` / Ctrl-C，变成孤儿继续往 workspace 写文件——`Child::kill_on_drop` 在 runtime 自身被拆除时是尽力而为。**用名字 grep 找断线在这里结构性失效**：它唯一的外部引用就是那句撒谎的注释。现接**两条**出口（有序路径 + 卡死路径的 `process_exit` 之前，后者还要 yield 一下让 runtime 有机会 drop 掉 `Child` 才触发 `kill_on_drop`），守卫 `both_daemon_exit_paths_reap_background_jobs` 按名字红。
@@ -1821,7 +1829,7 @@ Gateway owns CDP; Panel/TUI are I/O only; opt-in only for an explicit valid `[ga
   守卫：`error.rs::{a_number_embedding_an_auth_status_is_not_an_auth_failure, a_real_auth_status_is_still_transient}`——两条一起写，否则「修好误报」和「删掉这类分类」在套件里长得一模一样。
 
 ④ **CUT · `sandbox_kind` 轴（含 `SandboxKind` / `DenyAllSandbox`）。** 选择是活的（`dispatch.rs` 按它调工厂），终点只有一个：`prompt_build` 拿它 `.summary()` 渲染 `<environment>`。`HarnessDeps` 没有 sandbox 字段，**工具永远跑在 boot 那一个共享 sandbox 上**。而方向是反的——`DenyAllSandbox` 不覆写 `summary()`，所以声明 `none` 的那条 flow 既没被多限制一点，又是唯一一条对自己执行封套只字不提的 flow，尽管 `sandbox_factory.rs` 的 doc 逐字写着「exec-class tools must not run at all」。
-  **不 CONNECT**：这一问已有三个活答案（boot `[sandbox]` / `exec_tier` / `[policies.tool_permissions]`），第四个要么无效（现状）要么就是**第二个执行强制点**，而 CLAUDE.md 写死「执行档位唯一强制点是 `src/tools/scoped/`」。`req.sandbox_override` 保留（teams dispatcher 注入 `WorktreeSandbox` 是真消费者）。守卫 `the_factory_has_no_per_flow_selector` 是源码级的——运行时分不出「选了个更严的 sandbox」和「选了 boot sandbox」。
+  **不 CONNECT**：这一问已有三个活答案（boot `[sandbox]` / `exec_tier` / `[policies.tool_permissions]`），第四个要么无效（现状）要么就是**第二个执行强制点**，而 CLAUDE.md 写死「执行档位唯一强制点是 `src/tools/scoped/`」。此处当时保留 `req.sandbox_override` 供 Team 使用；2026-11-25 已删除该字段，Team 只传受信工作区，执行仍走 boot-mounted sandbox（见 §3.15）。守卫 `the_factory_has_no_per_flow_selector` 是源码级的——运行时分不出「选了个更严的 sandbox」和「选了 boot sandbox」。
   ⚠️ `FlowSpec` 带 `deny_unknown_fields`，删字段会让写了 `sandbox_kind` 的用户 flow 解析失败——**正因如此这一条必须排在 ② 之前**：今天没有任何用户 flow 能在 boot 被加载，影响半径为 0。
 
 ⑤ **CUT · `FlowSpec.priority` / `FlowOverrides.{context_mode, extra_system_prompt}`。** 三个字段零读者（`priority` 连预设 TOML 里都没人写过），编译变异证明。留下的唯一 override 是 `max_iterations`——它是活的，同一个值既进 `HarnessDeps` 又进 `SessionBudgetLayer`，所以告诉模型的上限就是循环强制的上限。**一个没人读的旋钮和一个没人设的旋钮长得一模一样**，而 ② 之后它们会第一次被正式交付给用户，所以只能在 ② 之前删。

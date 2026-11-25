@@ -158,7 +158,6 @@ where
         metadata,
         attachments: Vec::new(),
         pending_media: crate::gateway::media::PendingMedia::default(),
-        sandbox_override: None,
         workspace_override: None,
         max_iterations_override: None,
         model_override: None,

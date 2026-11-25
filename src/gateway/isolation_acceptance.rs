@@ -1380,7 +1380,8 @@ async fn two_members_of_a_room_work_in_the_same_bound_folder() {
             )
             .await
             .expect("a room member's turn must build")
-            .workspace_override
+            .workspace_path()
+            .map(std::path::Path::to_path_buf)
     }
 
     let alice = cwd_for("u-ws-alice", Some(&room.id)).await;

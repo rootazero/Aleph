@@ -30,6 +30,8 @@ pub struct FlowHandle {
     pub events: broadcast::Receiver<FlowStreamEvent>,
     pub completion: oneshot::Receiver<Result<FlowOutcome, FlowError>>,
     pub cancel: CancellationToken,
+    // Abort the actual harness if the checkout owner stops awaiting it.
+    _owned_task: Option<tokio_util::task::AbortOnDropHandle<()>>,
 }
 
 impl std::fmt::Debug for FlowHandle {
@@ -527,15 +529,6 @@ pub struct FlowRequest {
     /// for subagent dispatch and internal tooling that runs without a
     /// channel.
     pub interaction_manifest: Option<crate::thinker::interaction::InteractionManifest>,
-    /// G2 — per-request sandbox override. `None` falls back to
-    /// `Orchestrator::sandbox_factory(&session_key)` — the pre-G2 default.
-    /// `Some(sandbox)` short-circuits the factory; used by the
-    /// team dispatcher to inject a `WorktreeSandbox` so concurrent team
-    /// members write to isolated git worktrees and cannot corrupt each
-    /// other's index.
-    ///
-    /// Not included in `Debug` output because `Arc<dyn Sandbox>` is not `Debug`.
-    pub sandbox_override: Option<std::sync::Arc<dyn crate::sandbox::Sandbox>>,
     /// Per-request workspace override (project mode). When `Some`, this path
     /// is persisted on the `RunStarted` marker so a crash-resume can land
     /// back in the same project folder, and it surfaces to `HarnessRunner`
@@ -1127,6 +1120,18 @@ impl Orchestrator {
 
     /// Seven-step dispatch. See design §6.
     pub async fn dispatch(&self, req: FlowRequest) -> Result<FlowHandle, FlowError> {
+        self.dispatch_with_cancel(req, CancellationToken::new())
+            .await
+    }
+
+    pub(crate) async fn dispatch_with_cancel(
+        &self,
+        req: FlowRequest,
+        cancel: CancellationToken,
+    ) -> Result<FlowHandle, FlowError> {
+        if cancel.is_cancelled() {
+            return Err(FlowError::Cancelled);
+        }
         // Step 1: resolve flow_id → FlowSpec (see `resolve_spec`).
         let spec = self.resolve_spec(&req)?;
 
@@ -1141,7 +1146,6 @@ impl Orchestrator {
             depth: _,
             session_hint,
             parent_session,
-            sandbox_override,
             event_tx: req_event_tx,
             tool_service: tool_service_override,
             trace_sink,
@@ -1194,25 +1198,13 @@ impl Orchestrator {
             }
         }
 
-        // Step 5: brain pick deferred to HarnessRunner (ProviderRegistry lives there).
-
-        // Step 6: sandbox provision. Per-request `sandbox_override` short-circuits
-        // the factory — the team dispatcher uses it to inject a `WorktreeSandbox`
-        // for per-task git isolation. Falls back to the factory when None.
-        let sandbox = match sandbox_override {
-            Some(sb) => sb,
-            None => match (self.sandbox_factory)(&session_res.session_key) {
-                Ok(sb) => sb,
-                Err(e) => {
-                    let mut guard = self
-                        .active_sessions
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner());
-                    guard.remove(&session_res.session_key);
-                    return Err(e);
-                }
-            },
+        let lock = SessionLockGuard {
+            active: self.active_sessions.clone(),
+            key: session_res.session_key.clone(),
         };
+
+        // Step 5: brain pick deferred to HarnessRunner (ProviderRegistry lives there).
+        let sandbox = (self.sandbox_factory)(&session_res.session_key)?;
 
         // Step 7: spawn harness, plumbing events + completion + cancel.
         // One channel per run. A caller that already publishes on it (the
@@ -1227,7 +1219,6 @@ impl Orchestrator {
             None => flow_event_channel(),
         };
         let (done_tx, done_rx) = oneshot::channel();
-        let cancel = CancellationToken::new();
 
         let harness = self.harness.clone();
         let spec_clone = spec.clone();
@@ -1235,8 +1226,6 @@ impl Orchestrator {
         let sandbox_clone = sandbox.clone();
         let cancel_clone = cancel.clone();
         let session_key = session_res.session_key.clone();
-        let active = self.active_sessions.clone();
-        let session_for_release = session_res.session_key.clone();
         // Sixth capture at the same boundary: the run-origin task-local
         // (`telecom::run_origin`) is seeded by `run_loop::with_request_scope`
         // on the gateway side and dies at this `tokio::spawn`, so a tool
@@ -1295,15 +1284,14 @@ impl Orchestrator {
         let transcripts = crate::extension::hooks::current_transcript_source();
         // These run-wide task-locals are published by `run_agent_loop` but do
         // not cross the harness spawn boundary unless captured and re-scoped.
-        let exec_workspace = crate::sandbox::context::current_exec_workspace();
+        let exec_workspace = crate::sandbox::context::current_exec_workspace_binding();
         let fs_scope = crate::tools::fs_scope::current();
         let pending_media = crate::gateway::media::current_pending_media();
 
-        tokio::spawn(async move {
-            let _lock = SessionLockGuard {
-                active,
-                key: session_for_release,
-            };
+        let owns_checkout = exec_workspace
+            .as_ref()
+            .is_some_and(crate::sandbox::context::ExecWorkspace::is_owned_worktree);
+        let task = tokio::spawn(async move {
             // Re-establish the project-root task-local inside the spawned
             // harness task. `tokio::spawn` does NOT inherit task-locals, so the
             // `with_project_root` scope set on the gateway side (run_loop) is
@@ -1351,7 +1339,7 @@ impl Orchestrator {
                 crate::projects::with_project_root(
                     // rust-doctor-disable-next-line excessive-clone
                     workspace_override.clone(),
-                    crate::sandbox::context::with_exec_workspace(
+                    crate::sandbox::context::with_exec_workspace_binding(
                         exec_workspace,
                         crate::tools::fs_scope::with_fs_scope(
                             fs_scope,
@@ -1419,8 +1407,8 @@ impl Orchestrator {
             // caller — meaning the handle was abandoned and no one is waiting for
             // the result. Dropping the result is intentional; a `return` or `?`
             // here would propagate an error that signals nothing actionable.
+            drop(lock);
             let _ = done_tx.send(outcome);
-            // _lock drops here, releasing the session key regardless of panic.
         });
 
         Ok(FlowHandle {
@@ -1429,6 +1417,7 @@ impl Orchestrator {
             events: event_rx,
             completion: done_rx,
             cancel,
+            _owned_task: owns_checkout.then(|| tokio_util::task::AbortOnDropHandle::new(task)),
         })
     }
 
@@ -1464,7 +1453,7 @@ mod outcome_tests {
     /// **Scope, stated so it is not mistaken for more:** this checks ONE
     /// task-local. It deliberately does not derive the full set of `with_*`
     /// combinators wrapping `run_agent_loop_inner` — several of those
-    /// (`with_fs_scope`, `with_exec_workspace`, `with_pending_media`) reach the
+    /// (`with_fs_scope`, `with_exec_workspace_binding`, `with_pending_media`) reach the
     /// harness through explicit arguments instead, and an auto-derived list
     /// would need an exemption entry per case, i.e. exactly the name list this
     /// shape is supposed to replace. Whether each of those is genuinely carried
@@ -1561,9 +1550,9 @@ mod outcome_tests {
 
         for (publisher, capture, wrapper) in [
             (
-                "with_exec_workspace(",
-                "let exec_workspace = crate::sandbox::context::current_exec_workspace();",
-                "with_exec_workspace(exec_workspace,",
+                "with_exec_workspace_binding(",
+                "let exec_workspace = crate::sandbox::context::current_exec_workspace_binding();",
+                "with_exec_workspace_binding(exec_workspace,",
             ),
             (
                 "with_fs_scope(",

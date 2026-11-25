@@ -168,12 +168,21 @@ pub struct SubagentTool {
     pub(super) background: BackgroundConfig,
     pub(super) memory: MemoryCapture,
     pub(super) tools: ToolingContext,
+    pub(super) sandbox_factory: Option<crate::orchestrator::SandboxFactory>,
     pub(super) policy_inheritance: PolicyInheritance,
     pub(super) budget_inheritance: BudgetInheritance,
     pub(super) trace: TraceContext,
 }
 
 impl SubagentTool {
+    pub(crate) fn with_sandbox_factory(
+        mut self,
+        factory: crate::orchestrator::SandboxFactory,
+    ) -> Self {
+        self.sandbox_factory = Some(factory);
+        self
+    }
+
     /// Create a new `SubagentTool`.
     ///
     /// - `provider`: the AI provider for the sub-agent's LLM calls
@@ -218,6 +227,7 @@ impl SubagentTool {
                 memory_runtime: None,
                 parent_session_id: None,
             },
+            sandbox_factory: None,
             tools: ToolingContext {
                 session,
                 parent_tools,

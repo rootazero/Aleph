@@ -468,9 +468,9 @@ pub async fn prepare_session_for_run(
 /// an existing directory checks it.
 pub(super) fn run_workspace(request: &RunRequest, agent: &AgentInstance) -> std::path::PathBuf {
     request
-        .workspace_override
-        .clone()
-        .unwrap_or_else(|| agent.workspace().to_path_buf())
+        .workspace_path()
+        .unwrap_or_else(|| agent.workspace())
+        .to_path_buf()
 }
 
 /// §5.4: what a pre-seed hook stop leaves on the log — a **closed** run with
@@ -529,8 +529,7 @@ pub(super) fn hook_stop_receipt(
         run_id: run_id.clone(),
         at,
         project_root: request
-            .workspace_override
-            .as_ref()
+            .durable_workspace_path()
             .map(|p| p.display().to_string()),
         envelope: None,
         telecom_provenance:
@@ -731,22 +730,22 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // ([`run_workspace`]); validation of the override stays in the inner
         // fn — a vanished dir still fails the run there.
         let scope_workspace = run_workspace(request, &agent);
-        // Team-worktree runs (dispatcher members) carry the parent repo root
-        // in metadata: build a rebasing worktree scope so the member's file
-        // tools anchor at the worktree root AND parent-repo absolute paths
-        // are redirected into the checkout — the same semantics the subagent
-        // spawner publishes for `IsolationMode::Worktree`. Everything else
-        // gets the plain workspace artifact scope.
-        let fs_scope = match request.metadata.get("team_worktree_repo_root") {
-            Some(repo_root) if request.workspace_override.is_some() => {
-                let wt = scope_workspace
+        let exec_workspace = request.workspace_override.clone().unwrap_or_else(|| {
+            crate::sandbox::context::ExecWorkspace::Directory(scope_workspace.clone())
+        });
+        // The trusted binding also owns file-tool rebasing. Diagnostic
+        // metadata must not be able to select an alternate repository root.
+        let fs_scope = match &exec_workspace {
+            crate::sandbox::context::ExecWorkspace::OwnedWorktree(handle) => {
+                let root = handle.path();
+                let source = handle.repo_root();
+                let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+                let source = source
                     .canonicalize()
-                    .unwrap_or_else(|_| scope_workspace.clone());
-                let repo = std::path::PathBuf::from(repo_root);
-                let repo = repo.canonicalize().unwrap_or(repo);
-                crate::tools::fs_scope::FsScope::worktree(wt, repo)
+                    .unwrap_or_else(|_| source.to_path_buf());
+                crate::tools::fs_scope::FsScope::worktree(root, source)
             }
-            _ => {
+            crate::sandbox::context::ExecWorkspace::Directory(_) => {
                 crate::tools::fs_scope::FsScope::workspace(scope_workspace.join("output/documents"))
             }
         };
@@ -772,7 +771,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         let result = crate::agents::with_agent_id(
             Some(agent.id().to_string()),
             crate::projects::with_project_root(
-                request.workspace_override.clone(),
+                request.workspace_path().map(std::path::Path::to_path_buf),
                 // The exec-side twin of `fs_scope`, published from the SAME
                 // `override > agent workspace` value so the two layers cannot
                 // drift on "where does this run work". This is the ONLY channel
@@ -781,8 +780,8 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 // adapters used to) launders a gateway-owned path through a
                 // model-writable field, and the jail — which exists to judge
                 // model-supplied paths — then refused it.
-                crate::sandbox::context::with_exec_workspace(
-                    Some(scope_workspace.clone()),
+                crate::sandbox::context::with_exec_workspace_binding(
+                    Some(exec_workspace),
                     crate::tools::fs_scope::with_fs_scope(
                         Some(fs_scope),
                         // P1 data isolation: publish this run's owner/scope
@@ -882,7 +881,6 @@ mod hook_stop_tests {
             metadata,
             attachments: Vec::new(),
             pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
-            sandbox_override: None,
             workspace_override: None,
             max_iterations_override: None,
             model_override: None,

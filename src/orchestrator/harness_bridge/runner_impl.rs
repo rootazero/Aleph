@@ -835,7 +835,13 @@ impl HarnessRunner for AgentHarnessRunner {
         // re-trigger a crashed run in the same user-picked folder. The
         // field is omitted from the wire form when None (skip_serializing_if)
         // so legacy event logs stay byte-identical.
-        let project_root_str = workspace_override.as_ref().map(|p| p.display().to_string());
+        let owned_checkout = crate::sandbox::context::current_exec_workspace_binding()
+            .as_ref()
+            .is_some_and(crate::sandbox::context::ExecWorkspace::is_owned_worktree);
+        let project_root_str = workspace_override
+            .as_ref()
+            .filter(|_| !owned_checkout)
+            .map(|p| p.display().to_string());
         if let Err(e) = self
             .session_service
             .emit_event(

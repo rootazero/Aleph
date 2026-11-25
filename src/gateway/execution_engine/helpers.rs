@@ -316,20 +316,11 @@ pub async fn run_dispatch_and_drain_classified(
     // rust-doctor-disable-next-line excessive-clone
     let witness_session_for_fallback = witness_session.clone();
 
-    // 1. Dispatch.
-    let handle = orchestrator.dispatch(req).await.map_err(map_flow_error)?;
-
-    // Wire the caller's cancel token to the orchestrator's handle token so
-    // `cancel_token.cancel()` propagates into the harness run.
-    let handle_cancel = handle.cancel.clone();
-    let propagate = tokio::spawn({
-        let outer = cancel_token.clone();
-        async move {
-            outer.cancelled().await;
-            handle_cancel.cancel();
-        }
-    });
-
+    // Give the harness its child token before it can start, including on retries.
+    let handle = orchestrator
+        .dispatch_with_cancel(req, cancel_token.child_token())
+        .await
+        .map_err(map_flow_error)?;
     // 2. Drain task. Resolves to the *prepared but unsent* terminal frame
     //    (`Some`) when the harness broadcast `Complete`, and to `None` when it
     //    never did — so step 4 can emit a safety-net `RunComplete` in the rare
@@ -384,10 +375,7 @@ pub async fn run_dispatch_and_drain_classified(
         }
     });
 
-    // 3. Await completion. The propagate task must be reaped on the error
-    //    paths too: it waits on a cancel token that is never cancelled for a
-    //    Transient/Fatal failure, so an early `?` return here would leak one
-    //    task (pinned forever on `cancelled()`) per failed attempt.
+    // 3. Await the harness completion, not just the end of the event drain.
     let outcome: FlowOutcome = match handle.completion.await {
         Ok(Ok(outcome)) => outcome,
         Ok(Err(e)) => {
@@ -411,7 +399,6 @@ pub async fn run_dispatch_and_drain_classified(
             // that never comes. `complete_forwarded` is the discriminator —
             // the drain reports whether it actually forwarded the frame.
             let held = drain.await.ok().flatten();
-            propagate.abort();
             emit_route_correction(&emitter, run_id, witness_session_for_fallback.as_deref()).await;
             // Both halves of this line were fixed independently and both are
             // load-bearing: the `held` guard stops a synthetic zeroed frame
@@ -447,11 +434,7 @@ pub async fn run_dispatch_and_drain_classified(
             // classifies as transient, so this attempt is the run's last word.
             // Why the settle below is bounded — and why only here — is in
             // `settle_dropped_completion`'s doc, next to the code that does it.
-            //
-            // Reaped before that grace window rather than after it: this task
-            // forwards an outer cancel into a flow task that is already gone,
-            // and the drain reads the outer token itself.
-            propagate.abort();
+
             let failure = DispatchFailure::Fatal(format!("completion dropped: {e}"));
             settle_dropped_completion(
                 &emitter,
@@ -509,7 +492,6 @@ pub async fn run_dispatch_and_drain_classified(
     //    and Panel consumers still observe the run end — with the full
     //    enriched summary instead of an all-zeros placeholder.
     let held = drain.await.ok().flatten();
-    propagate.abort();
     if let Some(held) = held {
         // A successful attempt always speaks: `may_retry` is irrelevant here
         // because there is nothing left to supersede it.

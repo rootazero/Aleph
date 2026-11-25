@@ -1185,8 +1185,8 @@ pub async fn build_run_request(
         metadata,
         attachments,
         pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
-        sandbox_override: None,
-        workspace_override,
+        workspace_override: workspace_override
+            .map(crate::sandbox::context::ExecWorkspace::Directory),
         max_iterations_override: None,
         model_override,
         telecom_public: None,
@@ -2544,7 +2544,7 @@ mod tests {
             .await
             .expect("build_run_request");
 
-        assert_eq!(request.workspace_override.as_deref(), Some(dir.as_path()));
+        assert_eq!(request.workspace_path(), Some(dir.as_path()));
         assert_eq!(
             request.metadata.get("project_root").map(String::as_str),
             Some(dir.display().to_string().as_str()),
@@ -2594,7 +2594,7 @@ mod tests {
             .await
             .expect("a bound room must be usable by its remote members");
 
-        assert_eq!(request.workspace_override.as_deref(), Some(dir.as_path()));
+        assert_eq!(request.workspace_path(), Some(dir.as_path()));
     }
 
     /// Unbound rooms and personal sessions are unchanged: the agent's own
@@ -2703,7 +2703,7 @@ mod tests {
             .expect("build_run_request");
 
         assert_eq!(
-            request.workspace_override.as_deref(),
+            request.workspace_path(),
             Some(chosen.path()),
             "the per-turn choice wins"
         );

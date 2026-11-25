@@ -415,6 +415,13 @@ impl AlephTool for BashExecTool {
         };
 
         if args.background {
+            if crate::sandbox::context::current_exec_workspace_binding()
+                .is_some_and(|workspace| workspace.is_owned_worktree())
+            {
+                return Ok(error_output(
+                    "bash: background commands cannot outlive an owned worktree; run in the foreground",
+                ));
+            }
             // Background escapes the 180s foreground budget wrapper, so the
             // foreground 60s default would prematurely SIGKILL long builds.
             // Substitute a generous default only when the caller left `timeout`
@@ -467,7 +474,7 @@ impl BashExecTool {
         // task-local like the rest, so reading it inside the detached task
         // would find nothing and the job would silently run in a different
         // directory than the foreground call that spawned it.
-        let exec_workspace = crate::sandbox::context::current_exec_workspace();
+        let exec_workspace = crate::sandbox::context::current_exec_workspace_binding();
         let identity = crate::approval::current_call_identity();
         let inner = self.inner.clone();
         let preview = code_exec_args.code.clone();
@@ -514,16 +521,19 @@ impl BashExecTool {
                 // `background_lands_in_the_same_directory_as_foreground`.
                 LIVE_TAIL
                     .scope(live_for_task, async move {
-                        crate::sandbox::context::with_exec_workspace(exec_workspace, async move {
-                            match sid {
-                                Some(sid) => {
-                                    SESSION_ID
-                                        .scope(sid, inner.call_unclamped(code_exec_args))
-                                        .await
+                        crate::sandbox::context::with_exec_workspace_binding(
+                            exec_workspace,
+                            async move {
+                                match sid {
+                                    Some(sid) => {
+                                        SESSION_ID
+                                            .scope(sid, inner.call_unclamped(code_exec_args))
+                                            .await
+                                    }
+                                    None => inner.call_unclamped(code_exec_args).await,
                                 }
-                                None => inner.call_unclamped(code_exec_args).await,
-                            }
-                        })
+                            },
+                        )
                         .await
                     })
                     .await
@@ -1567,6 +1577,37 @@ mod tests {
         .await;
         assert!(!out.success);
         assert!(out.stderr.contains("`cmd` is required"), "{}", out.stderr);
+    }
+
+    #[tokio::test]
+    async fn owned_worktree_rejects_detached_bash_before_job_creation() {
+        use crate::sandbox::context::{with_exec_workspace_binding, ExecWorkspace};
+
+        let session = crate::routing::session_key::SessionKey::ephemeral("bash-owned-lifetime");
+        SESSION_ID
+            .scope(
+                session,
+                with_exec_workspace_binding(
+                    Some(ExecWorkspace::worktree_fixture(
+                        "/tmp/owned".into(),
+                        "/tmp/source".into(),
+                    )),
+                    async {
+                        let args = serde_json::from_value(serde_json::json!({
+                            "cmd": "echo hi",
+                            "background": true
+                        }))
+                        .unwrap();
+                        let output = BashExecTool::new().call(args).await.unwrap();
+                        assert!(!output.success && output.stdout.is_empty());
+                        assert!(output.stderr.contains("cannot outlive an owned worktree"));
+                        let listed = handle_process_action("list", None, None).await;
+                        let jobs: serde_json::Value = serde_json::from_str(&listed.stdout).unwrap();
+                        assert_eq!(jobs["processes"], serde_json::json!([]));
+                    },
+                ),
+            )
+            .await;
     }
 
     /// End-to-end background round-trip with no sandbox wired: the spawned task

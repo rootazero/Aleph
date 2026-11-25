@@ -1712,9 +1712,10 @@ let req = SpawnRequest {
 
 When set to `Worktree`, the spawner creates a fresh detached-HEAD git
 worktree at `$TMPDIR/aleph-subagent-<safe_label>-<uuid>/` before running
-the child harness. The child's `Sandbox` is replaced with `WorktreeSandbox`,
-which executes commands at the worktree path and injects `CARGO_TARGET_DIR`
-for strict build isolation.
+the child harness. The checkout becomes the trusted root of the existing OS
+sandbox; the sandbox sets `CARGO_TARGET_DIR` to `<worktree>/target`. A nested
+worktree starts from the trusted parent's committed HEAD, not its uncommitted
+changes; a child without a new checkout inherits its parent's binding.
 
 File tools are isolated too: the spawner publishes a per-run
 `tools::fs_scope::FsScope` task-local around the child harness, so
@@ -1742,13 +1743,20 @@ Cleanup is RAII-guaranteed:
   `git worktree remove --force` and emits
   `LoopTraceEvent::WorktreeCleanedUp { leaked: true }`.
 
-### Scope
+### Scope / 执行与寿命
 
-`WorktreeSandbox` provides **workspace isolation only** — it does not apply
-seatbelt or capability baseline. For seatbelt-protected subagents, omit
-`isolation` (or set to `None`) and trust the parent's `WorkspaceSandbox`.
-This is a deliberate Stage H scope choice; combining seatbelt + worktree
-is a follow-up.
+Team 从已授权项目解析 checkout，不使用 daemon 当前目录；无项目绑定、非 Git
+目录或显式禁用 worktree 时继续使用普通 OS 沙箱。绑定 Git 子目录时不扩大授权范围、
+不回退，需明确绑定 checkout 根目录。选定 checkout 后创建失败不回退。
+
+Both subagent and Team exec run through the same boot-mounted sandbox, including
+its existing capability approvals and OS-specific policy. An owned checkout
+rejects detached Bash jobs, browser companions, background subagents and resumable
+named-session sends, none of which owns checkout cleanup. A Team timeout signals
+cancellation and waits up to 250 ms for Rust harness completion. If the deadline
+expires, Aleph aborts the Rust task and lets the last checkout owner remove it.
+This does not establish that the native process tree has exited.
+See [Sandbox](SANDBOX.md) for policy and platform limits.
 
 ### Trace events
 

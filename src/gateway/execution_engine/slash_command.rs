@@ -202,7 +202,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // is judged here, once, against the request's own project. No
         // installed extension manager ⇒ unknown owner ⇒ refused.
         let visibility = crate::extension::visibility::VisibilityCtx::from_project_root(
-            request.workspace_override.clone(),
+            request.workspace_path().map(std::path::Path::to_path_buf),
         );
         crate::extension::visibility::slash_owner_admits(
             &mode,
