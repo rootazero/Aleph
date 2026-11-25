@@ -994,10 +994,9 @@ impl SessionStore for BarrierStore {
     async fn history_page(
         &self,
         key: &SessionKey,
-        limit: Option<usize>,
-        before: Option<chrono::DateTime<chrono::Utc>>,
+        read: HistoryRead,
     ) -> Result<HistoryPage, SessionStoreError> {
-        self.inner.history_page(key, limit, before).await
+        self.inner.history_page(key, read).await
     }
 
     async fn search_messages(
