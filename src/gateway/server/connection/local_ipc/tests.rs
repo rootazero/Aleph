@@ -535,6 +535,136 @@ async fn desktop_ipc_mounts_chat_and_caches_sends_by_idempotency_key() {
     .unwrap();
 }
 
+#[tokio::test]
+async fn desktop_ipc_mounts_addressed_transcript_reads_but_not_raw_trace() {
+    let (root, endpoint) = fixture();
+    let sessions = Arc::new(
+        FileSessionStore::new(FileSessionStoreConfig {
+            base_dir: root.path().join("sessions"),
+            ..Default::default()
+        })
+        .unwrap(),
+    );
+    let own = SessionKey::main("desktop-transcript-own");
+    let foreign = SessionKey::main("desktop-transcript-foreign");
+    let missing = SessionKey::main("desktop-transcript-missing");
+    for (owner, key) in [(OWNER_USER_ID, &own), ("other-user", &foreign)] {
+        with_scope(
+            Some(ScopeAttribution::personal(owner)),
+            sessions.get_or_create(key),
+        )
+        .await
+        .unwrap();
+    }
+    let mut gateway = GatewayServer::new("127.0.0.1:0".parse().unwrap());
+    gateway.config.require_idempotency_key = true;
+    gateway.set_security_store(Arc::new(SecurityStore::in_memory().unwrap()));
+    super::super::transcript_fixture::mount_addressed_reads(&mut gateway, sessions, &own, &foreign)
+        .await;
+    let (stop, shutdown) = oneshot::channel();
+    let path = endpoint.clone();
+    let task = tokio::spawn(async move { gateway.run_local_endpoint(shutdown, &path).await });
+    timeout(Duration::from_secs(5), async {
+        let mut stream = connect(&endpoint).await;
+        send(&mut stream, hello(1, 1)).await;
+        assert!(receive(&mut stream).await.get("result").is_some());
+        for method in ["chat.transcript_details", "trace.tool_output", "context.breakdown", "trace.by_runs"] {
+            let request = |key: &SessionKey| json!({
+                "jsonrpc":"2.0", "method":method, "id":2,
+                "params":{"session_key":key.to_key_string(), "run_ids":["foreign-run", "browser-run"],
+                          "run_id":"browser-run", "tool_call_id":"browser-result"},
+            });
+            send(&mut stream, request(&own)).await;
+            let response = receive(&mut stream).await;
+            assert_eq!(response["id"], 2);
+            if method == "trace.by_runs" {
+                assert_eq!(response["error"]["code"], -32601, "{response}");
+                continue;
+            }
+            let result = response.get("result").unwrap_or_else(|| panic!("{method}: {response}"));
+            match method {
+                "chat.transcript_details" => {
+                    let runs = result["runs"].as_array().unwrap();
+                    assert_eq!(runs.len(), 1, "{result}");
+                    assert_eq!(runs[0]["run_id"], "browser-run");
+                    let tools = runs[0]["tools"].as_array().unwrap();
+                    assert_eq!(tools.len(), 2);
+                    assert_eq!(tools[0]["change"]["kind"], "started");
+                    assert_eq!(tools[1]["change"]["kind"], "finished");
+                    assert_eq!(tools[0]["tool_call_id"], "browser-result");
+                    assert_eq!(tools[1]["tool_call_id"], "browser-result");
+                    assert!(!result.to_string().contains("excluded"));
+                }
+                "trace.tool_output" => assert_eq!(result["text"], "browser-owned output"),
+                _ => assert!(result.is_object()),
+            }
+            send(&mut stream, request(&foreign)).await;
+            let foreign_response = receive(&mut stream).await;
+            send(&mut stream, request(&missing)).await;
+            let missing_response = receive(&mut stream).await;
+            assert!(foreign_response.get("error").is_some(), "{method}: {foreign_response}");
+            for denial in [&foreign_response, &missing_response] {
+                assert_eq!(denial["id"], 2);
+                assert!(denial.get("result").is_none(), "{method}: {denial}");
+            }
+            assert_eq!(foreign_response["error"], missing_response["error"], "{method}");
+        }
+        stop.send(()).unwrap();
+        task.await.unwrap().unwrap();
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn desktop_ipc_drops_transcript_read_completed_after_owner_revocation() {
+    let (_root, endpoint) = fixture();
+    let mut gateway = GatewayServer::new("127.0.0.1:0".parse().unwrap());
+    let security = Arc::new(SecurityStore::in_memory().unwrap());
+    gateway.set_security_store(security.clone());
+    let entered = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let handler_entered = entered.clone();
+    let handler_release = release.clone();
+    gateway
+        .handlers_mut()
+        .register("context.breakdown", move |request| {
+            let entered = handler_entered.clone();
+            let release = handler_release.clone();
+            async move {
+                entered.notify_one();
+                release.notified().await;
+                crate::gateway::protocol::JsonRpcResponse::success(
+                    request.id,
+                    json!("private read result"),
+                )
+            }
+        });
+    let (stop, shutdown) = oneshot::channel();
+    let path = endpoint.clone();
+    let task = tokio::spawn(async move { gateway.run_local_endpoint(shutdown, &path).await });
+    timeout(Duration::from_secs(5), async {
+        let mut stream = connect(&endpoint).await;
+        send(&mut stream, hello(1, 1)).await;
+        assert!(receive(&mut stream).await.get("result").is_some());
+        send(
+            &mut stream,
+            json!({"jsonrpc":"2.0","method":"context.breakdown","params":{},"id":2}),
+        )
+        .await;
+        entered.notified().await;
+        security
+            .update_user(OWNER_USER_ID, None, None, Some(UserStatus::Deactivated))
+            .unwrap();
+        release.notify_one();
+        assert_closed(&mut stream).await;
+        stop.send(()).unwrap();
+        task.await.unwrap().unwrap();
+    })
+    .await
+    .unwrap();
+}
+
 /// S3 live events: a connection that negotiated `live_events` receives the
 /// run lifecycle of its own sessions — through the shared admission, then the
 /// v1 topic list — and an oversized frame becomes a warning on a live

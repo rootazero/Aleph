@@ -467,7 +467,14 @@ pub(super) async fn dispatch_for_peer(
     req_id: Option<serde_json::Value>,
     start: &CallerSnapshot,
 ) -> String {
-    dispatch_ordinary(text, mc, &peer.view(), method, req_id, start).await
+    let view = peer.view();
+    let dispatch = dispatch_ordinary(text, mc, &view, method, req_id, start);
+    if method == "trace.tool_output" && peer.bound.is_some() {
+        return crate::gateway::handlers::tool_output::V1_TOOL_OUTPUT
+            .scope(true, dispatch)
+            .await;
+    }
+    dispatch.await
 }
 
 async fn dispatch_ordinary(

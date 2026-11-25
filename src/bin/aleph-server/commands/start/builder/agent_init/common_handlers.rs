@@ -81,6 +81,20 @@ pub(super) fn register_trace_handlers(
         // owner-scoped in the handler rather than admin-gated — it takes the
         // `SessionStore` to KeyCheck the addressed session and to intersect
         // the requested runs with that session's own. See its doc.
+        let details_db = trace_db.clone();
+        let details_sessions = session_store.clone();
+        server
+            .handlers_mut()
+            .register("chat.transcript_details", move |req| {
+                let db = details_db.clone();
+                let sessions = details_sessions.clone();
+                async move {
+                    alephcore::gateway::handlers::trace_replay::handle_transcript_details(
+                        req, db, sessions,
+                    )
+                    .await
+                }
+            });
         let trace_by_runs_db = trace_db;
         let trace_sessions = session_store;
         server.handlers_mut().register("trace.by_runs", move |req| {
@@ -91,6 +105,15 @@ pub(super) fn register_trace_handlers(
             }
         });
     } else {
+        server
+            .handlers_mut()
+            .register("chat.transcript_details", |req| async move {
+                alephcore::gateway::protocol::JsonRpcResponse::error(
+                    req.id,
+                    alephcore::gateway::protocol::SERVICE_UNAVAILABLE,
+                    "Chat transcript details unavailable",
+                )
+            });
         server
             .handlers_mut()
             .register("trace.list", |req| async move {

@@ -247,7 +247,10 @@ async fn serve_requests(
             tokio::select! {
                 biased;
                 completed = jobs.next(), if !jobs.is_empty() => {
-                    if let Some((id, response, _permit)) = completed {
+                    if let Some((id, response, transcript_read, _permit)) = completed {
+                        if transcript_read && peer.snapshot().await.is_none() {
+                            return Ok(());
+                        }
                         let id: Value = id;
                         let response: String = response?;
                         // Match the receiver's byte and shape limits. A large Core
@@ -300,8 +303,14 @@ async fn serve_requests(
         }
         active.push(id.clone());
         jobs.push(async move {
+            let transcript_read = matches!(
+                request.method.as_str(),
+                aleph_protocol::chat_transcript::CHAT_TRANSCRIPT_DETAILS_METHOD
+                    | "trace.tool_output"
+                    | "context.breakdown"
+            );
             let result = execute(executor, peer, &text, &request).await;
-            (id, result, permit)
+            (id, result, transcript_read, permit)
         });
     }
 }

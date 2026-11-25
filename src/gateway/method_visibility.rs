@@ -562,6 +562,10 @@ pub const SCOPED_METHODS: &[(&str, Treatment)] = &[
     ("chat.send", Treatment::KeyChecked),
     ("chat.abort", Treatment::KeyChecked),
     ("chat.history", Treatment::KeyChecked),
+    (
+        aleph_protocol::chat_transcript::CHAT_TRANSCRIPT_DETAILS_METHOD,
+        Treatment::KeyChecked,
+    ),
     ("chat.clear", Treatment::KeyChecked),
     ("chat.rewind", Treatment::KeyChecked),
     ("sessions.new", Treatment::KeyChecked),

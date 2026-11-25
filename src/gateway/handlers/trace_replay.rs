@@ -66,6 +66,9 @@ use aleph_protocol::{
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+mod chat_details;
+pub use chat_details::handle_transcript_details;
+
 #[derive(Debug, Default, Deserialize)]
 struct TraceByRunsParams {
     /// The session these runs belong to. Required — see [`handle_by_runs`].
@@ -150,33 +153,8 @@ pub async fn handle_by_runs(
         return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Invalid session_key");
     };
 
-    match sessions.get_metadata(&session_key).await {
-        Ok(Some(meta)) if visibility::session_visible(&meta) => {}
-        // Foreign owner, missing row, and store error all produce the same
-        // response (GC 3 fail-closed, GC 4 no oracle).
-        _ => return visibility::not_found_response(request.id),
-    }
-
-    let owned_runs: HashSet<String> = match sessions
-        .get_history(&session_key, Some(MAX_HISTORY_SCAN))
-        .await
-    {
-        Ok(messages) => messages
-            .into_iter()
-            .filter_map(|m| {
-                m.metadata
-                    .as_ref()?
-                    .get("run_id")?
-                    .as_str()
-                    .map(str::to_string)
-            })
-            .collect(),
-        Err(e) => {
-            // Fail closed: without the session's own run list we cannot say a
-            // requested run belongs to it.
-            tracing::warn!(session_key = %key_str, error = %e, "trace.by_runs: history load failed");
-            HashSet::new()
-        }
+    let Some(owned_runs) = visible_history_runs(sessions.as_ref(), &session_key).await else {
+        return visibility::not_found_response(request.id);
     };
 
     // Structured file diffs are NOT in the trace rows: `LoopTraceEvent` carries
@@ -239,6 +217,38 @@ pub async fn handle_by_runs(
         runs.insert(run_id, Value::Array(events));
     }
     JsonRpcResponse::success(request.id, json!({ "runs": runs }))
+}
+
+/// Authorize the addressed session before reading its own run attribution.
+async fn visible_history_runs(
+    sessions: &dyn SessionStore,
+    session_key: &SessionKey,
+) -> Option<HashSet<String>> {
+    match sessions.get_metadata(session_key).await {
+        Ok(Some(meta)) if visibility::session_visible(&meta) => {}
+        _ => return None,
+    }
+    let owned_runs = match sessions
+        .get_history(session_key, Some(MAX_HISTORY_SCAN))
+        .await
+    {
+        Ok(messages) => messages
+            .into_iter()
+            .filter_map(|message| {
+                message
+                    .metadata
+                    .as_ref()?
+                    .get("run_id")?
+                    .as_str()
+                    .map(str::to_owned)
+            })
+            .collect(),
+        Err(error) => {
+            tracing::warn!(%error, "trace replay: attributed history unavailable");
+            HashSet::new()
+        }
+    };
+    Some(owned_runs)
 }
 
 /// This session's persisted tool presentations, indexed by call id, **masked**.
@@ -1348,6 +1358,151 @@ mod tests {
     /// A `tool_call_completed` trace row, shaped the way `trace_protocol.rs`
     /// writes one: `presentation: None`, always. The diff is what this section
     /// is about, and it is never in this table.
+    #[tokio::test]
+    async fn v1_transcript_details_discloses_only_owned_safe_tools() {
+        let db = Arc::new(StateDatabase::in_memory().unwrap());
+        let temp = TempDir::new().unwrap();
+        let sessions = session_store(&temp);
+        let owned = SessionKey::main("v1-details-owner");
+        let foreign = SessionKey::main("v1-details-foreign");
+        let missing = SessionKey::main("v1-details-missing");
+        seed_session(&sessions, &owned, "u-alice", &["r-v1-own"]).await;
+        seed_session(&sessions, &foreign, "u-bob", &["r-v1-foreign"]).await;
+        seed_run_in(&db, "r-v1-own", &owned, &["never return this prose"]).await;
+        seed_run_in(&db, "r-v1-foreign", &foreign, &[]).await;
+        db.insert_trace(&tool_call_trace("r-v1-own", 2, "c-v1-own"))
+            .await
+            .unwrap();
+        db.insert_trace(&tool_call_trace("r-v1-foreign", 1, "c-v1-foreign"))
+            .await
+            .unwrap();
+        let secret = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
+        use crate::session::store::SessionEventStore;
+        crate::session::store::install_test_event_store()
+            .append(
+                &owned,
+                1,
+                &crate::session::events::SessionEvent::RunStarted {
+                    run_id: "r-v1-own".into(),
+                    at: 1,
+                    project_root: None,
+                    envelope: None,
+                    telecom_provenance: Default::default(),
+                },
+                1,
+            )
+            .await
+            .unwrap();
+        seed_presentation(
+            &owned,
+            2,
+            "c-v1-own",
+            one_change("src/owned.rs", &format!("token = {secret}")),
+        )
+        .await;
+        let request = |key: &SessionKey| {
+            let mut request = req(json!({
+                "session_key": key.to_key_string(),
+                "run_ids": ["r-v1-foreign", "r-v1-own", "r-v1-unknown"],
+            }));
+            request.method = "chat.transcript_details".into();
+            request
+        };
+        CALLER_USER
+            .scope(Some("u-alice".to_owned()), async {
+                let addressed =
+                    handle_transcript_details(request(&owned), db.clone(), sessions.clone()).await;
+                let result = addressed.result.expect("authorized replay");
+                let runs = result["runs"].as_array().unwrap();
+                assert_eq!(runs.len(), 1);
+                assert_eq!(runs[0]["run_id"], "r-v1-own");
+                let tools = runs[0]["tools"].as_array().unwrap();
+                assert_eq!(tools.len(), 1);
+                assert_eq!(tools[0]["tool_call_id"], "c-v1-own");
+                assert_eq!(tools[0]["change"]["kind"], "finished");
+                assert_eq!(
+                    tools[0]["change"]["presentation"]["changes"][0]["path"],
+                    "src/owned.rs"
+                );
+                let wire = result.to_string();
+                for absent in [
+                    secret,
+                    "never return this prose",
+                    "r-v1-foreign",
+                    "c-v1-foreign",
+                    "\"output\"",
+                    "\"input\"",
+                ] {
+                    assert!(!wire.contains(absent), "unexpected {absent} in {wire}");
+                }
+                let foreign =
+                    handle_transcript_details(request(&foreign), db.clone(), sessions.clone())
+                        .await;
+                let missing =
+                    handle_transcript_details(request(&missing), db.clone(), sessions.clone())
+                        .await;
+                assert!(foreign.error.is_some());
+                assert_eq!(
+                    serde_json::to_value(foreign).unwrap(),
+                    serde_json::to_value(missing).unwrap()
+                );
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn v1_transcript_details_keeps_settled_pairs_when_the_delta_budget_fills() {
+        let db = Arc::new(StateDatabase::in_memory().unwrap());
+        let temp = TempDir::new().unwrap();
+        let sessions = session_store(&temp);
+        let key = SessionKey::main("v1-details-budget");
+        seed_session(&sessions, &key, "u-alice", &["r-long", "r-settled"]).await;
+        seed_run_in(&db, "r-long", &key, &[]).await;
+        seed_run_in(&db, "r-settled", &key, &[]).await;
+        db.update_task_status("r-settled", crate::resilience::TaskStatus::Completed)
+            .await
+            .unwrap();
+        for step in 0..79 {
+            db.insert_trace(&tool_call_trace("r-long", step, &format!("c-{step}")))
+                .await
+                .unwrap();
+        }
+        for (run, step, id) in [("r-long", 79, "c-cut"), ("r-settled", 0, "c-settled")] {
+            db.insert_trace(&TaskTrace::new(
+                run,
+                step,
+                AgentTraceEvent::ToolCallStarted {
+                    iteration: 0,
+                    call: aleph_protocol::AgentTraceToolCallStart {
+                        tool_id: id.into(),
+                        tool_name: "file_read".into(),
+                        input: json!({}),
+                    },
+                },
+            ))
+            .await
+            .unwrap();
+            db.insert_trace(&tool_call_trace(run, step + 1, id))
+                .await
+                .unwrap();
+        }
+        let response = CALLER_USER.scope(Some("u-alice".into()), handle_transcript_details(
+            req(json!({"session_key":key.to_key_string(), "run_ids":["r-long", "r-settled"]})),
+            db, sessions,
+        )).await;
+        let result = response.result.expect("authorized replay");
+        let runs = result["runs"].as_array().unwrap();
+        assert_eq!(result["limited"], true);
+        assert_eq!(runs[0]["run_id"], "r-long");
+        assert_eq!(runs[0]["limited"], true);
+        assert_eq!(runs[0]["tools"].as_array().unwrap().len(), 78);
+        assert!(!result.to_string().contains("c-cut"));
+        let settled = runs[1]["tools"].as_array().unwrap();
+        assert_eq!(settled.len(), 2);
+        assert_eq!(settled[0]["change"]["kind"], "started");
+        assert_eq!(settled[1]["change"]["kind"], "finished");
+    }
+
     fn tool_call_trace(run_id: &str, step: u32, call_id: &str) -> TaskTrace {
         TaskTrace::new(
             run_id,

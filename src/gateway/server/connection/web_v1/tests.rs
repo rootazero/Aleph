@@ -322,6 +322,13 @@ async fn web_socket_requires_hello_and_keeps_member_scope() {
         .unwrap();
         assert_eq!(metadata.owner_user_id.as_deref(), Some(user));
     }
+    super::super::transcript_fixture::mount_addressed_reads(
+        &mut gateway,
+        sessions.clone(),
+        &own,
+        &other,
+    )
+    .await;
     gateway
         .handlers_mut()
         .register("sessions.list", move |request| {
@@ -449,7 +456,7 @@ async fn web_socket_requires_hello_and_keeps_member_scope() {
         serde_json::json!({
             "origin": format!("https://{addr}"), "certificate":pem,
             "alternateOrigin": alternate_origin,
-            "token":paired.device_token, "ownKey":own.to_key_string(),
+            "token":paired.device_token, "ownKey":own.to_key_string(), "foreignKey":other.to_key_string(),
         })
         .to_string(),
     )

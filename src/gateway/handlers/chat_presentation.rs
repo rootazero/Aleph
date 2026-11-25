@@ -10,7 +10,7 @@ use crate::exec::masker::{mask_presentation, SecretMasker};
 
 pub(crate) const MAX_TOOL_FRAME_BYTES: usize = 24 * 1024;
 // Leave room for the RPC envelope and the bounded run/call addresses.
-const MAX_PRESENTATION_BYTES: usize = MAX_TOOL_FRAME_BYTES - 1024;
+pub(crate) const MAX_PRESENTATION_BYTES: usize = MAX_TOOL_FRAME_BYTES - 1024;
 
 pub(crate) fn safe_tool_address(address: &str) -> bool {
     !address.is_empty()

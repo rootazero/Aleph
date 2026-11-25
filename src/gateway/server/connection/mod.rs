@@ -94,6 +94,8 @@ pub mod forward;
 pub(super) mod local_ipc;
 pub mod off_loop;
 mod rpc;
+#[cfg(test)]
+mod transcript_fixture;
 pub mod upgrade;
 pub(super) mod web_v1;
 
@@ -113,6 +115,9 @@ pub(super) const V1_METHODS: &[&str] = &[
     "chat.history",
     "chat.send",
     "chat.abort",
+    aleph_protocol::chat_transcript::CHAT_TRANSCRIPT_DETAILS_METHOD,
+    "trace.tool_output",
+    "context.breakdown",
 ];
 
 pub(super) fn v1_mounted(method: &str) -> bool {
