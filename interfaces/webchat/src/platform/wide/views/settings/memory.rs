@@ -12,7 +12,7 @@ use leptos::task::spawn_local;
 use crate::api::{MemoryConfig, MemoryConfigApi, RetrieveWithTraceResponse};
 use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n};
-use aleph_protocol::dreaming::DreamGateBlock;
+use aleph_protocol::dreaming::{DreamGateBlock, DreamMissingDependencies};
 
 /// How many results the Settings debug retrieval asks for. Kept explicit
 /// rather than relying on the RPC's own default: the request that produced a
@@ -1172,6 +1172,14 @@ fn DreamInsightsPanel() -> impl IntoView {
                                     let (state, blocking) = match d.blocking_gate() {
                                         Some(DreamGateBlock::Disabled) => {
                                             (t_string!(i18n, settings.memory.dream_daemon_disabled).to_string(), true)
+                                        }
+                                        Some(DreamGateBlock::MissingDependencies(missing)) => {
+                                            let label = match missing {
+                                                DreamMissingDependencies::Provider => t_string!(i18n, settings.memory.dream_daemon_missing_provider),
+                                                DreamMissingDependencies::Embedder => t_string!(i18n, settings.memory.dream_daemon_missing_embedder),
+                                                DreamMissingDependencies::ProviderAndEmbedder => t_string!(i18n, settings.memory.dream_daemon_missing_both),
+                                            };
+                                            (label.to_string(), true)
                                         }
                                         Some(DreamGateBlock::OutsideWindow) => (format!(
                                             "{} ({}–{})",

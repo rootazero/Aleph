@@ -576,6 +576,81 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn missing_dependencies_reach_the_mounted_dreaming_rpc() {
+        use crate::capability::ownership::OwnershipTree;
+        use crate::config::types::memory::MemoryConfig;
+        use crate::memory::extensions::MemoryExtensionRegistry;
+        use crate::memory::runtime::{MemoryRuntime, MemoryRuntimeConfig, MemoryServicesConfig};
+        use crate::memory::store::markdown::MarkdownSessionStore;
+        use crate::sync_primitives::Arc;
+
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let mut memory = MemoryConfig::default();
+        memory.dreaming.enabled = true;
+        // Keep the background tick idle-gated; exercise only the RPC force trigger here.
+        memory.dreaming.idle_threshold_seconds = u32::MAX;
+        memory.embedding.providers.clear();
+        let mut config = crate::Config {
+            memory,
+            ..Default::default()
+        };
+        config.providers.clear();
+        let runtime = MemoryRuntime::new_with_services(
+            MemoryRuntimeConfig {
+                metadata_path: root.join("metadata.db"),
+                note_memory_dir: root.join("notes"),
+                retrieval_tuning: Default::default(),
+            },
+            Arc::new(OwnershipTree::new()),
+            MemoryServicesConfig {
+                app_config: Arc::new(tokio::sync::RwLock::new(config)),
+                raw_store: Arc::new(
+                    MarkdownSessionStore::new(&root.join("sessions"))
+                        .await
+                        .unwrap(),
+                ),
+                session_store: None,
+                provider: None,
+                extensions: Arc::new(MemoryExtensionRegistry::new()),
+                state_db: None,
+                default_agent_id: crate::routing::DEFAULT_AGENT_ID.into(),
+                curated_root: root.into(),
+                snapshot_dir: root.join("snapshots"),
+            },
+        );
+        runtime.start().await.unwrap();
+        let operation = runtime.operation().unwrap();
+        let db = operation.backend().clone();
+        let (insights, force) = operation
+            .scope(async {
+                let insights = handle_list_insights(
+                    JsonRpcRequest::with_id("dreaming.list_insights", None, json!(1)),
+                    db,
+                )
+                .await;
+                let force =
+                    handle_run_now(JsonRpcRequest::with_id("dreaming.run_now", None, json!(2)))
+                        .await;
+                (insights, force)
+            })
+            .await;
+        runtime.stop().await.unwrap();
+
+        let result = insights.result.expect("insights payload");
+        assert_eq!(
+            result["daemon"]["missing_dependencies"],
+            "provider_and_embedder"
+        );
+        let status: DreamSchedulingStatus = serde_json::from_value(result).unwrap();
+        assert!(status.last_run.is_none());
+        let error = force.error.expect("force must report missing dependencies");
+        assert_eq!(error.code, INTERNAL_ERROR);
+        assert!(error.message.contains("provider"));
+        assert!(error.message.contains("embedder"));
+    }
+
+    #[tokio::test]
     async fn list_insights_returns_daily_and_runs() {
         use crate::memory::dreaming::DailyInsight;
         use crate::memory::store::sqlite::SqliteMemoryBackend;
