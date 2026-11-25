@@ -162,7 +162,7 @@ impl CodexTokenRefresher {
             &self.config,
             &self.vault,
             PROVIDER_NAME,
-            Some(self),
+            self,
             due_within,
         )
         .await;

@@ -294,6 +294,27 @@ impl SharedTokenManager {
             .map_err(|error| SharedTokenError::Storage(error.to_string()))
     }
 
+    /// Capture the OAuth bearer, grant and scope epoch in one read transaction.
+    /// Config writers are excluded by the caller's guard; vault writers must
+    /// take the write lock before mutating either credential and its epoch.
+    pub(crate) fn oauth_refresh_snapshot(
+        &self,
+        config: &tokio::sync::RwLockReadGuard<'_, crate::Config>,
+        provider: &str,
+        bearer_key: &str,
+        grant_key: &str,
+    ) -> Result<Option<(DecryptedSecret, DecryptedSecret, u64)>, SharedTokenError> {
+        let vault = self.vault.read().unwrap_or_else(|e| e.into_inner());
+        let epoch = crate::providers::model_catalog::discovery::oauth_route_epoch(provider, config);
+        let Some(bearer) = self.decrypt_secret(&vault, bearer_key)? else {
+            return Ok(None);
+        };
+        let Some(grant) = self.decrypt_secret(&vault, grant_key)? else {
+            return Ok(None);
+        };
+        Ok(Some((bearer, grant, epoch)))
+    }
+
     /// Commit a credential refresh and its already-built transport at the same
     /// mutation boundary. The synchronous callback may not read vault or config.
     pub(crate) fn refresh_secrets_if_current<'a, T>(

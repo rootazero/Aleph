@@ -1385,12 +1385,17 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data":[{"id":MODEL}]})))
             .mount(&server)
             .await;
-        Mock::given(method("POST")).and(path("/v1/chat/completions"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "id": "fixture", "object": "chat.completion", "created": 0, "model": MODEL,
-                "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "ok"}}],
-                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
-            }))).mount(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                concat!(
+                    "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n",
+                    "data: [DONE]\n\n",
+                ),
+                "text/event-stream",
+            ))
+            .mount(&server)
+            .await;
         let (config, _) =
             fixture_with(&format!("{}/v1", server.uri()), PROVIDER, true, true, false);
         let (snapshot, named) = {
