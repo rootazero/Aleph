@@ -445,6 +445,10 @@ impl HandlerRegistry {
                 "chat.abort requires Gateway runtime - use Gateway::new()".to_string(),
             )
         });
+        registry.register("chat.models.list", |req| async move {
+            chat::handle_models_list(req)
+        });
+
         registry.register("chat.history", |req| async move {
             JsonRpcResponse::error(
                 req.id,
