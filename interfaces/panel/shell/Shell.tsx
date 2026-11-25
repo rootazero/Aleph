@@ -137,9 +137,11 @@ export function Shell() {
     return slot ? [{ slot, generation: generation() }] : [];
   });
 
+  const readerMode = signal(false);
   return (
     <View class="flex-1 bg-background">
       <If when={connection().state === "connected"} else={<Offline connection={connection} />}>
+        <If when={!readerMode()}>
         <View class="flex-row flex-wrap items-center gap-1 border-b border-border px-3 py-2">
           <Each of={view()?.slots ?? []} key={(slot) => `${slot.key}#${slot.state}`}>
             {(slot) => (
@@ -175,12 +177,14 @@ export function Shell() {
             />
           )}
         </If>
+        </If>
         <View class="flex-1">
           <Each of={mounted()} key={(item) => `${item.slot.key}#${item.slot.renderer}#${item.generation}`}>
             {(item) => {
               const sdk = createSdk(item().slot.key, item().generation, access);
               cleanup(() => sdk.dispose());
-              return <ModuleSlot slot={item().slot} tab={tabOf(item().slot.key)} tabs={view()?.tabs ?? []} sdk={sdk} />;
+              return <ModuleSlot slot={item().slot} tab={tabOf(item().slot.key)} tabs={view()?.tabs ?? []} sdk={sdk}
+                setReaderMode={(active) => readerMode.set(active)} />;
             }}
           </Each>
         </View>
@@ -191,7 +195,10 @@ export function Shell() {
 
 // Only live slots mount (`PanelModel` never makes an unavailable tab active);
 // a slot's key and renderer are fixed for its row.
-function ModuleSlot(props: { slot: Slot; tab: PanelTab | undefined; tabs: PanelTab[]; sdk: PanelSdk }) {
+function ModuleSlot(props: {
+  slot: Slot; tab: PanelTab | undefined; tabs: PanelTab[]; sdk: PanelSdk;
+  setReaderMode: (active: boolean) => void;
+}) {
   const { slot, tab, sdk } = props;
   if (slot.renderer === "dom") {
     return <Unavailable title={tab?.label ?? slot.key} detail="This tab needs the classic Panel; it does not run in this renderer yet." />;
@@ -202,7 +209,7 @@ function ModuleSlot(props: { slot: Slot; tab: PanelTab | undefined; tabs: PanelT
     case "aleph:sessions":
       return <Sessions sdk={sdk} />;
     case "aleph:chat":
-      return <Chat sdk={sdk} />;
+      return <Chat sdk={sdk} setReaderMode={props.setReaderMode} />;
     case "aleph:capabilities":
       return <Capabilities tabs={props.tabs} />;
     case "aleph:memory-nebula":

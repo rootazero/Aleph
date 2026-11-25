@@ -74,9 +74,33 @@ impl ChatModel {
         self.state.replace_history(history, details)
     }
 
-    /// Returns the authorized typed file changes for a visible tool row.
-    pub fn diff_body(&self, key: String) -> JsonValue {
-        json!(self.state.diff_body(&key))
+    /// Visible line numbers and word spans from Aleph's recorded change.
+    pub fn diff_view(&self, key: String, expanded: bool) -> JsonValue {
+        use shared_ui_logic::transcript::{diff_rows, stats_label, DiffView};
+
+        let changes: Vec<_> = self.state.diff_body(&key).unwrap_or_default().iter().map(|change| {
+            let label = stats_label(change);
+            match diff_rows(change, expanded) {
+                DiffView::Unavailable(_) => {
+                    let (label, reason) = if label.starts_with('+') {
+                        (label, "Diff unavailable: too large to show".to_owned())
+                    } else {
+                        (String::new(), label)
+                    };
+                    json!({"path": change.path, "label": label, "unavailable": reason, "lines": [], "hidden": 0})
+                }
+                DiffView::Rows(body) => {
+                    let lines: Vec<_> = body.rows.iter().map(|line| {
+                        let spans: Vec<_> = line.spans.iter().map(|span| {
+                            json!({"text": span.text, "emphasis": span.emphasis})
+                        }).collect();
+                        json!({"old": line.old_no, "new": line.new_no, "tag": line.tag, "spans": spans})
+                    }).collect();
+                    json!({"path": change.path, "label": label, "unavailable": null, "lines": lines, "hidden": body.hidden_rows})
+                }
+            }
+        }).collect();
+        json!(changes)
     }
 }
 

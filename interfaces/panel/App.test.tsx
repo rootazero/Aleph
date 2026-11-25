@@ -196,7 +196,7 @@ test("Nebula discovery is not carried across connection identities", async () =>
 
 
 // Chat: a stand-in Gateway whose transcript grows once a run completes.
-function chatGateway() {
+function chatGateway(answers: Answers = {}) {
   const transcript: { role: string; content: string; timestamp: string; run_id?: string }[] = [
     { role: "assistant", content: "Earlier answer", timestamp: "t0" },
   ];
@@ -214,6 +214,7 @@ function chatGateway() {
       return { run_id: "r-1", session_key: "s-1", streaming: true };
     },
     "chat.abort": () => ({ aborted: true }),
+    ...answers,
   });
   const complete = (text: string) => {
     transcript.push({ role: "assistant", content: text, timestamp: "t2", run_id: "r-1" });
@@ -231,7 +232,7 @@ const rpcParams = (app: { host: { calls(): { name: string; data: unknown }[] } }
 const chunk = (delta: string, seq?: number) => ({ topic: "stream.response_chunk", data: { type: "response_chunk", run_id: "r-1", delta, seq } });
 const toolStart = { tool_call_id: "call-1", change: { kind: "started", display_name: "Edit", args_text: "src/main.rs" } };
 const toolFinish = { tool_call_id: "call-1", change: { kind: "finished", success: true, duration_ms: 7, presentation_omitted: false } };
-const toolEvent = (delta: typeof toolStart | typeof toolFinish, seq: number) => ({
+const toolEvent = (delta: unknown, seq: number) => ({
   topic: "stream.chat_tool", data: { type: "chat_tool", run_id: "r-1", delta, seq },
 });
 
@@ -297,6 +298,100 @@ test("text and authorized tool rows interleave without moving on finish", async 
   await app.waitFor("Committed answer");
   expect(app.texts().filter((text) => text === title)).toHaveLength(1);
   expect(app.shows("Before tool")).toBe(false);
+});
+
+test("edit card shows recorded diff, opens full screen and pages masked output", async () => {
+  const { handlers } = chatGateway({
+    "trace.tool_output": (params) => {
+      const offset = (params as { offset: number }).offset;
+      return { tool_call_id: "call-1", offset, total_bytes: 8, source: "inline",
+        text: offset === 0 ? "你😀" : "!", truncated: offset === 0 };
+    },
+  });
+  const app = await openChat(handlers);
+  await app.type("label:Message", "edit the file");
+  await app.press("Send");
+  await app.waitFor("Stop");
+  await app.host.send("aleph.event", toolEvent(toolStart, 1));
+  await app.host.send("aleph.event", toolEvent({ ...toolFinish, change: { ...toolFinish.change,
+    presentation: { kind: "file_changes", changes: [{ path: "src/main.rs", kind: "modified", added: 1,
+      removed: 1, hunks: [{ old_start: 3, new_start: 3,
+        lines: [{ tag: "del", text: "before change" }, { tag: "add", text: "after change" }] }] }] },
+  } }, 2));
+  await app.waitFor("Done");
+  expect(rpcParams(app, "trace.tool_output")).toHaveLength(0);
+  await app.press("label:Expand Edit · src/main.rs");
+  await app.waitFor("你😀");
+  await app.waitFor("src/main.rs · +1 -1");
+  expect(rpcParams(app, "trace.tool_output")).toEqual([
+    { session_key: "s-1", run_id: "r-1", tool_call_id: "call-1", offset: 0, limit: 20480 },
+  ]);
+  await app.press("Open full screen");
+  await app.waitFor("Exit full screen");
+  expect(app.shows("label:Open Sessions")).toBe(false);
+  expect(app.shows("你😀")).toBe(true);
+  await app.keyboard.press("escape");
+  await app.waitFor("label:Open Sessions");
+  expect(app.shows("你😀")).toBe(true);
+  expect(rpcParams(app, "trace.tool_output")).toHaveLength(1);
+  await app.press("Open full screen");
+  await app.waitFor("Close reader");
+  await app.press("Close reader");
+  await app.press("Load more output");
+  await app.waitFor("你😀!");
+  expect(rpcParams(app, "trace.tool_output").map((request) => request.offset)).toEqual([0, 7]);
+  expect(rpcParams(app, "file.read")).toHaveLength(0);
+});
+
+test("collapsed tool ignores a stale page and expiry discards earlier output", async () => {
+  let release: ((answer: unknown) => void) | undefined;
+  let requests = 0;
+  const { handlers } = chatGateway({
+    "trace.tool_output": (params) => {
+      const offset = (params as { offset: number }).offset;
+      requests += 1;
+      if (requests === 1) return new Promise((resolve) => { release = resolve; });
+      if (offset > 0) return { tool_call_id: "call-1", offset, total_bytes: 0, source: "expired", text: "", truncated: true };
+      return { tool_call_id: "call-1", offset, total_bytes: 6, source: "persisted", text: "fresh", truncated: true };
+    },
+  });
+  const app = await openChat(handlers);
+  await app.type("label:Message", "execute tool");
+  await app.press("Send");
+  await app.waitFor("Stop");
+  await app.host.send("aleph.event", toolEvent(toolStart, 1));
+  await app.host.send("aleph.event", toolEvent(toolFinish, 2));
+  const expand = app.press("label:Expand Edit · src/main.rs");
+  await app.waitUntil(() => release !== undefined);
+  const collapse = app.press("label:Collapse Edit · src/main.rs");
+  await app.waitFor("label:Expand Edit · src/main.rs");
+  release!({ tool_call_id: "call-1", offset: 0, total_bytes: 5, source: "inline", text: "stale", truncated: false });
+  await expand;
+  await collapse;
+  expect(app.shows("stale")).toBe(false);
+  await app.press("label:Expand Edit · src/main.rs");
+  await app.waitFor("fresh");
+  await app.press("Load more output");
+  await app.waitFor("Tool output expired.");
+  expect(app.shows("fresh")).toBe(false);
+});
+
+test("scrolling up preserves the transcript anchor until jump to bottom", async () => {
+  const earlier = Array.from({ length: 80 }, (_, index) => ({
+    role: "assistant", content: `History item ${index}`, timestamp: `t${index}`,
+  }));
+  const { handlers } = chatGateway({
+    "chat.history": () => ({ session_key: "s-1", messages: [...earlier,
+      { role: "assistant", content: "Earlier answer", timestamp: "last" }], active_run: "r-1" }),
+  });
+  const app = await openChat(handlers);
+  await app.scroll("id:chat-transcript", -1600);
+  await app.waitFor("Jump to bottom");
+  await app.host.send("aleph.event", chunk("Live tail while reading", 1));
+  expect(app.shows("Live tail while reading")).toBe(false);
+  await app.press("Jump to bottom");
+  await app.waitFor("Live tail while reading");
+  await app.waitFor("Jump to bottom", { state: "gone" });
 });
 
 test("reopening an active run marks the prefix missing and retains its suffix", async () => {

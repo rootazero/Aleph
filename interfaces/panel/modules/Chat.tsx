@@ -1,9 +1,11 @@
 // Core owns committed history. Rust folds authorized live presentation into
 // the same list, while TSX owns RPC lifetimes and composer interaction.
-import { List, signal, type Signal, Text, View } from "nsh";
+import { cleanup, signal, type Signal, Text, View } from "nsh";
 import { Button, Input } from "nsh/base";
 import { ChatModel } from "aleph/panel";
 import { type PanelEvent, type PanelSdk, RpcError } from "../shell/sdk";
+import { TranscriptList } from "./chat/TranscriptList";
+import type { Change } from "./chat/Diff";
 
 const HOST_UNAVAILABLE = -32090;
 const HISTORY_LIMIT = 200;
@@ -48,33 +50,14 @@ type Patch = RunState & {
 };
 type Snapshot = RunState & { rows: ChatRow[]; limited: boolean };
 
-const toolState: Record<ToolRow["status"], string> = {
-  pending: "Status unknown",
-  running: "Running",
-  ok: "Done",
-  error: "Failed",
-};
-
-function TranscriptRow(props: { row: Signal<ChatRow> }) {
-  const text = () => props.row() as TextRow;
-  const tool = () => props.row() as ToolRow;
-  return (
-    <If when={props.row().kind === "tool"} else={
-      <View class="gap-1 py-2">
-        <Text class="text-muted-foreground">{text().role === "user" ? "You" : "Aleph"}</Text>
-        <Text class="text-foreground">{text().text}</Text>
-      </View>
-    }>
-      <View class="gap-1 py-2">
-        <Text class="text-foreground">{tool().display_name}{tool().args_text ? ` · ${tool().args_text}` : ""}</Text>
-        <Text class="text-muted-foreground">{toolState[tool().status]}</Text>
-      </View>
-    </If>
-  );
-}
-
-export function Chat(props: { sdk: PanelSdk }) {
+export function Chat(props: { sdk: PanelSdk; setReaderMode: (active: boolean) => void }) {
   const { sdk } = props;
+  const fullscreen = signal<string | null>(null);
+  const setFullscreen = (key: string | null) => {
+    fullscreen.set(key);
+    props.setReaderMode(key !== null);
+  };
+  cleanup(() => props.setReaderMode(false));
   const model = new ChatModel();
   const sessionKey = signal<string | null>((sdk.intent()?.session_key as string | undefined) ?? null);
   model.reset(sessionKey() ?? "");
@@ -228,19 +211,17 @@ export function Chat(props: { sdk: PanelSdk }) {
 
   return (
     <View class="flex-1 gap-2 p-4">
-      <Text class="text-muted-foreground">{sessionKey() ?? "New conversation"}</Text>
+      <If when={!fullscreen()}><Text class="text-muted-foreground">{sessionKey() ?? "New conversation"}</Text></If>
       <If when={!loading()} else={<Text class="text-muted-foreground">Loading conversation…</Text>}>
-        <List each={keys()} keyExtractor={(key) => key}
-          empty={<Text class="text-muted-foreground">No messages yet</Text>}
-          initialScrollAtEnd class="flex-1">
-          {(key) => <TranscriptRow row={rows.get(key())!} />}
-        </List>
+        <TranscriptList keys={keys} row={(key) => rows.get(key)!} sdk={sdk} session={sessionKey}
+          fullscreen={fullscreen} setFullscreen={setFullscreen}
+          diff={(key, expanded) => model.diffView(key, expanded) as Change[]} />
       </If>
-      <If when={activeRun()}><Text class="text-muted-foreground">Aleph · replying</Text></If>
+      <If when={!fullscreen() && activeRun()}><Text class="text-muted-foreground">Aleph · replying</Text></If>
       <If when={missingPrefix()}><Text class="text-muted-foreground">Earlier live updates may be missing.</Text></If>
       <If when={limited()}><Text class="text-muted-foreground">Some earlier tool details are unavailable.</Text></If>
       <If when={notice()}><Text class="text-destructive">{notice()}</Text></If>
-      <View class="flex-row items-end gap-2">
+      <View class={fullscreen() ? "hidden" : "flex-row items-end gap-2"}>
         <Input
           value={draft()}
           onChange={({ value }) => draft.set(value)}
