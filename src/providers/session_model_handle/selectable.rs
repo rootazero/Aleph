@@ -102,6 +102,7 @@ impl SelectableModelsSnapshot {
                     model_catalog::ModelSource::Configured,
                     &[],
                     base_url,
+                    &pc.model_defs,
                 )
                 .into_iter()
                 .map(|model| model.id)

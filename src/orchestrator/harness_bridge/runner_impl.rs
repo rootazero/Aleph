@@ -349,10 +349,15 @@ impl HarnessRunner for AgentHarnessRunner {
         // Gauge denominator: authoritative per-model context window (R7 — the
         // lookup is core's, not the panel's), honoring the configured
         // per-provider override first.
-        let context_window = crate::providers::model_catalog::resolve_context_window_with_override(
-            self.primary_context_window,
-            &gauge_model,
-        );
+        use crate::providers::model_catalog::{
+            resolve_context_window, resolve_context_window_with_override,
+        };
+        let context_window = match &self.context_budget_refiner {
+            Some(refiner) => refiner
+                .serving_context_window(&gauge_model, &cost_provider, self.primary_context_window)
+                .unwrap_or_else(|| resolve_context_window(&gauge_model)),
+            None => resolve_context_window_with_override(self.primary_context_window, &gauge_model),
+        };
         let refined_context_budget = self.context_budget_config.as_ref().map(|base| {
             self.context_budget_refiner.as_ref().map_or_else(
                 || base.clone(),

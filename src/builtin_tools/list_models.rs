@@ -432,6 +432,11 @@ impl crate::tools::AlephTool for ListModelsTool {
                             .map(|m| (m, ModelSource::Configured)),
                     )
                     .chain(
+                        cfg.into_iter()
+                            .flat_map(|c| &c.model_defs)
+                            .map(|def| (def.id.clone(), ModelSource::Configured)),
+                    )
+                    .chain(
                         discovered
                             .get(cfg_name)
                             .into_iter()
@@ -456,9 +461,10 @@ impl crate::tools::AlephTool for ListModelsTool {
                     configured,
                     is_default,
                     display_name.clone(),
-                    Some(preset.base_url),
+                    cfg.and_then(|c| c.base_url.as_deref())
+                        .or(Some(preset.base_url)),
                     source,
-                    None,
+                    cfg.and_then(|c| model_def_for(&c.model_defs, &model)),
                 ));
             }
         }
@@ -485,6 +491,11 @@ impl crate::tools::AlephTool for ListModelsTool {
                 .models
                 .iter()
                 .map(|m| (m, ModelSource::Configured))
+                .chain(
+                    cfg.model_defs
+                        .iter()
+                        .map(|def| (&def.id, ModelSource::Configured)),
+                )
                 .chain(
                     discovered
                         .get(name.as_str())

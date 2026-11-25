@@ -126,7 +126,7 @@ fn apply_cap_override(
     let Some(def) = model_def else {
         return base;
     };
-    let has_any_cap = def.context_window.is_some()
+    let has_any_cap = def.context_window.is_some_and(|window| window > 0)
         || def.max_output_tokens.is_some()
         || def.input.is_some()
         || def.reasoning.is_some();
@@ -140,7 +140,7 @@ fn apply_cap_override(
         supports_tools: false,
         supports_reasoning: false,
     });
-    if let Some(window) = def.context_window {
+    if let Some(window) = def.context_window.filter(|&window| window > 0) {
         caps.context_window = window;
     }
     if let Some(max_output) = def.max_output_tokens {

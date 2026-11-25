@@ -1297,6 +1297,7 @@ pub async fn handle_catalog(
                 .map(Vec::as_slice)
                 .unwrap_or_default(),
             cfg.and_then(|c| c.base_url.as_deref()),
+            cfg.map_or(&[], |c| c.model_defs.as_slice()),
         );
 
         items.push(CatalogEntry {
@@ -1394,6 +1395,7 @@ pub async fn handle_catalog(
                 ModelSource::Configured,
                 discovered.get(name).map(Vec::as_slice).unwrap_or_default(),
                 cfg.base_url.as_deref(),
+                &cfg.model_defs,
             ),
         });
     }

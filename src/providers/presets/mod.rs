@@ -306,10 +306,17 @@ pub fn get_preset(name: &str) -> Option<&'static ProviderPreset> {
 /// background jobs, not a failover candidate for the main loop.
 #[must_use]
 pub fn model_ladder(name: &str, base: Vec<String>, operator_base_url: Option<&str>) -> Vec<String> {
-    model_roster(name, base, ModelSource::Configured, &[], operator_base_url)
-        .into_iter()
-        .map(|m| m.id)
-        .collect()
+    model_roster(
+        name,
+        base,
+        ModelSource::Configured,
+        &[],
+        operator_base_url,
+        &[],
+    )
+    .into_iter()
+    .map(|m| m.id)
+    .collect()
 }
 
 /// The same merge, with each rung's provenance and lifecycle attached.
@@ -341,6 +348,7 @@ pub fn model_roster(
     base_source: ModelSource,
     discovered: &[String],
     operator_base_url: Option<&str>,
+    model_defs: &[crate::config::types::ModelDef],
 ) -> Vec<RosterModel> {
     let mut out: Vec<RosterModel> = Vec::with_capacity(base.len() + discovered.len() + 4);
     let push = |id: String, source: ModelSource, out: &mut Vec<RosterModel>| {
@@ -357,7 +365,7 @@ pub fn model_roster(
             &id,
             operator_base_url,
             source,
-            None,
+            model_defs.iter().find(|def| def.id == id),
         );
         out.push(RosterModel {
             id,
@@ -370,6 +378,9 @@ pub fn model_roster(
 
     for id in base {
         push(id, base_source, &mut out);
+    }
+    for def in model_defs {
+        push(def.id.clone(), ModelSource::Configured, &mut out);
     }
     if let Some(preset) = get_preset(name) {
         let unmoved = operator_base_url.is_none_or(|u| u == preset.base_url);
@@ -497,4 +508,32 @@ pub fn parse_temperature_policy(raw: &str) -> Option<TemperaturePolicy> {
 /// the wider coverage is strictly additive.
 pub fn resolve_provider_from_model(model: &str) -> Option<String> {
     crate::providers::model_catalog::infer_vendor(model).map(String::from)
+}
+
+#[cfg(test)]
+#[test]
+fn configured_model_def_reaches_preset_and_custom_rosters() {
+    let def: crate::config::types::ModelDef = serde_json::from_value(serde_json::json!({
+        "id": "operator-only-model",
+        "context_window": 64_000,
+    }))
+    .expect("valid model definition");
+    for provider in ["openai", "custom"] {
+        let roster = model_roster(
+            provider,
+            vec!["first-model".to_owned()],
+            ModelSource::Configured,
+            &["discovered-only-model".to_owned()],
+            None,
+            std::slice::from_ref(&def),
+        );
+        assert_eq!(roster[0].id, "first-model");
+        assert_eq!(roster[1].id, def.id);
+        assert_eq!(
+            roster[1].capabilities.as_ref().unwrap().context_window,
+            64_000
+        );
+        assert_eq!(roster.last().unwrap().id, "discovered-only-model");
+        assert!(!model_ladder(provider, vec!["first-model".to_owned()], None).contains(&def.id));
+    }
 }
