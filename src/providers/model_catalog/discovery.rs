@@ -203,16 +203,13 @@ fn scope_epoch_current(provider: &str, expected: u64) -> bool {
 }
 
 /// Called under the mutation epoch; only matching providers lose inventory.
-pub(super) fn revoke_inventory(
-    affected: impl Fn(&str) -> bool,
-    unavailable: impl Fn(&str) -> bool,
-) {
+pub(super) fn revoke_inventory(affected: impl Fn(&str) -> bool) {
     bump_scope_epochs(&affected, false);
     INVENTORIES
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .retain(|name, _| !affected(name));
-    crate::providers::session_model_handle::revoke_config_selection(affected, unavailable);
+    crate::providers::session_model_handle::revoke_config_selection(affected);
 }
 
 pub(super) fn revoke_vault_inventory(affected: impl Fn(&str) -> bool) {
@@ -1075,7 +1072,7 @@ mod tests {
                     "{obsolete:?}"
                 );
                 assert!(!selectable(PROVIDER, "vendor-model"));
-                assert!(selectable(PROVIDER, "operator-model"));
+                assert!(!selectable(PROVIDER, "operator-model"));
                 assert!(selectable(&other_provider(PROVIDER), "unrelated-model"));
             }
             let guard = config.read().await;
@@ -1261,7 +1258,7 @@ mod tests {
                 super::super::discovery_authority::replace_config(&mut live, changed);
             }
             assert!(!selectable(PROVIDER, "vendor-model"));
-            assert!(selectable(PROVIDER, "operator-model"));
+            assert!(!selectable(PROVIDER, "operator-model"));
             assert!(selectable(&other_provider(PROVIDER), "unrelated-model"));
             {
                 let guard = config.read().await;
@@ -1280,7 +1277,19 @@ mod tests {
         use serde_json::json;
 
         const PROVIDER: &str = "task-1b-runtime-scope";
-        scenario(PROVIDER, |config, _old_endpoint| async move {
+        scenario(PROVIDER, |config, old_endpoint| async move {
+            use crate::gateway::handlers::agent::{build_run_request, BuildRunError};
+            use crate::gateway::model_override::ModelOverride;
+
+            let key = crate::gateway::router::AgentRouter::new().route(None, None, None, None).await;
+            let agent = crate::gateway::agent_instance::AgentInstanceConfig::default();
+            let build = |model: &'static str| build_run_request(
+                "endpoint-fixture".into(), &key,
+                serde_json::from_value(json!({"input": "hi", "model_override": ModelOverride::Qualified { provider: PROVIDER.into(), model: model.into() }})).unwrap(),
+                Some(&config), None, &agent,
+            );
+            let queued = build("operator-model").await.unwrap();
+            queued.validate_dispatch_model().unwrap();
             let replacement = Endpoint::start().await;
             {
                 let mut live = config.write().await;
@@ -1316,8 +1325,11 @@ mod tests {
                 return Err(superseded);
             }
             assert_eq!(row["models"][0]["id"], "vendor-model");
+            assert!(matches!(build("vendor-model").await, Err(BuildRunError::InvalidModel(_))));
+            assert!(queued.validate_dispatch_model().is_err());
+            old_endpoint.assert_idle().await;
             assert!(!selectable(PROVIDER, "vendor-model"));
-            assert!(selectable(PROVIDER, "operator-model"));
+            assert!(!selectable(PROVIDER, "operator-model"));
             assert!(selectable(&other_provider(PROVIDER), "unrelated-model"));
             Ok(())
         })
@@ -1398,12 +1410,18 @@ mod tests {
             .await
             .unwrap();
             assert_eq!(admitted.model_override, Some(model.clone()));
+            admitted.validate_dispatch_model().unwrap();
 
             let mut live = config.write().await;
+            let mut disabled = live.clone();
+            disabled.providers.get_mut(PROVIDER).unwrap().enabled = false;
+            super::super::discovery_authority::replace_config(&mut live, disabled);
+            assert!(admitted.validate_dispatch_model().is_err());
             let mut removed = live.clone();
             removed.providers.remove(PROVIDER);
             super::super::discovery_authority::replace_config(&mut live, removed);
             drop(live);
+            assert!(admitted.validate_dispatch_model().is_err());
             assert!(!member_models().iter().any(|item| item.provider == PROVIDER));
             assert!(!selectable(PROVIDER, "operator-model"));
             let refused = agent::build_run_request(
@@ -1453,6 +1471,41 @@ mod tests {
             Ok(())
         })
         .await;
+    }
+
+    #[tokio::test]
+    async fn credential_revocation_refuses_a_previously_admitted_configured_model() {
+        use crate::gateway::handlers::agent::build_run_request;
+        use crate::gateway::security::{store::SecurityStore, SharedTokenManager};
+        use crate::providers::session_model_handle::{
+            selectable_models, with_test_selectable_models,
+        };
+        use serde_json::json;
+
+        const PROVIDER: &str = "queued-vault-fixture";
+        scenario_with_credentials(PROVIDER, true, |config, endpoint| async move {
+            let dir = tempfile::tempdir().unwrap();
+            let vault = SharedTokenManager::new(Arc::new(SecurityStore::in_memory().unwrap()), dir.path().join("test.vault"));
+            vault.generate_token().unwrap();
+            let vault_key = crate::providers::probe::provider_vault_key(PROVIDER);
+            vault.store_secret(&vault_key, "fixture-token").unwrap();
+            let (_, mounted) = fixture_with(&endpoint.url, PROVIDER, true, true, true);
+            with_test_selectable_models(Some(mounted), async {
+                let key = crate::gateway::router::AgentRouter::new().route(None, None, None, None).await;
+                let request = build_run_request("queued-fixture".into(), &key,
+                    serde_json::from_value(json!({"input": "hi", "model_override": { "kind": "qualified", "provider": PROVIDER, "model": "operator-model" }})).unwrap(),
+                    Some(&config), None, &crate::gateway::agent_instance::AgentInstanceConfig::default(),
+                ).await.unwrap();
+                request.validate_dispatch_model().unwrap();
+                // OAuth logout deletes this key before saving config. The vault
+                // operation must revoke queued bindings even before that save.
+                vault.delete_secret(&vault_key).unwrap();
+                assert!(request.validate_dispatch_model().is_err());
+                assert!(!selectable_models().unwrap().choices().iter().any(|item| item.provider == PROVIDER));
+                endpoint.assert_idle().await;
+                Ok(())
+            }).await
+        }).await;
     }
 
     #[tokio::test]
@@ -1596,9 +1649,9 @@ mod tests {
                         );
                     }
                     endpoint.assert_idle().await;
-                    // The revoked rows are not republished by the stale result.
+                    // The revoked route is not restored by the stale result.
                     assert!(!selectable(PROVIDER, "vendor-model"));
-                    assert!(selectable(PROVIDER, "operator-model"));
+                    assert!(!selectable(PROVIDER, "operator-model"));
                     let guard = config.read().await;
                     assert!(configured_inventory(&config, &guard, PROVIDER, credential).is_none());
                     Ok(())

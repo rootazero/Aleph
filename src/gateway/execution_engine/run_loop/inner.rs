@@ -1527,23 +1527,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
             // Named transports can outlive the published eligibility after a
             // reconfiguration. A queued external choice must still be usable.
-            if request
-                .metadata
-                .contains_key(crate::gateway::model_override::USER_MODEL_OVERRIDE_METADATA)
-            {
-                use crate::providers::session_model_handle::selectable_models;
-                let still_selectable = request.model_override.as_ref().is_some_and(|model| {
-                    selectable_models().is_some_and(|snapshot| {
-                        snapshot.resolve(model.provider(), model.model()).is_ok()
-                    })
-                });
-                if !still_selectable {
-                    return Err(ExecutionError::Orchestrator(
-                        "The selected model is no longer available. Choose a model and try again."
-                            .into(),
-                    ));
-                }
-            }
+            request.validate_dispatch_model()?;
 
             // Dispatch via the orchestrator
             let orchestrator = match self.orchestrator.get() {

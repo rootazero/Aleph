@@ -152,34 +152,29 @@ impl SelectableModelsSnapshot {
         next
     }
 
-    pub(super) fn preserve_discovered(&mut self, previous: &Self) {
+    pub(super) fn preserve_mounted_routes(&mut self, previous: &Self) {
         for (name, entry) in &mut self.providers {
             // Registry refresh alone does not replace the run builder's named
             // transports. Only a new boot publication certifies them again.
             if let Some(prior) = previous.providers.get(name) {
+                entry.available &= prior.available;
+                entry.authenticated = prior.authenticated;
                 entry.discovery_vault_backed = prior.discovery_vault_backed;
                 entry.discovery_transport_current = prior.discovery_transport_current;
                 entry.discovered.clone_from(&prior.discovered);
             } else {
+                entry.available = false;
                 entry.discovery_transport_current = false;
             }
         }
     }
 
-    /// Unpublish disabled or removed providers before the asynchronous reload.
-    /// Keep their configured IDs until the rebuild: a disabled duplicate must
-    /// not turn an ambiguous raw request into an implicit route switch.
-    pub(super) fn mark_unavailable(&mut self, unavailable: impl Fn(&str) -> bool) {
-        for (name, entry) in &mut self.providers {
-            if unavailable(name) {
-                entry.available = false;
-            }
-        }
-    }
-
-    pub(super) fn revoke_discovered(&mut self, affected: impl Fn(&str) -> bool, vault_only: bool) {
+    /// Withdraw execution eligibility while preserving configured IDs for raw
+    /// ambiguity checks. Only an actual remount can certify the route again.
+    pub(super) fn revoke_routes(&mut self, affected: impl Fn(&str) -> bool, vault_only: bool) {
         for (name, entry) in &mut self.providers {
             if affected(name) && (!vault_only || entry.discovery_vault_backed) {
+                entry.available = false;
                 entry.discovered.clear();
                 entry.discovery_transport_current = false;
             }

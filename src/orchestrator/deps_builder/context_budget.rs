@@ -606,16 +606,13 @@ pub fn build_context_budget_refiner(
         }
         windows.retain(|_, window| *window > 0);
         if !windows.is_empty() {
-            model_windows.insert(name.to_ascii_lowercase(), windows);
+            model_windows.insert(name.clone(), windows);
         }
-        if p.context_window.is_some() || p.max_tokens.is_some() {
-            let lower = name.to_ascii_lowercase();
-            if let Some(w) = p.context_window {
-                provider_windows.insert(lower.clone(), w);
-            }
-            if let Some(m) = p.max_tokens {
-                provider_max_tokens.insert(lower, m);
-            }
+        if let Some(window) = p.context_window {
+            provider_windows.insert(name.clone(), window);
+        }
+        if let Some(max_tokens) = p.max_tokens {
+            provider_max_tokens.insert(name.clone(), max_tokens);
         }
     }
     Some(ContextBudgetRefiner {
@@ -642,17 +639,16 @@ impl ContextBudgetRefiner {
         serving_provider: &str,
         window_override: Option<u32>,
     ) -> Option<u32> {
-        let is_primary = serving_provider.eq_ignore_ascii_case(&self.primary_provider_key);
-        let serving_key = serving_provider.to_ascii_lowercase();
+        let is_primary = serving_provider == self.primary_provider_key;
         let configured_window = self
             .provider_windows
-            .get(&serving_key)
+            .get(serving_provider)
             .copied()
             .filter(|&window| window > 0)
             .or_else(|| window_override.filter(|&window| is_primary && window > 0))
             .or_else(|| {
                 self.model_windows
-                    .get(&serving_key)?
+                    .get(serving_provider)?
                     .get(serving_model)
                     .copied()
             });
@@ -691,8 +687,7 @@ impl ContextBudgetRefiner {
         window_override: Option<u32>,
     ) -> ContextBudgetConfig {
         let caps = capabilities_for(serving_model);
-        let is_primary = serving_provider.eq_ignore_ascii_case(&self.primary_provider_key);
-        let serving_key = serving_provider.to_ascii_lowercase();
+        let is_primary = serving_provider == self.primary_provider_key;
         let Some(window) =
             self.serving_context_window(serving_model, serving_provider, window_override)
         else {
@@ -703,7 +698,7 @@ impl ContextBudgetRefiner {
             self.primary_max_tokens.map(u64::from)
         } else {
             self.provider_max_tokens
-                .get(&serving_key)
+                .get(serving_provider)
                 .copied()
                 .map(u64::from)
         }
@@ -1774,6 +1769,40 @@ mod tests {
                 .token_budget,
             base.token_budget
         );
+    }
+
+    #[test]
+    fn serving_budget_keeps_case_distinct_provider_keys() {
+        let mut config = cfg_with_primary(
+            "primary",
+            big_primary(),
+            ContextBudgetToml {
+                enabled: true,
+                ..ContextBudgetToml::default()
+            },
+        );
+        for (name, window, max_tokens) in [("Relay", 64_000, 2_000), ("relay", 32_000, 4_000)] {
+            let mut provider = ProviderConfig::test_config("org/model");
+            provider.context_window = None;
+            provider.model_defs = vec![window_def("org/model", window)];
+            provider.max_tokens = Some(max_tokens);
+            config.providers.insert(name.into(), provider);
+        }
+        let refiner = build_context_budget_refiner(&config, "primary").unwrap();
+        let base = build_context_budget_config(&config, "primary", &[]).unwrap();
+        for (name, window, reserve) in [("Relay", 64_000, 2_000), ("relay", 32_000, 4_000)] {
+            assert_eq!(
+                refiner.serving_context_window("org/model", name, None),
+                Some(window)
+            );
+            assert_eq!(
+                refiner
+                    .refine_for_serving_model(&base, "org/model", name, None)
+                    .token_budget,
+                base.token_budget
+                    .min(usable_budget(u64::from(window), reserve))
+            );
+        }
     }
 
     #[test]

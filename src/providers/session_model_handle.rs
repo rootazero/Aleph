@@ -440,18 +440,12 @@ pub(crate) fn publish_discovered(
     update_discovered(|snapshot| *snapshot = snapshot.replace_discovered(provider, models));
 }
 
-pub(crate) fn revoke_config_selection(
-    affected: impl Fn(&str) -> bool,
-    unavailable: impl Fn(&str) -> bool,
-) {
-    update_discovered(|snapshot| {
-        snapshot.revoke_discovered(affected, false);
-        snapshot.mark_unavailable(unavailable);
-    });
+pub(crate) fn revoke_config_selection(affected: impl Fn(&str) -> bool) {
+    update_discovered(|snapshot| snapshot.revoke_routes(affected, false));
 }
 
 pub(crate) fn revoke_vault_discovery(affected: impl Fn(&str) -> bool) {
-    update_discovered(|snapshot| snapshot.revoke_discovered(affected, true));
+    update_discovered(|snapshot| snapshot.revoke_routes(affected, true));
 }
 
 fn update_discovered(update: impl FnOnce(&mut SelectableModelsSnapshot)) {
@@ -513,7 +507,7 @@ pub fn refresh_selectable_models(
         // Credential resolution and snapshot construction must precede the
         // epoch/slot critical section; vault mutations take vault -> epoch.
         let mut next = prepare(&previous, previous.routable.clone());
-        next.preserve_discovered(&previous);
+        next.preserve_mounted_routes(&previous);
         let next = std::sync::Arc::new(next);
         if discovery_authority::commit_if_current(config, revision, || {
             replace_selectable_if_unchanged(handle, &previous, next)

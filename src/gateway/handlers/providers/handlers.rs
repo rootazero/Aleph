@@ -24,13 +24,12 @@ use crate::gateway::security::SharedTokenManager;
 use crate::providers::model_catalog::ModelSource;
 use crate::providers::probe::probe_provider_bounded;
 
-/// Refresh the selector's existing projection after a provider registry write.
-/// A failed reconstruction must not advertise the newly saved model roster on
-/// an older live instance. Unrelated writes must not re-enable that provider.
+/// Refresh configured model IDs after a registry write. Construction in the
+/// thinker registry can narrow availability but cannot certify a named run
+/// transport or re-enable one that a config/credential mutation revoked.
 async fn refresh_selectable_publication(
     config: &Arc<RwLock<Config>>,
     registry: Option<&Arc<crate::thinker::MultiProviderRegistry>>,
-    vault: Option<&Arc<SharedTokenManager>>,
     changed: &str,
     constructed: bool,
 ) {
@@ -49,17 +48,9 @@ async fn refresh_selectable_publication(
                 }
             })
             .collect();
-        // Authentication is only a selectable-model validation input. It must not
-        // synthesize routing availability or restore learned/semantic routing.
-        let env_provider = crate::gateway::available_provider_from_env();
-        selection::SelectableModelsSnapshot::from_config(&config, routable, &available, |name| {
-            vault.is_some_and(|vault| resolve_api_key(name, vault).is_some())
-                || config
-                    .providers
-                    .get(name)
-                    .is_some_and(|pc| pc.protocol() == "ollama")
-                || (name != changed && available.contains(name) && env_provider == Some(name))
-        })
+        // The publication carries forward mounted authentication; no credential
+        // lookup can attest the old named transport after a config change.
+        selection::SelectableModelsSnapshot::from_config(&config, routable, &available, |_| false)
     });
 }
 
@@ -278,14 +269,8 @@ async fn update_provider_inner(
         }
     }
 
-    refresh_selectable_publication(
-        &config,
-        multi_registry.as_ref(),
-        Some(&vault),
-        &params.name,
-        constructed,
-    )
-    .await;
+    refresh_selectable_publication(&config, multi_registry.as_ref(), &params.name, constructed)
+        .await;
 
     // Broadcast event
     let timestamp = std::time::SystemTime::now()
@@ -441,14 +426,8 @@ async fn create_provider_inner(
         info!(name = %name, "Provider registered in live registry");
     }
 
-    refresh_selectable_publication(
-        &config,
-        multi_registry.as_ref(),
-        Some(&vault),
-        &params.name,
-        constructed,
-    )
-    .await;
+    refresh_selectable_publication(&config, multi_registry.as_ref(), &params.name, constructed)
+        .await;
 
     // Broadcast event
     let timestamp = std::time::SystemTime::now()
@@ -581,14 +560,7 @@ async fn delete_provider_inner(
         }
     }
 
-    refresh_selectable_publication(
-        &config,
-        multi_registry.as_ref(),
-        Some(&vault),
-        &params.name,
-        false,
-    )
-    .await;
+    refresh_selectable_publication(&config, multi_registry.as_ref(), &params.name, false).await;
 
     // Broadcast event
     let timestamp = std::time::SystemTime::now()
@@ -1123,7 +1095,7 @@ async fn set_default_provider_inner(
         }
     }
 
-    refresh_selectable_publication(config, multi_registry, vault, &params.name, constructed).await;
+    refresh_selectable_publication(config, multi_registry, &params.name, constructed).await;
 
     // Broadcast event
     let timestamp = std::time::SystemTime::now()

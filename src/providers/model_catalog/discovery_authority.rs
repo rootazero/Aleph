@@ -47,7 +47,7 @@ impl MutationFence {
     }
     pub(crate) fn provider_changed(&mut self, provider: &str) {
         self.advance();
-        super::discovery::revoke_inventory(|name| name == provider, |_| false);
+        super::discovery::revoke_inventory(|name| name == provider);
     }
 
     pub(crate) fn vault_changed(&mut self, affected: impl Fn(&str) -> bool) {
@@ -60,15 +60,17 @@ impl MutationFence {
 /// fields affecting listing identity or eligibility need to invalidate fetches.
 pub(crate) fn config_replaced(previous: &Config, next: &Config) {
     let presets_changed = previous.presets_override.providers != next.presets_override.providers;
+    let merged_route = |config: &Config, name: &str| {
+        crate::providers::presets::get_merged_preset(name, &config.presets_override)
+            .map(|preset| (preset.base_url, preset.protocol))
+    };
     let affected = |name: &str| match (previous.providers.get(name), next.providers.get(name)) {
         (Some(old), Some(new)) => {
             old.base_url != new.base_url
                 || old.protocol != new.protocol
                 || old.api_key != new.api_key
                 || old.enabled != new.enabled
-                || (presets_changed
-                    && super::discovery::listing_address(previous, name).ok()
-                        != super::discovery::listing_address(next, name).ok())
+                || (presets_changed && merged_route(previous, name) != merged_route(next, name))
         }
         (None, None) => false,
         _ => true,
@@ -82,12 +84,7 @@ pub(crate) fn config_replaced(previous: &Config, next: &Config) {
     {
         let mut fence = mutation_fence();
         fence.advance();
-        super::discovery::revoke_inventory(affected, |name| {
-            !next
-                .providers
-                .get(name)
-                .is_some_and(|provider| provider.enabled)
-        });
+        super::discovery::revoke_inventory(affected);
     }
 }
 
