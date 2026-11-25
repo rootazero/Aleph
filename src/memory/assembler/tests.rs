@@ -10,6 +10,7 @@ use crate::memory::assembler::{
 };
 use crate::memory::embedding_provider::EmbeddingProvider;
 use crate::memory::note_retrieval::NoteFactRetrieval;
+use crate::memory::notes::store::NoteStore;
 use crate::memory::notes::NoteIndexer;
 use crate::memory::session_resume::reader::SnapshotReader;
 use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
@@ -30,6 +31,7 @@ struct StubReranker {
     sleep_for: Option<Duration>,
     /// Records whether the reranker was actually called.
     was_called: AtomicBool,
+    select_notes: bool,
 }
 
 impl StubReranker {
@@ -38,6 +40,7 @@ impl StubReranker {
             response: StdMutex::new(Some(Ok(json.into()))),
             sleep_for: None,
             was_called: AtomicBool::new(false),
+            select_notes: false,
         })
     }
     fn timing_out() -> Arc<Self> {
@@ -45,6 +48,7 @@ impl StubReranker {
             response: StdMutex::new(Some(Ok("ignored".into()))),
             sleep_for: Some(Duration::from_millis(2_000)),
             was_called: AtomicBool::new(false),
+            select_notes: false,
         })
     }
     fn invalid_json() -> Arc<Self> {
@@ -54,8 +58,18 @@ impl StubReranker {
 
 #[async_trait]
 impl LlmReranker for StubReranker {
-    async fn complete(&self, _prompt: &str, _model: Option<&str>) -> Result<String, AlephError> {
+    async fn complete(&self, prompt: &str, _model: Option<&str>) -> Result<String, AlephError> {
         self.was_called.store(true, Ordering::SeqCst);
+        if self.select_notes {
+            let ids: Vec<_> = prompt
+                .lines()
+                .filter_map(|line| {
+                    let line = line.trim().strip_prefix('[')?;
+                    Some(line.split_once(']')?.0)
+                })
+                .collect();
+            return Ok(serde_json::json!({"slots": [{"kind": "relevant_notes", "item_ids": ids, "tokens_budget": 2000}]}).to_string());
+        }
         if let Some(d) = self.sleep_for {
             tokio::time::sleep(d).await;
         }
@@ -109,12 +123,23 @@ fn default_cfg() -> AssemblerConfig {
 struct Fixture {
     assembler: HybridAssembler,
     raw_store: Arc<dyn RawMemoryStore>,
+    backend: MemoryBackend,
+    notes_dir: std::path::PathBuf,
+    _home: Option<crate::utils::paths::IsolatedAlephHome>,
     _tmp_mem: tempfile::TempDir,
     _tmp_snap: tempfile::TempDir,
     reranker: Arc<StubReranker>,
 }
 
 async fn fixture(reranker: Arc<StubReranker>, config: AssemblerConfig) -> Fixture {
+    fixture_with_notes(reranker, config, None).await
+}
+
+async fn fixture_with_notes(
+    reranker: Arc<StubReranker>,
+    config: AssemblerConfig,
+    notes_dir: Option<std::path::PathBuf>,
+) -> Fixture {
     // rust-doctor-disable-next-line unwrap-in-production
     let tmp_mem = tempfile::tempdir().unwrap();
     // rust-doctor-disable-next-line unwrap-in-production
@@ -123,8 +148,9 @@ async fn fixture(reranker: Arc<StubReranker>, config: AssemblerConfig) -> Fixtur
     // rust-doctor-disable-next-line unwrap-in-production
     let backend: MemoryBackend = Arc::new(SqliteMemoryBackend::new(&db_path).unwrap());
     let embedder: Arc<dyn EmbeddingProvider> = Arc::new(FakeEmbedder);
+    let notes_dir = notes_dir.unwrap_or_else(|| tmp_mem.path().join("notes"));
     let indexer = Arc::new(NoteIndexer::new(
-        tmp_mem.path().join("notes"),
+        notes_dir.clone(),
         // rust-doctor-disable-next-line excessive-clone
         backend.clone(),
     ));
@@ -135,8 +161,8 @@ async fn fixture(reranker: Arc<StubReranker>, config: AssemblerConfig) -> Fixtur
             .unwrap(),
     );
     let snapshots = Arc::new(SnapshotReader::new(tmp_snap.path()));
-    let profile = UserProfileLoader::new(tmp_mem.path().join("notes"));
-    let feedback_floor = FeedbackFloorLoader::new(tmp_mem.path().join("notes"));
+    let profile = UserProfileLoader::new(notes_dir.clone());
+    let feedback_floor = FeedbackFloorLoader::new(notes_dir.clone());
     // rust-doctor-disable-next-line excessive-clone
     let reranker_dyn: Arc<dyn LlmReranker> = reranker.clone();
     let assembler = HybridAssembler::new(
@@ -153,6 +179,9 @@ async fn fixture(reranker: Arc<StubReranker>, config: AssemblerConfig) -> Fixtur
     Fixture {
         assembler,
         raw_store,
+        backend,
+        notes_dir,
+        _home: None,
         _tmp_mem: tmp_mem,
         _tmp_snap: tmp_snap,
         reranker,
@@ -455,4 +484,255 @@ proptest! {
                 serde_json::from_str(&json).unwrap();
         });
     }
+}
+
+// A duplicate public path must not collapse materialized notes from two owners,
+// and synthetic profile/raw/summary entries must never acquire note exposure.
+async fn reflection_owner_fixture(force_fallback: bool) -> Fixture {
+    let reranker = Arc::new(StubReranker {
+        response: StdMutex::new(None),
+        sleep_for: None,
+        was_called: AtomicBool::new(false),
+        select_notes: true,
+    });
+    let mut config = default_cfg();
+    config.force_fallback = force_fallback;
+    let home = crate::utils::paths::IsolatedAlephHome::new();
+    let mut fx = fixture_with_notes(
+        reranker,
+        config,
+        Some(crate::utils::paths::get_note_memory_dir().unwrap()),
+    )
+    .await;
+    fx._home = Some(home);
+    for (owner, body) in [
+        ("default", "quartz base evidence"),
+        ("default__u-alice", "quartz personal evidence"),
+    ] {
+        let note = crate::memory::notes::KnowledgeNote {
+            title: "shared".into(),
+            category: "reference".into(),
+            facts: vec![body.into()],
+            ..Default::default()
+        };
+        let note_dir = fx.notes_dir.join(owner).join("reference");
+        std::fs::create_dir_all(&note_dir).unwrap();
+        std::fs::write(note_dir.join("shared.md"), note.to_markdown()).unwrap();
+        fx.backend
+            .index_note(&note, owner, "reference")
+            .await
+            .unwrap();
+    }
+    let other = crate::memory::notes::KnowledgeNote {
+        title: "z-other".into(),
+        category: "reference".into(),
+        facts: vec!["quartz additional base evidence".into()],
+        ..Default::default()
+    };
+    std::fs::write(
+        fx.notes_dir.join("default/reference/z-other.md"),
+        other.to_markdown(),
+    )
+    .unwrap();
+    fx.backend
+        .index_note(&other, "default", "reference")
+        .await
+        .unwrap();
+    let profile_dir = fx.notes_dir.join("default__u-alice/personal");
+    std::fs::create_dir_all(&profile_dir).unwrap();
+    std::fs::write(profile_dir.join("profile.md"), "synthetic quartz profile").unwrap();
+    for (owner, severity, body) in [
+        ("default", "high", "base standing rule"),
+        ("default__u-alice", "critical", "personal standing rule"),
+    ] {
+        let dir = fx.notes_dir.join(owner).join("feedback");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("standing-rule.md"),
+            format!(
+                "---\ncategory: feedback\nseverity: {severity}\nconfidence: 0.9\n---\n\n- {body}\n"
+            ),
+        )
+        .unwrap();
+    }
+    seed_raw(&fx.raw_store, "session-exposure", 1).await;
+    let snapshot_dir = fx._tmp_snap.path().join("previous-session");
+    std::fs::create_dir_all(&snapshot_dir).unwrap();
+    std::fs::write(
+        snapshot_dir.join("resume.json"),
+        serde_json::to_vec(&crate::memory::session_resume::SessionSnapshot {
+            session_id: "previous-session".into(),
+            agent_id: "default".into(),
+            scope_id: Some("default__u-alice".into()),
+            created_at: chrono::Utc::now(),
+            summary: "synthetic quartz summary".into(),
+        })
+        .unwrap(),
+    )
+    .unwrap();
+    fx
+}
+
+async fn assert_same_path_notes(force_fallback: bool) {
+    use crate::memory::reflector::packet_adapter::envelope_to_synthesis_context;
+    crate::scope::with_scope(
+        Some(crate::scope::ScopeAttribution::personal("u-alice")),
+        async {
+            let fx = reflection_owner_fixture(force_fallback).await;
+            let env = fx
+                .assembler
+                .assemble(
+                    "quartz",
+                    "default",
+                    Some("session-exposure"),
+                    AssemblyBudget { total_tokens: 8000 },
+                    Default::default(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(env.meta.used_fallback, force_fallback);
+            assert_eq!(
+                env.slots
+                    .iter()
+                    .flat_map(|slot| &slot.items)
+                    .filter(|item| item.title == "shared" && item.id == "note://reference/shared")
+                    .count(),
+                2,
+                "private selection identities must not change public envelope IDs"
+            );
+            assert_eq!(
+                env.slots
+                    .iter()
+                    .flat_map(|slot| &slot.items)
+                    .filter(|item| item.title == "shared" && item.id == "note://reference/shared")
+                    .count(),
+                2,
+                "private selection identities must not change public envelope IDs"
+            );
+            let ctx = envelope_to_synthesis_context(&env);
+            assert!(
+                ctx.user_prompt.contains("quartz base evidence"),
+                "base note lost on fallback={force_fallback}"
+            );
+            assert!(
+                ctx.user_prompt.contains("quartz personal evidence"),
+                "personal note lost on fallback={force_fallback}"
+            );
+            assert!(ctx.user_prompt.contains("synthetic quartz profile"));
+            assert!(ctx.user_prompt.contains("synthetic quartz summary"));
+            assert!(ctx.user_prompt.contains("body 0"));
+            assert!(ctx.user_prompt.contains("personal standing rule"));
+            assert!(
+                !ctx.user_prompt.contains("base standing rule"),
+                "feedback floor must retain path-based dedup"
+            );
+            assert_eq!(
+                ctx.note_lookup
+                    .values()
+                    .filter(|meta| meta.title == "shared")
+                    .count(),
+                2,
+                "same-path notes must have distinct synthesis keys"
+            );
+            let sources: Vec<_> = ctx
+                .note_lookup
+                .iter()
+                .filter(|(_, meta)| meta.title == "shared")
+                .map(|(key, _)| serde_json::json!({"path": key}))
+                .collect();
+            let provider: Arc<dyn crate::providers::AiProvider> = Arc::new(
+                crate::providers::recording_mock::RecordingMockProvider::new(
+                    serde_json::json!({"text": "answer", "sources": sources}).to_string(),
+                ),
+            );
+            let synthesis =
+                crate::memory::reflector::fs_reflector::MemoryReflector::synthesise_from_context(
+                    &ctx, &provider,
+                )
+                .await
+                .unwrap();
+            assert_eq!(synthesis.sources.len(), 2);
+            assert!(
+                synthesis
+                    .sources
+                    .iter()
+                    .all(|source| source.path == "reference/shared"),
+                "opaque aliases must map back to public citation paths"
+            );
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn reflection_same_path_notes_survive_fallback() {
+    assert_same_path_notes(true).await;
+}
+
+#[tokio::test]
+async fn reflection_same_path_notes_survive_rerank() {
+    assert_same_path_notes(false).await;
+}
+
+async fn assert_reflection_exposure(force_fallback: bool, fail_base: bool) {
+    use crate::memory::reflector::fs_reflector::{MemoryReflector, RecallWriter};
+    use crate::memory::reflector::types::ReflectOpts;
+    use crate::providers::recording_mock::RecordingMockProvider;
+    crate::scope::with_scope(Some(crate::scope::ScopeAttribution::personal("u-alice")), async {
+            let fx = reflection_owner_fixture(force_fallback).await;
+            let store = fx.backend.clone();
+            let writer: RecallWriter = Arc::new(move |row| {
+                let store = store.clone();
+                Box::pin(async move {
+                    store.record_signals(&row.query_text, &row.channel,
+                        &row.hits,
+                        row.session_id.as_deref(), &row.owner, &row.namespace).map(|_| ())
+                })
+            });
+            let db = rusqlite::Connection::open(fx._tmp_mem.path().join("mem.db")).unwrap();
+            if fail_base {
+                db.execute_batch("CREATE TRIGGER fail_base BEFORE INSERT ON recall_signals WHEN NEW.agent_id = 'default' AND NEW.note_path = 'reference/z-other' BEGIN SELECT RAISE(FAIL, 'injected owner write failure'); END;").unwrap();
+            }
+            let reflector = MemoryReflector::new(Arc::new(fx.assembler),
+                Arc::new(RecordingMockProvider::new(r#"{"text":"answer","sources":[]}"#.into())), writer);
+            let mut opts = ReflectOpts::for_agent("default");
+            opts.session_id = Some("session-exposure".into());
+            let result = reflector.reflect("quartz", opts.clone()).await.unwrap();
+            assert!(result.sources.is_empty());
+            let mut stmt = db.prepare("SELECT agent_id, note_path FROM recall_signals WHERE channel = 'reflect' ORDER BY agent_id, note_path").unwrap();
+            let rows: Vec<(String, String)> = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect();
+            let expected = if fail_base {
+                vec![("default__u-alice".into(), "feedback/standing-rule".into()),
+                    ("default__u-alice".into(), "reference/shared".into())]
+            } else {
+                vec![("default".into(), "reference/shared".into()),
+                    ("default".into(), "reference/z-other".into()),
+                    ("default__u-alice".into(), "feedback/standing-rule".into()),
+                    ("default__u-alice".into(), "reference/shared".into())]
+            };
+            assert_eq!(rows, expected, "only actual source owners may receive exposures, including after another owner fails");
+            reflector.reflect("quartz", opts).await.unwrap();
+            assert_eq!(db.query_row("SELECT COUNT(*) FROM recall_signals WHERE channel = 'reflect'", [], |r| r.get::<_, i64>(0)).unwrap(), if fail_base { 2 } else { 4 },
+                "existing daily/query dedup must remain intact");
+        }).await;
+}
+
+#[tokio::test]
+async fn reflection_exposure_writes_true_owners_without_model_citations_fallback() {
+    assert_reflection_exposure(true, false).await;
+}
+
+#[tokio::test]
+async fn reflection_exposure_writes_true_owners_without_model_citations_rerank() {
+    assert_reflection_exposure(false, false).await;
+}
+
+#[tokio::test]
+async fn reflection_exposure_continues_after_an_owner_transaction_fails_fallback() {
+    assert_reflection_exposure(true, true).await;
+}
+
+#[tokio::test]
+async fn reflection_exposure_continues_after_an_owner_transaction_fails_rerank() {
+    assert_reflection_exposure(false, true).await;
 }
