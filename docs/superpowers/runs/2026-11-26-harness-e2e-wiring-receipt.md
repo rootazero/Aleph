@@ -50,6 +50,12 @@ Deviation from the plan: the plan asked to identify the refusing gate by id `pla
 
 `cargo test -p alephcore --lib tools::scoped::tests::approval_order_matches_the_documented_five_stages` → PASS. Pinned today's order: (1) per-tool `deny` refuses with `GateRule::PolicyDeny`, no card, even at `exec_tier = full`; (2) `full` tier still asks for a tool that declares `requires_confirmation`, card rule `DECLARED_FLOOR_RULE` (`tool_declared`) — no YOLO below the floor, per design §8; (3) an `ApprovedForSession` grant suppresses the second card; (4) the same session unattended is refused (`RefusedBy::NobodyAsked`) before the grant is consulted; (5) attended, no grant → exactly one card.
 
+### F1 reopen (Task 4) / 重开线程
+
+`KEEP=1 ./qa/thread_continuity/run.sh reopen` → rc=0, 31 claims. Phase `before`: run 1 pins `qa-mock-model-b` through the `select_model` tool; `sessions.patch` sets `session_mode=code`, `exec_tier=auto`, `think_level=high`; run 2's `RunStarted` envelope reads `{exec_tier: auto, session_mode: code, think_level: high, model: qa-mock-model-b}` and its provider request carries `model=qa-mock-model-b`, `thinking={type: enabled, budget_tokens: 20000}` (control: run 1, before the patch, sent `thinking=None` and the default model). Server stopped with SIGTERM and restarted on the same `ALEPH_HOME`. Phase `after`: `chat.history` `result.session` fields `mode / exec_tier / think_level / memory_mode / model_pin / model_pin_provider / model / input_tokens(30) / output_tokens(36) / total_tokens(66)` and `session.usage` `tokens / input_tokens / output_tokens / messages(7) / cost_usd` all equal; `memory_mode` stays `null`; run 3 again runs under `auto / high / qa-mock-model-b` with the same thinking field.
+
+Deviations from the plan / 偏离: (1) the model pin is set through the `select_model` tool, not `sessions.patch` — the latter refuses `model_pin` by design (`NOT_PATCHABLE`, `src/gateway/handlers/session/db_handlers/modify.rs`), because the pin has two stores that only `select_model` writes together. (2) `qa/busy_input/mock_anthropic.py` gained a `scripted` plan now rather than in Task 8: the tool-spec list is the whole conversation, entries are consumed only by requests that carry a tool surface (side-channel calls answer plain text), and a list entry emits several `tool_use` blocks in one turn. The existing plans now go through the same `_respond`; `./qa/busy_input/run.sh burst-drain` re-run rc=0 after the change.
+
 ## Defect ledger / 缺陷台账
 
 | ID | Scenario | Symptom / 症状 | Root cause / 根因 | Failing test | Fix commit |
