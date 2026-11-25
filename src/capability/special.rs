@@ -189,23 +189,6 @@ impl SpecialRegistration {
         self.deferred_source_commit = true;
         self
     }
-
-    pub(crate) fn legacy(
-        descriptor: CapabilityDescriptor,
-        handler: Arc<dyn CapabilityHandler>,
-        provider: ProviderHandle,
-    ) -> Self {
-        Self {
-            descriptor,
-            schema: Value::Null,
-            handler,
-            provider,
-            validate_schema: false,
-            ui_surface: None,
-            observation_owner: None,
-            deferred_source_commit: false,
-        }
-    }
 }
 
 /// Retirement belongs to this registration, not a newest-record lookup. The
@@ -900,14 +883,6 @@ impl CapabilityHandlerRegistry {
             .closed
     }
 
-    #[cfg(test)]
-    pub(crate) fn set_revision_for_test(&self, revision: u64) {
-        self.state
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .revision = revision;
-    }
-
     #[must_use]
     pub fn describe(&self, scope: &Scope) -> Vec<CapturedSpecialEntry> {
         let state = self
@@ -938,76 +913,6 @@ impl CapabilityHandlerRegistry {
                 terminal_policy_source: entry.capture.terminal_policy_source.clone(),
             })
             .collect()
-    }
-
-    pub(crate) fn register_legacy(
-        &self,
-        descriptor: CapabilityDescriptor,
-        handler: Arc<dyn CapabilityHandler>,
-        provider: ProviderHandle,
-    ) -> Result<CapabilityId, CapabilityRegistryError> {
-        self.register(SpecialRegistration::legacy(descriptor, handler, provider))
-    }
-
-    /// Compatibility-only bridge for the old synchronous terminal/UI tests.
-    /// It still resolves the handler from this registry; it does not own a
-    /// second descriptor or handler map.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "retained only for the legacy registry bridge until synchronous terminal/UI callers migrate"
-        )
-    )]
-    pub(crate) fn dispatch_legacy(
-        &self,
-        id: &CapabilityId,
-        input: Value,
-    ) -> Result<Value, CapabilityDispatchError> {
-        let capture = self
-            .capture(id)
-            .ok_or_else(|| CapabilityDispatchError::NotFound(id.clone()))?;
-        let call = CapabilityHandlerCall::new(
-            CapabilityCallContext::from_trusted_parts(
-                crate::capability::ownership::OwnerRef::Runtime,
-                None,
-                None,
-                None,
-                None,
-                "legacy-compat".into(),
-            ),
-            Vec::new(),
-        );
-        let registry = self.clone();
-        let future = async move {
-            registry
-                .dispatch_admitted(AdmittedSpecialCall {
-                    capture,
-                    input,
-                    call,
-                    cancel: CancellationToken::new(),
-                })
-                .await
-        };
-        if tokio::runtime::Handle::try_current().is_ok() {
-            std::thread::spawn(move || {
-                tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .map_err(|error| CapabilityDispatchError::Execution(error.to_string()))
-                    .and_then(|runtime| runtime.block_on(future))
-            })
-            .join()
-            .map_err(|_| {
-                CapabilityDispatchError::Execution("legacy dispatch thread panicked".into())
-            })?
-        } else {
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|error| CapabilityDispatchError::Execution(error.to_string()))?
-                .block_on(future)
-        }
     }
 
     pub(crate) async fn dispatch_admitted(

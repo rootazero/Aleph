@@ -1,8 +1,5 @@
 use super::*;
 use crate::capability::activation::{ActivationError, CapabilityActivationController};
-use crate::capability::backend::{
-    CapabilityBackend, CapabilityDispatchError, CapabilityHandler, CapabilityHandlerRegistry,
-};
 use crate::capability::constraints::{Constraint, ConstraintContext};
 use crate::capability::descriptor::{
     CapabilityDescriptor, CapabilityFacet, CapabilityFacets, CapabilityKind, CapabilityRevision,
@@ -433,51 +430,6 @@ fn lease_validation_denial_is_audited() {
     assert_eq!(stream.snapshot().unwrap().records().len(), 1);
 }
 
-struct Echo;
-impl CapabilityHandler for Echo {
-    fn invoke(&self, input: Value) -> Result<Value, CapabilityDispatchError> {
-        if input["fail"] == true {
-            Err(CapabilityDispatchError::Execution(
-                "SECRET should never be logged".into(),
-            ))
-        } else {
-            Ok(input)
-        }
-    }
-}
-
-#[test]
-fn handler_invocation_success_and_failure_are_audited_without_payloads() {
-    let stream = Arc::new(InMemoryEventStream::new(8).unwrap());
-    let registry = CapabilityHandlerRegistry::new().with_events(emitter(&stream));
-    let id = registry.register(descriptor(), Arc::new(Echo)).unwrap();
-    assert!(registry.lookup(&id).is_some());
-    assert!(registry
-        .dispatch(&id, json!({"operation":"read", "secret":"SECRET"}))
-        .is_ok());
-    assert!(registry
-        .dispatch(&id, json!({"operation":"write", "fail":true}))
-        .is_err());
-    let snapshot = stream.snapshot().unwrap();
-    let events: Vec<_> = snapshot
-        .records()
-        .iter()
-        .map(|record| record.event())
-        .collect();
-    assert_eq!(events.len(), 2);
-    assert!(
-        matches!(events[0], CapabilityEvent::CapabilityInvoked { operation, handler_result: HandlerResult::Success, .. } if operation == "read")
-    );
-    assert!(matches!(
-        events[1],
-        CapabilityEvent::CapabilityInvoked {
-            handler_result: HandlerResult::ExecutionFailed,
-            ..
-        }
-    ));
-    assert!(!serde_json::to_string(&events).unwrap().contains("SECRET"));
-}
-
 #[test]
 fn visibility_mismatch_is_audited_without_changing_the_denial() {
     let stream = Arc::new(InMemoryEventStream::new(8).unwrap());
@@ -501,7 +453,7 @@ fn visibility_mismatch_is_audited_without_changing_the_denial() {
 }
 
 #[test]
-fn failing_sink_does_not_block_activation_revocation_or_handler_result() {
+fn failing_sink_does_not_block_activation_or_revocation() {
     let stream = Arc::new(
         InMemoryEventStream::with_persistence(
             16,
@@ -515,14 +467,7 @@ fn failing_sink_does_not_block_activation_revocation_or_handler_result() {
         .activate(&ConstraintContext::at_hour(12).unwrap(), OwnerGeneration(1))
         .unwrap();
     activation.revoke().unwrap();
-    let registry = CapabilityHandlerRegistry::new().with_events(emitter(&stream));
-    let id = registry.register(descriptor(), Arc::new(Echo)).unwrap();
-    assert_eq!(
-        registry.dispatch(&id, json!({"value": 42})).unwrap(),
-        json!({"value": 42})
-    );
-    assert!(registry.dispatch(&id, json!({"fail":true})).is_err());
-    assert_eq!(stream.snapshot().unwrap().records().len(), 6);
+    assert_eq!(stream.snapshot().unwrap().records().len(), 4);
 }
 
 #[test]

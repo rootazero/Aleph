@@ -33,7 +33,6 @@
 use crate::sync_primitives::{Arc, OnceLock};
 
 pub mod activation;
-pub mod ambient;
 pub mod audit;
 pub mod backend;
 pub mod constraints;
