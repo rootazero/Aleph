@@ -1264,14 +1264,29 @@ async fn final_binding_refuses_withdrawn_selection_and_reports_ignored_pin() {
         clear_session_model, get_session_model_snapshot, set_session_model,
         with_test_selectable_models, SelectableModelsSnapshot,
     };
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Arc;
 
-    struct Recorder(&'static str, AtomicUsize);
+    struct Recorder {
+        name: &'static str,
+        calls: AtomicUsize,
+        saw_inline_image: AtomicBool,
+        saw_text_image_notice: AtomicBool,
+    }
+    impl Recorder {
+        fn new(name: &'static str) -> Self {
+            Self {
+                name,
+                calls: AtomicUsize::new(0),
+                saw_inline_image: AtomicBool::new(false),
+                saw_text_image_notice: AtomicBool::new(false),
+            }
+        }
+    }
     impl AiProvider for Recorder {
         fn process<'a>(
             &'a self,
-            _: crate::providers::adapter::RequestPayload<'a>,
+            payload: crate::providers::adapter::RequestPayload<'a>,
         ) -> std::pin::Pin<
             Box<
                 dyn std::future::Future<
@@ -1280,22 +1295,40 @@ async fn final_binding_refuses_withdrawn_selection_and_reports_ignored_pin() {
                     + 'a,
             >,
         > {
-            self.1.fetch_add(1, Ordering::Relaxed);
+            use crate::providers::message::ContentBlock;
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            for block in payload
+                .messages
+                .iter()
+                .flat_map(|message| message.content_blocks())
+            {
+                match block {
+                    ContentBlock::Image { .. } => {
+                        self.saw_inline_image.store(true, Ordering::Relaxed)
+                    }
+                    ContentBlock::Text { text, .. }
+                        if text.contains("not viewable by this model") =>
+                    {
+                        self.saw_text_image_notice.store(true, Ordering::Relaxed);
+                    }
+                    _ => {}
+                }
+            }
             Box::pin(async {
                 Err(crate::providers::MockError::Authentication("fixture".into()).into())
             })
         }
         fn name(&self) -> &str {
-            self.0
+            self.name
         }
         fn color(&self) -> &str {
             "#000000"
         }
         fn serving_provider_hint(&self) -> Option<std::borrow::Cow<'_, str>> {
-            Some(self.0.into())
+            Some(self.name.into())
         }
         fn serving_model_hint(&self) -> Option<std::borrow::Cow<'_, str>> {
-            Some("default-model".into())
+            Some("codex-mini-latest".into())
         }
     }
 
@@ -1305,7 +1338,7 @@ async fn final_binding_refuses_withdrawn_selection_and_reports_ignored_pin() {
     let mut config = crate::Config::default();
     config.providers.insert(
         "relay".into(),
-        crate::config::ProviderConfig::test_config("org/model"),
+        crate::config::ProviderConfig::test_config("claude-sonnet-5.5"),
     );
     let ready = std::collections::BTreeSet::from(["relay".to_string()]);
     let eligible = SelectableModelsSnapshot::from_config(&config, ready.clone(), &ready, |_| true);
@@ -1317,16 +1350,16 @@ async fn final_binding_refuses_withdrawn_selection_and_reports_ignored_pin() {
         agent_id,
         crate::agents::AgentMode::Primary,
     ));
-    let old = Arc::new(Recorder("relay", AtomicUsize::new(0)));
-    let default = Arc::new(Recorder("default-route", AtomicUsize::new(0)));
+    let old = Arc::new(Recorder::new("relay"));
+    let default = Arc::new(Recorder::new("default-route"));
     let mut runner = runner_with_default_provider(fresh_service(), agents, default.clone());
     runner.named_providers.insert("relay".into(), old.clone());
     let (tx, mut rx) = broadcast::channel::<FlowStreamEvent>(256);
-    let run = |directive: Option<RunModelDirective>| {
+    let run = |directive: Option<RunModelDirective>, input| {
         runner.run(
             key_string.clone(),
             probe_spec(agent_id),
-            FlowInput::Prompt("hi".into()),
+            input,
             Arc::new(crate::sandbox::factory::NoopSandbox),
             tx.clone(),
             CancellationToken::new(),
@@ -1344,9 +1377,9 @@ async fn final_binding_refuses_withdrawn_selection_and_reports_ignored_pin() {
         )
     };
 
-    let selected = with_test_selectable_models(Some(eligible), async {
+    let selected = with_test_selectable_models(Some(eligible.clone()), async {
         let params: AgentRunParams = serde_json::from_value(serde_json::json!({
-            "input": "hi", "model_override": {"kind":"qualified", "provider":"relay", "model":"org/model"}
+            "input": "hi", "model_override": {"kind":"qualified", "provider":"relay", "model":"claude-sonnet-5.5"}
         })).unwrap();
         let request = build_run_request("early-validation".into(), &key, params, None, None, &Default::default()).await.unwrap();
         request.validate_dispatch_model().unwrap();
@@ -1355,27 +1388,69 @@ async fn final_binding_refuses_withdrawn_selection_and_reports_ignored_pin() {
     // The gateway check passed, but withdrawal happens before the real
     // runner acquires its transport. Both transport mounts still exist.
     assert!(
-        matches!(with_test_selectable_models(Some(withdrawn.clone()), run(selected)).await,
+        matches!(with_test_selectable_models(Some(withdrawn.clone()), run(selected, FlowInput::Prompt("hi".into()))).await,
         Err(FlowError::ProviderUnavailable(provider)) if provider == "relay")
     );
-    assert_eq!(old.1.load(Ordering::Relaxed), 0);
-    assert_eq!(default.1.load(Ordering::Relaxed), 0);
+    assert_eq!(old.calls.load(Ordering::Relaxed), 0);
+    assert_eq!(default.calls.load(Ordering::Relaxed), 0);
     assert!(rx.try_recv().is_err());
 
-    set_session_model(&key_string, Some("relay".into()), "org/model".into());
+    set_session_model(
+        &key_string,
+        Some("relay".into()),
+        "claude-sonnet-5.5".into(),
+    );
     let before = get_session_model_snapshot(&key_string);
-    let _ = with_test_selectable_models(Some(withdrawn), run(None)).await;
+    let image = crate::gateway::channel::Attachment {
+        id: "vision-test".into(),
+        mime_type: "image/png".into(),
+        filename: Some("photo.png".into()),
+        size: None,
+        url: None,
+        path: None,
+        data: Some(vec![0x89, 0x50, 0x4e, 0x47]),
+        is_voice_note: false,
+        is_video_note: false,
+    };
+    let media = Arc::new(crate::media::processor::PendingMedia::new(
+        Arc::new(crate::media::processor::MediaProcessor::new(None, None)),
+        vec![image],
+    ));
+    let input = FlowInput::PendingAttachments {
+        message: crate::session::events::MessageContent {
+            text: "describe the image".into(),
+            blocks: vec![],
+            thinking: None,
+            thinking_signature: None,
+        },
+        media,
+    };
+    with_test_selectable_models(Some(eligible), async {
+        let pin = before.pref.as_ref().unwrap();
+        assert!(crate::providers::session_model_handle::validate_persisted_model(pin).is_ok());
+        assert!(
+            crate::providers::capabilities_for(&pin.model)
+                .unwrap()
+                .supports_vision
+        );
+    })
+    .await;
+    // The gateway holds pending image data when the pin is withdrawn. The
+    // runner's text-only default must get a description marker, not pixels.
+    let _ = with_test_selectable_models(Some(withdrawn), run(None, input)).await;
     let after = get_session_model_snapshot(&key_string);
     clear_session_model(&key_string);
     assert_eq!(after.pref, before.pref);
     assert_eq!(after.generation, before.generation);
     assert!(
         matches!(rx.try_recv(), Ok(FlowStreamEvent::ModelResolved(info))
-        if info.is_fallback && info.original_model.as_deref() == Some("org/model")
-            && info.provider == "default-route" && info.model == "default-model")
+        if info.is_fallback && info.original_model.as_deref() == Some("claude-sonnet-5.5")
+            && info.provider == "default-route" && info.model == "codex-mini-latest")
     );
-    assert_eq!(old.1.load(Ordering::Relaxed), 0);
-    assert!(default.1.load(Ordering::Relaxed) > 0);
+    assert_eq!(old.calls.load(Ordering::Relaxed), 0);
+    assert!(default.calls.load(Ordering::Relaxed) > 0);
+    assert!(!default.saw_inline_image.load(Ordering::Relaxed));
+    assert!(default.saw_text_image_notice.load(Ordering::Relaxed));
 }
 
 /// The behavioural half of `the_terminal_settle_runs_on_both_arms_of_a_finished_run`.

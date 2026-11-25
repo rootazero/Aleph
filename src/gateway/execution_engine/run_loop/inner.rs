@@ -550,138 +550,32 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         let transient_context =
             (!transient_blocks.is_empty()).then(|| transient_blocks.join("\n\n"));
 
-        // Pre-process attachments into the content blocks that ride on this
-        // turn's user message (constant across retries). Serialized
-        // `ContentBlock`s are persisted on the seeded `UserMessage`'s
-        // `MessageContent.blocks` (via `FlowInput::Multimodal` below) and
-        // rebuilt into the provider message by `harness::agent::prompt` — that
-        // is the only path by which an image actually reaches the model.
-        // Empty when the turn carries no attachments; also the media-cache
-        // cleanup gate on every terminal branch of the retry loop below.
-        let media_blocks: Vec<serde_json::Value> = if let (false, Some(media_processor)) = (
-            request.attachments.is_empty(),
-            self.media_processor.as_ref(),
-        ) {
-            // Whether the model serving this turn actually accepts inline
-            // images decides HOW an attachment rides: a native
-            // `ContentBlock::Image` for a vision model, a `VisionPipeline` text
-            // description for a text-only one. Model id precedence mirrors the
-            // retry loop's resolution below (per-turn picker override ▸ agent
-            // default); when that id is absent from the capability catalogue we
-            // ask the live provider chain which model it would actually serve
-            // (`serving_model_hint`) before giving up. The lookup is a static
-            // table read, never a judgement about the message (R7).
-            // Same precedence the binder applies (per-turn pick ▸ session
-            // `select_model` pick ▸ agent default). Asking a *different* model
-            // whether it accepts inline images than the one that will serve the
-            // turn is how a vision-capable pick still gets a text description of
-            // the attachment — or worse, how a text-only one gets a raw image
-            // block it cannot read.
-            let session_pick = crate::providers::session_model_handle::get_session_model(
-                &request.session_key.to_key_string(),
-            );
-            let session_pick = session_pick.as_ref().and_then(|pref| {
-                crate::providers::session_model_handle::validate_persisted_model(pref).ok()
+        // Archive inbound artifacts independently of how the final binding
+        // renders them. The runner chooses the model-specific representation.
+        let pending_media = self
+            .media_processor
+            .as_ref()
+            .filter(|_| !request.attachments.is_empty())
+            .map(|processor| {
+                std::sync::Arc::new(crate::media::processor::PendingMedia::new(
+                    processor.clone(),
+                    request.attachments.clone(),
+                ))
             });
-            let configured_model = request.model_override.as_ref().map_or_else(
-                || {
-                    session_pick
-                        .as_ref()
-                        .map_or(agent.config().model.as_str(), |p| p.model.as_str())
-                },
-                |o| o.model(),
-            );
-            let serving_hint: Option<String> =
-                if crate::providers::capabilities_for(configured_model).is_some() {
-                    None
-                } else {
-                    self.provider_registry
-                        .get(configured_model)
-                        .and_then(|p| p.serving_model_hint().map(std::borrow::Cow::into_owned))
-                };
-            let supports_vision = model_supports_vision(configured_model, serving_hint.as_deref());
-
-            // Archive the attachments before they are turned into content
-            // blocks. The media cache writes under the OS temp dir and every
-            // terminal branch of the retry loop below `remove_dir_all`s it, so
-            // the cache is not a record of what the session received — the
-            // artifact store, rooted in the Aleph data directory, is.
+        if let Some(media) = &pending_media {
             archive_inbound_attachments(
                 &request.attachments,
                 &request.session_key.to_key_string(),
+                media.cache_key(),
                 run_id,
                 self.event_bus.as_deref(),
             )
             .await;
-
-            let mut blocks = media_processor
-                .process(
-                    &request.attachments,
-                    supports_vision,
-                    &request.session_key.to_key_string(),
-                    run_id,
-                )
-                .await;
-
-            blocks.extend(inbound_attachment_markers(&request.attachments));
-
-            let has_images = blocks
-                .iter()
-                .any(|b| matches!(b, crate::providers::message::ContentBlock::Image { .. }));
-            let has_transcripts = blocks.iter().any(|b| {
-                if let crate::providers::message::ContentBlock::Text { text, .. } = b {
-                    text.starts_with("[Voice message transcript]")
-                } else {
-                    false
-                }
-            });
-            tracing::info!(
-                target: "multimodal",
-                probe = "P5_inject",
-                run_id = %request.run_id,
-                content_blocks = blocks.len(),
-                has_images = has_images,
-                has_transcripts = has_transcripts,
-                supports_vision = supports_vision,
-                model = %configured_model,
-                "Multimodal content blocks built"
-            );
-
-            blocks
-                .iter()
-                .filter_map(|b| serde_json::to_value(b).ok())
-                .collect()
-        } else {
-            inbound_attachment_markers(&request.attachments)
-                .into_iter()
-                .filter_map(|block| serde_json::to_value(block).ok())
-                .collect()
-        };
-
-        // RAII guard for the media cache: every terminal arm of the retry
-        // loop below runs `mp.cleanup(session_key)` manually, but a
-        // cancel/timeout drop (the `tokio::select!` in `execute.rs` parking
-        // this future mid-`await`) never reaches those arms — the cache at
-        // `<temp_dir>/<session_key>` then persists until the OS reaps /tmp,
-        // accumulating unbounded disk usage on a busy server (and orphaning
-        // downloads fetched via the SSRF-guarded cache path). The guard's
-        // `Drop` runs cleanup on EVERY exit path — success, error, and
-        // future-drop alike — while the success arms call `cleanup_now()` to
-        // keep the cleanup at its original, log-adjacent position and disarm
-        // the guard so it does not double-clean.
-        //
-        // The guard is constructed BEFORE `media_blocks` is evaluated so that
-        // any media already written to the session cache during
-        // `archive_inbound_attachments` / `media_processor.process` (which
-        // ran above) is covered even if this future is dropped before reaching
-        // the retry loop.  The `active` flag is set whenever there are
-        // non-empty attachments AND a media processor is present — the same
-        // condition that caused those awaits to write into the cache.
-        let mut media_cleanup_guard = MediaCleanupGuard {
-            processor: self.media_processor.clone(),
-            session_key: request.session_key.to_key_string(),
-            active: !request.attachments.is_empty() && self.media_processor.is_some(),
-        };
+        }
+        let attachment_markers: Vec<_> = inbound_attachment_markers(&request.attachments)
+            .iter()
+            .filter_map(|block| serde_json::to_value(block).ok())
+            .collect();
 
         // === Retry loop: resolve provider → build agent loop → run ===
         const MAX_FALLBACK_ATTEMPTS: usize = 3;
@@ -1281,26 +1175,27 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             // harness bridge then skips seeding and replays the log.
             let flow_input = if request.is_resume() {
                 crate::orchestrator::FlowInput::Resume
-            } else if media_blocks.is_empty() {
+            } else if pending_media.is_some() || !attachment_markers.is_empty() {
+                // Prior turns already exist in the event log. Seed only this
+                // attachment turn, never append a second copy of history.
+                let message = crate::session::events::MessageContent {
+                    text: effective_user_input.clone(),
+                    blocks: attachment_markers.clone(),
+                    thinking: None,
+                    thinking_signature: None,
+                };
+                match &pending_media {
+                    Some(media) => crate::orchestrator::FlowInput::PendingAttachments {
+                        message,
+                        media: media.clone(),
+                    },
+                    None => crate::orchestrator::FlowInput::Multimodal(vec![message]),
+                }
+            } else {
                 super::super::helpers::history_to_flow_input(
                     history.clone(),
                     effective_user_input.clone(),
                 )
-            } else {
-                // Attachment turn: seed ONLY the new user message, carrying the
-                // media blocks. Prior turns are already in the event log —
-                // either persisted by earlier turns, or backfilled from the
-                // legacy `messages` rows just above — so, unlike
-                // `FlowInput::History`, this variant needs no empty-log replay
-                // guard and cannot duplicate history on turn 2+.
-                crate::orchestrator::FlowInput::Multimodal(vec![
-                    crate::session::events::MessageContent {
-                        text: effective_user_input.clone(),
-                        blocks: media_blocks.clone(),
-                        thinking: None,
-                        thinking_signature: None,
-                    },
-                ])
             };
 
             // Phase 4 (F4): derive the channel's InteractionManifest from
@@ -1479,8 +1374,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 Ok(response) => {
                     // Cleanup runs now (and disarms the RAII guard) so it
                     // stays adjacent to the success log line; the guard's
-                    // Drop covers every non-success path.
-                    media_cleanup_guard.cleanup_now();
                     info!(
                         run_id = run_id,
                         attempt = attempt,
@@ -1489,7 +1382,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     return Ok(response);
                 }
                 Err(super::super::helpers::DispatchFailure::Cancelled) => {
-                    media_cleanup_guard.cleanup_now();
                     return Err(ExecutionError::Cancelled);
                 }
                 Err(super::super::helpers::DispatchFailure::Transient {
@@ -1530,7 +1422,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     provider: prov_name,
                     message,
                 }) => {
-                    media_cleanup_guard.cleanup_now();
                     error!(
                         run_id = run_id,
                         attempt = attempt,
@@ -1543,7 +1434,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     )));
                 }
                 Err(super::super::helpers::DispatchFailure::Fatal(msg)) => {
-                    media_cleanup_guard.cleanup_now();
                     error!(
                         run_id = run_id,
                         attempt = attempt,
@@ -1555,34 +1445,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             }
         }
     }
-}
-
-/// Does the model serving this turn accept inline image blocks?
-///
-/// `configured` is the model id the turn resolves to; `serving_hint` is the
-/// live provider chain's [`AiProvider::serving_model_hint`](crate::providers::AiProvider::serving_model_hint),
-/// which covers ids the catalogue cannot answer for on its own (agent model
-/// left unset or the provider chain's failure-only fallback). The first id the
-/// capability catalogue knows wins — a pure static table read, blind to message
-/// content.
-///
-/// **Unknown capabilities fail OPEN (image is sent).** The two failures are not
-/// symmetric: sending an image to an unlisted text-only model produces a loud,
-/// attributable provider error (or an ignored block) the user can act on,
-/// whereas degrading an image for a model that could have seen it is silent —
-/// and when no `VisionPipeline` is configured the degradation is not even a
-/// description but a bare name/type summary, i.e. total loss of the picture
-/// itself. Unknown ids are overwhelmingly custom endpoints / proxy
-/// aliases of modern (vision-capable) models, so the closed default would
-/// blind them all. This matches the deliberate fail-open stance of
-/// [`providers::capability_gate`](crate::providers::capability_gate): the
-/// static table is best-effort, never authoritative.
-pub(super) fn model_supports_vision(configured: &str, serving_hint: Option<&str>) -> bool {
-    [Some(configured), serving_hint]
-        .into_iter()
-        .flatten()
-        .find_map(crate::providers::capabilities_for)
-        .is_none_or(|caps| caps.supports_vision)
 }
 
 fn inbound_attachment_markers(
@@ -1614,6 +1476,7 @@ fn inbound_attachment_markers(
 async fn archive_inbound_attachments(
     attachments: &[crate::gateway::channel::Attachment],
     session_key: &str,
+    cache_key: &str,
     run_id: &str,
     event_bus: Option<&crate::gateway::event_bus::GatewayEventBus>,
 ) {
@@ -1631,13 +1494,11 @@ async fn archive_inbound_attachments(
     for attachment in attachments {
         // Inline bytes are the common case (Panel and Slack uploads) and need
         // no I/O at all. A `path` or `url` attachment goes through the media
-        // cache so the SSRF policy and the 50 MB ceiling apply here exactly as
-        // they do on the injection path. That costs a second fetch for a remote
-        // URL, which is the price of not letting the only copy of the bytes
-        // vanish with the temp directory at the end of the run.
+        // cache so the same SSRF policy and 50 MB ceiling apply. Archival
+        // and injection share the same run-scoped cleanup boundary.
         let bytes = match attachment.data.clone() {
             Some(bytes) => bytes,
-            None => match cache.resolve(attachment, session_key).await {
+            None => match cache.resolve(attachment, cache_key).await {
                 Ok(cached) => match tokio::fs::read(&cached.local_path).await {
                     Ok(bytes) => bytes,
                     Err(e) => {
@@ -1868,40 +1729,3 @@ pub(super) fn mcp_handler_admitted(
 
 /// Shared MCP-server visibility derivation used by the run loop and MCP face.
 pub(super) use crate::gateway::execution_engine::tool_service_builder::visible_mcp_servers;
-
-/// RAII guard for the per-session media cache.
-///
-/// Bound to the run scope in `run_agent_loop_inner`: its `Drop` runs the
-/// cleanup on EVERY exit path from the retry loop — including the
-/// cancel/timeout future-drop that never reaches the manual cleanup calls in
-/// the `match dispatch_result` arms. Success arms call [`Self::cleanup_now`]
-/// to keep the cleanup at its original position and disarm the guard so the
-/// work never runs twice.
-struct MediaCleanupGuard {
-    processor: Option<Arc<crate::media::processor::MediaProcessor>>,
-    session_key: String,
-    active: bool,
-}
-
-impl MediaCleanupGuard {
-    /// Run the cleanup immediately (at the call site's original position)
-    /// and disarm so `Drop` does not repeat it.
-    fn cleanup_now(&mut self) {
-        if self.active {
-            if let Some(mp) = &self.processor {
-                mp.cleanup(&self.session_key);
-            }
-            self.active = false;
-        }
-    }
-}
-
-impl Drop for MediaCleanupGuard {
-    fn drop(&mut self) {
-        if self.active {
-            if let Some(mp) = &self.processor {
-                mp.cleanup(&self.session_key);
-            }
-        }
-    }
-}

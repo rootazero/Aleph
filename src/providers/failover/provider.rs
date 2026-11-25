@@ -788,8 +788,9 @@ impl FailoverProvider {
                         if first_attempt.is_none() && cand.name != super::NESTED_CHAIN_NODE {
                             let dialed = crate::providers::route_witness::Dialed::new(
                                 &cand.name,
-                                // rust-doctor-disable-next-line excessive-clone
-                                model.clone(),
+                                model.clone().or_else(|| {
+                                    cand.provider.serving_model_hint().map(Cow::into_owned)
+                                }),
                             );
                             if let Some(session) = witness_session {
                                 // rust-doctor-disable-next-line excessive-clone
@@ -848,8 +849,11 @@ impl FailoverProvider {
                                     if let Some(session) = witness_session {
                                         let served = crate::providers::route_witness::Dialed::new(
                                             &cand.name,
-                                            // rust-doctor-disable-next-line excessive-clone
-                                            model.clone(),
+                                            model.clone().or_else(|| {
+                                                cand.provider
+                                                    .serving_model_hint()
+                                                    .map(Cow::into_owned)
+                                            }),
                                         );
                                         crate::providers::route_witness::record_success(
                                             session,
@@ -1124,6 +1128,17 @@ impl FailoverProvider {
 
 impl FailoverProvider {
     /// Resolve the requested name without traversing the fallback ladder.
+    pub(crate) fn initial_route(&self) -> (String, Option<String>) {
+        let primary = self.primary.current();
+        let provider = primary
+            .serving_provider_hint()
+            .unwrap_or_else(|| Cow::Borrowed(primary.name()));
+        (
+            provider.into_owned(),
+            primary.serving_model_hint().map(Cow::into_owned),
+        )
+    }
+
     pub fn exact_transport(&self, name: &str) -> Option<Arc<dyn AiProvider>> {
         let provider = self
             .primary

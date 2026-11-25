@@ -178,27 +178,42 @@ impl HarnessRunner for AgentHarnessRunner {
                 None,
             ),
         };
-        let model = explicit_model_directive
-            .as_ref()
-            .map(|(_, model)| model.clone())
-            .or_else(|| llm.serving_model_hint().map(|model| model.into_owned()))
-            .unwrap_or_default();
-        let provider = explicit_model_directive
-            .as_ref()
-            .and_then(|(provider, _)| provider.clone())
-            .or_else(|| {
-                llm.serving_provider_hint()
-                    .map(|provider| provider.into_owned())
-            })
-            .unwrap_or_else(|| llm.name().to_string());
+        let (provider, model) = match &explicit_model_directive {
+            Some((Some(provider), model)) => (provider.clone(), Some(model.clone())),
+            directive => {
+                let (provider, hint) = llm.as_failover_provider().map_or_else(
+                    || {
+                        (
+                            llm.serving_provider_hint()
+                                .map_or_else(|| llm.name().to_string(), |s| s.into_owned()),
+                            llm.serving_model_hint().map(|s| s.into_owned()),
+                        )
+                    },
+                    crate::providers::failover::FailoverProvider::initial_route,
+                );
+                (
+                    provider,
+                    directive.as_ref().map(|(_, model)| model.clone()).or(hint),
+                )
+            }
+        };
         let _ = events.send(FlowStreamEvent::ModelResolved(
             crate::providers::health::ModelInfo {
-                model,
+                model: model.clone().unwrap_or_default(),
                 provider,
                 is_fallback: ignored_pin.is_some(),
                 original_model: ignored_pin,
             },
         ));
+        let input = match input {
+            FlowInput::PendingAttachments { mut message, media } => {
+                let mut blocks = media.blocks(model.as_deref(), &run_id).await.to_vec();
+                blocks.append(&mut message.blocks);
+                message.blocks = blocks;
+                FlowInput::Multimodal(vec![message])
+            }
+            input => input,
+        };
         // Stage J-pre: wrap the root provider with MeteringProvider so every
         // LLM call emits a LoopTraceEvent::ProviderUsage event labelled with
         // the agent that actually spent the tokens.
