@@ -69,6 +69,9 @@ Phase 6–8 留下了并存权威与未挂载模块（见 §3）。在它们之�
    **决定**：本期把「等待依赖」落在**调用路径**上——G2 的结构化 `DependencyUnavailable` 错误；`Parked` 状态与反向依赖重查写入本文 §9「推迟项」，触发条件是第一条 provider→provider 边出现。
 2. **`resolve_resource` 改为通用 provider 查找。** 可用性判定可以通用（读 `ProviderRegistry` 中目标 provider 的状态），但「捕获资源句柄」只有 memory 一个实现；为它抽 trait 是单消费者抽象。
    **决定**：判定通用化，捕获保持 memory 专有分支。
+3. **段 S 的双实例切换改为「先预检新版本，再拆旧版本」**（实施计划 §S0，用户于 2026-11-25 确认）。hooks/panel 由 `after_transition` 整体重建，loader / WASM runtime / `runtime_owners` / `scopes` 均以插件 id 为键，MCP 服务器与 services 不能新旧双开，§6.3 的双实例提交需要重设计这些键与双开语义，超出本期。
+   **决定**：把可失败且无副作用的步骤移到拆除之前——解析、身份校验、WASM 模块编译（`CompiledPlugin::new`，只编译不实例化，不运行任何 guest 代码）。预检失败且有版本在运行时，什么都不拆、不改行，返回 `MountError::ReloadRefused`（文案「the previous version is still running」）。预检通过后走现有 unmount → mount。
+   **实施时的一处收窄 / Narrowed during implementation**：准入被拒（信任策略或 `plugins.toml`）不算「新版本有缺陷」，而是运营者的决定；若因此保留旧版运行，等于让已被撤销信任的插件继续跑（闸的放行方向）。所以准入拒绝仍沿用今天的语义：拆除并在行上记录拒绝。/ An admission refusal is the operator's decision, not a defect of the new version; it still tears down and records the refusal, so a reload never keeps a revoked plugin running.
 
 ## 6. 设计 / Design
 
@@ -109,6 +112,8 @@ Phase 6–8 留下了并存权威与未挂载模块（见 §3）。在它们之�
 
 `reload`（全部插件）不在本段范围，保持现状。
 
+> **已按 §5 第 3 条修正 / Superseded by §5 item 3.** 以上 1–4 步的双实例提交本期未实现；实际实现见 `src/extension/lifecycle.rs` 的 `reload_plugin` / `preflight_reload` / `prepare_mount` / `commit_mount`，以及 `src/extension/runtime/wasm/mod.rs` 的 `WasmRuntime::preflight_module`。预检覆盖不到的失败（模块能编译但链接/实例化失败、MCP 服务器或 service 启动失败）仍发生在拆除之后，行为与今天一致。
+
 ### 6.4 段 F：文档 / Docs（最后一段提交）
 
 - FEATURE_LOCATOR「当前状态」更新到本期结束；登记 Phase 6–8 模块的现状（含被删模块与 git 找回方式）；§3.5 闭环记录追加本期条目。
@@ -135,5 +140,6 @@ Phase 6–8 留下了并存权威与未挂载模块（见 §3）。在它们之�
 | `ProviderState::Parked` + 依赖恢复时重拉下游 | 第一条 provider→provider `Requires` 边进入生产 |
 | `resource` 捕获的通用 trait | 第二种被 `Requires` 的资源出现 |
 | 全量 `reload` 分阶段化 | 单插件分阶段替换稳定后 |
+| 单插件双实例切换 + 旧版排空（`with_admitted_completion` 首个消费者、按 id+代数分键） | 出现预检拦不住的高频重载失败 |
 | 跨会话 grant（`policy.rs:365`） | sandbox `GrantStore` 有跨会话需求 |
 | ambient capability 重新挂载 | 安全面评审通过 |
