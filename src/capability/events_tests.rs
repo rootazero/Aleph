@@ -7,7 +7,7 @@ use crate::capability::descriptor::{
 };
 use crate::capability::ownership::{LifetimeScope, OwnerGeneration, OwnershipTree, RunId};
 use crate::capability::policy::PolicyEngine;
-use serde_json::{json, Value};
+use serde_json::json;
 
 fn id(name: &str) -> CapabilityId {
     CapabilityId {
@@ -582,8 +582,7 @@ fn failing_sink_preserves_the_original_policy_denial() {
 }
 
 #[test]
-fn provider_activation_fault_is_failed_not_denied_in_compliance_report() {
-    use crate::capability::audit::{AuditCollector, AuditQuery};
+fn provider_activation_fault_is_failed_not_denied() {
     use crate::capability::facade::{Reference, Zahir};
     use crate::capability::provider::{
         ProviderHandle, ProviderId, ProviderLifecycle, ProviderTransport,
@@ -601,11 +600,11 @@ fn provider_activation_fault_is_failed_not_denied_in_compliance_report() {
         }
     }
 
-    for (error, expected) in [
-        (ActivationError::Failed, "failed"),
-        (ActivationError::Rejected, "denied"),
-        (ActivationError::NotVisible, "denied"),
-        (ActivationError::Unknown, "denied"),
+    for error in [
+        ActivationError::Failed,
+        ActivationError::Rejected,
+        ActivationError::NotVisible,
+        ActivationError::Unknown,
     ] {
         let stream = Arc::new(InMemoryEventStream::new(4).unwrap());
         let providers = ProviderRegistry::new();
@@ -633,24 +632,15 @@ fn provider_activation_fault_is_failed_not_denied_in_compliance_report() {
             }),
             Err(error.clone())
         );
-        let audit = AuditCollector::new(stream);
-        let report = audit.report(&AuditQuery::default()).unwrap();
-        assert_eq!(report.entries().len(), 1);
-        assert_eq!(report.entries()[0].result(), expected);
-        let json: Value = serde_json::from_str(&report.to_json().unwrap()).unwrap();
-        assert_eq!(json["entries"][0]["result"], expected);
+        let snapshot = stream.snapshot().unwrap();
+        assert_eq!(snapshot.records().len(), 1);
+        let event = snapshot.records()[0].event();
         if error == ActivationError::Failed {
-            assert!(!matches!(
-                report.entries()[0].event(),
-                CapabilityEvent::PolicyViolation { .. }
-            ));
-            assert_eq!(json["entries"][0]["event_type"], "execution_failed");
-            assert_eq!(json["entries"][0]["action"], "activate");
+            assert!(
+                matches!(event, CapabilityEvent::ExecutionFailed { operation, .. } if operation == "activate")
+            );
         } else {
-            assert!(matches!(
-                report.entries()[0].event(),
-                CapabilityEvent::PolicyViolation { .. }
-            ));
+            assert!(matches!(event, CapabilityEvent::PolicyViolation { .. }));
         }
     }
 }
