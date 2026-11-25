@@ -50,7 +50,8 @@ def native_text(desktop, pid, shot, expected, timeout=15):
         window = desktop.main_window(pid)
         subprocess.run(['screencapture', '-x', '-o', f'-l{window["id"]}', str(path)],
                        check=True, timeout=20)
-        scan = subprocess.check_output([str(desktop.native_view), 'read', str(path)], timeout=15)
+        # Vision may cold-start its text model while the fixture is building.
+        scan = subprocess.check_output([str(desktop.native_view), 'read', str(path)], timeout=45)
         rows = json.loads(scan)
         match = next((row for row in rows if expected.search(row['text'])), None)
         if match:
@@ -166,9 +167,12 @@ def type_and_send(desktop, text, live_capture=None, continuity=None):
         if continuity is not None:
             marker = re.compile('desktophello$', re.IGNORECASE)
             native_text(desktop, pid, 'desktop-before-settings', marker)
-            keys(pid, '  keystroke "," using command down')
+            settings = re.compile(r'^Settings$')
+            button = native_text(desktop, pid, 'desktop-settings-entry', settings)
+            native_input(desktop, pid, 'click', button)
             native_text(desktop, pid, 'desktop-settings-open', re.compile(r'^Appearance$'))
-            keys(pid, '  keystroke "," using command down')
+            button = native_text(desktop, pid, 'desktop-settings-exit', settings)
+            native_input(desktop, pid, 'click', button)
             restored = native_text(desktop, pid, 'desktop-after-settings', marker)
             continuity['settings_restore'] = {'pid': pid, 'restored_marker': restored['text']}
 
@@ -296,7 +300,7 @@ def receipt(args):
                 if args.continuity:
                     s2.require(gateway.stop() == 0, 'Gateway did not stop cleanly for the fixture seed')
                     session_key, first_tail_marker = seed_history(aleph)
-                    gateway.start('gw-1.sock')
+                    gateway.start('gw-history.sock')
                     ipc = {'ALEPH_SHELL_PANEL_IPC': str(gateway.endpoint)}
                     desktop.write_layout(key, {**first, 'active': s2.tabs('sessions')[0]})
                     phases.append(desktop.run('scrollback', ipc, settle=6,
