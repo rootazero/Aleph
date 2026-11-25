@@ -41,4 +41,4 @@ Use `--rich` to execute a real Desktop IPC Write/Edit and reopen its durable car
 
 ## Evidence / 证据
 
-The selected output directory holds `report.json`, `web-report.json`, fixture-provider decisions and screenshots. See the [rich transcript receipt](../../docs/superpowers/runs/2026-11-25-nsh-chat-transcript-receipt.md) for the evidence boundaries. / 输出目录保留报告和截图；验证范围见富转录收据。
+The selected output directory holds `report.json`, `web-report.json`, fixture-provider decisions and screenshots. See the [R6 continuity receipt](../../docs/superpowers/runs/2026-11-25-nsh-panel-r6-continuity-receipt.md) and the [rich transcript receipt](../../docs/superpowers/runs/2026-11-25-nsh-chat-transcript-receipt.md) for the evidence boundaries. / 输出目录保留报告和截图；验证范围见第六轮会话连续性和富转录收据。
