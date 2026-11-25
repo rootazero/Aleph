@@ -286,13 +286,28 @@ async function run(fixturePath) {
     await page.getByText('Reconnect', { exact: true }).click();
     // The layout kept Chat active: the composer shows once connected.
     await pair(page, next.value.trim(), page.getByRole('textbox', { name: 'Message', exact: true }));
-    const rowAgain = await openFirstSession(page, desktopMessage);
+    const sendsBeforeReconnect = sentMethods(frames).filter((method) => method === 'chat.send').length;
+    let selectedKey = null;
+    if (fixture.continuity) {
+      await page.getByRole('textbox', { name: 'Message', exact: true }).waitFor({ timeout: 15000 });
+      await page.getByText(desktopMessage, { exact: true }).first().waitFor({ timeout: 15000 });
+      const selected = page.locator('[data-testid="chat-transcript"]');
+      await selected.waitFor({ timeout: 15000 });
+      selectedKey = await selected.getAttribute('data-session-key');
+      assert.ok(selectedKey, 'resumed Chat transcript has no selected session key');
+    } else {
+      await openFirstSession(page, desktopMessage);
+    }
     await page.getByText(committed.trim(), { exact: true }).first().waitFor({ timeout: 15000 });
+    assert.equal(sentMethods(frames).filter((method) => method === 'chat.send').length, sendsBeforeReconnect,
+      'reconnect created an extra user send');
     if (fixture.live_tool) {
       await page.getByLabel(`Expand Write · ${fixture.live_tool.file}`, { exact: true }).waitFor({ timeout: 15000 });
     }
     await page.screenshot({ path: shot('after-restart') });
-    step('gateway_restart_repair_restores_history', { row: rowAgain });
+    step('gateway_restart_repair_restores_history', {
+      continuity: Boolean(fixture.continuity), selected_session_key: fixture.continuity ? selectedKey : null,
+    });
     report.ok = true;
   } finally {
     await browser.close();
