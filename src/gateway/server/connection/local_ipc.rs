@@ -8,7 +8,8 @@ use std::{
 };
 
 use aleph_client::local_ipc::{
-    parse_payload, read_frame_budgeted, write_frame, HELLO_TIMEOUT, MAX_FRAME_BYTES, MAX_INFLIGHT,
+    parse_payload, parse_request_payload, parse_voice_response_payload, read_frame_budgeted,
+    write_frame, HELLO_TIMEOUT, MAX_FRAME_BYTES, MAX_INFLIGHT,
 };
 use aleph_protocol::system_hello::{Feature, HelloLimits};
 use futures_util::{stream::FuturesUnordered, StreamExt};
@@ -150,7 +151,7 @@ async fn serve_peer(
     };
     if let Some(error) = &hello.error {
         let response = serialize(&hello)?;
-        let response = if response_fits(&response) {
+        let response = if response_fits(&response, None) {
             response
         } else {
             serialize(&JsonRpcResponse::error(
@@ -177,7 +178,9 @@ async fn serve_peer(
     }
     let ctx =
         ConnectionContext::from_shared(&state, ChannelClass::Desktop, NO_NETWORK_ORIGIN, false);
-    let peer = DispatchPeer::desktop(state.connections.clone(), id.clone(), store);
+    let cancellation = stop.child_token();
+    let _cancel_on_close = cancellation.clone().drop_guard();
+    let peer = DispatchPeer::desktop(state.connections.clone(), id.clone(), store, cancellation);
     let executor = rpc::RpcExecutor {
         middleware: ctx.middleware_chain.clone(),
         lanes: ctx.lane_manager.clone(),
@@ -212,7 +215,7 @@ async fn read_request(
         return Ok(None);
     };
     let request: JsonRpcRequest =
-        serde_json::from_value(parse_payload(&text)?).map_err(io::Error::other)?;
+        serde_json::from_value(parse_request_payload(&text)?).map_err(io::Error::other)?;
     if request.jsonrpc != "2.0"
         || !request
             .id
@@ -247,12 +250,13 @@ async fn serve_requests(
             tokio::select! {
                 biased;
                 completed = jobs.next(), if !jobs.is_empty() => {
-                    if let Some((id, response, _permit)) = completed {
+                    if let Some((id, response, voice_synthesis, _permit)) = completed {
                         let id: Value = id;
+                        let voice_synthesis: bool = voice_synthesis;
                         let response: String = response?;
                         // Match the receiver's byte and shape limits. A large Core
                         // result is a correlated RPC error, not a transport failure.
-                        let response = if response_fits(&response) {
+                        let response = if response_fits(&response, voice_synthesis.then_some(&id)) {
                             response
                         } else {
                             serialize(&JsonRpcResponse::error(
@@ -295,7 +299,9 @@ async fn serve_requests(
         active.push(id.clone());
         jobs.push(async move {
             let result = execute(executor, peer, &text, &request).await;
-            (id, result, permit)
+            let voice_synthesis =
+                request.method == aleph_protocol::panel_voice::VOICE_TURN_SYNTHESIZE_METHOD;
+            (id, result, voice_synthesis, permit)
         });
     }
 }
@@ -330,8 +336,12 @@ fn serialize(response: &JsonRpcResponse) -> io::Result<String> {
     serde_json::to_string(response).map_err(io::Error::other)
 }
 
-fn response_fits(text: &str) -> bool {
-    text.len() <= MAX_FRAME_BYTES as usize && parse_payload(text).is_ok()
+fn response_fits(text: &str, synthesis_id: Option<&Value>) -> bool {
+    let budget = MAX_FRAME_BYTES as usize;
+    match synthesis_id {
+        Some(expected) => parse_voice_response_payload(text, budget, |id| id == expected).is_ok(),
+        None => text.len() <= budget && parse_payload(text).is_ok(),
+    }
 }
 
 async fn send(write: &mut (impl AsyncWrite + Unpin), text: &str) -> io::Result<()> {

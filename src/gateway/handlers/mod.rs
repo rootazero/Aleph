@@ -137,6 +137,7 @@ pub mod trace_replay;
 pub mod users;
 pub mod version;
 pub mod voice;
+pub mod voice_turn;
 pub mod wizard;
 pub mod workspace;
 
@@ -303,12 +304,26 @@ pub type HandlerFn = Arc<
     dyn Fn(JsonRpcRequest) -> Pin<Box<dyn Future<Output = JsonRpcResponse> + Send>> + Send + Sync,
 >;
 
+type VoiceHandlerFn = Arc<
+    dyn Fn(
+            JsonRpcRequest,
+            voice_turn::VoiceRequestContext,
+        ) -> Pin<Box<dyn Future<Output = JsonRpcResponse> + Send>>
+        + Send
+        + Sync,
+>;
+
+enum RegisteredHandler {
+    Plain(HandlerFn),
+    Voice(VoiceHandlerFn),
+}
+
 /// Registry for JSON-RPC method handlers
 ///
 /// Maps method names to their handler functions. Handlers are invoked
 /// asynchronously when a request with a matching method is received.
 pub struct HandlerRegistry {
-    handlers: HashMap<String, HandlerFn>,
+    handlers: HashMap<String, RegisteredHandler>,
 }
 
 impl HandlerRegistry {
@@ -1208,7 +1223,8 @@ impl HandlerRegistry {
         manager: Arc<crate::gateway::handlers::wizard::WizardSessionManager>,
     ) {
         for (name, handler) in crate::gateway::handlers::wizard::handlers(manager) {
-            self.handlers.insert(name.to_string(), handler);
+            self.handlers
+                .insert(name.to_string(), RegisteredHandler::Plain(handler));
         }
     }
 
@@ -1233,7 +1249,20 @@ impl HandlerRegistry {
     {
         self.handlers.insert(
             method.to_string(),
-            Arc::new(move |req| Box::pin(handler(req))),
+            RegisteredHandler::Plain(Arc::new(move |req| Box::pin(handler(req)))),
+        );
+    }
+
+    pub(crate) fn register_with_voice_context<F, Fut>(&mut self, method: &str, handler: F)
+    where
+        F: Fn(JsonRpcRequest, voice_turn::VoiceRequestContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = JsonRpcResponse> + Send + 'static,
+    {
+        self.handlers.insert(
+            method.to_string(),
+            RegisteredHandler::Voice(Arc::new(move |req, context| {
+                Box::pin(handler(req, context))
+            })),
         );
     }
 
@@ -1260,30 +1289,34 @@ impl HandlerRegistry {
     ///
     /// The response from the handler, or a method not found error
     pub async fn handle(&self, request: &JsonRpcRequest) -> JsonRpcResponse {
-        if let Some(handler) = self.handlers.get(&request.method) {
-            let response = handler(request.clone()).await;
-            self.project_panel_snapshot(request, response)
-        } else {
-            JsonRpcResponse::error(
-                request.id.clone(),
-                METHOD_NOT_FOUND,
-                format!("Method not found: {}", request.method),
-            )
-        }
+        self.handle_with_context(request, None, None).await
     }
 
-    pub(crate) async fn handle_with_panel_context(
+    pub(crate) async fn handle_with_context(
         &self,
         request: &JsonRpcRequest,
-        context: &crate::gateway::panel_project_context::PanelRequestContext,
+        panel_context: Option<&crate::gateway::panel_project_context::PanelRequestContext>,
+        voice_context: Option<voice_turn::VoiceRequestContext>,
     ) -> JsonRpcResponse {
-        if self.has_method(&request.method)
-            && panel_capabilities::is_context_method(&request.method)
-        {
-            let response = panel_capabilities::handle_with_context(request.clone(), context).await;
-            return self.project_panel_snapshot(request, response);
-        }
-        self.handle(request).await
+        let response = match self.handlers.get(&request.method) {
+            Some(RegisteredHandler::Plain(handler)) => match panel_context {
+                Some(context) if panel_capabilities::is_context_method(&request.method) => {
+                    panel_capabilities::handle_with_context(request.clone(), context).await
+                }
+                _ => handler(request.clone()).await,
+            },
+            Some(RegisteredHandler::Voice(handler)) => {
+                handler(request.clone(), voice_context.unwrap_or_default()).await
+            }
+            None => {
+                return JsonRpcResponse::error(
+                    request.id.clone(),
+                    METHOD_NOT_FOUND,
+                    format!("Method not found: {}", request.method),
+                )
+            }
+        };
+        self.project_panel_snapshot(request, response)
     }
 
     fn memory_nebula_mounted(&self) -> bool {
@@ -1602,3 +1635,7 @@ mod tests {
         assert!(registry.has_method("wizard.status"));
     }
 }
+
+#[cfg(test)]
+#[path = "voice_turn/tests.rs"]
+pub(crate) mod voice_turn_tests;

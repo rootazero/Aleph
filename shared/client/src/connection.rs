@@ -313,6 +313,14 @@ fn classify_frame(text: &str) -> Inbound {
     classify_value(value)
 }
 
+fn response_id_key(id: &Value) -> Option<std::borrow::Cow<'_, str>> {
+    match id {
+        Value::String(s) => Some(std::borrow::Cow::Borrowed(s)),
+        Value::Number(n) => Some(std::borrow::Cow::Owned(n.to_string())),
+        _ => None,
+    }
+}
+
 fn classify_value(value: Value) -> Inbound {
     // A JSON-RPC notification carries no id, and a response to a request this
     // client never sent is indistinguishable from one it did — so `null` is
@@ -372,13 +380,11 @@ fn classify_value(value: Value) -> Inbound {
     }
 
     if let Some(id) = id {
-        let id = match id {
-            Value::String(s) => s.clone(),
-            Value::Number(n) => n.to_string(),
-            // An id that is neither is not an id this client ever minted
-            // (`next_id` produces decimal strings), so nothing is waiting on it.
-            _ => return Inbound::Unrecognized,
+        let Some(id) = response_id_key(id) else {
+            // `next_id` produces decimal strings; nothing waits on other shapes.
+            return Inbound::Unrecognized;
         };
+        let id = id.into_owned();
         let result = match (value.get("error"), value.get("result")) {
             (Some(error), _) => Err(serde_json::from_value::<JsonRpcError>(error.clone())
                 .unwrap_or_else(|e| JsonRpcError {
@@ -763,7 +769,14 @@ impl AlephClient {
                 live_events,
             } => {
                 while let Ok(Some(text)) = local_ipc::read_frame(&mut read).await {
-                    let Ok(value) = local_ipc::parse_payload(&text) else {
+                    let Ok(value) = local_ipc::parse_voice_response_payload(
+                        &text,
+                        local_ipc::MAX_FRAME_BYTES as usize,
+                        |id| {
+                            response_id_key(id)
+                                .is_some_and(|id| socket.requests.expects_voice_synthesis(&id))
+                        },
+                    ) else {
                         break;
                     };
                     // With `live_events`, an id-less notification takes the
@@ -967,7 +980,7 @@ impl AlephClient {
         // `device_token` / `bootstrap_ticket`. Method + id + size suffice.
         debug!(method = %method, id = %id, bytes = json.len(), "Sending request");
 
-        let mut pending = socket.requests.reserve(id, during_handshake)?;
+        let mut pending = socket.requests.reserve(id, method, during_handshake)?;
         socket.send_text(json).await?;
         if socket.retain_sent_requests {
             pending.retain_until_reply();

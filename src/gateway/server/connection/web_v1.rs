@@ -2,9 +2,10 @@
 
 use std::{collections::HashMap, net::SocketAddr, sync::Mutex, time::Duration};
 
-use aleph_client::local_ipc::parse_payload;
+use aleph_client::local_ipc::{parse_payload, parse_request_payload, parse_voice_response_payload};
 use aleph_protocol::{
     framing::{encode_header, split_frame, HEADER_BYTES},
+    panel_voice::VOICE_TURN_SYNTHESIZE_METHOD,
     system_hello::{Feature, HelloLimits},
 };
 use axum::{
@@ -50,7 +51,7 @@ const COOKIE: &str = "__Host-aleph-v1";
 const SUBPROTOCOL: &str = "aleph.protocol.v1";
 const TTL: Duration = Duration::from_secs(300);
 const IO_TIMEOUT: Duration = Duration::from_secs(5);
-const MAX_MESSAGE: u32 = 1024 * 1024;
+pub(super) const MAX_MESSAGE: u32 = 1024 * 1024;
 const MAX_SESSIONS: usize = 256;
 const MAX_SOCKETS: usize = 8;
 
@@ -473,11 +474,14 @@ async fn serve(
         )
     });
     let expires = binding.expires;
+    let cancellation = stop.child_token();
+    let _cancel_on_close = cancellation.clone().drop_guard();
     let peer = DispatchPeer::web(
         gateway.connections.clone(),
         conn_id.clone(),
         expected,
         binding,
+        cancellation,
     );
     let executor = rpc::RpcExecutor {
         middleware: ctx.middleware_chain.clone(),
@@ -499,11 +503,11 @@ async fn serve(
                     match feed.admit(&ctx, received).await {
                         None => continue,
                         Some(V1Event::Send(frame)) => {
-                            send(socket, &frame, None, INTERNAL_ERROR).await?;
+                            send(socket, &frame, None, INTERNAL_ERROR, false).await?;
                             continue;
                         }
                         Some(V1Event::Lost(warning)) => {
-                            let _ = send(socket, &warning, None, INTERNAL_ERROR).await;
+                            let _ = send(socket, &warning, None, INTERNAL_ERROR, false).await;
                             break;
                         }
                         Some(V1Event::Close(_)) => break,
@@ -548,7 +552,15 @@ async fn serve(
                     if peer.snapshot().await.is_none() {
                         break;
                     }
-                    send(socket, &response, request.id, INTERNAL_ERROR).await?;
+                    let voice_synthesis = request.method == VOICE_TURN_SYNTHESIZE_METHOD;
+                    send(
+                        socket,
+                        &response,
+                        request.id,
+                        INTERNAL_ERROR,
+                        voice_synthesis,
+                    )
+                    .await?;
                 }
                 Err(error) => send_response(socket, &error).await?,
             }
@@ -584,7 +596,7 @@ async fn read(socket: &mut WebSocket) -> Option<(String, JsonRpcRequest)> {
                     return None;
                 }
                 let request: JsonRpcRequest =
-                    serde_json::from_value(parse_payload(text).ok()?).ok()?;
+                    serde_json::from_value(parse_request_payload(text).ok()?).ok()?;
                 if request.jsonrpc != "2.0"
                     || !request
                         .id
@@ -607,7 +619,7 @@ async fn send_response(socket: &mut WebSocket, response: &JsonRpcResponse) -> Op
         .error
         .as_ref()
         .map_or(INTERNAL_ERROR, |error| error.code);
-    send(socket, &text, response.id.clone(), code).await
+    send(socket, &text, response.id.clone(), code, false).await
 }
 
 async fn send(
@@ -615,9 +627,16 @@ async fn send(
     text: &str,
     id: Option<serde_json::Value>,
     code: i32,
+    voice_synthesis: bool,
 ) -> Option<()> {
+    let budget = MAX_MESSAGE as usize;
+    let fits = if voice_synthesis {
+        parse_voice_response_payload(text, budget, |actual| id.as_ref() == Some(actual)).is_ok()
+    } else {
+        text.len() <= budget && parse_payload(text).is_ok()
+    };
     let fallback;
-    let text = if text.len() > MAX_MESSAGE as usize || parse_payload(text).is_err() {
+    let text = if !fits {
         fallback = serde_json::to_string(&JsonRpcResponse::error(
             id,
             code,

@@ -645,3 +645,95 @@ async fn desktop_ipc_pushes_admitted_events_only_after_negotiation() {
 }
 
 const MAX_FRAME_BYTES_FOR_TEST: usize = aleph_client::local_ipc::MAX_FRAME_BYTES as usize;
+
+#[tokio::test]
+async fn voice_turn_v1_ingress_is_server_derived() {
+    use crate::gateway::handlers::voice_turn_tests::{
+        mount_synthesis_bytes, transcribe_request, transcribe_request_with_samples, SttFixture,
+    };
+    use aleph_protocol::panel_voice::MAX_UTTERANCE_SAMPLES;
+    use std::sync::atomic::Ordering;
+
+    let (_root, endpoint) = fixture();
+    let provider = SttFixture::new().await;
+    let store = Arc::new(SecurityStore::in_memory().unwrap());
+    let mut gateway = GatewayServer::new("127.0.0.1:0".parse().unwrap());
+    gateway.set_security_store(store.clone());
+    provider.mount(gateway.handlers_mut());
+    let tts_calls = mount_synthesis_bytes(gateway.handlers_mut(), 64_000);
+    let (stop, shutdown) = oneshot::channel();
+    let path = endpoint.clone();
+    let task = tokio::spawn(async move { gateway.run_local_endpoint(shutdown, &path).await });
+    timeout(Duration::from_secs(8), async {
+        let mut unauthenticated = connect(&endpoint).await;
+        send(&mut unauthenticated, transcribe_request()).await;
+        assert_eq!(
+            receive(&mut unauthenticated).await["error"]["code"],
+            AUTH_REQUIRED
+        );
+        assert_closed(&mut unauthenticated).await;
+        assert_eq!(provider.calls(), 0);
+
+        let mut stream = connect(&endpoint).await;
+        send(&mut stream, hello(1, 1)).await;
+        assert!(receive(&mut stream).await.get("result").is_some());
+        send(
+            &mut stream,
+            transcribe_request_with_samples(MAX_UTTERANCE_SAMPLES),
+        )
+        .await;
+        assert_eq!(receive(&mut stream).await["result"]["text"], "fixture");
+        assert_eq!(provider.calls(), 1);
+        send(
+            &mut stream,
+            json!({"jsonrpc":"2.0","id":2,"method":"voice.turn.synthesize","params":{
+                "turn_id":"1b63aa6b-0688-4be3-991f-e6994e0f795c","text":"Speak."
+            }}),
+        )
+        .await;
+        let result = receive(&mut stream).await;
+        assert_eq!(
+            result["result"]["mime_type"],
+            "audio/mpeg",
+            "{:?}",
+            result.get("error")
+        );
+        assert_eq!(
+            result["result"]["audio_base64"].as_str().unwrap().len(),
+            85_336
+        );
+        assert_eq!(tts_calls.load(Ordering::SeqCst), 1);
+
+        let configured = std::mem::take(
+            &mut provider
+                .config
+                .write()
+                .await
+                .generation
+                .transcription_providers,
+        );
+        send(&mut stream, transcribe_request()).await;
+        assert_eq!(
+            receive(&mut stream).await["error"]["data"]["kind"],
+            "offline_unavailable"
+        );
+        assert_eq!(provider.calls(), 1);
+
+        provider
+            .config
+            .write()
+            .await
+            .generation
+            .transcription_providers = configured;
+        store
+            .update_user(OWNER_USER_ID, None, None, Some(UserStatus::Deactivated))
+            .unwrap();
+        send(&mut stream, transcribe_request()).await;
+        assert_eq!(receive(&mut stream).await["error"]["code"], AUTH_REQUIRED);
+        assert_eq!(provider.calls(), 1);
+    })
+    .await
+    .unwrap();
+    let _ = stop.send(());
+    task.await.unwrap().unwrap();
+}

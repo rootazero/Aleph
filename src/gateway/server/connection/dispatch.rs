@@ -6,7 +6,11 @@
 
 use std::{collections::HashMap, sync::Arc};
 
+use aleph_protocol::panel_voice::{VOICE_TURN_SYNTHESIZE_METHOD, VOICE_TURN_TRANSCRIBE_METHOD};
 use tokio::sync::RwLock;
+use tokio_util::sync::CancellationToken;
+
+use crate::gateway::handlers::voice_turn::{VoiceIngress, VoiceRequestContext};
 
 use crate::gateway::middleware::MiddlewareChain;
 use crate::gateway::panel_project_context::{PanelCallerContext, PanelRequestContext};
@@ -47,6 +51,7 @@ pub async fn dispatch_with_caller_context(
         },
         caller_is_loopback,
         caller_conn_id,
+        None,
     )
     .await
 }
@@ -57,6 +62,7 @@ async fn dispatch_snapshot(
     snapshot: CallerSnapshot,
     caller_is_loopback: bool,
     caller_conn_id: Option<String>,
+    voice_context: Option<VoiceRequestContext>,
 ) -> String {
     let context = mc.panel_context(PanelCallerContext::authenticated(
         viewer_principal(&snapshot),
@@ -68,7 +74,7 @@ async fn dispatch_snapshot(
         caller_is_loopback,
         caller_conn_id,
         snapshot.verified_user.clone(),
-        process_request_with_panel_context(text, mc, context, Some(&snapshot)),
+        process_request_with_context(text, mc, context, voice_context, Some(&snapshot)),
     )
     .await
 }
@@ -130,6 +136,7 @@ pub(super) struct DispatchPeer {
 struct BoundPeer {
     expected: CallerSnapshot,
     authority: BoundAuthority,
+    cancellation: CancellationToken,
 }
 
 #[derive(Clone)]
@@ -169,11 +176,13 @@ impl DispatchPeer {
         conn_id: String,
         expected: CallerSnapshot,
         binding: super::web_v1::WebBinding,
+        cancellation: CancellationToken,
     ) -> Self {
         Self {
             bound: Some(BoundPeer {
                 expected,
                 authority: BoundAuthority::Web(binding),
+                cancellation,
             }),
             ..Self::legacy(connections, conn_id, false)
         }
@@ -184,6 +193,7 @@ impl DispatchPeer {
         connections: Arc<ConnectionTable>,
         conn_id: String,
         owner_store: Arc<crate::gateway::security::SecurityStore>,
+        cancellation: CancellationToken,
     ) -> Self {
         Self {
             bound: Some(BoundPeer {
@@ -194,6 +204,7 @@ impl DispatchPeer {
                     device_id: None,
                 },
                 authority: BoundAuthority::Desktop(owner_store),
+                cancellation,
             }),
             ..Self::legacy(connections, conn_id, false)
         }
@@ -210,6 +221,7 @@ impl DispatchPeer {
             bound: Some(BoundPeer {
                 expected,
                 authority: BoundAuthority::Fixture,
+                cancellation: CancellationToken::new(),
             }),
             ..Self::legacy(connections, conn_id, false)
         }
@@ -283,6 +295,34 @@ impl<'a> PeerView<'a> {
             });
         }
         Some(CallerSnapshot::read(self.connections, self.conn_id, self.legacy_loopback).await)
+    }
+
+    // Caller must already have passed `validate_live`. Neither loopback nor a
+    // Panel project selector establishes the transport of the invocation.
+    fn voice_context_after_validation(&self, method: &str) -> Option<VoiceRequestContext> {
+        if !matches!(
+            method,
+            VOICE_TURN_TRANSCRIBE_METHOD | VOICE_TURN_SYNTHESIZE_METHOD
+        ) {
+            return None;
+        }
+        let bound = self.bound?;
+        let (ingress, budget) = match &bound.authority {
+            BoundAuthority::Web(_) => (VoiceIngress::WebV1, super::web_v1::MAX_MESSAGE),
+            #[cfg(any(unix, windows))]
+            BoundAuthority::Desktop(_) => (
+                VoiceIngress::DesktopIpc,
+                aleph_client::local_ipc::MAX_FRAME_BYTES,
+            ),
+            #[cfg(test)]
+            BoundAuthority::Fixture => return None,
+        };
+        Some(VoiceRequestContext::new(
+            ingress,
+            self.conn_id.to_owned(),
+            budget as usize,
+            bound.cancellation.child_token(),
+        ))
     }
 }
 
@@ -443,7 +483,15 @@ pub async fn dispatch_for_connection(
     if method == "capabilities.ui.invoke" {
         return match live_ui_caller(connections, conn_id, start).await {
             Some(live) => {
-                dispatch_snapshot(text, mc, live, client_is_local, Some(conn_id.to_owned())).await
+                dispatch_snapshot(
+                    text,
+                    mc,
+                    live,
+                    client_is_local,
+                    Some(conn_id.to_owned()),
+                    None,
+                )
+                .await
             }
             None => viewer_denied_response(req_id),
         };
@@ -486,6 +534,7 @@ async fn dispatch_ordinary(
                 live,
                 peer.legacy_loopback,
                 Some(peer.conn_id.to_owned()),
+                peer.voice_context_after_validation(method),
             )
             .await
         }
@@ -509,13 +558,14 @@ pub fn idempotency_principal(method: &str, snapshot: &CallerSnapshot) -> String 
 
 /// Process a JSON-RPC request string
 pub async fn process_request(text: &str, middleware_chain: &MiddlewareChain) -> String {
-    process_request_with_panel_context(text, middleware_chain, None, None).await
+    process_request_with_context(text, middleware_chain, None, None, None).await
 }
 
-pub(crate) async fn process_request_with_panel_context(
+async fn process_request_with_context(
     text: &str,
     middleware_chain: &MiddlewareChain,
     panel_context: Option<PanelRequestContext>,
+    mut voice_context: Option<VoiceRequestContext>,
     caller: Option<&CallerSnapshot>,
 ) -> String {
     // Parse the request
@@ -564,12 +614,21 @@ pub(crate) async fn process_request_with_panel_context(
         method = %request.method,
     );
 
+    const TRACEPARENT_FIELD: &str = "traceparent";
+    let trace_header = trace.to_header();
+    if let Some(context) = voice_context.as_mut() {
+        // Appending one field to the existing object adds the serialized
+        // single-field object length minus its braces plus a comma.
+        let field = serde_json::json!({ (TRACEPARENT_FIELD): &trace_header });
+        context.reserve_response_bytes(field.to_string().len() - 1);
+    }
+
     #[cfg(feature = "native-qa")]
     let request_for_observer = request.clone();
     let response = {
         use tracing::Instrument;
         middleware_chain
-            .serve_with_panel_context(request, panel_context)
+            .serve_with_context(request, panel_context, voice_context)
             .instrument(span)
             .await
     };
@@ -594,8 +653,8 @@ pub(crate) async fn process_request_with_panel_context(
     let mut value = serde_json::to_value(&response).unwrap_or(serde_json::Value::Null);
     if let Some(obj) = value.as_object_mut() {
         obj.insert(
-            "traceparent".to_string(),
-            serde_json::Value::String(trace.to_header()),
+            TRACEPARENT_FIELD.to_owned(),
+            serde_json::Value::String(trace_header),
         );
     }
     serde_json::to_string(&value).unwrap_or_default()

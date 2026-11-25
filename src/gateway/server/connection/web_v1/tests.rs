@@ -547,3 +547,159 @@ async fn panel_route_rejects_traversal() {
         assert_ne!(response.status(), StatusCode::OK, "{path}");
     }
 }
+
+#[tokio::test]
+async fn voice_turn_v1_ingress_is_server_derived() {
+    use crate::gateway::handlers::voice_turn_tests::{
+        mount_synthesis_bytes, transcribe_request, transcribe_request_with_samples, SttFixture,
+    };
+    use aleph_protocol::panel_voice::MAX_UTTERANCE_SAMPLES;
+    use futures::{SinkExt, StreamExt};
+    use serde_json::{json, Value};
+    use std::sync::atomic::Ordering;
+    use tokio::{
+        net::{TcpListener, TcpStream},
+        time::timeout,
+    };
+    use tokio_tungstenite::{
+        client_async,
+        tungstenite::{client::IntoClientRequest, Message},
+        WebSocketStream,
+    };
+    use tokio_util::sync::CancellationToken;
+
+    async fn call(socket: &mut WebSocketStream<TcpStream>, request: Value) -> Value {
+        let text = request.to_string();
+        let mut frame = super::encode_header(text.len(), super::MAX_MESSAGE)
+            .unwrap()
+            .to_vec();
+        frame.extend_from_slice(text.as_bytes());
+        socket.send(Message::Binary(frame.into())).await.unwrap();
+        let response = socket.next().await.unwrap().unwrap().into_data();
+        let (text, tail) = super::split_frame(&response, super::MAX_MESSAGE)
+            .unwrap()
+            .expect("complete response frame");
+        assert!(tail.is_empty());
+        serde_json::from_str(text).unwrap()
+    }
+
+    let provider = SttFixture::new().await;
+    let (mut gateway, _, manager) = fixture(true);
+    gateway.config.require_idempotency_key = true;
+    provider.mount(gateway.handlers_mut());
+    let tts_calls = mount_synthesis_bytes(gateway.handlers_mut(), 786_000);
+    let stop = CancellationToken::new();
+    let app = gateway.native_tls_router(gateway.build_shared_state(), stop.clone());
+    let ticket = manager
+        .create_bootstrap_ticket(None, Some("member-fixture"))
+        .unwrap();
+    let origin = "https://localhost:8443";
+    let response = exchange(
+        app.clone(),
+        Some(origin),
+        json!({"bootstrap_ticket":ticket}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    let cookie = response.headers()[header::SET_COOKIE]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap();
+    // Exercise the real native-router WebSocket admission and framed dispatch;
+    // this loopback fixture does not repeat the separate TLS/browser test.
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        .unwrap();
+    });
+    let outcome = timeout(std::time::Duration::from_secs(8), async {
+        let upgrade = |cookie: &str| {
+            let mut request = "ws://localhost:8443/v1/ws".into_client_request().unwrap();
+            for (name, value) in [
+                (header::ORIGIN, origin),
+                (header::SEC_WEBSOCKET_PROTOCOL, super::SUBPROTOCOL),
+                (header::COOKIE, cookie),
+            ] {
+                request.headers_mut().insert(name, value.parse().unwrap());
+            }
+            request
+        };
+        let error = client_async(
+            upgrade("__Host-aleph-v1=invalid"),
+            TcpStream::connect(addr).await.unwrap(),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            tokio_tungstenite::tungstenite::Error::Http(response)
+                if response.status() == StatusCode::UNAUTHORIZED
+        ));
+        assert_eq!(provider.calls(), 0);
+        let (mut socket, _) =
+            client_async(upgrade(cookie), TcpStream::connect(addr).await.unwrap())
+                .await
+                .unwrap();
+        let hello = json!({"jsonrpc":"2.0","id":0,"method":"system.hello","params":{
+            "protocol":{"major":1,"minor":0},
+            "client":{"name":"voice-fixture","version":"1","platform":"test","ui_runtime":"test"},
+            "features":[]
+        }});
+        let response = call(&mut socket, hello).await;
+        assert!(response.get("result").is_some(), "{response}");
+        assert_eq!(
+            call(&mut socket, transcribe_request_with_samples(MAX_UTTERANCE_SAMPLES)).await["result"]["text"],
+            "fixture"
+        );
+        assert_eq!(provider.calls(), 1);
+        let mut request = transcribe_request();
+        request["method"] = json!("voice.transcribe");
+        assert_eq!(
+            call(&mut socket, request).await["error"]["code"],
+            crate::gateway::protocol::METHOD_NOT_FOUND
+        );
+        assert_eq!(provider.calls(), 1);
+        provider.config.write().await.generation.transcription_providers.clear();
+        // Caller-supplied "desktop" metadata cannot elect offline fallback.
+        assert_eq!(
+            call(&mut socket, transcribe_request()).await["error"]["data"]["kind"],
+            "not_configured"
+        );
+        assert_eq!(provider.calls(), 1);
+
+        let mut request = json!({"jsonrpc":"2.0","id":"short","method":"voice.turn.synthesize","params":{
+            "turn_id":"1b63aa6b-0688-4be3-991f-e6994e0f795c","text":""
+        }});
+        // Both Query methods work without a key under strict Web policy.
+        let result = call(&mut socket, request.clone()).await;
+        assert_eq!(result["error"]["data"]["kind"], "no_speech");
+        assert_eq!(tts_calls.load(Ordering::SeqCst), 0);
+        request["params"]["text"] = json!("Speak.");
+        request["params"]["idempotency_key"] = json!("same");
+        let result = call(&mut socket, request.clone()).await;
+        assert_eq!(result["result"]["mime_type"], "audio/mpeg", "{:?}", result.get("error"));
+        assert_eq!(
+            result["result"]["audio_base64"].as_str().unwrap().len(),
+            1_048_000
+        );
+        assert_eq!(tts_calls.load(Ordering::SeqCst), 1);
+        let long_id = "\"".repeat(230);
+        request["id"] = json!(long_id);
+        // Identical caller key must not replay a body sized for a shorter id.
+        let result = call(&mut socket, request).await;
+        assert_eq!(result["id"], long_id);
+        assert_eq!(result["error"]["data"]["kind"], "too_large");
+        assert_eq!(tts_calls.load(Ordering::SeqCst), 2);
+    })
+    .await;
+    stop.cancel();
+    task.abort();
+    outcome.unwrap();
+}

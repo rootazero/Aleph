@@ -4,7 +4,7 @@ use crate::sync_primitives::Arc;
 
 use tower::{Layer, Service};
 
-use crate::gateway::handlers::HandlerRegistry;
+use crate::gateway::handlers::{voice_turn::VoiceRequestContext, HandlerRegistry};
 use crate::gateway::middleware::{
     latency::global_latency_or_init,
     request_state::{set_global_registry, RequestStateRegistry},
@@ -90,17 +90,18 @@ impl MiddlewareChain {
     }
 
     pub async fn serve(&self, request: JsonRpcRequest) -> JsonRpcResponse {
-        self.serve_with_panel_context(request, None).await
+        self.serve_with_context(request, None, None).await
     }
 
-    pub(crate) async fn serve_with_panel_context(
+    pub(crate) async fn serve_with_context(
         &self,
         request: JsonRpcRequest,
-        context: Option<PanelRequestContext>,
+        panel_context: Option<PanelRequestContext>,
+        voice_context: Option<VoiceRequestContext>,
     ) -> JsonRpcResponse {
         let rate_limit = RateLimitLayer::new(self.rate_limiter.clone());
         let terminal: HandlerService<()> =
-            HandlerService::new(self.handlers.clone()).with_panel_context(context);
+            HandlerService::new(self.handlers.clone()).with_context(panel_context, voice_context);
 
         let traced = self.trace.layer(terminal);
         let metered = self.metrics.layer(traced);

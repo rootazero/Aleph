@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use aleph_protocol::JsonRpcError;
+use aleph_protocol::{panel_voice::VOICE_TURN_SYNTHESIZE_METHOD, JsonRpcError};
 use serde_json::Value;
 use tokio::sync::oneshot;
 
@@ -27,10 +27,15 @@ enum RequestProgress {
     Resolved,
 }
 
+struct PendingRequest {
+    progress: RequestProgress,
+    voice_synthesis: bool,
+}
+
 struct Requests {
     phase: Phase,
     limit: usize,
-    pending: HashMap<String, RequestProgress>,
+    pending: HashMap<String, PendingRequest>,
 }
 
 pub(super) struct RequestState(Mutex<Requests>);
@@ -51,6 +56,7 @@ impl RequestState {
     pub(super) fn reserve(
         self: &Arc<Self>,
         id: String,
+        method: &str,
         during_handshake: bool,
     ) -> CliResult<PendingCall> {
         let mut requests = self.lock();
@@ -71,7 +77,10 @@ impl RequestState {
             return Err(CliError::Other("Duplicate in-flight request ID".into()));
         };
         let (sender, receiver) = oneshot::channel();
-        entry.insert(RequestProgress::Waiting(sender));
+        entry.insert(PendingRequest {
+            progress: RequestProgress::Waiting(sender),
+            voice_synthesis: method == VOICE_TURN_SYNTHESIZE_METHOD,
+        });
         Ok(PendingCall {
             requests: self.clone(),
             id,
@@ -80,9 +89,20 @@ impl RequestState {
         })
     }
 
+    #[cfg(any(unix, windows))]
+    pub(super) fn expects_voice_synthesis(&self, id: &str) -> bool {
+        self.lock().pending.get(id).is_some_and(|entry| {
+            entry.voice_synthesis && !matches!(entry.progress, RequestProgress::Resolved)
+        })
+    }
+
     pub(super) fn resolve(&self, id: &str, result: Reply) {
         let mut requests = self.lock();
-        match requests.pending.get_mut(id) {
+        match requests
+            .pending
+            .get_mut(id)
+            .map(|entry| &mut entry.progress)
+        {
             Some(RequestProgress::Abandoned) => {
                 requests.pending.remove(id);
             }
@@ -159,7 +179,10 @@ impl Drop for PendingCall {
     fn drop(&mut self) {
         let mut requests = self.requests.lock();
         if self.retain_on_drop {
-            if let Some(progress @ RequestProgress::Waiting(_)) = requests.pending.get_mut(&self.id)
+            if let Some(progress @ RequestProgress::Waiting(_)) = requests
+                .pending
+                .get_mut(&self.id)
+                .map(|entry| &mut entry.progress)
             {
                 *progress = RequestProgress::Abandoned;
                 return;
@@ -172,6 +195,27 @@ impl Drop for PendingCall {
 #[cfg(test)]
 mod tests {
     use super::{Arc, CliError, Duration, RequestState};
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn voice_turn_synthesis_is_correlated_only_until_reply() {
+        use super::VOICE_TURN_SYNTHESIZE_METHOD;
+
+        let state = Arc::new(RequestState::new());
+        assert!(state.mark_ready());
+        let _ordinary = state.reserve("1".into(), "system.status", false).unwrap();
+        let mut synthesis = state
+            .reserve("2".into(), VOICE_TURN_SYNTHESIZE_METHOD, false)
+            .unwrap();
+        assert!(!state.expects_voice_synthesis("1"));
+        assert!(state.expects_voice_synthesis("2"));
+        assert!(!state.expects_voice_synthesis("3"));
+        synthesis.retain_until_reply();
+        drop(synthesis);
+        assert!(state.expects_voice_synthesis("2"));
+        state.resolve("2", Ok(serde_json::Value::Null));
+        assert!(!state.expects_voice_synthesis("2"));
+    }
     use serde_json::json;
 
     const DEADLINE: Duration = Duration::from_secs(2);
@@ -180,9 +224,9 @@ mod tests {
     async fn pending_requests_resolve_out_of_order() {
         let state = Arc::new(RequestState::new());
         assert!(state.mark_ready());
-        let first = state.reserve("1".into(), false).unwrap();
-        let second = state.reserve("2".into(), false).unwrap();
-        assert!(state.reserve("1".into(), false).is_err());
+        let first = state.reserve("1".into(), "fixture", false).unwrap();
+        let second = state.reserve("2".into(), "fixture", false).unwrap();
+        assert!(state.reserve("1".into(), "fixture", false).is_err());
         state.resolve("2", Ok(json!("second")));
         state.resolve("1", Ok(json!("first")));
         assert_eq!(first.wait(DEADLINE).await.unwrap().unwrap(), "first");
@@ -195,17 +239,17 @@ mod tests {
         let old = Arc::new(RequestState::new());
         let new = Arc::new(RequestState::new());
         assert!(matches!(
-            old.reserve("1".into(), false),
+            old.reserve("1".into(), "fixture", false),
             Err(CliError::Disconnected(_))
         ));
-        let handshake = old.reserve("handshake".into(), true).unwrap();
+        let handshake = old.reserve("handshake".into(), "fixture", true).unwrap();
         old.resolve("handshake", Ok(json!("accepted")));
         assert_eq!(handshake.wait(DEADLINE).await.unwrap().unwrap(), "accepted");
         assert!(old.mark_ready());
         assert!(new.mark_ready());
-        let first = old.reserve("1".into(), false).unwrap();
-        let unanswered = old.reserve("2".into(), false).unwrap();
-        let current = new.reserve("1".into(), false).unwrap();
+        let first = old.reserve("1".into(), "fixture", false).unwrap();
+        let unanswered = old.reserve("2".into(), "fixture", false).unwrap();
+        let current = new.reserve("1".into(), "fixture", false).unwrap();
         old.resolve("1", Ok(json!("old")));
         assert_eq!(first.wait(DEADLINE).await.unwrap().unwrap(), "old");
         old.close();
@@ -216,7 +260,7 @@ mod tests {
         ));
         assert!(!old.is_ready());
         assert!(!old.mark_ready());
-        assert!(old.reserve("3".into(), true).is_err());
+        assert!(old.reserve("3".into(), "fixture", true).is_err());
         assert!(new.is_ready());
         new.resolve("1", Ok(json!("new")));
         assert_eq!(current.wait(DEADLINE).await.unwrap().unwrap(), "new");
@@ -226,8 +270,8 @@ mod tests {
     async fn cancel_or_timeout_removes_only_its_reservation() {
         let state = Arc::new(RequestState::new());
         assert!(state.mark_ready());
-        let aborted = state.reserve("1".into(), false).unwrap();
-        let expired = state.reserve("2".into(), false).unwrap();
+        let aborted = state.reserve("1".into(), "fixture", false).unwrap();
+        let expired = state.reserve("2".into(), "fixture", false).unwrap();
         assert_eq!(state.pending_count(), 2);
         drop(aborted);
         assert_eq!(state.pending_count(), 1);
@@ -236,7 +280,7 @@ mod tests {
             Err(CliError::Timeout(_))
         ));
         assert_eq!(state.pending_count(), 0);
-        let live = state.reserve("3".into(), false).unwrap();
+        let live = state.reserve("3".into(), "fixture", false).unwrap();
         state.resolve("1", Ok(json!("late")));
         state.resolve("2", Ok(json!("late")));
         state.resolve("3", Ok(json!("live")));

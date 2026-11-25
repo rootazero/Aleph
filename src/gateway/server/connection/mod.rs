@@ -113,6 +113,8 @@ pub(super) const V1_METHODS: &[&str] = &[
     "chat.history",
     "chat.send",
     "chat.abort",
+    aleph_protocol::panel_voice::VOICE_TURN_TRANSCRIBE_METHOD,
+    aleph_protocol::panel_voice::VOICE_TURN_SYNTHESIZE_METHOD,
 ];
 
 pub(super) fn v1_mounted(method: &str) -> bool {

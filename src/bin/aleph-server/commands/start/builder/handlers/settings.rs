@@ -686,6 +686,12 @@ pub(in crate::commands::start) fn register_config_handlers(
         shared_token_mgr
     );
 
+    alephcore::gateway::handlers::voice_turn::register_transcription(
+        server.handlers_mut(),
+        config.clone(),
+        shared_token_mgr.clone(),
+    );
+
     // Streaming STT: Panel frames → backend WS → voice.transcribe.delta events.
     // One shared registry tracks all active streams (Arc for the macro's clone).
     let stream_registry = Arc::new(alephcore::gateway::voice::streaming::StreamRegistry::default());
@@ -1064,6 +1070,12 @@ pub(in crate::commands::start) fn register_voice_capability_handlers(
         "voice.record_stop",
         voice::handle_record_stop,
         platform
+    );
+
+    alephcore::gateway::handlers::voice_turn::register_synthesis(
+        server.handlers_mut(),
+        config.clone(),
+        generation_registry.clone(),
     );
 
     // Registered unconditionally: a boot path that resolves no generation
