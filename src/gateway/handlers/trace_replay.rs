@@ -1417,7 +1417,10 @@ mod tests {
                 let runs = result["runs"].as_array().unwrap();
                 assert_eq!(runs.len(), 2);
                 assert_eq!(runs[0]["run_id"], "r-v1-own");
-                assert_eq!(runs[1], json!({ "run_id": "r-v1-empty", "tools": [], "limited": false }));
+                assert_eq!(
+                    runs[1],
+                    json!({ "run_id": "r-v1-empty", "tools": [], "limited": false })
+                );
                 let tools = runs[0]["tools"].as_array().unwrap();
                 assert_eq!(tools.len(), 1);
                 assert_eq!(tools[0]["tool_call_id"], "c-v1-own");
