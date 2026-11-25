@@ -257,24 +257,63 @@ impl WasmRuntime {
     /// A non-object `settings` (including the `Null` the two-argument form
     /// passes) means "no configuration", not an error: a plugin with no
     /// `config_schema` must load exactly as it did before this existed.
+    /// Check that a plugin's guest module would load, without running it.
+    ///
+    /// Reads the entry file, validates the VM limits and compiles the module;
+    /// nothing is instantiated, so no guest code (not even a `start` section)
+    /// runs and no host import is called. A reload runs this before tearing
+    /// down the running version. Not caught here: a module that compiles but
+    /// fails to link or instantiate (e.g. an unknown host import).
+    pub(crate) fn preflight_module(manifest: &PluginManifest) -> Result<(), ExtensionError> {
+        let wasm_bytes = Self::read_guest_module(manifest)?;
+        let limits = manifest.wasm_resource_limits.clone().unwrap_or_default();
+        let (pages, fuel) = Self::checked_vm_limits(&limits)?;
+        let extism_manifest = ExtismManifest::new([Wasm::data(wasm_bytes)]).with_memory_max(pages);
+        extism::CompiledPlugin::new(PluginBuilder::new(extism_manifest).with_fuel_limit(fuel))
+            .map(|_| ())
+            .map_err(|e| ExtensionError::Runtime(format!("Failed to compile WASM: {e}")))
+    }
+
+    fn read_guest_module(manifest: &PluginManifest) -> Result<Vec<u8>, ExtensionError> {
+        let wasm_path = manifest.entry_path()?;
+        if !wasm_path.exists() {
+            return Err(ExtensionError::Runtime(format!(
+                "WASM file not found: {wasm_path:?}"
+            )));
+        }
+        info!("Reading WASM plugin: {} from {:?}", manifest.id, wasm_path);
+        std::fs::read(&wasm_path).map_err(|error| {
+            ExtensionError::Runtime(format!("Failed to read WASM file {wasm_path:?}: {error}"))
+        })
+    }
+
+    /// Memory pages (64 KiB each; `memory_mb` is MiB) and fuel, both required
+    /// to be positive.
+    fn checked_vm_limits(limits: &WasmResourceLimits) -> Result<(u32, u64), ExtensionError> {
+        let pages = limits
+            .memory_mb
+            .checked_mul(16)
+            .filter(|pages| *pages > 0)
+            .ok_or_else(|| {
+                ExtensionError::Runtime(
+                    "WASM memory limit must be positive and fit in pages".into(),
+                )
+            })?;
+        if limits.fuel == 0 {
+            return Err(ExtensionError::Runtime(
+                "WASM fuel limit must be positive".into(),
+            ));
+        }
+        Ok((pages, limits.fuel))
+    }
+
     pub fn load_plugin_with(
         &mut self,
         manifest: &PluginManifest,
         resolver: Option<Arc<dyn SecretResolver>>,
         settings: &serde_json::Value,
     ) -> Result<(), ExtensionError> {
-        let wasm_path = manifest.entry_path()?;
-
-        if !wasm_path.exists() {
-            return Err(ExtensionError::Runtime(format!(
-                "WASM file not found: {wasm_path:?}"
-            )));
-        }
-
-        info!("Loading WASM plugin: {} from {:?}", manifest.id, wasm_path);
-        let wasm_bytes = std::fs::read(&wasm_path).map_err(|error| {
-            ExtensionError::Runtime(format!("Failed to read WASM file {wasm_path:?}: {error}"))
-        })?;
+        let wasm_bytes = Self::read_guest_module(manifest)?;
         #[cfg(test)]
         if let Some(probe) = &self.probe {
             probe.record_guest_read(wasm_bytes.len());
@@ -284,8 +323,9 @@ impl WasmRuntime {
         let capabilities = manifest.wasm_capabilities.clone().unwrap_or_default();
         let limits = manifest.wasm_resource_limits.clone().unwrap_or_default();
         let call_timeout = std::time::Duration::from_secs(limits.timeout_secs);
-        let memory_pages = limits.memory_mb.checked_mul(16).filter(|pages| *pages > 0);
-        let fuel = limits.fuel;
+        // Validated before anything is built, so a bad limit fails the load
+        // the same way the reload preflight does.
+        let (pages, fuel) = Self::checked_vm_limits(&limits)?;
 
         // Build the per-plugin kernel. The resolver is installed via the
         // builder so the kernel can be cloned freely; the default
@@ -328,14 +368,6 @@ impl WasmRuntime {
         // plugin, context guests or not: an ordinary marketplace plugin is
         // untrusted code too and must not be able to allocate the default
         // 4 GiB or spin without fuel.
-        let pages = memory_pages.ok_or_else(|| {
-            ExtensionError::Runtime("WASM memory limit must be positive and fit in pages".into())
-        })?;
-        if fuel == 0 {
-            return Err(ExtensionError::Runtime(
-                "WASM fuel limit must be positive".into(),
-            ));
-        }
         extism_manifest = extism_manifest.with_memory_max(pages);
 
         // The operator's configuration, as Extism config keys. Scalars are

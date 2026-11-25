@@ -28,7 +28,7 @@ use crate::capability::ownership::{
 use crate::capability::policy_runtime::{
     CapabilityCallContext, ConstraintFactsSource, PolicyFactSourceKey, ResourceUse,
 };
-use crate::capability::provider::ProviderHandle;
+use crate::capability::provider::{ProviderHandle, ProviderState};
 use crate::capability::provider_backend::ProviderBackendAdapter;
 use crate::capability::provider_registry::ActivationError;
 use crate::capability::provider_registry::ProviderRegistry;
@@ -1470,7 +1470,8 @@ impl ZahirFacade {
             ResolveError::StaleOwner => "stale_owner",
             ResolveError::StaleProvider => "stale_provider",
             ResolveError::NotVisible => "not_visible",
-            _ => "source_unavailable",
+            ResolveError::DependencyUnavailable { .. } => "dependency_unavailable",
+            ResolveError::Unknown => "source_unavailable",
         };
         crate::capability::events::CapabilityEventEmitter::new(self.events.clone()).emit_scoped(
             call.actor().clone(),
@@ -1675,8 +1676,24 @@ impl ZahirFacade {
             return Err(ResolveError::Unknown);
         }
         let memory = self.memory_source()?;
-        let handle = memory.capture(reference)?;
+        // Visibility first: a caller without a binding learns nothing about
+        // the dependency's state.
         let descriptor = memory.descriptor(&reference.visibility)?;
+        let state = self
+            .provider_adapter
+            .entry(&reference.id)
+            .ok_or(ResolveError::Unknown)?
+            .provider
+            .state();
+        if state != ProviderState::Ready {
+            return Err(ResolveError::DependencyUnavailable {
+                target: reference.id.clone(),
+                state,
+            });
+        }
+        // The runtime's own Running check stays as the second fence for a
+        // stop that lands between the state read and the capture.
+        let handle = memory.capture(reference)?;
         Ok(BackendLease {
             descriptor,
             owner_generation: handle.binding.generation,
