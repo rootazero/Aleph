@@ -1330,7 +1330,7 @@ impl AgentHarnessRunner {
     }
 }
 
-fn qualified_model_provider(
+pub(crate) fn qualified_model_provider(
     named: &std::collections::HashMap<String, Arc<dyn crate::providers::AiProvider>>,
     provider: String,
     model: String,

@@ -1352,17 +1352,62 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn admin_refresh_reaches_member_projection_and_turn_admission() {
+    async fn admin_refresh_reaches_member_projection_and_exact_wire_binding() {
+        let _serial = SERIAL.lock().await;
+        for _ in 0..8 {
+            match refresh_to_wire().await {
+                Ok(()) => return,
+                Err(DiscoveryError::Superseded(_)) => continue,
+                Err(error) => panic!("unexpected discovery failure: {error}"),
+            }
+        }
+        panic!("the scenario kept being cancelled by unrelated mutations");
+    }
+
+    async fn refresh_to_wire() -> Result<(), DiscoveryError> {
         use crate::gateway::handlers::{agent, chat, providers};
         use crate::gateway::model_override::ModelOverride;
         use crate::gateway::protocol::JsonRpcRequest;
         use crate::gateway::security::{store::SecurityStore, SharedTokenManager};
+        use crate::orchestrator::harness_bridge::qualified_model_provider;
+        use crate::providers::adapter::RequestPayload;
+        use crate::providers::{create_provider, message::UnifiedMessage};
         use aleph_protocol::providers::ChatModelsListResult;
         use serde_json::json;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
 
         const PROVIDER: &str = "catalog-path-fixture";
         const MODEL: &str = "org/new-model";
-        scenario(PROVIDER, |config, endpoint| async move {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/models"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data":[{"id":MODEL}]})))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST")).and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "fixture", "object": "chat.completion", "created": 0, "model": MODEL,
+                "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "ok"}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+            }))).mount(&server).await;
+        let (config, _) =
+            fixture_with(&format!("{}/v1", server.uri()), PROVIDER, true, true, false);
+        let (snapshot, named) = {
+            let config = config.read().await;
+            let transport = create_provider(PROVIDER, config.providers[PROVIDER].clone()).unwrap();
+            let ready = BTreeSet::from([PROVIDER.to_string()]);
+            let snapshot =
+                SelectableSnapshot::from_config(&config, ready.clone(), &ready, |_| true)
+                    .certify_discovery_transports(|name| {
+                        transport_matches_listing(&config, name, transport.as_ref(), |_, _| None)
+                    });
+            (
+                snapshot,
+                std::collections::HashMap::from([(PROVIDER.into(), transport)]),
+            )
+        };
+        crate::providers::session_model_handle::with_test_selectable_models(Some(snapshot), async {
             let dir = tempfile::tempdir().unwrap();
             let vault = Arc::new(SharedTokenManager::new(
                 Arc::new(SecurityStore::in_memory().unwrap()),
@@ -1373,16 +1418,8 @@ mod tests {
                 Some(json!({"provider": PROVIDER})),
                 json!(1),
             );
-            let refresh = providers::handle_models_refresh(request, Arc::clone(&config), vault);
-            tokio::pin!(refresh);
-            let response = tokio::select! {
-                response = &mut refresh => response,
-                release = endpoint.next_request() => {
-                    endpoint.answer(r#"{"data":[{"id":"org/new-model"}]}"#).await;
-                    release.send(()).unwrap();
-                    refresh.await
-                }
-            };
+            let response =
+                providers::handle_models_refresh(request, Arc::clone(&config), vault).await;
             let refresh_result = response.result.unwrap();
             let row = &refresh_result["providers"][0];
             let superseded = DiscoveryError::Superseded(PROVIDER.into());
@@ -1426,6 +1463,17 @@ mod tests {
             .unwrap();
             assert_eq!(admitted.model_override, Some(model.clone()));
             admitted.validate_dispatch_model().unwrap();
+            let Some(ModelOverride::Qualified { provider, model }) =
+                admitted.model_override.clone()
+            else {
+                panic!("expected a qualified override");
+            };
+            let transport = qualified_model_provider(&named, provider, model).unwrap();
+            let messages = [UnifiedMessage::user("hi")];
+            transport
+                .process(RequestPayload::new(&messages))
+                .await
+                .unwrap();
 
             let mut live = config.write().await;
             let mut disabled = live.clone();
@@ -1452,9 +1500,19 @@ mod tests {
                 refused,
                 Err(agent::BuildRunError::InvalidModel(_))
             ));
+            let requests = server.received_requests().await.unwrap();
+            assert_eq!(
+                requests.len(),
+                2,
+                "expected only one listing and one inference"
+            );
+            assert_eq!(requests[0].url.path(), "/v1/models");
+            assert_eq!(requests[1].url.path(), "/v1/chat/completions");
+            let payload: serde_json::Value = serde_json::from_slice(&requests[1].body).unwrap();
+            assert_eq!(payload["model"], MODEL);
             Ok(())
         })
-        .await;
+        .await
     }
 
     #[tokio::test]
