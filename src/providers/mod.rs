@@ -362,6 +362,11 @@ pub trait AiProvider: Send + Sync {
         None
     }
 
+    /// Expose the existing failover wrapper at the exact-route boundary.
+    fn as_failover_provider(&self) -> Option<&failover::FailoverProvider> {
+        None
+    }
+
     /// Whether calling [`execute_streaming_dyn`](AiProvider::execute_streaming_dyn)
     /// produces *live* deltas rather than one replayed batch at the end.
     ///

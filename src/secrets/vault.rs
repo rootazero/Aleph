@@ -264,7 +264,7 @@ impl SecretVault {
             return Err(e);
         }
 
-        fence.advance();
+        fence.vault_changed(|provider| name.strip_prefix("ai:") == Some(provider));
         drop(fence);
         info!(name = name, "Secret stored in vault");
         Ok(())
@@ -282,7 +282,7 @@ impl SecretVault {
             return Err(e);
         }
 
-        fence.advance();
+        fence.vault_changed(|provider| name.strip_prefix("ai:") == Some(provider));
         drop(fence);
         info!(name = name, "Secret deleted from vault");
         Ok(true)
@@ -320,7 +320,18 @@ impl SecretVault {
             self.data.entries = previous;
             return Err(e);
         }
-        fence.advance();
+        fence.vault_changed(|provider| {
+            let key = format!("ai:{provider}");
+            match (previous.get(&key), self.data.entries.get(&key)) {
+                (Some(old), Some(new)) => {
+                    old.ciphertext != new.ciphertext
+                        || old.nonce != new.nonce
+                        || old.salt != new.salt
+                }
+                (None, None) => false,
+                _ => true,
+            }
+        });
         Ok(())
     }
 

@@ -4,7 +4,7 @@ use crate::providers::model_catalog::discovery_authority;
 use crate::sync_primitives::Arc;
 use serde_json::json;
 use tokio::sync::RwLock;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 use super::helpers::{
     build_provider_config_for_persistence, normalize_optional_string, provider_info_row,
@@ -13,9 +13,9 @@ use super::helpers::{
 use super::parse_params;
 use super::types::{
     failure_kind, AuthKind, CatalogEntry, CatalogParams, CatalogResult, CatalogView, CreateParams,
-    DeleteParams, DiscoveryFailureKind, GetParams, ModelsRefreshParams, ModelsRefreshResult,
-    ModelsRefreshRow, ProviderGetResult, ProviderHealthResult, ProviderHealthRow, ProviderInfo,
-    ProviderListResult, SetDefaultParams, TestParams, TestResult, UpdateParams,
+    DeleteParams, GetParams, ModelsRefreshParams, ModelsRefreshResult, ModelsRefreshRow,
+    ProviderGetResult, ProviderHealthResult, ProviderHealthRow, ProviderInfo, ProviderListResult,
+    SetDefaultParams, TestParams, TestResult, UpdateParams,
 };
 use crate::config::{Config, ProviderConfig};
 use crate::gateway::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus};
@@ -695,10 +695,7 @@ pub async fn handle_test(
         if let Some(ref name) = provider_name {
             let mut cfg = config_store.write().await;
             if let Some(p) = cfg.providers.get_mut(name) {
-                if !p.verified {
-                    p.verified = true;
-                    discovery_authority::mutation_fence().advance();
-                }
+                p.verified = true;
                 if let Err(e) = save_config(&cfg, &["providers"]).await {
                     error!(error = %e, "Failed to save config after test");
                 }
@@ -832,7 +829,7 @@ pub async fn handle_healthcheck(
 /// indistinguishable from "the sweep did nothing": they asked to refresh a
 /// specific provider and got an empty array back. Skipping a bad record is
 /// usually right; doing it *silently* is what costs — so the skip is now a row
-/// carrying [`DiscoveryFailureKind::MissingCredential`], which is also the one
+/// carrying `MissingCredential`, which is also the one
 /// state the UI can actually act on ("link this provider first").
 ///
 /// The same is true one step earlier: a named id with **no config section at
@@ -860,164 +857,77 @@ pub async fn handle_models_refresh(
     };
     let only = params.provider;
 
-    /// One provider to sweep, or a reason it cannot be swept.
-    enum Target {
-        Probe {
-            name: String,
-            base_url: String,
-            protocol: String,
-            api_key: String,
-        },
-        Blocked(ModelsRefreshRow),
-    }
-
-    /// A row saying why a provider could not be probed at all.
-    fn blocked(name: &str, kind: DiscoveryFailureKind, error: String) -> Target {
-        Target::Blocked(ModelsRefreshRow {
-            provider: name.to_string(),
-            ok: false,
-            stale: false,
-            fetched_at: None,
-            models: Vec::new(),
-            kind: Some(kind),
-            error: Some(error),
-        })
-    }
-
-    // Same discipline as `handle_healthcheck`: snapshot under the read lock,
-    // release before any network I/O.
-    let targets: Vec<Target> = {
-        let cfg = config.read().await;
-        let mut targets: Vec<Target> = cfg
-            .providers
-            .iter()
-            .filter(|(name, pc)| match only.as_ref() {
-                // Naming a provider is saying "go look at this one" — an
-                // explicit request outranks the blanket sweep's opt-out.
-                Some(o) => o.eq_ignore_ascii_case(name),
-                None => pc.enabled,
-            })
-            .map(|(name, pc)| {
-                // Ordering, not a second gate. `refresh_models` already refuses
-                // these at the leaf, so nothing was ever dialled — but the
-                // credential check below runs *first*, so an unlinked preset
-                // that publishes no listing was reported as
-                // `MissingCredential`. That answer is worse than useless here:
-                // it is actionable ("paste a key") and the action changes
-                // nothing, because no key makes an endpoint grow a `/models`
-                // route. Asking the same predicate earlier is what puts the two
-                // refusals in the order that describes reality.
-                if !crate::providers::probe::supports_model_listing(name) {
-                    return blocked(
-                        name,
-                        DiscoveryFailureKind::Unsupported,
-                        format!("provider '{name}' publishes no model listing endpoint"),
-                    );
-                }
-                let preset = crate::providers::presets::get_preset(name);
-                let Some(base_url) = pc
-                    .base_url
-                    .clone()
-                    .or_else(|| preset.map(|p| p.base_url.to_string()))
-                else {
-                    warn!(provider = %name, "modelsRefresh: no base URL resolvable");
-                    return blocked(
-                        name,
-                        DiscoveryFailureKind::Unsupported,
-                        format!("provider '{name}' has no base URL to probe"),
-                    );
-                };
-                let protocol = pc
-                    .protocol
-                    .clone()
-                    .or_else(|| preset.map(|p| p.protocol.to_string()))
-                    .unwrap_or_else(|| "openai".to_string());
-                let Some(api_key) = pc.api_key.clone().or_else(|| resolve_api_key(name, &vault))
-                else {
-                    warn!(provider = %name, "modelsRefresh: no API key resolvable");
-                    return blocked(
-                        name,
-                        DiscoveryFailureKind::MissingCredential,
-                        format!("no credential configured for provider '{name}'"),
-                    );
-                };
-                Target::Probe {
-                    name: name.clone(),
-                    base_url,
-                    protocol,
-                    api_key,
-                }
-            })
-            .collect();
-
-        // A named id with no config section at all — an unlinked preset, or a
-        // typo. Silence here is the same lie as every other skipped record:
-        // the caller asked about one thing and got an empty list back.
-        if let Some(name) = only.as_deref() {
-            if targets.is_empty() {
-                targets.push(blocked(
-                    name,
-                    DiscoveryFailureKind::MissingCredential,
-                    format!("provider '{name}' is not configured"),
-                ));
-            }
-        }
-        targets
+    use crate::providers::model_catalog::{
+        refresh_configured_models, DiscoveryError, RefreshMode, RefreshOutcome,
     };
+    let mode = if only.is_some() {
+        RefreshMode::ForceNamed
+    } else {
+        RefreshMode::Force
+    };
+    let mut names: Vec<_> = config
+        .read()
+        .await
+        .providers
+        .iter()
+        .filter(|(name, pc)| {
+            only.as_ref()
+                .map_or(pc.enabled, |only| only.eq_ignore_ascii_case(name))
+        })
+        .map(|(name, _)| name.clone())
+        .collect();
+    if names.is_empty() {
+        names.extend(only);
+    }
+    let outcomes = futures::future::join_all(names.into_iter().map(|name| {
+        let config = &config;
+        let vault = &vault;
+        async move {
+            let outcome = refresh_configured_models(config, &name, mode, |provider, _| {
+                resolve_api_key(provider, vault)
+            })
+            .await;
+            (name, outcome)
+        }
+    }))
+    .await;
 
-    let sweeps = targets.into_iter().map(|target| async move {
-        let (name, base_url, protocol, api_key) = match target {
-            Target::Blocked(row) => return row,
-            Target::Probe {
-                name,
-                base_url,
-                protocol,
-                api_key,
-            } => (name, base_url, protocol, api_key),
-        };
-        match crate::providers::model_catalog::refresh_models(&name, &base_url, &protocol, &api_key)
-            .await
-        {
-            Ok(listing) => ModelsRefreshRow {
-                provider: name,
-                ok: true,
-                stale: false,
-                fetched_at: Some(listing.fetched_at),
-                models: listing.models,
-                kind: None,
-                error: None,
-            },
-            Err(e) => {
-                let kind = failure_kind(&e);
-                // Stale snapshot beats an error row: report what the provider
-                // served last time, marked so the picker can show it as dated
-                // rather than live. The `kind` rides along either way — on a
-                // stale row it explains why the data is old.
-                match crate::providers::model_catalog::cached_models_async(&name, &base_url).await {
-                    Some(stale) => ModelsRefreshRow {
-                        provider: name,
-                        ok: true,
-                        stale: true,
-                        fetched_at: Some(stale.fetched_at),
-                        models: stale.models,
-                        kind: Some(kind),
-                        error: Some(e.to_string()),
-                    },
-                    None => ModelsRefreshRow {
-                        provider: name,
-                        ok: false,
-                        stale: false,
-                        fetched_at: None,
-                        models: Vec::new(),
-                        kind: Some(kind),
-                        error: Some(e.to_string()),
-                    },
+    // A fast provider can change scope while another provider is still fetching.
+    let guard = config.read().await;
+    let mut providers: Vec<_> = outcomes
+        .into_iter()
+        .map(|(name, outcome)| {
+            let (mut listing, mut stale, mut error) = match outcome {
+                Ok(RefreshOutcome::Fresh(listing) | RefreshOutcome::CacheHit(listing)) => {
+                    (Some(listing), false, None)
+                }
+                Ok(RefreshOutcome::Stale { listing, cause }) => (Some(listing), true, Some(cause)),
+                Err(error) => (None, false, Some(error)),
+            };
+            if let Some(accepted) = listing.as_ref() {
+                let current = crate::providers::model_catalog::discovery::configured_inventory(
+                    &config,
+                    &guard,
+                    &name,
+                    |provider, _| resolve_api_key(provider, &vault),
+                );
+                if !current.is_some_and(|current| current.same_acceptance(accepted)) {
+                    listing = None;
+                    stale = false;
+                    error = Some(DiscoveryError::Superseded(name.clone()));
                 }
             }
-        }
-    });
-
-    let mut providers = futures::future::join_all(sweeps).await;
+            ModelsRefreshRow {
+                provider: name,
+                ok: listing.is_some(),
+                stale,
+                fetched_at: listing.as_ref().map(|listing| listing.fetched_at),
+                models: listing.map(|listing| listing.models).unwrap_or_default(),
+                kind: error.as_ref().map(failure_kind),
+                error: error.map(|error| error.to_string()),
+            }
+        })
+        .collect();
     providers.sort_by(|a, b| a.provider.cmp(&b.provider));
 
     JsonRpcResponse::success(
@@ -1280,6 +1190,23 @@ pub async fn handle_catalog(
     // across an await would block every writer of the config for the whole
     // catalogue build, and the map is the only thing the two arms need.
     let providers = config_guard.providers.clone();
+    let discovered: std::collections::HashMap<_, Vec<_>> = providers
+        .keys()
+        .filter_map(|name| {
+            crate::providers::model_catalog::discovery::configured_inventory(
+                &config,
+                &config_guard,
+                name,
+                |provider, _| resolve_api_key(provider, &vault),
+            )
+            .map(|listing| {
+                (
+                    name.clone(),
+                    listing.models.into_iter().map(|model| model.id).collect(),
+                )
+            })
+        })
+        .collect();
     drop(config_guard);
 
     let entries = catalog::presets_for_modality(Modality::Chat);
@@ -1348,30 +1275,6 @@ pub async fn handle_catalog(
         // what stops the picker from recommending curated ids on a relay
         // whose base_url the operator moved — they would 400 there.
         //
-        // Live-discovered ids join here too, read from the on-disk cache
-        // only: `providers.catalog` is a read RPC and must not dial a
-        // vendor. `list_models` has folded discovered ids in since the
-        // round that added discovery, so until now the model could see a
-        // freshly fetched id and the human could not — one cache, one TTL,
-        // two different answers.
-        //
-        // Gated on `has_api_key`: `cached_models` is a synchronous file
-        // read, and discovery refuses to run without a credential, so a
-        // preset that has never had one cannot have a cache entry. Without
-        // this the catalogue would stat 56 files on every call — a page
-        // the Panel opens on every settings visit and every picker click.
-        let discovered = if has_api_key {
-            let effective_base_url = cfg
-                .and_then(|c| c.base_url.as_deref())
-                .unwrap_or(preset.base_url);
-            crate::providers::model_catalog::cached_models_async(cfg_name, effective_base_url)
-                .await
-                .map(|d| d.models.into_iter().map(|m| m.id).collect::<Vec<_>>())
-                .unwrap_or_default()
-        } else {
-            Vec::new()
-        };
-
         let roster = chat_presets::model_roster(
             entry.name,
             if models.is_empty() {
@@ -1389,7 +1292,10 @@ pub async fn handle_catalog(
             } else {
                 ModelSource::Configured
             },
-            &discovered,
+            discovered
+                .get(cfg_name)
+                .map(Vec::as_slice)
+                .unwrap_or_default(),
             cfg.and_then(|c| c.base_url.as_deref()),
         );
 
@@ -1486,20 +1392,7 @@ pub async fn handle_catalog(
                 name,
                 cfg.models.clone(),
                 ModelSource::Configured,
-                // Same credential gate as the preset arm above: no key
-                // means discovery never ran, so there is no cache file to
-                // read.
-                &if has_api_key {
-                    crate::providers::model_catalog::cached_models_async(
-                        name,
-                        cfg.base_url.as_deref().unwrap_or_default(),
-                    )
-                    .await
-                    .map(|d| d.models.into_iter().map(|m| m.id).collect::<Vec<_>>())
-                    .unwrap_or_default()
-                } else {
-                    Vec::new()
-                },
+                discovered.get(name).map(Vec::as_slice).unwrap_or_default(),
                 cfg.base_url.as_deref(),
             ),
         });

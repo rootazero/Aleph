@@ -1101,7 +1101,22 @@ impl FailoverProvider {
     }
 }
 
+impl FailoverProvider {
+    /// Resolve the requested name without traversing the fallback ladder.
+    pub fn exact_transport(&self, name: &str) -> Option<Arc<dyn AiProvider>> {
+        let provider = self
+            .primary
+            .provider_by_name(name)
+            .unwrap_or_else(|| self.primary.current());
+        (provider.serving_provider_hint().as_deref() == Some(name)).then_some(provider)
+    }
+}
+
 impl AiProvider for FailoverProvider {
+    fn as_failover_provider(&self) -> Option<&FailoverProvider> {
+        Some(self)
+    }
+
     fn process<'a>(
         &'a self,
         payload: RequestPayload<'a>,

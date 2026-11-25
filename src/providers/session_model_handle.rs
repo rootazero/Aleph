@@ -432,6 +432,61 @@ pub fn publish_selectable_models(snapshot: SelectableModelsSnapshot) {
     }
 }
 
+/// Called with the discovery epoch held; use current readiness and roster.
+pub(crate) fn publish_discovered(
+    provider: &str,
+    models: &[crate::providers::model_catalog::discovery::DiscoveredModel],
+) {
+    update_discovered(|snapshot| *snapshot = snapshot.replace_discovered(provider, models));
+}
+
+pub(crate) fn revoke_discovered(affected: impl Fn(&str) -> bool) {
+    update_discovered(|snapshot| snapshot.revoke_discovered(affected, false));
+}
+
+pub(crate) fn revoke_vault_discovery(affected: impl Fn(&str) -> bool) {
+    update_discovered(|snapshot| snapshot.revoke_discovered(affected, true));
+}
+
+fn update_discovered(update: impl FnOnce(&mut SelectableModelsSnapshot)) {
+    // A test scope owns its own slot: update that snapshot in place and never
+    // touch the process-global slot, so parallel tests cannot observe each
+    // other's discovered rows.
+    #[cfg(test)]
+    {
+        let mut update = Some(update);
+        let outcome = TEST_SELECTABLE_MODELS.try_with(|slot| {
+            let Some(slot) = slot else {
+                return None;
+            };
+            let mut current = slot.write().unwrap_or_else(|e| e.into_inner());
+            let update = update.take().expect("update once");
+            update(std::sync::Arc::make_mut(&mut current));
+            Some(())
+        });
+        match outcome {
+            // Applied to the scoped slot, or the scope deliberately holds no
+            // snapshot: in both cases the global slot stays untouched.
+            Ok(Some(())) | Ok(None) => return,
+            Err(_) => {
+                let update = update.take().expect("update once");
+                apply_discovered_update(update);
+            }
+        }
+        return;
+    }
+    #[cfg(not(test))]
+    apply_discovered_update(update);
+}
+
+/// Apply a discovered-row mutation to the process-global publication slot.
+fn apply_discovered_update(update: impl FnOnce(&mut SelectableModelsSnapshot)) {
+    if let Some(handle) = PINNABLE_PROVIDERS.get() {
+        let mut current = handle.write().unwrap_or_else(|e| e.into_inner());
+        update(std::sync::Arc::make_mut(&mut current));
+    }
+}
+
 /// Refresh the roster/readiness after an existing live provider reload. The
 /// routable keys remain those actually wired by the run builder at boot.
 /// No boot publication means no permission to install one via a config write.
@@ -451,7 +506,9 @@ pub fn refresh_selectable_models(
         let previous = handle.read().unwrap_or_else(|e| e.into_inner()).clone();
         // Credential resolution and snapshot construction must precede the
         // epoch/slot critical section; vault mutations take vault -> epoch.
-        let next = std::sync::Arc::new(prepare(&previous, previous.routable.clone()));
+        let mut next = prepare(&previous, previous.routable.clone());
+        next.preserve_discovered(&previous);
+        let next = std::sync::Arc::new(next);
         if discovery_authority::commit_if_current(config, revision, || {
             replace_selectable_if_unchanged(handle, &previous, next)
         }) == Some(true)
@@ -482,7 +539,10 @@ pub fn decline_pinnable_providers(because: &'static str) {
 /// A caller retains one immutable generation while a reload publishes another.
 pub fn selectable_models() -> Option<std::sync::Arc<SelectableModelsSnapshot>> {
     #[cfg(test)]
-    if let Ok(snapshot) = TEST_SELECTABLE_MODELS.try_with(Clone::clone) {
+    if let Ok(snapshot) = TEST_SELECTABLE_MODELS.try_with(|slot| {
+        slot.as_ref()
+            .map(|slot| slot.read().unwrap_or_else(|e| e.into_inner()).clone())
+    }) {
         return snapshot;
     }
     PINNABLE_PROVIDERS
@@ -492,7 +552,7 @@ pub fn selectable_models() -> Option<std::sync::Arc<SelectableModelsSnapshot>> {
 
 #[cfg(test)]
 tokio::task_local! {
-    static TEST_SELECTABLE_MODELS: Option<std::sync::Arc<SelectableModelsSnapshot>>;
+    static TEST_SELECTABLE_MODELS: Option<RwLock<std::sync::Arc<SelectableModelsSnapshot>>>;
 }
 
 /// Explicit task-scoped installation avoids global-test races, including
@@ -503,7 +563,10 @@ pub(crate) async fn with_test_selectable_models<T>(
     future: impl std::future::Future<Output = T>,
 ) -> T {
     TEST_SELECTABLE_MODELS
-        .scope(snapshot.map(std::sync::Arc::new), future)
+        .scope(
+            snapshot.map(|snapshot| RwLock::new(std::sync::Arc::new(snapshot))),
+            future,
+        )
         .await
 }
 

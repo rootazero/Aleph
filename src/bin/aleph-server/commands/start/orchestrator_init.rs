@@ -290,11 +290,28 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
     // model publication; it does not consult learned routing state.
     let registered_provider_names: std::collections::BTreeSet<String> =
         default_provider.provider_names().into_iter().collect();
-    let provider_chain = alephcore::orchestrator::build_failover_chain(
-        config,
-        primary_provider_key,
-        default_provider,
-    );
+    let vault_credential = |name: &str| {
+        shared_token_mgr
+            .get_secret(&format!("ai:{name}"))
+            .ok()
+            .flatten()
+            .map(|secret| secret.expose().to_owned())
+            .filter(|key| !key.trim().is_empty())
+    };
+    let provider_chain = {
+        // These keys belong to the installed transports, not the live Config.
+        let mut transport_config = config.clone();
+        for (name, provider) in &mut transport_config.providers {
+            if provider.api_key.is_none() {
+                provider.api_key = vault_credential(name);
+            }
+        }
+        alephcore::orchestrator::build_failover_chain(
+            &transport_config,
+            primary_provider_key,
+            default_provider,
+        )
+    };
     let default_provider = provider_chain.default.clone();
     // The providers this chain can migrate a request into, as the chain itself
     // answers it — the compaction budget is sized for the narrowest of them,
@@ -347,7 +364,21 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
                     || (registered_provider_names.contains(name)
                         && alephcore::gateway::available_provider_from_env() == Some(name))
             },
-        );
+        )
+        .certify_discovery_transports(|name| {
+            named_providers
+                .get(name)
+                .and_then(|route| route.as_failover_provider())
+                .and_then(|route| route.exact_transport(name))
+                .is_some_and(|transport| {
+                    alephcore::providers::model_catalog::discovery::transport_matches_listing(
+                        config,
+                        name,
+                        transport.as_ref(),
+                        |name, _| vault_credential(name),
+                    )
+                })
+        });
     alephcore::providers::session_model_handle::publish_selectable_models(snapshot);
 
     // Cheap-tier summarization provider, built once and used twice: by the

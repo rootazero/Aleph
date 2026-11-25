@@ -153,7 +153,7 @@ impl SharedTokenManager {
         let mut current = self.current_token.lock().unwrap_or_else(|e| e.into_inner());
         let mut fence = discovery_authority::mutation_fence();
         *current = Some(token.to_owned());
-        fence.advance();
+        fence.vault_changed(|_| true);
         Ok(())
     }
 
@@ -191,7 +191,7 @@ impl SharedTokenManager {
                 if current.as_deref() != Some(token.as_str()) {
                     let mut fence = discovery_authority::mutation_fence();
                     *current = Some(token.clone());
-                    fence.advance();
+                    fence.vault_changed(|_| true);
                 }
                 Some(token)
             }

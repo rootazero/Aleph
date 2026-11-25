@@ -48,6 +48,9 @@ impl std::fmt::Display for ModelSelectionError {
 #[derive(Clone, Debug)]
 struct SelectableProvider {
     models: BTreeSet<String>,
+    discovered: BTreeSet<String>,
+    discovery_transport_current: bool,
+    discovery_vault_backed: bool,
     authenticated: bool,
     available: bool,
 }
@@ -93,21 +96,11 @@ impl SelectableModelsSnapshot {
                         base.push(preset.default_model.clone());
                     }
                 }
-                let discovered = base_url
-                    .and_then(|url| model_catalog::cached_models(name, url))
-                    .map(|listing| {
-                        listing
-                            .models
-                            .into_iter()
-                            .map(|model| model.id)
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_default();
                 let models = presets::model_roster(
                     name,
                     base,
                     model_catalog::ModelSource::Configured,
-                    &discovered,
+                    &[],
                     base_url,
                 )
                 .into_iter()
@@ -117,6 +110,9 @@ impl SelectableModelsSnapshot {
                     name.clone(),
                     SelectableProvider {
                         models,
+                        discovered: BTreeSet::new(),
+                        discovery_transport_current: false,
+                        discovery_vault_backed: pc.api_key.is_none(),
                         authenticated: authenticated(name),
                         available: pc.enabled
                             && routable.contains(name)
@@ -128,6 +124,53 @@ impl SelectableModelsSnapshot {
         Self {
             routable,
             providers,
+        }
+    }
+
+    /// Certify only transports installed in the named run path. Config-only
+    /// rebuilds preserve the previous certificate instead of issuing one.
+    pub fn certify_discovery_transports(mut self, certified: impl Fn(&str) -> bool) -> Self {
+        for (provider, entry) in &mut self.providers {
+            entry.discovery_transport_current =
+                entry.available && entry.authenticated && certified(provider);
+        }
+        self
+    }
+
+    pub fn replace_discovered(
+        &self,
+        provider: &str,
+        models: &[model_catalog::discovery::DiscoveredModel],
+    ) -> Self {
+        let mut next = self.clone();
+        if let Some(entry) = next.providers.get_mut(provider) {
+            if entry.available && entry.authenticated && entry.discovery_transport_current {
+                entry.discovered = models.iter().map(|model| model.id.clone()).collect();
+            }
+        }
+        next
+    }
+
+    pub(super) fn preserve_discovered(&mut self, previous: &Self) {
+        for (name, entry) in &mut self.providers {
+            // Registry refresh alone does not replace the run builder's named
+            // transports. Only a new boot publication certifies them again.
+            if let Some(prior) = previous.providers.get(name) {
+                entry.discovery_vault_backed = prior.discovery_vault_backed;
+                entry.discovery_transport_current = prior.discovery_transport_current;
+                entry.discovered.clone_from(&prior.discovered);
+            } else {
+                entry.discovery_transport_current = false;
+            }
+        }
+    }
+
+    pub(super) fn revoke_discovered(&mut self, affected: impl Fn(&str) -> bool, vault_only: bool) {
+        for (name, entry) in &mut self.providers {
+            if affected(name) && (!vault_only || entry.discovery_vault_backed) {
+                entry.discovered.clear();
+                entry.discovery_transport_current = false;
+            }
         }
     }
 
@@ -160,7 +203,10 @@ impl SelectableModelsSnapshot {
                 let matches: Vec<_> = self
                     .providers
                     .iter()
-                    .filter(|(_, p)| p.models.contains(model))
+                    .filter(|(_, p)| {
+                        p.models.contains(model)
+                            || (p.available && p.authenticated && p.discovered.contains(model))
+                    })
                     .map(|(name, _)| name.as_str())
                     .collect();
                 match matches.as_slice() {
@@ -191,7 +237,7 @@ impl SelectableModelsSnapshot {
                 provider: provider.into(),
             });
         }
-        if !entry.available || !entry.models.contains(model) {
+        if !entry.available || !(entry.models.contains(model) || entry.discovered.contains(model)) {
             return Err(ModelSelectionError::Unsupported {
                 provider: provider.into(),
                 model: model.into(),

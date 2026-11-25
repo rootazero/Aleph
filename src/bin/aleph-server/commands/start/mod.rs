@@ -1061,15 +1061,8 @@ async fn start_server_body(
     {
         let vault = &auth_bundle.auth_ctx.shared_token_mgr;
 
-        // AI providers: vault key "ai:<name>"
-        for (name, provider_cfg) in &mut loaded_app_config.providers {
-            if provider_cfg.api_key.is_none() {
-                if let Ok(Some(secret)) = vault.get_secret(&format!("ai:{name}")) {
-                    provider_cfg.api_key = Some(secret.expose().to_string());
-                }
-            }
-        }
-
+        // AI providers hydrate only transport-local copies. The shared Config
+        // must retain vault provenance for credential changes and discovery.
         // Generation providers: vault key "gen:<name>"
         // Legacy flat map
         for (name, provider_cfg) in &mut loaded_app_config.generation.providers {

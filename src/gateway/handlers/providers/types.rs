@@ -51,6 +51,6 @@ pub fn failure_kind(err: &crate::providers::model_catalog::DiscoveryError) -> Di
         E::Timeout { .. } => DiscoveryFailureKind::Timeout,
         E::Status { .. } => DiscoveryFailureKind::Status,
         E::Shape { .. } => DiscoveryFailureKind::Shape,
-        E::Transport { .. } => DiscoveryFailureKind::Transport,
+        E::Superseded(_) | E::Transport { .. } => DiscoveryFailureKind::Transport,
     }
 }

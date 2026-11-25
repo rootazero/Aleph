@@ -46,7 +46,7 @@ pub use capabilities::{
     CONSERVATIVE_CONTEXT_WINDOW,
 };
 pub use discovery::{
-    cached_models, cached_models_async, refresh_models, DiscoveredModels, DiscoveryError,
+    refresh_configured_models, DiscoveredModels, DiscoveryError, RefreshMode, RefreshOutcome,
 };
 pub use endpoint::{endpoint_kind_for_base_url, EndpointKind};
 pub use lifecycle::{lifecycle_for, ModelLifecycle, ModelStatus};

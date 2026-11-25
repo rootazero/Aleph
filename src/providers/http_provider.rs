@@ -292,6 +292,19 @@ fn apply_fault(
 }
 
 impl HttpProvider {
+    pub(crate) fn matches_configured_transport(
+        &self,
+        provider: &str,
+        protocol: &str,
+        credential: &str,
+        matches_base: impl FnOnce(&str) -> bool,
+    ) -> bool {
+        self.name == provider
+            && self.config.protocol() == protocol
+            && self.config.api_key.as_deref() == Some(credential)
+            && self.config.base_url.as_deref().is_some_and(matches_base)
+    }
+
     /// Create a new `HttpProvider` with the given adapter
     pub fn new(
         name: String,

@@ -227,7 +227,7 @@ async fn update_config_api_key(
         provider.api_key = None;
     }
 
-    discovery_authority::mutation_fence().advance();
+    discovery_authority::mutation_fence().provider_changed(provider_name);
 
     if let Err(e) = cfg.save_incremental(&["providers"]) {
         warn!(error = %e, "Failed to persist config after OAuth update");

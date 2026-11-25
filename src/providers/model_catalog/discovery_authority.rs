@@ -45,24 +45,44 @@ impl MutationFence {
     pub(crate) fn advance(&mut self) {
         *self.0 = self.0.checked_add(1).expect("discovery revision exhausted");
     }
+    pub(crate) fn provider_changed(&mut self, provider: &str) {
+        self.advance();
+        super::discovery::revoke_inventory(|name| name == provider);
+    }
+
+    pub(crate) fn vault_changed(&mut self, affected: impl Fn(&str) -> bool) {
+        self.advance();
+        super::discovery::revoke_vault_inventory(affected);
+    }
 }
 
 /// Call under the live config write lock after an accepted replacement. Only
 /// fields affecting listing identity or eligibility need to invalidate fetches.
 pub(crate) fn config_replaced(previous: &Config, next: &Config) {
-    if previous.presets_override.providers != next.presets_override.providers
-        || previous.providers.len() != next.providers.len()
-        || previous.providers.iter().any(|(name, old)| {
-            next.providers.get(name).is_none_or(|new| {
-                old.base_url != new.base_url
-                    || old.protocol != new.protocol
-                    || old.api_key != new.api_key
-                    || old.enabled != new.enabled
-                    || old.verified != new.verified
-            })
-        })
+    let presets_changed = previous.presets_override.providers != next.presets_override.providers;
+    let affected = |name: &str| match (previous.providers.get(name), next.providers.get(name)) {
+        (Some(old), Some(new)) => {
+            old.base_url != new.base_url
+                || old.protocol != new.protocol
+                || old.api_key != new.api_key
+                || old.enabled != new.enabled
+                || (presets_changed
+                    && super::discovery::listing_address(previous, name).ok()
+                        != super::discovery::listing_address(next, name).ok())
+        }
+        (None, None) => false,
+        _ => true,
+    };
+    if presets_changed
+        || previous
+            .providers
+            .keys()
+            .chain(next.providers.keys())
+            .any(|name| affected(name))
     {
-        mutation_fence().advance();
+        let mut fence = mutation_fence();
+        fence.advance();
+        super::discovery::revoke_inventory(affected);
     }
 }
 
