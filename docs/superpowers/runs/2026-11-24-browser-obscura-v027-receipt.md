@@ -17,6 +17,7 @@
 | 332cca7a3 | `drive.py` expectations re-dated to 0.2.7 (`block_ref` by name; click-driven nav turns the loader over; inline link has a box) |
 | 21d362a2f | `provision`: read the dead-mirror failure from the install job's outcome; `ALEPH_GATEWAY_TOOLS_ALLOW=bash` on that stage's isolated server only |
 | b636e01b0 | v0.2.2-era comments re-measured on v0.2.7 carry the new reading; un-re-measured claims keep their dated v0.2.2 wording |
+| a950296b9 | Route a `Fetch.requestPaused` that arrives on the page's other session to the slot keyed by its `frameId` (`on_fetch`, `src/browser/live/mod.rs`); caps measures `network_interception` by effect, raw and through `browser_network{mock_add}`; obscura row → Supported |
 
 ## Capability table, final / 能力表终值 (obscura, measured 2026-11-25, v0.2.7)
 
@@ -27,7 +28,7 @@
 | file_upload | Unsupported | still gated by `--allow-file-access`, which Aleph never passes |
 | pdf / insert_text / ref_precheck | Supported | unchanged |
 | effect_probe | **Supported** (was Unsupported) | readback after a self-navigating click still clean null, but the nonce is gone on the new doc → Skipped, not a false miss |
-| network_interception | Unsupported | pause now holds and fulfill answers ok, but the page renders an empty body |
+| network_interception | **Supported** (was Unsupported) | a page `fetch()` of a URL the server lacks resolves to the mock, raw (fulfill on our session) and through `browser_network{mock_add}`; depends on the frameId route for pauses on the other session |
 | screencast | Supported | usable frames |
 | error_events | Unsupported | async throw → no `Runtime.exceptionThrown` within 10 s |
 
@@ -42,13 +43,15 @@ caps stage: table == measurement on all 10 rows, `measured_on` == binary (`v0.2.
 - **`DOM.disable`:** v0.2.7 accepts it; v0.2.2 answers -32601. Box-model / resolveNode still work after it.
 - **Fabricated / fractional boxes on real pages (2026-11-25, plan Task 4 Step 5):** `DOM.getBoxModel` on every element of the four QA pages (`caps.html` 11, `index.html` 21, `second.html` 5, `stall.html` 6): 0 fabricated fallback boxes, 0 no-box replies, and 3 elements on `index.html` with a fractional width or height. The fractional-size decode fix is therefore hit on ordinary pages; the fabricated-box guard is a backstop that none of these pages trigger.
 - **`qa-events-probe.mjs` (3 runs, identical):** `Runtime.exceptionThrown` never arrived (the throwing callback ran); `Target.targetDestroyed` arrived for both `closeTarget` and `Page.close`. Verdict PARTIAL — matches `error_events: Unsupported`.
-- **`fetch-probe.mjs`:** unmodified, it times out on its own `await Page.navigate` (v0.2.7 now holds the navigation, and obscura answers neither `Page.navigate` nor `Runtime.evaluate` while a pause is held — the probe was written for v0.2.2's non-holding pause). A scratch copy that awaits the navigate only after the fulfill, and that tolerates the evaluate timeout during the hold, measured 3 runs: enable ok, navigation pause arrives, holds, and the fulfill serves the mock body 3/3; the subresource (`fetch()`) pause arrived on our session 1/3. Listening on every session (6 runs): the subresource pause landed on `<target>-session` (the createTarget session) 3/6 and on ours 3/6, and fulfilling it on OUR session served the mock 6/6. So v0.2.7's Fetch pipeline works; what fails is the same two-sessions-per-page routing as the click fix. Aleph's Fetch dispatcher (`src/browser/live/mod.rs` `on_fetch`) matches by session only, so the row stays `Unsupported`; no request can hang today because `route_add` refuses on obscura before `Fetch.enable` is ever sent.
+- **`fetch-probe.mjs`:** unmodified, it times out on its own `await Page.navigate` (v0.2.7 now holds the navigation, and obscura answers neither `Page.navigate` nor `Runtime.evaluate` while a pause is held — the probe was written for v0.2.2's non-holding pause). A scratch copy that awaits the navigate only after the fulfill, and that tolerates the evaluate timeout during the hold, measured 3 runs: enable ok, navigation pause arrives, holds, and the fulfill serves the mock body 3/3; the subresource (`fetch()`) pause arrived on our session 1/3. Listening on every session (6 runs): the subresource pause landed on `<target>-session` (the createTarget session) 3/6 and on ours 3/6, and fulfilling it on OUR session served the mock 6/6. So v0.2.7's Fetch pipeline works; what failed was the same two-sessions-per-page routing as the click fix, which a950296b9 closes (see below).
+- **`network_interception` through Aleph (2026-11-25, after a950296b9):** caps 6 runs with the route, all PASS (43/0); the raw half saw the pause on the foreign session in 2 of 6 and on ours in 4 of 6, and its `frameId` named our target every time. Tool half: 3 `fetch()`es per run through `browser_network{mock_add}` all resolved to the rule's body. **Negative control:** the same build with the frameId route disabled by a temporary switch: 3 of 4 runs left every mocked `fetch()` pending (never answered), 1 of 4 passed (that process happened to report on Aleph's session). The route is what makes the row hold. The QA approval policy file gained `browser_network_mock: allow` for this check.
 
 ## Verification / 验证
 
 - `cargo clippy -p alephcore -p aleph-cdp --all-targets -- -D warnings`: clean.
 - `cargo test -p aleph-cdp`: 97 passed.
 - `cargo test -p alephcore --lib -- browser runtimes builtin_tools::browser_tools`: 1355 passed, 4 failed. All four also fail on clean `main` 99090adce (`browser::live::issuer` ×2, `browser::live::owner_registry` ×1, `browser_tools::tabs::no_browser_tool_formats_a_raw_backend_error`) and are not from this branch.
+- After a950296b9: clippy clean; the same filter 1357 passed, the same 4 failed; `qa/browser_dual` caps 43/0 (×3), click 26, switch 29, escape 14, open 19, snapshot 12, all 0 FAIL. Not re-run after it: provision, stall, reap (untouched paths); Chromium mock routes (`qa/browser_managed`) — the new route only fires when no slot matches the event's session, which Chrome never produces.
 - `qa/browser_dual/run.sh` on v0.2.7, after b636e01b0:
 
 | Stage | PASS | FAIL | Note |
@@ -59,7 +62,7 @@ caps stage: table == measurement on all 10 rows, `measured_on` == binary (`v0.2.
 | click | 26 | 0 | |
 | stall | 17 | 0 | KNOWN GAP still present on 0.2.7: the snapshot path calls a busy engine "stopped" |
 | reap | 13 | 0 | |
-| caps | 34 | 0 | |
+| caps | 34 | 0 | 43 / 0 after a950296b9 (×3), with network_interception tool-face checks |
 | switch | 29 | 0 | |
 | escape | 14 | 0 | |
 
@@ -76,6 +79,6 @@ A read-only branch review (openai-codex/gpt-6.1-sol, 2026-11-25) blocked the mer
 - No automatic engine switching; the model still decides (R7/R10).
 - No upstream obscura patches; no `--allow-file-access`.
 - `fetch_obscura.rs` stays: v0.2.7 `DOMSnapshot` still fabricates geometry (`y = i*18`).
-- `network_interception` was not flipped although the engine side now works (see Other readings): the dispatcher would need the same foreign-session fallback as `Page.frameNavigated`, plus a caps probe that measures the Aleph-attached path.
+- `network_interception` on obscura: only subresource mocks were measured through Aleph. A mock on the tab's own navigation document was measured raw only (scratch `fetch-probe`), and a held navigation pause stops obscura answering `Page.navigate` / `Runtime.evaluate` until it is released — Aleph's loop answers it, but that path has no caps check. Iframe-initiated requests: obscura sends the page's main frame id, so the route covers them, but no iframe case was measured.
 - No Linux / Windows run; x86_64 assets are the same names but unmeasured.
 - A failed background install is not written to the server log — only the job outcome carries it. Noted, not changed.

@@ -408,9 +408,10 @@ and restored when `browser_network` mocks and `browser_record` arrived to dispat
 
 As measured on obscura v0.2.7 (2026-11-25, receipt
 `docs/superpowers/runs/2026-11-24-browser-obscura-v027-receipt.md`), obscura is `Unsupported` for
-`js_dialogs`, `file_upload`, `network_interception` and `error_events` and `Supported` for the other
-six; `drag` there means pointer-event drags (obscura fires no HTML5 drag events). Chromium supports
-every row.
+`js_dialogs`, `file_upload` and `error_events` and `Supported` for the other seven; `drag` there
+means pointer-event drags (obscura fires no HTML5 drag events), and `network_interception` holds
+because the live owner routes a paused request reported on the page's second session by its
+`frameId` (`on_fetch` in `src/browser/live/mod.rs`). Chromium supports every row.
 
 The table reaches the model **as a tool result, not as description bytes** — `browser_session`'s
 `DESCRIPTION` carries one sentence pointing at `action:"capabilities"`, and nothing in this tree

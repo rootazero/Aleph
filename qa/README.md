@@ -71,7 +71,11 @@ ALEPH_QA_DRIVER=cdp ./qa/browser_managed/run.sh tools   # the same verbs over Al
                                    # (about:blank must still be the document), the page
                                    # receiving the mock body — and measured Unsupported
                                    # on v0.2.2: navigation pauses are advisory, so the
-                                   # real page completes unanswered;
+                                   # real page completes unanswered; Supported since
+                                   # 2026-11-25 (v0.2.7), re-probed by EFFECT on a
+                                   # subresource fetch() both raw and through
+                                   # browser_network{mock_add} (pauses on the page's
+                                   # other session reach Aleph by frameId);
                                    # round-2/C2's screencast probed since 2026-09-30
                                    # under the C1-tightened criterion (arrival alone is
                                    # not usability): >=3 frames, EVERY one base64-
