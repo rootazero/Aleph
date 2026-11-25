@@ -129,12 +129,12 @@ git commit -m "qa(plan_handoff): revive against ExecTier::Plan and request_appro
 | 行 | 配置 | 期望 |
 |---|---|---|
 | 逐工具拒绝 | 该工具 `deny`，`exec_tier = "full"` | 拒绝，id `policy_deny`，requester 调用 0 次 |
-| YOLO（无越底线） | `exec_tier = "full"`，工具声明 `requires_confirmation` | 仍询问，id `tool_declared`，requester 调用 1 次 |
+| YOLO（无越底线） | `exec_tier = "full"`，工具声明 `requires_confirmation` | 仍询问，id = `crate::exec::allowed_decisions::DECLARED_FLOOR_RULE`，requester 调用 1 次 |
 | 会话授权 | 先 `ApprovedForSession`，同参数再调 | 第二次不询问（调用计数不变） |
 | 无人值守先于授权 | 同上授权后 `.with_unattended(true)` | 拒绝，requester 调用计数不变 |
 | 询问 | 无授权、有人值守、`requires_confirmation` | 询问 1 次 |
 
-`tool_declared` 的 id 字符串以 `GateRule::ToolDeclared.id()` 为准（`src/tools/scoped/gate_chain.rs:183-198`），测试里用常量而不是字面量。
+所有 id 都通过 `GateRule::…id()` 或其背后的常量比较（`src/tools/scoped/gate_chain.rs:183-198`；`ToolDeclared` 的 id 是 `DECLARED_FLOOR_RULE`），不写字面量。
 
 - [ ] **Step 2: 运行**
 
