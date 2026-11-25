@@ -5638,6 +5638,69 @@ mod a3 {
         registry.register(descriptor, StdArc::new(handler)).unwrap();
     }
 
+    #[tokio::test]
+    async fn admitted_output_is_retrievable_through_ctx_search_only_in_its_session() {
+        let handlers = StdArc::new(ToolHandlerRegistry::new());
+        register(
+            &handlers,
+            crate::tools::handlers::builtin::BuiltinHandler::new(
+                "ctx_search".into(),
+                StdArc::new(crate::builtin_tools::CtxSearchTool::new()),
+            ),
+        );
+        let store = crate::tools::result_store::install_test_tool_result_store();
+        let producer = turn_ctx("ctx-restore-source-producer");
+        let outsider = turn_ctx("ctx-restore-source-outsider");
+        let scoped = crate::tools::result_store::ToolResultStore::for_session(
+            &store,
+            producer.session_key.to_key_string(),
+        );
+        let mut test_runner = LoopToolRegistry::new();
+        test_runner.register(Box::new(FailingTestRunner));
+        for tool_name in ["ctx_search", "file_read"] {
+            test_runner.register(Box::new(StubTool { tool_name }));
+        }
+        let writer = ScopedToolService::new(StdArc::new(test_runner), BTreeSet::new())
+            .with_turn_context(producer.clone())
+            .with_result_store(scoped);
+        let out = with_call_identity(
+            Some(identity("ctx-recovery-fixture-write")),
+            writer.execute("bash", json!({})),
+        )
+        .await
+        .unwrap();
+        let text = out.value.as_str().unwrap();
+        assert!(text.contains("[Full output persisted: "), "{text}");
+        assert!(text.contains("use ctx_search("), "{text}");
+
+        let query = json!({"query": "the_broken_one", "limit": 1});
+        let owner = service(&handlers).with_turn_context(producer);
+        let text = with_call_identity(
+            Some(identity("ctx-recovery-fixture-search-owner")),
+            owner.execute("ctx_search", query.clone()),
+        )
+        .await
+        .unwrap();
+        let result: Value = serde_json::from_str(text.value.as_str().unwrap()).unwrap();
+        let hit = &result["results"][0]["hits"][0];
+        assert!(hit["source"]
+            .as_str()
+            .is_some_and(|source| source.starts_with("bash:")));
+        assert!(hit["text"]
+            .as_str()
+            .is_some_and(|text| text.contains("the_broken_one")));
+
+        let outside = service(&handlers).with_turn_context(outsider);
+        let text = with_call_identity(
+            Some(identity("ctx-recovery-fixture-search-outsider")),
+            outside.execute("ctx_search", query),
+        )
+        .await
+        .unwrap();
+        let result: Value = serde_json::from_str(text.value.as_str().unwrap()).unwrap();
+        assert_eq!(result["results"][0]["hits"], json!([]));
+    }
+
     // The projection remains the real production adapter, for discovery. This
     // fixture binds the canonical registry and the existing facade handle; the
     // mounted-host binding path is exercised separately by canonical_service.
@@ -5655,6 +5718,14 @@ mod a3 {
         registry: &StdArc<ToolHandlerRegistry>,
         facade: StdArc<crate::capability::zahir_facade::ZahirFacade>,
     ) -> ScopedToolService {
+        let inner = capability_loop_registry(registry, facade);
+        ScopedToolService::new(StdArc::new(inner), BTreeSet::new())
+    }
+
+    fn capability_loop_registry(
+        registry: &StdArc<ToolHandlerRegistry>,
+        facade: StdArc<crate::capability::zahir_facade::ZahirFacade>,
+    ) -> LoopToolRegistry {
         let mut inner = LoopToolRegistry::new();
         inner.bind_canonical_registry(registry.clone(), StdArc::new(|_| true));
         assert!(inner.bind_canonical_facade(facade));
@@ -5666,7 +5737,7 @@ mod a3 {
                 ),
             ));
         }
-        ScopedToolService::new(StdArc::new(inner), BTreeSet::new())
+        inner
     }
 
     fn canonical_service(

@@ -112,7 +112,11 @@ Core 只为公共内容完全一致的原始帧恢复协议重放所需的私有
 
 普通隐藏推理默认不进入持久化和最终答案。提供商工具协议必需的推理/签名由 Core 按本次实际请求绑定的 `ProviderResponse.reasoning_replay` 保留，以便重启续跑；这一例外不适用于插件、摘要或通用检索。响应完成后不能读取可能已热切换的“当前提供商”来猜重放策略。
 
-`session_events` remains the only durable recovery source. Plugin state is disposable derived state; unloading/remounting can discard it. Existing compaction caches and fold ledgers are reused. Hard-forgotten spans remain unavailable to `session_decompress`, including foreign-owner fallback. Current WASM support does not grant arbitrary disk cache, network, project writes or cross-session access.
+`session_events` remains the only durable recovery source. Plugin state is disposable derived state; unloading/remounting can discard it. Existing compaction caches and fold ledgers are reused. Current WASM support does not grant arbitrary disk cache, network, project writes or cross-session access.
+
+`session_decompress` uses the injected session and one Core read snapshot, including when the original fold owner is unavailable. Before emitting a page, SQLite checks the whole requested interval: each retired content row needs its matching `(session_id, seq)` FTS entry. Hard clear/rewind removes the witness; FTS text is not used to reconstruct the body. Witnessed suffix payloads are decoded only when needed. The page accounts for compact JSON and can resume an oversized event using `next_from_seq` and optional `next_from_byte`. Keep the fold ID and upper sequence bound when continuing.
+
+`session_decompress` 在同一读快照内先验证整个请求范围，再读取当前页；外部 owner 不在时也不绕过此规则。硬退休内容不再由该路径读出，FTS 只是见证，原文仍从事件日志取。超长事件按 UTF-8 字节续读。恢复本身不重发或解退休旧事件，正常 `ToolResult` 仍可能落盘，后续清除不追溯撤回已交付副本；整轮预算仍可能转存回包。 Neither previously returned copies nor physical media are erased by the recovery read.
 
 ## Verification and boundaries / 验证与边界
 

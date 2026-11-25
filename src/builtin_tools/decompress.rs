@@ -34,15 +34,22 @@
 //!   `note` ("nothing was compacted" is a different statement from "the tool
 //!   did not run").
 
+use std::fmt::Write as _;
+use std::ops::ControlFlow;
+
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::{notify_tool_result, notify_tool_start};
+use crate::context::budget::pressure::{chars_for_result_token_budget, estimate_tokens_smart};
 use crate::error::{AlephError, Result};
-use crate::session::events::{EventSeq, SessionEvent};
+use crate::session::events::EventSeq;
 use crate::session::service::SessionId;
-use crate::session::store::SessionEventStore;
+use crate::session::store::{
+    event_content_text, EventContent, FoldRecoverySnapshot, FoldRestoreSpan, FoldSpanStatus,
+    SessionEventStore,
+};
 use crate::tools::AlephTool;
 
 /// Arguments for the `session_decompress` tool.
@@ -68,9 +75,12 @@ pub struct SessionDecompressArgs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub to_seq: Option<u64>,
 
-    /// Token cap for this page. Defaults to the read-family backstop
-    /// (`read_backstop_tokens`). A single event that alone exceeds the cap is
-    /// still emitted — a page must always make progress.
+    /// UTF-8 byte offset in the body at `from_seq`, excluding the display label.
+    /// Pass the prior page's `next_from_byte` with the same `fold_id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_byte: Option<usize>,
+
+    /// Token cap on the serialized result. Cannot exceed the read backstop.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<usize>,
 }
@@ -80,19 +90,21 @@ pub struct SessionDecompressArgs {
 pub struct SessionDecompressResult {
     /// The fold this page was restored from (empty when there is no fold).
     pub fold_id: String,
-    /// First seq of the fold span this page belongs to.
+    /// First seq addressed by this request.
     pub from_seq: u64,
-    /// Last seq of the fold span (inclusive).
+    /// Last seq requested (inclusive).
     pub to_seq: u64,
-    /// The verbatim transcript page — one `[role #seq]: body` line per
-    /// content-bearing event, in seq order. Concatenating every page's
-    /// `rendered` reproduces the whole fold's transcript exactly.
+    /// Verbatim transcript page. A fragmented event repeats its role/seq
+    /// label; concatenate its body slices without adding a delimiter.
     pub rendered: String,
     /// True when `max_tokens` cut the page before the span's end.
     pub truncated: bool,
     /// Continuation coordinate: pass as `from_seq` (with the same `fold_id`)
     /// to read the next page. `None` when the page reached the span's end.
     pub next_from_seq: Option<u64>,
+    /// Optional byte continuation within the same event body.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_from_byte: Option<usize>,
     /// Human/model-facing note for the honest-empty cases (no folds recorded,
     /// fold spans no renderable events).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -117,8 +129,9 @@ impl AlephTool for SessionDecompressTool {
         "Verbatim-restore a folded (compacted) span of THIS session. After session_compact, the \
          folded turns live on as a summary; this tool brings back the exact original events of \
          one fold — pass fold_id, or omit it to restore the most recent fold. Long folds page: \
-         max_tokens bounds one page, and a truncated result carries next_from_seq to continue \
-         with. Division of labor: recall_events SEARCHES this session's past by keyword, \
+         max_tokens bounds one serialized page. To continue, keep fold_id and to_seq, pass \
+         next_from_seq as from_seq, and pass next_from_byte as from_byte only when present. \
+         Division of labor: recall_events SEARCHES this session's past by keyword, \
          ctx_search retrieves offloaded tool OUTPUT, session_search covers OTHER sessions — use \
          this tool when you need the folded span itself, word for word. It errors honestly when \
          the fold_id is unknown, when the page bounds leave the fold's span, or when the span \
@@ -165,203 +178,449 @@ impl AlephTool for SessionDecompressTool {
     }
 }
 
-/// The restore itself, split from the process-global resolution above so the
-/// guard tests can drive it against a real in-memory store.
-///
-/// Order of operations: load the WHOLE log including retired rows (a fold
-/// whose own record was hard-retired must still resolve, so that its error
-/// can say "erased" instead of "not found") → derive the fold list → resolve
-/// the requested fold → read its span → refuse hard-retired spans → render
-/// and paginate.
+/// Keep fold discovery, erase authorization, and page construction inside
+/// the same read snapshot; notify lifecycle consumers only after releasing it.
 pub(crate) async fn decompress_fold_span(
     store: &dyn SessionEventStore,
     session_id: &SessionId,
     session_key: &str,
     args: &SessionDecompressArgs,
 ) -> Result<SessionDecompressResult> {
-    // The WHOLE log, retired rows included: a fold whose own record was
-    // hard-retired must still resolve, so that its failure can say "erased"
-    // instead of "not found".
-    let rows = store
-        .load_events_with_retirement(session_id, None, None)
+    let mut built_page = None;
+    store
+        .with_fold_recovery(session_id, &mut |snapshot| {
+            built_page = Some(build_page(snapshot, session_key, args));
+            Ok(())
+        })
         .await
-        .map_err(|e| AlephError::tool(format!("session_decompress: event log read failed: {e}")))?;
-    let events: Vec<SessionEvent> = rows.iter().map(|r| r.record.event.clone()).collect();
-    let folds = crate::context::compact::folds::list_folds(session_key, &events);
-
-    if folds.is_empty() {
-        return Ok(SessionDecompressResult {
-            fold_id: String::new(),
-            from_seq: 0,
-            to_seq: 0,
-            rendered: String::new(),
-            truncated: false,
-            next_from_seq: None,
-            note: Some(
-                "no folds recorded in this session — nothing has been compacted, so the \
-                 conversation you already see is the whole of it"
-                    .to_string(),
-            ),
-        });
+        .map_err(restore_storage_error)?;
+    let page = built_page.ok_or_else(|| {
+        AlephError::tool("session_decompress: store did not provide a snapshot")
+    })??;
+    if !page.fold_id.is_empty() {
+        crate::context::fabric::tool_admission::notify_current_lifecycle(
+            crate::context::fabric::ContextLifecycleEvent::RestoreRequested,
+        )
+        .await;
     }
+    Ok(page)
+}
 
-    // Default = the most recent fold (list_folds is seq-monotonic, so the
-    // last entry is the latest span).
+fn restore_storage_error(error: crate::session::service::SessionError) -> AlephError {
+    AlephError::tool(format!(
+        "session_decompress: event log read failed: {error}"
+    ))
+}
+
+fn build_page(
+    snapshot: &dyn FoldRecoverySnapshot,
+    session_key: &str,
+    args: &SessionDecompressArgs,
+) -> Result<SessionDecompressResult> {
+    if args.from_byte.is_some() && (args.fold_id.is_none() || args.from_seq.is_none()) {
+        return Err(AlephError::tool(
+            "session_decompress: from_byte requires fold_id and from_seq",
+        ));
+    }
+    let backstop = crate::tools::result_processing::read_backstop_tokens();
+    let cap = args.max_tokens.unwrap_or(backstop).min(backstop);
+    let events = snapshot.fold_events().map_err(restore_storage_error)?;
+    let folds = crate::context::compact::folds::list_folds(session_key, &events);
+    let mut page = SessionDecompressResult {
+        fold_id: String::new(),
+        from_seq: 0,
+        to_seq: 0,
+        rendered: String::new(),
+        truncated: false,
+        next_from_seq: None,
+        next_from_byte: None,
+        note: None,
+    };
     let fold = match &args.fold_id {
-        None => folds.last().expect("folds is non-empty").clone(),
-        Some(id) => folds
-            .iter()
-            .find(|f| &f.fold_id == id)
-            .cloned()
-            .ok_or_else(|| {
-                let known = folds
-                    .iter()
-                    .map(|f| f.fold_id.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                AlephError::tool(format!(
-                    "session_decompress: fold '{id}' not found in this session; \
-                     known folds: [{known}]"
-                ))
-            })?,
+        Some(id) => folds.iter().find(|f| &f.fold_id == id).ok_or_else(|| {
+            let known = folds
+                .iter()
+                .take(8)
+                .map(|fold| display_id(&fold.fold_id))
+                .collect::<Vec<_>>()
+                .join(", ");
+            AlephError::tool(format!(
+                "session_decompress: fold '{}' not found in this session; known folds (up to 8): [{known}]",
+                display_id(id)
+            ))
+        })?,
+        None => match folds.last() {
+            Some(fold) => fold,
+            None => {
+                page.note = Some(
+                    "no folds recorded in this session — nothing has been compacted, so the \
+                     conversation you already see is the whole of it"
+                        .into(),
+                );
+                return checked_page(page, cap);
+            }
+        },
     };
 
-    let recovery_note = match fold.recovery_route() {
-        crate::context::compact::folds::FoldRecoveryRoute::Builtin => None,
-        crate::context::compact::folds::FoldRecoveryRoute::ForeignOwner { owner } => Some(
-            format!(
-                "degraded recovery: fold owner '{owner}' is not mounted; Core restored the readable span with bounded builtin recovery"
-            ),
-        ),
-    };
-
-    // Page bounds must stay inside the fold's span — a page that reaches
-    // past it would render events the fold never folded.
     let start = args.from_seq.unwrap_or(fold.from_seq);
     let end = args.to_seq.unwrap_or(fold.to_seq);
-    if start < fold.from_seq || end > fold.to_seq || start > end {
-        return Err(AlephError::tool(format!(
-            "session_decompress: page [{start}..={end}] leaves the fold's span \
-             [{}..={}]",
-            fold.from_seq, fold.to_seq
-        )));
+    let span = FoldRestoreSpan::new(start, end)
+        .filter(|_| start >= fold.from_seq && end <= fold.to_seq)
+        .ok_or_else(|| {
+            AlephError::tool(format!(
+                "session_decompress: page [{start}..={end}] is invalid or leaves the fold's span \
+                 [{}..={}]",
+                fold.from_seq, fold.to_seq
+            ))
+        })?;
+    page.fold_id.clone_from(&fold.fold_id);
+    page.from_seq = start;
+    page.to_seq = end;
+    if let crate::context::compact::folds::FoldRecoveryRoute::ForeignOwner { owner } =
+        fold.recovery_route()
+    {
+        page.note = Some(format!(
+            "degraded recovery: fold owner '{}' is not mounted; Core restored the readable span with bounded builtin recovery",
+            display_id(&owner)
+        ));
     }
 
-    let span: Vec<_> = rows
-        .iter()
-        .filter(|r| r.record.seq >= start && r.record.seq <= end)
-        .collect();
-    if span.is_empty() {
-        return Err(AlephError::tool(format!(
-            "session_decompress: fold '{}' span {start}..={end} has no rows in the event \
-             log — the fold record survives but its events are gone",
-            fold.fold_id
-        )));
-    }
-
-    // The hard-retirement witness: a content-bearing row whose BM25 mirror
-    // is gone. `Retire::Through` keeps the mirror; `Retire::From` deletes it
-    // in the same transaction — so a missing mirror on a retired content row
-    // means clear/rewind erased this span. Restoring anyway would hand over
-    // payloads the user asked to erase AND (partially erased span) a
-    // half-transcript dressed as the original; refuse honestly instead.
-    let hard_retired = span
-        .iter()
-        .any(|r| r.retired && !r.fts_mirror_present && content_body(&r.record.event).is_some());
-    if hard_retired {
-        return Err(AlephError::tool(format!(
-            "session_decompress: fold '{}' span {start}..={end} was hard-retired — erased by \
-             clear/rewind, not compacted. The original text is no longer recallable; only its \
-             summary remains.",
-            fold.fold_id
-        )));
-    }
-
-    crate::context::fabric::tool_admission::notify_current_lifecycle(
-        crate::context::fabric::ContextLifecycleEvent::RestoreRequested,
-    )
-    .await;
-    let lines: Vec<(EventSeq, String)> = span
-        .iter()
-        .filter_map(|r| render_line(r.record.seq, &r.record.event).map(|line| (r.record.seq, line)))
-        .collect();
-    if lines.is_empty() {
-        return Ok(SessionDecompressResult {
-            fold_id: fold.fold_id,
-            from_seq: start,
-            to_seq: end,
-            rendered: String::new(),
-            truncated: false,
-            next_from_seq: None,
-            note: recovery_note.or_else(|| {
-                Some(
-                    "the fold's span holds no content-bearing events (markers/checkpoints only)"
-                        .to_string(),
+    let mut offset = args.from_byte;
+    // Compact JSON charges at most 2.5 chars per estimated token; a code
+    // point can occupy four bytes. This is a conservative copy ceiling.
+    let budget = PageBudget {
+        tokens: cap,
+        max_bytes: chars_for_result_token_budget(cap).saturating_mul(4),
+    };
+    let mut render_error = None;
+    let mut pending = None;
+    let status = snapshot
+        .visit_verified_span(span, &mut |record| {
+            let body = event_content_text(&record.event);
+            let byte = match offset.take() {
+                Some(byte) if record.seq == start && body.is_some() => byte,
+                Some(_) => {
+                    render_error = Some(invalid_byte_offset());
+                    return ControlFlow::Break(());
+                }
+                None => 0,
+            };
+            let Some((label, body)) = body else {
+                return ControlFlow::Continue(());
+            };
+            let added = (|| {
+                if let Some(line) = pending.take() {
+                    if finish_line(&mut page, line, Some(record.seq), cap)?.is_break() {
+                        return Ok(ControlFlow::Break(()));
+                    }
+                }
+                let mut window = BodyWindow::new(byte, budget.window_bytes());
+                let text = window.body(&body)?;
+                append_event(
+                    &mut page,
+                    record.seq,
+                    label,
+                    text,
+                    byte,
+                    budget,
+                    &mut pending,
                 )
-            }),
-        });
+            })();
+            match added {
+                Ok(flow) => flow,
+                Err(error) => {
+                    render_error = Some(error);
+                    ControlFlow::Break(())
+                }
+            }
+        })
+        .map_err(restore_storage_error)?;
+    match status {
+        FoldSpanStatus::Denied => {
+            return Err(AlephError::tool(format!(
+                "session_decompress: fold '{}' span {start}..={end} was hard-retired — erased by \
+                 clear/rewind, not compacted. The original text is no longer recallable; only its \
+                 summary remains.",
+                display_id(&fold.fold_id)
+            )));
+        }
+        FoldSpanStatus::Empty if offset.is_none() => {
+            return Err(AlephError::tool(format!(
+                "session_decompress: fold '{}' span {start}..={end} has no rows in the event log",
+                display_id(&fold.fold_id)
+            )));
+        }
+        _ => {}
+    }
+    if let Some(error) = render_error {
+        return Err(error);
+    }
+    if offset.is_some() {
+        return Err(invalid_byte_offset());
+    }
+    if let Some(line) = pending {
+        let _ = finish_line(&mut page, line, None, cap)?;
+    }
+    if page.rendered.is_empty() && page.note.is_none() {
+        page.note = Some(
+            "the fold's span holds no content-bearing events (markers/checkpoints only)".into(),
+        );
+    }
+    checked_page(page, cap)
+}
+
+fn display_id(id: &str) -> &str {
+    &id[..id.floor_char_boundary(id.len().min(128))]
+}
+
+fn invalid_byte_offset() -> AlephError {
+    AlephError::tool(
+        "session_decompress: from_byte must address a UTF-8 boundary inside the first event body",
+    )
+}
+
+fn page_too_small() -> AlephError {
+    AlephError::tool(
+        "session_decompress: max_tokens cannot fit the response envelope and required content",
+    )
+}
+
+impl SessionDecompressResult {
+    fn set_next(&mut self, seq: Option<EventSeq>, byte: Option<usize>) {
+        self.truncated = seq.is_some();
+        self.next_from_seq = seq;
+        self.next_from_byte = byte;
     }
 
-    // Paginate at event granularity against the token cap. A first line that
-    // alone exceeds the cap is still emitted: a page must always make
-    // progress, or the continuation coordinate would loop.
-    let cap = args
-        .max_tokens
-        .unwrap_or_else(crate::tools::result_processing::read_backstop_tokens)
-        .min(crate::tools::result_processing::read_backstop_tokens())
-        .max(1);
-    let mut used = 0usize;
-    let mut page: Vec<&str> = Vec::new();
-    let mut next_from_seq = None;
-    for (seq, line) in &lines {
-        let cost = crate::context::budget::pressure::estimate_tokens_smart(line) + 1;
-        if !page.is_empty() && used + cost > cap {
-            next_from_seq = Some(*seq);
+    fn fits(&self, cap: usize) -> bool {
+        // Ingress flattens the compact Value, not just the transcript body.
+        serde_json::to_value(self)
+            .is_ok_and(|value| estimate_tokens_smart(&value.to_string()) <= cap)
+    }
+}
+
+fn checked_page(page: SessionDecompressResult, cap: usize) -> Result<SessionDecompressResult> {
+    if page.fits(cap) {
+        Ok(page)
+    } else {
+        Err(page_too_small())
+    }
+}
+
+// Serialize structured bodies up to this page's window. Skipping a byte
+// prefix costs a scan, not an allocation proportional to the prefix or body.
+struct BodyWindow {
+    skip: usize,
+    limit: usize,
+    bytes: Vec<u8>,
+    more: bool,
+}
+
+impl BodyWindow {
+    fn new(skip: usize, limit: usize) -> Self {
+        Self {
+            skip,
+            limit,
+            bytes: Vec::new(),
+            more: false,
+        }
+    }
+
+    fn body<'a>(&'a mut self, content: &EventContent<'a>) -> Result<&'a str> {
+        if let EventContent::Text(text) = content {
+            return text
+                .get(self.skip..)
+                .filter(|body| !body.is_empty())
+                .ok_or_else(invalid_byte_offset);
+        }
+        if let Err(error) = content.write_to(self) {
+            if !self.more {
+                return Err(AlephError::tool(format!(
+                    "session_decompress: cannot render event body: {error}"
+                )));
+            }
+        }
+        if self.bytes.is_empty() {
+            return Err(invalid_byte_offset());
+        }
+        // The last chunk may end in a code point. The four extra bytes let
+        // append_event distinguish a clipped window from a complete body.
+        match std::str::from_utf8(&self.bytes) {
+            Ok(body) => Ok(body),
+            Err(error) if error.error_len().is_none() && self.more => {
+                Ok(std::str::from_utf8(&self.bytes[..error.valid_up_to()])
+                    .expect("validated prefix"))
+            }
+            Err(_) => Err(invalid_byte_offset()),
+        }
+    }
+}
+
+impl std::io::Write for BodyWindow {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let skipped = self.skip.min(bytes.len());
+        self.skip -= skipped;
+        let rest = &bytes[skipped..];
+        let copied = rest.len().min(self.limit - self.bytes.len());
+        self.bytes.extend_from_slice(&rest[..copied]);
+        if copied != rest.len() {
+            self.more = true;
+            return Err(std::io::Error::other("restore body window filled"));
+        }
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy)]
+struct PageBudget {
+    tokens: usize,
+    max_bytes: usize,
+}
+
+impl PageBudget {
+    fn window_bytes(self) -> usize {
+        self.max_bytes.saturating_add(4)
+    }
+}
+
+struct PendingLine {
+    seq: EventSeq,
+    from_byte: usize,
+    prior_len: usize,
+    label_end: usize,
+}
+
+fn append_event(
+    page: &mut SessionDecompressResult,
+    seq: EventSeq,
+    label: &str,
+    body: &str,
+    from_byte: usize,
+    budget: PageBudget,
+    pending: &mut Option<PendingLine>,
+) -> Result<ControlFlow<()>> {
+    let cap = budget.tokens;
+    let prior_len = page.rendered.len();
+    if prior_len != 0 {
+        page.rendered.push('\n');
+    }
+    write!(page.rendered, "[{label} #{seq}]: ").expect("writing to a String cannot fail");
+    let line = PendingLine {
+        seq,
+        from_byte,
+        prior_len,
+        label_end: page.rendered.len(),
+    };
+    if body.len() <= budget.max_bytes {
+        page.rendered.push_str(body);
+        let terminal = page.fits(cap);
+        if seq < page.to_seq {
+            // A dismissed candidate must not consume a lookahead. Only wait
+            // for the actual next seq when the envelope can change the answer.
+            let shortest = fits_continuation(page, seq + 1, cap);
+            let longest = fits_continuation(page, page.to_seq, cap);
+            if terminal && longest {
+                return Ok(ControlFlow::Continue(()));
+            }
+            if terminal || shortest {
+                *pending = Some(line);
+                return Ok(ControlFlow::Continue(()));
+            }
+        } else if terminal {
+            return Ok(ControlFlow::Continue(()));
+        }
+    }
+    let end = body.floor_char_boundary(body.len().min(budget.window_bytes()));
+    fragment_or_defer_line(page, line, &body[..end], cap)
+}
+
+fn fits_continuation(page: &mut SessionDecompressResult, seq: EventSeq, cap: usize) -> bool {
+    page.set_next(Some(seq), None);
+    let fits = page.fits(cap);
+    page.set_next(None, None);
+    fits
+}
+
+fn finish_line(
+    page: &mut SessionDecompressResult,
+    line: PendingLine,
+    next_seq: Option<EventSeq>,
+    cap: usize,
+) -> Result<ControlFlow<()>> {
+    let fits = match next_seq {
+        Some(seq) => fits_continuation(page, seq, cap),
+        None => page.fits(cap),
+    };
+    if fits {
+        return Ok(ControlFlow::Continue(()));
+    }
+    let body = page.rendered.split_off(line.label_end);
+    fragment_or_defer_line(page, line, &body, cap)
+}
+
+fn fragment_or_defer_line(
+    page: &mut SessionDecompressResult,
+    line: PendingLine,
+    body: &str,
+    cap: usize,
+) -> Result<ControlFlow<()>> {
+    let PendingLine {
+        seq,
+        from_byte,
+        prior_len,
+        label_end,
+    } = line;
+    if prior_len != 0 {
+        page.rendered.truncate(prior_len);
+        page.set_next(Some(seq), None);
+        return Ok(ControlFlow::Break(()));
+    }
+
+    // One event exceeds an empty page. Search only a budget-bounded prefix,
+    // measuring escaped JSON with the real continuation on each probe.
+    // Compact JSON has a monotonic estimate as characters and cursor digits
+    // are added. Snap probes to code point boundaries without copying offsets.
+    let mut best = 0;
+    let mut high = body.len().saturating_sub(1);
+    while best < high {
+        let probe = best + (high - best).div_ceil(2);
+        let above = body.ceil_char_boundary(probe);
+        let end = if above <= high {
+            above
+        } else {
+            body.floor_char_boundary(probe)
+        };
+        if end == best {
             break;
         }
-        used += cost;
-        page.push(line);
+        page.rendered.truncate(label_end);
+        page.rendered.push_str(&body[..end]);
+        page.set_next(Some(seq), Some(from_byte + end));
+        if page.fits(cap) {
+            best = end;
+        } else {
+            high = end - 1;
+        }
     }
-
-    Ok(SessionDecompressResult {
-        fold_id: fold.fold_id,
-        from_seq: start,
-        to_seq: end,
-        rendered: page.join("\n"),
-        truncated: next_from_seq.is_some(),
-        next_from_seq,
-        note: recovery_note,
-    })
-}
-
-/// An event's `(role label, verbatim body)` when it bears content, `None`
-/// otherwise. The trim filter is the same one `render_event_text` applies
-/// before writing the FTS mirror, so "content-bearing" means exactly "had a
-/// mirror row" — the identity the hard-retirement witness above relies on.
-fn content_body(event: &SessionEvent) -> Option<(&'static str, std::borrow::Cow<'_, str>)> {
-    let (label, body) = crate::session::store::event_content_text(event)?;
-    if body.trim().is_empty() {
-        None
-    } else {
-        Some((label, body))
+    if best == 0 {
+        return Err(page_too_small());
     }
-}
-
-/// Render one event as a transcript line, `None` for events with no content
-/// body (turn markers, checkpoints, the fold records themselves).
-///
-/// The label and the body come from one place —
-/// [`crate::session::store::event_content_text`] — so the set of
-/// content-bearing variants cannot drift between indexing and restoration.
-fn render_line(seq: EventSeq, event: &SessionEvent) -> Option<String> {
-    let (label, body) = content_body(event)?;
-    Some(format!("[{label} #{seq}]: {body}"))
+    page.rendered.truncate(label_end);
+    page.rendered.push_str(&body[..best]);
+    page.set_next(Some(seq), Some(from_byte + best));
+    Ok(ControlFlow::Break(()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::events::{now_ms, Durability, MessageContent, Retire, ToolOutput};
+    use crate::session::events::{
+        now_ms, Durability, MessageContent, Retire, SessionEvent, ToolOutput,
+    };
     use crate::session::store::{migrate_add_session_events, SqliteEventStore};
     use crate::sync_primitives::Arc;
 
@@ -512,6 +771,480 @@ mod tests {
         decompress_fold_span(store.as_ref(), &session(key), &canonical(key), args).await
     }
 
+    #[tokio::test]
+    async fn restore_capability_preserves_cursor_and_uses_only_the_injected_session() {
+        use crate::executor::ToolRegistry as _;
+        use crate::tools::{ScopedToolService, ToolHandlerRegistry, ToolService as _};
+
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let builtin = Arc::new(crate::executor::BuiltinToolRegistry::new().await.unwrap());
+        let store = crate::session::store::install_test_event_store();
+        let key = "agent:restore-capability:main";
+        let other_key = "agent:restore-capability-other:main";
+        let backstop = crate::tools::result_processing::read_backstop_tokens();
+        let body = serde_json::json!({"result": "你好\n\"😀".repeat(backstop)});
+        let fold_id = compacted_session(
+            &store,
+            key,
+            vec![tool_result_ev("restore-capability-call", body)],
+            1,
+            true,
+        )
+        .await;
+        let other_fold =
+            compacted_session(&store, other_key, vec![user_ev("other session")], 1, true).await;
+        let args = serde_json::json!({"__session_key": other_key, "max_tokens": backstop});
+        let denied = builtin
+            .execute_tool("session_decompress", args.clone())
+            .await
+            .unwrap_err();
+        assert!(denied
+            .to_string()
+            .contains("no authoritative session context"));
+
+        let handlers = Arc::new(ToolHandlerRegistry::new());
+        let _registration = crate::tools::handlers::builtin::register_builtin_routers(
+            &handlers,
+            builtin,
+            ["session_decompress".to_owned()],
+        )
+        .await
+        .unwrap();
+        let mut registry = crate::tools::runtime::LoopToolRegistry::new();
+        registry.bind_canonical_registry(handlers.clone(), Arc::new(|_| true));
+        let facade = crate::capability::zahir_facade::ZahirFacade::new(
+            handlers.as_ref().clone(),
+            Arc::new(crate::capability::ownership::OwnershipTree::new()),
+        );
+        assert!(registry.bind_canonical_facade(facade));
+        let entry = handlers.resolve_entry("session_decompress").unwrap();
+        registry.register(Box::new(
+            crate::tools::adapters::McpRegistryTool::from_registry_entry(
+                entry.handler.clone(),
+                &entry.descriptor,
+            ),
+        ));
+        let svc = ScopedToolService::new(Arc::new(registry), Default::default()).with_turn_context(
+            crate::tools::turn_context::TurnContext {
+                session_key: crate::routing::session_key::SessionKey::main("restore-capability"),
+                run_id: String::new(),
+                channel_id: "test".into(),
+                conversation_id: "test".into(),
+                caller_role: None,
+                channel_tool_permissions: None,
+                unattended: false,
+                plan_gate: None,
+                side_question: false,
+                telecom_authority: None,
+            },
+        );
+        let id = session(key);
+        let before = store.load_head_seq(&id).await.unwrap();
+        let out = crate::approval::with_call_identity(
+            Some(crate::approval::CallIdentity {
+                turn_id: uuid::Uuid::new_v4(),
+                call_id: "restore-capability-page".into(),
+            }),
+            svc.execute("session_decompress", args),
+        )
+        .await
+        .unwrap();
+        let text = out
+            .value
+            .as_str()
+            .expect("model receives compact JSON text");
+        let page: serde_json::Value = serde_json::from_str(text).expect("page survived Layer 2");
+        assert_eq!(page["fold_id"], fold_id);
+        assert_ne!(page["fold_id"], other_fold);
+        assert_eq!(page["next_from_seq"], 1);
+        assert!(page["next_from_byte"].as_u64().unwrap() > 0);
+        assert!(estimate_tokens_smart(text) <= backstop);
+        assert_eq!(store.load_head_seq(&id).await.unwrap(), before);
+    }
+
+    #[tokio::test]
+    async fn terminal_cursor_envelope_cannot_turn_a_valid_fragment_into_an_error() {
+        let store = test_store();
+        let key = "agent:main:peer:dec-envelope";
+        compacted_session(
+            &store,
+            key,
+            vec![user_ev(&"a".repeat(83)), user_ev("  ")],
+            2,
+            true,
+        )
+        .await;
+        let page = decompress(
+            &store,
+            key,
+            &SessionDecompressArgs {
+                max_tokens: Some(79),
+                ..args_all()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(page.next_from_seq, Some(1));
+        assert!(page.next_from_byte.unwrap() > 0);
+        assert!(page.fits(79));
+    }
+
+    #[tokio::test]
+    async fn tight_budget_can_fit_a_continuation_but_not_a_terminal_envelope() {
+        let store = test_store();
+        let key = "agent:main:peer:dec-continuation-envelope";
+        let fold_id =
+            compacted_session(&store, key, vec![user_ev("a"), user_ev("b")], 2, true).await;
+        let args = SessionDecompressArgs {
+            fold_id: Some(fold_id),
+            max_tokens: Some(46),
+            ..args_all()
+        };
+        let mut page = decompress(&store, key, &args).await.unwrap();
+        assert_eq!(page.rendered, "[user #1]: a");
+        assert_eq!(page.next_from_seq, Some(2));
+        assert!(page.fits(46));
+        page.set_next(None, None);
+        assert!(!page.fits(46));
+        let tail = decompress(
+            &store,
+            key,
+            &SessionDecompressArgs {
+                from_seq: Some(2),
+                max_tokens: Some(48),
+                ..args
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(tail.rendered, "[user #2]: b");
+        assert!(!tail.truncated);
+    }
+
+    #[tokio::test]
+    #[ignore = "manual SQLite recovery measurement; no wall-clock threshold"]
+    async fn measure_fold_recovery_with_unrelated_tail() {
+        for tail in [1_000, 4_000] {
+            let temp = tempfile::tempdir().unwrap();
+            let path = temp.path().join("events.sqlite");
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            migrate_add_session_events(&conn).unwrap();
+            let store = Arc::new(SqliteEventStore::new(conn));
+            let key = "agent:main:peer:dec-timing";
+            let fold_id = compacted_session(
+                &store,
+                key,
+                vec![
+                    user_ev("restore this exact line"),
+                    assistant_ev("later original"),
+                ],
+                2,
+                true,
+            )
+            .await;
+            let rows: Vec<_> = (0..tail)
+                .map(|i| (user_ev(&format!("unrelated live tail {i}")), now_ms()))
+                .collect();
+            store
+                .append_batch(&session(key), 6, &rows, None, Durability::Normal)
+                .await
+                .unwrap();
+            let args = SessionDecompressArgs {
+                fold_id: Some(fold_id),
+                from_seq: Some(1),
+                to_seq: Some(1),
+                max_tokens: Some(256),
+                ..Default::default()
+            };
+            let baseline = rusqlite::Connection::open(&path).unwrap();
+            for run in 1..=2 {
+                // Baseline is the removed SQL + eager row decode, against
+                // the exact same file seeded via SessionEventStore. It omits
+                // the old caller's subsequent clone, rendering, and paging.
+                let started = std::time::Instant::now();
+                let decoded = legacy_recovery_read(&baseline, key);
+                let old_read = started.elapsed();
+                assert_eq!(decoded.len(), tail + 5);
+                let started = std::time::Instant::now();
+                let page = decompress(&store, key, &args).await.unwrap();
+                eprintln!("tail={tail} run={run} legacy_read={old_read:?} candidate_page={:?} legacy_decoded={}", started.elapsed(), decoded.len());
+                assert_eq!(page.rendered, "[user #1]: restore this exact line");
+                assert!(!page.truncated);
+            }
+            store.retire_from(&session(key), 2).await.unwrap();
+            let late_range = SessionDecompressArgs {
+                to_seq: Some(2),
+                ..args
+            };
+            let error = decompress(&store, key, &late_range).await.unwrap_err();
+            assert!(error.to_string().contains("hard-retired"));
+        }
+    }
+
+    fn legacy_recovery_read(
+        conn: &rusqlite::Connection,
+        key: &str,
+    ) -> Vec<(crate::session::events::SessionEventRecord, bool, bool)> {
+        let session_json = serde_json::to_string(&session(key)).unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT e.seq, e.payload_json, e.created_at, e.retired_at,
+                    (SELECT COUNT(*) FROM session_events_fts f
+                     WHERE f.session_id = e.session_id AND f.seq = e.seq)
+             FROM session_events e
+             WHERE e.session_id = ?1 AND e.seq >= ?2 AND e.seq < ?3
+             ORDER BY e.seq ASC",
+            )
+            .unwrap();
+        let mut rows = stmt
+            .query(rusqlite::params![session_json, 0, i64::MAX])
+            .unwrap();
+        let mut decoded = Vec::new();
+        while let Some(row) = rows.next().unwrap() {
+            let seq: i64 = row.get(0).unwrap();
+            let payload: String = row.get(1).unwrap();
+            let created_at: i64 = row.get(2).unwrap();
+            let retired: Option<i64> = row.get(3).unwrap();
+            let witnesses: i64 = row.get(4).unwrap();
+            let crate::session::store::DecodedRow::Event(record) =
+                crate::session::store::decode_row(
+                    u64::try_from(seq).unwrap(),
+                    created_at,
+                    &payload,
+                )
+            else {
+                panic!("measurement data must decode")
+            };
+            decoded.push((record, retired.is_some(), witnesses > 0));
+        }
+        decoded
+    }
+
+    #[tokio::test]
+    async fn late_erasure_is_not_authorized_by_another_sessions_witness() {
+        let temp = tempfile::tempdir().unwrap();
+        let conn = rusqlite::Connection::open(temp.path().join("events.sqlite")).unwrap();
+        migrate_add_session_events(&conn).unwrap();
+        let store = Arc::new(SqliteEventStore::new(conn));
+        let key = "agent:main:peer:dec-late-erase";
+        let first = "first page ".repeat(32);
+        let later = format!("erased after the first page {}", "secret ".repeat(100));
+        let events = vec![user_ev(&first), assistant_ev(&later)];
+        compacted_session(&store, key, events.clone(), 2, true).await;
+        compacted_session(&store, "agent:main:peer:dec-late-other", events, 2, true).await;
+        let args = SessionDecompressArgs {
+            max_tokens: Some(240),
+            ..args_all()
+        };
+        let page = decompress(&store, key, &args).await.unwrap();
+        assert!(page.truncated);
+        assert!(!page.rendered.contains("erased after"));
+        store.retire_from(&session(key), 2).await.unwrap();
+        let err = decompress(&store, key, &args).await.unwrap_err();
+        assert!(err.to_string().contains("hard-retired"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn witnessed_corrupt_suffix_fails_only_when_needed() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("events.sqlite");
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        migrate_add_session_events(&conn).unwrap();
+        let store = Arc::new(SqliteEventStore::new(conn));
+        let key = "agent:main:peer:dec-corrupt-suffix";
+        let first = "first page ".repeat(32);
+        let fold_id = compacted_session(
+            &store,
+            key,
+            vec![
+                user_ev(&first),
+                assistant_ev(&first),
+                assistant_ev("corrupt later"),
+            ],
+            3,
+            true,
+        )
+        .await;
+        let affected = rusqlite::Connection::open(path).unwrap().execute(
+            "UPDATE session_events SET payload_json = 'not-json' WHERE session_id = ?1 AND seq = 3",
+            [serde_json::to_string(&session(key)).unwrap()],
+        ).unwrap();
+        assert_eq!(
+            affected, 1,
+            "the witnessed suffix must actually be corrupted"
+        );
+        let page = decompress(
+            &store,
+            key,
+            &SessionDecompressArgs {
+                max_tokens: Some(240),
+                ..args_all()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(page.next_from_seq, Some(2));
+        let err = decompress(
+            &store,
+            key,
+            &SessionDecompressArgs {
+                fold_id: Some(fold_id),
+                from_seq: Some(3),
+                ..args_all()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("event log read failed"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn missing_fts_and_unsupported_store_are_unavailable() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("events.sqlite");
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        migrate_add_session_events(&conn).unwrap();
+        let store = Arc::new(SqliteEventStore::new(conn));
+        let key = "agent:main:peer:dec-missing-fts";
+        compacted_session(&store, key, vec![user_ev("retired text")], 1, true).await;
+        rusqlite::Connection::open(path)
+            .unwrap()
+            .execute_batch("DROP TABLE session_events_fts")
+            .unwrap();
+        let err = decompress(&store, key, &args_all()).await.unwrap_err();
+        assert!(err.to_string().contains("event log read failed"), "{err}");
+
+        let unsupported = crate::session::store::test_support::CountingStore::in_memory();
+        let err = decompress_fold_span(
+            unsupported.as_ref(),
+            &session(key),
+            &canonical(key),
+            &args_all(),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("unavailable"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn structured_tool_body_streams_bounded_verbatim_fragments() {
+        let store = test_store();
+        let key = "agent:main:peer:dec-structured";
+        let value = serde_json::json!({"data": "你🙂\n\"\\".repeat(350), "tail": [true, 7]});
+        let expected = value.to_string();
+        let mut probe = BodyWindow::new(0, 32);
+        let prefix = probe.body(&EventContent::Json(&value)).unwrap();
+        assert!(expected.starts_with(prefix));
+        assert!(probe.more);
+        assert_eq!(probe.bytes.len(), 32);
+
+        let fold_id = compacted_session(
+            &store,
+            key,
+            vec![tool_result_ev("large-result", value)],
+            1,
+            true,
+        )
+        .await;
+        let mut args = SessionDecompressArgs {
+            fold_id: Some(fold_id),
+            from_seq: Some(1),
+            max_tokens: Some(140),
+            ..args_all()
+        };
+        let mut recovered = String::new();
+        loop {
+            let page = decompress(&store, key, &args).await.unwrap();
+            assert!(page.fits(140));
+            recovered.push_str(page.rendered.strip_prefix("[tool_result #1]: ").unwrap());
+            let Some(next) = page.next_from_byte else {
+                break;
+            };
+            assert_eq!(page.next_from_seq, Some(1));
+            assert_eq!(next, recovered.len());
+            assert!(next > args.from_byte.unwrap_or(0));
+            args.from_byte = Some(next);
+        }
+        assert_eq!(recovered, expected);
+    }
+
+    #[tokio::test]
+    async fn decompress_oversized_unicode_page_reassembles() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("events.sqlite");
+        let reopen = || {
+            Arc::new(SqliteEventStore::new(
+                rusqlite::Connection::open(&path).unwrap(),
+            ))
+        };
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        migrate_add_session_events(&conn).unwrap();
+        let mut store = Arc::new(SqliteEventStore::new(conn));
+        let key = "agent:main:peer:dec-bytes";
+        let body = format!("{}  ", "你🙂 \"quoted\" \\ line\n\t".repeat(400));
+        let fold_id = compacted_session(&store, key, vec![user_ev(&body)], 1, true).await;
+        let page_args = |seq, byte, cap| {
+            serde_json::from_value(serde_json::json!({
+                "fold_id": fold_id,
+                "from_seq": seq,
+                "to_seq": 1,
+                "from_byte": byte,
+                "max_tokens": cap,
+            }))
+            .unwrap()
+        };
+        let cap = 256;
+        let mut from = 0;
+        let mut recovered = String::new();
+        loop {
+            let page = decompress(&store, key, &page_args(1, from, cap))
+                .await
+                .unwrap();
+            let value = serde_json::to_value(&page).unwrap();
+            assert!(
+                crate::context::budget::pressure::estimate_tokens_smart(&value.to_string()) <= cap
+            );
+            assert_eq!(page.truncated, page.next_from_seq.is_some());
+            recovered.push_str(page.rendered.strip_prefix("[user #1]: ").unwrap());
+            if !page.truncated {
+                break;
+            }
+            assert_eq!(page.next_from_seq, Some(1));
+            let next = value["next_from_byte"].as_u64().unwrap() as usize;
+            assert!(next > from && body.is_char_boundary(next));
+            if from == 0 {
+                drop(store);
+                store = reopen();
+            }
+            from = next;
+        }
+        assert_eq!(recovered, body);
+        for args in [
+            page_args(1, 1, cap),
+            page_args(1, body.len(), cap),
+            page_args(1, usize::MAX, cap),
+            page_args(1, 0, 1),
+            page_args(u64::MAX, 0, cap),
+        ] {
+            assert!(decompress(&store, key, &args).await.is_err());
+        }
+        for value in [
+            serde_json::json!({"from_byte": 0, "from_seq": 1}),
+            serde_json::json!({"fold_id": fold_id, "from_byte": 0}),
+        ] {
+            let args = serde_json::from_value(value).unwrap();
+            assert!(decompress(&store, key, &args).await.is_err());
+        }
+        let args = SessionDecompressArgs {
+            fold_id: Some(fold_id.clone()),
+            ..args_all()
+        };
+        let err = decompress(&store, "agent:main:peer:dec-wrong-session", &args)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("not found"), "{err}");
+    }
+
     /// The headline guarantee (plan Step 1): the restored transcript is the
     /// folded span's original text, byte for byte — an effect assertion on a
     /// really-compacted session, not a mock's self-report.
@@ -657,11 +1390,11 @@ mod tests {
         let full = decompress(&store, key, &args_all()).await.unwrap();
         assert!(!full.truncated, "uncapped restore fits in one page");
 
-        // Force tiny pages: ~20 tokens ≈ one rendered line.
+        // Fit the serialized envelope and complete lines, but not the entire span.
         let page = |from: Option<u64>| SessionDecompressArgs {
             fold_id: Some(fold_id.clone()),
             from_seq: from,
-            max_tokens: Some(20),
+            max_tokens: Some(140),
             ..Default::default()
         };
         let mut rendered = String::new();
@@ -669,6 +1402,7 @@ mod tests {
         let mut pages = 0usize;
         loop {
             let out = decompress(&store, key, &page(from)).await.unwrap();
+            assert_eq!(out.next_from_byte, None, "each line fits by itself");
             if !rendered.is_empty() && !out.rendered.is_empty() {
                 rendered.push('\n');
             }
