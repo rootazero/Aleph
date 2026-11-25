@@ -70,6 +70,16 @@ Deviation from the plan / 偏离: the script also calls `set_objective` first. T
 
 Deviation from the plan / 偏离: the plan expected each message to get its OWN assistant reply. Under the default busy-input mode `Steer` (`src/gateway/execution_engine/gate.rs` `BusyInputMode::Steer`), a message that arrives while the session's run is going is folded into that run, so the two messages share one reply. The claim was rewritten to what must hold under either mode: nothing is lost, a reply follows, and the model is shown both. The client that lost the race varies between runs (A in one run, B in others), and the result is the same either way.
 
+### F7 fork and isolated sub-agents (Task 8) / 子代理
+
+`KEEP=1 ./qa/thread_continuity/run.sh fork` → rc=0, 18 claims. One session, six runs: runs 1–2 carry `QA_PARENT_MARKER`; run 3's single assistant turn calls `subagent{context:"fork"}` twice (`QA_FORK_TASK_1`, `QA_FORK_TASK_2`); run 4 is plain; run 5 forks once more (`QA_FORK_TASK_3`); run 6 calls `subagent{context:"isolated"}` (`QA_ISO_TASK`). Child requests are attributed by content (a tool-bearing request whose last user message states the task), not by position.
+
+- Siblings from one turn: identical `system` and identical `messages` minus the task (4 messages = runs 1–2), the prefix carries the parent marker, ends on an assistant message, and has no `tool_use` without its `tool_result`.
+- Across turns: run 5's fork gets the same `system`, and run 3's fork prefix is a strict prefix of it (4 → 10 messages; run 3's completed tool round and run 4 appended).
+- Isolated: the checker's request is a single task message; the parent marker appears nowhere in it (system or messages).
+
+Limit / 局限: the mock logs the parsed request body, so "identical" means identical JSON re-serialized in the order the server sent it, not raw HTTP bytes. Whether the provider actually reports a cache hit is not measured (no real provider). Per the approved design, a fork child still does not hit the PARENT's cache (`src/agents/subagent_spawner/fork.rs` module doc: parent `AssemblyPath::Cached` vs child `AssemblyPath::Basic`); that is the separate round the user chose.
+
 ### F4 human gate (Task 7) / 人工介入
 
 New fixture `qa/human_gate` (stages `ask`, `text`, `unattended`, `stale`; ports 18851/18852; reuses the scripted mock with `ask.tools.json` = one `ask_user` call carrying two questions `QA_Q1`/`QA_Q2`). Results:

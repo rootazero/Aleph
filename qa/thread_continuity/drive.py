@@ -628,12 +628,126 @@ async def two_clients_only():
         await c.ws.close()
 
 
+PARENT_MARKER = "QA_PARENT_MARKER"
+
+
+def logged_requests():
+    try:
+        return [json.loads(line) for line in open(REQUEST_LOG)]
+    except FileNotFoundError:
+        return []
+
+
+def own_text(message):
+    """The text a message itself carries, leaving out `tool_result` blocks
+    (those echo what a tool returned, not what this message says)."""
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    return "\n".join(
+        block.get("text", "") for block in content or [] if block.get("type") == "text"
+    )
+
+
+def child_request(task_marker):
+    """The first model request of the sub-agent whose task carries
+    `task_marker`: a request with a tool surface whose LAST message is a user
+    message stating that task. Attributed by content, never by position."""
+    for entry in logged_requests():
+        body = entry["body"]
+        messages = body.get("messages") or []
+        if body.get("tools") and messages and messages[-1].get("role") == "user" \
+                and task_marker in own_text(messages[-1]):
+            return body
+    return None
+
+
+def dangling_tool_uses(messages):
+    """`tool_use` ids in `messages` with no matching `tool_result`."""
+    used, answered = set(), set()
+    for message in messages:
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if block.get("type") == "tool_use":
+                used.add(block.get("id"))
+            elif block.get("type") == "tool_result":
+                answered.add(block.get("tool_use_id"))
+    return sorted(used - answered)
+
+
+def canonical(value):
+    """The request part re-serialized in the order the server sent it. The
+    mock logs the parsed body, so this is "identical JSON", not raw bytes."""
+    return json.dumps(value, ensure_ascii=False)
+
+
+async def fork_only():
+    client = await connect("qa-thread-fork")
+    key, _, _ = await send_collecting(client, f"{PARENT_MARKER} turn one: pick a colour")
+    if key is None:
+        return
+    turns = [
+        f"{PARENT_MARKER} turn two: pick a size",
+        "turn three: fork two reviewers",
+        "turn four: nothing to delegate",
+        "turn five: fork one reviewer again",
+        "turn six: one isolated checker",
+    ]
+    for message in turns:
+        _, run_id, _ = await send_collecting(client, message, key)
+        if run_id is None:
+            return
+    runs = SessionLog(DB).runs()
+    check(set(runs.values()) == {"completed"}, "every parent run completed", f"runs={runs}")
+
+    first = child_request("QA_FORK_TASK_1")
+    second = child_request("QA_FORK_TASK_2")
+    later = child_request("QA_FORK_TASK_3")
+    isolated = child_request("QA_ISO_TASK")
+    for name, body in (("fork 1", first), ("fork 2", second), ("fork 3", later), ("isolated", isolated)):
+        check(body is not None, f"the {name} sub-agent reached the model")
+    if None in (first, second, later, isolated):
+        log(f"request log last messages: {[own_text((e['body'].get('messages') or [{}])[-1])[:120] for e in logged_requests()]}")
+        return
+
+    # One fan-out: two forks from the same turn share the whole prefix.
+    prefix_1, prefix_2 = first["messages"][:-1], second["messages"][:-1]
+    check(canonical(first.get("system")) == canonical(second.get("system")),
+          "the two sibling forks are sent an identical system block")
+    check(canonical(prefix_1) == canonical(prefix_2),
+          "the two sibling forks share an identical messages prefix (everything but the task)",
+          f"len {len(prefix_1)} vs {len(prefix_2)}")
+    check(PARENT_MARKER in canonical(prefix_1), "the fork prefix carries the parent's conversation")
+    check(bool(prefix_1) and prefix_1[-1].get("role") == "assistant",
+          "the fork prefix ends on a complete assistant turn",
+          f"last role={prefix_1[-1].get('role') if prefix_1 else None}")
+    dangling = dangling_tool_uses(prefix_1)
+    check(not dangling, "the fork prefix has no tool_use without its tool_result", f"dangling={dangling}")
+
+    # Across turns: a later fork of the same role extends the earlier one.
+    prefix_3 = later["messages"][:-1]
+    check(canonical(first.get("system")) == canonical(later.get("system")),
+          "a fork two turns later is sent the same system block")
+    check(canonical(prefix_3[: len(prefix_1)]) == canonical(prefix_1) and len(prefix_3) > len(prefix_1),
+          "the earlier fork's messages prefix is a strict prefix of the later fork's",
+          f"len {len(prefix_1)} vs {len(prefix_3)}")
+
+    # Isolation: nothing of the parent conversation reaches the checker.
+    check(PARENT_MARKER not in canonical(isolated),
+          "the isolated sub-agent's request carries nothing of the parent conversation",
+          f"messages={len(isolated['messages'])}")
+    await client.ws.close()
+
+
 STAGES = {
     ("reopen", "before"): reopen_before,
     ("reopen", "after"): reopen_after,
     ("checklist", "before"): checklist_before,
     ("checklist", "after"): checklist_after,
     ("two_clients", "only"): two_clients_only,
+    ("fork", "only"): fork_only,
 }
 
 
