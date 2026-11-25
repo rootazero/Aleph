@@ -13,7 +13,7 @@ use rusqlite::{
 
 use crate::error::AlephError;
 use crate::memory::store::raw_memory::{
-    RawMemory, RawMemorySource, RawMemoryStore, SequencedCorrection,
+    CorrectionStatusCursor, RawMemory, RawMemorySource, RawMemoryStore, SequencedCorrection,
 };
 
 use super::utils::compute_sha256;
@@ -21,6 +21,23 @@ use super::MarkdownSessionStore;
 
 fn storage_error(error: impl std::fmt::Display) -> AlephError {
     AlephError::other(format!("Markdown raw memory: {error}"))
+}
+
+// A NULL activation sequence means a legacy status read, before activation.
+const CORRECTION_IS_PENDING: &str =
+    "seq.seq > ?2 AND (?3 IS NULL OR (?4 IS NOT NULL AND seq.seq > ?4) OR raw.created_at > ?3)";
+
+fn correction_fence(
+    conn: &Connection,
+    corpus: &str,
+) -> Result<Option<(i64, Option<i64>)>, AlephError> {
+    conn.query_row(
+        "SELECT activation_seq, legacy_watermark FROM raw_correction_fences WHERE agent_id = ?1",
+        [corpus],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )
+    .optional()
+    .map_err(storage_error)
 }
 
 /// Neither caller-controlled agent IDs nor record IDs become path components.
@@ -543,26 +560,17 @@ impl RawMemoryStore for MarkdownSessionStore {
             let tx = db
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .map_err(storage_error)?;
-            let fence: Option<(i64, Option<i64>)> = tx
-                .query_row(
-                    "SELECT activation_seq, legacy_watermark FROM raw_correction_fences WHERE agent_id = ?1",
-                    [&agent_id],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )
-                .optional()
-                .map_err(storage_error)?;
-            let Some((activation_seq, legacy_watermark)) = fence else {
+            let Some((activation_seq, legacy_watermark)) = correction_fence(&tx, &agent_id)? else {
                 return Ok(None);
             };
             let mut statement = tx
-                .prepare(
+                .prepare(&format!(
                     "SELECT seq.seq, raw.id, raw.file_id, raw.is_processed
                      FROM raw_correction_sequence AS seq
                      JOIN raw_memory_index AS raw ON raw.id = seq.raw_id AND raw.agent_id = seq.agent_id
-                     WHERE seq.agent_id = ?1 AND seq.seq > ?2
-                       AND (?3 IS NULL OR seq.seq > ?4 OR raw.created_at > ?3)
+                     WHERE seq.agent_id = ?1 AND ({CORRECTION_IS_PENDING})
                      ORDER BY seq.seq ASC LIMIT ?5",
-                )
+                ))
                 .map_err(storage_error)?;
             let mut rows = statement
                 .query(params![agent_id, after_seq, legacy_watermark, activation_seq, limit])
@@ -579,6 +587,56 @@ impl RawMemoryStore for MarkdownSessionStore {
             Ok(Some(page))
         })
         .await
+    }
+
+    async fn corrections_with_status(
+        &self,
+        agent_id: &str,
+        cursor: CorrectionStatusCursor,
+        include_distilled: bool,
+        limit: usize,
+    ) -> Result<Option<Vec<(RawMemory, bool)>>, AlephError> {
+        let agent_id = agent_id.to_owned();
+        let limit = i64::try_from(limit).map_err(storage_error)?;
+        self.with_raw_db(move |db, base| {
+            let tx = db.transaction_with_behavior(TransactionBehavior::Immediate).map_err(storage_error)?;
+            let fence = correction_fence(&tx, &agent_id)?;
+            let (committed_seq, activation_seq, legacy_watermark) = match (fence, cursor) {
+                (Some((activation, mark)), CorrectionStatusCursor::Committed(committed)) => {
+                    (committed, Some(activation), mark)
+                }
+                (Some((activation, mark)), CorrectionStatusCursor::Legacy(_)) => {
+                    (0, Some(activation), mark)
+                }
+                (None, CorrectionStatusCursor::Legacy(mark)) => (0, None, mark),
+                (None, CorrectionStatusCursor::Committed(0)) => return Ok(None),
+                (None, CorrectionStatusCursor::Committed(_)) => {
+                    return Err(storage_error("correction feed lost its activation fence"));
+                }
+            };
+            let mut statement = tx.prepare(&format!(
+                "WITH status AS (
+                    SELECT raw.id, raw.file_id, raw.is_processed, raw.created_at, seq.seq,
+                           NOT ({CORRECTION_IS_PENDING}) AS distilled
+                    FROM raw_correction_sequence AS seq
+                    JOIN raw_memory_index AS raw ON raw.id = seq.raw_id AND raw.agent_id = seq.agent_id
+                    WHERE seq.agent_id = ?1
+                 )
+                 SELECT id, file_id, is_processed, distilled FROM status
+                 WHERE ?5 OR NOT distilled ORDER BY created_at DESC, seq DESC LIMIT ?6"
+            )).map_err(storage_error)?;
+            let mut rows = statement.query(params![agent_id, committed_seq, legacy_watermark, activation_seq, include_distilled, limit]).map_err(storage_error)?;
+            let mut result = Vec::new();
+            while let Some(row) = rows.next().map_err(storage_error)? {
+                let id: String = row.get(0).map_err(storage_error)?;
+                let file_id: String = row.get(1).map_err(storage_error)?;
+                let processed = row.get(2).map_err(storage_error)?;
+                let distilled = row.get(3).map_err(storage_error)?;
+                let raw = read_memory(base, &id, &agent_id, &file_id, processed)?;
+                result.push((raw, distilled));
+            }
+            Ok(Some(result))
+        }).await
     }
 
     /// Counts rows under the prefix across every agent partition: a

@@ -257,13 +257,8 @@ impl DreamPipeline {
                 // path (not just the rarer synthesize path), so a freshly
                 // flagged correction becomes a recallable feedback rule within
                 // a day instead of waiting for a high-growth synthesize cycle.
-                // Watermark + min_candidates gating make this a cheap no-op when
-                // there are no new corrections, so no extra LLM call is incurred.
-                Box::new(stages::FeedbackDistillStage {
-                    max_per_cycle: dreaming_cfg.feedback_distill_max_per_cycle,
-                    min_candidates: dreaming_cfg.feedback_distill_min_candidates,
-                    lookback: dreaming_cfg.feedback_lookback,
-                }),
+                // The scoped sequence and quorum avoid an LLM call on quiet cycles.
+                Box::new(stages::FeedbackDistillStage::from(dreaming_cfg)),
                 // The failure rail, alongside the correction rail. Same
                 // frequent path for the same reason: a failure pattern is worth
                 // knowing about the next day, not the next high-growth cycle.
@@ -322,11 +317,7 @@ impl DreamPipeline {
                 // learnings. Also present on the Consolidate path so distillation
                 // happens daily; only one strategy runs per cycle, so there is no
                 // double execution.
-                Box::new(stages::FeedbackDistillStage {
-                    max_per_cycle: dreaming_cfg.feedback_distill_max_per_cycle,
-                    min_candidates: dreaming_cfg.feedback_distill_min_candidates,
-                    lookback: dreaming_cfg.feedback_lookback,
-                }),
+                Box::new(stages::FeedbackDistillStage::from(dreaming_cfg)),
                 // Present on BOTH LLM paths, like FeedbackDistill: only one
                 // strategy runs per cycle, so a stage that lives on only one of
                 // them silently stops distilling for as long as the selector
@@ -3069,7 +3060,7 @@ mod tests {
         .with_agent(agent_id);
         raw.path = Some(format!(
             "{}{id}",
-            stages::feedback_distill::CORRECTION_PATH_PREFIX
+            crate::memory::store::raw_memory::CORRECTION_PATH_PREFIX
         ));
         fx.raw_store
             .as_ref()

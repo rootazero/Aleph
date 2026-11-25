@@ -155,12 +155,13 @@ async fn identical_same_path_replacement_has_no_effect_or_archive() {
         .write_note_raw(CORPUS, "skill", "original", &bytes)
         .await
         .unwrap();
-    let _guard = super::super::lock_note_corpus(&vault, CORPUS).await;
-    assert!(indexer
-        .prepare_distill_effect_locked(CORPUS, "skill", &action)
-        .await
-        .unwrap()
-        .is_none());
+    assert_eq!(
+        indexer
+            .apply_distill_action(CORPUS, "skill", &action)
+            .await
+            .unwrap(),
+        DistillOutcome::Unchanged,
+    );
     assert_eq!(
         fs::read_to_string(vault.join(CORPUS).join("skill/original.md"))
             .await

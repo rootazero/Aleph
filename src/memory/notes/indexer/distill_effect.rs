@@ -2,7 +2,7 @@
 
 use super::{render_note, sha2_hash, NoteIndexer};
 use crate::error::AlephError;
-use crate::memory::dreaming::distill_action::DistillAction;
+use crate::memory::dreaming::distill_action::{DistillAction, DistillOutcome};
 use crate::memory::notes::store::NoteStore;
 use crate::memory::notes::{sanitize_title, KnowledgeNote, Severity};
 use crate::utils::atomic_write::atomic_write_file;
@@ -255,18 +255,22 @@ impl<S: NoteStore> NoteIndexer<S> {
         agent_id: &str,
         category: &str,
         action: &DistillAction,
-    ) -> Result<(), AlephError> {
+    ) -> Result<DistillOutcome, AlephError> {
+        if matches!(action, DistillAction::Skip { .. }) {
+            return Ok(DistillOutcome::Skipped);
+        }
         let _guard = super::lock_note_corpus(&self.memory_dir, agent_id).await;
-        if let Some(effect) = self
+        let Some(effect) = self
             .prepare_distill_effect_locked(agent_id, category, action)
             .await?
-        {
-            self.verify_distill_effect_locked(agent_id, &effect).await?;
-        }
-        Ok(())
+        else {
+            return Ok(DistillOutcome::Unchanged);
+        };
+        self.verify_distill_effect_locked(agent_id, &effect).await?;
+        Ok(DistillOutcome::Applied)
     }
 
-    pub(super) async fn prepare_distill_effect_locked(
+    pub(crate) async fn prepare_distill_effect_locked(
         &self,
         agent_id: &str,
         category: &str,
@@ -442,7 +446,7 @@ impl<S: NoteStore> NoteIndexer<S> {
         Ok(Some(effect))
     }
 
-    pub(super) async fn verify_distill_effect_locked(
+    pub(crate) async fn verify_distill_effect_locked(
         &self,
         agent_id: &str,
         effect: &PreparedDistillEffect,

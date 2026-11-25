@@ -251,6 +251,13 @@ pub struct SequencedCorrection {
     pub raw: RawMemory,
 }
 
+/// Cursor supplied by the feedback consumer for a status-only read.
+#[derive(Clone, Copy)]
+pub enum CorrectionStatusCursor {
+    Committed(i64),
+    Legacy(Option<i64>),
+}
+
 /// Storage trait for raw memory records.
 #[async_trait]
 pub trait RawMemoryStore: Send + Sync {
@@ -399,6 +406,22 @@ pub trait RawMemoryStore: Send + Sync {
         _after_seq: i64,
         _limit: usize,
     ) -> Result<Option<Vec<SequencedCorrection>>, AlephError> {
+        Err(AlephError::other(
+            "Correction feed is not supported by this store",
+        ))
+    }
+
+    /// Newest corrections and whether this corpus's consumer settled them.
+    /// With a sequence cursor, `None` requests a legacy fallback before activation.
+    /// The persisted fence takes precedence if activation races the fallback.
+    /// Filter pending rows before applying the limit.
+    async fn corrections_with_status(
+        &self,
+        _agent_id: &str,
+        _cursor: CorrectionStatusCursor,
+        _include_distilled: bool,
+        _limit: usize,
+    ) -> Result<Option<Vec<(RawMemory, bool)>>, AlephError> {
         Err(AlephError::other(
             "Correction feed is not supported by this store",
         ))

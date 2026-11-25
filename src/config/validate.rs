@@ -260,6 +260,16 @@ impl Config {
                 ));
             }
 
+            let dreaming = &self.memory.dreaming;
+            let page_limit =
+                crate::config::DreamingConfig::feedback_page_limit(dreaming.feedback_lookback);
+            if dreaming.feedback_distill_min_candidates > page_limit {
+                return Err(AlephError::invalid_config(format!(
+                    "memory.dreaming.feedback_distill_min_candidates ({}) exceeds the effective feedback_lookback ({page_limit})",
+                    dreaming.feedback_distill_min_candidates,
+                )));
+            }
+
             let start = match NaiveTime::parse_from_str(
                 &self.memory.dreaming.window_start_local,
                 "%H:%M",
@@ -771,6 +781,25 @@ mod tests {
             let mut cfg = Config::default();
             cfg.policies.exec_tier = tier;
             assert!(cfg.validate().is_ok(), "{tier:?} must still load");
+        }
+    }
+
+    #[test]
+    fn feedback_quorum_must_fit_the_effective_lookback() {
+        let mut cfg = Config::default();
+        cfg.memory.dreaming.enabled = true;
+        for (lookback, capacity) in [(10, 10), (600, 512)] {
+            cfg.memory.dreaming.feedback_lookback = lookback;
+            cfg.memory.dreaming.feedback_distill_min_candidates = capacity;
+            cfg.validate().unwrap();
+
+            cfg.memory.dreaming.feedback_distill_min_candidates = capacity + 1;
+            let error = cfg.validate().unwrap_err().to_string();
+            assert!(error.contains("feedback_distill_min_candidates"), "{error}");
+            assert!(
+                error.contains(&format!("effective feedback_lookback ({capacity})")),
+                "{error}"
+            );
         }
     }
 

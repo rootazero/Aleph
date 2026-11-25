@@ -18,6 +18,7 @@ use crate::memory::notes::{sanitize_title, KnowledgeNote, Severity};
 use crate::utils::atomic_write::atomic_write_file;
 
 mod distill_effect;
+pub(crate) use distill_effect::PreparedDistillEffect;
 
 // The runtime, base dream and corpus dreams construct separate indexers. Key
 // by vault and corpus, not indexer instance, and retire unused entries.
