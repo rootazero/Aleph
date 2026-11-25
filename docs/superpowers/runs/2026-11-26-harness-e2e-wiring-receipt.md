@@ -34,8 +34,21 @@
 1. exactly one run id in `RunStarted`/`RunFinished`, before and after the wait; and
 2. every burst text appears in `body.messages` of some logged provider request whose `run_turn` is greater than 1, i.e. after the run had started. It reads the mock's request log, which `qa/busy_input/run.sh` now passes as the mock's fifth argument and as `--request-log`.
 
+### F5/F6 plan mode (Task 2) / 计划模式
+
+`qa/plan_handoff` revived against `ExecTier::Plan` + `scratchpad{request_approval}` (was STALE, drove the removed `plan_phase` design). Run: `for s in handoff deny floor; do KEEP=1 ./qa/plan_handoff/run.sh $s; done`.
+
+| Stage | Result | Claims that passed / 通过的断言 |
+|---|---|---|
+| handoff | rc=1 → **D2 only** | control run lists `file_write`; while planning `file_write` stays listed and is refused with `GateRule::PlanMode`'s sentence; `set_plan` runs; `request_approval` appears in `clarification.pending` (question id `plan_approval`); `clarification.resolve reply=approved` accepted; model told `Plan approved`; the same run's next `file_write` writes and the file is on disk; `chat.history` `session.exec_tier` is no longer `plan` |
+| deny | rc=1 → **D2 only** | `reply=rejected` accepted; model told `Plan rejected`; `file_write` still listed and still refused; session tier still `plan` |
+| floor | rc=1 → **D2 only** | with config `bash = "allow"`, `file_write = "allow"`: `bash` still refused by plan mode; `file_ops list` admitted; `file_ops delete` refused; session tier still `plan` |
+
+Deviation from the plan: the plan asked to identify the refusing gate by id `plan_mode`. The id does not appear in model-facing text, so the fixture matches the opening of `GateRule::PlanMode::reason` (`This conversation is PLANNING`, `src/tools/scoped/gate_chain.rs`). 偏离：门的 id 不出现在模型可见文本中，改为匹配该规则的原因句。
+
 ## Defect ledger / 缺陷台账
 
 | ID | Scenario | Symptom / 症状 | Root cause / 根因 | Failing test | Fix commit |
 |---|---|---|---|---|---|
 | D1 | `qa/busy_input/run.sh steer` (F3) | The server logs `mid-loop steering: injected user message into running loop` three times, yet none of the three texts reaches any of the run's 7 later provider requests (run turns 3–9). The run never sees the steer. | Two different `SessionKey`s are used for one per-peer DM. The webhook router builds `DirectMessage{channel:"webhook", dm_scope:PerPeer}`; the harness runner receives the key as a string (`agent:main:dm:qa-sender`) and rebuilds it with `SessionKey::from_key_string` (`src/orchestrator/harness_bridge/runner_impl.rs:181`), which yields `channel:""`. Steering emits with the structured key (`src/gateway/execution_engine/steering.rs` `try_inject_steering`; its comment says "no translation needed"), so the event lands in a separate `session_events` stream the loop never reads. The pending-steer count (`read_steering_events`) reads that orphan stream too. Same split seen for `AssistantRunMeta` (`stamp_run_meta`, `src/gateway/execution_engine/helpers.rs:98`) and the `journal_hook_stop` receipt. The string form does not survive the round trip either: `agent:main:dm:x` parses to `{channel:"", PerPeer}`, which formats as `agent:main:peer:x`, so the harness's session-preference key (`runner_impl.rs:184`) differs from the gateway's. Scope: every DM from a named channel under the default `DmScope::PerPeer`. `Main` keys are not affected. | `qa/busy_input/run.sh steer` (real machine); unit test to come in Task 9 | — |
+| D2 | `qa/plan_handoff/run.sh {handoff,deny,floor}` (F5) | A `chat.send` carrying the removed `plan_phase: "planning"` field is accepted and starts an ordinary run (`result.run_id` returned). An old client would believe it is planning while every tool runs: fail-open. | `chat.send` deserializes into `AgentRunParams` (`src/gateway/handlers/agent.rs:37`, shared with `agent.run` via `src/bin/aleph-server/server_init.rs:368`), which has no `#[serde(deny_unknown_fields)]`, so unknown fields are dropped silently. Fix options (decide in Task 9, wire-contract change): reject unknown fields on `AgentRunParams` (broad: every client sending an extra field breaks) vs. reject only removed fields (narrow, but an enumerated list). | `qa/plan_handoff` last claim (real machine); unit test to come in Task 9 | — |
