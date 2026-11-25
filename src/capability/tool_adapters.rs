@@ -608,6 +608,14 @@ fn map_domain_tool_error(name: &str, error: CapabilityInvocationError) -> ToolEr
             name: name.into(),
             reason: error.to_string(),
         },
+        // The resolve variants are internal detail, and two of them differ
+        // only in whether the guessed id exists: naming the variant turns the
+        // refusal into an existence oracle for whoever guessed the id. The
+        // refusal itself is the whole answer the model can act on.
+        CapabilityInvocationError::Resolve(_) => ToolError::Execution {
+            name: name.into(),
+            cause: "capability is not available for this call".into(),
+        },
         error => ToolError::Execution {
             name: name.into(),
             cause: error.to_string(),
