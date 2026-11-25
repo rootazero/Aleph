@@ -219,35 +219,41 @@ impl SelectableModelsSnapshot {
         } else {
             (provider, model)
         };
-        let provider = match provider {
-            Some(name) => name,
-            None => {
-                let matches: Vec<_> = self
-                    .providers
-                    .iter()
-                    .filter(|(_, p)| {
-                        p.models.contains(model)
-                            || (p.available && p.authenticated && p.discovered.contains(model))
-                    })
-                    .map(|(name, _)| name.as_str())
-                    .collect();
-                match matches.as_slice() {
-                    [] => {
-                        return Err(ModelSelectionError::Unknown {
-                            model: model.into(),
-                            provider: None,
-                        })
-                    }
-                    [name] => *name,
-                    _ => {
-                        return Err(ModelSelectionError::Ambiguous {
-                            model: model.into(),
-                            providers: matches.iter().map(|p| (*p).to_owned()).collect(),
-                        })
-                    }
-                }
-            }
-        };
+        match provider {
+            Some(name) => self.resolve_qualified(name, model),
+            None => self.resolve_raw(model),
+        }
+    }
+
+    /// Resolve the exact wire ID, without interpreting a slash as shorthand.
+    pub fn resolve_raw(&self, model: &str) -> Result<SessionModelPref, ModelSelectionError> {
+        let matches: Vec<_> = self
+            .providers
+            .iter()
+            .filter(|(_, entry)| {
+                entry.models.contains(model)
+                    || (entry.available && entry.authenticated && entry.discovered.contains(model))
+            })
+            .map(|(name, _)| name.as_str())
+            .collect();
+        match matches.as_slice() {
+            [] => Err(ModelSelectionError::Unknown {
+                model: model.into(),
+                provider: None,
+            }),
+            [name] => self.resolve_qualified(name, model),
+            _ => Err(ModelSelectionError::Ambiguous {
+                model: model.into(),
+                providers: matches.into_iter().map(str::to_owned).collect(),
+            }),
+        }
+    }
+
+    fn resolve_qualified(
+        &self,
+        provider: &str,
+        model: &str,
+    ) -> Result<SessionModelPref, ModelSelectionError> {
         let Some(entry) = self.providers.get(provider) else {
             return Err(ModelSelectionError::Unknown {
                 model: model.into(),

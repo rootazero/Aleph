@@ -580,6 +580,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             let session_pick = crate::providers::session_model_handle::get_session_model(
                 &request.session_key.to_key_string(),
             );
+            let session_pick = session_pick.as_ref().and_then(|pref| {
+                crate::providers::session_model_handle::validate_persisted_model(pref).ok()
+            });
             let configured_model = request.model_override.as_ref().map_or_else(
                 || {
                     session_pick
@@ -774,6 +777,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             // was never tried. The table is gone. The honest half of the notice
             // now arrives from the walk itself, as a correction emitted just
             // before the terminal frame (`helpers::emit_route_correction`).
+            let mut ignored_pin = None;
             let (requested_provider, requested_model) = match request.model_override.as_ref() {
                 Some(override_) => {
                     let provider_name = match override_.provider() {
@@ -793,19 +797,21 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 None => match crate::providers::session_model_handle::get_session_model(
                     &request.session_key.to_key_string(),
                 ) {
-                    Some(pref) => (
-                        pref.provider.unwrap_or_else(|| {
-                            self.provider_registry.default_provider().name().to_string()
-                        }),
-                        pref.model,
-                    ),
-                    None => {
-                        let model = agent.config().model.clone();
-                        let provider = self.provider_registry.get(&model).map_or_else(
-                            || self.provider_registry.default_provider().name().to_string(),
-                            |prov| prov.name().to_string(),
-                        );
-                        (provider, model)
+                    pref => {
+                        use crate::providers::session_model_handle::validate_persisted_model;
+                        let binding = pref
+                            .as_ref()
+                            .and_then(|pref| validate_persisted_model(pref).ok())
+                            .and_then(|pref| Some((pref.provider?, pref.model)));
+                        binding.unwrap_or_else(|| {
+                            ignored_pin = pref.map(|pref| pref.model);
+                            let model = agent.config().model.clone();
+                            let provider = self.provider_registry.get(&model).map_or_else(
+                                || self.provider_registry.default_provider().name().to_string(),
+                                |prov| prov.name().to_string(),
+                            );
+                            (provider, model)
+                        })
                     }
                 },
             };
@@ -817,8 +823,8 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     model_info: crate::providers::health::ModelInfo {
                         model: requested_model,
                         provider: requested_provider,
-                        is_fallback: false,
-                        original_model: None,
+                        is_fallback: ignored_pin.is_some(),
+                        original_model: ignored_pin,
                     },
                 })
                 .await;
@@ -1518,6 +1524,26 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 // retry loop rebuilds this FlowRequest but never alters it.
                 telecom_public: request.telecom_public.clone(),
             };
+
+            // Named transports can outlive the published eligibility after a
+            // reconfiguration. A queued external choice must still be usable.
+            if request
+                .metadata
+                .contains_key(crate::gateway::model_override::USER_MODEL_OVERRIDE_METADATA)
+            {
+                use crate::providers::session_model_handle::selectable_models;
+                let still_selectable = request.model_override.as_ref().is_some_and(|model| {
+                    selectable_models().is_some_and(|snapshot| {
+                        snapshot.resolve(model.provider(), model.model()).is_ok()
+                    })
+                });
+                if !still_selectable {
+                    return Err(ExecutionError::Orchestrator(
+                        "The selected model is no longer available. Choose a model and try again."
+                            .into(),
+                    ));
+                }
+            }
 
             // Dispatch via the orchestrator
             let orchestrator = match self.orchestrator.get() {

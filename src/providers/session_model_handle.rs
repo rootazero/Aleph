@@ -577,6 +577,16 @@ pub fn pinnable_providers() -> Option<std::collections::BTreeSet<String>> {
 
 /// Resolve before any session or durable state is written. No publication is
 /// an explicit refusal, not a test/preboot bypass.
+pub fn validate_persisted_model(
+    pref: &SessionModelPref,
+) -> Result<SessionModelPref, ModelSelectionError> {
+    let snapshot = selectable_models().ok_or(ModelSelectionError::Unavailable)?;
+    match pref.provider.as_deref() {
+        Some(provider) => snapshot.resolve(Some(provider), &pref.model),
+        None => snapshot.resolve_raw(&pref.model),
+    }
+}
+
 pub fn resolve_selectable_model(
     provider: Option<&str>,
     model: &str,

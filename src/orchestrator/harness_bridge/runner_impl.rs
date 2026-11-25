@@ -166,55 +166,28 @@ impl HarnessRunner for AgentHarnessRunner {
         //      keyed by the canonical `SessionKey` the tool wrote under;
         //   2. otherwise the flow's `BrainRef` preset via `pick_llm`.
         //
-        // Explicit directives resolve a *base provider* then stamp the model
-        // onto it via the shared `ModelOverrideProvider`. The base is, in turn:
-        //   * the configured named provider for `provider_opt`, wrapped with
-        //     the configured failure-only `FailoverProvider` (retry,
-        //     circuit-breaking and cooldown); else
-        //   * the global default chain.
-        // Either way the base is a `FailoverProvider`, and its primary slot now
-        // honours the stamped model (see `failover.rs` model-list resolution) —
-        // so the explicitly chosen model actually reaches the wire instead of
-        // being shadowed by that provider's static catalog. The directive-less
-        // path is byte-identical to before — it uses `BrainRef` and lets the
-        // failover primary walk its catalog as usual.
+        // Qualified directives bind the exact transport, never its fallback
+        // ladder. Only trusted internal unqualified directives retain default
+        // chain routing. The directive-less path still uses BrainRef.
         let parsed_session_key = SessionKey::from_key_string(&session_key);
         let session_pref_key = parsed_session_key
             .as_ref()
             .map_or_else(|| session_key.clone(), |s| s.to_key_string());
-        let session_model_snapshot =
-            crate::providers::session_model_handle::get_session_model_snapshot(&session_pref_key);
-        let model_directive: Option<(Option<String>, String)> =
-            effective_model_directive(turn_model, session_model_snapshot.pref);
-        // *attribution* must fall back with it. `select_model` refuses an
-        // unknown key outright, so this is reachable only when an explicit
-        // session directive names a provider that has since been deleted;
-        // keeping the original name would price the run against a provider
-        // that never served a token.
-        let model_directive = model_directive.map(|(provider_opt, model)| {
-            let resolved = provider_opt.filter(|p| {
-                let known = self.named_providers.contains_key(p);
-                if !known {
-                    tracing::warn!(
-                        provider = %p,
-                        "model directive names an unconfigured provider; using the default chain",
-                    );
-                }
-                known
-            });
-            (resolved, model)
-        });
+        let session_pref = turn_model
+            .is_none()
+            .then(|| self.routable_session_model(&session_pref_key))
+            .flatten();
+        let model_directive = effective_model_directive(turn_model, session_pref);
         // rust-doctor-disable-next-line excessive-clone
         let explicit_model_directive = model_directive.clone();
         let llm = match model_directive {
-            Some((provider_opt, model)) => {
-                let base = provider_opt
-                    .as_ref()
-                    .and_then(|p| self.named_providers.get(p).cloned())
-                    .unwrap_or_else(|| self.default_provider.current());
-                Arc::new(crate::providers::ModelOverrideProvider::new(base, model))
-                    as Arc<dyn crate::providers::AiProvider>
+            Some((Some(provider), model)) => {
+                qualified_model_provider(&self.named_providers, provider, model)?
             }
+            Some((None, model)) => Arc::new(crate::providers::ModelOverrideProvider::new(
+                self.default_provider.current(),
+                model,
+            )) as Arc<dyn crate::providers::AiProvider>,
             None => llm::pick_llm(&spec.brain, &self.default_provider, &self.named_providers)?,
         };
         // Stage J-pre: wrap the root provider with MeteringProvider so every
@@ -1318,12 +1291,10 @@ impl HarnessRunner for AgentHarnessRunner {
         //    `effective_model_directive` → `named_providers`, else the default
         //    chain — the same resolution here, so a DeepSeek-pinned session
         //    under an Anthropic default counts DeepSeek's reasoning_content.
-        let pinned_provider = effective_model_directive(
-            None,
-            crate::providers::session_model_handle::get_session_model(&canonical_key),
-        )
-        .and_then(|(provider, _)| provider)
-        .and_then(|p| self.named_providers.get(&p).cloned());
+        let pinned_provider = self
+            .routable_session_model(&canonical_key)
+            .and_then(|pref| pref.provider)
+            .and_then(|p| self.named_providers.get(&p).cloned());
         let serving = pinned_provider.unwrap_or_else(|| self.default_provider.current());
         let history = serving
             .reasoning_replay((!model.is_empty()).then_some(model.as_str()))
@@ -1340,6 +1311,39 @@ impl HarnessRunner for AgentHarnessRunner {
             None => raw,
         })
     }
+
+    fn routable_session_model(
+        &self,
+        key: &str,
+    ) -> Option<crate::providers::session_model_handle::SessionModelPref> {
+        use crate::providers::session_model_handle::{get_session_model, validate_persisted_model};
+        let pref = validate_persisted_model(&get_session_model(key)?).ok()?;
+        exact_named_transport(&self.named_providers, pref.provider.as_deref()?)?;
+        Some(pref)
+    }
+}
+
+fn qualified_model_provider(
+    named: &std::collections::HashMap<String, Arc<dyn crate::providers::AiProvider>>,
+    provider: String,
+    model: String,
+) -> Result<Arc<dyn crate::providers::AiProvider>, FlowError> {
+    let transport =
+        exact_named_transport(named, &provider).ok_or(FlowError::ProviderUnavailable(provider))?;
+    Ok(Arc::new(crate::providers::ModelOverrideProvider::new(
+        transport, model,
+    )))
+}
+
+fn exact_named_transport(
+    named: &std::collections::HashMap<String, Arc<dyn crate::providers::AiProvider>>,
+    name: &str,
+) -> Option<Arc<dyn crate::providers::AiProvider>> {
+    let route = named.get(name)?;
+    if let Some(chain) = route.as_failover_provider() {
+        return chain.exact_transport(name);
+    }
+    (route.serving_provider_hint().as_deref() == Some(name)).then(|| Arc::clone(route))
 }
 
 /// The slice of `records` that THIS run produced.
@@ -1793,10 +1797,78 @@ mod model_directive_tests {
 
     #[test]
     fn a_provider_less_turn_pick_pins_only_the_model() {
-        // `Raw { model }` from the picker: the model is stamped, while the
+        // Trusted unqualified directive: the model is stamped, while the
         // failure-only provider chain remains responsible for fallback.
         let out = effective_model_directive(Some(pref(None, "gpt-5")), None);
         assert_eq!(out, Some((None, "gpt-5".to_string())));
+    }
+
+    #[tokio::test]
+    async fn qualified_model_reaches_only_the_named_transport_even_on_failure() {
+        use super::{qualified_model_provider, Arc, FlowError};
+        use crate::providers::adapter::{ProviderResponse, RequestPayload};
+        use crate::providers::failover::{
+            FailoverConfig, FailoverHealth, FailoverNode, FailoverProvider,
+        };
+        use crate::providers::{AiProvider, StaticDefault};
+        use std::{borrow::Cow, collections::HashMap, future::Future, pin::Pin, sync::Mutex};
+
+        struct Recorder {
+            name: &'static str,
+            seen: Mutex<Vec<Option<String>>>,
+        }
+        impl AiProvider for Recorder {
+            fn process<'a>(
+                &'a self,
+                payload: RequestPayload<'a>,
+            ) -> Pin<Box<dyn Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>>
+            {
+                self.seen.lock().unwrap().push(payload.model);
+                Box::pin(async {
+                    Err(crate::error::AlephError::provider(
+                        "fixture transport failed",
+                    ))
+                })
+            }
+            fn name(&self) -> &str {
+                self.name
+            }
+            fn color(&self) -> &str {
+                "#000000"
+            }
+            fn serving_provider_hint(&self) -> Option<Cow<'_, str>> {
+                Some(Cow::Borrowed(self.name))
+            }
+        }
+        let chosen = Arc::new(Recorder {
+            name: "relay",
+            seen: Mutex::new(Vec::new()),
+        });
+        let fallback = Arc::new(Recorder {
+            name: "default",
+            seen: Mutex::new(Vec::new()),
+        });
+        let chain = FailoverProvider::new(
+            Arc::new(StaticDefault::new(chosen.clone())),
+            vec![FailoverNode {
+                name: "default".into(),
+                models: vec!["org/model".into()],
+                provider: fallback.clone(),
+            }],
+            HashMap::new(),
+            FailoverHealth::default(),
+            FailoverConfig::default(),
+        );
+        let named = HashMap::from([("relay".into(), Arc::new(chain) as Arc<dyn AiProvider>)]);
+        let provider =
+            qualified_model_provider(&named, "relay".into(), "org/model".into()).unwrap();
+        let input = [crate::providers::message::UnifiedMessage::user("hi")];
+        assert!(provider.process(RequestPayload::new(&input)).await.is_err());
+        assert_eq!(*chosen.seen.lock().unwrap(), vec![Some("org/model".into())]);
+        assert!(fallback.seen.lock().unwrap().is_empty());
+        assert!(
+            matches!(qualified_model_provider(&named, "missing".into(), "org/model".into()), Err(FlowError::ProviderUnavailable(name)) if name == "missing")
+        );
     }
 }
 

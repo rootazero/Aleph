@@ -518,6 +518,10 @@ impl AiProvider for OllamaProvider {
     fn protocol(&self) -> Cow<'_, str> {
         Cow::Borrowed("ollama")
     }
+
+    fn serving_provider_hint(&self) -> Option<Cow<'_, str>> {
+        Some(Cow::Borrowed(&self.name))
+    }
 }
 
 #[cfg(test)]
