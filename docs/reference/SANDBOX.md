@@ -178,33 +178,9 @@ fail-fast, not a silent bypass.
 
 `src/sandbox/factory.rs` composes the `Arc<dyn Sandbox>` at boot:
 
-```rust
-pub fn build_sandbox(
-    cfg: &SandboxConfig,
-    driver: Arc<dyn OsSandboxDriverTrait>,
-    approval: Arc<ApprovalGate>,
-) -> Arc<dyn Sandbox>;
-```
+At startup, `src/bin/aleph-server/commands/start/mod.rs` calls `create_platform_driver_from_config` and passes the result to `build_sandbox`, together with the sandbox config, shared `ApprovalGate`, rate-limit config and shell security config. The factory returns an `Arc<dyn Sandbox>` used for exec-class tools. The startup gate has no requester until `set_requester` installs the channel approval bridge; before that, approval fails closed.
 
-`src/bin/aleph-server/commands/start/mod.rs` wires this during start-up:
-build a single `ApprovalGate` (requesterless at construction —
-`ChannelApprovalBridgeAdapter` is injected via `set_requester` after the
-channel registry comes up; see HITL P1 in
-`docs/superpowers/specs/2026-05-19-hitl-loop-closure-design.md`) → build
-the `OsSandboxAdapter` → wrap in `OsSandboxDriver` → call
-`build_sandbox(&loaded_app_config.sandbox, os_driver, approval_gate)`.
-The resulting `Arc<dyn Sandbox>` is threaded through tool registration
-into every exec-class tool constructor (`CodeExecTool::with_sandbox`,
-`BashExecTool::with_sandbox`, …).
-
-The same `approval_gate` is also handed to the `ScopedToolService` via
-`with_confirmation(confirm_tools, requester)`, so the `requires_confirmation`
-tool seam (HITL P3: `vault_store` / `agent_delete` / `team_disband`) and
-sandbox capability escalations share one gate. The pre-`ScopedToolService`
-`PermissionLayer` / `LayeredPermissionResolver` / `AgentPermissionFilter`
-chain was deleted in 2026-05-20 — it was unreachable because every
-gateway request overrode it. Per-agent permission policy is a future
-follow-up cycle.
+`ScopedToolService` uses the same approval gate at its confirmation boundary. The pre-scoped permission chain was removed because gateway requests overrode it.
 
 ## Relation to `file_write` / `file_edit`
 
@@ -348,7 +324,7 @@ for the full design.
 
 [cycle1]: ../superpowers/specs/2026-05-20-sandbox-hardening-cycle1-design.md
 
-### Behavior changes (breaking)
+### Historical behavior changes (hardening cycle 1)
 
 - **`NetworkPolicy::AllowHosts` and `NetworkPolicy::ProxyOnly` now hard-fail**
   on Linux and Windows. Both used to silently degrade — Linux fell back to
@@ -379,7 +355,7 @@ for the full design.
   field, so no OS-profile timeout is derived or serialized; the
   `WorkspaceSandbox` wall-clock is the sole enforcement point.
 
-### Dissolution — 937 lines of dead Windows code removed
+### Historical cleanup — 937 lines of dead Windows code removed
 
 The following modules contained stub façades pretending to implement Windows
 security primitives but were verifiably never called from production code:
@@ -603,7 +579,7 @@ status` continue to work. Cycle 5 closes the absent-path gap (below).
 | `None` | `(deny network*)` | `--unshare-net` + `SeccompNetworkMode::UnixOnly` (allow only `AF_UNIX`, deny `connect`) | Token restricts; no inbound caps granted |
 | `AllowAll` | `(allow network*)` | shared netns (`SeccompNetworkMode::Unrestricted`) | network capability granted |
 | `AllowHosts(hosts)` | **Cycle 6**: managed proxy enforces hostname allowlist + Seatbelt restricts to loopback only | **Phase B (live)**: managed proxy + netns→UDS→loopback bridge; `--unshare-net` isolates the netns and the only egress is the bridge to the host proxy. `SeccompNetworkMode::ProxyRouted` narrows the target's socket surface to `AF_INET`/`AF_INET6` and denies `AF_UNIX` socketpairs | **Rejected** — pre-resolved IPs surfaced in error; Phase D (WFP, admin) deferred |
-| `ProxyOnly` | `(allow ...)` for `localhost:<port>` | Rejected (use `AllowHosts`) | Rejected |
+| `LoopbackPorts { ports }` | Rejected | Rejected | Managed launcher only; exact TCP ports on loopback |
 
 Cycle 3 lifted Linux closer to codex parity by adding seccomp-level
 socket-family deny for `None` mode (defense in depth on top of
@@ -737,25 +713,9 @@ writable root cannot be rewritten from inside the sandbox, so it is not a
 TOCTOU vector. The helper is platform-agnostic and unit-tested in
 `protected_paths.rs`.
 
-### Windows protected-path creation gap — fixed
+### Historical record — Windows protected-path creation gap
 
-Windows had the same shape of gap on a different mechanism. Cycle 3's
-`stamp_protected_metadata_deny` stamped `DENY_ACCESS` ACEs only on the
-metadata dirs that *already existed*; the workspace-root grant inherits
-`GENERIC_ALL` to every child, so a sandboxed process could `mkdir .git`
-and write inside the new directory. NTFS ACLs cannot deny "create a child
-named `.git`" by name, so — mirroring the Linux synthetic-tmpfs fix — the
-deny ACE is given a real object to bind to.
-
-`ensure_protected_metadata_deny` (renamed from `stamp_protected_metadata_deny`)
-now handles each of the four subpaths by existence:
-
-- **Existing** path → stamp the `DENY_ACCESS` ACE, as in Cycle 3.
-- **Absent** path → `create_dir` an empty stub directory first, then stamp
-  the ACE on it. The new cross-platform `classify_protected_metadata`
-  (replacing `protected_metadata_targets_under`) returns all four paths
-  tagged with on-disk existence, keeping the partition logic unit-testable
-  on macOS / Linux dev boxes.
+Cycle 5 extended deny ACLs to protected metadata paths that were absent at launch, using temporary empty directories to give those ACLs a filesystem object to bind to. The existence classifier covered all protected subpaths; creation and cleanup belonged to the driver, not callers.
 
 After the target exits, the post-wait cleanup revokes every deny ACE and
 removes every stub it created. Removal uses `remove_dir`, not
@@ -907,11 +867,7 @@ run the target with broken egress control.
   `src/sandbox/workspace/mod.rs` (`maybe_spawn_proxy` Linux branch + `ActiveProxy`
   guard).
 
-**Entropy reduction:** the `AllowHosts`/`ProxyOnly` `UnsupportedPolicy`
-messages and several stale "Phase B is next" comments were updated to
-reflect the shipped state; the shared `PROXY_ENV_KEYS` const removed the
-duplicated env-key list in `maybe_spawn_proxy`.
-
+**Entropy reduction:** Phase B updated the unsupported-policy diagnostics and replaced the duplicated proxy environment key list with `PROXY_ENV_KEYS`.
 **Verification:** host bridge, route-spec round-trip, socket-dir lifecycle,
 proxy-env rewrite, and the full Linux orchestration path
 (`maybe_spawn_proxy` collapse + spec injection + real UDS↔TCP forwarding via

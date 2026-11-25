@@ -30,103 +30,37 @@ const KEY_MATERIAL: &str = "aleph-material";
 const KEY_DENSITY: &str = "aleph-density";
 
 // ---------------------------------------------------------------------------
-// Theme mode
+// Shared axes
 // ---------------------------------------------------------------------------
 
-/// Light/dark surface family. Drives the `<html>` class list.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ThemeMode {
-    System,
-    Light,
-    Dark,
+// The five axes the TSX Panel also stores live in `shared-ui-logic`; this
+// module keeps the Leptos-only parts: localised labels, `Material`, and the
+// DOM/`localStorage` plumbing below.
+pub use shared_ui_logic::prefs::appearance::{Accent, Density, FontScale, Roundness, ThemeMode};
+
+/// Localised display name of an appearance value.
+///
+/// Takes the context rather than returning a key: `t_string!` resolves a
+/// *static* path at compile time, so a runtime key would have to be
+/// re-matched by every caller — which is how the Chinese literals that
+/// used to live here reached both the phone and the desktop Appearance
+/// screens while the phone i18n census stayed green.
+pub trait AppearanceLabel {
+    fn label(self, i18n: I18nContext<Locale>) -> String;
 }
 
-impl ThemeMode {
-    pub const ALL: [Self; 3] = [Self::System, Self::Light, Self::Dark];
-
-    /// Localised display name.
-    ///
-    /// Takes the context rather than returning a key: `t_string!` resolves a
-    /// *static* path at compile time, so a runtime key would have to be
-    /// re-matched by every caller — which is how the Chinese literals that
-    /// used to live here reached both the phone and the desktop Appearance
-    /// screens while the phone i18n census stayed green.
-    #[must_use]
-    pub fn label(self, i18n: I18nContext<Locale>) -> String {
+impl AppearanceLabel for ThemeMode {
+    fn label(self, i18n: I18nContext<Locale>) -> String {
         match self {
             Self::System => t_string!(i18n, appearance.mode.system).to_string(),
             Self::Light => t_string!(i18n, appearance.mode.light).to_string(),
             Self::Dark => t_string!(i18n, appearance.mode.dark).to_string(),
         }
     }
-
-    /// `localStorage` value, or `None` for `System` (which clears the key).
-    #[must_use]
-    pub const fn storage_value(self) -> Option<&'static str> {
-        match self {
-            Self::System => None,
-            Self::Light => Some("light"),
-            Self::Dark => Some("dark"),
-        }
-    }
-
-    fn from_storage(raw: Option<&str>) -> Self {
-        match raw {
-            Some("light") => Self::Light,
-            // Legacy values: the retired Glass theme ("glass") and its
-            // Vibrant-era predecessor ("translucent") were dark-based —
-            // both load as Dark. `legacy_glass_migration` (run once on
-            // boot) rewrites storage to dark + liquid material.
-            Some("dark" | "glass" | "translucent") => Self::Dark,
-            _ => Self::System,
-        }
-    }
 }
 
-// ---------------------------------------------------------------------------
-// Accent palette
-// ---------------------------------------------------------------------------
-
-/// Accent colour. `Mauve` is the base theme (clears `data-accent`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Accent {
-    Mauve,
-    Ocean,
-    Forest,
-    Sunset,
-    Rose,
-}
-
-impl Accent {
-    pub const ALL: [Self; 5] = [
-        Self::Mauve,
-        Self::Ocean,
-        Self::Forest,
-        Self::Sunset,
-        Self::Rose,
-    ];
-
-    /// Stable id used for both the `data-accent` attribute and persistence.
-    #[must_use]
-    pub const fn id(self) -> &'static str {
-        match self {
-            Self::Mauve => "mauve",
-            Self::Ocean => "ocean",
-            Self::Forest => "forest",
-            Self::Sunset => "sunset",
-            Self::Rose => "rose",
-        }
-    }
-
-    /// Localised display name.
-    ///
-    /// Takes the context rather than returning a key: `t_string!` resolves a
-    /// *static* path at compile time, so a runtime key would have to be
-    /// re-matched by every caller — which is how the Chinese literals that
-    /// used to live here reached both the phone and the desktop Appearance
-    /// screens while the phone i18n census stayed green.
-    #[must_use]
-    pub fn label(self, i18n: I18nContext<Locale>) -> String {
+impl AppearanceLabel for Accent {
+    fn label(self, i18n: I18nContext<Locale>) -> String {
         match self {
             Self::Mauve => t_string!(i18n, appearance.accent.mauve).to_string(),
             Self::Ocean => t_string!(i18n, appearance.accent.ocean).to_string(),
@@ -135,26 +69,38 @@ impl Accent {
             Self::Rose => t_string!(i18n, appearance.accent.rose).to_string(),
         }
     }
+}
 
-    /// Representative swatch colour (oklch) for UI previews.
-    #[must_use]
-    pub const fn swatch(self) -> &'static str {
+impl AppearanceLabel for FontScale {
+    fn label(self, i18n: I18nContext<Locale>) -> String {
         match self {
-            Self::Mauve => "oklch(0.60 0.13 310)",
-            Self::Ocean => "oklch(0.58 0.13 250)",
-            Self::Forest => "oklch(0.55 0.12 150)",
-            Self::Sunset => "oklch(0.66 0.135 60)",
-            Self::Rose => "oklch(0.62 0.15 15)",
+            Self::Compact => t_string!(i18n, appearance.font_scale.compact).to_string(),
+            Self::Default => t_string!(i18n, appearance.font_scale.default).to_string(),
+            Self::Cozy => t_string!(i18n, appearance.font_scale.cozy).to_string(),
+            Self::Large => t_string!(i18n, appearance.font_scale.large).to_string(),
+            Self::Largest => t_string!(i18n, appearance.font_scale.largest).to_string(),
         }
     }
+}
 
-    fn from_storage(raw: Option<&str>) -> Self {
-        match raw {
-            Some("ocean") => Self::Ocean,
-            Some("forest") => Self::Forest,
-            Some("sunset") => Self::Sunset,
-            Some("rose") => Self::Rose,
-            _ => Self::Mauve,
+impl AppearanceLabel for Roundness {
+    fn label(self, i18n: I18nContext<Locale>) -> String {
+        match self {
+            Self::Sharp => t_string!(i18n, appearance.roundness.sharp).to_string(),
+            Self::Slight => t_string!(i18n, appearance.roundness.slight).to_string(),
+            Self::Default => t_string!(i18n, appearance.roundness.default).to_string(),
+            Self::Round => t_string!(i18n, appearance.roundness.round).to_string(),
+            Self::Extra => t_string!(i18n, appearance.roundness.extra).to_string(),
+        }
+    }
+}
+
+impl AppearanceLabel for Density {
+    fn label(self, i18n: I18nContext<Locale>) -> String {
+        match self {
+            Self::Compact => t_string!(i18n, appearance.density.compact).to_string(),
+            Self::Cozy => t_string!(i18n, appearance.density.cozy).to_string(),
+            Self::Spacious => t_string!(i18n, appearance.density.spacious).to_string(),
         }
     }
 }
@@ -234,217 +180,6 @@ impl Material {
             Some("liquid") => Self::Liquid,
             Some("aurora") => Self::Aurora,
             _ => Self::Luxe,
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Font scale (accessibility text size)
-// ---------------------------------------------------------------------------
-
-/// Global UI text scale. Wires the `--control-ui-text-scale` CSS hook that
-/// every `rem` in the panel keys off of.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FontScale {
-    Compact, // 90%
-    Default, // 100%
-    Cozy,    // 110%
-    Large,   // 125%
-    Largest, // 140%
-}
-
-impl FontScale {
-    pub const ALL: [Self; 5] = [
-        Self::Compact,
-        Self::Default,
-        Self::Cozy,
-        Self::Large,
-        Self::Largest,
-    ];
-
-    /// Localised display name.
-    ///
-    /// Takes the context rather than returning a key: `t_string!` resolves a
-    /// *static* path at compile time, so a runtime key would have to be
-    /// re-matched by every caller — which is how the Chinese literals that
-    /// used to live here reached both the phone and the desktop Appearance
-    /// screens while the phone i18n census stayed green.
-    #[must_use]
-    pub fn label(self, i18n: I18nContext<Locale>) -> String {
-        match self {
-            Self::Compact => t_string!(i18n, appearance.font_scale.compact).to_string(),
-            Self::Default => t_string!(i18n, appearance.font_scale.default).to_string(),
-            Self::Cozy => t_string!(i18n, appearance.font_scale.cozy).to_string(),
-            Self::Large => t_string!(i18n, appearance.font_scale.large).to_string(),
-            Self::Largest => t_string!(i18n, appearance.font_scale.largest).to_string(),
-        }
-    }
-
-    /// CSS multiplier applied to the root font-size knob.
-    #[must_use]
-    pub const fn css_value(self) -> &'static str {
-        match self {
-            Self::Compact => "0.9",
-            Self::Default => "1",
-            Self::Cozy => "1.1",
-            Self::Large => "1.25",
-            Self::Largest => "1.4",
-        }
-    }
-
-    /// `localStorage` value, or `None` for the default (clears the key).
-    #[must_use]
-    pub fn storage_value(self) -> Option<&'static str> {
-        match self {
-            Self::Default => None,
-            other => Some(other.css_value()),
-        }
-    }
-
-    fn from_storage(raw: Option<&str>) -> Self {
-        match raw {
-            Some("0.9") => Self::Compact,
-            Some("1.1") => Self::Cozy,
-            Some("1.25") => Self::Large,
-            Some("1.4") => Self::Largest,
-            _ => Self::Default,
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Roundness (corner radius density)
-// ---------------------------------------------------------------------------
-
-/// Corner-radius density. Drives `--control-ui-radius-scale`, the multiplier
-/// the `--radius-*` design tokens key off of (`--radius-full` stays pill-shaped).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Roundness {
-    Sharp,   // 0×  — square corners
-    Slight,  // 0.5×
-    Default, // 1×
-    Round,   // 1.5×
-    Extra,   // 2×
-}
-
-impl Roundness {
-    pub const ALL: [Self; 5] = [
-        Self::Sharp,
-        Self::Slight,
-        Self::Default,
-        Self::Round,
-        Self::Extra,
-    ];
-
-    /// Localised display name.
-    ///
-    /// Takes the context rather than returning a key: `t_string!` resolves a
-    /// *static* path at compile time, so a runtime key would have to be
-    /// re-matched by every caller — which is how the Chinese literals that
-    /// used to live here reached both the phone and the desktop Appearance
-    /// screens while the phone i18n census stayed green.
-    #[must_use]
-    pub fn label(self, i18n: I18nContext<Locale>) -> String {
-        match self {
-            Self::Sharp => t_string!(i18n, appearance.roundness.sharp).to_string(),
-            Self::Slight => t_string!(i18n, appearance.roundness.slight).to_string(),
-            Self::Default => t_string!(i18n, appearance.roundness.default).to_string(),
-            Self::Round => t_string!(i18n, appearance.roundness.round).to_string(),
-            Self::Extra => t_string!(i18n, appearance.roundness.extra).to_string(),
-        }
-    }
-
-    /// CSS multiplier applied to the radius tokens.
-    #[must_use]
-    pub const fn css_value(self) -> &'static str {
-        match self {
-            Self::Sharp => "0",
-            Self::Slight => "0.5",
-            Self::Default => "1",
-            Self::Round => "1.5",
-            Self::Extra => "2",
-        }
-    }
-
-    /// `localStorage` value, or `None` for the default (clears the key).
-    #[must_use]
-    pub fn storage_value(self) -> Option<&'static str> {
-        match self {
-            Self::Default => None,
-            other => Some(other.css_value()),
-        }
-    }
-
-    fn from_storage(raw: Option<&str>) -> Self {
-        match raw {
-            Some("0") => Self::Sharp,
-            Some("0.5") => Self::Slight,
-            Some("1.5") => Self::Round,
-            Some("2") => Self::Extra,
-            _ => Self::Default,
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Density (whitespace compactness)
-// ---------------------------------------------------------------------------
-
-/// Whitespace compactness. Drives `--control-ui-density`, the multiplier that
-/// Tailwind v4's `--spacing` base unit keys off of — so every numeric
-/// padding/margin/gap/size utility re-scales from one value. `Compact` is the
-/// cleared-key default: the baked baseline is already ~12% tighter than stock,
-/// and the knob only adds breathing room from there.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Density {
-    Compact,  // 1×    — the new compact baseline (default, clears the key)
-    Cozy,     // 1.13× — restores the original ~0.25rem whitespace
-    Spacious, // 1.25× — roomier
-}
-
-impl Density {
-    pub const ALL: [Self; 3] = [Self::Compact, Self::Cozy, Self::Spacious];
-
-    /// Localised display name.
-    ///
-    /// Takes the context rather than returning a key: `t_string!` resolves a
-    /// *static* path at compile time, so a runtime key would have to be
-    /// re-matched by every caller — which is how the Chinese literals that
-    /// used to live here reached both the phone and the desktop Appearance
-    /// screens while the phone i18n census stayed green.
-    #[must_use]
-    pub fn label(self, i18n: I18nContext<Locale>) -> String {
-        match self {
-            Self::Compact => t_string!(i18n, appearance.density.compact).to_string(),
-            Self::Cozy => t_string!(i18n, appearance.density.cozy).to_string(),
-            Self::Spacious => t_string!(i18n, appearance.density.spacious).to_string(),
-        }
-    }
-
-    /// CSS multiplier applied to the `--spacing` base.
-    #[must_use]
-    pub const fn css_value(self) -> &'static str {
-        match self {
-            Self::Compact => "1",
-            Self::Cozy => "1.13",
-            Self::Spacious => "1.25",
-        }
-    }
-
-    /// `localStorage` value, or `None` for the default (clears the key).
-    #[must_use]
-    pub fn storage_value(self) -> Option<&'static str> {
-        match self {
-            Self::Compact => None,
-            other => Some(other.css_value()),
-        }
-    }
-
-    fn from_storage(raw: Option<&str>) -> Self {
-        match raw {
-            Some("1.13") => Self::Cozy,
-            Some("1.25") => Self::Spacious,
-            _ => Self::Compact,
         }
     }
 }
@@ -549,8 +284,7 @@ pub fn apply_accent(accent: Accent) {
         }
     }
     // Mauve is the base palette → clear the key.
-    let stored = (accent != Accent::Mauve).then_some(accent.id());
-    persist(KEY_ACCENT, stored);
+    persist(KEY_ACCENT, accent.storage_value());
 }
 
 pub fn apply_font_scale(scale: FontScale) {
@@ -643,85 +377,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn mode_storage_round_trips() {
-        for m in ThemeMode::ALL {
-            assert_eq!(ThemeMode::from_storage(m.storage_value()), m);
-        }
-    }
-
-    #[test]
-    fn mode_system_clears_key() {
-        assert_eq!(ThemeMode::System.storage_value(), None);
-        assert_eq!(ThemeMode::from_storage(None), ThemeMode::System);
-        assert_eq!(ThemeMode::from_storage(Some("garbage")), ThemeMode::System);
-    }
-
-    #[test]
-    fn accent_id_round_trips() {
-        for a in Accent::ALL {
-            assert_eq!(Accent::from_storage(Some(a.id())), a);
-        }
-        // Unknown / mauve both fall back to the base palette.
-        assert_eq!(Accent::from_storage(None), Accent::Mauve);
-        assert_eq!(Accent::from_storage(Some("nope")), Accent::Mauve);
-    }
-
-    #[test]
-    fn font_scale_round_trips_via_css_value() {
-        for f in FontScale::ALL {
-            assert_eq!(FontScale::from_storage(Some(f.css_value())), f);
-        }
-        assert_eq!(FontScale::Default.storage_value(), None);
-        assert_eq!(FontScale::from_storage(None), FontScale::Default);
-    }
-
-    #[test]
-    fn roundness_round_trips_via_css_value() {
-        for r in Roundness::ALL {
-            assert_eq!(Roundness::from_storage(Some(r.css_value())), r);
-        }
-        assert_eq!(Roundness::Default.storage_value(), None);
-        assert_eq!(Roundness::from_storage(None), Roundness::Default);
-    }
-
-    #[test]
-    fn density_round_trips_via_css_value() {
-        for d in Density::ALL {
-            assert_eq!(Density::from_storage(Some(d.css_value())), d);
-        }
-        // Compact is the cleared-key default (the new compact baseline).
-        assert_eq!(Density::Compact.storage_value(), None);
-        assert_eq!(Density::from_storage(None), Density::Compact);
-        assert_eq!(Density::from_storage(Some("garbage")), Density::Compact);
-    }
-
-    #[test]
-    fn density_non_default_values_persist_a_key() {
-        assert!(Density::Cozy.storage_value().is_some());
-        assert!(Density::Spacious.storage_value().is_some());
-    }
-
-    #[test]
-    fn non_default_values_persist_a_key() {
+    fn non_default_materials_persist_a_key() {
         // Every non-default variant must produce a storable value so the
         // choice survives a reload (the boot replay relies on this).
-        assert!(FontScale::Largest.storage_value().is_some());
-        assert!(Roundness::Sharp.storage_value().is_some());
-        assert!(ThemeMode::Dark.storage_value().is_some());
         assert!(Material::Liquid.storage_value().is_some());
         assert!(Material::Aurora.storage_value().is_some());
-    }
-
-    #[test]
-    fn legacy_glass_values_load_as_dark() {
-        // The retired Glass theme (and its Vibrant-era "translucent"
-        // predecessor) must keep PARSING — they map to Dark; the material
-        // half of the migration is decided by `legacy_glass_migration`.
-        assert_eq!(ThemeMode::from_storage(Some("glass")), ThemeMode::Dark);
-        assert_eq!(
-            ThemeMode::from_storage(Some("translucent")),
-            ThemeMode::Dark
-        );
     }
 
     #[test]
@@ -878,6 +538,53 @@ mod tests {
                 ),
             ],
         );
+    }
+
+    /// `shared_ui_logic`'s accent table feeds the TSX Panel's NSH theme; this
+    /// stylesheet feeds the Leptos Panel. Both must show the same colours.
+    #[test]
+    fn accent_table_matches_tailwind_css() {
+        let css = include_str!("../styles/tailwind.css");
+        let (token_section, _) = css
+            .split_once("Material primitives")
+            .expect("material primitives banner present in tailwind.css");
+        // Value of `--<name>:` in a block body, without `;` and alpha suffix.
+        let value_of = |body: &[&str], name: &str| -> Option<String> {
+            let prefix = format!("--{name}:");
+            body.iter().find_map(|line| {
+                let value = line.strip_prefix(&prefix)?.trim().trim_end_matches(';');
+                let value = value.split(" / ").next().unwrap_or(value);
+                Some(format!("{})", value.trim_end_matches(')')))
+            })
+        };
+        for accent in Accent::ALL {
+            for dark in [false, true] {
+                let selector = match (accent, dark) {
+                    (Accent::Mauve, false) => "@theme {".to_owned(),
+                    (Accent::Mauve, true) => ".dark {".to_owned(),
+                    (_, false) => format!(r#"html[data-accent="{}"] {{"#, accent.id()),
+                    (_, true) => format!(r#"html.dark[data-accent="{}"] {{"#, accent.id()),
+                };
+                let body = css_block_body(token_section, &selector);
+                let palette = accent.palette(dark);
+                let context = format!("{selector} vs Accent::{accent:?}.palette({dark})");
+                assert_eq!(
+                    value_of(&body, "color-primary").as_deref(),
+                    Some(palette.primary),
+                    "{context}"
+                );
+                assert_eq!(
+                    value_of(&body, "color-sidebar-active").as_deref(),
+                    Some(palette.selected),
+                    "{context}"
+                );
+                for derived in ["color-ring", "color-chart-1"] {
+                    if let Some(value) = value_of(&body, derived) {
+                        assert_eq!(value, palette.primary, "{context}: --{derived}");
+                    }
+                }
+            }
+        }
     }
     /// Every selector that turns a backdrop filter ON must be turned back OFF
     /// by a `html[data-flat="1"]` rule.

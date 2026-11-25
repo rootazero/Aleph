@@ -65,6 +65,14 @@ pub enum PtyToolParams {
     Attach {
         session_id: String,
     },
+    History {
+        session_id: String,
+        #[serde(default)]
+        before: Option<String>,
+        #[serde(default = "crate::pty::default_history_limit")]
+        #[schemars(range(min = 1, max = 64))]
+        limit: u16,
+    },
     Resize {
         session_id: String,
         rows: u16,
@@ -103,6 +111,13 @@ pub enum PtyOperation {
         base64: bool,
     },
     Attach,
+    History {
+        #[serde(default)]
+        before: Option<String>,
+        #[serde(default = "crate::pty::default_history_limit")]
+        #[schemars(range(min = 1, max = 64))]
+        limit: u16,
+    },
     Resize {
         #[schemars(range(min = 1, max = 1000))]
         rows: u16,
@@ -115,6 +130,11 @@ pub enum PtyOperation {
 impl PtyOperation {
     pub fn validate(&self) -> Result<(), &'static str> {
         match self {
+            Self::History { before, limit } => {
+                crate::pty::validate_history(before.as_deref(), *limit)
+                    .map(|_| ())
+                    .map_err(crate::pty::PtyHistoryError::as_str)
+            }
             Self::Input { data, .. } if data.len() > MAX_PTY_INPUT_BYTES => {
                 Err("PTY input exceeds maximum UTF-8 byte length")
             }

@@ -214,7 +214,7 @@ impl TabModel {
     ///
     /// Idempotent on `session_id`: a retry that lands twice updates the
     /// existing tab rather than growing a duplicate.
-    pub fn adopt_spawned(&mut self, session_id: &str, shell: &str) {
+    pub fn adopt_spawned(&mut self, session_id: &str, shell: &str, select: bool) {
         if let Some(tab) = self.tabs.iter_mut().find(|t| t.session_id == session_id) {
             tab.closed = false;
             tab.shell = shell.to_string();
@@ -228,7 +228,9 @@ impl TabModel {
                 shell: shell.to_string(),
             });
         }
-        self.selected = Some(session_id.to_string());
+        if select {
+            self.selected = Some(session_id.to_string());
+        }
     }
 
     /// Build one tab row while retaining the last OSC title.
@@ -264,6 +266,7 @@ pub fn TabBar(
     on_select: Callback<String>,
     on_close: Callback<String>,
     on_new: Callback<()>,
+    #[prop(optional)] disabled: Option<Signal<bool>>,
 ) -> impl IntoView {
     let close_tab_label_for_rows = close_tab_label.clone();
     view! {
@@ -278,7 +281,7 @@ pub fn TabBar(
                     .into_iter()
                     .map(|tab| {
                         let is_selected = current.as_deref() == Some(tab.session_id.as_str());
-                        view! { <TerminalTab tab=tab is_selected=is_selected close_tab_label=close_tab_label_for_rows.clone() on_select=on_select on_close=on_close /> }
+                        view! { <TerminalTab tab=tab is_selected=is_selected close_tab_label=close_tab_label_for_rows.clone() on_select=on_select on_close=on_close disabled=disabled /> }
                     })
                     .collect_view()
             }}
@@ -287,6 +290,7 @@ pub fn TabBar(
                 class="shrink-0 px-2 py-1 text-xs rounded text-text-tertiary hover:text-text-primary"
                 title=new_tab_label.clone()
                 aria-label=new_tab_label
+                disabled=move || disabled.is_some_and(|d| d.get())
                 on:click=move |_| on_new.run(())
             >
                 "+"
@@ -303,6 +307,7 @@ fn TerminalTab(
     close_tab_label: String,
     on_select: Callback<String>,
     on_close: Callback<String>,
+    disabled: Option<Signal<bool>>,
 ) -> impl IntoView {
     let select_id = tab.session_id.clone();
     let close_id = tab.session_id.clone();
@@ -334,6 +339,7 @@ fn TerminalTab(
                 class="shrink-0 px-1 rounded text-text-tertiary hover:text-text-primary"
                 title=close_tab_label.clone()
                 aria-label=close_tab_label
+                disabled=move || disabled.is_some_and(|d| d.get())
                 on:click=move |_| on_close.run(close_id.clone())
             >
                 "\u{00d7}"

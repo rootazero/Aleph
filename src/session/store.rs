@@ -37,7 +37,6 @@
 //! `session_events` queries are short and use prepared statements, so the
 //! mutex-hold time is bounded.
 
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -115,38 +114,19 @@ pub trait SessionEventStore: Send + Sync + 'static {
         to: Option<EventSeq>,
     ) -> Result<Vec<SessionEventRecord>, SessionError>;
 
-    /// Load events with seq in [from..to) WITH their retirement state — the
-    /// one read that looks past `retired_at` at full payloads
-    /// ([`load_retired_run_anchors`](Self::load_retired_run_anchors) reads
-    /// only two marker kinds, from the `event_type` column).
-    ///
-    /// Its one consumer is `session_decompress` (Context Fabric spec
-    /// 2026-10-01 §3.1b): restoring a folded span means reading the rows
-    /// `Retire::Through` soft-retired, and answering honestly about a span
-    /// `Retire::From` erased means seeing those rows too — a fold whose own
-    /// record was hard-retired must still resolve, or its error would read
-    /// "no such fold" instead of "erased". The BM25-mirror flag is the
-    /// on-disk witness that tells the two retirements apart: `Through` keeps
-    /// the mirror (compacted turns stay recallable), `From` deletes it in
-    /// the same transaction (erased turns must not come back).
-    ///
-    /// Decode policy mirrors the live read's `fold_strict`: ignorable rows
-    /// drop, the first undecodable row refuses the slice — a restoration
-    /// that silently skipped a row would present a gap as the whole span.
-    ///
-    /// Default `Ok(vec![])`, for the same reason as
-    /// [`load_retired_run_anchors`](Self::load_retired_run_anchors): a store
-    /// with no soft delete has nothing retired to restore. A store that DOES
-    /// soft-delete must override it, or every decompress answers as if the
-    /// fold's rows were gone.
-    async fn load_events_with_retirement(
+    /// Discover and read a fold under a single session-scoped read snapshot.
+    /// The synchronous visitor cannot outlive the snapshot or await while it
+    /// holds the connection. An unsupported store must not masquerade as an
+    /// empty history.
+    #[doc(hidden)]
+    async fn with_fold_recovery(
         &self,
-        session_id: &SessionId,
-        from: Option<EventSeq>,
-        to: Option<EventSeq>,
-    ) -> Result<Vec<RetiredEventRow>, SessionError> {
-        let _ = (session_id, from, to);
-        Ok(Vec::new())
+        _session_id: &SessionId,
+        _read: &mut FoldRecoveryReader<'_>,
+    ) -> Result<(), SessionError> {
+        Err(SessionError::Storage(
+            "fold recovery is unavailable in this store".into(),
+        ))
     }
 
     /// Return the highest seq stored for this session, or 0 if none.
@@ -549,22 +529,47 @@ pub enum ReplayReleaseResult {
     ClaimLost,
 }
 
-/// One row from [`SessionEventStore::load_events_with_retirement`]: the
-/// decoded event plus the two retirement facts the fold-restoration path
-/// needs.
-#[derive(Debug, Clone)]
-pub struct RetiredEventRow {
-    /// The decoded event with its seq.
-    pub record: SessionEventRecord,
-    /// `retired_at` is stamped (either retirement kind).
-    pub retired: bool,
-    /// The BM25 mirror row for this seq survives. `Retire::Through`
-    /// (compaction) keeps it; `Retire::From` (clear/rewind) deletes it in the
-    /// same transaction — making this the on-disk witness that distinguishes
-    /// a compacted span from an erased one. Rows with no content body (turn
-    /// markers, checkpoints) never had a mirror row; only content-bearing
-    /// rows make the flag meaningful.
-    pub fts_mirror_present: bool,
+/// Inclusive bounds checked once against SQLite's signed sequence domain.
+#[doc(hidden)]
+#[derive(Clone, Copy)]
+pub struct FoldRestoreSpan {
+    start: i64,
+    end: i64,
+}
+
+impl FoldRestoreSpan {
+    pub(crate) fn new(start: EventSeq, end: EventSeq) -> Option<Self> {
+        if start > end {
+            return None;
+        }
+        Some(Self {
+            start: start.try_into().ok()?,
+            end: end.try_into().ok()?,
+        })
+    }
+}
+
+#[doc(hidden)]
+pub enum FoldSpanStatus {
+    Readable,
+    Empty,
+    Denied,
+}
+
+#[doc(hidden)]
+pub type FoldRecoveryReader<'a> =
+    dyn FnMut(&dyn FoldRecoverySnapshot) -> Result<(), SessionError> + Send + 'a;
+
+/// The fold reader exposes metadata and already-authorized rows only.
+#[doc(hidden)]
+pub trait FoldRecoverySnapshot {
+    fn fold_events(&self) -> Result<Vec<SessionEvent>, SessionError>;
+
+    fn visit_verified_span(
+        &self,
+        span: FoldRestoreSpan,
+        visit: &mut dyn FnMut(SessionEventRecord) -> std::ops::ControlFlow<()>,
+    ) -> Result<FoldSpanStatus, SessionError>;
 }
 
 /// One BM25 hit from [`SessionEventStore::search_events`].
@@ -905,7 +910,7 @@ pub fn decode_row(seq: EventSeq, created_at_ms: i64, json: &str) -> DecodedRow {
                 seq,
                 event,
                 created_at_ms,
-            })
+            });
         }
         Err(e) => e,
     };
@@ -1627,61 +1632,19 @@ impl SessionEventStore for SqliteEventStore {
             .map_err(SessionError::UndecodableRecord)
     }
 
-    async fn load_events_with_retirement(
+    async fn with_fold_recovery(
         &self,
         session_id: &SessionId,
-        from: Option<EventSeq>,
-        to: Option<EventSeq>,
-    ) -> Result<Vec<RetiredEventRow>, SessionError> {
+        read: &mut FoldRecoveryReader<'_>,
+    ) -> Result<(), SessionError> {
         let session_key = session_id_to_string(session_id)?;
-        // Same saturating-bound rule as `load_events_range`.
-        let from_val = i64::try_from(from.unwrap_or(0)).unwrap_or(i64::MAX);
-        let to_val = to.and_then(|v| i64::try_from(v).ok()).unwrap_or(i64::MAX);
-
-        let conn = self.conn.lock().await;
-        let mut stmt = conn
-            .prepare(
-                "SELECT e.seq, e.payload_json, e.created_at, e.retired_at,
-                        (SELECT COUNT(*) FROM session_events_fts f
-                         WHERE f.session_id = e.session_id AND f.seq = e.seq)
-                 FROM session_events e
-                 WHERE e.session_id = ?1 AND e.seq >= ?2 AND e.seq < ?3
-                 ORDER BY e.seq ASC",
-            )
-            .map_err(|e| SessionError::Storage(e.to_string()))?;
-        let rows = stmt
-            .query_map(params![session_key, from_val, to_val], |row| {
-                let seq: i64 = row.get(0)?;
-                let payload: String = row.get(1)?;
-                let created_at: i64 = row.get(2)?;
-                let retired_at: Option<i64> = row.get(3)?;
-                let fts_rows: i64 = row.get(4)?;
-                Ok((seq, payload, created_at, retired_at.is_some(), fts_rows > 0))
-            })
-            .map_err(|e| SessionError::Storage(e.to_string()))?;
-
-        let mut out = Vec::new();
-        for row in rows {
-            let (seq, payload, created_at, retired, fts_mirror_present) =
-                row.map_err(|e| SessionError::Storage(e.to_string()))?;
-            let seq = u64::try_from(seq)
-                .map_err(|_| SessionError::Storage(format!("stored seq {seq} is negative")))?;
-            // The trait contract's decode policy: ignorable rows drop, the
-            // first undecodable row refuses the slice (fold_strict's shape,
-            // kept per-row here so the retirement flags stay aligned).
-            match decode_row(seq, created_at, &payload) {
-                DecodedRow::Event(record) => out.push(RetiredEventRow {
-                    record,
-                    retired,
-                    fts_mirror_present,
-                }),
-                DecodedRow::Skipped { seq, kind_tag } => {
-                    tracing::debug!(seq, kind_tag, "session_events: ignorable row skipped");
-                }
-                DecodedRow::Undecodable(u) => return Err(SessionError::UndecodableRecord(u)),
-            }
-        }
-        Ok(out)
+        let mut conn = self.conn.lock().await;
+        let tx = conn.transaction().map_err(recovery_sql_error)?;
+        read(&SqliteFoldRecovery {
+            conn: &tx,
+            session_key: &session_key,
+        })?;
+        tx.commit().map_err(recovery_sql_error)
     }
 
     async fn load_rows(&self, session_id: &SessionId) -> Result<Vec<DecodedRow>, SessionError> {
@@ -2208,11 +2171,155 @@ fn query_rows(
     Ok(out)
 }
 
-/// Canonical string form of a `SessionId` for the `session_id` column.
-///
-/// Uses `serde_json::to_string` so the persisted form round-trips losslessly
-/// through `serde` and remains stable against any future `Display`
-/// refactors on `SessionKey`.
+/// Read-only view of one session inside a SQLite transaction.
+struct SqliteFoldRecovery<'a> {
+    conn: &'a Connection,
+    session_key: &'a str,
+}
+
+impl FoldRecoverySnapshot for SqliteFoldRecovery<'_> {
+    fn fold_events(&self) -> Result<Vec<SessionEvent>, SessionError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT seq, created_at, payload_json FROM session_events
+             INDEXED BY idx_session_events_session_type
+             WHERE session_id = ?1 AND event_type IN ('fold_recorded', 'compaction_performed')
+             ORDER BY seq",
+            )
+            .map_err(recovery_sql_error)?;
+        let mut rows = stmt.query([self.session_key]).map_err(recovery_sql_error)?;
+        let mut events = Vec::new();
+        while let Some(row) = rows.next().map_err(recovery_sql_error)? {
+            if let Some(record) = recovery_record(row)? {
+                events.push(record.event);
+            }
+        }
+        Ok(events)
+    }
+
+    fn visit_verified_span(
+        &self,
+        span: FoldRestoreSpan,
+        visit: &mut dyn FnMut(SessionEventRecord) -> std::ops::ControlFlow<()>,
+    ) -> Result<FoldSpanStatus, SessionError> {
+        if !self.verify_retired_rows(span)? {
+            return Ok(FoldSpanStatus::Denied);
+        }
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT seq, created_at, payload_json FROM session_events
+             WHERE session_id = ?1 AND seq BETWEEN ?2 AND ?3 ORDER BY seq",
+            )
+            .map_err(recovery_sql_error)?;
+        let mut rows = stmt
+            .query(params![self.session_key, span.start, span.end])
+            .map_err(recovery_sql_error)?;
+        let mut status = FoldSpanStatus::Empty;
+        while let Some(row) = rows.next().map_err(recovery_sql_error)? {
+            if let Some(record) = recovery_record(row)? {
+                status = FoldSpanStatus::Readable;
+                if visit(record).is_break() {
+                    break;
+                }
+            }
+        }
+        Ok(status)
+    }
+}
+
+impl SqliteFoldRecovery<'_> {
+    fn verify_retired_rows(&self, span: FoldRestoreSpan) -> Result<bool, SessionError> {
+        let bounds = params![self.session_key, span.start, span.end];
+        let mut retired_stmt = self
+            .conn
+            .prepare(
+                "SELECT seq FROM session_events
+             WHERE session_id = ?1 AND seq BETWEEN ?2 AND ?3 AND retired_at IS NOT NULL
+             ORDER BY seq",
+            )
+            .map_err(recovery_sql_error)?;
+        let mut retired = retired_stmt.query(bounds).map_err(recovery_sql_error)?;
+        let Some(mut seq) = next_recovery_seq(&mut retired)? else {
+            return Ok(true);
+        };
+
+        // Through retains the FTS witness; From removes it atomically. Both
+        // identity streams belong to this session and snapshot. FTS5 may sort
+        // the keys, but it is scanned at most once, not once per retired row.
+        let mut witness_stmt = self
+            .conn
+            .prepare(
+                "SELECT seq FROM session_events_fts
+             WHERE session_id = ?1 AND seq BETWEEN ?2 AND ?3 ORDER BY seq",
+            )
+            .map_err(recovery_sql_error)?;
+        let mut witnesses = witness_stmt.query(bounds).map_err(recovery_sql_error)?;
+        let mut witness = next_recovery_seq(&mut witnesses)?;
+        let mut missing_stmt = self
+            .conn
+            .prepare(
+                "SELECT seq, created_at, payload_json FROM session_events
+             WHERE session_id = ?1 AND seq = ?2",
+            )
+            .map_err(recovery_sql_error)?;
+        loop {
+            while witness.is_some_and(|candidate| candidate < seq) {
+                witness = next_recovery_seq(&mut witnesses)?;
+            }
+            if witness != Some(seq) {
+                // Markers never acquire a witness. Read an unwitnessed
+                // payload only to distinguish a marker from erased content.
+                let mut rows = missing_stmt
+                    .query(params![self.session_key, seq])
+                    .map_err(recovery_sql_error)?;
+                let row = rows.next().map_err(recovery_sql_error)?.ok_or_else(|| {
+                    SessionError::Storage(format!(
+                        "retired event {seq} missing in recovery snapshot"
+                    ))
+                })?;
+                if recovery_record(row)?
+                    .is_some_and(|record| event_content_text(&record.event).is_some())
+                {
+                    return Ok(false);
+                }
+            }
+            let Some(next) = next_recovery_seq(&mut retired)? else {
+                return Ok(true);
+            };
+            seq = next;
+        }
+    }
+}
+
+fn next_recovery_seq(rows: &mut rusqlite::Rows<'_>) -> Result<Option<i64>, SessionError> {
+    rows.next()
+        .and_then(|row| row.map(|row| row.get(0)).transpose())
+        .map_err(recovery_sql_error)
+}
+
+fn recovery_record(row: &rusqlite::Row<'_>) -> Result<Option<SessionEventRecord>, SessionError> {
+    let seq: i64 = row.get(0).map_err(recovery_sql_error)?;
+    let seq = u64::try_from(seq)
+        .map_err(|_| SessionError::Storage(format!("stored seq {seq} is negative")))?;
+    let created_at = row.get(1).map_err(recovery_sql_error)?;
+    let payload: String = row.get(2).map_err(recovery_sql_error)?;
+    match decode_row(seq, created_at, &payload) {
+        DecodedRow::Event(record) => Ok(Some(record)),
+        DecodedRow::Skipped { seq, kind_tag } => {
+            tracing::debug!(seq, kind_tag, "session_events: ignorable row skipped");
+            Ok(None)
+        }
+        DecodedRow::Undecodable(err) => Err(SessionError::UndecodableRecord(err)),
+    }
+}
+
+fn recovery_sql_error(error: rusqlite::Error) -> SessionError {
+    SessionError::Storage(error.to_string())
+}
+
+/// Canonical `session_id` column value, independent of `SessionKey`'s display format.
 fn session_id_to_string(id: &SessionId) -> Result<String, SessionError> {
     serde_json::to_string(id)
         .map_err(|e| SessionError::Storage(format!("failed to serialize session_id: {e}")))
@@ -2327,50 +2434,70 @@ const MAX_FTS_BODY_CHARS: usize = 8_000;
 /// This is mechanical field extraction — not semantic classification — so it
 /// stays on the right side of R7 (LLM sovereignty): the model decides what is
 /// relevant via its query; we only surface the raw text it can match against.
-/// The content an event carries, as `(role label, raw body)` — raw meaning
-/// untrimmed and uncapped, the verbatim text `session_decompress` restores.
-/// `None` for events with no content body. This is the ONE place that decides
-/// which variants are content-bearing: the FTS mirror (`render_event_text`
-/// trims and caps the same body) and the fold-restoration path both derive
-/// from it, so indexing and restoration cannot drift apart.
-pub(crate) fn event_content_text(event: &SessionEvent) -> Option<(&'static str, Cow<'_, str>)> {
-    let labelled: (&'static str, Cow<'_, str>) = match event {
-        SessionEvent::UserMessage { content, .. } => ("user", Cow::Borrowed(&content.text)),
-        SessionEvent::AssistantMessage { content, .. } => {
-            ("assistant", Cow::Borrowed(&content.text))
+/// The shared classification of the untrimmed body used for indexing,
+/// retirement eligibility, and verbatim fold restoration.
+pub(crate) enum EventContent<'a> {
+    Text(&'a str),
+    Json(&'a serde_json::Value),
+    ToolCall {
+        name: &'a str,
+        input: &'a serde_json::Value,
+    },
+}
+
+impl EventContent<'_> {
+    /// Stream the verbatim body, using compact JSON for structured values.
+    pub(crate) fn write_to(&self, out: &mut impl std::io::Write) -> serde_json::Result<()> {
+        match self {
+            Self::Text(text) => out
+                .write_all(text.as_bytes())
+                .map_err(serde_json::Error::io),
+            Self::Json(value) => serde_json::to_writer(out, value),
+            Self::ToolCall { name, input } => {
+                write!(out, "{name} ").map_err(serde_json::Error::io)?;
+                serde_json::to_writer(out, input)
+            }
         }
-        SessionEvent::SystemMessage { content, .. } => ("system", Cow::Borrowed(content)),
+    }
+}
+
+pub(crate) fn event_content_text(event: &SessionEvent) -> Option<(&'static str, EventContent<'_>)> {
+    use EventContent::{Json, Text, ToolCall};
+    let labelled = match event {
+        SessionEvent::UserMessage { content, .. } => ("user", Text(&content.text)),
+        SessionEvent::AssistantMessage { content, .. } => ("assistant", Text(&content.text)),
+        SessionEvent::SystemMessage { content, .. } => ("system", Text(content)),
         SessionEvent::ToolCallRequested { name, input, .. } => {
-            ("tool_call", Cow::Owned(format!("{name} {input}")))
+            ("tool_call", ToolCall { name, input })
         }
-        SessionEvent::ToolResult { output, .. } => ("tool_result", render_json(&output.value)),
-        SessionEvent::ToolError { error, .. } => ("tool_error", Cow::Borrowed(error)),
-        SessionEvent::ToolCallDenied { reason, .. } => ("tool_denied", Cow::Borrowed(reason)),
-        SessionEvent::SubagentReturned { summary, .. } => ("subagent", Cow::Borrowed(summary)),
-        SessionEvent::Error { message, .. } => ("error", Cow::Borrowed(message)),
+        SessionEvent::ToolResult { output, .. } => (
+            "tool_result",
+            match &output.value {
+                serde_json::Value::String(text) => Text(text),
+                value => Json(value),
+            },
+        ),
+        SessionEvent::ToolError { error, .. } => ("tool_error", Text(error)),
+        SessionEvent::ToolCallDenied { reason, .. } => ("tool_denied", Text(reason)),
+        SessionEvent::SubagentReturned { summary, .. } => ("subagent", Text(summary)),
+        SessionEvent::Error { message, .. } => ("error", Text(message)),
         _ => return None,
     };
-    Some(labelled)
+    match labelled.1 {
+        Text(text) if text.trim().is_empty() => None,
+        _ => Some(labelled),
+    }
 }
 
 fn render_event_text(event: &SessionEvent) -> Option<String> {
-    let (_, raw) = event_content_text(event)?;
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(cap_chars(trimmed, MAX_FTS_BODY_CHARS))
+    let (_, body) = event_content_text(event)?;
+    if let EventContent::Text(text) = body {
+        return Some(cap_chars(text.trim(), MAX_FTS_BODY_CHARS));
     }
-}
-
-/// Render a tool-output JSON value to searchable plain text: bare strings pass
-/// through unquoted (the common case — most tool outputs are strings); other
-/// shapes fall back to compact JSON so their tokens are still matchable.
-fn render_json(value: &serde_json::Value) -> Cow<'_, str> {
-    match value {
-        serde_json::Value::String(s) => Cow::Borrowed(s),
-        other => Cow::Owned(other.to_string()),
-    }
+    let mut rendered = Vec::new();
+    body.write_to(&mut rendered).ok()?;
+    let raw = std::str::from_utf8(&rendered).ok()?;
+    Some(cap_chars(raw.trim(), MAX_FTS_BODY_CHARS))
 }
 
 /// UTF-8-safe truncation to at most `max` characters (project rule P7).

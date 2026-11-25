@@ -946,7 +946,7 @@ R8/R9 的自我改进条款）。给它加 allowlist，要么自动放行模型�
 | `mount(id: &str) -> Result<PluginStatus, MountError>` | 解析 manifest → owner-trust / enabled 门（`plugins.toml`；`ClaudeCache` origin 按 origin 判默认 disabled）→ 新建 `EffectScope` → **按固定顺序**注册六种效果 → 任一步失败即 `dispose` 已注册部分（**全有或全无**）→ `write_failed_row` 写 `Error("<step>: <reason>")`；成功写 `Loaded`（MCP-kind 先 `Pending { waiting_on }`，server 完成 `initialize` 后由 `watch_server_starts` 改 `Loaded`） |
 | `unmount(id: &str) -> Result<DisposeReport, UnmountError>` | 从 `scopes`（`Mutex<HashMap<String, EffectScope>>`）取出该插件的 `EffectScope` → `dispose`（逆序；单条失败记日志带 step 标签、**不停**）→ 写 `Disabled` / 移除行 |
 | `reload_plugin(id)` | `unmount` + `mount`。2026-09-20 前的窄孪生（只刷 tool index、跳过 hooks / projections / MCP / services）已删 |
-| `reload()` | 对每个已发现插件 `unmount` + `mount`；`stop_orphaned_services` 变成 dispose 的自然结果 |
+| `reload()` | 对每个已发现插件 `unmount` + `mount`；孤儿服务随所属插件一并释放 |
 
 六种效果与它们的逆（注册顺序即下表顺序；dispose 逆序，所以 registry 行最后撤——视图重算时它已不在）：
 

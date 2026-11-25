@@ -4,7 +4,7 @@
 use crate::appearance::{
     apply_accent, apply_density, apply_font_scale, apply_material, apply_mode, apply_roundness,
     read_accent, read_density, read_font_scale, read_material, read_mode, read_roundness, Accent,
-    Density, FontScale, Material, Roundness, ThemeMode,
+    AppearanceLabel, Density, FontScale, Material, Roundness, ThemeMode,
 };
 use crate::i18n::{t, t_string};
 use crate::platform::phone::shell::PhoneShell;

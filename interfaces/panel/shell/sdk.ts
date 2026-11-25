@@ -33,6 +33,19 @@ export type PanelEvent = { topic: string; data: unknown };
 /** What a module that navigated here handed over, e.g. `{ session_key }`. */
 export type Intent = Record<string, unknown>;
 
+/**
+ * A command in the palette, with an optional default key. Module commands
+ * get the tab key as an id prefix (`aleph:chat/stop`), so two modules cannot
+ * claim one id.
+ */
+export type CommandSpec = {
+  id: string;
+  label: string;
+  keywords?: string[];
+  defaultKey?: string;
+  run(): void;
+};
+
 /** What the shell lends a module's SDK; read at call time, never cached. */
 export type ShellAccess = {
   rpc(method: string, params: Record<string, unknown>): Promise<unknown>;
@@ -43,6 +56,8 @@ export type ShellAccess = {
   intent(key: string): Intent | null;
   onConnection(listener: (state: ConnectionState) => void): () => void;
   onEvent(listener: (event: PanelEvent) => void): () => void;
+  /** Add a command to the palette and shortcuts; the answer removes it. */
+  registerCommand(spec: CommandSpec): () => void;
 };
 
 export type PanelSdk = {
@@ -57,6 +72,11 @@ export type PanelSdk = {
   navigate(key: string, intent?: Intent): void;
   /** What the module that navigated here handed over, if any. */
   intent(): Intent | null;
+  /** Commands this module offers while it is mounted. */
+  commands: {
+    /** `id` is local to the module; the shell sees `<tab key>/<id>`. */
+    register(spec: CommandSpec): () => void;
+  };
   dispose(): void;
 };
 
@@ -107,6 +127,20 @@ export function createSdk(key: string, generation: number, shell: ShellAccess): 
       if (current()) shell.navigate(target, intent);
     },
     intent: () => shell.intent(key),
+    commands: {
+      register(spec) {
+        if (disposed) throw new Error("disposed");
+        return hold(
+          shell.registerCommand({
+            ...spec,
+            id: `${key}/${spec.id}`,
+            run: () => {
+              if (current()) spec.run();
+            },
+          }),
+        );
+      },
+    },
     dispose() {
       if (disposed) return;
       disposed = true;

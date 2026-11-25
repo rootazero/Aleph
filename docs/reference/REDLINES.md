@@ -37,7 +37,7 @@
 - **正则 / 规则引擎做意图识别或路由** —— 违 R7/P8，语义判断交 LLM
 - **非 serde 的序列化栈** —— 全栈 serde
 - **第二个 VT / 终端模拟器实现**——服务端 VT 的唯一真源是 `src/gateway/pty/screen/`；新增终端能力一律**扩容它**，不引第二份（判据 §1「同一事实的两份表述」）
-- **第二个 CDP 客户端实现**（`chromiumoxide` / `headless_chrome` / 在 `src/browser/` 里再手写一份）—— 唯一真源是 **`crates/aleph-cdp`**（零 Aleph 依赖的传输层：一条连接、多 session、逐命令超时、断连时把全部 pending 一次性失败）。两个引擎、每一个 `browser_*` 动词、`page_state` 的两个 fetcher 全走它；缺方法就**给它加一个 `methods::` 包装**，不引第二份（2026-09-06；判据 §1）
+- **第二个 CDP 客户端实现**（引入第三方 CDP 客户端，或在 `src/browser/` 另写一份）—— 唯一真源是 **`crates/aleph-cdp`**（零 Aleph 依赖的传输层：一条连接、多 session、逐命令超时、断连时把全部 pending 一次性失败）。两个引擎、每一个 `browser_*` 动词、`page_state` 的两个 fetcher 全走它；缺方法就**给它加一个 `methods::` 包装**，不引第二份（2026-09-06；判据 §1）
 
 
 ## Gateway lifecycle authority constraint / Gateway lifecycle authority 约束

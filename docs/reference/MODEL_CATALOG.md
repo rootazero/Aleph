@@ -53,7 +53,7 @@ ModelRecord {
 
 重构前，`capabilities_for` + `rate_card` + `endpoint_kind_for_base_url` 这个三元 join 被**手抄了三处**：`builtin_tools/list_models.rs::enrich`、`src/gateway/handlers/providers/handlers.rs` 的 preset 行、同文件的 custom provider 行。加第四个维度（本轮的 lifecycle）会接上其中两处、漏掉第三处——而漏掉的那处不会报错，只会少一个字段。
 
-（`route_observe::price_milli_per_mtok` 与 `failover::price_hint` 只读 `pricing` 一张表，并且应当保持如此：它们要的是一个用来排序的标量，不是一条用来展示的记录。）
+定价是目录数据；当前 provider 绑定和仅失败时回退的规则见 [FEATURE_LOCATOR §3.6](FEATURE_LOCATOR.md#36-providermodel-binding-and-failure-only-fallback-current)。
 
 这是 opencode 用**有序插件**（`modelsDev(0) → env(10) → account(20) → provider(30) → config(40) → discovery(50)`，每层 mutate 同一份 draft）买到的性质。Aleph 只取那个不变量（"只有一个函数知道记录怎么组装"），不引入插件总线——四张静态表不需要一条消息总线。
 
@@ -134,7 +134,7 @@ scoped 行**先查**，所以一家宿主可以早于厂商退役某个 id 而�
 
 ## 4. 定价契约 (`pricing.rs`)
 
-### 4.1 `RateBasis` — 为什么聚合器以前恒 `Unknown`
+### 4.1 Historical: `RateBasis` — 为什么聚合器以前恒 `Unknown`
 
 `PRICE_TABLE` **按 vendor 分节**（anthropic / openai / google / deepseek / xai / mistral / moonshot / zai / qwen / minimax / doubao 共 11 节），但查表**按 provider id 门控**。于是所有"不是厂商自己在服务"的 provider——openrouter、groq、together、fireworks、deepinfra、siliconflow、novita、chutes、github-copilot、**amazon-bedrock**——`canonical_provider_id` 一律返 `None`，恒 `CostStatus::Unknown`。
 
@@ -317,7 +317,7 @@ kimi-cli 问每个已配置平台 `GET {base_url}/models`。数据少（基本�
 
 漂移守卫抓的是**内部一致性**（默认指向退役 id、缺能力行、aux 贵过主模型…），它**结构性地看不见**「这一行的数字与厂商现在收的钱不一致」——那需要一个外部来源。本轮建立的做法：
 
-1. **取一份可核实的快照**，不靠记忆。models.dev 的 `api.json`（184 provider / 6293 模型，含 `limit` / `cost` / `reasoning` / `attachment` / `release_date` / `status`）是 openclaw 目录自己的上游，一次 curl 就是全量。**它只当离线源**——§9 第一条禁的是把它做成运行时依赖，不是禁止拿它当刷新素材。比对脚本留在 scratchpad：进仓就是第二个真源，且它需要网络才跑得动。
+1. **取一份可核实的快照**，不靠记忆。models.dev 的 `api.json`（184 provider / 6293 模型，含 `limit` / `cost` / `reasoning` / `attachment` / 发布日期 / `status`）是 openclaw 目录自己的上游，一次 curl 就是全量。**它只当离线源**——§9 第一条禁的是把它做成运行时依赖，不是禁止拿它当刷新素材。比对脚本留在 scratchpad：进仓就是第二个真源，且它需要网络才跑得动。
 2. **比对必须复现查表语义**。逐行比对会报出上千条「分歧」，因为宽行按设计覆盖了大量本仓从不广告的变体。正确的形状是**拿上游的每一个模型走一遍 Aleph 的查表**（canonicalise → 首个前缀命中者胜；价格先按 vendor 分桶），再把结果收敛到**被广告的 id**（default / fallback / aux）——那才是承重的集合。2026-08-13 那次：1385+722 → 266 → **37**。
 3. **每一条候选先读它自己的注释**。`claude-sonnet-5` 那一行写着为什么它是 $3/$15 而不是上游的 $2/$10（launch promo 的 durable 价）；那条理由指向一个外部事实，而那个事实**已被厂商作废**（定价页现在写 $2/$10「is now the standard price」、原定涨价「will not occur」）。**上游不自动正确，注释也不自动正确——判据是注释里的理由指向的那个事实**。
 4. **分辨"修数字"与"加数据"**。修一个已存在的行是低风险的；新增档位表行、抬高会被别处当预留用的字段、改默认 id，都是别的动作，各有各的判据。
@@ -333,7 +333,7 @@ kimi-cli 问每个已配置平台 `GET {base_url}/models`。数据少（基本�
 
 ---
 
-## 8. 对照表 (Gap Analysis)
+## 8. 对照表 (Historical Comparisons)
 
 > **改这一层之前先看这两张表**。逐维度标注「映射 / 对齐 / 超越 / 有意不移植」。
 
@@ -505,7 +505,7 @@ RouteLLM 可提炼的三条资产——score→threshold 决策契约、"阈值=
 - **给 cohere 补价目** — openclaw 目录里 `command-a-plus-05-2026`（现旗舰）与 `north-mini-code-1-0` 的 cost 全是 `0`＝未公布；唯一有价的 `command-a-03-2025` 已退役。加任何一行都会触发守卫 10（同 preset 内可定价性必须同质），而退役行的价没有消费者。**2026-08-15 补记**：models.dev 现在给旗舰报了 $2.50/$10——「无 accepted 源」已不成立，但 `north-mini-code-1-0` 仍是 `0/0`，同质守卫依旧会红。解锁条件：fallback 链摘掉 north-mini-code（改链是另一件事），或它有价。
 - ~~**给 perplexity 补价目**~~ — **2026-08-15 数据刷新轮改判，已补**。原裁定写下时 openclaw 的 perplexity 插件没有 `modelCatalog`、models.dev 无价目；models.dev `perplexity` 节现报全族官价（`sonar` $1/$1、`sonar-pro` $3/$15、`sonar-reasoning-pro`/`sonar-deep-research` $2/$8），新 `perplexity` vendor 节已落地。⚠️ `sonar-reasoning`（广告 fallback 档）在上游**没有自己的条目**，解析到 `sonar` 行——记录在此，下轮不必重新发现。这是又一条「刻意不做的理由会过期」：复查 DEFER 时先复查它引用的外部事实。
 - **pi 的订阅端点隐含定价**（`KIMI_CODING_IMPLIED_COSTS`：用等价 API 费率回填订阅模型）— pi 估的是"订阅用量的价值"，Aleph 的费率喂 `cost_aware` 排序与 run 成本估算；把订阅端点按 API 价排序是对 operator 说谎。维持 `QUOTA_BILLED_MODELS` 显式 Unknown（§4.2）。
-- **ETag / Last-Modified 条件请求** — pi 的 `ModelsStoreEntry` 预留了这两个字段但**没有任何代码写入它们**（纯 schema 预留）；且各家 `/models` 端点基本不发 ETag。300s TTL + 单飞已覆盖实际需求。
+- **ETag / Last-Modified 条件请求** — pi 当时的目录缓存类型预留了这两个字段但**没有任何代码写入它们**（纯 schema 预留）；且各家 `/models` 端点基本不发 ETag。300s TTL + 单飞已覆盖实际需求。
 - **pi 的溢出检测正则库**（`utils/overflow.ts`）— 那是"这一轮请求失败了没有"的错误分类层（§2.x/§3.6 语境），不是"这个模型是什么"的目录层；如需引入应在 failover/compaction 那侧单独立项评估。
 - **改 `hyperbolic` / `huggingface` 的默认模型**（仍是 Llama-3.3 时代）— 与 round-2 对 siliconflow 的判断同款：没有 accepted 源给出"应该改成什么"，`Llama-3.3-70B-Instruct` 是真实可用的 id（这两家是托管方不是厂商）。陈旧但能用 > 可能 404。
 - **pi 的 per-model `compat` 矩阵** — 协议方言差异属 `src/providers/protocols/openai_common/provider_policy.rs` 的 `PayloadPolicy` 层，不进目录层。
@@ -517,7 +517,7 @@ RouteLLM 可提炼的三条资产——score→threshold 决策契约、"阈值=
 - **Bifrost 的 CEL 治理引擎 / virtual key 层级 / 9 种定价 override 作用域** — 多租户 SaaS 网关需求，非个人 runtime。
 - **Bifrost datasheet 的远端 24h 同步 + DB 缓存** — 与"拉 models.dev"同一条理由：R3。
 - **discovery 的 generation counter**（Bifrost `live.UpsertIfCurrent`）— 评估为不需要：per-provider 单飞锁已串行化同进程写者，多 aleph-server 进程本就被 doctor 的 duplicate-instance 检查禁止；跨写者竞态不存在，counter 无洞可补。端点搬迁的正确解法已用 base_url 指纹落地（§6）。
-- **`WeightedRandom` 式权重截断**（Bifrost `int(weight*100)`，0.005 静默变 0）— 若未来做加权选择，用别名法 O(1) 或前缀和，别抄截断。
+- **整数权重截断**（Bifrost `int(weight*100)`，0.005 静默变 0）— 若未来做加权选择，用别名法 O(1) 或前缀和，别抄截断。
 
 以下是 2026-08-13（契约收敛 + 链接后取模型 + 多选轮，对标 pi 的 `/model` 选择器）评估后**明确不做**的：
 
@@ -539,7 +539,7 @@ RouteLLM 可提炼的三条资产——score→threshold 决策契约、"阈值=
 
 以下是 2026-08-13 **round-3**（零消费者裁决 + 探测面收敛）评估后**明确不做**的：
 
-- **给 `ProviderHealthRow` 加 `skip_reason` 枚举** — 跳过有两个理由（operator 关了它 / preset 声明 `/models` 答不了这一问），而 `enabled` 已经把它们分开了。加一个外部标签 unit enum 会让旧客户端在遇到新变体时**整行**解析失败（同 round-2 对 `DiscoveryFailureKind` 的裁定，`#[serde(default)]` 只管缺失不管非法）。
+- **给 `ProviderHealthRow` 新增跳过原因枚举** — 跳过有两个理由（operator 关了它 / preset 声明 `/models` 答不了这一问），而 `enabled` 已经把它们分开了。加一个外部标签 unit enum 会让旧客户端在遇到新变体时**整行**解析失败（同 round-2 对 `DiscoveryFailureKind` 的裁定，`#[serde(default)]` 只管缺失不管非法）。
 - **把 `providers.healthcheck` 合并进 `providers/connectivity`** — 两者答的问题不同：前者是一张带延迟的表，后者是整个诊断引擎的一部分（散文式 finding + 总停机闸 + `fix_hint` 路由）。它们该共用的是**探测**与**探测判据**（`probe::probe_provider_bounded` / `probe::probe_disposition`），不是输出形状。
 - **复活 `providers.needsSetup`** — 零客户端，且是"agent 能不能作答"这个问题的**第三个答案**（Panel 清单一个、它一个、真相一个）。判据落在 Panel 的 `usable()` 上：`enabled && (has_api_key || verified)`。
 - **把 `usable()` 提到协议 crate** — `needsSetup` 撤回之后它只有一个消费者；为一个调用者建跨 crate 抽象就是 R10 要撤回的那种。
@@ -553,6 +553,8 @@ RouteLLM 可提炼的三条资产——score→threshold 决策契约、"阈值=
 - **改 `qwen` 的默认模型** — `qwen3-max-2026-01-23` 不在上游 `alibaba` 的 roster 里（上游有 `qwen3-max` / `qwen3.7-max` / `qwen3.8-max`），即它可能是个**已经不存在**的日期快照 id 而不只是陈旧。仍不动：范围裁定同上，且「阿里保留历史快照 id」与「这个 id 已经 404」在没有第二个来源时分不开。记在这里是为了让下一轮不必重新发现它。**2026-08-15 复核**：`alibaba-cn`（与预设 `dashscope.aliyuncs.com` 同区）roster 现有 `qwen3.7-max` / `qwen3.8-max` / `qwen3.7-plus` / `qwen3.7-flash`，但仍无该日期快照 id——同一来源的再次缺席不构成第二来源，维持裁定；若下一来源（如 openclaw 或厂商控制台）确认该 id 404，直接跳到 `qwen3.8-max` 并同步 fallback 链。
 - ~~**给 `minimax-m3` / `grok-4.3` / `gpt-5.6` 系补长上下文档位行**~~ — **2026-08-15 数据刷新轮已采纳**：本条当初记下的确切数字（M3 >512K→$0.60/$2.40、grok-4.3 >200K→$2.50/$5.00、gpt-5.4/5.5/5.6 系 >272K 各档）经 models.dev 原始 `tiers` 复核后全部落进 `TIER_TABLE`（含 `gpt-5.4-mini`/`nano` 两条否定行——否则广义 `gpt-5.4` 档会按前缀误吞它们双倍计费；grok-4.5/4.6 同批补档）。⚠️ 原注「minimax-m3 修正后短提示准确、>512K 低估 2 倍」至此闭合。
 
+
+### Historical: round-6 路由裁决
 
 以下是 2026-09-02 **round-6**（对标 grok-bot-0.18-reconstructed 的 inference router，§8.5）评估后**明确不做**的：
 

@@ -19,7 +19,7 @@ already exists, so runtime boot can assume it. Failures in first-time
 setup do not corrupt runtime boot — they leave Aleph in an "uninstalled"
 state and exit before the gateway opens.
 
-## 2. First-Time Setup — the former src/init_unified/ module (removed 2026-08-02)
+## 2. First-Time Setup — Historical record (module removed 2026-08-02)
 
 5-phase sequence that was executed by `InitializationCoordinator`:
 
@@ -49,12 +49,12 @@ Total: 6,194 LOC across 5 files.
 | File | LOC | Responsibility |
 |------|-----|----------------|
 | `mod.rs` | 1,656 | Top-level orchestrator: tracing, config load, session store, extension manager, graceful shutdown wiring |
-| `src/bin/aleph-server/commands/start/builder/subsystems.rs` | 581 | Auth (`initialize_auth`), device store, channel registration, inbound routing |
+| `src/bin/aleph-server/commands/start/builder/subsystems.rs` | 581 | Vault authentication (`initialize_vault`), channel registration, inbound routing |
 | `builder/agent_init.rs` | 1,905 | `AgentHandlersResult`: provider registry, agent registry, tool registry, execution engine, embedder, compression service, multi-provider registry |
 | `builder/handlers.rs` | 1,951 | Gateway HTTP route registration |
 | `orchestrator_init.rs` | 94 | Multi-agent orchestrator subsystem |
 
-Each sub-builder returns a typed bundle (e.g. `AuthBundle`,
+Each sub-builder returns a typed bundle (e.g. `VaultBundle`,
 `AgentHandlersResult`) the orchestrator combines into the final
 `GatewayServer`.
 
@@ -76,12 +76,12 @@ instantiation site, and any dependency that must already be ready.
 
 ### Module 3 — Memory
 - **Home**: `src/memory/`
-- **Primary instantiation**: `agent_init.rs::AgentHandlersResult.embedder` + `compression_service` — created alongside agent registry; concrete `MemoryStore` opened when first agent loads memory.
+- **Primary instantiation**: `src/bin/aleph-server/commands/start/mod.rs` creates `MemoryRuntime`, passes it into `register_agent_handlers`, and starts it explicitly.
 - **Dependencies**: database (first-time setup, §2) must be ready.
 
 ### Module 4 — Context Management
 - **Home**: `src/context/{budget,compact}/`
-- **Primary instantiation**: per-session — `ContextBudget` and `CompactionStrategy` constructed by harness when assembling a turn.
+- **Primary instantiation**: per-session — context-budget and compaction code in `src/context/`; see [Context budget](AGENT_LOOP_CONTEXT_BUDGET.md) for the boundaries.
 - **Dependencies**: tools registry (Module 2), memory (Module 3), prompt assembly (Module 5).
 
 ### Module 5 — Prompt Assembly
@@ -106,8 +106,8 @@ instantiation site, and any dependency that must already be ready.
 
 ### Module 9 — Guardrails
 - **Home**: `src/{security,sandbox,approval,pii}/`
-- **Primary instantiation**: `subsystems.rs:38 — initialize_auth` constructs `AuthBundle` (TokenManager, PairingManager, InvitationManager, GuestSessionManager). Sandbox / approval / PII assembled per-tool-call inside execution engine.
-- **Dependencies**: device store (created within `initialize_auth`), config (first-time setup, §2).
+- **Primary instantiation**: `initialize_vault` in `src/bin/aleph-server/commands/start/builder/subsystems.rs` constructs `VaultBundle`; `start_server` installs its shared-token manager and creates `DeviceTokenManager` before mounting the handshake handlers. See [Security](SECURITY.md) for tool policy and approval.
+- **Dependencies**: loaded config, vault, and security store.
 
 ### Module 10 — Verification & Feedback
 - **Home**: `src/verification/`
@@ -125,7 +125,7 @@ instantiation site, and any dependency that must already be ready.
 
 ### Module 12 — Initialization & Environment
 - **Home**: `src/config/` (the former src/init_unified/ module was removed on 2026-08-02)
-- **Primary instantiation**: none — the `InitializationCoordinator` was removed with the module.
+- **Primary instantiation**: none — the former setup coordinator was removed with the module.
 - **Dependencies**: filesystem only (creates everything else).
 
 ## 5. Cross-Module Invariants

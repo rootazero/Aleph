@@ -60,7 +60,13 @@ const pageHtml = (base, denied, empty) => `<!doctype html>
       subscriptions: [],
       subscriptionDisposes: 0,
       attachCount: 0,
+      heldAttaches: [],
+      holdAttaches: false,
+      drainFailures: 0,
       spawnCount: 0,
+      holdMutation: false,
+      heldMutations: [],
+      disposedReplies: 0,
       delayList: 0,
       nextSession: 1,
       terminalLoadCount: 0,
@@ -86,13 +92,14 @@ const pageHtml = (base, denied, empty) => `<!doctype html>
       cursor: [0, text.length],
       ...options,
     });
+    const screens = new Map(sessions.map(({ session_id }) => [session_id, { seq: 0, text: '初始屏幕 ✓' }]));
     const frame = (sessionId, seq, text, options = {}) => ({
       topic: 'pty.screen',
       data: { session_id: sessionId, seq, rows: 24, cols: 80, patch: patch(text, options) },
     });
 
     const record = (kind, value) => {
-      state.calls.push({ kind, value });
+      state.calls.push({ kind, value, at: performance.now() });
     };
     const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
@@ -105,27 +112,50 @@ const pageHtml = (base, denied, empty) => `<!doctype html>
       }
       if (method === 'pty.attach') {
         state.attachCount += 1;
-        const text = state.attachCount === 1 ? '初始屏幕 ✓' : '恢复屏幕 Unicode ✓';
-        return { seq: state.attachCount === 1 ? 0 : 2, rows: 24, cols: 80, patch: patch(text, { bracketed_paste: true }), scrollback_len: 0 };
+        const screen = screens.get(params.session_id);
+        if (!screen) throw Error('attach target no longer exists');
+        // Capture at invocation, not release: later queued frames must be replayed.
+        const response = { seq: screen.seq, rows: 24, cols: 80, patch: patch(screen.text, { bracketed_paste: true }), scrollback_len: 0 };
+        if (state.holdAttaches) await new Promise((resolve) => state.heldAttaches.push({ response, resolve }));
+        return response;
+      }
+      if (['pty.spawn', 'pty.close'].includes(method) && state.holdMutation) {
+        await new Promise((resolve) => state.heldMutations.push(resolve));
       }
       if (method === 'pty.spawn') {
         state.spawnCount += 1;
         const session = { session_id: 'spawned-' + state.nextSession++, shell: 'fixture-shell', cwd: '', created_at: 1700000001, closed: false };
         sessions.push(session);
+        screens.set(session.session_id, { seq: 0, text: '初始屏幕 ✓' });
+        if (state.ambiguousSpawn) throw Error('fixture spawn outcome unknown');
         return { session_id: session.session_id, shell: session.shell, seq: 0, rows: params.rows, cols: params.cols };
       }
-      if (method === 'pty.input' || method === 'pty.resize' || method === 'pty.close') return {};
+      if (method === 'pty.close') {
+        const index = sessions.findIndex((session) => session.session_id === params.session_id);
+        if (index >= 0) sessions.splice(index, 1);
+        if (state.ambiguousClose) throw Error('fixture close outcome unknown');
+        return {};
+      }
+      if (method === 'pty.input' || method === 'pty.resize') return {};
       if (method === 'config.get') return { terminal: { font_family: 'monospace', font_size_px: 14 } };
       throw Error('unexpected method ' + method);
     };
 
-    const subscribe = async (topic) => {
+    const subscribeTerminal = async (topic) => {
       record('subscribe', topic);
-      const subscription = { topic, queue: [], disposed: false };
+      const subscription = { topic, queue: [], bytes: 0, lost: false, disposed: false };
       state.subscriptions.push(subscription);
+      const coverageEpoch = String(state.epoch);
       return {
+        coverageEpoch: () => coverageEpoch,
         drain() {
-          return subscription.disposed ? [] : subscription.queue.splice(0);
+          if (subscription.disposed) return [];
+          if (subscription.lost || coverageEpoch !== String(state.epoch)) {
+            state.drainFailures += 1;
+            throw Error('fixture terminal coverage lost');
+          }
+          subscription.bytes = 0;
+          return subscription.queue.splice(0);
         },
         dispose() {
           if (!subscription.disposed) {
@@ -136,22 +166,71 @@ const pageHtml = (base, denied, empty) => `<!doctype html>
       };
     };
 
-    const sdk = {
-      invoke,
-      subscribe,
-      connection: () => ({ connected: state.connected, epoch: state.epoch }),
-      locale: () => 'en',
+    // The real host creates a fresh SDK per mount, but retains one payload-free
+    // coordinator in the authorized host/project scope (covered by Rust tests).
+    let mutationScope = { serial: 0, ticket: null, revision: 0 };
+    let disposeSdk = () => {};
+    const makeSdk = () => {
+      let active = true;
+      let owned = null;
+      const scope = mutationScope;
+      disposeSdk = () => { active = false; };
+      return {
+        async invoke(method, params) {
+          if (!active) throw Error('Disposed');
+          try { return await invoke(method, params); }
+          finally {
+            if (!active) { state.disposedReplies += 1; throw Error('Disposed'); }
+          }
+        },
+        terminalMutations() {
+          if (!active) throw Error('Disposed');
+          return {
+            revision: () => String(scope.revision),
+            pending: () => scope.ticket !== null,
+            reserve() {
+              if (!active || scope !== mutationScope || scope.ticket !== null) return undefined;
+              owned = scope.ticket = String(++scope.serial);
+              return owned;
+            },
+            cancel(ticket) {
+              if (owned === ticket && scope.ticket === ticket) { scope.ticket = null; owned = null; }
+            },
+            settle(ticket) {
+              if (owned === ticket && scope.ticket === ticket) { scope.ticket = null; owned = null; scope.revision += 1; }
+            },
+          };
+        },
+        subscribeTerminal,
+        connection: () => ({ connected: state.connected, epoch: state.epoch }),
+        locale: () => 'en',
+      };
     };
 
     const emit = (event) => {
       state.emittedTopics.push(event.topic);
+      if (event.topic === 'pty.screen') {
+        const previous = screens.get(event.data.session_id);
+        if (!previous || event.data.seq > previous.seq) screens.set(event.data.session_id, {
+          seq: event.data.seq, text: event.data.patch.rows[0].runs[0].text,
+        });
+      }
       if (event.topic === 'pty.exit') {
         const sessionId = event.data?.session_id;
         const index = sessions.findIndex((session) => session.session_id === sessionId);
         if (index >= 0) sessions.splice(index, 1);
       }
       for (const subscription of state.subscriptions) {
-        if (!subscription.disposed && subscription.topic === event.topic) subscription.queue.push(event);
+        if (subscription.disposed || subscription.topic !== event.topic || subscription.lost) continue;
+        const bytes = new TextEncoder().encode(JSON.stringify(event)).length;
+        if (subscription.queue.length >= 256 || subscription.bytes + bytes > 8 * 1024 * 1024) {
+          subscription.queue.length = 0;
+          subscription.bytes = 0;
+          subscription.lost = true;
+        } else {
+          subscription.queue.push(event);
+          subscription.bytes += bytes;
+        }
       }
     };
 
@@ -166,11 +245,12 @@ const pageHtml = (base, denied, empty) => `<!doctype html>
         state.terminalModule = await loader.loadPanelModule(manifest.entry);
         state.terminalLoadCount += 1;
       }
-      state.mounted = state.terminalModule.mount(document.querySelector('#sidebar'), document.querySelector('#content'), sdk);
+      state.mounted = state.terminalModule.mount(document.querySelector('#sidebar'), document.querySelector('#content'), makeSdk());
       document.querySelector('#message').textContent = 'Terminal mounted';
     };
 
     const unmountTerminal = () => {
+      disposeSdk();
       state.mounted?.unmount();
       state.mounted = null;
       clearRoots();
@@ -195,6 +275,24 @@ const pageHtml = (base, denied, empty) => `<!doctype html>
       emit,
       show,
       setEpoch(epoch) { state.epoch = epoch; },
+      setScreen(sessionId, seq, text) {
+        const previous = screens.get(sessionId);
+        if (previous && seq < previous.seq) throw Error('fixture snapshots must not go backwards');
+        screens.set(sessionId, { seq, text });
+      },
+      releaseMutation() {
+        state.holdMutation = false;
+        const release = state.heldMutations.shift();
+        if (!release) throw Error('no held mutation');
+        release();
+      },
+      releaseAttach() {
+        const held = state.heldAttaches.shift();
+        if (!held) throw Error('no held attach');
+        held.resolve();
+        return performance.now();
+      },
+      frame,
       setDelayList(milliseconds) { state.delayList = milliseconds; },
       async teardown() { unmountTerminal(); },
     };
@@ -296,8 +394,9 @@ async function runHappyPath(base) {
   await page.evaluate(() => __fixture.emit({ topic: 'pty.screen', data: { session_id: 'disposable-fixture', seq: 1, rows: 24, cols: 80, patch: { rows: [{ row: 0, runs: [{ text: 'Unicode marker ✓' }] }], bracketed_paste: true } } }));
   await waitFor(page, (previous) => document.querySelector('canvas').toDataURL() !== previous, firstPaint);
 
-  await page.evaluate(() => __fixture.emit({ topic: 'pty.screen', data: { session_id: 'disposable-fixture', seq: 3, rows: 24, cols: 80, patch: { rows: [{ row: 0, runs: [{ text: 'gap marker' }] }] } } }));
-  await waitFor(page, () => __fixture.state.attachCount >= 2);
+  await page.evaluate(() => __fixture.emit({ topic: 'pty.screen', data: { session_id: 'disposable-fixture', seq: 3, rows: 24, cols: 80, patch: { rows: [{ row: 0, runs: [{ text: '恢复屏幕 Unicode ✓' }] }] } } }));
+  await waitFor(page, () => __fixture.state.attachCount >= 2 && document.querySelector('[data-terminal-status]')?.textContent.trim() === '');
+  await waitFor(page, () => __fillTexts.includes('恢复屏幕 Unicode ✓'));
   assert.equal((await callValues(page, 'pty.attach')).length, 2, 'sequence gap must trigger attach recovery');
 
   await page.locator('canvas').focus();
@@ -344,10 +443,14 @@ async function runHappyPath(base) {
   assert.equal(await page.evaluate(() => __fixture.state.subscriptions.filter((item) => !item.disposed).length), 2, 'remount must keep one pair of active listeners');
   assert.equal(await page.evaluate(() => __fixture.state.subscriptionDisposes >= 2), true, 'old subscriptions must be disposed before remount');
 
-  const subscriptionsBeforeEpoch = await page.evaluate(() => __fixture.state.subscriptions.filter((item) => !item.disposed).length);
+  const subscriptionsBeforeEpoch = await page.evaluate(() => ({
+    active: __fixture.state.subscriptions.filter((item) => !item.disposed).length,
+    calls: __fixture.state.calls.filter((call) => call.kind === 'subscribe').length,
+    attaches: __fixture.state.attachCount,
+  }));
   const beforeReconnectPaint = await page.locator('canvas').evaluate((canvas) => canvas.toDataURL());
   await page.evaluate(() => __fixture.setEpoch(2));
-  await waitFor(page, (before) => __fixture.state.subscriptions.filter((item) => !item.disposed).length === before && __fixture.state.calls.filter((call) => call.kind === 'subscribe').length >= 4, subscriptionsBeforeEpoch);
+  await waitFor(page, (before) => __fixture.state.subscriptions.filter((item) => !item.disposed).length === before.active && __fixture.state.calls.filter((call) => call.kind === 'subscribe').length === before.calls + 2 && __fixture.state.attachCount > before.attaches && document.querySelector('[data-terminal-status]')?.textContent.trim() === '', subscriptionsBeforeEpoch);
   assert.equal(await page.evaluate(() => __fixture.state.subscriptionDisposes >= 2), true, 'connection epoch must dispose old subscriptions');
   await page.evaluate(() => __fixture.emit({ topic: 'pty.screen', data: { session_id: 'sibling-fixture', seq: 1, rows: 24, cols: 80, patch: { rows: [{ row: 0, runs: [{ text: 'reconnect coverage' }] }] } } }));
   await waitFor(page, (previous) => document.querySelector('canvas').toDataURL() !== previous, beforeReconnectPaint);
@@ -360,6 +463,7 @@ async function runHappyPath(base) {
   assert.equal(await page.locator('#sidebar').textContent(), '');
   assert.equal(await page.locator('#content').textContent(), '');
   assert.equal(await page.evaluate(() => __fixture.state.calls.some((call) => call.kind === 'invoke' && call.value.method === 'pty.close')), false);
+  assert.equal(await page.evaluate(() => __fixture.state.spawnCount), 0, 'load, reconnect, exit and hide must never spawn');
   await page.close();
 }
 
@@ -380,8 +484,11 @@ async function runSpawnPath() {
   assert.ok(Number.isFinite(fillTextCount) && fillTextCount >= 0,
     'Native Canvas counter initialization is a fixture precondition before Terminal mount');
   await page.getByRole('button', { name: 'Terminal' }).click();
-  await waitFor(page, () => __fixture.state.spawnCount >= 1 && document.querySelector('canvas') !== null);
-  assert.equal(await page.evaluate(() => __fixture.state.spawnCount), 1, 'empty list must spawn exactly one PTY');
+  await waitFor(page, () => __fixture.state.calls.some((call) => call.kind === 'invoke' && call.value.method === 'pty.list') && document.querySelector('canvas') !== null);
+  assert.equal(await page.evaluate(() => __fixture.state.spawnCount), 0, 'empty load must not spawn a PTY');
+  await page.locator('#content [data-terminal-tabs] button[aria-label="New terminal"]').click();
+  await waitFor(page, () => __fixture.state.spawnCount === 1 && __fixture.state.attachCount >= 1);
+  assert.equal(await page.evaluate(() => __fixture.state.spawnCount), 1, 'explicit New must spawn exactly one PTY');
   assert.ok((await callValues(page, 'pty.attach')).length >= 1, 'spawned PTY must be attached');
   try {
     await waitFor(page, () => globalThis.__fillTextCount > 0);
@@ -469,6 +576,178 @@ async function runSpawnPath() {
     }
     throw originalFailure;
   }
+  await page.locator('canvas').evaluate(async (canvas) => {
+    // Empty-state controls must not resize/implicitly erase the bitmap.
+    canvas.style.setProperty('width', '600px', 'important');
+    canvas.style.setProperty('height', '320px', 'important');
+    canvas.style.setProperty('flex', 'none', 'important');
+    for (let i = 0; i < 3; i++) await new Promise(requestAnimationFrame);
+  });
+  await waitFor(page, () => {
+    const canvas = document.querySelector('canvas');
+    const pixels = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+    return pixels.some((channel, i) => channel !== pixels[i % 4]);
+  });
+  const beforeLastClose = await page.locator('canvas').evaluate((canvas) => ({
+    image: canvas.toDataURL(), width: canvas.width, height: canvas.height,
+    rect: { width: canvas.getBoundingClientRect().width, height: canvas.getBoundingClientRect().height },
+  }));
+  await page.locator('#content [data-terminal-tabs] button[aria-label="Close terminal"]').click();
+  await waitFor(page, () => document.querySelectorAll('#content [data-terminal-tabs] [role="tab"]').length === 0);
+  await waitFor(page, (old) => document.querySelector('canvas').toDataURL() !== old, beforeLastClose.image);
+  const emptyCanvas = await page.locator('canvas').evaluate((canvas) => {
+    const pixels = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+    const background = pixels.slice(0, 4);
+    let uniform = true;
+    for (let i = 0; i < pixels.length; i += 4) {
+      if (pixels[i] !== background[0] || pixels[i + 1] !== background[1] || pixels[i + 2] !== background[2] || pixels[i + 3] !== background[3]) uniform = false;
+    }
+    return { uniform, background: [...background], width: canvas.width, height: canvas.height,
+      rect: { width: canvas.getBoundingClientRect().width, height: canvas.getBoundingClientRect().height } };
+  });
+  assert.equal(emptyCanvas.uniform, true, 'last close must erase the old glyphs, not just stop painting');
+  assert.deepEqual(emptyCanvas.background, [13, 13, 18, 255], 'empty canvas must use the terminal background');
+  assert.deepEqual({ width: emptyCanvas.width, height: emptyCanvas.height, rect: emptyCanvas.rect },
+    { width: beforeLastClose.width, height: beforeLastClose.height, rect: beforeLastClose.rect },
+    'last-close clearing must not rely on a geometry change');
+  assert.equal(await page.evaluate(() => __fixture.state.spawnCount), 1, 'last close adds zero passive spawns');
+  await page.getByRole('button', { name: 'Chat' }).click();
+  await page.getByRole('button', { name: 'Terminal' }).click();
+  await waitFor(page, () => document.querySelector('canvas') !== null && __fixture.state.subscriptions.filter((item) => !item.disposed).length === 2);
+  assert.equal(await page.evaluate(() => __fixture.state.spawnCount), 1, 'last close and remount must not spawn');
+  await waitFor(page, () => document.querySelector('[data-terminal-status]')?.textContent.trim() === '');
+  const listsBeforeAmbiguous = (await callValues(page, 'pty.list')).length;
+  await page.evaluate(() => { __fixture.state.ambiguousSpawn = true; });
+  await page.locator('#content [data-terminal-tabs] button[aria-label="New terminal"]').click();
+  await waitFor(page, () => __fixture.state.spawnCount === 2 && document.querySelectorAll('#content [data-terminal-tabs] [role="tab"]').length === 1);
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal(await page.evaluate(() => __fixture.state.spawnCount), 2, 'ambiguous spawn is never replayed');
+  assert.equal((await callValues(page, 'pty.list')).length, listsBeforeAmbiguous + 1, 'ambiguous spawn reconciles once');
+  await page.evaluate(() => { __fixture.state.ambiguousClose = true; });
+  const closesBeforeAmbiguous = (await callValues(page, 'pty.close')).length;
+  await page.locator('#content [data-terminal-tabs] button[aria-label="Close terminal"]').click();
+  await waitFor(page, () => document.querySelectorAll('#content [data-terminal-tabs] [role="tab"]').length === 0);
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal((await callValues(page, 'pty.close')).length, closesBeforeAmbiguous + 1, 'ambiguous close is never replayed');
+  assert.equal(await page.evaluate(() => __fixture.state.spawnCount), 2, 'ambiguous last close must not spawn');
+  await page.close();
+}
+
+// A sent mutation outlives its SDK and module mount. The replacement must
+// neither unlock nor adopt its payload; only a new authoritative list may win.
+const runMutationRemount = async () => {
+  for (const close of [false, true]) {
+    for (const ambiguous of [false, true]) {
+      const page = await browser.newPage();
+      await page.goto(origin);
+      await page.click('#terminal');
+      await waitFor(page, () => document.querySelector('canvas') && document.querySelector('#sidebar [aria-label="New terminal"]')?.disabled === false);
+      await page.evaluate(({ close, ambiguous }) => {
+        __fixture.state.holdMutation = true;
+        __fixture.state.ambiguousSpawn = !close && ambiguous;
+        __fixture.state.ambiguousClose = close && ambiguous;
+      }, { close, ambiguous });
+      const listsBefore = (await callValues(page, 'pty.list')).length;
+      if (close) await page.locator('#sidebar button[aria-label="Close terminal"]').first().click();
+      else await page.getByRole('button', { name: 'New terminal', exact: true }).first().click();
+      await waitFor(page, () => __fixture.state.heldMutations.length === 1);
+      await page.click('#chat');
+      await page.click('#terminal');
+      await waitFor(page, (n) => __fixture.state.calls.filter(c => c.kind === 'invoke' && c.value.method === 'pty.list').length > n, listsBefore);
+      await page.waitForTimeout(250);
+      assert.equal(await page.getByRole('button', { name: 'New terminal', exact: true }).first().isDisabled(), true, 'remounted New tab must remain locked');
+      const closeButtons = page.locator('#sidebar button[aria-label="Close terminal"]');
+      for (const button of await closeButtons.all()) assert.equal(await button.isDisabled(), true, 'remounted Close must remain locked');
+      // Selection is still allowed and must survive the old mutation settlement.
+      await page.locator('#sidebar [role=tab]').nth(1).click();
+      await waitFor(page, () => __fixture.state.calls.filter(c => c.kind === 'invoke' && c.value.method === 'pty.attach').at(-1)?.value.params.session_id === 'sibling-fixture');
+      const selectedTitle = await page.locator('#sidebar [role=tab][aria-selected=true]').textContent();
+      const afterReplacement = (await callValues(page, 'pty.list')).length;
+      await page.evaluate(() => __fixture.releaseMutation());
+      await waitFor(page, (n) => __fixture.state.calls.filter(c => c.kind === 'invoke' && c.value.method === 'pty.list').length > n, afterReplacement);
+      await waitFor(page, () => __fixture.state.disposedReplies === 1);
+      await waitFor(page, (count) => document.querySelector('#sidebar [aria-label="New terminal"]')?.disabled === false && document.querySelectorAll('#sidebar [role=tab]').length === count, close ? 1 : 3);
+      assert.equal((await callValues(page, close ? 'pty.close' : 'pty.spawn')).length, 1, 'old gesture is never replayed');
+      assert.equal(await page.locator('#sidebar [role=tab][aria-selected=true]').textContent(), selectedTitle, 'late settlement cannot overwrite newer selection');
+      assert.equal((await callValues(page, 'pty.attach')).at(-1).session_id, 'sibling-fixture', 'old payload never changes the selected attachment');
+      assert.equal(await page.locator('#sidebar [role=tab]').count(), close ? 1 : 3, 'only the authoritative post-settlement list reconciles membership');
+      assert.equal(await page.getByText('Disposed', { exact: true }).count(), 0, 'old SDK errors cannot enter replacement UI');
+      await page.close();
+    }
+  }
+};
+
+// Exercise the mounted Rust view through the modular SDK adapter. The response
+// wake and queued frames/loss are deliberately in the same event-loop turn.
+async function runQueuedAttachPath(mode) {
+  const page = await browser.newPage({ viewport: { width: 1024, height: 720 } });
+  await page.addInitScript(() => {
+    const fillText = CanvasRenderingContext2D.prototype.fillText;
+    globalThis.__fillTexts = [];
+    CanvasRenderingContext2D.prototype.fillText = function (...args) {
+      globalThis.__fillTexts.push(String(args[0]));
+      return fillText.apply(this, args);
+    };
+  });
+  await page.goto(`${origin}/index.html`, { waitUntil: 'networkidle' });
+  await page.getByRole('button', { name: 'Terminal' }).click();
+  await waitFor(page, () => __fillTexts.includes('初始屏幕 ✓') && document.querySelector('[data-terminal-status]')?.textContent.trim() === '');
+  await page.locator('canvas').evaluate(async (canvas) => {
+    canvas.style.setProperty('width', '600px', 'important');
+    canvas.style.setProperty('height', '320px', 'important');
+    canvas.style.setProperty('flex', 'none', 'important');
+    for (let i = 0; i < 3; i++) await new Promise(requestAnimationFrame);
+  });
+  const oldPaint = await page.locator('canvas').evaluate((canvas) => canvas.toDataURL());
+  const before = await page.evaluate(() => ({
+    attaches: __fixture.state.attachCount,
+    lists: __fixture.state.calls.filter((call) => call.kind === 'invoke' && call.value.method === 'pty.list').length,
+    subscriptions: __fixture.state.subscriptions.length,
+    paints: __fillTexts.length,
+  }));
+  await page.evaluate(() => {
+    __fixture.state.holdAttaches = true;
+    __fixture.setScreen('disposable-fixture', 11, 'captured before queued frames');
+    __fixture.emit(__fixture.frame('disposable-fixture', 10, 'trigger initial gap'));
+  });
+  await waitFor(page, () => __fixture.state.heldAttaches.length === 1);
+  assert.equal(await page.evaluate(() => __fixture.state.heldAttaches[0].response.seq), 11);
+  const releasedAt = await page.evaluate((mode) => {
+    if (mode === 'gap') {
+      __fixture.emit(__fixture.frame('disposable-fixture', 12, 'partial must not paint'));
+      __fixture.emit(__fixture.frame('disposable-fixture', 14, 'recovered current snapshot'));
+    } else {
+      __fixture.setScreen('disposable-fixture', 14, 'recovered current snapshot');
+      if (mode === 'count-loss') {
+        for (let seq = 1; seq <= 257; seq++) __fixture.emit(__fixture.frame('background-fixture', seq, 'bounded queue'));
+      } else {
+        __fixture.emit(__fixture.frame('background-fixture', 1, 'x'.repeat(8 * 1024 * 1024)));
+      }
+    }
+    return __fixture.releaseAttach();
+  }, mode);
+  // No more events after release. A timer alone must start exactly one retry.
+  await waitFor(page, (count) => __fixture.state.attachCount === count + 2 && __fixture.state.heldAttaches.length === 1, before.attaches);
+  assert.equal(await page.locator('canvas').evaluate((canvas) => canvas.toDataURL()), oldPaint,
+    `${mode}: preserve the old paint until a whole current snapshot can commit`);
+  assert.deepEqual(await page.evaluate((start) => __fillTexts.slice(start), before.paints), [],
+    `${mode}: no intermediate snapshot or partial frame may reach Canvas`);
+  const retry = await page.evaluate(() => __fixture.state.calls.filter((call) => call.kind === 'invoke' && call.value.method === 'pty.attach').at(-1));
+  assert.ok(retry.at - releasedAt >= 90, `${mode}: retry must respect the 100ms backoff, not spin immediately`);
+  if (mode !== 'gap') {
+    assert.equal(await page.evaluate(() => __fixture.state.drainFailures), 1, 'sticky queue loss must cross the adapter as a failed drain');
+    assert.equal(await page.evaluate(() => __fixture.state.subscriptions.length), before.subscriptions + 2, 'loss replaces exactly one coverage pair');
+    assert.equal((await callValues(page, 'pty.list')).length, before.lists + 1, 'loss re-lists once');
+  } else {
+    assert.equal((await callValues(page, 'pty.list')).length, before.lists, 'ordinary gap does not re-list');
+  }
+  assert.equal(await page.evaluate(() => __fixture.state.heldAttaches[0].response.seq), 14, 'retry snapshot includes all previously emitted frames');
+  await page.evaluate(() => { __fixture.state.holdAttaches = false; __fixture.releaseAttach(); });
+  await waitFor(page, () => __fillTexts.includes('recovered current snapshot') && document.querySelector('[data-terminal-status]')?.textContent.trim() === '');
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal((await callValues(page, 'pty.attach')).length, before.attaches + 2, 'quiet recovery converges without polling');
+  assert.equal(await page.evaluate(() => __fixture.state.spawnCount), 0, 'recovery never spawns');
+  assert.equal((await callValues(page, 'pty.close')).length, 0, 'recovery never closes');
   await page.close();
 }
 
@@ -482,12 +761,21 @@ async function runDeniedPath() {
 }
 
 try {
-  await runHappyPath('/');
-  await runHappyPath('/panel/');
-  await runSpawnPath();
-  await runDeniedPath();
+  const scenario = process.env.PANEL_TERMINAL_SCENARIO;
+  if (!scenario || scenario === 'queued-attach') {
+    for (const mode of ['gap', 'count-loss', 'byte-loss']) await runQueuedAttachPath(mode);
+  }
+  if (!scenario || scenario === 'happy') {
+    await runHappyPath('/');
+    await runHappyPath('/panel/');
+  }
+  if (!scenario || scenario === 'remount') await runMutationRemount();
+  if (!scenario || scenario === 'spawn') await runSpawnPath();
+  if (!scenario || scenario === 'denied') await runDeniedPath();
+  if (scenario && !['queued-attach', 'happy', 'spawn', 'denied', 'remount'].includes(scenario)) throw Error('unknown terminal scenario');
   console.log(JSON.stringify({
     protocol_fixture: 'passed',
+    scenarios: scenario ? [scenario] : ['queued-attach', 'happy', 'spawn', 'denied'],
     entry,
     bases: ['/', '/panel/'],
     live_gateway: 'not exercised by this fixture',
@@ -497,11 +785,14 @@ try {
       'exact pty.screen/pty.exit subscriptions and sequence-gap attach recovery',
       'UTF-8 Ctrl-C and bracketed-paste payload boundaries',
       'selected-session exit selects a surviving PTY without closing it',
-      'empty list performs one spawn and attaches the returned session',
+      'empty list stays empty until explicit New, then attaches once',
       'Canvas uses native fillText and wrong-topic events do not repaint',
       'resize changes geometry after the baseline report',
       'connection epoch replacement keeps new screen coverage',
       'pty.list failure is visible and does not spawn',
+      'queued attach replay gaps preserve old pixels until one backed-off retry',
+      'sticky count/byte loss crosses the modular adapter and recovers without another event',
+      'last close clears Canvas at unchanged geometry without passive spawn',
     ],
   }, null, 2));
 } finally {

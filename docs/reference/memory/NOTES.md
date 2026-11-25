@@ -342,7 +342,7 @@ The sweep is deliberately scoped to `.tx` only. Orphaned `.aleph_atomic_*.tmp`
 staging files from a killed atomic write are the same class and are **not**
 swept (they are filtered out of listings by `vault_io` and by the watcher's
 extension check, so they are inert rather than harmful) — stretching a knob
-named `tx_residue` to cover them would be a wider promise than its name makes.
+named for transaction residue to cover them would be a wider promise than its name makes.
 
 #### Write-time semantic dedup (mem0-style) / 写入期语义去重
 
@@ -407,7 +407,7 @@ Three decisions worth not reversing:
 
 There is **no config flag to disable it.** It does not choose a behaviour on the user's behalf; it makes the index tell the truth about files the user already owns. If the watch cannot be established the caller logs it and the process behaves exactly as it did before the module existed.
 
-> Comparison: EverOS runs the same idea as a `watchdog` observer feeding a durable `md_change_state` queue in SQLite, so a crash mid-sync replays on restart. Aleph's queue is in-process and a crash simply loses the pending batch — recovered by the boot reconcile of §6.3, which EverOS's design does not have an equivalent of. The trade is deliberate: no new table, no new migration, and the crash window is covered by a pass that has to exist anyway.
+> Comparison: EverOS runs the same idea as a `watchdog` observer feeding a durable Markdown-change queue in SQLite, so a crash mid-sync replays on restart. Aleph's queue is in-process and a crash simply loses the pending batch — recovered by the boot reconcile of §6.3, which EverOS's design does not have an equivalent of. The trade is deliberate: no new table, no new migration, and the crash window is covered by a pass that has to exist anyway.
 
 ## 7. `NoteStore` Trait
 
@@ -574,7 +574,7 @@ Three generated files live in each agent's note directory and are managed by `sr
 
 `read_snapshot` assembles these three files into an `OrientationSnapshot` that is injected into agent prompts: `schema_text` comes from `SchemaDoc::compact_for_prompt()` (Tag Taxonomy + Page Thresholds + Update Policy sections only, to reduce prompt tokens); `index_text` is the full `index.md`; `recent_log_tail` is the last 20 log entries.
 
-> The `(removed; memory system is now src/memory/)` directory and its `WikiGitManager` / `generate_index_content` were removed. All orientation functionality now lives in `src/memory/notes/orientation/`.
+> The old wiki index generator was removed. Orientation now lives in `src/memory/notes/orientation/`.
 
 ## 10. Skills as Notes
 
@@ -713,7 +713,7 @@ Commands in `src/memory/events/commands.rs`:
 - `ConsolidateCommand` — emits `NoteConsolidated`.
 - `DeleteNoteCommand` — hard delete; emits `NoteDeleted`.
 
-> The former `ApplyDecayCommand` (bulk `StrengthDecayed` batch) and `TierTransitioned` event were removed as part of the memory sovereignty cleanup. Strength/tier/confidence are no longer part of the note model; aging and salience are expressed through retrieval scoring stages and prompt-layer judgement instead of persisted per-note fields.
+> The former bulk strength-decay command and tier-transition event were removed as part of the memory sovereignty cleanup. Strength/tier/confidence are no longer part of the note model; aging and salience are expressed through retrieval scoring stages and prompt-layer judgement instead of persisted per-note fields.
 
 ### 12.3 Projection
 
@@ -728,19 +728,7 @@ This is the "notes dual-write": the event log remains the audit-and-explain sour
 
 ## 13. Namespace Scoping
 
-`src/memory/namespace.rs` declares:
-
-```rust
-pub enum NamespaceScope {
-    Owner,
-    Guest(String),
-    Shared,
-}
-```
-
-`NamespaceScope::to_sql_filter` returns the WHERE clause fragment (`1=1` for `Owner`, `namespace = ?` with bind for `Guest` and `Shared`), and `to_namespace_value` returns the column value written on insert (`"owner"`, `"guest:{id}"`, or `"shared"`). `from_auth_context(role, guest_id)` maps `DeviceRole::Operator` → `Owner` and `DeviceRole::Node` → `Guest(guest_id)` (required; returns an error if missing). The `recall_signals` table carries a `namespace` column defaulting to `'owner'`; per-user memory access filtering happens through this enum.
-
-Note scoping itself is orthogonal: notes are keyed by `agent_id` in the filesystem path and the `notes_index` primary key. `agent_id` and `namespace` are independent axes — the former partitions the markdown filesystem, the latter partitions rows visible to a given authenticated caller.
+`NamespaceScope::Owner` is the only variant in `src/memory/namespace.rs`; `to_namespace_value` writes the `owner` tag. The tag does not authorize access. Project memory partitions use the composed `agent_id` from `src/memory/project_scope.rs`. Session and project visibility are decided separately in `src/gateway/visibility.rs`.
 
 ## 14. Graph Subsystem
 

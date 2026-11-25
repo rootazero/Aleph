@@ -1,4 +1,4 @@
-# Model-Perceivable Ecosystem Implementation Plan
+# Model-Perceivable Ecosystem Implementation Plan (Historical record)
 
 > **状态：历史文档（point-in-time）** — 本文记录的是 2026-04-06 当时的设计/结论，不代表当前架构。当前状态以代码为准（落地部分见 `src/thinker/layers/agent_catalog.rs` 与 `src/builtin_tools/agent_manage/`）。
 

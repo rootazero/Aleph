@@ -53,6 +53,12 @@ pub(in crate::commands::start) fn register_pty_handlers(
     register_handler!(server, "pty.spawn", pty::handle_spawn_with_source, source);
     register_handler!(server, "pty.input", pty::handle_input_with_source, source);
     register_handler!(server, "pty.attach", pty::handle_attach_with_source, source);
+    register_handler!(
+        server,
+        "pty.history",
+        pty::handle_history_with_source,
+        source
+    );
     register_handler!(server, "pty.resize", pty::handle_resize_with_source, source);
     register_handler!(server, "pty.close", pty::handle_close_with_source, source);
     register_handler!(server, "pty.list", pty::handle_list_with_source, source);

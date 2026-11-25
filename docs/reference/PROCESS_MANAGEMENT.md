@@ -90,8 +90,7 @@ Aleph 自己 spawn 浏览器（2026-09-05 起 Chromium，2026-09-06 起还有 ob
   不向一个可能正是停机卡死原因的进程发起往返。`terminate()` 先 `child.kill()`，再在 `grace` 内**轮询**
   回收（不是 `wait()` 阻塞：kill 可能失败，而 `wait()` 会把这个 worker 挂到进程自己碰巧退出为止）。
   那个 `grace` 是**回收**的预算，不是给进程的缓刑。
-- **代价，写下来而不是留给人发现**：被 SIGKILL 的 Chromium 一定在 profile 目录里留下 `SingletonLock` /
-  `SingletonSocket` 与一个「did not shut down correctly」标记，下次启动可能弹恢复提示。本仓**没有**做宽限
+- **代价，写下来而不是留给人发现**：被 SIGKILL 的 Chromium 一定在 profile 目录里留下 Chromium 自己的 profile 单实例锁、套接字与未正常退出标记，下次启动可能弹恢复提示。本仓**没有**做宽限
   期，也**没有**清理陈旧 singleton 锁。
 
 详见 [FEATURE_LOCATOR §3.12](FEATURE_LOCATOR.md) 第七轮 ⑯⑰ 与第八轮 ⑫。

@@ -243,14 +243,17 @@ async function run(fixturePath) {
       }
     }
 
-    // 3. Customize: Capabilities first, Sessions hidden.
-    await page.getByText('Customize').click();
+    // 3. Settings → Menu: Capabilities first, Sessions hidden.
+    await page.getByLabel('Settings', { exact: true }).first().click();
     const moveUp = page.getByLabel('Move Capabilities up');
-    for (let position = 0; position < 4 && await moveUp.isEnabled(); position += 1) {
+    const menuSize = await page.getByRole('button', { name: /^Move .* up$/ }).count();
+    // The first entry cannot move further; extra presses are harmless.
+    for (let position = 1; position < menuSize; position += 1) {
       await moveUp.click();
     }
     await page.getByLabel('Hide Sessions').click();
-    await page.getByText('Done').click();
+    // The menu entry comes first; Settings also lists its shortcut row.
+    await page.getByLabel('Open Capabilities', { exact: true }).first().click();
     await page.waitForTimeout(500);
     const edited = await layoutEntries(page);
     const [key] = Object.keys(edited);

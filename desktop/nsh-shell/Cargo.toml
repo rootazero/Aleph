@@ -28,6 +28,9 @@ uuid = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 nsh-platform-macos = { version = "=0.6.0", default-features = false }
+# Already in the build through nsh-platform-macos (same version and features):
+# the Panel's text size is applied on the main queue.
+dispatch2 = "0.3.1"
 objc2 = { version = "0.6.5", default-features = false, features = ["std"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSBundle", "NSString"] }
 objc2-service-management = { version = "0.3.2", default-features = false, features = ["std", "SMAppService", "objc2", "objc2-foundation"] }

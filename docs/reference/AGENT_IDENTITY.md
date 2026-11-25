@@ -38,7 +38,7 @@
 | 关机时的队列 | 无对位（每条 append 同步过 advisory lock） | `identity::flush()` FIFO 屏障，优雅关机路径有界 await | **超越**（第四轮补）。排队未写＝**既丢记录又丢计数**，因为什么都没"失败" |
 | 撤销标记 vs 链 | 无（无生命周期概念） | `revoked_at` 列与链自己的 `IdentityRevoked` 两侧对账（`revoked_per_chain`），不一致就报出来 | **超越**（第四轮补）。"改回 NULL 抹不掉撤销"此前**没有任何代码在做这个比较** |
 | 委派身份 | 无子代理概念 | 子代理由 `AllowlistToolService` 就地开 `LEDGER_ACTOR` 作用域 → **自己的密钥、自己的链** | **超越**（参考实现无对位） |
-| 身份→权限 | `Scope` 16 条枚举，但生产恒发 `all_known()`（形同虚设）；真正差异在 membership / `MemberRole` / NIP-OA | 既有 `tool_permissions` 三级合并（global→agent→channel，`restrictive_min` 只收紧）× exec tier | **Aleph 领先，刻意不移植** buzz 的 scope 层：再加一套并行权限模型违 P2/P6 |
+| 身份→权限 | `Scope` 16 条枚举，但生产恒发全部已知 scope（形同虚设）；真正差异在 membership 角色和 NIP-OA | 既有 `tool_permissions` 三级合并（global→agent→channel，`restrictive_min` 只收紧）× exec tier | **Aleph 领先，刻意不移植** buzz 的 scope 层：再加一套并行权限模型违 P2/P6 |
 | **谁可以用哪个 agent** | 无对位（无 agent 概念）——连接的 scope 由 token 决定，调用方无从自选 | 第五轮前：**调用方在 wire 上自己填 `agent_id`，零校验**。现 `AgentDefinition.allowed_users` × `caller_may_act_as_agent`，强制在三个 run-start 入口共用的 `build_run_request`（必填参数，不是 `Option`） | **修掉自己的缺陷**。上一行那套 `tool_permissions` 是**按 agent 分的**，而 agent 免检自选 ⇒ 权限层键在一条自助轴上：被某个 agent 拒了就换一个名字 |
 | **记录里的"谁"** | 无（无签名，更无 principal） | `agent_id`（哪个身份在动）+ `principal`（哪个人在驱动），**两者都在 preimage 内** | **超越**（第五轮）。只记 agent 时，非否认对 agent 成立、对**人**不成立——共用一个 agent 的两个人在链上无法区分 |
 | agent vs human | 只差**配额**不差权限 | 两条正交轴都在：exec tier（这次调用能做什么）× `allowed_users`（这个人能扮演谁） | **超越**（第五轮起） |

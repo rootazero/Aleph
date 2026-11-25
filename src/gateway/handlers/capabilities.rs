@@ -139,6 +139,9 @@ pub async fn handle_terminal_invoke(request: JsonRpcRequest) -> JsonRpcResponse 
             )
         }
         Err(crate::capability::special_dispatch::CapabilityInvocationError::Handler(
+            crate::capability::special::CapabilityDispatchError::InvalidInput(message),
+        )) => JsonRpcResponse::error(request.id, INVALID_PARAMS, message),
+        Err(crate::capability::special_dispatch::CapabilityInvocationError::Handler(
             crate::capability::special::CapabilityDispatchError::NotFound(_),
         )) => JsonRpcResponse::error(request.id, INVALID_PARAMS, "terminal session was not found"),
         // A refusal the caller can act on (today: `[policies.terminal] enabled =

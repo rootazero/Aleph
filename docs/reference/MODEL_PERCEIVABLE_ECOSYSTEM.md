@@ -132,7 +132,7 @@ Use `agent_info(agent_id)` to get detailed capabilities before delegating.
 ## Part 3: McpToolIndexLayer
 
 > **⚠️ Status (2026-07-17): REMOVED / superseded — this section is historical.**
-> `McpToolIndexLayer` (`mcp_tool_index.rs`) and the `mcp_tool_schema` tool
+> The proposed MCP index layer and schema-lookup tool
 > (`builtin_tools/mcp_discover/`) described below were **removed as dead code on
 > 2026-05-31** (see `src/thinker/prompt_pipeline.rs`); no `mcp_tool_index.rs`
 > exists. MCP **tools** reach the model through normal dynamic tool-table
@@ -167,7 +167,7 @@ Use `agent_info(agent_id)` to get detailed capabilities before delegating.
 
 | Property | Value |
 |----------|-------|
-| Name | `mcp_tool_index` |
+| Purpose | A proposed index of MCP tool names and summaries for model discovery |
 | Priority | 1065 |
 | Stability | Dynamic |
 | Modes | Full only |

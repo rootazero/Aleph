@@ -1,7 +1,9 @@
-// The Panel shell: connection, the capability snapshot, the user's layout and
-// the one mounted module. Layout and projection rules live in Rust
-// (`aleph/panel`, shared with the Leptos Panel); this file only wires them.
-import { batch, cleanup, computed, host, signal, Storage, Text, View } from "nsh";
+// The Panel shell: a fixed two-column frame (menu on the left, the mounted
+// module or Settings on the right), connection, the capability snapshot, the
+// user's layout and personal preferences. Layout, projection and preference
+// rules live in Rust (`aleph/panel`, shared with the Leptos Panel); this file
+// only wires them.
+import { batch, cleanup, colorScheme, computed, effect, horizontalSizeClass, host, platform, signal, Storage, Text, View, type ViewRef } from "nsh";
 import { Button } from "nsh/base";
 import { PanelModel } from "aleph/panel";
 import { Capabilities } from "../modules/Capabilities";
@@ -9,9 +11,13 @@ import { Chat } from "../modules/Chat";
 import { MemoryNebula } from "../modules/MemoryNebula";
 import { Overview } from "../modules/Overview";
 import { Sessions } from "../modules/Sessions";
-import { LayoutEditor } from "./LayoutEditor";
+import { CommandPalette } from "./CommandPalette";
+import { bindCommands, type Command, type KeyedCommand, menuCommands, resolveKeys, shellCommands } from "./commands";
 import { PairingForm } from "./PairingForm";
-import { type ConnectionState, createSdk, type Intent, type PanelEvent, type PanelSdk, RpcError, type ShellAccess } from "./sdk";
+import { applyPrefs, type Binding, loadStored, persistPrefs, type Prefs, readPrefs } from "./prefs";
+import { type CommandSpec, type ConnectionState, createSdk, type Intent, type PanelEvent, type PanelSdk, RpcError, type ShellAccess } from "./sdk";
+import { Settings } from "./Settings";
+import { Sidebar } from "./Sidebar";
 import type { PanelTab, PanelView, Slot } from "./view";
 
 const INITIAL: ConnectionState = { state: "connecting", endpoint: "", subject: null, pairing: false };
@@ -29,7 +35,20 @@ export function Shell() {
   const generation = signal(0);
   const view = signal<PanelView | null>(null);
   const notice = signal<string | null>(null);
-  const editing = signal(false);
+  const settingsOpen = signal(false);
+  const prefs = signal<Prefs | null>(null);
+  const fontScaleSupported = signal(true);
+  const prefsSaveFailed = signal(false);
+  const paletteOpen = signal(false);
+  const readerMode = signal(false);
+  // Commands the mounted module registered (already prefixed with its key).
+  const moduleCommands = signal<CommandSpec[]>([]);
+  // Every module command seen this session, kept after its module unmounts
+  // so Settings (which unmounts the module) can still list and rebind it.
+  // Only names and default keys are kept, never the callbacks.
+  const seenModuleCommands = signal<Map<string, KeyedCommand>>(new Map());
+  // Keys the platform refused to bind, by command id.
+  const keyFailures = signal<Map<string, string>>(new Map());
   const listeners = new Set<(state: ConnectionState) => void>();
   const eventListeners = new Set<(event: PanelEvent) => void>();
   // What a module handed the one it navigated to (by tab key), for this run
@@ -73,7 +92,7 @@ export function Shell() {
         storageKey = null;
         view.set(null);
         notice.set(null);
-        editing.set(false);
+        settingsOpen.set(false);
       }
     });
     for (const listener of [...listeners]) listener(next);
@@ -106,11 +125,102 @@ export function Shell() {
       eventListeners.add(listener);
       return () => eventListeners.delete(listener);
     },
+    registerCommand(spec) {
+      moduleCommands.update((list) => [...list.filter((command) => command.id !== spec.id), spec]);
+      seenModuleCommands.update((seen) =>
+        new Map(seen).set(spec.id, { id: spec.id, label: spec.label, defaultKey: spec.defaultKey }),
+      );
+      return () => moduleCommands.update((list) => list.filter((command) => command !== spec));
+    },
   };
 
   const applyEvent = (event: PanelEvent) => {
     for (const listener of [...eventListeners]) listener(event);
   };
+
+  const showPrefs = async (next: Prefs) => {
+    prefs.set(next);
+    const applied = await applyPrefs(next);
+    fontScaleSupported.set(applied.fontScale === "applied");
+  };
+
+  // An edit shows at once and is then stored; the next edit starts from it,
+  // not from what storage holds yet.
+  const keepPrefs = (stored: string) => {
+    void showPrefs(readPrefs(stored));
+    void persistPrefs(stored).then((saved) => prefsSaveFailed.set(!saved));
+  };
+
+  const changeAppearance = (axis: string, value: string) => {
+    const current = prefs();
+    if (!current) return;
+    const stored = PanelModel.setAppearance(current.stored, axis, value);
+    if (stored) keepPrefs(stored);
+  };
+
+  // A stored form that needed repair is written back, but the Panel shows
+  // either way: storage that refuses the write must not leave it blank.
+  void loadStored().then((stored) => {
+    const loaded = readPrefs(stored);
+    void showPrefs(loaded);
+    if (stored !== null && loaded.stored !== stored) keepPrefs(loaded.stored);
+  });
+
+  const openModule = (key: string) => {
+    settingsOpen.set(false);
+    access.navigate(key);
+  };
+
+  const changeBinding = (id: string, binding: Binding | null) => {
+    const current = prefs();
+    if (!current) return;
+    const stored = PanelModel.setBinding(current.stored, id, binding);
+    if (stored) keepPrefs(stored);
+  };
+
+  const commands = computed<Command[]>(() => [
+    ...shellCommands(
+      {
+        palette: () => paletteOpen.update((open) => !open),
+        settings: () => settingsOpen.update((open) => !open),
+        toggleScheme: () => void changeAppearance("mode", colorScheme() === "dark" ? "light" : "dark"),
+        reconnect: () => {
+          if (host.available()) void host.call("aleph.connect", null);
+        },
+        openSlot: (index) => {
+          const live = (view()?.slots ?? []).filter((slot) => slot.state === "live");
+          const slot = live[index];
+          if (slot) openModule(slot.key);
+        },
+      },
+      platform.os === "web",
+    ),
+    ...menuCommands(view(), openModule),
+    ...moduleCommands().map((command) => ({ ...command, group: "module" as const })),
+  ]);
+  // Keys resolve over the live commands and the module commands seen
+  // earlier, once, so Settings and the bound keys agree on every conflict.
+  const keyedCommands = computed<KeyedCommand[]>(() => {
+    const live = commands();
+    const liveIds = new Set(live.map((command) => command.id));
+    const away = [...seenModuleCommands().values()].filter((command) => !liveIds.has(command.id));
+    return [...live, ...away];
+  });
+  const keys = computed(() => {
+    const current = prefs();
+    return current ? resolveKeys(keyedCommands(), current.stored) : [];
+  });
+  const labelOf = (id: string) => keyedCommands().find((command) => command.id === id)?.label ?? id;
+  const keyOf = (id: string) => {
+    const entry = keys().find((candidate) => candidate.id === id);
+    return entry?.key && !entry.problem && !keyFailures().has(id) ? entry.key : null;
+  };
+  // Rebind whenever the commands or the user's keys change.
+  effect(() => {
+    const bound = bindCommands(commands(), keys());
+    keyFailures.set(bound.failures);
+    return () => bound.unbind();
+  });
 
   const applyInitialConnection = (state: ConnectionState) => {
     // A real transition may arrive before the initial query returns.
@@ -137,59 +247,90 @@ export function Shell() {
     return slot ? [{ slot, generation: generation() }] : [];
   });
 
-  const readerMode = signal(false);
+  // The Panel's shortcuts only hear keys while the keyboard focus is in the
+  // Panel. On Desktop it is embedded in the shell's window, whose own root
+  // has the focus at launch, so the Panel takes it once it is laid out in
+  // that window (its first render comes earlier, when a `focus()` does
+  // nothing). A focused field that goes away hands it back to the Panel's
+  // root.
+  let root: ViewRef | undefined;
+  let focusTaken = false;
+  const takeFocus = (bounds: { size: { width: number; height: number } }) => {
+    if (focusTaken || !root || bounds.size.width === 0 || bounds.size.height === 0) return;
+    focusTaken = true;
+    root.focus();
+  };
+
+  // Nothing until preferences are read, so the first frame has the user's
+  // colours and density.
   return (
-    <View class="flex-1 bg-background">
-      <If when={connection().state === "connected"} else={<Offline connection={connection} />}>
-        <If when={!readerMode()}>
-        <View class="flex-row flex-wrap items-center gap-1 border-b border-border px-3 py-2">
-          <Each of={view()?.slots ?? []} key={(slot) => `${slot.key}#${slot.state}`}>
-            {(slot) => (
-              <If
-                when={slot().state === "live"}
-                else={<Text class="px-3 py-1 text-muted-foreground">{slot().key} · unavailable</Text>}
-              >
-                <Button
-                  onPress={() => access.navigate(slot().key)}
-                  accessibilityLabel={`Open ${tabOf(slot().key)?.label ?? slot().key}`}
-                  class="rounded-(--radius) px-3 py-1 active:bg-muted"
-                >
-                  <Text class={slot().key === view()?.layout.active ? "text-foreground" : "text-muted-foreground"}>
-                    {tabOf(slot().key)?.label ?? slot().key}
-                  </Text>
-                </Button>
-              </If>
-            )}
-          </Each>
-          <Button onPress={() => editing.update((open) => !open)} class="px-3 py-1 active:bg-muted">
-            <Text class="text-muted-foreground">{editing() ? "Done" : "Customize"}</Text>
-          </Button>
-        </View>
-        <If when={notice()}>
-          <Text class="px-3 py-2 text-destructive">{notice()}</Text>
-        </If>
-        <If when={editing() ? view() : null}>
-          {(current) => (
-            <LayoutEditor
-              view={current()}
-              onMove={(key, forward) => edit((stored) => PanelModel.moveTab(stored, key, forward))}
-              onHidden={(key, hidden) => edit((stored) => PanelModel.setHidden(stored, key, hidden))}
+    <If when={prefs()} else={<View class="flex-1 bg-background" />}>
+      {(current) => (
+        <View
+          ref={(node) => (root = node)}
+          focusable
+          onLayout={({ bounds }) => takeFocus(bounds)}
+          class="flex-1 flex-row bg-background"
+        >
+          <If when={!readerMode()}>
+            <Sidebar
+              view={view}
+              connection={connection}
+              settingsOpen={settingsOpen}
+              compact={() => horizontalSizeClass() === "compact"}
+              density={() => current().density}
+              onOpen={openModule}
+              onSettings={() => settingsOpen.update((open) => !open)}
             />
-          )}
-        </If>
-        </If>
-        <View class="flex-1">
-          <Each of={mounted()} key={(item) => `${item.slot.key}#${item.slot.renderer}#${item.generation}`}>
-            {(item) => {
-              const sdk = createSdk(item().slot.key, item().generation, access);
-              cleanup(() => sdk.dispose());
-              return <ModuleSlot slot={item().slot} tab={tabOf(item().slot.key)} tabs={view()?.tabs ?? []} sdk={sdk}
-                setReaderMode={(active) => readerMode.set(active)} />;
-            }}
-          </Each>
+          </If>
+          <View class="flex-1">
+            <If when={!readerMode() && notice()}>
+              <Text class="px-3 py-2 text-destructive">{notice()}</Text>
+            </If>
+            <If
+              when={settingsOpen()}
+              else={
+                <If when={connection().state === "connected"} else={<Offline connection={connection} />}>
+                  <View class="flex-1">
+                    <Each of={mounted()} key={(item) => `${item.slot.key}#${item.slot.renderer}#${item.generation}`}>
+                      {(item) => {
+                        const sdk = createSdk(item().slot.key, item().generation, access);
+                        cleanup(() => sdk.dispose());
+                        return <ModuleSlot slot={item().slot} tab={tabOf(item().slot.key)} tabs={view()?.tabs ?? []} sdk={sdk}
+                          setReaderMode={(active) => readerMode.set(active)} />;
+                      }}
+                    </Each>
+                  </View>
+                </If>
+              }
+            >
+              <Settings
+                prefs={current}
+                fontScaleSupported={fontScaleSupported}
+                saveFailed={prefsSaveFailed}
+                onAppearance={changeAppearance}
+                view={view}
+                onMove={(key, forward) => edit((stored) => PanelModel.moveTab(stored, key, forward))}
+                onHidden={(key, hidden) => edit((stored) => PanelModel.setHidden(stored, key, hidden))}
+                shortcuts={() =>
+                  keys().map((resolved) => ({
+                    id: resolved.id,
+                    label: labelOf(resolved.id),
+                    resolved,
+                    failure: keyFailures().get(resolved.id) ?? null,
+                  }))
+                }
+                labelOf={labelOf}
+                onBinding={changeBinding}
+              />
+            </If>
+          </View>
+          <If when={paletteOpen()}>
+            <CommandPalette commands={commands} keyOf={keyOf} onClose={() => paletteOpen.set(false)} />
+          </If>
         </View>
-      </If>
-    </View>
+      )}
+    </If>
   );
 }
 

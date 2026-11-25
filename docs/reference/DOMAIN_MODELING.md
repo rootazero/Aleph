@@ -95,22 +95,12 @@ Aleph 的核心领域划分为以下限界上下文：
 
 ### Memory Context
 
-**职责**：事实存储、RAG 检索、知识压缩
+**职责 / Responsibility**：知识库以 Markdown 笔记为权威；SQLite 承载可重建检索投影。 / Markdown notes are authoritative; SQLite serves rebuildable retrieval projections.
 
 | 类型 | 角色 | 位置 |
 |------|------|------|
-| `MemoryFact` | AggregateRoot | `memory/context.rs` |
-| `ContextAnchor` | ValueObject | `memory/context.rs` |
-| `FactType` | ValueObject | `memory/context.rs` |
-
-### Intent Context
-
-**职责**：意图检测、L1-L3 分层过滤
-
-| 类型 | 角色 | 位置 |
-|------|------|------|
-| `AggregatedIntent` | ValueObject | `intent/types.rs` |
-| `IntentSignal` | ValueObject | `intent/types.rs` |
+| `KnowledgeNote` | Document | `src/memory/notes/note/mod.rs` |
+| `FactProvenance` | ValueObject | `src/memory/notes/note/types.rs` |
 
 ---
 

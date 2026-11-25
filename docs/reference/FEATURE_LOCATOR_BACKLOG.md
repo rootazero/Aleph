@@ -25,7 +25,7 @@
   2. **蒸馏** ✅ `src/memory/dreaming/stages/feedback_distill.rs` 按前缀 + watermark 幂等读 → LLM 蒸馏 `feedback/` note，调度于 `src/memory/dreaming/mod.rs`（Consolidate + Synthesize 双 dream path）。
   3. **召回** ✅ assembler `gather.rs:284`/`envelope.rs:34` 表面化 `feedback/` note；goal 教训另有 `GoalLessonsPromoteStage`→`lesson/`。
 - **关键判断（为何不补 wiring）**：backlog 原设想的"工具失败/LLM 拒绝 → 自动写 raw memory"的 **harness 错误 hook 故意不存在，也不应加**——违 R10「不做错误恢复」+ R7 LLM 主权，且会用瞬时报错噪声淹没记忆。沉淀**刻意做成 LLM/工具驱动**（R8）：LLM 判断"值得记"才调 `flag_user_correction`。因此"链路断"的前提不成立。
-- **若将来仍想强化**（非本 gap 范畴）：唯一正当方向是**强化 prompt 引导**（`special_actions.rs`）让 LLM 更主动调工具记教训，或加一个 LLM 可调的 `flag_lesson` 工具——**仍是工具驱动，不是 harness 自动 hook**。
+- **若将来仍想强化**（非本 gap 范畴）：唯一正当方向是**强化 prompt 引导**（`special_actions.rs`）让 LLM 更主动调工具记教训，或新增一个供 LLM 主动记录教训的工具——**仍是工具驱动，不是 harness 自动 hook**。
 - **遗留可选项**：逐跳单测已有，但缺一个**端到端集成测试**（correction 工具写 → dream distill → feedback note 落地）作回归锁（防 `constructor.rs` 注册被悄悄摘除，类比历史 mutation_gate 死代码 bug）。**非必须**，列为可选加固。
 - **详见**：[FEATURE_LOCATOR.md §2.5③](FEATURE_LOCATOR.md)。
 
@@ -103,11 +103,11 @@
 - **类型**：新建子系统（"恢复/新建双层"，非微调）
 - **原决策（已废）**：loopback（本机 App）= operator（Config）；remote（局域网 Panel）= Chat 默认，须显式提权。tier 治理“配置变更”而非“执行”。
 - **2026-06-16 落地（已被取代，多数文件已删）**：
-  - 新建 src/gateway/panel_devices.rs（`PanelDeviceStore` + SQLite）+ `handlers/devices.rs`（`devices.list`/`set_level`/`revoke`）
+  - 新建 src/gateway/panel_devices.rs（设备资料与权限存储，SQLite）+ `handlers/devices.rs`（`devices.list`/`set_level`/`revoke`）
   - `src/gateway/server/handler.rs` connect 握手按 `device_id`+loopback 解析 tier，回填 `role`
   - `method_authz.rs::rpc_requires_operator` + `OPERATOR_RPC_METHODS` RPC 门；前端 `views/settings/security/devices.rs::PanelDevicesSection` + `ConfigGate` 包 17 配置页
 - **取代后的去留（2026-06-17 收敛）**：
-  - **删除**：src/gateway/panel_devices.rs、src/gateway/handlers/devices.rs、前端 `views/settings/security/devices.rs`(`PanelDevicesSection`)、`components/permission.rs`(`ConfigGate`)、`method_authz.rs::rpc_requires_operator`/`OPERATOR_RPC_METHODS`、`devices.set_level` RPC。
+  - **删除**：src/gateway/panel_devices.rs、src/gateway/handlers/devices.rs、前端 `views/settings/security/devices.rs`（设备管理区）、`components/permission.rs`(`ConfigGate`)、`method_authz.rs::rpc_requires_operator`/`OPERATOR_RPC_METHODS`、`devices.set_level` RPC。
   - **保留并改义**：`src/gateway/server/handler.rs` connect 握手改为校验 Gateway token（`connect_authorized`）→ `caller_role` 仅 operator/guest 二值；登录墙（非 operator 仅放行 `connect`）取代逐 RPC 白名单；`method_authz.rs` 仅余 **channel** tier 的 `tool_requires_operator`（panel 已解耦）。
   - **未受影响**：`src/gateway/security/store/devices.rs` 的 device 表（始终是 **cluster 节点**专用，与 panel tier 无关，仍由 `src/gateway/handlers/cluster.rs` 使用）。
 - **当前真相**：见 [FEATURE_LOCATOR §6.2](FEATURE_LOCATOR.md) 与附录 A #2/#3（均 ✅ 单层）。
@@ -133,8 +133,8 @@
 |---|------|------|------|--------|-----------|--------|
 | H1 | 插件 bundled `.mcp.json` 被解析后丢弃（非 MCP-kind 插件的 `CapabilityDeclaration::McpServer` 在 `dispatch` 被 no-op，loader 仅对 `PluginKind::Mcp` 读 `.mcp.json`） | 3.10 | broken-wiring | M | **High / 0.9** | 连线进 loader/manager **或** 停止非 MCP-kind 适配器发该 cap |
 | ~~H2~~ | ~~`parse_mcp_config_file` 丢弃 server-name map key → 无名 `McpServerConfig`（无法按名注册/拆卸）~~ | 3.10 | dead-field | S | Med / 0.85 | ✅ **已闭合**：`CapabilityDeclaration::McpServer` 现携带 `crate::mcp::McpManagerConfig`（含 `id` / `name`，由 `extension::mcp_config::parse_declared_servers` 产出）；无名的 `extension::types::McpServerConfig` 已零消费者并于 2026-10-02 删除 |
-| H3 | MCP `ApprovalHandler` 全子系统零消费者（`client.rs` 仅派发 `sampling/createMessage`，其余 server 请求丢弃） | 3.9 | dead/unwired | M | Med / 0.9 | 接入 `client.rs` request_handler **或** YAGNI 删 `approval.rs`+协议类型 |
-| H4 | `McpResourceManager`/`McpPromptManager` 仅测试构造（live 路径走 `McpReadResourceTool`/`McpGetPromptTool` 直连 handle） | 3.9 | dead-abstraction | S | Med / 0.92 | 删两 struct（P6 YAGNI）**或** builtins 改走 manager 单点 |
+| H3 | 旧 MCP approval 处理分支在当时没有消费者（`client.rs` 仅派发 `sampling/createMessage`，其余 server 请求丢弃） | 3.9 | dead/unwired | M | Med / 0.9 | 接入 `client.rs` request_handler **或** YAGNI 删 `approval.rs`+协议类型 |
+| H4 | 旧 MCP resource/prompt 管理封装在当时仅由测试构造（live 路径走 `McpReadResourceTool`/`McpGetPromptTool` 直连 handle） | 3.9 | dead-abstraction | S | Med / 0.92 | 删两 struct（P6 YAGNI）**或** builtins 改走 manager 单点 |
 | H5 | Resource subscribe/unsubscribe 死路（`client.subscribe_resource` 无非测试 caller）+ `resources/updated` 通知未路由（`classify_list_change` 只映 `*_list_changed`） | 3.9 | broken-wiring | M | Med / 0.88 | 补 `resources/updated` 臂并发事件 **或** 删订阅管线 |
 | H6 | `read_resource` 永不产 `ResourceContent::Image`（image-mime blob 被标 `binary`，消费侧 Image 臂死） | 3.9 | dead-field | S | Low / 0.85 | Blob 臂按 `mime.starts_with("image/")` 分流 **或** 删 Image 变体 |
 | H7 | `read_resource` 静默丢弃首项外的所有 content（`contents.into_iter().next()`，无 log/marker；对照 "tools/call" (JSON-RPC method) 有省略标记） | 3.9 | silent-swallow | S | Low / 0.8 | 映射全部 items **或** `len()>1` 时 warn |
@@ -161,10 +161,10 @@
 |---|------|------|------|--------|-----------|--------|
 | **D1** | `CommandRegistry` 替换 `handle_component` 的 raw `cb_<id>` 路径（旧路径还在走，会按回退文本通道） | discord.commands | broken-wiring | M | High / 0.95 | ✅ **R2 完成**（line2 merge `ec0281275`，D1 part 1+2）：`dispatch_component_click` 4 层 fallback 纯函数 + `mod.rs::handle_component` 改调 + `Arc<CommandRegistry>` 共享 + 6 dispatch 测试覆盖 legacy `cb_<id>`/D4 typed/empty-registry/Callback-registry/Session tier round-trip |
 | **D2** | `audit_hooks.rs` 三个 helper（requested/resolved/blocked）落地 + `manager.rs::resolve_with_reason` 末尾单行钩入 | discord.audit + exec.manager | new-feature | S | High / 0.9 | ✅ **R2 完成**（line1 merge `b49d7b075`，commit `97d4e6134`）：`audit_hooks::record_approval_resolved` 在 `exec/manager.rs::resolve_with_reason` 末尾单行钩入 |
-| **D3** | `startup_audit` 钩入 `start()`（每个 allowed_guild 启动期记一条 audit） | discord.security.startup_audit + mod.start | new-feature | S | Med / 0.9 | ✅ **R2 完成**（line1 merge `b49d7b075`，commit `bdb364ace`）：`startup_audit::for_config` 接入 `DiscordChannel::start`，对每个 `allowed_guild` 调一次 |
+| **D3** | `startup_audit` 钩入 `start()`（每个 allowed_guild 启动期记一条 audit） | discord.security.startup_audit + mod.start | new-feature | S | Med / 0.9 | ✅ **R2 完成**（line1 merge `b49d7b075`，commit `bdb364ace`）：`startup_audit::for_config` 接入 `DiscordChannel::start`，对每个允许的 guild 调一次 |
 | **D4** | Discord approval capability 接入（按钮走 typed ComponentId，不再 raw text 兜底） | discord.commands + approval handlers | new-feature | M | Med / 0.85 | ✅ **R2 完成**（line2 merge `ec0281275`，commit `a8520e1cb`）：发现 spec 引用的 `approval_card.rs` **不存在**——approval 按钮本就是通用 `ApprovalBridge::build_approval_keyboard` 生成，已在用 typed `approve:<id>:<decision>` 格式；D1 dispatch 已支持；补 Session tier round-trip 回归测试钉住 |
 | **D5** | Discord TTS outbound（需 voice 子系统先暴露 `voice.synthesize`） | discord.send + voice.outbound | blocked | M | Med / 0.7 | ⏸ **未开始**：blocked on voice 子系统 R?；R2 不主动 unblock |
-| **D6** | `ReconnectCoordinator::mark_event` 接入生效路径（每条 serenity gateway event 触发） | discord.reconnect + Handler impl | broken-wiring | S | High / 0.85 | ✅ **R2 完成**（line1 merge `b49d7b075`，commit `9c116a052`）：`DiscordChannel::reconnect` 改 `Arc<ReconnectCoordinator>` + Handler 加 `reconnect` 字段 + `ready`/`message`/`interaction_create` 三点 mark_event |
+| **D6** | 将旧重连协调器的事件标记接入生效路径（每条 serenity gateway event 触发） | discord.reconnect + Handler impl | broken-wiring | S | High / 0.85 | ✅ **R2 完成**（line1 merge `b49d7b075`，commit `9c116a052`）：`DiscordChannel::reconnect` 改 `Arc<ReconnectCoordinator>` + Handler 加 `reconnect` 字段 + `ready`/`message`/`interaction_create` 三点 mark_event |
 | **D7** | PluralKit 检测 + 转发身份处理（PK 转发消息的 actor_user 解析） | 新增 discord.pluralkit | new-feature | M | Low / 0.75 | ⏸ **未开始**：对标 openclaw `pluralkit.ts`；需 per-guild 缓存避免 PK API 限频；R2 范围裁剪未选 |
 | **D8** | session-key normalization + DM/group policy 抽 module（SSOT 重构） | 新增 discord.session_key + discord.group_policy | new-feature | M | Low / 0.8 | ✅ **R2 部分完成**（line3 merge `68368aba3`）：`session_key.rs` SSOT（DM/guild/thread 三形态，8 测试）+ `group_policy.rs` 模块（Ignore/Silence/RateLimit/Allow 四状态，9 测试）；**未迁移**现有 inline `format!("dm:{}")` 三处与 `is_dm` 链到新模块——迁移留作后续熵减 |
 

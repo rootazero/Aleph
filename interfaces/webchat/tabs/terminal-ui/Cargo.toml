@@ -5,6 +5,7 @@ edition.workspace = true
 publish = false
 
 [dependencies]
+shared-ui-logic = { path = "../../../../shared/ui_logic", default-features = false }
 aleph-protocol = { path = "../../../../shared/protocol" }
 futures.workspace = true
 js-sys = "0.3"

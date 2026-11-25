@@ -95,7 +95,7 @@ pub struct AgentHarness {
 | Component | Location | Purpose |
 |-----------|----------|---------|
 | `AgentHarness` | `src/harness/` | Think→Act loop controller |
-| `HarnessConfig` | `src/harness/` | Configuration options |
+| `HarnessDeps` | `src/harness/deps.rs` | Dependencies supplied when constructing the harness |
 | `TurnState` | `src/harness/` | State machine enum |
 | Tool execution | `src/harness/agent/act.rs` | Tool-call execution |
 | Tool batch orchestration | `src/harness/agent/act.rs` | Serial and parallel tool calls |
@@ -228,10 +228,7 @@ The Thinker is responsible for LLM interactions and decision making.
 |-----------|------|---------|
 | `Thinker` | `mod.rs` | Main thinker interface |
 | `PromptBuilder` | `prompt_builder.rs` | Construct prompts from context |
-| `DecisionParser` | `decision_parser.rs` | Parse LLM responses |
-| `ModelRouter` | `model_router.rs` | Select optimal model |
-| `ToolFilter` | `tool_filter.rs` | Filter available tools |
-| `StreamingHandler` | `streaming/` | Handle streaming responses |
+| `ScopedToolService` | `src/tools/scoped/mod.rs` | Resolves the scoped tool surface and executes calls |
 | `InteractionManifest` | `interaction.rs` | Channel capability awareness |
 | `SecurityContext` | `security_context.rs` | Policy-driven permissions |
 | `ContextAggregator` | `context.rs` | Reconcile interaction and security |
@@ -612,30 +609,9 @@ pub struct SmartFilter {
 
 ---
 
-## Guards
+## Execution limits
 
-The standalone loop-guard interface described below is no longer present. The harness loop and its iteration limit live in `src/harness/agent.rs`.
-
-| Guard | Purpose |
-|-------|---------|
-| `MaxIterationsGuard` | Prevent infinite loops |
-| `TokenBudgetGuard` | Enforce token limits |
-| `TimeoutGuard` | Enforce time limits |
-| `ToolRateLimitGuard` | Prevent tool spam |
-| `ErrorAccumulatorGuard` | Stop on repeated errors |
-
-```rust
-pub trait LoopGuard: Send + Sync {
-    fn check(&self, state: &LoopState) -> GuardResult;
-    fn name(&self) -> &str;
-}
-
-pub enum GuardResult {
-    Continue,
-    Warn(String),
-    Stop(String),
-}
-```
+The current iteration limit is enforced by `AgentHarness` in `src/harness/agent.rs`. Tool policy and confirmation live in `src/tools/scoped/mod.rs`; the former standalone loop-guard interface is not part of either contract.
 
 ---
 

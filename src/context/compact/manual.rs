@@ -468,7 +468,8 @@ pub async fn compact_session_with_fabric(
         ));
     }
 
-    let tokens_after = estimate_tokens_smart(&body);
+    let summary_content = format!("{SUMMARY_MARKER}\n{SUMMARY_FRAMING}\n\n{body}");
+    let tokens_after = estimate_tokens_smart(&summary_content);
     // A "summary" that is not smaller than what it replaces is pure loss: the
     // structure goes, the token cost stays. Reachable in practice on the
     // deterministic fallback, whose first-line-per-message rendering barely
@@ -503,7 +504,7 @@ pub async fn compact_session_with_fabric(
     let batch = vec![
         SessionEvent::SystemMessage {
             turn_id: summary_turn,
-            content: format!("{SUMMARY_MARKER}\n{SUMMARY_FRAMING}\n\n{body}"),
+            content: summary_content,
             at,
         },
         SessionEvent::CompactionPerformed {
@@ -1392,7 +1393,21 @@ mod tests {
             "the fold annotates the checkpoint's exact span and summary"
         );
         assert_eq!(*folded_tokens, outcome.tokens_before as u64);
+        let content = after
+            .iter()
+            .find_map(|row| match &row.event {
+                SessionEvent::SystemMessage {
+                    turn_id, content, ..
+                } if &turn_id.to_string() == summary_ref => Some(content),
+                _ => None,
+            })
+            .expect("summary_ref must resolve to the persisted summary");
         assert_eq!(*summary_tokens, outcome.tokens_after as u64);
+        assert_eq!(outcome.tokens_after, estimate_tokens_smart(content));
+        assert_eq!(
+            content.strip_prefix(&format!("{SUMMARY_MARKER}\n{SUMMARY_FRAMING}\n\n")),
+            Some(outcome.summary.as_str())
+        );
         assert_eq!(
             owner.as_deref(),
             Some(crate::context::compact::folds::BUILTIN_FOLD_OWNER),
@@ -1483,6 +1498,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_summary_that_only_shrinks_without_framing_is_refused() {
+        let (service, _store, sid) = seeded_session(10).await;
+        let before = service.get_events(&sid, None, None).await.unwrap();
+        let cut = select_cut(&before, MIN_KEEP_TOKENS).unwrap();
+        let original_tokens: usize = before[..cut]
+            .iter()
+            .filter_map(|row| event_to_message(&row.event))
+            .map(|message| estimate_tokens_smart(&message.text_content()))
+            .sum();
+        let limit = crate::context::budget::pressure::chars_for_token_budget("z", original_tokens);
+        let body = (0..=limit)
+            .rev()
+            .map(|length| "z".repeat(length))
+            .find(|body| !body.is_empty() && estimate_tokens_smart(body) < original_tokens)
+            .expect("a slightly smaller summary body");
+        let framed = format!("{SUMMARY_MARKER}\n{SUMMARY_FRAMING}\n\n{body}");
+        assert!(estimate_tokens_smart(&framed) >= original_tokens);
+        let parked = std::sync::Arc::new(ParkingSummarizer {
+            body,
+            ..ParkingSummarizer::new()
+        });
+        parked.release.notify_one();
+
+        let outcome = compact_session(
+            &service,
+            Some(&parked_compactor(&parked)),
+            &sid,
+            &tail_budget_opts(),
+        )
+        .await
+        .unwrap();
+        assert!(!outcome.compacted, "framing must count against the gain");
+        assert!(outcome
+            .skipped_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("not be smaller")));
+        let after = service.get_events(&sid, None, None).await.unwrap();
+        assert_eq!(
+            serde_json::to_value(&before).unwrap(),
+            serde_json::to_value(&after).unwrap()
+        );
+    }
+
+    #[tokio::test]
     async fn compacting_twice_is_idempotent_once_the_tail_fits() {
         let (service, _store, sid) = seeded_session(40).await;
         let opts = ManualCompactOptions {
@@ -1514,6 +1573,7 @@ mod tests {
         entered: tokio::sync::Notify,
         /// Awaited there until the test lets the compaction finish.
         release: tokio::sync::Notify,
+        body: String,
     }
 
     impl ParkingSummarizer {
@@ -1521,6 +1581,7 @@ mod tests {
             Self {
                 entered: tokio::sync::Notify::new(),
                 release: tokio::sync::Notify::new(),
+                body: "The earlier turns, condensed.".into(),
             }
         }
     }
@@ -1541,7 +1602,7 @@ mod tests {
                 self.entered.notify_one();
                 self.release.notified().await;
                 Ok(crate::providers::adapter::ProviderResponse::text_only(
-                    "<summary>The earlier turns, condensed.</summary>".to_string(),
+                    format!("<summary>{}</summary>", self.body),
                 ))
             })
         }

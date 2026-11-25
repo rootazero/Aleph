@@ -521,7 +521,7 @@ device token / bootstrap ticket / 共享 Gateway token)成为 **operator**,要�
 - allowlist 权威:`node_runtime.rs` 的 `dispatch_rejects_unlisted_command`。
 - jail containment:`node_file_cmd.rs` 的 `file_write_rejects_traversal`。
 - 审批 fail-closed:`node_approval.rs` 的 `outcome_mapping_is_fail_closed` /
-  `none_channel_denies` / `transport_closed_denies`。
+  `none_channel_is_unavailable_not_denied` / `transport_closed_is_unavailable`。
 - **登记幂等 / 注销真源**:`enrollment.rs` 的 `enroll_is_idempotent_across_name_spellings` /
   `enroll_refuses_to_deepen_a_pre_existing_duplicate` / `deregister_is_sticky_and_reaches_offline_nodes`,
   RPC 层 `handlers/cluster.rs::enroll_twice_returns_the_same_node_id`,工具层

@@ -20,6 +20,11 @@ use shared_ui_logic::panel::layout::{
 };
 use shared_ui_logic::panel::projection::PanelProjection;
 use shared_ui_logic::panel::registry::BUILTIN_NAMESPACE;
+use shared_ui_logic::prefs::commands::{
+    rank, resolve_bindings, CommandKey, KeyProblem, KeySource, RankItem,
+};
+use shared_ui_logic::prefs::appearance::{theme_tokens, FontScale};
+use shared_ui_logic::prefs::{self, Binding, PanelPrefs, PrefsRepair};
 use shared_ui_logic::transcript::chat_panel::ChatState;
 
 #[native_module("aleph/panel")]
@@ -291,6 +296,27 @@ fn edit(
     apply(&mut layout, &key).then(|| layout.to_json())
 }
 
+/// Stored preferences as `restore` reads them, ignoring any repair: the shell
+/// only edits the `stored` form it got back from `prefs`.
+fn stored_prefs(stored: &str) -> PanelPrefs {
+    prefs::restore(Some(stored)).prefs
+}
+
+/// The canonical keystroke text, or `None` when `text` is not a keystroke.
+fn normalize(text: &str, apple: bool) -> Option<String> {
+    nsh_core::keymap::Keystroke::parse_with(text, apple)
+        .ok()
+        .map(|keystroke| keystroke.to_string())
+}
+
+/// A string field of a JSON object, or `""`.
+fn text_field<'a>(value: &'a JsonValue, name: &str) -> &'a str {
+    value
+        .get(name)
+        .and_then(JsonValue::as_str)
+        .unwrap_or_default()
+}
+
 /// The Panel model the TSX shell reads: projection, layout and its edits.
 #[module]
 pub struct PanelModel;
@@ -370,6 +396,116 @@ impl PanelModel {
     /// Make a listed, visible tab the active one.
     pub fn select(stored: String, key: String) -> Option<String> {
         edit(&stored, &key, |layout, key| layout.select(key))
+    }
+
+    /// Personal preferences read from storage:
+    /// `{ appearance, keybindings, stored, repair, theme, fontFactor, density }`.
+    /// `stored` is what the shell writes back; `theme` is the `setTheme`
+    /// payload and `fontFactor` the host text-size multiplier (`null` for
+    /// the default size, which follows the system setting).
+    pub fn prefs(stored: Option<String>) -> JsonValue {
+        let restored = prefs::restore(stored.as_deref());
+        let prefs = &restored.prefs;
+        // The default text size follows the system setting, so it sends no
+        // factor rather than 1.0 (which would override that setting).
+        let font_scale = prefs.appearance.font_scale;
+        let font_factor = (font_scale != FontScale::Default).then(|| font_scale.factor());
+        let repair = restored.repair.map(|repair| match repair {
+            PrefsRepair::Corrupt => "corrupt",
+            PrefsRepair::UnknownVersion(_) => "unknown_version",
+        });
+        json!({
+            "appearance": prefs.appearance,
+            "keybindings": prefs.keybindings,
+            "stored": prefs.to_json(),
+            "repair": repair,
+            "theme": theme_tokens(&prefs.appearance),
+            "fontFactor": font_factor,
+            "density": prefs.appearance.density,
+        })
+    }
+
+    /// Set one appearance axis (`mode`, `accent`, `fontScale`, `roundness`,
+    /// `density`). Returns the new stored form, or `None` for an unknown axis
+    /// or value.
+    pub fn set_appearance(stored: String, axis: String, value: String) -> Option<String> {
+        let mut prefs = stored_prefs(&stored);
+        prefs::set_appearance(&mut prefs, &axis, &value).then(|| prefs.to_json())
+    }
+
+    /// Set one command's key: `null` restores the default, `"cleared"`
+    /// removes the key, `{ "key": "<text>" }` sets it. Returns the new stored
+    /// form, or `None` when `binding` has none of those shapes. Key text is
+    /// not checked here; `resolveBindings` reports invalid keys.
+    pub fn set_binding(stored: String, command: String, binding: JsonValue) -> Option<String> {
+        let binding = if binding.is_null() {
+            None
+        } else {
+            Some(serde_json::from_value::<Binding>(binding).ok()?)
+        };
+        let mut prefs = stored_prefs(&stored);
+        prefs::set_binding(&mut prefs, &command, binding);
+        Some(prefs.to_json())
+    }
+
+    /// The canonical form of a keystroke (`ctrl+alt+shift+cmd+<key>`), or
+    /// `None` when the text is not one. `apple` makes `mod` mean Command.
+    pub fn normalize_keystroke(text: String, apple: bool) -> Option<String> {
+        normalize(&text, apple)
+    }
+
+    /// Each command's effective key, in input order:
+    /// `[{ id, key, source, problem }]` with `source` one of
+    /// `default|user|cleared` and `problem` `null`, `"invalid"` or
+    /// `{ "conflict": <earlier id> }`. A key with a problem does not apply.
+    /// `commands` is `[{ id, defaultKey }]`.
+    pub fn resolve_bindings(commands: JsonValue, stored: String, apple: bool) -> JsonValue {
+        let listed = commands.as_array().cloned().unwrap_or_default();
+        let keys: Vec<CommandKey<'_>> = listed
+            .iter()
+            .map(|command| CommandKey {
+                id: text_field(command, "id"),
+                default_key: command.get("defaultKey").and_then(JsonValue::as_str),
+            })
+            .collect();
+        let prefs = stored_prefs(&stored);
+        let resolved = resolve_bindings(&keys, &prefs.keybindings, |text| normalize(text, apple));
+        let rows: Vec<JsonValue> = resolved
+            .into_iter()
+            .map(|entry| {
+                let source = match entry.source {
+                    KeySource::Default => "default",
+                    KeySource::User => "user",
+                    KeySource::Cleared => "cleared",
+                };
+                let problem = match entry.problem {
+                    None => JsonValue::Null,
+                    Some(KeyProblem::Invalid) => json!("invalid"),
+                    Some(KeyProblem::Conflict(owner)) => json!({ "conflict": owner }),
+                };
+                json!({ "id": entry.id, "key": entry.key, "source": source, "problem": problem })
+            })
+            .collect();
+        JsonValue::Array(rows)
+    }
+
+    /// Ids of the palette items matching `query`, best first.
+    /// `items` is `[{ id, label, keywords? }]`.
+    pub fn rank_commands(query: String, items: JsonValue) -> Vec<String> {
+        let listed = items.as_array().cloned().unwrap_or_default();
+        let rows: Vec<RankItem<'_>> = listed
+            .iter()
+            .map(|item| RankItem {
+                id: text_field(item, "id"),
+                label: text_field(item, "label"),
+                keywords: item
+                    .get("keywords")
+                    .and_then(JsonValue::as_array)
+                    .map(|words| words.iter().filter_map(JsonValue::as_str).collect())
+                    .unwrap_or_default(),
+            })
+            .collect();
+        rank(&query, &rows).into_iter().map(str::to_owned).collect()
     }
 }
 
@@ -592,5 +728,119 @@ mod tests {
             PanelModel::layout_key("local".into(), None),
             "aleph.panel.layout.v1:local"
         );
+    }
+
+    fn default_stored() -> String {
+        PanelPrefs::default().to_json()
+    }
+
+    #[test]
+    fn prefs_of_nothing_is_default() {
+        let prefs = PanelModel::prefs(None);
+        assert_eq!(prefs["repair"], JsonValue::Null);
+        assert_eq!(prefs["stored"], default_stored());
+        assert_eq!(prefs["appearance"]["accent"], "mauve");
+        assert_eq!(prefs["fontFactor"], JsonValue::Null);
+        assert_eq!(prefs["density"], "compact");
+        assert!(prefs["theme"]["cssVars"]["dark"]["primary"].is_string());
+
+        let corrupt = PanelModel::prefs(Some("{".into()));
+        assert_eq!(corrupt["repair"], "corrupt");
+        assert_eq!(corrupt["stored"], default_stored());
+    }
+
+    #[test]
+    fn set_appearance_rejects_unknown_axis() {
+        let stored = PanelModel::set_appearance(default_stored(), "accent".into(), "ocean".into())
+            .expect("known axis");
+        assert_eq!(
+            PanelModel::prefs(Some(stored.clone()))["appearance"]["accent"],
+            "ocean"
+        );
+        assert_eq!(
+            PanelModel::set_appearance(stored.clone(), "material".into(), "liquid".into()),
+            None
+        );
+        assert_eq!(
+            PanelModel::set_appearance(stored, "fontScale".into(), "huge".into()),
+            None
+        );
+    }
+
+    #[test]
+    fn set_binding_null_restores_default() {
+        let cleared =
+            PanelModel::set_binding(default_stored(), "shell.palette".into(), json!("cleared"))
+                .expect("cleared is a binding");
+        assert_ne!(cleared, default_stored());
+        let keyed =
+            PanelModel::set_binding(cleared, "shell.palette".into(), json!({ "key": "mod+j" }))
+                .expect("a key is a binding");
+        assert_eq!(
+            PanelModel::prefs(Some(keyed.clone()))["keybindings"]["shell.palette"]["key"],
+            "mod+j"
+        );
+        let restored =
+            PanelModel::set_binding(keyed.clone(), "shell.palette".into(), JsonValue::Null);
+        assert_eq!(restored.as_deref(), Some(default_stored().as_str()));
+        assert_eq!(
+            PanelModel::set_binding(keyed, "shell.palette".into(), json!(42)),
+            None
+        );
+    }
+
+    #[test]
+    fn normalize_treats_mod_as_cmd_on_apple() {
+        let apple = PanelModel::normalize_keystroke("mod+K".into(), true);
+        assert!(apple.is_some());
+        assert_eq!(apple, PanelModel::normalize_keystroke("cmd+k".into(), true));
+        assert_ne!(
+            apple,
+            PanelModel::normalize_keystroke("mod+k".into(), false)
+        );
+        assert_eq!(PanelModel::normalize_keystroke("mod+".into(), true), None);
+    }
+
+    #[test]
+    fn resolve_reports_conflict_and_invalid() {
+        let commands = json!([
+            { "id": "shell.palette", "defaultKey": "mod+k" },
+            { "id": "shell.settings", "defaultKey": "mod+," },
+            { "id": "shell.reconnect" },
+        ]);
+        let stored = PanelModel::set_binding(
+            default_stored(),
+            "shell.settings".into(),
+            json!({ "key": "cmd+K" }),
+        )
+        .and_then(|stored| {
+            PanelModel::set_binding(
+                stored,
+                "shell.reconnect".into(),
+                json!({ "key": "not a key" }),
+            )
+        })
+        .expect("bindings apply");
+        let rows = PanelModel::resolve_bindings(commands, stored, true);
+        assert_eq!(rows[0]["key"], "cmd+k");
+        assert_eq!(rows[0]["source"], "default");
+        assert_eq!(rows[0]["problem"], JsonValue::Null);
+        assert_eq!(rows[1]["source"], "user");
+        assert_eq!(rows[1]["problem"], json!({ "conflict": "shell.palette" }));
+        assert_eq!(rows[2]["key"], JsonValue::Null);
+        assert_eq!(rows[2]["problem"], "invalid");
+    }
+
+    #[test]
+    fn rank_commands_filters() {
+        let items = json!([
+            { "id": "open:chat", "label": "Open Chat" },
+            { "id": "shell.settings", "label": "Settings", "keywords": ["preferences"] },
+        ]);
+        assert_eq!(
+            PanelModel::rank_commands("pref".into(), items.clone()),
+            vec!["shell.settings".to_owned()]
+        );
+        assert_eq!(PanelModel::rank_commands(String::new(), items).len(), 2);
     }
 }

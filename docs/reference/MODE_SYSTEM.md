@@ -122,7 +122,7 @@ mode/exec_tier 覆盖值回写 `chat.session_mode`/`session_exec_tier`（`sessio
 **右栏：模式不再分派（锚点订正 2026-07-27）**——此处此前写「`state/layout.rs::follow_plan` +
 `events.rs` 的 `tool_call_started` 按有效模式分派（chat=不驱动 / work=有计划后 follow Plan /
 code=follow 工具）」。那套 live-follow 是**上下文检查器**时代的东西，随 `components/inspector/`
-在产物面板重构（§6.8）中整体删除，`follow_plan` / `follow_tool` 现在**在代码里一个都不存在**。
+在产物面板重构（§6.8）中整体删除；右栏不再通过这两个旧 follow 开关分派。
 右栏是产物面板，内容＝「这次会话产出了什么」，与会话模式正交：模式只做**工具呈现面**的静态分区，
 不改右栏。`events.rs` 的 `tool_call_started` 也不再碰右栏状态（2026-07-27 round-3 一并撤掉了它
 残留的徽标计数，见 FEATURE_LOCATOR §6.8）。

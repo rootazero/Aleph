@@ -137,7 +137,7 @@ LAN-trust revert:
 
 - **Legacy `PolicyEngine`** — the
   per-tool `Owner` / `Guest` / `Anonymous` permission checker. Gone.
-- **`InvitationManager`**
+- **The former file-backed invitation manager**
   and the `aleph guests invite / list / revoke` CLI — guest invitation
   lifecycle. Gone.
 
@@ -279,7 +279,7 @@ It fires only on the tier's *own* `Deny`, never on a composed one, so
 `Plan` carve-outs plus every idempotent tool fall straight through to rung 1 —
 an operator's explicit `deny` on `ctx_search` still denies while planning.
 This deliberately **inverts** the tier's shipped behaviour, whose test
-`an_explicit_entry_still_outranks_the_plan_tier` asserted the opposite; the
+An earlier regression test asserted the opposite; the
 three replacement tests in `exec_tier.rs` pin the scope of the inversion.
 
 ⚠️ **`Full` means "the tier gates nothing", not "nothing is gated."** The
@@ -673,8 +673,7 @@ same action on an `unattended` service is refused. A reorder turns that
 
 ## Exec primitives (`src/exec/`)
 
-There is **no** monolithic `ExecKernel` with a single `execute()` pipeline, and
-no separate `RiskAnalyzer` / `Allowlist` subsystem — earlier revisions of this
+There is no single execution pipeline or separate risk-classifier subsystem — earlier revisions of this
 doc described a design that was never built. Shell-command safety is enforced by
 two real layers documented above:
 
@@ -1103,7 +1102,7 @@ the operator could not have removed.
   它买到的是**"每个终端的起点可枚举、可审计"，不是"终端不能离开工作区"**。别把它当成隔离来引用。
 - **PTY 不经 `[sandbox.command_policy]` 也不经 exec tier**（`method_admin.rs` 的注释自陈 "strictly more dangerous"）。
   会话粒度的开关 `[policies.terminal] enabled` 是这一层唯一说得出口的谓词；关掉它会杀掉在飞的会话。
-- **终端历史住在服务器上**（每会话 `scrollback_lines` 行，默认 1000），因此对诊断与审计面可见。
+- **终端滚屏是服务端会话的内存状态，不是审计记录。** 每会话缓冲上限由 `scrollback_lines` 决定（默认 1000 行）。服务端拥有缓冲不等于其他 operator 可读，也不等于会话关闭后仍有持久历史。 / **Scrollback is server-side session memory, not an audit log.** `scrollback_lines` bounds the per-session buffer (default 1,000 rows). Server ownership does not grant other operators read access or retain history after the session closes.
 - **Operator scope and session ownership are separate gates.** Operator `['*']` permits reaching the PTY RPC/event surface; it does not override the existing `created_by` check. `owner_admits` is shared by listing, addressed operations and event delivery: a resolved caller must match the recorded creator. An internal caller with no resolved identity retains the existing unscoped behavior.
   **Operator scope 与 session ownership 是两道闸。** Operator 的 `['*']` 允许到达 PTY RPC/event 面，但不覆盖 `created_by` 判定。list、addressed operations 与事件交付共用 `owner_admits`：已解析身份的 caller 必须匹配创建者；未解析身份的内部 caller 保留现有 unscoped 行为。
 - **打开这道闸本身不举卡就是一次绕闸**：`[policies.terminal] enabled` 在
@@ -1183,7 +1182,7 @@ Aleph names its session after the *profile*, so the common name is literally
 logged-in browser driven by another instance**. That is a collision *between
 principals the local-user boundary was never meant to merge*, so it is a real
 gap rather than a consequence of the boundary above. Mechanism, the measured
-evidence, the proposed `instance_tag` fix and its two-server falsifier are in
+evidence, the proposal to tag the browser instance and its two-server validation are in
 [FEATURE_LOCATOR.md](FEATURE_LOCATOR.md) §3.12 第七轮 ⑤.
 
 ### Browser live viewer grants (2026-10-07 checkpoint)
@@ -3072,7 +3071,7 @@ attribution, and a bound workspace as the room's default cwd.
   names the working verb is the only kind that is actionable.
 
   **The comparison that produced this** (2026-08-09, vs rowboat's
-  `DeleteProjectUseCase`): rowboat answers "who can still reach this after the
+  its project-deletion use case): rowboat answers "who can still reach this after the
   row is gone" with an explicit cascade over ten repositories — api keys, data
   sources, Qdrant vectors, conversations, jobs, two kinds of job rule, members,
   the project. Aleph adopts the QUESTION and rejects the shape: a cascade would
@@ -3948,7 +3947,7 @@ from the pre-revert build:
 
 ---
 
-## Gap analysis: exec tiers vs codex / hermes-agent / pi {#exec-tier-gap-analysis}
+## Historical comparison: exec tiers vs codex / hermes-agent / pi {#exec-tier-gap-analysis}
 
 > Same convention as the **openclaw 对照映射表** in [CLUSTER.md](CLUSTER.md):
 > per-dimension verdicts, anchored to real code. **Read this before re-comparing
@@ -4074,10 +4073,7 @@ from the pre-revert build:
   transport on the RPC surface). `file_ops` — the one destructive multiplexer —
   is now denied outright there, but the general gap remains for any future
   argument-gated tool.
-- The `FullRead` / `FullWrite` / `ProxyOnly` sandbox-policy variants and the
-  managed per-host proxy subsystem remain dead (no producer sets them); pruning
-  them is deferred (cross-platform driver match-arm surgery — track with the
-  network-proxy decision).
+- Only the network modes implemented by the driver are available; see [Sandbox network filtering](SANDBOX.md#network-filtering). The former proxy-only policy is not a config option.
 - No user-editable floor under `Full` in hermes' sense (an `approvals.deny` glob
   that survives yolo). `[policies.tool_permissions]` `deny` overrides already
   cover ~80% of it, since an explicit entry beats the tier.
