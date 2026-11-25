@@ -288,35 +288,31 @@ static OBSCURA: EngineCapabilities = EngineCapabilities {
     // A pure lookup against Aleph's own per-tab `RefTable` — no engine
     // round-trip, so nothing to measure per engine (see the field doc).
     ref_precheck: Cap::Supported,
-    // **Unsupported as a MEASURED verdict, 2026-09-27, obscura v0.2.2
-    // (x86_64-linux) — the probe the mock plan's Task 4 promised
-    // (docs/superpowers/specs/2026-09-24-browser-network-mock-design/
-    // probes/fetch-probe.mjs), which measures the handshake link by link
-    // rather than end to end:**
-    //   1. `Fetch.enable{catch-all}` answers ok — the arm EXISTS;
-    //   2. a navigation's `requestPaused` ARRIVES — but the request is NOT
-    //      HELD: left unanswered for 1.5 s the page still reaches `complete`
-    //      with the real body (3/3 runs). The pause is advisory;
-    //   3. `fulfillRequest` on that pause answers ok and changes nothing —
-    //      the page shows the REAL body (3/3): a fulfilled-nothing;
-    //   4. a subresource `fetch()` pause arrives only SOMETIMES (2 of 3 runs;
-    //      when it does not, the fetch wedges pending forever — a request
-    //      held with no event to answer it is worse than no interception);
-    //   5. when the subresource event does arrive, fulfill serves the mock
-    //      correctly — the one working link cannot carry the chain.
-    // A mock route on this engine would report `active` while every page
-    // load slips past it — the exact lie this row exists to prevent. Written
-    // `Unsupported` at implementation time as the fail-closed answer to an
-    // unknown; the probe turned the unknown into a measured NO (判据 §8
-    // spent the other way). What would flip it: a build whose navigation
-    // pauses HOLD (link 2) and whose subresource events are reliable
-    // (link 4) — re-run the probe.
+    // **Supported on a MEASUREMENT, 2026-11-25, on the pinned tag (arm64
+    // macOS), by `qa/browser_dual`'s caps stage, both halves by EFFECT:**
+    //   * raw half: `Fetch.enable` on our session with a pattern matching only
+    //     a URL the fixture server does not have; a page `fetch()` of it pauses,
+    //     `Fetch.fulfillRequest` on OUR session answers it, and the fetch
+    //     resolves to the mock body (a pause that did not hold would have
+    //     resolved to the server's 404);
+    //   * tool half: `browser_network{mock_add}` on the managed tab, then page
+    //     `fetch()`es resolve to the rule's body, through Aleph's intercept loop.
+    // Condition the row rests on: the engine opens TWO sessions per page and
+    // reports a pause on whichever a `HashMap` scan meets first (3 of 6
+    // pauses on the session Aleph never attached); the live owner routes such
+    // a pause by its `frameId`, which names the target (`on_fetch`,
+    // src/browser/live/mod.rs). Without that route the request stays paused
+    // forever.
     //
-    // Re-measured 2026-11-25 on v0.2.7 (arm64 macOS) by `qa/browser_dual`'s
-    // caps line only (`fetch-probe.mjs` was not re-run): the navigation pause
-    // now HOLDS and `fulfillRequest` answers ok, but the page renders an EMPTY
-    // body, not the mock — a different failure at link 3, same verdict.
-    network_interception: Cap::Unsupported,
+    // History: Unsupported on a measured NO, 2026-09-27, obscura v0.2.2
+    // (x86_64-linux), from the mock plan's Task 4 probe
+    // (docs/superpowers/specs/2026-09-24-browser-network-mock-design/
+    // probes/fetch-probe.mjs): navigation pauses were advisory (the real page
+    // completed unanswered) and subresource pauses arrived only sometimes.
+    // Re-run on 2026-11-25 against the pinned tag, that probe's navigation
+    // pause HOLDS and the mock is served 3/3; its subresource pause lands on
+    // either session, and fulfilling it on ours serves the mock 6/6.
+    network_interception: Cap::Supported,
     // **Supported on a MEASUREMENT (2026-09-30, pinned v0.2.2, x86_64-linux),
     // upgraded from the fail-closed NOT_PROBED answer the row shipped with.**
     // The recording plan's Task 4 probe (docs/superpowers/specs/
@@ -587,12 +583,13 @@ mod tests {
         ),
         (
             "network_interception",
-            "T0's wire matrix has no Fetch label; settled instead by the mock plan's \
-             Task 4 probe (docs/superpowers/specs/2026-09-24-browser-network-mock-design/\
-             probes/fetch-probe.mjs) against the pinned build on 2026-09-27: \
-             Fetch.enable answers and events arrive, but navigation pauses are \
-             advisory (the request completes unanswered) and subresource pauses \
-             are unreliable — a MEASURED Unsupported, not an unknown",
+            "T0's wire matrix has no Fetch label; settled instead by the mock \
+             plan's Task 4 probe (docs/superpowers/specs/2026-09-24-browser-\
+             network-mock-design/probes/fetch-probe.mjs): a MEASURED Unsupported \
+             on v0.2.2 (2026-09-27, advisory navigation pauses); on the \
+             2026-11-25 pin qa/browser_dual's caps stage serves a mock both \
+             through raw Fetch and through browser_network, with foreign-session \
+             pauses routed by frameId — a MEASURED Supported on both engines",
         ),
         (
             "screencast",
@@ -883,9 +880,8 @@ mod tests {
             .collect();
         assert_eq!(
             exempt_disagreements,
-            vec!["network_interception", "error_events"],
-            "a matrix-exempt row other than \
-             `network_interception`/`error_events` \
+            vec!["error_events"],
+            "a matrix-exempt row other than `error_events` \
              now answers differently per engine. That difference is published to the model \
              as a route, and nothing in the matrix decides it — state the \
              reading that does, beside BOTH values, and check it here"
@@ -908,20 +904,17 @@ mod tests {
             production.contains("dropped:mouseup") && production.contains("HTML5"),
             "obscura's drag row no longer states its reading and the HTML5 caveat"
         );
-        // network_interception's disagreement rests on a MEASUREMENT on the
-        // obscura side since 2026-09-27 (the mock plan's Task 4 probe:
-        // navigation pauses advisory, subresource pauses unreliable), while
-        // chromium's Supported still rests on the Fetch chain running over
-        // the same connection and event pump the probed verbs already use.
-        // Both rows must keep naming that probe, or the route published to
-        // the model rests on an argument nobody can read.
-        // Scoped to the PRODUCTION prefix: the plan name also appears in
-        // NOT_PROBED, which is test text — a citation that lives only beside
-        // the guard certifies nothing about the rows it guards.
+        // network_interception's disagreement CLOSED on 2026-11-25 (caps stage
+        // on v0.2.7, raw and tool halves). The citation asserts stay: the row
+        // rests on that stage AND on the frameId route for pauses reported on
+        // the page's other session — a row that stopped naming the route would
+        // let it be deleted as dead code.
         assert!(
-            production.contains("2026-09-24-browser-network-mock"),
-            "the network_interception rows no longer name the Task 4 probe that \
-             decides obscura's value"
+            production.contains("2026-09-24-browser-network-mock")
+                && production.contains("on_fetch")
+                && production.contains("frameId"),
+            "obscura's network_interception row no longer states the probe history \
+             and the foreign-session route it rests on"
         );
         // error_events' disagreement rests on MEASUREMENTS on both sides
         // since 2026-10-01 (C3 Task 4): obscura never emits
@@ -1305,10 +1298,10 @@ mod tests {
         assert_eq!(json["chromium"]["js_dialogs"], "supported");
         assert_eq!(json["obscura"]["file_upload"], "unsupported");
         assert_eq!(json["chromium"]["file_upload"], "supported");
-        // The restored row reads both ways: chromium serves the Fetch
-        // handshake, obscura is the fail-closed answer to an unprobed one.
+        // The restored row: both engines serve the Fetch handshake on
+        // measurements now (obscura flipped 2026-11-25).
         assert_eq!(json["chromium"]["network_interception"], "supported");
-        assert_eq!(json["obscura"]["network_interception"], "unsupported");
+        assert_eq!(json["obscura"]["network_interception"], "supported");
         // The second restored row: BOTH engines serve the screencast stream
         // on measurements now (obscura flipped 2026-09-30 — its row kept
         // here so a constant-emitting `capabilities_json` still goes red on

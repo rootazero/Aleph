@@ -375,6 +375,8 @@ python3 "$MANAGED/add_browser_config.py" "$CONFIG" "${BROWSER_CFG_ARGS[@]}" || e
 # a refusal. `browser_cookies_write` was missing until the `switch` stage became
 # the first to call `browser_cookies`, and it failed three claims about the
 # MIGRATION for a reason that was upstream of it.
+# `browser_network_mock` is for `caps`' network_interception tool face
+# (`browser_network{mock_add}`, which asks for approval on every mock verb).
 #
 # There is deliberately NO `browser_switch_engine` key, and its absence is a
 # claim. `ActionType`'s own doc promises that an operator who wrote
@@ -386,7 +388,8 @@ cat > "$HOME/.aleph/approval-policy.json" <<'JSON'
 {"defaults":{
   "browser_open":"allow","browser_navigate":"allow","browser_click":"allow",
   "browser_type":"allow","browser_evaluate":"allow","browser_dialog":"allow",
-  "browser_session_state":"allow","browser_cookies_write":"allow"
+  "browser_session_state":"allow","browser_cookies_write":"allow",
+  "browser_network_mock":"allow"
 },"allowlist":[],"blocklist":[]}
 JSON
 

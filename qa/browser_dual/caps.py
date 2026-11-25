@@ -68,7 +68,9 @@ class Raw:
     async def wait_event(self, method, session, timeout=15):
         """The next `method` event on `session` — stash first, then the wire.
 
-        Never concurrent with `call` (both read the socket); the probes below
+        `session=None` takes the event from ANY session (the event's own
+        `sessionId` is then under the returned params' `__session`). Never
+        concurrent with `call` (both read the socket); the probes below
         sequence them.
         """
         loop = asyncio.get_running_loop()
@@ -84,7 +86,11 @@ class Raw:
                     m = json.loads(await asyncio.wait_for(self.ws.recv(), timeout=remaining))
                 except asyncio.TimeoutError:
                     return None
-            if m.get("method") == method and m.get("sessionId") == session:
+            if m.get("method") != method:
+                continue
+            if session is None:
+                return {**m.get("params", {}), "__session": m.get("sessionId")}
+            if m.get("sessionId") == session:
                 return m.get("params", {})
 
 
@@ -514,20 +520,27 @@ async def probe_obscura(ws_url, page_url, led):
             "supported" if persist and delivered and nav_sound else "unsupported")
 
         # network_interception — the Fetch handshake Aleph's mock routes are
-        # built on, link by link, on a FRESH target that starts at
-        # about:blank so "the pause actually HELD" is observable: while the
-        # navigation's requestPaused sits unanswered, about:blank must still
-        # be the document. Measured 2026-09-27 on the pinned v0.2.2 (the full
-        # five-link measurement is docs/superpowers/specs/
-        # 2026-09-24-browser-network-mock-design/probes/fetch-probe.mjs):
-        # enable answers, the navigation event ARRIVES but the request is NOT
-        # held (the real page completes while the pause sits unanswered), and
-        # the fulfill is accepted and moot. So the row is supported only when
-        # all three links hold: the event arrives, the pause holds, and the
-        # PAGE ends up showing the mock body. The plan's draft criterion
-        # ("requestPaused arrives ⇒ supported") predates that measurement and
-        # would have certified the advisory pause — a probe that reads the
-        # event count but not the effect is 判据 §11's shape.
+        # built on, measured on a SUBRESOURCE the way `browser_network`
+        # mocks are used: Fetch.enable on OUR session with a pattern that
+        # matches only a URL the fixture server does NOT have, a page script
+        # fetch()es it, and the pause is answered with Fetch.fulfillRequest
+        # on OUR session (the session Aleph's intercept loop answers on). The
+        # row is supported only by the EFFECT: the page's fetch() resolves to
+        # the mock body — a pause that did not hold, or a fulfill that went
+        # nowhere, would have resolved to the server's 404 page (判据 §11).
+        #
+        # The pause is accepted from ANY session and the session it named is
+        # logged: obscura v0.2.7 opens two sessions per page and reports a
+        # pause on whichever a HashMap scan meets first (measured 2026-11-25,
+        # 3 of 6 on the session nobody attached). Aleph's live owner routes
+        # such a pause by its frameId (`on_fetch`, src/browser/live/mod.rs);
+        # this probe asserts the half that routing relies on — the frameId
+        # names our target — and that the fulfill is honoured on our session.
+        #
+        # History: the 2026-09-27 v0.2.2 reading (navigation pause not held,
+        # fulfill moot) used a navigation pause; on v0.2.7 a held navigation
+        # pause also stops obscura answering Page.navigate and Runtime.evaluate
+        # until it is released, which is why this probe no longer uses one.
         ni = "unsupported"
         made2 = await cdp.call("Target.createTarget", {"url": "about:blank"})
         tid2 = made2.get("result", {}).get("targetId")
@@ -545,40 +558,57 @@ async def probe_obscura(ws_url, page_url, led):
 
             await cdp.call("Page.enable", {}, s2)
             await cdp.call("Runtime.enable", {}, s2)
-            en = await cdp.call("Fetch.enable", {"patterns": [{"urlPattern": "*"}]}, s2)
+            await cdp.call("Page.navigate", {"url": page_url}, s2)
+            for _ in range(40):
+                if await ev2("document.readyState") == "complete":
+                    break
+                await asyncio.sleep(0.25)
+            en = await cdp.call("Fetch.enable",
+                                {"patterns": [{"urlPattern": "*caps-mock-target-7f3a*"}]}, s2)
             if "error" in en:
                 led.log(f"  network_interception: Fetch.enable refused: {json.dumps(en)[:200]}")
             else:
-                await cdp.call("Page.navigate", {"url": page_url}, s2)
-                paused_ev = await cdp.wait_event("Fetch.requestPaused", s2, timeout=15)
+                await ev2(
+                    "window.__mock = 'pending';"
+                    "void fetch(new URL('caps-mock-target-7f3a.txt', location.href))"
+                    ".then(r => r.text()).then(t => { window.__mock = t; },"
+                    " e => { window.__mock = 'error:' + e; })")
+                paused_ev = await cdp.wait_event("Fetch.requestPaused", None, timeout=15)
                 if not paused_ev:
                     led.log("  network_interception: no requestPaused within 15s "
                             "(enable is a no-op)")
                 else:
-                    led.check("network_interception's pause names the URL under navigation",
-                              page_url in str(paused_ev.get("request", {}).get("url", "")),
+                    paused_on = paused_ev.get("__session")
+                    led.check("network_interception's pause names the fetched URL",
+                              "caps-mock-target-7f3a" in str(
+                                  paused_ev.get("request", {}).get("url", "")),
                               json.dumps(paused_ev)[:200])
-                    # Deliberately UNANSWERED for a second: a held request
-                    # cannot have delivered its document.
-                    await asyncio.sleep(1.0)
-                    held = bool(await ev2("location.href === 'about:blank'"))
-                    mock = ("<!doctype html><title>caps-mock</title>"
-                            "<body>MOCK-SERVED-7f3a</body>")
+                    frame_routes = paused_on == s2 or paused_ev.get("frameId") == tid2
+                    led.check("network_interception's pause is routable to our target "
+                              "(our session, or a frameId naming our target)",
+                              frame_routes,
+                              f"session={paused_on} ours={s2} frameId="
+                              f"{paused_ev.get('frameId')} target={tid2}")
                     fu = await cdp.call("Fetch.fulfillRequest", {
                         "requestId": paused_ev["requestId"],
                         "responseCode": 200,
                         "responseHeaders": [{"name": "content-type",
-                                             "value": "text/html; charset=utf-8"}],
-                        "body": base64.b64encode(mock.encode()).decode(),
+                                             "value": "text/plain; charset=utf-8"}],
+                        "body": base64.b64encode(b"MOCK-SERVED-7f3a").decode(),
                     }, s2)
-                    await asyncio.sleep(1.5)
-                    served = await ev2("document.body ? document.body.textContent.trim() : ''")
-                    led.log(f"  network_interception: held={held} "
+                    served = None
+                    for _ in range(20):
+                        served = await ev2("window.__mock")
+                        if served != "pending":
+                            break
+                        await asyncio.sleep(0.25)
+                    led.log(f"  network_interception: paused on "
+                            f"{'our session' if paused_on == s2 else paused_on!r} "
                             f"fulfill={'ok' if 'error' not in fu else json.dumps(fu)[:160]} "
-                            f"page={served!r}")
-                    if held and "error" not in fu and served == "MOCK-SERVED-7f3a":
+                            f"fetch()={served!r}")
+                    if frame_routes and "error" not in fu and served == "MOCK-SERVED-7f3a":
                         ni = "supported"
-                    await cdp.call("Fetch.disable", {}, s2)
+                await cdp.call("Fetch.disable", {}, s2)
             await cdp.call("Target.closeTarget", {"targetId": tid2})
         found["network_interception"] = ni
 
@@ -797,6 +827,65 @@ async def main():
         else:
             led.log("  error_events tool-face: engine half measured unsupported — the "
                     "[error] fold is not asserted (cannot fold an event that never arrived)")
+
+        # --- network_interception's tool face ------------------------------
+        # The raw probe above answered the pause itself. This half goes
+        # through Aleph end to end: `browser_network{mock_add}` arms the
+        # intercept loop on the managed tab, a page fetch() of a URL the
+        # fixture server does not have must resolve to the rule's body, and
+        # the rule is cleared again. It is where the live owner's frameId
+        # route (`on_fetch`) is exercised against the real engine: on obscura
+        # the pause may arrive on the page's other session, and a dropped
+        # pause would leave the fetch() pending forever. The direction follows
+        # the TABLE, because the tool gate does: a row claiming unsupported
+        # must make mock_add refuse rather than arm nothing (判据 §11).
+        mock_body = "MOCK-TOOL-7f3a"
+        ok, body = await rpc.invoke("browser_network", {
+            "profile": "default", "action": "mock_add",
+            "url_contains": "caps-mock-target-7f3a", "body": mock_body,
+            "headers": {"content-type": "text/plain"},
+        })
+        add_blob = json.dumps(body)
+        if table.get("obscura", {}).get("network_interception") == "supported":
+            led.check("browser_network mock_add arms on obscura", ran(ok, body), add_blob[:300])
+            fetched = []
+            for attempt in range(3):
+                key = f"__toolMock{attempt}"
+                # An arrow function: browser_evaluate wraps the script as an
+                # EXPRESSION (`as_call_expression`), so statements must sit in
+                # a function body it then calls.
+                ok, res = await rpc.invoke("browser_evaluate", {
+                    "profile": "default",
+                    "script": (f"() => {{ window.{key} = 'pending';"
+                               " void fetch(new URL('caps-mock-target-7f3a.txt?n="
+                               f"{attempt}', location.href)).then(r => r.text())"
+                               f".then(t => {{ window.{key} = t; }},"
+                               f" e => {{ window.{key} = 'error:' + e; }});"
+                               " return 'fetch-started'; }"),
+                })
+                led.check(f"the tool-face fetch #{attempt} was started on the managed tab",
+                          ran(ok, res) and "fetch-started" in json.dumps(res),
+                          json.dumps(res)[:200])
+                got = None
+                for _ in range(20):
+                    ok, res = await rpc.invoke("browser_evaluate", {
+                        "profile": "default", "script": f"window.{key}"})
+                    got = json.dumps(res)
+                    if "pending" not in got:
+                        break
+                    await asyncio.sleep(0.25)
+                fetched.append(mock_body in (got or ""))
+                led.log(f"  network_interception tool-face fetch #{attempt}: "
+                        f"{mock_body if fetched[-1] else (got or '')[-200:]}")
+            led.check("…and every page fetch() of the mocked URL resolves to the rule's body",
+                      all(fetched), str(fetched))
+            ok, body = await rpc.invoke("browser_network", {
+                "profile": "default", "action": "mock_clear", "scope": "tab"})
+            led.check("…and mock_clear removes the rule", ran(ok, body), json.dumps(body)[:200])
+        else:
+            led.check("browser_network mock_add on obscura REFUSES rather than arming nothing",
+                      not ran(ok, body), add_blob[:300])
+            led.check("…and the refusal names the engine", "obscura" in add_blob, add_blob[:300])
 
         # --- ref_precheck (round-1 B4), probed at the GATEWAY layer ---------
         # The check lives in `browser_tools::mod::precheck_ref`, one layer ABOVE

@@ -753,6 +753,34 @@ async fn lag_terminates_streams_and_closes_fetch_targets_without_continuing_requ
 }
 
 #[tokio::test]
+async fn a_pause_reported_on_a_foreign_session_reaches_the_target_named_by_its_frame() {
+    // obscura v0.2.7 reports a paused subresource on either of a page's two
+    // sessions; the one Aleph did not attach must not strand the request.
+    let (_server, owner, _handle) = fixture().await;
+    let mut feed = owner
+        .register_fetch("T1", &SessionId("T1-session-1".into()))
+        .await;
+    let mut params = paused_event("T1-session")["params"].clone();
+    params["frameId"] = json!("T1");
+    owner.dispatch(&Arc::new(aleph_cdp::CdpEvent {
+        session: Some(SessionId("T1-session".into())),
+        method: "Fetch.requestPaused".into(),
+        params: params.clone(),
+    }));
+    let ev = within(feed.rx.recv(), "foreign-session pause").await;
+    assert!(ev.is_some_and(|e| e.params["requestId"] == "r1"));
+
+    // A frame that names no armed target is still nobody's.
+    params["frameId"] = json!("T9");
+    owner.dispatch(&Arc::new(aleph_cdp::CdpEvent {
+        session: Some(SessionId("T9-session".into())),
+        method: "Fetch.requestPaused".into(),
+        params,
+    }));
+    assert!(feed.rx.try_recv().is_err());
+}
+
+#[tokio::test]
 async fn full_fetch_feed_closes_its_target_instead_of_leaving_paused_requests() {
     let (server, owner, _handle) = fixture().await;
     server.on(
