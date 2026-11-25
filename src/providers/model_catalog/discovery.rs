@@ -1726,20 +1726,40 @@ mod tests {
                     let refresh = || call_with(&config, PROVIDER, RefreshMode::Force, credential);
                     // The boot snapshot was constructed with a vault-backed provider.
                     // A first, successful listing: its rows are published.
-                    let (first, ()) = tokio::join!(refresh(), async {
+                    let (first, ()) = tokio::try_join!(refresh(), async {
                         let release = endpoint.next_request().await;
                         endpoint.answer(LISTING).await;
                         release.send(()).unwrap();
-                    });
-                    assert!(matches!(first, Ok(RefreshOutcome::Fresh(_))), "{first:?}");
+                        Ok(())
+                    })?;
+                    assert!(matches!(first, RefreshOutcome::Fresh(_)), "{first:?}");
                     assert!(selectable(PROVIDER, "vendor-model"));
                     // A second fetch is in flight when the credential is replaced in
                     // the vault. The vault write takes the revision fence, so it lands
                     // either before the commit (the fetch is superseded) or after it
                     // (the rows are revoked). It can never be interleaved between the
                     // scope check and the publication.
-                    let (leader, waiter, ()) =
-                        tokio::join!(refresh(), refresh(), async {
+                    let before_fetch = {
+                        let guard = config.read().await;
+                        discovery_revision(&guard)
+                    };
+                    let vault_changed = std::cell::Cell::new(false);
+                    let refresh_until_mutation = || async {
+                        let result = refresh().await;
+                        // An unrelated concurrent revision may prevent the HTTP
+                        // request from starting at all. Retry the fixture rather
+                        // than keep waiting for a request that cannot arrive.
+                        if !vault_changed.get() {
+                            if let Err(DiscoveryError::Superseded(_)) = result {
+                                return result.map(Ok);
+                            }
+                        }
+                        Ok(result)
+                    };
+                    let (leader, waiter, ()) = tokio::try_join!(
+                        refresh_until_mutation(),
+                        refresh_until_mutation(),
+                        async {
                             let release = endpoint.next_request().await;
                             tokio::time::timeout(Duration::from_secs(5), async {
                                 loop {
@@ -1749,20 +1769,31 @@ mod tests {
                                         },
                                     );
                                     if queued {
-                                        break;
+                                        return Ok(());
+                                    }
+                                    {
+                                        let guard = config.read().await;
+                                        if discovery_revision(&guard) != before_fetch {
+                                            return Err(DiscoveryError::Superseded(
+                                                PROVIDER.into(),
+                                            ));
+                                        }
                                     }
                                     tokio::task::yield_now().await;
                                 }
                             })
                             .await
-                            .expect("the second refresh did not join the first");
+                            .expect("the second refresh did not join the first")?;
                             assert!(vault.delete_secret(&vault_key).unwrap());
+                            vault_changed.set(true);
                             assert!(!selectable(PROVIDER, "vendor-model"));
                             vault.store_secret(&vault_key, "vault-test-b").unwrap();
                             vault.store_secret(&vault_key, "vault-test-a").unwrap();
                             endpoint.answer(LISTING).await;
                             release.send(()).unwrap();
-                        });
+                            Ok(())
+                        }
+                    )?;
                     for result in [leader, waiter] {
                         assert!(
                             matches!(result, Err(DiscoveryError::Superseded(_))),
