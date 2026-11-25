@@ -41,6 +41,31 @@
 
 `aleph-desktop-shell` 被排除：其 build script 需要 `binaries/aleph-server-aarch64-apple-darwin`，本机不存在（既有环境问题）。
 
+### 3.1 全分支终验 / Final branch gate（Task 9）
+
+| 命令 | 结果 |
+|---|---|
+| `cargo clippy -p alephcore --all-targets -- -D warnings` | exit 0 |
+| `cargo test -p alephcore --lib --no-fail-fast` | 22291 passed / 18 failed / 22 ignored（566 s） |
+
+18 条失败逐条归类，均与本分支无关（本分支未改动其中任何测试或被测文件）：
+
+| 归类 | 测试 | 证据 |
+|---|---|---|
+| main 上同样失败（本次单独重跑确认） | `a2a::…::handle_message_stream_returns_stream`、`browser::live::issuer::…::absolute_store_expiry_never_extends_and_invalid_ttls_deny`、`browser::live::issuer::…::permissions_narrow_without_implicitly_adding_frames_and_ttl_clamps`、`browser::live::owner_registry::…::same_profile_and_target_different_sessions_do_not_cross_route`、`executor::builtin_registry::definitions::…::registry_schema_bytes_ratchet`（`session_decompress` / `artifact_publish` 的 schema 超出上限）、`export::markdown::…::an_image_inside_a_link_does_not_nest_a_link`、`security::audit::…::every_authority_change_verb_is_in_the_census_and_nothing_else_is`（`AUTHORITY_VERBS` 里多出 6 条 Discord 行） | 在 main 检出 `a4dac8db4` 上运行这 7 条：0 passed / 7 failed |
+| main 上同样失败（段 S 已确认） | `extension::hooks::registry::ownership_tests::startup_and_default_constructors_forward_the_single_runtime_tree`、`extension::manifest::config_validation::…::depth_budget_is_enforced_by_the_declaration_check`、`extension::manifest::parsers::…::plugin_agent_mode_key_is_rejected_loudly` | 段 S 门禁 |
+| 子模块未检出 | `extension::validation::…::every_bundled_plugin_passes_the_installers_own_validation`（`plugins/`）、`config::tests::skill_doc_drift::no_bundled_snippet_hardcodes_the_aleph_config_path`、`config::tests::skill_doc_drift::the_bundled_self_skill_names_no_phantom_config_keys`（`skills/`）、`gateway::execution_engine::btw_wire_tests::no_shipped_command_word_resolves_as_a_side_question` | 失败信息直接说明子模块缺失 |
+| 环境问题，被测文件相对 `a4dac8db4` 未改动（未在 main 上重跑） | `builtin_tools::browser_tools::tabs::…::no_browser_tool_formats_a_raw_backend_error`、`builtin_tools::capability_projection_diagnostics::…::diagnostic_schema_names_the_operation_bodies`（没有 tokio reactor）、`builtin_tools::strategy_manage::…::revise_writes_loop_key_when_only_loop_strategy_exists` | 段 D 门禁 |
+| 并行负载下的偶发失败 | `gateway::server::tests::test_legacy_ws_first_frame_and_rpc_dispatch`（`legacy ingress fixture must complete: Elapsed(())`） | 单独重跑通过 |
+
+### 3.2 独立审阅 / Independent review
+
+异模型（`openai-codex/gpt-6-sol`）只读审阅 `a4dac8db4..HEAD`，结论 **OK with notes**：
+
+- 1 条 minor 已修：FEATURE_LOCATOR 原称「不可见的调用方仍得到 `Unknown`」，实际为 `NotVisible`（`MemoryRuntime::capture_binding`）。文档已改；`invisible_caller_learns_nothing_about_dependency_state` 由「不是 `DependencyUnavailable`」收紧为断言 `NotVisible`，在全量运行中通过。
+- 其余检查项未发现问题：mount 拆分、准入被拒仍拆除、Cold owner、attachment 撤销锁、新错误映射，以及已删模块是否还有残留引用。
+- 审阅者未核实：Extism `CompiledPlugin::new` 在依赖源码中的确切行为，以及预检与实际加载的配置是否一致。预检之后会再读一次 WASM 文件，所以「预检通过、拆除后挂载仍失败」的窗口依然存在（见第 4 节）。
+
 ## 4. 没做什么 / Not done
 
 - `ProviderState::Parked` 与依赖恢复后重拉下游、通用资源捕获 trait、单插件双实例切换 + 旧版排空（`with_admitted_completion` 仍无生产消费者）、全量 `reload()` 分阶段化、跨会话 grant、ambient 重新挂载——触发条件见设计 §9。
