@@ -207,7 +207,11 @@ impl HarnessRunner for AgentHarnessRunner {
         ));
         let input = match input {
             FlowInput::PendingAttachments { mut message, media } => {
-                let mut blocks = media.blocks(model.as_deref(), &run_id).await.to_vec();
+                let mut blocks = tokio::select! {
+                    biased;
+                    () = cancel.cancelled() => return Err(FlowError::Cancelled),
+                    blocks = media.blocks(model.as_deref(), &run_id) => blocks.to_vec(),
+                };
                 blocks.append(&mut message.blocks);
                 message.blocks = blocks;
                 FlowInput::Multimodal(vec![message])
@@ -253,6 +257,11 @@ impl HarnessRunner for AgentHarnessRunner {
             crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::capture(
                 _telecom_public.as_ref(),
             );
+        // Preparation may finish just as cancellation arrives. Check again
+        // before entering the write path; do not interrupt an in-flight seed.
+        if cancel.is_cancelled() {
+            return Err(FlowError::Cancelled);
+        }
         session_seed::seed_session(
             self.session_service.as_ref(),
             &session_id,

@@ -1453,6 +1453,141 @@ async fn final_binding_refuses_withdrawn_selection_and_reports_ignored_pin() {
     assert!(default.saw_text_image_notice.load(Ordering::Relaxed));
 }
 
+#[tokio::test]
+async fn cancelling_blocked_attachment_preparation_leaves_the_session_empty_and_dispatchable() {
+    use crate::media::cache::CachedMedia;
+    use crate::media::processor::{MediaProcessor, PendingMedia};
+    use crate::media::{TranscriptionResult, TranscriptionService};
+    use crate::orchestrator::{build_sandbox_factory, FlowRegistry, FlowRequest, Orchestrator};
+    use std::{sync::Arc, time::Duration};
+    use tokio::sync::Notify;
+
+    struct BlockedTranscription(Arc<Notify>);
+    #[async_trait::async_trait]
+    impl TranscriptionService for BlockedTranscription {
+        async fn transcribe(
+            &self,
+            _audio: &CachedMedia,
+            _language: Option<&str>,
+        ) -> anyhow::Result<TranscriptionResult> {
+            self.0.notify_one();
+            std::future::pending().await
+        }
+    }
+
+    let started = Arc::new(Notify::new());
+    let processor = Arc::new(MediaProcessor::new(
+        Some(Box::new(BlockedTranscription(started.clone()))),
+        None,
+    ));
+    let media = Arc::new(PendingMedia::new(
+        processor,
+        vec![crate::gateway::channel::Attachment {
+            id: "blocked-audio".into(),
+            mime_type: "audio/mp3".into(),
+            filename: Some("voice.mp3".into()),
+            size: None,
+            url: None,
+            path: None,
+            data: Some(vec![0xFF, 0xFB]),
+            is_voice_note: false,
+            is_video_note: false,
+        }],
+    ));
+    let service = fresh_service();
+    let agent_id = "blocked-attachment-fixture";
+    let key = SessionKey::ephemeral(agent_id);
+    let spec = probe_spec(agent_id);
+    let orch = Orchestrator::new(
+        Arc::new(FlowRegistry::new(HashMap::from([(
+            spec.id.clone(),
+            spec.clone(),
+        )]))),
+        Arc::new(HashMap::from([(agent_id.into(), spec.id.clone())])),
+        service.clone(),
+        build_sandbox_factory(Arc::new(|_| {
+            Ok(Arc::new(crate::sandbox::factory::NoopSandbox))
+        })),
+        Arc::new(runner_with_failing_provider(service.clone(), agent_id)),
+    );
+    let request = |input| FlowRequest {
+        flow_id: None,
+        agent_id: agent_id.into(),
+        run_id: uuid::Uuid::new_v4().to_string(),
+        input,
+        channel: None,
+        session_hint: Some(key.to_key_string()),
+        scope: crate::scope::FlowScope::unscoped(),
+        parent_session: None,
+        depth: 0,
+        tool_service: None,
+        trace_sink: None,
+        event_tx: None,
+        interaction_manifest: None,
+        workspace_override: None,
+        max_iterations_override: None,
+        transient_context: None,
+        think_level: None,
+        envelope: crate::thinker::TurnEnvelope::none(),
+        model_directive: None,
+        telecom_public: None,
+    };
+    let first = orch
+        .dispatch(request(FlowInput::PendingAttachments {
+            message: crate::session::events::MessageContent {
+                text: "transcribe this".into(),
+                blocks: vec![],
+                thinking: None,
+                thinking_signature: None,
+            },
+            media,
+        }))
+        .await
+        .unwrap();
+    assert_eq!(first.session_key, key.to_key_string());
+    tokio::time::timeout(Duration::from_secs(5), started.notified())
+        .await
+        .unwrap();
+    first.cancel.cancel();
+    assert!(matches!(
+        tokio::time::timeout(Duration::from_secs(5), first.completion)
+            .await
+            .unwrap()
+            .unwrap(),
+        Err(FlowError::Cancelled)
+    ));
+    assert!(service
+        .get_events(&key, None, None)
+        .await
+        .unwrap()
+        .is_empty());
+
+    let second = orch
+        .dispatch(request(FlowInput::Prompt("try again".into())))
+        .await
+        .expect("cancelled runner released its session lock");
+    assert_eq!(second.session_key, key.to_key_string());
+    // The mock provider intentionally refuses, but the new run must finish
+    // and seed its own prompt rather than inheriting the cancelled turn.
+    let outcome = tokio::time::timeout(Duration::from_secs(5), second.completion)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        outcome.is_err(),
+        "the default fixture refuses every request"
+    );
+    let events = service.get_events(&key, None, None).await.unwrap();
+    let prompts: Vec<_> = events
+        .iter()
+        .filter_map(|record| match &record.event {
+            SessionEvent::UserMessage { content, .. } => Some(content.text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(prompts, ["try again"]);
+}
+
 /// The behavioural half of `the_terminal_settle_runs_on_both_arms_of_a_finished_run`.
 ///
 /// A provider that fails on every call ends the run in `Err` *after* the loop
