@@ -470,9 +470,25 @@ impl ScopedToolService {
                         lease,
                         &Self::capability_call_context(&format!("{name}/resolve")),
                     )
-                    .map_err(|error| ToolError::PermissionDenied {
-                        name: name.into(),
-                        reason: format!("canonical capability lease cannot be resolved: {error:?}"),
+                    .map_err(|error| match error {
+                        // Model-visible: the tool stays listed and the model
+                        // learns why this call failed and that it may retry.
+                        crate::capability::facade::ResolveError::DependencyUnavailable {
+                            target,
+                            state,
+                        } => ToolError::Execution {
+                            name: name.into(),
+                            cause: format!(
+                                "`{}` 当前不可用（状态 {state:?}），稍后重试或请用户启用",
+                                target.name
+                            ),
+                        },
+                        error => ToolError::PermissionDenied {
+                            name: name.into(),
+                            reason: format!(
+                                "canonical capability lease cannot be resolved: {error:?}"
+                            ),
+                        },
                     })?;
                 captured_backend_lease = Some(backend_lease);
                 Some(entry)

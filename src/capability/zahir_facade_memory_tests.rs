@@ -1,7 +1,8 @@
 use super::ZahirFacade;
 use crate::capability::descriptor::{CapabilityId, CapabilityKind};
-use crate::capability::facade::{Reference, Scope, Zahir};
+use crate::capability::facade::{Reference, ResolveError, Scope, Zahir};
 use crate::capability::ownership::{LifetimeScope, OwnerRef, OwnershipTree, VisibilityScope};
+use crate::capability::provider::ProviderState;
 use crate::memory::runtime::{MemoryRuntime, MemoryRuntimeConfig};
 use crate::sync_primitives::Arc;
 use crate::tools::descriptor::{ToolCapabilityDescriptor, ToolSource};
@@ -188,4 +189,86 @@ async fn resource_lease_is_source_backed_and_controls_stay_independent() {
     runtime.stop().await.unwrap();
     assert!(facade.validate_lease(&resource).is_err());
     facade.validate_lease(&control).unwrap();
+}
+
+fn memory_tool_fixture(
+    root: &std::path::Path,
+) -> (Arc<ZahirFacade>, Arc<MemoryRuntime>, Reference) {
+    let tree = Arc::new(OwnershipTree::new());
+    let runtime = MemoryRuntime::new(
+        MemoryRuntimeConfig {
+            metadata_path: root.join("metadata.db"),
+            note_memory_dir: root.join("notes"),
+            retrieval_tuning: Default::default(),
+        },
+        tree.clone(),
+    );
+    let registry = ToolHandlerRegistry::new();
+    registry
+        .register(
+            ToolCapabilityDescriptor::from_definition(&memory_definition(), 0),
+            Arc::new(MemoryHandler(memory_definition())),
+        )
+        .unwrap();
+    let facade = ZahirFacade::new_with_memory(registry, tree, runtime.clone());
+    let reference = Reference {
+        id: CapabilityId {
+            namespace: "aleph/tools".into(),
+            name: "memory_fixture".into(),
+        },
+        visibility: VisibilityScope::default(),
+    };
+    (facade, runtime, reference)
+}
+
+#[tokio::test]
+async fn tool_resolve_reports_dependency_unavailable_while_memory_is_cold() {
+    let root = tempfile::tempdir().unwrap();
+    let (facade, _runtime, reference) = memory_tool_fixture(root.path());
+    assert_eq!(
+        facade.resolve(reference).unwrap_err(),
+        ResolveError::DependencyUnavailable {
+            target: crate::memory::runtime::resource_id(),
+            state: ProviderState::Cold,
+        }
+    );
+}
+
+#[tokio::test]
+async fn tool_resolve_reports_dependency_unavailable_after_memory_stops() {
+    let root = tempfile::tempdir().unwrap();
+    let (facade, runtime, reference) = memory_tool_fixture(root.path());
+    runtime.start().await.unwrap();
+    facade.resolve(reference.clone()).unwrap();
+    runtime.stop().await.unwrap();
+    assert_eq!(
+        facade.resolve(reference).unwrap_err(),
+        ResolveError::DependencyUnavailable {
+            target: crate::memory::runtime::resource_id(),
+            state: ProviderState::Stopped,
+        }
+    );
+}
+
+#[tokio::test]
+async fn invisible_caller_learns_nothing_about_dependency_state() {
+    let root = tempfile::tempdir().unwrap();
+    let (facade, _runtime, mut reference) = memory_tool_fixture(root.path());
+    reference.visibility = VisibilityScope {
+        principal: Some("someone-else".into()),
+        ..VisibilityScope::default()
+    };
+    assert!(!matches!(
+        facade.resolve(reference),
+        Err(ResolveError::DependencyUnavailable { .. })
+    ));
+}
+
+#[test]
+fn terminal_denial_keeps_dependency_unavailable() {
+    let error = ResolveError::DependencyUnavailable {
+        target: crate::memory::runtime::resource_id(),
+        state: ProviderState::Stopped,
+    };
+    assert_eq!(super::terminal_denial(error.clone()), error);
 }

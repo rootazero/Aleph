@@ -179,6 +179,24 @@ async fn call(service: &ScopedToolService, id: &str) -> Result<ToolOutput, ToolE
 }
 
 #[tokio::test]
+async fn memory_tool_call_while_runtime_stopped_returns_dependency_unavailable_text() {
+    let fixture = Fixture::new(false, "memory-stopped").await;
+    fixture.runtime.stop().await.unwrap();
+    let result = call(&fixture.service, "memory-stopped").await;
+    match result {
+        Err(ToolError::Execution { name, cause }) => {
+            assert_eq!(name, "memory_fixture");
+            assert_eq!(
+                cause,
+                "`memory.runtime` 当前不可用（状态 Stopped），稍后重试或请用户启用"
+            );
+        }
+        other => panic!("expected a dependency-unavailable execution error, got {other:?}"),
+    }
+    assert_eq!(fixture.calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
 async fn memory_tool_captures_resource_before_approval() {
     let mut fixture = Fixture::new(true, "memory-before-approval").await;
     let entered = Arc::new(Notify::new());

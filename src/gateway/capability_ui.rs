@@ -548,6 +548,10 @@ mod tests {
             ResolveError::Revoked,
             ResolveError::StaleOwner,
             ResolveError::StaleProvider,
+            ResolveError::DependencyUnavailable {
+                target: crate::memory::runtime::resource_id(),
+                state: crate::capability::provider::ProviderState::Stopped,
+            },
         ] {
             let response =
                 invocation_error_response(None, CapabilityInvocationError::Resolve(variant));
