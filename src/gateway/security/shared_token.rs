@@ -300,16 +300,18 @@ impl SharedTokenManager {
         &self,
         provider: &str,
         epoch: u64,
-        expected: (&str, &str),
+        expected: impl IntoIterator<Item = (&'a str, &'a str)>,
         secrets: impl IntoIterator<Item = (&'a str, &'a str)>,
         install: impl FnOnce() -> T,
     ) -> Result<Option<T>, SharedTokenError> {
         let mut vault = self.vault.write().unwrap_or_else(|e| e.into_inner());
-        let Some(stored) = self.decrypt_secret(&vault, expected.0)? else {
-            return Ok(None);
-        };
-        if stored.expose() != expected.1 {
-            return Ok(None);
+        for (name, value) in expected {
+            let Some(stored) = self.decrypt_secret(&vault, name)? else {
+                return Ok(None);
+            };
+            if stored.expose() != value {
+                return Ok(None);
+            }
         }
         let entries = self.encrypt_secret_batch(&vault, secrets)?;
         let mut fence = crate::providers::model_catalog::discovery_authority::mutation_fence();

@@ -292,6 +292,12 @@ fn apply_fault(
 }
 
 impl HttpProvider {
+    pub(crate) fn same_configured_route(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.config.protocol() == other.config.protocol()
+            && self.config.base_url == other.config.base_url
+    }
+
     pub(crate) fn matches_configured_transport(
         &self,
         provider: &str,

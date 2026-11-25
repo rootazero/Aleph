@@ -50,6 +50,11 @@ pub struct SecretVault {
     load_error: Option<String>,
 }
 
+fn provider_owns_secret(provider: &str, name: &str) -> bool {
+    name.strip_prefix("ai:") == Some(provider)
+        || (provider == "chatgpt" && name == "ai:chatgpt:oauth")
+}
+
 impl SecretVault {
     /// Open or create a vault at the given path.
     pub fn open(path: impl Into<PathBuf>) -> Result<Self, SecretError> {
@@ -264,7 +269,7 @@ impl SecretVault {
             return Err(e);
         }
 
-        fence.vault_changed(|provider| name.strip_prefix("ai:") == Some(provider));
+        fence.vault_changed(|provider| provider_owns_secret(provider, name));
         drop(fence);
         info!(name = name, "Secret stored in vault");
         Ok(())
@@ -282,7 +287,7 @@ impl SecretVault {
             return Err(e);
         }
 
-        fence.vault_changed(|provider| name.strip_prefix("ai:") == Some(provider));
+        fence.vault_changed(|provider| provider_owns_secret(provider, name));
         drop(fence);
         info!(name = name, "Secret deleted from vault");
         Ok(true)
@@ -353,8 +358,7 @@ impl SecretVault {
         }
         if let Some(fence) = fence {
             fence.vault_changed(|provider| {
-                let key = format!("ai:{provider}");
-                match (previous.get(&key), self.data.entries.get(&key)) {
+                let changed = |key: &str| match (previous.get(key), self.data.entries.get(key)) {
                     (Some(old), Some(new)) => {
                         old.ciphertext != new.ciphertext
                             || old.nonce != new.nonce
@@ -362,7 +366,9 @@ impl SecretVault {
                     }
                     (None, None) => false,
                     _ => true,
-                }
+                };
+                changed(&format!("ai:{provider}"))
+                    || (provider == "chatgpt" && changed("ai:chatgpt:oauth"))
             });
         }
         Ok(())

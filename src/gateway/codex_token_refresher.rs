@@ -11,23 +11,9 @@
 //! provider. The 401 was then classified transient and retried against the
 //! *same* stale token until the whole task hard-failed.
 //!
-//! This service closes that gap with two triggers, both reusing the exact same
-//! self-heal primitive [`CodexTokenRefresher::refresh_and_swap`]:
-//!
-//! * **Proactive** — a background loop refreshes a few minutes before expiry
-//!   ([`CodexTokenRefresher::spawn_background`]).
-//! * **Reactive** — the dispatch retry path calls `refresh_and_swap` when it
-//!   sees a `token_expired` error before retrying.
-//!
-//! ## Layering note (R1 / R10)
-//!
-//! Token refresh is *infrastructure* (a limb refreshing its own credential),
-//! not harness cognition. It lives in the Gateway, not `src/harness/`, and the
-//! dumb loop only calls into it on a specific auth error — it makes no recovery
-//! *strategy* decision. The provider hot-swap reuses the already-proven
-//! `providers.setDefault` mechanism: the failover chain's primary slot is the
-//! live `MultiProviderRegistry`, so re-registering `chatgpt` with a fresh-token
-//! instance is visible on the next dispatch turn with no restart.
+//! The Gateway refreshes proactively before expiry and on OAuth status polls.
+//! Both paths renew the already-mounted route. Dispatch retries do not rotate a
+//! grant from error text: a failure does not identify the credential it used.
 
 use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::config::Config;
@@ -166,16 +152,6 @@ impl CodexTokenRefresher {
         Some(cache.expires_in_seconds().unwrap_or(0))
     }
 
-    /// Refresh the OAuth token and hot-swap the running provider so the next
-    /// dispatch turn uses the fresh token. Returns `true` when the live
-    /// provider now carries a renewed token.
-    ///
-    /// Idempotent and cheap to call spuriously: if there is no token or no
-    /// refresh token, `try_refresh` returns `false` and nothing is swapped.
-    pub async fn refresh_and_swap(&self) -> bool {
-        self.refresh(None).await
-    }
-
     pub(crate) async fn refresh_if_due(&self, seconds: u64) -> bool {
         self.refresh(Some(seconds)).await
     }
@@ -204,10 +180,18 @@ impl CodexTokenRefresher {
         mut config: crate::config::ProviderConfig,
         access_token: &str,
     ) -> Option<Arc<dyn crate::providers::AiProvider>> {
+        let mounted = self
+            .named_route
+            .as_ref()?
+            .route
+            .as_failover_provider()?
+            .exact_transport(PROVIDER_NAME)?;
         config.api_key = Some(access_token.to_owned());
-        crate::providers::create_provider(PROVIDER_NAME, config)
-            .map_err(|error| warn!(%error, "codex refresh: failed to build renewed transport"))
-            .ok()
+        let candidate = crate::providers::create_provider(PROVIDER_NAME, config).ok()?;
+        mounted
+            .as_http_provider()?
+            .same_configured_route(candidate.as_http_provider()?)
+            .then_some(candidate)
     }
 
     /// Return true only if the run builder's actual named chain now resolves

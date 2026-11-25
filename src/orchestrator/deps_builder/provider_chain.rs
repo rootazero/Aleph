@@ -144,6 +144,9 @@ pub fn build_failover_chain(
         "failover chain assembled"
     );
 
+    let codex_mount = built
+        .get("chatgpt")
+        .map(|provider| Arc::new(CredentialMount::new(Arc::clone(provider))));
     let global_provider = FailoverProvider::new(
         default_provider,
         fallbacks,
@@ -158,6 +161,11 @@ pub fn build_failover_chain(
     .with_model_cooldown(model_cooldown.clone())
     // rust-doctor-disable-next-line excessive-clone
     .with_provider_cooldown(provider_cooldown.clone());
+    let global_provider = if let Some(mount) = &codex_mount {
+        global_provider.with_renewable_fallback("chatgpt".into(), Arc::clone(mount))
+    } else {
+        global_provider
+    };
     // Auto-derived chains (no operator `[fallback_provider].chain`) derive the
     // fallback set live from the registry each turn, so a provider added or
     // removed at runtime joins/leaves the fallback set without a restart. An
@@ -177,16 +185,14 @@ pub fn build_failover_chain(
 
     // Configured provider overrides: one FailoverProvider per non-primary
     // provider, pinning it as primary then falling through the global chain.
-    let mut codex_mount = None;
     let agent_overrides: HashMap<String, Arc<dyn AiProvider>> = built
         .into_iter()
         .map(|(name, provider)| {
-            let primary: Arc<dyn DefaultProviderHandle> = if name == "chatgpt" {
-                let mount = Arc::new(CredentialMount::new(provider));
-                codex_mount = Some(Arc::clone(&mount));
-                mount
-            } else {
-                Arc::new(StaticDefault::new(provider))
+            let primary: Arc<dyn DefaultProviderHandle> = match &codex_mount {
+                Some(mount) if name == "chatgpt" => {
+                    Arc::clone(mount) as Arc<dyn DefaultProviderHandle>
+                }
+                _ => Arc::new(StaticDefault::new(provider)),
             };
             let pinned = FailoverProvider::new(
                 primary,

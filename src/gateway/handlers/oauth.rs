@@ -275,14 +275,15 @@ async fn refresh_with<Fut: Future<Output = Option<OAuthTokenCache>>>(
     fetch: impl FnOnce(OAuthTokenCache) -> Fut,
 ) -> bool {
     // There is one supported OAuth account: both public aliases map to ChatGPT.
-    // Keep its rotating grant single-flight across status, background and retry.
+    // Keep its rotating grant single-flight across status and background renewal.
     static REFRESH: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
     let Some(observed) = oauth_state.read().await.clone() else {
         return false;
     };
     let _refresh = REFRESH.lock().await;
     let key = format!("ai:{provider_name}");
-    let (cache, epoch) = {
+    let blob_key = oauth_blob_key(provider_name);
+    let (cache, previous_blob, epoch) = {
         let state = oauth_state.read().await;
         let Some(cache) = state.as_ref() else {
             return false;
@@ -298,12 +299,20 @@ async fn refresh_with<Fut: Future<Output = Option<OAuthTokenCache>>>(
             return true;
         }
         let cfg = config.read().await;
-        if !cfg
+        let Some(provider_config) = cfg
             .providers
             .get(provider_name)
-            .is_some_and(vault_oauth_route)
-        {
+            .filter(|p| vault_oauth_route(p))
+        else {
             return false;
+        };
+        if let Some(live) = live {
+            if live
+                .prepare_refreshed_transport(provider_config.clone(), &cache.access_token)
+                .is_none()
+            {
+                return false;
+            }
         }
         let epoch =
             crate::providers::model_catalog::discovery::oauth_route_epoch(provider_name, &cfg);
@@ -315,7 +324,17 @@ async fn refresh_with<Fut: Future<Output = Option<OAuthTokenCache>>>(
         {
             return false;
         }
-        (cache.clone(), epoch)
+        let Ok(Some(previous_blob)) = vault.get_secret(&blob_key) else {
+            return false;
+        };
+        if serde_json::from_str::<OAuthTokenCache>(previous_blob.expose())
+            .ok()
+            .as_ref()
+            != Some(cache)
+        {
+            return false;
+        }
+        (cache.clone(), previous_blob, epoch)
     };
 
     if let Some(new_cache) = fetch(cache.clone()).await {
@@ -334,7 +353,6 @@ async fn refresh_with<Fut: Future<Output = Option<OAuthTokenCache>>>(
         let Ok(blob) = serde_json::to_string(&new_cache) else {
             return false;
         };
-        let blob_key = oauth_blob_key(provider_name);
         let was_available = crate::providers::session_model_handle::selectable_models()
             .is_some_and(|snapshot| snapshot.provider_is_available(provider_name));
         let transport = live.and_then(|live| {
@@ -343,7 +361,10 @@ async fn refresh_with<Fut: Future<Output = Option<OAuthTokenCache>>>(
         let result = vault.refresh_secrets_if_current(
             provider_name,
             epoch,
-            (key.as_str(), cache.access_token.as_str()),
+            [
+                (key.as_str(), cache.access_token.as_str()),
+                (blob_key.as_str(), previous_blob.expose()),
+            ],
             [
                 (key.as_str(), new_cache.access_token.as_str()),
                 (blob_key.as_str(), blob.as_str()),
@@ -638,8 +659,11 @@ mod tests {
         use crate::providers::session_model_handle::{
             with_test_selectable_models, SelectableModelsSnapshot,
         };
+        use crate::providers::{adapter::RequestPayload, message::UnifiedMessage, AiProvider};
         use crate::thinker::MultiProviderRegistry;
         use std::collections::BTreeSet;
+        use wiremock::matchers::{header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
 
         const PROVIDER: &str = "chatgpt";
         let key = "ai:chatgpt";
@@ -651,12 +675,29 @@ mod tests {
         vault.generate_token().unwrap();
         vault.store_secret(key, "old-fixture").unwrap();
         let mut provider = ProviderConfig::test_config("org/model");
+        let server = MockServer::start().await;
+        let endpoint = format!("{}/v1", server.uri());
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .and(header("authorization", "Bearer new-fixture"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "fixture", "object": "chat.completion", "created": 0, "model": "org/model",
+                "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "ok"}}]
+            })))
+            .expect(1)
+            .mount(&server).await;
         provider.protocol = Some("openai".into());
-        provider.base_url = Some("http://127.0.0.1:1/v1".into());
+        provider.base_url = Some(endpoint.clone());
         provider.api_key = Some("old-fixture".into());
         let mut config = Config::default();
         config.providers.clear();
         config.providers.insert(PROVIDER.into(), provider.clone());
+        config.fallback_provider = Some(crate::config::FallbackProviderToml {
+            chain: vec![PROVIDER.into()],
+            provider: None,
+            max_retries: Some(0),
+        });
+        provider.base_url = Some("http://127.0.0.1:1/v1".into());
         let primary = crate::providers::create_provider("fixture-primary", provider).unwrap();
         let registry = Arc::new(MultiProviderRegistry::new(
             "fixture-primary".into(),
@@ -683,6 +724,10 @@ mod tests {
             expires_at_unix: 0,
             session_id: "fixture".into(),
         })));
+        let initial_blob = serde_json::to_string(state.read().await.as_ref().unwrap()).unwrap();
+        vault
+            .store_secret(&oauth_blob_key(PROVIDER), &initial_blob)
+            .unwrap();
         let refresher = CodexTokenRefresher::new(
             state.clone(),
             config.clone(),
@@ -691,6 +736,23 @@ mod tests {
             Some(CodexRefreshRoute::new(route.clone(), chain.codex_mount)),
         );
         with_test_selectable_models(Some(snapshot), async {
+            {
+                let mut config = config.write().await;
+                config.providers.get_mut(PROVIDER).unwrap().base_url = Some("https://different.invalid/v1".into());
+            }
+            assert!(!refresh_with(&state, &config, &vault, PROVIDER, Some(&refresher), None, |_| async {
+                panic!("an edited endpoint must not request a new grant")
+            }).await);
+            {
+                let mut config = config.write().await;
+                let provider = config.providers.get_mut(PROVIDER).unwrap();
+                provider.base_url = Some(endpoint);
+                provider.protocol = Some("anthropic".into());
+            }
+            assert!(!refresh_with(&state, &config, &vault, PROVIDER, Some(&refresher), None, |_| async {
+                panic!("an edited protocol must not request a new grant")
+            }).await);
+            config.write().await.providers.get_mut(PROVIDER).unwrap().protocol = Some("openai".into());
             let session = crate::gateway::router::AgentRouter::new().route(None, None, None, None).await;
             let queued = build_run_request("retry-fixture".into(), &session, serde_json::from_value(json!({"input": "hi", "model_override": {"kind": "qualified", "provider": PROVIDER, "model": "org/model"}})).unwrap(), Some(&config), None, &crate::gateway::agent_instance::AgentInstanceConfig::default()).await.unwrap();
             let (fetch_started, fetching) = tokio::sync::oneshot::channel();
@@ -720,6 +782,25 @@ mod tests {
             assert!(!Arc::ptr_eq(&original, &renewed));
             assert_eq!(vault.get_secret(key).unwrap().unwrap().expose(), "new-fixture");
             queued.validate_dispatch_model().unwrap();
+            let messages = [UnifiedMessage::user("hi")];
+            chain.chain.process(RequestPayload::new(&messages)).await.unwrap();
+
+            let blob_key = oauth_blob_key(PROVIDER);
+            let renewed_blob = vault.get_secret(&blob_key).unwrap().unwrap();
+            assert!(!refresh_with(&state, &config, &vault, PROVIDER, Some(&refresher), None, |mut token| {
+                let vault = &vault;
+                let blob_key = &blob_key;
+                async move {
+                    vault.delete_secret(blob_key).unwrap();
+                    token.access_token = "discarded".into();
+                    Some(token)
+                }
+            }).await);
+            assert!(vault.get_secret(&blob_key).unwrap().is_none());
+            assert_eq!(vault.get_secret(key).unwrap().unwrap().expose(), "new-fixture");
+            assert!(queued.validate_dispatch_model().is_err());
+            assert!(Arc::ptr_eq(&renewed, &exact_transport()));
+            vault.store_secret(&blob_key, renewed_blob.expose()).unwrap();
 
             assert!(!refresh_with(&state, &config, &vault, PROVIDER, Some(&refresher), None, |mut token| async {
                 *state.write().await = None;

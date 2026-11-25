@@ -166,6 +166,8 @@ pub struct FailoverProvider {
     primary: Arc<dyn DefaultProviderHandle>,
     /// Static fallback chain, tried after the primary in order.
     fallbacks: Vec<FailoverNode>,
+    /// Reuse the named route's credential mount without changing slot order.
+    renewable_fallback: Option<(String, Arc<super::super::CredentialMount>)>,
     /// Provider name → model list. Boot snapshot; lets the live primary
     /// resolve its model list by name.
     model_catalog: HashMap<String, Vec<String>>,
@@ -216,6 +218,7 @@ impl FailoverProvider {
         Self {
             primary,
             fallbacks,
+            renewable_fallback: None,
             model_catalog,
             health,
             config,
@@ -223,6 +226,16 @@ impl FailoverProvider {
             provider_cooldown: None,
             derive_fallbacks_live: false,
         }
+    }
+
+    #[must_use]
+    pub(crate) fn with_renewable_fallback(
+        mut self,
+        name: String,
+        mount: Arc<super::super::CredentialMount>,
+    ) -> Self {
+        self.renewable_fallback = Some((name, mount));
+        self
     }
 
     /// Derive the fallback set live from the primary handle's registry on every
@@ -348,7 +361,15 @@ impl FailoverProvider {
                 }
             }
             // rust-doctor-disable-next-line excessive-clone
-            self.fallbacks.iter().find(|fb| fb.name == name).cloned()
+            let mut node = self.fallbacks.iter().find(|fb| fb.name == name).cloned()?;
+            if let Some((_, mount)) = self
+                .renewable_fallback
+                .as_ref()
+                .filter(|(key, _)| key == &name)
+            {
+                node.provider = mount.current();
+            }
+            Some(node)
         })
         .collect()
     }
