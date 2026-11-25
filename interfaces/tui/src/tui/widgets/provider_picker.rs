@@ -41,10 +41,14 @@ pub fn render_provider_picker(frame: &mut Frame, picker: &ProviderPickerState, a
     crate::tui::widgets::clear_overlay(frame, overlay_rect);
 
     let open = picker.provider.and_then(|i| picker.entries.get(i));
-    let title = open.map_or_else(
-        || " Providers ".to_string(),
-        |entry| format!(" Providers \u{25b8} {} ", entry.display_name),
-    );
+    let title = if picker.choices.is_some() {
+        " Chat models ".to_string()
+    } else {
+        open.map_or_else(
+            || " Providers ".to_string(),
+            |entry| format!(" Providers \u{25b8} {} ", entry.display_name),
+        )
+    };
 
     let block = Block::default()
         .borders(Borders::ALL)
@@ -81,7 +85,11 @@ pub fn render_provider_picker(frame: &mut Frame, picker: &ProviderPickerState, a
 
     if picker.rows.is_empty() {
         let empty = Paragraph::new(Line::from(Span::styled(
-            empty_message(open),
+            if picker.choices.is_some() {
+                "  (no matching models)".to_string()
+            } else {
+                empty_message(open)
+            },
             Style::default().fg(theme().muted),
         )));
         frame.render_widget(empty, list_area);
@@ -112,6 +120,10 @@ pub fn render_provider_picker(frame: &mut Frame, picker: &ProviderPickerState, a
                     )
                 }
                 PickerRow::Model { model } => (model_label(model), model.lifecycle.is_deprecated()),
+                PickerRow::MemberModel(choice) => (
+                    format!("{} / {}", choice.provider_label, choice.model_label),
+                    false,
+                ),
             };
             let style = if is_selected {
                 Style::default()
@@ -408,6 +420,7 @@ mod tests {
         let picker = |entries: Vec<CatalogEntry>| ProviderPickerState {
             input: String::new(),
             entries,
+            choices: None,
             provider: None,
             rows: vec![PickerRow::Provider {
                 index: 0,
@@ -433,6 +446,7 @@ mod tests {
         let picker = ProviderPickerState {
             input: "zzz".to_string(),
             entries: vec![crate::tui::app::sample_catalog_entry("openai", &["a"])],
+            choices: None,
             provider: None,
             rows: Vec::new(),
             selected: 0,

@@ -97,6 +97,8 @@ pub enum LocalCommand {
     /// Browse providers and their models (opens the provider picker).
     /// `query` pre-filters both levels through the shared ranker.
     Providers { query: String },
+    /// Pick a usable chat model without admin access.
+    PickModel { query: String },
     /// Browse this session's background sub-agents (opens the agents overlay;
     /// Enter opens one agent's run view).
     Agents,
@@ -242,8 +244,9 @@ const LOCAL_COMMAND_CATALOG: &[(&str, &str)] = &[
     ("/sessions", "Browse & switch session (alias: /resume)"),
     (
         "/providers",
-        "Browse providers & models and pick one (/providers [query])",
+        "Browse and refresh provider catalogs (admin: /providers [query])",
     ),
+    ("/pick-model", "Choose a chat model (/pick-model [query])"),
     (
         "/agents",
         "Browse this session's sub-agents; Enter opens an agent's run view",
@@ -359,11 +362,14 @@ pub fn parse_input(input: &str) -> ParsedInput {
         // Deliberately no `/models` alias: gateway commands come from the live
         // tool catalog, which grows with every installed skill / MCP server, and
         // a local word that matches one makes it UNREACHABLE rather than merely
-        // shadowed. One claim on the shared namespace is enough for one picker.
+        // shadowed. Keep the admin and member commands explicit.
         "/providers" => ParsedInput::Local(LocalCommand::Providers {
             // Forwarded verbatim (lowercased by the ranker, not here): the query
             // may name a model id, and model ids are case-sensitive on the wire
             // even though matching is not.
+            query: args.to_string(),
+        }),
+        "/pick-model" => ParsedInput::Local(LocalCommand::PickModel {
             query: args.to_string(),
         }),
         // Singular gateway namespaces (`agent_*` → `/agent …`, `task_*` →
@@ -796,6 +802,13 @@ mod tests {
         assert!(cmds.iter().any(|(name, _)| *name == "/context"));
         assert!(cmds.iter().any(|(name, _)| *name == "/theme"));
         assert!(cmds.iter().any(|(name, _)| *name == "/providers"));
+        assert!(cmds.iter().any(|(name, _)| *name == "/pick-model"));
+        assert_eq!(
+            parse_input("/pick-model org/model"),
+            ParsedInput::Local(LocalCommand::PickModel {
+                query: "org/model".into()
+            })
+        );
         assert!(cmds.iter().any(|(name, _)| *name == "/agents"));
         assert!(cmds.iter().any(|(name, _)| *name == "/todo"));
         assert!(cmds.iter().any(|(name, _)| *name == "/clear"));

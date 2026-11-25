@@ -43,7 +43,27 @@
 //! order survives inside each tier.
 
 use super::catalog::RosterModel;
-use super::wire::CatalogEntry;
+use super::wire::{CatalogEntry, ChatModelChoice};
+
+/// Narrow the member choices without changing the server's order.
+pub fn filter_chat_model_choices(choices: &[ChatModelChoice], query: &str) -> Vec<ChatModelChoice> {
+    let query = query.trim().to_lowercase();
+    choices
+        .iter()
+        .filter(|choice| {
+            query.is_empty()
+                || [
+                    &choice.provider,
+                    &choice.provider_label,
+                    &choice.model,
+                    &choice.model_label,
+                ]
+                .into_iter()
+                .any(|field| field.to_lowercase().contains(&query))
+        })
+        .cloned()
+        .collect()
+}
 
 /// A row any preset picker can rank.
 ///
