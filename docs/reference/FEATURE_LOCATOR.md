@@ -21,7 +21,7 @@
 
 ## Current state / 当前现状
 
-> Date / 日期: 2026-11-03
+> Date / 日期: 2026-11-25（capability 模块现状与插件重载预检；其余小节 2026-11-03 起未变 / module map and reload preflight; other subsections unchanged since 2026-11-03）
 
 > This section is the current-state entry for architecture and lifecycle questions. The historical and round-specific entries below remain evidence indexes; they do not override this section or the owning reference documents.
 > 本节是架构与生命周期问题的当前现状入口。下方历史轮次词条仍是证据索引，不覆盖本节或各事实所属的 reference 文档。
@@ -49,6 +49,20 @@ The production activation slice is bounded to ExtensionManager-managed, tool-onl
 `MemoryRuntime` is the current lifecycle authority for the bounded derived Memory bundle: runtime-bound backend access, admitted `MemoryOperation`, retained workers, spawned operation context, and shutdown cleanup. `MemoryOperation` must be carried explicitly across spawned work; a source-owned operation boundary retains the callback and its associated write under an admitted `MemoryOperation`. Raw chat, Markdown archival, and raw session-search paths remain independently available when Memory is Off or unbound. This does not claim a universal Memory scheduler, a stop gate for every Memory writer, process isolation, native unload, RSS reclamation, or exactly-once external effects. The source census and 33-row boundary ledger are in [`2026-11-02-memory-derived-writer-boundary-run.md`](../superpowers/runs/2026-11-02-memory-derived-writer-boundary-run.md); the owning contract is [`MEMORY_SYSTEM.md`](MEMORY_SYSTEM.md).
 
 `MemoryRuntime` 是 bounded derived Memory bundle 的当前 lifecycle authority：它负责 runtime-bound backend access、准入的 `MemoryOperation`、retained workers、跨 spawned work 的 operation context 以及 shutdown cleanup。跨 spawned work 必须显式携带 `MemoryOperation`；source-owned operation boundary 会在 admitted `MemoryOperation` 下保留 callback 及其关联写入。raw chat、Markdown archival 与 raw session-search path 在 Memory Off 或 unbound 时仍可独立使用。这不表示 universal Memory scheduler、覆盖每个 Memory writer 的 stop gate、process isolation、native unload、RSS reclamation 或 exactly-once external effects。源码 census 与 33 行 boundary ledger 见 [`2026-11-02-memory-derived-writer-boundary-run.md`](../superpowers/runs/2026-11-02-memory-derived-writer-boundary-run.md)；所属契约见 [`MEMORY_SYSTEM.md`](MEMORY_SYSTEM.md)。
+
+### Capability module map / Capability 模块现状（2026-11-25）
+
+Production-wired modules in `src/capability/`: contracts `descriptor`, `facade` (`ResolveError` closed set), `ownership` (`OwnershipTree`), `effect_claim`, `provider` (`ProviderHandle` / `ProviderState`); composition `zahir_facade`, `projection_host`, `backend` (`ToolBackendAdapter`), `provider_registry` + `provider_backend` (only the Memory provider is registered); call path `policy` (`PolicyEngine`), `policy_runtime` (live restrictions; an attachment is revoked by removing it from the runtime's list), `constraints` (compile-only, clockless), `special` (`CapabilityHandlerRegistry`, the only special handler registry) + `special_dispatch`; UI `ui`, `ui_surface`; observation `events`, `event_audience`; assembly `production_init`, `tool_adapters`, `diagnostic_control`; shared primitive `versioned_registry`. `census` is test-only static analysis.
+
+Removed on 2026-11-25 because they were unmounted or duplicated a production authority (recover with `git show a4dac8db4:src/capability/<file>`): `ambient.rs`, `audit.rs` (production audit is `src/security/audit.rs`), `grant.rs` + `grant_integration_tests.rs` (production grants are `src/sandbox/exec_approval/grants.rs`), `lifecycle.rs` + `activation.rs` (the activation state machine only re-checked facts the attachment list already enforces), and the `Legacy*` handler registry in `backend.rs`. Also removed: the never-emitted `CapabilityAttached` / `CapabilityDetaching` events and the test-only `capability_activations` entry in `src/tools/scoped/`.
+
+A visible Tool whose required provider is not `Ready` resolves to `ResolveError::DependencyUnavailable { target, state }` (event label `dependency_unavailable`), not `Unknown`; the tool stays listed and the model receives ``<name>` 当前不可用（状态 <State>），稍后重试或请用户启用`. An invisible caller still gets `Unknown`. `reload_plugin` preflights the new version (parse, identity check, WASM compile without instantiation) before tearing down the running one; a defective new version returns `MountError::ReloadRefused` and the old version keeps serving. Admission refusals still tear down.
+
+`src/capability/` 中的生产接线模块：契约 `descriptor`、`facade`（`ResolveError` 闭集）、`ownership`（`OwnershipTree`）、`effect_claim`、`provider`（`ProviderHandle` / `ProviderState`）；组合 `zahir_facade`、`projection_host`、`backend`（`ToolBackendAdapter`）、`provider_registry` + `provider_backend`（目前只登记 Memory provider）；调用路径 `policy`（`PolicyEngine`）、`policy_runtime`（运行期限制；撤销 = 从 runtime 的 attachment 列表移除）、`constraints`（只编译、无时钟）、`special`（`CapabilityHandlerRegistry`，唯一的 special handler registry）+ `special_dispatch`；UI `ui`、`ui_surface`；观测 `events`、`event_audience`；装配 `production_init`、`tool_adapters`、`diagnostic_control`；共享原语 `versioned_registry`。`census` 是仅测试的静态分析。
+
+2026-11-25 删除（未挂载或与生产权威重复；用 `git show a4dac8db4:src/capability/<file>` 找回）：`ambient.rs`、`audit.rs`（生产审计是 `src/security/audit.rs`）、`grant.rs` + `grant_integration_tests.rs`（生产授权是 `src/sandbox/exec_approval/grants.rs`）、`lifecycle.rs` + `activation.rs`（激活状态机只重复检查 attachment 列表已经保证的事实）、`backend.rs` 中的 `Legacy*` handler registry；以及从未发出的 `CapabilityAttached` / `CapabilityDetaching` 事件和 `src/tools/scoped/` 中仅测试使用的 `capability_activations` 入口。
+
+可见 Tool 的必需 provider 不在 `Ready` 时，resolve 返回 `ResolveError::DependencyUnavailable { target, state }`（事件标签 `dependency_unavailable`）而非 `Unknown`；工具仍列出，模型收到「`<name>` 当前不可用（状态 <State>），稍后重试或请用户启用」；不可见的调用方仍得到 `Unknown`。`reload_plugin` 在拆除运行中版本前先预检新版本（解析、身份校验、WASM 只编译不实例化）；新版本有缺陷时返回 `MountError::ReloadRefused`，旧版本继续服务；准入被拒仍会拆除。
 
 ## Deferred boundaries / Deferred 边界
 
@@ -6858,6 +6872,17 @@ The file backend now separates destination collisions from Windows sharing denia
 The full-lib suite remains non-green; tests after the abnormal exit were not executed. Same-name baseline failures do not establish identical causes. / 全量库测试仍未绿，异常退出后的测试未执行；与基线同名失败不等于根因相同。
 
 Attribution did not establish a store-owned transcript leak; the earlier intermittent live handle owner remains unexplained. The no-`[general]` effective SQLite default versus the present-table file default remains a separate finding. Linux/macOS, real UI/desktop QA, RSS reclamation, external-effect exactly-once and cluster/multiprocess placement remain outside this slice. / 归因未证实服务自身 transcript 泄漏，此前间歇性 live 句柄持有者仍未解释。无 `[general]` 时实际 SQLite 默认与有表时 file 默认的差异留作独立问题。Linux/macOS、真机 UI/desktop QA、RSS 回收、外部效果 exactly-once、集群/多进程放置均未在本切片闭合。
+
+### Current closure: Zahir capability convergence / 当前闭合：Zahir capability 收敛（2026-11-25）
+
+| 状态 | 内容 | 位置 |
+|---|---|---|
+| ✅ 已实现 | 删除未挂载 / 重复权威模块（ambient、audit、grant、lifecycle、activation、Legacy handler registry、scoped 兼容激活入口）；`src` 净变化 +556 / −4956 行（相对 `a4dac8db4`） | 分支 `zahir-capability-convergence` 提交 `4cb16e5b6`、`8507aff30`、`459c4fe96` |
+| ✅ 已实现 | `ResolveError::DependencyUnavailable { target, state }`：依赖 provider 非 `Ready` 时的结构化答案，工具列表不变 | `src/capability/facade.rs`、`src/capability/zahir_facade.rs`（`resolve_resource`）、`src/tools/scoped/dispatch.rs`；提交 `ae9438dd5` |
+| ✅ 已实现 | 插件重载先预检再拆除：`prepare_mount` / `commit_mount` 拆分、`preflight_reload`、`WasmRuntime::preflight_module`、`MountError::ReloadRefused` | `src/extension/lifecycle.rs`、`src/extension/runtime/wasm/mod.rs`；提交 `084453b9d` |
+| ⏸ 推迟 | `ProviderState::Parked` 与依赖恢复后重拉下游；通用资源捕获 trait；单插件双实例切换 + 旧版排空；全量 `reload` 分阶段化；跨会话 grant；ambient 重新挂载 | 触发条件见设计 §9 |
+
+Spec / 设计：`docs/superpowers/specs/2026-11-25-zahir-capability-convergence-design.md`；plan / 计划：`docs/superpowers/plans/2026-11-25-zahir-capability-convergence.md`；receipt / 回执：`docs/superpowers/runs/2026-11-25-zahir-convergence-receipt.md`。
 
 ## Reference links / 参考链接
 
