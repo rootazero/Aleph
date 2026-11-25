@@ -78,8 +78,9 @@ pub(crate) struct HistoryParams {
     /// next-older page. Unparseable values are treated as "no cursor".
     #[serde(default)]
     pub before: Option<String>,
+    // Decode the cursor shape only after the session is admitted.
     #[serde(default)]
-    pub scrollback: Option<ChatHistoryScrollbackRequest>,
+    pub scrollback: Option<serde_json::Value>,
 }
 
 /// Parse the `chat.history` `before` cursor into the instant it names.
@@ -480,6 +481,16 @@ pub async fn handle_history(
 
     let canonical = session_key.to_key_string();
     let (read, requested_before) = if let Some(scrollback) = params.scrollback {
+        let scrollback: ChatHistoryScrollbackRequest = match serde_json::from_value(scrollback) {
+            Ok(value) => value,
+            Err(_) => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    "Invalid scrollback request",
+                )
+            }
+        };
         if params.before.is_some() {
             return JsonRpcResponse::error(
                 request.id,
@@ -1951,25 +1962,27 @@ mod tests {
             let store = store(&temp);
             let alice = alice_session(&store).await;
             let missing = SessionKey::main("scrollback-missing");
-            let mut errors = Vec::new();
-            for key in [alice, missing] {
-                let response = CALLER_USER
+            for cursor in [json!("bad="), json!(42)] {
+                let params = |key: &SessionKey| json!({"session_key": key.to_key_string(), "scrollback": {"before": cursor}});
+                let mut refused = Vec::new();
+                for key in [&alice, &missing] {
+                    let response = CALLER_USER
+                        .scope(Some("u-bob".into()), history_response(&store, params(key)))
+                        .await;
+                    assert!(response.result.is_none());
+                    let error = response.error.unwrap();
+                    assert_eq!(error.code, RESOURCE_NOT_FOUND);
+                    refused.push(serde_json::to_value(error).unwrap());
+                }
+                assert_eq!(refused[0], refused[1]);
+                let visible = CALLER_USER
                     .scope(
-                        Some("u-bob".into()),
-                        history_response(
-                            &store,
-                            json!({
-                                "session_key": key.to_key_string(), "scrollback": {"before": "bad="}
-                            }),
-                        ),
+                        Some("u-alice".into()),
+                        history_response(&store, params(&alice)),
                     )
                     .await;
-                assert!(response.result.is_none());
-                let error = response.error.unwrap();
-                assert_eq!(error.code, RESOURCE_NOT_FOUND);
-                errors.push(serde_json::to_value(error).unwrap());
+                assert_eq!(visible.error.unwrap().code, INVALID_PARAMS);
             }
-            assert_eq!(errors[0], errors[1]);
         }
 
         /// The settings snapshot is part of this response's contract for the
