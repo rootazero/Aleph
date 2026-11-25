@@ -1322,6 +1322,107 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn admin_refresh_reaches_member_projection_and_turn_admission() {
+        use crate::gateway::handlers::{agent, chat, providers};
+        use crate::gateway::model_override::ModelOverride;
+        use crate::gateway::protocol::JsonRpcRequest;
+        use crate::gateway::security::{store::SecurityStore, SharedTokenManager};
+        use aleph_protocol::providers::ChatModelsListResult;
+        use serde_json::json;
+
+        const PROVIDER: &str = "catalog-path-fixture";
+        const MODEL: &str = "org/new-model";
+        scenario(PROVIDER, |config, endpoint| async move {
+            let dir = tempfile::tempdir().unwrap();
+            let vault = Arc::new(SharedTokenManager::new(
+                Arc::new(SecurityStore::in_memory().unwrap()),
+                dir.path().join("test.vault"),
+            ));
+            let request = JsonRpcRequest::with_id(
+                "providers.modelsRefresh",
+                Some(json!({"provider": PROVIDER})),
+                json!(1),
+            );
+            let refresh = providers::handle_models_refresh(request, Arc::clone(&config), vault);
+            tokio::pin!(refresh);
+            let response = tokio::select! {
+                response = &mut refresh => response,
+                release = endpoint.next_request() => {
+                    endpoint.answer(r#"{"data":[{"id":"org/new-model"}]}"#).await;
+                    release.send(()).unwrap();
+                    refresh.await
+                }
+            };
+            let refresh_result = response.result.unwrap();
+            let row = &refresh_result["providers"][0];
+            let superseded = DiscoveryError::Superseded(PROVIDER.into());
+            if row["error"].as_str() == Some(superseded.to_string().as_str()) {
+                return Err(superseded);
+            }
+            assert_eq!(row["models"][0]["id"], MODEL);
+            let member_models = || {
+                let response = chat::handle_models_list(JsonRpcRequest::with_id(
+                    "chat.models.list",
+                    None,
+                    json!(2),
+                ));
+                serde_json::from_value::<ChatModelsListResult>(response.result.unwrap())
+                    .unwrap()
+                    .items
+            };
+            let choice = member_models()
+                .into_iter()
+                .find(|item| item.provider == PROVIDER && item.model == MODEL)
+                .unwrap();
+            let model = ModelOverride::Qualified {
+                provider: choice.provider,
+                model: choice.model,
+            };
+            let key = crate::gateway::router::AgentRouter::new()
+                .route(None, None, None, None)
+                .await;
+            let agent = crate::gateway::agent_instance::AgentInstanceConfig::default();
+            let params =
+                || serde_json::from_value(json!({"input": "hi", "model_override": model})).unwrap();
+            let admitted = agent::build_run_request(
+                "first".into(),
+                &key,
+                params(),
+                Some(&config),
+                None,
+                &agent,
+            )
+            .await
+            .unwrap();
+            assert_eq!(admitted.model_override, Some(model.clone()));
+
+            let mut live = config.write().await;
+            let mut removed = live.clone();
+            removed.providers.remove(PROVIDER);
+            super::super::discovery_authority::replace_config(&mut live, removed);
+            drop(live);
+            assert!(!member_models()
+                .iter()
+                .any(|item| item.provider == PROVIDER && item.model == MODEL));
+            let refused = agent::build_run_request(
+                "second".into(),
+                &key,
+                params(),
+                Some(&config),
+                None,
+                &agent,
+            )
+            .await;
+            assert!(matches!(
+                refused,
+                Err(agent::BuildRunError::InvalidModel(_))
+            ));
+            Ok(())
+        })
+        .await;
+    }
+
+    #[tokio::test]
     async fn list_models_refresh_reaches_the_member_resolver() {
         use crate::builtin_tools::list_models::{ListModelsArgs, ListModelsTool};
         use crate::tools::AlephTool;
