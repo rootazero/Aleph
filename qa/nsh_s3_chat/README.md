@@ -21,7 +21,7 @@ python3 qa/nsh_s3_chat/run.py \
   --web "interfaces/panel/out-web/Aleph Panel" \
   --winlist <scratch>/winlist \
   --node-modules <repo>/node_modules \
-  --out <new evidence dir> [--rich]
+  --out <new evidence dir> [--rich] [--continuity]
 ```
 
 - Reuses the S2 fixture (`qa/nsh_s2_shell/run.py`): temporary `HOME`/`ALEPH_HOME`, random port (never 18790),
@@ -33,7 +33,11 @@ python3 qa/nsh_s3_chat/run.py \
   Gateway and writes back one fresh pairing ticket. After a restart the browser must pair again (cookie bindings
   live in Gateway memory).
 
-Use `--rich` to execute a real Desktop IPC Write/Edit and reopen its durable cards in Chrome. The fixture holds the final provider response for a native screenshot of the live run. Chrome checks recorded changes, tool hover, fullscreen/Escape and keyboard focus return, Markdown, Context, and Jump to bottom. It also sends a separate Write and verifies text → tool → text while the provider response is still open. Set `ALEPH_BROWSER_LIVE_CHROME_PATH` to a local Chrome binary if Playwright's Chromium is not installed.
+Use `--rich` to execute a real Desktop IPC Write/Edit and reopen its durable cards in Chrome. `--continuity` adds Chromium reconnect/selected-session/no-resend assertions; it does not seed >200 projection rows or prove prepend viewport anchoring.
+
+`--continuity` 在 Chromium 中追加重连、所选会话恢复及无重复发送断言；当前不创建超过 200 行的分页夹具，也不证明原生 NSH 视口锚定。 The fixture holds the final provider response for a native screenshot of the live run. Chrome checks recorded changes, tool hover, fullscreen/Escape and keyboard focus return, Markdown, Context, and Jump to bottom. It also sends a separate Write and verifies text → tool → text while the provider response is still open. Set `ALEPH_BROWSER_LIVE_CHROME_PATH` to a local Chrome binary if Playwright's Chromium is not installed.
+
+`--continuity` 在 Chromium 重连后断言 Chat 自动恢复所选会话、历史可见且没有额外 `chat.send`；它要求 TSX transcript 暴露 `data-testid="chat-transcript"` 与 `data-session-key`。该开关不证明原生壳的 Settings 恢复，也不验证向前翻页/视口锚定；这些仍需真实挂载证据，截图本身不算锚点证明。
 
 `--rich` 不联网调用模型，不读写真实工作区。Desktop IPC 驱动真实写入/编辑，在终态前截图。Chrome 重开历史验证变更、悬停、全屏退出与焦点归还、Markdown、Context 和跳到末尾，并单独发起一次真实写入，在完成前断言正文 → 工具 → 正文顺序。可用环境变量指定本机 Chrome。
 

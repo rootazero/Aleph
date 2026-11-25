@@ -94,6 +94,7 @@ def web_phase(args, gateway, root, env, port, aleph, out, web_release):
         'ticket': s2.pairing_ticket(args.server, root, env),
         'desktop_marker': 'desktophello',
         'rich': args.rich,
+        'continuity': args.continuity,
         'reply': fixture_provider.REPLY if args.rich else 'This response is from',
         'file': fixture_provider.FILE if args.rich else None,
         'live_tool': {
@@ -210,6 +211,7 @@ def main():
     parser.add_argument('--node-modules', type=Path, required=True, help='node_modules holding playwright')
     parser.add_argument('--out', type=Path, required=True, help='new directory for evidence')
     parser.add_argument('--rich', action='store_true', help='exercise actual Write/Edit via a loopback scripted provider')
+    parser.add_argument('--continuity', action='store_true', help='verify Chat survives reconnect and preserves the selected session without a send')
     args = parser.parse_args()
     if sys.platform != 'darwin':
         parser.error('the desktop surface is macOS-only')
