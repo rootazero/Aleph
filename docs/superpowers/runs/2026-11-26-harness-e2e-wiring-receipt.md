@@ -46,6 +46,10 @@
 
 Deviation from the plan: the plan asked to identify the refusing gate by id `plan_mode`. The id does not appear in model-facing text, so the fixture matches the opening of `GateRule::PlanMode::reason` (`This conversation is PLANNING`, `src/tools/scoped/gate_chain.rs`). 偏离：门的 id 不出现在模型可见文本中，改为匹配该规则的原因句。
 
+### F6 approval order (Task 3) / 审批顺序
+
+`cargo test -p alephcore --lib tools::scoped::tests::approval_order_matches_the_documented_five_stages` → PASS. Pinned today's order: (1) per-tool `deny` refuses with `GateRule::PolicyDeny`, no card, even at `exec_tier = full`; (2) `full` tier still asks for a tool that declares `requires_confirmation`, card rule `DECLARED_FLOOR_RULE` (`tool_declared`) — no YOLO below the floor, per design §8; (3) an `ApprovedForSession` grant suppresses the second card; (4) the same session unattended is refused (`RefusedBy::NobodyAsked`) before the grant is consulted; (5) attended, no grant → exactly one card.
+
 ## Defect ledger / 缺陷台账
 
 | ID | Scenario | Symptom / 症状 | Root cause / 根因 | Failing test | Fix commit |
