@@ -498,11 +498,13 @@ fn invocation_error_response(
         CapabilityInvocationError::Policy(error) => {
             JsonRpcResponse::error(id, PERMISSION_DENIED, error.to_string())
         }
-        CapabilityInvocationError::Resolve(error) => JsonRpcResponse::error(
-            id,
-            SERVICE_UNAVAILABLE,
-            format!("UI surface unavailable: {error:?}"),
-        ),
+        // The resolve variants are internal detail, and two of them differ
+        // only in whether the guessed id exists: naming the variant turns the
+        // refusal into an existence oracle for whoever guessed the id. The
+        // refusal itself is the whole answer the client can act on.
+        CapabilityInvocationError::Resolve(_) => {
+            JsonRpcResponse::error(id, SERVICE_UNAVAILABLE, "UI surface unavailable")
+        }
         CapabilityInvocationError::Handler(
             crate::capability::special::CapabilityDispatchError::InvalidInput(error),
         ) => JsonRpcResponse::error(id, INVALID_PARAMS, error),
@@ -518,6 +520,7 @@ fn invocation_error_response(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::capability::facade::ResolveError;
     use aleph_protocol::capability::{UiInputEvent, UiOperation};
 
     #[test]
@@ -536,5 +539,23 @@ mod tests {
     fn wire_input_is_still_the_shared_type() {
         let _ = UiInputEvent::KeyDown { key: "a".into() };
         let _ = UiOperation::Input {};
+    }
+    #[test]
+    fn resolve_failures_do_not_name_the_internal_variant() {
+        for variant in [
+            ResolveError::Unknown,
+            ResolveError::NotVisible,
+            ResolveError::Revoked,
+            ResolveError::StaleOwner,
+            ResolveError::StaleProvider,
+        ] {
+            let response =
+                invocation_error_response(None, CapabilityInvocationError::Resolve(variant));
+            let error = response
+                .error
+                .expect("a resolve failure answers with an error object");
+            assert_eq!(error.code, SERVICE_UNAVAILABLE);
+            assert_eq!(error.message, "UI surface unavailable");
+        }
     }
 }
