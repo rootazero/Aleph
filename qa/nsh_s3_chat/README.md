@@ -33,7 +33,9 @@ python3 qa/nsh_s3_chat/run.py \
   Gateway and writes back one fresh pairing ticket. After a restart the browser must pair again (cookie bindings
   live in Gateway memory).
 
-Use `--rich` to execute a real Desktop IPC Write/Edit and reopen its durable cards in Chrome. `--continuity` adds Chromium reconnect/selected-session/no-resend assertions; it does not seed >200 projection rows or prove prepend viewport anchoring.
+Use `--continuity` to check same-process Settings restore, native and Chromium scrollback, and Chromium reconnect without another send. After the first desktop send, the harness stops its isolated Gateway and seeds a 205-row legacy prefix ahead of the real desktop messages. It checks that the oldest marker is initially absent, that prepending leaves the original visible message in place, and that scrolling can reach the oldest marker. Native pixels are measured using Vision OCR on captures of the fixture's own window; Chromium uses its DOM bounds and verifies the Web v1 request. This mode requires Screen Recording and Accessibility for the terminal. / `--continuity` 验证桌面设置返回、桌面与浏览器真实翻页和视口位置，以及浏览器断线复配后不重发。205 行只写入已停止的隔离 Gateway 投影。原生以窗口 OCR 位置为证据，浏览器检查 DOM 与实际 Web v1 帧；终端需要屏幕录制和辅助功能权限。
+
+Use `--rich` to execute a real Desktop IPC Write/Edit and reopen its durable cards in Chrome.
 
 `--continuity` 在 Chromium 中追加重连、所选会话恢复及无重复发送断言；当前不创建超过 200 行的分页夹具，也不证明原生 NSH 视口锚定。 The fixture holds the final provider response for a native screenshot of the live run. Chrome checks recorded changes, tool hover, fullscreen/Escape and keyboard focus return, Markdown, Context, and Jump to bottom. It also sends a separate Write and verifies text → tool → text while the provider response is still open. Set `ALEPH_BROWSER_LIVE_CHROME_PATH` to a local Chrome binary if Playwright's Chromium is not installed.
 

@@ -119,13 +119,63 @@ async function run(fixturePath) {
     const desktopMarker = fixture.desktop_marker;
     assert.match(desktopMarker, /^[a-z]+$/);
     const row = await openFirstSession(page, new RegExp(`${desktopMarker}$`));
-    const desktopMessage = await page.getByText(new RegExp(`${desktopMarker}$`)).first().innerText();
+    const desktopRow = page.getByText(new RegExp(`${desktopMarker}$`)).first();
+    const desktopMessage = await desktopRow.innerText();
+    const historyRequests = (from = 0) => frames.slice(from)
+      .filter((f) => f.dir === 'sent' && f.frame?.method === 'chat.history')
+      .map((f) => f.frame.params);
+    const originalKey = historyRequests()[0]?.session_key;
+    assert.ok(originalKey, 'initial Chat read had no selected session key');
     const reply = () => page.getByText(fixture.reply).first();
     await reply().waitFor({ timeout: 15000 });
     const copies = await page.getByText(desktopMessage, { exact: true }).count();
     assert.equal(copies, 1, `the desktop message reached Core ${copies} times`);
     await page.screenshot({ path: shot('history') });
     step('cross_surface_history', { row, desktop_message_copies: copies });
+    if (fixture.continuity) {
+      const oldest = page.getByText(fixture.oldest_marker, { exact: true });
+      assert.equal(await oldest.count(), 0, 'oldest marker already appears in the tail');
+      const pager = page.getByText('Load older messages', { exact: true });
+      await pager.waitFor();
+      const tail = await desktopRow.boundingBox();
+      assert.ok(tail, 'desktop row is not rendered at the tail');
+      await page.mouse.move(tail.x + tail.width / 2, tail.y + tail.height / 2);
+      await page.mouse.wheel(0, -5000);
+      const jump = page.getByText('Jump to bottom', { exact: true });
+      await jump.waitFor();
+      let anchorText, bounds;
+      await waitFor(async () => {
+        for (const candidate of await page.getByText(/^Fixture earlier answer \d{3}$/).all()) {
+          const box = await candidate.boundingBox();
+          if (box && box.y > 150 && box.y < 520) {
+            anchorText = await candidate.innerText();
+            bounds = box;
+            return true;
+          }
+        }
+        return false;
+      }, 5000, 'a visible history row away from the tail');
+      await page.screenshot({ path: shot('before-prepend') });
+      const beforePrepend = frames.length;
+      await pager.click();
+      await page.getByText('No earlier messages', { exact: true }).waitFor({ timeout: 15000 });
+      const request = historyRequests(beforePrepend)[0];
+      assert.equal(request?.session_key, originalKey);
+      assert.ok(request?.scrollback?.before, 'no older request crossed the actual Web bridge');
+      const after = await page.getByText(anchorText, { exact: true }).boundingBox();
+      assert.ok(after && Math.abs(after.y - bounds.y) <= 3, `anchor moved: ${bounds.y} → ${after?.y}`);
+      await page.screenshot({ path: shot('after-prepend') });
+      await page.mouse.move(after.x + after.width / 2, after.y + after.height / 2);
+      for (let attempt = 0; attempt < 12 && !(await oldest.isVisible()); attempt++) {
+        await page.mouse.wheel(0, -5000);
+        await page.waitForTimeout(250);
+      }
+      await oldest.waitFor({ timeout: 5000 });
+      await page.screenshot({ path: shot('oldest-marker') });
+      step('web_prepend_preserves_anchor', { session_key: originalKey, anchor: anchorText, before_y: bounds.y, after_y: after.y });
+      await jump.click();
+      await reply().waitFor();
+    }
     if (fixture.rich) {
       const detailCall = frames.find((f) => f.dir === 'sent' && f.frame?.method === 'chat.transcript_details');
       const detail = frames.find((f) => f.dir === 'received' && f.frame?.id === detailCall?.frame?.id)?.frame;
@@ -283,18 +333,16 @@ async function run(fixturePath) {
     assert.ok(!next.done && next.value.startsWith('aleph-bt-'), 'run.py sent no ticket');
     await page.getByText('Disconnected from Aleph').waitFor({ timeout: 60000 });
     await page.screenshot({ path: shot('disconnected') });
+    const beforeReconnect = frames.length;
+    const sendsBeforeReconnect = sentMethods(frames).filter((method) => method === 'chat.send').length;
     await page.getByText('Reconnect', { exact: true }).click();
     // The layout kept Chat active: the composer shows once connected.
     await pair(page, next.value.trim(), page.getByRole('textbox', { name: 'Message', exact: true }));
-    const sendsBeforeReconnect = sentMethods(frames).filter((method) => method === 'chat.send').length;
     let selectedKey = null;
     if (fixture.continuity) {
-      await page.getByRole('textbox', { name: 'Message', exact: true }).waitFor({ timeout: 15000 });
       await page.getByText(desktopMessage, { exact: true }).first().waitFor({ timeout: 15000 });
-      const selected = page.locator('[data-testid="chat-transcript"]');
-      await selected.waitFor({ timeout: 15000 });
-      selectedKey = await selected.getAttribute('data-session-key');
-      assert.ok(selectedKey, 'resumed Chat transcript has no selected session key');
+      selectedKey = historyRequests(beforeReconnect)[0]?.session_key;
+      assert.equal(selectedKey, originalKey, 'reconnect read did not restore the selected conversation');
     } else {
       await openFirstSession(page, desktopMessage);
     }
