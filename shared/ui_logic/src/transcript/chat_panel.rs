@@ -22,6 +22,11 @@ pub struct ChatState {
     dropped_unconfirmed: bool,
     pending: Option<PendingSend>,
     last_ended: Option<String>,
+    committed: Vec<Message>,
+    replay: HashMap<String, ReplayDetail>,
+    scrollback: Option<ScrollbackPage>,
+    needs_latest: bool,
+    scrollback_reset: bool,
     committed_diffs: HashMap<String, RowBody>,
     generation: u64,
 }
@@ -54,19 +59,40 @@ struct PendingSend {
 #[derive(Deserialize)]
 struct History {
     session_key: String,
-    #[serde(default)]
     messages: Vec<Message>,
     active_run: Option<String>,
+    scrollback: Option<ScrollbackPage>,
     #[serde(default)]
     live_status_stale: bool,
 }
 
 #[derive(Deserialize)]
 struct Message {
+    message_id: Option<String>,
     role: String,
     content: String,
     timestamp: Option<String>,
     run_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ScrollbackPage {
+    requested_before: Option<String>,
+    next_before: Option<String>,
+    status: ScrollbackStatus,
+}
+
+#[derive(Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum ScrollbackStatus {
+    Ready,
+    StaleBoundary,
+    ContinuationUnavailable,
+}
+
+struct ReplayDetail {
+    run: Option<LiveRun>,
+    limited: bool,
 }
 
 #[derive(Deserialize)]
@@ -299,35 +325,43 @@ impl ChatState {
         let Ok(history) = serde_json::from_value::<History>(history) else {
             return Value::Null;
         };
-        if self.session != history.session_key {
+        if self.session != history.session_key
+            || history.scrollback.as_ref().is_some_and(|page| {
+                page.requested_before.is_some()
+                    || page.status == ScrollbackStatus::StaleBoundary
+                    || !valid_page(page, &history.messages)
+            })
+        {
             return Value::Null;
         }
-        let mut details = serde_json::from_value::<ChatTranscriptDetails>(details).unwrap_or(
-            ChatTranscriptDetails {
-                runs: Vec::new(),
-                limited: false,
-            },
-        );
         let assistant_runs: HashSet<_> = history
             .messages
             .iter()
             .filter(|message| message.role == "assistant")
             .filter_map(|message| message.run_id.as_deref())
             .collect();
-        self.sealed.retain(|run| {
-            !assistant_runs.contains(run.id.as_str())
-                || (run.detached
+        let mut confirmed = Vec::new();
+        for run in std::mem::take(&mut self.sealed) {
+            if assistant_runs.contains(run.id.as_str())
+                && !(run.detached
                     && (history.live_status_stale
                         || history.active_run.as_deref() == Some(&run.id)))
-        });
+            {
+                confirmed.push(run);
+            } else {
+                self.sealed.push_back(run);
+            }
+        }
         // Send acknowledgement can precede execution registration. A missing
         // active slot alone is not evidence that the run ended.
-        if self.live.as_ref().is_some_and(|run| {
+        if let Some(mut run) = self.live.take_if(|run| {
             !history.live_status_stale
                 && assistant_runs.contains(run.id.as_str())
                 && history.active_run.as_deref() != Some(&run.id)
         }) {
-            self.last_ended = self.live.take().map(|run| run.id);
+            self.last_ended = Some(run.id.clone());
+            run.fold.seal_chat_run(&run.id, 0);
+            confirmed.push(run);
         }
         if !history.live_status_stale && self.live.is_none() && self.pending.is_none() {
             if let Some(id) = &history.active_run {
@@ -363,28 +397,191 @@ impl ChatState {
             }
         }
 
+        let requested_runs = if details.is_null() {
+            Vec::new()
+        } else {
+            history
+                .messages
+                .iter()
+                .filter_map(|message| message.run_id.clone())
+                .collect()
+        };
+        self.merge_tail(history.messages, history.scrollback);
+        // Keep already observed live tool keys during the transition to the
+        // scoped replay response, so a focused reader is not briefly removed.
+        for run in confirmed {
+            if run.rows().any(|row| matches!(row, Row::Tool { .. })) {
+                self.replay.insert(
+                    run.id.clone(),
+                    ReplayDetail {
+                        run: Some(run),
+                        limited: false,
+                    },
+                );
+            }
+        }
+        if !requested_runs.is_empty() {
+            self.store_details(requested_runs, details);
+        }
+        self.snapshot()
+    }
+
+    fn merge_tail(&mut self, messages: Vec<Message>, page: Option<ScrollbackPage>) {
+        let overlap = if self.scrollback.is_some() && page.is_some() && !self.needs_latest {
+            messages.first().and_then(|first| {
+                self.committed
+                    .iter()
+                    .position(|message| message.message_id == first.message_id)
+            })
+        } else {
+            None
+        };
+        let prefix = overlap.filter(|&index| {
+            let tail_ids: HashSet<_> = messages
+                .iter()
+                .filter_map(|message| message.message_id.as_deref())
+                .collect();
+            self.committed[..index].iter().all(|message| {
+                message
+                    .message_id
+                    .as_deref()
+                    .is_some_and(|id| !tail_ids.contains(id))
+            })
+        });
+        self.scrollback_reset = self.needs_latest
+            || (self.scrollback.is_some() && !self.committed.is_empty() && prefix.is_none());
+        self.needs_latest = false;
+        if let Some(index) = prefix.filter(|&index| index > 0) {
+            self.committed.truncate(index);
+            self.committed.extend(messages);
+        } else {
+            if self.scrollback_reset {
+                self.replay.clear();
+            }
+            self.committed = messages;
+            self.scrollback = page;
+        }
+        let runs: HashSet<_> = self
+            .committed
+            .iter()
+            .filter_map(|message| message.run_id.as_deref())
+            .collect();
+        self.replay.retain(|id, _| runs.contains(id.as_str()));
+    }
+
+    pub fn prepend_history(&mut self, history: Value, requested_before: String) -> Value {
+        let Ok(mut history) = serde_json::from_value::<History>(history) else {
+            return Value::Null;
+        };
+        let Some(page) = history.scrollback.take() else {
+            return Value::Null;
+        };
+        if self.session != history.session_key
+            || self.needs_latest
+            || self
+                .scrollback
+                .as_ref()
+                .and_then(|page| page.next_before.as_deref())
+                != Some(&requested_before)
+            || page.requested_before.as_deref() != Some(&requested_before)
+            || !valid_page(&page, &history.messages)
+        {
+            return Value::Null;
+        }
+        if page.status == ScrollbackStatus::StaleBoundary {
+            self.needs_latest = true;
+            self.scrollback_reset = true;
+            return self.snapshot();
+        }
+        // Raced reads may repeat the committed prefix at the end of the page.
+        // Reject an overlap elsewhere rather than rearranging canonical rows.
+        let committed_ids: HashSet<_> = self
+            .committed
+            .iter()
+            .filter_map(|message| message.message_id.as_deref())
+            .collect();
+        if let Some(index) = history.messages.iter().position(|message| {
+            message
+                .message_id
+                .as_deref()
+                .is_some_and(|id| committed_ids.contains(id))
+        }) {
+            let duplicate = &history.messages[index..];
+            if duplicate.len() > self.committed.len()
+                || duplicate
+                    .iter()
+                    .zip(&self.committed)
+                    .any(|(older, current)| older.message_id != current.message_id)
+                || (index == 0 && page.next_before.is_some())
+            {
+                return Value::Null;
+            }
+            history.messages.truncate(index);
+        }
+        history.messages.append(&mut self.committed);
+        self.committed = history.messages;
+        self.scrollback = Some(page);
+        self.scrollback_reset = false;
+        self.snapshot()
+    }
+
+    pub fn apply_history_details(&mut self, run_ids: Vec<String>, details: Value) -> Value {
+        self.store_details(run_ids, details);
+        self.snapshot()
+    }
+
+    fn store_details(&mut self, run_ids: Vec<String>, details: Value) {
+        let represented: HashSet<_> = self
+            .committed
+            .iter()
+            .filter_map(|message| message.run_id.as_deref())
+            .collect();
+        let details = serde_json::from_value::<ChatTranscriptDetails>(details).ok();
+        let mut groups = HashMap::new();
+        let batch_limited = details.is_none_or(|details| {
+            groups.extend(
+                details
+                    .runs
+                    .into_iter()
+                    .map(|group| (group.run_id.clone(), group)),
+            );
+            details.limited
+        });
+        let mut seen = HashSet::new();
+        for id in run_ids {
+            if !represented.contains(id.as_str()) || !seen.insert(id.clone()) {
+                continue;
+            }
+            let detail = if let Some(group) = groups.remove(&id) {
+                let mut run = LiveRun::new(id.clone(), 0, false);
+                for delta in group.tools {
+                    run.fold_tool(&delta, 0);
+                }
+                run.fold.seal_chat_run(&id, 0);
+                ReplayDetail {
+                    run: Some(run),
+                    limited: group.limited || batch_limited,
+                }
+            } else {
+                ReplayDetail {
+                    run: None,
+                    limited: true,
+                }
+            };
+            self.replay.insert(id, detail);
+        }
+    }
+
+    fn snapshot(&mut self) -> Value {
         let provisional: HashSet<_> = self
             .live
             .iter()
-            .chain(self.sealed.iter())
+            .chain(&self.sealed)
             .map(|run| run.id.as_str())
             .collect();
-        let mut replay = HashMap::new();
-        for group in details
-            .runs
-            .drain(..)
-            .filter(|group| !provisional.contains(group.run_id.as_str()))
-        {
-            let mut run = LiveRun::new(group.run_id, 0, false);
-            for delta in group.tools {
-                run.fold_tool(&delta, 0);
-            }
-            run.fold.seal_chat_run(&run.id, 0);
-            replay.insert(run.id.clone(), run);
-        }
         let mut last_stamped_message = HashMap::new();
         let mut first_assistant = HashMap::new();
-        for (index, message) in history.messages.iter().enumerate() {
+        for (index, message) in self.committed.iter().enumerate() {
             if let Some(run) = message
                 .run_id
                 .as_deref()
@@ -399,7 +596,7 @@ impl ChatState {
         self.committed_diffs.clear();
         let mut rows = Vec::new();
         let mut occurrences = HashMap::<String, usize>::new();
-        for (index, message) in history.messages.iter().enumerate() {
+        for (index, message) in self.committed.iter().enumerate() {
             // Only the dedicated replay projection may render stored tool data.
             if !matches!(message.role.as_str(), "user" | "assistant") {
                 continue;
@@ -410,24 +607,37 @@ impl ChatState {
                 .or_else(|| last_stamped_message.get(run))
                 .copied()
                 == Some(index);
-            if group && message.role == "assistant" {
-                append_replay(run, &mut replay, &mut rows, &mut self.committed_diffs);
+            let replay = (group && !provisional.contains(run))
+                .then(|| self.replay.get(run).and_then(|detail| detail.run.as_ref()))
+                .flatten();
+            if message.role == "assistant" {
+                append_replay(replay, &mut rows, &mut self.committed_diffs);
             }
-            let key = format!(
-                "history/{run}/{}/{}",
-                message.role,
-                message.timestamp.as_deref().unwrap_or("")
-            );
-            let occurrence = occurrences.entry(key.clone()).or_default();
+            let key = if let Some(id) = message
+                .message_id
+                .as_deref()
+                .filter(|_| self.scrollback.is_some())
+            {
+                format!("history/id/{id}")
+            } else {
+                let base = format!(
+                    "history/{run}/{}/{}",
+                    message.role,
+                    message.timestamp.as_deref().unwrap_or("")
+                );
+                let occurrence = occurrences.entry(base.clone()).or_default();
+                let key = format!("{base}/{occurrence}");
+                *occurrence += 1;
+                key
+            };
             rows.push(Row::Text {
-                key: format!("{key}/{occurrence}"),
+                key,
                 role: message.role.clone(),
                 text: message.content.clone(),
                 streaming: false,
             });
-            *occurrence += 1;
-            if group && message.role != "assistant" {
-                append_replay(run, &mut replay, &mut rows, &mut self.committed_diffs);
+            if message.role != "assistant" {
+                append_replay(replay, &mut rows, &mut self.committed_diffs);
             }
         }
         for run in &self.sealed {
@@ -443,8 +653,14 @@ impl ChatState {
         json!({"rows": rows, "activeRun": self.live.as_ref().map(|run| &run.id),
             "missingPrefix": self.has_missing_prefix(), "unconfirmed": !self.sealed.is_empty(),
             "unconfirmedRuns": self.sealed.iter().map(|run| &run.id).collect::<Vec<_>>(),
-            "droppedUnconfirmed": self.dropped_unconfirmed, "limited": details.limited,
-            "canResume": self.live.as_ref().is_some_and(|run| run.can_resume)})
+            "droppedUnconfirmed": self.dropped_unconfirmed,
+            "limited": self.replay.iter().any(|(id, detail)| detail.limited && !provisional.contains(id.as_str())),
+            "canResume": self.live.as_ref().is_some_and(|run| run.can_resume),
+            "scrollbackSupported": self.scrollback.is_some(),
+            "nextBefore": self.scrollback.as_ref().filter(|_| !self.needs_latest).and_then(|page| page.next_before.as_deref()),
+            "scrollbackReset": self.scrollback_reset,
+            "needsLatest": self.needs_latest,
+            "continuationUnavailable": self.scrollback.as_ref().is_some_and(|page| page.status == ScrollbackStatus::ContinuationUnavailable)})
     }
 
     pub fn diff_body(&self, key: &str) -> Option<&[aleph_protocol::FileChange]> {
@@ -734,16 +950,42 @@ impl LiveRun {
     }
 }
 
-fn append_replay(
-    run_id: &str,
-    replay: &mut HashMap<String, LiveRun>,
-    rows: &mut Vec<Row>,
-    diffs: &mut HashMap<String, RowBody>,
-) {
-    let Some(run) = replay.remove(run_id) else {
+fn valid_page(page: &ScrollbackPage, messages: &[Message]) -> bool {
+    match page.status {
+        ScrollbackStatus::Ready => {
+            if page.next_before.as_ref().is_some_and(|next| {
+                next.is_empty()
+                    || Some(next) == page.requested_before.as_ref()
+                    || messages.is_empty()
+            }) {
+                return false;
+            }
+        }
+        ScrollbackStatus::StaleBoundary => {
+            return page.requested_before.is_some()
+                && page.next_before.is_none()
+                && messages.is_empty();
+        }
+        ScrollbackStatus::ContinuationUnavailable => {
+            if page.next_before.is_some() || messages.is_empty() {
+                return false;
+            }
+        }
+    }
+    let mut ids = HashSet::new();
+    messages.iter().all(|message| {
+        message
+            .message_id
+            .as_deref()
+            .is_some_and(|id| !id.is_empty() && ids.insert(id))
+    })
+}
+
+fn append_replay(run: Option<&LiveRun>, rows: &mut Vec<Row>, diffs: &mut HashMap<String, RowBody>) {
+    let Some(run) = run else {
         return;
     };
-    rows.extend(run.rows());
+    rows.extend(run.rows().filter(|row| matches!(row, Row::Tool { .. })));
     for entry in run.fold.iter() {
         if let TranscriptEntry::Tool(row) = entry {
             if matches!(row.body, RowBody::FileChanges(_)) {

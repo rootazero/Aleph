@@ -52,7 +52,18 @@ type Patch = RunState & {
   terminalRun?: string;
   error: string | null;
 };
-type Snapshot = RunState & { rows: ChatRow[]; limited: boolean; unconfirmedRuns: string[] };
+export type Scrollback = {
+  scrollbackSupported: boolean;
+  nextBefore: string | null;
+  scrollbackReset: boolean;
+  needsLatest: boolean;
+  continuationUnavailable: boolean;
+};
+const NO_SCROLLBACK: Scrollback = {
+  scrollbackSupported: false, nextBefore: null, scrollbackReset: false,
+  needsLatest: false, continuationUnavailable: false,
+};
+type Snapshot = RunState & Scrollback & { rows: ChatRow[]; limited: boolean; unconfirmedRuns: string[] };
 
 export function Chat(props: { sdk: PanelSdk; setReaderMode: (active: boolean) => void }) {
   const { sdk } = props;
@@ -82,10 +93,22 @@ export function Chat(props: { sdk: PanelSdk; setReaderMode: (active: boolean) =>
   const draft = signal("");
   const sending = signal(false);
   let composing = false;
+  const scrolling = signal(NO_SCROLLBACK);
+  const loadingOlder = signal(false);
+  const olderFailed = signal(false);
   let historyRequest = 0;
-  cleanup(() => { ++historyRequest; });
+  let historyEpoch = 0;
+  let olderRequest = 0;
+  let detailRequest = 0;
   let liveRevision = 0;
-  let hasHistory = false;
+  const detailOwners = new Map<string, number>();
+  const resetWindowRequests = () => {
+    ++historyEpoch;
+    ++olderRequest;
+    detailOwners.clear();
+    loadingOlder.set(false);
+    olderFailed.set(false);
+  };
 
   const upsert = (row: ChatRow) => {
     const current = rows.get(row.key);
@@ -99,21 +122,46 @@ export function Chat(props: { sdk: PanelSdk; setReaderMode: (active: boolean) =>
     droppedUnconfirmed.set(state.droppedUnconfirmed);
     canResume.set(state.canResume);
   };
-  const replace = (snapshot: Snapshot | null) => {
-    if (!snapshot) return;
-    const next = snapshot.rows.map((row) => {
+  const replace = (snapshot: Snapshot) => {
+    const { rows: committed, limited: detailLimited, unconfirmedRuns: _, ...state } = snapshot;
+    const next = committed.map((row) => {
       upsert(row);
       return row.key;
     });
     const retained = new Set(next);
     for (const key of rows.keys()) if (!retained.has(key)) rows.delete(key);
-    keys.set(next);
-    runState(snapshot);
-    limited.set(snapshot.limited);
+    batch(() => {
+      scrolling.set(state);
+      keys.set(next);
+      runState(state);
+      limited.set(detailLimited);
+    });
   };
   const report = (failure: unknown) => {
     const error = failure as Error;
     if (error.message !== "disposed") notice.set(error.message);
+  };
+
+  const loadDetails = async (key: string, messages: NonNullable<History["messages"]>, fromTail: boolean) => {
+    const runIds = [...new Set([...messages].reverse().map((message) => message.run_id)
+      .filter((id): id is string => typeof id === "string" && id.length > 0))].reverse();
+    const eligible = runIds.filter((id) => fromTail || !detailOwners.has(id));
+    const requested = eligible.slice(-DETAIL_RUN_LIMIT);
+    const skipped = eligible.slice(0, -DETAIL_RUN_LIMIT).filter((id) => !detailOwners.has(id));
+    if (skipped.length > 0) replace(model.applyHistoryDetails(skipped, null) as Snapshot);
+    if (requested.length === 0) return;
+    const epoch = historyEpoch;
+    const owner = ++detailRequest;
+    for (const run of requested) detailOwners.set(run, owner);
+    let details: unknown = null;
+    try {
+      details = await sdk.invoke("chat.transcript_details", { session_key: key, run_ids: requested });
+    } catch {
+      // Scoped replay can fail or be unavailable on an older Core. Prose is already visible.
+    }
+    if (!sdk.active() || key !== sessionKey() || epoch !== historyEpoch) return;
+    const current = requested.filter((id) => detailOwners.get(id) === owner);
+    if (current.length > 0) replace(model.applyHistoryDetails(current, details) as Snapshot);
   };
 
   const load = async (terminalRun?: string) => {
@@ -123,38 +171,18 @@ export function Chat(props: { sdk: PanelSdk; setReaderMode: (active: boolean) =>
     const revision = liveRevision;
     const current = () => sdk.active() && request === historyRequest && key === sessionKey();
     try {
-      const history = (await sdk.invoke("chat.history", { session_key: key, limit: HISTORY_LIMIT })) as History;
+      const history = (await sdk.invoke("chat.history", { session_key: key, limit: HISTORY_LIMIT, scrollback: {} })) as History;
       if (!current()) return;
       if (history?.session_key !== key || !Array.isArray(history.messages)) throw new Error("Unable to read conversation history.");
+      const snapshot = model.replaceHistory({ ...history, live_status_stale: liveRevision !== revision }, null) as Snapshot | null;
+      if (!snapshot) throw new Error("Unable to read conversation history.");
+      if (snapshot.scrollbackReset) resetWindowRequests();
       waitingForAdmission.set(false);
       historyFailed.set(false);
-      // Attach immediately so new chunks can land while the optional details
-      // read runs. Later reconciliations replace a completed run in one pass.
-      const observedHistory = () => ({ ...history, live_status_stale: liveRevision !== revision });
-      if (!hasHistory && !activeRun()) {
-        replace(model.replaceHistory(observedHistory(), null) as Snapshot | null);
-        loading.set(false);
-      }
-      hasHistory = true;
-      const runIds = [...new Set((history.messages ?? []).slice().reverse()
-        .map((message) => message.run_id).filter((id): id is string => Boolean(id)))];
-      let details: unknown = null;
-      if (runIds.length > 0) {
-        try {
-          details = await sdk.invoke("chat.transcript_details", {
-            session_key: key, run_ids: runIds.slice(0, DETAIL_RUN_LIMIT).reverse(),
-          });
-        } catch {
-          // Older hosts and failed detail reads still provide committed prose.
-          details = { runs: [], limited: true };
-        }
-      }
-      if (!current()) return;
-      const snapshot = model.replaceHistory(observedHistory(), details) as Snapshot | null;
-      if (snapshot && runIds.length > DETAIL_RUN_LIMIT) snapshot.limited = true;
       replace(snapshot);
+      void loadDetails(key, history.messages, true);
       // Completion can reach the feed before Core stamps the projected history row.
-      if (terminalRun && snapshot?.unconfirmedRuns.includes(terminalRun)) {
+      if (terminalRun && snapshot.unconfirmedRuns.includes(terminalRun)) {
         setTimeout(() => { if (current()) void load(); }, COMMIT_REREAD_MS);
       }
     } catch (failure) {
@@ -165,6 +193,37 @@ export function Chat(props: { sdk: PanelSdk; setReaderMode: (active: boolean) =>
       }
     } finally {
       if (current()) loading.set(false);
+    }
+  };
+
+  const loadOlder = async () => {
+    const key = sessionKey();
+    const before = scrolling().nextBefore;
+    if (!key || !before || loadingOlder() || waitingForAdmission()) return;
+    const request = ++olderRequest;
+    const current = () => sdk.active() && request === olderRequest && key === sessionKey();
+    loadingOlder.set(true);
+    olderFailed.set(false);
+    try {
+      const history = (await sdk.invoke("chat.history", {
+        session_key: key, limit: HISTORY_LIMIT, scrollback: { before },
+      })) as History;
+      if (!current() || before !== scrolling().nextBefore) return;
+      if (history?.session_key !== key || !Array.isArray(history.messages)) throw new Error("Invalid history page");
+      const snapshot = model.prependHistory(history, before) as Snapshot | null;
+      if (!snapshot) throw new Error("Unmatched history page");
+      replace(snapshot);
+      if (!snapshot.needsLatest) void loadDetails(key, history.messages, false);
+    } catch (failure) {
+      if (!current() || before !== scrolling().nextBefore) return;
+      olderFailed.set(true);
+      if (failure instanceof RpcError && failure.code === RESOURCE_NOT_FOUND) {
+        waitingForAdmission.set(true);
+        historyFailed.set(true);
+        report(failure);
+      }
+    } finally {
+      if (current()) loadingOlder.set(false);
     }
   };
 
@@ -206,9 +265,10 @@ export function Chat(props: { sdk: PanelSdk; setReaderMode: (active: boolean) =>
   const startNewConversation = () => {
     if (sending() || !sdk.rememberChat(null)) return;
     ++historyRequest;
-    hasHistory = false;
     model.reset("");
     batch(() => {
+      resetWindowRequests();
+      scrolling.set(NO_SCROLLBACK);
       sessionKey.set(null);
       rows.clear();
       keys.set([]);
@@ -301,6 +361,9 @@ export function Chat(props: { sdk: PanelSdk; setReaderMode: (active: boolean) =>
       <If when={!loading()} else={<Text class="text-muted-foreground">Loading conversation…</Text>}>
         <TranscriptList keys={keys} row={(key) => rows.get(key)!} sdk={sdk} session={sessionKey}
           fullscreen={fullscreen} setFullscreen={setFullscreen}
+          scrollback={scrolling} loadingOlder={loadingOlder} olderFailed={olderFailed}
+          loadOlder={() => void loadOlder()} reloadLatest={() => void load()}
+          canLoadOlder={() => !waitingForAdmission()}
           diagram={(source) => model.mermaidView(source) as Diagram}
           diff={(key, expanded) => model.diffView(key, expanded) as Change[]} />
       </If>

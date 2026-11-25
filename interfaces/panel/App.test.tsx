@@ -509,7 +509,7 @@ test("an open live Mermaid fence remains readable code", async () => {
 test("a session opens in chat and its reply streams in, then history takes over", async () => {
   const { handlers, complete } = chatGateway();
   const app = await openChat(handlers);
-  expect(rpcParams(app, "chat.history")[0]).toEqual({ session_key: "s-1", limit: 200 });
+  expect(rpcParams(app, "chat.history")[0]).toEqual({ session_key: "s-1", limit: 200, scrollback: {} });
 
   await app.type("label:Message", "你好");
   await app.press("Send");
@@ -533,6 +533,39 @@ test("a session opens in chat and its reply streams in, then history takes over"
   await app.waitFor("Hello, world");
   await app.waitFor("Stop", { state: "gone" });
   expect(rpcParams(app, "chat.history").length).toBe(loads + 1);
+});
+
+test("an older page failure is retryable without losing the visible transcript", async () => {
+  let olderCalls = 0;
+  const messages = Array.from({ length: 30 }, (_, index) => ({
+    message_id: `tail-${index}`, timestamp: "same", role: "assistant",
+    content: index === 29 ? "Earlier answer" : `Reply ${index}`,
+  }));
+  const { handlers } = chatGateway({ "chat.history": (params) => {
+    const before = (params as { scrollback?: { before?: string } }).scrollback?.before;
+    if (before) {
+      ++olderCalls;
+      if (olderCalls === 1) return { session_key: "s-1", messages };
+      return { session_key: "s-1", active_run: "untrusted-older-status",
+        messages: [{ message_id: "older", timestamp: "same", role: "user", content: "First saved message" }],
+        scrollback: { requested_before: before, next_before: null, status: "ready" } };
+    }
+    return { session_key: "s-1", messages,
+      scrollback: { requested_before: null, next_before: "older-boundary", status: "ready" } };
+  } });
+  const app = await openChat(handlers);
+  await app.press("Load older messages");
+  await app.waitFor("Older messages could not be loaded.");
+  expect(app.texts()).toContain("Earlier answer");
+  await app.press("Retry older messages");
+  await app.waitFor("No earlier messages");
+  expect(app.texts()).toContain("Earlier answer");
+  expect(app.texts()).not.toContain("Stop");
+  await app.scroll("id:chat-transcript", -5000);
+  await app.waitFor("First saved message");
+  expect(rpcParams(app, "chat.history").slice(1).map((params) => params.scrollback)).toEqual([
+    { before: "older-boundary" }, { before: "older-boundary" },
+  ]);
 });
 
 test("terminal history gets one follow-up when the committed stamp arrives late", async () => {
