@@ -331,13 +331,7 @@ async fn create_provider_inner(
         Err(e) => return e,
     };
 
-    // Snapshot (name + the built provider) for live registration. The
-    // provider is built unconditionally (the build is the protocol
-    // validation); it is only handed to a registry when one is attached.
-    let registration: (String, Arc<dyn crate::providers::AiProvider>);
-
-    // Create provider
-    {
+    let constructed = {
         let mut cfg = config.write().await;
 
         // Check if provider already exists
@@ -368,19 +362,18 @@ async fn create_provider_inner(
         // the registry cannot serve — the caller has to learn about it now.
         // The build is the protocol validation, so it runs even in config-only
         // mode (no live registry attached).
-        match crate::providers::create_provider(&params.name, provider_config.clone()) {
-            Ok(provider) => {
-                registration = (params.name.clone(), provider);
-            }
-            Err(e) => {
-                error!(name = %params.name, error = %e, "Failed to build provider");
-                return JsonRpcResponse::error(
-                    request.id,
-                    INTERNAL_ERROR,
-                    format!("Failed to build provider: {e}"),
-                );
-            }
-        }
+        let transport =
+            match crate::providers::create_provider(&params.name, provider_config.clone()) {
+                Ok(provider) => provider,
+                Err(e) => {
+                    error!(name = %params.name, error = %e, "Failed to build provider");
+                    return JsonRpcResponse::error(
+                        request.id,
+                        INTERNAL_ERROR,
+                        format!("Failed to build provider: {e}"),
+                    );
+                }
+            };
 
         // Store API key in vault (then clear from config so it's never persisted)
         if let Some(ref api_key) = provider_config.api_key {
@@ -412,19 +405,17 @@ async fn create_provider_inner(
             );
         }
         discovery_authority::replace_config(&mut cfg, cfg_candidate);
-    }
 
-    let mut constructed = false;
-    // Hot-register into the live registry so the provider is usable and an
-    // auto-derived failover fallback without a restart (mirrors set_default's
-    // runtime swap). The provider was already built above — a build failure
-    // aborted the request before the credential or the config was touched.
-    if let Some(registry) = &multi_registry {
-        let (name, provider) = registration;
-        registry.register(name.clone(), provider);
-        constructed = true;
-        info!(name = %name, "Provider registered in live registry");
-    }
+        // Like update and default promotion, publish before another Config
+        // writer or OAuth renewal can install a newer transport.
+        if let Some(registry) = &multi_registry {
+            registry.register(params.name.clone(), transport);
+            info!(name = %params.name, "Provider registered in live registry");
+            true
+        } else {
+            false
+        }
+    };
 
     refresh_selectable_publication(&config, multi_registry.as_ref(), &params.name, constructed)
         .await;
@@ -924,7 +915,16 @@ pub async fn handle_set_default_config_only(
         Err(e) => return e,
     };
 
-    set_default_provider_inner(&request, &params, &config, &event_bus, None, None).await
+    set_default_provider_inner(
+        &request,
+        &params,
+        &config,
+        &event_bus,
+        None,
+        None,
+        save_default_config,
+    )
+    .await
 }
 
 /// Set the default provider with runtime hot-swap
@@ -947,8 +947,13 @@ pub async fn handle_set_default(
         &event_bus,
         Some(&multi_registry),
         Some(&vault),
+        save_default_config,
     )
     .await
+}
+
+async fn save_default_config(config: &Config) -> Result<(), String> {
+    save_config(config, &["general"]).await
 }
 
 /// Shared implementation for setting the default provider
@@ -959,6 +964,7 @@ async fn set_default_provider_inner(
     event_bus: &Arc<GatewayEventBus>,
     multi_registry: Option<&Arc<crate::thinker::MultiProviderRegistry>>,
     vault: Option<&Arc<SharedTokenManager>>,
+    persist: impl AsyncFnOnce(&Config) -> Result<(), String>,
 ) -> JsonRpcResponse {
     // Resolve canonical name through the preset alias table (e.g. "codex" →
     // "chatgpt"). An exact config key match wins first (applied below against
@@ -972,8 +978,7 @@ async fn set_default_provider_inner(
     // Set default provider and build new provider instance
     // H5-05: the provider built for the runtime swap, produced before the
     // switch is persisted so a build failure aborts the request.
-    let mut built_provider: Option<(String, Arc<dyn crate::providers::AiProvider>)> = None;
-    {
+    let (constructed, promoted) = {
         let mut cfg = config.write().await;
 
         // An exact (case-insensitive) config key beats the alias resolution:
@@ -1028,23 +1033,21 @@ async fn set_default_provider_inner(
         // persisted — a provider that cannot be constructed must not leave a
         // saved "new default" that the runtime never adopts, and the caller
         // must learn about it now.
-        if multi_registry.is_some() {
-            if let Some((provider_name, pc)) = provider_config_for_swap.as_ref() {
-                match crate::providers::create_provider(provider_name.as_str(), pc.clone()) {
-                    Ok(provider) => {
-                        built_provider = Some((provider_name.clone(), provider));
-                    }
-                    Err(e) => {
-                        error!(name = %provider_name, error = %e, "Failed to build provider for the default switch");
-                        return JsonRpcResponse::error(
-                            request.id.clone(),
-                            INTERNAL_ERROR,
-                            format!("Failed to build provider: {e}"),
-                        );
-                    }
+        let built_provider = if let Some((provider_name, pc)) = provider_config_for_swap {
+            match crate::providers::create_provider(&provider_name, pc) {
+                Ok(provider) => Some(provider),
+                Err(e) => {
+                    error!(name = %provider_name, error = %e, "Failed to build provider for the default switch");
+                    return JsonRpcResponse::error(
+                        request.id.clone(),
+                        INTERNAL_ERROR,
+                        format!("Failed to build provider: {e}"),
+                    );
                 }
             }
-        }
+        } else {
+            None
+        };
 
         // H5-04: same candidate-then-publish discipline as create/update — the
         // default switch is only published to the shared config once the file
@@ -1060,7 +1063,7 @@ async fn set_default_provider_inner(
         }
 
         // Save to file (redact resolved secrets before write)
-        if let Err(e) = save_config(&cfg_candidate, &["general"]).await {
+        if let Err(e) = persist(&cfg_candidate).await {
             error!(error = %e, "Failed to save config");
             return JsonRpcResponse::error(
                 request.id.clone(),
@@ -1069,30 +1072,32 @@ async fn set_default_provider_inner(
             );
         }
         discovery_authority::replace_config(&mut cfg, cfg_candidate);
-    }
 
-    let mut constructed = false;
-    // Hot-swap the runtime provider using MultiProviderRegistry
-    if let (Some(registry), Some((name, new_provider))) = (multi_registry, built_provider) {
-        registry.register(name.clone(), new_provider);
-        constructed = true;
-        if let Err(e) = registry.set_default(&name) {
-            error!(name = %name, error = %e, "Failed to set default in multi-registry");
-        } else {
-            // Clear the breaker that gates dialing, so a provider
-            // promoted to default is actually tried. This used to reset
-            // the registry's own health map instead — which fed only the
-            // `ModelResolved` badge and gated nothing — so promoting a
-            // provider whose circuit was open left it skipped for the
-            // rest of the cooldown. Same fix, and same reason, as the
-            // connection-test path above.
-            if let Some(health) = crate::providers::failover::global_health() {
-                if health.reset(&name).await {
-                    info!(name = %name, "set as default; failover circuit reset");
+        // OAuth renewal takes a Config read guard before replacing the bearer
+        // and transport. Publish the transport built under this write guard
+        // before releasing it, or an older bearer could overwrite a renewal.
+        if let (Some(registry), Some(new_provider)) = (multi_registry, built_provider) {
+            registry.register(name.clone(), new_provider);
+            match registry.set_default(&name) {
+                Ok(()) => (true, Some((registry, name))),
+                Err(e) => {
+                    error!(name = %name, error = %e, "Failed to set default in multi-registry");
+                    (true, None)
                 }
             }
-            info!(name = %name, providers = ?registry.list_providers(), "Provider set as default in multi-registry");
+        } else {
+            (false, None)
         }
+    };
+
+    if let Some((registry, name)) = promoted {
+        // Reset the breaker that gates dialing, not the registry's badge state.
+        if let Some(health) = crate::providers::failover::global_health() {
+            if health.reset(&name).await {
+                info!(name = %name, "set as default; failover circuit reset");
+            }
+        }
+        info!(name = %name, providers = ?registry.list_providers(), "Provider set as default in multi-registry");
     }
 
     refresh_selectable_publication(config, multi_registry, &params.name, constructed).await;
@@ -1115,6 +1120,104 @@ async fn set_default_provider_inner(
 
     info!(name = %params.name, "Default provider set");
     JsonRpcResponse::success(request.id.clone(), json!({ "ok": true }))
+}
+
+#[cfg(test)]
+mod default_promotion_tests {
+    use super::*;
+    use crate::gateway::security::store::SecurityStore;
+    use crate::providers::DefaultProviderHandle;
+
+    #[tokio::test]
+    async fn waiting_renewal_observes_promotion_before_installing_new_bearer() {
+        const PROVIDER: &str = "chatgpt";
+        const BEARER_KEY: &str = "ai:chatgpt";
+        const GRANT_KEY: &str = "ai:chatgpt:oauth";
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Arc::new(SharedTokenManager::new(
+            Arc::new(SecurityStore::in_memory().unwrap()),
+            dir.path().join("test.vault"),
+        ));
+        vault.generate_token().unwrap();
+        vault
+            .store_secret_batch([(BEARER_KEY, "old-fixture"), (GRANT_KEY, "old-grant")])
+            .unwrap();
+        let mut provider = crate::config::ProviderConfig::test_config("org/model");
+        provider.api_key = None;
+        provider.base_url = Some("http://127.0.0.1:1/v1".into());
+        provider.verified = true;
+        let transport = |bearer: &str| {
+            let mut pc = provider.clone();
+            pc.api_key = Some(bearer.into());
+            crate::providers::create_provider(PROVIDER, pc).unwrap()
+        };
+        let boot = transport("boot-fixture");
+        let registry = Arc::new(crate::thinker::MultiProviderRegistry::new(
+            PROVIDER.into(),
+            boot.clone(),
+        ));
+        let mut cfg = Config::default();
+        cfg.providers.insert(PROVIDER.into(), provider.clone());
+        let config = Arc::new(RwLock::new(cfg));
+        let bus = Arc::new(GatewayEventBus::new());
+        let request = JsonRpcRequest::new("providers.setDefault", None, Some(json!(1)));
+        let params = SetDefaultParams {
+            name: PROVIDER.into(),
+        };
+        let (persisting, persisted) = tokio::sync::oneshot::channel();
+        let (release, resume) = tokio::sync::oneshot::channel();
+        let promote = set_default_provider_inner(
+            &request,
+            &params,
+            &config,
+            &bus,
+            Some(&registry),
+            Some(&vault),
+            async move |_| {
+                persisting.send(()).unwrap();
+                resume.await.unwrap();
+                Ok(())
+            },
+        );
+        let verify_and_renew = async {
+            persisted.await.unwrap();
+            let acquire = config.read();
+            tokio::pin!(acquire);
+            assert!(futures::poll!(&mut acquire).is_pending());
+            assert!(Arc::ptr_eq(&registry.current(), &boot));
+            release.send(()).unwrap();
+            let config = acquire.await;
+            let mounted = registry.current();
+            assert!(mounted
+                .as_http_provider()
+                .unwrap()
+                .matches_configured_transport(PROVIDER, "openai", "old-fixture", |_| true,));
+            let (_, _, epoch) = vault
+                .oauth_refresh_snapshot(&config, PROVIDER, BEARER_KEY, GRANT_KEY)
+                .unwrap()
+                .unwrap();
+            let renewed = transport("new-fixture");
+            assert_eq!(
+                vault
+                    .refresh_secrets_if_current(
+                        PROVIDER,
+                        epoch,
+                        [(BEARER_KEY, "old-fixture"), (GRANT_KEY, "old-grant")],
+                        [(BEARER_KEY, "new-fixture"), (GRANT_KEY, "new-grant")],
+                        || registry.register(PROVIDER.into(), renewed),
+                    )
+                    .unwrap(),
+                Some(())
+            );
+        };
+        let (response, ()) = tokio::join!(promote, verify_and_renew);
+        assert!(response.error.is_none(), "{:?}", response.error);
+        assert!(registry
+            .current()
+            .as_http_provider()
+            .unwrap()
+            .matches_configured_transport(PROVIDER, "openai", "new-fixture", |_| true,));
+    }
 }
 
 // ============================================================================
