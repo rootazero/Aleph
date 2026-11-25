@@ -17,14 +17,13 @@ use crate::memory::notes::profile::synthesizer::{FsProfileSynthesizer, ProfileSy
 use crate::memory::notes::query_filer::{DefaultQueryFiler, QueryFiler};
 use crate::memory::notes::NoteIndexer;
 use crate::memory::reflector::fs_reflector::RecallWriter;
-use crate::memory::reflector::recall_signals::SignalRow;
+use crate::memory::reflector::recall_signals::SignalBatch;
 use crate::memory::reflector::MemoryReflector;
 use crate::memory::session_reflection::SessionReflector;
 use crate::memory::session_resume::reader::SnapshotReader;
 use crate::memory::session_search_summary::end_hook::SessionEndSummarizer;
 use crate::memory::session_search_summary::synthesizer::SummarySynthesizer;
 use crate::memory::store::raw_memory::RawMemoryStore;
-use crate::memory::store::sqlite::recall_signals::RecallHit;
 use crate::memory::store::sqlite::SqliteMemoryBackend;
 use crate::providers::AiProvider;
 use crate::sync_primitives::Arc;
@@ -202,19 +201,16 @@ impl MemoryServices {
         };
         let memory_reflector = inputs.provider.as_ref().map(|provider| {
             let store = backend.clone();
-            let writer: RecallWriter = Arc::new(move |row: SignalRow| {
+            let writer: RecallWriter = Arc::new(move |row: SignalBatch| {
                 let store = store.clone();
                 Box::pin(async move {
                     store
                         .record_signals(
                             &row.query_text,
                             &row.channel,
-                            &[RecallHit {
-                                note_path: row.note_path,
-                                score: f64::from(row.score),
-                            }],
+                            &row.hits,
                             row.session_id.as_deref(),
-                            &row.agent_id,
+                            &row.owner,
                             &row.namespace,
                         )
                         .map(|_| ())

@@ -40,12 +40,22 @@ pub enum SlotKind {
     Nudges,
 }
 
+/// Trusted materialized-note identity, never supplied by an envelope consumer.
+#[derive(Debug, Clone)]
+pub(crate) struct NoteProvenance {
+    pub owner: String,
+    pub path: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct EnvelopeItem {
     pub id: String,
     pub title: String,
     pub content: String,
     pub source: ItemSource,
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub(crate) note_provenance: Option<NoteProvenance>,
     pub relevance: f32,
     pub tokens: u32,
     pub updated_at: i64,
@@ -115,6 +125,10 @@ mod tests {
                     relevance: 0.82,
                     tokens: 10,
                     updated_at: 1_699_999_000,
+                    note_provenance: Some(NoteProvenance {
+                        owner: "actual-owner".into(),
+                        path: "reference/rust-ownership".into(),
+                    }),
                     extra,
                 }],
                 tokens_used: 10,
@@ -132,6 +146,10 @@ mod tests {
 
         let json = serde_json::to_string(&envelope).expect("serialize");
         let roundtripped: MemoryEnvelope = serde_json::from_str(&json).expect("deserialize");
+        assert!(!json.contains("note_provenance"));
+        assert!(roundtripped.slots[0].items[0].note_provenance.is_none());
+        let schema = serde_json::to_string(&schemars::schema_for!(EnvelopeItem)).unwrap();
+        assert!(!schema.contains("note_provenance"));
 
         assert_eq!(envelope.schema_version, roundtripped.schema_version);
         assert_eq!(envelope.query, roundtripped.query);

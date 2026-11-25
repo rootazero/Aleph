@@ -1,28 +1,36 @@
 //! Convert an `AssembledPacket` (represented as a `MemoryEnvelope`) into the
-//! user-prompt text + path→title lookup required by the synthesis pipeline.
+//! user-prompt text, opaque citation lookup and trusted exposure list.
 //!
 //! # Mapping from envelope schema
 //!
 //! The envelope holds items inside `slots[*].items`.  Each `EnvelopeItem`
 //! carries `title`, `content`, and `relevance`.  The note path lives inside
 //! `ItemSource::Note { path, .. }`.  Non-Note items (Raw, Summary) are included
-//! with their `id` used as a fallback key, so the reflector can still cite them
-//! if the LLM references them.
+//! with their `id` retained as the canonical citation path. Every presented
+//! item receives its own private synthesis key, even when paths collide.
 
-use crate::memory::assembler::envelope::{EnvelopeItem, ItemSource, MemoryEnvelope};
+use crate::memory::assembler::envelope::{
+    EnvelopeItem, ItemSource, MemoryEnvelope, NoteProvenance,
+};
 use std::collections::HashMap;
 
-/// The prompt-ready representation: a user-message body and a path→title
-/// lookup that the reflector uses to overlay real titles onto the LLM's
-/// path-only `NoteRef` output.
+/// Prompt evidence and citation metadata are separate from trusted note exposure.
 pub struct SynthesisContext {
     pub user_prompt: String,
-    /// Key: note path (from `ItemSource::Note`) or item id for non-note items.
+    /// Key: opaque synthesis identity, never a public path or owner.
     pub note_lookup: HashMap<String, NoteMeta>,
+    pub(crate) note_exposures: Vec<NoteExposure>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct NoteExposure {
+    pub note: NoteProvenance,
+    pub relevance: f32,
 }
 
 #[derive(Debug, Clone)]
 pub struct NoteMeta {
+    pub citation_path: String,
     pub title: String,
     pub relevance: f32,
 }
@@ -49,12 +57,19 @@ pub fn envelope_to_synthesis_context(envelope: &MemoryEnvelope) -> SynthesisCont
     );
 
     let mut lookup = HashMap::new();
+    let mut note_exposures = Vec::new();
 
     use std::fmt::Write as _;
 
     for slot in &envelope.slots {
         for item in &slot.items {
-            let key = item_key(item);
+            let key = format!("memory-item-{}", lookup.len());
+            if let Some(note) = &item.note_provenance {
+                note_exposures.push(NoteExposure {
+                    note: note.clone(),
+                    relevance: item.relevance,
+                });
+            }
             let _ = write!(
                 body,
                 "<retrieved_note path=\"{}\" score=\"{:.3}\">\n\
@@ -69,6 +84,7 @@ pub fn envelope_to_synthesis_context(envelope: &MemoryEnvelope) -> SynthesisCont
             lookup.insert(
                 key,
                 NoteMeta {
+                    citation_path: citation_path(item),
                     // rust-doctor-disable-next-line excessive-clone
                     title: item.title.clone(),
                     relevance: item.relevance,
@@ -80,6 +96,7 @@ pub fn envelope_to_synthesis_context(envelope: &MemoryEnvelope) -> SynthesisCont
     SynthesisContext {
         user_prompt: body,
         note_lookup: lookup,
+        note_exposures,
     }
 }
 
@@ -103,7 +120,7 @@ fn escape_fence<'a>(s: &'a str) -> std::borrow::Cow<'a, str> {
 /// Return the canonical lookup key for an item:
 /// - `ItemSource::Note`    → the note path  (e.g. `"reference/rust"`)
 /// - everything else       → the item id    (e.g. `"note://raw/xyz"`)
-fn item_key(item: &EnvelopeItem) -> String {
+fn citation_path(item: &EnvelopeItem) -> String {
     match &item.source {
         // rust-doctor-disable-next-line excessive-clone
         ItemSource::Note { path, .. } => path.clone(),
@@ -132,6 +149,7 @@ mod tests {
             relevance,
             tokens: 20,
             updated_at: 0,
+            note_provenance: None,
             extra: serde_json::Map::new(),
         }
     }
@@ -189,29 +207,23 @@ mod tests {
 
         assert!(ctx
             .user_prompt
-            .contains("<retrieved_note path=\"reference/rust\" score=\"0.910\">"));
+            .contains("<retrieved_note path=\"memory-item-0\" score=\"0.910\">"));
         assert!(ctx
             .user_prompt
-            .contains("<retrieved_note path=\"reference/ownership\" score=\"0.730\">"));
+            .contains("<retrieved_note path=\"memory-item-1\" score=\"0.730\">"));
         assert_eq!(ctx.note_lookup.len(), 2);
         assert_eq!(
-            ctx.note_lookup.get("reference/rust").unwrap().title,
+            ctx.note_lookup.get("memory-item-0").unwrap().title,
             "Rust Lang"
         );
         assert!(
-            (ctx.note_lookup
-                .get("reference/ownership")
-                .unwrap()
-                .relevance
-                - 0.73)
-                .abs()
-                < 1e-6,
+            (ctx.note_lookup.get("memory-item-1").unwrap().relevance - 0.73).abs() < 1e-6,
             "relevance mismatch"
         );
     }
 
     #[test]
-    fn non_note_item_uses_id_as_key() {
+    fn non_note_item_retains_id_as_canonical_citation() {
         let raw_item = EnvelopeItem {
             id: "raw://session-abc/frag-1".to_string(),
             title: "Raw Fragment".to_string(),
@@ -224,17 +236,19 @@ mod tests {
             relevance: 0.55,
             tokens: 10,
             updated_at: 0,
+            note_provenance: None,
             extra: serde_json::Map::new(),
         };
         let envelope = make_envelope("anything?", vec![raw_item]);
         let ctx = envelope_to_synthesis_context(&envelope);
 
-        assert!(ctx.note_lookup.contains_key("raw://session-abc/frag-1"));
+        assert!(ctx.note_lookup.contains_key("memory-item-0"));
         assert_eq!(
-            ctx.note_lookup
-                .get("raw://session-abc/frag-1")
-                .unwrap()
-                .title,
+            ctx.note_lookup["memory-item-0"].citation_path,
+            "raw://session-abc/frag-1"
+        );
+        assert_eq!(
+            ctx.note_lookup.get("memory-item-0").unwrap().title,
             "Raw Fragment"
         );
     }
