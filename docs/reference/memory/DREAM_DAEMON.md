@@ -31,11 +31,11 @@ Machine-originated runs — cron, heartbeat, teams dispatch, A2A, model-driven `
 
 ## 3. Gating: what decides a cycle runs
 
-There is **no** standalone `DreamGate` type. Whether a cycle runs at all is decided by the daemon's own preconditions in `check_and_run` (§2): `config.enabled` → `is_within_window()` → `activity_probe()` (i.e. `idle_seconds() >= idle_threshold_seconds`, §2.1) → `is_running` compare-exchange latch → `should_skip_scheduled_run` (once-per-day). *Which* pipeline runs is the signal-driven `StrategySelector` + `MutationGate` (§2, §6). *Whether an already-formed edit is kept* is the `evolution/` gate (§3.1).
+Whether a cycle runs at all is decided by the daemon's own preconditions in `check_and_run` (§2): `config.enabled` → `is_within_window()` → `activity_probe()` (i.e. `idle_seconds() >= idle_threshold_seconds`, §2.1) → `is_running` compare-exchange latch → `should_skip_scheduled_run` (once-per-day). *Which* pipeline runs is the signal-driven `StrategySelector` + `MutationGate` (§2, §6). *Whether an already-formed edit is kept* is the `evolution/` gate (§3.1).
 
 The idle check sits **before** the latch on purpose: an active user should not even claim it — the 60 s ticker simply asks again. And these gates are the *only* answer to the operator's "why didn't it run last night", because a cycle that never started leaves no row anywhere; `dreaming::daemon_status()` reads them without moving any of them and `dreaming.list_insights` ships the snapshot (§8).
 
-> An earlier three-level `DreamGate` (time/count/drift) abstraction existed in src/memory/dreaming/gate.rs but had **zero production consumers** (the daemon always used the inline checks above) and was removed under R10/YAGNI. Do not reintroduce it; add cycle-entry preconditions to `check_and_run` instead.
+> The daemon owns cycle admission. Add new cycle-entry preconditions to `check_and_run` rather than introducing a parallel gate.
 
 ### 3.1 Evolution discipline (`src/memory/dreaming/evolution/`)
 
@@ -228,7 +228,7 @@ STALE         — Note B contains outdated information that Note A has supersede
 
 `src/memory/dreaming/stages/note_synthesis.rs`. Only built into the Synthesize pipeline (§6.2); `should_run` returns `ctx.notes.len() >= 5`. Notes are grouped by category, **excluding `category == "synthesis"`** so output doesn't feed itself; only categories with ≥ 3 notes are synthesized. Up to 15 notes per category (300 chars each) concatenate into an LLM prompt asking for "cross-cutting themes … connections between different notes … key takeaways", with instruction to use `[[wikilinks]]` back to source paths. Output is written under the `synthesis/` category — a directory **not** in `CATEGORY_DIRS`, so the stage calls `tokio::fs::create_dir_all(memory_dir/{agent_id}/synthesis/)` before writing. Title `"{category} Synthesis"`, `tags = [<category>, "synthesis"]`, `links = [<every source path>]`, `facts = [<synthesis text>]`. `NoteIndexer::write_note` persists and indexes; `synthesis_count` increments per success.
 
-**DBSCAN helper (removed).** A `dbscan(points, eps, min_pts)` helper using cosine distance shipped in src/memory/dreaming/stages/types.rs, and `DreamingConfig` exposed `cluster_dbscan_eps` (default `0.3`) / `cluster_dbscan_min_samples` (default `2`). Both were **cut on 2026-07-18** as dead code; the current synthesis stage groups by category and no clustering helper remains.
+**Synthesis.** Groups notes by category; there is no DBSCAN stage or configuration.
 
 ### 5.4 NoteLint
 
@@ -283,7 +283,7 @@ link_weight    = min(incoming_count / 3.0, 1.0)
 - **Per corpus, for the same reason FeedbackDistill is.** The sink bakes the *turn's* `agent_id` into every row, so running this base-only would mean a sub-agent that keeps failing at one tool never learns anything, while the base agent's lessons get derived from a partition it does not own. The corpus activity gate's fourth leg calls this stage's own `has_undistilled_tool_failures`.
 - **Bounds.** `DEFAULT_MIN_FAILURES = 3` (a quorum of 1 would let one unlucky invocation buy an LLM call and a permanent note every night — enforced at compile time), `DEFAULT_MAX_PER_CYCLE = 2` (deliberately smaller than FeedbackDistill's: a human types corrections at human speed, tool failures arrive at machine speed), `DEFAULT_FETCH_LIMIT = 500` rows.
 - **Watermark and window.** Own consumer key on `compression_metadata`, advanced to the newest row the digest actually looked at (not to "now"), so a row written mid-cycle is picked up next time rather than skipped. `DEFAULT_LOOKBACK_SECS` (7d) is the **first cycle's** floor only — folding it into the lower bound on every cycle would make a corpus that waited longer than the window lose every row it waited with while the watermark advanced past them, and waiting is a state `max_corpus_cycles_per_night` explicitly allows (§3.3). Work stays bounded by `fetch_limit`, which is a row cap and needs no help from a time floor.
-- **Evidence is data, never instructions.** Failure bodies come from tool error text, which can be attacker-influenced (a fetched page, a hostile file name), so they are wrapped in a `<tool_failure_evidence>` fence that a body cannot close from the inside (`a_failure_body_cannot_close_its_own_fence`).
+- **Evidence is data, never instructions.** Failure bodies come from tool error text, which can be attacker-influenced (a fetched page, a hostile file name), so they are wrapped in a `<tool_failure_evidence>` fence that a body cannot close from the inside.
 
 ## 6. Pipelines
 
@@ -316,7 +316,7 @@ The fixed daily/weekly pair is gone. Each cycle a `DreamStrategy` (`src/memory/d
 [Lint] -> [Review] -> [IndexRefresher] -> [CoRecallEdges] -> [GraphRecompute]
 ```
 
-No corpus-mutating LLM *distill* stages — but `NoteReview` still adjudicates each queued candidate with an LLM call, so "Conserve" means *no new edits proposed*, not *zero LLM spend* (round 4 doc honesty fix; the `DreamStrategy::Conserve` rustdoc says the same). A corpus admitted **only** by the corrections/tool-failure legs is treated as `Idle` under Conserve and does not spend a fan-out slot: the pipeline contains no stage that could consume those signals, and they lose nothing by waiting (no watermark moves).
+No corpus-mutating LLM *distill* stages — but `NoteReviewStage` still adjudicates each queued candidate with an LLM call, so "Conserve" means *no new edits proposed*, not *zero LLM spend* (round 4 doc honesty fix; the `DreamStrategy::Conserve` rustdoc says the same). A corpus admitted **only** by the corrections/tool-failure legs is treated as `Idle` under Conserve and does not spend a fan-out slot: the pipeline contains no stage that could consume those signals, and they lose nothing by waiting (no watermark moves).
 
 ## 7. `DreamReport` Schema
 
@@ -490,7 +490,7 @@ max_corpus_cycles_per_night    = 8          # Non-base corpora one night may run
 
 > **`feedback_lookback` is a row count, not a time window** — the distinction matters because `ToolFailureDistill` (§5.8) has a knob spelled similarly (`lookback_secs`) that *is* a duration, and conflating the two is how its first pass ended up using a time floor as a lower bound. FeedbackDistill's only lower bound is its watermark.
 
-> **Every knob listed here has a runtime reader — that is the invariant, not a coincidence.** This paragraph previously advertised three that did not: `weekly_*` (declared in `DreamingConfig` + mirrored in the Panel settings DTO, but *zero* runtime readers ever since the signal-driven `StrategySelector` replaced the daily/weekly split), plus `cluster_dbscan_*` and `drift_similarity_threshold` — the latter two **never existed in the code at all**, they were documentation-only fiction describing a "reserved surface for future" that was never built. All three are gone as of 2026-08-01 (fields, defaults, and Panel DTO mirror deleted). This is the same shape as the `idle_timeout_seconds` removal in [FEATURE_LOCATOR](../FEATURE_LOCATOR.md) §2.5②: *an inert knob sitting on a settings surface is worse than no knob*, because a user who sets it is silently ignored. Adding a knob here without a reader violates **R10** ("zero real consumers ⇒ withdraw it").
+> **Configuration invariant:** document a knob only when a production reader consumes it. Retired clustering and calendar-split knobs are not part of this surface.
 
 ## See Also
 

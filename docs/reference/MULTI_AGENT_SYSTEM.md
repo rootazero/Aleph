@@ -87,7 +87,7 @@ Sub-agents executing concurrently within one agent run, default 4, clamped to `[
 Subagents inherit the following from their parent via `SpawnerBase`:
 
 - `guardrails` (Stage 5a) — Input/Output/ToolCall checks
-- `fallback_llm` (Stage A, 2026-05-08) — Stage 5b single-step fallback
+- The earlier single-step fallback field was replaced by the provider's configured failure chain; no child-specific override is inherited here.
 - `stall_config`, `consecutive_failure_cap`, `turn_timeout` (Stage A) — P0 stability triple
 - `trace_sink` (Stage A) — the sink the child's harness loop emits into. It
   stops at the subagent boundary: a child's turns never reach the parent run's
@@ -438,7 +438,7 @@ pub struct TeamMessage {
 ```
 
 **Message Types**:
-- Business: `Message`, `Discovery`, `Challenge`, `ReviewRequest`, `ReviewResult`
+- Business messages are distinct from transport, acknowledgement and lifecycle messages.
 - System: `SystemNotification` (auto-generated from Layer 1 task events)
 - Lifecycle: `Idle`, `PlanApprovalRequest`, `PlanApproved`, `PlanRejected`
 
@@ -491,7 +491,7 @@ pub struct CollaborativeSession {
 ### Review & Acceptance Mechanism
 
 > Doc-drift fix (2026-07-19): an earlier revision of this section described
-> `review_score` / `ReviewScore` / `TeamRoleConfig` / `min_challenges`, none of
+> The earlier score threshold, typed review score and minimum-challenge count were proposals, not acceptance inputs.
 > which exist in the implementation. What follows is the real mechanism.
 
 Roles are prompt-level only (leader orchestration preamble in
@@ -840,7 +840,7 @@ routing and `a2a_agents list` see real skill data.
 > behavior is ordinary subagents with explicit bindings and failure-only fallback.
 
 
-### Continuous Advisory (this port)
+#### Continuous Advisory (historical port)
 
 Ported from hermes-agent's `MoAClient` (spec:
 `docs/superpowers/specs/2026-07-05-moa-continuous-advisory-port-design.md`).
@@ -1516,7 +1516,7 @@ that returned the outcome) is marked consumed
 (`BackgroundAgentTracker::mark_consumed`); the proactive `subagent_announce` (R5)
 checks `is_consumed` and skips re-delivering what the model already saw — so the
 poll/wait path and the announce path never double-inject the same result (hermes
-`_completion_consumed` parity). Both paths share the process-global
+consumption-deduplication behavior). Both paths share the process-global
 `BackgroundAgentTracker::global()` instance.
 
 `mark_consumed` works in **both** phases of a run's life, because its two

@@ -107,7 +107,7 @@ This bridge is the Phase 1 contract. It exists so that Phase 2 can incrementally
 ## Phase 2 status（截至 2026-09-20：逾期，未排期，DECIDE）
 
 Phase 2 — the destructive absorption that deletes `AlephSkillSpec` — was gated on two conditions
-(two weeks after Phase 1; no regression against `project_skill_system_wiring_shipped`). Both were met by
+(two weeks after Phase 1; no regression in project skill wiring). Both were met by
 **2026-06-03**. It did not happen. As of **2026-09-20** the module is 3.5 months past that date, still
 `#[deprecated(since = "26.5.20")]`, still the only parser of `metadata.aleph.input_hints` and still
 **live** (`run_loop/inner.rs join_markdown_skills`, boot `src/bin/aleph-server/commands/start/mod.rs`).
@@ -124,8 +124,8 @@ section states a date that passed, not a date that is coming. Task list for when
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
 | You see `SkillManifest` in `use` lines but it doesn't have the field you expect | You imported the Layer 1 install registry. Look at the import path — if it starts with `bundled::manifest::`, that's `InstallRegistry`. After Phase 1, the type name itself disambiguates. | Use `crate::domain::skill::SkillManifest` for skill identity / content. Use `crate::bundled::manifest::InstallRegistry` for install state. |
-| You're writing new code that parses a SKILL.md | Don't introduce a third parser. | Use `crate::skill::manifest::parse_skill_md` (Layer 2's parser); add fields to `SkillManifest` if needed. |
-| You need to represent "this CLI tool's network mode / docker config / required binaries" for a skill | These will live on `MarkdownCliExtras` after Phase 2 absorbs them. Until then, hold them in `AlephSkillSpec` (with `#[allow(deprecated)]`) at the parser boundary and discard at the SkillManifest layer. | Don't add new fields to `AlephSkillSpec`. Add them to `SkillManifest` directly and update the bridge. |
+| You're writing new code that parses a SKILL.md | Don't introduce a third parser. | Use `parse_skill_file` or `parse_skill_content` in `src/skill/manifest.rs` (Layer 2's parser). |
+| You need to represent "this CLI tool's network mode / docker config / required binaries" for a skill | The deferred Phase 2 proposal would migrate these fields to the canonical skill model. Until then, hold them in `AlephSkillSpec` (with `#[allow(deprecated)]`) at the parser boundary and discard at the SkillManifest layer. | Don't add new fields to `AlephSkillSpec`. Add them to `SkillManifest` directly and update the bridge. |
 | You see a `#[deprecated]` warning on `AlephSkillSpec` outside `markdown_skill/` | A consumer outside the controlled allow-list now references the deprecated type. | This is a signal to migrate the consumer to `SkillManifest` via the `From` bridge. |
 
 ## See also

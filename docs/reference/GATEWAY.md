@@ -396,7 +396,7 @@ iMessage is constructed directly in `initialize_channels`, which `continue`s bef
 consulting the table, and CLI is not a configurable channel type.
 
 New adapters must be added to `register_channel_plugins` by hand.
-`every_configurable_channel_type_is_registered` pins the current set against
+`the_factory_table_matches_the_configurable_channel_set` pins the current set against
 regression, but it cannot enumerate `impl ChannelFactory`, so it will not catch a
 *future* adapter that forgets to register — adding the name to that list is the
 same manual step as the registration.
@@ -963,7 +963,7 @@ its clients instead is two things, both of which were missing until 2026-08-10
   invalidation now runs inside the bind's rescope loop, **after** each write and
   for **every** key moved; three mutations (drop it, move it above the write,
   apply it to the first key only) each redden exactly one test, so the ordering
-  and the "every key" are falsified rather than argued. Its twin `forget_team`
+  and the "every key" are falsified rather than argued. The corresponding team-removal path
   was CUT rather than wired — a zero-consumer channel is cheaper to delete than
   to connect. ⚠️ Still open: nothing in source forces a future second writer of
   that pair to call it.
@@ -1260,7 +1260,7 @@ own comment recorded that those numbers had already needed changing once.
 
 Two limits carried deliberately. There is **no read face**: an operator can set
 the ceilings but still cannot ask a running server what they are. And there is
-**no separate webhook-auth window**: the `WebhookAuth` scope never had a
+**no separate webhook-auth window**: the former webhook-auth scope never had a
 producer — the webhook receiver authenticates by HMAC signature and never
 classified its attempts into a rate-limit scope — so it was removed instead of
 being left as a second spelling of `auth`. `[gateway.rate_limit.auth]` is the

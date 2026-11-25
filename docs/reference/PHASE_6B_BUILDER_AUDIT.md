@@ -1,9 +1,9 @@
-# Phase 6b — AgentLoop Builder Audit
+# Phase 6b — AgentLoop Builder Audit (Historical record)
 
 > **状态：历史文档（point-in-time）** — 本文记录的是 2026-04-20 当时的设计/结论，不代表当前架构。当前状态以代码为准（harness 现居 `src/harness/`）。
 
 **Date**: 2026-04-20
-**Status**: Task 10 artefact (Phase 6b).
+**Status**: Task 10 artefact (Phase 6b), not a current list of builder methods. See [Harness Philosophy](HARNESS_PHILOSOPHY.md) and `src/harness/agent.rs` for the current runner.
 **Parent spec**: [docs/superpowers/specs/2026-04-20-managed-agents-phase-6-cleanup-design.md](../superpowers/specs/2026-04-20-managed-agents-phase-6-cleanup-design.md) §6.1.
 
 ---

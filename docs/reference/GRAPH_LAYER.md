@@ -50,7 +50,7 @@
 ## 4. 四失败 → 落地机制
 
 1. **Goodhart → `watches` 配对**：`pair` 语法糖一次建看守 cron+边；goal 的胜利宣称即时触发看守（post-run 钩子+去抖），周期 cadence 兜底。反指标选择是认知，归 LLM——代码不自动生成看守。首发 dogfood：dreaming 蒸馏产量 × 用户纠正率。
-2. **参照盲区 → `owns_reference` 层级**：治理环拥有子环 objective；子环对自己的参照只读（goal 工具 ACL）；变更走提案 note→治理环慢 tick 裁决→用户确认。`reference_owned_by` 链必须汇于 root（lint 检查）。
+2. **参照盲区 → `owns_reference` 层级**：治理环拥有子环 objective；子环对自己的参照只读（goal 工具 ACL）。参照的写入归属从 `src/loop_graph/service.rs` 的 `governing_owner` 查找，不在调用方另建权威。
 3. **冲突 → `arbitrates` 仲裁**：检测靠 LLM（永不建冲突检测器，R7 红线），仲裁是事件不是服务；准绳向上锚到 root 根参照。
 4. **测量衰减 → `audits` 审计环**：独立周 cron（enable_audit 安装；**明确拒绝 dreaming 托管**——被审对象的宿主不能当审计员），七步：取拓扑→锚点真实取证（mode=ro）→报表对现实对账→验尸探针与冻结节点→点名（剧场循环/裸奔环/悬空边）→裁决 note→上报。层级封顶三层：优化环→审计环→**人**（读 digest，无元审计环）。
 
@@ -83,12 +83,12 @@ Graph RAG/多跳图检索（记忆检索议题）；Neo4j 等图数据库（红�
 | 容错重启 | `src/agents/swarm/tasks/retry.rs` 有界重试 + 指数退避 + jitter + recovery context 续做 | **SKIP（Aleph 更强）** |
 | Time-travel / fork（回到任意检查点重放、分叉） | 无（只有逐 step retry） | **SKIP（YAGNI）**：`workflow(action='run')` 重跑一次即可；fork 的消费者不存在 |
 | **Conditional edges / router** | 无（`depends_on` 静态 DAG，`topo_order` 硬拒环） | **DECIDE（人来定，勿自行开工）**：缺口属实，但**不是红线可清的**——spec §10 item 3 「LangGraph 式控制流图…把认知编进图结构 = fat harness，违 R10」是**通则**，并未把 `src/workflow/` 列为豁免地。今天可用的替代：`workflow_step_review{action:'skip'}` 手动剪枝（`Skipped` 已满足下游依赖） |
-| **运行时宽度扇出/扇入** | coord_task 的依赖集**在 INSERT 时冻结**（`crud.rs` 是唯一写者，无 `add_dependency`）；节点内可用 `subagent{batch_tasks, synthesize}` 做模型定宽的菱形 | **DEFER**：要一个 append-only `add_dependency`（`dag::check_no_cycle_sync` 守 + 目标离开 Pending/Blocked 即拒）。有真实用例再做 |
+| **运行时宽度扇出/扇入** | 协调任务的依赖集在插入时确定，不在执行中追加。 | 对照的是运行时增添分支。 | 不引入运行时重写依赖图；任务内并发由子代理承担。 |
 | **过期传播**（重跑上游使下游失效） | ~~无~~ → **已连线**：`workflow_step_review{retry}` 对已结算步骤返回 `now_stale`（`get_dependents` 的第一个消费者） | **DONE（2026-08-03，报告不代劳——是否重做归 LLM 判断，R7）** |
 | 声明式路径要求锚点 | ~~`require_grounding` 只有 `task_create` 能设~~ → **已连线**：`WorkflowStepDef.require_grounding` | **DONE（2026-08-03）** |
 | 子图嵌套（sub-workflow） | 无（`WorkflowStepKind` 只有 `Agent|Clarify`；运行时 `run` 另铸 run_id，status/cancel/settle 看不见子 run） | **DEFER**：正解是 `materialize` **编译期**展开（前缀化子 step id、重接边），不是运行时嵌套。等真有共享形状再做 |
 
-### 参考项目对照（codex Multi-agent V2 · Gap Analysis，2026-08-02）
+### 历史记录：参考项目对照（codex Multi-agent V2，2026-08-02）
 
 **改这一层前先看这张表，不必重做对比。** 双 checkout 复核（`80b65e9945` 与 `2b5bdcf675`），结论一致：
 

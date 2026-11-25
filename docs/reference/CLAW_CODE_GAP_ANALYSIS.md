@@ -1,4 +1,4 @@
-# claw-code Gap Analysis — 2026-05-27
+# claw-code Gap Analysis (Historical) — 2026-05-27
 
 Reference project: `/Volumes/TBU4/Github/claw-code` (TS upstream + `rust/crates/`
 runtime port).

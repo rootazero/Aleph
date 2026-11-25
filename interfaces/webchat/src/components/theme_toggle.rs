@@ -11,7 +11,7 @@
 //
 use crate::appearance::{
     apply_accent, apply_material, apply_mode, read_accent, read_material, read_mode, Accent,
-    Material, ThemeMode,
+    AppearanceLabel, Material, ThemeMode,
 };
 use crate::components::ui::SwatchButton;
 use crate::i18n::{t, t_string, use_i18n};

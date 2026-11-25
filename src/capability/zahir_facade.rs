@@ -631,6 +631,25 @@ impl ZahirFacade {
                 )
                 .await
             }
+            aleph_protocol::capability::PtyToolParams::History {
+                session_id,
+                before,
+                limit,
+            } => {
+                self.invoke_terminal_gateway(
+                    aleph_protocol::capability::PtyInvokeParams {
+                        session_id,
+                        operation: aleph_protocol::capability::PtyOperation::History {
+                            before,
+                            limit,
+                        },
+                    },
+                    call_id,
+                    cancel,
+                    captured.clone(),
+                )
+                .await
+            }
             aleph_protocol::capability::PtyToolParams::Attach { session_id } => {
                 self.invoke_terminal_gateway(
                     aleph_protocol::capability::PtyInvokeParams {

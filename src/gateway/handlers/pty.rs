@@ -450,6 +450,45 @@ pub async fn handle_input_with_source(
     )
 }
 
+pub async fn handle_history_with_source(
+    request: JsonRpcRequest,
+    source: Arc<crate::capability::tool_adapters::TerminalCapabilitySource>,
+) -> JsonRpcResponse {
+    let id = request.id.clone();
+    let params: aleph_protocol::pty::PtyHistoryRequest = match parse(&request) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let owned = match require_owned_session(&params.session_id)
+        .map(|owned| owned.with_source(Arc::clone(&source)))
+    {
+        Ok(owned) => owned,
+        Err(error) => return JsonRpcResponse::error(id, INVALID_PARAMS, error.to_string()),
+    };
+    #[cfg(test)]
+    wait_for_handler_handoff().await;
+    let result = source
+        .invoke_legacy_gateway(
+            aleph_protocol::capability::PtyToolParams::History {
+                session_id: params.session_id,
+                before: params.before,
+                limit: params.limit,
+            },
+            format!(
+                "pty.history:{}",
+                id.as_ref()
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| "notification".into())
+            ),
+            CancellationToken::new(),
+            Some(owned),
+        )
+        .await;
+    #[cfg(test)]
+    observe_stale_provider(&result);
+    gateway_response(id, result)
+}
+
 pub async fn handle_attach_with_source(
     request: JsonRpcRequest,
     source: Arc<crate::capability::tool_adapters::TerminalCapabilitySource>,

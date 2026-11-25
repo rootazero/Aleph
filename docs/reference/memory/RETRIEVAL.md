@@ -4,7 +4,7 @@
 
 ## 1. Entry Points
 
-`NoteFactRetrieval` is the single retrieval entry point in the current codebase. It reads from `notes_index` + `notes_vec_{dim}` + `notes_fts` via the `NoteStore` trait, fuses the two ranked lists with Reciprocal Rank Fusion, expands the candidate pool with associative graph-related peers (see Associative Graph Expansion), then hands results to the scoring pipeline (§4) or a tool caller. The legacy `FactRetrieval` / `HybridRetrieval` structs and `retrieval_trace.rs` were deleted; `NoteFactRetrieval` returns `Vec<ScoredFact>` so downstream consumers (Smart Recall, `ContextComptroller`, `memory_search`) kept their signatures. Paths on results use the `note://{category}/{filename}` scheme.
+`NoteFactRetrieval` is the single retrieval entry point in the current codebase. It reads from `notes_index` + `notes_vec_{dim}` + `notes_fts` via the `NoteStore` trait, fuses the two ranked lists with Reciprocal Rank Fusion, expands the candidate pool with associative graph-related peers (see Associative Graph Expansion), then hands results to the scoring pipeline (§4) or a tool caller. The earlier split retrieval implementation was removed; `NoteFactRetrieval` returns `Vec<ScoredFact>` so downstream consumers (Smart Recall, `ContextComptroller`, `memory_search`) kept their signatures. Paths on results use the `note://{category}/{filename}` scheme.
 
 | Method | Source | Scope |
 |---|---|---|
@@ -211,77 +211,17 @@ Downstream consumers still receive `ScoredFact<MemoryFact>`, but the path is now
 
 ## 5. Scoring Pipeline
 
-### 4.1 Stages Overview
+After hybrid fusion and any configured cross-encoder rerank, `NoteFactRetrieval` can adjust ranking with the following stages. The implementation is in `src/memory/note_retrieval/pipeline.rs` and `src/memory/note_retrieval/scoring.rs`; the config and defaults are in `src/config/types/memory/retrieval.rs`.
 
-The former `ScoringPipeline` and its config were removed. Current note scoring lives in `src/memory/note_retrieval/pipeline.rs` and uses recency reweighting, reinforcement, and MMR diversity. The stages and defaults below describe the removed pipeline, not the current implementation. `ScoringPipeline::from_config` built the stages in a fixed insertion order. Each stage implements `ScoringStage { fn name(&self); fn apply(&self, candidates: Vec<ScoredFact>, ctx: &ScoringContext) -> Vec<ScoredFact>; }` and receives a shared `ScoringContext { query, query_embedding, timestamp, config: ScoringPipelineConfig }`. `run` drives them sequentially.
+| Stage | Effect | Defaults |
+|---|---|---|
+| Recency | Blends relevance with an exponential decay based on the note's update time | `recency_enabled` on, `recency_half_life_days` 90, `recency_weight` 0.3 |
+| Reinforcement | Boosts relevance sublinearly with historical recall count | `reinforcement_enabled` on, `reinforcement_weight` 0.3 |
+| Diversity | Greedy MMR uses token overlap to reorder similar candidates; smaller lambda favors diversity | `mmr_enabled` off, `mmr_lambda` 0.7 |
 
-| # | Stage | Purpose | Key config key |
-|---|---|---|---|
-| 1 | `cosine_rerank` | Blend vector-search score with fresh cosine against `query_embedding` | `rerank_blend` (default 0.3) |
-| 2 | `recency_boost` | Additive boost for recently created facts | `recency_half_life_days` 14.0, `recency_weight` 0.1 |
-| 3 | `length_normalization` | Penalize content much longer than anchor | `length_norm_anchor` (default 500 chars) |
-| 4 | `time_decay` | Exponential decay by age, floor 0.5 | `time_decay_half_life_days` (default 60.0) |
-| 5 | `hard_min_score` | Drop candidates below threshold | `hard_min_score` (default 0.35) |
-| 6 | `mmr_diversity` | Defer near-duplicate embeddings to tail | `mmr_similarity_threshold` (default 0.85) |
+The old six-stage scoring pipeline and its tuning knobs were removed. Salience factors above adjust ranking; they do not assign durable confidence or importance to a note.
 
-`ScoringPipelineConfig::default()` also exposes `enabled: bool` (default `true`) as a top-level switch. All fields carry `#[serde(default = ...)]` so partial TOML configs fall back to defaults.
-
-> The former `importance_weight` stage and its backing `ValueEstimator` (keyword heuristic + LLM scorer) were removed as part of the memory sovereignty cleanup. Confidence is no longer stored on facts, and value judgments are the LLM's responsibility at the prompt layer rather than a code-level multiplier.
-
-### 4.2 `cosine_rerank`
-
-If `ctx.query_embedding` is `None`, the stage is a no-op passthrough. Otherwise, for each candidate that carries `fact.embedding`, it computes cosine similarity between the query vector and the fact vector (clamped to `[0, 1]`, returning 0 on zero-norm) and blends:
-
-```rust
-c.score = (1.0 - blend) * c.score + blend * sim;   // blend = ctx.config.rerank_blend
-```
-
-Facts without an embedding keep their original score. The stage re-sorts at the end. Controlled by `rerank_blend` (0.0 = pure original retrieval score, 1.0 = pure fresh cosine). The default 0.3 keeps retrieval rank primary while nudging toward vector truth.
-
-### 4.3 `mmr_diversity`
-
-Greedy Maximal Marginal Relevance without dropping anything. For each candidate in input order, if it has no embedding it is treated as diverse and appended to `selected`. Otherwise, if its cosine similarity to any already-selected fact exceeds `mmr_similarity_threshold`, it is pushed to a `deferred` list. At the end, `deferred` is appended after `selected`, so near-duplicates end up at the tail rather than being dropped. This preserves recall but ranks visually distinct items higher — important when downstream uses the head of the list. Ordering semantics: input order matters; higher-scoring candidates should reach this stage first so the diverse survivors come from the top.
-
-### 4.4 `time_decay`
-
-If `time_decay_half_life_days <= 0`, the stage is a no-op. Otherwise:
-
-```rust
-let age_days = ((ctx.timestamp - c.fact.created_at).max(0) as f64) / 86400.0;
-let decay = 0.5 + 0.5 * (-age_days / half_life as f64).exp();
-c.score *= decay as f32;
-```
-
-The `0.5 + 0.5 * exp(...)` shape floors decay at 0.5 so ancient facts retain half their score rather than vanishing. At half-life (default 60 days) the factor is `0.5 + 0.5 * e^-1 ≈ 0.684`. Re-sorts at the end.
-
-### 4.5 `recency_boost`
-
-Additive (not multiplicative), runs before `time_decay`. Disabled when `recency_weight <= 0` or `recency_half_life_days <= 0`. Otherwise:
-
-```rust
-let boost = (-age_days / half_life as f64).exp() * weight as f64;
-c.score += boost as f32;
-```
-
-With defaults `recency_half_life_days = 14`, `recency_weight = 0.1`: a brand-new fact gets `+0.1`; a 60-day-old fact gets roughly `+0.0014`. Complements time_decay — recency boosts young facts, decay fades old ones.
-
-### 4.6 `length_normalization`
-
-Penalizes very long facts logarithmically. `anchor = config.length_norm_anchor.max(1) as f32` (default 500 chars). For each candidate:
-
-```rust
-let ratio = (c.fact.content.chars().count() as f32 / anchor).max(1.0);
-let factor = 1.0 / (1.0 + 0.5 * ratio.log2());
-c.score *= factor;
-```
-
-The `ratio.max(1.0)` clamp means short facts get `log2(1) = 0` → factor 1.0 (no bonus, no penalty). At 2× anchor, factor ≈ 0.667; at 4× anchor, factor = 0.5. Uses `chars().count()` so it is UTF-8 safe. Re-sorts.
-
-### 4.7 `hard_min_score`
-
-Pure filter — no score mutation, no re-ordering. `candidates.into_iter().filter(|c| c.score >= threshold).collect()`. Threshold is `config.hard_min_score` (default 0.35). Placed after all multiplicative stages so a candidate that started at 0.9 but got hammered by decay + length penalties can still be dropped. Surviving order is preserved for `mmr_diversity`.
-
-## 6. Reranker (Optional, Not Wired)
+## 6. Reranker (Optional, configured)
 
 `src/memory/rerank/` implements HTTP cross-encoder reranking against five providers. The trait (from `provider.rs`):
 
@@ -366,28 +306,13 @@ Until 2026-08-05 the set was spelled out in five places and stopped at {768, 102
 
 ## 9. Context Assembly
 
-### 8.1 `ContextComptroller`
+### 9.1 Context budget trimming
 
-`src/memory/context_comptroller/` arbitrates retrieved facts against a token budget. `ComptrollerConfig` carries `similarity_threshold: 0.95`, `token_budget: 100_000`, `fold_threshold: 0.2`, and a `retention_mode: RetentionMode`. The `RetentionMode` enum: `PreferTranscript` (keep original text), `PreferFact` (keep compressed), and `Hybrid` (mix by importance — the `Default`).
+`memory_search` uses `ContextComptroller` to trim results to a caller-supplied token budget. The current implementation is under `src/memory/context_comptroller/`; its config has no retention-mode, deduplication-threshold, or token-budget setting.
 
-`ContextComptroller::arbitrate(results, budget)` sorts the input facts by `similarity_score` descending, then greedy-packs into a `TokenBudget::new(total)` using a crude `text.len() / 4` token estimate. Facts that don't fit bump `tokens_saved`. The return is `ArbitratedContext { facts, tokens_saved }`. Redundancy detection by embedding similarity is wired in the struct but the current `arbitrate` path uses pure budget trimming — `similarity_threshold` is consulted by future dedup logic; the inline comment notes raw-memory fold was removed.
+## 10. Removed LLM-only retrieval experiment
 
-## 10. `AiMemoryRetriever`
-
-The unwired `AiMemoryRetriever` was removed. It was an LLM-in-the-loop alternative to vector retrieval. It sends a list of `MemoryCandidate { id, user_input, ai_output, timestamp }` (truncated) to an `AiProvider` with a strict JSON system prompt and parses `AiMemoryResult { selected_memory_ids, reasoning }` out. The request/result types:
-
-```rust
-pub struct AiMemoryRequest { pub query: String, pub candidates: Vec<MemoryCandidate> }
-
-#[derive(Default, Deserialize)]
-pub struct AiMemoryResult {
-    pub selected_memory_ids: Vec<String>,
-    #[serde(default)]
-    pub reasoning: Option<String>,
-}
-```
-
-`retrieve(query, candidates, exclude_inputs)` filters current-session inputs out, caps at `max_candidates`, issues one LLM call under a `tokio::time::timeout(self.timeout)`. On success, it intersects the returned IDs with the candidate set. On error or timeout, it falls back to `fallback_selection` (most recent N). Construction: `AiMemoryRetriever::with_policy(provider, &AiRetrievalPolicy { max_candidates, fallback_count, timeout_ms, content_truncate_length })`. It had no production consumer.
+The experiment asked a model to select IDs from a supplied list of candidates and fell back to recent candidates on failure. It had no production consumer. Use the note retrieval entry points in §1.
 
 ## 11. RippleTask
 
@@ -410,7 +335,7 @@ pub struct RippleResult {
 }
 ```
 
-`RippleTask::explore(seed_facts)` maintains a `HashSet<String>` of visited IDs seeded from the input, then iterates up to `max_hops`. At each hop, for every fact with an embedding it calls `NoteStore::vector_search_notes_with_content(embedding, agent_id, dim, max_facts_per_hop)`, converts hits to `MemoryFact` with `similarity_score` attached, drops anything already visited, and keeps those above `similarity_threshold` as the next level. BFS stops when `current_level` is empty. `explore_tunnels` is currently a stub returning `Vec::new()` — the previous `graph_nodes` / `graph_edges` cross-domain edges were deprecated, and tunnel discovery will migrate to `notes_links` in a future change.
+`RippleTask::explore(seed_facts)` maintains a `HashSet<String>` of visited IDs seeded from the input, then iterates up to `max_hops`. At each hop, for every fact with an embedding it calls `NoteStore::vector_search_notes_with_content(embedding, agent_id, dim, max_facts_per_hop)`, converts hits to `MemoryFact` with `similarity_score` attached, drops anything already visited, and keeps those above `similarity_threshold` as the next level. BFS stops when `current_level` is empty. The current implementation does not do a separate tunnel expansion.
 
 ## 12. Memory Tools
 
@@ -519,7 +444,7 @@ All user-supplied fields are `xml_escape`d so evil content in a note cannot brea
 
 Default is `Hybrid` (pre-Spec-3 behaviour). The six retrieval tools gated by mode are: `memory_search`, `memory_reflect`, `recall_context`, `memory_browse`, `memory_explore`, `memory_timeline`. `note_manage` and `session_complete` are always registered — they are write-side and task-boundary tools unaffected by retrieval mode.
 
-The legacy `MemoryContext` type, `memory_context_from_envelope` adapter, and `MemoryContextProvider::fetch()` method were deleted in Spec 3. Production now uses `MemoryContextProvider::build_memory_user_message` → `render_with(&env, RenderStyle::Xml)` → `UnifiedMessage::user(rendered)`, threaded through the prompt builder via `LayerInput::memory_user_message`.
+`MemoryContextProvider::build_memory_user_message` renders the envelope using the assembler's configured style, wraps the rendered result with `wrap_memory_context` and returns a `UnifiedMessage::user`. See `src/thinker/memory_context_provider/memory.rs` and `src/thinker/layers/memory_window.rs` for the injection boundary.
 
 See `docs/superpowers/specs/2026-04-13-memory-evolution-spec3-fencing-modes-design.md`.
 
@@ -529,14 +454,10 @@ The memory pipeline exposes three hook points — `on_retrieve`, `on_capture`, a
 
 ## Appendix: Retrieval Tuning Tips
 
-- **Raise `hard_min_score` when noise surfaces.** The default 0.35 is tuned against the current confidence + decay profile; bump to 0.45 if retrieval surfaces marginal matches, lower to 0.25 for sparse knowledge bases.
-- **Lower `mmr_similarity_threshold` to surface variety.** 0.85 is aggressive — identical embeddings deferred. Drop to 0.75 if top results feel repetitive across distinct phrasings.
-- **Tune `rerank_blend` around the retrieval budget.** 0.3 respects the original retrieval ranking; raise toward 0.6 when you trust the query embedding more than FTS rank; set to 0.0 to disable the rerank stage entirely.
-- **Adjust `recency_half_life_days` / `time_decay_half_life_days` together.** Recency = short-term additive boost (14 days); decay = long-term multiplicative floor (60 days). Match them to how volatile your knowledge is.
-- **Enable a reranker only when latency budget allows.** `RerankConfig.timeout_ms = 5000` and `rerank_weight = 0.6` are the defaults — the network hop is the cost, and the stage is not wired into `NoteFactRetrieval` today.
-- **`ContextComptroller.token_budget` is the last gate.** Default 100 000. If tool callers over-fetch, shrink the budget before shrinking `max_results` — the comptroller keeps the highest-scoring facts and reports `tokens_saved`.
-- **`similarity_threshold` on `RippleConfig` controls graph reach.** 0.7 is the BFS floor. Raise for tighter clusters, lower to let ripples travel further.
-
+- Tune `recency_half_life_days` and `recency_weight` if recent notes should have more or less influence.
+- Turn on `mmr_enabled` and lower `mmr_lambda` to favor diversity when top results repeat the same phrasing.
+- Measure latency and retrieval quality before turning on a cross-encoder: `RerankConfig` controls its timeout and score blend, and the reranker adds a network round trip.
+- `RippleConfig.similarity_threshold` controls the reach of multi-hop vector exploration. Raise it for a tighter cluster.
 ## 17. Cross-session summary retrieval (Spec B)
 
 The `session_search` tool returns one synthesized excerpt per matched session,

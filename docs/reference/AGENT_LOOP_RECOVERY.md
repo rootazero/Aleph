@@ -1,6 +1,6 @@
-# Agent Loop Recovery
+# Historical — Agent Loop Recovery
 
-> Truncation recovery and 413 Prompt-Too-Long handling.
+> Earlier four-level recovery design, not the current runtime contract. For current control flow start at [`src/harness/agent.rs`](../../src/harness/agent.rs) and [`HARNESS_PHILOSOPHY.md`](HARNESS_PHILOSOPHY.md).
 
 ## Overview
 

@@ -4,7 +4,9 @@
 
 ## 当前边界
 
-终端事实由服务端 PTY 与 VT screen 持有：`src/gateway/pty/` 负责 spawn、输入、resize、attach、screen frame、OSC 7 cwd、title 和退出事件。客户端只消费 `pty.list`、`pty.screen`、`pty.exit`，维护自己的 tab 选择与 canvas/render 状态。
+终端事实由服务端 PTY 与 VT screen 持有。`src/gateway/pty/` 管理会话、输入、尺寸、attach 快照、screen frame、OSC 7 cwd、title 和退出事件。客户端通过 RPC 与事件维护自己的 tab 选择和渲染状态，不运行第二套 VT。
+
+The server PTY and VT in `src/gateway/pty/` own session state, input, geometry, attach snapshots, incremental frames, OSC 7 cwd, title changes and exits. Clients use these RPCs and events to maintain local tab selection and paint; they do not run a second VT.
 
 保留的主要入口：
 
@@ -17,8 +19,15 @@
 
 `pty.attach` 仍执行 session ownership 校验并返回 attach snapshot。客户端卸载不会销毁服务端 screen；重新 attach 可以恢复当前 screen。退出事件只驱动客户端清理 tab，不会创建新的 shell。
 
-WebSocket 重连后，Web terminal 会重新订阅临时的 `pty.screen` 与 `pty.exit` 事件，并重新 attach 当前选中的 session；服务端 screen 状态因此可以在连接恢复后继续显示。
-After a WebSocket reconnect, the web terminal re-subscribes to the ephemeral `pty.screen` and `pty.exit` events and re-attaches the selected session, so the server-side screen can continue rendering after the connection is restored.
+默认宽屏与可选模块化 Panel 共用 `DashboardState` 的 `PtyTopicLease`，仅订阅 `pty.screen` 和 `pty.exit`。每个 UI owner 先注册自己的事件接收队列，再等待 Gateway 确认当前连接世代的租约；同一 topic 的首个持有者建立订阅，最后一个持有者释放订阅。单个终端租约队列超出 256 个事件或 8 MiB 上限时丢弃不完整队列并持续报告丢失，直至释放租约；不能把溢出当作一次正常的空读取。重连需取得新世代覆盖并重新 attach 选中的 session。
+
+The default wide Panel and optional modular Panel share `DashboardState`'s `PtyTopicLease` for `pty.screen` and `pty.exit`. Each UI owner registers its queue before the Gateway confirms coverage for the current connection epoch. The first holder subscribes and the last holder releases the subscription. A terminal lease queue that exceeds either 256 events or 8 MiB discards the incomplete queue and reports loss until released, rather than returning a successful empty drain. Reconnect requires coverage for the new epoch and re-attaching the selected session.
+
+## Capability wiring / Capability 连线
+
+生产启动创建一个 `TerminalCapabilitySource`。`src/bin/aleph-server/commands/start/mod.rs` 将同一 source 绑定到 `ZahirFacade`，并交给 `src/bin/aleph-server/commands/start/builder/handlers/system.rs` 注册 `pty.*`。既有终端 Tool adapter 与 Gateway RPC 共用该 source，不另建 PTY manager、owner map 或 VT。此绑定不代表 Terminal 已具备 MCP/ACP 投影或 durable Capability recovery。
+
+Production startup creates one `TerminalCapabilitySource`, binds it to `ZahirFacade`, and passes it to the Gateway `pty.*` registration. The existing terminal Tool adapter and Gateway RPCs use the same source, PTY manager, ownership state and VT. This binding does not imply Terminal MCP/ACP projection or durable Capability recovery.
 
 ## Provider lifecycle / Provider 生命周期
 
@@ -28,11 +37,11 @@ The existing `PtyManager` owns one pure `ProviderHandle` and one joinable flush 
 
 The central async live-apply executor accepts the existing Gateway bus explicitly. Production wires the same bus into the shared ConfigPatcher and reload registration; patch, self_config update/rollback, rollback and explicit reload use that executor. Cold enable can start the first Ready driver without restart; missing enable context remains non-live. Stopping→enable first awaits the retained stop, then starts a checked new generation. Disable reports live only after source cleanup and stored-driver join. A local five-second async wait budget returns non-live on timeout/failure, preserving source evidence and ownership on cancellation. Patcher/rollback and reload apply the latest shared Config under a read guard held through completion; reload releases the installation write guard before joining. Identical patch/self_config updates remain no-ops, without lifecycle retry, backup, write, mtime change or fabricated live result; incomplete persisted disable recovers through the actual explicit `config.reload` handler.
 
-File-watcher updates alone remain outside this path. The five-second apply budget is not a hard RPC deadline and cannot preempt synchronous native I/O or lock waits. Normal shutdown awaits stop; forced shutdown retains its separate one-second join attempt. Successful kill request or waiter-confirmed child exit, canonical cleanup and flush-driver join do not prove native unload, OS child/reader-thread/RSS reclamation or process isolation. Terminal Zahir/BackendLease/MCP/ACP projection and durable Capability recovery remain deferred. Exact validation and limitations: [Terminal lifecycle run](../superpowers/runs/2026-10-31-terminal-lifecycle-run.md) and [explicit live-config run](../superpowers/runs/2026-10-31-terminal-live-config-run.md).
+File-watcher updates alone remain outside this path. The five-second apply budget is not a hard RPC deadline and cannot preempt synchronous native I/O or lock waits. Normal shutdown awaits stop; forced shutdown retains its separate one-second join attempt. Successful kill request or waiter-confirmed child exit, canonical cleanup and flush-driver join do not prove native unload, OS child/reader-thread/RSS reclamation or process isolation. Terminal MCP/ACP projection and durable Capability recovery remain deferred. Exact validation and limitations: [Terminal lifecycle run](../superpowers/runs/2026-10-31-terminal-lifecycle-run.md) and [explicit live-config run](../superpowers/runs/2026-10-31-terminal-live-config-run.md).
 
 中央异步 live-apply 显式接收既有 Gateway bus。生产把同一 bus 接入 shared ConfigPatcher 与 reload 注册，patch、self_config update/rollback、rollback 与显式 reload 共用执行器。Cold enable 可不重启启动首个 Ready driver，enable 缺 context 保持 non-live；Stopping→enable 先等待 retained stop，再启动 checked 新 generation。Disable 仅在 source cleanup 与 stored-driver join 完成后报告 live。五秒局部异步等待预算对 timeout/失败返回 non-live，取消保留 source evidence 与所有权。Patcher/rollback 与 reload 在最新 shared Config 的 read guard 下完成应用，reload 在 join 前释放安装配置的 write guard。相同 patch/self_config 保持 no-op，不重试 lifecycle、不备份、不写文件、不改变 mtime、不伪造 live 结果；持久化 disable 未完成时，经真实显式 `config.reload` handler 恢复。
 
-仅文件 watcher 更新仍不进入此路径。五秒 apply 预算不是 RPC 硬时限，无法抢占同步 native I/O 或锁等待；正常 shutdown 等待 stop，forced shutdown 保留独立的一秒 join 尝试。Kill 请求成功或 waiter 确认 child 退出，加 canonical cleanup 与 flush-driver join，不证明 native unload、OS child/reader-thread/RSS reclamation 或 process isolation。Terminal Zahir/BackendLease/MCP/ACP projection 与 durable Capability recovery 仍 deferred。精确验证与限制见上述 run records。
+仅文件 watcher 更新仍不进入此路径。五秒 apply 预算不是 RPC 硬时限，无法抢占同步 native I/O 或锁等待；正常 shutdown 等待 stop，forced shutdown 保留独立的一秒 join 尝试。Kill 请求成功或 waiter 确认 child 退出，加 canonical cleanup 与 flush-driver join，不证明 native unload、OS child/reader-thread/RSS reclamation 或 process isolation。Terminal MCP/ACP projection 与 durable Capability recovery 仍 deferred。精确验证与限制见上述 run records。
 
 ## Panel module lifecycle / Panel 模块生命周期
 
@@ -40,9 +49,9 @@ The standalone terminal entry owns only its UI resources: the SDK polling task, 
 
 独立 Terminal module 只拥有 UI 资源：SDK polling task、两个 DOM root、Leptos `Owner`、PTY 事件订阅、resize/observer 回调、animation frame 和已加载 module handle。`mount` 会先初始化浏览器 `spawn_local` executor，再创建 SDK adapter，最后创建 sidebar 与 Canvas 两个 surface。`unmount` 幂等释放这些资源并清空两个 root；它绝不调用 `pty.close`。
 
-The PTY/session lifetime belongs to the Gateway. Leaving the route, disabling the tab, replacing a module, or disposing a UI owner does not close the server session. Only an explicit user action routed to the PTY close operation may call `pty.close`; a test may call it only for the disposable session that the same test created. Source-owned capacity eviction, provider disable and daemon shutdown can also end sessions without a UI close RPC. A later visit reuses a surviving selected session through `pty.list` and `pty.attach`.
+The default wide Panel unmounts the terminal when leaving its route, rather than hiding a running view. Leaving a route, disabling a tab, or replacing a module releases UI resources without closing its PTY session. Only an explicit New or Close gesture sends `pty.spawn` or `pty.close`; an empty list, remount, and reconnect never do. Capacity eviction, provider disable, and daemon shutdown can end sessions independently. On return, the Panel lists surviving sessions and attaches to the selection. Gateway viewport registration remains connection-scoped; UI unmount does not send a viewport detach.
 
-PTY/session 生命周期属于 Gateway。离开路由、禁用 Tab、替换 module 或释放 UI owner 都不会关闭服务端 session。只有经过 PTY close operation 的明确用户动作才能调用 `pty.close`；测试只能为本次测试自己创建的 disposable session 显式调用它。Source-owned capacity eviction、provider disable 与 daemon shutdown 也可结束 session，不需要 UI close RPC。再次进入时通过 `pty.list` 与 `pty.attach` 复用仍存活的 selected session。
+默认宽屏 Panel 离开终端路由时卸载视图，而非用 CSS 隐藏仍在运行的视图。离开路由、禁用标签或替换模块只释放 UI 资源，不关闭 PTY 会话。只有明确的新建或关闭手势才发送 `pty.spawn` 或 `pty.close`；空列表、重挂载和重连不会发送。容量淘汰、provider 停用与 daemon 关闭仍可独立结束会话。返回时重新 list，随后 attach 选中的存活会话。Gateway 的 viewport 仍以连接为生命周期，卸载 UI 不发送 detach。
 
 The host-owned source/snapshot/projection path is the boundary between capability facts, route selection, and module loading. The serializable `PanelUiCapabilityDeclaration`, `PanelUiCapabilityOrigin`, and `PanelUiCapabilitySnapshot` live in `shared/protocol/src/panel.rs`; `shared/ui_logic/src/panel/source.rs` provides source implementations and built-in/fixture construction. Core derives explicit community declarations in `src/extension/panel.rs`, admits bounded SRI-verified bytes in `src/extension/panel_publication/`, and atomically replaces declaration/bytes/scope/revision through `src/extension/projection.rs` only from `src/extension/lifecycle.rs::after_transition`. Snapshot and asset reads share that state and `visible_to`; contextless discovery is Global-only. The optional `panel` manifest section is explicit and is never inferred from generic plugin entry, kind, permissions, `capabilities_v2`, or `wasm_capabilities`. `shared/ui_logic/src/panel/projection.rs::PanelProjection::{from_snapshot,replace_snapshot}` validates every declaration with stable fail-closed reason codes and atomically accepts only a newer valid snapshot. Community entries require `./tabs/<plugin_id>/<plugin_version>/<file>` plus SRI-shaped sha256 integrity and an explicit supported public base. The validated optional integrity travels through the existing projection → `TabRegistry` → `PanelLoader` path. `PanelTabDescriptor` remains the only browser projection shape; `PanelShell` and `PanelLoader` remain browser-side consumers. Discovery contract evidence and deferred boundaries are recorded in [panel-community-manifest-discovery-validation.md](../reports/panel-community-manifest-discovery-validation.md).
 
@@ -60,9 +69,9 @@ host-owned source/snapshot/projection 路径是 capability facts、route selecti
 
 生产 discovery bridge 复用已认证的 `/ws` WebSocket JSON-RPC control plane。`panel.capabilities.snapshot` 通过现有 handler registry 注册，并且每次只读取一次 Core canonical snapshot；webchat 在授权连接和重连后把结果写入独立 discovery state，并显式保留 error/disconnected 状态以及 epoch/revision fencing。snapshot arrival 本身不触发 selection、asset fetch、module import 或 mount；显式 `/panel/<plugin_id>/<tab_id>` 使用既有 `PanelProjection`、`PanelShell` 与 `PanelLoader`；production HTTP publication 与 credential handoff 已独立实现，运行证据与 deterministic fixture 分层记录。由于 EventBus 广播路径可丢失且只具 advisory 语义，live notification 仍 deferred；reconnect 与 explicit refresh 通过完整 snapshot query 恢复。install/update/uninstall、多文件 graph 与 external WASM 仍不在本阶段。
 
-Each SDK connection snapshot has an epoch. A reconnect replaces the old `pty.screen` and `pty.exit` subscriptions, re-attaches the selected session, and refreshes from the new epoch. Async list, attach, subscribe, and event results must check the active owner and connection epoch before changing the UI. Results from a disposed owner or an old epoch are discarded; they must not spawn a fallback PTY or report a false success.
+The shared controller waits for both topics in the current connection epoch before listing or attaching. It checks the connection epoch and selection revision before applying async results. Attach stages at most 256 frames and 8 MiB, then publishes a snapshot only after its full remaining replay is contiguous. Gaps, decode failure, and overflow keep the last confirmed paint marked stale, disable input, and schedule retry at 100, 250, 500 and 1,000 ms even when the shell is quiet. After exhaustion the user can retry explicitly. A disposed owner or old epoch cannot apply its response to the current view. An explicit pending New or Close remains reserved across same-scope mounts; late settlement can invalidate the current list, but never carries the old result or triggers a retry of the write. The modular reservation is scoped to the Dashboard and its project context, not to a short-lived Panel shell.
 
-每个 SDK connection snapshot 都带有 epoch。重连会释放旧的 `pty.screen`/`pty.exit` 订阅，在新 epoch 下重新 attach selected session，并从新 epoch 刷新。异步 list、attach、subscribe 与 event 结果在写入 UI 前必须检查 active owner 和 connection epoch；已释放 owner 或旧 epoch 的结果会被丢弃，不得 fallback spawn PTY，也不得报告假成功。
+共享控制器先确认当前连接世代的两个 topic，再 list 或 attach。应用异步结果前校验连接世代与选择版本；等待 attach 时最多暂存 256 帧和 8 MiB，只有快照后的回放完整连续才一起发布。缺帧、解码失败或溢出时保留上次确认的画面并标为过期，停用输入，即使终端无新输出也会在 100、250、500 和 1,000 ms 后重试；耗尽后可手动重试。已卸载 owner 或旧世代的响应不能写入当前视图。同一作用域重挂载仍保留待完成的新建或关闭操作锁。迟到的结算只能让当前列表重新读取，不传递旧结果也不重放写操作。模块化宿主的操作锁归 Dashboard 和项目上下文，不归短暂的 Panel 外壳。
 
 ## 已移除代码的归档 / Archive for removed code
 
@@ -71,15 +80,9 @@ Removed terminal-agent and model-routing code is archived under the repository r
 
 ## 已移除的能力
 
-以下路径不再属于产品或 workspace：
+产品不再包含从终端推断 agent 状态的识别引擎、前台进程探测、`RuntimeAgents` 状态表或 `runtime.agents.list`、`runtime.agents.changed`、`terminal_sessions_*` 观察面。对应的 Webchat/TUI 界面、共享状态、翻译和历史 QA 也已移除。
 
-- `(removed; terminal runtime detection is now src/gateway/pty/)` 及其 Apache-2.0 派生识别引擎
-- `src/gateway/pty/mod.rs` 的前台进程探测
-- `src/gateway/server/ (gateway runtime consolidated into server/)` 与 `RuntimeAgents` 状态表
-- `runtime.agents.list`、`runtime.agents.changed` 与 `terminal_sessions_*` 观察面
-- `src/builtin_tools/terminal.rs (removed; terminal logic is now in src/gateway/pty/)` 及 observation capability registry
-- Webchat/TUI runtime agent panel、共享 `agent_panel` 状态和相应 locale
-- herdr/agent runtime QA 驱动与 fixtures
+The terminal no longer detects foreground processes or infers agent state. The corresponding runtime-agent lookup and event APIs, observation tools, views, shared state, translations and historical QA are outside the current terminal.
 
 因此，`pty.list` 只报告 PTY session 本身的协议字段：session id、shell、cwd、创建时间和 closed 状态。它不推断其中运行的程序、agent、工作状态或 quiet 时间。
 
@@ -89,7 +92,7 @@ Removed terminal-agent and model-routing code is archived under the repository r
 
 VT 行为继续扩展 `src/gateway/pty/screen/` 的唯一实现。终端视图保持纯渲染边界；Channel、CLI 和 Panel 不承载终端业务判断。
 
-## 验证
+## 终端验证 / Terminal verification
 
 修改核心终端后至少运行：
 
@@ -107,19 +110,19 @@ receipt. A shared test lock orders access but does not undo a one-shot binding.
 验证 Terminal Capability 接线时运行 `cargo test -p alephcore --lib gateway::capability_terminal_tests`。
 测试若要给真实的进程全局 manager 绑定 source，应在精确匹配用例的子进程中运行，并校验该用例的完成回执；共享测试锁只能约束访问顺序，不能撤销一次性绑定。
 
-Panel host acceptance additionally runs from `interfaces/webchat`:
+从仓库根目录构建模块化 Panel，再将本次制品的根目录同时传给两个浏览器夹具。 / From the repository root, build the modular Panel and point both browser fixtures at that build's output:
 
-```text
-node tests/panel-terminal-protocol.test.mjs
-node tests/panel-terminal-host.test.mjs
+```sh
+just wasm-modular
+cd interfaces/webchat
+PANEL_OUTPUT_ROOT=.panel-modular-dist node tests/panel-terminal-protocol.test.mjs
+PANEL_OUTPUT_ROOT=.panel-modular-dist node tests/panel-terminal-host.test.mjs
 ```
 
-The first is the deterministic component fixture; the second boots the staged host WASM and real Panel loader/SDK against a loopback Gateway-shaped HTTP/WS fixture. Neither replaces the separate real Gateway/live smoke test, which must remain explicitly marked BLOCKED when no disposable Gateway target is available. The build-aware host fixture must receive `PANEL_OUTPUT_ROOT` from the clean source build; it rejects an unset root and therefore cannot silently consume the historical ignored `.panel-tabs` directory. The 2026-10-28 validation generated a candidate from revision `3ac50c1be5c3a613195cb76c080ef7d93f99d9ba` and exercised the final staged HTML and versioned Terminal assets through the production host. The result is recorded in [`panel-terminal-build-e2e-validation.md`](../reports/panel-terminal-build-e2e-validation.md); this remains loopback evidence, and the separate live Gateway verdict remains BLOCKED without an authorized disposable target.
+The first mounts the generated Terminal module against a deterministic SDK fixture. The second boots the staged host WASM and real loader/SDK against a simulated Gateway over HTTP/WS. Both require `PANEL_OUTPUT_ROOT` and cannot silently consume old artifacts. Neither replaces testing a current default Panel served by a disposable real Gateway. Without an authorized disposable target, report that live check as blocked.
 
-build-aware host fixture 必须接收 clean source build 生成的 `PANEL_OUTPUT_ROOT`；未设置时直接拒绝，因此不会静默消费历史 ignored `.panel-tabs` 目录。2026-10-28 验证从 revision `3ac50c1be5c3a613195cb76c080ef7d93f99d9ba` 生成 candidate，并由 production host 加载最终 staged HTML 与 versioned Terminal assets。结果记录在 [`panel-terminal-build-e2e-validation.md`](../reports/panel-terminal-build-e2e-validation.md)；这仍是 loopback evidence，没有授权 disposable target 时独立 live Gateway verdict 仍为 BLOCKED。
+前者把实际生成的 Terminal 模块挂到确定性的 SDK 夹具上；后者用真实 loader/SDK 启动模块化 host WASM，经 HTTP/WS 连接模拟 Gateway。两者都必须设置 `PANEL_OUTPUT_ROOT`，不会静默使用旧制品。默认 Panel 必须另用可销毁的真实 Gateway 提供和验证；没有获授权的测试目标即报告阻塞。
 
 The generic host boundary delivery is recorded in [`2026-10-27-panel-shell-projection-delivery.md`](../superpowers/plans/2026-10-27-panel-shell-projection-delivery.md). This stage adds only a controlled, explicitly trusted, self-contained community ES module fixture to the existing loader. It does not claim a second built-in Tab, community install/update/uninstall, production discovery, arbitrary multi-file JS/WASM loading, production ExtensionManager or ZahirFacade mounting, live Gateway parity, a safe same-origin sandbox, or a default release flip.
-
-Panel host acceptance 还应在 `interfaces/webchat` 下运行上述两个 fixture：前者是确定性 component fixture，后者启动 staged host WASM 与真实 Panel loader/SDK，并连接 loopback Gateway 形状的 HTTP/WS fixture。两者都不能替代独立的真实 Gateway/live smoke test；没有 disposable Gateway target 时必须明确标记为 BLOCKED。
 
 真机 QA 只覆盖仍存在的 PTY spawn、resize、attach、input、screen 和 exit 行为；已删除的 agent detection/runtime/panel 阶段不应重新加入 QA 路由。
