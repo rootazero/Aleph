@@ -73,6 +73,22 @@ fn change_id(change: &CapabilityChange) -> Option<&CapabilityId> {
     }
 }
 
+/// Collapse the terminal refusal classes that would otherwise reveal whether
+/// a session id exists.
+///
+/// `NotVisible` means "the caller's principal has no binding for this id" and
+/// `Unknown` means "there is no such session" — for a terminal session the
+/// only difference between them is whether the guessed id is real. A caller
+/// that can tell the two apart can enumerate the sessions on the host, so
+/// both refuse as `Unknown`. The resolve observation still records the true
+/// variant for the audit trail; only the refusal the caller sees is folded.
+fn terminal_denial(error: ResolveError) -> ResolveError {
+    match error {
+        ResolveError::NotVisible => ResolveError::Unknown,
+        error => error,
+    }
+}
+
 /// One projection of the live registry entries, owner generations, and
 /// registry state. It is TWO internally coherent cuts, NOT one atomic
 /// generation:
@@ -540,7 +556,7 @@ impl ZahirFacade {
         };
         let lease = self
             .resolve_special_for_call(&reference, &context)
-            .map_err(CapabilityInvocationError::Resolve)?;
+            .map_err(|error| CapabilityInvocationError::Resolve(terminal_denial(error)))?;
         if let Some(captured) = &captured {
             let BackendSourceEvidence::Special {
                 capture: lease_capture,
