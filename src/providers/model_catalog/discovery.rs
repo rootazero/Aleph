@@ -1204,20 +1204,23 @@ mod tests {
             // Two admin-forced refreshes back to back, well inside one clock
             // second: each one has to reach the provider. A second-resolution
             // timestamp must not turn the second call into a cache hit.
-            let (first, ()) = tokio::join!(call(&config, PROVIDER, RefreshMode::Force), async {
-                let release = endpoint.next_request().await;
-                endpoint.answer(LISTING).await;
-                release.send(()).unwrap();
-            });
-            assert!(matches!(first, Ok(RefreshOutcome::Fresh(_))), "{first:?}");
-            let (second, ()) = tokio::join!(call(&config, PROVIDER, RefreshMode::Force), async {
-                let release = endpoint.next_request().await;
-                endpoint
-                    .answer(r#"{"data":[{"id":"vendor-model-2"}]}"#)
-                    .await;
-                release.send(()).unwrap();
-            });
-            let second = second?;
+            let (first, ()) =
+                tokio::try_join!(call(&config, PROVIDER, RefreshMode::Force), async {
+                    let release = endpoint.next_request().await;
+                    endpoint.answer(LISTING).await;
+                    release.send(()).unwrap();
+                    Ok(())
+                })?;
+            assert!(matches!(first, RefreshOutcome::Fresh(_)), "{first:?}");
+            let (second, ()) =
+                tokio::try_join!(call(&config, PROVIDER, RefreshMode::Force), async {
+                    let release = endpoint.next_request().await;
+                    endpoint
+                        .answer(r#"{"data":[{"id":"vendor-model-2"}]}"#)
+                        .await;
+                    release.send(()).unwrap();
+                    Ok(())
+                })?;
             assert!(
                 matches!(second, RefreshOutcome::Fresh(ref listing)
                     if listing.fetched_at == 1000
@@ -1225,19 +1228,18 @@ mod tests {
                 "{second:?}"
             );
             // The fresh cache answers without a request.
-            let cached = call(&config, PROVIDER, RefreshMode::PreferFreshCache)
-                .await
-                .map_err(|e| e)?;
+            let cached = call(&config, PROVIDER, RefreshMode::PreferFreshCache).await?;
             assert!(matches!(cached, RefreshOutcome::CacheHit(_)), "{cached:?}");
             endpoint.assert_idle().await;
             // A forced empty listing inside the same second is a fetch, not a
             // cache hit, and it removes the discovered rows.
-            let (empty, ()) = tokio::join!(call(&config, PROVIDER, RefreshMode::Force), async {
-                let release = endpoint.next_request().await;
-                endpoint.answer(EMPTY_LISTING).await;
-                release.send(()).unwrap();
-            });
-            let empty = empty.map_err(|e| e)?;
+            let (empty, ()) =
+                tokio::try_join!(call(&config, PROVIDER, RefreshMode::Force), async {
+                    let release = endpoint.next_request().await;
+                    endpoint.answer(EMPTY_LISTING).await;
+                    release.send(()).unwrap();
+                    Ok(())
+                })?;
             assert!(
                 matches!(empty, RefreshOutcome::Fresh(ref listing) if listing.models.is_empty()),
                 "{empty:?}"
@@ -1254,12 +1256,14 @@ mod tests {
     async fn a_scope_change_invalidates_the_retained_inventory_and_the_published_rows() {
         const PROVIDER: &str = "task-1b-retain";
         scenario(PROVIDER, |config, endpoint| async move {
-            let (first, ()) = tokio::join!(call(&config, PROVIDER, RefreshMode::Force), async {
-                let release = endpoint.next_request().await;
-                endpoint.answer(LISTING).await;
-                release.send(()).unwrap();
-            });
-            assert!(matches!(first, Ok(RefreshOutcome::Fresh(_))), "{first:?}");
+            let (first, ()) =
+                tokio::try_join!(call(&config, PROVIDER, RefreshMode::Force), async {
+                    let release = endpoint.next_request().await;
+                    endpoint.answer(LISTING).await;
+                    release.send(()).unwrap();
+                    Ok(())
+                })?;
+            assert!(matches!(first, RefreshOutcome::Fresh(_)), "{first:?}");
             assert!(selectable(PROVIDER, "vendor-model"));
             {
                 let guard = config.read().await;
