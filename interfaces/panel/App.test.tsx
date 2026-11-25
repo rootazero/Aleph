@@ -315,6 +315,145 @@ async function openChat(handlers: ReturnType<typeof gateway>) {
   return app;
 }
 
+test("resumes the acknowledged session after Settings and same-subject reconnect", async () => {
+  const { handlers } = chatGateway();
+  const app = await openPanel({ host: { handlers } });
+  await app.waitFor("label:Open Chat");
+  await app.press("label:Open Chat");
+  await app.type("label:Message", "keep this conversation");
+  await app.press("Send");
+  await app.waitFor("Stop");
+  await app.press("label:Settings");
+  await app.press("label:Settings");
+  await app.waitFor("Earlier answer");
+  await app.host.send("aleph.connection", { ...CONNECTED, state: "disconnected", subject: null });
+  await app.host.send("aleph.connection", CONNECTED);
+  await app.waitFor("Earlier answer");
+  expect(rpcParams(app, "chat.history").map((params) => params.session_key)).toEqual(["s-1", "s-1"]);
+  expect(rpcParams(app, "chat.send").length).toBe(1);
+  expect(rpcParams(app, "chat.abort").length).toBe(0);
+  await app.host.send("aleph.connection", { ...CONNECTED, subject: "different" });
+  await app.waitFor("label:Open Chat");
+  await app.press("label:Open Chat");
+  await app.waitFor("New conversation");
+  expect(rpcParams(app, "chat.history").length).toBe(2);
+});
+
+test("endpoint and anonymous handshakes do not reuse a previous selection", async () => {
+  const { handlers } = chatGateway();
+  const app = await openChat(handlers);
+  await app.host.send("aleph.connection", { ...CONNECTED, endpoint: "https://other.aleph.test" });
+  await app.waitFor("label:Open Chat");
+  await app.press("label:Open Chat");
+  await app.waitFor("New conversation");
+  await app.host.send("aleph.connection", { ...CONNECTED, subject: null });
+  await app.waitFor("label:Open Chat");
+  await app.press("label:Open Chat");
+  await app.waitFor("New conversation");
+  expect(rpcParams(app, "chat.history").length).toBe(1);
+  await app.press("label:Open Sessions");
+  await app.press("label:Open chat Release notes");
+  await app.waitFor("Earlier answer");
+  await app.host.send("aleph.connection", { ...CONNECTED, state: "disconnected", subject: null });
+  await app.host.send("aleph.connection", { ...CONNECTED, subject: null });
+  await app.waitFor("New conversation");
+  expect(rpcParams(app, "chat.history").length).toBe(2);
+});
+
+test("hidden Chat does not accept or save a Sessions target", async () => {
+  const { handlers } = chatGateway();
+  const app = await openPanel({ host: { handlers } });
+  await app.waitFor("label:Open Sessions");
+  await app.press("label:Settings");
+  await app.press("label:Hide Chat");
+  await app.press("label:Settings");
+  await app.press("label:Open Sessions");
+  await app.press("label:Open chat Release notes");
+  await app.waitFor("Chat is hidden. Show it in Settings to open this conversation.");
+  await app.press("label:Settings");
+  await app.press("label:Show Chat");
+  await app.press("label:Settings");
+  await app.press("label:Open Chat");
+  await app.waitFor("New conversation");
+  expect(rpcParams(app, "chat.history").length).toBe(0);
+});
+
+test("a denied selected session cannot receive a send until explicitly starting over", async () => {
+  const { handlers } = chatGateway();
+  const base = handlers["aleph.rpc"];
+  handlers["aleph.rpc"] = (call) => call.method === "chat.history"
+    ? Promise.resolve({ error: { code: -32009, message: "session not found" } })
+    : base(call);
+  const app = await openPanel({ host: { handlers } });
+  await app.waitFor("label:Open Sessions");
+  await app.press("label:Open Sessions");
+  await app.press("label:Open chat Release notes");
+  await app.waitFor("session not found");
+  expect(app.texts()).not.toContain("No messages yet");
+  await app.type("label:Message", "do not recreate it");
+  await app.submit("label:Message");
+  expect(rpcParams(app, "chat.send").length).toBe(0);
+  await app.press("label:Start new conversation");
+  await app.type("label:Message", "explicitly new");
+  await app.press("Send");
+  expect(rpcParams(app, "chat.send").map((params) => [params.session_key, params.message])).toEqual([[undefined, "explicitly new"]]);
+  expect(rpcParams(app, "chat.abort").length).toBe(0);
+});
+
+test("an abandoned send shows a notice on remount without adopting its late key", async () => {
+  let acknowledge!: () => void;
+  const held = new Promise<void>((resolve) => { acknowledge = resolve; });
+  const { handlers } = chatGateway({ "chat.send": async () => {
+    await held;
+    return { run_id: "late", session_key: "late-session", streaming: true };
+  } });
+  const app = await openPanel({ host: { handlers } });
+  await app.waitFor("label:Open Chat");
+  await app.press("label:Open Chat");
+  await app.type("label:Message", "a late send");
+  const submitted = app.press("Send");
+  try {
+    await app.waitUntil(() => rpcParams(app, "chat.send").length === 1);
+    await app.press("label:Settings");
+  } finally {
+    acknowledge();
+    await submitted;
+  }
+  await app.press("label:Settings");
+  await app.waitFor("A send may have reached Aleph. Check Sessions before sending again.");
+  await app.press("label:Dismiss send notice");
+  expect(app.texts()).not.toContain("A send may have reached Aleph. Check Sessions before sending again.");
+  expect(rpcParams(app, "chat.history").length).toBe(0);
+  expect(rpcParams(app, "chat.send").length).toBe(1);
+});
+
+test("late send results and notices cannot cross the subject boundary", async () => {
+  let acknowledge!: () => void;
+  const held = new Promise<void>((resolve) => { acknowledge = resolve; });
+  const { handlers } = chatGateway({ "chat.send": async () => {
+    await held;
+    return { run_id: "late", session_key: "private-session", streaming: true };
+  } });
+  const app = await openPanel({ host: { handlers } });
+  await app.waitFor("label:Open Chat");
+  await app.press("label:Open Chat");
+  await app.type("label:Message", "private send");
+  const submitted = app.press("Send");
+  try {
+    await app.waitUntil(() => rpcParams(app, "chat.send").length === 1);
+    await app.host.send("aleph.connection", { ...CONNECTED, subject: "different" });
+  } finally {
+    acknowledge();
+    await submitted;
+  }
+  await app.waitFor("label:Open Chat");
+  await app.press("label:Open Chat");
+  await app.waitFor("New conversation");
+  expect(app.texts()).not.toContain("A send may have reached Aleph. Check Sessions before sending again.");
+  expect(rpcParams(app, "chat.history").length).toBe(0);
+  expect(rpcParams(app, "chat.send").length).toBe(1);
+});
+
 test("context separates sent prompt, pre-trim skill and estimated tool results", async () => {
   const { handlers } = chatGateway({
     "context.breakdown": () => ({
@@ -371,7 +510,7 @@ test("an open live Mermaid fence remains readable code", async () => {
 test("a session opens in chat and its reply streams in, then history takes over", async () => {
   const { handlers, complete } = chatGateway();
   const app = await openChat(handlers);
-  expect(rpcParams(app, "chat.history")[0]).toEqual({ session_key: "s-1", limit: 200 });
+  expect(rpcParams(app, "chat.history")[0]).toEqual({ session_key: "s-1", limit: 200, scrollback: {} });
 
   await app.type("label:Message", "你好");
   await app.press("Send");
@@ -395,6 +534,39 @@ test("a session opens in chat and its reply streams in, then history takes over"
   await app.waitFor("Hello, world");
   await app.waitFor("Stop", { state: "gone" });
   expect(rpcParams(app, "chat.history").length).toBe(loads + 1);
+});
+
+test("an older page failure is retryable without losing the visible transcript", async () => {
+  let olderCalls = 0;
+  const messages = Array.from({ length: 30 }, (_, index) => ({
+    message_id: `tail-${index}`, timestamp: "same", role: "assistant",
+    content: index === 29 ? "Earlier answer" : `Reply ${index}`,
+  }));
+  const { handlers } = chatGateway({ "chat.history": (params) => {
+    const before = (params as { scrollback?: { before?: string } }).scrollback?.before;
+    if (before) {
+      ++olderCalls;
+      if (olderCalls === 1) return { session_key: "s-1", messages };
+      return { session_key: "s-1", active_run: "untrusted-older-status",
+        messages: [{ message_id: "older", timestamp: "same", role: "user", content: "First saved message" }],
+        scrollback: { requested_before: before, next_before: null, status: "ready" } };
+    }
+    return { session_key: "s-1", messages,
+      scrollback: { requested_before: null, next_before: "older-boundary", status: "ready" } };
+  } });
+  const app = await openChat(handlers);
+  await app.press("Load older messages");
+  await app.waitFor("Older messages could not be loaded.");
+  expect(app.texts()).toContain("Earlier answer");
+  await app.press("Retry older messages");
+  await app.waitFor("No earlier messages");
+  expect(app.texts()).toContain("Earlier answer");
+  expect(app.texts()).not.toContain("Stop");
+  await app.scroll("id:chat-transcript", -5000);
+  await app.waitFor("First saved message");
+  expect(rpcParams(app, "chat.history").slice(1).map((params) => params.scrollback)).toEqual([
+    { before: "older-boundary" }, { before: "older-boundary" },
+  ]);
 });
 
 test("terminal history gets one follow-up when the committed stamp arrives late", async () => {
@@ -665,7 +837,7 @@ test("a send whose answer was lost is reported unknown, not retried", async () =
   const app = await openChat(lossy);
   await app.type("label:Message", "did it arrive?");
   await app.press("Send");
-  await app.waitFor("Connection lost while sending: the message may or may not have reached Aleph. Check the transcript before sending again.");
+  await app.waitFor("A send may have reached Aleph. Check Sessions before sending again.");
   await app.wait(100);
   expect(app.host.calls().filter((call) => (call.data as { method?: string })?.method === "chat.send").length).toBe(1);
 });

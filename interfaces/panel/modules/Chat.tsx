@@ -1,15 +1,14 @@
 // Core owns committed history. Rust folds authorized live presentation into
 // the same list, while TSX owns RPC lifetimes and composer interaction.
-import { cleanup, signal, type Signal, Text, View } from "nsh";
+import { batch, cleanup, signal, type Signal, Text, View } from "nsh";
 import { Button, Input } from "nsh/base";
 import { ChatModel } from "aleph/panel";
-import { type PanelEvent, type PanelSdk, RpcError } from "../shell/sdk";
+import { HOST_UNAVAILABLE, RESOURCE_NOT_FOUND, type PanelEvent, type PanelSdk, RpcError } from "../shell/sdk";
 import { TranscriptList } from "./chat/TranscriptList";
 import { ContextSheet } from "./chat/ContextSheet";
 import type { Change } from "./chat/Diff";
 import type { Diagram } from "./chat/MessageBody";
 
-const HOST_UNAVAILABLE = -32090;
 const HISTORY_LIMIT = 200;
 const COMMIT_REREAD_MS = 350;
 const DETAIL_RUN_LIMIT = 12;
@@ -27,7 +26,6 @@ type History = {
   messages?: { run_id?: string }[];
   active_run?: string | null;
 };
-type SendResult = { run_id: string; session_key: string };
 
 type TextRow = { kind: "text"; key: string; role: string; text: string; streaming: boolean };
 export type ToolRow = {
@@ -54,7 +52,18 @@ type Patch = RunState & {
   terminalRun?: string;
   error: string | null;
 };
-type Snapshot = RunState & { rows: ChatRow[]; limited: boolean; unconfirmedRuns: string[] };
+export type Scrollback = {
+  scrollbackSupported: boolean;
+  nextBefore: string | null;
+  scrollbackReset: boolean;
+  needsLatest: boolean;
+  continuationUnavailable: boolean;
+};
+const NO_SCROLLBACK: Scrollback = {
+  scrollbackSupported: false, nextBefore: null, scrollbackReset: false,
+  needsLatest: false, continuationUnavailable: false,
+};
+type Snapshot = RunState & Scrollback & { rows: ChatRow[]; limited: boolean; unconfirmedRuns: string[] };
 
 export function Chat(props: { sdk: PanelSdk; setReaderMode: (active: boolean) => void }) {
   const { sdk } = props;
@@ -72,6 +81,9 @@ export function Chat(props: { sdk: PanelSdk; setReaderMode: (active: boolean) =>
   const keys = signal<string[]>([]);
   const rows = new Map<string, Signal<ChatRow>>();
   const loading = signal(sessionKey() !== null);
+  const historyReady = signal(sessionKey() === null);
+  const waitingForAdmission = signal(sessionKey() !== null);
+  const historyFailed = signal(false);
   const activeRun = signal<string | null>(null);
   const missingPrefix = signal(false);
   const unconfirmed = signal(false);
@@ -82,10 +94,22 @@ export function Chat(props: { sdk: PanelSdk; setReaderMode: (active: boolean) =>
   const draft = signal("");
   const sending = signal(false);
   let composing = false;
+  const scrolling = signal(NO_SCROLLBACK);
+  const loadingOlder = signal(false);
+  const olderFailed = signal(false);
   let historyRequest = 0;
-  cleanup(() => { ++historyRequest; });
+  let historyEpoch = 0;
+  let olderRequest = 0;
+  let detailRequest = 0;
   let liveRevision = 0;
-  let hasHistory = false;
+  const detailOwners = new Map<string, number>();
+  const resetWindowRequests = () => {
+    ++historyEpoch;
+    ++olderRequest;
+    detailOwners.clear();
+    loadingOlder.set(false);
+    olderFailed.set(false);
+  };
 
   const upsert = (row: ChatRow) => {
     const current = rows.get(row.key);
@@ -99,21 +123,46 @@ export function Chat(props: { sdk: PanelSdk; setReaderMode: (active: boolean) =>
     droppedUnconfirmed.set(state.droppedUnconfirmed);
     canResume.set(state.canResume);
   };
-  const replace = (snapshot: Snapshot | null) => {
-    if (!snapshot) return;
-    const next = snapshot.rows.map((row) => {
+  const replace = (snapshot: Snapshot) => {
+    const { rows: committed, limited: detailLimited, unconfirmedRuns: _, ...state } = snapshot;
+    const next = committed.map((row) => {
       upsert(row);
       return row.key;
     });
     const retained = new Set(next);
     for (const key of rows.keys()) if (!retained.has(key)) rows.delete(key);
-    keys.set(next);
-    runState(snapshot);
-    limited.set(snapshot.limited);
+    batch(() => {
+      scrolling.set(state);
+      keys.set(next);
+      runState(state);
+      limited.set(detailLimited);
+    });
   };
   const report = (failure: unknown) => {
     const error = failure as Error;
     if (error.message !== "disposed") notice.set(error.message);
+  };
+
+  const loadDetails = async (key: string, messages: NonNullable<History["messages"]>, fromTail: boolean) => {
+    const runIds = [...new Set([...messages].reverse().map((message) => message.run_id)
+      .filter((id): id is string => typeof id === "string" && id.length > 0))].reverse();
+    const eligible = runIds.filter((id) => fromTail || !detailOwners.has(id));
+    const requested = eligible.slice(-DETAIL_RUN_LIMIT);
+    const skipped = eligible.slice(0, -DETAIL_RUN_LIMIT).filter((id) => !detailOwners.has(id));
+    if (skipped.length > 0) replace(model.applyHistoryDetails(skipped, null) as Snapshot);
+    if (requested.length === 0) return;
+    const epoch = historyEpoch;
+    const owner = ++detailRequest;
+    for (const run of requested) detailOwners.set(run, owner);
+    let details: unknown = null;
+    try {
+      details = await sdk.invoke("chat.transcript_details", { session_key: key, run_ids: requested });
+    } catch {
+      // Scoped replay can fail or be unavailable on an older Core. Prose is already visible.
+    }
+    if (!sdk.active() || key !== sessionKey() || epoch !== historyEpoch) return;
+    const current = requested.filter((id) => detailOwners.get(id) === owner);
+    if (current.length > 0) replace(model.applyHistoryDetails(current, details) as Snapshot);
   };
 
   const load = async (terminalRun?: string) => {
@@ -121,43 +170,64 @@ export function Chat(props: { sdk: PanelSdk; setReaderMode: (active: boolean) =>
     if (!key) return;
     const request = ++historyRequest;
     const revision = liveRevision;
-    const current = () => request === historyRequest && key === sessionKey();
+    const current = () => sdk.active() && request === historyRequest && key === sessionKey();
     try {
-      const history = (await sdk.invoke("chat.history", { session_key: key, limit: HISTORY_LIMIT })) as History;
+      const history = (await sdk.invoke("chat.history", { session_key: key, limit: HISTORY_LIMIT, scrollback: {} })) as History;
       if (!current()) return;
-      // Attach immediately so new chunks can land while the optional details
-      // read runs. Later reconciliations replace a completed run in one pass.
-      const observedHistory = () => ({ ...history, live_status_stale: liveRevision !== revision });
-      if (!hasHistory && !activeRun()) {
-        replace(model.replaceHistory(observedHistory(), null) as Snapshot | null);
-        loading.set(false);
-      }
-      hasHistory = true;
-      const runIds = [...new Set((history.messages ?? []).slice().reverse()
-        .map((message) => message.run_id).filter((id): id is string => Boolean(id)))];
-      let details: unknown = null;
-      if (runIds.length > 0) {
-        try {
-          details = await sdk.invoke("chat.transcript_details", {
-            session_key: key, run_ids: runIds.slice(0, DETAIL_RUN_LIMIT).reverse(),
-          });
-        } catch {
-          // Older hosts and failed detail reads still provide committed prose.
-          details = { runs: [], limited: true };
-        }
-      }
-      if (!current()) return;
-      const snapshot = model.replaceHistory(observedHistory(), details) as Snapshot | null;
-      if (snapshot && runIds.length > DETAIL_RUN_LIMIT) snapshot.limited = true;
-      replace(snapshot);
+      if (history?.session_key !== key || !Array.isArray(history.messages)) throw new Error("Unable to read conversation history.");
+      const snapshot = model.replaceHistory({ ...history, live_status_stale: liveRevision !== revision }, null) as Snapshot | null;
+      if (!snapshot) throw new Error("Unable to read conversation history.");
+      if (snapshot.scrollbackReset) resetWindowRequests();
+      batch(() => {
+        historyReady.set(true);
+        waitingForAdmission.set(false);
+        historyFailed.set(false);
+        replace(snapshot);
+      });
+      void loadDetails(key, history.messages, true);
       // Completion can reach the feed before Core stamps the projected history row.
-      if (terminalRun && snapshot?.unconfirmedRuns.includes(terminalRun)) {
+      if (terminalRun && snapshot.unconfirmedRuns.includes(terminalRun)) {
         setTimeout(() => { if (current()) void load(); }, COMMIT_REREAD_MS);
       }
     } catch (failure) {
-      if (current()) report(failure);
+      if (current()) {
+        if (failure instanceof RpcError && failure.code === RESOURCE_NOT_FOUND) waitingForAdmission.set(true);
+        historyFailed.set(true);
+        report(failure);
+      }
     } finally {
       if (current()) loading.set(false);
+    }
+  };
+
+  const loadOlder = async () => {
+    const key = sessionKey();
+    const before = scrolling().nextBefore;
+    if (!key || !before || loadingOlder() || waitingForAdmission()) return;
+    const request = ++olderRequest;
+    const current = () => sdk.active() && request === olderRequest && key === sessionKey();
+    loadingOlder.set(true);
+    olderFailed.set(false);
+    try {
+      const history = (await sdk.invoke("chat.history", {
+        session_key: key, limit: HISTORY_LIMIT, scrollback: { before },
+      })) as History;
+      if (!current() || before !== scrolling().nextBefore) return;
+      if (history?.session_key !== key || !Array.isArray(history.messages)) throw new Error("Invalid history page");
+      const snapshot = model.prependHistory(history, before) as Snapshot | null;
+      if (!snapshot) throw new Error("Unmatched history page");
+      replace(snapshot);
+      if (!snapshot.needsLatest) void loadDetails(key, history.messages, false);
+    } catch (failure) {
+      if (!current() || before !== scrolling().nextBefore) return;
+      olderFailed.set(true);
+      if (failure instanceof RpcError && failure.code === RESOURCE_NOT_FOUND) {
+        waitingForAdmission.set(true);
+        historyFailed.set(true);
+        report(failure);
+      }
+    } finally {
+      if (current()) loadingOlder.set(false);
     }
   };
 
@@ -196,9 +266,32 @@ export function Chat(props: { sdk: PanelSdk; setReaderMode: (active: boolean) =>
   });
   void load();
 
+  const startNewConversation = () => {
+    if (sending() || !sdk.rememberChat(null)) return;
+    ++historyRequest;
+    model.reset("");
+    batch(() => {
+      resetWindowRequests();
+      scrolling.set(NO_SCROLLBACK);
+      sessionKey.set(null);
+      rows.clear();
+      keys.set([]);
+      loading.set(false);
+      historyReady.set(true);
+      waitingForAdmission.set(false);
+      historyFailed.set(false);
+      runState({ activeRun: null, missingPrefix: false, unconfirmed: false, droppedUnconfirmed: false, canResume: false });
+      limited.set(false);
+      notice.set(null);
+      draft.set("");
+      showContext.set(false);
+      setFullscreen(null);
+    });
+  };
+
   const send = async () => {
     const text = draft().trim();
-    if (!text || composing || sending() || activeRun()) return;
+    if (!text || composing || sending() || activeRun() || waitingForAdmission()) return;
     const key = sessionKey();
     const params: Record<string, unknown> = {
       message: text, channel: "gui:chat", stream: true, idempotency_key: newIdempotencyKey(),
@@ -211,23 +304,28 @@ export function Chat(props: { sdk: PanelSdk; setReaderMode: (active: boolean) =>
     apply(model.beginSend(text, Date.now()) as Patch);
     draft.set("");
     try {
-      const result = (await sdk.invoke("chat.send", params)) as SendResult;
+      const result = await sdk.sendChat(params);
+      if (!sdk.rememberChat(result.session_key)) return;
       ++historyRequest;
       sessionKey.set(result.session_key);
       apply(model.resolveSend(result.session_key, result.run_id, Date.now()) as Patch);
     } catch (failure) {
+      if (!sdk.active()) return;
       apply(model.resolveSend(key ?? "", null, Date.now()) as Patch);
-      if (failure instanceof RpcError && failure.code === HOST_UNAVAILABLE) {
-        notice.set("Connection lost while sending: the message may or may not have reached Aleph. Check the transcript before sending again.");
-        void load();
-      } else if (failure instanceof RpcError) {
+      if (failure instanceof RpcError && failure.code !== HOST_UNAVAILABLE) {
+        if (failure.code === RESOURCE_NOT_FOUND && key) {
+          waitingForAdmission.set(true);
+          historyFailed.set(true);
+        }
         draft.set(text);
         notice.set(failure.message);
+      } else if (sdk.chatSendUnknown()) {
+        void load();
       } else {
         report(failure);
       }
     } finally {
-      sending.set(false);
+      if (sdk.active()) sending.set(false);
     }
   };
 
@@ -247,19 +345,31 @@ export function Chat(props: { sdk: PanelSdk; setReaderMode: (active: boolean) =>
       <If when={!fullscreen()}>
         <View class="flex-row items-center justify-between">
           <Text class="text-muted-foreground">{sessionKey() ?? "New conversation"}</Text>
-          <If when={sessionKey() && !showContext()}>
-            <Button class="rounded px-2 py-1 hover:bg-muted focus-visible:bg-muted" onPress={() => showContext.set(true)}>
-              <Text>Context</Text>
-            </Button>
+          <If when={sessionKey()}>
+            <View class="flex-row gap-2">
+              <Button accessibilityLabel="Start new conversation" disabled={sending()} onPress={startNewConversation}
+                class="rounded px-2 py-1 hover:bg-muted focus-visible:bg-muted">
+                <Text>New conversation</Text>
+              </Button>
+              <If when={!waitingForAdmission() && !showContext()}>
+                <Button class="rounded px-2 py-1 hover:bg-muted focus-visible:bg-muted" onPress={() => showContext.set(true)}>
+                  <Text>Context</Text>
+                </Button>
+              </If>
+            </View>
           </If>
         </View>
       </If>
       <If when={showContext() && sessionKey()}>
         <ContextSheet session={sessionKey} sdk={sdk} project={(raw) => model.contextView(raw)} close={() => showContext.set(false)} />
       </If>
-      <If when={!loading()} else={<Text class="text-muted-foreground">Loading conversation…</Text>}>
+      <If when={loading()}><Text class="text-muted-foreground">Loading conversation…</Text></If>
+      <If when={!loading() && historyReady()}>
         <TranscriptList keys={keys} row={(key) => rows.get(key)!} sdk={sdk} session={sessionKey}
           fullscreen={fullscreen} setFullscreen={setFullscreen}
+          scrollback={scrolling} loadingOlder={loadingOlder} olderFailed={olderFailed}
+          loadOlder={() => void loadOlder()} reloadLatest={() => void load()}
+          canLoadOlder={() => !waitingForAdmission()}
           diagram={(source) => model.mermaidView(source) as Diagram}
           diff={(key, expanded) => model.diffView(key, expanded) as Change[]} />
       </If>
@@ -290,6 +400,19 @@ export function Chat(props: { sdk: PanelSdk; setReaderMode: (active: boolean) =>
       <If when={droppedUnconfirmed()}><Text class="text-muted-foreground">The oldest unconfirmed turn exceeded the preview limit.</Text></If>
       <If when={limited()}><Text class="text-muted-foreground">Some earlier tool details are unavailable.</Text></If>
       <If when={notice()}><Text class="text-destructive">{notice()}</Text></If>
+      <If when={!fullscreen() && historyFailed()}>
+        <Button onPress={() => { notice.set(null); void load(); }} class="self-start rounded px-2 py-1 hover:bg-muted focus-visible:bg-muted">
+          <Text>Retry history</Text>
+        </Button>
+      </If>
+      <If when={!fullscreen() && sdk.chatSendUnknown()}>
+        <View class="flex-row items-center gap-2">
+          <Text class="text-muted-foreground">A send may have reached Aleph. Check Sessions before sending again.</Text>
+          <Button accessibilityLabel="Dismiss send notice" onPress={sdk.dismissChatSendUnknown} class="rounded px-2 py-1 hover:bg-muted focus-visible:bg-muted">
+            <Text>Dismiss</Text>
+          </Button>
+        </View>
+      </If>
       <View class={fullscreen() ? "hidden" : "flex-row items-end gap-2"}>
         <Input
           value={draft()}
@@ -304,7 +427,7 @@ export function Chat(props: { sdk: PanelSdk; setReaderMode: (active: boolean) =>
           class="flex-1 rounded-(--radius) border border-input px-3 py-2 text-foreground"
         />
         <If when={activeRun()} else={
-          <Button disabled={sending() || !draft().trim()} onPress={() => void send()}
+          <Button disabled={sending() || waitingForAdmission() || !draft().trim()} onPress={() => void send()}
             class="rounded-(--radius) bg-primary px-4 py-2 disabled:opacity-40">
             <Text class="text-primary-foreground">Send</Text>
           </Button>

@@ -152,16 +152,16 @@ pub async fn handle_transcript_details(
             })
             .collect::<Vec<_>>();
         details.limited |= limited;
-        if !tools.is_empty() {
-            candidates.push((
-                index,
-                ChatRunDetail {
-                    run_id,
-                    tools,
-                    limited,
-                },
-            ));
-        }
+        // An admitted, successfully read run may have no tools. Keep an
+        // empty group so clients can distinguish it from an omitted run.
+        candidates.push((
+            index,
+            ChatRunDetail {
+                run_id,
+                tools,
+                limited,
+            },
+        ));
     }
 
     let presentations = if completed_calls.is_empty() {

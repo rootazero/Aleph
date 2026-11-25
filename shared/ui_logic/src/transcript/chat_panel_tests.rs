@@ -17,6 +17,202 @@ fn history(active: Option<&str>, messages: Value) -> Value {
     json!({"session_key":"s-1", "active_run":active, "messages":messages})
 }
 
+fn paged_history(
+    active: Option<&str>,
+    messages: Value,
+    requested: Option<&str>,
+    next: Option<&str>,
+    status: &str,
+) -> Value {
+    let mut page = history(active, messages);
+    page["scrollback"] =
+        json!({"requested_before": requested, "next_before": next, "status": status});
+    page
+}
+
+#[test]
+fn older_page_preserves_live_run_and_deduplicates_split_run() {
+    let mut model = ChatState::default();
+    model.reset("s-1".into());
+    let tail = model.replace_history(
+        paged_history(
+            Some("live"),
+            json!([
+                {"message_id":"2", "role":"assistant", "content":"answer", "run_id":"finished"}
+            ]),
+            None,
+            Some("boundary"),
+            "ready",
+        ),
+        Value::Null,
+    );
+    assert_eq!(tail["nextBefore"], "boundary");
+    model.accept(text("live", 1, "streaming"));
+    let older = model.prepend_history(paged_history(Some("not-live"), json!([
+        {"message_id":"1", "role":"user", "content":"older prompt", "run_id":"finished"},
+        {"message_id":"2", "role":"assistant", "content":"overlapping copy", "run_id":"finished"}
+    ]), Some("boundary"), None, "ready"), "boundary".into());
+    let rows = older["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows[0]["text"], "older prompt");
+    assert_eq!(rows[1]["key"], tail["rows"][0]["key"]);
+    assert_eq!(rows[1]["text"], "answer");
+    assert_eq!(rows[2]["text"], "streaming");
+    assert_eq!(older["activeRun"], "live");
+    assert_eq!(older["nextBefore"], Value::Null);
+    let details = json!({"runs":[{"run_id":"finished", "limited":false, "tools":[
+        {"tool_call_id":"edit-1", "change":start_tool()}, {"tool_call_id":"edit-1", "change":finish_tool()}
+    ]}], "limited":false});
+    model.apply_history_details(vec!["finished".into()], details.clone());
+    let joined = model.apply_history_details(vec!["finished".into()], details);
+    assert_eq!(joined["activeRun"], "live");
+    assert_eq!(
+        joined["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|row| row["kind"] == "tool")
+            .count(),
+        1
+    );
+    assert_eq!(joined["rows"][2]["text"], "answer");
+    let unavailable = model.apply_history_details(vec!["finished".into()], Value::Null);
+    assert_eq!(unavailable["limited"], true);
+    assert_eq!(unavailable["rows"][1]["text"], "answer");
+    let none_admitted = model.apply_history_details(
+        vec!["finished".into()],
+        json!({"runs": [], "limited": false}),
+    );
+    assert_eq!(none_admitted["limited"], true);
+    let confirmed_empty = model.apply_history_details(
+        vec!["finished".into()],
+        json!({"runs": [{"run_id": "finished", "tools": [], "limited": false}], "limited": false}),
+    );
+    assert_eq!(confirmed_empty["limited"], false);
+    assert_eq!(confirmed_empty["rows"][1]["text"], "answer");
+}
+
+#[test]
+fn tail_refresh_keeps_confirmed_prefix_or_reports_reset() {
+    let mut model = ChatState::default();
+    model.reset("s-1".into());
+    model.replace_history(
+        paged_history(
+            None,
+            json!([
+                {"message_id":"2", "role":"assistant", "content":"second"}
+            ]),
+            None,
+            Some("two"),
+            "ready",
+        ),
+        Value::Null,
+    );
+    model.prepend_history(
+        paged_history(
+            None,
+            json!([
+                {"message_id":"1", "role":"assistant", "content":"first"}
+            ]),
+            Some("two"),
+            Some("one"),
+            "ready",
+        ),
+        "two".into(),
+    );
+    let refreshed = model.replace_history(
+        paged_history(
+            None,
+            json!([
+                {"message_id":"2", "role":"assistant", "content":"second"},
+                {"message_id":"3", "role":"assistant", "content":"third"}
+            ]),
+            None,
+            Some("two"),
+            "ready",
+        ),
+        Value::Null,
+    );
+    assert_eq!(refreshed["rows"][0]["text"], "first");
+    assert_eq!(refreshed["nextBefore"], "one");
+    let reset = model.replace_history(
+        paged_history(
+            None,
+            json!([
+                {"message_id":"4", "role":"assistant", "content":"only this"}
+            ]),
+            None,
+            Some("four"),
+            "ready",
+        ),
+        Value::Null,
+    );
+    assert_eq!(reset["scrollbackReset"], true);
+    assert_eq!(reset["rows"].as_array().unwrap().len(), 1);
+    assert!(model
+        .prepend_history(
+            paged_history(None, json!([]), Some("one"), None, "ready"),
+            "one".into()
+        )
+        .is_null());
+}
+
+#[test]
+fn older_pages_require_support_exact_echo_and_stable_ids() {
+    let mut model = ChatState::default();
+    model.reset("s-1".into());
+    let legacy = history(None, json!([{"role":"assistant", "content":"legacy"}]));
+    assert!(model.replace_history(legacy.clone(), Value::Null)["nextBefore"].is_null());
+    assert!(model.prepend_history(legacy, "two".into()).is_null());
+    model.replace_history(
+        paged_history(
+            None,
+            json!([
+                {"message_id":"2", "role":"assistant", "content":"second"}
+            ]),
+            None,
+            Some("two"),
+            "ready",
+        ),
+        Value::Null,
+    );
+    assert!(model
+        .prepend_history(
+            paged_history(None, json!([]), Some("wrong"), None, "ready"),
+            "two".into()
+        )
+        .is_null());
+    assert!(model
+        .prepend_history(
+            paged_history(
+                None,
+                json!([
+                    {"role":"assistant", "content":"ambiguous"}
+                ]),
+                Some("two"),
+                None,
+                "ready"
+            ),
+            "two".into()
+        )
+        .is_null());
+    let unavailable = model.prepend_history(
+        paged_history(
+            None,
+            json!([
+                {"message_id":"1", "role":"assistant", "content":"first"}
+            ]),
+            Some("two"),
+            None,
+            "continuation_unavailable",
+        ),
+        "two".into(),
+    );
+    assert_eq!(unavailable["continuationUnavailable"], true);
+    assert!(unavailable["nextBefore"].is_null());
+    assert_eq!(unavailable["rows"][0]["text"], "first");
+}
+
 fn start_tool() -> Value {
     json!({"kind":"started", "display_name":"Edit", "args_text":"src/lib.rs"})
 }

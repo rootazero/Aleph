@@ -13,8 +13,9 @@ pub mod types;
 use crate::gateway::router::SessionKey;
 use crate::gateway::session_store::error::SessionStoreError;
 use crate::gateway::session_store::types::{
-    stamp_millis, CheckpointSummary, DeleteResult, HistoryPage, MessageRecord, SearchHit,
-    SessionFilter, SessionMetadata, SessionPatch, SessionPreview, TruncateResult,
+    stamp_millis, CheckpointSummary, DeleteResult, HistoryPage, HistoryRead, MessageRecord,
+    ScrollbackRead, SearchHit, SessionFilter, SessionMetadata, SessionPatch, SessionPreview,
+    TruncateResult,
 };
 use async_trait::async_trait;
 
@@ -74,115 +75,53 @@ pub trait SessionStore: Send + Sync {
         limit: Option<usize>,
     ) -> Result<Vec<MessageRecord>, SessionStoreError>;
 
-    /// A window of this session's transcript AND how long the whole transcript
-    /// is, from one read.
+    /// A window and the whole transcript length, from one read.
     ///
-    /// `before` is a cursor: only messages *strictly older* than that instant
-    /// are admitted, and with a `limit` the most recent `limit` of those,
-    /// oldest-first. `None` admits everything, making the window identical to
-    /// `get_history`.
+    /// Legacy `before` filters by timestamp (normalizing mixed seconds and
+    /// milliseconds); scrollback takes the exclusive prefix of a row ID.
+    /// Both deliver the trailing eligible rows in canonical projection order,
+    /// oldest first. For scrollback the boundary must identify exactly one row.
     ///
-    /// The cursor is an INSTANT, not a number. It used to be an `i64`
-    /// documented as unix seconds, and the store it is compared against holds
-    /// [`MessageRecord::timestamp`] in a mixed unit (see that field's doc):
-    /// seconds in some rows, milliseconds in others, sometimes both inside one
-    /// transcript. A millisecond row is ~1000x any seconds cursor, so it never
-    /// satisfied `timestamp < before` — a cursor page silently omitted the
-    /// majority of a real install's rows and returned nothing at all for its
-    /// largest sessions, which a client can only read as "you have reached the
-    /// beginning". A type the caller cannot spell in the wrong unit is the fix;
-    /// the comparison itself goes through `stamp_millis`.
-    ///
-    /// **The transcript's order is the order its rows were recorded**, on every
-    /// backend: `messages.id` on SQLite (`INTEGER PRIMARY KEY AUTOINCREMENT`),
-    /// file position in `transcript.jsonl`. The stamp is data ABOUT a row, not
-    /// its position; it appears here as a predicate (`before`) and nowhere as a
-    /// rank.
-    ///
-    /// The two were one thing until they were not. SQLite ranked
-    /// `(stamp_millis_sql, id)` while the file store served and deleted by
-    /// position — spellings that agree only while `add_message_full` overwrites
-    /// every producer's stamp with the insert clock. Repairing that fidelity
-    /// bug made the two orders separable, and `/undo` (`truncate_messages`) and
-    /// `compact_session` choose their victims by this order: separable means
-    /// the two backends can destroy different rows of the same conversation,
-    /// each returning success.
-    ///
-    /// Recording order wins, for three reasons in descending weight:
-    ///
-    ///   * It is the only order both stores express NATIVELY and totally.
-    ///     Serving stamp order from the file store means sorting the transcript
-    ///     on every read — which relocates every legacy `timestamp: 0` row to
-    ///     the head of its conversation, and makes what is served differ from
-    ///     the bytes on disk.
-    ///   * It preserves causality. A reply is appended after the message it
-    ///     answers; an event clock can order them the other way (a channel
-    ///     message delayed in transit), and a transcript showing an answer
-    ///     above its question is wrong in a way no reader can repair.
-    ///   * Adopting it costs nothing. `session_projector` — the single append
-    ///     throat — stamps `SessionEventRecord::created_at_ms`, monotonic in
-    ///     `seq`, and the projector's heal re-projects only the seqs the
-    ///     transcript is MISSING (it was "only the tail above `max(seq)`" until
-    ///     the heal became a seq-set difference — the sentence survived the
-    ///     mechanism it described); the other two producers stamp
-    ///     `Utc::now()`. A back-filled row therefore lands at the END of the
-    ///     transcript in recording order even though its seq is older, which is
-    ///     the one place the two orders visibly part company. So on real
-    ///     data the two orders already coincide: this settles a rule, it does
-    ///     not repair a live symptom. `messages.source_seq` agrees with `id`
-    ///     wherever it is non-NULL, a third witness to the same order.
-    ///
-    /// Pinned by `no_message_query_orders_by_the_stamp` (source-level, the SQL
-    /// half) and `both_backends_serve_the_transcript_in_recording_order`
-    /// (runtime, both halves — the only check that can see the file store
-    /// start sorting).
-    ///
-    /// **There is deliberately no separate `history_len`.** There was, and its
-    /// only caller fetched the count and the window in two calls against a
-    /// store a live run appends to — so the two answers described two different
-    /// sessions and the client's `total - count` was wrong by whatever landed
-    /// in between. That was managed with a comment about which order made the
-    /// skew fall the safer way and a source-level guard pinning the order,
-    /// which a later edit could satisfy lexically while breaking semantically
-    /// (move the count into a helper, call the helper after the window). One
-    /// method has no order to get wrong, and a caller holding an
-    /// `Arc<dyn SessionStore>` has no second call to reach for. If you ever need
-    /// "how many are older than T", that is a different question and deserves
-    /// its own method rather than a parameter here.
-    ///
-    /// **The cursor has no in-repo client, and that is a reviewed decision
-    /// rather than an oversight.** `chat.history?before=…` has been on the wire
-    /// since v2026.04.02 and no Panel or CLI surface calls it: both answer "show
-    /// me earlier messages" by WIDENING the window instead — the Panel re-runs
-    /// its one hydration path (prepending a page would mis-key its `<For>` rows,
-    /// see `HISTORY_PAGE`), and the CLI footer says "raise --limit, or omit it".
-    /// An earlier round justified keeping the cursor with "this question has no
-    /// second answer in the repo"; that is false — those two ARE the second and
-    /// third answers — so do not lean on it when reopening the CUT. The leg that
-    /// does hold is the shape of removing it: `HistoryParams` does not deny
-    /// unknown fields, so a third-party caller still sending `before` would
-    /// silently receive the NEWEST window instead of an older page. Making that
-    /// fail loudly costs more code than deleting the cursor removes, and the
-    /// cursor is now correct and covered. Reviewed and kept, 2026-08-28.
-    ///
-    /// The default impl reads the transcript ONCE and answers both from it —
-    /// correct for every store, exactly consistent, and for the file backend
-    /// half the work it used to do (the count parsed the whole transcript, then
-    /// the window parsed it again). SQL-backed stores override it to push both
-    /// down, and must take their connection ONCE so the pair stays atomic.
+    /// Reading the transcript once keeps the rows, whole count and continuation
+    /// in agreement while a live run appends. SQL implementations hold the same
+    /// connection lock across their statements to preserve that property.
     async fn history_page(
         &self,
         key: &SessionKey,
-        limit: Option<usize>,
-        before: Option<chrono::DateTime<chrono::Utc>>,
+        read: HistoryRead,
     ) -> Result<HistoryPage, SessionStoreError> {
-        let all = self.get_history(key, None).await?;
-        // Taken before the window consumes `all`; both describe the same read,
-        // which is the whole point of this method.
-        let total = all.len();
+        let mut all = self.get_history(key, None).await?;
+        let total = Some(all.len());
+        let (rows, scrollback) = match read {
+            HistoryRead::Legacy { limit, before } => (paginate_before(all, limit, before), None),
+            HistoryRead::Scrollback { limit, before_row } => {
+                if let Some(before) = before_row {
+                    let mut matches = all.iter().enumerate().filter(|(_, row)| row.id == before);
+                    match (matches.next(), matches.next()) {
+                        (Some((index, _)), None) => all.truncate(index),
+                        _ => {
+                            return Ok(HistoryPage {
+                                rows: Vec::new(),
+                                total,
+                                scrollback: Some(ScrollbackRead::StaleBoundary),
+                            })
+                        }
+                    }
+                }
+                let dropped = all.len().saturating_sub(limit);
+                let rows = all.split_off(dropped);
+                let next_row = if dropped > 0 {
+                    rows.first().map(|row| row.id.clone())
+                } else {
+                    None
+                };
+                (rows, Some(ScrollbackRead::Ready { next_row }))
+            }
+        };
         Ok(HistoryPage {
-            rows: paginate_before(all, limit, before),
-            total: Some(total),
+            rows,
+            total,
+            scrollback,
         })
     }
 
@@ -1601,7 +1540,13 @@ mod mixed_unit_cursor_tests {
         let (store, key) = seeded(&temp).await;
 
         let page = store
-            .history_page(&key, None, Some(at(BASE + 35)))
+            .history_page(
+                &key,
+                HistoryRead::Legacy {
+                    limit: None,
+                    before: Some(at(BASE + 35)),
+                },
+            )
             .await
             .unwrap();
         assert_eq!(
@@ -1621,7 +1566,13 @@ mod mixed_unit_cursor_tests {
         let (store, key) = seeded(&temp).await;
 
         let page = store
-            .history_page(&key, Some(2), Some(at(BASE + 35)))
+            .history_page(
+                &key,
+                HistoryRead::Legacy {
+                    limit: Some(2),
+                    before: Some(at(BASE + 35)),
+                },
+            )
             .await
             .unwrap();
         assert_eq!(ids(&page.rows), ["t20ms", "t30ms"]);
@@ -1635,7 +1586,13 @@ mod mixed_unit_cursor_tests {
         let (store, key) = seeded(&temp).await;
 
         let page = store
-            .history_page(&key, None, Some(at(BASE - 1)))
+            .history_page(
+                &key,
+                HistoryRead::Legacy {
+                    limit: None,
+                    before: Some(at(BASE - 1)),
+                },
+            )
             .await
             .unwrap();
         assert!(ids(&page.rows).is_empty());
@@ -1718,7 +1675,13 @@ mod history_page_total_tests {
         );
         assert_eq!(
             store
-                .history_page(&key(), None, None)
+                .history_page(
+                    &key(),
+                    HistoryRead::Legacy {
+                        limit: None,
+                        before: None
+                    }
+                )
                 .await
                 .unwrap()
                 .total
@@ -1739,7 +1702,13 @@ mod history_page_total_tests {
         assert_eq!(windowed.len(), 3);
         assert_eq!(
             store
-                .history_page(&key(), None, None)
+                .history_page(
+                    &key(),
+                    HistoryRead::Legacy {
+                        limit: None,
+                        before: None
+                    }
+                )
                 .await
                 .unwrap()
                 .total
@@ -1754,13 +1723,141 @@ mod history_page_total_tests {
         store.get_or_create(&key()).await.unwrap();
         assert_eq!(
             store
-                .history_page(&key(), None, None)
+                .history_page(
+                    &key(),
+                    HistoryRead::Legacy {
+                        limit: None,
+                        before: None
+                    }
+                )
                 .await
                 .unwrap()
                 .total
                 .unwrap(),
             0
         );
+    }
+
+    async fn scrollback(
+        store: &dyn SessionStore,
+        limit: usize,
+        before_row: Option<String>,
+    ) -> HistoryPage {
+        store
+            .history_page(&key(), HistoryRead::Scrollback { limit, before_row })
+            .await
+            .unwrap()
+    }
+
+    fn ready_boundary(page: &HistoryPage) -> Option<String> {
+        match &page.scrollback {
+            Some(ScrollbackRead::Ready { next_row }) => next_row.clone(),
+            other => panic!("expected a readable page, got {other:?}"),
+        }
+    }
+
+    fn row_ids(page: &HistoryPage) -> impl Iterator<Item = &str> {
+        page.rows.iter().map(|row| row.id.as_str())
+    }
+
+    #[tokio::test]
+    async fn both_backends_scroll_back_in_projection_order() {
+        let file = TempDir::new().unwrap();
+        let sql = TempDir::new().unwrap();
+        for store in [file_store(&file), sqlite_store(&sql)] {
+            let key = key();
+            store.get_or_create(&key).await.unwrap();
+            let empty = scrollback(&*store, 2, None).await;
+            assert!(empty.rows.is_empty());
+            assert_eq!(empty.total, Some(0));
+            assert_eq!(ready_boundary(&empty), None);
+
+            let projected = |seq| crate::session::projection::row_id(&key.to_key_string(), seq);
+            for (id, content) in [
+                ("legacy-prefix".into(), "legacy prefix"),
+                (projected(30), "seq30"),
+                ("legacy-after30".into(), "legacy after30"),
+                (projected(20), "seq20"),
+            ] {
+                store
+                    .append_message(
+                        &key,
+                        MessageRecord {
+                            id,
+                            content: content.into(),
+                            ..row(1)
+                        },
+                    )
+                    .await
+                    .unwrap();
+            }
+            let whole = store.get_history(&key, None).await.unwrap();
+            assert_eq!(
+                whole
+                    .iter()
+                    .map(|row| row.content.as_str())
+                    .collect::<Vec<_>>(),
+                ["legacy prefix", "seq20", "seq30", "legacy after30"]
+            );
+            let whole_ids = whole.iter().map(|row| row.id.as_str()).collect::<Vec<_>>();
+            let tail = scrollback(&*store, 2, None).await;
+            assert_eq!(tail.total, Some(4));
+            assert_eq!(ready_boundary(&tail).as_deref(), Some(whole_ids[2]));
+            store
+                .append_message(
+                    &key,
+                    MessageRecord {
+                        id: projected(40),
+                        ..row(1)
+                    },
+                )
+                .await
+                .unwrap();
+            let older = scrollback(&*store, 2, ready_boundary(&tail)).await;
+            assert_eq!(older.total, Some(5));
+            assert_eq!(ready_boundary(&older), None);
+            assert_eq!(
+                row_ids(&older).chain(row_ids(&tail)).collect::<Vec<_>>(),
+                whole_ids
+            );
+
+            // Size 1 crosses both the non-NULL anchor tie and the NULL prefix.
+            let with_append = store.get_history(&key, None).await.unwrap();
+            let mut before = None;
+            for (i, expected) in with_append.iter().enumerate().rev() {
+                let page = scrollback(&*store, 1, before).await;
+                assert_eq!(row_ids(&page).collect::<Vec<_>>(), [expected.id.as_str()]);
+                before = ready_boundary(&page);
+                assert_eq!(before.as_deref(), (i > 0).then_some(expected.id.as_str()));
+            }
+            let before_first = scrollback(&*store, 1, Some(whole_ids[0].into())).await;
+            assert!(before_first.rows.is_empty());
+            assert_eq!(ready_boundary(&before_first), None);
+
+            store.truncate_messages(&key, 2).await.unwrap();
+            let removed = scrollback(&*store, 1, ready_boundary(&tail)).await;
+            assert!(removed.rows.is_empty());
+            assert!(matches!(
+                removed.scrollback,
+                Some(ScrollbackRead::StaleBoundary)
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn file_scrollback_rejects_an_ambiguous_boundary() {
+        let temp = TempDir::new().unwrap();
+        let store = file_store(&temp);
+        store.get_or_create(&key()).await.unwrap();
+        for _ in 0..2 {
+            store.append_message(&key(), row(1)).await.unwrap();
+        }
+        let page = scrollback(&*store, 1, Some(row(1).id)).await;
+        assert!(page.rows.is_empty());
+        assert!(matches!(
+            page.scrollback,
+            Some(ScrollbackRead::StaleBoundary)
+        ));
     }
 
     #[tokio::test]

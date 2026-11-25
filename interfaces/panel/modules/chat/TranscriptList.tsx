@@ -1,6 +1,6 @@
 import { cleanup, effect, keymap, List, signal, Text, untracked, View, type ListRef, type Signal, type ViewRef } from "nsh";
 import { Button } from "nsh/base";
-import type { ChatRow, ToolRow } from "../Chat";
+import type { ChatRow, Scrollback, ToolRow } from "../Chat";
 import type { PanelSdk } from "../../shell/sdk";
 import type { Change } from "./Diff";
 import { MessageBody, type Diagram } from "./MessageBody";
@@ -62,6 +62,12 @@ export function TranscriptList(props: {
   sdk: PanelSdk;
   fullscreen: () => string | null;
   setFullscreen: (key: string | null) => void;
+  scrollback: () => Scrollback;
+  loadingOlder: () => boolean;
+  olderFailed: () => boolean;
+  loadOlder: () => void;
+  reloadLatest: () => void;
+  canLoadOlder: () => boolean;
   diagram: (source: string) => Diagram;
   diff: (key: string, expanded: boolean) => Change[];
 }) {
@@ -137,8 +143,36 @@ export function TranscriptList(props: {
           <Text>Close reader</Text>
         </Button>
       </If>
+      <If when={!props.fullscreen() && props.scrollback().scrollbackSupported}>
+        <View class="h-10 flex-row items-center gap-2" testID="chat-scrollback">
+          <If when={props.scrollback().needsLatest} else={
+            <If when={props.scrollback().nextBefore} else={
+              <Text class="text-muted-foreground">{props.scrollback().continuationUnavailable
+                ? "More history exists, but Aleph cannot provide the next page."
+                : "No earlier messages"}</Text>
+            }>
+              <Button onPress={props.loadOlder} disabled={props.loadingOlder() || !props.canLoadOlder()}
+                class="rounded border border-border px-2 py-1 hover:bg-muted focus-visible:bg-muted disabled:opacity-40">
+                <Text>{props.loadingOlder() ? "Loading older messages…" : props.olderFailed() ? "Retry older messages" : "Load older messages"}</Text>
+              </Button>
+              <If when={props.olderFailed()}><Text class="text-destructive">Older messages could not be loaded.</Text></If>
+            </If>
+          }>
+            <Text class="text-muted-foreground">History changed. Reload the latest messages to continue.</Text>
+            <Button onPress={props.reloadLatest} class="rounded border border-border px-2 py-1 hover:bg-muted focus-visible:bg-muted">
+              <Text>Reload latest messages</Text>
+            </Button>
+          </If>
+          <If when={props.scrollback().scrollbackReset && !props.scrollback().needsLatest}>
+            <Text class="text-muted-foreground">History changed. Showing the latest messages.</Text>
+          </If>
+        </View>
+      </If>
+      {/* NSH only pins the oldest visible row at offset zero when start-loading
+          is enabled. Keep network reads explicit: only the button fetches. */}
       <List testID="chat-transcript" ref={(ref) => { list = ref; }} each={props.keys()} keyExtractor={(key) => key}
         empty={<Text class="text-muted-foreground">No messages yet</Text>}
+        onLoadMoreAtStart={() => undefined}
         initialScrollAtEnd maintainVisibleContentPosition={{ autoscrollToBottomThreshold: TAIL_DISTANCE }}
         onScroll={({ offset, contentSize, size }) => following.set(contentSize.height - size.height - offset.y <= TAIL_DISTANCE)}
         class="flex-1">

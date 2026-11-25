@@ -21,7 +21,7 @@ python3 qa/nsh_s3_chat/run.py \
   --web "interfaces/panel/out-web/Aleph Panel" \
   --winlist <scratch>/winlist \
   --node-modules <repo>/node_modules \
-  --out <new evidence dir> [--rich]
+  --out <new evidence dir> [--rich] [--continuity]
 ```
 
 - Reuses the S2 fixture (`qa/nsh_s2_shell/run.py`): temporary `HOME`/`ALEPH_HOME`, random port (never 18790),
@@ -33,10 +33,12 @@ python3 qa/nsh_s3_chat/run.py \
   Gateway and writes back one fresh pairing ticket. After a restart the browser must pair again (cookie bindings
   live in Gateway memory).
 
+Use `--continuity` to check same-process Settings restore, native and Chromium scrollback, and Chromium reconnect without another send. After the first desktop send, the harness stops its isolated Gateway and seeds a 205-row legacy prefix ahead of the real desktop messages. It checks that the oldest marker is initially absent, that prepending leaves the original visible message in place, and that scrolling can reach the oldest marker. Native pixels are measured using Vision OCR on captures of the fixture's own window; Chromium uses its DOM bounds and verifies the Web v1 request. This mode requires Screen Recording and Accessibility for the terminal. / `--continuity` 验证桌面设置返回、桌面与浏览器真实翻页和视口位置，以及浏览器断线复配后不重发。205 行只写入已停止的隔离 Gateway 投影。原生以窗口 OCR 位置为证据，浏览器检查 DOM 与实际 Web v1 帧；终端需要屏幕录制和辅助功能权限。
+
 Use `--rich` to execute a real Desktop IPC Write/Edit and reopen its durable cards in Chrome. The fixture holds the final provider response for a native screenshot of the live run. Chrome checks recorded changes, tool hover, fullscreen/Escape and keyboard focus return, Markdown, Context, and Jump to bottom. It also sends a separate Write and verifies text → tool → text while the provider response is still open. Set `ALEPH_BROWSER_LIVE_CHROME_PATH` to a local Chrome binary if Playwright's Chromium is not installed.
 
 `--rich` 不联网调用模型，不读写真实工作区。Desktop IPC 驱动真实写入/编辑，在终态前截图。Chrome 重开历史验证变更、悬停、全屏退出与焦点归还、Markdown、Context 和跳到末尾，并单独发起一次真实写入，在完成前断言正文 → 工具 → 正文顺序。可用环境变量指定本机 Chrome。
 
 ## Evidence / 证据
 
-The selected output directory holds `report.json`, `web-report.json`, fixture-provider decisions and screenshots. See the [rich transcript receipt](../../docs/superpowers/runs/2026-11-25-nsh-chat-transcript-receipt.md) for the evidence boundaries. / 输出目录保留报告和截图；验证范围见富转录收据。
+The selected output directory holds `report.json`, `web-report.json`, fixture-provider decisions and screenshots. See the [R6 continuity receipt](../../docs/superpowers/runs/2026-11-25-nsh-panel-r6-continuity-receipt.md) and the [rich transcript receipt](../../docs/superpowers/runs/2026-11-25-nsh-chat-transcript-receipt.md) for the evidence boundaries. / 输出目录保留报告和截图；验证范围见第六轮会话连续性和富转录收据。

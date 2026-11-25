@@ -20,10 +20,10 @@ use shared_ui_logic::panel::layout::{
 };
 use shared_ui_logic::panel::projection::PanelProjection;
 use shared_ui_logic::panel::registry::BUILTIN_NAMESPACE;
+use shared_ui_logic::prefs::appearance::{theme_tokens, FontScale};
 use shared_ui_logic::prefs::commands::{
     rank, resolve_bindings, CommandKey, KeyProblem, KeySource, RankItem,
 };
-use shared_ui_logic::prefs::appearance::{theme_tokens, FontScale};
 use shared_ui_logic::prefs::{self, Binding, PanelPrefs, PrefsRepair};
 use shared_ui_logic::transcript::chat_panel::ChatState;
 
@@ -82,6 +82,16 @@ impl ChatModel {
     /// Returns the visible snapshot after reconciling committed history.
     pub fn replace_history(&mut self, history: JsonValue, details: JsonValue) -> JsonValue {
         self.state.replace_history(history, details)
+    }
+
+    /// Joins an older window without changing the live run.
+    pub fn prepend_history(&mut self, history: JsonValue, requested_before: String) -> JsonValue {
+        self.state.prepend_history(history, requested_before)
+    }
+
+    /// Updates the details of already represented runs, independently of history reads.
+    pub fn apply_history_details(&mut self, run_ids: Vec<String>, details: JsonValue) -> JsonValue {
+        self.state.apply_history_details(run_ids, details)
     }
 
     /// Show the last measured request without imputing provider usage.

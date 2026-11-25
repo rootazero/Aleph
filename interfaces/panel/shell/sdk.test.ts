@@ -14,8 +14,12 @@ function standIn() {
     rpc: () => new Promise((resolve, reject) => pending.push({ resolve, reject })),
     generation: () => generation,
     connection: () => CONNECTED,
-    navigate: () => {},
+    navigate: () => true,
     intent: () => null,
+    rememberChat: () => true,
+    beginChatSend: () => () => {},
+    chatSendUnknown: () => false,
+    dismissChatSendUnknown: () => {},
     onConnection(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);

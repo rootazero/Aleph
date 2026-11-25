@@ -13,6 +13,11 @@ export type ConnectionState = {
   pairing: boolean;
 };
 
+export const HOST_UNAVAILABLE = -32090;
+export const RESOURCE_NOT_FOUND = -32009;
+const CHAT_TAB = "aleph:chat";
+type ChatSendAcknowledgement = { run_id: string; session_key: string };
+
 /** A JSON-RPC error answer, or a host failure (`code` -32090). */
 export class RpcError extends Error {
   readonly code: number;
@@ -51,9 +56,13 @@ export type ShellAccess = {
   rpc(method: string, params: Record<string, unknown>): Promise<unknown>;
   generation(): number;
   connection(): ConnectionState;
-  navigate(key: string, intent?: Intent): void;
+  navigate(key: string, intent?: Intent): boolean;
   /** The intent last handed to the module `key`, if any. */
   intent(key: string): Intent | null;
+  rememberChat(sessionKey: string | null): boolean;
+  beginChatSend(): ((unknown: boolean) => void) | null;
+  chatSendUnknown(): boolean;
+  dismissChatSendUnknown(): void;
   onConnection(listener: (state: ConnectionState) => void): () => void;
   onEvent(listener: (event: PanelEvent) => void): () => void;
   /** Add a command to the palette and shortcuts; the answer removes it. */
@@ -69,9 +78,13 @@ export type PanelSdk = {
   /** Live events whose topic starts with `topicPrefix` (`"stream."`, `"connection."`). */
   on(topicPrefix: string, listener: (event: PanelEvent) => void): () => void;
   connection(): ConnectionState;
-  navigate(key: string, intent?: Intent): void;
+  navigate(key: string, intent?: Intent): boolean;
   /** What the module that navigated here handed over, if any. */
   intent(): Intent | null;
+  rememberChat(sessionKey: string | null): boolean;
+  sendChat(params: Record<string, unknown>): Promise<ChatSendAcknowledgement>;
+  chatSendUnknown(): boolean;
+  dismissChatSendUnknown(): void;
   /** Commands this module offers while it is mounted. */
   commands: {
     /** `id` is local to the module; the shell sees `<tab key>/<id>`. */
@@ -84,6 +97,8 @@ export function createSdk(key: string, generation: number, shell: ShellAccess): 
   let disposed = false;
   const releases = new Set<() => void>();
   const current = () => !disposed && shell.generation() === generation;
+  const ownsChat = () => key === CHAT_TAB && current();
+  let finishSend: ((unknown: boolean) => void) | null = null;
   // A listener registration the SDK releases on `dispose()`.
   const hold = (stop: () => void) => {
     const release = () => {
@@ -124,9 +139,38 @@ export function createSdk(key: string, generation: number, shell: ShellAccess): 
     },
     connection: () => shell.connection(),
     navigate(target, intent) {
-      if (current()) shell.navigate(target, intent);
+      return current() && shell.navigate(target, intent);
     },
-    intent: () => shell.intent(key),
+    intent: () => current() ? shell.intent(key) : null,
+    rememberChat: (sessionKey) => ownsChat() && shell.rememberChat(sessionKey),
+    async sendChat(params) {
+      if (!ownsChat()) throw new Error("disposed");
+      const finish = shell.beginChatSend();
+      if (!finish) throw new Error("A send is already pending");
+      finishSend = finish;
+      let unknown = true;
+      try {
+        const result = (await shell.rpc("chat.send", params)) as ChatSendAcknowledgement | null;
+        if (!current()) throw new Error("disposed");
+        if (typeof result?.session_key !== "string" || !result.session_key ||
+            typeof result.run_id !== "string" || !result.run_id) {
+          throw new Error("Invalid chat.send acknowledgement");
+        }
+        unknown = false;
+        return result;
+      } catch (failure) {
+        if (!current()) throw new Error("disposed");
+        if (failure instanceof RpcError && failure.code !== HOST_UNAVAILABLE) unknown = false;
+        throw failure;
+      } finally {
+        finish(unknown);
+        finishSend = null;
+      }
+    },
+    chatSendUnknown: () => ownsChat() && shell.chatSendUnknown(),
+    dismissChatSendUnknown() {
+      if (ownsChat()) shell.dismissChatSendUnknown();
+    },
     commands: {
       register(spec) {
         if (disposed) throw new Error("disposed");
@@ -144,6 +188,7 @@ export function createSdk(key: string, generation: number, shell: ShellAccess): 
     dispose() {
       if (disposed) return;
       disposed = true;
+      finishSend?.(true);
       for (const release of [...releases]) release();
     },
   };

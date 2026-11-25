@@ -50,6 +50,8 @@ async fn test_message_operations() {
 
 #[tokio::test]
 async fn history_page_cursor_filters_by_timestamp() {
+    use crate::gateway::session_store::types::HistoryRead;
+
     let temp = tempdir().unwrap();
     let config = test_config(temp.path().join("test.db"));
     let manager = SessionManager::new(config).unwrap();
@@ -63,12 +65,28 @@ async fn history_page_cursor_filters_by_timestamp() {
     let now = chrono::Utc::now();
 
     // No cursor → identical to plain get_history (all three).
-    let all = manager.history_page(&key, None, None).await.unwrap().rows;
+    let all = manager
+        .history_page(
+            &key,
+            HistoryRead::Legacy {
+                limit: None,
+                before: None,
+            },
+        )
+        .await
+        .unwrap()
+        .rows;
     assert_eq!(all.len(), 3);
 
     // Cursor in the future → every message is strictly older, so all survive.
     let before_future = manager
-        .history_page(&key, None, Some(now + chrono::Duration::hours(1)))
+        .history_page(
+            &key,
+            HistoryRead::Legacy {
+                limit: None,
+                before: Some(now + chrono::Duration::hours(1)),
+            },
+        )
         .await
         .map(|p| p.rows)
         .unwrap();
@@ -76,7 +94,13 @@ async fn history_page_cursor_filters_by_timestamp() {
 
     // Cursor far in the past → nothing is older than it.
     let before_past = manager
-        .history_page(&key, None, Some(now - chrono::Duration::hours(1)))
+        .history_page(
+            &key,
+            HistoryRead::Legacy {
+                limit: None,
+                before: Some(now - chrono::Duration::hours(1)),
+            },
+        )
         .await
         .map(|p| p.rows)
         .unwrap();
@@ -84,7 +108,13 @@ async fn history_page_cursor_filters_by_timestamp() {
 
     // Limit still windows the cursor-filtered set (most-recent `limit`).
     let windowed = manager
-        .history_page(&key, Some(2), Some(now + chrono::Duration::hours(1)))
+        .history_page(
+            &key,
+            HistoryRead::Legacy {
+                limit: Some(2),
+                before: Some(now + chrono::Duration::hours(1)),
+            },
+        )
         .await
         .map(|p| p.rows)
         .unwrap();
