@@ -3,13 +3,12 @@
 //! Handles browser-based OAuth login/logout/status for providers that
 //! require OAuth authentication (currently Codex/ChatGPT subscription).
 //!
-//! Token persistence follows the same pattern as other providers:
-//! `api_key` is stored directly in `aleph.toml` (plaintext), consistent
-//! with how the Settings UI manages provider credentials.
+//! Provider credentials are kept in the vault, not the shared configuration.
 
 use crate::providers::model_catalog::discovery_authority;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::future::Future;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
@@ -27,10 +26,8 @@ use super::parse_params;
 
 /// In-memory OAuth token cache with expiry metadata.
 ///
-/// The `access_token` is also persisted as `config.providers["chatgpt"].api_key` (legacy name)
-/// in `aleph.toml`, just like any other provider. This struct adds expiry
-/// tracking and refresh token support on top.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// The access token and the refresh metadata are persisted in the vault.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OAuthTokenCache {
     pub access_token: String,
     pub refresh_token: Option<String>,
@@ -244,31 +241,97 @@ pub(crate) async fn try_refresh(
     config: &Arc<RwLock<Config>>,
     vault: &Arc<SharedTokenManager>,
     provider_name: &str,
+    live: Option<&crate::gateway::codex_token_refresher::CodexTokenRefresher>,
 ) -> bool {
-    let cache = {
-        let guard = oauth_state.read().await;
-        match guard.as_ref() {
-            Some(c) => c.clone(),
-            None => return false,
-        }
+    refresh_with(
+        oauth_state,
+        config,
+        vault,
+        provider_name,
+        live,
+        |cache| async move {
+            let mut auth = cache.to_auth();
+            match auth.refresh().await {
+                Ok(()) => Some(OAuthTokenCache::from_auth(&auth)),
+                Err(error) => {
+                    warn!(%error, "OAuth token refresh failed");
+                    None
+                }
+            }
+        },
+    )
+    .await
+}
+
+async fn refresh_with<Fut: Future<Output = Option<OAuthTokenCache>>>(
+    oauth_state: &SharedOAuthState,
+    config: &Arc<RwLock<Config>>,
+    vault: &Arc<SharedTokenManager>,
+    provider_name: &str,
+    live: Option<&crate::gateway::codex_token_refresher::CodexTokenRefresher>,
+    fetch: impl FnOnce(OAuthTokenCache) -> Fut,
+) -> bool {
+    let (cache, revision) = {
+        let state = oauth_state.read().await;
+        let Some(cache) = state.as_ref() else {
+            return false;
+        };
+        let cfg = config.read().await;
+        (cache.clone(), discovery_authority::discovery_revision(&cfg))
     };
 
-    let mut auth = cache.to_auth();
-    match auth.refresh().await {
-        Ok(()) => {
-            let new_cache = OAuthTokenCache::from_auth(&auth);
-            *oauth_state.write().await = Some(new_cache.clone());
-            update_config_api_key(config, vault, provider_name, Some(&new_cache.access_token))
-                .await;
-            // Persist refresh_token + real expiry so a restart can recover.
-            persist_oauth_blob(vault, provider_name, &new_cache);
-            info!("OAuth token refreshed successfully");
-            true
+    if let Some(new_cache) = fetch(cache.clone()).await {
+        let mut state = oauth_state.write().await;
+        if state.as_ref() != Some(&cache) {
+            return false;
         }
-        Err(e) => {
-            warn!(error = %e, "OAuth token refresh failed");
-            false
+        let cfg = config.read().await;
+        let Some(provider_config) = cfg.providers.get(provider_name).filter(|provider| {
+            provider.enabled && provider.api_key.as_ref().is_none_or(String::is_empty)
+        }) else {
+            return false;
+        };
+        let Ok(blob) = serde_json::to_string(&new_cache) else {
+            return false;
+        };
+        let key = format!("ai:{provider_name}");
+        let blob_key = oauth_blob_key(provider_name);
+        let was_available = crate::providers::session_model_handle::selectable_models()
+            .is_some_and(|snapshot| snapshot.provider_is_available(provider_name));
+        let transport = live.and_then(|live| {
+            live.prepare_refreshed_transport(provider_config.clone(), &new_cache.access_token)
+        });
+        let result = vault.refresh_secrets_if_current(
+            revision,
+            (key.as_str(), cache.access_token.as_str()),
+            [
+                (key.as_str(), new_cache.access_token.as_str()),
+                (blob_key.as_str(), blob.as_str()),
+            ],
+            || {
+                if let (Some(live), Some(transport)) = (live, transport) {
+                    if live.install_refreshed_transport(transport) && was_available {
+                        crate::providers::session_model_handle::restore_refreshed_credential(
+                            provider_name,
+                        );
+                    }
+                }
+            },
+        );
+        match result {
+            Ok(Some(())) => {
+                *state = Some(new_cache);
+                info!("OAuth token refreshed successfully");
+                true
+            }
+            Ok(None) => false,
+            Err(e) => {
+                warn!(error = %e, "Failed to persist refreshed OAuth token");
+                false
+            }
         }
+    } else {
+        false
     }
 }
 
@@ -364,13 +427,12 @@ pub async fn handle_oauth_login(
     let cache = OAuthTokenCache::from_auth(&auth);
     let expires_in = cache.expires_in_seconds();
 
-    // Store in memory (with expiry + refresh token metadata)
-    *oauth_state.write().await = Some(cache.clone());
-
-    // Persist access_token to vault (legacy key read by providers) + the full
-    // blob (refresh token + expiry) so a restart can recover and auto-refresh.
+    // Serialize login persistence with refresh and logout.
+    let mut state = oauth_state.write().await;
     update_config_api_key(&config, &vault, provider_name, Some(&cache.access_token)).await;
     persist_oauth_blob(&vault, provider_name, &cache);
+    *state = Some(cache);
+    drop(state);
 
     info!(provider = provider_name, "OAuth login successful");
 
@@ -427,10 +489,12 @@ pub async fn handle_oauth_logout(
     let provider_name = canonical_provider_name(&params.provider);
 
     // Clear memory
-    *oauth_state.write().await = None;
+    let mut state = oauth_state.write().await;
+    *state = None;
 
-    // Clear vault token + config
+    // Clear vault token + config before a concurrent login may publish.
     update_config_api_key(&config, &vault, provider_name, None).await;
+    drop(state);
 
     info!(provider = provider_name, "OAuth logout completed");
 
@@ -479,9 +543,20 @@ pub async fn handle_oauth_status(
 
     if is_expired {
         debug!("OAuth token expired, attempting refresh");
-        let refreshed = try_refresh(&oauth_state, &config, &vault, provider_name).await;
-        if !refreshed {
-            *oauth_state.write().await = None;
+        let live = crate::gateway::codex_token_refresher::global()
+            .filter(|live| live.owns(&oauth_state, &config, &vault));
+        let refreshed = if let Some(live) = live {
+            live.refresh_and_swap().await
+        } else {
+            try_refresh(&oauth_state, &config, &vault, provider_name, None).await
+        };
+        if !refreshed
+            && oauth_state
+                .read()
+                .await
+                .as_ref()
+                .is_none_or(OAuthTokenCache::is_expired)
+        {
             return JsonRpcResponse::success(
                 request.id,
                 oauth_status_value(
@@ -509,6 +584,87 @@ pub async fn handle_oauth_status(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn renewed_vault_token_keeps_live_exact_binding_retryable_but_cannot_revive_logout() {
+        use crate::gateway::codex_token_refresher::CodexTokenRefresher;
+        use crate::gateway::handlers::agent::build_run_request;
+        use crate::gateway::security::store::SecurityStore;
+        use crate::providers::failover::{FailoverConfig, FailoverHealth, FailoverProvider};
+        use crate::providers::session_model_handle::{
+            with_test_selectable_models, SelectableModelsSnapshot,
+        };
+        use crate::thinker::MultiProviderRegistry;
+        use std::collections::BTreeSet;
+
+        const PROVIDER: &str = "chatgpt";
+        let key = "ai:chatgpt";
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Arc::new(SharedTokenManager::new(
+            Arc::new(SecurityStore::in_memory().unwrap()),
+            dir.path().join("test.vault"),
+        ));
+        vault.generate_token().unwrap();
+        vault.store_secret(key, "old-fixture").unwrap();
+        let mut provider = ProviderConfig::test_config("org/model");
+        provider.protocol = Some("openai".into());
+        provider.base_url = Some("http://127.0.0.1:1/v1".into());
+        provider.api_key = Some("old-fixture".into());
+        let original = crate::providers::create_provider(PROVIDER, provider.clone()).unwrap();
+        let registry = Arc::new(MultiProviderRegistry::new(
+            PROVIDER.into(),
+            original.clone(),
+        ));
+        let route = Arc::new(FailoverProvider::new(
+            registry.clone(),
+            vec![],
+            Default::default(),
+            FailoverHealth::default(),
+            FailoverConfig::default(),
+        ));
+        provider.api_key = None;
+        let mut config = Config::default();
+        config.providers.insert(PROVIDER.into(), provider);
+        let available = BTreeSet::from([PROVIDER.to_string()]);
+        let snapshot =
+            SelectableModelsSnapshot::from_config(&config, available.clone(), &available, |_| true);
+        let config = Arc::new(RwLock::new(config));
+        let state = Arc::new(RwLock::new(Some(OAuthTokenCache {
+            access_token: "old-fixture".into(),
+            refresh_token: Some("refresh-fixture".into()),
+            expires_at_unix: 0,
+            session_id: "fixture".into(),
+        })));
+        let refresher = CodexTokenRefresher::new(
+            state.clone(),
+            config.clone(),
+            vault.clone(),
+            registry,
+            Some(route.clone()),
+        );
+        with_test_selectable_models(Some(snapshot), async {
+            let session = crate::gateway::router::AgentRouter::new().route(None, None, None, None).await;
+            let queued = build_run_request("retry-fixture".into(), &session, serde_json::from_value(json!({"input": "hi", "model_override": {"kind": "qualified", "provider": PROVIDER, "model": "org/model"}})).unwrap(), Some(&config), None, &crate::gateway::agent_instance::AgentInstanceConfig::default()).await.unwrap();
+            assert!(refresh_with(&state, &config, &vault, PROVIDER, Some(&refresher), |mut token| async move {
+                token.access_token = "new-fixture".into();
+                Some(token)
+            }).await);
+            let renewed = route.exact_transport(PROVIDER).unwrap();
+            assert!(!Arc::ptr_eq(&original, &renewed));
+            assert_eq!(vault.get_secret(key).unwrap().unwrap().expose(), "new-fixture");
+            queued.validate_dispatch_model().unwrap();
+
+            assert!(!refresh_with(&state, &config, &vault, PROVIDER, Some(&refresher), |mut token| async {
+                *state.write().await = None;
+                vault.delete_secret(key).unwrap();
+                token.access_token = "obsolete-fixture".into();
+                Some(token)
+            }).await);
+            assert!(vault.get_secret(key).unwrap().is_none());
+            assert!(queued.validate_dispatch_model().is_err());
+            assert!(Arc::ptr_eq(&renewed, &route.exact_transport(PROVIDER).unwrap()));
+        }).await;
+    }
 
     #[test]
     fn test_oauth_token_cache_roundtrip() {

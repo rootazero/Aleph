@@ -42,6 +42,10 @@ pub(crate) fn mutation_fence() -> MutationFence {
 }
 
 impl MutationFence {
+    pub(crate) fn is_current(&self, revision: DiscoveryRevision) -> bool {
+        *self.0 == revision.0
+    }
+
     pub(crate) fn advance(&mut self) {
         *self.0 = self.0.checked_add(1).expect("discovery revision exhausted");
     }
@@ -75,16 +79,28 @@ pub(crate) fn config_replaced(previous: &Config, next: &Config) {
         (None, None) => false,
         _ => true,
     };
-    if presets_changed
-        || previous
-            .providers
-            .keys()
-            .chain(next.providers.keys())
-            .any(|name| affected(name))
-    {
+    let route_changed = previous
+        .providers
+        .keys()
+        .chain(next.providers.keys())
+        .any(|name| affected(name));
+    let roster_changed = previous.providers.iter().any(|(name, old)| {
+        next.providers.get(name).is_some_and(|new| {
+            old.all_models() != new.all_models()
+                || !old
+                    .model_defs
+                    .iter()
+                    .map(|def| &def.id)
+                    .eq(new.model_defs.iter().map(|def| &def.id))
+        })
+    });
+    if presets_changed || route_changed || roster_changed {
         let mut fence = mutation_fence();
-        fence.advance();
-        super::discovery::revoke_inventory(affected);
+        if presets_changed || route_changed {
+            fence.advance();
+            super::discovery::withdraw_config_inventory(&affected);
+        }
+        crate::providers::session_model_handle::update_configured_selection(next, affected);
     }
 }
 

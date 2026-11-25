@@ -113,7 +113,7 @@ impl SelectableModelsSnapshot {
                         models,
                         discovered: BTreeSet::new(),
                         discovery_transport_current: false,
-                        discovery_vault_backed: pc.api_key.is_none(),
+                        discovery_vault_backed: pc.api_key.as_ref().is_none_or(String::is_empty),
                         authenticated: authenticated(name),
                         available: pc.enabled
                             && routable.contains(name)
@@ -152,6 +152,18 @@ impl SelectableModelsSnapshot {
         next
     }
 
+    pub(super) fn replace_configured_roster(&mut self, config: &Config) {
+        let mounted = self
+            .providers
+            .iter()
+            .filter(|(_, entry)| entry.available)
+            .map(|(name, _)| name.clone())
+            .collect();
+        let mut next = Self::from_config(config, self.routable.clone(), &mounted, |_| false);
+        next.preserve_mounted_routes(self);
+        *self = next;
+    }
+
     pub(super) fn preserve_mounted_routes(&mut self, previous: &Self) {
         for (name, entry) in &mut self.providers {
             // Registry refresh alone does not replace the run builder's named
@@ -177,6 +189,15 @@ impl SelectableModelsSnapshot {
                 entry.available = false;
                 entry.discovered.clear();
                 entry.discovery_transport_current = false;
+            }
+        }
+    }
+
+    pub(super) fn restore_refreshed_credential(&mut self, provider: &str) {
+        if let Some(entry) = self.providers.get_mut(provider) {
+            if entry.discovery_vault_backed {
+                entry.available = true;
+                entry.authenticated = true;
             }
         }
     }

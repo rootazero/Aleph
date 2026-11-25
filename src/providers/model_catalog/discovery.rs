@@ -204,12 +204,16 @@ fn scope_epoch_current(provider: &str, expected: u64) -> bool {
 
 /// Called under the mutation epoch; only matching providers lose inventory.
 pub(super) fn revoke_inventory(affected: impl Fn(&str) -> bool) {
-    bump_scope_epochs(&affected, false);
+    withdraw_config_inventory(&affected);
+    crate::providers::session_model_handle::revoke_config_selection(affected);
+}
+
+pub(super) fn withdraw_config_inventory(affected: &impl Fn(&str) -> bool) {
+    bump_scope_epochs(affected, false);
     INVENTORIES
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .retain(|name, _| !affected(name));
-    crate::providers::session_model_handle::revoke_config_selection(affected);
 }
 
 pub(super) fn revoke_vault_inventory(affected: impl Fn(&str) -> bool) {
@@ -289,7 +293,7 @@ pub(crate) fn configured_inventory(
         guard
             .providers
             .get(provider)
-            .is_some_and(|pc| pc.api_key.is_none()),
+            .is_some_and(|pc| pc.api_key.as_ref().is_none_or(String::is_empty)),
     );
     let epoch = scope_epoch(provider);
     // Sample the coarse revision before any credential resolution: the fence
@@ -322,10 +326,12 @@ fn resolve_scope(
     };
     let (endpoint, protocol) = listing_address(config, provider)?;
     let pc = &config.providers[provider];
-    let vault_backed = pc.api_key.is_none();
+    let vault_backed = pc.api_key.as_ref().is_none_or(String::is_empty);
     let key = pc
         .api_key
-        .clone()
+        .as_ref()
+        .filter(|key| !key.is_empty())
+        .cloned()
         .or_else(|| resolve(provider, pc))
         .filter(|key| !key.trim().is_empty())
         .ok_or_else(|| DiscoveryError::MissingCredential(provider.into()))?;
@@ -367,7 +373,7 @@ pub async fn refresh_configured_models(
         guard
             .providers
             .get(provider)
-            .is_some_and(|pc| pc.api_key.is_none()),
+            .is_some_and(|pc| pc.api_key.as_ref().is_none_or(String::is_empty)),
     );
     let epoch = scope_epoch(provider);
     // Sample the coarse revision before the credential is resolved, so the
@@ -1474,6 +1480,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn roster_only_update_rechecks_queued_and_unqualified_choices() {
+        use crate::gateway::handlers::agent::build_run_request;
+        use crate::providers::session_model_handle::{selectable_models, ModelSelectionError};
+        use serde_json::json;
+
+        const PROVIDER: &str = "roster-only-fixture";
+        scenario(PROVIDER, |config, _| async move {
+            let key = crate::gateway::router::AgentRouter::new().route(None, None, None, None).await;
+            let request = build_run_request("roster-fixture".into(), &key,
+                serde_json::from_value(json!({"input": "hi", "model_override": { "kind": "qualified", "provider": PROVIDER, "model": "operator-model" }})).unwrap(),
+                Some(&config), None, &crate::gateway::agent_instance::AgentInstanceConfig::default(),
+            ).await.unwrap();
+            request.validate_dispatch_model().unwrap();
+            let mut live = config.write().await;
+            let mut changed = live.clone();
+            let provider = changed.providers.get_mut(PROVIDER).unwrap();
+            provider.models = vec!["unrelated-model".into()];
+            super::super::discovery_authority::replace_config(&mut live, changed);
+            assert!(request.validate_dispatch_model().is_err());
+            let snapshot = selectable_models().unwrap();
+            assert!(snapshot.resolve(Some(PROVIDER), "unrelated-model").is_ok());
+            assert!(matches!(snapshot.resolve_raw("unrelated-model"), Err(ModelSelectionError::Ambiguous { .. })));
+            Ok(())
+        }).await;
+    }
+
+    #[tokio::test]
     async fn credential_revocation_refuses_a_previously_admitted_configured_model() {
         use crate::gateway::handlers::agent::build_run_request;
         use crate::gateway::security::{store::SecurityStore, SharedTokenManager};
@@ -1485,11 +1518,16 @@ mod tests {
         const PROVIDER: &str = "queued-vault-fixture";
         scenario_with_credentials(PROVIDER, true, |config, endpoint| async move {
             let dir = tempfile::tempdir().unwrap();
-            let vault = SharedTokenManager::new(Arc::new(SecurityStore::in_memory().unwrap()), dir.path().join("test.vault"));
+            let store_path = dir.path().join("security.db");
+            let vault = SharedTokenManager::new(Arc::new(SecurityStore::open(&store_path).unwrap()), dir.path().join("test.vault"));
             vault.generate_token().unwrap();
             let vault_key = crate::providers::probe::provider_vault_key(PROVIDER);
             vault.store_secret(&vault_key, "fixture-token").unwrap();
-            let (_, mounted) = fixture_with(&endpoint.url, PROVIDER, true, true, true);
+            let mut boot = config.read().await.clone();
+            boot.providers.get_mut(PROVIDER).unwrap().api_key = Some(String::new());
+            *config.write().await = boot.clone();
+            let available = BTreeSet::from([PROVIDER.to_string()]);
+            let mounted = SelectableSnapshot::from_config(&boot, available.clone(), &available, |_| true);
             with_test_selectable_models(Some(mounted), async {
                 let key = crate::gateway::router::AgentRouter::new().route(None, None, None, None).await;
                 let request = build_run_request("queued-fixture".into(), &key,
@@ -1497,6 +1535,14 @@ mod tests {
                     Some(&config), None, &crate::gateway::agent_instance::AgentInstanceConfig::default(),
                 ).await.unwrap();
                 request.validate_dispatch_model().unwrap();
+                vault.reset_token().unwrap();
+                request.validate_dispatch_model().unwrap();
+                assert_eq!(vault.get_secret(&vault_key).unwrap().unwrap().expose(), "fixture-token");
+                let connection = rusqlite::Connection::open(&store_path).unwrap();
+                connection.execute_batch("CREATE TRIGGER refuse_fixture_rotation BEFORE INSERT ON shared_token BEGIN SELECT RAISE(ABORT, 'fixture write failure'); END;").unwrap();
+                assert!(vault.reset_token().is_err());
+                request.validate_dispatch_model().unwrap();
+                assert_eq!(vault.get_secret(&vault_key).unwrap().unwrap().expose(), "fixture-token");
                 // OAuth logout deletes this key before saving config. The vault
                 // operation must revoke queued bindings even before that save.
                 vault.delete_secret(&vault_key).unwrap();

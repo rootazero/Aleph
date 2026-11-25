@@ -246,9 +246,9 @@ Moonshot 的闸曾经写 `false`——那在只有 K2.x 的时代是对的，K3 
 
 Discovery derives the listing URL, protocol and credential from current configuration, disables redirects, coalesces in-flight requests within scope, and checks the revision before accepting a result. A valid empty list clears discovered rows; a nonempty malformed list does not. Failure can read the prior same-scope inventory as stale. Neither stale results nor cache hits republish. Discovery inventory is process-local, with no restart recovery or background polling.
 
-`src/providers/session_model_handle.rs` 发布 `providers/pinnable-set`。成员投影不读取凭据库或磁盘；只有已认证、可用的供应商才出现在选择器中。发现项还必须与启动时认证的实际 serving transport 匹配。端点、协议、凭据变化或禁用、删除会立即撤销受影响供应商的选择资格（包括配置项），排队的显式选择会在派发前重新验证。只更新配置或 thinker registry 不会认证新的运行传输；需要重启并重新挂载后才恢复可选。目录发现不提供账号权限证明，也不改默认或自动回退梯。
+`src/providers/session_model_handle.rs` 发布 `providers/pinnable-set`。成员投影不读取凭据库或磁盘；只有已认证、可用的供应商才出现在选择器中。发现项还必须与启动时认证的实际 serving transport 匹配。端点、协议、凭据变化或禁用、删除会立即撤销受影响供应商的选择资格（包括配置项），排队的显式选择会在派发前重新验证。只更改模型名单会立即更新配置项，不会清空同一范围的发现结果；更改端点则需要重启并重新挂载。OAuth 自动换发仅在实际命名路由已换挂相同的新传输时恢复配置项；网关令牌轮换仅重加密相同凭据，不撤销绑定。目录发现不提供账号权限证明，也不改默认或自动回退梯。
 
-The member projection reads only the immutable publication. Fresh discovery can add rows only for a verified serving transport. Changes to the route, credential, or enabled state also withdraw configured choices; dispatch rechecks queued explicit selections. A config-only reload does not certify a replacement transport. Restart to mount and certify the changed route. Availability, inventory, operator metadata and automatic fallback are separate.
+The member projection reads only the immutable publication. Fresh discovery can add rows only for a verified serving transport. Changes to the route, credential, or enabled state also withdraw configured choices; dispatch rechecks queued explicit selections. Roster-only changes update configured choices immediately and preserve discovery in the same scope. Restart to mount and certify a changed endpoint. OAuth renewal restores configured choices only when the actual named route resolves to the renewed transport. Gateway token rotation re-encrypts the same credentials without withdrawing choices. Availability, inventory, operator metadata and automatic fallback are separate.
 
 ### 6.1 精确绑定、元数据与策展 / Exact bindings, metadata and curation
 

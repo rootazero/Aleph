@@ -306,32 +306,65 @@ impl SecretVault {
         &self.data.entries
     }
 
-    /// Replace all entries atomically (for re-encryption).
+    /// Replace credentials in one atomic vault write.
     pub fn replace_all(
         &mut self,
         entries: HashMap<String, EncryptedEntry>,
     ) -> Result<(), SecretError> {
+        self.replace_entries(entries, Some(&mut discovery_authority::mutation_fence()))
+    }
+
+    pub(crate) fn replace_credentials(
+        &mut self,
+        entries: HashMap<String, EncryptedEntry>,
+        fence: &mut discovery_authority::MutationFence,
+    ) -> Result<(), SecretError> {
+        self.replace_entries(entries, Some(fence))
+    }
+
+    /// Persist the token manager's re-encryption of the same plaintext entries.
+    /// No discovery epoch changes: callers still hold the vault write lock.
+    pub(crate) fn rewrap_entries(
+        &mut self,
+        entries: HashMap<String, EncryptedEntry>,
+    ) -> Result<(), SecretError> {
+        debug_assert!(
+            self.data
+                .entries
+                .keys()
+                .all(|key| entries.contains_key(key))
+                && self.data.entries.len() == entries.len()
+        );
+        self.replace_entries(entries, None)
+    }
+
+    fn replace_entries(
+        &mut self,
+        entries: HashMap<String, EncryptedEntry>,
+        fence: Option<&mut discovery_authority::MutationFence>,
+    ) -> Result<(), SecretError> {
         // Put the previous map back when the write fails: the in-memory vault
         // and the file must agree, otherwise the process keeps serving
         // ciphertexts the on-disk copy no longer holds.
-        let mut fence = discovery_authority::mutation_fence();
         let previous = std::mem::replace(&mut self.data.entries, entries);
         if let Err(e) = self.save() {
             self.data.entries = previous;
             return Err(e);
         }
-        fence.vault_changed(|provider| {
-            let key = format!("ai:{provider}");
-            match (previous.get(&key), self.data.entries.get(&key)) {
-                (Some(old), Some(new)) => {
-                    old.ciphertext != new.ciphertext
-                        || old.nonce != new.nonce
-                        || old.salt != new.salt
+        if let Some(fence) = fence {
+            fence.vault_changed(|provider| {
+                let key = format!("ai:{provider}");
+                match (previous.get(&key), self.data.entries.get(&key)) {
+                    (Some(old), Some(new)) => {
+                        old.ciphertext != new.ciphertext
+                            || old.nonce != new.nonce
+                            || old.salt != new.salt
+                    }
+                    (None, None) => false,
+                    _ => true,
                 }
-                (None, None) => false,
-                _ => true,
-            }
-        });
+            });
+        }
         Ok(())
     }
 

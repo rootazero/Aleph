@@ -109,7 +109,8 @@ async fn chat_models_list_open_to_members_without_admin_exposure() {
             {"provider": "relay-b", "model": "org/model", "provider_label": "relay-b", "model_label": "org/model"}
         ]}));
         for admin in ["providers.catalog", "providers.modelsRefresh"] {
-            let response = invoke(&executor, &peer, JsonRpcRequest::with_id(admin, None, json!(2))).await;
+            let params = (admin == "providers.modelsRefresh").then(|| json!({"idempotency_key": uuid::Uuid::new_v4()}));
+            let response = invoke(&executor, &peer, JsonRpcRequest::with_id(admin, params, json!(2))).await;
             assert_eq!(response["error"]["code"], AUTH_REQUIRED, "{admin}: {response}");
         }
     }).await;

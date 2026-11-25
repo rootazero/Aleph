@@ -125,7 +125,10 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
     // tool-name space the live agent loop resolves against. `None` (tests /
     // no MCP bridge) leaves the durable identity field unset.
     tool_descriptor_lookup: Option<Arc<dyn alephcore::tools::descriptor::ToolDescriptorLookup>>,
-) -> anyhow::Result<Arc<Orchestrator>> {
+) -> anyhow::Result<(
+    Arc<Orchestrator>,
+    Option<Arc<dyn alephcore::providers::AiProvider>>,
+)> {
     // Install the process-wide UI locale from the same `[general] language`
     // key that already drives the gateway's system messages and the model's
     // response language (two lines apart, below). Strings a human reads that
@@ -400,6 +403,7 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
     );
 
     let (stall_cfg, failure_cap, turn_to) = build_stability_triple(config);
+    let codex_named_route = named_providers.get("chatgpt").cloned();
     let harness = Arc::new(AgentHarnessRunner {
         agent_registry: agent_registry.clone(),
         session_service: session_service.clone(),
@@ -495,7 +499,7 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
     .with_agent_registry(agent_registry);
 
     tracing::info!("Orchestrator assembled (Phase 5)");
-    Ok(Arc::new(orchestrator))
+    Ok((Arc::new(orchestrator), codex_named_route))
 }
 
 // =============================================================================

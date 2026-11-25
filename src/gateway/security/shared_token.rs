@@ -133,7 +133,7 @@ impl SharedTokenManager {
     /// even if the token file is lost.
     pub fn generate_token(&self) -> Result<String, SharedTokenError> {
         let token = format!("aleph-{}", Uuid::new_v4());
-        self.commit_token(&token)?;
+        self.commit_token(&token, false)?;
         Ok(token)
     }
 
@@ -143,7 +143,7 @@ impl SharedTokenManager {
     /// is the moment the previous token stops being accepted. Callers that must
     /// keep the old token working until another store is in sync (see
     /// [`Self::reset_token`]) therefore call this last.
-    fn commit_token(&self, token: &str) -> Result<(), SharedTokenError> {
+    fn commit_token(&self, token: &str, vault_rewrapped: bool) -> Result<(), SharedTokenError> {
         let hash = hmac_sign(&self.secret, token);
 
         self.store
@@ -151,9 +151,13 @@ impl SharedTokenManager {
             .map_err(|e| SharedTokenError::Storage(e.to_string()))?;
 
         let mut current = self.current_token.lock().unwrap_or_else(|e| e.into_inner());
-        let mut fence = discovery_authority::mutation_fence();
-        *current = Some(token.to_owned());
-        fence.vault_changed(|_| true);
+        if vault_rewrapped {
+            *current = Some(token.to_owned());
+        } else {
+            let mut fence = discovery_authority::mutation_fence();
+            *current = Some(token.to_owned());
+            fence.vault_changed(|_| true);
+        }
         Ok(())
     }
 
@@ -284,7 +288,45 @@ impl SharedTokenManager {
             return Ok(());
         }
         let mut vault = self.vault.write().unwrap_or_else(|e| e.into_inner());
-        // Rotation holds this write lock until the current token changes.
+        let entries = self.encrypt_secret_batch(&vault, secrets)?;
+        vault
+            .replace_all(entries)
+            .map_err(|error| SharedTokenError::Storage(error.to_string()))
+    }
+
+    /// Commit a credential refresh and its already-built transport at the same
+    /// mutation boundary. The synchronous callback may not read vault or config.
+    pub(crate) fn refresh_secrets_if_current<'a, T>(
+        &self,
+        revision: crate::providers::model_catalog::discovery_authority::DiscoveryRevision,
+        expected: (&str, &str),
+        secrets: impl IntoIterator<Item = (&'a str, &'a str)>,
+        install: impl FnOnce() -> T,
+    ) -> Result<Option<T>, SharedTokenError> {
+        let mut vault = self.vault.write().unwrap_or_else(|e| e.into_inner());
+        let Some(stored) = self.decrypt_secret(&vault, expected.0)? else {
+            return Ok(None);
+        };
+        if stored.expose() != expected.1 {
+            return Ok(None);
+        }
+        let entries = self.encrypt_secret_batch(&vault, secrets)?;
+        let mut fence = crate::providers::model_catalog::discovery_authority::mutation_fence();
+        if !fence.is_current(revision) {
+            return Ok(None);
+        }
+        vault
+            .replace_credentials(entries, &mut fence)
+            .map_err(|error| SharedTokenError::Storage(error.to_string()))?;
+        Ok(Some(install()))
+    }
+
+    fn encrypt_secret_batch<'a>(
+        &self,
+        vault: &SecretVault,
+        secrets: impl IntoIterator<Item = (&'a str, &'a str)>,
+    ) -> Result<std::collections::HashMap<String, EncryptedEntry>, SharedTokenError> {
+        // Rotation holds the vault write lock until the current token changes.
         let crypto = self.crypto()?;
         let mut entries = vault.entries().clone();
         for (name, value) in secrets {
@@ -294,9 +336,7 @@ impl SharedTokenManager {
             }
             entries.insert(name.to_owned(), entry);
         }
-        vault
-            .replace_all(entries)
-            .map_err(|error| SharedTokenError::Storage(error.to_string()))
+        Ok(entries)
     }
 
     fn encrypt_secret(
@@ -324,6 +364,14 @@ impl SharedTokenManager {
     /// Get a decrypted secret from the vault.
     pub fn get_secret(&self, name: &str) -> Result<Option<DecryptedSecret>, SharedTokenError> {
         let vault = self.vault.read().unwrap_or_else(|e| e.into_inner());
+        self.decrypt_secret(&vault, name)
+    }
+
+    fn decrypt_secret(
+        &self,
+        vault: &SecretVault,
+        name: &str,
+    ) -> Result<Option<DecryptedSecret>, SharedTokenError> {
         let crypto = self.crypto()?;
         match vault.get(name) {
             Ok(entry) => {
@@ -417,14 +465,15 @@ impl SharedTokenManager {
         //    credential here, so a failure leaves the vault exactly as it was
         //    and the old token still decrypts it.
         vault
-            .replace_all(new_entries)
+            .rewrap_entries(new_entries)
             .map_err(|e| SharedTokenError::Storage(e.to_string()))?;
 
         // 3. Persist the new token. If this fails the vault is already
         //    encrypted under the new key, so put the old ciphertexts back: the
         //    old token is still the live one and it can still decrypt them.
-        if let Err(e) = self.commit_token(&new_token) {
-            vault.replace_all(old_entries).map_err(|rollback| {
+        if let Err(e) = self.commit_token(&new_token, true) {
+            vault.rewrap_entries(old_entries).map_err(|rollback| {
+                discovery_authority::mutation_fence().vault_changed(|_| true);
                 SharedTokenError::Storage(format!(
                     "token rotation failed ({e}) and the vault rollback failed as well ({rollback}); the stored secrets may be unreadable"
                 ))

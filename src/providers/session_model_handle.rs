@@ -444,6 +444,19 @@ pub(crate) fn revoke_config_selection(affected: impl Fn(&str) -> bool) {
     update_discovered(|snapshot| snapshot.revoke_routes(affected, false));
 }
 
+pub(crate) fn update_configured_selection(config: &crate::Config, affected: impl Fn(&str) -> bool) {
+    update_discovered(|snapshot| {
+        snapshot.revoke_routes(affected, false);
+        snapshot.replace_configured_roster(config);
+    });
+}
+
+/// Under the mutation fence, restore only the route that was eligible just
+/// before its credential was refreshed and whose exact transport was swapped.
+pub(crate) fn restore_refreshed_credential(provider: &str) {
+    update_discovered(|snapshot| snapshot.restore_refreshed_credential(provider));
+}
+
 pub(crate) fn revoke_vault_discovery(affected: impl Fn(&str) -> bool) {
     update_discovered(|snapshot| snapshot.revoke_routes(affected, true));
 }
