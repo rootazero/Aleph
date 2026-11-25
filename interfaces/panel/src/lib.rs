@@ -74,6 +74,27 @@ impl ChatModel {
         self.state.replace_history(history, details)
     }
 
+    /// Show the last measured request without imputing provider usage.
+    pub fn context_view(&self, breakdown: JsonValue) -> JsonValue {
+        serde_json::from_value(breakdown).map_or(JsonValue::Null, |report| {
+            shared_ui_logic::transcript::panel_context_view(&report)
+        })
+    }
+
+    /// Layout only the bounded, inert flowchart subset.
+    pub fn mermaid_view(&self, source: String) -> JsonValue {
+        use shared_ui_logic::transcript::mermaid::{layout_flowchart, FlowchartFallback};
+        match layout_flowchart(&source) {
+            Ok(scene) => json!({"scene": scene}),
+            Err(reason) => json!({"reason": match reason {
+                FlowchartFallback::SourceLimit | FlowchartFallback::NodeLimit |
+                FlowchartFallback::EdgeLimit | FlowchartFallback::LabelLimit |
+                FlowchartFallback::CanvasLimit => "diagram exceeds limits",
+                _ => "unsupported diagram",
+            }}),
+        }
+    }
+
     /// Visible line numbers and word spans from Aleph's recorded change.
     pub fn diff_view(&self, key: String, expanded: bool) -> JsonValue {
         use shared_ui_logic::transcript::{diff_rows, stats_label, DiffView};

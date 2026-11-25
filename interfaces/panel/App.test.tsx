@@ -245,6 +245,59 @@ async function openChat(handlers: ReturnType<typeof gateway>) {
   return app;
 }
 
+test("context separates sent prompt, pre-trim skill and estimated tool results", async () => {
+  const { handlers } = chatGateway({
+    "context.breakdown": () => ({
+      session_key: "s-1", turn: 7, dynamic_bytes_sent: 20,
+      layers: [
+        { name: "identity", zone: "stable", bytes: 100, tokens: 25 },
+        { name: "skill_instructions", zone: "dynamic", bytes: 80, tokens: 20 },
+      ],
+      tools: [{ name: "Edit", schema_bytes: 70, description_bytes: 30 }],
+      messages: { tool_results: 9, reasoning: 0, other: 2 },
+    }),
+  });
+  const app = await openChat(handlers);
+  expect(rpcParams(app, "context.breakdown")).toHaveLength(0);
+  await app.press("Context");
+  await app.waitFor("Last measured request · turn 7");
+  expect(app.texts()).toContain("System Prompt · 120 bytes sent");
+  expect(app.texts()).toContain("Skill · 80 bytes before trimming (part of System Prompt)");
+  expect(app.texts()).toContain("Tool schemas · 100 bytes");
+  expect(app.texts()).toContain("Tool results · 9 estimated tokens");
+  expect(app.texts()).toContain("Provider input · Unknown");
+  expect(rpcParams(app, "context.breakdown")).toEqual([{ session_key: "s-1" }]);
+});
+
+test("assistant Markdown uses callouts and bounded Mermaid with source fallback", async () => {
+  const history = [
+    "Earlier answer", "", "> [!NOTE]", "> Read the docs.", "", "https://example.com/manual", "",
+    "```mermaid", "flowchart TD", "A[Start] --> B[Done]", "```", "",
+    "```mermaid", "sequenceDiagram", "A->>B: plain fallback", "```", "",
+    "[Do not open](javascript:alert%281%29)", "<!--aleph-mermaid:0-->",
+  ].join("\n");
+  const { handlers } = chatGateway({ "chat.history": () => ({
+    session_key: "s-1", messages: [{ role: "assistant", content: history, timestamp: "t0" }], active_run: null,
+  }) });
+  const app = await openChat(handlers);
+  await app.waitFor("Read the docs.");
+  await app.waitFor("text:https://example.com/manual");
+  await app.waitFor("label:Mermaid flowchart: Start, Done");
+  await app.waitFor("Mermaid source · unsupported diagram");
+  await app.waitFor("Do not open");
+  expect(app.texts()).toContain("<!--aleph-mermaid:0-->");
+});
+
+test("an open live Mermaid fence remains readable code", async () => {
+  const { handlers } = chatGateway();
+  const app = await openChat(handlers);
+  await app.type("label:Message", "draw a diagram");
+  await app.press("Send");
+  await app.host.send("aleph.event", chunk("```mermaid\nflowchart LR\nA[Live start] --> B[Live end]"));
+  await app.waitFor("text:flowchart LR\nA[Live start] --> B[Live end]");
+  expect(app.shows("label:Mermaid flowchart: Live start, Live end")).toBe(false);
+});
+
 test("a session opens in chat and its reply streams in, then history takes over", async () => {
   const { handlers, complete } = chatGateway();
   const app = await openChat(handlers);

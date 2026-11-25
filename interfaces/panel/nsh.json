@@ -5,7 +5,8 @@
   "build": 1,
   "rust": ".",
   "capabilities": {
-    "host": ["aleph.rpc", "aleph.pair", "aleph.connect", "aleph.connection"]
+    "host": ["aleph.rpc", "aleph.pair", "aleph.connect", "aleph.connection"],
+    "openUrl": { "schemes": ["https", "http"] }
   },
   "web": {
     "host": "./web/host.js"

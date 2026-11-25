@@ -3,6 +3,7 @@ import { Button } from "nsh/base";
 import type { ChatRow, ToolRow } from "../Chat";
 import type { PanelSdk } from "../../shell/sdk";
 import type { Change } from "./Diff";
+import { MessageBody, type Diagram } from "./MessageBody";
 import { outputReader } from "./output";
 import { ToolCard } from "./ToolCard";
 
@@ -12,6 +13,7 @@ type Reader = ReturnType<typeof outputReader>;
 function TranscriptItem(props: {
   row: () => ChatRow | undefined;
   reader: (key: string) => Reader | undefined;
+  diagram: (source: string) => Diagram;
   diff: (key: string, expanded: boolean) => Change[];
   fullscreen: () => string | null;
   bindLauncher: (key: string, ref?: ViewRef) => void;
@@ -35,7 +37,9 @@ function TranscriptItem(props: {
     <If when={props.row()?.kind === "tool"} else={
       <View class="gap-1 py-2">
         <Text class="text-muted-foreground">{body()?.role === "user" ? "You" : "Aleph"}</Text>
-        <Text class="text-foreground">{body()?.text}</Text>
+        <If when={body()?.role === "assistant"} else={<Text class="text-foreground">{body()?.text}</Text>}>
+          <MessageBody text={body()?.text ?? ""} streaming={body()?.streaming ?? false} layout={props.diagram} />
+        </If>
       </View>
     }>
       <ToolCard row={tool} reader={() => props.reader(tool().key)}
@@ -54,6 +58,7 @@ export function TranscriptList(props: {
   sdk: PanelSdk;
   fullscreen: () => string | null;
   setFullscreen: (key: string | null) => void;
+  diagram: (source: string) => Diagram;
   diff: (key: string, expanded: boolean) => Change[];
 }) {
   const open = signal(new Map<string, Reader>());
@@ -130,7 +135,7 @@ export function TranscriptList(props: {
         onScroll={({ offset, contentSize, size }) => following.set(contentSize.height - size.height - offset.y <= TAIL_DISTANCE)}
         class="flex-1">
         {(item) => <TranscriptItem row={() => props.row(item())?.()}
-          reader={(key) => open().get(key)} diff={props.diff} fullscreen={props.fullscreen}
+          reader={(key) => open().get(key)} diff={props.diff} diagram={props.diagram} fullscreen={props.fullscreen}
           bindLauncher={bindLauncher} onToggle={toggle} onFullscreen={toggleFullscreen} />}
       </List>
       <If when={!following()}>

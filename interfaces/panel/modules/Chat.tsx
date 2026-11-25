@@ -5,7 +5,9 @@ import { Button, Input } from "nsh/base";
 import { ChatModel } from "aleph/panel";
 import { type PanelEvent, type PanelSdk, RpcError } from "../shell/sdk";
 import { TranscriptList } from "./chat/TranscriptList";
+import { ContextSheet } from "./chat/ContextSheet";
 import type { Change } from "./chat/Diff";
+import type { Diagram } from "./chat/MessageBody";
 
 const HOST_UNAVAILABLE = -32090;
 const HISTORY_LIMIT = 200;
@@ -53,7 +55,9 @@ type Snapshot = RunState & { rows: ChatRow[]; limited: boolean };
 export function Chat(props: { sdk: PanelSdk; setReaderMode: (active: boolean) => void }) {
   const { sdk } = props;
   const fullscreen = signal<string | null>(null);
+  const showContext = signal(false);
   const setFullscreen = (key: string | null) => {
+    if (key) showContext.set(false);
     fullscreen.set(key);
     props.setReaderMode(key !== null);
   };
@@ -211,10 +215,23 @@ export function Chat(props: { sdk: PanelSdk; setReaderMode: (active: boolean) =>
 
   return (
     <View class="flex-1 gap-2 p-4">
-      <If when={!fullscreen()}><Text class="text-muted-foreground">{sessionKey() ?? "New conversation"}</Text></If>
+      <If when={!fullscreen()}>
+        <View class="flex-row items-center justify-between">
+          <Text class="text-muted-foreground">{sessionKey() ?? "New conversation"}</Text>
+          <If when={sessionKey() && !showContext()}>
+            <Button class="rounded px-2 py-1 hover:bg-muted focus-visible:bg-muted" onPress={() => showContext.set(true)}>
+              <Text>Context</Text>
+            </Button>
+          </If>
+        </View>
+      </If>
+      <If when={showContext() && sessionKey()}>
+        <ContextSheet session={sessionKey} sdk={sdk} project={(raw) => model.contextView(raw)} close={() => showContext.set(false)} />
+      </If>
       <If when={!loading()} else={<Text class="text-muted-foreground">Loading conversation…</Text>}>
         <TranscriptList keys={keys} row={(key) => rows.get(key)!} sdk={sdk} session={sessionKey}
           fullscreen={fullscreen} setFullscreen={setFullscreen}
+          diagram={(source) => model.mermaidView(source) as Diagram}
           diff={(key, expanded) => model.diffView(key, expanded) as Change[]} />
       </If>
       <If when={!fullscreen() && activeRun()}><Text class="text-muted-foreground">Aleph · replying</Text></If>
