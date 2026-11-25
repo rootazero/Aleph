@@ -1375,6 +1375,7 @@ mod tests {
                 Some(json!({"provider": PROVIDER})),
                 json!(1),
             );
+            let before_refresh = test_revision(&config).await;
             let refresh = handle_models_refresh(request, Arc::clone(&config), vault);
             tokio::pin!(refresh);
             let response = tokio::select! {
@@ -1387,10 +1388,7 @@ mod tests {
             };
             let result = response.result.unwrap();
             let row = &result["providers"][0];
-            let superseded = DiscoveryError::Superseded(PROVIDER.into());
-            if row["error"].as_str() == Some(superseded.to_string().as_str()) {
-                return Err(superseded);
-            }
+            propagated_rpc_supersession(&config, before_refresh, PROVIDER, row).await?;
             assert_eq!(row["models"][0]["id"], "vendor-model");
             assert!(matches!(build("vendor-model").await, Err(BuildRunError::InvalidModel(_))));
             assert!(queued.validate_dispatch_model().is_err());
@@ -1414,6 +1412,20 @@ mod tests {
             }
         }
         panic!("the scenario kept being cancelled by unrelated mutations");
+    }
+
+    async fn propagated_rpc_supersession(
+        config: &RwLock<Config>,
+        before: super::super::discovery_authority::DiscoveryRevision,
+        provider: &str,
+        row: &serde_json::Value,
+    ) -> Result<(), DiscoveryError> {
+        let superseded = DiscoveryError::Superseded(provider.into());
+        if row["error"].as_str() == Some(superseded.to_string().as_str()) {
+            expect_observed_supersession(config, before, &Err(superseded.clone())).await;
+            return Err(superseded);
+        }
+        Ok(())
     }
 
     async fn refresh_to_wire() -> Result<(), DiscoveryError> {
@@ -1475,14 +1487,12 @@ mod tests {
                 Some(json!({"provider": PROVIDER})),
                 json!(1),
             );
+            let before_refresh = test_revision(&config).await;
             let response =
                 providers::handle_models_refresh(request, Arc::clone(&config), vault).await;
             let refresh_result = response.result.unwrap();
             let row = &refresh_result["providers"][0];
-            let superseded = DiscoveryError::Superseded(PROVIDER.into());
-            if row["error"].as_str() == Some(superseded.to_string().as_str()) {
-                return Err(superseded);
-            }
+            propagated_rpc_supersession(&config, before_refresh, PROVIDER, row).await?;
             assert_eq!(row["models"][0]["id"], MODEL);
             let member_models = || {
                 let response = chat::handle_models_list(JsonRpcRequest::with_id(
