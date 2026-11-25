@@ -79,6 +79,17 @@ fn older_page_preserves_live_run_and_deduplicates_split_run() {
     let unavailable = model.apply_history_details(vec!["finished".into()], Value::Null);
     assert_eq!(unavailable["limited"], true);
     assert_eq!(unavailable["rows"][1]["text"], "answer");
+    let none_admitted = model.apply_history_details(
+        vec!["finished".into()],
+        json!({"runs": [], "limited": false}),
+    );
+    assert_eq!(none_admitted["limited"], true);
+    let confirmed_empty = model.apply_history_details(
+        vec!["finished".into()],
+        json!({"runs": [{"run_id": "finished", "tools": [], "limited": false}], "limited": false}),
+    );
+    assert_eq!(confirmed_empty["limited"], false);
+    assert_eq!(confirmed_empty["rows"][1]["text"], "answer");
 }
 
 #[test]

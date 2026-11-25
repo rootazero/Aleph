@@ -168,8 +168,11 @@ export function TranscriptList(props: {
           </If>
         </View>
       </If>
+      {/* NSH only pins the oldest visible row at offset zero when start-loading
+          is enabled. Keep network reads explicit: only the button fetches. */}
       <List testID="chat-transcript" ref={(ref) => { list = ref; }} each={props.keys()} keyExtractor={(key) => key}
         empty={<Text class="text-muted-foreground">No messages yet</Text>}
+        onLoadMoreAtStart={() => undefined}
         initialScrollAtEnd maintainVisibleContentPosition={{ autoscrollToBottomThreshold: TAIL_DISTANCE }}
         onScroll={({ offset, contentSize, size }) => following.set(contentSize.height - size.height - offset.y <= TAIL_DISTANCE)}
         class="flex-1">

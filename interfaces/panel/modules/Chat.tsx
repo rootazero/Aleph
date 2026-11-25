@@ -81,6 +81,7 @@ export function Chat(props: { sdk: PanelSdk; setReaderMode: (active: boolean) =>
   const keys = signal<string[]>([]);
   const rows = new Map<string, Signal<ChatRow>>();
   const loading = signal(sessionKey() !== null);
+  const historyReady = signal(sessionKey() === null);
   const waitingForAdmission = signal(sessionKey() !== null);
   const historyFailed = signal(false);
   const activeRun = signal<string | null>(null);
@@ -177,9 +178,12 @@ export function Chat(props: { sdk: PanelSdk; setReaderMode: (active: boolean) =>
       const snapshot = model.replaceHistory({ ...history, live_status_stale: liveRevision !== revision }, null) as Snapshot | null;
       if (!snapshot) throw new Error("Unable to read conversation history.");
       if (snapshot.scrollbackReset) resetWindowRequests();
-      waitingForAdmission.set(false);
-      historyFailed.set(false);
-      replace(snapshot);
+      batch(() => {
+        historyReady.set(true);
+        waitingForAdmission.set(false);
+        historyFailed.set(false);
+        replace(snapshot);
+      });
       void loadDetails(key, history.messages, true);
       // Completion can reach the feed before Core stamps the projected history row.
       if (terminalRun && snapshot.unconfirmedRuns.includes(terminalRun)) {
@@ -273,6 +277,7 @@ export function Chat(props: { sdk: PanelSdk; setReaderMode: (active: boolean) =>
       rows.clear();
       keys.set([]);
       loading.set(false);
+      historyReady.set(true);
       waitingForAdmission.set(false);
       historyFailed.set(false);
       runState({ activeRun: null, missingPrefix: false, unconfirmed: false, droppedUnconfirmed: false, canResume: false });
@@ -358,7 +363,8 @@ export function Chat(props: { sdk: PanelSdk; setReaderMode: (active: boolean) =>
       <If when={showContext() && sessionKey()}>
         <ContextSheet session={sessionKey} sdk={sdk} project={(raw) => model.contextView(raw)} close={() => showContext.set(false)} />
       </If>
-      <If when={!loading()} else={<Text class="text-muted-foreground">Loading conversation…</Text>}>
+      <If when={loading()}><Text class="text-muted-foreground">Loading conversation…</Text></If>
+      <If when={!loading() && historyReady()}>
         <TranscriptList keys={keys} row={(key) => rows.get(key)!} sdk={sdk} session={sessionKey}
           fullscreen={fullscreen} setFullscreen={setFullscreen}
           scrollback={scrolling} loadingOlder={loadingOlder} olderFailed={olderFailed}

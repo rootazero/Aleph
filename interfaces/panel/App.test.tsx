@@ -389,6 +389,7 @@ test("a denied selected session cannot receive a send until explicitly starting 
   await app.press("label:Open Sessions");
   await app.press("label:Open chat Release notes");
   await app.waitFor("session not found");
+  expect(app.texts()).not.toContain("No messages yet");
   await app.type("label:Message", "do not recreate it");
   await app.submit("label:Message");
   expect(rpcParams(app, "chat.send").length).toBe(0);

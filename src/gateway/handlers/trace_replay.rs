@@ -1366,9 +1366,10 @@ mod tests {
         let owned = SessionKey::main("v1-details-owner");
         let foreign = SessionKey::main("v1-details-foreign");
         let missing = SessionKey::main("v1-details-missing");
-        seed_session(&sessions, &owned, "u-alice", &["r-v1-own"]).await;
+        seed_session(&sessions, &owned, "u-alice", &["r-v1-own", "r-v1-empty"]).await;
         seed_session(&sessions, &foreign, "u-bob", &["r-v1-foreign"]).await;
         seed_run_in(&db, "r-v1-own", &owned, &["never return this prose"]).await;
+        seed_run_in(&db, "r-v1-empty", &owned, &[]).await;
         seed_run_in(&db, "r-v1-foreign", &foreign, &[]).await;
         db.insert_trace(&tool_call_trace("r-v1-own", 2, "c-v1-own"))
             .await
@@ -1403,7 +1404,7 @@ mod tests {
         let request = |key: &SessionKey| {
             let mut request = req(json!({
                 "session_key": key.to_key_string(),
-                "run_ids": ["r-v1-foreign", "r-v1-own", "r-v1-unknown"],
+                "run_ids": ["r-v1-foreign", "r-v1-own", "r-v1-unknown", "r-v1-empty"],
             }));
             request.method = "chat.transcript_details".into();
             request
@@ -1414,8 +1415,9 @@ mod tests {
                     handle_transcript_details(request(&owned), db.clone(), sessions.clone()).await;
                 let result = addressed.result.expect("authorized replay");
                 let runs = result["runs"].as_array().unwrap();
-                assert_eq!(runs.len(), 1);
+                assert_eq!(runs.len(), 2);
                 assert_eq!(runs[0]["run_id"], "r-v1-own");
+                assert_eq!(runs[1], json!({ "run_id": "r-v1-empty", "tools": [], "limited": false }));
                 let tools = runs[0]["tools"].as_array().unwrap();
                 assert_eq!(tools.len(), 1);
                 assert_eq!(tools[0]["tool_call_id"], "c-v1-own");

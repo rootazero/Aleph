@@ -3,6 +3,9 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use aleph_protocol::chat_transcript::{ChatToolChange, ChatToolDelta, ChatTranscriptDetails};
+use aleph_protocol::session_thread::{
+    ChatHistoryScrollbackResponse as ScrollbackPage, ScrollbackStatus,
+};
 use aleph_protocol::StreamEvent;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -73,21 +76,6 @@ struct Message {
     content: String,
     timestamp: Option<String>,
     run_id: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct ScrollbackPage {
-    requested_before: Option<String>,
-    next_before: Option<String>,
-    status: ScrollbackStatus,
-}
-
-#[derive(Deserialize, PartialEq)]
-#[serde(rename_all = "snake_case")]
-enum ScrollbackStatus {
-    Ready,
-    StaleBoundary,
-    ContinuationUnavailable,
 }
 
 struct ReplayDetail {
