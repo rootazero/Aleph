@@ -2,7 +2,7 @@
 
 - 日期 / Date: 2026-11-25
 - 分支 / Branch: `zahir-capability-convergence`（worktree `.worktrees/zahir-convergence`，基于 main `a4dac8db4`）
-- 状态 / Status: 设计草案，待用户批准 / Draft, pending user approval
+- 状态 / Status: 设计定稿，待用户批准 / Final draft, pending user approval（§5 修正已确认；§6.3 提交原子性与排空超时为设计者决定）
 - 上游 / Upstream: `docs/research/Everything-externally-composable-is-a-Capability.md`（§10 工具集会话固定、§10.3 热替换、§13 成功标准）；参考实现 cordis、cordis-rs、pi/packages/chord
 
 ## 1. 意图 / Intent
@@ -61,14 +61,14 @@ Phase 6–8 留下了并存权威与未挂载模块（见 §3）。在它们之�
 - 方案二：照 cordis-rs Fiber 写统一 supervisor 接管全部 provider —— 否决：改动约 20 个子系统，违反 R10。
 - 方案三：本期只收敛 —— 否决：功能增强落空。
 
-## 5. 对已批准方案的两处修正（待用户确认）/ Corrections pending confirmation
+## 5. 对已批准方案的两处修正（用户已于 2026-11-25 确认）/ Corrections confirmed by the user
 
 写设计时按源码复核，发现上一轮方案里有两点没有生产消费者，按判据 11（报成功的 no-op）不应原样实现：
 
 1. **`ProviderState::Parked` + 依赖恢复时重新拉起下游。** 当前所有 `Requires` 边的下游都是工具，不是 provider；工具在会话内固定列出（§10），不需要也不应「停放」。实现一个监听 provider→provider 边的循环，在今天会零次触发。
-   **建议**：本期把「等待依赖」落在**调用路径**上——G2 的结构化 `DependencyUnavailable` 错误；`Parked` 状态与反向依赖重查写入本文 §9「推迟项」，触发条件是第一条 provider→provider 边出现。
+   **决定**：本期把「等待依赖」落在**调用路径**上——G2 的结构化 `DependencyUnavailable` 错误；`Parked` 状态与反向依赖重查写入本文 §9「推迟项」，触发条件是第一条 provider→provider 边出现。
 2. **`resolve_resource` 改为通用 provider 查找。** 可用性判定可以通用（读 `ProviderRegistry` 中目标 provider 的状态），但「捕获资源句柄」只有 memory 一个实现；为它抽 trait 是单消费者抽象。
-   **建议**：判定通用化，捕获保持 memory 专有分支。
+   **决定**：判定通用化，捕获保持 memory 专有分支。
 
 ## 6. 设计 / Design
 
