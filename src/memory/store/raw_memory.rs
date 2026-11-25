@@ -241,6 +241,16 @@ impl RawMemory {
     }
 }
 
+/// The raw path prefix written by the user-correction tool.
+pub const CORRECTION_PATH_PREFIX: &str = "aleph://correction/";
+
+/// A committed correction and its stable append position in the raw index.
+#[derive(Debug)]
+pub struct SequencedCorrection {
+    pub seq: i64,
+    pub raw: RawMemory,
+}
+
 /// Storage trait for raw memory records.
 #[async_trait]
 pub trait RawMemoryStore: Send + Sync {
@@ -365,6 +375,33 @@ pub trait RawMemoryStore: Send + Sync {
             .into_iter()
             .filter(|r| r.created_at > since_created_at)
             .collect())
+    }
+
+    /// Freeze the legacy timestamp boundary for this corpus if not yet active.
+    /// Pass a successfully read legacy watermark, or `None` if it never existed.
+    /// Repeating activation must not move the boundary.
+    async fn activate_correction_feed(
+        &self,
+        _agent_id: &str,
+        _legacy_watermark: Option<i64>,
+    ) -> Result<(), AlephError> {
+        Err(AlephError::other(
+            "Correction feed is not supported by this store",
+        ))
+    }
+
+    /// Read the next page in append order. `None` means the corpus has not yet
+    /// been activated; `Some([])` means an active corpus has no eligible rows.
+    /// A selected row with an unreadable body must fail the whole page.
+    async fn correction_page(
+        &self,
+        _agent_id: &str,
+        _after_seq: i64,
+        _limit: usize,
+    ) -> Result<Option<Vec<SequencedCorrection>>, AlephError> {
+        Err(AlephError::other(
+            "Correction feed is not supported by this store",
+        ))
     }
 
     /// Count raw memories under `path_prefix` created after `since_created_at`,

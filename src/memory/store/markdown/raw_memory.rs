@@ -12,7 +12,9 @@ use rusqlite::{
 };
 
 use crate::error::AlephError;
-use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
+use crate::memory::store::raw_memory::{
+    RawMemory, RawMemorySource, RawMemoryStore, SequencedCorrection,
+};
 
 use super::utils::compute_sha256;
 use super::MarkdownSessionStore;
@@ -504,6 +506,78 @@ impl RawMemoryStore for MarkdownSessionStore {
             limit,
             None,
         )
+        .await
+    }
+
+    async fn activate_correction_feed(
+        &self,
+        agent_id: &str,
+        legacy_watermark: Option<i64>,
+    ) -> Result<(), AlephError> {
+        let agent_id = agent_id.to_owned();
+        self.with_raw_db(move |db, _| {
+            // A single SQLite write statement freezes the mark and append
+            // boundary together, including when independent stores race.
+            db.execute(
+                "INSERT OR IGNORE INTO raw_correction_fences (agent_id, activation_seq, legacy_watermark)
+                 SELECT ?1, COALESCE(MAX(seq), 0), ?2 FROM raw_correction_sequence",
+                params![agent_id, legacy_watermark],
+            )
+            .map_err(storage_error)?;
+            Ok(())
+        })
+        .await
+    }
+
+    async fn correction_page(
+        &self,
+        agent_id: &str,
+        after_seq: i64,
+        limit: usize,
+    ) -> Result<Option<Vec<SequencedCorrection>>, AlephError> {
+        let agent_id = agent_id.to_owned();
+        let limit = i64::try_from(limit).map_err(storage_error)?;
+        self.with_raw_db(move |db, base| {
+            // Use the same locking discipline as other Markdown reads so a
+            // concurrent deletion cannot remove the file during this page.
+            let tx = db
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(storage_error)?;
+            let fence: Option<(i64, Option<i64>)> = tx
+                .query_row(
+                    "SELECT activation_seq, legacy_watermark FROM raw_correction_fences WHERE agent_id = ?1",
+                    [&agent_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()
+                .map_err(storage_error)?;
+            let Some((activation_seq, legacy_watermark)) = fence else {
+                return Ok(None);
+            };
+            let mut statement = tx
+                .prepare(
+                    "SELECT seq.seq, raw.id, raw.file_id, raw.is_processed
+                     FROM raw_correction_sequence AS seq
+                     JOIN raw_memory_index AS raw ON raw.id = seq.raw_id AND raw.agent_id = seq.agent_id
+                     WHERE seq.agent_id = ?1 AND seq.seq > ?2
+                       AND (?3 IS NULL OR seq.seq > ?4 OR raw.created_at > ?3)
+                     ORDER BY seq.seq ASC LIMIT ?5",
+                )
+                .map_err(storage_error)?;
+            let mut rows = statement
+                .query(params![agent_id, after_seq, legacy_watermark, activation_seq, limit])
+                .map_err(storage_error)?;
+            let mut page = Vec::new();
+            while let Some(row) = rows.next().map_err(storage_error)? {
+                let seq = row.get(0).map_err(storage_error)?;
+                let id: String = row.get(1).map_err(storage_error)?;
+                let file_id: String = row.get(2).map_err(storage_error)?;
+                let processed = row.get(3).map_err(storage_error)?;
+                let raw = read_memory(base, &id, &agent_id, &file_id, processed)?;
+                page.push(SequencedCorrection { seq, raw });
+            }
+            Ok(Some(page))
+        })
         .await
     }
 
