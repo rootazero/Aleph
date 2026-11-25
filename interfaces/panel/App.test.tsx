@@ -197,20 +197,26 @@ test("Nebula discovery is not carried across connection identities", async () =>
 
 // Chat: a stand-in Gateway whose transcript grows once a run completes.
 function chatGateway() {
-  const transcript = [{ role: "assistant", content: "Earlier answer", timestamp: "t0" }];
+  const transcript: { role: string; content: string; timestamp: string; run_id?: string }[] = [
+    { role: "assistant", content: "Earlier answer", timestamp: "t0" },
+  ];
   let active: string | null = null;
+  const tools = [toolStart, toolFinish];
   const handlers = gateway({
     "chat.history": () => ({ session_key: "s-1", messages: [...transcript], active_run: active }),
+    "chat.transcript_details": () => ({
+      runs: active ? [] : [{ run_id: "r-1", tools, limited: false }], limited: false,
+    }),
     "chat.send": (params) => {
       const { message } = params as { message: string };
-      transcript.push({ role: "user", content: message, timestamp: "t1" });
+      transcript.push({ role: "user", content: message, timestamp: "t1", run_id: "r-1" });
       active = "r-1";
       return { run_id: "r-1", session_key: "s-1", streaming: true };
     },
     "chat.abort": () => ({ aborted: true }),
   });
   const complete = (text: string) => {
-    transcript.push({ role: "assistant", content: text, timestamp: "t2" });
+    transcript.push({ role: "assistant", content: text, timestamp: "t2", run_id: "r-1" });
     active = null;
   };
   return { handlers, complete };
@@ -222,7 +228,12 @@ const rpcParams = (app: { host: { calls(): { name: string; data: unknown }[] } }
     .filter((call) => call.name === "aleph.rpc" && (call.data as { method: string }).method === method)
     .map((call) => (call.data as { params: Record<string, unknown> }).params);
 
-const chunk = (delta: string) => ({ topic: "stream.response_chunk", data: { type: "response_chunk", run_id: "r-1", delta } });
+const chunk = (delta: string, seq?: number) => ({ topic: "stream.response_chunk", data: { type: "response_chunk", run_id: "r-1", delta, seq } });
+const toolStart = { tool_call_id: "call-1", change: { kind: "started", display_name: "Edit", args_text: "src/main.rs" } };
+const toolFinish = { tool_call_id: "call-1", change: { kind: "finished", success: true, duration_ms: 7, presentation_omitted: false } };
+const toolEvent = (delta: typeof toolStart | typeof toolFinish, seq: number) => ({
+  topic: "stream.chat_tool", data: { type: "chat_tool", run_id: "r-1", delta, seq },
+});
 
 async function openChat(handlers: ReturnType<typeof gateway>) {
   const app = await open("./App.tsx", { host: { handlers } });
@@ -260,6 +271,74 @@ test("a session opens in chat and its reply streams in, then history takes over"
   await app.waitFor("Hello, world");
   await app.waitFor("Stop", { state: "gone" });
   expect(rpcParams(app, "chat.history").length).toBe(loads + 1);
+});
+
+test("text and authorized tool rows interleave without moving on finish", async () => {
+  const { handlers, complete } = chatGateway();
+  const app = await openChat(handlers);
+  await app.type("label:Message", "edit the file");
+  await app.press("Send");
+  await app.waitFor("Stop");
+  await app.host.send("aleph.event", chunk("Before tool", 1));
+  await app.host.send("aleph.event", toolEvent(toolStart, 3));
+  await app.host.send("aleph.event", chunk("After tool", 4));
+  await app.waitFor("After tool");
+  await app.waitFor("Running");
+  await app.host.send("aleph.event", toolEvent(toolFinish, 8));
+  await app.host.send("aleph.event", toolEvent(toolStart, 3));
+  await app.waitFor("Done");
+  const seen = app.texts();
+  const title = "Edit · src/main.rs";
+  expect(seen.filter((text) => text === title)).toHaveLength(1);
+  expect(seen.indexOf("Before tool")).toBeLessThan(seen.indexOf(title));
+  expect(seen.indexOf(title)).toBeLessThan(seen.indexOf("After tool"));
+  complete("Committed answer");
+  await app.host.send("aleph.event", { topic: "stream.run_complete", data: { run_id: "r-1", seq: 9 } });
+  await app.waitFor("Committed answer");
+  expect(app.texts().filter((text) => text === title)).toHaveLength(1);
+  expect(app.shows("Before tool")).toBe(false);
+});
+
+test("reopening an active run marks the prefix missing and retains its suffix", async () => {
+  const { handlers } = chatGateway();
+  const base = handlers["aleph.rpc"];
+  const app = await openChat({
+    ...handlers,
+    "aleph.rpc": async (call) => call.method === "chat.history"
+      ? { result: { session_key: "s-1", messages: [{ role: "assistant", content: "Earlier answer" }], active_run: "r-1" } }
+      : base(call),
+  });
+  await app.waitFor("Earlier live updates may be missing.");
+  await app.host.send("aleph.event", chunk("Live suffix", 104));
+  await app.waitFor("Live suffix");
+  await app.host.send("aleph.event", { topic: "connection.stale", data: { dropped: 2 } });
+  await app.waitUntil(() => rpcParams(app, "chat.history").length === 2);
+  await app.waitFor("Live suffix");
+  expect(app.shows("Earlier live updates may be missing.")).toBe(true);
+});
+
+test("chunks delivered before the send reply adopt only its run", async () => {
+  const { handlers } = chatGateway();
+  const base = handlers["aleph.rpc"];
+  let acknowledge: () => void = () => {};
+  const waiting = new Promise<void>((resolve) => { acknowledge = resolve; });
+  const app = await openChat({
+    ...handlers,
+    "aleph.rpc": async (call) => {
+      if (call.method === "chat.send") await waiting;
+      return base(call);
+    },
+  });
+  await app.type("label:Message", "deliver early");
+  const submitted = app.press("Send");
+  await app.waitUntil(() => rpcParams(app, "chat.send").length === 1);
+  await app.host.send("aleph.event", { topic: "stream.response_chunk", data: { run_id: "foreign", delta: "Other run", seq: 1 } });
+  await app.host.send("aleph.event", chunk("Early text", 2));
+  expect(app.shows("Early text")).toBe(false);
+  acknowledge();
+  await submitted;
+  await app.waitFor("Early text");
+  expect(app.shows("Other run")).toBe(false);
 });
 
 test("stop aborts the running reply", async () => {

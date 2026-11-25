@@ -459,5 +459,9 @@ fn presentation_text(ev: &AgentTraceEvent) -> Option<String> {
         .map(|p| p.content)
 }
 
+#[cfg(feature = "panel")]
+mod chat_tool;
+#[cfg(all(test, feature = "panel"))]
+mod chat_tool_tests;
 #[cfg(test)]
 mod tests;

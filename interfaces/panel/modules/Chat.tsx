@@ -1,26 +1,15 @@
-// One conversation: the transcript (`chat.history`), a composer (`chat.send`),
-// the reply streaming in (`stream.*` live events) and Stop (`chat.abort`).
-//
-// The transcript is always Core's: live chunks only preview the reply being
-// written, and every end of a run, every lost or interrupted live feed and
-// every new connection (the shell remounts this module) refetches history.
-// Nothing is replayed, and a send whose answer never came back is reported as
-// unknown, never retried on its own.
-import { List, signal, Text, View } from "nsh";
+// Core owns committed history. Rust folds authorized live presentation into
+// the same list, while TSX owns RPC lifetimes and composer interaction.
+import { List, signal, type Signal, Text, View } from "nsh";
 import { Button, Input } from "nsh/base";
+import { ChatModel } from "aleph/panel";
 import { type PanelEvent, type PanelSdk, RpcError } from "../shell/sdk";
 
-// `aleph_protocol::panel::PANEL_HOST_UNAVAILABLE`: the host lost the socket,
-// so whether a write reached Core is unknown.
 const HOST_UNAVAILABLE = -32090;
 const HISTORY_LIMIT = 200;
+const DETAIL_RUN_LIMIT = 12;
 
-/**
- * A random version-4 UUID for `idempotency_key`. Not `crypto.randomUUID()`:
- * the desktop shell's embedded runtime has no Web Crypto (enabling it pulls
- * in RSA and elliptic-curve crates). The key only has to be unique within
- * this caller's namespace while the Gateway caches it, not unguessable.
- */
+// The native runtime need not ship Web Crypto for this cache-scoped key.
 function newIdempotencyKey(): string {
   const hex = (digits: number) =>
     Array.from({ length: digits }, () => Math.floor(Math.random() * 16).toString(16)).join("");
@@ -28,28 +17,101 @@ function newIdempotencyKey(): string {
   return `${hex(8)}-${hex(4)}-4${hex(3)}-${variant}${hex(3)}-${hex(12)}`;
 }
 
-type Message = { role: string; content: string; timestamp?: string; run_id?: string };
-type History = { session_key: string; messages?: Message[]; active_run?: string | null };
+type History = {
+  session_key: string;
+  messages?: { run_id?: string }[];
+  active_run?: string | null;
+};
 type SendResult = { run_id: string; session_key: string };
-type Draft = { text: string; done: boolean; error: string | null };
-type StreamData = { run_id?: string; delta?: string; content?: string; error?: string };
+
+type TextRow = { kind: "text"; key: string; role: string; text: string; streaming: boolean };
+export type ToolRow = {
+  kind: "tool";
+  key: string;
+  run_id: string;
+  tool_call_id: string;
+  display_name: string;
+  args_text: string;
+  status: "pending" | "running" | "ok" | "error";
+  duration_ms: number | null;
+  has_diff: boolean;
+  presentation_omitted: boolean;
+};
+export type ChatRow = TextRow | ToolRow;
+type RunState = { activeRun: string | null; missingPrefix: boolean };
+type Patch = RunState & {
+  upsert: ChatRow[];
+  remove: string[];
+  appendOrder: string[];
+  reconcile: boolean;
+  error: string | null;
+};
+type Snapshot = RunState & { rows: ChatRow[]; limited: boolean };
+
+const toolState: Record<ToolRow["status"], string> = {
+  pending: "Status unknown",
+  running: "Running",
+  ok: "Done",
+  error: "Failed",
+};
+
+function TranscriptRow(props: { row: Signal<ChatRow> }) {
+  const text = () => props.row() as TextRow;
+  const tool = () => props.row() as ToolRow;
+  return (
+    <If when={props.row().kind === "tool"} else={
+      <View class="gap-1 py-2">
+        <Text class="text-muted-foreground">{text().role === "user" ? "You" : "Aleph"}</Text>
+        <Text class="text-foreground">{text().text}</Text>
+      </View>
+    }>
+      <View class="gap-1 py-2">
+        <Text class="text-foreground">{tool().display_name}{tool().args_text ? ` · ${tool().args_text}` : ""}</Text>
+        <Text class="text-muted-foreground">{toolState[tool().status]}</Text>
+      </View>
+    </If>
+  );
+}
 
 export function Chat(props: { sdk: PanelSdk }) {
   const { sdk } = props;
+  const model = new ChatModel();
   const sessionKey = signal<string | null>((sdk.intent()?.session_key as string | undefined) ?? null);
-  const messages = signal<Message[]>([]);
+  model.reset(sessionKey() ?? "");
+  const keys = signal<string[]>([]);
+  const rows = new Map<string, Signal<ChatRow>>();
   const loading = signal(sessionKey() !== null);
   const activeRun = signal<string | null>(null);
-  const reply = signal("");
+  const missingPrefix = signal(false);
+  const limited = signal(false);
   const notice = signal<string | null>(null);
   const draft = signal("");
   const sending = signal(false);
   let composing = false;
-  // Stream frames for runs this module does not know yet: on Desktop IPC a
-  // run's first chunks can arrive before `chat.send` answers with its id.
-  // Collected only while a send is waiting.
-  const early = new Map<string, Draft>();
+  let historyRequest = 0;
+  let hasHistory = false;
 
+  const upsert = (row: ChatRow) => {
+    const current = rows.get(row.key);
+    if (current) current.set(row);
+    else rows.set(row.key, signal(row));
+  };
+  const runState = (state: RunState) => {
+    activeRun.set(state.activeRun);
+    missingPrefix.set(state.missingPrefix);
+  };
+  const replace = (snapshot: Snapshot | null) => {
+    if (!snapshot) return;
+    const next = snapshot.rows.map((row) => {
+      upsert(row);
+      return row.key;
+    });
+    const retained = new Set(next);
+    for (const key of rows.keys()) if (!retained.has(key)) rows.delete(key);
+    keys.set(next);
+    runState(snapshot);
+    limited.set(snapshot.limited);
+  };
   const report = (failure: unknown) => {
     const error = failure as Error;
     if (error.message !== "disposed") notice.set(error.message);
@@ -58,55 +120,64 @@ export function Chat(props: { sdk: PanelSdk }) {
   const load = async () => {
     const key = sessionKey();
     if (!key) return;
+    const request = ++historyRequest;
+    const current = () => request === historyRequest && key === sessionKey();
     try {
       const history = (await sdk.invoke("chat.history", { session_key: key, limit: HISTORY_LIMIT })) as History;
-      messages.set(history.messages ?? []);
-      // A run Core reports still going: its earlier chunks are gone, its next
-      // ones and its end still arrive.
-      if (history.active_run !== activeRun()) reply.set("");
-      activeRun.set(history.active_run ?? null);
+      if (!current()) return;
+      // Attach immediately so new chunks can land while the optional details
+      // read runs. Later reconciliations replace a completed run in one pass.
+      if (!hasHistory && !activeRun()) {
+        replace(model.replaceHistory(history, null) as Snapshot | null);
+        loading.set(false);
+      }
+      hasHistory = true;
+      const runIds = [...new Set((history.messages ?? []).slice().reverse()
+        .map((message) => message.run_id).filter((id): id is string => Boolean(id)))];
+      let details: unknown = null;
+      if (runIds.length > 0) {
+        try {
+          details = await sdk.invoke("chat.transcript_details", {
+            session_key: key, run_ids: runIds.slice(0, DETAIL_RUN_LIMIT).reverse(),
+          });
+        } catch {
+          // Older hosts and failed detail reads still provide committed prose.
+          details = { runs: [], limited: true };
+        }
+      }
+      if (!current()) return;
+      const snapshot = model.replaceHistory(history, details) as Snapshot | null;
+      if (snapshot && runIds.length > DETAIL_RUN_LIMIT) snapshot.limited = true;
+      replace(snapshot);
     } catch (failure) {
-      report(failure);
+      if (current()) report(failure);
     } finally {
-      loading.set(false);
+      if (current()) loading.set(false);
     }
   };
 
-  const finish = (error: string | null) => {
-    activeRun.set(null);
-    reply.set("");
-    if (error) notice.set(`The reply failed: ${error}`);
-    void load();
+  const apply = (patch: Patch) => {
+    for (const row of patch.upsert) upsert(row);
+    for (const key of patch.remove) rows.delete(key);
+    if (patch.remove.length || patch.appendOrder.length) {
+      const removed = new Set(patch.remove);
+      keys.update((prior) => [...prior.filter((key) => !removed.has(key)), ...patch.appendOrder]);
+    }
+    runState(patch);
+    if (patch.error) notice.set(`The reply failed: ${patch.error}`);
+    if (patch.reconcile) void load();
   };
 
   const onStream = (event: PanelEvent) => {
-    const data = (event.data ?? {}) as StreamData;
-    const runId = data.run_id;
-    if (!runId) return;
-    const chunk = event.topic === "stream.response_chunk" ? (data.delta ?? data.content ?? "") : "";
-    const ended = event.topic === "stream.run_complete" || event.topic === "stream.run_error";
-    const error = event.topic === "stream.run_error" ? (data.error ?? "unknown error") : null;
-    if (runId === activeRun()) {
-      if (chunk) reply.update((text) => text + chunk);
-      if (ended) finish(error);
-      return;
-    }
-    if (!sending()) return;
-    const held = early.get(runId) ?? { text: "", done: false, error: null };
-    early.set(runId, { text: held.text + chunk, done: held.done || ended, error: held.error ?? error });
+    apply(model.accept({ ...event, nowMs: Date.now() }) as Patch);
   };
-
-  // The live feed lost frames (the Gateway's overflow warning, or the desktop
-  // host's own count): what is on screen may be missing text, so reload it.
-  const onInterrupted = () => {
-    notice.set("Live updates were interrupted; reloaded from Aleph.");
-    reply.set("");
-    void load();
-  };
-
   sdk.on("stream.", onStream);
   sdk.on("connection.", (event) => {
-    if (event.topic === "connection.warning" || event.topic === "connection.stale") onInterrupted();
+    if (event.topic === "connection.warning" || event.topic === "connection.stale") {
+      notice.set("Live updates were interrupted; reloaded from Aleph.");
+      apply(model.interrupt() as Patch);
+      void load();
+    }
   });
   void load();
 
@@ -115,40 +186,32 @@ export function Chat(props: { sdk: PanelSdk }) {
     if (!text || composing || sending() || activeRun()) return;
     const key = sessionKey();
     const params: Record<string, unknown> = {
-      message: text,
-      channel: "gui:chat",
-      stream: true,
-      // One key per attempt: a retry of this exact send is answered from
-      // the Gateway's cache instead of starting a second run.
-      idempotency_key: newIdempotencyKey(),
+      message: text, channel: "gui:chat", stream: true, idempotency_key: newIdempotencyKey(),
     };
     if (key) params.session_key = key;
+    ++historyRequest;
+    loading.set(false);
     sending.set(true);
     notice.set(null);
-    early.clear();
-    messages.update((list) => [...list, { role: "user", content: text }]);
+    apply(model.beginSend(text, Date.now()) as Patch);
     draft.set("");
     try {
       const result = (await sdk.invoke("chat.send", params)) as SendResult;
-      if (!key) sessionKey.set(result.session_key);
-      const held = early.get(result.run_id);
-      activeRun.set(result.run_id);
-      reply.set(held?.text ?? "");
-      if (held?.done) finish(held.error);
+      ++historyRequest;
+      sessionKey.set(result.session_key);
+      apply(model.resolveSend(result.session_key, result.run_id, Date.now()) as Patch);
     } catch (failure) {
+      apply(model.resolveSend(key ?? "", null, Date.now()) as Patch);
       if (failure instanceof RpcError && failure.code === HOST_UNAVAILABLE) {
         notice.set("Connection lost while sending: the message may or may not have reached Aleph. Check the transcript before sending again.");
         void load();
       } else if (failure instanceof RpcError) {
-        // Core refused it: nothing was sent, so give the text back.
-        messages.update((list) => list.slice(0, -1));
         draft.set(text);
         notice.set(failure.message);
       } else {
         report(failure);
       }
     } finally {
-      early.clear();
       sending.set(false);
     }
   };
@@ -167,37 +230,21 @@ export function Chat(props: { sdk: PanelSdk }) {
     <View class="flex-1 gap-2 p-4">
       <Text class="text-muted-foreground">{sessionKey() ?? "New conversation"}</Text>
       <If when={!loading()} else={<Text class="text-muted-foreground">Loading conversation…</Text>}>
-        <List
-          each={messages()}
-          keyExtractor={(message, index) => `${index}:${message.timestamp ?? ""}`}
+        <List each={keys()} keyExtractor={(key) => key}
           empty={<Text class="text-muted-foreground">No messages yet</Text>}
-          initialScrollAtEnd
-          class="flex-1"
-        >
-          {(message) => (
-            <View class="gap-1 py-2">
-              <Text class="text-muted-foreground">{message().role === "user" ? "You" : "Aleph"}</Text>
-              <Text class="text-foreground">{message().content}</Text>
-            </View>
-          )}
+          initialScrollAtEnd class="flex-1">
+          {(key) => <TranscriptRow row={rows.get(key())!} />}
         </List>
       </If>
-      <If when={activeRun()}>
-        <View class="gap-1 py-2">
-          <Text class="text-muted-foreground">Aleph · replying</Text>
-          <Text class="text-foreground">{reply() || "…"}</Text>
-        </View>
-      </If>
-      <If when={notice()}>
-        <Text class="text-destructive">{notice()}</Text>
-      </If>
+      <If when={activeRun()}><Text class="text-muted-foreground">Aleph · replying</Text></If>
+      <If when={missingPrefix()}><Text class="text-muted-foreground">Earlier live updates may be missing.</Text></If>
+      <If when={limited()}><Text class="text-muted-foreground">Some earlier tool details are unavailable.</Text></If>
+      <If when={notice()}><Text class="text-destructive">{notice()}</Text></If>
       <View class="flex-row items-end gap-2">
         <Input
           value={draft()}
           onChange={({ value }) => draft.set(value)}
-          onCompositionChange={({ composing: active }) => {
-            composing = active;
-          }}
+          onCompositionChange={({ composing: active }) => { composing = active; }}
           onSubmit={() => void send()}
           multiline
           submitBehavior="submit"
@@ -206,18 +253,12 @@ export function Chat(props: { sdk: PanelSdk }) {
           autoFocus
           class="flex-1 rounded-(--radius) border border-input px-3 py-2 text-foreground"
         />
-        <If
-          when={activeRun()}
-          else={
-            <Button
-              disabled={sending() || !draft().trim()}
-              onPress={() => void send()}
-              class="rounded-(--radius) bg-primary px-4 py-2 disabled:opacity-40"
-            >
-              <Text class="text-primary-foreground">Send</Text>
-            </Button>
-          }
-        >
+        <If when={activeRun()} else={
+          <Button disabled={sending() || !draft().trim()} onPress={() => void send()}
+            class="rounded-(--radius) bg-primary px-4 py-2 disabled:opacity-40">
+            <Text class="text-primary-foreground">Send</Text>
+          </Button>
+        }>
           <Button onPress={() => void stop()} class="rounded-(--radius) border border-input px-4 py-2">
             <Text class="text-foreground">Stop</Text>
           </Button>

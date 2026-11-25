@@ -24,6 +24,8 @@ pub use summarize::{
     DISPLAY_NAMES, PREFERRED_ARG_KEYS,
 };
 
+#[cfg(feature = "panel")]
+pub mod chat_panel;
 mod group;
 mod reducer;
 mod step;

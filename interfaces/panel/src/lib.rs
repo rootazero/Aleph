@@ -20,11 +20,64 @@ use shared_ui_logic::panel::layout::{
 };
 use shared_ui_logic::panel::projection::PanelProjection;
 use shared_ui_logic::panel::registry::BUILTIN_NAMESPACE;
+use shared_ui_logic::transcript::chat_panel::ChatState;
 
 #[native_module("aleph/panel")]
 fn native(registry: &mut Registry) {
     registry.module::<PanelModel>();
     registry.module::<NebulaModel>();
+    registry.class::<ChatModel>();
+}
+
+/// The transcript state for one mounted Chat tab.
+#[class]
+pub struct ChatModel {
+    state: ChatState,
+}
+
+#[class]
+impl ChatModel {
+    /// Constructs an independent transcript for the mounted tab.
+    pub fn new() -> Self {
+        Self {
+            state: ChatState::default(),
+        }
+    }
+
+    /// Selects a session and clears all provisional rows.
+    pub fn reset(&mut self, session: String) {
+        self.state.reset(session);
+    }
+
+    /// Adds the optimistic user row and opens the early-event buffer.
+    pub fn begin_send(&mut self, text: String, now_ms: u64) -> JsonValue {
+        self.state.begin_send(text, now_ms)
+    }
+
+    /// Reconciles the optimistic row with the acknowledged run, if any.
+    pub fn resolve_send(&mut self, session: String, run: Option<String>, now_ms: u64) -> JsonValue {
+        self.state.resolve_send(session, run, now_ms)
+    }
+
+    /// Applies one typed event and returns only the affected rows.
+    pub fn accept(&mut self, event: JsonValue) -> JsonValue {
+        self.state.accept(event)
+    }
+
+    /// Marks the live suffix incomplete when the host reports an interruption.
+    pub fn interrupt(&mut self) -> JsonValue {
+        self.state.interrupt()
+    }
+
+    /// Returns the visible snapshot after reconciling committed history.
+    pub fn replace_history(&mut self, history: JsonValue, details: JsonValue) -> JsonValue {
+        self.state.replace_history(history, details)
+    }
+
+    /// Returns the authorized typed file changes for a visible tool row.
+    pub fn diff_body(&self, key: String) -> JsonValue {
+        json!(self.state.diff_body(&key))
+    }
 }
 
 /// One built-in module the TSX shell renders itself.
