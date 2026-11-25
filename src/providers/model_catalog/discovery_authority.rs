@@ -42,10 +42,6 @@ pub(crate) fn mutation_fence() -> MutationFence {
 }
 
 impl MutationFence {
-    pub(crate) fn is_current(&self, revision: DiscoveryRevision) -> bool {
-        *self.0 == revision.0
-    }
-
     pub(crate) fn advance(&mut self) {
         *self.0 = self.0.checked_add(1).expect("discovery revision exhausted");
     }

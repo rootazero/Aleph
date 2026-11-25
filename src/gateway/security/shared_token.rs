@@ -271,8 +271,8 @@ impl SharedTokenManager {
 
     /// Store an encrypted secret in the vault.
     pub fn store_secret(&self, name: &str, value: &str) -> Result<(), SharedTokenError> {
-        let entry = Self::encrypt_secret(&self.crypto()?, name, value)?;
         let mut vault = self.vault.write().unwrap_or_else(|e| e.into_inner());
+        let entry = Self::encrypt_secret(&self.crypto()?, name, value)?;
         vault
             .set(name, entry)
             .map_err(|e| SharedTokenError::Storage(e.to_string()))
@@ -298,7 +298,8 @@ impl SharedTokenManager {
     /// mutation boundary. The synchronous callback may not read vault or config.
     pub(crate) fn refresh_secrets_if_current<'a, T>(
         &self,
-        revision: crate::providers::model_catalog::discovery_authority::DiscoveryRevision,
+        provider: &str,
+        epoch: u64,
         expected: (&str, &str),
         secrets: impl IntoIterator<Item = (&'a str, &'a str)>,
         install: impl FnOnce() -> T,
@@ -312,7 +313,7 @@ impl SharedTokenManager {
         }
         let entries = self.encrypt_secret_batch(&vault, secrets)?;
         let mut fence = crate::providers::model_catalog::discovery_authority::mutation_fence();
-        if !fence.is_current(revision) {
+        if !crate::providers::model_catalog::discovery::scope_epoch_current(provider, epoch) {
             return Ok(None);
         }
         vault
@@ -414,7 +415,6 @@ impl SharedTokenManager {
     pub fn reset_token(&self) -> Result<String, SharedTokenError> {
         use std::collections::HashMap;
 
-        let old_crypto = self.crypto()?;
         let new_token = format!("aleph-{}", Uuid::new_v4());
         let new_crypto = SecretsCrypto::new(new_token.clone());
 
@@ -427,6 +427,7 @@ impl SharedTokenManager {
         // replace — and it must not be able to write an entry under the old
         // key either, after the vault has been re-encrypted.
         let mut vault = self.vault.write().unwrap_or_else(|e| e.into_inner());
+        let old_crypto = self.crypto()?;
 
         // 1. Decrypt all entries with the old token, re-encrypting each one
         //    with the new token.
@@ -640,6 +641,44 @@ mod tests {
         let mut names = mgr.list_secret_names().unwrap();
         names.sort();
         assert_eq!(names, vec!["anthropic", "openai"]);
+    }
+
+    #[test]
+    fn concurrent_vault_writes_and_rotations_keep_every_entry_readable() {
+        use std::sync::Barrier;
+        use std::thread;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(SecurityStore::in_memory().unwrap());
+        let manager = SharedTokenManager::new(store, dir.path().join("rotate.vault"));
+        manager.generate_token().unwrap();
+        manager.store_secret("ai:original", "original").unwrap();
+
+        let start = Barrier::new(4);
+        thread::scope(|scope| {
+            let rotate = || {
+                start.wait();
+                manager.reset_token().unwrap()
+            };
+            let first = scope.spawn(rotate);
+            let second = scope.spawn(rotate);
+            let write = scope.spawn(|| {
+                start.wait();
+                manager.store_secret("ai:concurrent", "concurrent").unwrap();
+            });
+            start.wait();
+            let first = first.join().unwrap();
+            let second = second.join().unwrap();
+            write.join().unwrap();
+            assert_ne!(first, second);
+            assert_ne!(
+                manager.validate(&first).unwrap(),
+                manager.validate(&second).unwrap()
+            );
+        });
+        for (key, value) in [("ai:original", "original"), ("ai:concurrent", "concurrent")] {
+            assert_eq!(manager.get_secret(key).unwrap().unwrap().expose(), value);
+        }
     }
 
     #[test]

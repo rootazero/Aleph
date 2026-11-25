@@ -127,7 +127,7 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
     tool_descriptor_lookup: Option<Arc<dyn alephcore::tools::descriptor::ToolDescriptorLookup>>,
 ) -> anyhow::Result<(
     Arc<Orchestrator>,
-    Option<Arc<dyn alephcore::providers::AiProvider>>,
+    Option<alephcore::gateway::codex_token_refresher::CodexRefreshRoute>,
 )> {
     // Install the process-wide UI locale from the same `[general] language`
     // key that already drives the gateway's system messages and the model's
@@ -403,7 +403,12 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
     );
 
     let (stall_cfg, failure_cap, turn_to) = build_stability_triple(config);
-    let codex_named_route = named_providers.get("chatgpt").cloned();
+    let codex_named_route = named_providers.get("chatgpt").cloned().map(|route| {
+        alephcore::gateway::codex_token_refresher::CodexRefreshRoute::new(
+            route,
+            provider_chain.codex_mount.clone(),
+        )
+    });
     let harness = Arc::new(AgentHarnessRunner {
         agent_registry: agent_registry.clone(),
         session_service: session_service.clone(),

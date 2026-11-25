@@ -56,6 +56,29 @@ impl DefaultProviderHandle for StaticDefault {
     }
 }
 
+/// A mounted named transport whose owner can replace it after OAuth renewal.
+/// It does not follow unrelated registry edits or changes to the default.
+pub struct CredentialMount(std::sync::RwLock<Arc<dyn AiProvider>>);
+
+impl CredentialMount {
+    pub(crate) fn new(provider: Arc<dyn AiProvider>) -> Self {
+        Self(std::sync::RwLock::new(provider))
+    }
+
+    pub(crate) fn replace(&self, provider: Arc<dyn AiProvider>) {
+        *self.0.write().unwrap_or_else(|error| error.into_inner()) = provider;
+    }
+}
+
+impl DefaultProviderHandle for CredentialMount {
+    fn current(&self) -> Arc<dyn AiProvider> {
+        self.0
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+    }
+}
+
 // `MultiProviderRegistry` impls `DefaultProviderHandle` directly (see
 // `crate::thinker::mod`). The orchestrator boot path passes the registry as
 // `Arc<dyn DefaultProviderHandle>` so each turn reads through the registry's

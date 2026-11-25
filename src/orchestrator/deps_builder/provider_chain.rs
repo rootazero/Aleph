@@ -5,8 +5,8 @@ use std::collections::HashMap;
 
 use crate::config::Config;
 use crate::providers::{
-    create_provider, AiProvider, DefaultProviderHandle, FailoverConfig, FailoverHealth,
-    FailoverNode, FailoverProvider, ModelCooldown, ProviderCooldown, StaticDefault,
+    create_provider, AiProvider, CredentialMount, DefaultProviderHandle, FailoverConfig,
+    FailoverHealth, FailoverNode, FailoverProvider, ModelCooldown, ProviderCooldown, StaticDefault,
 };
 
 /// Provider routing assembled once at boot.
@@ -20,6 +20,8 @@ use crate::providers::{
 pub struct ProviderChain {
     pub default: Arc<dyn DefaultProviderHandle>,
     pub agent_overrides: HashMap<String, Arc<dyn AiProvider>>,
+    /// Present when the OAuth account is mounted as a secondary named route.
+    pub codex_mount: Option<Arc<CredentialMount>>,
     /// The concrete global chain used for fallback ordering and live
     /// auto-derived membership.
     pub chain: Arc<FailoverProvider>,
@@ -175,11 +177,19 @@ pub fn build_failover_chain(
 
     // Configured provider overrides: one FailoverProvider per non-primary
     // provider, pinning it as primary then falling through the global chain.
+    let mut codex_mount = None;
     let agent_overrides: HashMap<String, Arc<dyn AiProvider>> = built
         .into_iter()
         .map(|(name, provider)| {
+            let primary: Arc<dyn DefaultProviderHandle> = if name == "chatgpt" {
+                let mount = Arc::new(CredentialMount::new(provider));
+                codex_mount = Some(Arc::clone(&mount));
+                mount
+            } else {
+                Arc::new(StaticDefault::new(provider))
+            };
             let pinned = FailoverProvider::new(
-                Arc::new(StaticDefault::new(provider)),
+                primary,
                 vec![FailoverNode {
                     name: crate::providers::failover::NESTED_CHAIN_NODE.to_string(),
                     models: Vec::new(),
@@ -204,6 +214,7 @@ pub fn build_failover_chain(
     ProviderChain {
         default,
         agent_overrides,
+        codex_mount,
         chain: global_chain,
     }
 }

@@ -173,6 +173,15 @@ fn mark_vault_backed(provider: &str, vault_backed: bool) {
         .vault_backed = vault_backed;
 }
 
+/// Capture the credential-backed route epoch under the live config read guard.
+pub(crate) fn oauth_route_epoch(
+    provider: &str,
+    _config: &tokio::sync::RwLockReadGuard<'_, Config>,
+) -> u64 {
+    mark_vault_backed(provider, true);
+    scope_epoch(provider)
+}
+
 /// Bump the epoch of every provider the mutation can have changed.
 fn bump_scope_epochs(affected: impl Fn(&str) -> bool, vault_only: bool) {
     let mut epochs = SCOPE_EPOCHS.lock().unwrap_or_else(|e| e.into_inner());
@@ -197,7 +206,7 @@ fn bump_scope_epochs(affected: impl Fn(&str) -> bool, vault_only: bool) {
 /// the epoch under the config write lock. A vault write does not take the
 /// config lock, but it does take the revision fence, so the fence keeps the
 /// epoch check and the publication atomic against it as well.
-fn scope_epoch_current(provider: &str, expected: u64) -> bool {
+pub(crate) fn scope_epoch_current(provider: &str, expected: u64) -> bool {
     let epochs = SCOPE_EPOCHS.lock().unwrap_or_else(|e| e.into_inner());
     epochs.get(provider).map_or(0, |entry| entry.epoch) == expected
 }

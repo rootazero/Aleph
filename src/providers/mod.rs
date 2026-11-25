@@ -98,7 +98,7 @@ pub mod think_level_provider;
 pub use adapter::{
     NativeToolCall, ProtocolAdapter, ProviderResponse, RequestPayload, StopReason, TokenUsage,
 };
-pub use default_handle::{DefaultProviderHandle, StaticDefault};
+pub use default_handle::{CredentialMount, DefaultProviderHandle, StaticDefault};
 pub use delta::{
     response_to_delta_stream, DeltaCollector, DeltaSink, IndexIdTracker, NoopSink, ProviderDelta,
 };

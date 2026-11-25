@@ -112,7 +112,22 @@ pub struct CodexTokenRefresher {
     config: Arc<RwLock<Config>>,
     vault: Arc<SharedTokenManager>,
     registry: Arc<MultiProviderRegistry>,
-    named_route: Option<Arc<dyn crate::providers::AiProvider>>,
+    named_route: Option<CodexRefreshRoute>,
+}
+
+/// The assembled route and, for a secondary provider, its owned credential mount.
+pub struct CodexRefreshRoute {
+    route: Arc<dyn crate::providers::AiProvider>,
+    mount: Option<Arc<crate::providers::CredentialMount>>,
+}
+
+impl CodexRefreshRoute {
+    pub fn new(
+        route: Arc<dyn crate::providers::AiProvider>,
+        mount: Option<Arc<crate::providers::CredentialMount>>,
+    ) -> Self {
+        Self { route, mount }
+    }
 }
 
 impl CodexTokenRefresher {
@@ -121,7 +136,7 @@ impl CodexTokenRefresher {
         config: Arc<RwLock<Config>>,
         vault: Arc<SharedTokenManager>,
         registry: Arc<MultiProviderRegistry>,
-        named_route: Option<Arc<dyn crate::providers::AiProvider>>,
+        named_route: Option<CodexRefreshRoute>,
     ) -> Self {
         Self {
             oauth_state,
@@ -158,12 +173,21 @@ impl CodexTokenRefresher {
     /// Idempotent and cheap to call spuriously: if there is no token or no
     /// refresh token, `try_refresh` returns `false` and nothing is swapped.
     pub async fn refresh_and_swap(&self) -> bool {
+        self.refresh(None).await
+    }
+
+    pub(crate) async fn refresh_if_due(&self, seconds: u64) -> bool {
+        self.refresh(Some(seconds)).await
+    }
+
+    async fn refresh(&self, due_within: Option<u64>) -> bool {
         let refreshed = try_refresh(
             &self.oauth_state,
             &self.config,
             &self.vault,
             PROVIDER_NAME,
             Some(self),
+            due_within,
         )
         .await;
         if refreshed {
@@ -194,9 +218,15 @@ impl CodexTokenRefresher {
     ) -> bool {
         self.registry
             .register(PROVIDER_NAME.to_owned(), Arc::clone(&transport));
-        self.named_route
-            .as_ref()
-            .and_then(|route| route.as_failover_provider())
+        let Some(named_route) = &self.named_route else {
+            return false;
+        };
+        if let Some(mount) = &named_route.mount {
+            mount.replace(Arc::clone(&transport));
+        }
+        named_route
+            .route
+            .as_failover_provider()
             .and_then(|chain| chain.exact_transport(PROVIDER_NAME))
             .is_some_and(|mounted| Arc::ptr_eq(&mounted, &transport))
     }
@@ -216,7 +246,7 @@ impl CodexTokenRefresher {
 
                 if due {
                     debug!("codex refresh: token near expiry, refreshing proactively");
-                    if self.refresh_and_swap().await {
+                    if self.refresh_if_due(REFRESH_MARGIN_SECS).await {
                         info!("codex refresh: proactive token refresh succeeded");
                     } else {
                         // Refresh failed (e.g. refresh token revoked). Back off
