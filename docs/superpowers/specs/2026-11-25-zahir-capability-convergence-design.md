@@ -2,7 +2,7 @@
 
 - 日期 / Date: 2026-11-25
 - 分支 / Branch: `zahir-capability-convergence`（worktree `.worktrees/zahir-convergence`，基于 main `a4dac8db4`）
-- 状态 / Status: 设计定稿，待用户批准 / Final draft, pending user approval（§5 修正已确认；§6.3 提交原子性与排空超时为设计者决定）
+- 状态 / Status: 已批准（2026-11-25）/ Approved by the user（§5 修正已确认；§6.3 提交原子性与排空超时为设计者决定）
 - 上游 / Upstream: `docs/research/Everything-externally-composable-is-a-Capability.md`（§10 工具集会话固定、§10.3 热替换、§13 成功标准）；参考实现 cordis、cordis-rs、pi/packages/chord
 
 ## 1. 意图 / Intent
