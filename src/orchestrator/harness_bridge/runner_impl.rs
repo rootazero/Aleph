@@ -1316,7 +1316,9 @@ impl HarnessRunner for AgentHarnessRunner {
             None => raw,
         })
     }
+}
 
+impl AgentHarnessRunner {
     fn routable_session_model(
         &self,
         key: &str,
