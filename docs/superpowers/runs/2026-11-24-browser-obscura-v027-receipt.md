@@ -74,6 +74,8 @@ A read-only branch review (openai-codex/gpt-6.1-sol, 2026-11-25) blocked the mer
 - **P2 — the geometry reading could not fail caps.** `qa/browser_dual/caps.py` now `led.check`s `geometry_agrees`, which pins the "no screenshot coordinate warning" conclusion.
 - After the fixes: `cargo test -p alephcore --lib -- browser::cdp_backend` 186 passed; clippy clean; QA on v0.2.7: click 26, caps 35, switch 29, escape 14, open 19, snapshot 12, all with 0 FAIL. After the re-review's navigation change to premise 3: caps 36 PASS / 0 FAIL, three runs.
 
+Review of a950296b9 + 3cbc0308e (openai-codex/gpt-6.1-sol, read-only, 2026-11-25): OK with notes. No misrouting path found: a session match comes first, and the fallback only selects an already-registered slot keyed by the full target id. No navigation deadlock: `navigate.rs` starts the intercept worker before it awaits `Page.navigate`, and the worker answers on its own. One P2: caps' `mock_clear` check only read the reply. Fixed: it now asserts that `mock_list` is empty and that a fresh `fetch()` of the same URL reaches the server (404). caps 45 / 0, ×2.
+
 ## Deliberately not done / 刻意不做
 
 - No automatic engine switching; the model still decides (R7/R10).

@@ -881,7 +881,32 @@ async def main():
                       all(fetched), str(fetched))
             ok, body = await rpc.invoke("browser_network", {
                 "profile": "default", "action": "mock_clear", "scope": "tab"})
-            led.check("…and mock_clear removes the rule", ran(ok, body), json.dumps(body)[:200])
+            led.check("…and mock_clear answers", ran(ok, body), json.dumps(body)[:200])
+            # By effect, not by the reply: the rule is gone from the list AND a
+            # fresh fetch() of the same URL now reaches the fixture server.
+            ok, body = await rpc.invoke("browser_network", {
+                "profile": "default", "action": "mock_list"})
+            led.check("…and mock_list no longer carries the rule",
+                      ran(ok, body) and "caps-mock-target-7f3a" not in json.dumps(body),
+                      json.dumps(body)[:200])
+            await rpc.invoke("browser_evaluate", {
+                "profile": "default",
+                "script": ("() => { window.__toolMockAfter = 'pending';"
+                           " void fetch(new URL('caps-mock-target-7f3a.txt?n=after',"
+                           " location.href)).then(r => { window.__toolMockAfter ="
+                           " 'status:' + r.status; }, e => { window.__toolMockAfter ="
+                           " 'error:' + e; }); return 'fetch-started'; }"),
+            })
+            after = ""
+            for _ in range(20):
+                ok, res = await rpc.invoke("browser_evaluate", {
+                    "profile": "default", "script": "window.__toolMockAfter"})
+                after = json.dumps(res)
+                if "pending" not in after:
+                    break
+                await asyncio.sleep(0.25)
+            led.check("…and a fetch() after the clear reaches the server (404), not the mock",
+                      "status:404" in after, after[-200:])
         else:
             led.check("browser_network mock_add on obscura REFUSES rather than arming nothing",
                       not ran(ok, body), add_blob[:300])
