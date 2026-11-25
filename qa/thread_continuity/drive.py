@@ -483,11 +483,157 @@ async def checklist_after():
     await client.ws.close()
 
 
+# --- two_clients (F8) --------------------------------------------------------
+
+SAME_TEXT = "same text"
+
+
+async def send_and_watch(client, session_key, message, idle):
+    """`chat.send` on `client`, then keep reading its socket until `idle` is
+    set. Returns (reply, frames): the RPC answer and every other frame."""
+    client.rid += 1
+    rid = client.rid
+    await rpc(client.ws, "chat.send", {"message": message, "session_key": session_key}, rid)
+    answer, frames = None, []
+    while not idle.is_set():
+        try:
+            m = json.loads(await asyncio.wait_for(client.ws.recv(), 0.5))
+        except asyncio.TimeoutError:
+            continue
+        if m.get("id") == rid:
+            answer = m
+        else:
+            frames.append(m)
+    return answer, frames
+
+
+async def wait_idle(idle, budget=180, quiet=4.0):
+    """Set `idle` once every run has finished and neither the run table nor
+    the provider request log has changed for `quiet` seconds: a message the
+    gateway queued behind a busy run would start a new run inside that window."""
+    slog = SessionLog(DB)
+    end = time.monotonic() + budget
+    last, stable_since = None, time.monotonic()
+    await asyncio.sleep(1.0)
+    while time.monotonic() < end:
+        runs = slog.runs()
+        now = (tuple(sorted(runs.items(), key=lambda kv: kv[0])), len(requests()))
+        if now != last:
+            last, stable_since = now, time.monotonic()
+        elif all(v is not None for v in runs.values()) and time.monotonic() - stable_since >= quiet:
+            break
+        await asyncio.sleep(0.3)
+    idle.set()
+
+
+def error_frames(frames):
+    return [
+        f for f in frames
+        if "error" in f or str(f.get("method", "")).endswith("error")
+    ]
+
+
+def event_seq_holes():
+    """Per stream in `session_events`, the seq values missing between its
+    first and last row. Empty dict = every stream is contiguous."""
+    import sqlite3
+
+    holes = {}
+    with sqlite3.connect(DB) as db:
+        streams = db.execute("SELECT session_id, MIN(seq), MAX(seq), COUNT(*) FROM session_events GROUP BY session_id")
+        for session_id, low, high, count in streams.fetchall():
+            if high - low + 1 != count:
+                present = {s for (s,) in db.execute("SELECT seq FROM session_events WHERE session_id = ?", (session_id,))}
+                holes[session_id] = sorted(set(range(low, high + 1)) - present)[:20]
+    return holes
+
+
+async def two_clients_only():
+    a = await connect("qa-thread-client-a")
+    session_key, run_id = await send(a, "QA_TWO_CLIENTS_OPEN")
+    if not run_id:
+        return
+    check(await wait_run_finished(run_id) is not None, "the opening run finished")
+    b = await connect("qa-thread-client-b")
+
+    idle = asyncio.Event()
+    (answer_a, frames_a), (answer_b, frames_b), _ = await asyncio.gather(
+        send_and_watch(a, session_key, SAME_TEXT, idle),
+        send_and_watch(b, session_key, SAME_TEXT, idle),
+        wait_idle(idle),
+    )
+    log(f"client A chat.send -> {json.dumps(answer_a)[:300]}")
+    log(f"client B chat.send -> {json.dumps(answer_b)[:300]}")
+    log(f"runs: {SessionLog(DB).runs()}")
+    for name, answer in (("A", answer_a), ("B", answer_b)):
+        check(answer is not None and "result" in answer, f"client {name}'s chat.send returned success", json.dumps(answer)[:300])
+    for name, frames in (("A", frames_a), ("B", frames_b)):
+        bad = error_frames(frames)
+        check(not bad, f"client {name} received no error frame", json.dumps(bad[:2])[:400])
+    for name, answer, frames in (("A", answer_a, frames_a), ("B", answer_b, frames_b)):
+        own = ((answer or {}).get("result") or {}).get("run_id")
+        terminal = sorted({
+            (f.get("method"), (f.get("params") or {}).get("run_id"))
+            for f in frames
+            if f.get("method") in ("stream.run_complete", "stream.run_error")
+        })
+        log(f"client {name}: own run {own}; terminal frames seen {terminal}")
+        mentions = sorted({str(f.get("method")) for f in frames if own and own in json.dumps(f)})
+        log(f"client {name}: frame kinds naming its own run: {mentions}")
+        # A client that was handed a run id waits for that id to settle: the
+        # Panel binds it from the `chat.send` reply and releases the composer
+        # only on `run_complete` / `run_error` for the same id
+        # (interfaces/webchat/src/state/sessions.rs `settle_run`).
+        check(
+            any(run == own for _, run in terminal),
+            f"client {name} receives a terminal frame for the run id its chat.send returned",
+            f"own={own} terminal={terminal}",
+        )
+
+    r = await a.call("chat.history", {"session_key": session_key, "limit": 200})
+    rows = (r.get("result") or {}).get("messages") or []
+    transcript = [(m.get("role"), message_text(m).strip()) for m in rows]
+    log("transcript: " + json.dumps(transcript)[:1200])
+    users = [i for i, (role, text) in enumerate(transcript) if role == "user"]
+    same = [i for i in users if transcript[i][1] == SAME_TEXT]
+    check(len(same) == 2, f"the transcript holds exactly two {SAME_TEXT!r} user messages", f"found {len(same)}")
+    # Busy-input mode `Steer` (the default) folds a message that arrives while
+    # this session's run is going into that run (src/gateway/execution_engine/
+    # gate.rs `BusyInputMode::Steer`), so the two messages may share ONE reply.
+    # What must hold either way: nothing is lost, and the model is shown both.
+    check(
+        bool(same) and any(role == "assistant" and text for role, text in transcript[same[-1] + 1 :]),
+        f"an assistant reply follows the last {SAME_TEXT!r}",
+    )
+    shown = max(
+        (
+            # Raw, or wrapped by the steering reminder ("The user sent the
+            # following message:\nsame text\n\n...").
+            sum(
+                1
+                for m in r["body"].get("messages", [])
+                if m.get("role") == "user"
+                and (message_text(m).strip() == SAME_TEXT or f"message:\n{SAME_TEXT}\n" in message_text(m))
+            )
+            for r in requests()
+            if r["body"].get("tools")
+        ),
+        default=0,
+    )
+    check(shown == 2, f"one provider request shows the model both {SAME_TEXT!r} messages", f"max shown in one request: {shown}")
+
+    holes = event_seq_holes()
+    check(not holes, "session event sequence numbers have no holes", json.dumps(holes)[:400])
+    for c in (a, b):
+        await c.ws.close()
+
+
 STAGES = {
     ("reopen", "before"): reopen_before,
     ("reopen", "after"): reopen_after,
     ("checklist", "before"): checklist_before,
     ("checklist", "after"): checklist_after,
+    ("two_clients", "only"): two_clients_only,
 }
 
 
