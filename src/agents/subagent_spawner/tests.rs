@@ -225,6 +225,7 @@ mod tests {
         let session: Arc<dyn SessionService> = Arc::new(InProcessActorSessionService::new(store));
 
         SpawnerBase {
+            sandbox_factory: None,
             session,
             parent_tools: Arc::new(AlwaysOkTools),
             provider,
@@ -257,6 +258,62 @@ mod tests {
             cheap_summary_provider: None,
             verifier_chain: None,
         }
+    }
+
+    #[tokio::test]
+    async fn nested_subagent_worktree_uses_the_parent_checkout_committed_head() {
+        use crate::sandbox::worktree::create;
+        use std::path::Path;
+        use std::process::Command;
+
+        fn git(root: &Path, args: &[&str]) -> String {
+            let output = Command::new("git")
+                .arg("-C")
+                .arg(root)
+                .args(args)
+                .output()
+                .expect("Git is required for worktree support");
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8(output.stdout).unwrap().trim().to_owned()
+        }
+
+        let repo = tempfile::tempdir().unwrap();
+        let commit = |root: &Path, message: &str| {
+            git(
+                root,
+                &[
+                    "-c",
+                    "user.name=Aleph Test",
+                    "-c",
+                    "user.email=test@example.invalid",
+                    "-c",
+                    "commit.gpgsign=false",
+                    "commit",
+                    "--allow-empty",
+                    "-m",
+                    message,
+                ],
+            );
+        };
+        git(repo.path(), &["init", "--quiet"]);
+        commit(repo.path(), "project head");
+        let parent = Arc::new(create(repo.path(), "parent-head", None).await.unwrap());
+        commit(parent.path(), "parent head");
+        let binding = parent.exec_workspace();
+        let source = worktree_source(Some(&binding), Some(repo.path().to_path_buf())).unwrap();
+        assert_eq!(source, parent.path());
+
+        let child = create(&source, "child-head", None).await.unwrap();
+        let head = |root: &Path| git(root, &["rev-parse", "HEAD"]);
+        assert_eq!(head(child.path()), head(parent.path()));
+        assert_ne!(head(child.path()), head(repo.path()));
+        child.cleanup().await.unwrap();
+        drop(binding);
+        Arc::try_unwrap(parent).unwrap().cleanup().await.unwrap();
     }
 
     // -- Context management ------------------------------------------------
@@ -1974,7 +2031,7 @@ mod tests {
     }
 
     #[test]
-    fn a_worktree_isolated_child_is_told_where_it_may_write() {
+    fn a_child_cwd_alone_does_not_claim_sandbox_write_access() {
         // A real directory, because a provisioned worktree is one — and
         // because `RuntimeContext` now (correctly) refuses to advertise a path
         // that is not a directory.
@@ -2001,8 +2058,8 @@ mod tests {
             "the child must be told which model is answering:\n{whole}"
         );
         assert!(
-            whole.contains(&format!("Writable roots: {wt_str}")),
-            "the child must be told the root it may write to:\n{whole}"
+            !whole.contains("Writable roots:"),
+            "a cwd is not a sandbox policy:\n{whole}"
         );
         // The two fields that had a renderer, a doc and tests but never a
         // producer, so neither string could appear for any input.

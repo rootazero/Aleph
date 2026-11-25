@@ -220,6 +220,7 @@ pub struct AgentRuntime {
     /// Parent tool service — decorated with `AllowlistToolService` inside
     /// the spawner.
     parent_tools: Arc<dyn ToolService>,
+    pub(crate) sandbox_factory: Option<crate::orchestrator::SandboxFactory>,
 
     provider_routing: ProviderRouting,
     memory: MemoryCapture,
@@ -244,6 +245,7 @@ impl AgentRuntime {
             cancel_token,
             session,
             parent_tools,
+            sandbox_factory: None,
             provider_routing: ProviderRouting {
                 provider,
                 provider_routes: HashMap::new(),
@@ -612,6 +614,7 @@ impl AgentRuntime {
             config.spawn_override.model.as_deref(),
         );
         let base = SpawnerBase {
+            sandbox_factory: self.sandbox_factory.clone(),
             session: self.session.clone(),
             parent_tools: self.parent_tools.clone(),
             provider,

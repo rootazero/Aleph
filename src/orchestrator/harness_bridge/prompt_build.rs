@@ -971,7 +971,15 @@ async fn resolve_prompt_context(
     // `Sandbox::summary()` defaults to `None`, so mock/noop sandboxes
     // in tests leave this absent and the SecurityLayer skips the
     // sandbox bullet block.
-    resolved_context.sandbox_summary = sandbox.summary();
+    resolved_context.sandbox_summary =
+        match crate::routing::session_key::SessionKey::from_key_string(session_key_str) {
+            Some(session) => {
+                crate::sandbox::context::SESSION_ID
+                    .scope(session, async { sandbox.summary() })
+                    .await
+            }
+            None => sandbox.summary(),
+        };
     // Re-surface the session's active scratchpad execution list so the
     // live plan stays in context across long tool-only stretches where
     // the model never re-calls the `scratchpad` tool. Reuses the same

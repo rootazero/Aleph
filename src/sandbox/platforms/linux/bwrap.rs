@@ -259,12 +259,6 @@ impl BubblewrapDriver {
         args.push("--dev".into());
         args.push("/dev".into());
 
-        let cwd_str = cwd.to_str().ok_or_else(|| {
-            SandboxError::ProfileGeneration("workspace path contains invalid UTF-8".into())
-        })?;
-        args.push("--chdir".into());
-        args.push(cwd_str.into());
-
         args.push("--".into());
 
         Ok(args)
@@ -688,14 +682,15 @@ impl OsSandboxDriverTrait for BubblewrapDriver {
             bwrap_args.push("/aleph-sandbox-init".into());
         }
 
-        // Re-append the option terminator popped above, so the target
-        // command composed below is not parsed as more bwrap options.
-        bwrap_args.push("--".into());
-
-        debug!("running bubblewrap with {} arguments", bwrap_args.len());
+        debug!(
+            "running bubblewrap with {} profile arguments",
+            bwrap_args.len()
+        );
 
         let mut cmd = Command::new(bwrap_path);
-        cmd.args(&bwrap_args);
+        // The mount and Landlock roots are policy inputs; --chdir is a
+        // launch input and can name a child of those roots.
+        cmd.args(&bwrap_args).arg("--chdir").arg(cwd).arg("--");
 
         // Compose the target invocation. With an init policy in hand we
         // exec the target indirectly:

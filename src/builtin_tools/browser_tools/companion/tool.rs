@@ -239,6 +239,13 @@ impl AlephTool for BrowserCompanionTool {
 
 impl BrowserCompanionTool {
     async fn start(&self, args: &BrowserCompanionArgs) -> BrowserCompanionOutput {
+        if crate::sandbox::context::current_exec_workspace_binding()
+            .is_some_and(|workspace| workspace.is_owned_worktree())
+        {
+            return BrowserCompanionOutput::fail(
+                "a new browser companion cannot outlive an owned worktree",
+            );
+        }
         let request = match build_request(args) {
             Ok(r) => r,
             Err(message) => return BrowserCompanionOutput::fail(message),
@@ -417,6 +424,36 @@ mod tests {
         // No session in scope is reported before anything else runs.
         let out = tool.call(start_args()).await.expect("output");
         assert!(!out.success && out.companion_id.is_none());
+    }
+
+    #[tokio::test]
+    async fn owned_worktree_rejects_browser_companion_start_before_manager() {
+        use crate::sandbox::context::{with_exec_workspace_binding, ExecWorkspace};
+
+        let tool = BrowserCompanionTool::new(
+            Arc::new(ProfileManager::new(BrowserSystemConfig::default())),
+            None,
+            None,
+        );
+        with_exec_workspace_binding(
+            Some(ExecWorkspace::worktree_fixture(
+                "/tmp/owned".into(),
+                "/tmp/source".into(),
+            )),
+            async {
+                let out = tool.call(start_args()).await.unwrap();
+                assert!(!out.success && out.companion_id.is_none());
+                assert_eq!(
+                    out.message.as_deref(),
+                    Some("a new browser companion cannot outlive an owned worktree")
+                );
+                let status =
+                    serde_json::from_value(serde_json::json!({"action": "status"})).unwrap();
+                let out = tool.call(status).await.unwrap();
+                assert_eq!(out.message.as_deref(), Some("companion_id is required"));
+            },
+        )
+        .await;
     }
 
     #[tokio::test]

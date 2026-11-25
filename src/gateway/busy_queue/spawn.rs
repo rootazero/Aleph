@@ -59,17 +59,27 @@ pub fn spawn_queued_run<P, R, E>(
     // conversation a person is looking at, and the `RunError` receipt for a run
     // that never reached the engine has to resolve on the client that is
     // attached to it — the derived session may have no row at all yet.
-    let ticket = register_run(
-        &request.session_key,
-        &request.metadata,
-        cfg.max_per_session,
-        &run_id,
-    );
+    let owned_worktree = request
+        .workspace_override
+        .as_ref()
+        .is_some_and(crate::sandbox::context::ExecWorkspace::is_owned_worktree);
+    let ticket = if owned_worktree {
+        None
+    } else {
+        register_run(
+            &request.session_key,
+            &request.metadata,
+            cfg.max_per_session,
+            &run_id,
+        )
+    };
     // Crash-durability write point (one of two; the channel twin lives in
     // `inbound_router::executor`). Only a *registered* ticket is journaled —
     // a `None` here is REJECT_NEWEST, the sender already heard no.
     if ticket.is_some() && durable::is_armed() {
-        durable::record_enqueued(durable::QueuedRunPayload::from_request(&request, locale));
+        if let Some(payload) = durable::QueuedRunPayload::from_request(&request, locale) {
+            durable::record_enqueued(payload);
+        }
     }
 
     tokio::spawn(async move {

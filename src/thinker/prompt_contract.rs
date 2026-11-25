@@ -156,13 +156,15 @@ fn fixed_sandbox_summary() -> crate::sandbox::SandboxSummary {
         // `linux/bwrap` backend would collide with `os = "linux"` as a substring —
         // a false positive about a genuinely different fact.
         backend: "macos/seatbelt",
-        policy_tier: crate::sandbox::PolicyTier::WorkspaceWrite.as_str(),
+        posture: crate::sandbox::summary::SandboxPosture::Configured {
+            tier: crate::sandbox::PolicyTier::WorkspaceWrite,
+            network: crate::sandbox::NetworkState::AllowAll,
+        },
         // Same width as `fixed_runtime_context().working_dir`, deliberately a
         // DIFFERENT value. In production the two usually coincide, but they are
         // different facts — "where you may write" vs "where you are" — and the
         // guard matches on value, so equal strings would read as a duplicate.
         writable_roots: vec![std::path::PathBuf::from("/home/u/projects/demo-wsp")],
-        network: crate::sandbox::NetworkState::AllowAll,
         max_memory_mb: Some(512),
         // `None` here keeps the `Permission profile:` bullet out of the
         // scaffold measurement; adding the field to production dispatch

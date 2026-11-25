@@ -50,8 +50,7 @@
 //! a channel's configured `default_workspace` (operator-written config, and
 //! room runs take the by-id branch before this one anyway), a resumed run's
 //! persisted path, a workspace inherited by a subagent or team member (team
-//! WORKTREE runs are excluded here outright, by the `team_worktree_path`
-//! metadata key). Do not read that list as exhaustive — read the rule:
+//! worktree runs are excluded here by the trusted execution-workspace binding). Do not read that list as exhaustive — read the rule:
 //!
 //! - a new writer of `workspace_path` that CHOOSES a directory owes
 //!   `require_directory_choice`;

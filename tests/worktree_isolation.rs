@@ -179,6 +179,7 @@ async fn h_t1_worktree_isolation_happy_path() {
     let sink_for_base: Arc<dyn TraceSink> = sink.clone();
 
     let base = SpawnerBase {
+        sandbox_factory: None,
         session: fresh_session_service(),
         parent_tools: Arc::new(NoopTools),
         provider: Arc::new(OneShotProvider),
@@ -226,7 +227,10 @@ async fn h_t1_worktree_isolation_happy_path() {
         request_id: None,
     };
 
-    let result = spawn(&base, req).await;
+    // Explicit isolation gets its source from the calling run, not process cwd.
+    let workspace = std::env::current_dir().unwrap().canonicalize().unwrap();
+    let result =
+        alephcore::sandbox::context::with_exec_workspace(Some(workspace), spawn(&base, req)).await;
     assert!(result.is_ok(), "spawn should succeed: {:?}", result.err());
     assert_eq!(result.unwrap().final_text.as_deref(), Some("worktree-ok"));
 

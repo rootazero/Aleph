@@ -65,8 +65,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         let (Some(sm), Some(root)) = (
             self.session_manager.clone(),
             request
-                .workspace_override
-                .as_ref()
+                .durable_workspace_path()
                 .map(|p| p.display().to_string()),
         ) else {
             return;

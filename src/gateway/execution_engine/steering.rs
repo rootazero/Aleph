@@ -81,7 +81,8 @@ pub(super) struct BusySibling {
     /// message asking for a different one must be deferred rather than folded.
     pub(super) model_override: Option<crate::gateway::model_override::ModelOverride>,
     /// Same argument, with file-writing consequences.
-    pub(super) workspace_override: Option<std::path::PathBuf>,
+    pub(super) workspace_override: Option<crate::sandbox::context::ExecWorkspace>,
+    pub(super) owned_worktree: bool,
     /// Whether the sibling was admitted from a public telecom line. Only the
     /// presence matters (see [`fold_is_admissible`]); the provenance itself is
     /// never read here.
@@ -109,6 +110,7 @@ pub(super) async fn find_busy_sibling(
         metadata: run.request.metadata.clone(),
         model_override: run.request.model_override.clone(),
         workspace_override: run.request.workspace_override.clone(),
+        owned_worktree: run.owned_worktree,
         telecom_public: run.request.telecom_public.clone(),
         admitted_at: run.admitted_at,
     })
@@ -187,8 +189,8 @@ pub(super) fn find_steering_target(
 ///   that, a follow-up command parked and ran as a fresh run, which is exactly
 ///   the behaviour deferring restores.
 /// * **Per-request execution directives** — the `RunRequest` fields that shape
-///   HOW the run executes rather than what it says: `sandbox_override` (the
-///   team dispatcher's isolated git worktree), `max_iterations_override` (a
+///   HOW the run executes rather than what it says: an owned worktree binding,
+///   `max_iterations_override` (a
 ///   cron job's own Think→Act cap) and `timeout_secs` (heartbeat, team member
 ///   runs, `sessions_send`'s wait mode). Every one of them is read inside
 ///   `run_loop`, i.e. after the gate, so an inline fold executes the *running*
@@ -219,7 +221,7 @@ fn carries_more_than_text(request: &RunRequest) -> bool {
         || request
             .metadata
             .contains_key(crate::gateway::btw::BTW_METADATA_KEY)
-        || request.sandbox_override.is_some()
+        || request.workspace_override.as_ref().is_some_and(|workspace| workspace.is_owned_worktree())
         || request.max_iterations_override.is_some()
         || request.timeout_secs.is_some()
 }
@@ -581,7 +583,6 @@ pub(super) async fn build_steering_rescue_request(
         metadata,
         attachments: Vec::new(),
         pending_media: Default::default(),
-        sandbox_override: request.sandbox_override.clone(),
         workspace_override: request.workspace_override.clone(),
         max_iterations_override: request.max_iterations_override,
         model_override,
@@ -678,7 +679,7 @@ fn fold_is_admissible(enabled: bool, request: &RunRequest, sibling: &BusySibling
     // DIFFERENT one — a channel turn landing on a session a project-room turn is
     // still running, or the reverse — would silently execute in the other
     // directory, with file-writing consequences.
-    if request.workspace_override != sibling.workspace_override {
+    if sibling.owned_worktree || request.workspace_override != sibling.workspace_override {
         return false;
     }
 
@@ -867,7 +868,11 @@ mod tests {
         );
 
         let mut isolated = run_request("s1", "keep going");
-        isolated.sandbox_override = Some(std::sync::Arc::new(crate::sandbox::NoopSandbox));
+        isolated.workspace_override =
+            Some(crate::sandbox::context::ExecWorkspace::worktree_fixture(
+                "/tmp/worktree".into(),
+                "/tmp/project".into(),
+            ));
         assert!(
             carries_more_than_text(&isolated),
             "a team member's isolated worktree cannot be applied to a sibling \
@@ -878,7 +883,9 @@ mod tests {
         // the same path on every turn, so presence alone would disable mid-loop
         // steering for rooms. Its check is comparative, in `try_inject_steering`.
         let mut in_project = run_request("s1", "keep going");
-        in_project.workspace_override = Some(std::path::PathBuf::from("/tmp/proj"));
+        in_project.workspace_override = Some(crate::sandbox::context::ExecWorkspace::Directory(
+            "/tmp/proj".into(),
+        ));
         assert!(
             !carries_more_than_text(&in_project),
             "workspace_override is compared against the steer target, not presence-checked"
@@ -924,6 +931,7 @@ mod tests {
             metadata: request.metadata.clone(),
             model_override: request.model_override.clone(),
             workspace_override: request.workspace_override.clone(),
+            owned_worktree: request.owns_worktree(),
             telecom_public: request.telecom_public.clone(),
             admitted_at: std::time::Instant::now(),
         }
@@ -1038,7 +1046,6 @@ mod tests {
             metadata: Default::default(),
             attachments: Vec::new(),
             pending_media: Default::default(),
-            sandbox_override: None,
             workspace_override: None,
             max_iterations_override: None,
             model_override: None,
@@ -1052,6 +1059,7 @@ mod tests {
             run_id.to_string(),
             ActiveRun {
                 request: run_request(session, "prior"),
+                owned_worktree: false,
                 state,
                 started_at: chrono::Utc::now(),
                 admitted_at: std::time::Instant::now(),

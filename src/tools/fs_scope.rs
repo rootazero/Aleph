@@ -6,8 +6,8 @@
 //! * the `ToolContextHandle` written by every `run_agent_loop` invocation —
 //!   so two concurrent runs with different workspaces clobbered each other's
 //!   relative-path resolution mid-run; and
-//! * nothing at all for worktree-isolated agents — `WorktreeSandbox` redirects
-//!   *command* execution, but `file_read` / `file_write` / `file_edit` /
+//! * nothing at all for worktree-isolated agents — their commands used the
+//!   checkout, but `file_read` / `file_write` / `file_edit` /
 //!   `apply_patch` kept resolving paths against the parent repo, silently
 //!   escaping the isolation boundary.
 //!
@@ -42,7 +42,7 @@ pub struct FsScope {
     /// `from` is rebased onto `to` before the deny check. Worktree isolation
     /// uses this to redirect parent-repo absolute paths (the parent naturally
     /// phrases tasks in its own paths) into the isolated checkout — mirroring
-    /// what `WorktreeSandbox` already does for command execution.
+    /// the trusted root used for OS-sandboxed command execution.
     pub rebase: Option<(PathBuf, PathBuf)>,
 }
 

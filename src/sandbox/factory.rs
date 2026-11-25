@@ -114,22 +114,11 @@ pub struct NoopSandbox;
 #[async_trait]
 impl Sandbox for NoopSandbox {
     async fn execute(&self, _command: SandboxCommand) -> Result<SandboxOutput, SandboxError> {
-        Err(SandboxError::Other(
-            "sandbox disabled: set [sandbox] enabled = true in config to execute commands".into(),
-        ))
+        Err(SandboxError::Disabled)
     }
 
     fn summary(&self) -> Option<crate::sandbox::summary::SandboxSummary> {
-        // Explicit "off" signal so the LLM does not believe enforcement is
-        // active when it is not. Mirrors codex's `permission_profile_sandbox_tag = "none"`.
-        Some(crate::sandbox::summary::SandboxSummary {
-            backend: "none/disabled",
-            policy_tier: crate::sandbox::summary::PolicyTier::DangerFullAccess.as_str(),
-            writable_roots: Vec::new(),
-            network: crate::sandbox::summary::NetworkState::AllowAll,
-            max_memory_mb: None,
-            permission_profile_id: None,
-        })
+        Some(crate::sandbox::summary::SandboxSummary::disabled())
     }
 }
 
@@ -236,7 +225,7 @@ mod tests {
             })
             .await
             .expect_err("disabled sandbox must refuse execution");
-        assert!(matches!(err, SandboxError::Other(ref msg) if msg.contains("sandbox disabled")));
+        assert!(matches!(err, SandboxError::Disabled));
         // WorkspaceSandbox would have created a session dir — Noop must not.
         assert!(
             std::fs::read_dir(tmp.path())
@@ -354,9 +343,8 @@ mod tests {
             })
             .await
             .expect_err("fork bomb must be refused by the command policy hook");
-        // WorkspaceSandbox maps a hook denial to SandboxError::Other.
         assert!(
-            matches!(err, SandboxError::Other(ref m) if m.contains("command policy")),
+            matches!(&err, SandboxError::CapabilityDenied { reason } if reason.contains("command policy")),
             "unexpected error: {err}"
         );
     }
@@ -409,7 +397,7 @@ mod tests {
             .await
             .expect_err("hardline floor must refuse dd even with the policy disabled");
         assert!(
-            matches!(err, SandboxError::Other(ref m) if m.contains("dd_to_block_device")),
+            matches!(&err, SandboxError::CapabilityDenied { reason } if reason.contains("dd_to_block_device")),
             "unexpected error: {err}"
         );
     }

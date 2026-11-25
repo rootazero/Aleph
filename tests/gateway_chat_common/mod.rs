@@ -253,7 +253,6 @@ pub fn basic_request() -> FlowRequest {
         trace_sink: None,
         event_tx: None,
         interaction_manifest: None,
-        sandbox_override: None,
         workspace_override: None,
         max_iterations_override: None,
         transient_context: None,

@@ -364,6 +364,13 @@ where
         emitter: Arc<E>,
     ) -> Result<(), ExecutionError> {
         let run_id = request.run_id.clone();
+        let owned_worktree = request.owns_worktree();
+        // Only Team has an authoritative restart path for gateway-owned checkouts.
+        if owned_worktree && !crate::teams::run_mode::is_team_session(&request.session_key) {
+            return Err(ExecutionError::Failed(
+                "owned worktree requires a Team session".into(),
+            ));
+        }
 
         // First, before ANYTHING reads the metadata — `admit_run`'s steer-fold
         // resolves this turn's permissions below: no request keeps a
@@ -952,32 +959,42 @@ where
         // `BeforeAgentStart` / `AgentEnd` seams are inside the scope too.
         // Sub-work spawned through `CarriedAttribution` (batch legs,
         // background sub-agents) does not carry it and omits the key.
-        let result: Result<String, ExecutionError> = tokio::select! {
-            result = crate::extension::hooks::with_transcript_source(
-                Some(Arc::new(crate::gateway::session_store::hook_transcripts::StoreTranscripts::new(
+        let run = crate::extension::hooks::with_transcript_source(
+            Some(Arc::new(
+                crate::gateway::session_store::hook_transcripts::StoreTranscripts::new(
                     agent.session_store(),
-                ))),
-                Box::pin(self.run_agent_loop(
-                    &run_id,
-                    &request,
-                    agent.clone(),
-                    emitter.clone(),
-                    deadline.clone(),
-                    trace_task_persisted.then(|| run_id.clone()),
-                    cancel_token.clone(),
-                    occupancy_out.clone(),
-                )),
-            ) => result,
+                ),
+            )),
+            Box::pin(self.run_agent_loop(
+                &run_id,
+                &request,
+                agent.clone(),
+                emitter.clone(),
+                deadline.clone(),
+                trace_task_persisted.then(|| run_id.clone()),
+                cancel_token.clone(),
+                occupancy_out.clone(),
+            )),
+        );
+        tokio::pin!(run);
+        let result: Result<String, ExecutionError> = tokio::select! {
+            result = &mut run => result,
 
             _ = cancel_rx.recv() => {
-                // Bridge: coarse cancellation → fine-grained CancellationToken
+                // Keep the harness completion receiver alive for the checkout owner.
                 cancel_token.cancel();
+                if owned_worktree {
+                    let _ = run.await;
+                }
                 info!("Run {} cancelled", run_id);
                 Err(ExecutionError::Cancelled)
             }
 
             _ = super::deadline::wait_for_deadline(deadline.clone()) => {
                 cancel_token.cancel();
+                if owned_worktree {
+                    let _ = run.await;
+                }
                 warn!("Run {} timed out after {}s effective time", run_id, timeout_secs);
                 Err(ExecutionError::Timeout)
             }
@@ -1095,7 +1112,7 @@ where
                     let sc = sc.clone();
                     let agent_clone = agent.clone();
                     let session_key_clone = request.session_key.clone();
-                    let project_root = request.workspace_override.clone();
+                    let project_root = request.workspace_path().map(std::path::Path::to_path_buf);
                     let scope_attr = crate::scope::current_scope();
                     tokio::spawn(crate::scope::with_scope(scope_attr, async move {
                         if let Err(e) = sc
@@ -1119,7 +1136,13 @@ where
                 // call (`GoalStore::try_claim_continuation`) inside
                 // `goal_continuation`: the clock-less sibling of the loop's
                 // `try_claim_tick` just below.
-                if let Some(cont_deps) = self.continuation_deps.get() {
+                let owned_worktree = request
+                    .workspace_override
+                    .as_ref()
+                    .is_some_and(crate::sandbox::context::ExecWorkspace::is_owned_worktree);
+                if let (Some(cont_deps), false) = (self.continuation_deps.get(), owned_worktree) {
+                    // Continuations can outlive a checkout owner. Only
+                    // ordinary runs may publish a path to these new runs.
                     // Both continuation chains inherit this turn's policy inputs;
                     // chaining is transitive, since continuation N's own post_run
                     // reads them back out of N's metadata.
@@ -1131,7 +1154,7 @@ where
                     // drops the project's CLAUDE.md / AGENTS.md and project
                     // skills, and its workspace_directive tells the model its cwd
                     // is the agent workspace.
-                    let workspace = request.workspace_override.as_deref();
+                    let workspace = request.workspace_path();
                     super::goal_continuation::post_run(
                         cont_deps,
                         &self.session_manager,
@@ -1542,8 +1565,8 @@ fn continuation_request(
         metadata: continuation_metadata(policy_meta),
         attachments: Vec::new(),
         pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
-        sandbox_override: None,
-        workspace_override,
+        workspace_override: workspace_override
+            .map(crate::sandbox::context::ExecWorkspace::Directory),
         max_iterations_override: None,
         model_override: None,
         // Inherited, never re-derived or widened: a continuation of a

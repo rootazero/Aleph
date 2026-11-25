@@ -33,7 +33,6 @@ where
     let verified = caller_identity::current_caller_verified_user();
     let session = context::current_session();
     let justification = context::current_justification();
-    let sandbox = context::current_sandbox_override();
     let tail = context::current_live_tail();
     Box::pin(async move {
         let future = crate::approval::with_call_identity(identity, future);
@@ -50,7 +49,6 @@ where
         let future = crate::tools::fs_scope::with_fs_scope(fs, future);
         let future = optional_scope(&context::SESSION_ID, session, future);
         let future = optional_scope(&context::EXEC_JUSTIFICATION, justification, future);
-        let future = optional_scope(&context::SANDBOX_OVERRIDE, sandbox, future);
         let future = optional_scope(&context::LIVE_TAIL, tail, future);
         // Personal caller scoping happens first; captured project attribution
         // is restored inside it and therefore cannot be overwritten by it.

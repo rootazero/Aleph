@@ -330,12 +330,7 @@ out.
 
     /// Execute code and return result
     async fn execute(&self, args: CodeExecArgs) -> Result<CodeExecOutput> {
-        // A worktree-isolated subagent scopes its `WorktreeSandbox` here via the
-        // task-local override so this command runs inside the checkout; outside
-        // that scope the tool falls back to its construction-time sandbox.
-        let sandbox = match crate::sandbox::context::current_sandbox_override()
-            .or_else(|| self.sandbox.clone())
-        {
+        let sandbox = match self.sandbox.as_ref() {
             Some(s) => s,
             None => {
                 return Ok(CodeExecOutput {

@@ -368,7 +368,7 @@ mod tests {
     fn run_metadata_and_fence(
         allowed: Option<Vec<String>>,
     ) -> (std::collections::HashMap<String, String>, bool) {
-        let m = crate::teams::dispatcher::runner::task_run_metadata("t1", "task-1", None, None);
+        let m = crate::teams::dispatcher::runner::task_run_metadata("t1", "task-1", None);
         let actor = crate::gateway::visibility::ambient_actor();
         let admitted =
             crate::config::types::agent_admits_user(allowed.as_deref(), actor.as_deref());

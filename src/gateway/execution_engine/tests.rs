@@ -115,7 +115,6 @@ async fn test_simple_execution_engine_basic() {
         metadata: HashMap::new(),
         attachments: Vec::new(),
         pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
-        sandbox_override: None,
         workspace_override: None,
         max_iterations_override: None,
         model_override: None,
@@ -169,7 +168,6 @@ async fn test_session_state_returns_to_idle_after_run() {
         metadata: HashMap::new(),
         attachments: Vec::new(),
         pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
-        sandbox_override: None,
         workspace_override: None,
         max_iterations_override: None,
         model_override: None,
@@ -236,7 +234,6 @@ async fn test_first_message_publishes_session_updated_on_bus() {
         metadata,
         attachments: Vec::new(),
         pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
-        sandbox_override: None,
         workspace_override: None,
         max_iterations_override: None,
         model_override: None,
@@ -319,7 +316,6 @@ async fn panel_originated_session_update_names_its_run_not_just_gui_chat() {
         metadata,
         attachments: Vec::new(),
         pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
-        sandbox_override: None,
         workspace_override: None,
         max_iterations_override: None,
         model_override: None,
@@ -380,7 +376,6 @@ async fn test_simple_execution_engine_run() {
         metadata: HashMap::new(),
         attachments: Vec::new(),
         pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
-        sandbox_override: None,
         workspace_override: None,
         max_iterations_override: None,
         model_override: None,
@@ -504,7 +499,6 @@ pub(super) fn gate_test_request(session_key: &SessionKey, run_id: &str) -> RunRe
         metadata: HashMap::new(),
         attachments: Vec::new(),
         pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
-        sandbox_override: None,
         workspace_override: None,
         max_iterations_override: None,
         model_override: None,
@@ -2411,8 +2405,8 @@ async fn goal_continuation_inherits_the_originating_runs_project_root() {
         .await
         .expect("the claimed continuation must reach the execution adapter");
     assert_eq!(
-        request.workspace_override,
-        Some(project),
+        request.workspace_path(),
+        Some(project.as_path()),
         "the continuation must run inside the project the goal was set in"
     );
 }

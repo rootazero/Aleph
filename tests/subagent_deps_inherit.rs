@@ -116,6 +116,7 @@ async fn subagent_base_carries_4_p1_fields() {
     let tools: Arc<dyn ToolService> = Arc::new(NoopTools);
 
     let base = SpawnerBase {
+        sandbox_factory: None,
         session,
         parent_tools: tools,
         provider,

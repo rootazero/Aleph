@@ -67,7 +67,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // user-facing reason rather than discovering the disappearance
         // mid-tool-call. The value itself is `super::run_workspace`, the one
         // derivation every other reader of "where does this run work" uses.
-        if let Some(p) = request.workspace_override.as_ref().filter(|p| !p.is_dir()) {
+        if let Some(p) = request.workspace_path().filter(|p| !p.is_dir()) {
             error!(
                 run_id = run_id,
                 project_root = %p.display(),
@@ -129,7 +129,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 }
             });
         } else if request.workspace_override.is_some()
-            && !request.metadata.contains_key("team_worktree_path")
+            && !request
+                .workspace_override
+                .as_ref()
+                .is_some_and(crate::sandbox::context::ExecWorkspace::is_owned_worktree)
         {
             let path = effective_workspace.clone();
             // Capture the owner HERE, before the blocking boundary: both
@@ -725,6 +728,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         let turn_context = turn_permissions.turn_context(request, run_id, unattended);
 
         loop {
+            if cancel_token.is_cancelled() {
+                return Err(ExecutionError::Cancelled);
+            }
             attempt += 1;
 
             // This turn's explicit model pick, in the shape the harness binder
@@ -1147,7 +1153,8 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     .with_parent_agent_id(request.session_key.agent_id().to_string())
                     .with_parent_session_id(request.session_key.to_key_string())
                     .with_cancel_token(cancel_token.clone())
-                    .with_provider_overrides(agent_overrides);
+                    .with_provider_overrides(agent_overrides)
+                    .with_sandbox_factory(orchestrator.sandbox_factory.clone());
                 // Stage 5a (#9) — inherit the main harness's guardrail
                 // registry so spawned subagents enforce the same
                 // Input/Output/ToolCall checks. `None` (mocks / simple
@@ -1435,14 +1442,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 // the channel's creation above.
                 event_tx: Some(event_tx),
                 interaction_manifest,
-                // G2 — forward the per-run sandbox override so the team
-                // dispatcher's WorktreeSandbox replaces the orchestrator's
-                // sandbox_factory output for this run.
-                sandbox_override: request.sandbox_override.clone(),
                 // Project mode — the workspace override flows into
                 // `HarnessRunner::run` and lands on the `RunStarted` marker
                 // for resume parity.
-                workspace_override: request.workspace_override.clone(),
+                workspace_override: request.workspace_path().map(std::path::Path::to_path_buf),
                 // D2: forward the per-run iteration cap override so the
                 // harness bridge can apply it as the highest-priority layer
                 // in `resolve_max_iterations`.

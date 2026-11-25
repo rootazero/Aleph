@@ -476,9 +476,8 @@ pub async fn run_child_with_drain(
                 stdout_truncated_bytes: stdout_dropped,
                 stderr_truncated_bytes: stderr_dropped,
                 duration_ms: elapsed_ms,
-                // The shared drain serves all three OS drivers plus
-                // `WorktreeSandbox`, so it does not know which backend (if
-                // any) is enforcing. `WorkspaceSandbox` labels this after the
+                // The shared drain serves all three OS drivers, so it does
+                // not know which backend is enforcing. `WorkspaceSandbox` labels this after the
                 // driver returns, where the active driver is in hand.
                 denial_hint: None,
             })

@@ -75,7 +75,7 @@ pub struct CarriedAttribution {
     agent_id: Option<String>,
     caller_role: Option<String>,
     room_author: Option<String>,
-    exec_workspace: Option<std::path::PathBuf>,
+    exec_workspace: Option<crate::sandbox::context::ExecWorkspace>,
     /// The run's telecom origin (seeded only by `run_loop::with_request_scope`).
     /// Unseeded stays unseeded across the carrier; see `telecom::run_origin`.
     run_origin: crate::gateway::telecom::run_origin::CarriedRunOrigin,
@@ -130,7 +130,7 @@ impl CarriedAttribution {
             agent_id: crate::agents::current_agent_id(),
             caller_role: crate::gateway::caller_identity::current_caller_role(),
             room_author: super::current_room_author(),
-            exec_workspace: crate::sandbox::context::current_exec_workspace(),
+            exec_workspace: crate::sandbox::context::current_exec_workspace_binding(),
             run_origin: crate::gateway::telecom::run_origin::capture_carry(),
         }
     }
@@ -194,7 +194,7 @@ impl CarriedAttribution {
                             self.scope,
                             super::with_room_author(
                                 self.room_author,
-                                crate::sandbox::context::with_exec_workspace(
+                                crate::sandbox::context::with_exec_workspace_binding(
                                     self.exec_workspace,
                                     crate::gateway::telecom::run_origin::reestablish_carry(
                                         self.run_origin,
@@ -388,6 +388,35 @@ mod tests {
             Some(root),
             "a detached child must execute in the root its run was authorised for,              not in a fresh empty hash directory"
         );
+    }
+
+    #[tokio::test]
+    async fn carried_attribution_preserves_owned_worktree() {
+        use crate::sandbox::context::{
+            current_exec_workspace_binding, with_exec_workspace_binding, ExecWorkspace,
+        };
+
+        let outer = ExecWorkspace::Directory(std::path::PathBuf::from("project"));
+        let owned = ExecWorkspace::worktree_fixture("checkout".into(), "repo".into());
+        with_exec_workspace_binding(Some(outer.clone()), async {
+            let carrier = with_exec_workspace_binding(Some(owned.clone()), async {
+                CarriedAttribution::capture()
+            })
+            .await;
+            let observed =
+                tokio::spawn(carrier.reestablish(async { current_exec_workspace_binding() }))
+                    .await
+                    .unwrap();
+            match (observed, owned) {
+                (Some(ExecWorkspace::OwnedWorktree(observed)), ExecWorkspace::OwnedWorktree(owned)) => {
+                    assert!(std::sync::Arc::ptr_eq(&observed, &owned));
+                }
+                _ => panic!("worktree ownership was lost crossing the carrier"),
+            }
+            assert!(matches!(current_exec_workspace_binding(), Some(ExecWorkspace::Directory(root)) if root == outer.root()));
+        })
+        .await;
+        assert!(current_exec_workspace_binding().is_none());
     }
 
     /// Capturing outside any scope is the unrestricted case and must stay a

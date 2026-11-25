@@ -1758,15 +1758,6 @@ async fn start_server_body(
         };
     }
 
-    // Start dispatching only after both durable logging and leader
-    // notification are listening: the lossy bus cannot replay early events.
-    if let Some(dispatcher) = agent_result.team_dispatcher.clone() {
-        dispatcher.spawn_loop();
-        if !args.daemon {
-            println!("  Team dispatcher started");
-        }
-    }
-
     // Register the subagent completion announcer — background subagent
     // results proactively drive one turn on the parent session instead of
     // waiting for the LLM to poll the tracker (R5; see
@@ -2421,6 +2412,14 @@ async fn start_server_body(
             failed = backfill.failed,
             "legacy room attribution backfill"
         );
+    }
+
+    // Start after event subscribers and project attribution are ready.
+    if let Some(dispatcher) = agent_result.team_dispatcher.clone() {
+        dispatcher.spawn_loop();
+        if !args.daemon {
+            println!("  Team dispatcher started");
+        }
     }
 
     // Taken before the mutable borrow below: `handle_bind` needs it to

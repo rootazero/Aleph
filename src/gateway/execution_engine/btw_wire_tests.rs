@@ -307,6 +307,7 @@ async fn park_running_run(
         run_id.to_string(),
         super::ActiveRun {
             request: gate_test_request(session, run_id),
+            owned_worktree: false,
             state: super::RunState::Running,
             started_at: chrono::Utc::now(),
             admitted_at: std::time::Instant::now(),
@@ -390,6 +391,7 @@ async fn park_uncancellable_run(
         run_id.to_string(),
         super::ActiveRun {
             request: gate_test_request(session, run_id),
+            owned_worktree: false,
             state: super::RunState::Running,
             started_at: chrono::Utc::now(),
             admitted_at: std::time::Instant::now(),

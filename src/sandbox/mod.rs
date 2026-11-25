@@ -50,7 +50,7 @@ pub use live_tail::{LiveSnapshot, LiveStream, LiveTail};
 pub use platforms::create_platform_driver_from_config;
 
 pub use summary::{NetworkState, PolicyTier, SandboxSummary};
-pub use worktree::{WorktreeError, WorktreeHandle, WorktreeSandbox};
+pub use worktree::{WorktreeError, WorktreeHandle};
 
 #[async_trait]
 pub trait Sandbox: Send + Sync + 'static {

@@ -371,7 +371,9 @@ pub(super) fn request(input: &str, role: Option<&str>, project: &Path) -> RunReq
         EXEC_TIER_SESSION_KEY.to_string(),
         ExecTier::Ask.id().to_string(),
     );
-    request.workspace_override = Some(project.to_path_buf());
+    request.workspace_override = Some(crate::sandbox::context::ExecWorkspace::Directory(
+        project.to_path_buf(),
+    ));
     request
 }
 

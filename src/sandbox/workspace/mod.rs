@@ -120,12 +120,18 @@ impl WorkspaceSandbox {
     ///
     /// Absence keeps the historical hash directory, which is what every caller
     /// outside a run (cluster node file commands, direct callers, tests) gets.
-    fn jail_root_for(&self, sid: &SessionId) -> PathBuf {
-        crate::sandbox::context::current_exec_workspace()
-            .unwrap_or_else(|| self.workspace_root.join(session_key_to_filename(sid)))
+    fn jail_root_for(
+        &self,
+        sid: &SessionId,
+        workspace: Option<&super::context::ExecWorkspace>,
+    ) -> PathBuf {
+        workspace.map_or_else(
+            || self.workspace_root.join(session_key_to_filename(sid)),
+            |binding| binding.root().to_path_buf(),
+        )
     }
 
-    /// Resolve the per-session workspace, creating the directory on first call.
+    /// Resolve the per-session workspace, creating ordinary directories on first call.
     /// Idempotent — subsequent calls return the cached `Arc<SessionWorkspace>`.
     ///
     /// Keyed by `(session, root)`, not by session alone: one session can run
@@ -135,8 +141,12 @@ impl WorkspaceSandbox {
     /// root, not a session. Keying by session alone would hand a grant made for
     /// project A to a command running in project B, and would also pin the
     /// first root the session ever saw for the whole process lifetime.
-    async fn for_session(&self, sid: &SessionId) -> Result<Arc<SessionWorkspace>, SandboxError> {
-        let cwd = self.jail_root_for(sid);
+    async fn for_session(
+        &self,
+        sid: &SessionId,
+        cwd: PathBuf,
+        owned: bool,
+    ) -> Result<Arc<SessionWorkspace>, SandboxError> {
         // rust-doctor-disable-next-line excessive-clone
         let key = (sid.clone(), cwd.clone());
 
@@ -151,9 +161,11 @@ impl WorkspaceSandbox {
             return Ok(ws);
         }
 
-        tokio::fs::create_dir_all(&cwd)
-            .await
-            .map_err(|e| SandboxError::Io(format!("create workspace dir: {e}")))?;
+        if !owned {
+            tokio::fs::create_dir_all(&cwd)
+                .await
+                .map_err(|e| SandboxError::Io(format!("create workspace dir: {e}")))?;
+        }
 
         let ws = Arc::new(SessionWorkspace {
             cwd,
@@ -172,31 +184,23 @@ impl WorkspaceSandbox {
 #[async_trait]
 impl Sandbox for WorkspaceSandbox {
     fn summary(&self) -> Option<crate::sandbox::summary::SandboxSummary> {
-        // Backend mechanism + the root this run may actually write in.
-        // Per-call capabilities can be tighter than this; the LLM only needs
-        // the envelope so it understands which enforcer it's facing. The
-        // `os_driver.platform()` tag is the same identifier carried into
-        // logs/telemetry, making correlation easy.
-        //
-        // `writable_roots` reports the SAME root `jail_root_for` enforces, so
-        // the prompt cannot advertise a regime the runtime does not apply. In
-        // project mode the two differ by more than cosmetics: naming the
-        // `~/.aleph/workspaces` parent would tell a model working in
-        // `/Users/me/proj` that its own project is off-limits. This costs no
-        // prompt cache — `writable_roots_line` already rides the dynamic tail
-        // (`OperatingEnvelopeLayer` @1758) for exactly this per-run reason.
-        // With no run in scope the value is byte-identical to what it was.
-        Some(crate::sandbox::summary::SandboxSummary {
+        use crate::sandbox::summary::{NetworkState, PolicyTier, SandboxPosture, SandboxSummary};
+
+        let workspace = super::context::current_exec_workspace_binding();
+        let root = match workspace.as_ref() {
+            Some(binding) if binding.is_owned_worktree() => resolve_owned_root(binding.root()).ok(),
+            Some(binding) => Some(binding.root().to_path_buf()),
+            None => super::context::current_session().map(|sid| self.jail_root_for(&sid, None)),
+        };
+        Some(SandboxSummary {
             backend: self.os_driver.platform(),
-            policy_tier: crate::sandbox::summary::PolicyTier::WorkspaceWrite.as_str(),
-            writable_roots: vec![crate::sandbox::context::current_exec_workspace()
-                // rust-doctor-disable-next-line excessive-clone
-                .unwrap_or_else(|| self.workspace_root.clone())],
-            // Honest per-call default: the baseline is `strict()` (network
-            // DENIED). Network is reachable only via an approval-gated
-            // capability escalation, so telling the model "allowed (all hosts)"
-            // here would invite it to assume egress it does not actually have.
-            network: crate::sandbox::summary::NetworkState::Denied,
+            posture: SandboxPosture::Configured {
+                tier: PolicyTier::WorkspaceWrite,
+                network: NetworkState::from_policy(
+                    &SandboxCapabilities::session_baseline().network,
+                ),
+            },
+            writable_roots: root.into_iter().collect(),
             max_memory_mb: None,
             permission_profile_id: None,
         })
@@ -204,6 +208,7 @@ impl Sandbox for WorkspaceSandbox {
 
     // rust-doctor-disable-next-line high-cyclomatic-complexity
     async fn execute(&self, cmd: SandboxCommand) -> Result<SandboxOutput, SandboxError> {
+        self.os_driver.execution_preflight()?;
         // Shared admission (hooks, cwd containment, approval, proxy, DNS, profile)
         // lives in `prepare_command` so the managed spawn path cannot diverge.
         let PreparedCommand {
@@ -250,9 +255,7 @@ impl Sandbox for WorkspaceSandbox {
 
         // Command-output content floor (secret redaction + block-class gate +
         // invisible/bidi neutralization) before any downstream consumer touches
-        // stdout/stderr. Shared with `WorktreeSandbox` via the single source of
-        // truth in `scrub::scrub_and_gate_output`, so the two execution paths
-        // cannot silently diverge on what they redact or refuse.
+        // stdout/stderr. Ordinary and owned-worktree commands share this floor.
         let output_blocked: Vec<&'static str> = if let Ok(ref mut out) = output {
             crate::sandbox::scrub::scrub_and_gate_output(out)
         } else {
@@ -328,6 +331,13 @@ impl WorkspaceSandbox {
         &self,
         mut cmd: SandboxCommand,
     ) -> Result<PreparedCommand, SandboxError> {
+        let workspace = super::context::current_exec_workspace_binding();
+        let owned_path = workspace
+            .as_ref()
+            .filter(|binding| binding.is_owned_worktree())
+            .map(super::context::ExecWorkspace::root);
+        let owned_root = owned_path.map(resolve_owned_root).transpose()?;
+
         // Hook context is created on-demand at each call site rather than
         // once at the top: it borrows `&cmd`, which would block the SP-4
         // DNS step from acquiring `&mut cmd.capabilities`. Per-call ctx
@@ -336,10 +346,15 @@ impl WorkspaceSandbox {
         if let SandboxHookResult::Deny { reason } =
             self.hooks.run_before(&SandboxHookContext::new(&cmd)).await
         {
-            return Err(SandboxError::Other(format!("hook denied: {reason}")));
+            return Err(SandboxError::CapabilityDenied { reason });
         }
 
-        let ws = self.for_session(&cmd.session_id).await?;
+        let jail_root = owned_root
+            .clone()
+            .unwrap_or_else(|| self.jail_root_for(&cmd.session_id, workspace.as_ref()));
+        let ws = self
+            .for_session(&cmd.session_id, jail_root, owned_root.is_some())
+            .await?;
 
         // The requested cwd in LEXICAL form (`.`/`..` folded, every symlink
         // component still spelled out as the caller wrote it). Kept next to the
@@ -659,7 +674,14 @@ impl WorkspaceSandbox {
         // it leaves open is as small as it can be: the proxy spawn and the DNS
         // pre-resolution above are both awaits too, and DNS in particular is
         // network-paced. Everything from this line to `run` is machine-paced.
-        if awaited_approval {
+        if let (Some(path), Some(root)) = (owned_path, owned_root.as_ref()) {
+            if resolve_owned_root(path)? != *root {
+                return Err(SandboxError::CapabilityDenied {
+                    reason: "owned worktree root changed while preparing execution".into(),
+                });
+            }
+        }
+        if awaited_approval || owned_root.is_some() {
             let reverified = revalidate_cwd_containment(&ws.cwd, &requested_cwd, &cwd)?;
             if cmd.cwd.is_some() {
                 // Execute in the path the SECOND check resolved, not the one
@@ -674,7 +696,14 @@ impl WorkspaceSandbox {
             // form here would silently rewrite the policy.
         }
 
-        let profile = self.os_driver.profile_for(&cmd.capabilities, &cwd)?;
+        let policy_root = owned_root.as_deref().unwrap_or(&cwd);
+        let profile = self.os_driver.profile_for(&cmd.capabilities, policy_root)?;
+        if let Some(root) = owned_root {
+            cmd.env.insert(
+                "CARGO_TARGET_DIR".into(),
+                root.join("target").to_string_lossy().into_owned(),
+            );
+        }
 
         // Codex-inspired child-process annotations: spawned processes can
         // detect they're running under a sandbox without round-tripping
@@ -712,6 +741,25 @@ impl WorkspaceSandbox {
             active_proxy,
         })
     }
+}
+
+fn resolve_owned_root(root: &Path) -> Result<PathBuf, SandboxError> {
+    // A checkout removed or replaced with a symlink is not provisioned by
+    // the sandbox. Canonicalize its ancestors so Linux binds the same path
+    // spelling that the verified launch cwd uses inside the mount namespace.
+    let denied = || SandboxError::CapabilityDenied {
+        reason: format!(
+            "owned worktree is no longer a directory: {}",
+            root.display()
+        ),
+    };
+    if !std::fs::symlink_metadata(root)
+        .map_err(|_| denied())?
+        .is_dir()
+    {
+        return Err(denied());
+    }
+    std::fs::canonicalize(root).map_err(|_| denied())
 }
 
 impl WorkspaceSandbox {
@@ -2519,8 +2567,17 @@ mod tests {
 
     /// Recording driver that captures the `env` passed to `run()` so tests
     /// can assert on injected `ALEPH_SANDBOX*` keys.
+    #[derive(Default)]
+    struct RecordedWorkspace {
+        policy_root: PathBuf,
+        launch_cwd: PathBuf,
+        writable_paths: Vec<PathBuf>,
+    }
+
     struct EnvRecordingDriver {
+        supported: bool,
         last_env: Arc<RwLock<HashMap<String, String>>>,
+        workspace: Arc<std::sync::Mutex<RecordedWorkspace>>,
     }
 
     impl EnvRecordingDriver {
@@ -2528,7 +2585,9 @@ mod tests {
             let last_env = Arc::new(RwLock::new(HashMap::new()));
             (
                 Self {
+                    supported: true,
                     last_env: last_env.clone(),
+                    workspace: Arc::default(),
                 },
                 last_env,
             )
@@ -2541,13 +2600,16 @@ mod tests {
             "macos/seatbelt"
         }
         fn is_supported(&self) -> bool {
-            true
+            self.supported
         }
         fn profile_for(
             &self,
-            _caps: &SandboxCapabilities,
-            _cwd: &Path,
+            caps: &SandboxCapabilities,
+            policy_root: &Path,
         ) -> Result<OsSandboxProfile, SandboxError> {
+            let mut workspace = self.workspace.lock().unwrap();
+            workspace.policy_root = policy_root.to_path_buf();
+            workspace.writable_paths.clone_from(&caps.fs_write);
             Ok(OsSandboxProfile {
                 contents: String::new(),
                 max_memory_mb: None,
@@ -2561,12 +2623,13 @@ mod tests {
             _args: &[String],
             env: &HashMap<String, String>,
             _stdin: Option<&[u8]>,
-            _cwd: &Path,
+            cwd: &Path,
             _profile: &OsSandboxProfile,
             _timeout: Duration,
             _max_output_bytes: usize,
         ) -> Result<SandboxOutput, SandboxError> {
             *self.last_env.write().await = env.clone();
+            self.workspace.lock().unwrap().launch_cwd = cwd.to_path_buf();
             Ok(SandboxOutput {
                 stdout: b"ok".to_vec(),
                 exit_code: Some(0),
@@ -2574,6 +2637,311 @@ mod tests {
                 ..Default::default()
             })
         }
+    }
+
+    fn workspace_probe_command(cwd: Option<PathBuf>) -> SandboxCommand {
+        SandboxCommand {
+            session_id: sid(),
+            tool_name: "bash".into(),
+            program: "echo".into(),
+            args: vec!["probe".into()],
+            env: HashMap::new(),
+            stdin: None,
+            cwd,
+            capabilities: SandboxCapabilities::strict(),
+            timeout: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn owned_worktree_separates_launch_cwd_from_policy_root() {
+        use crate::sandbox::context::{with_exec_workspace_binding, ExecWorkspace};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let child = root.join("src");
+        std::fs::create_dir(&child).unwrap();
+        let (driver, last_env) = EnvRecordingDriver::new();
+        let recorded = Arc::clone(&driver.workspace);
+        let sandbox = build_sandbox(
+            &tmp,
+            Arc::new(driver),
+            build_gate_auto_deny(),
+            SandboxHooks::new(),
+        );
+        for binding in [
+            ExecWorkspace::Directory(root.clone()),
+            ExecWorkspace::worktree_fixture(root.clone(), root.clone()),
+        ] {
+            let owned = binding.is_owned_worktree();
+            with_exec_workspace_binding(
+                Some(binding),
+                sandbox.execute(workspace_probe_command(Some(child.clone()))),
+            )
+            .await
+            .unwrap();
+            let env = last_env.read().await;
+            let recorded = recorded.lock().unwrap();
+            assert_eq!(recorded.launch_cwd, child);
+            assert_eq!(
+                recorded.policy_root,
+                if owned { &root } else { &child }.as_path()
+            );
+            if owned {
+                assert_eq!(
+                    env.get("CARGO_TARGET_DIR"),
+                    Some(&root.join("target").to_string_lossy().into_owned())
+                );
+            } else {
+                assert!(!env.contains_key("CARGO_TARGET_DIR"));
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn owned_worktree_under_aliased_parent_uses_canonical_policy_root() {
+        use crate::sandbox::context::{with_exec_workspace_binding, ExecWorkspace};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let real_parent = tmp.path().join("actual");
+        let alias = tmp.path().join("alias");
+        let root = real_parent.join("checkout");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::os::unix::fs::symlink(&real_parent, &alias).unwrap();
+        let (driver, _) = EnvRecordingDriver::new();
+        let recorded = Arc::clone(&driver.workspace);
+        let sandbox = build_sandbox(
+            &tmp,
+            Arc::new(driver),
+            build_gate_auto_deny(),
+            SandboxHooks::new(),
+        );
+        with_exec_workspace_binding(
+            Some(ExecWorkspace::worktree_fixture(
+                alias.join("checkout"),
+                real_parent,
+            )),
+            sandbox.execute(workspace_probe_command(Some("src".into()))),
+        )
+        .await
+        .unwrap();
+        let recorded = recorded.lock().unwrap();
+        assert_eq!(recorded.policy_root, root.canonicalize().unwrap());
+        assert_eq!(
+            recorded.launch_cwd,
+            root.join("src").canonicalize().unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn owned_worktree_explicit_write_grant_uses_existing_approval() {
+        use crate::sandbox::context::{with_exec_workspace_binding, ExecWorkspace};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap().join("worktree");
+        let sibling = root.with_file_name("sibling");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::create_dir(&sibling).unwrap();
+        for approved in [false, true] {
+            let (driver, _) = EnvRecordingDriver::new();
+            let recorded = Arc::clone(&driver.workspace);
+            let approval = if approved {
+                ApprovalOutcome::Approved
+            } else {
+                ApprovalOutcome::Denied
+            };
+            let sandbox = build_sandbox(
+                &tmp,
+                Arc::new(driver),
+                build_gate_with(approval),
+                SandboxHooks::new(),
+            );
+            with_exec_workspace_binding(
+                Some(ExecWorkspace::worktree_fixture(root.clone(), root.clone())),
+                async {
+                    sandbox
+                        .execute(workspace_probe_command(None))
+                        .await
+                        .unwrap();
+                    assert!(!recorded.lock().unwrap().writable_paths.contains(&sibling));
+                    *recorded.lock().unwrap() = RecordedWorkspace::default();
+
+                    let mut command = workspace_probe_command(None);
+                    command.capabilities.fs_write.push(sibling.clone());
+                    let result = sandbox.execute(command).await;
+                    let recorded = recorded.lock().unwrap();
+                    if approved {
+                        result.unwrap();
+                        assert_eq!(recorded.policy_root, root);
+                        assert_eq!(recorded.launch_cwd, root);
+                        assert!(recorded.writable_paths.contains(&sibling));
+                    } else {
+                        assert!(matches!(result, Err(SandboxError::CapabilityDenied { .. })));
+                        assert!(recorded.launch_cwd.as_os_str().is_empty());
+                    }
+                },
+            )
+            .await;
+        }
+    }
+
+    #[tokio::test]
+    async fn missing_owned_worktree_never_recreated_or_launched() {
+        use crate::sandbox::context::{with_exec_workspace_binding, ExecWorkspace};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("removed-worktree");
+        std::fs::create_dir(&root).unwrap();
+        use crate::sandbox::hooks::SandboxBeforeHook;
+
+        #[derive(Default)]
+        struct CountingHook(std::sync::atomic::AtomicUsize);
+
+        #[async_trait]
+        impl SandboxBeforeHook for CountingHook {
+            async fn before(&self, _: SandboxHookContext<'_>) -> SandboxHookResult {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                SandboxHookResult::Allow
+            }
+        }
+
+        let (driver, last_env) = EnvRecordingDriver::new();
+        let hooks = Arc::new(CountingHook::default());
+        let sandbox = build_sandbox(
+            &tmp,
+            Arc::new(driver),
+            build_gate_auto_deny(),
+            SandboxHooks::new().with_before(hooks.clone()),
+        );
+        let result = with_exec_workspace_binding(
+            Some(ExecWorkspace::worktree_fixture(root.clone(), root.clone())),
+            async {
+                std::fs::remove_dir(&root).unwrap();
+                sandbox.execute(workspace_probe_command(None)).await
+            },
+        )
+        .await;
+
+        assert!(result.is_err(), "a removed checkout cannot host execution");
+        assert!(!root.exists());
+        assert!(last_env.read().await.is_empty(), "the driver must not run");
+        assert_eq!(hooks.0.load(std::sync::atomic::Ordering::Relaxed), 0);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    #[ignore = "requires a host that permits native Seatbelt and a checkout outside system scratch"]
+    async fn owned_worktree_seatbelt_native_write_boundary() {
+        use crate::sandbox::context::with_exec_workspace_binding;
+        use crate::sandbox::platforms::macos::seatbelt::SeatbeltDriver;
+
+        let source = std::env::current_dir().unwrap().canonicalize().unwrap();
+        let outside = tempfile::tempdir_in(&source).unwrap();
+        let excluded = outside.path().join("not-written");
+        let worktree = Arc::new(
+            crate::sandbox::worktree::create(&source, "seatbelt-verification", None)
+                .await
+                .unwrap(),
+        );
+        let root = worktree.path().canonicalize().unwrap();
+        let cwd = root.join("src");
+        std::fs::create_dir_all(root.join("target")).unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let sandbox = build_sandbox(
+            &tmp,
+            Arc::new(SeatbeltDriver::new()),
+            build_gate_auto_deny(),
+            SandboxHooks::new(),
+        );
+        let mut command = workspace_probe_command(Some(cwd.clone()));
+        command.program = "/bin/sh".into();
+        command.args = vec![
+            "-c".into(),
+            concat!(
+                "test \"$PWD\" = \"$1\" && test \"$CARGO_TARGET_DIR\" = \"$2\" && ",
+                "printf scoped > \"$2/sandbox-smoke\" || exit 1; ",
+                "if { printf outside; } > \"$3\"; then exit 2; fi"
+            )
+            .into(),
+            "sandbox-smoke".into(),
+            cwd.to_string_lossy().into_owned(),
+            root.join("target").to_string_lossy().into_owned(),
+            excluded.to_string_lossy().into_owned(),
+        ];
+        let result =
+            with_exec_workspace_binding(Some(worktree.exec_workspace()), sandbox.execute(command))
+                .await;
+        let inside = std::fs::read_to_string(root.join("target/sandbox-smoke"));
+        Arc::try_unwrap(worktree).unwrap().cleanup().await.unwrap();
+        let output = result.unwrap();
+        assert_eq!(
+            output.exit_code,
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(inside.unwrap(), "scoped");
+        assert!(!excluded.exists());
+    }
+
+    #[tokio::test]
+    async fn unavailable_backend_refuses_before_preparing_the_workspace() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (mut driver, last_env) = EnvRecordingDriver::new();
+        driver.supported = false;
+        let recorded = Arc::clone(&driver.workspace);
+        let sandbox = build_sandbox(
+            &tmp,
+            Arc::new(driver),
+            build_gate_auto_deny(),
+            SandboxHooks::new(),
+        );
+        let session = sid();
+        let default_root = sandbox.jail_root_for(&session, None);
+        let error = sandbox
+            .execute(workspace_probe_command(None))
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            SandboxError::BackendUnavailable {
+                platform: "macos/seatbelt",
+                ..
+            }
+        ));
+        assert!(!default_root.exists());
+        assert!(recorded.lock().unwrap().policy_root.as_os_str().is_empty());
+        assert!(last_env.read().await.is_empty());
+        assert!(matches!(
+            sandbox.summary().unwrap().posture,
+            crate::sandbox::summary::SandboxPosture::Configured { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn summary_root_matches_session_default_and_actual_driver() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (driver, _) = EnvRecordingDriver::new();
+        let reported = Arc::clone(&driver.workspace);
+        let sandbox = build_sandbox(
+            &tmp,
+            Arc::new(driver),
+            build_gate_auto_deny(),
+            SandboxHooks::new(),
+        );
+        let command = workspace_probe_command(None);
+        assert!(sandbox.summary().unwrap().writable_roots.is_empty());
+        let summary = crate::sandbox::context::SESSION_ID
+            .scope(command.session_id.clone(), async {
+                sandbox.summary().unwrap()
+            })
+            .await;
+        sandbox.execute(command).await.unwrap();
+        assert_eq!(
+            summary.writable_roots,
+            vec![reported.lock().unwrap().policy_root.clone()]
+        );
     }
 
     #[tokio::test]

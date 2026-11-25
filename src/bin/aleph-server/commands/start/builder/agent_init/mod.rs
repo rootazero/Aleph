@@ -1344,6 +1344,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                     artifact_store.clone(),
                     inbox_provider,
                     (*gateway_ctx).clone(),
+                    alephcore::projects::ProjectStore::shared(),
                     dispatcher_cfg,
                     dispatch_signal.clone(),
                 );

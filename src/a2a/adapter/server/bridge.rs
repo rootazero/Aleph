@@ -193,7 +193,6 @@ impl AgentLoopBridge {
             )]),
             attachments: Vec::new(),
             pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
-            sandbox_override: None,
             workspace_override: None,
             max_iterations_override: None,
             model_override: None,

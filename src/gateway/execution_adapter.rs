@@ -304,7 +304,6 @@ mod tests {
             metadata: HashMap::new(),
             attachments: Vec::new(),
             pending_media: PendingMedia::default(),
-            sandbox_override: None,
             workspace_override: None,
             max_iterations_override: None,
             model_override: None,

@@ -74,6 +74,11 @@ impl SimpleExecutionEngine {
         agent: Arc<AgentInstance>,
         emitter: Arc<E>,
     ) -> Result<(), ExecutionError> {
+        if request.owns_worktree() {
+            return Err(ExecutionError::Failed(
+                "owned worktree requires the mounted execution engine".into(),
+            ));
+        }
         let run_id = request.run_id.clone();
 
         // Run-admission spend arm — this engine has no `admit_run` to gate
@@ -111,6 +116,7 @@ impl SimpleExecutionEngine {
                 run_id.clone(),
                 ActiveRun {
                     request: request.clone(),
+                    owned_worktree: false,
                     state: RunState::Running,
                     started_at: chrono::Utc::now(),
                     admitted_at: std::time::Instant::now(),

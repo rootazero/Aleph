@@ -64,11 +64,29 @@ pub(super) struct RunSlot {
     /// the permit (freeing the global + per-agent semaphore slots) and releases
     /// the session claim.
     _permit: Option<RunPermit>,
+    owned_registration: Option<(
+        Arc<tokio::sync::RwLock<std::collections::HashMap<String, ActiveRun>>>,
+        std::time::Instant,
+    )>,
 }
 
 impl Drop for RunSlot {
     fn drop(&mut self) {
         self.registry.release(&self.session_key, &self.run_id);
+        if let (Some((runs, admitted_at)), Ok(runtime)) = (
+            self.owned_registration.take(),
+            tokio::runtime::Handle::try_current(),
+        ) {
+            let run_id = self.run_id.clone();
+            runtime.spawn(async move {
+                let mut runs = runs.write().await;
+                if runs.get(&run_id).is_some_and(|run| {
+                    run.admitted_at == admitted_at && matches!(run.state, RunState::Running)
+                }) {
+                    runs.remove(&run_id);
+                }
+            });
+        }
     }
 }
 
@@ -302,6 +320,7 @@ where
             session_key: request.session_key.clone(),
             run_id: run_id.to_string(),
             _permit: None,
+            owned_registration: None,
         };
 
         // Register the run BEFORE acquiring the concurrency permit, because the
@@ -322,21 +341,27 @@ where
         // target: a follow-up injected into the session log while it parks is
         // read when it starts, instead of being queued behind it.
         //
-        // (`active_runs` has no RAII guard, so a future dropped mid-wait leaves
-        // a stale row. That exposure already existed for the whole run — the
-        // entry is removed on the completion path — so this widens an existing
-        // window rather than opening a new kind; the session claim itself is
-        // guarded by `slot` above, which is the leak that actually wedges a
-        // session.)
+        // Team may forcibly abort the owner after its cancellation grace.
+        // Track that registration without holding the actual checkout lease.
+        let owned_worktree = request.owns_worktree();
+        let mut snapshot = request.clone();
+        if owned_worktree {
+            snapshot.workspace_override = None;
+        }
         {
             let mut runs = self.active_runs.write().await;
+            let admitted_at = std::time::Instant::now();
+            if owned_worktree {
+                slot.owned_registration = Some((Arc::clone(&self.active_runs), admitted_at));
+            }
             runs.insert(
                 run_id.to_string(),
                 ActiveRun {
-                    request: request.clone(),
+                    request: snapshot,
+                    owned_worktree,
                     state: RunState::Running,
                     started_at: chrono::Utc::now(),
-                    admitted_at: std::time::Instant::now(),
+                    admitted_at,
                     completed_at: None,
                     steps_completed: 0,
                     current_tool: None,
@@ -410,6 +435,7 @@ mod tests {
             session_key: sk.clone(),
             run_id: "run-1".to_string(),
             _permit: None,
+            owned_registration: None,
         };
         assert!(
             !registry.try_claim(&sk, "run-2"),
