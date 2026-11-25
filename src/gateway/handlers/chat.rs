@@ -2334,7 +2334,7 @@ mod tests {
                 _transient_context: Option<String>,
                 _think_level: Option<crate::agents::thinking::ThinkLevel>,
                 _envelope: crate::thinker::TurnEnvelope,
-                _turn_model: Option<crate::providers::session_model_handle::SessionModelPref>,
+                _turn_model: Option<crate::orchestrator::dispatch::RunModelDirective>,
                 _run_id: String,
                 _telecom_public: Option<crate::gateway::telecom::TelecomPublicContext>,
             ) -> Result<

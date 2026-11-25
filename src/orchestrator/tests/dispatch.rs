@@ -36,7 +36,7 @@ impl crate::orchestrator::dispatch::HarnessRunner for MockHarness {
         _transient_context: Option<String>,
         _think_level: Option<crate::agents::thinking::ThinkLevel>,
         _envelope: crate::thinker::TurnEnvelope,
-        _turn_model: Option<crate::providers::session_model_handle::SessionModelPref>,
+        _turn_model: Option<crate::orchestrator::dispatch::RunModelDirective>,
         _run_id: String,
         _telecom_public: Option<crate::gateway::telecom::TelecomPublicContext>,
     ) -> Result<crate::orchestrator::dispatch::FlowOutcome, FlowError> {
@@ -375,7 +375,7 @@ async fn dispatch_rejects_concurrent_same_session_reuse() {
             _transient_context: Option<String>,
             _think_level: Option<crate::agents::thinking::ThinkLevel>,
             _envelope: crate::thinker::TurnEnvelope,
-            _turn_model: Option<crate::providers::session_model_handle::SessionModelPref>,
+            _turn_model: Option<crate::orchestrator::dispatch::RunModelDirective>,
             _run_id: String,
             _telecom_public: Option<crate::gateway::telecom::TelecomPublicContext>,
         ) -> Result<crate::orchestrator::dispatch::FlowOutcome, FlowError> {
@@ -506,7 +506,7 @@ impl crate::orchestrator::dispatch::HarnessRunner for CapturingHarness {
         _transient_context: Option<String>,
         _think_level: Option<crate::agents::thinking::ThinkLevel>,
         _envelope: crate::thinker::TurnEnvelope,
-        _turn_model: Option<crate::providers::session_model_handle::SessionModelPref>,
+        _turn_model: Option<crate::orchestrator::dispatch::RunModelDirective>,
         run_id: String,
         telecom_public: Option<crate::gateway::telecom::TelecomPublicContext>,
     ) -> Result<crate::orchestrator::dispatch::FlowOutcome, FlowError> {
@@ -874,7 +874,7 @@ impl crate::orchestrator::dispatch::HarnessRunner for OriginProbeHarness {
         _transient_context: Option<String>,
         _think_level: Option<crate::agents::thinking::ThinkLevel>,
         _envelope: crate::thinker::TurnEnvelope,
-        _turn_model: Option<crate::providers::session_model_handle::SessionModelPref>,
+        _turn_model: Option<crate::orchestrator::dispatch::RunModelDirective>,
         _run_id: String,
         telecom_public: Option<crate::gateway::telecom::TelecomPublicContext>,
     ) -> Result<crate::orchestrator::dispatch::FlowOutcome, FlowError> {
@@ -986,7 +986,7 @@ impl crate::orchestrator::dispatch::HarnessRunner for NoCompleteHarness {
         _transient_context: Option<String>,
         _think_level: Option<crate::agents::thinking::ThinkLevel>,
         _envelope: crate::thinker::TurnEnvelope,
-        _turn_model: Option<crate::providers::session_model_handle::SessionModelPref>,
+        _turn_model: Option<crate::orchestrator::dispatch::RunModelDirective>,
         _run_id: String,
         _telecom_public: Option<crate::gateway::telecom::TelecomPublicContext>,
     ) -> Result<crate::orchestrator::dispatch::FlowOutcome, FlowError> {

@@ -590,9 +590,8 @@ async fn settle_dropped_completion(
 /// Emit the `ModelResolved` correction, if this run's provider dials ended up
 /// somewhere other than where the walk set out for.
 ///
-/// The run-start `ModelResolved` states what was *asked for*; it is emitted
-/// before anything has been dialed, so it cannot know about a migration. This is
-/// the other half: the failover walk records what actually answered
+/// The runner's `ModelResolved` states which initial binding it acquired,
+/// before any dial. The failover walk records what actually answered
 /// ([`route_witness`](crate::providers::route_witness)) and this turns that into
 /// the `is_fallback` flag every user-visible fallback notice gates on — Panel,
 /// TUI, CLI and the channel reply line.

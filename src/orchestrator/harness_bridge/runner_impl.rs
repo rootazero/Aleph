@@ -131,7 +131,7 @@ impl HarnessRunner for AgentHarnessRunner {
         transient_context: Option<String>,
         think_level: Option<crate::agents::thinking::ThinkLevel>,
         mut envelope: crate::thinker::TurnEnvelope,
-        turn_model: Option<crate::providers::session_model_handle::SessionModelPref>,
+        turn_model: Option<crate::orchestrator::dispatch::RunModelDirective>,
         run_id: String,
         _telecom_public: Option<crate::gateway::telecom::TelecomPublicContext>,
     ) -> Result<FlowOutcome, FlowError> {
@@ -154,42 +154,51 @@ impl HarnessRunner for AgentHarnessRunner {
             return Err(FlowError::UnknownAgent(spec.agent.clone()));
         }
 
-        // Step 3: brain pick. Effective model directive, in precedence order:
-        //   0. this turn's explicit pick — the chat-window model picker
-        //      (`chat.send.model_override`) or the `[voice]` low-TTFT pin. The
-        //      most recent deliberate choice, so it outranks everything below;
-        //      it is per-TURN, so nothing about it is remembered afterwards.
-        //      Until this arm existed the pick reached the vision-capability
-        //      check and the `ModelResolved` banner and stopped there — the
-        //      turn was served by (1)/(2) while the UI reported otherwise;
-        //   1. a `select_model` pick recorded for this session (A layer, R8) —
-        //      keyed by the canonical `SessionKey` the tool wrote under;
-        //   2. otherwise the flow's `BrainRef` preset via `pick_llm`.
-        //
-        // Qualified directives bind the exact transport, never its fallback
-        // ladder. Only trusted internal unqualified directives retain default
-        // chain routing. The directive-less path still uses BrainRef.
+        // Bind from the same eligibility snapshot used to decide whether to
+        // ignore a stored pin. Only the initial, actual binding labels the run.
         let parsed_session_key = SessionKey::from_key_string(&session_key);
         let session_pref_key = parsed_session_key
             .as_ref()
             .map_or_else(|| session_key.clone(), |s| s.to_key_string());
-        let session_pref = turn_model
-            .is_none()
-            .then(|| self.routable_session_model(&session_pref_key))
-            .flatten();
-        let model_directive = effective_model_directive(turn_model, session_pref);
-        // rust-doctor-disable-next-line excessive-clone
-        let explicit_model_directive = model_directive.clone();
-        let llm = match model_directive {
-            Some((Some(provider), model)) => {
-                qualified_model_provider(&self.named_providers, provider, model)?
-            }
-            Some((None, model)) => Arc::new(crate::providers::ModelOverrideProvider::new(
-                self.default_provider.current(),
-                model,
-            )) as Arc<dyn crate::providers::AiProvider>,
-            None => llm::pick_llm(&spec.brain, &self.default_provider, &self.named_providers)?,
+        let stored_pin = if turn_model.is_none() {
+            crate::providers::session_model_handle::get_session_model(&session_pref_key)
+        } else {
+            None
         };
+        let (explicit, ignored_pin) = bind_model_directive(
+            &self.named_providers,
+            self.default_provider.as_ref(),
+            turn_model,
+            stored_pin,
+        )?;
+        let (llm, explicit_model_directive) = match explicit {
+            Some(binding) => (binding.transport, Some((binding.provider, binding.model))),
+            None => (
+                llm::pick_llm(&spec.brain, &self.default_provider, &self.named_providers)?,
+                None,
+            ),
+        };
+        let model = explicit_model_directive
+            .as_ref()
+            .map(|(_, model)| model.clone())
+            .or_else(|| llm.serving_model_hint().map(|model| model.into_owned()))
+            .unwrap_or_default();
+        let provider = explicit_model_directive
+            .as_ref()
+            .and_then(|(provider, _)| provider.clone())
+            .or_else(|| {
+                llm.serving_provider_hint()
+                    .map(|provider| provider.into_owned())
+            })
+            .unwrap_or_else(|| llm.name().to_string());
+        let _ = events.send(FlowStreamEvent::ModelResolved(
+            crate::providers::health::ModelInfo {
+                model,
+                provider,
+                is_fallback: ignored_pin.is_some(),
+                original_model: ignored_pin,
+            },
+        ));
         // Stage J-pre: wrap the root provider with MeteringProvider so every
         // LLM call emits a LoopTraceEvent::ProviderUsage event labelled with
         // the agent that actually spent the tokens.
@@ -1293,7 +1302,7 @@ impl HarnessRunner for AgentHarnessRunner {
             .unwrap_or_default();
         //    Reasoning is counted as the provider the next turn would use
         //    sends it: `run` resolves a pinned provider through
-        //    `effective_model_directive` → `named_providers`, else the default
+        //    `routable_session_model` → `named_providers`, else the default
         //    chain — the same resolution here, so a DeepSeek-pinned session
         //    under an Anthropic default counts DeepSeek's reasoning_content.
         let pinned_provider = self
@@ -1327,6 +1336,71 @@ impl AgentHarnessRunner {
         let pref = validate_persisted_model(&get_session_model(key)?).ok()?;
         exact_named_transport(&self.named_providers, pref.provider.as_deref()?)?;
         Some(pref)
+    }
+}
+
+struct BoundModel {
+    provider: Option<String>,
+    model: String,
+    transport: Arc<dyn crate::providers::AiProvider>,
+}
+
+fn bind_model_directive(
+    named: &std::collections::HashMap<String, Arc<dyn crate::providers::AiProvider>>,
+    default: &dyn crate::providers::DefaultProviderHandle,
+    turn: Option<crate::orchestrator::dispatch::RunModelDirective>,
+    stored_pin: Option<crate::providers::session_model_handle::SessionModelPref>,
+) -> Result<(Option<BoundModel>, Option<String>), FlowError> {
+    use crate::orchestrator::dispatch::RunModelDirective;
+    use crate::providers::model_catalog::discovery_authority::mutation_fence;
+    use crate::providers::session_model_handle::{selectable_models, validate_persisted_model};
+
+    let exact = |provider: String, model: String| -> Result<BoundModel, FlowError> {
+        let transport = qualified_model_provider(named, provider.clone(), model.clone())?;
+        Ok(BoundModel {
+            provider: Some(provider),
+            model,
+            transport,
+        })
+    };
+    match turn {
+        Some(RunModelDirective::Selected { provider, model }) => {
+            let _fence = mutation_fence();
+            if !selectable_models()
+                .is_some_and(|snapshot| snapshot.resolve(Some(&provider), &model).is_ok())
+            {
+                return Err(FlowError::ProviderUnavailable(provider));
+            }
+            Ok((Some(exact(provider, model)?), None))
+        }
+        Some(RunModelDirective::Internal(pref)) => {
+            let binding = match pref.provider {
+                Some(provider) => exact(provider, pref.model)?,
+                None => BoundModel {
+                    provider: None,
+                    transport: Arc::new(crate::providers::ModelOverrideProvider::new(
+                        default.current(),
+                        pref.model.clone(),
+                    )),
+                    model: pref.model,
+                },
+            };
+            Ok((Some(binding), None))
+        }
+        None => {
+            let Some(pin) = stored_pin else {
+                return Ok((None, None));
+            };
+            let _fence = mutation_fence();
+            if let Ok(pref) = validate_persisted_model(&pin) {
+                if let Some(provider) = pref.provider {
+                    if let Ok(binding) = exact(provider, pref.model) {
+                        return Ok((Some(binding), None));
+                    }
+                }
+            }
+            Ok((None, Some(pin.model)))
+        }
     }
 }
 
@@ -1466,26 +1540,6 @@ const CALIBRATION_DRIFT_HIGH: f64 = 1.35;
 /// accuracy the EWMA converged to under the same tokenizer.
 pub(crate) fn seeded_calibration_for_model(model: &str) -> Option<f64> {
     calibration_seed_for_model(&CALIBRATION_CARRYOVER, model)
-}
-
-/// The one place that says which model directive wins.
-///
-/// Two explicit sources want to name the model for a run, ranked by how
-/// recent and deliberate the choice was:
-///
-/// 1. `turn` — this turn's explicit pick (chat-window picker / `[voice]` pin).
-///    A human just chose it for this message; nothing may outrank it;
-/// 2. `session` — the sticky `select_model` pick the model itself made earlier
-///    in this conversation (R8).
-///
-/// `None` from both means "no directive": `pick_llm` resolves the flow's
-/// `BrainRef` and the failover primary walks its own catalog, exactly as it did
-/// before any of this existed.
-fn effective_model_directive(
-    turn: Option<crate::providers::session_model_handle::SessionModelPref>,
-    session: Option<crate::providers::session_model_handle::SessionModelPref>,
-) -> Option<(Option<String>, String)> {
-    turn.or(session).map(|p| (p.provider, p.model))
 }
 
 /// The provider key the run's cost estimate and `FlowOutcome.serving_provider`
@@ -1767,49 +1821,6 @@ mod acting_provider_tests {
 
 #[cfg(test)]
 mod model_directive_tests {
-    use super::effective_model_directive;
-    use crate::providers::session_model_handle::SessionModelPref;
-
-    fn pref(provider: Option<&str>, model: &str) -> SessionModelPref {
-        SessionModelPref {
-            provider: provider.map(ToString::to_string),
-            model: model.to_string(),
-        }
-    }
-
-    #[test]
-    fn a_turn_pick_outranks_the_session_pick() {
-        // The regression this ranking exists for: the chat-window picker's
-        // choice used to reach the vision check and the `ModelResolved` banner
-        // and stop there, so the turn ran on the session pick while the UI
-        // announced the turn pick.
-        let out = effective_model_directive(
-            Some(pref(Some("openai"), "gpt-5")),
-            Some(pref(None, "claude-sonnet-5")),
-        );
-        assert_eq!(out, Some((Some("openai".to_string()), "gpt-5".to_string())));
-    }
-
-    #[test]
-    fn the_session_pick_wins_when_no_turn_pick_is_present() {
-        let out = effective_model_directive(None, Some(pref(None, "claude-sonnet-5")));
-        assert_eq!(out, Some((None, "claude-sonnet-5".to_string())));
-    }
-
-    #[test]
-    fn absence_of_explicit_picks_means_no_directive() {
-        // Nothing declared → `pick_llm` / catalog walk, byte-identical to before.
-        assert_eq!(effective_model_directive(None, None), None);
-    }
-
-    #[test]
-    fn a_provider_less_turn_pick_pins_only_the_model() {
-        // Trusted unqualified directive: the model is stamped, while the
-        // failure-only provider chain remains responsible for fallback.
-        let out = effective_model_directive(Some(pref(None, "gpt-5")), None);
-        assert_eq!(out, Some((None, "gpt-5".to_string())));
-    }
-
     #[tokio::test]
     async fn qualified_model_reaches_only_the_named_transport_even_on_failure() {
         use super::{qualified_model_provider, Arc, FlowError};

@@ -14,7 +14,7 @@ use super::super::{ExecutionError, RunRequest};
 use crate::extension::hooks::{budget_hook_contexts, join_messages, HookExecutor};
 use crate::extension::HookEvent;
 use crate::gateway::agent_instance::AgentInstance;
-use crate::gateway::event_emitter::{EventEmitter, StreamEvent};
+use crate::gateway::event_emitter::EventEmitter;
 
 use crate::executor::ToolRegistry;
 use crate::thinker::ProviderRegistry as ThinkerProviderRegistry;
@@ -736,99 +736,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             }
             attempt += 1;
 
-            // This turn's explicit model pick, in the shape the harness binder
-            // consumes. `Qualified { provider, model }` pins both; `Raw
-            // { model }` pins only the model and lets the provider chain stand
-            // (the failover chain's own primary is a better answer than a
-            // name-prefix guess, and it keeps breaker/route-mode gating).
-            //
-            // This is the field that makes the pick REAL: everything below
-            // (and the `ModelResolved` event) only ever described it.
-            //
-            // A blank model is dropped rather than pinned: the field is now
-            // load-bearing, and stamping `""` onto the chain would turn a
-            // malformed client payload into a provider error. (The `[voice]`
-            // path already guards this in `ModelOverride::from_voice`.)
-            let turn_model = request
-                .model_override
-                .as_ref()
-                .filter(|o| !o.model().trim().is_empty())
-                .map(
-                    |o| crate::providers::session_model_handle::SessionModelPref {
-                        provider: o.provider().map(ToString::to_string),
-                        model: o.model().trim().to_string(),
-                    },
-                );
-
-            // The model this turn ASKS FOR, in the same precedence the harness
-            // binder applies: per-turn pick ▸ session `select_model` pick ▸ the
-            // agent's configured default. Nothing has been dialed yet, so this
-            // is a statement of intent and nothing more — `is_fallback` is
-            // therefore always false here.
-            //
-            // It used to be a *prediction*: a health table on
-            // `MultiProviderRegistry` picked a candidate from its own failure
-            // record and stamped `is_fallback` from it. That table decided no
-            // dial (the walk in `FailoverProvider` does, from its own breaker,
-            // route mode, load ordering and rate windows), and the failures it
-            // recorded were filed against the predicted provider rather than the
-            // one that actually failed — so a real migration lit nothing while a
-            // table that had merely seen errors could announce a provider that
-            // was never tried. The table is gone. The honest half of the notice
-            // now arrives from the walk itself, as a correction emitted just
-            // before the terminal frame (`helpers::emit_route_correction`).
-            let mut ignored_pin = None;
-            let (requested_provider, requested_model) = match request.model_override.as_ref() {
-                Some(override_) => {
-                    let provider_name = match override_.provider() {
-                        Some(p) => p.to_string(),
-                        None => self.provider_registry.get(override_.model()).map_or_else(
-                            || self.provider_registry.default_provider().name().to_string(),
-                            |prov| prov.name().to_string(),
-                        ),
-                    };
-                    (provider_name, override_.model().to_string())
-                }
-                // A `select_model` pick recorded for this session outranks the
-                // agent's configured model at the binder, so the banner has to
-                // say so too — otherwise the run the user is watching is
-                // announced under the model it replaced. Same global, same
-                // canonical key the binder reads.
-                None => match crate::providers::session_model_handle::get_session_model(
-                    &request.session_key.to_key_string(),
-                ) {
-                    pref => {
-                        use crate::providers::session_model_handle::validate_persisted_model;
-                        let binding = pref
-                            .as_ref()
-                            .and_then(|pref| validate_persisted_model(pref).ok())
-                            .and_then(|pref| Some((pref.provider?, pref.model)));
-                        binding.unwrap_or_else(|| {
-                            ignored_pin = pref.map(|pref| pref.model);
-                            let model = agent.config().model.clone();
-                            let provider = self.provider_registry.get(&model).map_or_else(
-                                || self.provider_registry.default_provider().name().to_string(),
-                                |prov| prov.name().to_string(),
-                            );
-                            (provider, model)
-                        })
-                    }
-                },
-            };
-
-            // Emit ModelResolved so the Panel can label the run while it streams.
-            let _ = emitter
-                .emit(StreamEvent::ModelResolved {
-                    run_id: run_id.to_string(),
-                    model_info: crate::providers::health::ModelInfo {
-                        model: requested_model,
-                        provider: requested_provider,
-                        is_fallback: ignored_pin.is_some(),
-                        original_model: ignored_pin,
-                    },
-                })
-                .await;
-
             // Project one immutable capability-registry snapshot for this request.
             // Builtins, markdown skills, and MCP handlers all use the same
             // descriptor/handler generation. Plugin tools remain a narrow
@@ -1519,7 +1426,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 // This turn's explicit model pick. Cloned because the request is
                 // rebuilt on each retry iteration of the enclosing loop.
                 // rust-doctor-disable-next-line excessive-clone
-                model_directive: turn_model.clone(),
+                model_directive: request.run_model_directive(),
                 // Typed copy of the originating request's provenance; the
                 // retry loop rebuilds this FlowRequest but never alters it.
                 telecom_public: request.telecom_public.clone(),

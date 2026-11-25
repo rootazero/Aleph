@@ -417,6 +417,31 @@ pub const RESUME_TIER_CEILING_KEY: &str = "resume_tier_ceiling";
 
 impl RunRequest {
     /// Revalidate queued user selections against the live mounted-route publication.
+    pub(crate) fn run_model_directive(
+        &self,
+    ) -> Option<crate::orchestrator::dispatch::RunModelDirective> {
+        use crate::gateway::model_override::{ModelOverride, USER_MODEL_OVERRIDE_METADATA};
+        use crate::orchestrator::dispatch::RunModelDirective;
+        use crate::providers::session_model_handle::SessionModelPref;
+        let override_ = self.model_override.as_ref()?;
+        if self.metadata.contains_key(USER_MODEL_OVERRIDE_METADATA) {
+            let ModelOverride::Qualified { provider, model } = override_ else {
+                return None;
+            };
+            return Some(RunModelDirective::Selected {
+                provider: provider.clone(),
+                model: model.clone(),
+            });
+        }
+        let model = override_.model().trim();
+        (!model.is_empty()).then(|| {
+            RunModelDirective::Internal(SessionModelPref {
+                provider: override_.provider().map(str::to_owned),
+                model: model.to_owned(),
+            })
+        })
+    }
+
     pub(crate) fn validate_dispatch_model(&self) -> Result<(), ExecutionError> {
         use crate::gateway::model_override::{ModelOverride, USER_MODEL_OVERRIDE_METADATA};
         use crate::providers::session_model_handle::selectable_models;

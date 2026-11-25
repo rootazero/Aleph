@@ -1256,6 +1256,128 @@ async fn run_until_it_fails(
     (result, events)
 }
 
+#[tokio::test]
+async fn final_binding_refuses_withdrawn_selection_and_reports_ignored_pin() {
+    use crate::gateway::handlers::agent::{build_run_request, AgentRunParams};
+    use crate::orchestrator::dispatch::RunModelDirective;
+    use crate::providers::session_model_handle::{
+        clear_session_model, get_session_model_snapshot, set_session_model,
+        with_test_selectable_models, SelectableModelsSnapshot,
+    };
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    struct Recorder(&'static str, AtomicUsize);
+    impl AiProvider for Recorder {
+        fn process<'a>(
+            &'a self,
+            _: crate::providers::adapter::RequestPayload<'a>,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = crate::error::Result<crate::providers::adapter::ProviderResponse>,
+                    > + Send
+                    + 'a,
+            >,
+        > {
+            self.1.fetch_add(1, Ordering::Relaxed);
+            Box::pin(async {
+                Err(crate::providers::MockError::Authentication("fixture".into()).into())
+            })
+        }
+        fn name(&self) -> &str {
+            self.0
+        }
+        fn color(&self) -> &str {
+            "#000000"
+        }
+        fn serving_provider_hint(&self) -> Option<std::borrow::Cow<'_, str>> {
+            Some(self.0.into())
+        }
+        fn serving_model_hint(&self) -> Option<std::borrow::Cow<'_, str>> {
+            Some("default-model".into())
+        }
+    }
+
+    let agent_id = "withdrawal-fixture";
+    let key = SessionKey::ephemeral(agent_id);
+    let key_string = key.to_key_string();
+    let mut config = crate::Config::default();
+    config.providers.insert(
+        "relay".into(),
+        crate::config::ProviderConfig::test_config("org/model"),
+    );
+    let ready = std::collections::BTreeSet::from(["relay".to_string()]);
+    let eligible = SelectableModelsSnapshot::from_config(&config, ready.clone(), &ready, |_| true);
+    config.providers.remove("relay");
+    let withdrawn = SelectableModelsSnapshot::from_config(&config, ready.clone(), &ready, |_| true);
+
+    let agents = Arc::new(AgentRegistry::new());
+    agents.register(crate::agents::AgentDef::new(
+        agent_id,
+        crate::agents::AgentMode::Primary,
+    ));
+    let old = Arc::new(Recorder("relay", AtomicUsize::new(0)));
+    let default = Arc::new(Recorder("default-route", AtomicUsize::new(0)));
+    let mut runner = runner_with_default_provider(fresh_service(), agents, default.clone());
+    runner.named_providers.insert("relay".into(), old.clone());
+    let (tx, mut rx) = broadcast::channel::<FlowStreamEvent>(256);
+    let run = |directive: Option<RunModelDirective>| {
+        runner.run(
+            key_string.clone(),
+            probe_spec(agent_id),
+            FlowInput::Prompt("hi".into()),
+            Arc::new(crate::sandbox::factory::NoopSandbox),
+            tx.clone(),
+            CancellationToken::new(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            crate::thinker::TurnEnvelope::default(),
+            directive,
+            uuid::Uuid::new_v4().to_string(),
+            None,
+        )
+    };
+
+    let selected = with_test_selectable_models(Some(eligible), async {
+        let params: AgentRunParams = serde_json::from_value(serde_json::json!({
+            "input": "hi", "model_override": {"kind":"qualified", "provider":"relay", "model":"org/model"}
+        })).unwrap();
+        let request = build_run_request("early-validation".into(), &key, params, None, None, &Default::default()).await.unwrap();
+        request.validate_dispatch_model().unwrap();
+        request.run_model_directive()
+    }).await;
+    // The gateway check passed, but withdrawal happens before the real
+    // runner acquires its transport. Both transport mounts still exist.
+    assert!(
+        matches!(with_test_selectable_models(Some(withdrawn.clone()), run(selected)).await,
+        Err(FlowError::ProviderUnavailable(provider)) if provider == "relay")
+    );
+    assert_eq!(old.1.load(Ordering::Relaxed), 0);
+    assert_eq!(default.1.load(Ordering::Relaxed), 0);
+    assert!(rx.try_recv().is_err());
+
+    set_session_model(&key_string, Some("relay".into()), "org/model".into());
+    let before = get_session_model_snapshot(&key_string);
+    let _ = with_test_selectable_models(Some(withdrawn), run(None)).await;
+    let after = get_session_model_snapshot(&key_string);
+    clear_session_model(&key_string);
+    assert_eq!(after.pref, before.pref);
+    assert_eq!(after.generation, before.generation);
+    assert!(
+        matches!(rx.try_recv(), Ok(FlowStreamEvent::ModelResolved(info))
+        if info.is_fallback && info.original_model.as_deref() == Some("org/model")
+            && info.provider == "default-route" && info.model == "default-model")
+    );
+    assert_eq!(old.1.load(Ordering::Relaxed), 0);
+    assert!(default.1.load(Ordering::Relaxed) > 0);
+}
+
 /// The behavioural half of `the_terminal_settle_runs_on_both_arms_of_a_finished_run`.
 ///
 /// A provider that fails on every call ends the run in `Err` *after* the loop

@@ -90,6 +90,15 @@ pub(crate) async fn emit_flow_event(
             }
         }
 
+        FlowStreamEvent::ModelResolved(model_info) => {
+            emitter
+                .emit(StreamEvent::ModelResolved {
+                    run_id: run_id.to_string(),
+                    model_info,
+                })
+                .await?;
+        }
+
         FlowStreamEvent::Reasoning(text) => {
             // Map to the existing Reasoning stream event. Forwarding to clients
             // is exercised by the gateway emitter (GatewayEventEmitter →
