@@ -834,6 +834,36 @@ mod tests {
         refresh_configured_models(config, provider, mode, resolve).await
     }
 
+    async fn test_revision(
+        config: &RwLock<Config>,
+    ) -> super::super::discovery_authority::DiscoveryRevision {
+        let guard = config.read().await;
+        discovery_revision(&guard)
+    }
+
+    async fn expect_observed_supersession(
+        config: &RwLock<Config>,
+        before: super::super::discovery_authority::DiscoveryRevision,
+        outcome: &Outcome,
+    ) {
+        if matches!(outcome, Err(DiscoveryError::Superseded(_))) {
+            assert!(
+                test_revision(config).await != before,
+                "setup refresh rejected at a stable revision: {outcome:?}"
+            );
+        }
+    }
+
+    async fn setup_refresh(
+        config: &RwLock<Config>,
+        refresh: impl std::future::Future<Output = Outcome>,
+    ) -> Outcome {
+        let before = test_revision(config).await;
+        let outcome = refresh.await;
+        expect_observed_supersession(config, before, &outcome).await;
+        outcome
+    }
+
     fn selectable(provider: &str, model: &str) -> bool {
         crate::providers::session_model_handle::selectable_models()
             .unwrap()
@@ -843,9 +873,9 @@ mod tests {
 
     /// Run `run` against a fresh endpoint and configuration.
     ///
-    /// A scenario that reports `Superseded` was cancelled by a mutation that
-    /// had nothing to do with it and is retried; every other outcome is the
-    /// scenario's own result and fails the test.
+    /// Retry `Superseded` only when the attempt observed a revision change.
+    /// Setup steps after intentional mutations also check their own revision
+    /// window so that earlier mutations cannot mask a false rejection.
     async fn scenario<F, Fut>(provider: &str, run: F)
     where
         F: FnMut(Arc<RwLock<Config>>, Endpoint) -> Fut,
@@ -864,6 +894,7 @@ mod tests {
             let endpoint = Endpoint::start().await;
             let (config, snapshot) =
                 fixture_with(&endpoint.url, provider, true, true, vault_backed);
+            let before = test_revision(&config).await;
             let outcome = crate::providers::session_model_handle::with_test_selectable_models(
                 Some(snapshot),
                 TEST_NOW_SECONDS.scope(1000, run(Arc::clone(&config), endpoint.clone())),
@@ -871,7 +902,9 @@ mod tests {
             .await;
             match outcome {
                 Ok(()) => return,
-                Err(DiscoveryError::Superseded(_)) => continue,
+                Err(DiscoveryError::Superseded(_)) if test_revision(&config).await != before => {
+                    continue
+                }
                 Err(other) => panic!("unexpected discovery failure: {other}"),
             }
         }
@@ -1204,23 +1237,27 @@ mod tests {
             // Two admin-forced refreshes back to back, well inside one clock
             // second: each one has to reach the provider. A second-resolution
             // timestamp must not turn the second call into a cache hit.
-            let (first, ()) =
-                tokio::try_join!(call(&config, PROVIDER, RefreshMode::Force), async {
+            let (first, ()) = tokio::try_join!(
+                setup_refresh(&config, call(&config, PROVIDER, RefreshMode::Force)),
+                async {
                     let release = endpoint.next_request().await;
                     endpoint.answer(LISTING).await;
                     release.send(()).unwrap();
                     Ok(())
-                })?;
+                }
+            )?;
             assert!(matches!(first, RefreshOutcome::Fresh(_)), "{first:?}");
-            let (second, ()) =
-                tokio::try_join!(call(&config, PROVIDER, RefreshMode::Force), async {
+            let (second, ()) = tokio::try_join!(
+                setup_refresh(&config, call(&config, PROVIDER, RefreshMode::Force)),
+                async {
                     let release = endpoint.next_request().await;
                     endpoint
                         .answer(r#"{"data":[{"id":"vendor-model-2"}]}"#)
                         .await;
                     release.send(()).unwrap();
                     Ok(())
-                })?;
+                }
+            )?;
             assert!(
                 matches!(second, RefreshOutcome::Fresh(ref listing)
                     if listing.fetched_at == 1000
@@ -1228,18 +1265,24 @@ mod tests {
                 "{second:?}"
             );
             // The fresh cache answers without a request.
-            let cached = call(&config, PROVIDER, RefreshMode::PreferFreshCache).await?;
+            let cached = setup_refresh(
+                &config,
+                call(&config, PROVIDER, RefreshMode::PreferFreshCache),
+            )
+            .await?;
             assert!(matches!(cached, RefreshOutcome::CacheHit(_)), "{cached:?}");
             endpoint.assert_idle().await;
             // A forced empty listing inside the same second is a fetch, not a
             // cache hit, and it removes the discovered rows.
-            let (empty, ()) =
-                tokio::try_join!(call(&config, PROVIDER, RefreshMode::Force), async {
+            let (empty, ()) = tokio::try_join!(
+                setup_refresh(&config, call(&config, PROVIDER, RefreshMode::Force)),
+                async {
                     let release = endpoint.next_request().await;
                     endpoint.answer(EMPTY_LISTING).await;
                     release.send(()).unwrap();
                     Ok(())
-                })?;
+                }
+            )?;
             assert!(
                 matches!(empty, RefreshOutcome::Fresh(ref listing) if listing.models.is_empty()),
                 "{empty:?}"
@@ -1256,13 +1299,15 @@ mod tests {
     async fn a_scope_change_invalidates_the_retained_inventory_and_the_published_rows() {
         const PROVIDER: &str = "task-1b-retain";
         scenario(PROVIDER, |config, endpoint| async move {
-            let (first, ()) =
-                tokio::try_join!(call(&config, PROVIDER, RefreshMode::Force), async {
+            let (first, ()) = tokio::try_join!(
+                setup_refresh(&config, call(&config, PROVIDER, RefreshMode::Force)),
+                async {
                     let release = endpoint.next_request().await;
                     endpoint.answer(LISTING).await;
                     release.send(()).unwrap();
                     Ok(())
-                })?;
+                }
+            )?;
             assert!(matches!(first, RefreshOutcome::Fresh(_)), "{first:?}");
             assert!(selectable(PROVIDER, "vendor-model"));
             {
@@ -1730,7 +1775,7 @@ mod tests {
                     let refresh = || call_with(&config, PROVIDER, RefreshMode::Force, credential);
                     // The boot snapshot was constructed with a vault-backed provider.
                     // A first, successful listing: its rows are published.
-                    let (first, ()) = tokio::try_join!(refresh(), async {
+                    let (first, ()) = tokio::try_join!(setup_refresh(&config, refresh()), async {
                         let release = endpoint.next_request().await;
                         endpoint.answer(LISTING).await;
                         release.send(()).unwrap();
@@ -1753,10 +1798,11 @@ mod tests {
                         // An unrelated concurrent revision may prevent the HTTP
                         // request from starting at all. Retry the fixture rather
                         // than keep waiting for a request that cannot arrive.
-                        if !vault_changed.get() {
-                            if let Err(DiscoveryError::Superseded(_)) = result {
-                                return result.map(Ok);
-                            }
+                        if !vault_changed.get()
+                            && matches!(result, Err(DiscoveryError::Superseded(_)))
+                        {
+                            expect_observed_supersession(&config, before_fetch, &result).await;
+                            return result.map(Ok);
                         }
                         Ok(result)
                     };
