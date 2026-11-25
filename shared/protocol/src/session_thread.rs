@@ -39,8 +39,9 @@ use serde::{Deserialize, Serialize};
 
 /// The two numbers `chat.history` reports about the slice it just served.
 ///
-/// `messages` is the TRAILING `limit` rows, so at exactly `limit` rows a full
-/// page and a complete short conversation are byte-for-byte identical: nothing
+/// In the legacy tail read `messages` is the TRAILING `limit` rows, so at
+/// exactly `limit` rows a full page and a complete short conversation are
+/// byte-for-byte identical: nothing
 /// in the page itself can say whether a beginning was cut off. `count` alone
 /// therefore cannot answer "is this all of it", and every client that tried
 /// answered it by guessing from the length it received — a client inventing an
@@ -70,15 +71,40 @@ pub struct HistoryWindow {
     pub total: Option<usize>,
 }
 
+/// Setting `chat.history.scrollback` opts into pagination in projection order.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChatHistoryScrollbackRequest {
+    /// An opaque `next_before` from the same session. Omit to read the tail.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChatHistoryScrollbackResponse {
+    /// The boundary this page answered, or `None` for the tail.
+    pub requested_before: Option<String>,
+    /// Present only when `Ready` and more projected rows can be requested.
+    pub next_before: Option<String>,
+    pub status: ScrollbackStatus,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScrollbackStatus {
+    Ready,
+    /// The boundary no longer identifies a row. Request the tail again.
+    StaleBoundary,
+    /// These rows are readable but the next boundary cannot be encoded.
+    ContinuationUnavailable,
+}
+
 impl HistoryWindow {
-    /// Rows above this window, when the server said how many there are.
+    /// Rows outside this window, when the server supplied a count. For a tail
+    /// window, these are all earlier rows. Scrollback clients must instead
+    /// use [`ChatHistoryScrollbackResponse::next_before`] to continue.
     ///
-    /// `saturating_sub` because `total` and the window are two reads of a store
-    /// a live run may be appending to. The handler counts FIRST precisely so
-    /// the skew falls on this side: a row that lands in between makes `count`
-    /// the larger, and "nothing above" is the honest reading of that. The
-    /// other order over-reports, which renders as a "load earlier" control over
-    /// a conversation that has nothing earlier.
+    /// Saturates for older servers where a live append between separate
+    /// count and window reads could make the count smaller than the window.
     #[must_use]
     pub fn above(&self) -> Option<usize> {
         self.total.map(|t| t.saturating_sub(self.count))
@@ -776,6 +802,35 @@ mod last_run_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chat_history_scrollback_wire_shape() {
+        use serde_json::json;
+
+        let tail: ChatHistoryScrollbackRequest = serde_json::from_value(json!({})).unwrap();
+        assert_eq!(tail.before, None);
+        assert_eq!(serde_json::to_value(tail).unwrap(), json!({}));
+        for (status, wire) in [
+            (ScrollbackStatus::Ready, "ready"),
+            (ScrollbackStatus::StaleBoundary, "stale_boundary"),
+            (
+                ScrollbackStatus::ContinuationUnavailable,
+                "continuation_unavailable",
+            ),
+        ] {
+            let response = ChatHistoryScrollbackResponse {
+                requested_before: Some("boundary".into()),
+                next_before: None,
+                status,
+            };
+            let json = json!({"requested_before": "boundary", "next_before": null, "status": wire});
+            assert_eq!(serde_json::to_value(&response).unwrap(), json);
+            assert_eq!(
+                serde_json::from_value::<ChatHistoryScrollbackResponse>(json).unwrap(),
+                response
+            );
+        }
+    }
 
     #[test]
     fn a_plain_run_request_emits_input_not_message() {
