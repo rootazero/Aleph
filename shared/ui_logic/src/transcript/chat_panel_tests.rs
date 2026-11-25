@@ -6,7 +6,7 @@ fn text(run: &str, seq: u64, content: &str) -> Value {
 }
 
 fn tool(run: &str, seq: u64, change: Value) -> Value {
-    json!({"topic":"stream.chat_tool", "nowMs":1, "data":{"run_id":run, "seq":seq, "delta":{"tool_call_id":"edit-1", "change":change}}})
+    json!({"topic":"stream.chat_tool", "nowMs":1, "data":{"type":"chat_tool", "run_id":run, "seq":seq, "tool_call_id":"edit-1", "change":change}})
 }
 
 fn end(run: &str, seq: u64) -> Value {
@@ -66,7 +66,8 @@ fn history_does_not_erase_the_live_suffix_and_replaces_it_only_when_committed() 
     assert!(!patch.to_string().contains("must not appear"));
     let stale = model.replace_history(history(Some("r-1"), json!([])), Value::Null);
     assert_eq!(stale["activeRun"], Value::Null);
-    assert_eq!(stale["rows"][0]["text"], "live suffix");
+    assert_eq!(stale["rows"][0]["text"], "Unconfirmed turn");
+    assert_eq!(stale["rows"][1]["text"], "live suffix");
     let details = json!({"runs":[{"run_id":"r-1", "limited":false, "tools":[
         {"tool_call_id":"edit-1", "change":start_tool()}, {"tool_call_id":"edit-1", "change":finish_tool()}
     ]}], "limited":false});
@@ -129,6 +130,211 @@ fn a_foreign_snapshot_never_changes_the_live_fold() {
 }
 
 #[test]
+fn a_history_read_before_execution_admission_keeps_stop_and_accepts_frames() {
+    let mut model = ChatState::default();
+    model.reset("s-1".into());
+    model.begin_send("hello".into(), 0);
+    model.resolve_send("s-1".into(), Some("r-1".into()), 0);
+    let snapshot = model.replace_history(history(None, json!([])), Value::Null);
+    assert_eq!(snapshot["activeRun"], "r-1");
+    assert_eq!(
+        model.accept(text("r-1", 1, "arrived"))["upsert"][0]["text"],
+        "arrived"
+    );
+}
+
+#[test]
+fn continuity_loss_discards_held_terminal_and_keeps_unconfirmed_runs_separately() {
+    let mut model = ChatState::default();
+    model.reset("s-1".into());
+    model.begin_send("first".into(), 0);
+    model.accept(text("r-1", 1, "pre-interruption"));
+    model.accept(end("r-1", 2));
+    model.interrupt();
+    model.accept(text("r-1", 3, "current suffix"));
+    let ack = model.resolve_send("s-1".into(), Some("r-1".into()), 2);
+    assert_eq!(ack["activeRun"], "r-1");
+    assert_eq!(ack["upsert"][0]["text"], "current suffix");
+    assert_eq!(ack["reconcile"], true);
+    assert!(ack.get("terminalRun").is_none());
+    let sealed = model.accept(end("r-1", 4));
+    assert_eq!(sealed["terminalRun"], "r-1");
+    assert_eq!(sealed["missingPrefix"], true);
+    assert_eq!(sealed["unconfirmed"], true);
+
+    let next = model.begin_send("second".into(), 0);
+    assert_eq!(next["remove"], json!([]));
+    model.resolve_send("s-1".into(), Some("r-2".into()), 0);
+    model.accept(text("r-2", 1, "second suffix"));
+    model.accept(end("r-2", 2));
+    let snapshot = model.replace_history(history(None, json!([])), Value::Null);
+    let texts = |snapshot: &Value| {
+        snapshot["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["text"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        texts(&snapshot),
+        [
+            "Unconfirmed turn",
+            "first",
+            "current suffix",
+            "Unconfirmed turn",
+            "second",
+            "second suffix"
+        ]
+    );
+    let committed = model.replace_history(
+        history(
+            None,
+            json!([
+                {"role":"user", "content":"first committed prompt", "run_id":"r-1"},
+                {"role":"tool", "content":"RAW TOOL BODY", "run_id":"r-1"},
+                {"role":"assistant", "content":"first committed", "run_id":"r-1"}
+            ]),
+        ),
+        Value::Null,
+    );
+    assert_eq!(committed["missingPrefix"], false);
+    assert_eq!(committed["unconfirmed"], true);
+    assert_eq!(
+        texts(&committed),
+        [
+            "first committed prompt",
+            "first committed",
+            "Unconfirmed turn",
+            "second",
+            "second suffix"
+        ]
+    );
+}
+
+#[test]
+fn graceful_final_response_seals_the_run_without_a_run_complete_frame() {
+    let mut model = ChatState::default();
+    model.reset("s-1".into());
+    model.begin_send("hello".into(), 0);
+    let mut intermediate = text("r-1", 1, "progress");
+    intermediate["data"]["is_final"] = json!(true);
+    intermediate["data"]["is_intermediate"] = json!(true);
+    assert!(model.accept(intermediate).get("terminalRun").is_none());
+    let mut final_chunk = text("r-1", 2, "Stopped by hook");
+    final_chunk["data"]["is_final"] = json!(true);
+    assert!(model.accept(final_chunk).get("terminalRun").is_none());
+    let patch = model.resolve_send("s-1".into(), Some("r-1".into()), 0);
+    assert!(patch["activeRun"].is_null());
+    assert_eq!(patch["reconcile"], true);
+    assert_eq!(patch["terminalRun"], "r-1");
+    assert_eq!(patch["upsert"][0]["streaming"], false);
+    assert!(patch["upsert"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("Stopped by hook"));
+    assert_eq!(model.accept(end("r-1", 3))["reconcile"], false);
+}
+
+#[test]
+fn an_interrupted_unconfirmed_run_requires_an_idle_read_and_explicit_resume() {
+    let mut model = ChatState::default();
+    model.reset("s-1".into());
+    model.begin_send("keep this prompt".into(), 0);
+    model.resolve_send("s-1".into(), Some("r-1".into()), 0);
+    assert_eq!(
+        model.replace_history(history(None, json!([])), Value::Null)["canResume"],
+        false
+    );
+    model.interrupt();
+    assert_eq!(
+        model.replace_history(history(Some("r-1"), json!([])), Value::Null)["canResume"],
+        false
+    );
+    let idle = model.replace_history(history(None, json!([])), Value::Null);
+    assert_eq!(idle["canResume"], true);
+    assert_eq!(idle["activeRun"], "r-1");
+    let late_text = model.accept(text("r-1", 1, "still arriving"));
+    assert_eq!(late_text["canResume"], false);
+    let mut stale = history(None, json!([]));
+    stale["live_status_stale"] = json!(true);
+    assert_eq!(
+        model.replace_history(stale, Value::Null)["canResume"],
+        false
+    );
+    assert_eq!(model.resume_composing()["activeRun"], "r-1");
+    model.replace_history(history(None, json!([])), Value::Null);
+    let preview = model.resume_composing();
+    assert!(preview["activeRun"].is_null());
+    assert_eq!(preview["missingPrefix"], true);
+    assert_eq!(preview["unconfirmed"], true);
+    assert!(preview["error"].is_null());
+    let snapshot = model.replace_history(history(None, json!([])), Value::Null);
+    assert_eq!(snapshot["rows"][0]["text"], "Unconfirmed turn");
+    assert_eq!(snapshot["rows"][1]["text"], "keep this prompt");
+    let detached = model.accept(text("r-1", 2, " later"));
+    assert!(detached["activeRun"].is_null());
+    assert_eq!(detached["upsert"][0]["text"], "still arriving later");
+    let attached = model.replace_history(history(Some("r-1"), json!([])), Value::Null);
+    assert_eq!(attached["activeRun"], "r-1");
+    assert_eq!(attached["rows"][1]["text"], "still arriving later");
+    assert_eq!(model.accept(end("r-1", 3))["reconcile"], true);
+}
+
+#[test]
+fn detached_frames_patch_the_labelled_preview_while_a_new_run_is_active() {
+    let mut model = ChatState::default();
+    model.reset("s-1".into());
+    model.begin_send("earlier prompt".into(), 0);
+    model.resolve_send("s-1".into(), Some("r-1".into()), 0);
+    model.interrupt();
+    model.replace_history(history(None, json!([])), Value::Null);
+    model.resume_composing();
+    model.begin_send("new prompt".into(), 0);
+    model.resolve_send("s-1".into(), Some("r-2".into()), 0);
+    let snapshot = model.replace_history(history(Some("r-2"), json!([])), Value::Null);
+    assert_eq!(snapshot["rows"][0]["text"], "Unconfirmed turn");
+    assert_eq!(snapshot["rows"][1]["text"], "earlier prompt");
+    assert_eq!(snapshot["rows"][2]["text"], "new prompt");
+    let old = model.accept(text("r-1", 1, "late reply"));
+    assert_eq!(old["activeRun"], "r-2");
+    assert_eq!(old["insertAfter"], snapshot["rows"][1]["key"]);
+    assert_eq!(old["upsert"][0]["text"], "late reply");
+    assert_eq!(model.accept(end("r-1", 2))["activeRun"], "r-2");
+    model.accept(end("r-2", 1));
+    let snapshot = model.replace_history(
+        history(
+            None,
+            json!([
+                {"role":"assistant", "content":"new committed reply", "run_id":"r-2"}
+            ]),
+        ),
+        Value::Null,
+    );
+    assert_eq!(snapshot["rows"][0]["text"], "new committed reply");
+    assert_eq!(snapshot["rows"][1]["text"], "Unconfirmed turn");
+    assert_eq!(snapshot["rows"][2]["text"], "earlier prompt");
+    assert_eq!(snapshot["rows"][3]["text"], "late reply");
+}
+
+#[test]
+fn resume_inserts_a_label_for_late_first_frame_without_a_history_reload() {
+    let mut model = ChatState::default();
+    model.reset("s-1".into());
+    model.replace_history(history(Some("r-1"), json!([])), Value::Null);
+    model.interrupt();
+    model.replace_history(history(None, json!([])), Value::Null);
+    let parked = model.resume_composing();
+    assert_eq!(parked["upsert"][0]["text"], "Unconfirmed turn");
+    assert_eq!(parked["appendOrder"], json!(["unconfirmed/r-1"]));
+    model.begin_send("new prompt".into(), 0);
+    model.resolve_send("s-1".into(), Some("r-2".into()), 0);
+    let late = model.accept(text("r-1", 1, "late first reply"));
+    assert_eq!(late["insertAfter"], "unconfirmed/r-1");
+    assert_eq!(late["activeRun"], "r-2");
+}
+
+#[test]
 fn one_new_chunk_patch_has_constant_size_at_10_or_500_history_rows() {
     let patch_size = |num| {
         let mut model = ChatState::default();
@@ -139,5 +345,7 @@ fn one_new_chunk_patch_has_constant_size_at_10_or_500_history_rows() {
         assert_eq!(patch["upsert"].as_array().unwrap().len(), 1);
         serde_json::to_vec(&patch).unwrap().len()
     };
-    assert_eq!(patch_size(10), patch_size(500));
+    let (small, large) = (patch_size(10), patch_size(500));
+    println!("one upsert: {small} serialized bytes at 10 rows; {large} at 500 rows");
+    assert_eq!(small, large);
 }

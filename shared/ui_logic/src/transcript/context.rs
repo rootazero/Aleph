@@ -28,6 +28,7 @@ pub fn panel_context_view(report: &ContextBreakdown) -> serde_json::Value {
         "system_prompt_bytes": report.dynamic_bytes_sent.map(|dynamic| stable_bytes + dynamic),
         "skill_pre_trim_bytes": skill_bytes,
         "tool_schema_bytes": report.tool_bytes(),
+        "tools": report.tools,
         "tool_result_tokens": report.messages.map(|messages| messages.tool_results),
         "provider_total": reconcile(report).total,
         "layers": report.layers,

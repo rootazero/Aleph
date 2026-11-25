@@ -1,6 +1,6 @@
 //! NSH Chat's transport-neutral state and render patches.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use aleph_protocol::chat_transcript::{ChatToolChange, ChatToolDelta, ChatTranscriptDetails};
 use aleph_protocol::StreamEvent;
@@ -12,12 +12,14 @@ use super::{Change, RowBody, RowStatus, StepStatus, Transcript, TranscriptEntry}
 const EARLY_FRAMES: usize = 64;
 const EARLY_BYTES: usize = 256 * 1024;
 const EARLY_AGE_MS: u64 = 10_000;
+const UNCONFIRMED_RUN_LIMIT: usize = 8;
 
 #[derive(Default)]
 pub struct ChatState {
     session: String,
     live: Option<LiveRun>,
-    sealed: Option<LiveRun>,
+    sealed: VecDeque<LiveRun>,
+    dropped_unconfirmed: bool,
     pending: Option<PendingSend>,
     last_ended: Option<String>,
     committed_diffs: HashMap<String, RowBody>,
@@ -31,12 +33,18 @@ struct LiveRun {
     omitted: HashSet<String>,
     last_seq: Option<u64>,
     missing_prefix: bool,
+    can_resume: bool,
+    detached: bool,
+    prompt: Option<Prompt>,
+}
+
+struct Prompt {
+    key: String,
+    text: String,
 }
 
 struct PendingSend {
-    key: String,
-    text: String,
-    run: Option<String>,
+    prompt: Prompt,
     started_ms: u64,
     held: Vec<ChatFrame>,
     bytes: usize,
@@ -49,6 +57,8 @@ struct History {
     #[serde(default)]
     messages: Vec<Message>,
     active_run: Option<String>,
+    #[serde(default)]
+    live_status_stale: bool,
 }
 
 #[derive(Deserialize)]
@@ -71,7 +81,13 @@ struct FrameData {
     seq: Option<u64>,
     delta: Option<Value>,
     content: Option<String>,
+    tool_call_id: Option<String>,
+    change: Option<ChatToolChange>,
     error: Option<String>,
+    #[serde(default)]
+    is_final: bool,
+    #[serde(default)]
+    is_intermediate: bool,
 }
 
 #[derive(Serialize)]
@@ -110,9 +126,18 @@ struct Patch {
     upsert: Vec<Row>,
     remove: Vec<String>,
     append_order: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    insert_after: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    insert_before: Option<String>,
     reconcile: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    terminal_run: Option<String>,
     active_run: Option<String>,
     missing_prefix: bool,
+    unconfirmed: bool,
+    dropped_unconfirmed: bool,
+    can_resume: bool,
     error: Option<String>,
 }
 
@@ -145,28 +170,21 @@ impl ChatState {
 
     pub fn begin_send(&mut self, text: String, now_ms: u64) -> Value {
         let mut patch = self.patch();
-        if self.live.is_some()
-            || self
-                .pending
-                .as_ref()
-                .is_some_and(|pending| pending.run.is_none())
-        {
+        if self.live.is_some() || self.pending.is_some() {
             return encode(patch);
-        }
-        if let Some(previous) = self.pending.take() {
-            patch.remove.push(previous.key);
         }
         self.generation += 1;
         let pending = PendingSend {
-            key: format!("local/{}", self.generation),
-            text,
-            run: None,
+            prompt: Prompt {
+                key: format!("local/{}", self.generation),
+                text,
+            },
             started_ms: now_ms,
             held: Vec::new(),
             bytes: 0,
             incomplete: false,
         };
-        patch.insert(pending.row());
+        patch.insert(pending.prompt.row());
         self.pending = Some(pending);
         encode(patch)
     }
@@ -177,19 +195,19 @@ impl ChatState {
             return encode(patch);
         };
         let Some(run_id) = run else {
-            patch.remove.push(pending.key);
+            patch.remove.push(pending.prompt.key);
             return encode(patch);
         };
         self.session = session;
         let held = std::mem::take(&mut pending.held);
         let expired = now_ms.saturating_sub(pending.started_ms) > EARLY_AGE_MS;
         let missing = pending.incomplete || expired;
-        pending.run = Some(run_id.clone());
-        self.pending = Some(pending);
-        self.live = Some(LiveRun::new(run_id.clone(), now_ms, missing));
+        let mut run = LiveRun::new(run_id.clone(), now_ms, missing);
+        run.prompt = Some(pending.prompt);
+        self.live = Some(run);
         if !expired {
             for frame in held.into_iter().filter(|frame| frame.data.run_id == run_id) {
-                self.fold_frame(frame, now_ms, &mut patch);
+                self.fold_live_frame(frame, now_ms, &mut patch);
             }
         }
         patch.reconcile |= missing;
@@ -199,11 +217,7 @@ impl ChatState {
 
     pub fn accept(&mut self, event: Value) -> Value {
         let now_ms = event.get("nowMs").and_then(Value::as_u64).unwrap_or(0);
-        let bytes = if self
-            .pending
-            .as_ref()
-            .is_some_and(|pending| pending.run.is_none())
-        {
+        let bytes = if self.pending.is_some() {
             serde_json::to_vec(&event).map_or(usize::MAX, |value| value.len())
         } else {
             0
@@ -226,15 +240,24 @@ impl ChatState {
             .as_ref()
             .is_some_and(|run| run.id == frame.data.run_id)
         {
-            self.fold_frame(frame, now_ms, &mut patch);
-        } else if let Some(pending) = self
-            .pending
-            .as_mut()
-            .filter(|pending| pending.run.is_none())
+            self.fold_live_frame(frame, now_ms, &mut patch);
+        } else if let Some(run) = self
+            .sealed
+            .iter_mut()
+            .find(|run| run.detached && run.id == frame.data.run_id)
         {
+            let anchor = run.last_row_key().map(str::to_owned);
+            if Self::fold_frame(run, frame, now_ms, &mut patch) {
+                run.detached = false;
+            }
+            if !patch.append_order.is_empty() {
+                patch.insert_after = anchor.or_else(|| Some(run.preview_key()));
+            }
+        } else if let Some(pending) = &mut self.pending {
             // Keep complete frames only and never retain unrelated data after the send reply.
             if now_ms.saturating_sub(pending.started_ms) > EARLY_AGE_MS {
                 pending.held.clear();
+                pending.bytes = 0;
                 pending.incomplete = true;
             } else if pending.held.len() < EARLY_FRAMES
                 && pending.bytes.saturating_add(bytes) <= EARLY_BYTES
@@ -252,11 +275,24 @@ impl ChatState {
     pub fn interrupt(&mut self) -> Value {
         if let Some(run) = &mut self.live {
             run.missing_prefix = true;
+            run.can_resume = false;
         }
         if let Some(pending) = &mut self.pending {
+            pending.held.clear();
+            pending.bytes = 0;
             pending.incomplete = true;
         }
         encode(self.patch())
+    }
+
+    /// Allow composing without losing the interrupted run's live subscription.
+    pub fn resume_composing(&mut self) -> Value {
+        let mut patch = self.patch();
+        if self.live.as_ref().is_some_and(|run| run.can_resume) {
+            self.retain_live_preview(&mut patch, true);
+            self.finish_patch(&mut patch);
+        }
+        encode(patch)
     }
 
     pub fn replace_history(&mut self, history: Value, details: Value) -> Value {
@@ -278,43 +314,52 @@ impl ChatState {
             .filter(|message| message.role == "assistant")
             .filter_map(|message| message.run_id.as_deref())
             .collect();
-        if self
-            .sealed
-            .as_ref()
-            .is_some_and(|run| assistant_runs.contains(run.id.as_str()))
-        {
-            self.sealed = None;
+        self.sealed.retain(|run| {
+            !assistant_runs.contains(run.id.as_str())
+                || (run.detached
+                    && (history.live_status_stale
+                        || history.active_run.as_deref() == Some(&run.id)))
+        });
+        // Send acknowledgement can precede execution registration. A missing
+        // active slot alone is not evidence that the run ended.
+        if self.live.as_ref().is_some_and(|run| {
+            !history.live_status_stale
+                && assistant_runs.contains(run.id.as_str())
+                && history.active_run.as_deref() != Some(&run.id)
+        }) {
+            self.last_ended = self.live.take().map(|run| run.id);
         }
-        if self
-            .live
-            .as_ref()
-            .is_some_and(|run| history.active_run.as_deref() != Some(&run.id))
-        {
-            if let Some(mut run) = self.live.take() {
-                self.last_ended = Some(run.id.clone());
-                if !assistant_runs.contains(run.id.as_str()) {
-                    run.fold.seal_chat_run(&run.id, 0);
-                    self.sealed = Some(run);
+        if !history.live_status_stale && self.live.is_none() && self.pending.is_none() {
+            if let Some(id) = &history.active_run {
+                match self.sealed.iter().position(|run| &run.id == id) {
+                    Some(index) if self.sealed[index].detached => {
+                        self.live = self.sealed.remove(index);
+                        if let Some(run) = &mut self.live {
+                            run.detached = false;
+                        }
+                    }
+                    None if Some(id) != self.last_ended.as_ref()
+                        && !assistant_runs.contains(id.as_str()) =>
+                    {
+                        self.live = Some(LiveRun::new(id.clone(), 0, true));
+                    }
+                    _ => {}
                 }
             }
         }
-        if self.live.is_none() {
-            if let Some(run) = history
-                .active_run
-                .filter(|id| Some(id) != self.last_ended.as_ref())
-            {
-                self.live = Some(LiveRun::new(run, 0, true));
-            }
+        if let Some(run) = &mut self.live {
+            run.can_resume =
+                !history.live_status_stale && run.missing_prefix && history.active_run.is_none();
         }
-        if let Some(pending) = &self.pending {
-            if history.messages.iter().any(|message| {
-                message.role == "user" && pending.run.is_some() && message.run_id == pending.run
-            }) || pending
-                .run
-                .as_ref()
-                .is_some_and(|run| assistant_runs.contains(run.as_str()))
-            {
-                self.pending = None;
+        let user_runs: HashSet<_> = history
+            .messages
+            .iter()
+            .filter(|message| message.role == "user")
+            .filter_map(|message| message.run_id.as_deref())
+            .collect();
+        for run in self.live.iter_mut().chain(&mut self.sealed) {
+            if user_runs.contains(run.id.as_str()) {
+                run.prompt = None;
             }
         }
 
@@ -340,7 +385,11 @@ impl ChatState {
         let mut last_stamped_message = HashMap::new();
         let mut first_assistant = HashMap::new();
         for (index, message) in history.messages.iter().enumerate() {
-            if let Some(run) = message.run_id.as_deref() {
+            if let Some(run) = message
+                .run_id
+                .as_deref()
+                .filter(|_| matches!(message.role.as_str(), "user" | "assistant"))
+            {
                 last_stamped_message.insert(run, index);
                 if message.role == "assistant" {
                     first_assistant.entry(run).or_insert(index);
@@ -351,6 +400,10 @@ impl ChatState {
         let mut rows = Vec::new();
         let mut occurrences = HashMap::<String, usize>::new();
         for (index, message) in history.messages.iter().enumerate() {
+            // Only the dedicated replay projection may render stored tool data.
+            if !matches!(message.role.as_str(), "user" | "assistant") {
+                continue;
+            }
             let run = message.run_id.as_deref().unwrap_or("");
             let group = first_assistant
                 .get(run)
@@ -377,17 +430,21 @@ impl ChatState {
                 append_replay(run, &mut replay, &mut rows, &mut self.committed_diffs);
             }
         }
-        if let Some(run) = &self.sealed {
+        for run in &self.sealed {
+            rows.push(run.preview_label());
             rows.extend(run.rows());
         }
         if let Some(pending) = &self.pending {
-            rows.push(pending.row());
+            rows.push(pending.prompt.row());
         }
         if let Some(run) = &self.live {
             rows.extend(run.rows());
         }
         json!({"rows": rows, "activeRun": self.live.as_ref().map(|run| &run.id),
-            "missingPrefix": self.live.as_ref().is_some_and(|run| run.missing_prefix), "limited": details.limited})
+            "missingPrefix": self.has_missing_prefix(), "unconfirmed": !self.sealed.is_empty(),
+            "unconfirmedRuns": self.sealed.iter().map(|run| &run.id).collect::<Vec<_>>(),
+            "droppedUnconfirmed": self.dropped_unconfirmed, "limited": details.limited,
+            "canResume": self.live.as_ref().is_some_and(|run| run.can_resume)})
     }
 
     pub fn diff_body(&self, key: &str) -> Option<&[aleph_protocol::FileChange]> {
@@ -416,23 +473,46 @@ impl ChatState {
 
     fn finish_patch(&self, patch: &mut Patch) {
         patch.active_run = self.live.as_ref().map(|run| run.id.clone());
-        patch.missing_prefix = self.live.as_ref().is_some_and(|run| run.missing_prefix);
+        patch.missing_prefix = self.has_missing_prefix();
+        patch.unconfirmed = !self.sealed.is_empty();
+        patch.dropped_unconfirmed = self.dropped_unconfirmed;
+        patch.can_resume = self.live.as_ref().is_some_and(|run| run.can_resume);
     }
 
-    fn fold_frame(&mut self, frame: ChatFrame, now_ms: u64, patch: &mut Patch) {
-        let Some(run) = self.live.as_mut() else {
-            return;
-        };
+    fn has_missing_prefix(&self) -> bool {
+        self.live
+            .iter()
+            .chain(&self.sealed)
+            .any(|run| run.missing_prefix)
+    }
+
+    fn fold_live_frame(&mut self, frame: ChatFrame, now_ms: u64, patch: &mut Patch) {
+        if let Some(run) = &mut self.live {
+            if Self::fold_frame(run, frame, now_ms, patch) {
+                self.retain_live_preview(patch, false);
+            }
+        }
+    }
+
+    fn fold_frame(run: &mut LiveRun, frame: ChatFrame, now_ms: u64, patch: &mut Patch) -> bool {
         let data = frame.data;
         if data
             .seq
             .is_some_and(|seq| run.last_seq.is_some_and(|last| last >= seq))
         {
-            return;
+            return false;
         }
         if data.seq.is_some() {
             run.last_seq = data.seq;
         }
+        run.can_resume = false;
+        // A final, non-intermediate chunk is the last frame on graceful
+        // hook stops, which bypass the normal event drain.
+        let terminal = match frame.topic.as_str() {
+            "stream.response_chunk" => data.is_final && !data.is_intermediate,
+            "stream.run_complete" | "stream.run_error" => true,
+            _ => false,
+        };
         let changes = match frame.topic.as_str() {
             "stream.response_chunk" => {
                 let text = data
@@ -454,37 +534,60 @@ impl ChatState {
                     now_ms,
                 )
             }
-            "stream.chat_tool" => data
-                .delta
-                .and_then(|delta| serde_json::from_value::<ChatToolDelta>(delta).ok())
-                .map_or_else(Vec::new, |delta| run.fold_tool(&delta, now_ms)),
-            _ => {
-                patch.reconcile = true;
-                if frame.topic == "stream.run_error" {
-                    patch.error = Some(data.error.unwrap_or_else(|| "unknown error".into()));
-                }
-                run.fold.seal_chat_run(&run.id, now_ms)
+            "stream.chat_tool" => data.tool_call_id.zip(data.change).map_or_else(
+                Vec::new,
+                |(tool_call_id, change)| {
+                    run.fold_tool(
+                        &ChatToolDelta {
+                            tool_call_id,
+                            change,
+                        },
+                        now_ms,
+                    )
+                },
+            ),
+            "stream.run_error" => {
+                patch.error = Some(data.error.unwrap_or_else(|| "unknown error".into()));
+                Vec::new()
             }
+            _ => Vec::new(),
         };
         run.project_changes(changes, data.seq, patch);
-        if patch.reconcile
-            && matches!(
-                frame.topic.as_str(),
-                "stream.run_complete" | "stream.run_error"
-            )
-        {
+        if terminal {
+            let changes = run.fold.seal_chat_run(&run.id, now_ms);
+            run.project_changes(changes, data.seq, patch);
+            patch.reconcile = true;
+            patch.terminal_run = Some(run.id.clone());
+        }
+        terminal
+    }
+
+    fn retain_live_preview(&mut self, patch: &mut Patch, detached: bool) {
+        let Some(mut run) = self.live.take() else {
+            return;
+        };
+        run.detached = detached;
+        run.can_resume = false;
+        if detached {
+            patch.insert_before = run.rows().next().map(|first| first.key().to_owned());
+            patch.insert(run.preview_label());
+        } else {
             self.last_ended = Some(run.id.clone());
-            if let Some(previous) = self.sealed.take() {
+        }
+        if self.sealed.len() == UNCONFIRMED_RUN_LIMIT {
+            if let Some(previous) = self.sealed.pop_front() {
+                self.dropped_unconfirmed = true;
+                patch.remove.push(previous.preview_key());
                 patch
                     .remove
                     .extend(previous.rows().map(|row| row.key().to_owned()));
             }
-            self.sealed = self.live.take();
         }
+        self.sealed.push_back(run);
     }
 }
 
-impl PendingSend {
+impl Prompt {
     fn row(&self) -> Row {
         Row::Text {
             key: self.key.clone(),
@@ -506,6 +609,22 @@ impl LiveRun {
             omitted: HashSet::new(),
             last_seq: None,
             missing_prefix,
+            can_resume: false,
+            detached: false,
+            prompt: None,
+        }
+    }
+
+    fn preview_key(&self) -> String {
+        format!("unconfirmed/{}", self.id)
+    }
+
+    fn preview_label(&self) -> Row {
+        Row::Text {
+            key: self.preview_key(),
+            role: "notice".into(),
+            text: "Unconfirmed turn".into(),
+            streaming: false,
         }
     }
 
@@ -525,8 +644,25 @@ impl LiveRun {
         changes
     }
 
+    fn last_row_key(&self) -> Option<&str> {
+        self.fold
+            .iter()
+            .rev()
+            .find_map(|entry| match entry {
+                TranscriptEntry::Tool(row) => Some(row.id.as_str()),
+                TranscriptEntry::Step(step) if step.text.is_some() => {
+                    self.text_keys.get(&step.id).map(String::as_str)
+                }
+                _ => None,
+            })
+            .or_else(|| self.prompt.as_ref().map(|prompt| prompt.key.as_str()))
+    }
+
     fn rows(&self) -> impl Iterator<Item = Row> + '_ {
-        self.fold.iter().filter_map(|entry| self.row(entry))
+        self.prompt
+            .iter()
+            .map(Prompt::row)
+            .chain(self.fold.iter().filter_map(|entry| self.row(entry)))
     }
 
     fn row(&self, entry: &TranscriptEntry) -> Option<Row> {

@@ -11,6 +11,7 @@ import type { Diagram } from "./chat/MessageBody";
 
 const HOST_UNAVAILABLE = -32090;
 const HISTORY_LIMIT = 200;
+const COMMIT_REREAD_MS = 350;
 const DETAIL_RUN_LIMIT = 12;
 
 // The native runtime need not ship Web Crypto for this cache-scoped key.
@@ -42,15 +43,18 @@ export type ToolRow = {
   presentation_omitted: boolean;
 };
 export type ChatRow = TextRow | ToolRow;
-type RunState = { activeRun: string | null; missingPrefix: boolean };
+type RunState = { activeRun: string | null; missingPrefix: boolean; unconfirmed: boolean; droppedUnconfirmed: boolean; canResume: boolean };
 type Patch = RunState & {
   upsert: ChatRow[];
   remove: string[];
   appendOrder: string[];
+  insertAfter?: string;
+  insertBefore?: string;
   reconcile: boolean;
+  terminalRun?: string;
   error: string | null;
 };
-type Snapshot = RunState & { rows: ChatRow[]; limited: boolean };
+type Snapshot = RunState & { rows: ChatRow[]; limited: boolean; unconfirmedRuns: string[] };
 
 export function Chat(props: { sdk: PanelSdk; setReaderMode: (active: boolean) => void }) {
   const { sdk } = props;
@@ -70,12 +74,17 @@ export function Chat(props: { sdk: PanelSdk; setReaderMode: (active: boolean) =>
   const loading = signal(sessionKey() !== null);
   const activeRun = signal<string | null>(null);
   const missingPrefix = signal(false);
+  const unconfirmed = signal(false);
+  const droppedUnconfirmed = signal(false);
+  const canResume = signal(false);
   const limited = signal(false);
   const notice = signal<string | null>(null);
   const draft = signal("");
   const sending = signal(false);
   let composing = false;
   let historyRequest = 0;
+  cleanup(() => { ++historyRequest; });
+  let liveRevision = 0;
   let hasHistory = false;
 
   const upsert = (row: ChatRow) => {
@@ -86,6 +95,9 @@ export function Chat(props: { sdk: PanelSdk; setReaderMode: (active: boolean) =>
   const runState = (state: RunState) => {
     activeRun.set(state.activeRun);
     missingPrefix.set(state.missingPrefix);
+    unconfirmed.set(state.unconfirmed);
+    droppedUnconfirmed.set(state.droppedUnconfirmed);
+    canResume.set(state.canResume);
   };
   const replace = (snapshot: Snapshot | null) => {
     if (!snapshot) return;
@@ -104,18 +116,20 @@ export function Chat(props: { sdk: PanelSdk; setReaderMode: (active: boolean) =>
     if (error.message !== "disposed") notice.set(error.message);
   };
 
-  const load = async () => {
+  const load = async (terminalRun?: string) => {
     const key = sessionKey();
     if (!key) return;
     const request = ++historyRequest;
+    const revision = liveRevision;
     const current = () => request === historyRequest && key === sessionKey();
     try {
       const history = (await sdk.invoke("chat.history", { session_key: key, limit: HISTORY_LIMIT })) as History;
       if (!current()) return;
       // Attach immediately so new chunks can land while the optional details
       // read runs. Later reconciliations replace a completed run in one pass.
+      const observedHistory = () => ({ ...history, live_status_stale: liveRevision !== revision });
       if (!hasHistory && !activeRun()) {
-        replace(model.replaceHistory(history, null) as Snapshot | null);
+        replace(model.replaceHistory(observedHistory(), null) as Snapshot | null);
         loading.set(false);
       }
       hasHistory = true;
@@ -133,9 +147,13 @@ export function Chat(props: { sdk: PanelSdk; setReaderMode: (active: boolean) =>
         }
       }
       if (!current()) return;
-      const snapshot = model.replaceHistory(history, details) as Snapshot | null;
+      const snapshot = model.replaceHistory(observedHistory(), details) as Snapshot | null;
       if (snapshot && runIds.length > DETAIL_RUN_LIMIT) snapshot.limited = true;
       replace(snapshot);
+      // Completion can reach the feed before Core stamps the projected history row.
+      if (terminalRun && snapshot?.unconfirmedRuns.includes(terminalRun)) {
+        setTimeout(() => { if (current()) void load(); }, COMMIT_REREAD_MS);
+      }
     } catch (failure) {
       if (current()) report(failure);
     } finally {
@@ -148,14 +166,24 @@ export function Chat(props: { sdk: PanelSdk; setReaderMode: (active: boolean) =>
     for (const key of patch.remove) rows.delete(key);
     if (patch.remove.length || patch.appendOrder.length) {
       const removed = new Set(patch.remove);
-      keys.update((prior) => [...prior.filter((key) => !removed.has(key)), ...patch.appendOrder]);
+      keys.update((prior) => {
+        const next = prior.filter((key) => !removed.has(key));
+        const before = patch.insertBefore === undefined ? -1 : next.indexOf(patch.insertBefore);
+        const after = patch.insertAfter === undefined ? -1 : next.indexOf(patch.insertAfter);
+        const insertAt = before >= 0 ? before : after >= 0 ? after + 1 : next.length;
+        next.splice(insertAt, 0, ...patch.appendOrder);
+        return next;
+      });
     }
     runState(patch);
     if (patch.error) notice.set(`The reply failed: ${patch.error}`);
-    if (patch.reconcile) void load();
+    if (patch.reconcile) void load(patch.terminalRun);
   };
 
   const onStream = (event: PanelEvent) => {
+    const data = event.data as { run_id?: string } | undefined;
+    const run = activeRun();
+    if (run && data?.run_id === run) ++liveRevision;
     apply(model.accept({ ...event, nowMs: Date.now() }) as Patch);
   };
   sdk.on("stream.", onStream);
@@ -234,8 +262,31 @@ export function Chat(props: { sdk: PanelSdk; setReaderMode: (active: boolean) =>
           diagram={(source) => model.mermaidView(source) as Diagram}
           diff={(key, expanded) => model.diffView(key, expanded) as Change[]} />
       </If>
-      <If when={!fullscreen() && activeRun()}><Text class="text-muted-foreground">Aleph · replying</Text></If>
+      <If when={!fullscreen() && activeRun()}>
+        <Text class="text-muted-foreground">{canResume() ? "Aleph reports no active run; the previous outcome is unknown." : "Aleph · replying"}</Text>
+        <If when={canResume()} else={
+          <If when={missingPrefix()}>
+            <Button onPress={() => void load()} class="self-start rounded px-2 py-1 hover:bg-muted focus-visible:bg-muted">
+              <Text>Check live status</Text>
+            </Button>
+          </If>
+        }>
+          <Button onPress={() => apply(model.resumeComposing() as Patch)}
+            class="self-start rounded px-2 py-1 hover:bg-muted focus-visible:bg-muted">
+            <Text>Resume composing</Text>
+          </Button>
+        </If>
+      </If>
       <If when={missingPrefix()}><Text class="text-muted-foreground">Earlier live updates may be missing.</Text></If>
+      <If when={unconfirmed()}>
+        <View class="flex-row items-center gap-2">
+          <Text class="text-muted-foreground">Some turns are not yet confirmed in history.</Text>
+          <Button onPress={() => void load()} class="rounded px-2 py-1 hover:bg-muted focus-visible:bg-muted">
+            <Text>Refresh history</Text>
+          </Button>
+        </View>
+      </If>
+      <If when={droppedUnconfirmed()}><Text class="text-muted-foreground">The oldest unconfirmed turn exceeded the preview limit.</Text></If>
       <If when={limited()}><Text class="text-muted-foreground">Some earlier tool details are unavailable.</Text></If>
       <If when={notice()}><Text class="text-destructive">{notice()}</Text></If>
       <View class={fullscreen() ? "hidden" : "flex-row items-end gap-2"}>

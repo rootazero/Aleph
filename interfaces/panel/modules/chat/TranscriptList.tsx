@@ -35,12 +35,16 @@ function TranscriptItem(props: {
   });
   return (
     <If when={props.row()?.kind === "tool"} else={
-      <View class="gap-1 py-2">
-        <Text class="text-muted-foreground">{body()?.role === "user" ? "You" : "Aleph"}</Text>
-        <If when={body()?.role === "assistant"} else={<Text class="text-foreground">{body()?.text}</Text>}>
-          <MessageBody text={body()?.text ?? ""} streaming={body()?.streaming ?? false} layout={props.diagram} />
-        </If>
-      </View>
+      <If when={body()?.role === "notice"} else={
+        <View class="gap-1 py-2">
+          <Text class="text-muted-foreground">{body()?.role === "user" ? "You" : "Aleph"}</Text>
+          <If when={body()?.role === "assistant"} else={<Text class="text-foreground">{body()?.text}</Text>}>
+            <MessageBody text={body()?.text ?? ""} streaming={body()?.streaming ?? false} layout={props.diagram} />
+          </If>
+        </View>
+      }>
+        <Text class="border-t border-border py-2 text-muted-foreground">{body()?.text}</Text>
+      </If>
     }>
       <ToolCard row={tool} reader={() => props.reader(tool().key)}
         diff={(expanded) => props.diff(tool().key, expanded)}
@@ -75,8 +79,12 @@ export function TranscriptList(props: {
     open.set(next);
   };
   const toggle = (key: string) => {
-    if (open().has(key)) close(key);
-    else open.set(new Map(open()).set(key, outputReader(props.sdk, props.session, () => open().has(key))));
+    if (open().has(key)) {
+      if (props.fullscreen() === key) props.setFullscreen(null);
+      close(key);
+    } else {
+      open.set(new Map(open()).set(key, outputReader(props.sdk, props.session, () => open().has(key))));
+    }
   };
   const position = (key: string) => {
     const index = props.keys().indexOf(key);
@@ -87,7 +95,7 @@ export function TranscriptList(props: {
     if (!key) return;
     props.setFullscreen(null);
     const launcher = launchers.get(key);
-    if (launcher) queueMicrotask(() => { if (launchers.get(key) === launcher && !props.fullscreen()) launcher.focus(); });
+    if (launcher) requestAnimationFrame(() => { if (launchers.get(key) === launcher && !props.fullscreen()) launcher.focus(); });
     else if (open().has(key) && props.keys().includes(key)) {
       restoreFocus = key;
       position(key);
@@ -106,7 +114,7 @@ export function TranscriptList(props: {
     else launchers.delete(key);
     if (ref && restoreFocus === key) {
       restoreFocus = null;
-      queueMicrotask(() => { if (!props.fullscreen()) ref.focus(); });
+      requestAnimationFrame(() => { if (!props.fullscreen() && launchers.get(key) === ref) ref.focus(); });
     }
   };
   effect(() => {

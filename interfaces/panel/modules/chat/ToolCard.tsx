@@ -28,6 +28,13 @@ export function ToolCard(props: {
   const settled = () => row().status === "ok" || row().status === "error";
   const output = () => props.reader()?.state();
   const load = () => void props.reader()?.load(row());
+  const expectsDiff = () => row().display_name === "Edit" || row().display_name === "Write";
+  let toggleRef: ViewRef | undefined;
+  const toggle = () => {
+    const closingReader = props.focusedReader();
+    props.onToggle();
+    if (closingReader) requestAnimationFrame(() => toggleRef?.focus());
+  };
   effect(() => {
     const reader = props.reader();
     if (!reader || !settled()) return;
@@ -40,7 +47,7 @@ export function ToolCard(props: {
 
   return (
     <View class="gap-1 py-1">
-      <Button onPress={props.onToggle}
+      <Button ref={(ref) => { toggleRef = ref; }} onPress={toggle}
         accessibilityLabel={`${open() ? "Collapse" : "Expand"} ${title()}`}
         class={`items-stretch rounded-(--radius) border px-3 py-2 hover:bg-muted focus:border-primary ${props.focusedReader() ? "border-primary bg-muted" : "border-border"}`}>
         <View class="flex-row flex-wrap items-center justify-between gap-1">
@@ -59,6 +66,9 @@ export function ToolCard(props: {
           </Button>
           <If when={row().has_diff}><Diff read={props.diff} /></If>
           <If when={row().presentation_omitted}><Text class="text-muted-foreground">Recorded changes were omitted.</Text></If>
+          <If when={settled() && expectsDiff() && !row().has_diff && !row().presentation_omitted}>
+            <Text class="text-muted-foreground">No recorded diff.</Text>
+          </If>
           <If when={!settled()}><Text class="text-muted-foreground">Output is not available until the call finishes.</Text></If>
           <If when={output()?.text}>
             <View selectable class="rounded bg-muted p-2"><Text class="font-mono text-sm">{output()?.text}</Text></View>

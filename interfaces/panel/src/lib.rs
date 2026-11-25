@@ -69,6 +69,11 @@ impl ChatModel {
         self.state.interrupt()
     }
 
+    /// Allows composing after an interrupted run without claiming it completed.
+    pub fn resume_composing(&mut self) -> JsonValue {
+        self.state.resume_composing()
+    }
+
     /// Returns the visible snapshot after reconciling committed history.
     pub fn replace_history(&mut self, history: JsonValue, details: JsonValue) -> JsonValue {
         self.state.replace_history(history, details)

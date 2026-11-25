@@ -8,6 +8,7 @@ type Counts = {
   system_prompt_bytes: number | null;
   skill_pre_trim_bytes: number;
   tool_schema_bytes: number;
+  tools: { name: string; schema_bytes: number; description_bytes: number }[];
   tool_result_tokens: number | null;
   provider_total: number | null;
   layers: { name: string; zone: string; bytes: number }[];
@@ -74,6 +75,12 @@ export function ContextSheet(props: {
               <Text>Tool schemas · {view().tool_schema_bytes} bytes</Text>
               <Text>Tool results · {view().tool_result_tokens === null ? "Unknown" : `${view().tool_result_tokens} estimated tokens`}</Text>
               <Text>Provider input · {view().provider_total === null ? "Unknown" : `${view().provider_total} tokens`}</Text>
+              <If when={view().tools.length > 0}>
+                <Text class="mt-2 text-muted-foreground">Tool schema measurements</Text>
+                <Each of={view().tools} key={(tool) => tool.name}>
+                  {(tool) => <Text>{tool().name} · {tool().schema_bytes} schema bytes · {tool().description_bytes} description bytes</Text>}
+                </Each>
+              </If>
               <If when={view().layers.length > 0}>
                 <Text class="mt-2 text-muted-foreground">System Prompt layers before trimming</Text>
                 <Each of={view().layers} key={(layer) => `${layer.zone}/${layer.name}`}>

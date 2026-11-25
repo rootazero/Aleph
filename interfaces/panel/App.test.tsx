@@ -232,8 +232,8 @@ const rpcParams = (app: { host: { calls(): { name: string; data: unknown }[] } }
 const chunk = (delta: string, seq?: number) => ({ topic: "stream.response_chunk", data: { type: "response_chunk", run_id: "r-1", delta, seq } });
 const toolStart = { tool_call_id: "call-1", change: { kind: "started", display_name: "Edit", args_text: "src/main.rs" } };
 const toolFinish = { tool_call_id: "call-1", change: { kind: "finished", success: true, duration_ms: 7, presentation_omitted: false } };
-const toolEvent = (delta: unknown, seq: number) => ({
-  topic: "stream.chat_tool", data: { type: "chat_tool", run_id: "r-1", delta, seq },
+const toolEvent = (delta: { tool_call_id: string; change: object }, seq: number) => ({
+  topic: "stream.chat_tool", data: { type: "chat_tool", run_id: "r-1", ...delta, seq },
 });
 
 async function openChat(handlers: ReturnType<typeof gateway>) {
@@ -327,6 +327,64 @@ test("a session opens in chat and its reply streams in, then history takes over"
   expect(rpcParams(app, "chat.history").length).toBe(loads + 1);
 });
 
+test("terminal history gets one follow-up when the committed stamp arrives late", async () => {
+  let readsAfterTerminal = 0;
+  let ended = false;
+  const { handlers } = chatGateway({
+    "chat.history": () => ({
+      session_key: "s-1", active_run: null,
+      messages: [
+        { role: "assistant", content: "Earlier answer", timestamp: "t0" },
+        ...(ended && ++readsAfterTerminal >= 2
+          ? [{ role: "assistant", content: "Stamped answer", run_id: "r-1", timestamp: "t2" }]
+          : []),
+      ],
+    }),
+  });
+  const app = await openChat(handlers);
+  await app.type("label:Message", "wait for the stamp");
+  await app.press("Send");
+  await app.waitFor("Stop");
+  await app.host.send("aleph.event", chunk("Transient answer", 1));
+  ended = true;
+  await app.host.send("aleph.event", { topic: "stream.run_complete", data: { run_id: "r-1", seq: 2 } });
+  await app.waitFor("Stamped answer");
+  expect(readsAfterTerminal).toBe(2);
+  expect(app.shows("Transient answer")).toBe(false);
+  expect(app.shows("Unconfirmed turn")).toBe(false);
+});
+
+test("an older unconfirmed preview does not retry an already stamped completion", async () => {
+  let sends = 0;
+  let stamped = false;
+  const { handlers } = chatGateway({
+    "chat.send": () => ({ run_id: `r-${++sends}`, session_key: "s-1", streaming: true }),
+    "chat.history": () => ({
+      session_key: "s-1", active_run: null,
+      messages: [
+        { role: "assistant", content: "Earlier answer", timestamp: "t0" },
+        ...(stamped ? [{ role: "assistant", content: "Stamped second turn", run_id: "r-2", timestamp: "t2" }] : []),
+      ],
+    }),
+  });
+  const app = await openChat(handlers);
+  await app.type("label:Message", "first turn");
+  await app.press("Send");
+  await app.waitFor("Stop");
+  await app.host.send("aleph.event", { topic: "stream.run_complete", data: { run_id: "r-1", seq: 1 } });
+  await app.waitFor("Unconfirmed turn");
+  await app.type("label:Message", "second turn");
+  await app.press("Send");
+  await app.waitFor("Stop");
+  const loads = rpcParams(app, "chat.history").length;
+  stamped = true;
+  await app.host.send("aleph.event", { topic: "stream.run_complete", data: { run_id: "r-2", seq: 1 } });
+  await app.waitFor("Stamped second turn");
+  await app.waitFor("Unconfirmed turn");
+  await new Promise((resolve) => setTimeout(resolve, 750));
+  expect(rpcParams(app, "chat.history").length).toBe(loads + 1);
+});
+
 test("text and authorized tool rows interleave without moving on finish", async () => {
   const { handlers, complete } = chatGateway();
   const app = await openChat(handlers);
@@ -416,6 +474,7 @@ test("collapsed tool ignores a stale page and expiry discards earlier output", a
   await app.host.send("aleph.event", toolEvent(toolFinish, 2));
   const expand = app.press("label:Expand Edit · src/main.rs");
   await app.waitUntil(() => release !== undefined);
+  await app.waitFor("label:Collapse Edit · src/main.rs");
   const collapse = app.press("label:Collapse Edit · src/main.rs");
   await app.waitFor("label:Expand Edit · src/main.rs");
   release!({ tool_call_id: "call-1", offset: 0, total_bytes: 5, source: "inline", text: "stale", truncated: false });
