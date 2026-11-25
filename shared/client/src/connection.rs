@@ -56,6 +56,7 @@ enum SocketReader {
     Local {
         read: LocalReader,
         live_events: bool,
+        chat_grant: tokio::sync::oneshot::Receiver<bool>,
     },
 }
 
@@ -531,10 +532,15 @@ impl AlephClient {
         let (read, write) = tokio::io::split(local_ipc::windows::connect(endpoint).await?);
         let socket = Socket::new(SocketWriter::Local(write));
         let live_events = hello.features.contains(&Feature::LiveEvents);
+        let (grant_tx, chat_grant) = tokio::sync::oneshot::channel();
         let (client, events) = Self::with_socket(
             None,
             socket.clone(),
-            SocketReader::Local { read, live_events },
+            SocketReader::Local {
+                read,
+                live_events,
+                chat_grant,
+            },
         );
         let result: HelloResult = client
             .request(
@@ -569,6 +575,10 @@ impl AlephClient {
         {
             return Err(CliError::Disconnected("IPC closed during handshake".into()));
         }
+        let _ = grant_tx.send(
+            result.features.contains(&Feature::LiveEvents)
+                && result.features.contains(&Feature::ChatTranscript),
+        );
         if let Some(subject) = result.subject {
             let _ = client.hello_subject.set(subject);
         }
@@ -763,7 +773,10 @@ impl AlephClient {
             SocketReader::Local {
                 mut read,
                 live_events,
+                mut chat_grant,
             } => {
+                let mut received_response = false;
+                let mut chat_allowed = None;
                 while let Ok(Some(text)) = local_ipc::read_frame(&mut read).await {
                     let Ok(value) = local_ipc::parse_payload(&text) else {
                         break;
@@ -776,6 +789,27 @@ impl AlephClient {
                         && value.get("method").is_some()
                         && value.get("id").is_none()
                     {
+                        let method = value.get("method").and_then(Value::as_str);
+                        let params = value.get("params");
+                        let tool_type = params.and_then(|p| p.get("type")).and_then(Value::as_str);
+                        let topic = params.and_then(|p| p.get("topic")).and_then(Value::as_str);
+                        if method == Some("stream.chat_tool")
+                            || tool_type == Some("chat_tool")
+                            || (method == Some(TOPIC_EVENT_METHOD)
+                                && topic == Some("stream.chat_tool"))
+                        {
+                            if method != Some("stream.chat_tool") || !received_response {
+                                continue;
+                            }
+                            // A frame can follow the hello response before the
+                            // caller has finished validating its feature grant.
+                            if chat_allowed.is_none() {
+                                chat_allowed = Some((&mut chat_grant).await.unwrap_or(false));
+                            }
+                            if chat_allowed != Some(true) {
+                                continue;
+                            }
+                        }
                         let Some(delivery) = delivery.upgrade() else {
                             break;
                         };
@@ -792,6 +826,7 @@ impl AlephClient {
                     let Inbound::Response { id, result } = classify_value(value) else {
                         break;
                     };
+                    received_response = true;
                     socket.requests.resolve(&id, result);
                 }
                 return;

@@ -454,7 +454,13 @@ pub trait SessionEventStore: Send + Sync + 'static {
 /// `MAX(seq)` in place.
 pub type RetireGeneration = u64;
 
-pub type ToolPresentations = HashMap<(String, String), Option<aleph_protocol::Presentation>>;
+pub type ToolPresentations = HashMap<(String, String), StoredToolPresentation>;
+
+pub enum StoredToolPresentation {
+    Absent,
+    Present(aleph_protocol::Presentation),
+    Unavailable,
+}
 
 // A result must follow a live opener with no intervening run boundary.
 // Inspect retired boundaries too: filtering them first could assign a
@@ -1800,6 +1806,7 @@ impl SessionEventStore for SqliteEventStore {
                        json_extract(value, '$[1]') AS call_id FROM json_each(?2)
             )
             SELECT wanted.run_id, wanted.call_id,
+                   COUNT(*) = 1 AND json_extract(payload_json, '$.output.metadata.presentation') IS NULL,
                    CASE WHEN COUNT(*) = 1
                         AND length(CAST(json_extract(payload_json, '$.output.metadata.presentation') AS BLOB)) <= ?3
                         THEN json_extract(payload_json, '$.output.metadata.presentation') END
@@ -1811,11 +1818,18 @@ impl SessionEventStore for SqliteEventStore {
             "#)).map_err(|error| SessionError::Storage(error.to_string()))?;
         let rows = query
             .query_map(params![session_key, addresses, max_bytes], |row| {
-                let body: Option<String> = row.get(2)?;
-                Ok((
-                    (row.get(0)?, row.get(1)?),
-                    body.and_then(|json| serde_json::from_str(&json).ok()),
-                ))
+                let absent: bool = row.get(2)?;
+                let body: Option<String> = row.get(3)?;
+                let presentation = if absent {
+                    StoredToolPresentation::Absent
+                } else {
+                    body.and_then(|json| serde_json::from_str(&json).ok())
+                        .map_or(
+                            StoredToolPresentation::Unavailable,
+                            StoredToolPresentation::Present,
+                        )
+                };
+                Ok(((row.get(0)?, row.get(1)?), presentation))
             })
             .map_err(|error| SessionError::Storage(error.to_string()))?;
         rows.collect::<Result<_, _>>()

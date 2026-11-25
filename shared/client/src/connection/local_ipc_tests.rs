@@ -170,9 +170,12 @@ async fn local_client_delivers_live_events_only_when_requested() {
         }))
         .unwrap()
     };
-    // The fixture always grants `live_events` and pushes two notifications.
     let peer = async {
-        for _ in 0..2 {
+        for features in [
+            json!(["live_events"]),
+            json!(["live_events"]),
+            json!(["live_events", "chat_transcript"]),
+        ] {
             let (mut stream, _) = listener.accept().await.unwrap();
             let hello: JsonRpcRequest =
                 serde_json::from_str(&read_frame(&mut stream).await.unwrap().unwrap()).unwrap();
@@ -182,12 +185,16 @@ async fn local_client_delivers_live_events_only_when_requested() {
                     "protocol": {"major": 1, "minor": 0},
                     "server": {"name": "fixture", "version": "1"},
                     "connection_id": "fixture-connection",
-                    "features": ["live_events"],
+                    "features": features,
                     "limits": {"max_message_bytes": MAX_FRAME_BYTES, "max_inflight_requests": 2},
                 }),
             );
             let frames = [
                 serde_json::to_string(&response).unwrap(),
+                json!({"jsonrpc":"2.0","method":"stream.chat_tool","params":{
+                    "type":"chat_tool","run_id":"r-1","seq":1,"tool_call_id":"call-1",
+                    "change":{"kind":"started","display_name":"Tool","args_text":""}}})
+                .to_string(),
                 json!({"jsonrpc":"2.0","method":"stream.run_accepted","params":{
                     "type":"run_accepted","run_id":"r-1","session_key":"agent:main:main","accepted_at":"t"}})
                 .to_string(),
@@ -207,19 +214,29 @@ async fn local_client_delivers_live_events_only_when_requested() {
     let caller = async {
         let refused = AlephClient::connect_local(&endpoint, &hello_params(json!([]))).await;
         assert!(refused.is_err(), "unrequested feature granted");
-        let (client, mut events) =
-            AlephClient::connect_local(&endpoint, &hello_params(json!(["live_events"])))
-                .await
-                .unwrap();
-        let mut topics = client.take_topic_events().unwrap();
-        match events.recv().await.unwrap() {
-            StreamEvent::RunAccepted { run_id, .. } => assert_eq!(run_id, "r-1"),
-            other => panic!("unexpected stream event {other:?}"),
+        for granted in [false, true] {
+            let (client, mut events) = AlephClient::connect_local(
+                &endpoint,
+                &hello_params(json!(["live_events", "chat_transcript"])),
+            )
+            .await
+            .unwrap();
+            let mut topics = client.take_topic_events().unwrap();
+            if granted {
+                assert!(matches!(
+                    events.recv().await,
+                    Some(StreamEvent::ChatTool { seq: 1, .. })
+                ));
+            }
+            match events.recv().await.unwrap() {
+                StreamEvent::RunAccepted { run_id, .. } => assert_eq!(run_id, "r-1"),
+                other => panic!("unexpected stream event {other:?}"),
+            }
+            let topic = topics.recv().await.unwrap();
+            assert_eq!(topic.topic, "connection.warning");
+            assert_eq!(client.stream_continuity().dropped_events, 0);
+            drop(client);
         }
-        let topic = topics.recv().await.unwrap();
-        assert_eq!(topic.topic, "connection.warning");
-        assert_eq!(client.stream_continuity().dropped_events, 0);
-        drop(client);
     };
     timeout(Duration::from_secs(5), async { tokio::join!(peer, caller) })
         .await

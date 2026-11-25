@@ -10,15 +10,18 @@ use serde_json::json;
 
 use super::{visible_history_runs, JsonRpcRequest, JsonRpcResponse, SessionKey, SessionStore};
 use crate::gateway::handlers::chat_presentation::{
-    project_tool_finish, project_tool_start, safe_tool_address, MAX_PRESENTATION_BYTES,
+    project_tool_finish, project_tool_start, safe_tool_address,
 };
 use crate::gateway::{protocol::INVALID_PARAMS, visibility};
 use crate::resilience::{StateDatabase, TaskStatus};
+use crate::session::store::StoredToolPresentation;
 use crate::sync_primitives::Arc;
 
 const MAX_RUNS: usize = 12;
 const MAX_DELTAS: usize = 80;
 const MAX_RESPONSE_BYTES: usize = 384 * 1024;
+// The projector applies its independent wire budget after masking.
+const MAX_STORED_PRESENTATION_BYTES: usize = 96 * 1024;
 // Keep space for the response envelope and at most 12 bounded run IDs.
 const MAX_DELTA_BYTES: usize = MAX_RESPONSE_BYTES - 8 * 1024;
 
@@ -165,13 +168,16 @@ pub async fn handle_transcript_details(
         Some(HashMap::new())
     } else if let Some(store) = crate::session::store::global_session_event_store() {
         store
-            .load_tool_presentations(&session_key, &completed_calls, MAX_PRESENTATION_BYTES)
+            .load_tool_presentations(
+                &session_key,
+                &completed_calls,
+                MAX_STORED_PRESENTATION_BYTES,
+            )
             .await
             .ok()
     } else {
         None
     };
-    let presentation_read_limited = presentations.is_none();
     let mut presentations = presentations.unwrap_or_default();
     // Reserve all selected statuses before spending bytes on optional diffs.
     let lean_bytes = candidates
@@ -192,10 +198,14 @@ pub async fn handle_transcript_details(
                 continue;
             };
             let stored = presentations.remove(&(run.run_id.clone(), delta.tool_call_id.clone()));
-            let unavailable = presentation_read_limited || matches!(stored, Some(None));
+            let (presentation, unavailable) = match stored {
+                Some(StoredToolPresentation::Present(body)) => (Some(body), false),
+                Some(StoredToolPresentation::Absent) => (None, false),
+                Some(StoredToolPresentation::Unavailable) | None => (None, true),
+            };
             let mut enriched = ChatToolDelta {
                 tool_call_id: delta.tool_call_id.clone(),
-                change: project_tool_finish(success, duration_ms, stored.flatten()),
+                change: project_tool_finish(success, duration_ms, presentation),
             };
             let extra = encoded_delta_bytes(&enriched).saturating_sub(encoded_delta_bytes(delta));
             if let ChatToolChange::Finished {
