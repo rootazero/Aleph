@@ -104,17 +104,21 @@ pub(in crate::gateway::server) async fn serve(
                             }
                         };
                         let mut discard = !authenticated;
+                        let mut cleanup = None;
                         if authenticated {
                             let (read, write) = tokio::io::split(&mut stream);
-                            if let Err(error) = serve_peer(read, write, state, stop.clone()).await {
+                            if let Err(error) = serve_peer(read, write, state, stop.clone(), &mut cleanup).await {
                                 tracing::debug!(kind = ?error.kind(), "Desktop IPC peer closed");
                                 discard = true;
                             }
                         }
-                        if discard || stop.is_cancelled() {
+                        if discard || stop.is_cancelled() || cleanup.as_ref().is_some_and(|peer| peer.peer.has_offline_voice()) {
                             // Discard unread output on failures/stop so a peer that
                             // never reads cannot pin a pending Windows write.
                             let _ = stream.disconnect();
+                        }
+                        if let Some(cleanup) = cleanup {
+                            cleanup.finish().await;
                         }
                         stream
                     });

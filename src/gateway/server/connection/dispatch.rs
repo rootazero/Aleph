@@ -238,6 +238,30 @@ impl DispatchPeer {
         self.view().snapshot().await
     }
 
+    pub(super) fn is_voice_bound(&self) -> bool {
+        let authority = self.bound.as_ref().map(|bound| &bound.authority);
+        #[cfg(any(unix, windows))]
+        if matches!(authority, Some(BoundAuthority::Desktop(_))) {
+            return true;
+        }
+        matches!(authority, Some(BoundAuthority::Web(_)))
+    }
+
+    #[cfg(windows)]
+    pub(super) fn has_offline_voice(&self) -> bool {
+        self.bound
+            .as_ref()
+            .is_some_and(|peer| peer.turns.has_offline())
+    }
+
+    #[cfg(any(unix, windows))]
+    pub(super) async fn drain_desktop_voice(&self) {
+        if let Some(bound) = &self.bound {
+            bound.cancellation.cancel();
+            bound.turns.drain_offline().await;
+        }
+    }
+
     fn view(&self) -> PeerView<'_> {
         PeerView {
             connections: &self.connections,
@@ -511,6 +535,7 @@ pub async fn dispatch_for_connection(
         method,
         req_id,
         start,
+        None,
     )
     .await
 }
@@ -519,11 +544,20 @@ pub(super) async fn dispatch_for_peer(
     text: &str,
     mc: &MiddlewareChain,
     peer: &DispatchPeer,
-    method: &str,
-    req_id: Option<serde_json::Value>,
+    req: &JsonRpcRequest,
     start: &CallerSnapshot,
+    permit: Option<tokio::sync::OwnedSemaphorePermit>,
 ) -> String {
-    dispatch_ordinary(text, mc, &peer.view(), method, req_id, start).await
+    dispatch_ordinary(
+        text,
+        mc,
+        &peer.view(),
+        &req.method,
+        req.id.clone(),
+        start,
+        permit,
+    )
+    .await
 }
 
 async fn dispatch_ordinary(
@@ -533,16 +567,25 @@ async fn dispatch_ordinary(
     method: &str,
     id: Option<serde_json::Value>,
     start: &CallerSnapshot,
+    permit: Option<tokio::sync::OwnedSemaphorePermit>,
 ) -> String {
     match validate_live(peer, method, start, id).await {
         Ok(live) => {
+            let mut permit = permit;
+            let voice_context = peer.voice_context_after_validation(method).map(|context| {
+                if method == VOICE_TURN_TRANSCRIBE_METHOD {
+                    context.with_query_permit(permit.take())
+                } else {
+                    context
+                }
+            });
             dispatch_snapshot(
                 text,
                 mc,
                 live,
                 peer.legacy_loopback,
                 Some(peer.conn_id.to_owned()),
-                peer.voice_context_after_validation(method),
+                voice_context,
             )
             .await
         }

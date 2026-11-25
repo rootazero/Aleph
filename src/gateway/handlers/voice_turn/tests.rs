@@ -105,7 +105,16 @@ impl SttFixture {
                 post(
                     |State((_, fallback)): State<(Arc<AtomicUsize>, Arc<AtomicUsize>)>| async move {
                         fallback.fetch_add(1, Ordering::SeqCst);
-                        Json(json!({"text":"should not reach fallback"}))
+                        Json(json!({"text":"configured cloud"}))
+                    },
+                ),
+            )
+            .route(
+                "/fallback-fail/v1/audio/transcriptions",
+                post(
+                    |State((_, fallback)): State<(Arc<AtomicUsize>, Arc<AtomicUsize>)>| async move {
+                        fallback.fetch_add(1, Ordering::SeqCst);
+                        StatusCode::BAD_GATEWAY
                     },
                 ),
             )
@@ -303,6 +312,7 @@ async fn voice_turn_wav_limits_checked_before_dispatch() {
     assert_eq!(provider.calls(), 1);
 
     let mut cfg = provider.config.write().await;
+    cfg.generation.transcription_providers.remove("fallback");
     let url = cfg
         .generation
         .transcription_providers
@@ -512,7 +522,7 @@ async fn voice_turn_synthesis_attempts_primary_and_secondary_at_most_once() {
 /// The host's installed recognizer, faked: counts calls and, when `reply` is
 /// `None`, holds the clip until cancelled.
 #[derive(Default)]
-struct FakeOfflineEngine {
+pub(crate) struct FakeOfflineEngine {
     calls: AtomicUsize,
     reply: std::sync::Mutex<Option<String>>,
     started: tokio::sync::Notify,
@@ -520,9 +530,23 @@ struct FakeOfflineEngine {
     /// Whether the clip still existed when the cancel reached the engine.
     clip_present_at_cancel: std::sync::Mutex<Option<bool>>,
     returned: tokio::sync::Notify,
+    cancellation_seen: tokio::sync::Notify,
+    release_gate: Option<tokio::sync::Semaphore>,
 }
 
 impl FakeOfflineEngine {
+    pub(crate) async fn wait_started(&self) {
+        self.started.notified().await;
+    }
+
+    pub(crate) async fn wait_cancelled(&self) {
+        self.cancellation_seen.notified().await;
+    }
+
+    pub(crate) fn release(&self) {
+        self.release_gate.as_ref().unwrap().add_permits(1);
+    }
+
     fn replying(text: &str) -> Arc<Self> {
         let engine = Self::default();
         *engine.reply.lock().unwrap() = Some(text.to_owned());
@@ -556,8 +580,10 @@ impl aleph_desktop::traits::MediaCapability for FakeOfflineEngine {
                 self.started.notify_one();
                 cancel.cancelled().await;
                 *self.clip_present_at_cancel.lock().unwrap() = Some(clip.is_file());
-                // The engine is still holding the clip for a moment after cancel.
-                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                self.cancellation_seen.notify_one();
+                if let Some(gate) = &self.release_gate {
+                    gate.acquire().await.unwrap().forget();
+                }
                 assert!(clip.is_file(), "clip released while the engine held it");
                 Err(aleph_desktop::DesktopError::PlatformError(
                     "offline speech recognition cancelled".into(),
@@ -605,6 +631,20 @@ fn offline_adapter(
     )
 }
 
+pub(crate) async fn mount_gated_offline(
+    provider: &SttFixture,
+    handlers: &mut HandlerRegistry,
+    scratch: &tempfile::TempDir,
+) -> Arc<FakeOfflineEngine> {
+    remove_stt_providers(provider).await;
+    let engine = Arc::new(FakeOfflineEngine {
+        release_gate: Some(tokio::sync::Semaphore::new(0)),
+        ..Default::default()
+    });
+    provider.mount_with_offline(handlers, offline_adapter(&engine, scratch));
+    engine
+}
+
 async fn remove_stt_providers(provider: &SttFixture) {
     let mut cfg = provider.config.write().await;
     cfg.generation.default_transcription_provider = None;
@@ -647,10 +687,10 @@ async fn offline_stt_policy_matrix() {
         .generation
         .default_transcription_provider = Some("fallback".to_owned());
     let reply = invoke_on(&registry, transcribe_request(), &desktop, BUDGET).await;
-    assert_eq!(reply.result.unwrap()["text"], "should not reach fallback");
+    assert_eq!(reply.result.unwrap()["text"], "configured cloud");
     assert_eq!((provider.calls(), engine.calls()), (2, 0));
 
-    // A configured provider that fails after dispatch never falls through.
+    // A failed configured local endpoint retries only the configured cloud.
     {
         let mut cfg = provider.config.write().await;
         cfg.generation.default_transcription_provider = Some("fixture".to_owned());
@@ -665,14 +705,35 @@ async fn offline_stt_policy_matrix() {
         *url = url.replace("/v1", "/fail");
     }
     let reply = invoke_on(&registry, transcribe_request(), &desktop, BUDGET).await;
+    assert_eq!(reply.result.unwrap()["text"], "configured cloud");
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(provider.fallback_calls.load(Ordering::SeqCst), 2);
+    assert_eq!(engine.calls(), 0);
+
+    // If both configured providers fail, do not dispatch to the installed engine.
+    {
+        let mut cfg = provider.config.write().await;
+        let url = cfg
+            .generation
+            .transcription_providers
+            .get_mut("fallback")
+            .unwrap()
+            .base_url
+            .as_mut()
+            .unwrap();
+        *url = url.replace("/fallback/v1", "/fallback-fail/v1");
+    }
+    let reply = invoke_on(&registry, transcribe_request(), &desktop, BUDGET).await;
     assert_eq!(error_kind(reply), "provider_failed");
-    assert_eq!((provider.calls(), engine.calls()), (3, 0));
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 3);
+    assert_eq!(provider.fallback_calls.load(Ordering::SeqCst), 3);
+    assert_eq!(engine.calls(), 0);
 
     // No provider at all: owner Desktop IPC asks the installed engine exactly once.
     remove_stt_providers(&provider).await;
     let reply = invoke_on(&registry, transcribe_request(), &desktop, BUDGET).await;
     assert_eq!(reply.result.unwrap()["text"], "offline");
-    assert_eq!((provider.calls(), engine.calls()), (3, 1));
+    assert_eq!((provider.calls(), engine.calls()), (6, 1));
     assert!(
         scratch_is_empty(&scratch),
         "clip deleted after the engine returned"
@@ -732,7 +793,7 @@ async fn offline_stt_policy_matrix() {
     returned.await;
     assert_eq!(*held.clip_present_at_cancel.lock().unwrap(), Some(true));
     wait_until(|| scratch_is_empty(&scratch)).await;
-    assert_eq!((provider.calls(), held.calls()), (3, 1));
+    assert_eq!((provider.calls(), held.calls()), (6, 1));
 
     // The cancelled turn cannot be started again on this connection.
     let reply = invoke_on(&registry, transcribe_request(), &desktop, BUDGET).await;
@@ -809,4 +870,155 @@ async fn voice_turn_cancel_is_denied_to_other_connections() {
         "cancelled"
     );
     assert_eq!(held.calls(), 1);
+}
+
+pub(crate) struct BlockedSttFixture {
+    _provider: SttFixture,
+    entered: Arc<tokio::sync::Semaphore>,
+    exited: Arc<tokio::sync::Semaphore>,
+    server: tokio::task::JoinHandle<()>,
+}
+
+impl BlockedSttFixture {
+    pub(crate) async fn new(handlers: &mut HandlerRegistry) -> Self {
+        use axum::{extract::State, routing::post, Router};
+        struct Exit(Arc<tokio::sync::Semaphore>);
+        impl Drop for Exit {
+            fn drop(&mut self) {
+                self.0.add_permits(1);
+            }
+        }
+        let entered = Arc::new(tokio::sync::Semaphore::new(0));
+        let exited = Arc::new(tokio::sync::Semaphore::new(0));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = Router::new()
+            .route(
+                "/v1/audio/transcriptions",
+                post(
+                    |State((entered, exited)): State<(
+                        Arc<tokio::sync::Semaphore>,
+                        Arc<tokio::sync::Semaphore>,
+                    )>,
+                     _body: axum::body::Bytes| async move {
+                        let _exit = Exit(exited);
+                        entered.add_permits(1);
+                        std::future::pending::<axum::http::StatusCode>().await
+                    },
+                ),
+            )
+            .with_state((entered.clone(), exited.clone()));
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let provider = SttFixture::new().await;
+        provider
+            .config
+            .write()
+            .await
+            .generation
+            .transcription_providers
+            .get_mut("fixture")
+            .unwrap()
+            .base_url = Some(format!("http://{addr}/v1"));
+        provider.mount(handlers);
+        voice_turn::register_cancel(handlers);
+        Self {
+            _provider: provider,
+            entered,
+            exited,
+            server,
+        }
+    }
+
+    pub(crate) async fn entered(&self, count: u32) {
+        self.entered.acquire_many(count).await.unwrap().forget();
+    }
+
+    pub(crate) async fn exited(&self, count: u32) {
+        self.exited.acquire_many(count).await.unwrap().forget();
+    }
+}
+
+impl Drop for BlockedSttFixture {
+    fn drop(&mut self) {
+        self.server.abort();
+    }
+}
+
+pub(crate) async fn fill_query_lane(
+    lanes: &crate::gateway::lane::LaneManager,
+    class: crate::gateway::lane::ChannelClass,
+) -> Vec<tokio::sync::OwnedSemaphorePermit> {
+    use crate::gateway::lane::{ChannelClass, Lane};
+    let query = lanes
+        .snapshot()
+        .into_iter()
+        .find(|row| row.lane == Lane::Query.to_string())
+        .unwrap();
+    let count = query.shared_available
+        + if class == ChannelClass::Desktop {
+            query.desktop_available.unwrap_or_default()
+        } else {
+            0
+        };
+    let mut permits = Vec::with_capacity(count);
+    for _ in 0..count {
+        permits.push(lanes.acquire("voice.turn.transcribe", class).await.unwrap());
+    }
+    permits
+}
+
+pub(crate) fn blocked_stt_turn(index: u32) -> Value {
+    let mut request = transcribe_request();
+    request["id"] = json!(index);
+    request["params"]["turn_id"] = json!(uuid::Uuid::from_u128(u128::from(index) + 1));
+    request
+}
+
+pub(crate) fn blocked_stt_cancel(index: u32) -> Value {
+    let mut request = cancel_request(&uuid::Uuid::from_u128(u128::from(index) + 1).to_string());
+    request["id"] = json!(1000 + index);
+    request
+}
+
+#[tokio::test]
+async fn voice_turn_early_cancel_survives_duplicate_and_history_overflow() {
+    const BUDGET: usize = 1024 * 1024;
+    let scratch = tempfile::tempdir().unwrap();
+    let provider = SttFixture::new().await;
+    remove_stt_providers(&provider).await;
+    let engine = FakeOfflineEngine::replying("unused");
+    let mut registry = HandlerRegistry::empty();
+    provider.mount_with_offline(&mut registry, offline_adapter(&engine, &scratch));
+    let desktop = TestConnection::new(VoiceIngress::DesktopIpc, "desktop-conn");
+
+    for _ in 0..64 {
+        let reply = invoke_on(&registry, blocked_stt_cancel(1), &desktop, BUDGET).await;
+        assert_eq!(reply.result.unwrap()["cancelled"], false);
+    }
+    let reply = invoke_on(&registry, blocked_stt_turn(1), &desktop, BUDGET).await;
+    assert_eq!(error_kind(reply), "cancelled");
+    assert_eq!(engine.calls(), 0);
+    assert!(scratch_is_empty(&scratch));
+
+    // Repeated cancellation of one id must not exhaust the distinct-id budget.
+    let reply = invoke_on(&registry, blocked_stt_turn(2), &desktop, BUDGET).await;
+    assert_eq!(reply.result.unwrap()["text"], "unused");
+
+    for index in 2..=34 {
+        let reply = invoke_on(&registry, blocked_stt_cancel(index), &desktop, BUDGET).await;
+        assert_eq!(reply.result.unwrap()["cancelled"], false);
+    }
+    // Retained oldest id and unknown ids both fail closed after overflow.
+    // Malformed PCM must not win over the pre-start cancellation check.
+    for index in [1, 34, 35] {
+        let mut request = blocked_stt_turn(index);
+        request["params"]["audio_base64"] = json!("!!!");
+        assert_eq!(
+            error_kind(invoke_on(&registry, request, &desktop, BUDGET).await),
+            "cancelled"
+        );
+    }
+    assert_eq!(engine.calls(), 1);
+    assert_eq!(provider.calls(), 0);
+    assert!(scratch_is_empty(&scratch));
 }

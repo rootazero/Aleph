@@ -1,6 +1,6 @@
 //! Bounded whole-turn RPCs over the configured Core media providers.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
@@ -14,8 +14,8 @@ use aleph_protocol::panel_voice::{
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::Deserialize;
 use serde_json::json;
-use tokio::sync::RwLock;
-use tokio_util::sync::CancellationToken;
+use tokio::sync::{OwnedSemaphorePermit, RwLock};
+use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use tracing::instrument::WithSubscriber;
 
 use crate::config::Config;
@@ -25,7 +25,7 @@ use crate::gateway::protocol::{
 };
 use crate::gateway::security::SharedTokenManager;
 use crate::gateway::voice::{
-    inbound::{resolve_stt_source, transcribe_with_source, SttSource},
+    inbound::{resolve_stt_source, transcribe_with_source},
     outbound::{generate_tts_turn, TtsOutcome},
 };
 use crate::generation::GenerationProviderRegistry;
@@ -49,6 +49,7 @@ pub(crate) struct VoiceRequestContext {
     response_budget: usize,
     cancellation: CancellationToken,
     turns: Arc<VoiceTurnScopes>,
+    query_permit: Option<Arc<OwnedSemaphorePermit>>,
 }
 
 impl VoiceRequestContext {
@@ -65,7 +66,13 @@ impl VoiceRequestContext {
             response_budget,
             cancellation,
             turns,
+            query_permit: None,
         }
+    }
+
+    pub(crate) fn with_query_permit(mut self, permit: Option<OwnedSemaphorePermit>) -> Self {
+        self.query_permit = permit.map(Arc::new);
+        self
     }
 
     pub(crate) fn reserve_response_bytes(&mut self, bytes: usize) {
@@ -83,7 +90,7 @@ impl VoiceRequestContext {
     }
 }
 
-/// Remembered cancelled turn ids per connection. A client can only evict its own.
+/// Bound cancellation history; overflow closes voice admission for this peer.
 const MAX_CANCELLED_TURNS: usize = 32;
 
 /// The provider work of one connection's whole turns, keyed by `turn_id`.
@@ -94,28 +101,26 @@ const MAX_CANCELLED_TURNS: usize = 32;
 #[derive(Default)]
 pub(crate) struct VoiceTurnScopes {
     table: Mutex<TurnTable>,
+    offline: TaskTracker,
 }
 
 #[derive(Default)]
 struct TurnTable {
     active: HashMap<uuid::Uuid, ActiveTurn>,
-    cancelled: VecDeque<uuid::Uuid>,
-    next_epoch: u64,
+    cancelled: HashSet<uuid::Uuid>,
+    cancellation_overflow: bool,
 }
 
 struct ActiveTurn {
     token: CancellationToken,
     /// Admitted requests sharing the token.
     admitted: usize,
-    /// Tells this entry apart from a later one for the same id.
-    epoch: u64,
 }
 
 /// An admitted request's share of its turn. Leaves the table on drop.
 struct TurnScope {
     turns: Arc<VoiceTurnScopes>,
     turn_id: uuid::Uuid,
-    epoch: u64,
     token: CancellationToken,
 }
 
@@ -128,21 +133,20 @@ impl VoiceTurnScopes {
         connection: &CancellationToken,
     ) -> Result<TurnScope, VoiceErrorKind> {
         let mut table = self.table.lock().unwrap_or_else(PoisonError::into_inner);
-        if table.cancelled.contains(&turn_id) {
+        if connection.is_cancelled()
+            || table.cancellation_overflow
+            || table.cancelled.contains(&turn_id)
+        {
             return Err(VoiceErrorKind::Cancelled);
         }
-        let epoch = table.next_epoch;
-        table.next_epoch += 1;
         let turn = table.active.entry(turn_id).or_insert_with(|| ActiveTurn {
             token: connection.child_token(),
             admitted: 0,
-            epoch,
         });
         turn.admitted += 1;
         Ok(TurnScope {
             turns: self.clone(),
             turn_id,
-            epoch: turn.epoch,
             token: turn.token.clone(),
         })
     }
@@ -154,17 +158,30 @@ impl VoiceTurnScopes {
         let mut table = self.table.lock().unwrap_or_else(PoisonError::into_inner);
         if !table.cancelled.contains(&turn_id) {
             if table.cancelled.len() == MAX_CANCELLED_TURNS {
-                table.cancelled.pop_front();
+                // Do not evict an id that a delayed request can still use.
+                table.cancellation_overflow = true;
+            } else {
+                table.cancelled.insert(turn_id);
             }
-            table.cancelled.push_back(turn_id);
         }
-        match table.active.remove(&turn_id) {
-            Some(turn) => {
+        if let Some(turn) = table.active.get(&turn_id) {
+            if !turn.token.is_cancelled() {
                 turn.token.cancel();
-                true
+                return true;
             }
-            None => false,
         }
+        false
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn has_offline(&self) -> bool {
+        !self.offline.is_empty()
+    }
+
+    #[cfg(any(unix, windows))]
+    pub(crate) async fn drain_offline(&self) {
+        self.offline.close();
+        self.offline.wait().await;
     }
 }
 
@@ -178,10 +195,6 @@ impl Drop for TurnScope {
         let Some(turn) = table.active.get_mut(&self.turn_id) else {
             return;
         };
-        // A cancelled turn was already removed; never touch a successor's entry.
-        if turn.epoch != self.epoch {
-            return;
-        }
         turn.admitted -= 1;
         if turn.admitted == 0 {
             table.active.remove(&self.turn_id);
@@ -206,25 +219,38 @@ impl OfflineSpeechAdapter {
         }
     }
 
-    /// The clip belongs to the recognition, not to the RPC response: the work
-    /// runs on its own task, so a cancelled or dropped response still waits for
-    /// the engine to return before the clip is deleted.
+    // A dropped connection waiter must not drop the adapter or its Query slot.
+    // The connection cancels the token and drains its tracked work on teardown.
     async fn transcribe(
         &self,
         wav: Vec<u8>,
         language: Option<String>,
-        cancel: CancellationToken,
+        context: &VoiceRequestContext,
     ) -> Result<String, VoiceErrorKind> {
-        if self.platform.media().is_none() {
-            return Err(VoiceErrorKind::OfflineUnavailable);
+        let cancel = context.cancellation.clone();
+        if cancel.is_cancelled() {
+            return Err(VoiceErrorKind::Cancelled);
         }
         let adapter = self.clone();
-        tokio::spawn(
-            async move { adapter.recognize(&wav, language.as_deref(), cancel).await }
+        let query_permit = context.query_permit.clone();
+        let result = context
+            .turns
+            .offline
+            .spawn(
+                async move {
+                    let _query_permit = query_permit;
+                    adapter.recognize(&wav, language.as_deref(), cancel).await
+                }
                 .with_subscriber(tracing::Dispatch::none()),
-        )
-        .await
-        .unwrap_or(Err(VoiceErrorKind::ProviderFailed))
+            )
+            .await
+            .unwrap_or(Err(VoiceErrorKind::ProviderFailed));
+        // Keep the IPC job and its active request slot through adapter release,
+        // even when the separate cancel control reply has already been sent.
+        if context.cancellation.is_cancelled() {
+            return Err(VoiceErrorKind::Cancelled);
+        }
+        result
     }
 
     async fn recognize(
@@ -233,12 +259,18 @@ impl OfflineSpeechAdapter {
         language: Option<&str>,
         cancel: CancellationToken,
     ) -> Result<String, VoiceErrorKind> {
+        if cancel.is_cancelled() {
+            return Err(VoiceErrorKind::Cancelled);
+        }
         let media = self
             .platform
             .media()
             .ok_or(VoiceErrorKind::OfflineUnavailable)?;
         let clip = ScratchClip::stage(&self.scratch_root, wav)
             .map_err(|_| VoiceErrorKind::OfflineUnavailable)?;
+        if cancel.is_cancelled() {
+            return Err(VoiceErrorKind::Cancelled);
+        }
         let result = media
             .speech_to_text_offline(clip.path_str()?, language, cancel)
             .await;
@@ -351,47 +383,36 @@ pub fn register_transcription(
                 .ok_or(VoiceErrorKind::InvalidAudio)?;
             let wav = decode_voice_wav(params.audio_base64)?;
             let source = {
-                let cfg = config.read().await;
+                let cfg = until_cancelled(&context.cancellation, config.read()).await?;
                 resolve_stt_source(
                     &cfg.generation,
                     &vault,
                     cfg.voice_local.vocabulary_hint().as_deref(),
                 )
             };
-            // A configured BYO endpoint is a provider, not an installed offline
-            // adapter. Do not resend the utterance to any other source on failure.
-            let source = match source {
-                Some(SttSource::Local { config, .. }) => Some(SttSource::Local {
-                    config,
-                    fallback: None,
-                }),
-                Some(source) => Some(source),
-                // Only live owner Desktop IPC reaches the installed recognizer,
-                // and only when no provider is configured at all.
-                None if context.ingress == VoiceIngress::DesktopIpc => None,
-                None => return Err(VoiceErrorKind::NotConfigured),
-            };
             let text = match source {
-                Some(source) => transcribe_with_source(
-                    wav.into(),
-                    "turn.wav",
-                    "audio/wav",
-                    params.language,
-                    &source,
+                // Preserve the resolver's explicitly configured local→cloud
+                // sequence; neither failure can enter the installed adapter.
+                Some(source) => until_cancelled(
+                    &context.cancellation,
+                    transcribe_with_source(
+                        wav.into(),
+                        "turn.wav",
+                        "audio/wav",
+                        params.language,
+                        &source,
+                    )
+                    .with_subscriber(tracing::Dispatch::none()),
                 )
-                .with_subscriber(tracing::Dispatch::none())
-                .await
+                .await?
                 .map_err(|_| VoiceErrorKind::ProviderFailed)?,
-                None => {
+                None if context.ingress == VoiceIngress::DesktopIpc => {
                     offline
                         .ok_or(VoiceErrorKind::OfflineUnavailable)?
-                        .transcribe(
-                            wav,
-                            params.language.map(str::to_owned),
-                            context.cancellation.clone(),
-                        )
+                        .transcribe(wav, params.language.map(str::to_owned), &context)
                         .await?
                 }
+                None => return Err(VoiceErrorKind::NotConfigured),
             };
             let text = text.trim();
             if text.is_empty() {
@@ -454,12 +475,18 @@ pub fn register_synthesis(
                 .ok_or(VoiceErrorKind::NoSpeech)?;
             let registry = generation_registry.ok_or(VoiceErrorKind::NotConfigured)?;
             let registry = super::voice::snapshot_generation_registry(&registry);
-            let gen_config = config.read().await.generation.clone();
+            let gen_config = until_cancelled(&context.cancellation, config.read())
+                .await?
+                .generation
+                .clone();
             // Existing providers may log text from upstream error bodies. The
             // whole-turn path exposes only a typed failure, even in telemetry.
-            let outcome = generate_tts_turn(params.text, &registry, &gen_config)
-                .with_subscriber(tracing::Dispatch::none())
-                .await;
+            let outcome = until_cancelled(
+                &context.cancellation,
+                generate_tts_turn(params.text, &registry, &gen_config)
+                    .with_subscriber(tracing::Dispatch::none()),
+            )
+            .await?;
             let attachment = match outcome {
                 Some(TtsOutcome::Generated(attachment)) => attachment,
                 Some(TtsOutcome::Skipped) => return Err(VoiceErrorKind::NoSpeech),
@@ -510,16 +537,26 @@ where
             if let Some(scope) = &scope {
                 turn_context.cancellation = scope.token.clone();
             }
-            let cancelled = turn_context.cancellation.clone();
-            tokio::select! {
-                biased;
-                _ = cancelled.cancelled() => Err(VoiceErrorKind::Cancelled),
-                outcome = call(request, turn_context) => outcome,
+            if turn_context.cancellation.is_cancelled() {
+                Err(VoiceErrorKind::Cancelled)
+            } else {
+                call(request, turn_context).await
             }
         }
         Err(kind) => Err(kind),
     };
     result.unwrap_or_else(|kind| voice_error(id, kind, &context))
+}
+
+async fn until_cancelled<F: std::future::Future>(
+    cancel: &CancellationToken,
+    work: F,
+) -> Result<F::Output, VoiceErrorKind> {
+    tokio::select! {
+        biased;
+        _ = cancel.cancelled() => Err(VoiceErrorKind::Cancelled),
+        result = work => Ok(result),
+    }
 }
 
 /// `None` for a missing or malformed turn id; the handler's own parse rejects it.

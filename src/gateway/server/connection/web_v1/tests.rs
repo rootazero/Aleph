@@ -703,3 +703,237 @@ async fn voice_turn_v1_ingress_is_server_derived() {
     task.abort();
     outcome.unwrap();
 }
+
+#[tokio::test]
+async fn drive_voice_media_reads_cancel_and_eof_before_stalled_reply_ack() {
+    use crate::gateway::handlers::voice_turn_tests::{blocked_stt_cancel, blocked_stt_turn};
+    use axum::extract::ws::Message;
+    use serde_json::{json, Value};
+    use tokio::sync::Notify;
+
+    fn frame(request: Value) -> Result<Message, std::convert::Infallible> {
+        Ok(super::wire_message(&request.to_string(), None, 0, false).unwrap())
+    }
+
+    for send_cancel in [true, false] {
+        let (mut input, mut incoming) = futures::channel::mpsc::channel(2);
+        let (writes, mut replies) = super::Writes::queue(2);
+        let cancelled = Notify::new();
+        let mut deferred = None;
+        let active_id = Some(json!(1));
+        let run = super::drive_voice_media(
+            async {
+                cancelled.notified().await;
+                "cancelled".to_owned()
+            },
+            &mut incoming,
+            &active_id,
+            &mut deferred,
+            &writes,
+            |_, control| {
+                if control.id == Some(json!(1001)) {
+                    cancelled.notify_one();
+                }
+                std::future::ready(Some(Message::Binary(Vec::new().into())))
+            },
+        );
+        let peer = async move {
+            use futures::SinkExt;
+            input.send(frame(blocked_stt_turn(3))).await.unwrap();
+            input.send(frame(blocked_stt_cancel(2))).await.unwrap();
+            let stalled_reply = replies.recv().await.unwrap();
+            if send_cancel {
+                input.send(frame(blocked_stt_cancel(1))).await.unwrap();
+            }
+            drop(input);
+            // `join!` retains this item (and its ack sender) until the driver returns.
+            (stalled_reply, replies)
+        };
+        let (result, _stalled_writer) =
+            tokio::time::timeout(super::IO_TIMEOUT, async { tokio::join!(run, peer) })
+                .await
+                .expect("voice media must not wait for the blocked reply acknowledgment");
+        assert_eq!(result.as_deref(), send_cancel.then_some("cancelled"));
+        assert_eq!(deferred.unwrap().1.id, Some(json!(3)));
+    }
+}
+
+#[tokio::test]
+async fn drive_voice_media_reserves_control_id_until_write_ack() {
+    use crate::gateway::handlers::voice_turn_tests::{blocked_stt_cancel, blocked_stt_turn};
+    use axum::extract::ws::Message;
+    use futures::SinkExt;
+    use serde_json::{json, Value};
+    use std::cell::Cell;
+
+    fn frame(request: Value) -> Result<Message, std::convert::Infallible> {
+        Ok(super::wire_message(&request.to_string(), None, 0, false).unwrap())
+    }
+
+    for second_is_cancel in [true, false] {
+        for acknowledge in [false, true] {
+            let (mut input, mut incoming) = futures::channel::mpsc::channel(2);
+            let (writes, mut replies) = super::Writes::queue(super::MAX_PENDING_VOICE_CONTROLS + 1);
+            let executed = Cell::new(0);
+            let mut deferred = None;
+            let active_id = Some(json!(1));
+            let first = blocked_stt_cancel(2);
+            let id = first["id"].clone();
+            let mut second = if second_is_cancel {
+                blocked_stt_cancel(3)
+            } else {
+                blocked_stt_turn(3)
+            };
+            second["id"] = id.clone();
+            let run = super::drive_voice_media(
+                std::future::pending::<String>(),
+                &mut incoming,
+                &active_id,
+                &mut deferred,
+                &writes,
+                |_, _| {
+                    executed.set(executed.get() + 1);
+                    std::future::ready(Some(Message::Binary(Vec::new().into())))
+                },
+            );
+            let peer = async move {
+                input.send(frame(first)).await.unwrap();
+                let reply = replies.recv().await.unwrap();
+                let held = if acknowledge {
+                    reply.sent.send(()).unwrap();
+                    None
+                } else {
+                    Some(reply.sent)
+                };
+                input.send(frame(second)).await.unwrap();
+                drop(input);
+                // Retain both the held acknowledgment and the queue receiver
+                // until the driver has admitted or refused the later frame.
+                (held, replies)
+            };
+            let (result, _writer) =
+                tokio::time::timeout(super::IO_TIMEOUT, async { tokio::join!(run, peer) })
+                    .await
+                    .expect("driver must not wait on a control write acknowledgment");
+            assert!(result.is_none());
+            assert_eq!(
+                executed.get(),
+                if acknowledge && second_is_cancel {
+                    2
+                } else {
+                    1
+                }
+            );
+            assert_eq!(
+                deferred.and_then(|(_, request)| request.id),
+                (acknowledge && !second_is_cancel).then_some(id)
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn voice_turn_control_bypasses_full_web_query_lane() {
+    blocked_voice_turn_web(true).await;
+}
+
+#[tokio::test]
+async fn voice_turn_web_disconnect_drops_active_provider_wait() {
+    blocked_voice_turn_web(false).await;
+}
+
+async fn blocked_voice_turn_web(cancel: bool) {
+    use crate::gateway::{
+        handlers::voice_turn_tests::{
+            blocked_stt_cancel, blocked_stt_turn, fill_query_lane, BlockedSttFixture,
+        },
+        lane::ChannelClass,
+    };
+    use futures::{SinkExt, StreamExt};
+    use serde_json::{json, Value};
+    use tokio::net::{TcpListener, TcpStream};
+    use tokio_tungstenite::{
+        client_async,
+        tungstenite::{client::IntoClientRequest, Message},
+        WebSocketStream,
+    };
+
+    async fn send(socket: &mut WebSocketStream<TcpStream>, request: Value) {
+        let text = request.to_string();
+        let mut frame = super::encode_header(text.len(), super::MAX_MESSAGE)
+            .unwrap()
+            .to_vec();
+        frame.extend_from_slice(text.as_bytes());
+        socket.send(Message::Binary(frame.into())).await.unwrap();
+    }
+    async fn receive(socket: &mut WebSocketStream<TcpStream>) -> Value {
+        let bytes = socket.next().await.unwrap().unwrap().into_data();
+        let (text, tail) = super::split_frame(&bytes, super::MAX_MESSAGE)
+            .unwrap()
+            .unwrap();
+        assert!(tail.is_empty());
+        serde_json::from_str(text).unwrap()
+    }
+
+    let (mut gateway, _, manager) = fixture(true);
+    gateway.config.require_idempotency_key = true;
+    let provider = BlockedSttFixture::new(gateway.handlers_mut()).await;
+    let lanes = gateway.lane_manager.clone();
+    let stop = tokio_util::sync::CancellationToken::new();
+    let app = gateway.native_tls_router(gateway.build_shared_state(), stop.clone());
+    let origin = "https://localhost:8443";
+    let ticket = manager
+        .create_bootstrap_ticket(None, Some("member-fixture"))
+        .unwrap();
+    let exchange_reply = exchange(
+        app.clone(),
+        Some(origin),
+        json!({"bootstrap_ticket":ticket}),
+    )
+    .await;
+    assert_eq!(exchange_reply.status(), StatusCode::NO_CONTENT);
+    let cookie = exchange_reply.headers()[header::SET_COOKIE]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        .unwrap();
+    });
+    let outcome = tokio::time::timeout(std::time::Duration::from_secs(8), async {
+        let mut request = "ws://localhost:8443/v1/ws".into_client_request().unwrap();
+        for (name, value) in [(header::ORIGIN, origin), (header::SEC_WEBSOCKET_PROTOCOL, super::SUBPROTOCOL), (header::COOKIE, cookie)] {
+            request.headers_mut().insert(name, value.parse().unwrap());
+        }
+        let (mut socket, _) = client_async(request, TcpStream::connect(addr).await.unwrap()).await.unwrap();
+        send(&mut socket, json!({"jsonrpc":"2.0","id":0,"method":"system.hello","params":{
+            "protocol":{"major":1,"minor":0},
+            "client":{"name":"voice-control-fixture","version":"1","platform":"test","ui_runtime":"test"},
+            "features":[]
+        }})).await;
+        assert!(receive(&mut socket).await.get("result").is_some());
+        send(&mut socket, blocked_stt_turn(1)).await;
+        provider.entered(1).await;
+        let _remaining_query_permits = fill_query_lane(&lanes, ChannelClass::Bot).await;
+        if cancel {
+            send(&mut socket, blocked_stt_cancel(1)).await;
+            let mut responses = [receive(&mut socket).await, receive(&mut socket).await];
+            responses.sort_by_key(|response| response["id"].as_u64().unwrap());
+            assert_eq!(responses[0]["error"]["data"]["kind"], "cancelled");
+            assert_eq!(responses[1]["result"]["cancelled"], true);
+        }
+        drop(socket);
+        provider.exited(1).await;
+    }).await;
+    stop.cancel();
+    server.abort();
+    outcome.expect("blocked Web provider wait must end without releasing the fixture");
+}

@@ -630,7 +630,20 @@ async fn desktop_ipc_pushes_admitted_events_only_after_negotiation() {
             receive(&mut live).await,
             serde_json::from_str::<Value>(&own_complete).unwrap()
         );
-        // The live connection still serves requests after the warning.
+        // Publish more than the reply queue can hold in one scheduler turn.
+        // The client reads continuously once the burst is published.
+        let burst: Vec<_> = (0..super::MAX_INFLIGHT + 4)
+            .map(|seq| accepted(&format!("r-burst-{seq}"), &own))
+            .collect();
+        for frame in &burst {
+            bus.publish(frame);
+        }
+        for expected in &burst {
+            assert_eq!(
+                receive(&mut live).await,
+                serde_json::from_str::<Value>(expected).unwrap()
+            );
+        }
         send(&mut live, json!({"jsonrpc":"2.0","method":"health","id":2})).await;
         assert_eq!(receive(&mut live).await["id"], 2);
 
@@ -736,4 +749,372 @@ async fn voice_turn_v1_ingress_is_server_derived() {
     .unwrap();
     let _ = stop.send(());
     task.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn voice_turn_control_bypasses_full_ipc_wire_budget_inflight_and_query_lane() {
+    blocked_voice_turn_ipc(BlockedPeerExit::CancelThenDisconnect).await;
+}
+
+#[tokio::test]
+async fn voice_turn_ipc_disconnect_drops_active_provider_waits() {
+    blocked_voice_turn_ipc(BlockedPeerExit::Disconnect).await;
+}
+
+#[tokio::test]
+async fn voice_turn_ipc_ordinary_wire_budget_overflow_closes_peer() {
+    blocked_voice_turn_ipc(BlockedPeerExit::OrdinaryOverflow).await;
+}
+
+#[derive(Clone, Copy)]
+enum BlockedPeerExit {
+    CancelThenDisconnect,
+    Disconnect,
+    OrdinaryOverflow,
+}
+
+async fn blocked_voice_turn_ipc(exit: BlockedPeerExit) {
+    use crate::gateway::{
+        handlers::voice_turn_tests::{
+            blocked_stt_cancel, blocked_stt_turn, fill_query_lane, BlockedSttFixture,
+        },
+        lane::ChannelClass,
+    };
+    use aleph_client::local_ipc::MAX_INFLIGHT;
+
+    let (_root, endpoint) = fixture();
+    let mut gateway = GatewayServer::new("127.0.0.1:0".parse().unwrap());
+    gateway.set_security_store(Arc::new(SecurityStore::in_memory().unwrap()));
+    let provider = BlockedSttFixture::new(gateway.handlers_mut()).await;
+    let lanes = gateway.lane_manager.clone();
+    let (stop, shutdown) = oneshot::channel();
+    let path = endpoint.clone();
+    let server = tokio::spawn(async move { gateway.run_local_endpoint(shutdown, &path).await });
+    timeout(Duration::from_secs(20), async {
+        let mut stream = connect(&endpoint).await;
+        send(&mut stream, hello(1, 1)).await;
+        assert!(receive(&mut stream).await.get("result").is_some());
+        let (count, frame_bytes) = match exit {
+            BlockedPeerExit::CancelThenDisconnect => {
+                let count = MAX_INFLIGHT;
+                let frame_bytes = super::WIRE_BUDGET / count as usize;
+                assert_eq!(frame_bytes * count as usize, super::WIRE_BUDGET);
+                (count, Some(frame_bytes))
+            }
+            BlockedPeerExit::Disconnect => (MAX_INFLIGHT, None),
+            BlockedPeerExit::OrdinaryOverflow => (2, Some(super::WIRE_BUDGET / 2)),
+        };
+        for id in 1..=count {
+            let mut text = blocked_stt_turn(id).to_string();
+            if let Some(frame_bytes) = frame_bytes {
+                assert!(text.len() < frame_bytes && frame_bytes <= super::MAX_FRAME_BYTES as usize);
+                text.extend(std::iter::repeat_n(' ', frame_bytes - text.len()));
+            }
+            write_frame(&mut stream, &text).await.unwrap();
+        }
+        provider.entered(count).await;
+        let _remaining_query_permits = fill_query_lane(&lanes, ChannelClass::Desktop).await;
+        let cancelled = match exit {
+            BlockedPeerExit::CancelThenDisconnect => {
+                send(&mut stream, blocked_stt_cancel(1)).await;
+                let mut responses = [receive(&mut stream).await, receive(&mut stream).await];
+                responses.sort_by_key(|response| response["id"].as_u64().unwrap());
+                assert_eq!(responses[0]["error"]["data"]["kind"], "cancelled");
+                assert_eq!(responses[1]["result"]["cancelled"], true);
+                provider.exited(1).await;
+                1
+            }
+            BlockedPeerExit::OrdinaryOverflow => {
+                assert!(count < MAX_INFLIGHT, "exercise bytes, not request count");
+                send(&mut stream, blocked_stt_turn(count + 1)).await;
+                assert_closed(&mut stream).await;
+                0
+            }
+            BlockedPeerExit::Disconnect => 0,
+        };
+        drop(stream);
+        provider.exited(count - cancelled).await;
+    })
+    .await
+    .expect("blocked IPC provider wait must end without releasing the fixture");
+    let _ = stop.send(());
+    server.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn voice_turn_ipc_reads_cancel_and_eof_during_partial_reply_write() {
+    use crate::gateway::handlers::voice_turn_tests::{
+        blocked_stt_cancel, blocked_stt_turn, BlockedSttFixture,
+    };
+    use tokio::io::{duplex, split, AsyncReadExt};
+    use tokio_util::sync::CancellationToken;
+
+    let mut gateway = GatewayServer::new("127.0.0.1:0".parse().unwrap());
+    gateway.set_security_store(Arc::new(SecurityStore::in_memory().unwrap()));
+    let provider = BlockedSttFixture::new(gateway.handlers_mut()).await;
+    let bus = gateway.event_bus.clone();
+    let state = gateway.build_shared_state();
+    const BUFFER: usize = 64;
+    let (mut client, server) = duplex(BUFFER);
+    let task = tokio::spawn(async move {
+        let (read, write) = split(server);
+        let mut cleanup = None;
+        let result =
+            super::serve_peer(read, write, state, CancellationToken::new(), &mut cleanup).await;
+        if let Some(cleanup) = cleanup {
+            cleanup.finish().await;
+        }
+        result
+    });
+
+    let outcome = timeout(super::WRITE_TIMEOUT, async {
+        let mut request = hello(1, 1);
+        request["params"]["features"] = json!(["live_events"]);
+        write_frame(&mut client, &request.to_string())
+            .await
+            .unwrap();
+        let hello: Value =
+            serde_json::from_str(&read_frame(&mut client).await.unwrap().unwrap()).unwrap();
+        assert_eq!(hello["result"]["features"], json!(["live_events"]));
+        for id in 1..=2 {
+            write_frame(&mut client, &blocked_stt_turn(id).to_string())
+                .await
+                .unwrap();
+        }
+        provider.entered(2).await;
+
+        let ordinary = |id| json!({"jsonrpc":"2.0","method":"fixture.unmounted","id":id});
+        let large = ordinary(json!("x".repeat(2 * BUFFER))).to_string();
+        write_frame(&mut client, &large).await.unwrap();
+        // The writer has started this ordinary reply but its body cannot fit.
+        let len = client.read_u32().await.unwrap() as usize;
+        assert!(len > BUFFER);
+        for id in 4..=super::MAX_INFLIGHT {
+            write_frame(&mut client, &ordinary(json!(id)).to_string())
+                .await
+                .unwrap();
+        }
+        // Two provider waits, the partial reply and the completed ordinary
+        // requests together use all ordinary slots. Event admission has
+        // priority over reading the control frame.
+        bus.publish(super::super::overflow_warning_frame(1, 1));
+        write_frame(&mut client, &blocked_stt_cancel(1).to_string())
+            .await
+            .unwrap();
+        provider.exited(1).await;
+
+        let mut body = vec![0; len];
+        client.read_exact(&mut body).await.unwrap();
+        let mut ids = Vec::new();
+        let mut event_count = 0;
+        for _ in 0..super::MAX_INFLIGHT {
+            let reply: Value =
+                serde_json::from_str(&read_frame(&mut client).await.unwrap().unwrap()).unwrap();
+            if reply["params"]["topic"] == "connection.warning" {
+                event_count += 1;
+            } else {
+                let id = reply["id"].as_u64().unwrap();
+                match id {
+                    1 => assert_eq!(reply["error"]["data"]["kind"], "cancelled"),
+                    1001 => {
+                        assert_eq!(event_count, 1, "event must be ahead of the control reply");
+                        assert_eq!(reply["result"]["cancelled"], true);
+                    }
+                    _ => assert_eq!(reply["error"]["code"], METHOD_NOT_FOUND),
+                }
+                ids.push(id);
+            }
+        }
+        ids.sort_unstable();
+        let expected: Vec<_> = [1]
+            .into_iter()
+            .chain(4..=u64::from(super::MAX_INFLIGHT))
+            .chain([1001])
+            .collect();
+        assert_eq!(ids, expected);
+        assert_eq!(event_count, 1);
+
+        // Stall another reply before observing EOF with the other job active.
+        write_frame(&mut client, &large).await.unwrap();
+        assert!(client.read_u32().await.unwrap() as usize > BUFFER);
+        drop(client);
+        provider.exited(1).await;
+    })
+    .await;
+    // The duplex write may observe the close before the reader does.
+    let _ = task.await.unwrap();
+    outcome.expect("cancel and EOF must not wait for the blocked writer");
+}
+
+#[tokio::test]
+async fn desktop_ipc_delivers_lag_warning_despite_ready_malformed_requests() {
+    use std::task::Poll;
+    use tokio::io::duplex;
+    use tokio_util::sync::CancellationToken;
+
+    let mut gateway = GatewayServer::new("127.0.0.1:0".parse().unwrap());
+    gateway.set_security_store(Arc::new(SecurityStore::in_memory().unwrap()));
+    let bus = gateway.event_bus.clone();
+    let state = gateway.build_shared_state();
+    let (mut requests, read) = duplex(1024);
+    let (write, mut replies) = duplex(64);
+    let mut cleanup = None;
+
+    timeout(super::WRITE_TIMEOUT, async {
+        let mut request = hello(1, 1);
+        request["params"]["features"] = json!(["live_events"]);
+        write_frame(&mut requests, &request.to_string())
+            .await
+            .unwrap();
+        // Both invalid payloads are already readable before the writer can
+        // acknowledge the warning. The request side stays open for the test.
+        for text in [
+            "{",
+            r#"{"jsonrpc":"2.0","method":"health"}"#,
+            r#"{"jsonrpc":"2.0","method":"health","id":2}"#,
+        ] {
+            write_frame(&mut requests, text).await.unwrap();
+        }
+
+        let result = {
+            let peer =
+                super::serve_peer(read, write, state, CancellationToken::new(), &mut cleanup);
+            tokio::pin!(peer);
+            assert!(matches!(futures::poll!(peer.as_mut()), Poll::Pending));
+            // No further peer polls until the real bus has overrun its ring.
+            let event = json!({"jsonrpc":"2.0","method":"stream.run_accepted","params":{
+                "type":"run_accepted","run_id":"lag-fixture",
+                "session_key":SessionKey::main("owner-live").to_key_string(),"accepted_at":"t",
+            }})
+            .to_string();
+            for _ in 0..2048 {
+                assert!(bus.publish(&event) > 0, "hello must have subscribed");
+            }
+
+            let (result, ()) = tokio::join!(peer, async {
+                let hello: Value =
+                    serde_json::from_str(&read_frame(&mut replies).await.unwrap().unwrap())
+                        .unwrap();
+                assert_eq!(hello["result"]["features"], json!(["live_events"]));
+                let warning: Value =
+                    serde_json::from_str(&read_frame(&mut replies).await.unwrap().unwrap())
+                        .unwrap();
+                assert_eq!(
+                    warning["method"],
+                    aleph_protocol::jsonrpc::TOPIC_EVENT_METHOD
+                );
+                assert!(warning.get("id").is_none());
+                assert_eq!(warning["params"]["topic"], "connection.warning");
+                let data = &warning["params"]["data"];
+                assert_eq!(data["reason"], "events_overflow");
+                assert_eq!(data["advice"], "reconnect");
+                assert!(data["dropped"].as_u64().unwrap() > 0);
+                assert_eq!(data["dropped"], data["total_overflow"]);
+                assert!(read_frame(&mut replies).await.unwrap().is_none());
+            });
+            result
+        };
+        if let Some(cleanup) = cleanup {
+            cleanup.finish().await;
+        }
+        result.expect("peer must close after acknowledging the warning");
+    })
+    .await
+    .expect("lag warning and EOF must arrive while the request side is still open");
+}
+
+#[tokio::test]
+async fn voice_turn_ipc_adapter_retains_slot_and_clip_until_release_during_shutdown() {
+    use crate::gateway::{
+        handlers::voice_turn_tests::{
+            blocked_stt_cancel, blocked_stt_turn, mount_gated_offline, SttFixture,
+        },
+        lane::Lane,
+    };
+
+    let (_root, endpoint) = fixture();
+    let scratch = tempfile::tempdir().unwrap();
+    let provider = SttFixture::new().await;
+    let mut gateway = GatewayServer::new("127.0.0.1:0".parse().unwrap());
+    gateway.set_security_store(Arc::new(SecurityStore::in_memory().unwrap()));
+    let engine = mount_gated_offline(&provider, gateway.handlers_mut(), &scratch).await;
+    gateway
+        .handlers_mut()
+        .register("health", crate::gateway::handlers::health::handle);
+    let bus = gateway.event_bus.clone();
+    let lanes = gateway.lane_manager.clone();
+    let available = || {
+        lanes
+            .snapshot()
+            .into_iter()
+            .find(|row| row.lane == Lane::Query.to_string())
+            .unwrap()
+            .shared_available
+    };
+    let capacity = available();
+    let clip_count = || std::fs::read_dir(scratch.path()).unwrap().count();
+    let (stop, shutdown) = oneshot::channel();
+    let path = endpoint.clone();
+    let mut server = tokio::spawn(async move { gateway.run_local_endpoint(shutdown, &path).await });
+
+    timeout(Duration::from_secs(8), async {
+        let mut stream = connect(&endpoint).await;
+        let mut request = hello(1, 1);
+        request["params"]["features"] = json!(["live_events"]);
+        send(&mut stream, request).await;
+        assert_eq!(
+            receive(&mut stream).await["result"]["features"],
+            json!(["live_events"])
+        );
+        send(&mut stream, blocked_stt_turn(1)).await;
+        engine.wait_started().await;
+        send(&mut stream, blocked_stt_cancel(1)).await;
+        assert_eq!(receive(&mut stream).await["result"]["cancelled"], true);
+        engine.wait_cancelled().await;
+        assert_eq!(clip_count(), 1);
+        assert_eq!(available(), capacity - 1);
+
+        // A second control proves progress without the cancelled work's reply.
+        let mut duplicate = blocked_stt_cancel(1);
+        duplicate["id"] = json!(1002);
+        send(&mut stream, duplicate).await;
+        let reply = receive(&mut stream).await;
+        assert_eq!(reply["id"], 1002);
+        assert_eq!(reply["result"]["cancelled"], false);
+
+        // Force the live feed's clean Close, not the listener stop/error
+        // path that unconditionally disconnects the pipe. No outbound frame
+        // is needed, so the assertion cannot race unread pipe data.
+        bus.publish(json!({"topic": super::super::TOKEN_ROTATED_TOPIC}).to_string());
+        assert_closed(&mut stream).await;
+        assert_eq!(clip_count(), 1);
+        assert_eq!(available(), capacity - 1);
+
+        let mut healthy = connect(&endpoint).await;
+        send(&mut healthy, hello(1, 1)).await;
+        assert!(receive(&mut healthy).await.get("result").is_some());
+        send(
+            &mut healthy,
+            json!({"jsonrpc":"2.0","method":"health","id":2}),
+        )
+        .await;
+        assert_eq!(receive(&mut healthy).await["result"]["status"], "healthy");
+        drop(healthy);
+        stop.send(()).unwrap();
+        assert!(
+            timeout(Duration::from_millis(50), &mut server)
+                .await
+                .is_err(),
+            "shutdown left the adapter unowned"
+        );
+        assert_eq!(clip_count(), 1);
+        assert_eq!(available(), capacity - 1);
+
+        engine.release();
+        server.await.unwrap().unwrap();
+        assert_eq!(clip_count(), 0);
+        assert_eq!(available(), capacity);
+    })
+    .await
+    .unwrap();
 }
