@@ -70,6 +70,25 @@ build-debug: wasm
     cargo build -p alephcore --bin {{server_bin}}
     @echo "✓ Server (debug): {{debug_dir}}/{{server_bin}}"
 
+# ─── Desktop App (NSH host, packaged by the nsh toolchain) ───
+
+# Package the desktop app with `nsh package`, then add the release
+# aleph-server (and AlephBridge on macOS): <out>/Aleph.app or <out>/Aleph/,
+# and <out>/Aleph-<version>-<os>-<arch>.{tar.gz|zip}.
+nsh-package target=os() out="target/nsh-out":
+    bash scripts/nsh_package.sh --target {{target}} --out {{out}}
+
+# Run the desktop app in nsh's development host with hot reload. The host's
+# executable is not beside aleph-server, so the local target finds the debug
+# server built first through PATH.
+nsh-dev: build-debug
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # cargo's real target dir: .cargo/config.toml may pin a shared one.
+    target_dir="$(cargo metadata --format-version 1 --no-deps \
+        | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p' | sed 's/\\\\/\//g')"
+    cd desktop/nsh-shell && PATH="$target_dir/debug:$PATH" nsh run
+
 # ─── Desktop App (Tauri v2 native shell, with aleph-server bundled in) ───
 
 # Stage the daemon (+ macOS Swift bridge) as Tauri externalBin inputs.

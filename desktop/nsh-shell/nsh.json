@@ -4,12 +4,43 @@
   "version": "26.9.1",
   "rust": ".",
   "root": "App",
-  "schemes": ["aleph"],
+  "schemes": [
+    "aleph"
+  ],
   "singleInstance": true,
   "window": {
     "title": "Aleph",
-    "defaultSize": { "width": 1180, "height": 800 },
+    "defaultSize": {
+      "width": 1180,
+      "height": 800
+    },
     "closeOnPress": false,
     "restoreBounds": true
+  },
+  "capabilities": {
+    "network": {
+      "hosts": [
+        "*"
+      ]
+    },
+    "webview": {
+      "hosts": [
+        "*"
+      ],
+      "media": [
+        "microphone"
+      ]
+    },
+    "notifications": true,
+    "openUrl": {
+      "schemes": [
+        "https",
+        "http",
+        "mailto",
+        "x-apple.systempreferences"
+      ]
+    },
+    "windows": {},
+    "application": true
   }
 }

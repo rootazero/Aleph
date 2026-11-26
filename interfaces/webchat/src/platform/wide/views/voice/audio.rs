@@ -169,32 +169,30 @@ pub(crate) enum MicError {
 }
 
 /// Is the Panel running inside the native desktop shell? The shell injects
-/// `data-shell="aleph-tauri"` on `<html>` for every document it loads —
-/// including the remote-served Panel, and there before the page's own first
-/// script (measured 2026-08-31; `qa/webview_compat/run.sh macos`, scenario
-/// `marker-origin`).
+/// `data-shell` on `<html>` for every document it loads, including the
+/// remote-served Panel, before the page's own first script: `"aleph-nsh"`
+/// from the NSH host (`desktop/nsh-shell/src/panel_bridge.js`), and
+/// `"aleph-tauri"` from the Tauri host until that host is removed.
 ///
-/// Prefer it over `window.__TAURI__` because it is *our* marker: one writer,
-/// one spelling, and it carries the platform alongside. The reason is NOT that
-/// Tauri withholds its globals from a remotely-navigated origin — this doc used
-/// to say that, and the same measurement shows `window.__TAURI_INTERNALS__` is
-/// defined on a remote origin too (Tauri's own init scripts take the same
-/// document-start path). What a remote origin does not get is the *capability*
-/// that lets an `invoke` succeed, which is a different fact and not one this
-/// predicate is asking about.
-///
-/// The distinction matters for a mic *denial*: in the shell, wry auto-grants the
-/// webview capture request, so a denial is an OS-level (macOS TCC) refusal a
-/// deep-link can fix. In a plain browser the denial is a *per-origin* browser
-/// permission — the macOS Settings pane is the wrong place to send the user (the
-/// browser app is already allowed there); they must re-grant the site itself.
+/// Prefer it over runtime globals because it is *our* marker: one writer per
+/// host, one spelling. The distinction matters for a mic *denial*: the shell
+/// grants the WebView's capture request itself (NSH through the
+/// `webview.media` capability), so a denial is an OS-level (macOS TCC)
+/// refusal a deep-link can fix. In a plain browser the denial is a
+/// *per-origin* browser permission: the macOS Settings pane is the wrong
+/// place to send the user (the browser app is already allowed there); they
+/// must re-grant the site itself.
 pub(crate) fn is_native_shell() -> bool {
-    web_sys::window()
+    let marker = web_sys::window()
         .and_then(|w| w.document())
         .and_then(|d| d.document_element())
-        .and_then(|e| e.get_attribute("data-shell"))
-        .as_deref()
-        == Some("aleph-tauri")
+        .and_then(|e| e.get_attribute("data-shell"));
+    native_shell_marker(marker.as_deref())
+}
+
+/// Whether a `data-shell` value names one of Aleph's desktop hosts.
+fn native_shell_marker(data_shell: Option<&str>) -> bool {
+    matches!(data_shell, Some("aleph-nsh" | "aleph-tauri"))
 }
 
 impl MicError {
@@ -1219,5 +1217,21 @@ mod frame_tests {
         assert_eq!(i16::from_le_bytes([bytes[2], bytes[3]]), 32767);
         assert_eq!(i16::from_le_bytes([bytes[4], bytes[5]]), -32768);
         assert_eq!(i16::from_le_bytes([bytes[6], bytes[7]]), 32767);
+    }
+}
+
+#[cfg(test)]
+mod shell_marker_tests {
+    use super::native_shell_marker;
+
+    #[test]
+    fn nsh_marker_is_native() {
+        assert!(native_shell_marker(Some("aleph-nsh")));
+    }
+
+    #[test]
+    fn missing_or_foreign_marker_is_not_native() {
+        assert!(!native_shell_marker(None));
+        assert!(!native_shell_marker(Some("other")));
     }
 }

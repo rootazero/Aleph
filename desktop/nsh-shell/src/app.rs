@@ -215,7 +215,7 @@ fn panel(launch: &launch::Launch, window: WindowRef) -> AnyElement {
             let Some(nonce) = nonce.as_deref() else {
                 return;
             };
-            let Ok(mut event) = serde_json::from_str::<serde_json::Value>(raw) else {
+            let Ok(event) = serde_json::from_str::<serde_json::Value>(raw) else {
                 return;
             };
             if event["nonce"].as_str() != Some(nonce)
@@ -224,7 +224,11 @@ fn panel(launch: &launch::Launch, window: WindowRef) -> AnyElement {
                 return;
             }
             #[cfg(all(target_os = "macos", debug_assertions))]
-            crate::clock::annotate(&mut event);
+            let event = {
+                let mut event = event;
+                crate::clock::annotate(&mut event);
+                event
+            };
             println!("ALEPH_PANEL_QA {event}");
             let _ = std::io::stdout().flush();
             let close = event["kind"].as_str() == Some("close-requested");
