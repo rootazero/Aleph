@@ -3,7 +3,13 @@ name = "aleph-nsh-shell"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "aleph_nsh_shell"
+path = "src/lib.rs"
+
 [features]
+# The nsh runner builds the app crate with its default features only.
+default = ["embedded-core"]
 embedded-core = ["dep:aleph-desktop-host"]
 qa-service = ["aleph-client/qa-service"]
 # Opt-in embedded TSX Panel (macOS only in S2): runs `interfaces/panel` in an

@@ -1,5 +1,5 @@
 //! The native shell hosts the canonical Panel; it owns no chat projection.
-pub(crate) const APP_ID: &str = "com.aleph.nsh-shell";
+pub(crate) const APP_ID: &str = "ai.aleph.desktop";
 
 pub(crate) fn valid_qa_nonce(nonce: &str) -> bool {
     nonce.len() == 64

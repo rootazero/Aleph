@@ -1,0 +1,15 @@
+{
+  "name": "Aleph",
+  "id": "ai.aleph.desktop",
+  "version": "26.9.1",
+  "rust": ".",
+  "root": "App",
+  "schemes": ["aleph"],
+  "singleInstance": true,
+  "window": {
+    "title": "Aleph",
+    "defaultSize": { "width": 1180, "height": 800 },
+    "closeOnPress": false,
+    "restoreBounds": true
+  }
+}
