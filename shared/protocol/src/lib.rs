@@ -41,6 +41,7 @@ mod ids;
 pub mod json_canvas;
 pub mod jsonrpc;
 pub mod memory_graph;
+pub mod memory_trace;
 pub mod metrics;
 pub mod native_credentials;
 pub mod panel;
