@@ -21,6 +21,7 @@ use alephcore::gateway::agent_instance::AgentInstanceConfig;
 use alephcore::gateway::event_bus::GatewayEventBus;
 use alephcore::gateway::event_visibility::EventVisibilityIndex;
 use alephcore::gateway::execution_engine::{set_mcp_tool_registry, ExecutionEngineConfig};
+use alephcore::gateway::handlers::agent::AgentRunManager;
 use alephcore::gateway::router::{AgentRouter, SessionKey};
 use alephcore::gateway::session_manager::{SessionManager, SessionManagerConfig};
 use alephcore::gateway::session_store::error::SessionStoreError;
@@ -48,6 +49,7 @@ struct Effects {
     provider_requests: Mutex<Vec<ProviderObservation>>,
     provider_entered: watch::Sender<usize>,
     provider_gate: watch::Sender<bool>,
+    provider_gate_input: Mutex<Option<String>>,
     tools: AtomicUsize,
 }
 
@@ -55,6 +57,138 @@ struct Effects {
 pub struct ProviderObservation {
     pub name: String,
     pub user_texts: Vec<String>,
+}
+
+use alephcore::session::events::{EventSeq, Retire, RunOutcome, SessionEvent, SessionEventRecord};
+use alephcore::session::service::{SessionError, SessionHandle, SessionId, SessionService};
+
+struct TerminalCommitGate {
+    committed: watch::Sender<Option<(String, RunOutcome)>>,
+    release: watch::Sender<bool>,
+}
+
+#[derive(Debug)]
+struct SteeringReadGate {
+    armed: std::sync::atomic::AtomicBool,
+    entered: watch::Sender<Vec<String>>,
+    release: watch::Sender<bool>,
+    lose_append_ack_for: Mutex<Option<String>>,
+    matching_appends: AtomicUsize,
+}
+
+struct GatedSessionService {
+    inner: alephcore::session::in_process::InProcessActorSessionService,
+    gate: Arc<TerminalCommitGate>,
+    steering_read: Arc<SteeringReadGate>,
+}
+
+#[async_trait]
+impl SessionService for GatedSessionService {
+    async fn attach(&self, id: SessionId) -> Result<SessionHandle, SessionError> {
+        self.inner.attach(id).await
+    }
+
+    async fn get_events(
+        &self,
+        id: &SessionId,
+        from: Option<EventSeq>,
+        to: Option<EventSeq>,
+    ) -> Result<Vec<SessionEventRecord>, SessionError> {
+        let events = self.inner.get_events(id, from, to).await?;
+        if self.steering_read.armed.swap(false, Ordering::SeqCst) {
+            let snapshot = events
+                .iter()
+                .filter_map(|r| match &r.event {
+                    SessionEvent::UserMessage {
+                        content,
+                        synthetic: false,
+                        ..
+                    } => Some(content.text.clone()),
+                    _ => None,
+                })
+                .collect();
+            self.steering_read.entered.send_replace(snapshot);
+            self.steering_read
+                .release
+                .subscribe()
+                .wait_for(|released| *released)
+                .await
+                .expect("fixture owns steering read gate");
+        }
+        Ok(events)
+    }
+
+    async fn emit_event(
+        &self,
+        id: &SessionId,
+        event: SessionEvent,
+    ) -> Result<EventSeq, SessionError> {
+        let marker = match &event {
+            SessionEvent::RunFinished {
+                run_id, outcome, ..
+            } => Some((run_id.clone(), *outcome)),
+            _ => None,
+        };
+        let lose_ack = match &event {
+            SessionEvent::UserMessage {
+                content,
+                synthetic: false,
+                ..
+            } => {
+                self.steering_read
+                    .lose_append_ack_for
+                    .lock()
+                    .unwrap()
+                    .as_deref()
+                    == Some(content.text.as_str())
+            }
+            _ => false,
+        };
+        let seq = self.inner.emit_event(id, event).await?;
+        if lose_ack {
+            self.steering_read
+                .matching_appends
+                .fetch_add(1, Ordering::SeqCst);
+            return Err(SessionError::AppendOutcomeUnknown(
+                "fixture lost append acknowledgement".into(),
+            ));
+        }
+        if let Some(marker) = marker {
+            self.gate.committed.send_replace(Some(marker));
+            // The row is durable, but the harness cannot produce its completion frame yet.
+            self.gate
+                .release
+                .subscribe()
+                .wait_for(|released| *released)
+                .await
+                .expect("fixture owns commit gate");
+        }
+        Ok(seq)
+    }
+
+    async fn emit_batch(
+        &self,
+        id: &SessionId,
+        events: Vec<SessionEvent>,
+        retire: Option<Retire>,
+    ) -> Result<Vec<EventSeq>, SessionError> {
+        self.inner.emit_batch(id, events, retire).await
+    }
+
+    async fn subscribe(
+        &self,
+        id: &SessionId,
+    ) -> Result<broadcast::Receiver<SessionEventRecord>, SessionError> {
+        self.inner.subscribe(id).await
+    }
+
+    async fn wake(&self, id: &SessionId) -> Result<SessionHandle, SessionError> {
+        self.inner.wake(id).await
+    }
+
+    async fn detach(&self, id: &SessionId) -> Result<(), SessionError> {
+        self.inner.detach(id).await
+    }
 }
 
 struct LocalProvider(Arc<Effects>);
@@ -74,6 +208,13 @@ impl AiProvider for LocalProvider {
                 .iter()
                 .map(aleph_slot_api::ai_message::UnifiedMessage::text_content)
                 .collect::<Vec<_>>();
+            let held = self
+                .0
+                .provider_gate_input
+                .lock()
+                .expect("provider gate input")
+                .as_ref()
+                .is_none_or(|input| user_texts.contains(input));
             {
                 self.0
                     .provider_requests
@@ -85,12 +226,14 @@ impl AiProvider for LocalProvider {
                     });
             }
             self.0.provider_entered.send_modify(|count| *count += 1);
-            self.0
-                .provider_gate
-                .subscribe()
-                .wait_for(|open| *open)
-                .await
-                .expect("fixture owns provider gate");
+            if held {
+                self.0
+                    .provider_gate
+                    .subscribe()
+                    .wait_for(|open| *open)
+                    .await
+                    .expect("fixture owns provider gate");
+            }
             Ok(ProviderResponse::text_only("readiness local reply".into()))
         })
     }
@@ -194,6 +337,7 @@ struct HandlerContext {
     config: Arc<RwLock<alephcore::Config>>,
     providers: Arc<SingleProviderRegistry>,
     store: Arc<BarrierStore>,
+    run_manager: Arc<AgentRunManager>,
 }
 
 struct Call {
@@ -201,6 +345,7 @@ struct Call {
     user: String,
     key: String,
     input: String,
+    run_only: Option<bool>,
     response: oneshot::Sender<JsonRpcResponse>,
 }
 
@@ -222,6 +367,8 @@ pub struct ReadinessRig {
     worker: Option<JoinHandle<anyhow::Result<()>>>,
     context: Arc<HandlerContext>,
     effects: Arc<Effects>,
+    terminal_commit: Arc<TerminalCommitGate>,
+    steering_read: Arc<SteeringReadGate>,
     frames: Mutex<broadcast::Receiver<String>>,
     terminal_frames: AsyncMutex<broadcast::Receiver<String>>,
     event_visibility: Arc<EventVisibilityIndex>,
@@ -233,6 +380,10 @@ pub struct ReadinessRig {
 
 impl ReadinessRig {
     pub async fn new() -> anyhow::Result<Self> {
+        Self::new_with_steering(false).await
+    }
+
+    pub async fn new_with_steering(mid_turn_steering: bool) -> anyhow::Result<Self> {
         // Process bootstrap only; metadata readiness remains controlled by the store gates.
         FIXTURE_PROCESS_BOOT.call_once(|| {
             set_mcp_tool_registry(Arc::new(ToolHandlerRegistry::new()));
@@ -250,7 +401,19 @@ impl ReadinessRig {
             provider_requests: Mutex::new(Vec::new()),
             provider_entered: watch::channel(0).0,
             provider_gate: watch::channel(true).0,
+            provider_gate_input: Mutex::new(None),
             tools: AtomicUsize::new(0),
+        });
+        let terminal_commit = Arc::new(TerminalCommitGate {
+            committed: watch::channel(None).0,
+            release: watch::channel(true).0,
+        });
+        let steering_read = Arc::new(SteeringReadGate {
+            armed: Default::default(),
+            entered: watch::channel(Vec::new()).0,
+            release: watch::channel(true).0,
+            lose_append_ack_for: Mutex::new(None),
+            matching_appends: AtomicUsize::new(0),
         });
         let providers = Arc::new(SingleProviderRegistry::new(Arc::new(LocalProvider(
             effects.clone(),
@@ -263,7 +426,8 @@ impl ReadinessRig {
             ExecutionEngine::new(
                 ExecutionEngineConfig {
                     default_timeout_secs: 10,
-                    mid_turn_steering: false,
+                    mid_turn_steering,
+                    max_pending_steering: 1,
                     ..Default::default()
                 },
                 providers.clone(),
@@ -296,14 +460,22 @@ impl ReadinessRig {
             .await;
         let mut router = AgentRouter::new();
         router.set_session_store(store.clone());
+        let router = Arc::new(router);
+        let run_manager = Arc::new(AgentRunManager::new(
+            router.clone(),
+            events.clone(),
+            agents.clone(),
+            engine.clone(),
+        ));
         let context = Arc::new(HandlerContext {
             engine,
             events,
-            router: Arc::new(router),
+            router,
             agents,
             config,
             providers,
             store,
+            run_manager,
         });
         let (calls, incoming) = mpsc::unbounded_channel();
         let (controls, control_commands) = mpsc::unbounded_channel();
@@ -314,6 +486,8 @@ impl ReadinessRig {
         let worker_shutdown = shutdown.clone();
         let worker_keys = keys.clone();
         let worker_effects = effects.clone();
+        let worker_terminal_commit = terminal_commit.clone();
+        let worker_steering_read = steering_read.clone();
         let worker = std::thread::Builder::new()
             .name("session-readiness-fixture".into())
             .spawn(move || {
@@ -322,7 +496,12 @@ impl ReadinessRig {
                     .build()?;
                 let local = LocalSet::new();
                 let result = runtime.block_on(local.run_until(async move {
-                    let init = install_orchestrator(&worker_context.engine, worker_effects);
+                    let init = install_orchestrator(
+                        &worker_context.engine,
+                        worker_effects,
+                        worker_terminal_commit,
+                        worker_steering_read,
+                    );
                     let ok = init.is_ok();
                     let _ = ready_tx.send(init);
                     if !ok {
@@ -351,6 +530,8 @@ impl ReadinessRig {
                 worker: Some(worker),
                 context: context.clone(),
                 effects,
+                terminal_commit,
+                steering_read,
                 frames,
                 terminal_frames,
                 event_visibility: Arc::new(EventVisibilityIndex::new()),
@@ -424,6 +605,7 @@ impl ReadinessRig {
         user: &str,
         key: &str,
         input: &str,
+        run_only: Option<bool>,
     ) -> oneshot::Receiver<JsonRpcResponse> {
         let (response, receive) = oneshot::channel();
         self.keys.lock().expect("fixture keys").insert(key.into());
@@ -433,6 +615,7 @@ impl ReadinessRig {
                 user: user.into(),
                 key: key.into(),
                 input: input.into(),
+                run_only,
                 response,
             })
             .expect("fixture runtime is open");
@@ -450,6 +633,7 @@ impl ReadinessRig {
             user,
             key,
             &format!("readiness-synthetic-caller:{user}"),
+            None,
         )
     }
 
@@ -465,7 +649,7 @@ impl ReadinessRig {
         key: &str,
         input: &str,
     ) -> oneshot::Receiver<JsonRpcResponse> {
-        self.start_call_with_input("chat.send", user, key, input)
+        self.start_call_with_input("chat.send", user, key, input, None)
     }
 
     pub fn start_chat_send(&self, user: &str, key: &str) -> oneshot::Receiver<JsonRpcResponse> {
@@ -511,8 +695,74 @@ impl ReadinessRig {
     pub async fn chat_send(&self, user: &str, key: &str) -> JsonRpcResponse {
         self.call("chat.send", user, key).await
     }
+    pub async fn chat_send_exact(&self, user: &str, key: &str) -> JsonRpcResponse {
+        self.chat_send_exact_with_input(user, key, "exact voice test")
+            .await
+    }
+
+    pub async fn chat_send_exact_with_input(
+        &self,
+        user: &str,
+        key: &str,
+        input: &str,
+    ) -> JsonRpcResponse {
+        self.start_call_with_input("chat.send", user, key, input, Some(true))
+            .await
+            .expect("real chat.send finishes")
+    }
+
+    pub fn lose_steering_append_ack_for(&self, text: &str) {
+        *self.steering_read.lose_append_ack_for.lock().unwrap() = Some(text.into());
+    }
+
+    pub fn steering_appends_with_lost_ack(&self) -> usize {
+        self.steering_read.matching_appends.load(Ordering::SeqCst)
+    }
+
+    pub fn hold_next_steering_read(&self) {
+        self.steering_read.release.send_replace(false);
+        self.steering_read.armed.store(true, Ordering::SeqCst);
+    }
+
+    pub async fn wait_steering_read_with(&self, text: &str) {
+        self.steering_read
+            .entered
+            .subscribe()
+            .wait_for(|snapshot| snapshot.iter().any(|seen| seen == text))
+            .await
+            .expect("fixture owns steering read gate");
+    }
+
+    pub fn release_steering_read(&self) {
+        self.steering_read.release.send_replace(true);
+    }
+
+    pub fn observe_frames(&self) -> broadcast::Receiver<String> {
+        self.context.events.subscribe()
+    }
+
+    pub fn hold_terminal_commit_receipt(&self) {
+        self.terminal_commit.release.send_replace(false);
+    }
+
+    pub fn release_terminal_commit_receipt(&self) {
+        self.terminal_commit.release.send_replace(true);
+    }
+
+    pub async fn wait_terminal_commit(&self, run_id: &str) -> RunOutcome {
+        let mut events = self.terminal_commit.committed.subscribe();
+        let found = events
+            .wait_for(|last| last.as_ref().is_some_and(|(id, _)| id == run_id))
+            .await
+            .expect("fixture owns commit gate");
+        found.as_ref().unwrap().1
+    }
+
     pub async fn agent_run(&self, user: &str, key: &str) -> JsonRpcResponse {
         self.call("agent.run", user, key).await
+    }
+    pub async fn chat_abort_exact(&self, user: &str, run_id: &str) -> JsonRpcResponse {
+        self.call("chat.abort", user, run_id).await
     }
     pub async fn wait_prepare_entered(&self) {
         self.wait_prepare_entries(1).await;
@@ -623,12 +873,38 @@ impl ReadinessRig {
         self.effects.provider_gate.send_replace(false);
     }
 
+    pub fn close_provider_for_input(&self, input: &str) {
+        *self
+            .effects
+            .provider_gate_input
+            .lock()
+            .expect("provider gate input") = Some(input.into());
+        self.close_provider();
+    }
+
     pub fn release_provider(&self) {
         self.effects.provider_gate.send_replace(true);
     }
 
     pub async fn wait_provider_entered(&self) {
         BarrierStore::wait_count(&self.effects.provider_entered, 1).await;
+    }
+
+    pub fn provider_requests_with_input(&self, input: &str) -> usize {
+        self.effects
+            .provider_requests
+            .lock()
+            .expect("provider request observations")
+            .iter()
+            .filter(|request| request.user_texts.iter().any(|text| text == input))
+            .count()
+    }
+
+    pub async fn wait_provider_input(&self, input: &str) {
+        let mut entered = self.effects.provider_entered.subscribe();
+        while self.provider_requests_with_input(input) == 0 {
+            entered.changed().await.expect("fixture owns provider gate");
+        }
     }
 
     pub fn provider_observations(&self) -> Vec<ProviderObservation> {
@@ -695,6 +971,9 @@ impl ReadinessRig {
     pub async fn close(mut self) -> anyhow::Result<()> {
         self.release_prepare();
         self.release_committed_prepare();
+        self.release_terminal_commit_receipt();
+        self.release_steering_read();
+        self.release_provider();
         self.shutdown.cancel();
         let worker = self.worker.take().expect("fixture runtime owner");
         let joined = tokio::task::spawn_blocking(move || worker.join())
@@ -804,23 +1083,27 @@ async fn serve_calls(
                 let key = call.key.clone();
                 let map_key = key.clone();
                 let handle = handlers.spawn_local(async move {
-                    let request = JsonRpcRequest::new(
-                        call.method,
-                        Some(json!({
-                            "input": call.input,
-                            "session_key": call.key
-                        })),
-                        Some(json!("readiness-rpc")),
-                    );
+                    let params = if call.method == "chat.abort" {
+                        json!({"run_id": call.key, "run_only": true})
+                    } else {
+                        let mut params = json!({"input": call.input, "session_key": call.key});
+                        if let Some(run_only) = call.run_only {
+                            params["run_only"] = json!(run_only);
+                        }
+                        params
+                    };
+                    let request = JsonRpcRequest::new(call.method, Some(params), Some(json!("readiness-rpc")));
                     let result = trusted_caller(&call.user, RPC_HANDLER.scope((), async {
-                        if call.method == "chat.send" {
-                            crate::server_init::handle_chat_send_with_engine(request, context.engine.clone(), context.events.clone(), context.router.clone(), context.agents.clone(), context.config.clone(), None, context.providers.clone(), context.store.clone(), None).await
-                        } else {
-                            crate::server_init::handle_run_with_engine(request, context.engine.clone(), context.events.clone(), context.router.clone(), context.agents.clone(), context.config.clone(), None, context.store.clone(), None).await
+                        match call.method {
+                            "chat.send" => crate::server_init::handle_chat_send_with_engine(request, context.engine.clone(), context.events.clone(), context.router.clone(), context.agents.clone(), context.config.clone(), None, context.providers.clone(), context.store.clone(), None, context.run_manager.clone()).await,
+                            "chat.abort" => alephcore::gateway::handlers::chat::handle_abort(request, context.run_manager.clone(), context.store.clone()).await,
+                            _ => crate::server_init::handle_run_with_engine(request, context.engine.clone(), context.events.clone(), context.router.clone(), context.agents.clone(), context.config.clone(), None, context.store.clone(), None).await,
                         }
                     })).await;
-                    if let Some(id) = result.result.as_ref().and_then(|v| v["run_id"].as_str()) {
-                        run_ids.lock().expect("submitted run ids").push(id.to_string());
+                    if call.method != "chat.abort" {
+                        if let Some(id) = result.result.as_ref().and_then(|v| v["run_id"].as_str()) {
+                            run_ids.lock().expect("submitted run ids").push(id.to_string());
+                        }
                     }
                     let _ = call.response.send(result);
                     (key, ())
@@ -1239,13 +1522,17 @@ impl alephcore::tools::service::ToolService for EmptyTools {
     }
 }
 
-fn install_orchestrator(engine: &Engine, effects: Arc<Effects>) -> anyhow::Result<()> {
+fn install_orchestrator(
+    engine: &Engine,
+    effects: Arc<Effects>,
+    gate: Arc<TerminalCommitGate>,
+    steering_read: Arc<SteeringReadGate>,
+) -> anyhow::Result<()> {
     use alephcore::orchestrator::{
         build_sandbox_factory, AgentHarnessRunner, BrainRef, FlowOverrides, FlowRegistry, FlowSet,
         FlowSpec, Orchestrator, SessionStrategy,
     };
     use alephcore::session::in_process::InProcessActorSessionService;
-    use alephcore::session::service::SessionService;
     use alephcore::session::store::{
         migrate_add_session_events, SessionEventStore, SqliteEventStore,
     };
@@ -1253,8 +1540,11 @@ fn install_orchestrator(engine: &Engine, effects: Arc<Effects>) -> anyhow::Resul
     let connection = rusqlite::Connection::open_in_memory()?;
     migrate_add_session_events(&connection)?;
     let events: Arc<dyn SessionEventStore> = Arc::new(SqliteEventStore::new(connection));
-    let session_service: Arc<dyn SessionService> =
-        Arc::new(InProcessActorSessionService::new(events));
+    let session_service: Arc<dyn SessionService> = Arc::new(GatedSessionService {
+        inner: InProcessActorSessionService::new(events),
+        gate,
+        steering_read,
+    });
     let agent_registry = Arc::new(alephcore::agents::AgentRegistry::with_builtins());
     let runner = Arc::new(AgentHarnessRunner {
         agent_registry: agent_registry.clone(),

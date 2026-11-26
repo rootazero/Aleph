@@ -254,6 +254,8 @@ pub enum ReceiptKind {
     Auth,
     /// Network / upstream outage across the whole provider chain.
     Unreachable,
+    /// The message may already be durable; do not encourage resubmission.
+    DeliveryUnconfirmed,
     /// Anything else. Deliberately opaque: the raw chain goes to the server
     /// log, never onto the wire (hermes GAP-5).
     Failed,
@@ -295,7 +297,7 @@ impl ReceiptKind {
             Self::RateLimited => C::RateLimited,
             Self::Auth => C::Auth,
             Self::Unreachable => C::ProvidersUnreachable,
-            Self::Failed => C::Failed,
+            Self::Failed | Self::DeliveryUnconfirmed => C::Failed,
             Self::SpendExhausted { .. } => C::SpendExhausted,
         }
     }
@@ -443,6 +445,12 @@ pub fn t(msg: Msg<'_>, locale: Locale) -> String {
                 .into()
         }
 
+        (Msg::ErrReceipt(ReceiptKind::DeliveryUnconfirmed), Locale::Zh) => {
+            "无法确认消息是否送达，请先检查会话。".into()
+        }
+        (Msg::ErrReceipt(ReceiptKind::DeliveryUnconfirmed), Locale::En) => {
+            "Could not confirm message delivery. Check the conversation first.".into()
+        }
         (Msg::ErrReceipt(ReceiptKind::Failed), Locale::Zh) => "任务执行失败，请重试。".into(),
         (Msg::ErrReceipt(ReceiptKind::Failed), Locale::En) => {
             "The task failed. Please try again.".into()

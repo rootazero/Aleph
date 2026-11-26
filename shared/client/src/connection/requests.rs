@@ -27,7 +27,30 @@ enum RequestProgress {
     Resolved,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum RequestLane {
+    Ordinary,
+    OwnedChatAbort,
+    CaptureControl,
+    ProviderCancel,
+}
+
+impl RequestLane {
+    fn limit(self, ordinary: usize) -> usize {
+        match self {
+            Self::Ordinary => ordinary,
+            Self::CaptureControl => 3,
+            Self::OwnedChatAbort | Self::ProviderCancel => 1,
+        }
+    }
+
+    fn uses_gateway_ordinary_capacity(self) -> bool {
+        matches!(self, Self::Ordinary | Self::OwnedChatAbort)
+    }
+}
+
 struct PendingRequest {
+    lane: RequestLane,
     progress: RequestProgress,
     voice_synthesis: bool,
 }
@@ -59,6 +82,16 @@ impl RequestState {
         method: &str,
         during_handshake: bool,
     ) -> CliResult<PendingCall> {
+        self.reserve_in(id, method, during_handshake, RequestLane::Ordinary)
+    }
+
+    pub(super) fn reserve_in(
+        self: &Arc<Self>,
+        id: String,
+        method: &str,
+        during_handshake: bool,
+        lane: RequestLane,
+    ) -> CliResult<PendingCall> {
         let mut requests = self.lock();
         let expected = if during_handshake {
             Phase::Handshaking
@@ -70,7 +103,26 @@ impl RequestState {
                 "Connection not ready for request".into(),
             ));
         }
-        if requests.pending.len() >= requests.limit {
+        let limit = lane.limit(requests.limit);
+        let lane_full = requests.pending.len() >= limit
+            && requests
+                .pending
+                .values()
+                .filter(|entry| entry.lane == lane)
+                .count()
+                >= limit;
+        // The exact abort bypasses the Panel turn lock, not the Gateway's
+        // negotiated ordinary ceiling. Capture controls and provider cancel
+        // have their own Gateway pools and are not counted here.
+        let gateway_full = lane.uses_gateway_ordinary_capacity()
+            && requests.pending.len() >= requests.limit
+            && requests
+                .pending
+                .values()
+                .filter(|entry| entry.lane.uses_gateway_ordinary_capacity())
+                .count()
+                >= requests.limit;
+        if lane_full || gateway_full {
             return Err(CliError::Other("In-flight request limit reached".into()));
         }
         let Entry::Vacant(entry) = requests.pending.entry(id.clone()) else {
@@ -78,6 +130,7 @@ impl RequestState {
         };
         let (sender, receiver) = oneshot::channel();
         entry.insert(PendingRequest {
+            lane,
             progress: RequestProgress::Waiting(sender),
             voice_synthesis: method == VOICE_TURN_SYNTHESIZE_METHOD,
         });
@@ -135,6 +188,12 @@ impl RequestState {
         self.lock().phase == Phase::Ready
     }
 
+    pub(super) fn with_ready<T>(&self, action: impl FnOnce() -> T) -> Option<T> {
+        // Keep the same phase lock used by close through the action.
+        let requests = self.lock();
+        (requests.phase == Phase::Ready).then(action)
+    }
+
     pub(super) fn is_closed(&self) -> bool {
         self.lock().phase == Phase::Closed
     }
@@ -146,6 +205,11 @@ impl RequestState {
             std::mem::take(&mut requests.pending)
         };
         drop(pending);
+    }
+
+    #[cfg(all(test, any(unix, windows)))]
+    pub(super) fn retirement_would_block(&self) -> bool {
+        matches!(self.0.try_lock(), Err(std::sync::TryLockError::WouldBlock))
     }
 
     #[cfg(test)]

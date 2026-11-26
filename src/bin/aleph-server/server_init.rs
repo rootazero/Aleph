@@ -7,8 +7,9 @@ use std::path::PathBuf;
 
 use alephcore::sync_primitives::Arc;
 
-use alephcore::gateway::busy_queue::spawn_queued_run;
+use alephcore::gateway::busy_queue::{spawn_queued_chat_run, spawn_queued_run};
 use alephcore::gateway::event_bus::GatewayEventBus;
+use alephcore::gateway::handlers::agent::AgentRunManager;
 use alephcore::gateway::router::AgentRouter;
 use alephcore::gateway::{AgentRegistry, ExecutionEngine, GatewayEventEmitter};
 
@@ -345,12 +346,14 @@ pub async fn handle_chat_send_with_engine<P, R>(
     telecom_lifecycle: Option<
         Arc<alephcore::gateway::telecom::lifecycle_tools::TelecomLifecycleService>,
     >,
+    run_manager: Arc<AgentRunManager>,
 ) -> alephcore::gateway::JsonRpcResponse
 where
     P: alephcore::thinker::ProviderRegistry + 'static,
     R: alephcore::executor::ToolRegistry + 'static,
 {
     use alephcore::gateway::handlers::agent::AgentRunParams;
+    use alephcore::gateway::handlers::chat::ChatSendParams;
     use alephcore::gateway::protocol::{INTERNAL_ERROR, INVALID_PARAMS};
     use serde::Serialize;
     use serde_json::{json, Value};
@@ -362,10 +365,10 @@ where
         pub streaming: bool,
     }
 
-    // Parse params — `chat.send` accepts the same shape as `agent.run` (the
-    // `input` field carries `serde(alias = "message")` since 7d88f469e dropped
-    // the historical `SendParams` copy). One shared struct, no field drift.
-    let params: AgentRunParams = match request.params {
+    let ChatSendParams {
+        agent: params,
+        run_only,
+    } = match request.params {
         Some(Value::Object(map)) => match serde_json::from_value(Value::Object(map)) {
             Ok(p) => p,
             Err(e) => {
@@ -504,17 +507,30 @@ where
         };
     let _ = metadata;
 
-    // Spawn onto the shared per-session busy wait lane (same queue the inbound
-    // router uses for channel messages).
-    spawn_queued_run(
-        engine.clone(),
-        run_request,
-        agent,
-        emitter,
-        busy_cfg,
-        locale,
-        "Chat run",
-    );
+    // Bind the authorized receipt before the queued execution can begin or the receipt is returned.
+    if run_only {
+        spawn_queued_chat_run(
+            engine.clone(),
+            run_request,
+            agent,
+            emitter,
+            busy_cfg,
+            locale,
+            "Chat run",
+            &run_manager,
+        )
+        .await;
+    } else {
+        spawn_queued_run(
+            engine.clone(),
+            run_request,
+            agent,
+            emitter,
+            busy_cfg,
+            locale,
+            "Chat run",
+        );
+    }
 
     // Auto-topic generation is now handled by ExecutionEngine on first message
 

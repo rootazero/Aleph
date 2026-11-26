@@ -12,6 +12,173 @@ use super::agent_instance::AgentInstance;
 use super::event_emitter::EventEmitter;
 use super::execution_engine::{ExecutionError, RunRequest, RunStatus};
 
+/// Cancellation shared by a receipt's run entry and its execution, including admission.
+#[derive(Clone, Debug, Default)]
+pub struct ChatRunCancellation {
+    token: tokio_util::sync::CancellationToken,
+    state: Arc<std::sync::Mutex<ChatRunCancellationState>>,
+    inline_settled: Arc<tokio::sync::Notify>,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+enum ChatRunCancellationState {
+    #[default]
+    Open,
+    Requested,
+    Inline {
+        stop_requested: bool,
+    },
+    Indeterminate,
+    Finished {
+        requested: bool,
+    },
+}
+
+/// The stop intent was recorded, but the inline outcome cannot yet be acknowledged.
+#[derive(Debug)]
+pub(crate) struct ChatRunStopUndecided;
+
+// Do not let a blocked inline append outlast the caller's RPC deadline.
+const INLINE_STOP_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
+
+impl ChatRunCancellation {
+    pub(crate) fn token(&self) -> tokio_util::sync::CancellationToken {
+        self.token.clone()
+    }
+
+    pub(crate) async fn request(&self) -> Result<bool, ChatRunStopUndecided> {
+        let mut owns_intent = false;
+        tokio::time::timeout(INLINE_STOP_WAIT, async {
+            loop {
+                // Register before reading the state so settlement cannot lose its wake.
+                let settled = self.inline_settled.notified();
+                tokio::pin!(settled);
+                settled.as_mut().enable();
+                {
+                    let mut state = self.state.lock().unwrap();
+                    match &mut *state {
+                        ChatRunCancellationState::Open if !self.token.is_cancelled() => {
+                            *state = ChatRunCancellationState::Requested;
+                            self.token.cancel();
+                            return Ok(true);
+                        }
+                        ChatRunCancellationState::Inline { stop_requested } => {
+                            if !*stop_requested {
+                                *stop_requested = true;
+                                owns_intent = true;
+                            }
+                        }
+                        ChatRunCancellationState::Indeterminate => {
+                            return Err(ChatRunStopUndecided)
+                        }
+                        ChatRunCancellationState::Requested
+                        | ChatRunCancellationState::Finished { requested: true } => {
+                            return Ok(owns_intent)
+                        }
+                        _ => return Ok(false),
+                    }
+                }
+                settled.await;
+            }
+        })
+        .await
+        .map_err(|_| ChatRunStopUndecided)?
+    }
+
+    pub(crate) fn check(&self) -> Result<(), ExecutionError> {
+        if self.token.is_cancelled() {
+            Err(ExecutionError::Cancelled)
+        } else {
+            Ok(())
+        }
+    }
+
+    // Inline operations cannot be recalled after they begin mutating another run or transcript.
+    pub(crate) fn commit_inline(&self) -> Result<(), ExecutionError> {
+        self.begin_terminal_commit()
+    }
+
+    /// Reserve the terminal outcome before its first irreversible write.
+    pub(crate) fn begin_terminal_commit(&self) -> Result<(), ExecutionError> {
+        self.finish(Ok(()))
+    }
+
+    pub(crate) fn begin_inline_attempt(&self) -> Result<ChatRunInlineAttempt<'_>, ExecutionError> {
+        let mut state = self.state.lock().unwrap();
+        if *state != ChatRunCancellationState::Open || self.token.is_cancelled() {
+            return Err(ExecutionError::Cancelled);
+        }
+        *state = ChatRunCancellationState::Inline {
+            stop_requested: false,
+        };
+        Ok(ChatRunInlineAttempt(self))
+    }
+
+    pub(crate) fn finish<T>(&self, result: Result<T, ExecutionError>) -> Result<T, ExecutionError> {
+        let mut state = self.state.lock().unwrap();
+        let requested = match *state {
+            ChatRunCancellationState::Open => false,
+            ChatRunCancellationState::Inline { .. } | ChatRunCancellationState::Indeterminate => {
+                return result
+            }
+            ChatRunCancellationState::Requested => true,
+            ChatRunCancellationState::Finished { requested } => requested,
+        };
+        *state = ChatRunCancellationState::Finished { requested };
+        if requested {
+            Err(ExecutionError::Cancelled)
+        } else {
+            result
+        }
+    }
+
+    pub(crate) fn finished_after_request(&self) -> bool {
+        *self.state.lock().unwrap() == ChatRunCancellationState::Finished { requested: true }
+    }
+}
+
+/// Busy attempts must block cancellation during a sibling effect, but a refused attempt can retry.
+pub(crate) struct ChatRunInlineAttempt<'a>(&'a ChatRunCancellation);
+
+impl ChatRunInlineAttempt<'_> {
+    pub(crate) fn complete(self) {
+        let mut state = self.0.state.lock().unwrap();
+        *state = ChatRunCancellationState::Finished { requested: false };
+        self.0.inline_settled.notify_waiters();
+    }
+
+    /// Only call after proving that the receipt was not consumed.
+    pub(crate) fn refuse(self) {
+        let mut state = self.0.state.lock().unwrap();
+        match *state {
+            ChatRunCancellationState::Inline {
+                stop_requested: true,
+            } => {
+                *state = ChatRunCancellationState::Requested;
+                self.0.token.cancel();
+            }
+            ChatRunCancellationState::Inline {
+                stop_requested: false,
+            } => {
+                *state = ChatRunCancellationState::Open;
+            }
+            _ => unreachable!("only an inline attempt can be refused"),
+        }
+        self.0.inline_settled.notify_waiters();
+    }
+}
+
+impl Drop for ChatRunInlineAttempt<'_> {
+    fn drop(&mut self) {
+        let mut state = self.0.state.lock().unwrap();
+        if matches!(*state, ChatRunCancellationState::Inline { .. }) {
+            // The actor may have appended even when its reply never arrived.
+            *state = ChatRunCancellationState::Indeterminate;
+            self.0.inline_settled.notify_waiters();
+        }
+    }
+}
+
 /// Trait for abstracting over execution engine implementations.
 ///
 /// This trait allows components like `InboundMessageRouter` to execute agent runs
@@ -60,6 +227,23 @@ pub trait ExecutionAdapter: Send + Sync {
         agent: Arc<AgentInstance>,
         emitter: Arc<dyn EventEmitter + Send + Sync>,
     ) -> Result<(), ExecutionError>;
+
+    /// Opt in only if `execute_chat_run` consumes this handle through admission and execution.
+    fn chat_run_cancellation(&self) -> Option<ChatRunCancellation> {
+        None
+    }
+
+    async fn execute_chat_run(
+        &self,
+        _request: RunRequest,
+        _agent: Arc<AgentInstance>,
+        _emitter: Arc<dyn EventEmitter + Send + Sync>,
+        _cancellation: ChatRunCancellation,
+    ) -> Result<(), ExecutionError> {
+        Err(ExecutionError::Failed(
+            "chat run cancellation is not supported".into(),
+        ))
+    }
 
     /// Cancel a run by its ID.
     ///
@@ -326,6 +510,120 @@ mod tests {
         let status = status.unwrap();
         assert_eq!(status.run_id, "some-run");
         assert_eq!(status.state, RunState::Completed);
+    }
+
+    #[tokio::test]
+    async fn chat_run_cancellation_arbitrates_inline_commit_and_terminal_outcome() {
+        let cancelled = ChatRunCancellation::default();
+        assert!(cancelled.request().await.unwrap());
+        assert!(cancelled.token().is_cancelled());
+        assert!(matches!(
+            cancelled.commit_inline(),
+            Err(ExecutionError::Cancelled)
+        ));
+        assert!(cancelled.finished_after_request());
+        assert!(!cancelled.request().await.unwrap());
+
+        let committed = ChatRunCancellation::default();
+        assert!(committed.commit_inline().is_ok());
+        assert!(!committed.request().await.unwrap());
+        assert!(!committed.token().is_cancelled());
+        assert_eq!(
+            committed.finish(Ok("inline result")).unwrap(),
+            "inline result"
+        );
+
+        let completed = ChatRunCancellation::default();
+        assert!(completed.finish(Ok(())).is_ok());
+        assert!(!completed.request().await.unwrap());
+        assert!(!completed.token().is_cancelled());
+
+        let retry = ChatRunCancellation::default();
+        let attempt = retry.begin_inline_attempt().unwrap();
+        attempt.refuse();
+        assert!(
+            retry.request().await.unwrap(),
+            "a retry still owns the original handle"
+        );
+        assert!(matches!(
+            retry.begin_inline_attempt(),
+            Err(ExecutionError::Cancelled)
+        ));
+
+        let steered = ChatRunCancellation::default();
+        steered.begin_inline_attempt().unwrap().complete();
+        assert!(
+            !steered.request().await.unwrap(),
+            "a completed fold consumed this turn"
+        );
+    }
+
+    #[tokio::test]
+    async fn exact_stop_awaits_inline_commit_or_refusal_without_guessing() {
+        for committed in [true, false] {
+            let cancellation = ChatRunCancellation::default();
+            let successor = ChatRunCancellation::default();
+            let append = cancellation.begin_inline_attempt().unwrap();
+            let stop = cancellation.request();
+            tokio::pin!(stop);
+            assert!(
+                futures::poll!(&mut stop).is_pending(),
+                "an unresolved append cannot justify a false ACK"
+            );
+            assert!(
+                !cancellation.token().is_cancelled(),
+                "do not interrupt an append that may have committed"
+            );
+            if committed {
+                append.complete();
+            } else {
+                append.refuse();
+            }
+            assert_eq!(stop.await.unwrap(), !committed);
+            assert_eq!(cancellation.token().is_cancelled(), !committed);
+            assert!(!successor.token().is_cancelled());
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn exact_stop_intent_survives_a_dropped_or_expired_waiter() {
+        for expired in [true, false] {
+            let cancellation = ChatRunCancellation::default();
+            let append = cancellation.begin_inline_attempt().unwrap();
+            if expired {
+                assert!(
+                    cancellation.request().await.is_err(),
+                    "expiry returns undecided, not false"
+                );
+            } else {
+                let mut stop = Box::pin(cancellation.request());
+                assert!(futures::poll!(&mut stop).is_pending());
+                drop(stop);
+            }
+            append.refuse();
+            assert!(matches!(
+                cancellation.check(),
+                Err(ExecutionError::Cancelled)
+            ));
+            assert!(matches!(
+                cancellation.begin_inline_attempt(),
+                Err(ExecutionError::Cancelled)
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn unknown_inline_append_never_reopens_the_receipt() {
+        let cancellation = ChatRunCancellation::default();
+        let append = cancellation.begin_inline_attempt().unwrap();
+        let stop = cancellation.request();
+        tokio::pin!(stop);
+        assert!(futures::poll!(&mut stop).is_pending());
+        drop(append);
+        assert!(stop.await.is_err());
+        assert!(cancellation.request().await.is_err());
+        assert!(!cancellation.token().is_cancelled());
+        assert!(cancellation.begin_inline_attempt().is_err());
     }
 
     #[tokio::test]

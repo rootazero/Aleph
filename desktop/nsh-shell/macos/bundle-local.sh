@@ -1,19 +1,32 @@
 #!/bin/bash
 set -euo pipefail
 
+usage() {
+    printf 'Usage: %s [--server <aleph-server binary> [--bridge <AlephBridge binary>]] <aleph-nsh-shell binary> <new bundle.app>\n' "$0" >&2
+    exit 2
+}
+
 server=
-if [[ $# == 4 && "$1" == --server ]]; then
+bridge=
+if [[ $# == 4 || $# == 6 ]]; then
+    [[ "$1" == --server ]] || usage
     server=$2
     if [[ ! -f "$server" || ! -x "$server" ]]; then
         printf 'Expected an executable server binary.\n' >&2
         exit 2
     fi
     shift 2
+    if [[ $# == 4 ]]; then
+        [[ "$1" == --bridge ]] || usage
+        bridge=$2
+        if [[ ! -f "$bridge" || ! -x "$bridge" ]]; then
+            printf 'Expected an executable AlephBridge binary.\n' >&2
+            exit 2
+        fi
+        shift 2
+    fi
 fi
-if [[ $# != 2 || "$2" != *.app ]]; then
-    printf 'Usage: %s [--server <aleph-server binary>] <aleph-nsh-shell binary> <new bundle.app>\n' "$0" >&2
-    exit 2
-fi
+[[ $# == 2 && "$2" == *.app ]] || usage
 script_dir=$(cd "$(dirname "$0")" && pwd)
 binary=$1
 destination=$2
@@ -29,13 +42,19 @@ mkdir -p "$bundle/Contents/MacOS"
 install -m 644 "$script_dir/Info.plist" "$bundle/Contents/Info.plist"
 install -m 755 "$binary" "$bundle/Contents/MacOS/aleph-nsh-shell"
 plutil -lint "$bundle/Contents/Info.plist"
-if [[ -n "$server" ]]; then
-    sibling="$bundle/Contents/MacOS/aleph-server"
-    install -m 755 "$server" "$sibling"
+# Sign the staged copies without modifying the supplied executables.
+stage_signed_sibling() {
+    local sibling="$bundle/Contents/MacOS/$2"
+    install -m 755 "$1" "$sibling"
     codesign --force --sign - "$sibling"
     codesign --verify --strict "$sibling"
+}
+if [[ -n "$server" ]]; then
+    stage_signed_sibling "$server" aleph-server
 fi
-# The supplied executable may already be signed; only the staged copy changes.
+if [[ -n "$bridge" ]]; then
+    stage_signed_sibling "$bridge" AlephBridge
+fi
 codesign --force --sign - "$bundle"
 codesign --verify --deep --strict "$bundle"
 # Unlike mv, this renames to the exact path even if a directory wins the race.

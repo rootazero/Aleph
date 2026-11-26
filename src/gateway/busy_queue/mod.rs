@@ -83,7 +83,7 @@ mod spawn;
 pub use config::BusyQueueConfig;
 pub use deliver::{deliver_with_ticket, run_queued_reporter, DeliveryOutcome};
 pub use durable::{QueuedRunPayload, SettleReason};
-pub use spawn::spawn_queued_run;
+pub use spawn::{spawn_queued_chat_run, spawn_queued_run};
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};

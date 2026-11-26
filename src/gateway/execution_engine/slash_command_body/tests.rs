@@ -1145,6 +1145,7 @@ async fn run_loop_with_prompt_hook(hook: Option<&str>, metadata: &[(&str, &str)]
             executor,
             "cmd-hooks".to_string(),
             Arc::new(std::sync::Mutex::new(None)),
+            None,
         )
         .await;
     // Neither run reaches a provider: the deny ends one, and the test engine

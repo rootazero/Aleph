@@ -11,24 +11,23 @@ import { Chat } from "../modules/Chat";
 import { MemoryNebula } from "../modules/MemoryNebula";
 import { Overview } from "../modules/Overview";
 import { Sessions } from "../modules/Sessions";
+import { Voice } from "../modules/Voice";
+import { VOICE_CAPTURE_HOST_TIMEOUT_MS } from "../modules/voiceHostAudio";
 import { CommandPalette } from "./CommandPalette";
 import { bindCommands, type Command, type KeyedCommand, menuCommands, resolveKeys, shellCommands } from "./commands";
 import { PairingForm } from "./PairingForm";
 import { applyPrefs, type Binding, loadStored, persistPrefs, type Prefs, readPrefs } from "./prefs";
-import { type CommandSpec, type ConnectionState, createSdk, type Intent, type PanelEvent, type PanelSdk, RpcError, type ShellAccess } from "./sdk";
+import { connectionChanged, createPanelRpc, readConnection } from "./panelRpc";
+import { type CommandSpec, type ConnectionState, createSdk, type Intent, type PanelEvent, type PanelSdk, type ShellAccess } from "./sdk";
 import { Settings } from "./Settings";
 import { Sidebar } from "./Sidebar";
 import type { PanelTab, PanelView, Slot } from "./view";
 
 const INITIAL: ConnectionState = { state: "connecting", endpoint: "", subject: null, pairing: false };
 
-type RpcAnswer = { result?: unknown; error?: { code: number; message: string } };
-
-async function rpc(method: string, params: Record<string, unknown>): Promise<unknown> {
-  const answer = (await host.call("aleph.rpc", { method, params })) as RpcAnswer;
-  if (answer.error) throw new RpcError(answer.error.code, answer.error.message);
-  return answer.result ?? null;
-}
+const rpc = createPanelRpc((topic, envelope) => host.call(topic, envelope,
+  envelope.voice_binding !== undefined && envelope.method === "voice.turn.capture"
+    ? { timeout: VOICE_CAPTURE_HOST_TIMEOUT_MS } : undefined));
 
 export function Shell() {
   const connection = signal<ConnectionState>(INITIAL);
@@ -80,9 +79,9 @@ export function Shell() {
     if (made.stored !== stored) await Storage.setItem(key, made.stored);
   };
 
-  const applyConnection = (next: ConnectionState) => {
-    const previous = connection();
-    const changed = next.state !== previous.state || next.endpoint !== previous.endpoint || next.subject !== previous.subject;
+  const applyConnection = (state: unknown) => {
+    const next = readConnection(state) ?? { ...INITIAL, state: "unavailable" } as const;
+    const changed = connectionChanged(connection(), next);
     batch(() => {
       connection.set(next);
       if (changed) {
@@ -221,15 +220,15 @@ export function Shell() {
     return () => bound.unbind();
   });
 
-  const applyInitialConnection = (state: ConnectionState) => {
+  const applyInitialConnection = (state: unknown) => {
     // A real transition may arrive before the initial query returns.
     if (generation() === 0) applyConnection(state);
   };
   if (host.available()) {
-    cleanup(host.on<ConnectionState>("aleph.connection", applyConnection));
+    cleanup(host.on<unknown>("aleph.connection", applyConnection));
     cleanup(host.on<PanelEvent>("aleph.event", applyEvent));
     void host.call("aleph.connection", null).then(
-      (state) => applyInitialConnection(state as ConnectionState),
+      applyInitialConnection,
       () => applyInitialConnection({ ...INITIAL, state: "unavailable" }),
     );
   } else {
@@ -344,6 +343,8 @@ function ModuleSlot(props: { slot: Slot; tab: PanelTab | undefined; tabs: PanelT
       return <Sessions sdk={sdk} />;
     case "aleph:chat":
       return <Chat sdk={sdk} />;
+    case "aleph:voice":
+      return <Voice sdk={sdk} />;
     case "aleph:capabilities":
       return <Capabilities tabs={props.tabs} />;
     case "aleph:memory-nebula":

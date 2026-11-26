@@ -347,7 +347,7 @@ pub(super) async fn deny_if_over_spend_and_report<E: EventEmitter + Send + Sync>
 /// .. })` without installing a low ceiling into the process-wide
 /// policy/ledger `OnceLock`s the rest of this crate's tests already share
 /// and race.
-async fn report_admission_denial<E: EventEmitter + Send + Sync>(
+pub(super) async fn report_admission_denial<E: EventEmitter + Send + Sync>(
     result: Result<(), ExecutionError>,
     request: &RunRequest,
     emitter: &E,
@@ -370,7 +370,7 @@ async fn report_admission_denial<E: EventEmitter + Send + Sync>(
             tracing::warn!(
                 run_id = %request.run_id,
                 error = %emit_err,
-                "failed to emit RunError stream event for a spend-denied admission",
+                "failed to emit scoped RunError stream event",
             );
         }
         return Err(e);
@@ -578,6 +578,25 @@ pub(super) async fn journal_hook_stop(request: &RunRequest, outcome: RunOutcome,
     journal_hook_stop_with(svc.as_deref(), request, outcome, text).await;
 }
 
+async fn emit_hook_stop_completion<E: EventEmitter + Send + Sync>(
+    emitter: &E,
+    run_id: &str,
+    text: &str,
+) {
+    use crate::gateway::event_emitter::{RunSummary, StreamEvent};
+    let _ = emitter
+        .emit(StreamEvent::RunComplete {
+            run_id: run_id.to_owned(),
+            seq: emitter.next_seq(),
+            summary: RunSummary {
+                final_response: Some(text.to_owned()),
+                ..Default::default()
+            },
+            total_duration_ms: 0,
+        })
+        .await;
+}
+
 /// [`journal_hook_stop`] with the service handed in. Returns `()` whatever
 /// the store says, so no caller can make its own `return` depend on the
 /// receipt — that is the "best-effort" contract, as a type.
@@ -626,6 +645,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         trace_task_id: Option<String>,
         cancel_token: CancellationToken,
         occupancy_out: Arc<std::sync::Mutex<Option<super::helpers::RunContextOccupancy>>>,
+        chat_cancellation: Option<&crate::gateway::execution_adapter::ChatRunCancellation>,
     ) -> Result<String, ExecutionError> {
         // Resolve the extension manager + snapshot its HookExecutor once for
         // the whole run. Both flow into `run_agent_loop_inner` so tool
@@ -674,6 +694,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     // (the spec said `Cancelled`; both reduce `Clean`, and
                     // `Errored` is what the caller's `RunState::Failed`
                     // already says about this exit).
+                    if let Some(cancellation) = chat_cancellation {
+                        cancellation.begin_terminal_commit()?;
+                    }
                     journal_hook_stop(request, RunOutcome::Errored, &reason).await;
                     return Err(ExecutionError::Failed(format!(
                         "BeforeAgentStart hook aborted the run: {reason}"
@@ -704,10 +727,16 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     // (`Ok(_response)`) and no `RunComplete` follows — the
                     // orchestrator drain never ran on this arm. Without the
                     // chunk a chat channel gets no reply at all.
+                    if let Some(cancellation) = chat_cancellation {
+                        cancellation.begin_terminal_commit()?;
+                    }
                     journal_hook_stop(request, RunOutcome::Cancelled, &stop_msg).await;
                     emitter
                         .emit_response_chunk(run_id, &stop_msg, &stop_msg, 0, true, false)
                         .await;
+                    if chat_cancellation.is_some() {
+                        emit_hook_stop_completion(emitter.as_ref(), run_id, &stop_msg).await;
+                    }
                     return Ok(stop_msg);
                 }
                 Ok(_) => {}
@@ -809,6 +838,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                                         hook_executor.clone(),
                                         hook_session_id.clone(),
                                         occupancy_out,
+                                        chat_cancellation,
                                     )),
                                 ),
                             ),

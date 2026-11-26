@@ -3,6 +3,7 @@ use super::slash_command::stamp_btw;
 use super::{ExecutionEngine, ExecutionError, RunRequest, RunState};
 use crate::gateway::agent_instance::AgentInstance;
 use crate::gateway::event_emitter::{EventEmitter, StreamEvent};
+use crate::gateway::execution_adapter::ChatRunCancellation;
 use crate::gateway::inbound_router::SLASH_COMMAND_MODE_KEY;
 use crate::resilience::TaskStatus;
 use crate::sync_primitives::Arc;
@@ -207,7 +208,7 @@ where
     }
 
     /// Emit the terminal frame for a failure that returns from `execute()`
-    /// *before* `RunAccepted`.
+    /// *before* `RunAccepted`, or for a managed failure at any phase.
     ///
     /// The run loop's own `RunError` producer is unreachable from up here, and
     /// the two delivery wrappers both decline to report an attempt that "ran"
@@ -245,7 +246,7 @@ where
                 run_id = %run_id,
                 error_code = %error_code,
                 error = %emit_err,
-                "failed to emit the pre-admission RunError stream event"
+                "failed to emit a scoped RunError stream event"
             );
         }
     }
@@ -359,10 +360,57 @@ where
     /// * `emitter` - Event emitter for streaming events
     pub async fn execute<E: EventEmitter + Send + Sync + 'static>(
         &self,
-        mut request: RunRequest,
+        request: RunRequest,
         agent: Arc<AgentInstance>,
         emitter: Arc<E>,
     ) -> Result<(), ExecutionError> {
+        self.execute_with_chat_cancellation(request, agent, emitter, None)
+            .await
+    }
+
+    pub(in crate::gateway) async fn execute_with_chat_cancellation<
+        E: EventEmitter + Send + Sync + 'static,
+    >(
+        &self,
+        request: RunRequest,
+        agent: Arc<AgentInstance>,
+        emitter: Arc<E>,
+        chat_cancellation: Option<&ChatRunCancellation>,
+    ) -> Result<(), ExecutionError> {
+        let Some(cancellation) = chat_cancellation else {
+            return self.execute_inner(request, agent, emitter, None).await;
+        };
+        let result = self
+            .execute_inner(request.clone(), agent, emitter.clone(), Some(cancellation))
+            .await;
+        // The busy queue still owns AgentBusy: it can retry this same receipt.
+        if matches!(&result, Err(ExecutionError::AgentBusy(_))) {
+            return result;
+        }
+        let result = cancellation.finish(result);
+        if let Err(error) = &result {
+            self.emit_pre_admission_run_error(
+                emitter.as_ref(),
+                &request.run_id,
+                &request.session_key,
+                &request,
+                error,
+            )
+            .await;
+        }
+        result
+    }
+
+    async fn execute_inner<E: EventEmitter + Send + Sync + 'static>(
+        &self,
+        mut request: RunRequest,
+        agent: Arc<AgentInstance>,
+        emitter: Arc<E>,
+        chat_cancellation: Option<&ChatRunCancellation>,
+    ) -> Result<(), ExecutionError> {
+        if let Some(cancellation) = chat_cancellation {
+            cancellation.check()?;
+        }
         let run_id = request.run_id.clone();
 
         // First, before ANYTHING reads the metadata — `admit_run`'s steer-fold
@@ -441,8 +489,18 @@ where
         // rather than being served here.
         if let Some(main) = btw_main_session.as_ref() {
             if crate::gateway::btw::is_promote(&request.metadata) {
+                if let Some(cancellation) = chat_cancellation {
+                    cancellation.commit_inline()?;
+                }
                 return self
-                    .serve_btw_promote(main, &request, &agent, emitter.as_ref(), &run_id)
+                    .serve_btw_promote(
+                        main,
+                        &request,
+                        &agent,
+                        emitter.as_ref(),
+                        &run_id,
+                        chat_cancellation.is_none(),
+                    )
                     .await;
             }
         }
@@ -462,14 +520,20 @@ where
         // and an append onto the main one), so an over-ceiling principal
         // keeps the read-only crossing while everything that would actually
         // spend is still refused here.
-        super::run_loop::deny_if_over_spend_and_report(&request, emitter.as_ref()).await?;
+        if chat_cancellation.is_some() {
+            super::run_loop::deny_if_over_spend(&request)?;
+        } else {
+            super::run_loop::deny_if_over_spend_and_report(&request, emitter.as_ref()).await?;
+        }
 
         // Create cancellation channel
         let (cancel_tx, mut cancel_rx) = mpsc::channel::<()>(1);
 
         // Create CancellationToken for fine-grained agent loop cancellation.
         // The bridge task converts the coarse cancel_rx signal into a token cancellation.
-        let cancel_token = CancellationToken::new();
+        let cancel_token = chat_cancellation.map_or_else(CancellationToken::new, |cancellation| {
+            cancellation.token().child_token()
+        });
 
         // Admission gate: claim the session's run slot, resolve busy-input
         // policy (Steer / Interrupt / Queue) if it's already held, acquire a
@@ -491,8 +555,16 @@ where
         // this request as the run's copy — a steer target while it parks for
         // a slot — and the busy lane folds a follow-up only into a run on the
         // same model (`slash_command_body::pin_model`).
-        super::slash_command_body::pin_model(&mut request).await;
-        let _run_slot = match self
+        if chat_cancellation.is_some() {
+            tokio::select! {
+                biased;
+                _ = cancel_token.cancelled() => return Err(ExecutionError::Cancelled),
+                () = super::slash_command_body::pin_model(&mut request) => {}
+            }
+        } else {
+            super::slash_command_body::pin_model(&mut request).await;
+        }
+        let admission = self
             .admit_run(
                 &request,
                 &run_id,
@@ -500,11 +572,47 @@ where
                 cancel_tx,
                 &mut cancel_rx,
                 cancel_token.clone(),
+                chat_cancellation,
             )
-            .await?
-        {
-            GateOutcome::Admitted(slot) => slot,
-            GateOutcome::HandledInline => return Ok(()),
+            .await;
+        let _run_slot = match admission {
+            Ok(GateOutcome::Admitted(slot)) => slot,
+            Err(error) => {
+                if chat_cancellation.is_none()
+                    && matches!(&error, ExecutionError::DeliveryUnconfirmed)
+                {
+                    self.emit_pre_admission_run_error(
+                        emitter.as_ref(),
+                        &run_id,
+                        &request.session_key,
+                        &request,
+                        &error,
+                    )
+                    .await;
+                }
+                return Err(error);
+            }
+            Ok(GateOutcome::HandledInline) => {
+                if chat_cancellation.is_some() {
+                    // The accepted inline fold was this receipt's whole turn.
+                    let _ = emitter
+                        .emit(StreamEvent::RunAccepted {
+                            run_id: run_id.clone(),
+                            session_key: request.session_key.to_key_string(),
+                            accepted_at: chrono::Utc::now().to_rfc3339(),
+                        })
+                        .await;
+                    let _ = emitter
+                        .emit(StreamEvent::RunComplete {
+                            run_id: run_id.clone(),
+                            seq: emitter.next_seq(),
+                            summary: Default::default(),
+                            total_duration_ms: 0,
+                        })
+                        .await;
+                }
+                return Ok(());
+            }
         };
 
         let trace_task_persisted = self
@@ -527,14 +635,19 @@ where
         if let Err(error) = session_preparation {
             let error =
                 ExecutionError::Failed(format!("session metadata preparation failed: {error}"));
-            self.emit_pre_admission_run_error(
-                emitter.as_ref(),
-                &run_id,
-                btw_main_session.as_ref().unwrap_or(&request.session_key),
-                &request,
-                &error,
-            )
-            .await;
+            let error = if let Some(cancellation) = chat_cancellation {
+                cancellation.finish::<()>(Err(error)).unwrap_err()
+            } else {
+                self.emit_pre_admission_run_error(
+                    emitter.as_ref(),
+                    &run_id,
+                    btw_main_session.as_ref().unwrap_or(&request.session_key),
+                    &request,
+                    &error,
+                )
+                .await;
+                error
+            };
             {
                 let mut runs = self.active_runs.write().await;
                 if let Some(run) = runs.get_mut(&run_id) {
@@ -585,8 +698,19 @@ where
                 // side row may not exist yet, and no `RunAccepted` has seeded
                 // the run→session index. (`src/gateway/CLAUDE.md` 地雷 H: a
                 // frame emitted before admission must carry its own scope.)
-                self.emit_pre_admission_run_error(emitter.as_ref(), &run_id, main, &request, &e)
+                let e = if let Some(cancellation) = chat_cancellation {
+                    cancellation.finish::<()>(Err(e)).unwrap_err()
+                } else {
+                    self.emit_pre_admission_run_error(
+                        emitter.as_ref(),
+                        &run_id,
+                        main,
+                        &request,
+                        &e,
+                    )
                     .await;
+                    e
+                };
 
                 // Settle the registered run and persisted task before returning.
                 // The slot drops (releasing claim + permit) on function exit.
@@ -735,7 +859,9 @@ where
         // flag — not a message-content heuristic — keeps this R7-clean.
         // Awaited + stored just before harness dispatch so StrategyLayer welds
         // it on turn 1. A no-op otherwise.
-        let naked_loop_planner = if request.metadata.contains_key(SLASH_COMMAND_MODE_KEY) {
+        let naked_loop_planner = if request.metadata.contains_key(SLASH_COMMAND_MODE_KEY)
+            || (chat_cancellation.is_some() && cancel_token.is_cancelled())
+        {
             None
         } else {
             self.spawn_naked_loop_planner(&request, is_first_message)
@@ -834,15 +960,21 @@ where
 
         // Slash command fast path (L0): bypass full agent loop
         if let Some(mode_json) = request.metadata.get(SLASH_COMMAND_MODE_KEY) {
-            let fast_result = self
-                .execute_slash_command_fast_path(
+            let fast_result = async {
+                if let Some(cancellation) = chat_cancellation {
+                    cancellation.check()?;
+                }
+                self.execute_slash_command_fast_path(
                     &run_id,
                     mode_json,
                     &request,
                     agent.clone(),
                     emitter.clone(),
+                    chat_cancellation,
                 )
-                .await;
+                .await
+            }
+            .await;
 
             match fast_result {
                 Ok(response) => {
@@ -894,6 +1026,8 @@ where
                                 &emitter,
                                 &why,
                                 trace_task_persisted,
+                                chat_cancellation
+                                    .is_some_and(|c| c.begin_terminal_commit().is_err()),
                             )
                             .await;
                     }
@@ -909,6 +1043,10 @@ where
                             &emitter,
                             &e.to_string(),
                             trace_task_persisted,
+                            chat_cancellation.is_some_and(|c| {
+                                let stopped = c.begin_terminal_commit().is_err();
+                                stopped || matches!(e, ExecutionError::Cancelled)
+                            }),
                         )
                         .await;
                 }
@@ -919,8 +1057,20 @@ where
         // store its Strategy before harness dispatch so the weld is present on
         // turn 1. Best-effort: any failure (planner error / put error / join
         // error) leaves the prompt byte-identical and the run proceeds (P7).
-        if let Some((key, handle)) = naked_loop_planner {
-            if let Ok(Some(strategy)) = handle.await {
+        if let Some((key, mut handle)) = naked_loop_planner {
+            let planned = if chat_cancellation.is_some() {
+                tokio::select! {
+                    biased;
+                    _ = cancel_token.cancelled() => {
+                        handle.abort();
+                        None
+                    }
+                    planned = &mut handle => Some(planned),
+                }
+            } else {
+                Some(handle.await)
+            };
+            if let Some(Ok(Some(strategy))) = planned {
                 if let Some(store) = crate::strategy::global() {
                     let _ = store.put(&key, &strategy);
                 }
@@ -952,35 +1102,59 @@ where
         // `BeforeAgentStart` / `AgentEnd` seams are inside the scope too.
         // Sub-work spawned through `CarriedAttribution` (batch legs,
         // background sub-agents) does not carry it and omits the key.
-        let result: Result<String, ExecutionError> = tokio::select! {
-            result = crate::extension::hooks::with_transcript_source(
-                Some(Arc::new(crate::gateway::session_store::hook_transcripts::StoreTranscripts::new(
+        let run = crate::extension::hooks::with_transcript_source(
+            Some(Arc::new(
+                crate::gateway::session_store::hook_transcripts::StoreTranscripts::new(
                     agent.session_store(),
-                ))),
-                Box::pin(self.run_agent_loop(
-                    &run_id,
-                    &request,
-                    agent.clone(),
-                    emitter.clone(),
-                    deadline.clone(),
-                    trace_task_persisted.then(|| run_id.clone()),
-                    cancel_token.clone(),
-                    occupancy_out.clone(),
-                )),
-            ) => result,
+                ),
+            )),
+            Box::pin(self.run_agent_loop(
+                &run_id,
+                &request,
+                agent.clone(),
+                emitter.clone(),
+                deadline.clone(),
+                trace_task_persisted.then(|| run_id.clone()),
+                cancel_token.clone(),
+                occupancy_out.clone(),
+                chat_cancellation,
+            )),
+        );
+        tokio::pin!(run);
+        let result: Result<String, ExecutionError> = tokio::select! {
+            result = &mut run => result,
 
             _ = cancel_rx.recv() => {
-                // Bridge: coarse cancellation → fine-grained CancellationToken
+                // Coarse stop still wakes the run. Managed runs await their
+                // harness journal and AgentEnd instead of dropping the loop.
                 cancel_token.cancel();
                 info!("Run {} cancelled", run_id);
-                Err(ExecutionError::Cancelled)
+                if chat_cancellation.is_some() {
+                    run.await
+                } else {
+                    Err(ExecutionError::Cancelled)
+                }
             }
 
             _ = super::deadline::wait_for_deadline(deadline.clone()) => {
                 cancel_token.cancel();
                 warn!("Run {} timed out after {}s effective time", run_id, timeout_secs);
-                Err(ExecutionError::Timeout)
+                if let Some(cancellation) = chat_cancellation {
+                    match run.await {
+                        Err(ExecutionError::Cancelled) if !cancellation.finished_after_request() => {
+                            Err(ExecutionError::Timeout)
+                        }
+                        result => result,
+                    }
+                } else {
+                    Err(ExecutionError::Timeout)
+                }
             }
+        };
+
+        let result = match chat_cancellation {
+            Some(cancellation) => cancellation.finish(result),
+            None => result,
         };
 
         // Update run state based on result
@@ -1175,26 +1349,28 @@ where
                 // internal callers; only the channel presentation changes.
                 // `ExecutionError::user_receipt` is the single source of truth,
                 // shared with the bin-crate RPC handlers (agent.run / chat.send).
-                let (error_code, error_message) = e.user_receipt(
-                    crate::gateway::i18n::Locale::from_run_metadata(&request.metadata),
-                );
-                if let Err(emit_err) = emitter
-                    .emit(StreamEvent::RunError {
-                        run_id: run_id.clone(),
-                        seq: emitter.next_seq(),
-                        error: error_message,
-                        error_code: Some(error_code.to_string()),
-                        // Post-admission: `RunAccepted` already seeded the index.
-                        session_key: None,
-                    })
-                    .await
-                {
-                    tracing::warn!(
-                        run_id = %run_id,
-                        error_code = %error_code,
-                        error = %emit_err,
-                        "failed to emit RunError stream event"
+                if chat_cancellation.is_none() {
+                    let (error_code, error_message) = e.user_receipt(
+                        crate::gateway::i18n::Locale::from_run_metadata(&request.metadata),
                     );
+                    if let Err(emit_err) = emitter
+                        .emit(StreamEvent::RunError {
+                            run_id: run_id.clone(),
+                            seq: emitter.next_seq(),
+                            error: error_message,
+                            error_code: Some(error_code.to_string()),
+                            // Post-admission: `RunAccepted` already seeded the index.
+                            session_key: None,
+                        })
+                        .await
+                    {
+                        tracing::warn!(
+                            run_id = %run_id,
+                            error_code = %error_code,
+                            error = %emit_err,
+                            "failed to emit RunError stream event"
+                        );
+                    }
                 }
                 // The same terminal announcement the success arm makes. A run
                 // that failed or was cancelled still MOVED the transcript: the

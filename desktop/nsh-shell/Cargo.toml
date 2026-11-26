@@ -11,7 +11,7 @@ qa-service = ["aleph-client/qa-service"]
 # bundle first: `just panel-tsx-bundle`.
 # No `nsh-platform-macos/crypto`: it adds 16 crates (RSA, elliptic curves,
 # simd-json) and the Panel must not name the `crypto` global (S3).
-tsx-panel = ["dep:aleph-panel-ui", "nsh-platform-macos/js"]
+tsx-panel = ["dep:aleph-panel-ui", "dep:base64", "dep:objc2-avf-audio", "nsh-platform-macos/js"]
 
 [dependencies]
 nsh-core = "=0.6.0"
@@ -28,6 +28,8 @@ uuid = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 nsh-platform-macos = { version = "=0.6.0", default-features = false }
+base64 = { workspace = true, optional = true }
+objc2-avf-audio = { version = "0.3.2", default-features = false, features = ["std", "AVAudioPlayer"], optional = true }
 # Already in the build through nsh-platform-macos (same version and features):
 # the Panel's text size is applied on the main queue.
 dispatch2 = "0.3.1"
@@ -43,5 +45,6 @@ nsh-platform-linux = { version = "=0.6.0", default-features = false, features = 
 nsh-platform-windows = { version = "=0.6.0", default-features = false, features = ["webview"] }
 
 [dev-dependencies]
+base64 = { workspace = true }
 futures-util = "0.3"
 tokio-tungstenite = "0.28"

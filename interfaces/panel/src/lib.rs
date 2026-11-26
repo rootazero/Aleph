@@ -20,16 +20,76 @@ use shared_ui_logic::panel::layout::{
 };
 use shared_ui_logic::panel::projection::PanelProjection;
 use shared_ui_logic::panel::registry::BUILTIN_NAMESPACE;
+use shared_ui_logic::prefs::appearance::{theme_tokens, FontScale};
 use shared_ui_logic::prefs::commands::{
     rank, resolve_bindings, CommandKey, KeyProblem, KeySource, RankItem,
 };
-use shared_ui_logic::prefs::appearance::{theme_tokens, FontScale};
 use shared_ui_logic::prefs::{self, Binding, PanelPrefs, PrefsRepair};
 
 #[native_module("aleph/panel")]
 fn native(registry: &mut Registry) {
     registry.module::<PanelModel>();
     registry.module::<NebulaModel>();
+    registry.class::<BrowserCaptureVad>();
+}
+
+/// One instance per browser capture. The page owns PCM; only the sample
+/// clock, RMS and final half-open range cross the NSH module boundary.
+#[class]
+pub struct BrowserCaptureVad(shared_ui_logic::voice::CaptureVad);
+
+#[class]
+impl BrowserCaptureVad {
+    /// Starts a sample clock at zero for one capture.
+    pub fn new() -> Self {
+        Self(shared_ui_logic::voice::CaptureVad::default())
+    }
+
+    /// Returns the normalized sample rate, frame size, and clip bound.
+    pub fn config() -> JsonValue {
+        use aleph_protocol::panel_voice::{MAX_UTTERANCE_SAMPLES, SAMPLE_RATE_HZ};
+        use shared_ui_logic::voice::CAPTURE_FRAME_SAMPLES;
+
+        json!({
+            "sample_rate_hz": SAMPLE_RATE_HZ,
+            "frame_samples": CAPTURE_FRAME_SAMPLES,
+            "max_utterance_samples": MAX_UTTERANCE_SAMPLES,
+        })
+    }
+
+    /// Feeds a normalized RMS frame at its exclusive sample offset.
+    pub fn observe(&mut self, end_sample: u32, rms: f64) -> JsonValue {
+        let rms = if (0.0..=1.0).contains(&rms) {
+            rms as f32
+        } else {
+            f32::NAN
+        };
+        browser_vad_decision(self.0.observe(end_sample as usize, rms))
+    }
+
+    /// Discards incomplete speech or seals the observed range on manual finish.
+    pub fn finish(&mut self) -> JsonValue {
+        browser_vad_decision(self.0.finish())
+    }
+}
+
+fn browser_vad_decision(decision: shared_ui_logic::voice::CaptureDecision) -> JsonValue {
+    use shared_ui_logic::voice::CaptureDecision;
+    match decision {
+        CaptureDecision::Continue => json!({ "kind": "continue" }),
+        CaptureDecision::NoSpeech => json!({ "kind": "no_speech" }),
+        CaptureDecision::InvalidInput => json!({ "kind": "invalid_input" }),
+        CaptureDecision::Seal {
+            first_sample,
+            end_sample,
+            limit_reached,
+        } => json!({
+            "kind": "seal",
+            "first_sample": first_sample,
+            "end_sample": end_sample,
+            "limit_reached": limit_reached,
+        }),
+    }
 }
 
 /// One built-in module the TSX shell renders itself.
@@ -75,6 +135,7 @@ const SHELL_PUBLIC_BASE: &str = "shell/";
 fn is_shell_module(key: &PanelTabKey) -> bool {
     key.plugin_id == BUILTIN_NAMESPACE
         && (key.tab_id == aleph_protocol::memory_graph::NEBULA_TAB_ID
+            || key.tab_id == "voice"
             || SHELL_MODULES
                 .iter()
                 .any(|module| module.tab_id == key.tab_id))
@@ -445,6 +506,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn browser_capture_vad_returns_only_the_rust_sample_range() {
+        let mut vad = BrowserCaptureVad::new();
+        let frame = BrowserCaptureVad::config()["frame_samples"]
+            .as_u64()
+            .unwrap() as u32;
+        for n in 1..=20 {
+            assert_eq!(vad.observe(n * frame, 0.5), json!({ "kind": "continue" }));
+        }
+        assert_eq!(
+            vad.finish(),
+            json!({ "kind": "seal", "first_sample": 0, "end_sample": 20 * frame, "limit_reached": false })
+        );
+        assert_eq!(
+            BrowserCaptureVad::new().finish(),
+            json!({ "kind": "no_speech" })
+        );
+        assert_eq!(
+            BrowserCaptureVad::new().observe(frame + 1, 0.5),
+            json!({ "kind": "invalid_input" })
+        );
+    }
+
+    #[test]
     fn nebula_scene_preserves_similarity_edge_kind() {
         let node =
             |id| json!({"id": id, "path": id, "name": id, "category": "concept", "link_count": 0});
@@ -555,6 +639,32 @@ mod tests {
         let view = PanelModel::view(snapshot, Some(stored));
         assert_eq!(view["projectionError"], "unacceptable_trust");
         assert!(!has_nebula(&view));
+    }
+
+    #[test]
+    fn voice_projects_as_tsx_only_from_a_live_core_declaration() {
+        let live_voice = |view: &JsonValue| {
+            view["slots"].as_array().unwrap().iter().any(|slot| {
+                slot["key"] == "aleph:voice" && slot["state"] == "live" && slot["renderer"] == "tsx"
+            })
+        };
+        let blank = PanelModel::view(JsonValue::Null, None);
+        assert!(!blank["tabs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tab| tab["key"] == "aleph:voice"));
+        let mut snapshot = community(3);
+        let declaration = &mut snapshot["declarations"][0];
+        declaration["origin"] = json!("builtin");
+        declaration["public_base"] = json!("shell/");
+        declaration["asset_integrity"] = JsonValue::Null;
+        declaration["descriptor"]["key"] = json!({ "plugin_id": "aleph", "tab_id": "voice" });
+        declaration["descriptor"]["entry"] = json!("shell/voice");
+        declaration["descriptor"]["trust"] = json!("verified");
+        assert!(live_voice(&PanelModel::view(snapshot.clone(), None)));
+        snapshot["declarations"][0]["descriptor"]["status"] = json!("disabled");
+        assert!(!live_voice(&PanelModel::view(snapshot, None)));
     }
 
     #[test]

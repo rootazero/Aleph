@@ -889,14 +889,32 @@ impl HarnessRunner for AgentHarnessRunner {
             _ => session_id,
         };
 
+        let mut run_result = run_result.map_err(|e| match e {
+            crate::harness::trait_def::HarnessError::Cancelled => FlowError::Cancelled,
+            other => error::classify_harness_error(other, &provider_name),
+        });
+        // The terminal marker, not the later stream drain, decides the exact
+        // stop race. A transient attempt with a successor is not terminal for
+        // the receipt; it closes its own marker without sealing the retry.
+        let _ = crate::orchestrator::dispatch::CHAT_RUN_ATTEMPT.try_with(|attempt| {
+            if let Some(attempt) = attempt {
+                if cancel.is_cancelled() {
+                    run_result = Err(FlowError::Cancelled);
+                }
+                let retry =
+                    attempt.may_retry && matches!(&run_result, Err(FlowError::Transient { .. }));
+                if !retry && attempt.cancellation.begin_terminal_commit().is_err() {
+                    run_result = Err(FlowError::Cancelled);
+                }
+            }
+        });
+
         // Classify the outcome BEFORE the `?` so `RunFinished` is emitted
         // on the error path too. Ok → Completed; Cancelled → Cancelled;
         // any other error → Errored.
         let run_outcome = match &run_result {
             Ok(()) => crate::session::events::RunOutcome::Completed,
-            Err(crate::harness::trait_def::HarnessError::Cancelled) => {
-                crate::session::events::RunOutcome::Cancelled
-            }
+            Err(FlowError::Cancelled) => crate::session::events::RunOutcome::Cancelled,
             Err(_) => crate::session::events::RunOutcome::Errored,
         };
         if let Err(e) = self
@@ -1171,14 +1189,7 @@ impl HarnessRunner for AgentHarnessRunner {
         // channel stays alive until BroadcastCallback drops at end of run.
         let _ = events;
 
-        if let Err(e) = run_result {
-            return Err(match e {
-                crate::harness::trait_def::HarnessError::Cancelled => FlowError::Cancelled,
-                other => error::classify_harness_error(other, &provider_name),
-            });
-        }
-
-        Ok(outcome)
+        run_result.map(|()| outcome)
     }
 
     async fn estimate_context(

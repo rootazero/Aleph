@@ -22,6 +22,7 @@ use crate::credential::{ensure_credential_transport, DeviceCredential, VerifiedI
 use crate::error::{CliError, CliResult};
 use crate::tls;
 
+mod panel_voice;
 mod requests;
 use requests::RequestState;
 
@@ -138,6 +139,14 @@ impl Socket {
     }
 
     async fn send_text(&self, json: String) -> CliResult<()> {
+        self.send_text_if(json, || Ok(())).await
+    }
+
+    async fn send_text_if(
+        &self,
+        json: String,
+        before_send: impl FnOnce() -> CliResult<()>,
+    ) -> CliResult<()> {
         let mut write = self.write.lock().await;
         if self.requests.is_closed() {
             return Err(CliError::Disconnected("Connection closed by peer".into()));
@@ -145,6 +154,7 @@ impl Socket {
         let Some(writer) = write.as_mut() else {
             return Err(CliError::Disconnected("Connection closed by peer".into()));
         };
+        before_send()?;
         let sent = tokio::select! {
             biased;
             () = self.stopped() => return Err(CliError::Disconnected("Connection closed by peer".into())),
@@ -1131,6 +1141,21 @@ impl AlephClient {
     /// Whether the current socket is live and has completed its handshake.
     pub fn is_connected(&self) -> bool {
         self.socket().requests.is_ready()
+    }
+
+    /// Run a short, synchronous side effect only while this Desktop IPC
+    /// socket is Ready, ordered against that socket's logical retirement.
+    /// Returns `None` for WebSocket, unready or retired connections.
+    ///
+    /// The action runs under the request-state lock, never the socket
+    /// selection or writer lock. It must not call back into the client,
+    /// take locks used by client callers, or wait for I/O or async work.
+    pub fn with_ready_local_connection<T>(&self, action: impl FnOnce() -> T) -> Option<T> {
+        if self.url.is_some() {
+            return None;
+        }
+        // Desktop IPC has no in-place reconnect; the host installs a new client.
+        self.socket().requests.with_ready(action)
     }
 
     /// Close the captured socket, not any replacement installed while waiting

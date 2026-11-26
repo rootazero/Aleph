@@ -288,6 +288,7 @@ pub async fn run_dispatch_and_drain(
         // Never withholds the terminal frame: this wrapper has no retry loop
         // above it, so an attempt of its is always the run's last word.
         false,
+        None,
     )
     .await
     .map_err(ExecutionError::from)
@@ -306,6 +307,7 @@ pub async fn run_dispatch_and_drain_classified(
     locale: Locale,
     occupancy_out: &std::sync::Mutex<Option<RunContextOccupancy>>,
     may_retry: bool,
+    chat_cancellation: Option<&crate::gateway::execution_adapter::ChatRunCancellation>,
 ) -> Result<String, DispatchFailure> {
     // Session this run's provider dials are witnessed under. Captured before
     // `req` moves into the dispatch; the drain below reads the witness at the
@@ -317,7 +319,15 @@ pub async fn run_dispatch_and_drain_classified(
     let witness_session_for_fallback = witness_session.clone();
 
     // 1. Dispatch.
-    let handle = orchestrator.dispatch(req).await.map_err(map_flow_error)?;
+    let handle = match chat_cancellation {
+        Some(cancellation) => {
+            orchestrator
+                .dispatch_chat_attempt(req, cancellation, may_retry)
+                .await
+        }
+        None => orchestrator.dispatch(req).await,
+    }
+    .map_err(map_flow_error)?;
 
     // Wire the caller's cancel token to the orchestrator's handle token so
     // `cancel_token.cancel()` propagates into the harness run.
@@ -427,7 +437,8 @@ pub async fn run_dispatch_and_drain_classified(
             // report the run as whatever the final, instant, zeroed retry did.
             let superseded_by_a_retry =
                 may_retry && matches!(failure, DispatchFailure::Transient { .. });
-            if !superseded_by_a_retry {
+            // Managed failures get their one scoped RunError from execute().
+            if chat_cancellation.is_none() && !superseded_by_a_retry {
                 match held {
                     Some(held) => {
                         if let Err(err) = emit_held_complete(&emitter, run_id, &held).await {
@@ -453,15 +464,19 @@ pub async fn run_dispatch_and_drain_classified(
             // and the drain reads the outer token itself.
             propagate.abort();
             let failure = DispatchFailure::Fatal(format!("completion dropped: {e}"));
-            settle_dropped_completion(
-                &emitter,
-                run_id,
-                drain,
-                &failure,
-                locale,
-                TERMINAL_DRAIN_GRACE,
-            )
-            .await;
+            if chat_cancellation.is_some() {
+                drain.abort();
+            } else {
+                settle_dropped_completion(
+                    &emitter,
+                    run_id,
+                    drain,
+                    &failure,
+                    locale,
+                    TERMINAL_DRAIN_GRACE,
+                )
+                .await;
+            }
             return Err(failure);
         }
     };
@@ -510,6 +525,13 @@ pub async fn run_dispatch_and_drain_classified(
     //    enriched summary instead of an all-zeros placeholder.
     let held = drain.await.ok().flatten();
     propagate.abort();
+    // The real harness settles before its durable marker. This also fences
+    // runners that produce only a FlowOutcome, with no durable marker.
+    if let Some(cancellation) = chat_cancellation {
+        cancellation
+            .begin_terminal_commit()
+            .map_err(|_| DispatchFailure::Cancelled)?;
+    }
     if let Some(held) = held {
         // A successful attempt always speaks: `may_retry` is irrelevant here
         // because there is nothing left to supersede it.
