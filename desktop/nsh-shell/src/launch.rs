@@ -4,7 +4,8 @@
 //! without a preset, so the app reads the production target itself.
 
 use crate::shell_host::HostSettings;
-use std::path::PathBuf;
+use aleph_client::ConnectionTarget;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 /// The QA context of a debug run; present exactly when
@@ -36,7 +37,7 @@ pub(crate) fn preset(launch: Launch) {
 
 /// The preset launch, or the production one when nothing was preset.
 pub(crate) fn current() -> Launch {
-    current_in(&PRESET)
+    current_in(&PRESET, std::env::home_dir().as_deref())
 }
 
 fn preset_in(cell: &OnceLock<Launch>, launch: Launch) {
@@ -45,32 +46,67 @@ fn preset_in(cell: &OnceLock<Launch>, launch: Launch) {
     }
 }
 
-fn current_in(cell: &OnceLock<Launch>) -> Launch {
-    cell.get().cloned().unwrap_or_else(production)
+fn current_in(cell: &OnceLock<Launch>, home: Option<&Path>) -> Launch {
+    cell.get().cloned().unwrap_or_else(|| production(home))
 }
 
-/// The packaged app's launch. QA runs only through the command-line entry,
-/// which validates the QA environment and presets it, so QA variables here
-/// are not read at all rather than half-honored.
-fn production() -> Launch {
-    Launch {
-        settings: HostSettings::from_inputs(None, None)
-            .expect("the local target is a loopback HTTP origin"),
-        qa: None,
-    }
+/// The packaged app's launch: the target saved under `home`, or the local
+/// server. QA runs only through the command-line entry, which validates the
+/// QA environment and presets it, so QA variables here are not read at all
+/// rather than half-honored.
+fn production(home: Option<&Path>) -> Launch {
+    let saved = home.map_or(ConnectionTarget::Local, crate::target_store::load_target);
+    let settings = HostSettings::for_target(saved, None).unwrap_or_else(|error| {
+        // A saved target that cannot carry native credentials (plain HTTP
+        // to another host) is treated like an unreadable file.
+        eprintln!("ignoring the saved connection target: {error}");
+        HostSettings::for_target(ConnectionTarget::Local, None)
+            .expect("the local target is a loopback HTTP origin")
+    });
+    Launch { settings, qa: None }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{current_in, preset_in, Launch};
     use crate::shell_host::HostSettings;
+    use aleph_client::ConnectionTarget;
     use std::sync::OnceLock;
 
+    /// An empty directory standing in for the user's home.
+    fn scratch_home(name: &str) -> std::path::PathBuf {
+        let home =
+            std::env::temp_dir().join(format!("aleph-nsh-launch-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).unwrap();
+        home
+    }
+
     #[test]
-    fn current_without_preset_reads_environment() {
+    fn current_without_preset_or_home_is_local() {
         let cell = OnceLock::new();
-        let launch = current_in(&cell);
+        let launch = current_in(&cell, None);
         assert!(launch.qa.is_none());
+        assert_eq!(launch.settings.url, "http://127.0.0.1:18790/");
+    }
+
+    #[test]
+    fn current_without_preset_reads_the_saved_target() {
+        let home = scratch_home("saved");
+        let remote = ConnectionTarget::parse("https://gw.example.com").unwrap();
+        crate::target_store::save_target(&home, &remote).unwrap();
+        let launch = current_in(&OnceLock::new(), Some(&home));
+        let _ = std::fs::remove_dir_all(&home);
+        assert_eq!(launch.settings.url, "https://gw.example.com/");
+    }
+
+    #[test]
+    fn saved_plain_http_remote_falls_back_to_local() {
+        let home = scratch_home("plain-http");
+        let remote = ConnectionTarget::parse("http://box.lan:18790").unwrap();
+        crate::target_store::save_target(&home, &remote).unwrap();
+        let launch = current_in(&OnceLock::new(), Some(&home));
+        let _ = std::fs::remove_dir_all(&home);
         assert_eq!(launch.settings.url, "http://127.0.0.1:18790/");
     }
 
@@ -84,7 +120,15 @@ mod tests {
         )
         .unwrap();
         preset_in(&cell, Launch { settings, qa: None });
-        assert_eq!(current_in(&cell).settings.url, "https://box.lan:8443/");
+        let home = scratch_home("preset");
+        crate::target_store::save_target(
+            &home,
+            &ConnectionTarget::parse("https://other.example.com").unwrap(),
+        )
+        .unwrap();
+        let url = current_in(&cell, Some(&home)).settings.url;
+        let _ = std::fs::remove_dir_all(&home);
+        assert_eq!(url, "https://box.lan:8443/");
     }
 
     #[test]

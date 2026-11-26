@@ -54,7 +54,7 @@ impl HostSettings {
         Self::for_target(target, None)
     }
 
-    fn for_target(
+    pub(crate) fn for_target(
         target: aleph_client::ConnectionTarget,
         qa_nonce: Option<String>,
     ) -> Result<Self, String> {

@@ -10,6 +10,7 @@ mod launch;
 mod local_service;
 mod platform;
 mod shell_host;
+mod target_store;
 
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 mod app;
