@@ -811,6 +811,13 @@ fn denial_advisory(hint: Option<&SandboxDenialHint>, exit_code: i32) -> Option<S
     ))
 }
 
+fn drain_advisory(incomplete: bool) -> Option<String> {
+    incomplete.then(|| {
+        "Output capture ended before both pipes reached EOF; additional output may be missing."
+            .to_owned()
+    })
+}
+
 fn sandbox_result_to_output(
     result: std::result::Result<SandboxOutput, SandboxError>,
     language: String,
@@ -861,13 +868,17 @@ fn sandbox_result_to_output(
                 truncated: if out.truncated { Some(true) } else { None },
                 stdout_truncated_bytes: out.stdout_truncated_bytes,
                 stderr_truncated_bytes: out.stderr_truncated_bytes,
-                advisory: denial_advisory(out.denial_hint.as_ref(), exit_code),
+                advisory: merge_advisory(
+                    denial_advisory(out.denial_hint.as_ref(), exit_code),
+                    drain_advisory(out.drain_incomplete),
+                ),
             }
         }
         Err(SandboxError::Timeout {
             elapsed_ms,
             partial_stdout,
             partial_stderr,
+            drain_incomplete,
         }) => {
             warn!(
                 timeout_secs = timeout_secs,
@@ -882,17 +893,13 @@ fn sandbox_result_to_output(
                 sanitize_command_output(&String::from_utf8_lossy(&partial_stdout)).into_owned();
             let partial_stderr_text =
                 sanitize_command_output(&String::from_utf8_lossy(&partial_stderr)).into_owned();
-            // Frame the human-readable banner so the model can see _that_
-            // it timed out, and inline the captured partial stderr (if
-            // any) so it knows _what the script printed_ on its way out.
+            let notice = format!(
+                "Execution timed out after {timeout_secs}s (exit code 124, POSIX timeout convention)."
+            );
             let stderr = if partial_stderr_text.is_empty() {
-                format!(
-                    "Execution timed out after {timeout_secs}s (exit code 124, POSIX timeout convention). Partial stdout above was captured before the kill; partial stderr was empty."
-                )
+                format!("{notice} No stderr was captured.")
             } else {
-                format!(
-                    "Execution timed out after {timeout_secs}s (exit code 124, POSIX timeout convention). Partial stderr captured before kill:\n{partial_stderr_text}"
-                )
+                format!("{notice} Captured partial stderr:\n{partial_stderr_text}")
             };
             CodeExecOutput {
                 success: false,
@@ -906,7 +913,7 @@ fn sandbox_result_to_output(
                 truncated: None,
                 stdout_truncated_bytes: 0,
                 stderr_truncated_bytes: 0,
-                advisory: None,
+                advisory: drain_advisory(drain_incomplete),
             }
         }
         Err(SandboxError::CapabilityDenied { reason }) => CodeExecOutput {
@@ -1639,6 +1646,7 @@ mod tests {
                     elapsed_ms: 1234,
                     partial_stdout: b"started step 1\n".to_vec(),
                     partial_stderr: b"warning: foo\n".to_vec(),
+                    drain_incomplete: true,
                 })
             }
         }
@@ -1681,6 +1689,11 @@ mod tests {
             out.stderr
         );
         assert_eq!(out.duration_ms, 1234);
+        assert!(out
+            .advisory
+            .unwrap()
+            .contains("before both pipes reached EOF"));
+        assert_eq!(out.truncated, None);
     }
 
     #[tokio::test]
@@ -1696,6 +1709,7 @@ mod tests {
                     elapsed_ms: 500,
                     partial_stdout: Vec::new(),
                     partial_stderr: Vec::new(),
+                    drain_incomplete: false,
                 })
             }
         }
@@ -1721,7 +1735,7 @@ mod tests {
         assert_eq!(out.exit_code, 124);
         assert!(out.stdout.is_empty());
         assert!(
-            out.stderr.contains("partial stderr was empty"),
+            out.stderr.contains("No stderr was captured"),
             "drain-empty banner missing: {}",
             out.stderr
         );
