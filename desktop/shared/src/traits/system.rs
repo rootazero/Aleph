@@ -2,8 +2,10 @@
 
 use async_trait::async_trait;
 
-use crate::system_types::{AppInfo, ClipboardContent, InstalledApp, SystemInfo};
 use crate::Result;
+use crate::system_types::{
+    AppInfo, ClipboardContent, DesktopProcessIdentity, InstalledApp, SystemInfo,
+};
 
 /// System-level operations: app lifecycle, clipboard, notifications, system info.
 #[async_trait]
@@ -42,6 +44,12 @@ pub trait SystemCapability: Send + Sync {
 
     /// List currently running applications.
     async fn list_running_apps(&self) -> Result<Vec<AppInfo>>;
+
+    /// Evidence for this live process instance at lookup time. A PID or app
+    /// list entry alone is not enough; unsupported platforms return `None`.
+    async fn desktop_process_identity(&self, _pid: i32) -> Result<Option<DesktopProcessIdentity>> {
+        Ok(None)
+    }
 
     /// List the applications *installed* on this machine, running or not.
     ///
