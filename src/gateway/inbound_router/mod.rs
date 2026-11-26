@@ -2547,9 +2547,10 @@ mod tests {
         };
         let key = router.resolve_session_key_with_agent(&msg, "main");
         // Fallback uses SessionKey::dm (matching the bound-route path) →
-        // PerPeer + channel → "agent:main:dm:owner" — the same key the
-        // configured-binding path produces, so history is not split.
-        assert_eq!(key.to_key_string(), "agent:main:dm:owner");
+        // PerPeer drops the channel → "agent:main:peer:owner" — the same key
+        // the configured-binding path and the harness produce, so history is
+        // not split.
+        assert_eq!(key.to_key_string(), "agent:main:peer:owner");
     }
 
     /// PerChannelPeer DM fallback also agrees with the bound-route path's

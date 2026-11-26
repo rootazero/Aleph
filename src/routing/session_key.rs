@@ -202,6 +202,13 @@ impl SessionKey {
     /// Create a DM session key with scope strategy
     ///
     /// If `dm_scope` is Main, returns a Main session key (DMs collapse into main).
+    ///
+    /// `PerPeer` is per-user across channels, so its key carries NO channel:
+    /// the channel is dropped here. Keeping it made one conversation two keys —
+    /// the inbound router's `{channel: "webhook"}` and the `{channel: ""}` every
+    /// string round trip produces (`agent:a:dm:p` and `agent:a:peer:p`) — and
+    /// writers on each side landed in different stores (steering events the
+    /// loop never read, a `clarification.pending` row nobody could find).
     pub fn dm(
         agent_id: impl Into<String>,
         channel: impl Into<String>,
@@ -215,7 +222,14 @@ impl SessionKey {
                 main_key: DEFAULT_MAIN_KEY.to_string(),
                 epoch: 0,
             },
-            _ => Self::DirectMessage {
+            DmScope::PerPeer => Self::DirectMessage {
+                agent_id,
+                channel: String::new(),
+                peer_id: sanitize_component(&peer_id.into()),
+                dm_scope,
+                epoch: 0,
+            },
+            DmScope::PerChannelPeer => Self::DirectMessage {
                 agent_id,
                 channel: sanitize_component(&channel.into()),
                 peer_id: sanitize_component(&peer_id.into()),
@@ -308,10 +322,9 @@ impl SessionKey {
     fn format_dm_base(agent_id: &str, channel: &str, peer_id: &str, dm_scope: DmScope) -> String {
         match dm_scope {
             DmScope::Main => format!("agent:{agent_id}:main"),
-            DmScope::PerPeer if channel.is_empty() => {
-                format!("agent:{agent_id}:peer:{peer_id}")
-            }
-            DmScope::PerPeer => format!("agent:{agent_id}:dm:{peer_id}"),
+            // One spelling for every per-peer key, whatever channel a literal
+            // carries; `dm:` survives only as a parse alias (`parse_rest`).
+            DmScope::PerPeer => format!("agent:{agent_id}:peer:{peer_id}"),
             DmScope::PerChannelPeer => {
                 format!("agent:{agent_id}:{channel}:dm:{peer_id}")
             }
@@ -665,7 +678,7 @@ impl SessionKey {
 
     fn parse_rest(agent_id: &str, rest: &[&str], epoch: u32) -> Option<Self> {
         match rest {
-            // agent:id:peer:peer_id (legacy per-peer DM format)
+            // agent:id:peer:peer_id (canonical per-peer DM spelling)
             ["peer", peer_id] => Some(Self::DirectMessage {
                 agent_id: agent_id.to_string(),
                 channel: String::new(),
@@ -674,7 +687,7 @@ impl SessionKey {
                 epoch,
             }),
 
-            // agent:id:dm:peer (per-peer DM)
+            // agent:id:dm:peer (per-peer DM alias; re-serializes as `peer:`)
             ["dm", peer_id] => Some(Self::DirectMessage {
                 agent_id: agent_id.to_string(),
                 channel: String::new(),
@@ -992,7 +1005,27 @@ mod tests {
     #[test]
     fn test_to_key_string_dm_per_peer() {
         let key = SessionKey::dm("main", "telegram", "user123", DmScope::PerPeer);
-        assert_eq!(key.to_key_string(), "agent:main:dm:user123");
+        assert_eq!(key.to_key_string(), "agent:main:peer:user123");
+    }
+
+    /// The inbound router builds the key with its channel; every consumer that
+    /// receives it as a string rebuilds it with `from_key_string`. Both must be
+    /// the same key — equal as values, as strings and as serde JSON (the
+    /// `session_events.session_id` form) — or the two sides write to
+    /// different stores.
+    #[test]
+    fn a_per_peer_dm_is_one_key_whichever_way_it_was_built() {
+        let routed = SessionKey::dm("main", "webhook", "qa-sender", DmScope::PerPeer);
+        let rebuilt = SessionKey::from_key_string(&routed.to_key_string()).unwrap();
+        let aliased = SessionKey::from_key_string("agent:main:dm:qa-sender").unwrap();
+        assert_eq!(routed, rebuilt);
+        assert_eq!(routed, aliased);
+        assert_eq!(routed, SessionKey::peer("main", "qa-sender"));
+        assert_eq!(rebuilt.to_key_string(), "agent:main:peer:qa-sender");
+        assert_eq!(
+            serde_json::to_string(&routed).unwrap(),
+            serde_json::to_string(&rebuilt).unwrap()
+        );
     }
 
     #[test]
@@ -1256,14 +1289,10 @@ mod tests {
         // session (which would leak the DM into the agent main thread). The key
         // guarantee is that the trailing "s1" is NOT stripped as an epoch.
         //
-        // Note: a `dm:` key drops the channel for PerPeer scope, so the parsed
-        // form has an empty channel and canonically re-serializes via the legacy
-        // `peer:` spelling — `dm:`/`peer:` are intentionally distinct outputs for
-        // PerPeer (see `test_to_key_string_dm_per_peer` / `test_to_key_string_peer`).
-        // We therefore assert the parsed *shape* (PerPeer DM, peer=s1), not a
-        // byte-identical round-trip, which the canonical-form asymmetry precludes.
+        // `dm:` is a parse alias of the canonical `peer:` spelling, so the
+        // alias must survive a peer id that looks like an epoch too.
         let key = SessionKey::dm("main", "telegram", "s1", DmScope::PerPeer);
-        assert_eq!(key.to_key_string(), "agent:main:dm:s1");
+        assert_eq!(key.to_key_string(), "agent:main:peer:s1");
         let parsed = SessionKey::parse("agent:main:dm:s1").expect("must parse");
         assert!(
             matches!(

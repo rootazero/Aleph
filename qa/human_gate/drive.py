@@ -253,10 +253,10 @@ async def stage_text():
     if not check(await wait_for_tool_request(), "the channel run reaches the model with tools"):
         return
     await asyncio.sleep(2)
-    # Defect D1: the channel run parks its question under the structured
-    # `agent:main:dm:qa-sender` key, the handler re-parses the string into the
-    # channel-less key and misses the session row, so a scoped operator never
-    # sees it. Kept as a claim; the text replies below do not depend on it.
+    # Guards D1: the channel run parks its question under the per-peer key
+    # (`agent:main:peer:qa-sender`), the same key the session row lives under,
+    # so a scoped operator sees it. Before D1 was fixed the question sat
+    # under `agent:main:dm:qa-sender` and never showed up here.
     first = await await_question(client, "QA_Q1", budget=5)
     check(first is not None, "the channel run's ask_user request shows up in clarification.pending",
           f"pending={json.dumps(await pending(client))[:300]}")
