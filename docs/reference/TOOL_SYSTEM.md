@@ -340,9 +340,13 @@ Three things about this pair are load-bearing:
 
 | Tool | Description | Args |
 |------|-------------|------|
-| `bash_exec` | Run bash command | `command`, `timeout?` |
+| `bash` | Run the platform shell / 执行平台 Shell | `cmd`, `timeout?`, `background?`, `yield_ms?`; or `process_action`, `process_id?`, `cursor?` |
 | `code_exec` | Execute code snippet | `language`, `code` |
 | `python_exec` | Run Python | `code`, `requirements?` |
+
+Plain `bash` waits for completion (default 60 s, ceiling 170 s). `background: true` starts a managed job with a 3600 s default and a 14400 s ceiling. `yield_ms` (1–10000) limits only the first wait: return the final result if it settles in time, otherwise return a `process_id`. Setting `yield_ms` alone does not opt into the longer background execution budget. Owned worktrees do not support either detached form.
+
+后续调用复用 `bash`：`list` 查作业，`poll` 看状态或滚动尾巴，`wait` 等完成（默认 60 秒，上限 170 秒），`kill` 请求取消；`read` 在同一会话内用 `next_cursor` 增量读取 stdout/stderr。游标只在本次 daemon 生命周期和原进程有效，终态保留同一滚动窗口直到淘汰；没有恢复、重放或任意 stdin/EOF 写入。`read` 按源字节报告流各自的 `lost`（已滚出）、`withheld`（不能安全展示）和 `pending`（等待完整行）。保留窗口不是完整 transcript；终态 `poll`/`wait` 仍返回原有最终结果。详见 [Shell 生命周期](PROCESS_MANAGEMENT.md#agent-shell-子进程-agent-shell-children)。
 
 ### Web & Search
 

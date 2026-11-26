@@ -79,7 +79,7 @@ Each `SessionWorkspace` carries:
    only where the process starts. Owned worktrees set `CARGO_TARGET_DIR` to
    `<worktree>/target`. Ordinary runs retain their existing cwd policy.
 5. **Run** — `os_driver.run(program, args, env, stdin, cwd, profile, timeout,
-   max_output_bytes)`. Default timeout 60s, default output budget 1 MB (split
+   max_output_bytes, lifecycle)`. Default timeout 60s, default output budget 1 MB (split
    stdout + stderr). Both override-able on the `WorkspaceSandbox` via
    `with_timeout` / `with_max_output_bytes`. Immediately after the run (before
    scrub), stderr is matched against the *running* backend's own denial
@@ -95,6 +95,10 @@ Each `SessionWorkspace` carries:
    carrying `session_id`, `program`, `caps`, `exit_code`, `signal`,
    `duration_ms`. This is the capability-ledger hook; downstream tracing
    subscribers can sink it to whatever store is desired.
+
+**Managed Shell / 托管 Shell。** Background and yielding shell calls use the same admission, workspace, policy, and native driver as foreground calls. Only opted-in drivers accept the lifecycle control. The driver orders cancellation against spawn, owns the direct child through a wait, and bounds the remaining output drain independently of the output byte limit. The optional initial script pipe drains concurrently with output and closes at the end of the script; it is not an interactive input channel.
+
+取消在启动前阻止 spawn；启动后由原生驱动确认直接子进程已退出，不能将发送停止信号等同于回收。Aleph 不对所有后代作跨平台回收承诺。`bash` 未开放任意会话 stdin/EOF：现有硬性命令策略审查的是启动内容，不能保证解释器随后收到的任意字节仍走同一策略。人工 PTY 和浏览器伴随进程不复用此契约。
 
 **Worktree lifetime / 工作树寿命。** Team selects its source from the authorized
 project, not the daemon cwd. A project bound to a Git subdirectory must be
