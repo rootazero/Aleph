@@ -36,10 +36,13 @@ pub(super) enum GateOutcome {
     /// dropping it releases the session claim + permit (including on early
     /// return or panic).
     Admitted(RunSlot),
-    /// Already fully handled inline (a busy sibling on this session was
-    /// steered via mid-loop injection) — `execute()` must return `Ok(())`
-    /// now, without running anything.
-    HandledInline,
+    /// Already handled inline by steering a live sibling on this session.
+    /// Ordinary Chat follows that sibling via `RunJoined`; an exact receipt
+    /// closes independently. Neither starts a new run.
+    HandledInline {
+        /// The live run the message was folded into.
+        joined_run_id: String,
+    },
 }
 
 /// RAII guard for an admitted run: holds the session's run-mutex claim and
@@ -274,22 +277,21 @@ where
                     // No sibling on THIS session means a cross-session busy
                     // agent — there is no live loop to fold into, so the
                     // message waits its turn in the lane.
-                    let injected = match sibling.as_ref() {
-                        Some(s) => {
-                            super::steering::try_inject_steering(
-                                self.config.mid_turn_steering,
-                                self.config.max_pending_steering,
-                                s,
-                                self.orchestrator.as_ref(),
-                                request,
-                                run_id,
-                                chat_cancellation,
-                            )
-                            .await?
-                        }
-                        None => false,
+                    let joined_run_id = match sibling.as_ref() {
+                        Some(s) => super::steering::try_inject_steering(
+                            self.config.mid_turn_steering,
+                            self.config.max_pending_steering,
+                            s,
+                            self.orchestrator.as_ref(),
+                            request,
+                            run_id,
+                            chat_cancellation,
+                        )
+                        .await?
+                        .then(|| s.run_id.clone()),
+                        None => None,
                     };
-                    if injected {
+                    if let Some(joined_run_id) = joined_run_id {
                         // An inline fold IS the turn: `execute()` returns
                         // `Ok(())` on `HandledInline`, so `run_loop::inner` —
                         // the only other place these resolvers run — is never
@@ -315,7 +317,7 @@ where
                         let _ = self.resolve_turn_mode(request).await;
                         let _ = self.resolve_turn_think_level(request).await;
                         let _ = self.resolve_turn_memory_mode(request).await;
-                        return Ok(GateOutcome::HandledInline);
+                        return Ok(GateOutcome::HandledInline { joined_run_id });
                     }
                     return Err(ExecutionError::AgentBusy(agent.id().to_string()));
                 }

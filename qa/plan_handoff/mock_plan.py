@@ -5,17 +5,14 @@ Different job from `busy_input/mock_anthropic.py`, which scripts *timing*. This
 one scripts *which tool the model reaches for on each turn*, and — the part no
 unit test can reach — **records the tool surface the server actually sent**.
 
-That recording is the point. The read-only floor has two halves that a unit test
-can only assert about separately:
-
-  * `PlanPhase::hides` removes a wholly-refused tool from the turn's tool list,
-  * releasing the latch bumps `ScopedToolService::cache_generation`, so the NEXT
-    turn's list is rebuilt with the floor lifted.
-
-Only a real server assembles that list, and only a provider sees it. So every
-request's `tools[]` names go to `observations.jsonl`, alongside the tool_result
-blocks the previous turn's call produced — which is the other thing a unit test
-cannot see: what the model was actually told when the floor refused it.
+That recording is the point. Under `ExecTier::Plan` a refused tool stays
+VISIBLE in the turn's tool list and is refused at dispatch with
+`GateRule::PlanMode`'s own sentence, and approving the plan through
+`scratchpad{action:"request_approval"}` flips the run's `PlanGate` so the very
+next call runs. Only a real server assembles that list, and only a provider sees
+it. So every request's `tools[]` names go to `observations.jsonl`, alongside the
+tool_result blocks the previous turn's call produced — the model's own view of
+what happened to its calls, which no unit test can see.
 
 The turn counter advances **only for requests that carry tools**. A run makes
 side-channel provider calls (titling, compaction, summarisation) that carry no
@@ -54,14 +51,13 @@ SET_PLAN = (
         "items": ["read the code", "write the patch", "run the tests"],
     },
 )
-REQUEST_BUILD = ("scratchpad", {"action": "request_build"})
+REQUEST_APPROVAL = ("scratchpad", {"action": "request_approval"})
 
-# Every plan opens with a CONTROL turn — a separate, ordinary `building`
+# Every plan opens with a CONTROL turn — a separate, ordinary `full`-tier
 # session that calls nothing. Its only job is to record the tool surface of a
 # session that is NOT planning, on this same server, with this same config and
-# session mode. Without it, "`bash` is absent while planning" is satisfied just
-# as well by "`bash` was never offered in this mode at all", and the scenario
-# would pass while testing nothing. (判据 §0: 空配置下「成功」与「默认值」长得一样.)
+# session mode, so "`file_write` is still listed while planning" is read against
+# a session where it is listed for certain.
 CONTROL = None
 
 PLANS = {
@@ -70,7 +66,7 @@ PLANS = {
         CONTROL,  # 1. building: the A of the A/B
         WRITE_WHILE_PLANNING,  # 2. refused by the floor at dispatch
         SET_PLAN,  # 3. planning tools work
-        REQUEST_BUILD,  # 4. raises the card; the driver approves
+        REQUEST_APPROVAL,  # 4. asks the human; the driver approves
         WRITE_AFTER_APPROVAL,  # 5. must SUCCEED — same run, floor lifted
         None,  # 6. end
     ],
@@ -78,7 +74,7 @@ PLANS = {
     "deny": [
         CONTROL,
         SET_PLAN,
-        REQUEST_BUILD,  # driver denies
+        REQUEST_APPROVAL,  # driver rejects
         WRITE_WHILE_PLANNING,  # must STILL be refused
         None,
     ],

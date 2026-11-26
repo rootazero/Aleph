@@ -1,11 +1,10 @@
 //! Resolve the channel delivery route `(ChannelId, ConversationId)` from a
 //! structured `SessionKey`.
 //!
-//! Single source of truth for routing. Approval delivery must never fall back to
-//! scanning string `session_key` — that approach silently returns `None` for the
-//! default `DmScope::PerPeer` (`agent:{a}:dm:{p}`, which lacks a channel name).
-//! The structured `SessionKey` directly carries the `channel` field, so there is
-//! no ambiguity.
+//! Approval delivery must never fall back to scanning a string `session_key`.
+//! A per-peer DM (`DmScope::PerPeer`, `agent:{a}:peer:{p}`) is one conversation
+//! across channels, so its key carries no channel and yields no route here; the
+//! gateway path routes it from the turn's own channel (`TURN_CONTEXT`).
 
 use crate::gateway::channel::{ChannelId, ConversationId};
 use crate::routing::session_key::SessionKey;
@@ -32,6 +31,7 @@ fn channel_route_inner(key: &SessionKey, depth: usize) -> Option<(ChannelId, Con
         return None;
     }
     match key {
+        SessionKey::DirectMessage { channel, .. } if channel.is_empty() => None,
         SessionKey::DirectMessage {
             channel, peer_id, ..
         }
@@ -52,11 +52,9 @@ mod tests {
     use crate::routing::session_key::{DmScope, PeerKind, SessionKey};
 
     #[test]
-    fn dm_per_peer_routes_to_channel() {
+    fn dm_per_peer_has_no_channel_to_route_to() {
         let key = SessionKey::dm("main", "telegram", "123456", DmScope::PerPeer);
-        let (ch, conv) = channel_route(&key).expect("DM must route");
-        assert_eq!(ch.as_str(), "telegram");
-        assert_eq!(conv.as_str(), "123456");
+        assert!(channel_route(&key).is_none());
     }
 
     #[test]
@@ -90,7 +88,7 @@ mod tests {
 
     #[test]
     fn subagent_recurses_to_parent() {
-        let parent = SessionKey::dm("main", "telegram", "777", DmScope::PerPeer);
+        let parent = SessionKey::dm("main", "telegram", "777", DmScope::PerChannelPeer);
         let key = SessionKey::Subagent {
             parent_key: Box::new(parent),
             subagent_id: "coding".to_string(),

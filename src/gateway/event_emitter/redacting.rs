@@ -262,6 +262,7 @@ impl RedactingEmitter {
             // human, and delivered by its own bus path, not this emitter).
             other @ (StreamEvent::RunAccepted { .. }
             | StreamEvent::RunQueued { .. }
+            | StreamEvent::RunJoined { .. }
             | StreamEvent::AgentTrace { .. }
             | StreamEvent::ContextGauge { .. }
             | StreamEvent::AskUser { .. }

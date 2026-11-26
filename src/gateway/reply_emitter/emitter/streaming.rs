@@ -686,6 +686,8 @@ impl EventEmitter for ReplyEmitter {
             // rather than a half-measure in this file.
             StreamEvent::RunAccepted { .. }
             | StreamEvent::RunQueued { .. }
+            // A folded follow-up: the run it joined delivers the reply.
+            | StreamEvent::RunJoined { .. }
             | StreamEvent::ToolUpdate { .. }
             | StreamEvent::AgentTrace { .. }
             | StreamEvent::UncertaintySignal { .. }

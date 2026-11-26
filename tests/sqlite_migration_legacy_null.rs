@@ -91,6 +91,57 @@ fn write_legacy_db(path: &Path) {
     }
 }
 
+/// A legacy per-peer DM row still spelled `agent:a:dm:p` lands under the
+/// canonical `agent:a:peer:p` key in the same import, so the first message
+/// the running server writes under `peer:` already sees the old history.
+/// Left for the next startup, that first write would create a second
+/// record and the fold would then refuse to pick between the two.
+#[tokio::test]
+async fn an_imported_per_peer_dm_row_lands_under_the_canonical_key() {
+    let tmp = TempDir::new().expect("tempdir");
+    let legacy_db = tmp.path().join("sessions.db");
+    let store_dir = tmp.path().join("file_store");
+    write_legacy_db(&legacy_db);
+    {
+        let conn = rusqlite::Connection::open(&legacy_db).expect("open legacy db");
+        conn.execute("UPDATE sessions SET key = 'agent:main:dm:legacy-peer'", [])
+            .expect("rekey session");
+        conn.execute(
+            "UPDATE messages SET session_key = 'agent:main:dm:legacy-peer'",
+            [],
+        )
+        .expect("rekey messages");
+    }
+    let store = FileSessionStore::new(FileSessionStoreConfig {
+        base_dir: store_dir.clone(),
+        ..Default::default()
+    })
+    .expect("file store");
+
+    export_legacy_messages_from(&legacy_db, &store)
+        .await
+        .expect("migration succeeds");
+
+    // Every session dir and the key its record names.
+    let mut records = Vec::new();
+    for entry in std::fs::read_dir(&store_dir).expect("store dir") {
+        let dir = entry.expect("entry").path();
+        if let Ok(raw) = std::fs::read_to_string(dir.join("metadata.json")) {
+            let meta: SessionMetadata = serde_json::from_str(&raw).expect("parse metadata.json");
+            records.push((meta.key, dir));
+        }
+    }
+    let keys: Vec<&str> = records.iter().map(|(key, _)| key.as_str()).collect();
+    assert_eq!(
+        keys,
+        vec!["agent:main:peer:legacy-peer"],
+        "one record, under the canonical key; no dm: record is left for a later write to collide with"
+    );
+    let transcript =
+        std::fs::read_to_string(records[0].1.join("transcript.jsonl")).expect("transcript.jsonl");
+    assert!(transcript.contains("hello from the past"));
+}
+
 #[tokio::test]
 async fn migrates_legacy_db_with_null_token_and_compaction_columns() {
     let tmp = TempDir::new().expect("tempdir");

@@ -599,9 +599,9 @@ where
                 }
                 return Err(error);
             }
-            Ok(GateOutcome::HandledInline) => {
+            Ok(GateOutcome::HandledInline { joined_run_id }) => {
                 if chat_cancellation.is_some() {
-                    // The accepted inline fold was this receipt's whole turn.
+                    // Close the exact receipt without following the sibling run.
                     let _ = emitter
                         .emit(StreamEvent::RunAccepted {
                             run_id: run_id.clone(),
@@ -617,6 +617,21 @@ where
                             total_duration_ms: 0,
                         })
                         .await;
+                } else {
+                    // `chat.send` already handed `run_id` to its caller, and this
+                    // is the last word that id will ever get: without it a client
+                    // waiting for the id's terminal frame stays busy forever. Not
+                    // `RunComplete` — the conversation is still running.
+                    if let Err(e) = emitter
+                        .emit(StreamEvent::RunJoined {
+                            run_id: run_id.clone(),
+                            session_key: request.session_key.to_key_string(),
+                            joined_run_id,
+                        })
+                        .await
+                    {
+                        tracing::warn!(run_id = %run_id, "failed to emit RunJoined: {e}");
+                    }
                 }
                 return Ok(());
             }

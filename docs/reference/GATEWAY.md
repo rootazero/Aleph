@@ -832,6 +832,22 @@ start", and whichever terminal frame arrives next (`RunAccepted` or
 `RunError`) overwrites it, so a stale open answer costs one frame, never a
 stuck UI.
 
+**A send folded into a running run (2026-11-26).** Under the default
+`BusyInputMode::Steer`, a `chat.send` that arrives while the session already
+has a run is injected into that run and never gets a run of its own
+(`GateOutcome::HandledInline { joined_run_id }`,
+`src/gateway/execution_engine/gate.rs`). Its returned id would otherwise see no
+frame at all, so the engine emits `StreamEvent::RunJoined { run_id,
+session_key, joined_run_id }` (`stream.run_joined`, topic `run.joined`) and
+returns. It is not `RunComplete`: the Leptos Panel treats `run_complete` as
+"the conversation is idle" and would settle the plan while the joined run is
+still working. Clients release the folded id and follow `joined_run_id` at
+once, so Stop targets the run that is answering and that run's terminal frame
+settles the conversation: Leptos `events.rs` `apply_run_joined` (only when the
+conversation was following the folded id) and NSH Panel `chat_panel.rs`
+`follow_joined_run`, which also keeps an early handoff outside the early-frame
+byte and age limits.
+
 **Why position is self-reported by the waiter, not broadcast or polled.** The
 production point is the wait loop itself: `report(ahead)` is called from
 `deliver_with_ticket`, immediately before it parks — not from inside the
@@ -993,7 +1009,7 @@ failure path is one of them.
 | Variant | Format | Use Case |
 |---------|--------|----------|
 | **Main** | `agent:main:main` | Cross-channel shared session |
-| **DirectMessage** | `agent:main:telegram:dm:user123` | Per-user DM |
+| **DirectMessage** | `agent:main:peer:user123` (PerPeer) / `agent:main:telegram:dm:user123` (PerChannelPeer) | Per-user DM. PerPeer stores no channel; `agent:main:dm:user123` is only a parse alias, folded into `peer:` on startup (2026-11-26) |
 | **Group** | `agent:main:discord:group:guild-id` | Group/channel chat |
 | **Task** | `agent:main:cron:daily-summary` | Cron jobs, webhooks |
 | **Subagent** | `subagent:agent:main:translator` | Sub-agent delegation |

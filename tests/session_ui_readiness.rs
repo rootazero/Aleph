@@ -973,7 +973,9 @@ async fn exact_abort_during_steering_backpressure_is_not_lost_and_does_not_touch
             .result
             .unwrap();
         let accepted = accepted["run_id"].as_str().unwrap();
-        rig.wait_run_frame(accepted, "stream.run_complete").await;
+        let terminal = rig.wait_run_frame(accepted, "stream.run_complete").await;
+        let summary = terminal["params"]["summary"].as_object().unwrap();
+        assert!(!summary.contains_key("final_response"));
         assert_eq!(rig.active_run_id(key).as_deref(), Some(leader));
         assert_eq!(
             rig.local_provider_effects(),
@@ -1024,6 +1026,42 @@ async fn exact_abort_during_steering_backpressure_is_not_lost_and_does_not_touch
     assert_eq!(terminals[0]["method"], "stream.run_error");
     assert_eq!(terminals[0]["params"]["error_code"], "CANCELLED");
     assert_eq!(terminals[0]["params"]["session_key"], key);
+}
+
+#[tokio::test]
+async fn ordinary_steering_receipt_joins_the_active_run() {
+    let rig = ReadinessRig::new_with_steering(true).await.unwrap();
+    let key = "agent:main:readiness-steering-join";
+    let owner = "readiness-steering-join-owner";
+    tokio::time::timeout(Duration::from_secs(15), async {
+        rig.precreate(owner, key).await.unwrap();
+        rig.configure_busy_queue(4, 30).await;
+        rig.release_prepare();
+        rig.release_committed_prepare();
+        rig.close_provider();
+        let leader = rig.chat_send(owner, key).await.result.unwrap();
+        let leader = leader["run_id"].as_str().unwrap();
+        rig.wait_provider_entered().await;
+
+        let send = rig
+            .start_chat_send_with_input(owner, key, "ordinary steering follow-up")
+            .await
+            .unwrap()
+            .result
+            .unwrap();
+        let receipt = send["run_id"].as_str().unwrap();
+        assert_ne!(receipt, leader);
+        let joined = rig.wait_run_frame(receipt, "stream.run_joined").await;
+        assert_eq!(joined["params"]["session_key"], key);
+        assert_eq!(joined["params"]["joined_run_id"], leader);
+        assert_eq!(rig.active_run_id(key).as_deref(), Some(leader));
+        assert_eq!(rig.local_provider_effects(), 1);
+        rig.release_provider();
+        rig.wait_run_frame(leader, "stream.run_complete").await;
+    })
+    .await
+    .expect("ordinary steering must tell its caller to follow the live run");
+    rig.close().await.unwrap();
 }
 
 #[tokio::test]

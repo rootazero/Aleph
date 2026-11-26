@@ -36,6 +36,7 @@ Usage:
 """
 import argparse
 import asyncio
+import json
 import sys
 
 import websockets
@@ -60,10 +61,50 @@ ap.add_argument(
     "debounce or the burst arrives as ONE merged message",
 )
 ap.add_argument("--conversation", default="qa-busy-conv")
+ap.add_argument(
+    "--request-log",
+    default="",
+    help="the mock provider's JSONL request log; steer mode reads it to prove "
+    "the arrivals reached the live run's next provider request",
+)
 args = ap.parse_args()
 
 CONV = args.conversation
 _seq = [0]
+
+
+BURST_WORDS = "bravo charlie delta echo".split()
+
+
+def burst_text(i):
+    return f"{BURST_WORDS[i % 4]}: burst message {i + 2}"
+
+
+def requests_carrying(text):
+    """Run-turn indices of logged provider requests whose `messages` contain
+    `text`. Planning calls are skipped: they are not the run's own turns."""
+    hits = []
+    with open(args.request_log) as fh:
+        for line in fh:
+            entry = json.loads(line)
+            if entry.get("is_planning"):
+                continue
+            messages = (entry.get("body") or {}).get("messages", [])
+            if text in json.dumps(messages, ensure_ascii=False):
+                hits.append(entry.get("run_turn"))
+    return hits
+
+
+async def wait_for_injection(texts, budget):
+    """Poll the request log until every text has reached some run request.
+    Returns `{text: [run_turn, ...]}` for whatever arrived within `budget`."""
+    found = {}
+    for _ in range(int(budget)):
+        found = {t: requests_carrying(t) for t in texts}
+        if all(found.values()):
+            break
+        await asyncio.sleep(1)
+    return found
 
 
 def send(text):
@@ -140,7 +181,7 @@ async def main():
 
         # --- 3. arrivals while that run is live ----------------------------
         for i in range(args.burst):
-            send(f"{'bravo charlie delta echo'.split()[i % 4]}: burst message {i + 2}")
+            send(burst_text(i))
             if i + 1 < args.burst:
                 await asyncio.sleep(args.spacing)
 
@@ -173,7 +214,37 @@ async def main():
                 log(f"FAIL: {args.mode} mode must never cancel, but {cancelled} was")
                 return 1
             log(f"PASS: {len(runs)} run(s), zero cancellations under {args.mode}")
+
+        if args.mode == "queue":
             return 0
+
+        # steer: the arrivals must join the LIVE run, not start their own.
+        # Zero cancellations alone is also what a queue would show, so the two
+        # claims below are what make this a steer test.
+        if len(runs) != 1:
+            log(f"FAIL: steer must keep one run, but the engine recorded {runs}")
+            return 1
+        if not args.request_log:
+            log("FAIL: steer needs --request-log to prove the injection")
+            return 1
+        texts = [burst_text(i) for i in range(args.burst)]
+        found = await wait_for_injection(texts, 120)
+        missing = [t for t, turns in found.items() if not turns]
+        if missing:
+            log(f"FAIL: steered text never reached a provider request: {missing}")
+            return 1
+        late = [t for t, turns in found.items() if min(turns) <= 1]
+        if late:
+            log(f"FAIL: steered text {late} was already in the first run turn, "
+                "so it was not injected mid-run")
+            return 1
+        if len(slog.runs()) != 1:
+            log(f"FAIL: a second run appeared while waiting: {slog.runs()}")
+            return 1
+        log(f"PASS: every steered message reached run {first_run}'s later "
+            f"provider requests (first run turn carrying each: "
+            f"{ {t: min(n) for t, n in found.items()} })")
+        return 0
 
     return 1
 

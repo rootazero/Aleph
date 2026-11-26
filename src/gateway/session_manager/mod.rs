@@ -378,6 +378,7 @@ impl SessionManager {
         }
 
         Self::run_migrations(conn)?;
+        Self::fold_per_peer_dm_aliases(conn);
 
         // AFTER the migrations, not in the schema batch above: `source_seq` is
         // added by `run_migrations` on a database created before it existed, so
@@ -495,6 +496,84 @@ impl SessionManager {
         }
 
         Ok(())
+    }
+
+    /// Re-key every row still stored under the retired per-peer DM spelling
+    /// `agent:a:dm:p` to the canonical `agent:a:peer:p`, with its messages and
+    /// epoch reservation. A row whose canonical key already has a row is left
+    /// alone: two records for one conversation is a human's call.
+    ///
+    /// Best-effort, like `migration::normalize_session_dir_names` for the file
+    /// backend: errors are logged and never block opening the store.
+    fn fold_per_peer_dm_aliases(conn: &Connection) {
+        use crate::gateway::session_store::migration::per_peer_dm_alias_target;
+
+        let alias_keys: Vec<String> = match conn
+            .prepare("SELECT key FROM sessions WHERE key LIKE 'agent:%:dm:%'")
+            .and_then(|mut stmt| {
+                stmt.query_map([], |row| row.get::<_, String>(0))?
+                    .collect::<Result<Vec<_>, _>>()
+            }) {
+            Ok(keys) => keys,
+            Err(e) => {
+                tracing::warn!(error = %e, "Per-peer DM alias fold: listing rows failed");
+                return;
+            }
+        };
+
+        for alias in alias_keys {
+            let Some(canonical) = per_peer_dm_alias_target(&alias) else {
+                continue;
+            };
+            let result = (|| -> rusqlite::Result<bool> {
+                let tx = conn.unchecked_transaction()?;
+                let taken: bool = tx.query_row(
+                    "SELECT COUNT(*) > 0 FROM sessions WHERE key = ?1",
+                    [&canonical],
+                    |row| row.get(0),
+                )?;
+                if taken {
+                    return Ok(false);
+                }
+                // `messages.session_key` references `sessions.key` without
+                // ON UPDATE; checking at commit lets both sides move.
+                tx.execute_batch("PRAGMA defer_foreign_keys = ON;")?;
+                tx.execute(
+                    "UPDATE sessions SET key = ?1 WHERE key = ?2",
+                    [&canonical, &alias],
+                )?;
+                tx.execute(
+                    "UPDATE messages SET session_key = ?1 WHERE session_key = ?2",
+                    [&canonical, &alias],
+                )?;
+                tx.execute(
+                    "INSERT INTO session_epoch_reservations (base_key, epoch)
+                     SELECT ?1, epoch FROM session_epoch_reservations WHERE base_key = ?2
+                     ON CONFLICT(base_key) DO UPDATE
+                       SET epoch = MAX(epoch, excluded.epoch)",
+                    [&canonical, &alias],
+                )?;
+                tx.execute(
+                    "DELETE FROM session_epoch_reservations WHERE base_key = ?1",
+                    [&alias],
+                )?;
+                tx.commit()?;
+                Ok(true)
+            })();
+            match result {
+                Ok(true) => {
+                    tracing::info!(from = %alias, to = %canonical, "Per-peer DM alias row re-keyed")
+                }
+                Ok(false) => tracing::info!(
+                    from = %alias,
+                    to = %canonical,
+                    "Per-peer DM alias fold: both spellings hold a row, leaving both"
+                ),
+                Err(e) => {
+                    tracing::warn!(from = %alias, error = %e, "Per-peer DM alias fold failed")
+                }
+            }
+        }
     }
 }
 

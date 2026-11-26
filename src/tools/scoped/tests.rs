@@ -3558,6 +3558,117 @@ async fn a_session_grant_does_not_survive_into_an_unattended_run() {
     );
 }
 
+/// The approval chain read against the five-stage order a user would expect:
+/// per-tool deny → YOLO → session grant → (unattended) → ask. Each block is one
+/// stage and pins what Aleph actually does there today. The design decision
+/// (2026-11-26 harness E2E design §4, §8) is that there is NO YOLO that lowers
+/// a tool's own `requires_confirmation` floor: `exec_tier = full` still asks.
+/// A change to any block is a change to the documented order, not a test fix.
+#[tokio::test]
+async fn approval_order_matches_the_documented_five_stages() {
+    use super::gate_chain::GateRule;
+    use crate::config::types::policies::{ExecTier, ToolPermissionsConfig};
+    use crate::exec::allowed_decisions::DECLARED_FLOOR_RULE;
+    use crate::extension::PermissionAction;
+    use crate::sandbox::exec_approval::gate::ApprovalOutcome;
+
+    // 1. Per-tool deny wins before anything can ask: no card, PolicyDeny.
+    let requester = StdArc::new(FakeRequester::new(ApprovalOutcome::Approved));
+    let denied = ScopedToolService::new(confirm_registry(), BTreeSet::new())
+        .with_exec_tier(ExecTier::Full)
+        .with_tool_permissions(ToolPermissionsConfig {
+            default: PermissionAction::Allow,
+            overrides: [("danger".to_string(), PermissionAction::Deny)]
+                .into_iter()
+                .collect(),
+        })
+        .with_turn_context(turn_ctx("agent-order-policy-deny"))
+        .with_confirmation(StdArc::clone(&requester) as _);
+    let err = denied.execute("danger", json!({})).await.unwrap_err();
+    assert!(
+        matches!(err, ToolError::PermissionDenied { .. }),
+        "stage 1: expected PermissionDenied, got {err:?}"
+    );
+    let rule = denied.deny_rule("danger");
+    assert!(
+        matches!(rule, Some(GateRule::PolicyDeny { .. })),
+        "stage 1: the refusing rule is PolicyDeny, got {rule:?}"
+    );
+    assert_eq!(
+        requester.calls.load(Ordering::SeqCst),
+        0,
+        "stage 1: no card"
+    );
+
+    // 2. "YOLO": the most permissive tier does not lower the tool's own floor.
+    let requester = StdArc::new(FakeRequester::new(ApprovalOutcome::Approved));
+    let full = ScopedToolService::new(confirm_registry(), BTreeSet::new())
+        .with_exec_tier(ExecTier::Full)
+        .with_turn_context(turn_ctx("agent-order-full-tier"))
+        .with_confirmation(StdArc::clone(&requester) as _);
+    full.execute("danger", json!({})).await.expect("approved");
+    assert_eq!(
+        requester.rule_ids(),
+        vec![Some(DECLARED_FLOOR_RULE)],
+        "stage 2: `full` still asks, and the card names the declared floor"
+    );
+
+    // 3. A session grant satisfies the same call later in the session.
+    let requester = StdArc::new(FakeRequester::new(ApprovalOutcome::ApprovedForSession));
+    let ctx = turn_ctx("agent-order-session-grant");
+    let attended = ScopedToolService::new(confirm_registry(), BTreeSet::new())
+        .with_turn_context(ctx.clone())
+        .with_confirmation(StdArc::clone(&requester) as _);
+    attended
+        .execute("danger", json!({}))
+        .await
+        .expect("granted");
+    attended
+        .execute("danger", json!({}))
+        .await
+        .expect("the grant holds");
+    assert_eq!(
+        requester.calls.load(Ordering::SeqCst),
+        1,
+        "stage 3: the grant suppresses the second card"
+    );
+
+    // 4. Unattended is checked BEFORE the grant: the same session, nobody
+    //    watching, is refused even though the grant exists.
+    let unattended = ScopedToolService::new(confirm_registry(), BTreeSet::new())
+        .with_turn_context(ctx)
+        .with_confirmation(StdArc::clone(&requester) as _)
+        .with_unattended(true);
+    let err = unattended.execute("danger", json!({})).await.unwrap_err();
+    assert!(
+        matches!(
+            err,
+            ToolError::Refused {
+                by: crate::tools::service::RefusedBy::NobodyAsked,
+                ..
+            }
+        ),
+        "stage 4: unattended refuses before a grant is consulted, got {err:?}"
+    );
+    assert_eq!(
+        requester.calls.load(Ordering::SeqCst),
+        1,
+        "stage 4: no card"
+    );
+
+    // 5. Nothing above decided: attended, no grant → ask, exactly once.
+    let requester = StdArc::new(FakeRequester::new(ApprovalOutcome::Approved));
+    let ask = ScopedToolService::new(confirm_registry(), BTreeSet::new())
+        .with_turn_context(turn_ctx("agent-order-ask"))
+        .with_confirmation(StdArc::clone(&requester) as _);
+    ask.execute("danger", json!({})).await.expect("approved");
+    assert_eq!(
+        requester.calls.load(Ordering::SeqCst),
+        1,
+        "stage 5: one card"
+    );
+}
+
 /// PINS THE SAME ADJUDICATED DECISION, one tier wider — a **persistent** grant
 /// does not carry into an unattended continuation either.
 ///
