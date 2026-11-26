@@ -444,6 +444,10 @@ impl AppState {
             // Exhaustiveness still requires an arm for the variant, per
             // `run_scoped_id`'s doc above.
             StreamEvent::RunQueued { .. } => Action::None,
+            // This screen never adopts a send's id before `RunAccepted`, so a
+            // folded send leaves nothing to close; the joined run's own
+            // frames keep driving the transcript.
+            StreamEvent::RunJoined { .. } => Action::None,
 
             StreamEvent::AgentTrace { event, .. } => {
                 self.current_run_uses_agent_trace = true;

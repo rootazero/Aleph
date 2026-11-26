@@ -498,6 +498,9 @@ pub(crate) fn classify(topic: &str, data: Option<&Value>) -> Option<SessionIdent
         // for the same reason: both are keyed by the session they were
         // ADDRESSED to, not correlated after the fact through a run id.
         | "stream.run_queued"
+        // A folded follow-up's only frame: its id was never admitted, so
+        // nothing seeded it — same argument as `stream.run_queued`.
+        | "stream.run_joined"
         | "stream.session_updated"
         // The peer-echo of a human's message. Session-scoped for the same
         // reason its transcript is: the audience that may read the row is
@@ -3453,7 +3456,8 @@ mod tests {
         fn expected(frame: &GatewayEventFrame) -> SessionIdentity {
             match frame {
                 GatewayEventFrame::RunAccepted { session_key, .. }
-                | GatewayEventFrame::RunQueued { session_key, .. } => {
+                | GatewayEventFrame::RunQueued { session_key, .. }
+                | GatewayEventFrame::RunJoined { session_key, .. } => {
                     SessionIdentity::BySessionKey(session_key.clone())
                 }
                 GatewayEventFrame::Reasoning { run_id, .. }
@@ -3589,6 +3593,11 @@ mod tests {
                 run_id: "r1".into(),
                 session_key: "agent:main:main".into(),
                 ahead: 2,
+            },
+            GatewayEventFrame::RunJoined {
+                run_id: "r1".into(),
+                session_key: "agent:main:main".into(),
+                joined_run_id: "r0".into(),
             },
             GatewayEventFrame::Reasoning {
                 run_id: "r1".into(),

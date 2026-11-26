@@ -632,7 +632,7 @@ async fn a_run_waiting_for_a_concurrency_permit_can_still_be_cancelled() {
         .expect("run A must be admitted")
     {
         GateOutcome::Admitted(slot) => slot,
-        GateOutcome::HandledInline => panic!("an idle session must not be handled inline"),
+        GateOutcome::HandledInline { .. } => panic!("an idle session must not be handled inline"),
     };
 
     // Run B is on a different session (its own slot is free) but the agent's

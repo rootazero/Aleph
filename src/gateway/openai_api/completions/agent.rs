@@ -211,6 +211,9 @@ impl EventEmitter for SseEventEmitter {
             // deliberate suppression, not a missing producer. Panel is the
             // one client that renders this frame today (`ChatPhase::Queued`).
             StreamEvent::RunQueued { .. } => None,
+            // A folded follow-up has no completion of its own on this
+            // surface: its text is answered by the run it joined.
+            StreamEvent::RunJoined { .. } => None,
             StreamEvent::AskUser { .. } => None,
             StreamEvent::UncertaintySignal { .. } => None,
             StreamEvent::ModelResolved { .. } => None,

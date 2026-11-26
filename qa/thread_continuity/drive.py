@@ -575,20 +575,30 @@ async def two_clients_only():
         terminal = sorted({
             (f.get("method"), (f.get("params") or {}).get("run_id"))
             for f in frames
-            if f.get("method") in ("stream.run_complete", "stream.run_error")
+            if f.get("method") in ("stream.run_complete", "stream.run_error", "stream.run_joined")
         })
         log(f"client {name}: own run {own}; terminal frames seen {terminal}")
         mentions = sorted({str(f.get("method")) for f in frames if own and own in json.dumps(f)})
         log(f"client {name}: frame kinds naming its own run: {mentions}")
         # A client that was handed a run id waits for that id to settle: the
         # Panel binds it from the `chat.send` reply and releases the composer
-        # only on `run_complete` / `run_error` for the same id
-        # (interfaces/webchat/src/state/sessions.rs `settle_run`).
+        # only on a terminal frame for the same id
+        # (interfaces/webchat/src/state/sessions.rs `settle_run`). A message
+        # folded into the live run gets `stream.run_joined` instead (D3).
         check(
             any(run == own for _, run in terminal),
             f"client {name} receives a terminal frame for the run id its chat.send returned",
             f"own={own} terminal={terminal}",
         )
+        completed = {run for method, run in terminal if method == "stream.run_complete"}
+        for f in frames:
+            params = f.get("params") or {}
+            if f.get("method") == "stream.run_joined" and params.get("run_id") == own:
+                check(
+                    params.get("joined_run_id") in completed and params.get("joined_run_id") != own,
+                    f"client {name}'s run_joined names the run that answered it",
+                    json.dumps(params)[:300],
+                )
 
     r = await a.call("chat.history", {"session_key": session_key, "limit": 200})
     rows = (r.get("result") or {}).get("messages") or []

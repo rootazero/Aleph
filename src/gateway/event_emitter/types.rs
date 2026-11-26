@@ -68,6 +68,28 @@ pub enum StreamEvent {
         ahead: u16,
     },
 
+    /// The message sent as `run_id` was folded into a run already live on
+    /// the same session (busy-input `Steer`) and will never run on its own.
+    ///
+    /// `chat.send` has already handed `run_id` to the caller, so without this
+    /// frame that id would never see a terminal frame: a client that tracks
+    /// "my send is in flight until its run ends" stayed busy forever. It is
+    /// deliberately NOT a `RunComplete` for `run_id`: the conversation is
+    /// still running (`joined_run_id` carries on), so a client must not mark
+    /// it idle, settle its plan, or bill an empty run. It closes `run_id` and
+    /// points at the run that now answers it.
+    ///
+    /// Carries `session_key` for the same reason `RunQueued` does: `run_id`
+    /// was never admitted, so no `RunAccepted` seeded the run→session index
+    /// and a `ByRunId` frame would be fail-closed dropped.
+    RunJoined {
+        run_id: String,
+        /// The session the message was addressed to.
+        session_key: String,
+        /// The live run the message was folded into.
+        joined_run_id: String,
+    },
+
     /// Reasoning/thinking process update
     Reasoning {
         run_id: String,

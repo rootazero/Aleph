@@ -246,6 +246,7 @@ impl ChatState {
                 | "stream.chat_tool"
                 | "stream.run_complete"
                 | "stream.run_error"
+                | "stream.run_joined"
         ) {
             return encode(patch);
         }
@@ -691,6 +692,10 @@ impl ChatState {
     }
 
     fn fold_live_frame(&mut self, frame: ChatFrame, now_ms: u64, patch: &mut Patch) {
+        if frame.topic == "stream.run_joined" {
+            self.drop_joined_send(patch);
+            return;
+        }
         if let Some(run) = &mut self.live {
             if Self::fold_frame(run, frame, now_ms, patch) {
                 self.retain_live_preview(patch, false);
@@ -764,6 +769,22 @@ impl ChatState {
             patch.terminal_run = Some(run.id.clone());
         }
         terminal
+    }
+
+    /// Core folded this send into the run already live on the session, so
+    /// the send's own id will never produce a reply. Its prompt row goes —
+    /// the folded message is committed inside the live run's turn and the
+    /// reload brings it back there — and the reload adopts the live run, so
+    /// Stop tracks the run that is actually answering.
+    fn drop_joined_send(&mut self, patch: &mut Patch) {
+        let Some(run) = self.live.take() else {
+            return;
+        };
+        patch
+            .remove
+            .extend(run.rows().map(|row| row.key().to_owned()));
+        self.last_ended = Some(run.id);
+        patch.reconcile = true;
     }
 
     fn retain_live_preview(&mut self, patch: &mut Patch, detached: bool) {

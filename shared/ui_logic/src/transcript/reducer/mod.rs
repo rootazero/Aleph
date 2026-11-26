@@ -291,6 +291,7 @@ impl Transcript {
             StreamEvent::RunError { error, .. } => self.fail_run(error, now),
             StreamEvent::RunAccepted { .. }
             | StreamEvent::RunQueued { .. }
+            | StreamEvent::RunJoined { .. }
             | StreamEvent::AskUser { .. }
             | StreamEvent::ClarificationEnded { .. }
             | StreamEvent::UncertaintySignal { .. }

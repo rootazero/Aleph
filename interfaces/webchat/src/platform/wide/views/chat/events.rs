@@ -942,7 +942,10 @@ fn resolve_target(
     }
     let target = sessions.chat_for(conv, singleton);
     let is_foreground = sessions.active_conv() == Some(conv);
-    if matches!(event_type, "run_complete" | "run_error") {
+    // `run_joined` is the last frame a send's id ever gets when the core
+    // folded the message into a run already live on that conversation: the
+    // id stops counting as running, while the live run keeps its own route.
+    if matches!(event_type, "run_complete" | "run_error" | "run_joined") {
         sessions.settle_run(run_id);
     }
     target.map(|chat| (chat, is_foreground))

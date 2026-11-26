@@ -545,3 +545,53 @@ fn one_new_chunk_patch_has_constant_size_at_10_or_500_history_rows() {
     println!("one upsert: {small} serialized bytes at 10 rows; {large} at 500 rows");
     assert_eq!(small, large);
 }
+
+fn joined(run: &str, live: &str) -> Value {
+    json!({"topic":"stream.run_joined", "nowMs":1, "data":{"run_id":run, "session_key":"s-1", "joined_run_id":live}})
+}
+
+#[test]
+fn a_send_folded_into_the_live_run_follows_that_run_instead_of_waiting_forever() {
+    // After the send reply: the id was handed out, then folded.
+    let mut model = ChatState::default();
+    model.reset("s-1".into());
+    model.begin_send("same text".into(), 0);
+    let sent = model.resolve_send("s-1".into(), Some("r-folded".into()), 0);
+    assert_eq!(sent["activeRun"], "r-folded");
+    let patch = model.accept(joined("r-folded", "r-live"));
+    assert_eq!(patch["activeRun"], Value::Null);
+    assert_eq!(patch["reconcile"], true);
+    assert_eq!(
+        patch["unconfirmed"], false,
+        "a folded send is not an unconfirmed turn"
+    );
+    assert_eq!(
+        patch["remove"].as_array().unwrap().len(),
+        1,
+        "its prompt row goes"
+    );
+    let reload = model.replace_history(
+        history(
+            Some("r-live"),
+            json!([{"role":"user", "content":"same text", "timestamp":"t1", "run_id":"r-live"}]),
+        ),
+        Value::Null,
+    );
+    assert_eq!(
+        reload["activeRun"], "r-live",
+        "Stop now tracks the run that answers"
+    );
+    assert_eq!(
+        model.accept(text("r-live", 1, "answer"))["upsert"][0]["text"],
+        "answer"
+    );
+
+    // Before the send reply: the frame is held and applied on resolve.
+    let mut early = ChatState::default();
+    early.reset("s-1".into());
+    early.begin_send("same text".into(), 0);
+    early.accept(joined("r-folded", "r-live"));
+    let patch = early.resolve_send("s-1".into(), Some("r-folded".into()), 1);
+    assert_eq!(patch["activeRun"], Value::Null);
+    assert_eq!(patch["reconcile"], true);
+}

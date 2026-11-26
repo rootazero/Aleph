@@ -144,6 +144,10 @@ pub(super) const V1_EVENT_TOPICS: &[&str] = &[
     "stream.response_chunk",
     "stream.run_complete",
     "stream.run_error",
+    // The only frame a send's id ever gets when the message was folded into
+    // a run already live on its session; without it Chat waits on that id
+    // forever.
+    "stream.run_joined",
     aleph_protocol::chat_transcript::CHAT_TOOL_TOPIC,
     "connection.warning",
 ];
