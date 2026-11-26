@@ -52,18 +52,46 @@ impl DreamStage for NoteSynthesisStage {
                 (cat.to_string(), paths)
             })
             .collect();
+        // `by_category` is a `HashMap`, so its iteration order changes per
+        // process. Without an explicit order the same corpus could ask the
+        // model about `preference` before `learning` on one run and after it
+        // on the next, which makes a synthesis cycle unreproducible.
+        categories_to_synthesize.sort_by(|a, b| a.0.cmp(&b.0));
 
-        let mut previews = Vec::new();
         for (category, note_paths) in &categories_to_synthesize {
-            // Load content previews (cap at 15 notes to limit LLM context)
-            previews.clear();
-            for path in note_paths.iter().take(15) {
-                let content = ctx.load_content(path).await.unwrap_or_default();
+            // Collect the `(path, preview)` pairs of the usable inputs FIRST
+            // (cap at 15 notes to limit LLM context). The prompt text and the
+            // persisted `links` / `source_notes` are then derived from that
+            // one list, so a note can never be cited without having been
+            // shown to the model — and a note shown to the model is never
+            // dropped from the evidence chain.
+            let mut ordered_paths = note_paths.clone();
+            ordered_paths.sort();
+            ordered_paths.dedup();
+            let mut usable: Vec<(String, String)> = Vec::new();
+            for path in &ordered_paths {
+                if usable.len() == 15 {
+                    break;
+                }
+                let Some(content) = ctx.load_content(path).await else {
+                    continue;
+                };
                 let preview: String = content.chars().take(300).collect();
-                previews.push(format!("### {path}\n{preview}"));
+                if preview.trim().is_empty() {
+                    continue;
+                }
+                usable.push((path.clone(), preview));
+            }
+            if usable.len() < 3 {
+                continue;
             }
 
-            let note_count = note_paths.len();
+            let note_count = usable.len();
+            let consulted: Vec<String> = usable.iter().map(|(path, _)| path.clone()).collect();
+            let previews: Vec<String> = usable
+                .iter()
+                .map(|(path, preview)| format!("### {path}\n{preview}"))
+                .collect();
 
             let prompt = format!(
                 "Analyze these {note_count} knowledge notes in the '{category}' category and write a synthesis insight.\n\n\
@@ -98,22 +126,7 @@ impl DreamStage for NoteSynthesisStage {
             let synthesis_text = response.text_content();
 
             // Build the synthesis note from its source member paths.
-            let note = build_synthesis_note(category, &synthesis_text, note_paths.to_vec());
-
-            // Ensure the synthesis directory exists (not in CATEGORY_DIRS, create manually)
-            let synthesis_dir = ctx
-                .indexer
-                .memory_dir()
-                .join(&ctx.agent_id)
-                .join("synthesis");
-            if let Err(e) = tokio::fs::create_dir_all(&synthesis_dir).await {
-                tracing::warn!(
-                    category,
-                    error = %e,
-                    "Failed to create synthesis directory"
-                );
-                continue;
-            }
+            let note = build_synthesis_note(category, &synthesis_text, consulted);
 
             match ctx
                 .indexer
@@ -182,6 +195,17 @@ fn build_synthesis_note(
 mod tests {
     use super::*;
     use crate::memory::dreaming::NoteEntry;
+    use crate::memory::dreaming::{DreamReport, DreamStrategy, EditBudget};
+    use crate::memory::embedding_provider::EmbeddingProvider;
+    use crate::memory::notes::store::NoteStore;
+    use crate::memory::notes::NoteIndexer;
+    use crate::memory::store::SqliteMemoryBackend;
+    use crate::providers::mock::MockProvider;
+    use crate::providers::{AiProvider, ProviderResponse};
+    use std::collections::HashSet;
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::sync::{Arc, Mutex};
 
     fn make_note(path: &str, category: &str) -> NoteEntry {
         NoteEntry {
@@ -198,6 +222,347 @@ mod tests {
         (0..count)
             .map(|i| make_note(&format!("{category}/note{i}"), category))
             .collect()
+    }
+
+    // ---------------------------------------------------------------------
+    // Task 1 — the synthesis stage must record exactly the notes it showed
+    // the model, and must not manufacture provenance for notes it never
+    // read.
+    // ---------------------------------------------------------------------
+
+    /// A body that is longer than the 300-codepoint preview budget *and*
+    /// multibyte, so a preview cut on bytes would be visibly shorter than
+    /// one cut on codepoints.
+    fn multibyte_body() -> String {
+        "界".repeat(305)
+    }
+
+    /// The exact frontmatter bytes of a fixture note (written verbatim to
+    /// disk, so the preview is a byte-for-byte function of the file).
+    fn fixture_frontmatter(name: &str) -> String {
+        format!("---\ntitle: \"{name}\"\n---\n")
+    }
+
+    /// Records the real prompt text of every request, then delegates the
+    /// answer to `MockProvider`.
+    struct Recorder {
+        prompts: Mutex<Vec<String>>,
+    }
+
+    impl Recorder {
+        fn new() -> Self {
+            Self {
+                prompts: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn calls(&self) -> usize {
+            self.prompts.lock().expect("recorder lock").len()
+        }
+
+        fn only_prompt(&self) -> String {
+            let prompts = self.prompts.lock().expect("recorder lock");
+            assert_eq!(prompts.len(), 1, "expected exactly one synthesis request");
+            prompts[0].clone()
+        }
+    }
+
+    impl AiProvider for Recorder {
+        fn process<'a>(
+            &'a self,
+            payload: RequestPayload<'a>,
+        ) -> Pin<Box<dyn Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>>
+        {
+            let text = payload
+                .messages
+                .iter()
+                .map(|m| m.text_content())
+                .collect::<Vec<_>>()
+                .join("\n");
+            self.prompts.lock().expect("recorder lock").push(text);
+            let mock = MockProvider::new("synthesis result");
+            Box::pin(async move { mock.process(payload).await })
+        }
+
+        fn name(&self) -> &str {
+            "recorder"
+        }
+
+        fn color(&self) -> &str {
+            "#000000"
+        }
+    }
+
+    struct Embedder;
+    #[async_trait::async_trait]
+    impl EmbeddingProvider for Embedder {
+        async fn embed(&self, _: &str) -> Result<Vec<f32>, AlephError> {
+            Ok(vec![])
+        }
+        async fn embed_batch(&self, _: &[&str]) -> Result<Vec<Vec<f32>>, AlephError> {
+            Ok(vec![])
+        }
+        fn dimensions(&self) -> usize {
+            0
+        }
+        fn model_name(&self) -> &str {
+            "test"
+        }
+        fn provider_id(&self) -> &str {
+            "test"
+        }
+    }
+
+    /// The preview block the stage put in the prompt for `path`.
+    fn preview_block(prompt: &str, path: &str) -> String {
+        let header = format!("### {path}\n");
+        let start = prompt
+            .find(&header)
+            .unwrap_or_else(|| panic!("prompt has no block for {path}"));
+        let rest = &prompt[start + header.len()..];
+        let end = rest.find("\n\n").unwrap_or(rest.len());
+        rest[..end].to_string()
+    }
+
+    #[tokio::test]
+    async fn synthesis_persists_only_prompted_sources() {
+        let agent = crate::routing::DEFAULT_AGENT_ID;
+        let dir = tempfile::tempdir().unwrap();
+        let memory_dir = dir.path().join("notes");
+        let db = Arc::new(SqliteMemoryBackend::new(&dir.path().join("memory.db")).unwrap());
+        let indexer = NoteIndexer::new(memory_dir.clone(), db.clone());
+
+        // 18 candidate paths in one category, presented to the stage in
+        // reverse order so the stage's own ordering decides what is cited.
+        let paths: Vec<String> = (0..18).map(|i| format!("preference/{i:02}")).collect();
+
+        // `preference/00` is missing (no file at all) and `preference/01` is a
+        // whitespace-only file: neither is a usable input. Both live on disk
+        // (or not) rather than in `note_contents`, so the stage really reads
+        // the corpus through `DreamContext::load_content`.
+        let blank_dir = memory_dir.join(agent).join("preference");
+        tokio::fs::create_dir_all(&blank_dir).await.unwrap();
+        tokio::fs::write(blank_dir.join("01.md"), "   \n\t\n ")
+            .await
+            .unwrap();
+
+        // `preference/02..=17` are real, indexed notes whose body is longer
+        // than the preview budget and multibyte.
+        for name in [
+            "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12", "13", "14", "15",
+            "16", "17",
+        ] {
+            indexer
+                .write_note_raw(
+                    agent,
+                    "preference",
+                    name,
+                    &format!("{}{}", fixture_frontmatter(name), multibyte_body()),
+                )
+                .await
+                .unwrap();
+        }
+
+        let recorder = Arc::new(Recorder::new());
+        let notes: Vec<NoteEntry> = paths
+            .iter()
+            .rev()
+            .map(|p| make_note(p, "preference"))
+            .collect();
+        let ctx = DreamContext {
+            notes,
+            note_contents: HashMap::new(),
+            agent_id: agent.into(),
+            database: db.clone(),
+            raw_store: None,
+            indexer,
+            provider: recorder.clone(),
+            embedder: Arc::new(Embedder),
+            report: DreamReport::default(),
+            pipeline_type: "synthesize".into(),
+            activity_checker: Arc::new(|| false),
+            strategy: DreamStrategy::Synthesize,
+            orientation: None,
+            evolution_budget: EditBudget::default(),
+        };
+
+        let ctx = NoteSynthesisStage.execute(ctx).await.unwrap();
+
+        // The 15 usable inputs, in exact-path order: `00`/`01` are unusable,
+        // `17` is past the 15-note budget.
+        let expected: Vec<String> = (2..=16).map(|i| format!("preference/{i:02}")).collect();
+
+        // --- what the model actually saw -------------------------------
+        let prompt = recorder.only_prompt();
+        assert!(
+            prompt.contains("Analyze these 15 knowledge notes in the 'preference' category"),
+            "the prompt count must come from the usable inputs: {prompt}"
+        );
+        assert_eq!(
+            prompt.matches("### preference/").count(),
+            15,
+            "exactly the usable notes may reach the model"
+        );
+        for absent in ["preference/00", "preference/01", "preference/17"] {
+            assert!(
+                !prompt.contains(&format!("### {absent}\n")),
+                "{absent} must not reach the model"
+            );
+        }
+        let mut last = 0usize;
+        for path in &expected {
+            let idx = prompt
+                .find(&format!("### {path}\n"))
+                .unwrap_or_else(|| panic!("prompt has no block for {path}"));
+            assert!(idx > last, "blocks must be ordered by exact path");
+            last = idx;
+        }
+        for path in &expected {
+            let name = path.strip_prefix("preference/").unwrap();
+            let front = fixture_frontmatter(name);
+            let expected_preview = format!("{front}{}", "界".repeat(300 - front.chars().count()));
+            let block = preview_block(&prompt, path);
+            assert_eq!(
+                block.chars().count(),
+                300,
+                "the preview of {path} must be 300 codepoints"
+            );
+            assert!(
+                block.len() > block.chars().count(),
+                "the preview of {path} must be cut on codepoints, not bytes"
+            );
+            assert_eq!(
+                block, expected_preview,
+                "the preview of {path} must be the first 300 codepoints of the file"
+            );
+        }
+
+        // --- what was persisted ----------------------------------------
+        let summary_path = "synthesis/preference Synthesis";
+        assert!(
+            db.get_note_index(summary_path, agent)
+                .await
+                .unwrap()
+                .is_some(),
+            "the synthesis note must be indexed"
+        );
+        let markdown = tokio::fs::read_to_string(
+            memory_dir
+                .join(agent)
+                .join("synthesis")
+                .join("preference Synthesis.md"),
+        )
+        .await
+        .unwrap();
+        let parsed = KnowledgeNote::from_markdown("preference Synthesis", &markdown).unwrap();
+        assert_eq!(
+            parsed.source_notes, expected,
+            "source_notes must be exactly the prompted paths"
+        );
+        assert_eq!(
+            parsed.links, expected,
+            "links must be exactly the prompted paths"
+        );
+        // NOTE: `sources_of` takes a third `limit` argument once Task 3 lands
+        // the bounded store; the parent run owns that call-site update.
+        assert_eq!(
+            db.sources_of(agent, summary_path).await.unwrap(),
+            expected,
+            "the SQLite projection must list the same paths"
+        );
+
+        // --- what the graph shows --------------------------------------
+        let (nodes, edges) = db.get_graph_data(agent, 200).await.unwrap();
+        let node_paths: HashSet<String> = nodes.iter().map(|n| n.path.clone()).collect();
+        let mut cited: Vec<String> = edges
+            .iter()
+            .filter(|e| e.from == summary_path)
+            .map(|e| e.to.clone())
+            .collect();
+        cited.sort();
+        assert_eq!(
+            cited, expected,
+            "graph edges must point at exactly the prompted notes"
+        );
+        for path in &expected {
+            assert!(
+                node_paths.contains(path),
+                "{path} must be an indexed graph node"
+            );
+        }
+        assert_eq!(ctx.report.synthesis_count, 1);
+        assert_eq!(ctx.report.synthesis_rewrites.len(), 1);
+        assert_eq!(ctx.report.synthesis_rewrites[0].0, summary_path);
+    }
+
+    #[tokio::test]
+    async fn synthesis_requires_three_readable_previews() {
+        let agent = crate::routing::DEFAULT_AGENT_ID;
+        let dir = tempfile::tempdir().unwrap();
+        let memory_dir = dir.path().join("notes");
+        let db = Arc::new(SqliteMemoryBackend::new(&dir.path().join("memory.db")).unwrap());
+        let indexer = NoteIndexer::new(memory_dir.clone(), db.clone());
+
+        // Four candidates, but only two are usable: `00` is missing and `01`
+        // is whitespace-only. Two usable inputs are below the three-source
+        // category minimum, so the stage must not call the model at all.
+        let blank_dir = memory_dir.join(agent).join("preference");
+        tokio::fs::create_dir_all(&blank_dir).await.unwrap();
+        tokio::fs::write(blank_dir.join("01.md"), "   \n\t\n ")
+            .await
+            .unwrap();
+        for name in ["02", "03"] {
+            indexer
+                .write_note_raw(
+                    agent,
+                    "preference",
+                    name,
+                    &format!("{}{}", fixture_frontmatter(name), multibyte_body()),
+                )
+                .await
+                .unwrap();
+        }
+
+        // A summary that already exists on disk must survive untouched.
+        let summary_dir = memory_dir.join(agent).join("synthesis");
+        tokio::fs::create_dir_all(&summary_dir).await.unwrap();
+        let summary_file = summary_dir.join("preference Synthesis.md");
+        let previous = "PREVIOUS SUMMARY — must not be rewritten\n";
+        tokio::fs::write(&summary_file, previous).await.unwrap();
+
+        let recorder = Arc::new(Recorder::new());
+        let notes: Vec<NoteEntry> = ["00", "01", "02", "03"]
+            .iter()
+            .rev()
+            .map(|n| make_note(&format!("preference/{n}"), "preference"))
+            .collect();
+        let ctx = DreamContext {
+            notes,
+            note_contents: HashMap::new(),
+            agent_id: agent.into(),
+            database: db.clone(),
+            raw_store: None,
+            indexer,
+            provider: recorder.clone(),
+            embedder: Arc::new(Embedder),
+            report: DreamReport::default(),
+            pipeline_type: "synthesize".into(),
+            activity_checker: Arc::new(|| false),
+            strategy: DreamStrategy::Synthesize,
+            orientation: None,
+            evolution_budget: EditBudget::default(),
+        };
+
+        let ctx = NoteSynthesisStage.execute(ctx).await.unwrap();
+
+        assert_eq!(recorder.calls(), 0, "no model request below the minimum");
+        assert_eq!(ctx.report.synthesis_count, 0);
+        assert!(ctx.report.synthesis_rewrites.is_empty());
+        assert_eq!(
+            tokio::fs::read_to_string(&summary_file).await.unwrap(),
+            previous,
+            "the previous summary must be left untouched"
+        );
     }
 
     #[test]
