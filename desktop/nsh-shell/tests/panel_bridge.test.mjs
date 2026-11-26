@@ -159,3 +159,24 @@ test("untrusted origin and iframe have no bridge", () => {
   assert.equal(host({ origin: "https://other" }).bridge, undefined);
   assert.equal(host({ subframe: true }).bridge, undefined);
 });
+
+test("autostartSet sends the wanted state and resolves with the re-read status", async () => {
+  const h = host(); h.ready();
+  const pending = h.bridge.autostartSet(true);
+  await tick();
+  assert.equal(h.sent.length, 1);
+  assert.deepEqual(JSON.parse(JSON.stringify(h.sent[0])),
+    { kind: "autostart-set", request: h.sent[0].request, document: h.bridge.document, enabled: true });
+  h.receive({ kind: "autostart-reply", document: h.bridge.document, request: h.sent[0].request, status: { status: "enabled" } });
+  assert.deepEqual(JSON.parse(JSON.stringify(await pending)), { status: "enabled" });
+  assert.equal(h.timers.size, 0);
+});
+
+test("autostartSet rejects a non-boolean without sending", async () => {
+  const h = host(); h.ready();
+  for (const value of ["true", 1, null, undefined]) {
+    await assert.rejects(h.bridge.autostartSet(value));
+  }
+  await assert.rejects(h.bridge.autostartSet(true, "extra"));
+  assert.equal(h.sent.length, 0);
+});

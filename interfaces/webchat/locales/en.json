@@ -774,8 +774,7 @@
         "status_disabled": "Disabled",
         "status_approval": "Requires approval in system settings",
         "status_unavailable": "Status unavailable — not confirmed disabled",
-        "status_failed": "Could not read login-item status",
-        "read_only": "Read only: changing this setting in NSH is not available yet."
+        "status_failed": "Could not read or change the login item"
       }
     },
     "behavior": {

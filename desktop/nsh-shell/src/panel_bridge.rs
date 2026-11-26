@@ -160,7 +160,18 @@ impl Bridge {
         if state.loading {
             return true;
         }
-        if let PanelReply::AutostartRequest { request, document } = message {
+        let autostart = match &message {
+            PanelReply::AutostartRequest { request, document } => {
+                Some((*request, document.clone(), None))
+            }
+            PanelReply::AutostartSet {
+                request,
+                document,
+                enabled,
+            } => Some((*request, document.clone(), Some(*enabled))),
+            _ => None,
+        };
+        if let Some((request, document, write)) = autostart {
             let generation = state.generation;
             let accepted =
                 state.document.as_deref() == Some(document.as_str()) && valid_document(&document);
@@ -168,7 +179,10 @@ impl Bridge {
             if accepted {
                 let bridge = self.clone();
                 spawn(async move {
-                    let status = bridge.0.autostart.query().await;
+                    let status = match write {
+                        Some(enabled) => bridge.0.autostart.set(enabled).await,
+                        None => bridge.0.autostart.query().await,
+                    };
                     let page = bridge.0.state.borrow();
                     if !page.loading
                         && page.generation == generation
@@ -221,9 +235,9 @@ impl Bridge {
                 }
                 return true;
             }
-            PanelReply::CredentialRequest { .. } | PanelReply::AutostartRequest { .. } => {
-                unreachable!()
-            }
+            PanelReply::CredentialRequest { .. }
+            | PanelReply::AutostartRequest { .. }
+            | PanelReply::AutostartSet { .. } => unreachable!(),
         };
         if let Some(exchange) = &mut state.exchange {
             if exchange.request == request

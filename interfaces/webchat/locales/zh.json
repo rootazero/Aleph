@@ -774,8 +774,7 @@
         "status_disabled": "已禁用",
         "status_approval": "需要在系统设置中批准",
         "status_unavailable": "状态不可用，并非已确认禁用",
-        "status_failed": "无法读取登录项状态",
-        "read_only": "只读：NSH 暂不支持修改此设置。"
+        "status_failed": "无法读取或修改登录项"
       }
     },
     "behavior": {
