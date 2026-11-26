@@ -6,6 +6,8 @@
 mod autostart;
 mod credentials;
 mod launch;
+#[cfg(feature = "embedded-core")]
+mod local_service;
 mod platform;
 mod shell_host;
 

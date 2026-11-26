@@ -103,21 +103,6 @@ pub fn run() -> ExitCode {
             return ExitCode::FAILURE;
         }
     }
-    // Task 2 moves this to a background start the window can show progress for.
-    #[cfg(feature = "embedded-core")]
-    if settings.acquires_local_server {
-        let readiness = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|_| "could not initialize local service runtime".to_owned())
-            .and_then(|runtime| {
-                runtime.block_on(aleph_desktop_host::local_server::ensure_compatible_ready())
-            });
-        if let Err(error) = readiness {
-            eprintln!("NSH local service startup refused: {error}");
-            return ExitCode::FAILURE;
-        }
-    }
     let qa = settings.qa_nonce.is_some().then(|| QaLaunch {
         run_id: std::env::var("ALEPH_PANEL_QA_RUN_ID").unwrap_or_default(),
         message: std::env::var("ALEPH_PANEL_QA_MESSAGE").unwrap_or_default(),

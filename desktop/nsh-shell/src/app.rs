@@ -2,15 +2,21 @@
 //! runner mounts it as nsh.json's `"root"`; the command-line entry mounts the
 //! same component after presetting its launch.
 
+#[cfg(feature = "embedded-core")]
+use crate::local_service::{LocalService, ServerPhase};
 use crate::{autostart, credentials, launch, panel_bridge};
+#[cfg(feature = "embedded-core")]
+use nsh_base::theme;
 use nsh_core::desktop::{Shortcut, TrayTitleRun};
 use nsh_core::element::desktop::{
-    main_window, quit, register_global_shortcut, set_tray, tray, MenuItem,
+    main_window, quit, register_global_shortcut, set_tray, tray, MenuItem, WindowRef,
 };
 use nsh_core::prelude::{
-    component, element_ref, request_notification_permission, spawn, web_view, Element, IntoElement,
-    Styled, WebNavigation,
+    component, element_ref, request_notification_permission, spawn, web_view, AnyElement, Element,
+    IntoElement, Styled, WebNavigation,
 };
+#[cfg(feature = "embedded-core")]
+use nsh_core::prelude::{dynamic, px, signal, text, view, when, Interactive, ParentElement};
 use std::io::Write;
 use std::sync::Mutex;
 
@@ -105,8 +111,79 @@ pub fn App() -> impl IntoElement {
             .flex_1()
             .into_element();
     }
+    #[cfg(feature = "embedded-core")]
+    if launch.settings.acquires_local_server {
+        return local_panel(launch, bridge_window);
+    }
+    panel(&launch, bridge_window)
+}
+
+/// The Panel once the bundled server is ready; until then, its progress or
+/// its failure with a retry.
+#[cfg(feature = "embedded-core")]
+fn local_panel(launch: launch::Launch, window: WindowRef) -> AnyElement {
+    let service = LocalService::bundled();
+    let phase = signal(service.phase());
+    let mut changes = service.subscribe();
+    spawn(async move {
+        loop {
+            phase.set(changes.borrow_and_update().clone());
+            if changes.changed().await.is_err() {
+                return;
+            }
+        }
+    });
+    service.start();
+    view()
+        .flex_1()
+        .child(
+            when(
+                move || phase.get() == ServerPhase::Ready,
+                move || panel(&launch, window.clone()),
+            )
+            .otherwise(move || {
+                let service = service.clone();
+                dynamic(move || local_status(phase.get(), &service))
+            }),
+        )
+        .into_element()
+}
+
+#[cfg(feature = "embedded-core")]
+fn local_status(phase: ServerPhase, service: &LocalService) -> AnyElement {
+    let screen = view()
+        .flex_1()
+        .items_center()
+        .justify_center()
+        .gap_3()
+        .p(px(32.0))
+        .bg(move || theme().background);
+    let ServerPhase::Failed(error) = phase else {
+        return screen
+            .child(text("正在启动本地服务…").text_color(move || theme().muted_foreground))
+            .into_element();
+    };
+    let retry = service.clone();
+    screen
+        .child(text("本地服务启动失败").text_color(move || theme().foreground))
+        .child(text(error).text_color(move || theme().muted_foreground))
+        .child(
+            view()
+                .px(px(20.0))
+                .py(px(8.0))
+                .rounded(move || theme().radius)
+                .bg(move || theme().primary)
+                .on_press(move || retry.start())
+                .child(text("重试").text_color(move || theme().primary_foreground)),
+        )
+        .into_element()
+}
+
+/// The canonical Panel in a web view, with the shell bridge and, in a QA
+/// run, the QA driver.
+fn panel(launch: &launch::Launch, window: WindowRef) -> AnyElement {
     let bridge_prefix = format!("aleph-shell-v1:{}:", uuid::Uuid::new_v4().simple());
-    let script = injected_script(&launch, &bridge_prefix);
+    let script = injected_script(launch, &bridge_prefix);
     let nonce = launch.settings.qa_nonce.clone();
     let qa_run_id = launch
         .qa
@@ -119,13 +196,13 @@ pub fn App() -> impl IntoElement {
     let bridge = panel_bridge::Bridge::start(
         view,
         bridge_prefix,
-        bridge_window,
+        window,
         credentials,
         autostart::Reader::new(nonce.as_deref()),
     );
     let navigation = bridge.clone();
     let terminated = bridge.clone();
-    web_view(launch.settings.url)
+    web_view(launch.settings.url.clone())
         .flex_1()
         .element_ref(&view)
         .injected_java_script_before_content(script)
