@@ -14,11 +14,11 @@
 
 use crate::memory::notes::store::NoteStore;
 use crate::memory::store::raw_memory::RawMemoryStore;
-use crate::memory::store::sqlite::memory_write_decisions::{
-    MemoryWriteDecisionRow, MAX_DECISIONS_PER_AGENT,
-};
+use crate::memory::store::sqlite::memory_write_decisions::MAX_DECISIONS_PER_AGENT;
 use crate::memory::store::MemoryBackend;
 use crate::sync_primitives::Arc;
+use aleph_protocol::memory_trace::{EvidenceItem, FactOrigin};
+pub use aleph_protocol::memory_trace::{TraceKind, TraceResult};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -28,21 +28,6 @@ use std::path::PathBuf;
 /// question they answer ("what happened to this fact?") is about the last few
 /// attempts, not the whole retained window.
 const DEFAULT_WRITE_DECISION_ROWS: usize = 20;
-
-/// Which kind of target to trace.
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum TraceKind {
-    /// Trace a note by its path (`category/name`).
-    Note,
-    /// Trace a raw memory by its id.
-    Raw,
-    /// Trace a USER.md section heading (e.g. `## Sources` key) to all citing notes.
-    ProfileSection,
-    /// Look up what the curated hot memory (`remember`) did with a fact: one
-    /// row per write ATTEMPT, refusals included.
-    WriteDecision,
-}
 
 /// Arguments for the `memory_trace` tool.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -58,74 +43,6 @@ pub struct MemoryTraceArgs {
     /// graph-traversal depth.
     #[serde(default)]
     pub max_results: Option<usize>,
-}
-
-/// A single piece of ground-truth evidence in the chain.
-#[derive(Debug, Clone, Serialize)]
-pub struct EvidenceItem {
-    /// The raw memory id.
-    pub raw_id: String,
-    /// The note path that cites this raw (if reached via a note).
-    pub via_note: Option<String>,
-    /// The session id the raw was recorded in (if present).
-    pub via_session: Option<String>,
-    /// First 800 chars of raw content; `None` when `pruned`.
-    pub content: Option<String>,
-    /// `true` when the raw id was referenced but the row is missing from the store.
-    pub pruned: bool,
-}
-
-/// One fact of a note beside where that specific line came from.
-///
-/// The evidence chain above answers "which raw memories fed this note". This
-/// answers the finer question the chain cannot: *which line*, and whether the
-/// model quoted it or inferred it.
-///
-/// Every fact carries an inline `<!-- origin: ..., inferred: ... -->` marker
-/// written at ingest. This is the first *structured* read of them. The only
-/// other path that reaches a caller at all is `note_manage(action='get')`,
-/// which hands back the whole file — capped at its own char ceiling, markers
-/// buried in prose as HTML comments, and nothing anywhere saying what they
-/// mean; every other rendering (`body_text_for_fts`, the panel drawer, note
-/// listings) strips them.
-#[derive(Debug, Clone, Serialize)]
-pub struct FactOrigin {
-    /// The note this fact belongs to.
-    pub note_path: String,
-    /// Position of the fact within that note, 0-based.
-    pub fact_idx: usize,
-    /// The fact as a reader sees it, provenance marker removed.
-    pub text: String,
-    /// `raw_source` / `prior_note` / `inferred` / `system` / `legacy`.
-    /// `legacy` means the line carries no marker at all — written before the
-    /// markers existed, or edited in by hand in Obsidian.
-    pub origin: &'static str,
-    /// The model's own claim about whether it invented this line.
-    pub inferred: bool,
-    /// Raw-memory id or note path this fact was quoted from, when the marker
-    /// named one.
-    pub source_id: Option<String>,
-}
-
-/// Result of walking the evidence chain.
-#[derive(Debug, Clone, Serialize)]
-pub struct TraceResult {
-    /// The original target string.
-    pub target: String,
-    /// Note paths visited during the walk.
-    pub notes: Vec<String>,
-    /// Evidence items collected.
-    pub evidence: Vec<EvidenceItem>,
-    /// Curated-memory write decisions matching `target`, newest first — only
-    /// populated for `kind: "write_decision"`. Absent from the serialized shape
-    /// when empty, so the evidence-chain kinds keep the output they had.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub write_decisions: Vec<MemoryWriteDecisionRow>,
-    /// Per-fact origins — only populated for `kind: "note"`, and empty when the
-    /// note cannot be read or parsed. Absent from the serialized shape when
-    /// empty, so the other kinds keep the output they had.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub facts: Vec<FactOrigin>,
 }
 
 /// Tool that walks a memory claim down to ground-truth evidence.
@@ -217,7 +134,7 @@ impl MemoryTraceTool {
                 note_path: note_path.to_string(),
                 fact_idx,
                 text,
-                origin: prov.origin.as_str(),
+                origin: prov.origin.as_str().to_owned(),
                 inferred: prov.inferred,
                 source_id: prov.source_id,
             })
@@ -366,6 +283,7 @@ impl MemoryTraceTool {
             evidence,
             facts,
             write_decisions,
+            ..TraceResult::default()
         })
     }
 }
