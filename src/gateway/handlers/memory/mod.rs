@@ -694,13 +694,14 @@ pub async fn handle_trace(
 
     // A stored address is already a partition, not an input to scope
     // composition. Legacy callers still select their current scoped store.
-    let partition = if params.exact_partition || crate::memory::project_scope::is_composed_id(&agent) {
-        agent
-    } else if let Some(mcp) = mcp {
-        mcp.resolve_storage_id(&agent)
-    } else {
-        agent
-    };
+    let partition =
+        if params.exact_partition || crate::memory::project_scope::is_composed_id(&agent) {
+            agent
+        } else if let Some(mcp) = mcp {
+            mcp.resolve_storage_id(&agent)
+        } else {
+            agent
+        };
 
     let tool = MemoryTraceTool::new(db, raw_store, partition, note_memory_dir);
     match tool
@@ -1262,49 +1263,101 @@ mod trace_tests {
     use serde_json::json;
 
     #[tokio::test]
-    async fn returns_notes_and_evidence_for_seeded_note() {
-        let dir = tempfile::tempdir().unwrap();
-        let db: crate::memory::store::MemoryBackend =
-            Arc::new(SqliteMemoryBackend::new(&dir.path().join("m.db")).unwrap());
-        let (_raw_dir, raw_store) = raw_test_store().await;
-
-        // Seed a note that cites one raw memory (mirrors memory_trace.rs unit test).
-        let note = KnowledgeNote {
-            title: "exercise".into(),
-            category: "habits".into(),
-            facts: vec!["daily running".into()],
-            source_notes: vec!["raw-ev1".into()],
-            ..Default::default()
+    async fn returns_markdown_evidence_through_the_admitted_runtime() {
+        use crate::capability::facade::Reference;
+        use crate::capability::ownership::{OwnershipTree, VisibilityScope};
+        use crate::memory::notes::NoteIndexer;
+        use crate::memory::runtime::{resource_id, MemoryRuntime, MemoryRuntimeConfig};
+        use aleph_protocol::memory_trace::{
+            NoteSourceStatus, TraceKind, TraceRequest, TraceResult,
         };
-        db.index_note(&note, "main", "habits").await.unwrap();
 
-        // Insert the raw so evidence resolves (non-pruned).
+        let dir = tempfile::tempdir().unwrap();
+        let note_dir = dir.path().join("notes");
+        let runtime = MemoryRuntime::new(
+            MemoryRuntimeConfig {
+                metadata_path: dir.path().join("m.db"),
+                note_memory_dir: note_dir.clone(),
+                retrieval_tuning: Default::default(),
+            },
+            Arc::new(OwnershipTree::new()),
+        );
+        runtime.start().await.unwrap();
+        let operation = runtime
+            .capture(&Reference {
+                id: resource_id(),
+                visibility: VisibilityScope::default(),
+            })
+            .unwrap()
+            .admit()
+            .unwrap();
+        let db = operation.backend().clone();
+        let (_raw_dir, raw_store) = raw_test_store().await;
         let mut raw = RawMemory::new("user: I run daily".into(), RawMemorySource::Transcript);
         raw.id = "raw-ev1".into();
         raw.agent_id = "main".into();
         raw_store.insert_raw_memory(&raw).await.unwrap();
 
-        let req = JsonRpcRequest::with_id(
-            "memory.trace",
-            Some(json!({ "agent_id": "main", "target": "habits/exercise", "kind": "note" })),
-            json!(1),
+        let result: TraceResult = operation
+            .scope(async {
+                let indexer = NoteIndexer::new(note_dir, db.clone());
+                let source = KnowledgeNote {
+                    title: "exercise".into(),
+                    category: "habits".into(),
+                    source_notes: vec!["raw-ev1".into()],
+                    ..Default::default()
+                };
+                indexer.write_note("main", "habits", &source).await.unwrap();
+                let synthesis = KnowledgeNote {
+                    title: "summary".into(),
+                    category: "synthesis".into(),
+                    facts: vec!["daily running <!-- src: habits/exercise, origin: prior_note, inferred: false -->".into()],
+                    source_notes: vec!["habits/exercise".into()],
+                    ..Default::default()
+                };
+                indexer
+                    .write_note("main", "synthesis", &synthesis)
+                    .await
+                    .unwrap();
+
+                let params = TraceRequest {
+                    agent_id: Some("main".into()),
+                    target: "synthesis/summary".into(),
+                    kind: TraceKind::Note,
+                    max_results: Some(1),
+                    exact_partition: true,
+                };
+                let req = JsonRpcRequest::with_id(
+                    "memory.trace",
+                    Some(serde_json::to_value(params).unwrap()),
+                    json!(1),
+                );
+                let resp = handle_trace(req, raw_store, db, None).await;
+                assert!(resp.is_success(), "{:?}", resp.error);
+                serde_json::from_value(resp.result.unwrap()).unwrap()
+            })
+            .await;
+        runtime.stop().await.unwrap();
+
+        assert_eq!(result.notes, ["synthesis/summary"]);
+        assert_eq!(result.note_sources.len(), 1);
+        assert_eq!(result.note_sources[0].source_path, "habits/exercise");
+        assert_eq!(result.note_sources[0].status, NoteSourceStatus::Available);
+        assert_eq!(result.facts[0].text, "daily running");
+        assert_eq!(result.facts[0].origin, "prior_note");
+        assert_eq!(
+            result.facts[0].source_id.as_deref(),
+            Some("habits/exercise")
         );
-        let resp = handle_trace(req, raw_store.clone(), db, None).await;
-        assert!(resp.is_success(), "{:?}", resp.error);
-        let result = resp.result.unwrap();
-        assert!(
-            result["notes"].as_array().is_some(),
-            "response has notes array"
+        assert_eq!(
+            result.evidence[0].via_note.as_deref(),
+            Some("habits/exercise")
         );
-        assert!(
-            result["evidence"].as_array().is_some(),
-            "response has evidence array"
+        assert_eq!(
+            result.evidence[0].content.as_deref(),
+            Some("user: I run daily")
         );
-        let evidence = result["evidence"].as_array().unwrap();
-        assert!(
-            evidence.iter().any(|e| e["raw_id"] == "raw-ev1"),
-            "evidence references seeded raw raw-ev1"
-        );
+        assert!(!result.incomplete && !result.truncated);
     }
 
     /// The Panel's write-decision ledger asks for an agent's RECENT decisions
@@ -1506,7 +1559,11 @@ mod trace_tests {
             ("main", false, "alice exercise evidence"),
         ] {
             let response = query(Some(agent), exact, "habits/exercise", "note").await;
-            assert!(response.is_success(), "{agent}, {exact}: {:?}", response.error);
+            assert!(
+                response.is_success(),
+                "{agent}, {exact}: {:?}",
+                response.error
+            );
             assert_eq!(
                 response.result.unwrap()["evidence"][0]["content"],
                 text,
@@ -1514,7 +1571,11 @@ mod trace_tests {
             );
         }
         assert_eq!(
-            query(None, true, "habits/exercise", "note").await.error.unwrap().code,
+            query(None, true, "habits/exercise", "note")
+                .await
+                .error
+                .unwrap()
+                .code,
             crate::gateway::protocol::INVALID_PARAMS,
         );
         let denied = query(Some("main__u-bob"), true, "raw-exercise-main__u-bob", "raw").await;

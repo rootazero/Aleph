@@ -676,11 +676,12 @@ pub trait NoteStore: Send + Sync {
     // -----------------------------------------------------------------
 
     /// Source refs (raw-memory ids or prior-note paths) a note was distilled
-    /// from — forward provenance. Default: empty.
+    /// from — forward provenance, ordered by source ref. Default: empty.
     async fn sources_of(
         &self,
         _agent_id: &str,
         _note_path: &str,
+        _limit: usize,
     ) -> Result<Vec<String>, AlephError> {
         Ok(Vec::new())
     }
@@ -703,6 +704,7 @@ pub trait NoteStore: Send + Sync {
         &self,
         _agent_id: &str,
         _source_ref: &str,
+        _limit: usize,
     ) -> Result<Vec<String>, AlephError> {
         Ok(Vec::new())
     }

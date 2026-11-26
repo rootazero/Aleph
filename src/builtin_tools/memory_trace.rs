@@ -1,10 +1,7 @@
-//! `memory_trace` — drill a high-level memory claim down to ground-truth
-//! evidence: profile section → notes → raw memories → transcript text.
+//! `memory_trace` — inspect the recorded sources of a memory claim.
 //!
-//! Walking direction: profile section / note path / raw id
-//!   → source notes → raw memory rows → original transcript content.
-//!
-//! Missing raws degrade to a `pruned: true` node, never an error.
+//! `walk` resolves same-partition profile, note, and raw sources in bounded
+//! steps. An unavailable raw citation remains visible as `pruned: true`.
 //!
 //! The `write_decision` kind answers the mirror question — "why is this NOT in
 //! memory?" — off the curated-write audit log instead of the evidence chain. It
@@ -12,12 +9,12 @@
 //! questions about one memory claim, and this tool already holds the two handles
 //! the answer needs (the memory backend and the calling agent's id).
 
-use crate::memory::notes::store::NoteStore;
+mod walk;
+
 use crate::memory::store::raw_memory::RawMemoryStore;
 use crate::memory::store::sqlite::memory_write_decisions::MAX_DECISIONS_PER_AGENT;
 use crate::memory::store::MemoryBackend;
 use crate::sync_primitives::Arc;
-use aleph_protocol::memory_trace::{EvidenceItem, FactOrigin};
 pub use aleph_protocol::memory_trace::{TraceKind, TraceResult};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -38,14 +35,13 @@ pub struct MemoryTraceArgs {
     pub target: String,
     /// The kind of target being traced.
     pub kind: TraceKind,
-    /// Maximum number of items to return. Caps the `evidence` list (default:
-    /// unlimited) or the `write_decisions` list (default: 20); it is not a
-    /// graph-traversal depth.
+    /// Maximum rows in `evidence` (up to 500) or `write_decisions` (default 20).
+    /// Does not change which note edges or fact annotations are reported.
     #[serde(default)]
     pub max_results: Option<usize>,
 }
 
-/// Tool that walks a memory claim down to ground-truth evidence.
+/// Tool that resolves recorded evidence within the runtime's partition.
 pub struct MemoryTraceTool {
     db: MemoryBackend,
     raw_store: Arc<dyn RawMemoryStore>,
@@ -63,13 +59,13 @@ impl MemoryTraceTool {
 
     /// Tool description shown to the LLM in its system prompt.
     pub const DESCRIPTION: &'static str =
-        "Drill a memory claim down to ground-truth evidence: profile section / note / raw id \
-         → source notes → raw memories → original transcript text. Returns the evidence chain; \
-         missing raws are marked as pruned rather than causing an error.\n\n\
-         `kind: \"note\"` also returns `facts[]`: each fact of that note with its `origin` \
-         (raw_source / prior_note / inferred / system / legacy), an `inferred` flag and the \
-         `source_id` it was quoted from. Answer \"did I actually say that?\" from these rows; \
-         `inferred: true` means no one ever said it.\n\n\
+        "Trace recorded sources of a profile section, Wiki note or raw ID. Source-note \
+         edges and raw excerpts stay in one memory partition. Unavailable raw sources \
+         are marked pruned. `truncated` means a limit omitted results; `incomplete` \
+         means some recorded evidence was unavailable.\n\n\
+         `kind: \"note\"` returns the target's fact annotations (`origin`, `inferred`, \
+         and optional `source_id`). These describe recorded attribution, not proof of \
+         what the user did or did not say; use the actual excerpts to answer that.\n\n\
          Use `kind: \"write_decision\"` for the mirror question — why a fact is NOT in memory. \
          It returns one row per `remember` OR `flag_user_correction` write ATTEMPT (newest \
          first), refusals included, each with a machine-readable `reason` (written / duplicate / \
@@ -97,196 +93,38 @@ impl MemoryTraceTool {
         }
     }
 
-    /// Read one note's facts and the origin marker on each.
-    ///
-    /// Reads the markdown, not `notes_provenance`. The table is a projection of
-    /// these same markers, rebuilt on every index pass, and it does not store
-    /// the fact text — so a caller that wants both would pair text from the
-    /// file with provenance from the index and mis-attribute any fact whose
-    /// note changed since. From the file the two always describe the same
-    /// bytes. (The table earns its place on the other axis: `notes_citing`
-    /// reads it to find fact-level citations of a source across notes, which
-    /// no single file can answer.)
-    ///
-    /// Every failure returns an empty list rather than an error: this is one
-    /// section of a trace answer, and a note that was pruned, renamed, or
-    /// hand-edited into unparseable shape should not take the evidence chain
-    /// down with it.
-    async fn fact_origins(&self, agent: &str, note_path: &str) -> Vec<FactOrigin> {
-        let safe = crate::memory::notes::sanitize_note_path(note_path);
-        // `sanitize_note_path` returns "" when every segment is unsafe. Joining
-        // that would open the agent directory itself.
-        if safe.is_empty() {
-            return Vec::new();
-        }
-        let file = self.note_memory_dir.join(agent).join(format!("{safe}.md"));
-        let Ok(content) = tokio::fs::read_to_string(&file).await else {
-            return Vec::new();
-        };
-        let stem = safe.rsplit('/').next().unwrap_or(&safe);
-        let Ok(note) = crate::memory::notes::KnowledgeNote::from_markdown(stem, &content) else {
-            return Vec::new();
-        };
-        note.facts_with_origin()
-            .into_iter()
-            .enumerate()
-            .map(|(fact_idx, (text, prov))| FactOrigin {
-                note_path: note_path.to_string(),
-                fact_idx,
-                text,
-                origin: prov.origin.as_str().to_owned(),
-                inferred: prov.inferred,
-                source_id: prov.source_id,
-            })
-            .collect()
-    }
-
-    /// Execute the evidence-chain walk.
+    /// Read the evidence chain, or the separate curated-write decision ledger.
     pub async fn call_impl(&self, args: MemoryTraceArgs) -> anyhow::Result<TraceResult> {
-        // BT-D-R4-09: cap the evidence walk. The previous shape had no
-        // upper bound — notes_citing for ProfileSection could return
-        // thousands of paths, each triggering another DB round-trip
-        // (sources_of, get_raws_by_ids), each accumulating evidence
-        // items that grew the response without bound. 500 evidence
-        // items is far above any sensible "trace a claim" request
-        // and caps the wall-time at ~500 small DB reads. Earlier
-        // entries are preserved; later ones are dropped.
-        const MAX_TRACE_EVIDENCE: usize = 500;
-        let mut evidence = Vec::with_capacity(MAX_TRACE_EVIDENCE.min(64));
-        let agent = &self.agent_id;
-
-        // 1. Resolve the set of note paths to inspect.
-        let notes: Vec<String> = match args.kind {
-            TraceKind::Note => vec![args.target.clone()],
-            TraceKind::Raw => self
-                .db
-                .notes_citing(agent, &args.target)
-                .await
-                .map_err(|e| anyhow::anyhow!("notes_citing: {e}"))?,
-            TraceKind::ProfileSection => {
-                // section heading → session ids (from USER.md Sources map)
-                // → raw memory rows → citing notes
-                let agent_dir = self.note_memory_dir.join(agent.as_str());
-                let store = crate::memory::notes::profile::ProfileStore::new(agent_dir);
-                let profile = store.read().await.ok().flatten();
-                let mut notes = Vec::new();
-                if let Some(p) = profile {
-                    if let Some(sessions) = p.sources.get(&args.target) {
-                        for sid in sessions {
-                            let raws = self
-                                .raw_store
-                                .get_raws_by_session(agent, sid)
-                                .await
-                                .map_err(|e| anyhow::anyhow!("get_raws_by_session: {e}"))?;
-                            for raw in raws {
-                                let citing = self
-                                    .db
-                                    .notes_citing(agent, &raw.id)
-                                    .await
-                                    .map_err(|e| anyhow::anyhow!("notes_citing: {e}"))?;
-                                for n in citing {
-                                    if !notes.contains(&n) {
-                                        notes.push(n);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                notes
-            }
-            // A write-decision trace visits no notes: the audit log is read
-            // directly below, so the evidence walk is a no-op for this kind.
-            TraceKind::WriteDecision => Vec::new(),
-        };
-
-        // 2. Each note → its source raw ids → fetch rows (graceful prune for missing).
-        for note in &notes {
-            if evidence.len() >= MAX_TRACE_EVIDENCE {
-                break;
-            }
-            let raw_ids = self
-                .db
-                .sources_of(agent, note)
-                .await
-                .map_err(|e| anyhow::anyhow!("sources_of: {e}"))?;
-            let fetched = self
-                .raw_store
-                .get_raws_by_ids(agent, &raw_ids)
-                .await
-                .map_err(|e| anyhow::anyhow!("get_raws_by_ids: {e}"))?;
-            for rid in &raw_ids {
-                if evidence.len() >= MAX_TRACE_EVIDENCE {
-                    break;
-                }
-                let found = fetched.iter().find(|r| &r.id == rid);
-                evidence.push(EvidenceItem {
-                    raw_id: rid.clone(),
-                    via_note: Some(note.clone()),
-                    via_session: found.and_then(|r| r.session_id.clone()),
-                    content: found.map(|r| r.content.chars().take(800).collect()),
-                    pruned: found.is_none(),
-                });
-            }
+        if !walk::valid_partition(&self.agent_id) {
+            return Ok(TraceResult {
+                target: args.target,
+                ..TraceResult::default()
+            });
         }
-
-        // 3. For Raw kind: also surface the raw itself if present.
-        if args.kind == TraceKind::Raw {
-            let fetched = self
-                .raw_store
-                .get_raws_by_ids(agent, std::slice::from_ref(&args.target))
-                .await
-                .map_err(|e| anyhow::anyhow!("get_raws_by_ids(raw): {e}"))?;
-            if let Some(r) = fetched.first() {
-                evidence.push(EvidenceItem {
-                    raw_id: r.id.clone(),
-                    via_note: None,
-                    via_session: r.session_id.clone(),
-                    content: Some(r.content.chars().take(800).collect()),
-                    pruned: false,
-                });
-            }
+        if args.kind != TraceKind::WriteDecision {
+            return walk::trace(self, args).await;
         }
-
-        // 4. Cap the number of returned evidence items if requested.
-        if let Some(max) = args.max_results {
-            evidence.truncate(max);
-        }
-
-        // 5. The curated-write audit log: one row per `remember` attempt,
-        //    refusals included. Clamped to the table's own per-agent ceiling so
-        //    a large `max_results` cannot ask for more than is retained.
-        let write_decisions = if args.kind == TraceKind::WriteDecision {
-            let limit = args
-                .max_results
-                .unwrap_or(DEFAULT_WRITE_DECISION_ROWS)
-                .min(MAX_DECISIONS_PER_AGENT);
-            self.db
-                .recent_write_decisions(agent, Some(args.target.as_str()), limit)
-                .map_err(|e| anyhow::anyhow!("recent_write_decisions: {e}"))?
-        } else {
-            Vec::new()
-        };
-
-        // 6. Per-fact origins for a note trace. The evidence chain says which
-        //    raws fed the note; this says which line came from which, and
-        //    whether the model quoted or inferred it.
-        let facts = if args.kind == TraceKind::Note {
-            self.fact_origins(agent, &args.target).await
-        } else {
-            Vec::new()
-        };
-
+        let limit = args
+            .max_results
+            .unwrap_or(DEFAULT_WRITE_DECISION_ROWS)
+            .min(MAX_DECISIONS_PER_AGENT);
+        let mut rows = self
+            .db
+            .recent_write_decisions(&self.agent_id, Some(&args.target), limit + 1)
+            .map_err(|error| anyhow::anyhow!("recent_write_decisions: {error}"))?;
+        let truncated = rows.len() > limit;
+        rows.truncate(limit);
         Ok(TraceResult {
             target: args.target,
-            notes,
-            evidence,
-            facts,
-            write_decisions,
+            write_decisions: rows,
+            truncated,
             ..TraceResult::default()
         })
     }
 }
+
+#[cfg(test)]
+mod walk_tests;
 
 #[cfg(test)]
 mod tests {

@@ -722,18 +722,28 @@ impl RawMemoryStore for MarkdownSessionStore {
         .await
     }
 
-    async fn get_raws_by_session(
+    async fn get_raw_ids_by_session(
         &self,
         agent_id: &str,
         session_id: &str,
-    ) -> Result<Vec<RawMemory>, AlephError> {
-        self.query_markdown_raw(
-            "agent_id = ?1 AND session_id = ?2",
-            vec![agent_id.to_owned().into(), session_id.to_owned().into()],
-            false,
-            usize::MAX,
-            None,
-        )
+        limit: usize,
+    ) -> Result<Vec<String>, AlephError> {
+        let agent = agent_id.to_owned();
+        let session = session_id.to_owned();
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        self.with_raw_db(move |db, _| {
+            let mut stmt = db
+                .prepare(
+                    "SELECT id FROM raw_memory_index WHERE agent_id = ?1 AND session_id = ?2 \
+                 ORDER BY created_at, rowid LIMIT ?3",
+                )
+                .map_err(storage_error)?;
+            let rows = stmt
+                .query_map(params![agent, session, limit], |row| row.get(0))
+                .map_err(storage_error)?;
+            rows.collect::<Result<Vec<String>, _>>()
+                .map_err(storage_error)
+        })
         .await
     }
 
