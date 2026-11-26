@@ -118,6 +118,13 @@ handle enters a walk — the application element, the system-wide element, and e
 child, because the setting is per-element and is **not** inherited by elements
 copied out of one.
 
+### NSH whole-turn audio ownership / NSH 整轮音频所有权
+
+- **Capture / 采集:** The [Rust adapter](../../desktop/macos/src/voice_capture.rs) pins one Swift helper generation through begin, poll, and seal/cancel. [AudioSession](../../desktop/macos/bridge/Sources/AlephBridge/RPC/AudioSession.swift) owns the device; readiness requires a real sample, not just successful start. Only bounded sample offsets and levels are polled. The sealed WAV returns to Core, not to the Panel. / 采集到封口或取消绑定同一 helper，首个有效样本才就绪；Panel 不接触原生录音字节。
+- **Offline STT / 离线识别:** [OfflineSpeechAudio](../../desktop/macos/bridge/Sources/AlephBridge/RPC/OfflineSpeechAudio.swift) reads bounded PCM from the private staging root, closes the file, and hands owned PCM to Speech in on-device mode. Core removes a handed-off clip only after the matching release proof or after reaping that exact helper. / 同一操作证明文件已脱离识别流程，或确切旧进程已回收，Core 才清理已交接录音。Ambiguous requests are not replayed. / 不重放不确定请求。
+
+The Panel uses the separate Gateway voice contract; it cannot call these private Bridge operations directly. Ordinary Speech tools retain their existing behavior. / Panel 走独立的 Gateway 语音契约，不直接调用私有 Bridge 方法；既有 Speech 工具行为不变。
+
 ## 2. Protocol
 
 ### Transport
