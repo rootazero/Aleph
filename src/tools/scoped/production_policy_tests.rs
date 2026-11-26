@@ -1,7 +1,7 @@
 //! Two-crate production evidence: this leg uses the shared startup factory and
 //! real request builder; the binary leg checks its delegate/startup wiring.
 use super::{DeferredTools, ScopedToolService};
-use crate::approval::{CallIdentity, with_call_identity};
+use crate::approval::{with_call_identity, CallIdentity};
 use crate::capability::backend::TOOL_NAMESPACE;
 use crate::capability::constraints::{ConstraintContext, ConstraintViolation};
 use crate::capability::descriptor::CapabilityId;
@@ -13,12 +13,12 @@ use crate::capability::policy_runtime::{
 use crate::capability::production_init::build_capability_policy;
 use crate::capability::projection_host::ProjectionHost;
 use crate::capability::provider::{ProviderHandle, ProviderState};
-use crate::config::types::policies::ExecTier;
 use crate::config::types::policies::capability_constraints::ResourceUnit;
+use crate::config::types::policies::ExecTier;
 use crate::gateway::execution_engine::build_request_tool_service;
 use crate::memory::runtime::{MemoryOperation, MemoryRuntime, MemoryRuntimeConfig};
-use crate::sandbox::exec_approval::ApprovalAction;
 use crate::sandbox::exec_approval::gate::{ApprovalOutcome, ApprovalRequester, ApprovalResponse};
+use crate::sandbox::exec_approval::ApprovalAction;
 use crate::sync_primitives::Arc;
 use crate::tools::adapters::McpRegistryTool;
 use crate::tools::descriptor::{ToolCapabilityDescriptor, ToolSource};
@@ -27,7 +27,7 @@ use crate::tools::registry::ToolHandlerRegistry;
 use crate::tools::runtime::LoopToolRegistry;
 use crate::tools::service::{ToolDefinition, ToolError, ToolOutput, ToolService};
 use crate::tools::turn_context::TurnContext;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::{Notify, Semaphore};
@@ -545,11 +545,179 @@ async fn allowed_policy_does_not_replace_existing_tool_authorization() {
 }
 
 #[tokio::test]
+async fn desktop_approval_invocation_is_bound_to_capture() {
+    tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        exercise_desktop_approval_capture(),
+    )
+    .await
+    .expect("bounded desktop approval capture test");
+}
+
+async fn exercise_desktop_approval_capture() {
+    use crate::builtin_tools::desktop::operator_approval::take_desktop_approval;
+    use crate::exec::manager::ExecApprovalManager;
+    use crate::gateway::event_bus::GatewayEventBus;
+
+    struct Probe {
+        definition: ToolDefinition,
+        results: tokio::sync::mpsc::UnboundedSender<(bool, bool)>,
+        ready: Arc<Notify>,
+        proceed: Arc<Semaphore>,
+    }
+    #[async_trait::async_trait]
+    impl ToolHandler for Probe {
+        fn definition(&self) -> ToolDefinition {
+            self.definition.clone()
+        }
+        async fn invoke(&self, _: Value) -> Result<ToolOutput, ToolError> {
+            let invocation = take_desktop_approval();
+            self.ready.notify_one();
+            self.proceed.acquire().await.unwrap().forget();
+            let present = invocation.is_some();
+            let valid = invocation.is_some_and(|ctx| ctx.validate_before_dispatch().is_ok());
+            assert!(take_desktop_approval().is_none());
+            self.results.send((present, valid)).unwrap();
+            Ok(ToolOutput {
+                value: json!({"probe": true}),
+                metadata: Default::default(),
+            })
+        }
+    }
+
+    let definition: ToolDefinition = serde_json::from_value(json!({
+        "name":"desktop", "description":"Capture probe", "input_schema":{"type":"object"},
+        "source":ToolSource::Builtin
+    }))
+    .unwrap();
+    let descriptor = ToolCapabilityDescriptor::from_definition(&definition, 0);
+    let registry = Arc::new(ToolHandlerRegistry::new());
+    let (results, mut observed) = tokio::sync::mpsc::unbounded_channel();
+    let ready = Arc::new(Notify::new());
+    let proceed = Arc::new(Semaphore::new(0));
+    let make_probe = || {
+        Arc::new(Probe {
+            definition: definition.clone(),
+            results: results.clone(),
+            ready: ready.clone(),
+            proceed: proceed.clone(),
+        })
+    };
+    let handler = make_probe();
+    registry
+        .register(descriptor.clone(), handler.clone())
+        .unwrap();
+    let host = ProjectionHost::mount(registry.as_ref().clone(), Arc::new(OwnershipTree::new()));
+    assert!(host.wait_until_ready().await);
+    let mut canonical = LoopToolRegistry::new();
+    canonical.register(Box::new(McpRegistryTool::from_registry_entry(
+        handler.clone(),
+        &descriptor,
+    )));
+    canonical.bind_canonical_registry(registry.clone(), Arc::new(|_| true));
+    assert!(canonical.bind_canonical_facade(host.facade()));
+    let canonical = Arc::new(canonical);
+    let requester = Arc::new(crate::approval::OperatorApprovalRequester::new(
+        Arc::new(ExecApprovalManager::new()),
+        Arc::new(GatewayEventBus::new()),
+    ));
+    let attended = || {
+        ScopedToolService::new(canonical.clone(), BTreeSet::new())
+            .with_exec_tier(ExecTier::Full)
+            .with_turn_context(context("capture-probe"))
+    };
+
+    for (service, expected) in [
+        (attended(), (false, false)),
+        (
+            ScopedToolService::new(canonical.clone(), BTreeSet::new())
+                .with_exec_tier(ExecTier::Full)
+                .with_operator_approval(requester.clone()),
+            (false, false),
+        ),
+    ] {
+        proceed.add_permits(1);
+        with_call_identity(
+            Some(CallIdentity {
+                turn_id: crate::session::events::TurnId::nil(),
+                call_id: "missing-context".into(),
+            }),
+            service.execute("desktop", json!({})),
+        )
+        .await
+        .unwrap();
+        assert_eq!(observed.recv().await, Some(expected));
+        ready.notified().await;
+    }
+
+    proceed.add_permits(1);
+    handler.invoke(json!({})).await.unwrap();
+    assert_eq!(observed.recv().await, Some((false, false)));
+    ready.notified().await;
+
+    let mut fallback = LoopToolRegistry::new();
+    fallback.register(Box::new(McpRegistryTool::from_registry_entry(
+        handler.clone(),
+        &descriptor,
+    )));
+    let fallback = ScopedToolService::new(Arc::new(fallback), BTreeSet::new())
+        .with_exec_tier(ExecTier::Full)
+        .with_turn_context(context("capture-fallback"))
+        .with_operator_approval(requester.clone());
+    proceed.add_permits(1);
+    fallback.execute("desktop", json!({})).await.unwrap();
+    assert_eq!(observed.recv().await, Some((false, false)));
+    ready.notified().await;
+
+    for replace in [false, true] {
+        let service = attended().with_operator_approval(requester.clone());
+        let call = tokio::spawn(async move {
+            with_call_identity(
+                Some(CallIdentity {
+                    turn_id: crate::session::events::TurnId::nil(),
+                    call_id: format!("capture-{replace}"),
+                }),
+                service.execute("desktop", json!({})),
+            )
+            .await
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(3), ready.notified())
+            .await
+            .unwrap();
+        if replace {
+            registry.unregister("desktop").unwrap();
+            registry.register(descriptor.clone(), make_probe()).unwrap();
+        } else {
+            let mut unrelated = definition.clone();
+            unrelated.name = "unrelated".into();
+            registry
+                .register(
+                    ToolCapabilityDescriptor::from_definition(&unrelated, 0),
+                    Arc::new(Probe {
+                        definition: unrelated,
+                        results: results.clone(),
+                        ready: ready.clone(),
+                        proceed: proceed.clone(),
+                    }),
+                )
+                .unwrap();
+        }
+        proceed.add_permits(1);
+        assert_eq!(observed.recv().await, Some((true, !replace)));
+        let result = call.await.unwrap();
+        if !replace {
+            assert!(result.is_ok(), "{result:?}");
+        }
+    }
+    host.close_and_await().await;
+}
+
+#[tokio::test]
 async fn late_desktop_registration_reaches_scoped_handler_once() {
     use crate::capability::descriptor::CapabilityKind;
     use crate::capability::facade::{ResolveError, Scope};
-    use crate::executor::ToolRegistry;
     use crate::executor::builtin_registry::{BuiltinToolConfig, BuiltinToolRegistry};
+    use crate::executor::ToolRegistry;
     use crate::tools::handlers::builtin::register_builtin_routers;
     use aleph_desktop::traits::{
         AutomationCapability, MediaCapability, PermissionCapability, PimCapability,
@@ -654,13 +822,11 @@ async fn late_desktop_registration_reaches_scoped_handler_once() {
     let tree = Arc::new(OwnershipTree::new());
     let host = ProjectionHost::mount(registry.as_ref().clone(), tree);
     assert!(host.wait_until_ready().await);
-    assert!(
-        !host
-            .current_snapshot()
-            .unwrap()
-            .entries
-            .contains_key("desktop")
-    );
+    assert!(!host
+        .current_snapshot()
+        .unwrap()
+        .entries
+        .contains_key("desktop"));
     let facade = host.facade();
     let scope = Scope {
         kind: Some(CapabilityKind::Tool),
@@ -668,12 +834,10 @@ async fn late_desktop_registration_reaches_scoped_handler_once() {
         ..Scope::default()
     };
     let first = facade.describe(scope.clone());
-    assert!(
-        !first
-            .capabilities
-            .iter()
-            .any(|entry| entry.id.name == "desktop")
-    );
+    assert!(!first
+        .capabilities
+        .iter()
+        .any(|entry| entry.id.name == "desktop"));
     let mut publications = registry.subscribe_publications();
 
     let names: Vec<_> = builtins
@@ -803,13 +967,11 @@ async fn late_desktop_registration_reaches_scoped_handler_once() {
         "{:?}",
         disposed.failures().collect::<Vec<_>>()
     );
-    assert!(
-        !facade
-            .describe(scope)
-            .capabilities
-            .iter()
-            .any(|entry| entry.id == desktop_id)
-    );
+    assert!(!facade
+        .describe(scope)
+        .capabilities
+        .iter()
+        .any(|entry| entry.id == desktop_id));
     assert!(
         matches!(
             facade.validate_lease(&lease),

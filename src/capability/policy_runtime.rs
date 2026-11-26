@@ -278,12 +278,7 @@ impl PolicyRuntime {
             .map(|entry| Arc::clone(&entry.active_calls))
             .unwrap_or_default();
         sources.retain(|entry| entry.fact_key != fact_key);
-        let state = Arc::new(AttachmentState::new(
-            binding,
-            fact_key,
-            facts,
-            active_calls,
-        ));
+        let state = Arc::new(AttachmentState::new(binding, fact_key, facts, active_calls));
         sources.push(Arc::clone(&state));
         Ok(PolicyAttachment {
             id: id.clone(),
@@ -522,6 +517,15 @@ impl PolicyEngine {
             .expect("new admission is not shared")
             .drain = Some(Arc::clone(&self.runtime.admissions));
         Ok(running)
+    }
+
+    pub(crate) fn admissions_open(&self) -> bool {
+        !*self
+            .runtime
+            .admissions
+            .stopped
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Seal every invocation and source publication, independently of configured quotas.

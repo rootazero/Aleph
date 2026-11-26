@@ -2550,6 +2550,7 @@ mod post_observation {
     #[derive(Debug, PartialEq, Eq)]
     enum Call {
         TargetedClick(i32),
+        TargetedType(i32, String),
         GlobalClick,
         Focus(Option<i32>),
         GlobalCapture,
@@ -2567,6 +2568,7 @@ mod post_observation {
         matched: Option<AxElement>,
         window_owner: Option<u64>,
         owned_frame: DesktopResult<Screenshot>,
+        interactive: Option<InteractiveState>,
     }
 
     impl FakeDesktop {
@@ -2578,6 +2580,7 @@ mod post_observation {
                 matched: None,
                 window_owner: None,
                 owned_frame: Ok(frame()),
+                interactive: None,
             }
         }
 
@@ -2634,6 +2637,11 @@ mod post_observation {
             Ok(())
         }
 
+        async fn type_text_targeted(&self, pid: i32, text: &str) -> DesktopResult<()> {
+            self.record(Call::TargetedType(pid, text.into()));
+            Ok(())
+        }
+
         async fn click(&self, _: f64, _: f64, _: MouseButton) -> DesktopResult<()> {
             self.record(Call::GlobalClick);
             Ok(())
@@ -2685,6 +2693,12 @@ mod post_observation {
                 .map(|pid| WindowInfo {
                     id: u64::from(WINDOW),
                     pid,
+                    bounds: self.interactive.as_ref().map(|state| BoundingBox {
+                        x: state.frame_x.load(std::sync::atomic::Ordering::Acquire) as f64,
+                        y: 20.0,
+                        w: 16.0,
+                        h: 16.0,
+                    }),
                     ..Default::default()
                 })
                 .into_iter()
@@ -2734,9 +2748,424 @@ mod post_observation {
         }
     }
 
+    struct InteractiveState {
+        launch_stamp: std::sync::atomic::AtomicU64,
+        escape_generation: std::sync::atomic::AtomicU64,
+        frame_x: std::sync::atomic::AtomicU64,
+    }
+
+    #[async_trait]
+    impl SystemCapability for FakeDesktop {
+        async fn launch_app(&self, _: &str) -> DesktopResult<()> {
+            unused()
+        }
+        async fn quit_app(&self, _: &str) -> DesktopResult<()> {
+            unused()
+        }
+        async fn list_running_apps(
+            &self,
+        ) -> DesktopResult<Vec<aleph_desktop::system_types::AppInfo>> {
+            Ok(vec![])
+        }
+        async fn desktop_process_identity(
+            &self,
+            pid: i32,
+        ) -> DesktopResult<Option<aleph_desktop::system_types::DesktopProcessIdentity>> {
+            Ok(self.interactive.as_ref().map(|state| {
+                aleph_desktop::system_types::DesktopProcessIdentity {
+                    pid,
+                    bundle_id: "org.example.Fixture".into(),
+                    launch_stamp: state
+                        .launch_stamp
+                        .load(std::sync::atomic::Ordering::Acquire),
+                }
+            }))
+        }
+        async fn send_notification(&self, _: &str, _: &str) -> DesktopResult<()> {
+            unused()
+        }
+        async fn clipboard_read(
+            &self,
+        ) -> DesktopResult<aleph_desktop::system_types::ClipboardContent> {
+            unused()
+        }
+        async fn clipboard_write(&self, _: &str) -> DesktopResult<()> {
+            unused()
+        }
+        async fn system_info(&self) -> DesktopResult<aleph_desktop::system_types::SystemInfo> {
+            unused()
+        }
+    }
+
+    impl aleph_desktop::EscapeAbort for FakeDesktop {
+        fn start(&self) -> DesktopResult<()> {
+            Ok(())
+        }
+        fn stop(&self) {}
+        fn is_aborted(&self) -> bool {
+            false
+        }
+        fn abort_generation(&self) -> Option<u64> {
+            self.interactive.as_ref().map(|state| {
+                state
+                    .escape_generation
+                    .load(std::sync::atomic::Ordering::Acquire)
+            })
+        }
+        fn reset(&self) {}
+    }
+
+    #[derive(Default)]
+    struct InteractivePolicy(std::sync::atomic::AtomicBool);
+
+    #[async_trait]
+    impl crate::approval::ApprovalPolicy for InteractivePolicy {
+        async fn check(
+            &self,
+            _: &crate::approval::ActionRequest,
+        ) -> crate::approval::ApprovalDecision {
+            use crate::approval::ApprovalDecision;
+            if self.0.load(std::sync::atomic::Ordering::Acquire) {
+                ApprovalDecision::Deny {
+                    reason: "fixture policy changed".into(),
+                }
+            } else {
+                ApprovalDecision::Ask {
+                    prompt: "fixture policy requires approval".into(),
+                }
+            }
+        }
+        async fn record(
+            &self,
+            _: &crate::approval::ActionRequest,
+            _: &crate::approval::ApprovalDecision,
+        ) {
+        }
+    }
+
+    #[test]
+    fn desktop_operator_approval_binds_effect_to_one_call() {
+        // The fixture drives the production scoped future and the full desktop
+        // dispatcher on a debug runtime, whose frames exceed libtest's stack.
+        let done = std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(|| {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap()
+                    .block_on(async {
+                        tokio::time::timeout(
+                            std::time::Duration::from_secs(15),
+                            exercise_desktop_operator_approval(),
+                        )
+                        .await
+                        .expect("bounded desktop operator approval fixture");
+                    });
+            })
+            .unwrap()
+            .join();
+        if let Err(panic) = done {
+            std::panic::resume_unwind(panic);
+        }
+    }
+
+    async fn exercise_desktop_operator_approval() {
+        use crate::approval::{with_call_identity, CallIdentity, OperatorApprovalRequester};
+        use crate::capability::{ownership::OwnershipTree, projection_host::ProjectionHost};
+        use crate::config::types::policies::ExecTier;
+        use crate::exec::manager::ExecApprovalManager;
+        use crate::exec::socket::ApprovalDecisionType;
+        use crate::gateway::event_bus::GatewayEventBus;
+        use crate::routing::session_key::SessionKey;
+        use crate::tools::descriptor::ToolCapabilityDescriptor;
+        use crate::tools::{
+            adapters::McpRegistryTool,
+            handlers::{builtin::BuiltinHandler, ToolHandler},
+            registry::ToolHandlerRegistry,
+            runtime::LoopToolRegistry,
+            scoped::ScopedToolService,
+            service::ToolService,
+            turn_context::TurnContext,
+        };
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let manager = Arc::new(ExecApprovalManager::new());
+        let bus = Arc::new(GatewayEventBus::new());
+        let mut events = bus.subscribe_typed();
+        let requester = Arc::new(OperatorApprovalRequester::for_config_tier(
+            manager.clone(),
+            bus,
+        ));
+        let policy = Arc::new(InteractivePolicy::default());
+        let mut platform = FakeDesktop::new(true, None);
+        platform.interactive = Some(InteractiveState {
+            launch_stamp: AtomicU64::new(1),
+            escape_generation: AtomicU64::new(1),
+            frame_x: AtomicU64::new(10),
+        });
+        platform.window_owner = Some(PID as u64);
+        let platform = Arc::new(platform);
+        let state = platform.interactive.as_ref().unwrap();
+        let tool = Arc::new(
+            DesktopTool::new()
+                .with_platform(platform.clone())
+                .with_approval_policy(policy.clone())
+                .with_allow_global_pointer(true),
+        );
+        let handler = Arc::new(BuiltinHandler::new("desktop".into(), tool.clone()));
+        let registry = Arc::new(ToolHandlerRegistry::new());
+        let descriptor = ToolCapabilityDescriptor::from_definition(&handler.definition(), 0);
+        registry
+            .register(descriptor.clone(), handler.clone())
+            .unwrap();
+        let host = ProjectionHost::mount(registry.as_ref().clone(), Arc::new(OwnershipTree::new()));
+        assert!(host.wait_until_ready().await);
+        let mut inner = LoopToolRegistry::new();
+        inner.register(Box::new(McpRegistryTool::from_registry_entry(
+            handler.clone(),
+            &descriptor,
+        )));
+        inner.bind_canonical_registry(registry.clone(), Arc::new(|_| true));
+        assert!(inner.bind_canonical_facade(host.facade()));
+        let service = Arc::new(
+            ScopedToolService::new(Arc::new(inner), Default::default())
+                .with_exec_tier(ExecTier::Auto)
+                .with_turn_context(TurnContext {
+                    session_key: SessionKey::main("desktop-operator-fixture"),
+                    run_id: "desktop-operator-fixture".into(),
+                    channel_id: "test".into(),
+                    conversation_id: "origin".into(),
+                    caller_role: None,
+                    channel_tool_permissions: None,
+                    unattended: false,
+                    plan_gate: None,
+                    side_question: false,
+                    telecom_authority: None,
+                })
+                .with_operator_approval(requester),
+        );
+        let call = |label: &str, input| {
+            let service = service.clone();
+            let call_id = label.to_string();
+            tokio::spawn(async move {
+                with_call_identity(
+                    Some(CallIdentity {
+                        turn_id: crate::session::events::TurnId::nil(),
+                        call_id,
+                    }),
+                    service.execute("desktop", input),
+                )
+                .await
+            })
+        };
+        const SECRET: &str = "synthetic-approval-secret";
+        let type_args = serde_json::json!({ "action":"type_text", "pid":PID, "text":SECRET, "force":true, "observe":"state" });
+        let click_args =
+            serde_json::json!({ "action":"click", "pid":PID, "x":12, "y":22, "window_id":WINDOW });
+        let raw = handler.invoke(type_args.clone()).await.unwrap();
+        assert!(raw.value.to_string().contains("approval_required"));
+        for (label, args) in [
+            (
+                "global",
+                serde_json::json!({"action":"click", "x":12, "y":22}),
+            ),
+            (
+                "unbound-pointer",
+                serde_json::json!({"action":"click", "pid":PID, "x":12, "y":22}),
+            ),
+            (
+                "keyboard-window",
+                serde_json::json!({"action":"type_text", "pid":PID, "window_id":WINDOW, "text":SECRET, "force":true}),
+            ),
+            (
+                "implicit-return",
+                serde_json::json!({"action":"type_text", "pid":PID, "text":format!("{SECRET}\n"), "force":true}),
+            ),
+            (
+                "batch",
+                serde_json::json!({"action":"batch", "actions":[{"action":"type_text", "pid":PID, "text":SECRET}]}),
+            ),
+        ] {
+            let refused = call(label, args).await.unwrap().unwrap();
+            assert!(
+                refused.value.to_string().contains("approval_required"),
+                "{label}: {refused:?}"
+            );
+            assert!(events.try_recv().is_err(), "{label} emitted a card");
+        }
+
+        for case in [
+            "approved",
+            "denied",
+            "pid-reused",
+            "escape",
+            "window-moved",
+            "policy-changed",
+            "lock-busy",
+            "cancelled",
+            "lease-replaced",
+        ] {
+            let mut current = call(
+                case,
+                if case == "window-moved" {
+                    click_args.clone()
+                } else {
+                    type_args.clone()
+                },
+            );
+            let id = loop {
+                let event = tokio::select! {
+                    returned = &mut current => panic!("{case} settled before requesting approval: {returned:?}"),
+                    event = events.recv() => event.unwrap(),
+                };
+                assert!(!format!("{event:?}").contains(SECRET));
+                if let crate::gateway::events::GatewayEventFrame::ApprovalRequested {
+                    approval_id,
+                    session_key,
+                    tool_call_id,
+                    ..
+                } = event
+                {
+                    assert!(session_key.is_empty());
+                    assert_eq!(tool_call_id.as_deref(), Some(case));
+                    break approval_id;
+                }
+            };
+            let sibling = if case == "approved" {
+                let mut sibling = call("sibling", type_args.clone());
+                let sibling_id = match tokio::select! {
+                    returned = &mut sibling => panic!("sibling settled before requesting approval: {returned:?}"),
+                    event = events.recv() => event.unwrap(),
+                } {
+                    crate::gateway::events::GatewayEventFrame::ApprovalRequested {
+                        approval_id,
+                        tool_call_id,
+                        ..
+                    } => {
+                        assert_eq!(tool_call_id.as_deref(), Some("sibling"));
+                        approval_id
+                    }
+                    event => panic!("expected sibling approval: {event:?}"),
+                };
+                Some((sibling, sibling_id))
+            } else {
+                None
+            };
+            let record = manager.get_pending(&id).unwrap().record;
+            assert!(record.operator_only && record.grant_key.is_none());
+            assert_eq!(
+                record.allowed_decisions,
+                vec![ApprovalDecisionType::AllowOnce, ApprovalDecisionType::Deny]
+            );
+            assert!(record.command.contains("org.example.Fixture"));
+            assert!(!format!("{record:?}").contains(SECRET));
+            let effect_count = || {
+                platform
+                    .calls
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|call| {
+                        matches!(
+                            call,
+                            Call::TargetedType(..) | Call::TargetedClick(_) | Call::GlobalClick
+                        )
+                    })
+                    .count()
+            };
+            let effects_before = usize::from(case != "approved");
+            assert_eq!(effect_count(), effects_before);
+            // Another session can take the real lock while the card is pending.
+            let competing_lock =
+                super::super::session_lock::acquire_for_session("approval-test-other").unwrap();
+            let competing_lock = if case == "lock-busy" {
+                Some(competing_lock)
+            } else {
+                drop(competing_lock);
+                None
+            };
+            match case {
+                "pid-reused" => {
+                    state.launch_stamp.fetch_add(1, Ordering::AcqRel);
+                }
+                "escape" => {
+                    state.escape_generation.fetch_add(1, Ordering::AcqRel);
+                }
+                "window-moved" => {
+                    state.frame_x.store(11, Ordering::Release);
+                }
+                "policy-changed" => {
+                    policy.0.store(true, Ordering::Release);
+                }
+                "lease-replaced" => {
+                    registry.unregister("desktop").unwrap();
+                    registry
+                        .register(
+                            descriptor.clone(),
+                            Arc::new(BuiltinHandler::new("desktop".into(), tool.clone())),
+                        )
+                        .unwrap();
+                }
+                "cancelled" => {
+                    current.abort();
+                    assert!(current.await.unwrap_err().is_cancelled());
+                    loop {
+                        let event = events.recv().await.unwrap();
+                        if matches!(event, crate::gateway::events::GatewayEventFrame::ApprovalExpired { approval_id, .. } if approval_id == id)
+                        {
+                            break;
+                        }
+                    }
+                    assert!(manager.get_pending(&id).is_none());
+                    assert_eq!(effect_count(), effects_before);
+                    continue;
+                }
+                _ => {}
+            }
+            let decision = if case == "denied" {
+                ApprovalDecisionType::Deny
+            } else {
+                ApprovalDecisionType::AllowOnce
+            };
+            assert!(manager.resolve(&id, decision, None));
+            assert!(!manager.resolve(&id, decision, None));
+            let result = current.await.unwrap();
+            drop(competing_lock);
+            policy.0.store(false, Ordering::Release);
+            assert_eq!(
+                effect_count(),
+                effects_before + usize::from(case == "approved"),
+                "{case}: {result:?}"
+            );
+            assert!(manager.get_pending(&id).is_none());
+            if let Some((sibling, sibling_id)) = sibling {
+                assert!(manager.get_pending(&sibling_id).is_some());
+                assert!(manager.resolve(&sibling_id, ApprovalDecisionType::Deny, None));
+                sibling.await.unwrap().unwrap();
+                assert_eq!(effect_count(), 1);
+            }
+            if case == "approved" {
+                let result = result.unwrap();
+                assert!(result.value.to_string().contains("post_state"));
+                assert!(platform
+                    .calls
+                    .lock()
+                    .unwrap()
+                    .contains(&Call::TargetedType(PID, SECRET.into())));
+            }
+        }
+        host.close_and_await().await;
+    }
+
     impl DesktopPlatform for FakeDesktop {
         fn platform_name(&self) -> &str {
-            "post-observation-fake"
+            if self.interactive.is_some() {
+                "macOS"
+            } else {
+                "post-observation-fake"
+            }
         }
         fn screen(&self) -> Option<&dyn ScreenCapability> {
             Some(self)
@@ -2748,7 +3177,14 @@ mod post_observation {
             None
         }
         fn system(&self) -> Option<&dyn SystemCapability> {
-            None
+            self.interactive
+                .as_ref()
+                .map(|_| self as &dyn SystemCapability)
+        }
+        fn escape_listener(&self) -> Option<&dyn aleph_desktop::EscapeAbort> {
+            self.interactive
+                .as_ref()
+                .map(|_| self as &dyn aleph_desktop::EscapeAbort)
         }
         fn automation(&self) -> Option<&dyn AutomationCapability> {
             None

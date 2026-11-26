@@ -59,13 +59,14 @@ pub(crate) const fn confirmation_requester_slot() -> &'static dyn SlotStatus {
 /// removes the escalation path rather than the gate. Safe, and invisible: the
 /// refusal text is identical whether boot never installed a requester or the
 /// deployment genuinely has no operator surface.
-static CONFIG_APPROVAL_REQUESTER: CapabilitySlot<Arc<dyn ApprovalRequester>> = CapabilitySlot::new(
-    "gateway/config-approval-requester",
-    MissingSemantics::FailsClosed,
-);
+static CONFIG_APPROVAL_REQUESTER: CapabilitySlot<Arc<crate::approval::OperatorApprovalRequester>> =
+    CapabilitySlot::new(
+        "gateway/config-approval-requester",
+        MissingSemantics::FailsClosed,
+    );
 
-/// Install the process-wide config-tier approval requester. Called once at boot.
-pub fn set_config_approval_requester(requester: Arc<dyn ApprovalRequester>) {
+/// Install the process-wide operator approval requester. Called once at boot.
+pub fn set_config_approval_requester(requester: Arc<crate::approval::OperatorApprovalRequester>) {
     let _ = CONFIG_APPROVAL_REQUESTER.install(requester);
 }
 
@@ -238,7 +239,7 @@ pub fn build_request_tool_service(
     // chat-tier connection. Inert until boot installs the requester (then the
     // config gate suspends for operator approval instead of hard-rejecting).
     if let Some(requester) = CONFIG_APPROVAL_REQUESTER.get() {
-        svc = svc.with_config_approval(Arc::clone(requester));
+        svc = svc.with_operator_approval(Arc::clone(requester));
     }
     // Progressive tool disclosure: collapse non-core tool schemas. `None`
     // (core empty / ["*"]) leaves the service byte-identical to old behavior.

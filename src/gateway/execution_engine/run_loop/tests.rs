@@ -2425,6 +2425,7 @@ fn canonical_test_entry(name: &str, server: &'static str) -> crate::tools::regis
         cold: None,
         observation: None,
         domain_policy: None,
+        published_handler: None,
     }
 }
 
@@ -2481,6 +2482,7 @@ fn invoking_canonical_test_entry(
         cold: None,
         observation: None,
         domain_policy: None,
+        published_handler: None,
     }
 }
 

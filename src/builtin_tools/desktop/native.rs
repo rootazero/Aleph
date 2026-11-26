@@ -29,6 +29,7 @@ use crate::sync_primitives::Arc;
 
 use super::observe::{self, PostTarget};
 use super::types::{DesktopArgs, DesktopOutput, MouseButton};
+use super::DesktopTool;
 use crate::error::{AlephError, Result};
 use aleph_desktop::system_types::AppInfo;
 use aleph_protocol::desktop_bridge::methods::ax::{
@@ -52,6 +53,206 @@ pub(super) enum Rail {
     Targeted(i32),
     /// The global HID tap: moves the user's cursor, needs the app frontmost.
     Global,
+}
+
+/// A held approval is tied to these exact arguments and the actual delivery rail.
+pub(super) struct PreparedDesktopAction {
+    pub(super) args: DesktopArgs,
+    pub(super) rail: Rail,
+    identity: aleph_desktop::system_types::DesktopProcessIdentity,
+    window: Option<super::window_lookup::ResolvedWindow>,
+    escape_generation: u64,
+}
+
+impl PreparedDesktopAction {
+    pub(super) fn approval_card(&self) -> crate::sandbox::exec_approval::ApprovalAction {
+        let mut action = crate::sandbox::exec_approval::ApprovalAction::bare(
+            "desktop",
+            "Allow this single targeted desktop action. Input content is not shown.",
+        );
+        let mut target = format!("{} (PID {})", self.identity.bundle_id, self.identity.pid);
+        if let Some(window) = self.window {
+            target.push_str(&format!(", window {}", window.id));
+        }
+        action.summary = format!("{} → {target}", self.args.action);
+        action
+    }
+
+    pub(super) async fn capture(
+        tool: &DesktopTool,
+        platform: &Arc<dyn aleph_desktop::DesktopPlatform>,
+        raw: &DesktopArgs,
+        normalized: &DesktopArgs,
+    ) -> Option<Self> {
+        use super::window_lookup::ResolvedWindow;
+
+        if platform.platform_name() != "macOS" || raw.element.is_some() {
+            return None;
+        }
+        let pointer = matches!(raw.action.as_str(), "click" | "double_click");
+        match raw.action.as_str() {
+            "click" | "double_click" => {
+                reject_malformed_coordinates(normalized).ok()?;
+                require_xy(normalized, &raw.action).ok()?;
+            }
+            "type_text" if !split_trailing_newline(raw.text.as_deref().unwrap_or("")).1 => {}
+            "key_combo" if raw.keys.as_ref().is_some_and(|keys| !keys.is_empty()) => {}
+            _ => return None,
+        }
+        // Pointer approval needs an owned frame containing the point. Keyboard
+        // delivery binds a process, not a requested window.
+        if pointer != raw.window_id.is_some() {
+            return None;
+        }
+        if pointer && !matches!(raw.coord_space.as_deref(), None | Some("pixel" | "window")) {
+            return None;
+        }
+        let screen = platform.screen()?;
+        let rail = resolve_rail(tool.allow_global_pointer, platform, screen, normalized)
+            .await
+            .ok()?;
+        let Rail::Targeted(pid) = rail else {
+            return None;
+        };
+        let mut args = normalized.clone();
+        let window = if let Some(id) = raw.window_id {
+            let window =
+                ResolvedWindow::lookup(screen, u64::from(id), "approval needs a current frame")
+                    .await
+                    .ok()?;
+            if window.pid != pid {
+                return None;
+            }
+            if raw.coord_space.as_deref() == Some("window") {
+                // An explicit capture size removes dependence on a guessed display scale.
+                let [w, h] = raw.coord_factors?;
+                if w == 0 || h == 0 {
+                    return None;
+                }
+                let mut bound = raw.clone();
+                super::coord_resolve::rescale_window_in_place(&mut bound, &window.frame, 1.0);
+                if (bound.x, bound.y) != (args.x, args.y) {
+                    return None;
+                }
+                args = bound;
+            }
+            let (x, y) = require_xy(&args, &args.action).ok()?;
+            let frame = window.frame;
+            let right = frame.x + frame.w;
+            let bottom = frame.y + frame.h;
+            if ![frame.x, frame.y, right, bottom]
+                .into_iter()
+                .all(f64::is_finite)
+                || !(x >= frame.x && x < right && y >= frame.y && y < bottom)
+            {
+                return None;
+            }
+            Some(window)
+        } else {
+            None
+        };
+        let identity = platform
+            .system()?
+            .desktop_process_identity(pid)
+            .await
+            .ok()??;
+        if pid <= 0
+            || identity.pid != pid
+            || identity.bundle_id.is_empty()
+            || identity.bundle_id.len() > 160
+            || !identity
+                .bundle_id
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || b".-_".contains(&c))
+            || super::safety::blocked_app_reason(&identity.bundle_id, &identity.bundle_id).is_some()
+        {
+            return None;
+        }
+        let listener = platform.escape_listener()?;
+        tool.start_escape_listener(listener);
+        let escape_generation = listener.abort_generation()?;
+        if listener.is_aborted() {
+            return None;
+        }
+        Some(Self {
+            args,
+            rail,
+            identity,
+            window,
+            escape_generation,
+        })
+    }
+
+    pub(super) async fn revalidate(
+        &self,
+        tool: &DesktopTool,
+        platform: &Arc<dyn aleph_desktop::DesktopPlatform>,
+        screen: &dyn aleph_desktop::ScreenCapability,
+    ) -> Option<DesktopOutput> {
+        if super::check_hard_block(&self.args).is_some()
+            || tool.check_blocked_app(&self.args).await.is_some()
+        {
+            return Some(DesktopOutput::failed(
+                "Desktop safety guard refused the approved action.",
+            ));
+        }
+        if choose_rail(
+            screen.supports_targeted_input(),
+            Some(self.identity.pid),
+            tool.allow_global_pointer,
+            &self.args.action,
+        )
+        .ok()
+            != Some(self.rail)
+        {
+            return Some(DesktopOutput::failed(
+                "Desktop delivery rail changed during operator approval.",
+            ));
+        }
+        if let Some(before) = self.window {
+            let after = super::window_lookup::ResolvedWindow::lookup(
+                screen,
+                before.id,
+                "approval needs a current frame",
+            )
+            .await
+            .ok();
+            let geometry = |window: super::window_lookup::ResolvedWindow| {
+                (
+                    window.pid,
+                    window.frame.x,
+                    window.frame.y,
+                    window.frame.w,
+                    window.frame.h,
+                )
+            };
+            if after.map(geometry) != Some(geometry(before)) {
+                return Some(DesktopOutput::failed(
+                    "Desktop window owner or geometry changed during operator approval.",
+                ));
+            }
+        }
+        let identity = match platform.system() {
+            Some(system) => system
+                .desktop_process_identity(self.identity.pid)
+                .await
+                .ok()
+                .flatten(),
+            None => None,
+        };
+        if identity.as_ref() != Some(&self.identity) {
+            return Some(DesktopOutput::failed(
+                "Desktop process changed during operator approval.",
+            ));
+        }
+        None
+    }
+
+    pub(super) fn escape_unchanged(&self, platform: &dyn aleph_desktop::DesktopPlatform) -> bool {
+        platform.escape_listener().is_some_and(|listener| {
+            listener.abort_generation() == Some(self.escape_generation) && !listener.is_aborted()
+        })
+    }
 }
 
 impl Rail {
@@ -1120,13 +1321,28 @@ impl super::DesktopTool {
     /// (the output itself may report success or a structured failure), or
     /// `Ok(None)` when the action name is not handled here, so the caller
     /// reports it as unsupported on this platform.
-    pub(super) async fn call_via_platform(
+    #[cfg(test)]
+    async fn call_via_platform(
         &self,
         platform: &Arc<dyn aleph_desktop::DesktopPlatform>,
         args: &DesktopArgs,
     ) -> Result<Option<DesktopOutput>> {
+        self.dispatch_via_platform(platform, args, None).await
+    }
+
+    pub(super) async fn dispatch_via_platform(
+        &self,
+        platform: &Arc<dyn aleph_desktop::DesktopPlatform>,
+        args: &DesktopArgs,
+        approval: Option<&super::operator_approval::ApprovedDesktopAction>,
+    ) -> Result<Option<DesktopOutput>> {
         let screen = match platform.screen() {
             Some(s) => s,
+            None if approval.is_some() => {
+                return Ok(Some(DesktopOutput::failed(
+                    "Approved desktop screen is unavailable.",
+                )));
+            }
             None => return Ok(None),
         };
 
@@ -1134,31 +1350,32 @@ impl super::DesktopTool {
         // every arm below sees plain coordinates / locator fields. The token
         // carries its own target pid — which is also what picks the rail.
         let owned_args;
-        let args: &DesktopArgs = match args.element.as_deref() {
-            Some(token) => match resolve_element_token(platform, args, token).await {
-                Ok(rewritten) => {
-                    owned_args = rewritten;
-                    &owned_args
-                }
-                Err(out) => return Ok(Some(out)),
-            },
-            None => args,
-        };
-
-        // Pick the delivery rail once, before a single event is synthesized, so
-        // a refusal costs the user nothing. Non-input actions never consult the
-        // policy (and never pay for the pid lookup) — `Global` is inert for them.
-        let rail = if is_input_action(&args.action) {
-            // Args first, rail second. See `reject_malformed_coordinates`.
-            if let Err(malformed) = reject_malformed_coordinates(args) {
-                return Ok(Some(malformed));
-            }
-            match resolve_rail(self.allow_global_pointer, platform, screen, args).await {
-                Ok(rail) => rail,
-                Err(refusal) => return Ok(Some(refusal)),
-            }
+        let (args, rail) = if let Some(approval) = approval {
+            // Do not resolve or rewrite an approved payload a second time.
+            (&approval.prepared.args, approval.prepared.rail)
         } else {
-            Rail::Global
+            let args = match args.element.as_deref() {
+                Some(token) => match resolve_element_token(platform, args, token).await {
+                    Ok(rewritten) => {
+                        owned_args = rewritten;
+                        &owned_args
+                    }
+                    Err(out) => return Ok(Some(out)),
+                },
+                None => args,
+            };
+            let rail = if is_input_action(&args.action) {
+                if let Err(malformed) = reject_malformed_coordinates(args) {
+                    return Ok(Some(malformed));
+                }
+                match resolve_rail(self.allow_global_pointer, platform, screen, args).await {
+                    Ok(rail) => rail,
+                    Err(refusal) => return Ok(Some(refusal)),
+                }
+            } else {
+                Rail::Global
+            };
+            (args, rail)
         };
 
         // A selector on the global rail is a request, not evidence of delivery.
@@ -1184,7 +1401,7 @@ impl super::DesktopTool {
         };
 
         let mut output = self
-            .dispatch_native(platform, screen, args, rail, &mut post_target)
+            .dispatch_native(platform, screen, args, rail, &mut post_target, approval)
             .await?;
         if let (Some(out), Some(target)) = (&mut output, post_target) {
             if out.success {
@@ -1279,6 +1496,7 @@ impl super::DesktopTool {
         args: &DesktopArgs,
         rail: Rail,
         post_target: &mut Option<PostTarget>,
+        approval: Option<&super::operator_approval::ApprovedDesktopAction>,
     ) -> Result<Option<DesktopOutput>> {
         match args.action.as_str() {
             "screenshot" => self.capture_screenshot(screen, args, None).await.map(Some),
@@ -1331,6 +1549,11 @@ impl super::DesktopTool {
                     Err(out) => return Ok(Some(out)),
                 };
                 let button = to_desktop_button(args.button.as_ref());
+                if let Some(approval) = approval {
+                    if let Some(refusal) = approval.recheck(self, platform, screen).await {
+                        return Ok(Some(refusal));
+                    }
+                }
                 let result = match rail {
                     Rail::Targeted(pid) => screen.click_targeted(pid, x, y, button).await,
                     Rail::Global => screen.click(x, y, button).await,
@@ -1373,6 +1596,11 @@ impl super::DesktopTool {
                 // behaves inconsistently in single-line fields.
                 let raw = args.text.as_deref().unwrap_or("");
                 let (text, submit) = split_trailing_newline(raw);
+                if let Some(approval) = approval {
+                    if let Some(refusal) = approval.recheck(self, platform, screen).await {
+                        return Ok(Some(refusal));
+                    }
+                }
                 let typed = match rail {
                     Rail::Targeted(pid) => screen.type_text_targeted(pid, text).await,
                     Rail::Global => screen.type_text(text).await,
@@ -1446,6 +1674,11 @@ impl super::DesktopTool {
                     };
                     if let Some(refusal) = super::focus_gate::check_secure_only(platform, pid).await
                     {
+                        return Ok(Some(refusal));
+                    }
+                }
+                if let Some(approval) = approval {
+                    if let Some(refusal) = approval.recheck(self, platform, screen).await {
                         return Ok(Some(refusal));
                     }
                 }
@@ -1909,6 +2142,11 @@ impl super::DesktopTool {
                     Err(out) => return Ok(Some(out)),
                 };
                 let button = to_desktop_button(args.button.as_ref());
+                if let Some(approval) = approval {
+                    if let Some(refusal) = approval.recheck(self, platform, screen).await {
+                        return Ok(Some(refusal));
+                    }
+                }
                 let result = match rail {
                     Rail::Targeted(pid) => screen.double_click_targeted(pid, x, y, button).await,
                     Rail::Global => screen.double_click(x, y, button).await,

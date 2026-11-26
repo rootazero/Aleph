@@ -12,6 +12,7 @@ mod held_inputs;
 mod interactable;
 mod native;
 mod observe;
+pub(crate) mod operator_approval;
 mod perm;
 mod recovery;
 mod safety;
@@ -198,6 +199,28 @@ impl DesktopTool {
             return Ok(());
         };
 
+        self.start_escape_listener(listener);
+
+        let (boundary_crossed, prior_session) = self.run_boundary_crossed();
+        if boundary_crossed {
+            listener.reset();
+            // The new run must not inherit stuck inputs from the prior session.
+            if let (Some(screen), Some(prior_session)) = (platform.screen(), prior_session) {
+                held_inputs::release_all(&prior_session, screen).await;
+            }
+        }
+        if listener.is_aborted() {
+            if let Some(screen) = platform.screen() {
+                held_inputs::release_all_sessions(screen).await;
+            }
+            return Err(DesktopOutput::failed(
+                "Computer use aborted by user (Escape pressed)",
+            ));
+        }
+        Ok(())
+    }
+
+    fn start_escape_listener(&self, listener: &dyn aleph_desktop::EscapeAbort) {
         if !self
             .escape_started
             .load(crate::sync_primitives::Ordering::Acquire)
@@ -214,36 +237,6 @@ impl DesktopTool {
             self.escape_started
                 .store(true, crate::sync_primitives::Ordering::Release);
         }
-
-        let (boundary_crossed, prior_session) = self.run_boundary_crossed();
-        if boundary_crossed {
-            listener.reset();
-            // A previous run may have died holding a modifier or mid-drag; the
-            // new run must not inherit its stuck inputs. Use the *captured*
-            // session id (the run that just ended / is being reset), not
-            // `current_session_id()` — by the time the boundary check fires,
-            // the new run's session is the current one, and clearing its
-            // inputs would not free the stuck inputs from the run that
-            // actually held them.
-            if let Some(screen) = platform.screen() {
-                if let Some(prior_session) = prior_session {
-                    held_inputs::release_all(&prior_session, screen).await;
-                }
-            }
-        }
-
-        if listener.is_aborted() {
-            // Escape is the user's emergency stop on the one physical desktop:
-            // hand back every held key/button, not just this session's.
-            if let Some(screen) = platform.screen() {
-                held_inputs::release_all_sessions(screen).await;
-            }
-            return Err(DesktopOutput::failed(
-                "Computer use aborted by user (Escape pressed)",
-            ));
-        }
-
-        Ok(())
     }
 
     /// Execute a batch of desktop actions sequentially.
@@ -389,49 +382,23 @@ impl DesktopTool {
     /// human-readable audit context resolved from the agent-loop call context
     /// (see [`audit_identity`]), so `ApprovalPolicy::record` produces an
     /// accountable audit trail rather than blank entries.
-    async fn check_approval(
-        &self,
-        action_type: ActionType,
-        action: &str,
-        target: &str,
-    ) -> Option<DesktopOutput> {
-        let policy = self.approval_policy.as_ref()?;
-
+    fn approval_request(action_type: ActionType, action: &str, target: &str) -> ActionRequest {
         let (agent_id, context) = crate::approval::audit_identity("desktop", action, target);
-        let request = ActionRequest {
+        ActionRequest {
             action_type: action_type.clone(),
             target: target.to_string(),
             display_target: String::new(),
             agent_id,
             context,
             timestamp: chrono::Utc::now(),
-        };
+        }
+    }
 
-        let decision = policy.check(&request).await;
-        let decision = crate::approval::lift_ask(decision, action_type.clone());
-
-        match decision {
-            ApprovalDecision::Allow => {
-                policy.record(&request, &decision).await;
-                None
-            }
-            ApprovalDecision::Deny { ref reason } => {
-                policy.record(&request, &decision).await;
-                Some(DesktopOutput::failed(format!(
-                    "Action denied by approval policy: {reason}"
-                )))
-            }
-            ApprovalDecision::Ask { ref prompt } => {
-                // Don't record yet — record() should be called after user responds
-                Some(DesktopOutput {
-                    success: false,
-                    data: Some(serde_json::json!({
-                        "approval_required": true,
-                        "prompt": prompt,
-                    })),
-                    message: Some(format!("Approval required: {prompt}")),
-                })
-            }
+    fn approval_required(prompt: String) -> DesktopOutput {
+        DesktopOutput {
+            success: false,
+            message: Some(format!("Approval required: {prompt}")),
+            data: Some(serde_json::json!({ "approval_required": true, "prompt": prompt })),
         }
     }
 
@@ -833,6 +800,9 @@ Pythonic action script — UI-TARS-finetuned models can emit `script` containing
             }
         }
 
+        let approval_invocation = operator_approval::take_desktop_approval();
+        let original = approval_invocation.as_ref().map(|_| Box::new(args.clone()));
+
         // 2. Normalize coordinate space for leaf actions. Batches defer per
         //    sub-action so each one inherits the batch-level `coord_space`
         //    via `execute_batch` and rescales against its own display.
@@ -854,13 +824,50 @@ Pythonic action script — UI-TARS-finetuned models can emit `script` containing
         // state but stay approval-exempt) — see `requires_lock`.
         let needs_lock = requires_lock(&args);
 
-        // 3. Approval check
-        if let Some((action_type, target)) = classify_approval(&args) {
-            if let Some(out) = self
-                .check_approval(action_type, &args.action, &target)
-                .await
-            {
-                return Ok(out);
+        // 3. A desktop Ask may hold this invocation, never a lock or a grant.
+        let mut approved = None;
+        if let (Some(policy), Some((action_type, target))) =
+            (&self.approval_policy, classify_approval(&args))
+        {
+            let request = Self::approval_request(action_type.clone(), &args.action, &target);
+            let decision = crate::approval::lift_ask(policy.check(&request).await, action_type);
+            match decision {
+                ApprovalDecision::Allow => policy.record(&request, &decision).await,
+                ApprovalDecision::Deny { ref reason } => {
+                    policy.record(&request, &decision).await;
+                    return Ok(DesktopOutput::failed(format!(
+                        "Action denied by approval policy: {reason}"
+                    )));
+                }
+                ApprovalDecision::Ask { prompt } => {
+                    let (Some(mut invocation), Some(original), Some(platform)) =
+                        (approval_invocation, original, self.platform.as_ref())
+                    else {
+                        return Ok(Self::approval_required(prompt));
+                    };
+                    let Some(prepared) =
+                        native::PreparedDesktopAction::capture(self, platform, &original, &args)
+                            .await
+                    else {
+                        return Ok(Self::approval_required(prompt));
+                    };
+                    if let Err(error) = invocation.validate_before_dispatch() {
+                        return Ok(DesktopOutput::failed(error.to_string()));
+                    }
+                    let response = invocation.request(&prepared.approval_card()).await;
+                    if response.outcome
+                        != crate::sandbox::exec_approval::gate::ApprovalOutcome::Approved
+                    {
+                        return Ok(DesktopOutput::failed(
+                            "Operator approval was not granted for this desktop call.",
+                        ));
+                    }
+                    approved = Some(Box::new(operator_approval::ApprovedDesktopAction {
+                        invocation,
+                        prepared,
+                        policy_request: request,
+                    }));
+                }
             }
         }
 
@@ -868,7 +875,20 @@ Pythonic action script — UI-TARS-finetuned models can emit `script` containing
         //    rest of this call (and, for a batch, across all its sub-actions
         //    via re-entrant acquisition) and released on drop, so the desktop
         //    is freed for other sessions once the call returns.
-        let _session_guard = if needs_lock {
+        let _session_guard = if let Some(action) = &approved {
+            if let Err(error) = action.invocation.validate_before_dispatch() {
+                return Ok(DesktopOutput::failed(error.to_string()));
+            }
+            match self.acquire_lock() {
+                Ok(Some(guard)) => Some(guard),
+                Ok(None) => {
+                    return Ok(DesktopOutput::failed(
+                        "Approved desktop call has no owning session.",
+                    ))
+                }
+                Err(out) => return Ok(out),
+            }
+        } else if needs_lock {
             match self.acquire_lock() {
                 Ok(guard) => guard,
                 Err(out) => return Ok(out),
@@ -878,7 +898,7 @@ Pythonic action script — UI-TARS-finetuned models can emit `script` containing
         };
 
         // 5. Escape abort check (lock-requiring actions only)
-        if needs_lock {
+        if needs_lock && approved.is_none() {
             if let Err(out) = self.check_escape().await {
                 return Ok(out);
             }
@@ -891,7 +911,10 @@ Pythonic action script — UI-TARS-finetuned models can emit `script` containing
 
         // 7. Execute via platform
         if let Some(ref platform) = self.platform {
-            if let Some(mut output) = self.call_via_platform(platform, &args).await? {
+            let output = self
+                .dispatch_via_platform(platform, &args, approved.as_deref())
+                .await?;
+            if let Some(mut output) = output {
                 // 7.4 Effect grading — stamp every successful mutating action
                 //     with the closed-set evidence grade (`types::ActionEffect`).
                 //     Success-path only: refusals (success:false) are a
