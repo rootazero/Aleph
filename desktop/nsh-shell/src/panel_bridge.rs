@@ -1,4 +1,5 @@
 use crate::credentials::CredentialService;
+use crate::deep_link::{deep_link_action, DeepLink};
 use aleph_protocol::panel_shell::{
     valid_document, valid_notification, CredentialCall, CredentialReply, PanelReply, ShellRequest,
 };
@@ -85,8 +86,12 @@ impl Bridge {
             let mut next_press = next_notification_press();
             loop {
                 tokio::select! {
+                    // nsh keeps the links that came before this listener,
+                    // the one that launched the app included.
                     url = &mut next_url => {
-                        if url == "aleph://open" {
+                        if deep_link_action(&url) == Some(DeepLink::Open) {
+                            intent_window.show();
+                            intent_window.focus();
                             intents.open_chat();
                         }
                         next_url = next_url_scheme_open();

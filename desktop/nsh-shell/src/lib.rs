@@ -5,6 +5,7 @@
 
 mod autostart;
 mod credentials;
+mod deep_link;
 mod launch;
 #[cfg(feature = "embedded-core")]
 mod local_service;
