@@ -33,7 +33,13 @@ pub struct Attachment {
 }
 
 /// Parameters for agent.run request
+///
+/// Unknown fields are ignored, with one exception: a field this struct once
+/// had whose silent loss would weaken a safety promise is refused instead
+/// (see the `Deserialize` impl below). The derive is `remote = "Self"` so that
+/// impl can check the raw keys first and then reuse the derived field mapping.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(remote = "Self")]
 pub struct AgentRunParams {
     /// User input message.
     ///
@@ -138,6 +144,33 @@ pub struct AgentRunParams {
 
 const fn default_stream() -> bool {
     true
+}
+
+/// Removed request fields that must be refused rather than ignored, each with
+/// what replaced it.
+///
+/// `plan_phase` selected the old read-only planning phase. A client that still
+/// sends it believes its turn cannot change anything; ignoring the field would
+/// run every tool for it. Its replacement is `exec_tier: "plan"`.
+const REFUSED_REMOVED_FIELDS: &[(&str, &str)] = &[(
+    "plan_phase",
+    "it was removed; send `exec_tier: \"plan\"` for a read-only planning turn",
+)];
+
+impl<'de> Deserialize<'de> for AgentRunParams {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error as _;
+        let fields = serde_json::Map::<String, serde_json::Value>::deserialize(deserializer)?;
+        for (name, replacement) in REFUSED_REMOVED_FIELDS {
+            if fields.contains_key(*name) {
+                return Err(D::Error::custom(format!(
+                    "`{name}` is not accepted: {replacement}"
+                )));
+            }
+        }
+        // The derived mapping (`remote = "Self"` makes it an inherent fn).
+        AgentRunParams::deserialize(serde_json::Value::Object(fields)).map_err(D::Error::custom)
+    }
 }
 
 /// Result of agent.run request (immediate response)
@@ -1457,6 +1490,29 @@ mod tests {
         assert_eq!(parsed.thinking, shared.thinking);
         assert_eq!(parsed.mode, shared.mode);
         assert_eq!(parsed.exec_tier, shared.exec_tier);
+    }
+
+    /// A client still sending the removed `plan_phase` field believes its turn
+    /// is read-only planning. Dropping the field silently would run every tool
+    /// for it (fail-open), so the request is refused and told what replaced it.
+    #[test]
+    fn a_run_request_carrying_the_removed_plan_phase_is_refused() {
+        let err = serde_json::from_value::<AgentRunParams>(serde_json::json!({
+            "message": "hi",
+            "plan_phase": "planning",
+        }))
+        .expect_err("plan_phase must not be accepted");
+        let text = err.to_string();
+        assert!(text.contains("plan_phase"), "{text}");
+        assert!(text.contains("exec_tier"), "{text}");
+
+        let parsed = serde_json::from_value::<AgentRunParams>(serde_json::json!({
+            "message": "hi",
+            "exec_tier": "plan",
+        }))
+        .expect("the replacement field still parses");
+        assert_eq!(parsed.input, "hi");
+        assert_eq!(parsed.exec_tier.as_deref(), Some("plan"));
     }
 
     /// The response half of the same contract, checked by **key-set equality**,

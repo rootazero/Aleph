@@ -1107,9 +1107,23 @@ async function cmdRewind(sub, arg) {
  * `#[serde(flatten)]` — so the knob keys sit at the TOP level of that object,
  * beside `role` / `identity_id` / `source_channel`, and a nested `custom`
  * object would be read by nobody.
+ *
+ * Re-measured 2026-11-26: the session manager now follows
+ * `[general] session_store_backend`, and the generated config says `"file"`,
+ * so `sessions.db` holds the event log but no `sessions` table, and the row is
+ * `data/sessions/<key>/metadata.json` with the knobs under `identity_meta`.
+ * The stamp therefore writes wherever the row actually is — the sqlite table
+ * when it exists, else the file — rather than pinning one backend's layout.
  */
 const stampSessionMeta = (key, patch) => {
   const db = new DatabaseSync(EVENTS_DB);
+  const hasTable = db
+    .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sessions'")
+    .get();
+  if (!hasTable) {
+    db.close();
+    return stampSessionMetaFile(key, patch);
+  }
   try {
     const row = db.prepare("SELECT key, metadata FROM sessions WHERE key = ?").get(key);
     if (!row) {
@@ -1130,6 +1144,19 @@ const stampSessionMeta = (key, patch) => {
   } finally {
     db.close();
   }
+};
+
+/** File-backend twin of `stampSessionMeta`: patch `identity_meta` in place. */
+const stampSessionMetaFile = (key, patch) => {
+  const file = path.join(ALEPH_HOME, "data", "sessions", key, "metadata.json");
+  if (!fs.existsSync(file)) {
+    console.error(`INSTRUMENT FAILURE: no sessions table and no ${file}`);
+    process.exit(1);
+  }
+  const row = JSON.parse(fs.readFileSync(file, "utf8"));
+  row.identity_meta = { ...(row.identity_meta || {}), ...patch };
+  fs.writeFileSync(file, JSON.stringify(row));
+  return JSON.parse(fs.readFileSync(file, "utf8")).identity_meta;
 };
 
 /**

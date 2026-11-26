@@ -1,35 +1,39 @@
 #!/usr/bin/env python3
-"""Real-machine QA for the read-only planning phase and the plan→build handoff.
+"""Real-machine QA for plan mode (`ExecTier::Plan`) and the plan→build handoff.
 
 Three scenarios, each a separate claim that only a running server can settle.
 
-`handoff` — the end-to-end. A session opened with `plan_phase: "planning"` and
-  `exec_tier: "full"` (the WIDEST tier on purpose: if the floor holds here it
-  holds everywhere) must:
-    1. refuse `file_write` at dispatch, with the floor's own wording;
-    2. not have offered `file_write` in the tool surface at all;
-    3. run `scratchpad` normally;
-    4. stop `scratchpad{action:"request_build"}` for a human, on a card whose
-       decision set is allow-once/deny — no standing grant, even for an operator;
-    5. on approval, unlock **inside the same run**: the next turn's tool surface
-       contains `file_write` again (the `cache_generation` bump reaching a live
-       run) and the call actually writes;
-    6. leave `plan_phase = building` persisted on the session.
+`handoff` — the end-to-end. A session opened with `exec_tier: "plan"` must:
+    1. keep `file_write` in the tool surface (plan mode refuses at dispatch,
+       it does not hide), and refuse the call with `GateRule::PlanMode`'s own
+       sentence;
+    2. run `scratchpad set_plan` normally;
+    3. stop `scratchpad{action:"request_approval"}` for a human through
+       `clarification::ask` — answered here over `clarification.resolve`;
+    4. on `approved`, unlock **inside the same run**: the next `file_write`
+       actually writes, and the model is told `Plan approved`;
+    5. leave the session's exec tier off `plan` (the gate writes the release
+       through to the session, so attached clients see the same tier).
 
-`deny` — the same card, declined. The floor must still be engaged afterwards:
-  a declined plan is not a lifted latch.
+`deny` — the same question, answered `rejected`. Plan mode must still hold:
+  a declined plan is not a lifted gate.
 
-`floor` — the floor's position in the permission stack. The config carries an
-  explicit `[policies.tool_permissions.overrides] bash = "allow"`, which beats
-  the tier by design; it must NOT beat the floor. Also pins the argument-aware
-  half: `file_ops` list is admitted and `file_ops` delete is refused, same tool,
-  same turn sequence.
+`floor` — plan mode's position in the permission stack. The config carries
+  explicit `[policies.tool_permissions.overrides] bash = "allow"` and
+  `file_write = "allow"`, which beat the tier by design; they must NOT beat plan
+  mode. Also pins the argument-aware half: `file_ops` list is admitted and
+  `file_ops` delete is refused — same tool, same run.
+
+Every scenario finally checks that a `chat.send` carrying the removed
+`plan_phase` field is rejected rather than silently ignored.
 
 Usage:  drive_plan_handoff.py WS_URL DB OBSERVATIONS SCENARIO
 """
 import argparse
 import asyncio
 import json
+import os
+import re
 import sys
 import time
 
@@ -45,8 +49,11 @@ ap.add_argument("observations")
 ap.add_argument("scenario", choices=["handoff", "deny", "floor"])
 args = ap.parse_args()
 
-FLOOR_PHRASE = "read-only planning phase"
-CARD_PHRASE = "finished planning"
+# The opening of `GateRule::PlanMode::reason` (src/tools/scoped/gate_chain.rs).
+# The model-facing refusal carries the rule's sentence, not its id, so this is
+# how a tool result names the gate that refused it.
+PLAN_MODE_PHRASE = "This conversation is PLANNING"
+APPROVAL_QUESTION_ID = "plan_approval"
 
 failures = []
 
@@ -83,7 +90,7 @@ def result_for(turn_obs, call_index):
     """The tool_result text produced by the `call_index`-th scripted call.
 
     Results accumulate in the conversation, so the Nth call's result is the
-    Nth entry of the LAST turn that carries at least N of them. Reading it off
+    Nth entry of the first turn that carries at least N of them. Reading it off
     a fixed turn would break the moment a side-channel call landed between.
     """
     for obs in turn_obs:
@@ -93,47 +100,37 @@ def result_for(turn_obs, call_index):
     return None
 
 
-async def pending_cards(ws, rid):
-    await rpc(ws, "exec.approvals.pending", {}, rid)
-    r = await reply(ws, rid)
-    if "result" not in r:
-        return []
-    return r["result"].get("pending", [])
-
-
-async def await_card(ws, rid_base, budget=240):
-    """Poll for the plan-handoff card. Identified by the rule's own prose, not
-    by position: an `Auto`-tier turn can park other cards, and picking "the
-    first pending one" would silently test whichever arrived first."""
+async def await_approval_question(ws, session_key, rid_base, budget=240):
+    """Poll `clarification.pending` for this session's plan-approval question.
+    Matched by session and question id, not by position: another pending
+    question must not be answered by accident."""
     end = time.monotonic() + budget
     rid = rid_base
     while time.monotonic() < end:
-        for p in await pending_cards(ws, rid):
-            rec = p.get("record", {})
-            if CARD_PHRASE in (rec.get("reason") or ""):
-                return rec
+        await rpc(ws, "clarification.pending", {}, rid)
+        r = await reply(ws, rid)
+        for p in (r.get("result") or {}).get("pending") or []:
+            ids = [q.get("id") for q in p.get("questions") or []]
+            if p.get("session_key") == session_key and APPROVAL_QUESTION_ID in ids:
+                return p
         rid += 1
         await asyncio.sleep(0.5)
     return None
 
 
-async def session_row(ws, rid, session_key):
-    await rpc(ws, "sessions.list", {"limit": 50}, rid)
+async def session_exec_tier(ws, rid, session_key):
+    """The session's exec tier as every attached client reads it."""
+    await rpc(ws, "chat.history", {"session_key": session_key}, rid)
     r = await reply(ws, rid)
-    rows = (r.get("result") or {}).get("sessions") or []
-    for row in rows:
-        if row.get("session_key") == session_key or row.get("key") == session_key:
-            return row
-    return {"__rows__": rows}
+    session = (r.get("result") or {}).get("session") or {}
+    return session.get("exec_tier"), session
 
 
 async def control_turn(ws, slog):
-    """One ordinary `building` session, on this server, in this config.
+    """One ordinary `full`-tier session, on this server, in this config.
 
-    The A of the A/B. Every "X is absent while planning" claim below is only
-    worth anything next to a run where X was present, and the cheapest thing
-    that can be wrong about this whole fixture is that the tool was never
-    offered in this session mode to begin with.
+    The A of the A/B. "Still listed while planning" is only worth anything
+    next to a run where the tool is certainly listed.
     """
     await rpc(
         ws,
@@ -142,7 +139,6 @@ async def control_turn(ws, slog):
             "message": "Say hello.",
             "channel": "gui:qa-plan-control",
             "exec_tier": "full",
-            "plan_phase": "building",
         },
         50,
     )
@@ -153,7 +149,7 @@ async def control_turn(ws, slog):
         return
     log(f"control run {r['result']['run_id']} session {r['result']['session_key']}")
     fin = await slog.wait_for("run_finished", 1, 180)
-    check(fin is not None, "the control (building) run finished")
+    check(fin is not None, "the control (full tier) run finished")
 
 
 async def run_scenario(ws, slog):
@@ -169,50 +165,46 @@ async def run_scenario(ws, slog):
         {
             "message": opening,
             "channel": f"gui:qa-plan-{args.scenario}",
-            # The widest tier on purpose — see the module doc.
-            "exec_tier": "full",
-            "plan_phase": "planning",
+            "exec_tier": "plan",
         },
         2,
     )
     r = await reply(ws, 2)
     if "result" not in r:
         log(f"FAIL: chat.send rejected: {r}")
-        failures.append("chat.send accepted plan_phase")
+        failures.append("chat.send accepted exec_tier plan")
         return
     session_key = r["result"]["session_key"]
     run_id = r["result"]["run_id"]
     log(f"run {run_id} session {session_key}")
 
     if args.scenario in ("handoff", "deny"):
-        card = await await_card(ws, 100)
-        if not check(card is not None, "the handoff raises an approval card"):
+        pending = await await_approval_question(ws, session_key, 100)
+        if not check(
+            pending is not None,
+            "request_approval asks the human through clarification.pending",
+        ):
             return
-        log(f"card: {json.dumps(card, indent=2)[:900]}")
-        check(
-            card.get("allowed_decisions") == ["allow-once", "deny"],
-            "the card offers allow-once/deny only (no standing grant, "
-            "even though this connection is operator)",
-            f"allowed_decisions={card.get('allowed_decisions')}",
-        )
-        check(
-            "scratchpad" not in (card.get("reason") or ""),
-            "the card asks about the PLAN, not about the scratchpad tool",
-            f"reason={(card.get('reason') or '')[:120]!r}",
-        )
-        decision = "allow-once" if args.scenario == "handoff" else "deny"
+        log(f"pending: {json.dumps(pending)[:600]}")
+        verdict = "approved" if args.scenario == "handoff" else "rejected"
         await rpc(
             ws,
-            "exec.approval.resolve",
-            {"id": card["id"], "decision": decision, "resolved_by": "qa"},
+            "clarification.resolve",
+            {
+                "session_key": session_key,
+                "reply": verdict,
+                "expected_request_id": pending["request_id"],
+            },
             200,
         )
         rr = await reply(ws, 200)
-        log(f"resolved {decision} -> {json.dumps(rr)[:200]}")
+        check(
+            (rr.get("result") or {}).get("resolved") is True,
+            f"clarification.resolve accepts the `{verdict}` reply",
+            json.dumps(rr)[:240],
+        )
 
-    # The run ends when the mock returns end_turn (or, for `deny`, when the
-    # refused handoff has been reported and the plan runs out). #2 because the
-    # control run already committed one.
+    # #2 because the control run already committed one.
     fin = await slog.wait_for("run_finished", 2, 300)
     check(fin is not None, "the planning run finished")
     await asyncio.sleep(2)  # let the last observation flush
@@ -234,53 +226,79 @@ async def run_scenario(ws, slog):
     else:
         assert_floor(obs)
 
-    row = await session_row(ws, 300, session_key)
-    expected = "building" if args.scenario == "handoff" else "planning"
+    tier, session = await session_exec_tier(ws, 300, session_key)
+    if args.scenario == "handoff":
+        check(
+            tier != "plan",
+            "after approval, the session's exec tier is no longer `plan`",
+            f"exec_tier={tier!r}",
+        )
+    else:
+        check(
+            tier == "plan",
+            "without approval, the session's exec tier is still `plan`",
+            f"exec_tier={tier!r} session={json.dumps(session)[:300]}",
+        )
+
+
+async def removed_field_is_rejected(ws):
+    """`plan_phase` was removed with the first plan design. A request that
+    still carries it must fail loudly; a silent ignore would let an old client
+    believe it is planning while every tool runs."""
+    await rpc(
+        ws,
+        "chat.send",
+        {
+            "message": "Say hello.",
+            "channel": "gui:qa-plan-removed-field",
+            "plan_phase": "planning",
+        },
+        400,
+    )
+    r = await reply(ws, 400)
     check(
-        row.get("plan_phase") == expected,
-        f"the session's persisted plan_phase is {expected!r}",
-        f"row={json.dumps(row)[:300]}",
+        "error" in r,
+        "a chat.send carrying the removed `plan_phase` field is rejected",
+        json.dumps(r)[:240],
     )
 
 
 def control_offered(obs, tool):
-    """Was `tool` in the CONTROL (building) turn's surface? Every absence claim
-    below is read against this, so a tool that this session mode never offers
-    cannot masquerade as a tool the floor removed."""
+    """Was `tool` in the CONTROL (full tier) turn's surface?"""
     return bool(obs) and tool in obs[0]["tools_visible"]
 
 
-def assert_hidden(obs, planning_turn, tool):
-    """`tool` was offered to a building session and is gone from a planning one."""
+def assert_listed_but_refused(obs, planning_turn, tool, call_index):
+    """Plan mode keeps `tool` visible and refuses the call at dispatch."""
     check(
         control_offered(obs, tool),
-        f"CONTROL: a building session in this mode IS offered `{tool}`",
+        f"CONTROL: a full-tier session in this mode IS offered `{tool}`",
         f"control surface = {len(obs[0]['tools_visible']) if obs else 0} tools",
     )
     check(
-        tool not in obs[planning_turn]["tools_visible"],
-        f"while planning, `{tool}` is not in the tool surface at all",
+        tool in obs[planning_turn]["tools_visible"],
+        f"while planning, `{tool}` is still listed in the tool surface",
         f"planning surface = {len(obs[planning_turn]['tools_visible'])} tools",
     )
+    result = result_for(obs, call_index)
+    check(
+        result is not None and PLAN_MODE_PHRASE in (result["text"] or ""),
+        f"while planning, calling `{tool}` is refused by plan mode",
+        f"result={(result or {}).get('text', '')[:240]!r}",
+    )
+
+
+def written_path(result_text):
+    """The path out of `file_write`'s `Wrote N bytes to PATH`. The tool result
+    is a JSON object, so the path ends at the closing quote of that string."""
+    m = re.search(r"Wrote \d+ bytes to ([^\"'\s]+)", result_text or "")
+    return m.group(1) if m else None
 
 
 def assert_handoff(obs):
     if not check(len(obs) >= 5, f"at least 5 scripted turns ran (saw {len(obs)})"):
         return
-    assert_hidden(obs, 1, "file_write")
-    assert_hidden(obs, 1, "bash")
-    check(
-        "scratchpad" in obs[1]["tools_visible"]
-        and "file_ops" in obs[1]["tools_visible"],
-        "the argument-dependent tools stay visible while planning",
-    )
-
-    r1 = result_for(obs, 1)
-    check(
-        r1 is not None and FLOOR_PHRASE in r1["text"],
-        "a `file_write` that arrives anyway is refused by the floor at dispatch",
-        f"result={(r1 or {}).get('text', '')[:200]!r}",
-    )
+    assert_listed_but_refused(obs, 1, "file_write", 1)
     r2 = result_for(obs, 2)
     check(
         r2 is not None and not r2["is_error"],
@@ -289,22 +307,22 @@ def assert_handoff(obs):
     )
     r3 = result_for(obs, 3)
     check(
-        r3 is not None and "approv" in (r3["text"] or "").lower(),
-        "the approved handoff tells the model execution is unlocked",
+        r3 is not None and "Plan approved" in (r3["text"] or ""),
+        "the approved handoff tells the model `Plan approved`",
         f"result={(r3 or {}).get('text', '')[:300]!r}",
     )
-
-    check(
-        "file_write" in obs[4]["tools_visible"],
-        "AFTER approval, the SAME RUN's next tool surface contains `file_write` "
-        "again (the cache_generation bump reached a live run)",
-        f"post-approval surface = {len(obs[4]['tools_visible'])} tools",
-    )
     r4 = result_for(obs, 4)
+    text = (r4 or {}).get("text", "")
     check(
-        r4 is not None and "Wrote" in (r4["text"] or ""),
-        "after approval, `file_write` actually writes",
-        f"result={(r4 or {}).get('text', '')[:200]!r}",
+        r4 is not None and "Wrote" in text and PLAN_MODE_PHRASE not in text,
+        "after approval, the SAME RUN's next `file_write` writes",
+        f"result={text[:200]!r}",
+    )
+    path = written_path(text)
+    check(
+        path is not None and os.path.exists(os.path.expanduser(path)),
+        "the post-approval file is on disk",
+        f"path={path!r}",
     )
 
 
@@ -313,47 +331,29 @@ def assert_deny(obs):
         return
     r2 = result_for(obs, 2)
     check(
-        r2 is not None and "not approve" in (r2["text"] or ""),
-        "a declined handoff is reported as a refusal, not as a success",
+        r2 is not None and "Plan rejected" in (r2["text"] or ""),
+        "a rejected plan is reported to the model as a rejection",
         f"result={(r2 or {}).get('text', '')[:240]!r}",
     )
-    assert_hidden(obs, 3, "file_write")
-    r3 = result_for(obs, 3)
-    check(
-        r3 is not None and FLOOR_PHRASE in (r3["text"] or ""),
-        "after a declined handoff, a mutating call is still refused",
-        f"result={(r3 or {}).get('text', '')[:200]!r}",
-    )
+    assert_listed_but_refused(obs, 3, "file_write", 3)
 
 
 def assert_floor(obs):
     if not check(len(obs) >= 4, f"at least 4 scripted turns ran (saw {len(obs)})"):
         return
-    assert_hidden(obs, 1, "bash")
-    check(
-        "file_write" not in obs[1]["tools_visible"],
-        'an explicit `file_write = "allow"` override does not put it back either',
-    )
-    r1 = result_for(obs, 1)
-    check(
-        r1 is not None and FLOOR_PHRASE in (r1["text"] or ""),
-        "a `bash` call is refused by the floor despite an explicit allow entry "
-        "and the `full` tier",
-        f"result={(r1 or {}).get('text', '')[:200]!r}",
-    )
+    assert_listed_but_refused(obs, 1, "bash", 1)
     r2 = result_for(obs, 2)
-    # The claim is that the FLOOR let it through, so the evidence is the
-    # absence of the floor's refusal — not the tool's success. A first pass
-    # asserted `not is_error` and failed on "Directory not found", which is a
-    # call that got past the floor exactly as claimed.
+    # The claim is that plan mode let it through, so the evidence is the
+    # absence of the refusal — not the tool's success ("Directory not found"
+    # is a call that got past the gate exactly as claimed).
     check(
-        r2 is not None and FLOOR_PHRASE not in (r2["text"] or ""),
-        "`file_ops` list — a read-only operation — is NOT refused by the floor",
+        r2 is not None and PLAN_MODE_PHRASE not in (r2["text"] or ""),
+        "`file_ops` list — a read-only operation — is NOT refused by plan mode",
         f"result={(r2 or {}).get('text', '')[:160]!r}",
     )
     r3 = result_for(obs, 3)
     check(
-        r3 is not None and FLOOR_PHRASE in (r3["text"] or ""),
+        r3 is not None and PLAN_MODE_PHRASE in (r3["text"] or ""),
         "`file_ops` delete — same tool, mutating operation — IS refused",
         f"result={(r3 or {}).get('text', '')[:200]!r}",
     )
@@ -367,6 +367,9 @@ async def main():
         log("connect ->", r["result"]["role"])
         await control_turn(ws, slog)
         await run_scenario(ws, slog)
+        # Last on purpose: if the field were accepted it would start a run,
+        # and that run must not consume the scenario's scripted turns.
+        await removed_field_is_rejected(ws)
 
     log("")
     if failures:

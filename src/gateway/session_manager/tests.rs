@@ -1386,3 +1386,85 @@ async fn a_damaged_message_is_dropped_from_a_preview_not_fatal_to_it() {
         .collect();
     assert_eq!(contents, vec!["kept"]);
 }
+
+/// Before per-peer DM keys were unified, a channel DM's row was written under
+/// `agent:a:dm:p` while everything else looked it up as `agent:a:peer:p`.
+/// Opening the store re-keys such a row and its messages, unless the canonical
+/// key already has a row of its own (two records — a human picks).
+#[test]
+fn opening_the_store_rekeys_a_per_peer_dm_alias_row_and_its_messages() {
+    let temp = tempdir().unwrap();
+    let db = temp.path().join("sessions.db");
+    drop(SessionManager::new(test_config(db.clone())).unwrap());
+
+    {
+        let conn = crate::utils::sqlite_open::open_sqlite_safe(&db).unwrap();
+        for key in [
+            "agent:main:dm:solo",
+            "agent:main:dm:twice",
+            "agent:main:peer:twice",
+            "agent:main:telegram:dm:u1",
+        ] {
+            conn.execute(
+                "INSERT INTO sessions (key, agent_id, session_type, created_at, last_active_at, owner_user_id)
+                 VALUES (?1, 'main', 'dm', 1, 1, 'u-owner')",
+                [key],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO messages (session_key, role, content, timestamp) VALUES (?1, 'user', 'hi', 1)",
+                [key],
+            )
+            .unwrap();
+        }
+        conn.execute(
+            "INSERT INTO session_epoch_reservations (base_key, epoch) VALUES ('agent:main:dm:solo', 3)",
+            [],
+        )
+        .unwrap();
+    }
+
+    drop(SessionManager::new(test_config(db.clone())).unwrap());
+
+    let conn = crate::utils::sqlite_open::open_sqlite_safe(&db).unwrap();
+    let keys: Vec<String> = conn
+        .prepare("SELECT key FROM sessions ORDER BY key")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(
+        keys,
+        [
+            "agent:main:dm:twice",
+            "agent:main:peer:solo",
+            "agent:main:peer:twice",
+            "agent:main:telegram:dm:u1",
+        ]
+    );
+    let owner: String = conn
+        .query_row(
+            "SELECT owner_user_id FROM sessions WHERE key = 'agent:main:peer:solo'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(owner, "u-owner", "the row keeps its owner");
+    let moved: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM messages WHERE session_key = 'agent:main:peer:solo'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(moved, 1, "the row's messages follow it");
+    let epoch: u32 = conn
+        .query_row(
+            "SELECT epoch FROM session_epoch_reservations WHERE base_key = 'agent:main:peer:solo'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(epoch, 3, "a reserved epoch is not handed out again");
+}

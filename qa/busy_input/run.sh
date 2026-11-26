@@ -42,7 +42,6 @@ DB="$ALEPH_HOME/data/sessions.db"
 # stack". Release builds do not need this.
 export RUST_MIN_STACK="${RUST_MIN_STACK:-268435456}"
 
-BIN="$REPO/target/debug/aleph-server"
 MOCK_PID=""
 SERVER_PID=""
 
@@ -79,6 +78,12 @@ if [ "${SKIP_BUILD:-0}" != "1" ]; then
     echo "build failed" >&2; exit 1
   fi
 fi
+# Ask cargo where its target dir really is: `.cargo/config.toml` pins a shared
+# absolute one, so a hardcoded `$REPO/target` is wrong from any git worktree
+# (same resolution as qa/session_order/run.sh).
+TARGET_DIR="$(cd "$REPO" && HOME="${REAL_HOME:-$HOME}" cargo metadata --format-version 1 --no-deps 2>/dev/null \
+  | python3 -c 'import json,sys;print(json.load(sys.stdin)["target_directory"])')"
+BIN="$TARGET_DIR/debug/aleph-server"
 [ -x "$BIN" ] || { echo "no binary at $BIN" >&2; exit 1; }
 
 say "generate a baseline config"
@@ -103,7 +108,10 @@ PATCH_ARGS=(--gateway-port "$GATEWAY_PORT" --mock-port "$MOCK_PORT")
 python3 "$HERE/patch_config.py" "$CONFIG" "${PATCH_ARGS[@]}" || exit 1
 
 say "start mock provider (plan $PLAN)"
-python3 "$HERE/mock_anthropic.py" "$MOCK_PORT" /etc/hostname "$PLAN" >"$QA_ROOT/mock.log" 2>&1 &
+# Arg 4 (tool spec) stays empty; arg 5 is the request log the steer verdict
+# reads to see the arrivals land in the live run's next provider request.
+REQUEST_LOG="$QA_ROOT/requests.jsonl"
+python3 "$HERE/mock_anthropic.py" "$MOCK_PORT" /etc/hostname "$PLAN" "" "$REQUEST_LOG" >"$QA_ROOT/mock.log" 2>&1 &
 MOCK_PID=$!
 sleep 1
 
@@ -127,7 +135,8 @@ if [ "$SCENARIO" = "burst-drain" ]; then
 else
   python3 "$HERE/drive_channel_busy.py" \
     "ws://127.0.0.1:$GATEWAY_PORT/ws" "http://127.0.0.1:$GATEWAY_PORT" \
-    "$DB" "$SECRET" "$WEBHOOK_PATH" "$CHANNEL_MODE" || RC=$?
+    "$DB" "$SECRET" "$WEBHOOK_PATH" "$CHANNEL_MODE" \
+    --request-log "$REQUEST_LOG" || RC=$?
 fi
 
 say "mock provider log"

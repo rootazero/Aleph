@@ -1,0 +1,18 @@
+[
+  null,
+  null,
+  [
+    {"name": "subagent", "input": {"task": "QA_FORK_TASK_1 review the colour choice", "context": "fork"}},
+    {"name": "subagent", "input": {"task": "QA_FORK_TASK_2 review the size choice", "context": "fork"}}
+  ],
+  null,
+  null,
+  null,
+  null,
+  {"name": "subagent", "input": {"task": "QA_FORK_TASK_3 review again", "context": "fork"}},
+  null,
+  null,
+  {"name": "subagent", "input": {"task": "QA_ISO_TASK check the work cold", "context": "isolated"}},
+  null,
+  null
+]

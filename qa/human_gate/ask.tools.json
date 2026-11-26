@@ -1,0 +1,7 @@
+[
+  {"name": "ask_user", "input": {"questions": [
+    {"id": "q1", "question": "QA_Q1 which colour?"},
+    {"id": "q2", "question": "QA_Q2 which size?"}
+  ]}},
+  null
+]

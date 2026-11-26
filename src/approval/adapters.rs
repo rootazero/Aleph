@@ -229,8 +229,10 @@ mod tests {
     }
 
     /// DM session key — `channel_route` resolves to `("telegram","123456")`.
+    /// A per-channel DM: the only DM key that names its channel (a per-peer
+    /// DM spans channels and routes from `TURN_CONTEXT` instead).
     fn test_session_id() -> crate::session::service::SessionId {
-        SessionKey::dm("main", "telegram", "123456", DmScope::PerPeer)
+        SessionKey::dm("main", "telegram", "123456", DmScope::PerChannelPeer)
     }
 
     /// A routable turn context pointing at a `telegram` DM.

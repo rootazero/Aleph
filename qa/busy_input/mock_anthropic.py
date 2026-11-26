@@ -32,6 +32,13 @@ Turn plans are named so scenarios can pick their own pacing:
                                     run-admission arm's `SpendExhausted` this
                                     plan exists to isolate. One call in, one
                                     priced call out, nothing else moves.
+  scripted       no timing at all  — the tool spec list is the conversation:
+                                    entry N scripts the N-th request that
+                                    carries a tool surface (object = one call,
+                                    list = several calls in one turn, null =
+                                    end the turn). Tool-less side-channel
+                                    requests answer plain text and consume
+                                    nothing. See `_scripted_post`.
 
 Two optional trailing arguments let a scenario say WHAT the turn calls and
 capture WHAT THE MODEL SAW coming back:
@@ -143,8 +150,13 @@ PLANS = {
     # cannot assume "turn 2 holds turn 1's result" and needs slack plus a
     # content-based oracle. See `qa/file_search/drive_turn.py`.
     "tool-chain": [(1, "tool")] * 9 + [(0, "end")],
+    # `scripted` is handled separately in `_do_post` (see `_scripted_post`):
+    # the tool spec list IS the script, so this entry only exists so the name
+    # is listed with the others.
+    "scripted": [],
 }
 PLAN = PLANS.get(PLAN_NAME, PLANS["burst-drain"])
+SCRIPTED = PLAN_NAME == "scripted"
 
 T0 = time.monotonic()
 
@@ -209,9 +221,163 @@ class H(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             log("client disconnected mid-stream (run cancelled) — expected under interrupt")
 
+    def _scripted_post(self, body):
+        """The `scripted` plan: the tool spec list is a whole conversation.
+
+        Turns are told apart by CONTENT, not by the global request counter:
+        a request with no tool surface is a side-channel call (titling,
+        compaction, summaries) and is answered with plain text without
+        consuming a scripted turn. Every other request takes the next entry:
+
+          object  -> one `tool_use` block
+          list    -> several `tool_use` blocks in the same assistant turn
+          null    -> no tool call; the turn ends (`end_turn`)
+
+        Past the end of the list every turn ends. Nothing sleeps: a scripted
+        claim is about what was called and seen, not about timing.
+        """
+        has_tools = bool(body.get("tools"))
+        with _lock:
+            _n[0] += 1
+            turn = _n[0]
+            if has_tools:
+                _n_run_seen[0] += 1
+            run_turn = _n_run_seen[0]
+            entry = None
+            if has_tools and run_turn <= len(TOOL_SPECS):
+                entry = TOOL_SPECS[run_turn - 1]
+            if REQUEST_LOG:
+                with open(REQUEST_LOG, "a") as fh:
+                    fh.write(
+                        json.dumps(
+                            {
+                                "turn": turn,
+                                "is_planning": not has_tools,
+                                "n_answered_so_far": turn,
+                                "run_turn": run_turn,
+                                "body": body,
+                            }
+                        )
+                        + "\n"
+                    )
+        if entry is None:
+            calls = []
+        elif isinstance(entry, list):
+            calls = entry
+        else:
+            calls = [entry]
+        role = "run" if has_tools else "side-channel"
+        names = [c["name"] for c in calls] or ["end"]
+        log(f"turn #{turn} ({role}, run #{run_turn}) ({describe(body.get('messages', []))}) -> {names}")
+        self._respond(body, turn, calls)
+
+    def _respond(self, body, turn, calls):
+        """Answer with one text block plus a `tool_use` block per call."""
+
+        def call_id(i):
+            return f"toolu_{turn}" if len(calls) == 1 else f"toolu_{turn}_{i}"
+
+        stop_reason = "tool_use" if calls else "end_turn"
+        if not body.get("stream"):
+            content = [{"type": "text", "text": f"mock turn {turn}"}]
+            for i, call in enumerate(calls):
+                content.append(
+                    {"type": "tool_use", "id": call_id(i), "name": call["name"], "input": call["input"]}
+                )
+            payload = {
+                "id": f"msg_{turn}",
+                "type": "message",
+                "role": "assistant",
+                "model": body.get("model", "qa-mock"),
+                "content": content,
+                "stop_reason": stop_reason,
+                "usage": {"input_tokens": 10, "output_tokens": 10},
+            }
+            raw = json.dumps(payload).encode()
+            self.send_response(200)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+            return
+
+        self.send_response(200)
+        self.send_header("content-type", "text/event-stream")
+        self.send_header("cache-control", "no-cache")
+        self.send_header("transfer-encoding", "chunked")
+        self.end_headers()
+
+        def chunk(b):
+            self.wfile.write(f"{len(b):X}\r\n".encode() + b + b"\r\n")
+            self.wfile.flush()
+
+        chunk(
+            sse(
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": f"msg_{turn}",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": body.get("model", "qa-mock"),
+                        "content": [],
+                        "stop_reason": None,
+                        "stop_sequence": None,
+                        "usage": {"input_tokens": 10, "output_tokens": 1},
+                    },
+                }
+            )
+        )
+        chunk(sse({"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}))
+        chunk(
+            sse(
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "text_delta", "text": f"mock turn {turn}: still working."},
+                }
+            )
+        )
+        chunk(sse({"type": "content_block_stop", "index": 0}))
+        for i, call in enumerate(calls, start=1):
+            chunk(
+                sse(
+                    {
+                        "type": "content_block_start",
+                        "index": i,
+                        "content_block": {"type": "tool_use", "id": call_id(i - 1), "name": call["name"], "input": {}},
+                    }
+                )
+            )
+            chunk(
+                sse(
+                    {
+                        "type": "content_block_delta",
+                        "index": i,
+                        "delta": {"type": "input_json_delta", "partial_json": json.dumps(call["input"])},
+                    }
+                )
+            )
+            chunk(sse({"type": "content_block_stop", "index": i}))
+        chunk(
+            sse(
+                {
+                    "type": "message_delta",
+                    "delta": {"stop_reason": stop_reason, "stop_sequence": None},
+                    "usage": {"output_tokens": 12},
+                }
+            )
+        )
+        chunk(sse({"type": "message_stop"}))
+        self.wfile.write(b"0\r\n\r\n")
+        self.wfile.flush()
+
     def _do_post(self):
         n = int(self.headers.get("content-length", 0))
         body = json.loads(self.rfile.read(n) or b"{}")
+        if SCRIPTED:
+            self._scripted_post(body)
+            return
         with _lock:
             _n[0] += 1
             is_planning = _n_planning_seen[0] < N_PLANNING
@@ -247,129 +413,12 @@ class H(BaseHTTPRequestHandler):
         log(f"turn #{turn} ({role}, run #{run_turn}) ({describe(msgs)}) -> thinking {think}s, then {kind}")
         time.sleep(think)
 
-        if not body.get("stream"):
-            content = [{"type": "text", "text": f"mock turn {turn}"}]
-            if kind == "tool" and not is_planning:
-                spec = spec_for(run_turn)
-                content.append(
-                    {
-                        "type": "tool_use",
-                        "id": f"toolu_{turn}",
-                        "name": spec["name"],
-                        "input": spec["input"],
-                    }
-                )
-            payload = {
-                "id": f"msg_{turn}",
-                "type": "message",
-                "role": "assistant",
-                "model": body.get("model", "qa-mock"),
-                "content": content,
-                "stop_reason": "tool_use" if kind == "tool" and not is_planning else "end_turn",
-                "usage": {"input_tokens": 10, "output_tokens": 10},
-            }
-            raw = json.dumps(payload).encode()
-            self.send_response(200)
-            self.send_header("content-type", "application/json")
-            self.send_header("content-length", str(len(raw)))
-            self.end_headers()
-            self.wfile.write(raw)
+        calls = [spec_for(run_turn)] if kind == "tool" and not is_planning else []
+        self._respond(body, turn, calls)
+        if body.get("stream"):
+            log(f"turn #{turn} ASSISTANT TURN STREAMED ({kind})")
+        else:
             log(f"turn #{turn} answered (non-streaming, {kind})")
-            return
-
-        self.send_response(200)
-        self.send_header("content-type", "text/event-stream")
-        self.send_header("cache-control", "no-cache")
-        self.send_header("transfer-encoding", "chunked")
-        self.end_headers()
-
-        def chunk(b):
-            self.wfile.write(f"{len(b):X}\r\n".encode() + b + b"\r\n")
-            self.wfile.flush()
-
-        chunk(
-            sse(
-                {
-                    "type": "message_start",
-                    "message": {
-                        "id": f"msg_{turn}",
-                        "type": "message",
-                        "role": "assistant",
-                        "model": body.get("model", "qa-mock"),
-                        "content": [],
-                        "stop_reason": None,
-                        "stop_sequence": None,
-                        "usage": {"input_tokens": 10, "output_tokens": 1},
-                    },
-                }
-            )
-        )
-        chunk(
-            sse(
-                {
-                    "type": "content_block_start",
-                    "index": 0,
-                    "content_block": {"type": "text", "text": ""},
-                }
-            )
-        )
-        chunk(
-            sse(
-                {
-                    "type": "content_block_delta",
-                    "index": 0,
-                    "delta": {
-                        "type": "text_delta",
-                        "text": f"mock turn {turn}: still working.",
-                    },
-                }
-            )
-        )
-        chunk(sse({"type": "content_block_stop", "index": 0}))
-        if kind == "tool" and not is_planning:
-            chunk(
-                sse(
-                    {
-                        "type": "content_block_start",
-                        "index": 1,
-                        "content_block": {
-                            "type": "tool_use",
-                            "id": f"toolu_{turn}",
-                            "name": spec_for(run_turn)["name"],
-                            "input": {},
-                        },
-                    }
-                )
-            )
-            chunk(
-                sse(
-                    {
-                        "type": "content_block_delta",
-                        "index": 1,
-                        "delta": {
-                            "type": "input_json_delta",
-                            "partial_json": json.dumps(spec_for(run_turn)["input"]),
-                        },
-                    }
-                )
-            )
-            chunk(sse({"type": "content_block_stop", "index": 1}))
-        chunk(
-            sse(
-                {
-                    "type": "message_delta",
-                    "delta": {
-                        "stop_reason": "tool_use" if kind == "tool" and not is_planning else "end_turn",
-                        "stop_sequence": None,
-                    },
-                    "usage": {"output_tokens": 12},
-                }
-            )
-        )
-        chunk(sse({"type": "message_stop"}))
-        self.wfile.write(b"0\r\n\r\n")
-        self.wfile.flush()
-        log(f"turn #{turn} ASSISTANT TURN STREAMED ({kind})")
 
     def do_GET(self):
         raw = json.dumps({"data": [{"id": "qa-mock", "type": "model"}]}).encode()

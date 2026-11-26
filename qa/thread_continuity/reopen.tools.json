@@ -1,0 +1,4 @@
+[
+  {"name": "select_model", "input": {"model": "qa-mock-model-b", "provider": "qa-mock"}},
+  null
+]

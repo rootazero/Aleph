@@ -174,7 +174,8 @@ dm_scope = "main"
 **注意事项**
 - **多用户警示**：若 owner 之外还有人被 allowlist 也能 DM，`main` 会把所有人并进同一会话。
   多用户请用 `per-channel-peer`（owner 专属 Main 的判定本期未实现）。
-- **迁移断点**：从 `per-peer` 切到 `main` 后，旧的 `agent:<id>:dm:<peer>` 会话停在原地（不迁移），
+- **迁移断点**：从 `per-peer` 切到 `main` 后，旧的 `agent:<id>:peer:<peer>` 会话停在原地（不迁移；
+  2026-11-26 起 per-peer 只有 `peer:` 一种拼法，旧 `dm:` 记录在启动时并入 `peer:`），
   新消息走 `agent:<id>:main`，会有一次性上下文断点。
 - 群组消息不受影响，始终按 `Group` 会话隔离。
 
