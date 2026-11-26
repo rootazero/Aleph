@@ -23,7 +23,32 @@ from qa_rpc import Ledger, Rpc, ran, ws_connect, http_json  # noqa: E402
 # it was taken on exactly as it carries the commit (判据 §18). On any other
 # build such a claim is UNKNOWN — never PASS, because nothing measured it, and
 # never FAIL, because nothing says it should still hold.
-MEASURED_ON = "0.2.2"
+#
+# Moved 0.2.2 -> 0.2.7 on 2026-11-25 after every stage was re-run on the new
+# build: two v0.2.2 gaps closed there (a click-driven navigation now turns the
+# loader over; the inline link now has a box), and the claims below were
+# rewritten to the v0.2.7 readings. The receipt is
+# docs/superpowers/runs/2026-11-24-browser-obscura-v027-receipt.md.
+MEASURED_ON = "0.2.7"
+
+
+def pinned_obscura_tag():
+    """The tag Aleph installs, e.g. `v0.2.7` — read from the ledger's one
+    author (`obscura_tag!` in src/runtimes/specs.rs), never spelled here.
+
+    Not `MEASURED_ON`: that dates this file's expectations, and a bump moves
+    the pin first and the dates only once the stages have been re-run on the
+    new build. Comparing an installed binary against the date instead of the
+    pin is how `provision` once failed on a correct install.
+    """
+    specs = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         "..", "..", "src", "runtimes", "specs.rs")
+    with open(specs) as fh:
+        for line in fh:
+            m = re.fullmatch(r'\s*"(v[0-9][0-9.]*)"\s*', line)
+            if m:
+                return m.group(1)
+    raise SystemExit("could not read the pinned obscura tag from src/runtimes/specs.rs")
 
 
 def ps_lines(pattern):
@@ -226,6 +251,26 @@ async def snapshot_state(rpc, led, profile="default"):
     return ok, body or {}, state
 
 
+def block_ref(text):
+    """The ref of `#blk`, the block that owns the text "go by coordinates".
+
+    Picked by NAME, not by "the first ref with a box": on obscura v0.2.2 the
+    inline link above it had no box, so that rule happened to land on the
+    block; on v0.2.7 the link has one (8,80 62x17) and the same rule picked the
+    link — every block-only claim in `stage_click` then measured the link.
+    The block's snapshot line is the boxed line just before its text line.
+    """
+    previous = None
+    for ln in text.splitlines():
+        if "go by coordinates" in ln:
+            if previous and "@" in previous:
+                return previous.split("[ref=")[1].split("]")[0]
+            return None
+        if "[ref=" in ln:
+            previous = ln
+    return None
+
+
 def node_named(state, needle, want_rect=False):
     """The node this page's text belongs to — and, with `want_rect`, the one
     that owns its BOX.
@@ -267,6 +312,24 @@ async def goto(rpc, url, profile="default"):
 # --------------------------------------------------------------------------
 
 
+async def wait_for_install_job(rpc, led, job_id):
+    """Block on a `runtime_manage` install job and return its finished outcome.
+
+    `bash{process_action:"wait"}` is the only reader of a background job's
+    result, and `bash` is denied on the gateway `tools.invoke` surface unless
+    `ALEPH_GATEWAY_TOOLS_ALLOW` names it (run.sh does, for this stage only). A
+    denied wait answers instantly with an rpc_error, which used to be dropped:
+    the stage then read nothing and guessed. Assert the wait itself answered.
+    """
+    # `ok` is not read: a failed install is a finished job whose own
+    # `success` is false, and the second caller below expects exactly that.
+    _, body = await rpc.invoke("bash", {"process_action": "wait", "process_id": job_id})
+    led.check(f"bash wait on install job {job_id} returned the job's outcome",
+              isinstance(body, dict) and "success" in body and "rpc_error" not in body,
+              json.dumps(body)[:400])
+    return body if isinstance(body, dict) else {}
+
+
 async def stage_provision(rpc, led, a):
     """The ledger install, against the REAL release.
 
@@ -296,7 +359,7 @@ async def stage_provision(rpc, led, a):
     m = re.search(r"process_id:(\d+)", message) or re.search(r"as job (\d+)", message)
     led.check("the install reported a pollable job id in its message", bool(m), message[:300])
     if m:
-        await rpc.invoke("bash", {"process_action": "wait", "process_id": int(m.group(1))})
+        await wait_for_install_job(rpc, led, int(m.group(1)))
 
     for _ in range(300):
         if os.path.exists(installed):
@@ -307,8 +370,9 @@ async def stage_provision(rpc, led, a):
         led.check("(the rest of this stage needs that binary)", False, server_log(a)[-1500:])
         return
     led.check("it is executable", os.access(installed, os.X_OK))
-    led.check("`--version` reports the pinned tag", obscura_version(installed) == MEASURED_ON,
-              str(obscura_version(installed)))
+    led.check("`--version` reports the pinned tag",
+              obscura_version(installed) == pinned_obscura_tag().lstrip("v"),
+              f"binary={obscura_version(installed)} pin={pinned_obscura_tag()}")
     led.check(
         "obscura-worker was NOT installed beside it (one member, not the archive)",
         not os.path.exists(os.path.join(os.path.dirname(installed), "obscura-worker")),
@@ -367,17 +431,22 @@ async def stage_provision(rpc, led, a):
     led.check("the dead mirror is in the config the installer will read",
               f'download_host = "{a.dead_mirror}"' in open(a.config).read())
     shutil.rmtree(os.path.dirname(installed), ignore_errors=True)
-    before = len(server_log(a))
 
     ok, body = await rpc.invoke("runtime_manage", {"action": "install", "capability": "obscura"})
     m = re.search(r"process_id:(\d+)", (body or {}).get("message", "")) \
         or re.search(r"as job (\d+)", (body or {}).get("message", ""))
-    if m:
-        await rpc.invoke("bash", {"process_action": "wait", "process_id": int(m.group(1))})
-    time.sleep(5)
-    tail = server_log(a)[before:]
+    led.check("the dead-mirror install reported a pollable job id", bool(m), json.dumps(body)[:300])
+    # The failure is read from the JOB'S OWN OUTCOME, not the server log. A
+    # background install that fails is reported only to whoever polls the job
+    # (`run_install` -> `ProcessRegistry::complete`); nothing logs it. Reading
+    # the log made these checks pass only while some other line happened to
+    # carry the words, and made the "did not follow the mirror" check below
+    # pass vacuously on an empty tail.
+    outcome = await wait_for_install_job(rpc, led, int(m.group(1))) if m else {}
+    tail = f"{outcome.get('stderr', '')}\n{outcome.get('stdout', '')}"
 
     led.check("an unreachable asset mirror installs NOTHING", not os.path.exists(installed), installed)
+    led.check("the install job reports failure", outcome.get("success") is False, json.dumps(outcome)[:600])
     led.check("and the failure names the mirror it could not reach",
               a.dead_mirror in tail, tail[-600:])
     # The half that makes the first half mean something. `Fetch::Checksum`'s own
@@ -543,8 +612,7 @@ async def stage_click(rpc, led, a):
     build = obscura_version(a.obscura_binary)
     await rpc.invoke("browser_open", {"profile": "default", "url": a.page_url})
     _, _, text = await snapshot_text(rpc)
-    ref = next((ln.split("[ref=")[1].split("]")[0] for ln in text.splitlines()
-                if "[ref=" in ln and "go by coordinates" not in ln and "@" in ln), None)
+    ref = block_ref(text)
     led.check("the block clickable's ref is in the snapshot", ref is not None, text[:800])
     if ref is None:
         return
@@ -627,15 +695,18 @@ async def stage_click(rpc, led, a):
     # the only thing that can answer, which is why it exists and why it is not
     # an optional extra on top of a document comparison.
     #
+    # v0.2.7 (re-run 2026-11-25): the loader DOES turn over on a click-driven
+    # navigation, so the document layer answers first and the refusal names
+    # the navigation. The node layer stays: an operator may still pin v0.2.2.
+    #
     # DATED, because it is a statement about what THIS build of the other
-    # project does: on a build that turned the loader over here, the sentence
-    # would legitimately become "the page navigated", and this harness must say
-    # UNKNOWN rather than fail a build for being better.
+    # project does; on a build that went back to the old loader the sentence
+    # would legitimately become "no longer in the page", still a refusal.
     dated(led, build,
-          "KNOWN GAP: a CLICK-driven navigation does not turn obscura's main "
-          "loaderId over, so the refusal names the node rather than the "
-          "navigation — the document layer is blind to it on this engine",
-          "no longer in the page" in blob, blob[:400])
+          "a CLICK-driven navigation turns obscura's main loaderId over, so "
+          "the refusal names the navigation (on v0.2.2 it named the node: the "
+          "document layer was blind to it there)",
+          "the page navigated" in blob, blob[:400])
 
     # …and the document layer, on the route where this engine DOES turn the
     # loader over. Aleph issues no `navigate` here — the page moves itself, from
@@ -648,8 +719,7 @@ async def stage_click(rpc, led, a):
     # map clear, measured at under a millisecond in the server log.
     await goto(rpc, a.page_url)
     _, _, text_sc = await snapshot_text(rpc)
-    sc_ref = next((ln.split("[ref=")[1].split("]")[0] for ln in text_sc.splitlines()
-                   if "[ref=" in ln and "go by coordinates" not in ln and "@" in ln), None)
+    sc_ref = block_ref(text_sc)
     led.check("the block clickable has a ref for the script-navigation case",
               sc_ref is not None, text_sc[:800])
     if sc_ref is not None:
@@ -687,21 +757,27 @@ async def stage_click(rpc, led, a):
                                  {"profile": "default", "script": "location.pathname"})
         led.check("…and the URL changed", "second" in json.dumps(ev), json.dumps(ev)[:300])
 
-    # The measured gap, asserted so it cannot improve silently — and DATED, so
-    # the day this harness meets another obscura it says UNKNOWN rather than
-    # vouching for a reading it never took.
+    # The inline link's box, asserted so it cannot change silently — and
+    # DATED, so the day this harness meets another obscura it says UNKNOWN
+    # rather than vouching for a reading it never took. On v0.2.2 this was a
+    # KNOWN GAP (T0 U9: a zero box from getBoxModel, getContentQuads and
+    # getBoundingClientRect alike); v0.2.7 lays the link out.
     await goto(rpc, a.page_url)
     _, _, state = await snapshot_state(rpc, led)
     lnk = node_named(state, "go by ref")
     dated(led, build,
-          "KNOWN GAP (see T0 U9): this inline link has no rect — obscura gives "
-          "<a> a zero box from getBoxModel, getContentQuads and "
-          "getBoundingClientRect alike",
-          lnk is not None and lnk.get("rect") is None, json.dumps(lnk)[:400])
+          "this inline link has a rect — obscura lays out <a> (v0.2.2 gave it "
+          "a zero box, T0 U9)",
+          lnk is not None and lnk.get("rect") is not None, json.dumps(lnk)[:400])
     # …and what that costs, which is more than the missing coordinates: the
     # element cannot be clicked AT ALL. Asserted as a REFUSAL, because the one
     # answer that would be worse than "no" here is a reported success for a
     # click that reached nothing (判据 §11).
+    #
+    # Which half runs is decided by THIS run's reading of the link's box, not
+    # by the build stamp: v0.2.7 lays the link out (8,80 62x17), and then the
+    # claim is the opposite one — a ref click on it lands and navigates.
+    link_has_box = bool(lnk and lnk.get("rect"))
     lnk_ref = next((ln.split("[ref=")[1].split("]")[0] for ln in text.splitlines()
                     if "[ref=" in ln and "go by ref" in ln), None)
     led.check("the inline link is still offered a ref", lnk_ref is not None, text[:800])
@@ -710,14 +786,22 @@ async def stage_click(rpc, led, a):
         lnk_ref = next((ln.split("[ref=")[1].split("]")[0] for ln in fresh.splitlines()
                         if "[ref=" in ln and "go by ref" in ln), lnk_ref)
         ok, body = await rpc.invoke("browser_click", {"profile": "default", "ref_id": lnk_ref})
-        dated(led, build,
-              "a boxless element REFUSES the click rather than reporting a "
-              "no-op success, and says the box is the reason",
-              (not ran(ok, body)) and "zero-sized box" in json.dumps(body),
-              json.dumps(body)[:400])
         _, ev = await rpc.invoke("browser_evaluate",
                                  {"profile": "default", "script": "location.pathname"})
-        led.check("…and nothing navigated", "index" in json.dumps(ev), json.dumps(ev)[:300])
+        if link_has_box:
+            led.check("the inline link has a box on this build, so a ref click "
+                      "on it succeeds", ran(ok, body), json.dumps(body)[:400])
+            led.check("…and it navigated", "second" in json.dumps(ev),
+                      json.dumps(ev)[:300])
+        else:
+            # Aleph's own answer, not the engine's, so not dated: whatever
+            # build leaves the link boxless, the click must be refused.
+            led.check("a boxless element REFUSES the click rather than reporting "
+                      "a no-op success, and says the box is the reason",
+                      (not ran(ok, body)) and "zero-sized box" in json.dumps(body),
+                      json.dumps(body)[:400])
+            led.check("…and nothing navigated", "index" in json.dumps(ev),
+                      json.dumps(ev)[:300])
 
     # --- the OTHER staleness: same document, the node left it ---------------
     #
@@ -736,8 +820,7 @@ async def stage_click(rpc, led, a):
     # measured on the real default engine.
     await goto(rpc, a.page_url)
     _, _, text2 = await snapshot_text(rpc)
-    gone_ref = next((ln.split("[ref=")[1].split("]")[0] for ln in text2.splitlines()
-                     if "[ref=" in ln and "go by coordinates" not in ln and "@" in ln), None)
+    gone_ref = block_ref(text2)
     led.check("the block clickable has a ref for the detach case",
               gone_ref is not None, text2[:800])
     if gone_ref is not None:

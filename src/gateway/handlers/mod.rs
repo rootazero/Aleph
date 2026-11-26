@@ -54,6 +54,7 @@ pub mod canvas_error;
 pub mod capabilities;
 pub mod channel;
 pub mod chat;
+pub(crate) mod chat_presentation;
 pub mod clarification;
 pub mod cluster;
 pub mod commands;
@@ -459,6 +460,10 @@ impl HandlerRegistry {
                 "chat.abort requires Gateway runtime - use Gateway::new()".to_string(),
             )
         });
+        registry.register("chat.models.list", |req| async move {
+            chat::handle_models_list(req)
+        });
+
         registry.register("chat.history", |req| async move {
             JsonRpcResponse::error(
                 req.id,

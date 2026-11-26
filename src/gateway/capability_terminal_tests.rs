@@ -1354,6 +1354,21 @@ async fn history_as<T>(user: &str, future: impl std::future::Future<Output = T>)
     .await
 }
 
+/// The payload of a tool error: the text inside the external-content
+/// boundary. The boundary id is random per call, so comparing the rendered
+/// error would compare two random ids instead of the refusal itself.
+fn denial_payload(error: &ToolError) -> String {
+    let text = error.to_string();
+    let start = text
+        .find("<<<EXTERNAL_UNTRUSTED_CONTENT")
+        .and_then(|at| text[at..].find('\n').map(|offset| at + offset + 1))
+        .unwrap_or(0);
+    let end = text
+        .rfind("\n<<<END_EXTERNAL_UNTRUSTED_CONTENT")
+        .unwrap_or(text.len());
+    text[start..end].to_owned()
+}
+
 fn history_registry(
     source: &Arc<TerminalCapabilitySource>,
 ) -> crate::gateway::handlers::HandlerRegistry {
@@ -1476,9 +1491,11 @@ async fn history_uses_live_capability_admission() {
     .await
     .unwrap_err();
     // Tool errors identify their target but must have the identical denial class.
+    // The rendered tool error carries a random external-content boundary id,
+    // so the comparison reads the payload the model would see.
     assert_eq!(
-        foreign_tool.to_string().replace(&id, "missing"),
-        absent_tool.to_string()
+        denial_payload(&foreign_tool).replace(&id, "missing"),
+        denial_payload(&absent_tool)
     );
 
     for params in [

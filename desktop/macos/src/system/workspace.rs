@@ -7,7 +7,7 @@
 //! genuinely this crate's: turning `NSWorkspace`'s process list into the
 //! [`AppInfo`] shape the tool layer resolves names against.
 
-use aleph_desktop::system_types::AppInfo;
+use aleph_desktop::system_types::{AppInfo, DesktopProcessIdentity};
 use aleph_desktop::Result;
 use objc2_app_kit::{NSRunningApplication, NSWorkspace};
 use objc2_foundation::NSArray;
@@ -67,9 +67,69 @@ pub fn list_running_apps() -> Result<Vec<AppInfo>> {
     Ok(result)
 }
 
+/// Read evidence from the same native app object; do not join independent
+/// app-list and PID observations.
+pub(super) fn desktop_process_identity(requested_pid: i32) -> Option<DesktopProcessIdentity> {
+    if requested_pid <= 0 {
+        return None;
+    }
+    let app = NSRunningApplication::runningApplicationWithProcessIdentifier(requested_pid)?;
+    let pid = app.processIdentifier();
+    let bundle_id = app.bundleIdentifier().map(|id| id.to_string());
+    let launch_time = app
+        .launchDate()
+        .map(|date| date.timeIntervalSinceReferenceDate());
+    identity_from_evidence(
+        requested_pid,
+        pid,
+        bundle_id,
+        launch_time,
+        app.isTerminated(),
+    )
+}
+
+fn identity_from_evidence(
+    requested_pid: i32,
+    pid: i32,
+    bundle_id: Option<String>,
+    launch_time: Option<f64>,
+    terminated: bool,
+) -> Option<DesktopProcessIdentity> {
+    if pid <= 0 || pid != requested_pid || terminated {
+        return None;
+    }
+    let bundle_id = bundle_id.filter(|id| !id.trim().is_empty())?;
+    let launch_stamp = launch_time.filter(|time| time.is_finite())?.to_bits();
+    Some(DesktopProcessIdentity {
+        pid,
+        bundle_id,
+        launch_stamp,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn desktop_process_identity_requires_live_native_evidence() {
+        let app = || Some("org.example.Proof".to_string());
+        let first = identity_from_evidence(42, 42, app(), Some(12.5), false).unwrap();
+        assert_eq!(first.pid, 42);
+        assert_eq!(first.bundle_id, "org.example.Proof");
+        assert_ne!(
+            Some(first),
+            identity_from_evidence(42, 42, app(), Some(13.0), false)
+        );
+
+        assert!(identity_from_evidence(0, 0, app(), Some(12.5), false).is_none());
+        assert!(identity_from_evidence(42, 43, app(), Some(12.5), false).is_none());
+        assert!(identity_from_evidence(42, 42, app(), Some(12.5), true).is_none());
+        assert!(identity_from_evidence(42, 42, None, Some(12.5), false).is_none());
+        assert!(identity_from_evidence(42, 42, Some(" ".into()), Some(12.5), false).is_none());
+        assert!(identity_from_evidence(42, 42, app(), None, false).is_none());
+        assert!(identity_from_evidence(42, 42, app(), Some(f64::NAN), false).is_none());
+    }
 
     #[test]
     fn test_list_running_apps_includes_finder() {

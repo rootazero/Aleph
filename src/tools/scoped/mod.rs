@@ -49,9 +49,9 @@ mod skill_inline_tests;
 pub(crate) use crate::tools::dispatch_verdict::current_dispatch_verdict;
 pub use deferred::DeferredTools;
 pub use progressive_disclosure::ProgressiveDisclosureRewriter;
-pub use traits::{CapabilityConstraintContextSource, ToolDefinitionRewriter};
+pub use traits::ToolDefinitionRewriter;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
@@ -79,6 +79,11 @@ pub(crate) enum ResultTransport {
     #[default]
     ModelContext,
     StructuredRpc,
+}
+
+pub(super) enum ConfigApprovalRequester {
+    Operator(Arc<crate::approval::OperatorApprovalRequester>),
+    Generic(Arc<dyn ApprovalRequester>),
 }
 
 /// Identify the narrow legacy compatibility shape that has no canonical
@@ -115,14 +120,6 @@ pub struct ScopedToolService {
     pub(super) canonical_facade: Option<Arc<crate::capability::zahir_facade::ZahirFacade>>,
     /// Startup restrictions shared with the mounted canonical facade.
     pub(super) capability_policy: Option<Arc<crate::capability::policy::PolicyEngine>>,
-    /// Optional activation controllers keyed by canonical tool name. The
-    /// controller is the capability-layer authority for runtime restrictions;
-    /// this service only invokes its validation at the handler seam.
-    pub(super) capability_activations:
-        BTreeMap<String, Arc<dyn crate::capability::activation::CapabilityActivation>>,
-    /// Trusted owner-supplied current facts. Missing context fails closed only
-    /// for tools with an installed activation controller.
-    pub(super) capability_constraint_context: Option<Arc<CapabilityConstraintContextSource>>,
     visible_mcp_servers: Option<crate::tools::handlers::McpServerFilter>,
     pub(super) allowed: BTreeSet<String>,
     pub(super) subagent_tool: Option<Arc<SubagentTool>>,
@@ -140,7 +137,7 @@ pub struct ScopedToolService {
     /// sudo). Distinct from `approval_requester` (which routes to the
     /// requester's OWN channel for `requires_confirmation`); this routes to the
     /// server operator. `None` → config gate hard-rejects (fail closed).
-    pub(super) config_approval_requester: Option<Arc<dyn ApprovalRequester>>,
+    pub(super) config_approval_requester: Option<ConfigApprovalRequester>,
     /// Routing context of the agent turn this service serves. When set,
     /// `execute()` scopes it into the `TURN_CONTEXT` task-local so HITL tools
     /// (sandbox escalation, `requires_confirmation`, `ask_user`) can route a

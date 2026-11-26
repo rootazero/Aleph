@@ -266,21 +266,28 @@ test("Nebula discovery is not carried across connection identities", async () =>
 
 
 // Chat: a stand-in Gateway whose transcript grows once a run completes.
-function chatGateway() {
-  const transcript = [{ role: "assistant", content: "Earlier answer", timestamp: "t0" }];
+function chatGateway(answers: Answers = {}) {
+  const transcript: { role: string; content: string; timestamp: string; run_id?: string }[] = [
+    { role: "assistant", content: "Earlier answer", timestamp: "t0" },
+  ];
   let active: string | null = null;
+  const tools = [toolStart, toolFinish];
   const handlers = gateway({
     "chat.history": () => ({ session_key: "s-1", messages: [...transcript], active_run: active }),
+    "chat.transcript_details": () => ({
+      runs: active ? [] : [{ run_id: "r-1", tools, limited: false }], limited: false,
+    }),
     "chat.send": (params) => {
       const { message } = params as { message: string };
-      transcript.push({ role: "user", content: message, timestamp: "t1" });
+      transcript.push({ role: "user", content: message, timestamp: "t1", run_id: "r-1" });
       active = "r-1";
       return { run_id: "r-1", session_key: "s-1", streaming: true };
     },
     "chat.abort": () => ({ aborted: true }),
+    ...answers,
   });
   const complete = (text: string) => {
-    transcript.push({ role: "assistant", content: text, timestamp: "t2" });
+    transcript.push({ role: "assistant", content: text, timestamp: "t2", run_id: "r-1" });
     active = null;
   };
   return { handlers, complete };
@@ -292,7 +299,12 @@ const rpcParams = (app: { host: { calls(): { name: string; data: unknown }[] } }
     .filter((call) => call.name === "aleph.rpc" && (call.data as { method: string }).method === method)
     .map((call) => (call.data as { params: Record<string, unknown> }).params);
 
-const chunk = (delta: string) => ({ topic: "stream.response_chunk", data: { type: "response_chunk", run_id: "r-1", delta } });
+const chunk = (delta: string, seq?: number) => ({ topic: "stream.response_chunk", data: { type: "response_chunk", run_id: "r-1", delta, seq } });
+const toolStart = { tool_call_id: "call-1", change: { kind: "started", display_name: "Edit", args_text: "src/main.rs" } };
+const toolFinish = { tool_call_id: "call-1", change: { kind: "finished", success: true, duration_ms: 7, presentation_omitted: false } };
+const toolEvent = (delta: { tool_call_id: string; change: object }, seq: number) => ({
+  topic: "stream.chat_tool", data: { type: "chat_tool", run_id: "r-1", ...delta, seq },
+});
 
 async function openChat(handlers: ReturnType<typeof gateway>) {
   const app = await openPanel({ host: { handlers } });
@@ -303,10 +315,202 @@ async function openChat(handlers: ReturnType<typeof gateway>) {
   return app;
 }
 
+test("resumes the acknowledged session after Settings and same-subject reconnect", async () => {
+  const { handlers } = chatGateway();
+  const app = await openPanel({ host: { handlers } });
+  await app.waitFor("label:Open Chat");
+  await app.press("label:Open Chat");
+  await app.type("label:Message", "keep this conversation");
+  await app.press("Send");
+  await app.waitFor("Stop");
+  await app.press("label:Settings");
+  await app.press("label:Settings");
+  await app.waitFor("Earlier answer");
+  await app.host.send("aleph.connection", { ...CONNECTED, state: "disconnected", subject: null });
+  await app.host.send("aleph.connection", CONNECTED);
+  await app.waitFor("Earlier answer");
+  expect(rpcParams(app, "chat.history").map((params) => params.session_key)).toEqual(["s-1", "s-1"]);
+  expect(rpcParams(app, "chat.send").length).toBe(1);
+  expect(rpcParams(app, "chat.abort").length).toBe(0);
+  await app.host.send("aleph.connection", { ...CONNECTED, subject: "different" });
+  await app.waitFor("label:Open Chat");
+  await app.press("label:Open Chat");
+  await app.waitFor("New conversation");
+  expect(rpcParams(app, "chat.history").length).toBe(2);
+});
+
+test("endpoint and anonymous handshakes do not reuse a previous selection", async () => {
+  const { handlers } = chatGateway();
+  const app = await openChat(handlers);
+  await app.host.send("aleph.connection", { ...CONNECTED, endpoint: "https://other.aleph.test" });
+  await app.waitFor("label:Open Chat");
+  await app.press("label:Open Chat");
+  await app.waitFor("New conversation");
+  await app.host.send("aleph.connection", { ...CONNECTED, subject: null });
+  await app.waitFor("label:Open Chat");
+  await app.press("label:Open Chat");
+  await app.waitFor("New conversation");
+  expect(rpcParams(app, "chat.history").length).toBe(1);
+  await app.press("label:Open Sessions");
+  await app.press("label:Open chat Release notes");
+  await app.waitFor("Earlier answer");
+  await app.host.send("aleph.connection", { ...CONNECTED, state: "disconnected", subject: null });
+  await app.host.send("aleph.connection", { ...CONNECTED, subject: null });
+  await app.waitFor("New conversation");
+  expect(rpcParams(app, "chat.history").length).toBe(2);
+});
+
+test("hidden Chat does not accept or save a Sessions target", async () => {
+  const { handlers } = chatGateway();
+  const app = await openPanel({ host: { handlers } });
+  await app.waitFor("label:Open Sessions");
+  await app.press("label:Settings");
+  await app.press("label:Hide Chat");
+  await app.press("label:Settings");
+  await app.press("label:Open Sessions");
+  await app.press("label:Open chat Release notes");
+  await app.waitFor("Chat is hidden. Show it in Settings to open this conversation.");
+  await app.press("label:Settings");
+  await app.press("label:Show Chat");
+  await app.press("label:Settings");
+  await app.press("label:Open Chat");
+  await app.waitFor("New conversation");
+  expect(rpcParams(app, "chat.history").length).toBe(0);
+});
+
+test("a denied selected session cannot receive a send until explicitly starting over", async () => {
+  const { handlers } = chatGateway();
+  const base = handlers["aleph.rpc"];
+  handlers["aleph.rpc"] = (call) => call.method === "chat.history"
+    ? Promise.resolve({ error: { code: -32009, message: "session not found" } })
+    : base(call);
+  const app = await openPanel({ host: { handlers } });
+  await app.waitFor("label:Open Sessions");
+  await app.press("label:Open Sessions");
+  await app.press("label:Open chat Release notes");
+  await app.waitFor("session not found");
+  expect(app.texts()).not.toContain("No messages yet");
+  await app.type("label:Message", "do not recreate it");
+  await app.submit("label:Message");
+  expect(rpcParams(app, "chat.send").length).toBe(0);
+  await app.press("label:Start new conversation");
+  await app.type("label:Message", "explicitly new");
+  await app.press("Send");
+  expect(rpcParams(app, "chat.send").map((params) => [params.session_key, params.message])).toEqual([[undefined, "explicitly new"]]);
+  expect(rpcParams(app, "chat.abort").length).toBe(0);
+});
+
+test("an abandoned send shows a notice on remount without adopting its late key", async () => {
+  let acknowledge!: () => void;
+  const held = new Promise<void>((resolve) => { acknowledge = resolve; });
+  const { handlers } = chatGateway({ "chat.send": async () => {
+    await held;
+    return { run_id: "late", session_key: "late-session", streaming: true };
+  } });
+  const app = await openPanel({ host: { handlers } });
+  await app.waitFor("label:Open Chat");
+  await app.press("label:Open Chat");
+  await app.type("label:Message", "a late send");
+  const submitted = app.press("Send");
+  try {
+    await app.waitUntil(() => rpcParams(app, "chat.send").length === 1);
+    await app.press("label:Settings");
+  } finally {
+    acknowledge();
+    await submitted;
+  }
+  await app.press("label:Settings");
+  await app.waitFor("A send may have reached Aleph. Check Sessions before sending again.");
+  await app.press("label:Dismiss send notice");
+  expect(app.texts()).not.toContain("A send may have reached Aleph. Check Sessions before sending again.");
+  expect(rpcParams(app, "chat.history").length).toBe(0);
+  expect(rpcParams(app, "chat.send").length).toBe(1);
+});
+
+test("late send results and notices cannot cross the subject boundary", async () => {
+  let acknowledge!: () => void;
+  const held = new Promise<void>((resolve) => { acknowledge = resolve; });
+  const { handlers } = chatGateway({ "chat.send": async () => {
+    await held;
+    return { run_id: "late", session_key: "private-session", streaming: true };
+  } });
+  const app = await openPanel({ host: { handlers } });
+  await app.waitFor("label:Open Chat");
+  await app.press("label:Open Chat");
+  await app.type("label:Message", "private send");
+  const submitted = app.press("Send");
+  try {
+    await app.waitUntil(() => rpcParams(app, "chat.send").length === 1);
+    await app.host.send("aleph.connection", { ...CONNECTED, subject: "different" });
+  } finally {
+    acknowledge();
+    await submitted;
+  }
+  await app.waitFor("label:Open Chat");
+  await app.press("label:Open Chat");
+  await app.waitFor("New conversation");
+  expect(app.texts()).not.toContain("A send may have reached Aleph. Check Sessions before sending again.");
+  expect(rpcParams(app, "chat.history").length).toBe(0);
+  expect(rpcParams(app, "chat.send").length).toBe(1);
+});
+
+test("context separates sent prompt, pre-trim skill and estimated tool results", async () => {
+  const { handlers } = chatGateway({
+    "context.breakdown": () => ({
+      session_key: "s-1", turn: 7, dynamic_bytes_sent: 20,
+      layers: [
+        { name: "identity", zone: "stable", bytes: 100, tokens: 25 },
+        { name: "skill_instructions", zone: "dynamic", bytes: 80, tokens: 20 },
+      ],
+      tools: [{ name: "Edit", schema_bytes: 70, description_bytes: 30 }],
+      messages: { tool_results: 9, reasoning: 0, other: 2 },
+    }),
+  });
+  const app = await openChat(handlers);
+  expect(rpcParams(app, "context.breakdown")).toHaveLength(0);
+  await app.press("Context");
+  await app.waitFor("Last measured request · turn 7");
+  expect(app.texts()).toContain("System Prompt · 120 bytes sent");
+  expect(app.texts()).toContain("Skill · 80 bytes before trimming (part of System Prompt)");
+  expect(app.texts()).toContain("Tool schemas · 100 bytes");
+  expect(app.texts()).toContain("Tool results · 9 estimated tokens");
+  expect(app.texts()).toContain("Provider input · Unknown");
+  expect(rpcParams(app, "context.breakdown")).toEqual([{ session_key: "s-1" }]);
+});
+
+test("assistant Markdown uses callouts and bounded Mermaid with source fallback", async () => {
+  const history = [
+    "Earlier answer", "", "> [!NOTE]", "> Read the docs.", "", "https://example.com/manual", "",
+    "```mermaid", "flowchart TD", "A[Start] --> B[Done]", "```", "",
+    "```mermaid", "sequenceDiagram", "A->>B: plain fallback", "```", "",
+    "[Do not open](javascript:alert%281%29)", "<!--aleph-mermaid:0-->",
+  ].join("\n");
+  const { handlers } = chatGateway({ "chat.history": () => ({
+    session_key: "s-1", messages: [{ role: "assistant", content: history, timestamp: "t0" }], active_run: null,
+  }) });
+  const app = await openChat(handlers);
+  await app.waitFor("Read the docs.");
+  await app.waitFor("text:https://example.com/manual");
+  await app.waitFor("label:Mermaid flowchart: Start, Done");
+  await app.waitFor("Mermaid source · unsupported diagram");
+  await app.waitFor("Do not open");
+  expect(app.texts()).toContain("<!--aleph-mermaid:0-->");
+});
+
+test("an open live Mermaid fence remains readable code", async () => {
+  const { handlers } = chatGateway();
+  const app = await openChat(handlers);
+  await app.type("label:Message", "draw a diagram");
+  await app.press("Send");
+  await app.host.send("aleph.event", chunk("```mermaid\nflowchart LR\nA[Live start] --> B[Live end]"));
+  await app.waitFor("text:flowchart LR\nA[Live start] --> B[Live end]");
+  expect(app.shows("label:Mermaid flowchart: Live start, Live end")).toBe(false);
+});
+
 test("a session opens in chat and its reply streams in, then history takes over", async () => {
   const { handlers, complete } = chatGateway();
   const app = await openChat(handlers);
-  expect(rpcParams(app, "chat.history")[0]).toEqual({ session_key: "s-1", limit: 200 });
+  expect(rpcParams(app, "chat.history")[0]).toEqual({ session_key: "s-1", limit: 200, scrollback: {} });
 
   await app.type("label:Message", "你好");
   await app.press("Send");
@@ -330,6 +534,260 @@ test("a session opens in chat and its reply streams in, then history takes over"
   await app.waitFor("Hello, world");
   await app.waitFor("Stop", { state: "gone" });
   expect(rpcParams(app, "chat.history").length).toBe(loads + 1);
+});
+
+test("an older page failure is retryable without losing the visible transcript", async () => {
+  let olderCalls = 0;
+  const messages = Array.from({ length: 30 }, (_, index) => ({
+    message_id: `tail-${index}`, timestamp: "same", role: "assistant",
+    content: index === 29 ? "Earlier answer" : `Reply ${index}`,
+  }));
+  const { handlers } = chatGateway({ "chat.history": (params) => {
+    const before = (params as { scrollback?: { before?: string } }).scrollback?.before;
+    if (before) {
+      ++olderCalls;
+      if (olderCalls === 1) return { session_key: "s-1", messages };
+      return { session_key: "s-1", active_run: "untrusted-older-status",
+        messages: [{ message_id: "older", timestamp: "same", role: "user", content: "First saved message" }],
+        scrollback: { requested_before: before, next_before: null, status: "ready" } };
+    }
+    return { session_key: "s-1", messages,
+      scrollback: { requested_before: null, next_before: "older-boundary", status: "ready" } };
+  } });
+  const app = await openChat(handlers);
+  await app.press("Load older messages");
+  await app.waitFor("Older messages could not be loaded.");
+  expect(app.texts()).toContain("Earlier answer");
+  await app.press("Retry older messages");
+  await app.waitFor("No earlier messages");
+  expect(app.texts()).toContain("Earlier answer");
+  expect(app.texts()).not.toContain("Stop");
+  await app.scroll("id:chat-transcript", -5000);
+  await app.waitFor("First saved message");
+  expect(rpcParams(app, "chat.history").slice(1).map((params) => params.scrollback)).toEqual([
+    { before: "older-boundary" }, { before: "older-boundary" },
+  ]);
+});
+
+test("terminal history gets one follow-up when the committed stamp arrives late", async () => {
+  let readsAfterTerminal = 0;
+  let ended = false;
+  const { handlers } = chatGateway({
+    "chat.history": () => ({
+      session_key: "s-1", active_run: null,
+      messages: [
+        { role: "assistant", content: "Earlier answer", timestamp: "t0" },
+        ...(ended && ++readsAfterTerminal >= 2
+          ? [{ role: "assistant", content: "Stamped answer", run_id: "r-1", timestamp: "t2" }]
+          : []),
+      ],
+    }),
+  });
+  const app = await openChat(handlers);
+  await app.type("label:Message", "wait for the stamp");
+  await app.press("Send");
+  await app.waitFor("Stop");
+  await app.host.send("aleph.event", chunk("Transient answer", 1));
+  ended = true;
+  await app.host.send("aleph.event", { topic: "stream.run_complete", data: { run_id: "r-1", seq: 2 } });
+  await app.waitFor("Stamped answer");
+  expect(readsAfterTerminal).toBe(2);
+  expect(app.shows("Transient answer")).toBe(false);
+  expect(app.shows("Unconfirmed turn")).toBe(false);
+});
+
+test("an older unconfirmed preview does not retry an already stamped completion", async () => {
+  let sends = 0;
+  let stamped = false;
+  const { handlers } = chatGateway({
+    "chat.send": () => ({ run_id: `r-${++sends}`, session_key: "s-1", streaming: true }),
+    "chat.history": () => ({
+      session_key: "s-1", active_run: null,
+      messages: [
+        { role: "assistant", content: "Earlier answer", timestamp: "t0" },
+        ...(stamped ? [{ role: "assistant", content: "Stamped second turn", run_id: "r-2", timestamp: "t2" }] : []),
+      ],
+    }),
+  });
+  const app = await openChat(handlers);
+  await app.type("label:Message", "first turn");
+  await app.press("Send");
+  await app.waitFor("Stop");
+  await app.host.send("aleph.event", { topic: "stream.run_complete", data: { run_id: "r-1", seq: 1 } });
+  await app.waitFor("Unconfirmed turn");
+  await app.type("label:Message", "second turn");
+  await app.press("Send");
+  await app.waitFor("Stop");
+  const loads = rpcParams(app, "chat.history").length;
+  stamped = true;
+  await app.host.send("aleph.event", { topic: "stream.run_complete", data: { run_id: "r-2", seq: 1 } });
+  await app.waitFor("Stamped second turn");
+  await app.waitFor("Unconfirmed turn");
+  await new Promise((resolve) => setTimeout(resolve, 750));
+  expect(rpcParams(app, "chat.history").length).toBe(loads + 1);
+});
+
+test("text and authorized tool rows interleave without moving on finish", async () => {
+  const { handlers, complete } = chatGateway();
+  const app = await openChat(handlers);
+  await app.type("label:Message", "edit the file");
+  await app.press("Send");
+  await app.waitFor("Stop");
+  await app.host.send("aleph.event", chunk("Before tool", 1));
+  await app.host.send("aleph.event", toolEvent(toolStart, 3));
+  await app.host.send("aleph.event", chunk("After tool", 4));
+  await app.waitFor("After tool");
+  await app.waitFor("Running");
+  await app.host.send("aleph.event", toolEvent(toolFinish, 8));
+  await app.host.send("aleph.event", toolEvent(toolStart, 3));
+  await app.waitFor("Done");
+  const seen = app.texts();
+  const title = "Edit · src/main.rs";
+  expect(seen.filter((text) => text === title)).toHaveLength(1);
+  expect(seen.indexOf("Before tool")).toBeLessThan(seen.indexOf(title));
+  expect(seen.indexOf(title)).toBeLessThan(seen.indexOf("After tool"));
+  complete("Committed answer");
+  await app.host.send("aleph.event", { topic: "stream.run_complete", data: { run_id: "r-1", seq: 9 } });
+  await app.waitFor("Committed answer");
+  expect(app.texts().filter((text) => text === title)).toHaveLength(1);
+  expect(app.shows("Before tool")).toBe(false);
+});
+
+test("edit card shows recorded diff, opens full screen and pages masked output", async () => {
+  const { handlers } = chatGateway({
+    "trace.tool_output": (params) => {
+      const offset = (params as { offset: number }).offset;
+      return { tool_call_id: "call-1", offset, total_bytes: 8, source: "inline",
+        text: offset === 0 ? "你😀" : "!", truncated: offset === 0 };
+    },
+  });
+  const app = await openChat(handlers);
+  await app.type("label:Message", "edit the file");
+  await app.press("Send");
+  await app.waitFor("Stop");
+  await app.host.send("aleph.event", toolEvent(toolStart, 1));
+  await app.host.send("aleph.event", toolEvent({ ...toolFinish, change: { ...toolFinish.change,
+    presentation: { kind: "file_changes", changes: [{ path: "src/main.rs", kind: "modified", added: 1,
+      removed: 1, hunks: [{ old_start: 3, new_start: 3,
+        lines: [{ tag: "del", text: "before change" }, { tag: "add", text: "after change" }] }] }] },
+  } }, 2));
+  await app.waitFor("Done");
+  expect(rpcParams(app, "trace.tool_output")).toHaveLength(0);
+  await app.press("label:Expand Edit · src/main.rs");
+  await app.waitFor("你😀");
+  await app.waitFor("src/main.rs · +1 -1");
+  expect(rpcParams(app, "trace.tool_output")).toEqual([
+    { session_key: "s-1", run_id: "r-1", tool_call_id: "call-1", offset: 0, limit: 20480 },
+  ]);
+  await app.press("Open full screen");
+  await app.waitFor("Exit full screen");
+  expect(app.shows("label:Open Sessions")).toBe(false);
+  expect(app.shows("你😀")).toBe(true);
+  await app.keyboard.press("escape");
+  await app.waitFor("label:Open Sessions");
+  expect(app.shows("你😀")).toBe(true);
+  expect(rpcParams(app, "trace.tool_output")).toHaveLength(1);
+  await app.press("Open full screen");
+  await app.waitFor("Close reader");
+  await app.press("Close reader");
+  await app.press("Load more output");
+  await app.waitFor("你😀!");
+  expect(rpcParams(app, "trace.tool_output").map((request) => request.offset)).toEqual([0, 7]);
+  expect(rpcParams(app, "file.read")).toHaveLength(0);
+});
+
+test("collapsed tool ignores a stale page and expiry discards earlier output", async () => {
+  let release: ((answer: unknown) => void) | undefined;
+  let requests = 0;
+  const { handlers } = chatGateway({
+    "trace.tool_output": (params) => {
+      const offset = (params as { offset: number }).offset;
+      requests += 1;
+      if (requests === 1) return new Promise((resolve) => { release = resolve; });
+      if (offset > 0) return { tool_call_id: "call-1", offset, total_bytes: 0, source: "expired", text: "", truncated: true };
+      return { tool_call_id: "call-1", offset, total_bytes: 6, source: "persisted", text: "fresh", truncated: true };
+    },
+  });
+  const app = await openChat(handlers);
+  await app.type("label:Message", "execute tool");
+  await app.press("Send");
+  await app.waitFor("Stop");
+  await app.host.send("aleph.event", toolEvent(toolStart, 1));
+  await app.host.send("aleph.event", toolEvent(toolFinish, 2));
+  const expand = app.press("label:Expand Edit · src/main.rs");
+  await app.waitUntil(() => release !== undefined);
+  await app.waitFor("label:Collapse Edit · src/main.rs");
+  const collapse = app.press("label:Collapse Edit · src/main.rs");
+  await app.waitFor("label:Expand Edit · src/main.rs");
+  release!({ tool_call_id: "call-1", offset: 0, total_bytes: 5, source: "inline", text: "stale", truncated: false });
+  await expand;
+  await collapse;
+  expect(app.shows("stale")).toBe(false);
+  await app.press("label:Expand Edit · src/main.rs");
+  await app.waitFor("fresh");
+  await app.press("Load more output");
+  await app.waitFor("Tool output expired.");
+  expect(app.shows("fresh")).toBe(false);
+});
+
+test("scrolling up preserves the transcript anchor until jump to bottom", async () => {
+  const earlier = Array.from({ length: 80 }, (_, index) => ({
+    role: "assistant", content: `History item ${index}`, timestamp: `t${index}`,
+  }));
+  const { handlers } = chatGateway({
+    "chat.history": () => ({ session_key: "s-1", messages: [...earlier,
+      { role: "assistant", content: "Earlier answer", timestamp: "last" }], active_run: "r-1" }),
+  });
+  const app = await openChat(handlers);
+  await app.scroll("id:chat-transcript", -1600);
+  await app.waitFor("Jump to bottom");
+  await app.host.send("aleph.event", chunk("Live tail while reading", 1));
+  expect(app.shows("Live tail while reading")).toBe(false);
+  await app.press("Jump to bottom");
+  await app.waitFor("Live tail while reading");
+  await app.waitFor("Jump to bottom", { state: "gone" });
+});
+
+test("reopening an active run marks the prefix missing and retains its suffix", async () => {
+  const { handlers } = chatGateway();
+  const base = handlers["aleph.rpc"];
+  const app = await openChat({
+    ...handlers,
+    "aleph.rpc": async (call) => call.method === "chat.history"
+      ? { result: { session_key: "s-1", messages: [{ role: "assistant", content: "Earlier answer" }], active_run: "r-1" } }
+      : base(call),
+  });
+  await app.waitFor("Earlier live updates may be missing.");
+  await app.host.send("aleph.event", chunk("Live suffix", 104));
+  await app.waitFor("Live suffix");
+  await app.host.send("aleph.event", { topic: "connection.stale", data: { dropped: 2 } });
+  await app.waitUntil(() => rpcParams(app, "chat.history").length === 2);
+  await app.waitFor("Live suffix");
+  expect(app.shows("Earlier live updates may be missing.")).toBe(true);
+});
+
+test("chunks delivered before the send reply adopt only its run", async () => {
+  const { handlers } = chatGateway();
+  const base = handlers["aleph.rpc"];
+  let acknowledge: () => void = () => {};
+  const waiting = new Promise<void>((resolve) => { acknowledge = resolve; });
+  const app = await openChat({
+    ...handlers,
+    "aleph.rpc": async (call) => {
+      if (call.method === "chat.send") await waiting;
+      return base(call);
+    },
+  });
+  await app.type("label:Message", "deliver early");
+  const submitted = app.press("Send");
+  await app.waitUntil(() => rpcParams(app, "chat.send").length === 1);
+  await app.host.send("aleph.event", { topic: "stream.response_chunk", data: { run_id: "foreign", delta: "Other run", seq: 1 } });
+  await app.host.send("aleph.event", chunk("Early text", 2));
+  expect(app.shows("Early text")).toBe(false);
+  acknowledge();
+  await submitted;
+  await app.waitFor("Early text");
+  expect(app.shows("Other run")).toBe(false);
 });
 
 test("stop aborts the running reply", async () => {
@@ -379,7 +837,7 @@ test("a send whose answer was lost is reported unknown, not retried", async () =
   const app = await openChat(lossy);
   await app.type("label:Message", "did it arrive?");
   await app.press("Send");
-  await app.waitFor("Connection lost while sending: the message may or may not have reached Aleph. Check the transcript before sending again.");
+  await app.waitFor("A send may have reached Aleph. Check Sessions before sending again.");
   await app.wait(100);
   expect(app.host.calls().filter((call) => (call.data as { method?: string })?.method === "chat.send").length).toBe(1);
 });

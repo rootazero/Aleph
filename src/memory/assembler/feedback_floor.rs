@@ -21,6 +21,8 @@ const FLOOR_CAP: usize = 6;
 /// One always-on feedback rule, parsed from a `feedback/*.md` note.
 #[derive(Debug, Clone)]
 pub struct FeedbackFloorEntry {
+    /// Partition read from disk, not note frontmatter or request filing scope.
+    pub owner: String,
     /// Scheme-less note path, e.g. `"feedback/no-force-push"`.
     pub path: String,
     pub title: String,
@@ -137,6 +139,7 @@ impl FeedbackFloorLoader {
                 continue;
             }
             out.push(FeedbackFloorEntry {
+                owner: agent_id.to_string(),
                 path: format!("feedback/{stem}"),
                 title: note.title,
                 body: strip_frontmatter(&content),

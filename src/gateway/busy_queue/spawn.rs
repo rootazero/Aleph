@@ -50,16 +50,13 @@ pub fn spawn_queued_run<P, R, E>(
     R: crate::executor::ToolRegistry + 'static,
     E: EventEmitter + Send + Sync + 'static,
 {
-    let ticket = register_run(
-        &request.session_key,
-        &request.metadata,
-        cfg.max_per_session,
-        &request.run_id,
-    );
+    let ticket = register_queue_ticket(&request, cfg.max_per_session);
     // Only registered ordinary runs are eligible for queue recovery. A
     // rejected ticket has no payload to recover.
     if ticket.is_some() && durable::is_armed() {
-        durable::record_enqueued(durable::QueuedRunPayload::from_request(&request, locale));
+        if let Some(payload) = durable::QueuedRunPayload::from_request(&request, locale) {
+            durable::record_enqueued(payload);
+        }
     }
     spawn_registered_run(
         engine, request, agent, emitter, cfg, locale, label, ticket, None,
@@ -85,16 +82,24 @@ pub async fn spawn_queued_chat_run<P, R, E>(
     E: EventEmitter + Send + Sync + 'static,
 {
     // Keep arrival order: take the ticket before waiting on the manager's run map.
-    let ticket = register_run(
-        &request.session_key,
-        &request.metadata,
-        cfg.max_per_session,
-        &request.run_id,
-    );
+    let ticket = register_queue_ticket(&request, cfg.max_per_session);
     let managed = manager.bind_queued_chat_run(&request).await;
     spawn_registered_run(
         engine, request, agent, emitter, cfg, locale, label, ticket, managed,
     );
+}
+
+fn register_queue_ticket(request: &RunRequest, max_per_session: usize) -> Option<TicketGuard> {
+    if request.owns_worktree() {
+        return None;
+    }
+    // A side question waits on the derived execution session, not the addressed session.
+    register_run(
+        &request.session_key,
+        &request.metadata,
+        max_per_session,
+        &request.run_id,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -142,7 +142,7 @@ impl HarnessRunner for StubHarnessRunner {
         _transient_context: Option<String>,
         _think_level: Option<alephcore::agents::thinking::ThinkLevel>,
         _envelope: alephcore::thinker::TurnEnvelope,
-        _turn_model: Option<alephcore::providers::session_model_handle::SessionModelPref>,
+        _turn_model: Option<alephcore::orchestrator::dispatch::RunModelDirective>,
         run_id: String,
         _telecom_public: Option<alephcore::gateway::telecom::TelecomPublicContext>,
     ) -> Result<FlowOutcome, FlowError> {
@@ -253,7 +253,6 @@ pub fn basic_request() -> FlowRequest {
         trace_sink: None,
         event_tx: None,
         interaction_manifest: None,
-        sandbox_override: None,
         workspace_override: None,
         max_iterations_override: None,
         transient_context: None,

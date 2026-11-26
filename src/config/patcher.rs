@@ -13,6 +13,7 @@ use crate::config::schema::generate_config_schema;
 use crate::config::Config;
 use crate::error::{AlephError, Result};
 use crate::gateway::event_bus::GatewayEventBus;
+use crate::providers::model_catalog::discovery_authority;
 use crate::sync_primitives::Arc;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -478,6 +479,7 @@ impl ConfigPatcher {
             *config = previous;
             return Err(e);
         }
+        discovery_authority::config_replaced(&previous, &config);
         Ok(())
     }
 
@@ -687,6 +689,7 @@ impl ConfigPatcher {
                 *config = previous;
                 return Err(e);
             }
+            discovery_authority::config_replaced(&previous, &config);
         }
 
         // The restored file is ours even if live application is cancelled.

@@ -127,6 +127,11 @@ impl SimpleExecutionEngine {
         emitter: Arc<E>,
         chat_cancellation: Option<&ChatRunCancellation>,
     ) -> Result<(), ExecutionError> {
+        if request.owns_worktree() {
+            return Err(ExecutionError::Failed(
+                "owned worktree requires the mounted execution engine".into(),
+            ));
+        }
         if let Some(cancellation) = chat_cancellation {
             cancellation.check()?;
         }
@@ -192,6 +197,7 @@ impl SimpleExecutionEngine {
                 run_id.clone(),
                 ActiveRun {
                     request: request.clone(),
+                    owned_worktree: false,
                     state: RunState::Running,
                     started_at: chrono::Utc::now(),
                     admitted_at: std::time::Instant::now(),

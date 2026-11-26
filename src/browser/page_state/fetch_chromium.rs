@@ -5650,7 +5650,9 @@ mod tests {
     ///   (measured twice, independently: `-32601 Unknown DOM method: disable`),
     ///   so an engine-blind "always disable after the tree read" refactor turns
     ///   a working `fetch_obscura` into one that errors on **every** snapshot on
-    ///   the DEFAULT engine. A unified CDP layer is this branch's stated
+    ///   that build. The pinned v0.2.7 accepts the call, but still emits no
+    ///   `DOM.*` events to stop, so on obscura the verb has nothing to do on
+    ///   any build and breaks an operator-pinned older one. A unified CDP layer is this branch's stated
     ///   direction of travel, so that refactor is not hypothetical.
     ///
     /// The enabler set alone could not catch it: `fetch_obscura.rs` is already
@@ -5762,12 +5764,12 @@ mod tests {
             disablers,
             vec!["src/browser/page_state/fetch_chromium.rs".to_string()],
             "`DOM.disable` belongs to the Chromium fetcher and nowhere else, and \
-             the reason is the ENGINE rather than tidiness: measured twice on \
-             the installed obscura v0.2.2, `DOM.disable` answers `-32601 Unknown \
-             DOM method: disable` — it is absent, not a no-op. So an \
-             engine-blind \"always disable after the tree read\" turns a working \
-             `fetch_obscura` into one that errors on EVERY snapshot, on the \
-             DEFAULT engine. If a unified CDP layer needs this verb, gate it on \
+             the reason is the ENGINE rather than tidiness: obscura emits no \
+             `DOM.*` events to stop (v0.2.2 and v0.2.7), and on v0.2.2 \
+             `DOM.disable` answers `-32601 Unknown DOM method: disable` — so an \
+             engine-blind \"always disable after the tree read\" buys nothing \
+             on the DEFAULT engine and fails EVERY snapshot on an \
+             operator-pinned older build. If a unified CDP layer needs this verb, gate it on \
              the engine and re-measure the one you are adding it for. Found: \
              {disablers:?}"
         );

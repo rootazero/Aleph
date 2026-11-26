@@ -3,7 +3,7 @@
 //! daily insight) and assembles a single pool of [`Candidate`]s with a
 //! [`SlotKind`] hint on each.
 
-use super::envelope::{ItemSource, SlotKind};
+use super::envelope::{ItemSource, NoteProvenance, SlotKind};
 use super::fallback::Candidate;
 use super::feedback_floor::{FeedbackFloorEntry, FeedbackFloorLoader};
 use super::profile::UserProfileLoader;
@@ -121,6 +121,7 @@ impl Gatherer {
                 relevance: 1.0,
                 updated_at: chrono::Utc::now().timestamp(),
                 slot_hint: SlotKind::UserProfile,
+                note_provenance: None,
                 fact_source: FactSource::Extracted,
             });
         }
@@ -192,12 +193,16 @@ impl Gatherer {
                         title,
                         full_content: sf.fact.content,
                         source: ItemSource::Note {
-                            path: path_no_scheme,
+                            path: path_no_scheme.clone(),
                             category,
                         },
                         relevance: sf.score,
                         updated_at: sf.fact.updated_at,
                         slot_hint,
+                        note_provenance: Some(NoteProvenance {
+                            owner: sf.fact.agent,
+                            path: path_no_scheme,
+                        }),
                         fact_source: FactSource::Extracted,
                     }
                 })
@@ -393,12 +398,16 @@ fn feedback_entry_to_candidate(id: String, entry: FeedbackFloorEntry) -> Candida
         title: entry.title,
         full_content: entry.body,
         source: ItemSource::Note {
-            path: entry.path,
+            path: entry.path.clone(),
             category: "feedback".into(),
         },
         relevance: 1.0,
         updated_at: entry.updated_at,
         slot_hint: SlotKind::Feedback,
+        note_provenance: Some(NoteProvenance {
+            owner: entry.owner,
+            path: entry.path,
+        }),
         fact_source: FactSource::Extracted,
     }
 }
@@ -426,6 +435,7 @@ fn snapshot_to_candidate(snap: SessionSnapshot) -> Candidate {
         relevance: 0.9,
         updated_at: snap.created_at.timestamp(),
         slot_hint: SlotKind::SessionRecent,
+        note_provenance: None,
         fact_source: FactSource::Summary,
     }
 }
@@ -445,6 +455,7 @@ fn insight_to_candidate(insight: crate::memory::dreaming::DailyInsight) -> Candi
         relevance: 0.7,
         updated_at: insight.created_at,
         slot_hint: SlotKind::SessionRecent,
+        note_provenance: None,
         fact_source: FactSource::Summary,
     }
 }
@@ -469,6 +480,7 @@ fn raw_to_candidate(r: RawMemory, slot: SlotKind) -> Candidate {
         relevance: 0.6,
         updated_at: r.created_at,
         slot_hint: slot,
+        note_provenance: None,
         fact_source,
     }
 }

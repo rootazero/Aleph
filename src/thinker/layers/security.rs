@@ -143,9 +143,11 @@ mod tests {
         );
         ctx.sandbox_summary = Some(SandboxSummary {
             backend: "macos/seatbelt",
-            policy_tier: PolicyTier::WorkspaceWrite.as_str(),
+            posture: crate::sandbox::summary::SandboxPosture::Configured {
+                tier: PolicyTier::WorkspaceWrite,
+                network: NetworkState::AllowAll,
+            },
             writable_roots: vec![std::path::PathBuf::from("/ws/abc")],
-            network: NetworkState::AllowAll,
             max_memory_mb: Some(512),
             permission_profile_id: None,
         });

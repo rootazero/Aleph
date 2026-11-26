@@ -23,7 +23,7 @@ use crate::sandbox::capabilities::{NetworkPolicy, SandboxCapabilities};
 /// and total.
 ///
 /// This enum is the single source of truth for the tier tag strings —
-/// [`SandboxSummary::policy_tier`] is always set from [`PolicyTier::as_str`],
+/// configured summaries render it with [`PolicyTier::as_str`],
 /// so the previously-scattered string literals now live in exactly one place.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -77,6 +77,17 @@ impl PolicyTier {
     }
 }
 
+/// Configuration declaration, not evidence that the backend can start a process.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum SandboxPosture {
+    Configured {
+        tier: PolicyTier,
+        network: NetworkState,
+    },
+    Disabled,
+}
+
 /// Snapshot of the active sandbox posture suitable for prompt injection.
 ///
 /// Construction is platform-agnostic — implementors of the `Sandbox` trait
@@ -89,15 +100,10 @@ pub struct SandboxSummary {
     /// `"linux/bwrap"`, `"windows/token"`, `"none/noop"`,
     /// `"git/worktree"`). Stable identifiers — the LLM can key on these.
     pub backend: &'static str,
-    /// One-word policy tier: `"danger-full-access"`, `"read-only"`,
-    /// `"workspace-write"`, or `"isolated"`. Matches codex's tier names so
-    /// shared docs / prompts read consistently across both ecosystems.
-    pub policy_tier: &'static str,
+    pub posture: SandboxPosture,
     /// Roots the agent may write to. Sorted, deduplicated. Empty for
     /// `"read-only"`.
     pub writable_roots: Vec<PathBuf>,
-    /// Whether outbound network is permitted, and to where.
-    pub network: NetworkState,
     /// Hard memory ceiling on each command, if configured.
     pub max_memory_mb: Option<u64>,
     /// Optional stable, audit-friendly identifier of the active permission
@@ -178,32 +184,34 @@ impl SandboxSummary {
 
         Self {
             backend,
-            policy_tier: tier.as_str(),
+            posture: SandboxPosture::Configured {
+                tier,
+                network: NetworkState::from_policy(&caps.network),
+            },
             writable_roots,
-            network: NetworkState::from_policy(&caps.network),
             max_memory_mb: caps.max_memory_mb,
             permission_profile_id: None,
         }
     }
 
-    /// "Isolated" tier — used by `WorktreeSandbox` which performs
-    /// workspace-tree isolation (separate git worktree) without an
-    /// OS-level process sandbox. The LLM should know it is NOT seatbelted.
-    #[must_use]
-    pub fn isolated_worktree(worktree_path: PathBuf) -> Self {
+    /// Historical git-only posture fixture. Production worktrees use the OS sandbox.
+    #[cfg(test)]
+    pub(crate) fn isolated_worktree(worktree_path: PathBuf) -> Self {
         Self {
             backend: "git/worktree",
-            policy_tier: PolicyTier::Isolated.as_str(),
+            posture: SandboxPosture::Configured {
+                tier: PolicyTier::Isolated,
+                network: NetworkState::AllowAll,
+            },
             writable_roots: vec![worktree_path],
-            network: NetworkState::AllowAll,
             max_memory_mb: None,
             permission_profile_id: None,
         }
     }
 
     /// Builder helper: attach a permission-profile id post-construction.
-    /// Keeps `from_baseline` and `isolated_worktree` free of an extra
-    /// argument while still letting dispatchers opt into the
+    /// Keeps baseline construction independent of profile identity while
+    /// still letting dispatchers opt into the
     /// `## Operating Envelope` bullet line when they wire one up.
     #[must_use]
     pub fn with_permission_profile_id(mut self, id: impl Into<String>) -> Self {
@@ -211,12 +219,24 @@ impl SandboxSummary {
         self
     }
 
-    /// The active posture as the ordered [`PolicyTier`] enum (parsed from the
-    /// tag the summary was built with). Lets callers compare postures by risk
-    /// rather than string-matching.
+    /// A disabled sandbox declares no policy tier and rejects execution.
     #[must_use]
-    pub fn tier(&self) -> PolicyTier {
-        PolicyTier::from_tag(self.policy_tier)
+    pub const fn tier(&self) -> Option<PolicyTier> {
+        match &self.posture {
+            SandboxPosture::Configured { tier, .. } => Some(*tier),
+            SandboxPosture::Disabled => None,
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn disabled() -> Self {
+        Self {
+            backend: "none/disabled",
+            posture: SandboxPosture::Disabled,
+            writable_roots: Vec::new(),
+            max_memory_mb: None,
+            permission_profile_id: None,
+        }
     }
 
     /// Render bullet lines for the system prompt. Returns one line per
@@ -225,8 +245,8 @@ impl SandboxSummary {
     ///
     /// **Prompt layers must not call this.** It mixes two things with different
     /// cache lifetimes: the session-stable *posture* and the per-run *identity*
-    /// (`writable_roots`, which for [`Self::isolated_worktree`] carries a fresh
-    /// UUID on every isolated run). Layers take [`Self::posture_lines`] and
+    /// (`writable_roots`, which can include a fresh checkout on each run).
+    /// Layers take [`Self::posture_lines`] and
     /// [`Self::writable_roots_line`] separately so each lands in the zone it
     /// belongs to. This full-picture form is for operator-facing surfaces
     /// (`aleph-server sandbox-debug`) that have no cache to break.
@@ -245,8 +265,8 @@ impl SandboxSummary {
 
     /// The per-run half: *where* the agent may write.
     ///
-    /// Split out of the posture because [`Self::isolated_worktree`] mints a new
-    /// worktree path — with a fresh UUID — for every isolated run. Rendered from
+    /// Split out of the posture because a newly owned checkout has a unique
+    /// path for every run. Rendered from
     /// a Stable layer that path welded a run-unique byte into the cacheable
     /// prefix, so no two isolated runs (a team fan-out of N sub-agents, say)
     /// could ever share it: each one paid `cache_creation` for the whole prefix
@@ -279,20 +299,14 @@ impl SandboxSummary {
     /// second copy was ~30 bytes of the same sentence on every request and a
     /// direct violation of §2.3's own rule ③ (one question, one voice).
     ///
-    /// It belongs to the **dynamic** half for a second, independent reason:
-    /// the posture is per-run. [`Self::isolated_worktree`] hardcodes
-    /// [`NetworkState::AllowAll`] while [`Self::from_baseline`] reads config,
-    /// so a session that mixes an isolated run with a normal one changes this
-    /// value mid-conversation — and while it lived in the cacheable prefix,
-    /// that change re-keyed the whole conversation's provider cache.
-    ///
-    /// Always `Some`: every [`NetworkState`] variant has a descriptor. The
-    /// `Option` is kept so callers compose it with the other per-run bullets
-    /// ([`Self::writable_roots_line`], [`Self::permission_profile_prompt_line`])
-    /// without a special case.
+    /// Kept in the dynamic half with other run settings. Disabled execution
+    /// has no configured network posture and returns `None`.
     #[must_use]
     pub fn network_prompt_line(&self) -> Option<String> {
-        let line = match &self.network {
+        let SandboxPosture::Configured { network, .. } = &self.posture else {
+            return None;
+        };
+        let line = match network {
             NetworkState::Denied => "Network: denied".to_string(),
             NetworkState::AllowAll => "Network: allowed (all hosts)".to_string(),
             NetworkState::AllowHosts { hosts } => {
@@ -327,28 +341,27 @@ impl SandboxSummary {
     pub(crate) fn fact_census(&self) -> Vec<(&'static str, String)> {
         let Self {
             backend,
-            policy_tier,
+            posture,
             writable_roots,
-            network,
             max_memory_mb,
             permission_profile_id,
         } = self;
-        let mut facts: Vec<(&'static str, String)> = vec![
-            ("sandbox.backend", (*backend).to_string()),
-            ("sandbox.policy_tier", (*policy_tier).to_string()),
-        ];
+        let mut facts = vec![("sandbox.backend", (*backend).to_string())];
+        if let SandboxPosture::Configured { tier, network } = posture {
+            facts.push(("sandbox.policy_tier", tier.as_str().to_string()));
+            facts.push((
+                "sandbox.network",
+                match network {
+                    NetworkState::Denied => "denied".to_string(),
+                    NetworkState::AllowAll => "allowed (all hosts)".to_string(),
+                    NetworkState::AllowHosts { hosts } => hosts.join(", "),
+                    NetworkState::LoopbackPorts { ports } => join_ports(ports),
+                },
+            ));
+        }
         for root in writable_roots {
             facts.push(("sandbox.writable_root", root.display().to_string()));
         }
-        facts.push((
-            "sandbox.network",
-            match network {
-                NetworkState::Denied => "denied".to_string(),
-                NetworkState::AllowAll => "allowed (all hosts)".to_string(),
-                NetworkState::AllowHosts { hosts } => hosts.join(", "),
-                NetworkState::LoopbackPorts { ports } => join_ports(ports),
-            },
-        ));
         if let Some(mb) = max_memory_mb {
             facts.push(("sandbox.max_memory_mb", format!("{mb} MiB")));
         }
@@ -374,13 +387,16 @@ impl SandboxSummary {
     /// Single source for both renderings, so the operator view and the two
     /// prompt halves can never drift in wording or order.
     fn lines(&self, include_per_run: bool) -> Vec<String> {
+        let Some(tier) = self.tier() else {
+            return vec!["Sandbox: disabled (command execution unavailable)".to_string()];
+        };
         let mut lines = Vec::with_capacity(5);
-        lines.push(format!("Sandbox: {} ({})", self.backend, self.policy_tier));
+        lines.push(format!("Sandbox: {} ({})", self.backend, tier.as_str()));
 
         // Surface the danger posture explicitly so the model is maximally
         // cautious (R9: intelligence in the prompt). Driven by the ordered
         // tier enum, not a string compare.
-        if self.tier().is_danger() {
+        if tier.is_danger() {
             lines.push(
                 "⚠ Danger posture: full filesystem write + open network — \
                  double-check destructive or exfiltration-prone actions before running them."
@@ -417,9 +433,12 @@ mod tests {
     fn read_only_tier_when_no_writable_roots() {
         let caps = SandboxCapabilities::strict();
         let summary = SandboxSummary::from_baseline("macos/seatbelt", &caps);
-        assert_eq!(summary.policy_tier, "read-only");
+        assert_eq!(summary.tier(), Some(PolicyTier::ReadOnly));
         assert!(summary.writable_roots.is_empty());
-        assert_eq!(summary.network, NetworkState::Denied);
+        assert_eq!(
+            summary.network_prompt_line().as_deref(),
+            Some("Network: denied")
+        );
     }
 
     #[test]
@@ -430,7 +449,7 @@ mod tests {
             ..Default::default()
         };
         let summary = SandboxSummary::from_baseline("linux/bwrap", &caps);
-        assert_eq!(summary.policy_tier, "workspace-write");
+        assert_eq!(summary.tier(), Some(PolicyTier::WorkspaceWrite));
         assert_eq!(summary.writable_roots, vec![PathBuf::from("/workspace")]);
     }
 
@@ -442,7 +461,7 @@ mod tests {
             ..Default::default()
         };
         let summary = SandboxSummary::from_baseline("macos/seatbelt", &caps);
-        assert_eq!(summary.policy_tier, "danger-full-access");
+        assert_eq!(summary.tier(), Some(PolicyTier::DangerFullAccess));
     }
 
     #[test]
@@ -484,7 +503,7 @@ mod tests {
     fn isolated_worktree_marks_no_process_sandbox() {
         let summary = SandboxSummary::isolated_worktree(PathBuf::from("/wt/a"));
         assert_eq!(summary.backend, "git/worktree");
-        assert_eq!(summary.policy_tier, "isolated");
+        assert_eq!(summary.tier(), Some(PolicyTier::Isolated));
         let lines = summary.to_prompt_lines();
         assert!(lines[0].contains("git/worktree"));
         assert!(lines[0].contains("isolated"));
@@ -576,7 +595,7 @@ mod tests {
     fn writable_roots_line_is_none_when_read_only() {
         let summary =
             SandboxSummary::from_baseline("macos/seatbelt", &SandboxCapabilities::strict());
-        assert_eq!(summary.policy_tier, "read-only");
+        assert_eq!(summary.tier(), Some(PolicyTier::ReadOnly));
         assert!(summary.writable_roots_line().is_none());
         // The per-run half is then just the network posture: the full view is
         // the stable half plus that one line, and nothing else.
@@ -594,9 +613,11 @@ mod tests {
         // `OperatingEnvelopeLayer` and `sandbox-debug` cannot drift.
         let denied = SandboxSummary {
             backend: "b",
-            policy_tier: "read-only",
+            posture: SandboxPosture::Configured {
+                tier: PolicyTier::ReadOnly,
+                network: NetworkState::Denied,
+            },
             writable_roots: vec![],
-            network: NetworkState::Denied,
             max_memory_mb: None,
             permission_profile_id: None,
         };
@@ -607,9 +628,11 @@ mod tests {
 
         let allow_all = SandboxSummary {
             backend: "b",
-            policy_tier: "danger-full-access",
+            posture: SandboxPosture::Configured {
+                tier: PolicyTier::DangerFullAccess,
+                network: NetworkState::AllowAll,
+            },
             writable_roots: vec![],
-            network: NetworkState::AllowAll,
             max_memory_mb: None,
             permission_profile_id: None,
         };
@@ -620,9 +643,11 @@ mod tests {
 
         let empty_hosts = SandboxSummary {
             backend: "b",
-            policy_tier: "workspace-write",
+            posture: SandboxPosture::Configured {
+                tier: PolicyTier::WorkspaceWrite,
+                network: NetworkState::AllowHosts { hosts: vec![] },
+            },
             writable_roots: vec![],
-            network: NetworkState::AllowHosts { hosts: vec![] },
             max_memory_mb: None,
             permission_profile_id: None,
         };
@@ -705,8 +730,7 @@ mod tests {
             ..Default::default()
         };
         let summary = SandboxSummary::from_baseline("linux/bwrap", &caps);
-        assert_eq!(summary.tier(), PolicyTier::WorkspaceWrite);
-        assert_eq!(summary.tier().as_str(), summary.policy_tier);
+        assert_eq!(summary.tier(), Some(PolicyTier::WorkspaceWrite));
     }
 
     #[test]

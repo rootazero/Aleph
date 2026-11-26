@@ -147,6 +147,7 @@ pub struct TeamDispatcher {
     pub(crate) artifact_store: Option<Arc<dyn ArtifactStore>>,
     pub(crate) inbox_provider: Option<Arc<TeamInboxContextProvider>>,
     pub(crate) context: GatewayContext,
+    pub(crate) projects: Arc<crate::projects::ProjectStore>,
     pub(crate) config: DispatcherConfig,
     pub(crate) signal: Arc<Notify>,
     pub(crate) semaphore: Arc<Semaphore>,
@@ -181,6 +182,7 @@ impl TeamDispatcher {
         artifact_store: Option<Arc<dyn ArtifactStore>>,
         inbox_provider: Option<Arc<TeamInboxContextProvider>>,
         context: GatewayContext,
+        projects: Arc<crate::projects::ProjectStore>,
         config: DispatcherConfig,
         signal: Arc<Notify>,
     ) -> Self {
@@ -191,6 +193,7 @@ impl TeamDispatcher {
             artifact_store,
             inbox_provider,
             context,
+            projects,
             config,
             signal,
             semaphore,

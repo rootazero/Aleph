@@ -7,21 +7,38 @@
 //! - `chat.send` - Send a message (wraps agent.run)
 //! - `chat.abort` - Abort message generation
 //! - `chat.history` - Get chat history
+//! - `chat.models.list` - List usable model choices
 //! - `chat.clear` - Clear chat history
 //! - `chat.rewind` - Drop the conversation from a given event seq onward
 //!   (server half of edit-and-resend; the client then calls `chat.send`)
 
 use crate::sync_primitives::Arc;
+use aleph_protocol::providers::ChatModelsListResult;
+use aleph_protocol::session_thread::{
+    ChatHistoryScrollbackRequest, ChatHistoryScrollbackResponse, ScrollbackStatus,
+};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tracing::debug;
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use super::super::router::SessionKey;
+use super::super::session_store::types::{HistoryRead, ScrollbackRead};
 use super::super::session_store::SessionStore;
 use super::super::visibility;
 use super::agent::{AgentRunManager, AgentRunParams};
-use super::parse_params;
+use super::{parse_params, service_unavailable};
+
+pub fn handle_models_list(request: JsonRpcRequest) -> JsonRpcResponse {
+    let Some(snapshot) = crate::providers::session_model_handle::selectable_models() else {
+        return service_unavailable(request, "Selectable model publication is unavailable");
+    };
+    let result = ChatModelsListResult {
+        items: snapshot.choices(),
+    };
+    JsonRpcResponse::success(request.id, json!(result))
+}
 
 // ============================================================================
 // Request/Response Types
@@ -76,6 +93,9 @@ pub(crate) struct HistoryParams {
     /// next-older page. Unparseable values are treated as "no cursor".
     #[serde(default)]
     pub before: Option<String>,
+    // Decode the cursor shape only after the session is admitted.
+    #[serde(default)]
+    pub scrollback: Option<serde_json::Value>,
 }
 
 /// Parse the `chat.history` `before` cursor into the instant it names.
@@ -118,6 +138,29 @@ pub struct ClearParams {
     pub session_key: String,
 }
 
+const SCROLLBACK_MAX_ROWS: usize = 200;
+const SCROLLBACK_TOKEN_MAX_BYTES: usize = 4096;
+const SCROLLBACK_TOKEN_VERSION: u8 = 1;
+
+// The token identifies a projection row, not the caller or their authority.
+fn decode_scrollback_boundary(token: &str, canonical: &str) -> Option<String> {
+    if token.len() > SCROLLBACK_TOKEN_MAX_BYTES {
+        return None;
+    }
+    let bytes = URL_SAFE_NO_PAD.decode(token).ok()?;
+    let (version, session, row): (u8, String, String) = serde_json::from_slice(&bytes).ok()?;
+    (version == SCROLLBACK_TOKEN_VERSION && session == canonical).then_some(row)
+}
+
+fn encode_scrollback_boundary(canonical: &str, row: &str) -> Option<String> {
+    if canonical.len().saturating_add(row.len()) > SCROLLBACK_TOKEN_MAX_BYTES {
+        return None;
+    }
+    let bytes = serde_json::to_vec(&(SCROLLBACK_TOKEN_VERSION, canonical, row)).ok()?;
+    let len = base64::encoded_len(bytes.len(), false)?;
+    (len <= SCROLLBACK_TOKEN_MAX_BYTES).then(|| URL_SAFE_NO_PAD.encode(bytes))
+}
+
 /// Parameters for chat.rewind request
 #[derive(Debug, Clone, Deserialize)]
 pub struct RewindParams {
@@ -150,6 +193,9 @@ pub struct EstimateParams {
 /// A chat message in the history
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
+    /// Stable projection row ID, emitted only on an opt-in history read.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<String>,
     /// Message role (user, assistant, system)
     pub role: String,
     /// Message content
@@ -502,9 +548,61 @@ pub async fn handle_history(
         return visibility::not_found_response(request.id); // same error as missing (GC 4)
     }
 
-    // Resolve the optional pagination cursor (degrades to None when absent
-    // or unparseable, yielding the most-recent window).
-    let before_ts = params.before.as_deref().and_then(parse_before);
+    let canonical = session_key.to_key_string();
+    let (read, requested_before) = if let Some(scrollback) = params.scrollback {
+        let scrollback: ChatHistoryScrollbackRequest = match serde_json::from_value(scrollback) {
+            Ok(value) => value,
+            Err(_) => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    "Invalid scrollback request",
+                )
+            }
+        };
+        if params.before.is_some() {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                "Cannot combine before with scrollback",
+            );
+        }
+        let limit = params.limit.unwrap_or(SCROLLBACK_MAX_ROWS);
+        if !(1..=SCROLLBACK_MAX_ROWS).contains(&limit) {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                format!("Scrollback limit must be between 1 and {SCROLLBACK_MAX_ROWS}"),
+            );
+        }
+        let before_row = match scrollback.before.as_deref() {
+            None => None,
+            Some(token) => match decode_scrollback_boundary(token, &canonical) {
+                Some(row) => Some(row),
+                None => {
+                    return JsonRpcResponse::error(
+                        request.id,
+                        INVALID_PARAMS,
+                        "Invalid scrollback boundary",
+                    )
+                }
+            },
+        };
+        (
+            HistoryRead::Scrollback { limit, before_row },
+            scrollback.before,
+        )
+    } else {
+        // A malformed legacy timestamp still degrades to an unfiltered tail.
+        let before = params.before.as_deref().and_then(parse_before);
+        (
+            HistoryRead::Legacy {
+                limit: params.limit,
+                before,
+            },
+            None,
+        )
+    };
 
     // ONE call for both answers. This used to be two — a `history_len` and
     // then the window — against a store a live run appends to, so the count
@@ -516,12 +614,26 @@ pub async fn handle_history(
     // (move the count into a helper, call the helper after the window). There
     // is no order here to get wrong, and `SessionStore` no longer offers a
     // second call to reach for.
-    match session_manager
-        .history_page(&session_key, params.limit, before_ts)
-        .await
-    {
+    match session_manager.history_page(&session_key, read).await {
         Ok(page) => {
             let total = page.total;
+            let scrollback = page.scrollback.map(|state| {
+                let (status, next_before) = match state {
+                    ScrollbackRead::StaleBoundary => (ScrollbackStatus::StaleBoundary, None),
+                    ScrollbackRead::Ready { next_row: None } => (ScrollbackStatus::Ready, None),
+                    ScrollbackRead::Ready {
+                        next_row: Some(row),
+                    } => match encode_scrollback_boundary(&canonical, &row) {
+                        Some(token) => (ScrollbackStatus::Ready, Some(token)),
+                        None => (ScrollbackStatus::ContinuationUnavailable, None),
+                    },
+                };
+                ChatHistoryScrollbackResponse {
+                    requested_before,
+                    next_before,
+                    status,
+                }
+            });
             let chat_messages: Vec<ChatMessage> = page
                 .rows
                 .into_iter()
@@ -536,6 +648,7 @@ pub async fn handle_history(
                     let meta = m.metadata;
                     let field = |k: &str| meta.as_ref().and_then(|mt| mt.get(k))?.as_str();
                     ChatMessage {
+                        message_id: scrollback.is_some().then_some(m.id),
                         role: m.role,
                         content: m.content,
                         timestamp,
@@ -563,7 +676,6 @@ pub async fn handle_history(
             // rationale above). Resolved through the one "session → plan"
             // function the prompt layer and the stop verifier also call, so a
             // client and the model can never be told different lists.
-            let canonical = session_key.to_key_string();
             let active_run = run_manager
                 .as_ref()
                 .and_then(|rm| rm.active_run_for_session(&canonical));
@@ -649,9 +761,7 @@ pub async fn handle_history(
             // `RunQueued` frames — they fired before its socket existed — so
             // without this it paints "thinking" over a queue it cannot see.
             let pending = crate::gateway::busy_queue::pending_for(&canonical);
-            JsonRpcResponse::success(
-                request.id,
-                json!({
+            let mut result = json!({
                     "session_key": params.session_key,
                     "messages": chat_messages,
                     "count": count,
@@ -670,8 +780,11 @@ pub async fn handle_history(
                     "active_run_elapsed_ms": active_run_elapsed_ms,
                     "plan": plan,
                     "session": session_snapshot,
-                }),
-            )
+            });
+            if let Some(scrollback) = scrollback {
+                result["scrollback"] = json!(scrollback);
+            }
+            JsonRpcResponse::success(request.id, result)
         }
         Err(e) => JsonRpcResponse::error(
             request.id,
@@ -1115,6 +1228,235 @@ mod tests {
         assert_eq!(window.is_complete(), Some(false));
     }
 
+    async fn scrollback_file_fixture(
+        temp: &tempfile::TempDir,
+        ids: &[&str],
+    ) -> (Arc<dyn SessionStore>, SessionKey) {
+        use crate::gateway::session_store::file_backend::{
+            FileSessionStore, FileSessionStoreConfig,
+        };
+        use crate::gateway::session_store::types::MessageRecord;
+
+        let store: Arc<dyn SessionStore> = Arc::new(
+            FileSessionStore::new(FileSessionStoreConfig {
+                base_dir: temp.path().to_path_buf(),
+                ..Default::default()
+            })
+            .unwrap(),
+        );
+        let key = SessionKey::main("scrollback-wire");
+        store.get_or_create(&key).await.unwrap();
+        for (i, id) in ids.iter().enumerate() {
+            store
+                .append_message(
+                    &key,
+                    MessageRecord {
+                        id: (*id).into(),
+                        role: "user".into(),
+                        content: format!("message {i}"),
+                        timestamp: 1_700_000_000 + i as i64,
+                        metadata: None,
+                        input_tokens: 0,
+                        output_tokens: 0,
+                        tool_call_id: None,
+                        tool_name: None,
+                    },
+                )
+                .await
+                .unwrap();
+        }
+        (store, key)
+    }
+
+    async fn history_response(
+        store: &Arc<dyn SessionStore>,
+        params: serde_json::Value,
+    ) -> JsonRpcResponse {
+        handle_history(
+            JsonRpcRequest {
+                jsonrpc: "2.0".into(),
+                method: "chat.history".into(),
+                params: Some(params),
+                id: Some(json!(1)),
+            },
+            store.clone(),
+            None,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn chat_history_scrollback_wire_is_exclusive_and_only_opt_in() {
+        let temp = tempfile::tempdir().unwrap();
+        let (store, key) = scrollback_file_fixture(&temp, &["m-first", "m-last"]).await;
+        let canonical = key.to_key_string();
+        let tail = history_response(
+            &store,
+            json!({
+                "session_key": canonical, "limit": 1, "scrollback": {}
+            }),
+        )
+        .await
+        .result
+        .unwrap();
+        assert_eq!(tail["scrollback"]["status"], "ready");
+        assert_eq!(
+            tail["scrollback"]["requested_before"],
+            serde_json::Value::Null
+        );
+        assert_eq!(tail["messages"][0]["message_id"], "m-last");
+        let next = tail["scrollback"]["next_before"].as_str().unwrap();
+        let older = history_response(&store, json!({
+            "session_key": "agent:Scrollback-Wire:main", "limit": 1, "scrollback": {"before": next}
+        })).await.result.unwrap();
+        assert_eq!(
+            older["scrollback"],
+            json!({"status": "ready", "requested_before": next, "next_before": null})
+        );
+        assert_eq!(older["count"], 1);
+        assert_eq!(older["messages"][0]["message_id"], "m-first");
+
+        let legacy = history_response(
+            &store,
+            json!({
+                "session_key": canonical, "before": tail["messages"][0]["timestamp"]
+            }),
+        )
+        .await
+        .result
+        .unwrap();
+        assert!(legacy.get("scrollback").is_none());
+        assert_eq!(
+            legacy["messages"],
+            json!([{"role": "user", "content": "message 0", "timestamp": "2023-11-14T22:13:20+00:00"}])
+        );
+        let malformed_legacy = history_response(
+            &store,
+            json!({
+                "session_key": canonical, "before": "not a timestamp"
+            }),
+        )
+        .await
+        .result
+        .unwrap();
+        assert_eq!(malformed_legacy["count"], 2);
+        // Apart from the opt-in fields, history serves the same payload.
+        let mut older = older;
+        older["session_key"] = json!(canonical);
+        older.as_object_mut().unwrap().remove("scrollback");
+        older["messages"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("message_id");
+        assert_eq!(older, legacy);
+
+        store.truncate_messages(&key, 0).await.unwrap();
+        let stale = history_response(
+            &store,
+            json!({
+                "session_key": canonical, "scrollback": {"before": next}
+            }),
+        )
+        .await
+        .result
+        .unwrap();
+        assert_eq!(stale["messages"], json!([]));
+        assert_eq!(
+            stale["scrollback"],
+            json!({"status": "stale_boundary", "requested_before": next, "next_before": null})
+        );
+        let empty = history_response(
+            &store,
+            json!({
+                "session_key": canonical, "limit": 200, "scrollback": {}
+            }),
+        )
+        .await
+        .result
+        .unwrap();
+        assert_eq!(empty["messages"], json!([]));
+        assert_eq!(
+            empty["scrollback"],
+            json!({"status": "ready", "requested_before": null, "next_before": null})
+        );
+    }
+
+    #[tokio::test]
+    async fn chat_history_scrollback_rejects_invalid_limits_and_tokens() {
+        use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+
+        let temp = tempfile::tempdir().unwrap();
+        let (store, key) = scrollback_file_fixture(&temp, &[]).await;
+        let canonical = key.to_key_string();
+        let foreign =
+            URL_SAFE_NO_PAD.encode(serde_json::to_vec(&(1, "agent:foreign:main", "m1")).unwrap());
+        let wrong_version =
+            URL_SAFE_NO_PAD.encode(serde_json::to_vec(&(2, &canonical, "m1")).unwrap());
+        for mut params in [
+            json!({"limit": 0, "scrollback": {}}),
+            json!({"limit": 201, "scrollback": {}}),
+            json!({"before": "malformed legacy stamp", "scrollback": {}}),
+            json!({"scrollback": {"before": "bad="}}),
+            json!({"scrollback": {"before": "A".repeat(4097)}}),
+            json!({"scrollback": {"before": foreign}}),
+            json!({"scrollback": {"before": wrong_version}}),
+        ] {
+            params["session_key"] = json!(canonical);
+            let response = history_response(&store, params).await;
+            assert!(response.result.is_none());
+            assert_eq!(response.error.unwrap().code, INVALID_PARAMS);
+        }
+    }
+
+    #[tokio::test]
+    async fn chat_history_scrollback_defaults_to_200_without_capping_legacy_history() {
+        let temp = tempfile::tempdir().unwrap();
+        let ids = (0..201).map(|i| format!("m{i}")).collect::<Vec<_>>();
+        let ids = ids.iter().map(String::as_str).collect::<Vec<_>>();
+        let (store, key) = scrollback_file_fixture(&temp, &ids).await;
+        let tail = history_response(
+            &store,
+            json!({
+                "session_key": key.to_key_string(), "scrollback": {}
+            }),
+        )
+        .await
+        .result
+        .unwrap();
+        assert_eq!(tail["count"], 200);
+        assert_eq!(tail["total"], 201);
+        assert_eq!(tail["messages"][0]["message_id"], "m1");
+        assert!(tail["scrollback"]["next_before"].is_string());
+        let legacy = history_response(&store, json!({"session_key": key.to_key_string()}))
+            .await
+            .result
+            .unwrap();
+        assert_eq!(legacy["count"], 201);
+        assert!(legacy.get("scrollback").is_none());
+    }
+
+    #[tokio::test]
+    async fn chat_history_scrollback_keeps_rows_when_the_boundary_exceeds_budget() {
+        let temp = tempfile::tempdir().unwrap();
+        let huge_id = format!("legacy-{}", "x".repeat(4096));
+        let (store, key) = scrollback_file_fixture(&temp, &["first", &huge_id]).await;
+        let tail = history_response(
+            &store,
+            json!({
+                "session_key": key.to_key_string(), "limit": 1, "scrollback": {}
+            }),
+        )
+        .await
+        .result
+        .unwrap();
+        assert_eq!(tail["messages"][0]["message_id"], huge_id);
+        assert_eq!(tail["messages"][0]["content"], "message 1");
+        assert_eq!(
+            tail["scrollback"],
+            json!({"status": "continuation_unavailable", "requested_before": null, "next_before": null})
+        );
+    }
+
     /// The wire contract Panel Stop depends on. An older client that sends only
     /// `run_id` must still parse (the field is optional), and a client that
     /// scopes the stop must have its session key actually arrive — this is the
@@ -1389,6 +1731,7 @@ mod tests {
     #[test]
     fn test_chat_message_serialization() {
         let message = ChatMessage {
+            message_id: None,
             role: "assistant".to_string(),
             content: "Hello!".to_string(),
             timestamp: "2024-01-01T12:00:00Z".to_string(),
@@ -1412,6 +1755,7 @@ mod tests {
     #[test]
     fn test_chat_message_without_run_id() {
         let message = ChatMessage {
+            message_id: None,
             role: "user".to_string(),
             content: "Hi".to_string(),
             timestamp: "2024-01-01T12:00:00Z".to_string(),
@@ -2207,6 +2551,35 @@ mod tests {
             );
         }
 
+        #[tokio::test]
+        async fn chat_history_scrollback_admits_session_before_checking_the_token() {
+            let temp = tempfile::tempdir().unwrap();
+            let store = store(&temp);
+            let alice = alice_session(&store).await;
+            let missing = SessionKey::main("scrollback-missing");
+            for cursor in [json!("bad="), json!(42)] {
+                let params = |key: &SessionKey| json!({"session_key": key.to_key_string(), "scrollback": {"before": cursor}});
+                let mut refused = Vec::new();
+                for key in [&alice, &missing] {
+                    let response = CALLER_USER
+                        .scope(Some("u-bob".into()), history_response(&store, params(key)))
+                        .await;
+                    assert!(response.result.is_none());
+                    let error = response.error.unwrap();
+                    assert_eq!(error.code, RESOURCE_NOT_FOUND);
+                    refused.push(serde_json::to_value(error).unwrap());
+                }
+                assert_eq!(refused[0], refused[1]);
+                let visible = CALLER_USER
+                    .scope(
+                        Some("u-alice".into()),
+                        history_response(&store, params(&alice)),
+                    )
+                    .await;
+                assert_eq!(visible.error.unwrap().code, INVALID_PARAMS);
+            }
+        }
+
         /// The settings snapshot is part of this response's contract for the
         /// same reason `active_run` and `plan` are: they are one snapshot with
         /// the transcript, and a client that had to fetch them separately would
@@ -2544,7 +2917,7 @@ mod tests {
                 _transient_context: Option<String>,
                 _think_level: Option<crate::agents::thinking::ThinkLevel>,
                 _envelope: crate::thinker::TurnEnvelope,
-                _turn_model: Option<crate::providers::session_model_handle::SessionModelPref>,
+                _turn_model: Option<crate::orchestrator::dispatch::RunModelDirective>,
                 _run_id: String,
                 _telecom_public: Option<crate::gateway::telecom::TelecomPublicContext>,
             ) -> Result<

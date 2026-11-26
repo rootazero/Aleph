@@ -6,9 +6,7 @@ use crate::config::types::phase6_wiring::ModelThresholdToml;
 use crate::config::types::ProviderConfig;
 use crate::config::Config;
 use crate::context::budget::ContextBudgetConfig;
-use crate::providers::model_catalog::{
-    capabilities_for, resolve_context_window, resolve_context_window_with_override,
-};
+use crate::providers::model_catalog::{capabilities_for, context_window_for};
 
 /// Default model context-window estimate (tokens) used when neither the
 /// primary provider nor the capability catalog reveals the active model's
@@ -57,13 +55,6 @@ fn usable_budget(window: u64, reserve: u64) -> u64 {
     }
 }
 
-/// The name the global failover chain reports (`FailoverProvider::name()`
-/// returns the literal `"failover"`). It is a WRAPPER name, not a provider
-/// key: the chain fronts the primary route, so a run served through it is
-/// sized by the PRIMARY's declared window — never by a provider that happens
-/// to be called "failover".
-const FAILOVER_CHAIN_NAME: &str = "failover";
-
 /// Floor for the derived summarizer-input budget. Below this the window
 /// selection would admit barely a handful of turns, so every compaction
 /// would summarize almost nothing (and a still-overflowing span has the
@@ -84,12 +75,8 @@ const MIN_SUMMARIZER_INPUT_BUDGET: u64 = 4_096;
 /// constant — the legacy 200k-window path resolves to exactly 48k and stays
 /// byte-identical.
 ///
-/// Window precedence for the summary model: `capabilities_for(model)` (the
-/// catalog is model-specific) → the primary provider's operator-declared
-/// `context_window` → the chain-minimum window computed above (already the
-/// most conservative window in play). When no distinct summary model
-/// resolves, the summarizer IS the main model, and the chain-minimum window
-/// is exactly right.
+/// Use the configured summary route's window, falling back to the chain
+/// minimum when no summary window is known.
 fn derive_summarizer_input_budget(
     config: &Config,
     primary_provider_key: &str,
@@ -97,15 +84,8 @@ fn derive_summarizer_input_budget(
 ) -> usize {
     let summary_model = super::summary::effective_summary_model(config, primary_provider_key);
     let window = if let Some((model, _)) = summary_model {
-        capabilities_for(&model)
-            .map(|c| u64::from(c.context_window))
-            .or_else(|| {
-                config
-                    .providers
-                    .get(primary_provider_key)
-                    .and_then(|p| p.context_window)
-                    .map(u64::from)
-            })
+        configured_context_window(config.providers.get(primary_provider_key), &model)
+            .map(u64::from)
             .unwrap_or(chain_min_window)
     } else {
         chain_min_window
@@ -250,11 +230,19 @@ struct DerivedBudget {
     source: &'static str,
 }
 
+fn configured_context_window(provider: Option<&ProviderConfig>, model: &str) -> Option<u32> {
+    context_window_for(
+        model,
+        provider.and_then(|p| p.context_window),
+        provider.and_then(|p| p.model_defs.iter().find(|def| def.id == model)),
+    )
+}
+
 /// Derive the usable context-compaction budget for `model` running on
 /// `primary`, in tokens.
 ///
 /// Precedence (each independently for window and reserve):
-///   - **window**:  `provider.context_window` ▸ `capabilities_for(model)` ▸
+///   - **window**: provider override ▸ exact model override ▸ catalog ▸
 ///     [`DEFAULT_CONTEXT_TOKEN_BUDGET`]
 ///   - **reserve**: `provider.max_tokens` ▸ `capabilities_for(model)` ▸
 ///     [`DEFAULT_OUTPUT_RESERVE`]
@@ -267,10 +255,22 @@ struct DerivedBudget {
 /// applied.
 fn derive_token_budget(primary: Option<&ProviderConfig>, model: Option<&str>) -> DerivedBudget {
     let caps = model.and_then(capabilities_for);
-    let (window, source) = primary
-        .and_then(|p| p.context_window)
-        .map(|w| (u64::from(w), "config"))
-        .or_else(|| caps.map(|c| (u64::from(c.context_window), "catalog")))
+    let model = model.unwrap_or_default();
+    let (window, source) = configured_context_window(primary, model)
+        .map(|window| {
+            let configured = primary.is_some_and(|p| {
+                p.context_window.is_some_and(|w| w > 0)
+                    || p.model_defs
+                        .iter()
+                        .find(|def| def.id == model)
+                        .and_then(|def| def.context_window)
+                        .is_some_and(|w| w > 0)
+            });
+            (
+                u64::from(window),
+                if configured { "config" } else { "catalog" },
+            )
+        })
         .unwrap_or((DEFAULT_CONTEXT_TOKEN_BUDGET, "default"));
     let reserve = primary
         .and_then(|p| p.max_tokens)
@@ -580,6 +580,7 @@ pub struct ContextBudgetRefiner {
     /// provider's run into a 200k-window budget, and the prompt gate then
     /// admitted ~6x the model's real input capacity on every turn.
     provider_windows: HashMap<String, u32>,
+    model_windows: HashMap<String, HashMap<String, u32>>,
     provider_max_tokens: HashMap<String, u32>,
 }
 
@@ -594,16 +595,24 @@ pub fn build_context_budget_refiner(
 ) -> Option<ContextBudgetRefiner> {
     let cb = config.effective_context_budget()?;
     let mut provider_windows = HashMap::new();
+    let mut model_windows = HashMap::new();
     let mut provider_max_tokens = HashMap::new();
     for (name, p) in &config.providers {
-        if p.context_window.is_some() || p.max_tokens.is_some() {
-            let lower = name.to_ascii_lowercase();
-            if let Some(w) = p.context_window {
-                provider_windows.insert(lower.clone(), w);
-            }
-            if let Some(m) = p.max_tokens {
-                provider_max_tokens.insert(lower, m);
-            }
+        let mut windows = HashMap::new();
+        for def in &p.model_defs {
+            windows
+                .entry(def.id.clone())
+                .or_insert(def.context_window.unwrap_or(0));
+        }
+        windows.retain(|_, window| *window > 0);
+        if !windows.is_empty() {
+            model_windows.insert(name.clone(), windows);
+        }
+        if let Some(window) = p.context_window {
+            provider_windows.insert(name.clone(), window);
+        }
+        if let Some(max_tokens) = p.max_tokens {
+            provider_max_tokens.insert(name.clone(), max_tokens);
         }
     }
     Some(ContextBudgetRefiner {
@@ -617,19 +626,33 @@ pub fn build_context_budget_refiner(
             .get(primary_provider_key)
             .and_then(|p| p.max_tokens),
         provider_windows,
+        model_windows,
         provider_max_tokens,
     })
 }
 
 impl ContextBudgetRefiner {
-    /// The primary's declared context window, if it declared one.
-    ///
-    /// The refiner does not store the primary's window separately: the
-    /// caller threads it in per run as the `window_override` (it is the
-    /// primary's `[providers]` entry, resolved at boot). This helper keeps
-    /// that plumbing in one place for the failover-chain arm.
-    fn primary_window_override(&self, window_override: Option<u32>) -> Option<u32> {
-        window_override.filter(|&w| w > 0)
+    /// A known window for the exact serving route, without an unknown-model guess.
+    pub(crate) fn serving_context_window(
+        &self,
+        serving_model: &str,
+        serving_provider: &str,
+        window_override: Option<u32>,
+    ) -> Option<u32> {
+        let is_primary = serving_provider == self.primary_provider_key;
+        let configured_window = self
+            .provider_windows
+            .get(serving_provider)
+            .copied()
+            .filter(|&window| window > 0)
+            .or_else(|| window_override.filter(|&window| is_primary && window > 0))
+            .or_else(|| {
+                self.model_windows
+                    .get(serving_provider)?
+                    .get(serving_model)
+                    .copied()
+            });
+        context_window_for(serving_model, configured_window, None)
     }
 
     /// Re-key `base` (the chain-minimum startup config) onto the model serving
@@ -664,41 +687,18 @@ impl ContextBudgetRefiner {
         window_override: Option<u32>,
     ) -> ContextBudgetConfig {
         let caps = capabilities_for(serving_model);
-        if caps.is_none() && window_override.is_none_or(|w| w == 0) {
+        let is_primary = serving_provider == self.primary_provider_key;
+        let Some(window) =
+            self.serving_context_window(serving_model, serving_provider, window_override)
+        else {
             return base.clone();
-        }
-        // The window may only come from the PRIMARY's declaration when the
-        // serving provider IS the primary. A different serving provider is
-        // sized by its OWN declared window (falling back to the model
-        // catalog), never by the primary's — otherwise a run served by a
-        // 32k-window provider is budgeted at the primary's 200k window and
-        // the prompt gate admits far more than the model can take.
-        let is_primary = serving_provider.eq_ignore_ascii_case(&self.primary_provider_key);
-        let serving_key = serving_provider.to_ascii_lowercase();
-        let window = if is_primary {
-            u64::from(resolve_context_window_with_override(
-                window_override,
-                serving_model,
-            ))
-        } else {
-            // The failover CHAIN fronts the primary route, so a run served
-            // through it is sized by the primary — its name is a wrapper
-            // name, not a provider key.
-            let chain_window = if serving_provider.eq_ignore_ascii_case(FAILOVER_CHAIN_NAME) {
-                self.primary_window_override(window_override)
-            } else {
-                None
-            };
-            chain_window
-                .or_else(|| self.provider_windows.get(&serving_key).copied())
-                .map(u64::from)
-                .unwrap_or_else(|| u64::from(resolve_context_window(serving_model)))
         };
+        let window = u64::from(window);
         let reserve = if is_primary {
             self.primary_max_tokens.map(u64::from)
         } else {
             self.provider_max_tokens
-                .get(&serving_key)
+                .get(serving_provider)
                 .copied()
                 .map(u64::from)
         }
@@ -1701,6 +1701,108 @@ mod tests {
             refiner.refine_for_serving_model(&base, "my-custom-model", "local", Some(64_000));
         assert_eq!(refined.token_budget, 64_000 - DEFAULT_OUTPUT_RESERVE);
         assert_cfg_eq(&refined, &base);
+    }
+
+    fn window_def(id: &str, window: u32) -> crate::config::types::ModelDef {
+        serde_json::from_value(serde_json::json!({"id": id, "context_window": window}))
+            .expect("valid model definition")
+    }
+
+    #[test]
+    fn model_window_precedence_is_provider_then_model_then_catalog() {
+        let model = "kimi-k2";
+        let def = window_def(model, 64_000);
+        assert_eq!(
+            context_window_for(model, Some(80_000), Some(&def)),
+            Some(80_000)
+        );
+        assert_eq!(context_window_for(model, Some(0), Some(&def)), Some(64_000));
+        assert_eq!(
+            context_window_for(model, None, Some(&window_def(model, 0))),
+            Some(262_144)
+        );
+        assert_eq!(
+            context_window_for(model, None, Some(&window_def("Kimi-k2", 64_000))),
+            Some(262_144)
+        );
+    }
+
+    #[test]
+    fn serving_custom_model_override_restricts_chain_cap() {
+        let mut primary = big_primary();
+        primary.context_window = None;
+        primary.max_tokens = None;
+        primary.model_defs = vec![
+            window_def("custom-model", 64_000),
+            window_def("summary-model", 32_000),
+            window_def("wide-model", 2_000_000),
+        ];
+        let cfg = cfg_with_primary(
+            "claude",
+            primary,
+            ContextBudgetToml {
+                enabled: true,
+                summary_model: Some("summary-model".into()),
+                ..ContextBudgetToml::default()
+            },
+        );
+        let base = build_context_budget_config(&cfg, "claude", &[]).expect("enabled");
+        let refiner = build_context_budget_refiner(&cfg, "claude").expect("enabled");
+        assert_eq!(base.summarizer_input_budget, 8_000);
+        let startup = derive_token_budget(cfg.providers.get("claude"), Some("custom-model"));
+        assert_eq!(startup.window, 64_000);
+        assert_eq!(
+            refiner
+                .refine_for_serving_model(&base, "custom-model", "claude", None)
+                .token_budget,
+            startup.usable
+        );
+        for provider in ["other", "failover"] {
+            assert_cfg_eq(
+                &refiner.refine_for_serving_model(&base, "custom-model", provider, Some(64_000)),
+                &base,
+            );
+        }
+        assert_eq!(
+            refiner
+                .refine_for_serving_model(&base, "wide-model", "claude", None)
+                .token_budget,
+            base.token_budget
+        );
+    }
+
+    #[test]
+    fn serving_budget_keeps_case_distinct_provider_keys() {
+        let mut config = cfg_with_primary(
+            "primary",
+            big_primary(),
+            ContextBudgetToml {
+                enabled: true,
+                ..ContextBudgetToml::default()
+            },
+        );
+        for (name, window, max_tokens) in [("Relay", 64_000, 2_000), ("relay", 32_000, 4_000)] {
+            let mut provider = ProviderConfig::test_config("org/model");
+            provider.context_window = None;
+            provider.model_defs = vec![window_def("org/model", window)];
+            provider.max_tokens = Some(max_tokens);
+            config.providers.insert(name.into(), provider);
+        }
+        let refiner = build_context_budget_refiner(&config, "primary").unwrap();
+        let base = build_context_budget_config(&config, "primary", &[]).unwrap();
+        for (name, window, reserve) in [("Relay", 64_000, 2_000), ("relay", 32_000, 4_000)] {
+            assert_eq!(
+                refiner.serving_context_window("org/model", name, None),
+                Some(window)
+            );
+            assert_eq!(
+                refiner
+                    .refine_for_serving_model(&base, "org/model", name, None)
+                    .token_budget,
+                base.token_budget
+                    .min(usable_budget(u64::from(window), reserve))
+            );
+        }
     }
 
     #[test]

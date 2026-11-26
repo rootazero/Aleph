@@ -23,6 +23,7 @@ pub mod canvas;
 pub mod capability;
 pub mod channel_pairing;
 pub mod channels;
+pub mod chat_transcript;
 pub mod clarification;
 pub mod commands;
 pub mod context_breakdown;

@@ -494,11 +494,9 @@
 //!
 //! ## `OrgShared`
 //!
-//! No entry in this table is `OrgShared`. Every Task 6 method is genuinely
-//! per-user (a session has exactly one owner); every Task 7 method is
-//! per-user or per-partition, never org-level infrastructure. `OrgShared`
-//! stays defined (see the enum doc) for a future task whose methods
-//! genuinely are shared by design.
+//! `chat.models.list` is shared by design: it projects usable bindings from
+//! the installation's provider runtime without session data or admin settings.
+//! No entire method family is `OrgShared`.
 
 /// How a scoped-data method's response is (or should be) restricted to the
 /// calling user.
@@ -523,11 +521,6 @@ pub enum Treatment {
     PartitionChecked,
     /// Deliberately shared across every user by design — not a gap. Carries
     /// a reason string at the call site (see `org_shared_entries_all_carry_reasons`).
-    /// Still unused after Task 7 — none of `memory.*`/`artifacts.*`/
-    /// `clarification.*`/`subagent.tree`/`graph.query` are org-shared, they
-    /// are all per-user or per-partition. Left for a future task whose
-    /// methods genuinely are org-level infrastructure (e.g. `teams.*`).
-    #[allow(dead_code)]
     OrgShared,
 }
 
@@ -562,6 +555,11 @@ pub const SCOPED_METHODS: &[(&str, Treatment)] = &[
     ("chat.send", Treatment::KeyChecked),
     ("chat.abort", Treatment::KeyChecked),
     ("chat.history", Treatment::KeyChecked),
+    ("chat.models.list", Treatment::OrgShared),
+    (
+        aleph_protocol::chat_transcript::CHAT_TRANSCRIPT_DETAILS_METHOD,
+        Treatment::KeyChecked,
+    ),
     ("chat.clear", Treatment::KeyChecked),
     ("chat.rewind", Treatment::KeyChecked),
     ("sessions.new", Treatment::KeyChecked),
@@ -796,7 +794,10 @@ const ORG_SHARED_PREFIXES: &[&str] = &[];
 /// `OrgShared` entries carry a one-line reason at the point they're listed,
 /// keyed by the exact method or by the family prefix
 /// (`ORG_SHARED_PREFIXES`).
-pub const ORG_SHARED_REASONS: &[(&str, &str)] = &[];
+pub const ORG_SHARED_REASONS: &[(&str, &str)] = &[(
+    "chat.models.list",
+    "Installation-wide usable model bindings, without credentials, endpoints or session state",
+)];
 
 #[must_use]
 pub fn treatment_of(method: &str) -> Option<Treatment> {
@@ -992,35 +993,22 @@ mod tests {
     /// one-line reason. "Shared by design" and "nobody looked" are
     /// indistinguishable without one.
     ///
-    /// Both sources are empty today, so the loop below iterates zero times and
-    /// on its own this test cannot fail — a guard chaining two empty iterators
-    /// is indistinguishable from a deleted guard. The two assertions in front
-    /// of it state the emptiness itself, which CAN fail: they are what makes
-    /// the ruling "nothing in this table claims 'shared' without a per-method
-    /// audit" a checked fact rather than a comment. Adding a genuinely
-    /// org-shared family is expected to fail here; the fix is to name it in
-    /// the assertion (the same convention as the `deliberately absent` pins),
-    /// at which point the reason loop starts doing the work it was written for.
+    /// Pin the reviewed exact methods and reject any widening to siblings.
     #[test]
     fn org_shared_entries_all_carry_reasons() {
-        assert!(
-            !SCOPED_METHODS
-                .iter()
-                .any(|(_, t)| *t == Treatment::OrgShared),
-            "no method in SCOPED_METHODS is OrgShared today; if you added one, \
-             give it a reason in ORG_SHARED_REASONS and name it here"
-        );
+        let exact: Vec<_> = SCOPED_METHODS
+            .iter()
+            .filter(|(_, treatment)| *treatment == Treatment::OrgShared)
+            .map(|(method, _)| *method)
+            .collect();
+        assert_eq!(exact, ["chat.models.list"]);
         assert!(
             ORG_SHARED_PREFIXES.is_empty(),
             "no family is ruled OrgShared today (teams.* was the last one and \
              its ruling was overturned 2026-08-06); if you added one, give it a \
              reason in ORG_SHARED_REASONS and name it here"
         );
-        let exact = SCOPED_METHODS
-            .iter()
-            .filter(|(_, t)| *t == Treatment::OrgShared)
-            .map(|(m, _)| *m);
-        for m in exact.chain(ORG_SHARED_PREFIXES.iter().copied()) {
+        for m in exact.into_iter().chain(ORG_SHARED_PREFIXES.iter().copied()) {
             assert!(
                 ORG_SHARED_REASONS
                     .iter()

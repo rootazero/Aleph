@@ -39,6 +39,7 @@ export function Shell() {
   const fontScaleSupported = signal(true);
   const prefsSaveFailed = signal(false);
   const paletteOpen = signal(false);
+  const readerMode = signal(false);
   // Commands the mounted module registered (already prefixed with its key).
   const moduleCommands = signal<CommandSpec[]>([]);
   // Every module command seen this session, kept after its module unmounts
@@ -49,9 +50,16 @@ export function Shell() {
   const keyFailures = signal<Map<string, string>>(new Map());
   const listeners = new Set<(state: ConnectionState) => void>();
   const eventListeners = new Set<(event: PanelEvent) => void>();
-  // What a module handed the one it navigated to (by tab key), for this run
-  // of the shell only: a reload starts every module without one.
+  // Keep only the last confirmed identity, never a cache of previous identities.
   const intents = new Map<string, Intent>();
+  let identity: { endpoint: string; subject: string } | null = null;
+  const sendUnknown = signal(false);
+  let pendingSend: ((unknown: boolean) => void) | null = null;
+  const clearContinuity = () => {
+    intents.clear();
+    sendUnknown.set(false);
+    identity = null;
+  };
   // The snapshot and storage key the current view was made from.
   let snapshot: unknown = null;
   let storageKey: string | null = null;
@@ -83,8 +91,13 @@ export function Shell() {
     const next = readConnection(state) ?? { ...INITIAL, state: "unavailable" } as const;
     const changed = connectionChanged(connection(), next);
     batch(() => {
-      connection.set(next);
       if (changed) {
+        pendingSend?.(true);
+        if (!identity || (next.endpoint && next.endpoint !== identity.endpoint)) clearContinuity();
+        if (next.state === "connected") {
+          if (next.subject !== identity?.subject || next.endpoint !== identity?.endpoint) clearContinuity();
+          identity = next.subject && next.endpoint ? { endpoint: next.endpoint, subject: next.subject } : null;
+        }
         generation.update((value) => value + 1);
         snapshot = null;
         storageKey = null;
@@ -92,6 +105,7 @@ export function Shell() {
         notice.set(null);
         settingsOpen.set(false);
       }
+      connection.set(next);
     });
     for (const listener of [...listeners]) listener(next);
     if (changed && next.state === "connected") void load(generation());
@@ -111,10 +125,37 @@ export function Shell() {
     generation: () => generation(),
     connection: () => connection(),
     navigate(key, intent) {
+      const current = view();
+      if (!current || !storageKey || connection().state !== "connected") return false;
+      const stored = PanelModel.select(current.stored, key);
+      if (!stored) return false;
+      const next = PanelModel.view(snapshot, stored) as PanelView;
+      if (next.layout.active !== key) return false;
+      if (intent && !next.slots.some((slot) => slot.key === key && slot.state === "live")) return false;
       if (intent) intents.set(key, intent);
-      edit((stored) => PanelModel.select(stored, key));
+      view.set(next);
+      void Storage.setItem(storageKey, stored);
+      return true;
     },
-    intent: (key) => intents.get(key) ?? null,
+    intent: (key) => connection().state === "connected" ? intents.get(key) ?? null : null,
+    rememberChat(sessionKey) {
+      if (connection().state !== "connected") return false;
+      if (sessionKey === null) intents.delete("aleph:chat");
+      else intents.set("aleph:chat", { session_key: sessionKey });
+      return true;
+    },
+    beginChatSend() {
+      if (connection().state !== "connected" || pendingSend) return null;
+      const finish = (unknown: boolean) => {
+        if (pendingSend !== finish) return;
+        pendingSend = null;
+        if (unknown) sendUnknown.set(true);
+      };
+      pendingSend = finish;
+      return finish;
+    },
+    chatSendUnknown: () => sendUnknown(),
+    dismissChatSendUnknown: () => sendUnknown.set(false),
     onConnection(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -270,17 +311,19 @@ export function Shell() {
           onLayout={({ bounds }) => takeFocus(bounds)}
           class="flex-1 flex-row bg-background"
         >
-          <Sidebar
-            view={view}
-            connection={connection}
-            settingsOpen={settingsOpen}
-            compact={() => horizontalSizeClass() === "compact"}
-            density={() => current().density}
-            onOpen={openModule}
-            onSettings={() => settingsOpen.update((open) => !open)}
-          />
+          <If when={!readerMode()}>
+            <Sidebar
+              view={view}
+              connection={connection}
+              settingsOpen={settingsOpen}
+              compact={() => horizontalSizeClass() === "compact"}
+              density={() => current().density}
+              onOpen={openModule}
+              onSettings={() => settingsOpen.update((open) => !open)}
+            />
+          </If>
           <View class="flex-1">
-            <If when={notice()}>
+            <If when={!readerMode() && notice()}>
               <Text class="px-3 py-2 text-destructive">{notice()}</Text>
             </If>
             <If
@@ -292,7 +335,8 @@ export function Shell() {
                       {(item) => {
                         const sdk = createSdk(item().slot.key, item().generation, access);
                         cleanup(() => sdk.dispose());
-                        return <ModuleSlot slot={item().slot} tab={tabOf(item().slot.key)} tabs={view()?.tabs ?? []} sdk={sdk} />;
+                        return <ModuleSlot slot={item().slot} tab={tabOf(item().slot.key)} tabs={view()?.tabs ?? []} sdk={sdk}
+                          setReaderMode={(active) => readerMode.set(active)} />;
                       }}
                     </Each>
                   </View>
@@ -331,7 +375,10 @@ export function Shell() {
 
 // Only live slots mount (`PanelModel` never makes an unavailable tab active);
 // a slot's key and renderer are fixed for its row.
-function ModuleSlot(props: { slot: Slot; tab: PanelTab | undefined; tabs: PanelTab[]; sdk: PanelSdk }) {
+function ModuleSlot(props: {
+  slot: Slot; tab: PanelTab | undefined; tabs: PanelTab[]; sdk: PanelSdk;
+  setReaderMode: (active: boolean) => void;
+}) {
   const { slot, tab, sdk } = props;
   if (slot.renderer === "dom") {
     return <Unavailable title={tab?.label ?? slot.key} detail="This tab needs the classic Panel; it does not run in this renderer yet." />;
@@ -342,7 +389,7 @@ function ModuleSlot(props: { slot: Slot; tab: PanelTab | undefined; tabs: PanelT
     case "aleph:sessions":
       return <Sessions sdk={sdk} />;
     case "aleph:chat":
-      return <Chat sdk={sdk} />;
+      return <Chat sdk={sdk} setReaderMode={props.setReaderMode} />;
     case "aleph:voice":
       return <Voice sdk={sdk} />;
     case "aleph:capabilities":

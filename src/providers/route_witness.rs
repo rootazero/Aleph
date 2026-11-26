@@ -231,6 +231,8 @@ pub struct RouteWitness {
     pub first: Dialed,
     /// The endpoint that answered the most recent successful dial.
     pub served: Dialed,
+    /// Distinguishes a real answer from the plan-time mirror in `served`.
+    pub answered: bool,
 }
 
 impl RouteWitness {
@@ -273,14 +275,15 @@ impl RouteWitness {
             && self.first.provider == attempted.provider
             && attempted.model != DialedModel::Unresolved
         {
-            // `served == first` is exactly "nothing has answered yet"; keep the
+            // While nothing has answered yet, keep the
             // two in step so the mirror above survives the refinement.
-            if self.served == self.first {
+            if !self.answered {
                 self.served = attempted.clone();
             }
             self.first = attempted.clone();
         }
         if let Some(served) = served {
+            self.answered = true;
             self.served = served;
         }
     }
@@ -349,8 +352,16 @@ impl BoundedWitnesses {
             }
             std::collections::hash_map::Entry::Vacant(entry) => {
                 let first = attempted;
+                let answered = served.is_some();
                 let served = served.unwrap_or_else(|| first.clone());
-                entry.insert((tick, RouteWitness { first, served }));
+                entry.insert((
+                    tick,
+                    RouteWitness {
+                        first,
+                        served,
+                        answered,
+                    },
+                ));
             }
         }
     }
@@ -373,9 +384,7 @@ impl BoundedWitnesses {
     /// delete turn 1's real, dialed record.
     fn retract(&mut self, key: &str, provider: &str) {
         let is_bare_anchor = self.map.get(key).is_some_and(|(_, w)| {
-            w.first.provider == provider
-                && w.first.model == DialedModel::Unresolved
-                && w.served == w.first
+            w.first.provider == provider && w.first.model == DialedModel::Unresolved && !w.answered
         });
         if is_bare_anchor {
             self.map.remove(key);

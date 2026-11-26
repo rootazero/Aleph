@@ -396,7 +396,7 @@ impl TeamDispatcher {
             input,
             uuid::Uuid::new_v4().to_string(),
             timeout_secs,
-            isolate,
+            isolate.then_some(self.projects.as_ref()),
             model_override,
             think_level,
         )

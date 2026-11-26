@@ -9,6 +9,7 @@
 //! Moved verbatim out of the legacy `/ws` event arm; only control flow changed
 //! (`continue` → [`EventVerdict::Skip`], socket writes → returned verdicts).
 
+use aleph_protocol::{chat_transcript::CHAT_TOOL_TOPIC, system_hello::Feature};
 use tokio::sync::broadcast::{self, error::RecvError};
 use tracing::{debug, info, warn};
 
@@ -18,6 +19,8 @@ use super::{
     ui_display_admits_connection, v1_event_admitted, wall_admits, ConnectionContext,
 };
 
+use crate::gateway::handlers::chat_presentation::{is_tool_source_topic, project_live_tool};
+
 /// What a connection does with one bus frame.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum EventVerdict {
@@ -25,6 +28,8 @@ pub(super) enum EventVerdict {
     Skip,
     /// Send these exact wire bytes (projection and wrapping already applied).
     Send(String),
+    /// A V1 projection that requires a fresh bound credential at the write edge.
+    ToolPresentation(String),
     /// Close the connection; the reason is the WebSocket close reason
     /// (`token_rotated` / `device_revoked`, close code 4001 on `/ws`).
     Close(&'static str),
@@ -41,6 +46,16 @@ pub(super) async fn admit_event(
     conn_id: &str,
     session_device_id: Option<&str>,
     event_json: String,
+) -> EventVerdict {
+    admit_with_presentation(ctx, conn_id, session_device_id, event_json, false).await
+}
+
+async fn admit_with_presentation(
+    ctx: &ConnectionContext,
+    conn_id: &str,
+    session_device_id: Option<&str>,
+    event_json: String,
+    chat_transcript: bool,
 ) -> EventVerdict {
     // Token rotation kick: close remote (token-authorized)
     // sessions so they re-authenticate; never forward this
@@ -78,6 +93,11 @@ pub(super) async fn admit_event(
     // Try to extract topic from event for filtering
     let (should_forward, projected_payload) = if let Some(event_obj) = parsed.as_ref() {
         let (topic, event_data) = extract_topic_and_data(event_obj);
+        let presenting_tool = chat_transcript && is_tool_source_topic(topic);
+        // A tool presentation is produced here, never by the process-wide bus.
+        if topic == CHAT_TOOL_TOPIC || (presenting_tool && ctx.session_store.is_none()) {
+            return EventVerdict::Skip;
+        }
         if !crate::gateway::pty::manager::frame_admits(topic, event_data) {
             return EventVerdict::Skip;
         }
@@ -175,10 +195,11 @@ pub(super) async fn admit_event(
                 ),
             };
         if admits
-            && matches!(
-                topic,
-                "capability.event" | "capability.event.status" | "capabilities.ui.display"
-            )
+            && (presenting_tool
+                || matches!(
+                    topic,
+                    "capability.event" | "capability.event.status" | "capabilities.ui.display"
+                ))
         {
             // Session I/O cannot bless an identity restamped while
             // it was in flight. Selection and authority stay separate.
@@ -192,6 +213,7 @@ pub(super) async fn admit_event(
                         && state.caller_user == event_caller_user
                         && state.caller_role == event_caller_role
                         && wall_admits(Some(&state.caller_role), "")
+                        && (!presenting_tool || state.device_id.as_deref() == session_device_id)
                         && ctx.event_scope_guard.can_receive(topic, &state.permissions)
                         && crate::gateway::surface::delivery::audience_allows(
                             event_data,
@@ -238,6 +260,17 @@ pub(super) async fn admit_event(
     }) {
         return EventVerdict::Skip;
     }
+    if chat_transcript {
+        if let Some(frame) = parsed.as_ref() {
+            let (topic, data) = extract_topic_and_data(frame);
+            if is_tool_source_topic(topic) {
+                return data
+                    .or_else(|| frame.get("params"))
+                    .and_then(|payload| project_live_tool(topic, payload))
+                    .map_or(EventVerdict::Skip, EventVerdict::ToolPresentation);
+            }
+        }
+    }
     debug!("Forwarding event to {}", conn_id);
     // Apply the projection (if any) and wrap the bare
     // TopicEvent form — see `event_wire_form`.
@@ -252,6 +285,8 @@ pub(super) async fn admit_event(
 pub(super) enum V1Event {
     /// Write this frame and keep serving.
     Send(String),
+    /// Revalidate bound authority immediately before writing this projection.
+    ToolPresentation(String),
     /// Write this warning, then end the connection: frames were lost and the
     /// client must resynchronize from a snapshot.
     Lost(String),
@@ -276,6 +311,7 @@ pub(super) struct V1EventFeed {
     conn_id: String,
     device_id: Option<String>,
     max_frame_bytes: usize,
+    chat_transcript: bool,
     overflow: u64,
 }
 
@@ -285,12 +321,15 @@ impl V1EventFeed {
         conn_id: String,
         device_id: Option<String>,
         max_frame_bytes: usize,
+        features: &[Feature],
     ) -> Self {
         Self {
             receiver: ctx.event_bus.subscribe(),
             conn_id,
             device_id,
             max_frame_bytes,
+            chat_transcript: features.contains(&Feature::LiveEvents)
+                && features.contains(&Feature::ChatTranscript),
             overflow: 0,
         }
     }
@@ -313,11 +352,19 @@ impl V1EventFeed {
             }
             Err(RecvError::Closed) => return Some(V1Event::Close("event bus closed")),
         };
-        let verdict = admit_event(ctx, &self.conn_id, self.device_id.as_deref(), event_json).await;
-        let wire = match verdict {
+        let verdict = admit_with_presentation(
+            ctx,
+            &self.conn_id,
+            self.device_id.as_deref(),
+            event_json,
+            self.chat_transcript,
+        )
+        .await;
+        let (wire, tool_presentation) = match verdict {
             EventVerdict::Skip => return None,
             EventVerdict::Close(reason) => return Some(V1Event::Close(reason)),
-            EventVerdict::Send(wire) => wire,
+            EventVerdict::Send(wire) => (wire, false),
+            EventVerdict::ToolPresentation(wire) => (wire, true),
         };
         if !v1_event_admitted(&wire) {
             return None;
@@ -331,7 +378,11 @@ impl V1EventFeed {
             self.overflow += 1;
             return Some(V1Event::Send(overflow_warning_frame(1, self.overflow)));
         }
-        Some(V1Event::Send(wire))
+        Some(if tool_presentation {
+            V1Event::ToolPresentation(wire)
+        } else {
+            V1Event::Send(wire)
+        })
     }
 }
 
@@ -520,6 +571,152 @@ mod tests {
         let wrapped = json!({"jsonrpc": "2.0", "method": "event", "params": {"topic": "session.created", "data": {}}});
         assert!(!v1_event_admitted(&wrapped.to_string()));
         assert!(!v1_event_admitted("not json"));
+    }
+
+    #[tokio::test]
+    async fn v1_projects_tool_frames_only_after_run_admission() {
+        let fixture = fixture(false);
+        let key = SessionKey::main("rich-chat");
+        crate::scope::with_scope(
+            Some(crate::scope::ScopeAttribution::personal("alice")),
+            fixture.store.get_or_create(&key),
+        )
+        .await
+        .unwrap();
+        let accepted = stream(
+            "stream.run_accepted",
+            json!({"type":"run_accepted", "run_id":"run", "session_key":key.to_key_string(), "accepted_at":"t"}),
+        );
+        let tool = stream(
+            "stream.tool_start",
+            json!({"type":"tool_start", "run_id":"run", "seq":7, "tool_id":"call", "tool_name":"plugin", "params":{"path":"not-for-panel"}}),
+        );
+        assert!(matches!(
+            admit(&fixture, "alice", &accepted).await,
+            EventVerdict::Send(_)
+        ));
+        assert_eq!(
+            admit(&fixture, "alice", &tool).await,
+            EventVerdict::Send(tool.to_string())
+        );
+        let features = [super::Feature::LiveEvents, super::Feature::ChatTranscript];
+        let feed = |user: &str, features: &[super::Feature]| {
+            super::V1EventFeed::subscribe(
+                &fixture.ctx,
+                user.into(),
+                Some(format!("device-{user}")),
+                65536,
+                features,
+            )
+        };
+        let mut owner = feed("alice", &features);
+        let mut foreign = feed("bob", &features);
+        let mut old_client = feed("alice", &features[..1]);
+        assert_eq!(
+            foreign.admit(&fixture.ctx, Ok(tool.to_string())).await,
+            None
+        );
+        assert_eq!(
+            old_client.admit(&fixture.ctx, Ok(tool.to_string())).await,
+            None
+        );
+
+        // Ownership alone does not admit a project room; membership does.
+        let project = SessionKey::main("rich-chat-foreign-project");
+        crate::scope::with_scope(
+            Some(crate::scope::ScopeAttribution {
+                owner_user_id: "alice".into(),
+                scope: crate::scope::ScopeId::Project("p-chat-foreign-fixture".into()),
+            }),
+            fixture.store.get_or_create(&project),
+        )
+        .await
+        .unwrap();
+        let project_accepted = stream(
+            "stream.run_accepted",
+            json!({"type":"run_accepted", "run_id":"room-run", "session_key":project.to_key_string(), "accepted_at":"t"}),
+        );
+        assert_eq!(
+            owner
+                .admit(&fixture.ctx, Ok(project_accepted.to_string()))
+                .await,
+            None
+        );
+        let mut project_tool = tool.clone();
+        project_tool["params"]["run_id"] = json!("room-run");
+        assert_eq!(
+            owner
+                .admit(&fixture.ctx, Ok(project_tool.to_string()))
+                .await,
+            None
+        );
+
+        let reasoning = stream(
+            "stream.reasoning",
+            json!({"run_id": "run", "content": "private"}),
+        );
+        assert_eq!(
+            owner.admit(&fixture.ctx, Ok(reasoning.to_string())).await,
+            None
+        );
+        let chunk = |seq| {
+            stream(
+                "stream.response_chunk",
+                json!({"run_id": "run", "seq": seq}),
+            )
+            .to_string()
+        };
+        assert_eq!(
+            owner.admit(&fixture.ctx, Ok(chunk(6))).await,
+            Some(super::V1Event::Send(chunk(6)))
+        );
+        let Some(super::V1Event::ToolPresentation(wire)) =
+            owner.admit(&fixture.ctx, Ok(tool.to_string())).await
+        else {
+            panic!("the owner should receive a V1 tool presentation");
+        };
+        let frame: Value = serde_json::from_str(&wire).unwrap();
+        assert_eq!(frame["method"], "stream.chat_tool");
+        assert_eq!(frame["params"]["run_id"], "run");
+        assert_eq!(frame["params"]["seq"], 7);
+        assert_eq!(frame["params"]["tool_call_id"], "call");
+        assert!(frame["params"].get("params").is_none());
+        assert!(!wire.contains("not-for-panel"));
+        assert_eq!(
+            owner.admit(&fixture.ctx, Ok(chunk(8))).await,
+            Some(super::V1Event::Send(chunk(8)))
+        );
+        assert_eq!(
+            owner.admit(&fixture.ctx, Ok(wire)).await,
+            None,
+            "never accept a pre-projected bus frame"
+        );
+
+        let progress = stream(
+            "stream.tool_update",
+            json!({
+                "type": "tool_update", "run_id": "run", "seq": 9, "tool_id": "call", "progress": "raw progress"
+            }),
+        );
+        let Some(super::V1Event::ToolPresentation(wire)) =
+            owner.admit(&fixture.ctx, Ok(progress.to_string())).await
+        else {
+            panic!("tool progress should disclose only a status");
+        };
+        assert!(!wire.contains("raw progress"));
+        assert_eq!(
+            serde_json::from_str::<Value>(&wire).unwrap()["params"]["change"],
+            json!({"kind":"working"})
+        );
+        fixture
+            .ctx
+            .connections
+            .write()
+            .await
+            .get_mut("alice")
+            .unwrap()
+            .caller_role = "guest".into();
+        assert_eq!(owner.admit(&fixture.ctx, Ok(tool.to_string())).await, None);
     }
 
     #[tokio::test]

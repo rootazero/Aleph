@@ -197,8 +197,8 @@ serde_ignored = "0.1"
 similar = { version = "3", default-features = false, features = ["std", "text"] }
 thiserror = "2.0"
 aleph-protocol = { path = "shared/protocol" }
-# Share the same sample-clock voice controller with the Panel without pulling
-# the UI crate's default WASM dependencies into the server.
+# Reuse the shared voice sample-clock controller and transcript presentation logic.
+# Disable the default WASM dependencies in Core.
 shared-ui-logic = { path = "shared/ui_logic", default-features = false }
 # Pure error + UTF-8 text helper authority. The directional dependency is
 # one-way: alephcore → aleph-slot-api. The new crate must NOT take a
@@ -443,8 +443,7 @@ tempfile = "3.8"
 filetime = "0.2"
 serial_test = "4"
 aleph-protocol = { path = "shared/protocol" }
-# Enable the production dependency's Panel projection only in tests for the
-# presentation census and the Gateway's Nebula declaration.
+# Enable the Panel projection only in tests, for the Nebula declaration census.
 shared-ui-logic = { path = "shared/ui_logic", default-features = false, features = ["panel"] }
 proptest = "1.12"
 rand = "0.10"

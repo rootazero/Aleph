@@ -5,6 +5,36 @@
 
 use aleph_protocol::context_breakdown::ContextBreakdown;
 
+/// Selected counts for the Panel's last-request view. Per-layer attribution
+/// precedes trimming, and conversation counts remain local estimates.
+#[cfg(feature = "panel")]
+#[must_use]
+pub fn panel_context_view(report: &ContextBreakdown) -> serde_json::Value {
+    let stable_bytes: u64 = report
+        .layers
+        .iter()
+        .filter(|layer| layer.zone == "stable")
+        .map(|layer| layer.bytes)
+        .sum();
+    let skill_bytes: u64 = report
+        .layers
+        .iter()
+        .filter(|layer| layer.name == "skill_instructions")
+        .map(|layer| layer.bytes)
+        .sum();
+    serde_json::json!({
+        "session_key": report.session_key,
+        "turn": report.turn,
+        "system_prompt_bytes": report.dynamic_bytes_sent.map(|dynamic| stable_bytes + dynamic),
+        "skill_pre_trim_bytes": skill_bytes,
+        "tool_schema_bytes": report.tool_bytes(),
+        "tools": report.tools,
+        "tool_result_tokens": report.messages.map(|messages| messages.tool_results),
+        "provider_total": reconcile(report).total,
+        "layers": report.layers,
+    })
+}
+
 /// Provider count vs. our total: beyond this fraction the provider wins.
 pub const PROVIDER_TOLERANCE: f64 = 0.001;
 

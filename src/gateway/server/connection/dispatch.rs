@@ -573,16 +573,14 @@ pub(super) async fn dispatch_for_peer(
     start: &CallerSnapshot,
     permit: Option<tokio::sync::OwnedSemaphorePermit>,
 ) -> String {
-    dispatch_ordinary(
-        text,
-        mc,
-        &peer.view(),
-        &req.method,
-        req.id.clone(),
-        start,
-        permit,
-    )
-    .await
+    let view = peer.view();
+    let dispatch = dispatch_ordinary(text, mc, &view, &req.method, req.id.clone(), start, permit);
+    if req.method == "trace.tool_output" && peer.bound.is_some() {
+        return crate::gateway::handlers::tool_output::V1_TOOL_OUTPUT
+            .scope(true, dispatch)
+            .await;
+    }
+    dispatch.await
 }
 
 async fn dispatch_ordinary(

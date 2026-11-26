@@ -95,6 +95,9 @@ impl Lane {
             "panel.capabilities.snapshot" | "graph.query" | "graph.node_detail" => {
                 Some(Self::Query)
             }
+            aleph_protocol::chat_transcript::CHAT_TRANSCRIPT_DETAILS_METHOD
+            | "trace.tool_output"
+            | "context.breakdown" => Some(Self::Query),
             // The handshake. It has no `.`, so the suffix heuristic never ran
             // and it fell through to Mutate — which `needs_idempotency()`.
             // With `require_idempotency_key = true` the server therefore

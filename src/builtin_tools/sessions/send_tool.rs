@@ -433,7 +433,16 @@ impl SessionsSendTool {
         // `~/.aleph/workspaces/{agent_id}/`. Captured BEFORE any spawn
         // because tokio task-locals do not cross the `tokio::spawn`
         // boundary used by fire-and-forget below.
-        let inherited_workspace = crate::projects::current_project_root();
+        use crate::sandbox::context::{current_exec_workspace_binding, ExecWorkspace};
+        // A named session can resume after this checkout's lifetime, without its owner.
+        if current_exec_workspace_binding().is_some_and(|binding| binding.is_owned_worktree()) {
+            return SessionsSendOutput::error(
+                run_id,
+                "An owned worktree cannot delegate to a resumable session; use a foreground subagent".into(),
+            );
+        }
+        let inherited_workspace =
+            crate::projects::current_project_root().map(ExecWorkspace::Directory);
         // Same capture-before-spawn rule, same reason, and the sibling that was
         // missing: a delegated run inherits WHOSE it is, not just where it runs.
         let inherited_scope = crate::scope::current_scope();
@@ -465,7 +474,7 @@ impl SessionsSendTool {
         // failing closed instantly. Fire-and-forget stays stamped regardless.
         let parent_unattended = turn.as_ref().is_some_and(|t| t.unattended);
         let sub_metadata = build_sub_metadata(
-            inherited_workspace.as_deref(),
+            inherited_workspace.as_ref().map(ExecWorkspace::root),
             turn.as_ref().and_then(|t| t.caller_role.clone()),
             turn.as_ref()
                 .and_then(|t| t.channel_tool_permissions.clone()),
@@ -506,7 +515,6 @@ impl SessionsSendTool {
             metadata: sub_metadata.clone(),
             attachments: Vec::new(),
             pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
-            sandbox_override: None,
             workspace_override: inherited_workspace.clone(),
             max_iterations_override: None,
             model_override: None,
@@ -589,7 +597,6 @@ impl SessionsSendTool {
                                 metadata: sub_metadata.clone(),
                                 attachments: Vec::new(),
                                 pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
-                                sandbox_override: None,
                                 workspace_override: inherited_workspace.clone(),
                                 max_iterations_override: None,
                                 model_override: None,
@@ -1267,7 +1274,7 @@ mod tests {
             _transient_context: Option<String>,
             _think_level: Option<crate::agents::thinking::ThinkLevel>,
             _envelope: crate::thinker::TurnEnvelope,
-            _turn_model: Option<crate::providers::session_model_handle::SessionModelPref>,
+            _turn_model: Option<crate::orchestrator::dispatch::RunModelDirective>,
             _run_id: String,
             _telecom_public: Option<crate::gateway::telecom::TelecomPublicContext>,
         ) -> std::result::Result<
@@ -1338,7 +1345,6 @@ mod tests {
                     trace_sink: None,
                     event_tx: None,
                     interaction_manifest: None,
-                    sandbox_override: None,
                     workspace_override: None,
                     max_iterations_override: None,
                     transient_context: None,

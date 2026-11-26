@@ -249,6 +249,7 @@ mod tests {
             relevance: 0.5,
             tokens: (body.chars().count() / 4).max(1) as u32,
             updated_at: 1_700_000_000,
+            note_provenance: None,
             extra: serde_json::Map::new(),
         }
     }

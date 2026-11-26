@@ -4,7 +4,7 @@ use serde_json::Value;
 
 use crate::output;
 use aleph_client::{AlephClient, CliConfig, CliResult};
-use aleph_protocol::dreaming::{DreamGateBlock, DreamSchedulingStatus};
+use aleph_protocol::dreaming::{DreamGateBlock, DreamMissingDependencies, DreamSchedulingStatus};
 
 /// Truncate a string to a maximum character length, appending "..." if truncated.
 fn truncate(s: &str, max_chars: usize) -> String {
@@ -171,6 +171,15 @@ fn dreaming_pairs(status: &DreamSchedulingStatus) -> Vec<(&'static str, String)>
     // change to either.
     let state = match d.blocking_gate() {
         Some(DreamGateBlock::Disabled) => "disabled".to_string(),
+        Some(DreamGateBlock::MissingDependencies(missing)) => match missing {
+            DreamMissingDependencies::Provider => "unavailable — missing AI provider".to_string(),
+            DreamMissingDependencies::Embedder => {
+                "unavailable — missing embedding provider".to_string()
+            }
+            DreamMissingDependencies::ProviderAndEmbedder => {
+                "unavailable — missing AI and embedding providers".to_string()
+            }
+        },
         Some(DreamGateBlock::OutsideWindow) => format!(
             "waiting — outside the window ({}–{} local)",
             d.window_start_local, d.window_end_local
@@ -391,6 +400,7 @@ mod tests {
     fn daemon(enabled: bool, within_window: bool, user_active: bool) -> DaemonStatus {
         DaemonStatus {
             enabled,
+            missing_dependencies: None,
             within_window,
             user_active,
             idle_seconds: 42,
@@ -408,6 +418,26 @@ mod tests {
             .find(|(k, _)| *k == "State")
             .expect("State row")
             .1
+    }
+
+    #[test]
+    fn missing_dependencies_and_last_run_render_independently() {
+        let mut daemon = daemon(true, true, false);
+        daemon.missing_dependencies = Some(DreamMissingDependencies::ProviderAndEmbedder);
+        let status = over_the_wire(&DreamSchedulingStatus {
+            daemon: Some(daemon),
+            last_run: Some(aleph_protocol::dreaming::DreamLastRun {
+                status: "success".to_string(),
+                ..Default::default()
+            }),
+        });
+        assert_eq!(
+            state_of(&status),
+            "unavailable — missing AI and embedding providers"
+        );
+        assert!(dreaming_pairs(&status)
+            .iter()
+            .any(|(name, value)| *name == "Last run" && value.contains("success")));
     }
 
     /// "No daemon in this process" and "the daemon is switched off" are

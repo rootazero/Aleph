@@ -146,7 +146,24 @@ impl HybridAssembler {
         candidates: &[Candidate],
         total_budget: u32,
     ) -> Result<Vec<EnvelopeSlot>, &'static str> {
-        let prompt = build_prompt(query, candidates, total_budget);
+        // Public paths can collide across owners. Alias only the private
+        // selection view; hydration must still use the original candidates.
+        let mut seen = std::collections::HashSet::new();
+        let aliased;
+        let selection_candidates = if candidates.iter().any(|c| !seen.insert(c.id.as_str())) {
+            aliased = candidates
+                .iter()
+                .enumerate()
+                .map(|(index, candidate)| Candidate {
+                    id: format!("selection-{index}"),
+                    ..candidate.clone()
+                })
+                .collect::<Vec<_>>();
+            aliased.as_slice()
+        } else {
+            candidates
+        };
+        let prompt = build_prompt(query, selection_candidates, total_budget);
         let timeout = std::time::Duration::from_millis(self.config.rerank_timeout_ms);
 
         let raw = match tokio::time::timeout(
@@ -161,14 +178,17 @@ impl HybridAssembler {
             Err(_) => return Err("llm_timeout"),
         };
 
-        let decisions = match parse_response(&raw, candidates, total_budget) {
+        let decisions = match parse_response(&raw, selection_candidates, total_budget) {
             Ok(v) => v,
             Err(AssemblerError::RerankEmpty) => return Err("llm_empty_slots"),
             Err(AssemblerError::RerankParse(_)) => return Err("llm_parse_error"),
         };
 
-        let by_id: HashMap<&str, &Candidate> =
-            candidates.iter().map(|c| (c.id.as_str(), c)).collect();
+        let by_id: HashMap<&str, &Candidate> = selection_candidates
+            .iter()
+            .zip(candidates)
+            .map(|(selection, original)| (selection.id.as_str(), original))
+            .collect();
         let mut slots: Vec<EnvelopeSlot> = Vec::new();
 
         // The two pinned slots below are added ON TOP of the LLM-chosen slots,
@@ -446,6 +466,7 @@ fn candidate_to_item(c: &Candidate) -> EnvelopeItem {
         relevance: c.relevance,
         tokens: 0,
         updated_at: c.updated_at,
+        note_provenance: c.note_provenance.clone(),
         extra: Default::default(),
     }
 }
@@ -608,6 +629,7 @@ mod tests {
                 relevance: 1.0,
                 tokens: 0,
                 updated_at: 0,
+                note_provenance: None,
                 extra: Default::default(),
             }],
             tokens_used: 0,
@@ -639,6 +661,7 @@ mod tests {
                 relevance: 1.0,
                 tokens: 0,
                 updated_at: 0,
+                note_provenance: None,
                 extra: Default::default(),
             }],
             tokens_used: 0,
@@ -666,6 +689,7 @@ mod tests {
             relevance: 1.0,
             tokens: 0,
             updated_at: 0,
+            note_provenance: None,
             extra: Default::default(),
         }
     }

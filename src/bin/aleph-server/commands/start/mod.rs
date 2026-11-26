@@ -1083,15 +1083,8 @@ async fn start_server_body(
     {
         let vault = &auth_bundle.auth_ctx.shared_token_mgr;
 
-        // AI providers: vault key "ai:<name>"
-        for (name, provider_cfg) in &mut loaded_app_config.providers {
-            if provider_cfg.api_key.is_none() {
-                if let Ok(Some(secret)) = vault.get_secret(&format!("ai:{name}")) {
-                    provider_cfg.api_key = Some(secret.expose().to_string());
-                }
-            }
-        }
-
+        // AI providers hydrate only transport-local copies. The shared Config
+        // must retain vault provenance for credential changes and discovery.
         // Generation providers: vault key "gen:<name>"
         // Legacy flat map
         for (name, provider_cfg) in &mut loaded_app_config.generation.providers {
@@ -1780,15 +1773,6 @@ async fn start_server_body(
         };
     }
 
-    // Start dispatching only after both durable logging and leader
-    // notification are listening: the lossy bus cannot replay early events.
-    if let Some(dispatcher) = agent_result.team_dispatcher.clone() {
-        dispatcher.spawn_loop();
-        if !args.daemon {
-            println!("  Team dispatcher started");
-        }
-    }
-
     // Register the subagent completion announcer — background subagent
     // results proactively drive one turn on the parent session instead of
     // waiting for the LLM to poll the tracker (R5; see
@@ -1927,6 +1911,7 @@ async fn start_server_body(
     // because both are required by `AgentHarnessRunner`. Failure is warn-only —
     // the rest of boot continues without flow composition, preserving Phase 4
     // behaviour until Task 10 consumes `server.orchestrator`.
+    let mut codex_named_route = None;
     if let (Some(default_provider), Some(session_service)) = (
         agent_result.default_provider.clone(),
         session_service_for_orchestrator.clone(),
@@ -1987,7 +1972,8 @@ async fn start_server_body(
         )
         .await
         {
-            Ok(orch) => {
+            Ok((orch, named_route)) => {
+                codex_named_route = named_route;
                 // Inject orchestrator into ExecutionEngine via the shared OnceLock.
                 if let Some(ref cell) = agent_result.orchestrator_cell {
                     if cell.set(orch.clone()).is_err() {
@@ -2371,6 +2357,7 @@ async fn start_server_body(
                 app_config_for_oauth.clone(),
                 oauth_vault.clone(),
                 registry,
+                codex_named_route,
             ));
             // Written fully qualified, like the `decline_global` in this gate's
             // `else` arm two lines below and like every other conditional
@@ -2450,6 +2437,14 @@ async fn start_server_body(
             failed = backfill.failed,
             "legacy room attribution backfill"
         );
+    }
+
+    // Start after event subscribers and project attribution are ready.
+    if let Some(dispatcher) = agent_result.team_dispatcher.clone() {
+        dispatcher.spawn_loop();
+        if !args.daemon {
+            println!("  Team dispatcher started");
+        }
     }
 
     // Taken before the mutable borrow below: `handle_bind` needs it to

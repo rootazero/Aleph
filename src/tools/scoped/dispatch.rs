@@ -470,9 +470,25 @@ impl ScopedToolService {
                         lease,
                         &Self::capability_call_context(&format!("{name}/resolve")),
                     )
-                    .map_err(|error| ToolError::PermissionDenied {
-                        name: name.into(),
-                        reason: format!("canonical capability lease cannot be resolved: {error:?}"),
+                    .map_err(|error| match error {
+                        // Model-visible: the tool stays listed and the model
+                        // learns why this call failed and that it may retry.
+                        crate::capability::facade::ResolveError::DependencyUnavailable {
+                            target,
+                            state,
+                        } => ToolError::Execution {
+                            name: name.into(),
+                            cause: format!(
+                                "`{}` 当前不可用（状态 {state:?}），稍后重试或请用户启用",
+                                target.name
+                            ),
+                        },
+                        error => ToolError::PermissionDenied {
+                            name: name.into(),
+                            reason: format!(
+                                "canonical capability lease cannot be resolved: {error:?}"
+                            ),
+                        },
                     })?;
                 captured_backend_lease = Some(backend_lease);
                 Some(entry)
@@ -912,7 +928,11 @@ impl ScopedToolService {
             return Ok(false);
         }
         match &self.config_approval_requester {
-            Some(req) => {
+            Some(requester) => {
+                let req: Arc<dyn ApprovalRequester> = match requester {
+                    super::ConfigApprovalRequester::Operator(requester) => requester.clone(),
+                    super::ConfigApprovalRequester::Generic(requester) => requester.clone(),
+                };
                 // Deliberately NOT `.offering(...)`: this card exists BECAUSE
                 // the requester is not operator-tier, so the default session
                 // ceiling is exactly right — answering it must not permanently
@@ -920,7 +940,7 @@ impl ScopedToolService {
                 let rule = super::gate_chain::GateRule::OperatorRequired;
                 let action = ApprovalAction::for_tool_call(name, input, rule.reason(name))
                     .gated_by(rule.id());
-                if let Err(denial) = self.confirm_with_memory(req, &action, input).await {
+                if let Err(denial) = self.confirm_with_memory(&req, &action, input).await {
                     if matches!(denial.outcome, ApprovalOutcome::Timeout) {
                         return Err(ToolError::ApprovalExpired {
                             name: name.to_string(),
@@ -1141,6 +1161,7 @@ impl ScopedToolService {
                         attempt_name.clone(),
                         attempt_input.clone(),
                         cancel.clone(),
+                        deadline,
                         admission.clone(),
                     )
                 };
@@ -1198,6 +1219,7 @@ impl ScopedToolService {
         name: String,
         input: Value,
         cancel: CancellationToken,
+        deadline: std::time::Instant,
         admission: Arc<GateAdmissionToken>,
     ) -> Result<ToolOutput, ToolError> {
         if matches!(&target, RoutingTarget::Inner)
@@ -1362,6 +1384,54 @@ impl ScopedToolService {
                         cancel: settlement_cancel.clone(),
                     });
             let _caller_interest = settlement_cancel.clone().drop_guard();
+            let desktop_approval = match (
+                &self.config_approval_requester,
+                registry.as_ref(),
+                crate::tools::turn_context::current_turn_context(),
+            ) {
+                (
+                    Some(super::ConfigApprovalRequester::Operator(requester)),
+                    Some(registry),
+                    Some(turn),
+                ) if entry.descriptor.name == "desktop"
+                    && matches!(
+                        entry.descriptor.source,
+                        crate::tools::service::ToolSource::Builtin
+                    )
+                    && entry.descriptor.replay_policy == ReplayPolicy::Unsafe
+                    && !self.unattended
+                    && !turn.unattended
+                    && !turn.run_id.is_empty()
+                    && !turn.side_question
+                    // An existing reservation is not proof that changing runtime
+                    // conditions are still satisfied after the operator wait.
+                    && self.capability_policy.as_ref().is_none_or(|policy| {
+                        !policy.is_configured(&backend_lease.descriptor.id)
+                    })
+                    && self.effective_exec_tier().is_some_and(|tier| {
+                        tier != crate::config::types::policies::ExecTier::Plan
+                    }) =>
+                {
+                    use crate::builtin_tools::desktop::operator_approval::{
+                        DesktopApprovalCapture, DesktopApprovalInvocation,
+                    };
+                    Some(Box::new(DesktopApprovalInvocation::new(
+                        DesktopApprovalCapture::new(
+                            registry.clone(),
+                            facade.clone(),
+                            lease.clone(),
+                            backend_lease.clone(),
+                        ),
+                        self.capability_policy.clone(),
+                        requester.clone(),
+                        settlement_cancel.clone(),
+                        tokio::time::Instant::from_std(deadline),
+                    )))
+                }
+                _ => None,
+            };
+            // carry restores the original turn, call identity and tier; the
+            // desktop context adds only the held invocation's authority.
             let owned = crate::memory::runtime::carry(async move {
                 let _running_call = running_call;
                 let result = crate::tools::dispatch_verdict::with_gate_admission(
@@ -1375,11 +1445,14 @@ impl ScopedToolService {
                         Self::validate_plugin_capture(registry.as_deref(), &lease)?;
                         let invocation = crate::tools::result_processing::with_recovery_tools(
                             recovery,
-                            crate::tools::adapters::mcp_adapter::invoke_handler_to_settlement(
-                                &entry.handler,
-                                &entry.descriptor,
-                                input,
-                                settlement_cancel,
+                            crate::builtin_tools::desktop::operator_approval::scope_desktop_approval(
+                                desktop_approval,
+                                crate::tools::adapters::mcp_adapter::invoke_handler_to_settlement(
+                                    &entry.handler,
+                                    &entry.descriptor,
+                                    input,
+                                    settlement_cancel,
+                                ),
                             ),
                         );
                         let result = match domain_call {
@@ -1489,7 +1562,6 @@ impl ScopedToolService {
         ),
         ToolError,
     > {
-        self.validate_compatibility_activation(name, lease.owner_generation)?;
         // Only the immutable Core registration owns the typed domain policy seam.
         // Approval, compatibility, canonical capture and lease checks stay here.
         if domain_policy.is_some() {
@@ -1526,36 +1598,6 @@ impl ScopedToolService {
             crate::gateway::caller_identity::current_caller_conn_id(),
             call_id.into(),
         )
-    }
-
-    /// Preserve the old opt-in API through the same activation evaluator used
-    /// by PolicyRuntime. Production does not install a per-name policy here.
-    fn validate_compatibility_activation(
-        &self,
-        name: &str,
-        current_generation: crate::capability::ownership::OwnerGeneration,
-    ) -> Result<(), ToolError> {
-        let Some(activation) = self.capability_activations.get(name) else {
-            return Ok(());
-        };
-        let source = self.capability_constraint_context.as_ref().ok_or_else(|| {
-            ToolError::PermissionDenied {
-                name: name.to_string(),
-                reason:
-                    "capability runtime restriction requires an invocation-owner context source"
-                        .into(),
-            }
-        })?;
-        let context = source(name).map_err(|error| ToolError::PermissionDenied {
-            name: name.to_string(),
-            reason: format!("capability runtime context unavailable: {error}"),
-        })?;
-        activation
-            .validate_runtime(current_generation, &context)
-            .map_err(|error| ToolError::PermissionDenied {
-                name: name.to_string(),
-                reason: format!("capability runtime restriction denied invocation: {error}"),
-            })
     }
 
     fn validate_plugin_capture(

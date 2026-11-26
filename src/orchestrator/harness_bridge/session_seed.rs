@@ -42,6 +42,9 @@ pub(super) async fn seed_session(
             seed_history(service, session_id, turns, prompt, origin).await
         }
         FlowInput::Multimodal(msgs) => seed_multimodal(service, session_id, msgs, origin).await,
+        FlowInput::PendingAttachments { .. } => Err(FlowError::Internal(
+            "attachments must be resolved before session seeding".into(),
+        )),
         FlowInput::Resume => Ok(()),
     }
 }

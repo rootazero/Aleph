@@ -67,7 +67,7 @@ export function helloPayload(id) {
     params: {
       protocol: { major: 1, minor: 0 },
       client: { name: "aleph-panel", version: "0.1.0", platform: "web", ui_runtime: "nsh" },
-      features: ["live_events"],
+      features: ["live_events", "chat_transcript"],
     },
   });
 }
@@ -201,6 +201,7 @@ export async function createHost(player, env = globalThis) {
 
   // A pushed frame: a notification (no id) after hello. Anything without a
   // topic is unreadable and ends the connection, like any other bad frame.
+  let toolPresentationGranted = false;
   const deliver = (message) => {
     const params = message.params;
     const event =
@@ -208,6 +209,7 @@ export async function createHost(player, env = globalThis) {
         ? { topic: params?.topic, data: params?.data ?? null }
         : { topic: message.method, data: params ?? null };
     if (typeof event.topic !== "string") throw new Error("event without a topic");
+    if (event.topic === "stream.chat_tool" && !toolPresentationGranted) return;
     player.hostEvent("aleph.event", event);
   };
 
@@ -226,6 +228,9 @@ export async function createHost(player, env = globalThis) {
       }
       maxPayload = Math.min(DEFAULT_MAX_PAYLOAD, message.result.limits.max_message_bytes);
       maxInflight = Math.max(1, message.result.limits.max_inflight_requests);
+      const features = message.result.features;
+      toolPresentationGranted = Array.isArray(features) &&
+        features.includes("live_events") && features.includes("chat_transcript");
       const connectionId = message.result.connection_id;
       // Gateway v1 issues a fresh ID per socket. This binding never enters RPC params.
       const voiceBinding = typeof connectionId === "string" && connectionId ? { voice_binding: connectionId } : {};
@@ -250,6 +255,7 @@ export async function createHost(player, env = globalThis) {
       socket.close();
     }
     failAll("reconnecting");
+    toolPresentationGranted = false;
     nextId = HELLO_ID + 1;
     if (!supported) {
       publish({ state: "unavailable", subject: null, pairing: false });

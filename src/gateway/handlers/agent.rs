@@ -761,6 +761,8 @@ impl AgentRunManager {
 pub enum BuildRunError {
     /// Malformed or unacceptable params → `INVALID_PARAMS`.
     Invalid(String),
+    /// The selection failed Core's exact-binding check.
+    InvalidModel(crate::providers::session_model_handle::ModelSelectionError),
     /// The turn named a project the caller cannot reach — or the check itself
     /// could not complete. Maps to `RESOURCE_NOT_FOUND` with the SAME message
     /// a project id that was never minted produces, so `chat.send` cannot be
@@ -787,6 +789,14 @@ impl std::fmt::Display for BuildRunError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             BuildRunError::Invalid(s) => f.write_str(s),
+            BuildRunError::InvalidModel(error) => {
+                use crate::providers::session_model_handle::ModelSelectionError;
+                f.write_str(match error {
+                    ModelSelectionError::Unavailable => "Chat model selection is unavailable.",
+                    ModelSelectionError::Ambiguous { .. } => "Model ID is ambiguous; select a provider and model.",
+                    _ => "The requested model is not available for selection.",
+                })
+            }
             BuildRunError::ProjectNotFound(id) => write!(f, "project not found: {id}"),
             BuildRunError::AgentForbidden(id) => write!(
                 f,
@@ -1074,6 +1084,12 @@ pub async fn build_run_request(
         return Err(BuildRunError::AgentForbidden(agent.agent_id.clone()));
     }
 
+    let attribution =
+        resolve_attribution(sessions, session_key, params.project_id.as_deref()).await?;
+    let explicit_override = params
+        .model_override
+        .map(validate_explicit_model)
+        .transpose()?;
     let session_key_str = session_key.to_key_string();
 
     // Record voice mode for this session BEFORE the run spawns, so prompt
@@ -1099,6 +1115,12 @@ pub async fn build_run_request(
     crate::gateway::voice::voice_mode::set(&session_key_str, voice_state);
 
     let mut metadata = HashMap::new();
+    if explicit_override.is_some() {
+        metadata.insert(
+            crate::gateway::model_override::USER_MODEL_OVERRIDE_METADATA.into(),
+            "1".into(),
+        );
+    }
     metadata.insert(
         "channel_id".to_string(),
         params.channel.clone().unwrap_or_default(),
@@ -1138,8 +1160,6 @@ pub async fn build_run_request(
     // P1 data isolation + P2 project rooms: stamp the run's owner/scope
     // attribution. Two paths, and writing only the second is the silent bug
     // this comment exists to prevent — see `resolve_attribution`.
-    let attribution =
-        resolve_attribution(sessions, session_key, params.project_id.as_deref()).await?;
     if let Some(attr) = attribution.as_ref() {
         crate::scope::stamp_metadata(&mut metadata, attr);
     }
@@ -1317,7 +1337,6 @@ pub async fn build_run_request(
     // llm_provider/llm_model`) so the spoken reply starts faster — the same pin
     // the channel voice path applies. An explicit per-turn override from the
     // model picker always wins.
-    let explicit_override = params.model_override;
     let model_override = match (explicit_override, params.voice_input, app_config) {
         (Some(o), _, _) => Some(o),
         (None, true, Some(cfg)) => {
@@ -1338,13 +1357,25 @@ pub async fn build_run_request(
         metadata,
         attachments,
         pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
-        sandbox_override: None,
-        workspace_override,
+        workspace_override: workspace_override
+            .map(crate::sandbox::context::ExecWorkspace::Directory),
         max_iterations_override: None,
         model_override,
         telecom_public: None,
         telecom_authority: None,
     })
+}
+
+fn validate_explicit_model(
+    model: crate::gateway::model_override::ModelOverride,
+) -> Result<crate::gateway::model_override::ModelOverride, BuildRunError> {
+    use crate::providers::session_model_handle::{selectable_models, ModelSelectionError};
+    let snapshot = selectable_models();
+    snapshot
+        .as_deref()
+        .ok_or(ModelSelectionError::Unavailable)
+        .and_then(|snapshot| model.validate_explicit(snapshot))
+        .map_err(BuildRunError::InvalidModel)
 }
 
 /// Authenticated server-only run path. Capture the transport identity here,
@@ -2114,8 +2145,22 @@ mod tests {
             project_id: None,
         };
 
-        let request = crate::gateway::caller_identity::CALLER_ROLE
-            .scope(
+        use crate::providers::session_model_handle::{
+            with_test_selectable_models, SelectableModelsSnapshot,
+        };
+        let mut config = crate::Config::default();
+        config.providers.insert(
+            "anthropic".into(),
+            crate::config::ProviderConfig::test_config("claude-opus-4-8"),
+        );
+        let ready = std::collections::BTreeSet::from(["anthropic".to_string()]);
+        let snapshot =
+            SelectableModelsSnapshot::from_config(&config, ready.clone(), &ready, |name| {
+                name == "anthropic"
+            });
+        let request = with_test_selectable_models(
+            Some(snapshot),
+            crate::gateway::caller_identity::CALLER_ROLE.scope(
                 Some("guest".to_string()),
                 build_run_request(
                     "run-1".to_string(),
@@ -2125,9 +2170,10 @@ mod tests {
                     None,
                     &crate::gateway::agent_instance::AgentInstanceConfig::default(),
                 ),
-            )
-            .await
-            .expect("build_run_request");
+            ),
+        )
+        .await
+        .expect("build_run_request");
 
         assert_eq!(request.attachments.len(), 1);
         assert_eq!(
@@ -2156,6 +2202,45 @@ mod tests {
             Some(session_key.to_key_string().as_str()),
             "ask_user / approval routing refuse a turn with an empty conversation_id"
         );
+    }
+
+    #[tokio::test]
+    async fn invalid_explicit_model_cannot_clear_existing_voice_state() {
+        use crate::gateway::model_override::ModelOverride;
+        use crate::gateway::voice::voice_mode;
+        use crate::providers::session_model_handle::with_test_selectable_models;
+
+        let key = SessionKey::Ephemeral {
+            agent_id: "main".into(),
+            ephemeral_id: uuid::Uuid::new_v4().to_string(),
+        };
+        let key_string = key.to_key_string();
+        voice_mode::set(
+            &key_string,
+            Some(voice_mode::VoiceTurnState::new(true, None)),
+        );
+        let params: AgentRunParams =
+            serde_json::from_value(serde_json::json!({ "input": "hi" })).unwrap();
+        let result = with_test_selectable_models(
+            None,
+            build_run_request(
+                "invalid-explicit-model".into(),
+                &key,
+                AgentRunParams {
+                    model_override: Some(ModelOverride::Raw {
+                        model: "absent".into(),
+                    }),
+                    ..params
+                },
+                None,
+                None,
+                &crate::gateway::agent_instance::AgentInstanceConfig::default(),
+            ),
+        )
+        .await;
+        assert!(matches!(result, Err(BuildRunError::InvalidModel(_))));
+        assert!(voice_mode::get(&key_string).is_some());
+        voice_mode::set(&key_string, None);
     }
 
     /// The DreamDaemon idle sensor: every human run entrance funnels through
@@ -2699,7 +2784,7 @@ mod tests {
             .await
             .expect("build_run_request");
 
-        assert_eq!(request.workspace_override.as_deref(), Some(dir.as_path()));
+        assert_eq!(request.workspace_path(), Some(dir.as_path()));
         assert_eq!(
             request.metadata.get("project_root").map(String::as_str),
             Some(dir.display().to_string().as_str()),
@@ -2749,7 +2834,7 @@ mod tests {
             .await
             .expect("a bound room must be usable by its remote members");
 
-        assert_eq!(request.workspace_override.as_deref(), Some(dir.as_path()));
+        assert_eq!(request.workspace_path(), Some(dir.as_path()));
     }
 
     /// Unbound rooms and personal sessions are unchanged: the agent's own
@@ -2858,7 +2943,7 @@ mod tests {
             .expect("build_run_request");
 
         assert_eq!(
-            request.workspace_override.as_deref(),
+            request.workspace_path(),
             Some(chosen.path()),
             "the per-turn choice wins"
         );

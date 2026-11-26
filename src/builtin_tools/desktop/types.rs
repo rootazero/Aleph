@@ -294,11 +294,10 @@ pub struct DesktopArgs {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pid: Option<i32>,
 
-    /// Post-action observation for mutating actions: "state" appends a
-    /// lightweight `post_state` (frontmost app, focused element) to the
-    /// result after a short settle delay; "screenshot" additionally captures
-    /// a budget-bounded screenshot. Omit for the historical fire-and-forget
-    /// behavior.
+    /// Opt-in post-action observation: "state" reports focus for the
+    /// delivered scope; "screenshot" adds a bounded image when available.
+    /// A scoped image requires a known window and verified ownership.
+    /// Observation is not an action effect check and never changes success.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub observe: Option<String>,
 

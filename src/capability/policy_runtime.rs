@@ -1,11 +1,9 @@
 //! Startup rules and live, source-owned facts extend the existing Policy gates.
 //! This map owns restrictions only, never descriptors, handlers, or ownership.
 
-use crate::capability::activation::CapabilityActivationController;
-use crate::capability::constraints::{ConstraintContext, ConstraintSet, ConstraintViolation};
+use crate::capability::constraints::{ConstraintContext, ConstraintViolation};
 use crate::capability::descriptor::{CapabilityId, CapabilityRevision};
 use crate::capability::facade::{BackendLease, BackendSourceEvidence};
-use crate::capability::lifecycle::LifecycleState;
 use crate::capability::ownership::{OwnerGeneration, OwnerRef, OwnershipTree, VisibilityScope};
 use crate::capability::policy::{CapabilityLease, PolicyDenial, PolicyEngine};
 use crate::capability::provider::{ProviderHandle, ProviderId};
@@ -130,40 +128,25 @@ struct AttachmentState {
     binding: AttachmentBinding,
     fact_key: PolicyFactSourceKey,
     facts: Arc<dyn ConstraintFactsSource>,
-    controller: Mutex<CapabilityActivationController>,
     active_calls: Arc<AtomicUsize>,
 }
 
+/// Revocation is removal from the attachment list: `admit` is only reached for
+/// a state still listed, and listing and removal share one lock, so a removed
+/// state never admits again. No second revoked flag mirrors that membership.
 impl AttachmentState {
     fn new(
         binding: AttachmentBinding,
         fact_key: PolicyFactSourceKey,
         facts: Arc<dyn ConstraintFactsSource>,
         active_calls: Arc<AtomicUsize>,
-    ) -> Result<Self, PolicyDenial> {
-        // Evaluate compiled rules once in Policy; the existing controller owns lifecycle.
-        // Otherwise Existing/Release would accidentally re-run the allocation predicate.
-        let mut controller =
-            CapabilityActivationController::new(None, binding.generation, ConstraintSet::default());
-        controller
-            .attach()
-            .map_err(|_| denied("attachment_lifecycle"))?;
-        Ok(Self {
+    ) -> Self {
+        Self {
             binding,
             fact_key,
             facts,
-            controller: Mutex::new(controller),
             active_calls,
-        })
-    }
-
-    fn revoke(&self) {
-        // Only an already-revoked controller can reject revoke; teardown is idempotent.
-        let _ = self
-            .controller
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .revoke();
+        }
     }
 
     fn admit(
@@ -179,18 +162,6 @@ impl AttachmentState {
             }
         }
         .map_err(|_| denied("runtime_constraints"))?;
-        let mut controller = self
-            .controller
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if controller.state() == LifecycleState::Attached {
-            controller
-                .activate(context, self.binding.generation)
-                .map_err(|_| denied("activation_lifecycle"))?;
-        }
-        controller
-            .validate_runtime(self.binding.generation, context)
-            .map_err(|_| denied("runtime_lifecycle"))?;
         self.active_calls.fetch_add(1, Ordering::SeqCst);
         Ok(RunningCapabilityCall::new(
             Some(Arc::clone(&self.active_calls)),
@@ -306,19 +277,8 @@ impl PolicyRuntime {
             .find(|entry| entry.fact_key == fact_key)
             .map(|entry| Arc::clone(&entry.active_calls))
             .unwrap_or_default();
-        sources.retain(|entry| {
-            if entry.fact_key != fact_key {
-                return true;
-            }
-            entry.revoke();
-            false
-        });
-        let state = Arc::new(AttachmentState::new(
-            binding,
-            fact_key,
-            facts,
-            active_calls,
-        )?);
+        sources.retain(|entry| entry.fact_key != fact_key);
+        let state = Arc::new(AttachmentState::new(binding, fact_key, facts, active_calls));
         sources.push(Arc::clone(&state));
         Ok(PolicyAttachment {
             id: id.clone(),
@@ -559,6 +519,15 @@ impl PolicyEngine {
         Ok(running)
     }
 
+    pub(crate) fn admissions_open(&self) -> bool {
+        !*self
+            .runtime
+            .admissions
+            .stopped
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     /// Seal every invocation and source publication, independently of configured quotas.
     pub fn stop_admission(&self) {
         *self
@@ -610,13 +579,7 @@ impl PolicyEngine {
         };
         let mut entries = self.runtime.attachments();
         if let Some(sources) = entries.get_mut(&attachment.id) {
-            sources.retain(|current| {
-                if !Arc::ptr_eq(current, state) {
-                    return true;
-                }
-                current.revoke();
-                false
-            });
+            sources.retain(|current| !Arc::ptr_eq(current, state));
             if sources.is_empty() {
                 entries.remove(&attachment.id);
             }
@@ -637,13 +600,7 @@ impl PolicyEngine {
 
     pub fn withdraw_fact_source(&self, key: &PolicyFactSourceKey) {
         self.runtime.attachments().retain(|_, sources| {
-            sources.retain(|state| {
-                if &state.fact_key != key {
-                    return true;
-                }
-                state.revoke();
-                false
-            });
+            sources.retain(|state| &state.fact_key != key);
             !sources.is_empty()
         });
     }

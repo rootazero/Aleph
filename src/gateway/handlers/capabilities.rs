@@ -131,11 +131,14 @@ pub async fn handle_terminal_invoke(request: JsonRpcRequest) -> JsonRpcResponse 
         Err(crate::capability::special_dispatch::CapabilityInvocationError::Policy(error)) => {
             JsonRpcResponse::error(request.id, PERMISSION_DENIED, error.to_string())
         }
-        Err(crate::capability::special_dispatch::CapabilityInvocationError::Resolve(error)) => {
+        // The remaining resolve variants are internal detail as well. The
+        // caller cannot act on the difference, and naming one turns the
+        // refusal into an oracle for whoever guessed the id.
+        Err(crate::capability::special_dispatch::CapabilityInvocationError::Resolve(_)) => {
             JsonRpcResponse::error(
                 request.id,
                 SERVICE_UNAVAILABLE,
-                format!("terminal capability unavailable: {error:?}"),
+                "terminal capability unavailable",
             )
         }
         Err(crate::capability::special_dispatch::CapabilityInvocationError::Handler(

@@ -20,14 +20,11 @@
 //! other's index. The `WorktreeHandle` is
 //! held in [`execute_member_task`]'s scope and torn down via RAII — explicit
 //! `cleanup()` on the happy path, `Drop` safety-net on panic / timeout /
-//! abort. Isolation is best-effort: outside a git repository we silently
-//! fall back to the pre-G2 behaviour and log a warning.
+//! abort. Without an authorized Git project, the member keeps its ordinary
+//! sandbox; setup failures in a selected checkout are reported instead.
 //!
-//! Isolation covers both surfaces: command execution runs at the worktree
-//! path via [`WorktreeSandbox`], and the member's `workspace_override` is
-//! pointed at the worktree so `run_agent_loop` roots the run's `FsScope` /
-//! `ToolContext` there — file-level tools (Edit / Write) resolve inside the
-//! isolated checkout instead of the parent repo.
+//! The member's trusted workspace feeds both the mounted OS sandbox and the
+//! file-tool scope. Neither path derives its root from a model-supplied cwd.
 
 use std::collections::HashMap;
 
@@ -36,7 +33,7 @@ use crate::gateway::event_emitter::team_fanout;
 use crate::gateway::event_emitter::NoOpEventEmitter;
 use crate::gateway::execution_engine::{ExecutionError, RunRequest};
 use crate::gateway::router::SessionKey;
-use crate::sandbox::{worktree as worktree_mod, Sandbox, WorktreeHandle, WorktreeSandbox};
+use crate::sandbox::{context::ExecWorkspace, worktree as worktree_mod, WorktreeHandle};
 use crate::sync_primitives::Arc;
 use crate::teams::types::{TeamMember, TeamMemberKind};
 
@@ -207,7 +204,6 @@ pub(in crate::teams::dispatcher) fn task_run_metadata(
     team_id: &str,
     task_id: &str,
     think_level: Option<&str>,
-    worktree: Option<&WorktreeHandle>,
 ) -> HashMap<String, String> {
     let mut m = HashMap::new();
     m.insert("team_id".to_string(), team_id.to_string());
@@ -247,19 +243,6 @@ pub(in crate::teams::dispatcher) fn task_run_metadata(
         m.insert(
             crate::agents::thinking::THINK_LEVEL_SESSION_KEY.to_string(),
             level.to_string(),
-        );
-    }
-    if let Some(handle) = worktree {
-        m.insert(
-            "team_worktree_path".to_string(),
-            handle.path().display().to_string(),
-        );
-        // Lets `run_agent_loop` build a rebasing `FsScope::worktree` so
-        // parent-repo absolute paths are redirected into the checkout,
-        // matching the subagent spawner's isolation semantics.
-        m.insert(
-            "team_worktree_repo_root".to_string(),
-            handle.repo_root().display().to_string(),
         );
     }
     m
@@ -303,7 +286,7 @@ pub async fn execute_member_task(
     task_text: String,
     run_id: String,
     timeout_secs: u64,
-    isolate_workspace: bool,
+    worktree_projects: Option<&crate::projects::ProjectStore>,
     model_override: Option<crate::gateway::model_override::ModelOverride>,
     think_level: Option<String>,
 ) -> MemberRunOutcome {
@@ -426,41 +409,35 @@ pub async fn execute_member_task(
     // G2 — provision a worktree handle when the caller requests isolation.
     // Kept in this function's scope so `Drop` fires on every exit path; the
     // happy path also calls `cleanup()` explicitly below.
-    let worktree_handle: Option<WorktreeHandle> = if isolate_workspace {
-        provision_worktree(team_id, task_id).await
-    } else {
-        None
+    let worktree_handle = match worktree_projects {
+        Some(projects) => {
+            let scope = crate::scope::current_scope();
+            let enabled = std::env::var("ALEPH_TEAM_MEMBER_WORKTREE").ok().as_deref() != Some("0");
+            match provision_worktree(projects, scope.as_ref(), enabled, team_id, task_id).await {
+                Ok(handle) => handle,
+                Err(error) => {
+                    return MemberRunOutcome {
+                        status: MemberRunStatus::Failed,
+                        reply: None,
+                        error: Some(error),
+                    }
+                }
+            }
+        }
+        None => None,
     };
-    let sandbox_override: Option<Arc<dyn Sandbox>> = worktree_handle
-        .as_ref()
-        .map(|h| Arc::new(WorktreeSandbox::new(h.path().to_path_buf())) as Arc<dyn Sandbox>);
 
     let session_key = SessionKey::task(
         agent_id,
         crate::teams::run_mode::TEAM_TASK_TASK_TYPE,
         task_id,
     );
-    let metadata = task_run_metadata(
-        team_id,
-        task_id,
-        think_level.as_deref(),
-        worktree_handle.as_ref(),
-    );
+    let metadata = task_run_metadata(team_id, task_id, think_level.as_deref());
 
-    // Workspace for the member run. With a provisioned worktree the member's
-    // ENTIRE run is rooted there — `run_agent_loop` derives its `FsScope`,
-    // `ToolContext` and project-skill discovery from `workspace_override`, so
-    // file tools now land inside the isolated checkout instead of the parent
-    // repo (previously only bash was redirected via `WorktreeSandbox`; the
-    // file-tool side of the isolation was a documented follow-up). Without a
-    // worktree, inherit the dispatcher's project root so a team worker
-    // spawned inside a project-scoped chat lands in the same folder.
-    // Captured before the spawn boundary because tokio task-locals do not
-    // cross `tokio::spawn`.
-    let inherited_workspace = worktree_handle
-        .as_ref()
-        .map(|h| h.path().to_path_buf())
-        .or_else(crate::projects::current_project_root);
+    let worktree_handle = worktree_handle.map(Arc::new);
+
+    let inherited_workspace =
+        member_workspace_binding(worktree_handle.as_ref(), worktree_projects.is_none());
 
     let request = RunRequest {
         run_id,
@@ -470,7 +447,6 @@ pub async fn execute_member_task(
         metadata,
         attachments: Vec::new(),
         pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
-        sandbox_override,
         workspace_override: inherited_workspace,
         max_iterations_override: None,
         // Per-step model override (workflow `model`); `None` for plain team
@@ -498,15 +474,20 @@ pub async fn execute_member_task(
 
     // Spawn the execution so it can be aborted on timeout.
     let agent_for_exec = target_agent.clone();
-    let handle = tokio::spawn(async move {
-        execution_adapter
+    let adapter_for_exec = execution_adapter.clone();
+    let active_run_id = request.run_id.clone();
+    let request_owned_worktree = request
+        .workspace_override
+        .as_ref()
+        .is_some_and(crate::sandbox::context::ExecWorkspace::is_owned_worktree);
+    // Dropping the dispatcher future must not detach a run from its checkout owner.
+    let mut handle = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+        adapter_for_exec
             .execute(request, agent_for_exec, emitter)
             .await
-    });
-    let abort_handle = handle.abort_handle();
-
+    }));
     let timeout_duration = std::time::Duration::from_secs(timeout_secs);
-    let outcome = match tokio::time::timeout(timeout_duration, handle).await {
+    let outcome = match tokio::time::timeout(timeout_duration, &mut handle).await {
         Ok(Ok(Ok(()))) => {
             let reply = fetch_last_reply(&target_agent, &session_key).await;
             MemberRunOutcome {
@@ -543,18 +524,26 @@ pub async fn execute_member_task(
             error: Some(format!("Task panicked: {join_err}")),
         },
         Err(_) => {
-            // Timeout — abort the spawned task to free resources.
-            abort_handle.abort();
-            // `tokio::JoinHandle::abort` only signals cancellation; the
-            // task may still be mid-flight, holding the worktree directory
-            // open while it finishes flushing stdout / writing tool output.
-            // The explicit `cleanup().await` below calls
-            // `git worktree remove --force`, which would race the spawned
-            // task's open file descriptors and produce ENOENT / EBUSY in
-            // member-side logs. A short grace window lets the task unwind
-            // before the directory disappears. The window is bounded so a
-            // misbehaving member cannot indefinitely block the dispatcher.
-            tokio::time::sleep(std::time::Duration::from_millis(WORKTREE_CLEANUP_GRACE_MS)).await;
+            if request_owned_worktree {
+                let completion = tokio::time::timeout(
+                    std::time::Duration::from_millis(WORKTREE_CLEANUP_GRACE_MS),
+                    async {
+                        let _ = execution_adapter.cancel(&active_run_id).await;
+                        (&mut handle).await
+                    },
+                )
+                .await;
+                if !matches!(completion, Ok(Ok(_))) {
+                    tracing::warn!(
+                        team_id = %team_id,
+                        task_id = %task_id,
+                        "member harness did not finish within cancellation grace; active checkout owners defer cleanup"
+                    );
+                    handle.abort();
+                }
+            } else {
+                handle.abort();
+            }
             // Keep what it produced. The per-task session is durable and the
             // messages are already written, so the same one-line read the
             // success arm uses works here too — and the NEXT attempt's
@@ -584,10 +573,9 @@ pub async fn execute_member_task(
         }
     };
 
-    // G2 — explicit happy-path cleanup. `Drop` is the safety net for panic /
-    // timeout / abort paths; calling `cleanup().await` here turns a noisy
-    // Drop-time "leaked" trace into a clean removal.
-    if let Some(handle) = worktree_handle {
+    // Explicit cleanup only when no harness or inherited run can still use it.
+    // Otherwise the last owner removes it via the drop safety net.
+    if let Some(handle) = worktree_handle.and_then(|handle| Arc::try_unwrap(handle).ok()) {
         if let Err(e) = handle.cleanup().await {
             tracing::warn!(
                 team_id = team_id,
@@ -601,20 +589,76 @@ pub async fn execute_member_task(
     outcome
 }
 
-/// Best-effort provision a fresh worktree for the given team task. Returns
-/// `None` when we are not in a git repository, when the env var
-/// `ALEPH_TEAM_MEMBER_WORKTREE` is `"0"`, or when `git worktree add` itself
-/// fails. The fallback path matches the pre-G2 behaviour (no isolation).
-async fn provision_worktree(team_id: &str, task_id: &str) -> Option<WorktreeHandle> {
-    if std::env::var("ALEPH_TEAM_MEMBER_WORKTREE").ok().as_deref() == Some("0") {
-        return None;
+fn member_workspace_binding(
+    provisioned: Option<&Arc<WorktreeHandle>>,
+    synchronous: bool,
+) -> Option<ExecWorkspace> {
+    if let Some(checkout) = provisioned {
+        return Some(checkout.exec_workspace());
     }
-    let repo_root = match std::env::current_dir() {
-        Ok(p) => p,
-        Err(e) => {
-            tracing::warn!(error = %e, "team_worktree: cwd lookup failed; skipping isolation");
-            return None;
+    // Only synchronous delegation shares a live caller checkout. An ordinary
+    // caller directory is not a project binding and must not replace the
+    // member's default workspace.
+    if synchronous {
+        if let Some(checkout) = crate::sandbox::context::current_exec_workspace_binding()
+            .filter(ExecWorkspace::is_owned_worktree)
+        {
+            return Some(checkout);
         }
+    }
+    crate::projects::current_project_root().map(ExecWorkspace::Directory)
+}
+
+/// Resolve the checkout from authorized project attribution, never daemon cwd.
+/// Only an absent binding or a reachable non-Git workspace is an ordinary run.
+fn team_worktree_source(
+    projects: &crate::projects::ProjectStore,
+    scope: Option<&crate::scope::ScopeAttribution>,
+) -> Result<Option<std::path::PathBuf>, String> {
+    let Some(crate::scope::ScopeId::Project(project_id)) = scope.map(|scope| &scope.scope) else {
+        return Ok(None);
+    };
+    let project = projects
+        .get(project_id)
+        .map_err(|e| format!("team worktree: project lookup failed: {e}"))?
+        .ok_or_else(|| format!("team worktree: authorized project {project_id} not found"))?;
+    let Some(root) = project.workspace_path else {
+        return Ok(None);
+    };
+    let root = root
+        .canonicalize()
+        .map_err(|e| format!("team worktree: resolve project checkout: {e}"))?;
+    if !std::fs::metadata(&root)
+        .map_err(|e| format!("team worktree: inspect project checkout: {e}"))?
+        .is_dir()
+    {
+        return Err("team worktree: project checkout is not a directory".into());
+    }
+    for candidate in root.ancestors() {
+        match std::fs::symlink_metadata(candidate.join(".git")) {
+            Ok(_) if candidate == root => return Ok(Some(root)),
+            Ok(_) => {
+                return Err("team worktree: the bound directory is inside a Git checkout; bind the checkout root to use a worktree".into());
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(format!("team worktree: inspect Git metadata: {e}")),
+        }
+    }
+    Ok(None)
+}
+
+async fn provision_worktree(
+    projects: &crate::projects::ProjectStore,
+    scope: Option<&crate::scope::ScopeAttribution>,
+    enabled: bool,
+    team_id: &str,
+    task_id: &str,
+) -> Result<Option<WorktreeHandle>, String> {
+    if !enabled {
+        return Ok(None);
+    }
+    let Some(repo_root) = team_worktree_source(projects, scope)? else {
+        return Ok(None);
     };
     let safe_team = team_id
         .chars()
@@ -629,26 +673,10 @@ async fn provision_worktree(team_id: &str, task_id: &str) -> Option<WorktreeHand
     } else {
         format!("team-{safe_team}-{safe_task}")
     };
-    match worktree_mod::create(&repo_root, &label, None).await {
-        Ok(h) => Some(h),
-        Err(crate::sandbox::WorktreeError::NotAGitRepo(_)) => {
-            tracing::debug!(
-                team_id = team_id,
-                task_id = task_id,
-                "team_worktree: not a git repo; falling back to no isolation"
-            );
-            None
-        }
-        Err(e) => {
-            tracing::warn!(
-                team_id = team_id,
-                task_id = task_id,
-                error = %e,
-                "team_worktree: provision failed; falling back to no isolation"
-            );
-            None
-        }
-    }
+    worktree_mod::create(&repo_root, &label, None)
+        .await
+        .map(Some)
+        .map_err(|e| format!("team worktree: creation failed: {e}"))
 }
 
 /// Dispatch a task to an ACP-backed external coding CLI session.
@@ -897,57 +925,99 @@ mod tests {
         assert!(MemberDispatchTarget::from_member(&m).is_none());
     }
 
-    /// Env-var escape hatch must short-circuit before any git plumbing
-    /// touches disk. Belt-and-suspenders for ops who want to fall back to
-    /// pre-G2 behaviour without a code change.
     #[tokio::test]
-    async fn provision_worktree_respects_env_disable() {
-        // Serialize against any concurrent test that mutates the same env var.
-        // tokio's test framework runs tests in parallel by default; we use
-        // a static mutex to guarantee ordering for env-var manipulation.
-        static LOCK: crate::sync_primitives::Mutex<()> = crate::sync_primitives::Mutex::new(());
-        let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    async fn team_worktree_does_not_inherit_a_leaders_default_directory() {
+        let leader = tempfile::tempdir().unwrap();
+        let member = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
 
-        let prev = std::env::var("ALEPH_TEAM_MEMBER_WORKTREE").ok();
-        std::env::set_var("ALEPH_TEAM_MEMBER_WORKTREE", "0");
-
-        let result = provision_worktree("team-1", "task-1").await;
-        assert!(
-            result.is_none(),
-            "env=0 must short-circuit worktree provisioning"
-        );
-
-        match prev {
-            Some(v) => std::env::set_var("ALEPH_TEAM_MEMBER_WORKTREE", v),
-            None => std::env::remove_var("ALEPH_TEAM_MEMBER_WORKTREE"),
-        }
+        crate::sandbox::context::with_exec_workspace(Some(leader.path().to_path_buf()), async {
+            let binding = member_workspace_binding(None, true);
+            assert!(
+                binding.is_none(),
+                "leader's default must not become an override"
+            );
+            assert_eq!(
+                binding
+                    .as_ref()
+                    .map(ExecWorkspace::root)
+                    .unwrap_or(member.path()),
+                member.path()
+            );
+            crate::projects::with_project_root(Some(project.path().to_path_buf()), async {
+                assert_eq!(
+                    member_workspace_binding(None, true),
+                    Some(ExecWorkspace::Directory(project.path().to_path_buf()))
+                );
+            })
+            .await;
+        })
+        .await;
     }
 
-    /// Outside a git repository, provisioning is a logged no-op rather than
-    /// an error — callers see `None` and fall back to the shared-tree path.
     #[tokio::test]
-    async fn provision_worktree_returns_none_for_non_git_dir() {
-        let tmp = tempfile::tempdir().expect("tempdir");
+    async fn team_worktree_distinguishes_absence_from_setup_failure() {
+        use crate::projects::ProjectStore;
+        use crate::scope::{ScopeAttribution, ScopeId};
 
-        // Save + change cwd so the env_var path below sees a non-git location.
-        static LOCK: crate::sync_primitives::Mutex<()> = crate::sync_primitives::Mutex::new(());
-        let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let prev_cwd = std::env::current_dir().expect("cwd");
-        std::env::set_current_dir(tmp.path()).expect("cd tmp");
-
-        let result = provision_worktree("team-1", "task-1").await;
-
-        std::env::set_current_dir(prev_cwd).expect("restore cwd");
-
+        let projects = ProjectStore::new(rusqlite::Connection::open_in_memory().unwrap());
+        let scope = |id: String| ScopeAttribution {
+            owner_user_id: "alice".into(),
+            scope: ScopeId::Project(id),
+        };
+        let missing = scope("unknown".into());
         assert!(
-            result.is_none(),
-            "non-git cwd must fall back to no isolation, got {result:?}"
+            provision_worktree(&projects, Some(&missing), false, "team-1", "task-1")
+                .await
+                .unwrap()
+                .is_none()
         );
+        assert!(team_worktree_source(&projects, None).unwrap().is_none());
+        assert!(team_worktree_source(&projects, Some(&missing))
+            .unwrap_err()
+            .contains("lookup failed"));
+        projects.create_schema().unwrap();
+        assert!(team_worktree_source(&projects, Some(&missing))
+            .unwrap_err()
+            .contains("not found"));
+        let unbound = projects.create("unbound", None, None).unwrap();
+        assert!(team_worktree_source(&projects, Some(&scope(unbound.id)))
+            .unwrap()
+            .is_none());
+
+        let directory = tempfile::tempdir().unwrap();
+        let bound = projects
+            .create("bound", None, Some(directory.path()))
+            .unwrap();
+        let bound_scope = scope(bound.id);
+        assert!(team_worktree_source(&projects, Some(&bound_scope))
+            .unwrap()
+            .is_none());
+        // A Git marker with no valid repository is a setup error, not absence.
+        std::fs::create_dir(directory.path().join(".git")).unwrap();
+        let subdirectory = directory.path().join("src");
+        std::fs::create_dir(&subdirectory).unwrap();
+        let nested = projects
+            .create("nested", None, Some(&subdirectory))
+            .unwrap();
+        assert!(team_worktree_source(&projects, Some(&scope(nested.id)))
+            .unwrap_err()
+            .contains("bind the checkout root"));
+        assert!(
+            provision_worktree(&projects, Some(&bound_scope), true, "team-1", "task-1")
+                .await
+                .unwrap_err()
+                .contains("creation failed")
+        );
+        directory.close().unwrap();
+        assert!(team_worktree_source(&projects, Some(&bound_scope))
+            .unwrap_err()
+            .contains("resolve project checkout"));
     }
 
     #[test]
     fn task_run_metadata_pins_the_team_run_mode() {
-        let m = task_run_metadata("t1", "task-9", None, None);
+        let m = task_run_metadata("t1", "task-9", None);
         assert_eq!(
             m.get(crate::config::types::policies::MODE_SESSION_KEY)
                 .map(String::as_str),
@@ -964,7 +1034,7 @@ mod tests {
     /// The per-step `effort` override still rides the same metadata map.
     #[test]
     fn task_run_metadata_carries_a_declared_think_level() {
-        let m = task_run_metadata("t1", "task-9", Some("high"), None);
+        let m = task_run_metadata("t1", "task-9", Some("high"));
         assert_eq!(
             m.get(crate::agents::thinking::THINK_LEVEL_SESSION_KEY)
                 .map(String::as_str),
@@ -982,7 +1052,7 @@ mod tests {
         let m = crate::scope::with_scope(
             Some(attr),
             crate::scope::with_room_author(Some("u-bob".to_string()), async {
-                task_run_metadata("t1", "task-9", None, None)
+                task_run_metadata("t1", "task-9", None)
             }),
         )
         .await;
@@ -1002,7 +1072,7 @@ mod tests {
     /// behaviour.
     #[test]
     fn task_run_metadata_without_a_caller_stamps_nothing() {
-        let m = task_run_metadata("t1", "task-9", None, None);
+        let m = task_run_metadata("t1", "task-9", None);
         assert!(crate::scope::scope_from_metadata(&m).is_none());
         assert!(!m.contains_key("caller_role"));
         assert!(!m.contains_key(crate::gateway::execution_engine::AUTHOR_USER_KEY));
@@ -1041,7 +1111,7 @@ mod tests {
         let (metadata, admitted) = crate::teams::dispatcher::schedule::spawn_under_authority(
             Some(granted.carried()),
             async {
-                let m = task_run_metadata("t1", "task-9", None, None);
+                let m = task_run_metadata("t1", "task-9", None);
                 // The same expression the Agent arm of `execute_member_task`
                 // evaluates (runner.rs, "The agent axis" block).
                 let allowed = vec!["u-alice".to_string()];

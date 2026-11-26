@@ -525,6 +525,7 @@ pub enum PickerRow {
     Model {
         model: RosterModel,
     },
+    MemberModel(aleph_protocol::providers::ChatModelChoice),
 }
 
 /// What confirming the highlighted row means.
@@ -532,8 +533,8 @@ pub enum PickerRow {
 pub enum ProviderPick {
     /// Descend into this provider's roster.
     Provider(usize),
-    /// Pin this model id.
-    Model(String),
+    /// Pin the exact binding selected in the overlay.
+    Model { provider: String, model: String },
 }
 
 /// Local theme choices and feedback kept outside the transcript.
@@ -561,8 +562,10 @@ pub struct ProviderPickerState {
     /// so `gpt-5` → Enter lands on the gpt-5 rows rather than on a roster the
     /// user then has to re-narrow.
     pub input: String,
-    /// The catalogue as the server sent it.
+    /// The admin catalogue as the server sent it.
     pub entries: Vec<CatalogEntry>,
+    /// Member choices carry no settings or discovery actions.
+    pub choices: Option<Vec<aleph_protocol::providers::ChatModelChoice>>,
     /// Which provider we have descended into (index into `entries`), or `None`
     /// at the provider level.
     pub provider: Option<usize>,
@@ -581,6 +584,9 @@ impl ProviderPickerState {
     /// level's row list changes shape.
     #[must_use]
     pub fn refresh_target(&self) -> Option<&CatalogEntry> {
+        if self.choices.is_some() {
+            return None;
+        }
         let index = match self.provider {
             Some(index) => index,
             None => match self.rows.get(self.selected)? {
@@ -588,7 +594,7 @@ impl ProviderPickerState {
                 // A model row at the provider level cannot happen (that level
                 // only emits provider rows), but answering `None` is the
                 // honest reading rather than an unwrap.
-                PickerRow::Model { .. } => return None,
+                PickerRow::Model { .. } | PickerRow::MemberModel(_) => return None,
             },
         };
         self.entries.get(index)
@@ -1852,6 +1858,7 @@ impl AppState {
         self.provider_picker = Some(ProviderPickerState {
             input: query,
             entries,
+            choices: None,
             provider: None,
             rows: Vec::new(),
             selected: 0,
@@ -1860,12 +1867,31 @@ impl AppState {
         self.focus = Focus::ProviderPicker;
     }
 
+    pub fn open_model_choices(
+        &mut self,
+        choices: Vec<aleph_protocol::providers::ChatModelChoice>,
+        query: String,
+    ) {
+        self.open_provider_picker(Vec::new(), query);
+        if let Some(picker) = &mut self.provider_picker {
+            picker.choices = Some(choices);
+        }
+        self.recompute_provider_filter();
+    }
+
     /// Recompute the rows on screen from the current filter and level.
     pub fn recompute_provider_filter(&mut self) {
         let Some(picker) = &mut self.provider_picker else {
             return;
         };
-        picker.rows = provider_picker_rows(&picker.entries, picker.provider, &picker.input);
+        picker.rows = if let Some(choices) = &picker.choices {
+            aleph_protocol::providers::search::filter_chat_model_choices(choices, &picker.input)
+                .into_iter()
+                .map(PickerRow::MemberModel)
+                .collect()
+        } else {
+            provider_picker_rows(&picker.entries, picker.provider, &picker.input)
+        };
         picker.selected = 0;
     }
 
@@ -1941,7 +1967,7 @@ impl AppState {
                 PickerRow::Provider { index, .. } => {
                     picker.entries.get(*index).is_some_and(|e| e.id == id)
                 }
-                PickerRow::Model { .. } => false,
+                PickerRow::Model { .. } | PickerRow::MemberModel(_) => false,
             }) {
                 picker.selected = row;
             }
@@ -1957,7 +1983,14 @@ impl AppState {
         let picker = self.provider_picker.as_ref()?;
         match picker.rows.get(picker.selected)? {
             PickerRow::Provider { index, .. } => Some(ProviderPick::Provider(*index)),
-            PickerRow::Model { model } => Some(ProviderPick::Model(model.id.clone())),
+            PickerRow::Model { model } => Some(ProviderPick::Model {
+                provider: picker.entries.get(picker.provider?)?.id.clone(),
+                model: model.id.clone(),
+            }),
+            PickerRow::MemberModel(choice) => Some(ProviderPick::Model {
+                provider: choice.provider.clone(),
+                model: choice.model.clone(),
+            }),
         }
     }
 

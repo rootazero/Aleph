@@ -118,6 +118,7 @@ async fn flag_user_correction_files_under_the_turns_agent_not_the_boot_agent() {
             raw_store: raw_store.clone(),
             session_store: None,
             provider: None,
+            provider_secrets: None,
             extensions: Arc::new(crate::memory::extensions::MemoryExtensionRegistry::new()),
             state_db: None,
             default_agent_id: crate::routing::DEFAULT_AGENT_ID.into(),

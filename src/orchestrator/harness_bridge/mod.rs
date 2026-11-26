@@ -46,6 +46,8 @@ mod prompt_build;
 mod public_lookup_tool;
 pub mod public_run;
 mod runner_impl;
+#[cfg(test)]
+pub(crate) use runner_impl::qualified_model_provider;
 
 pub mod context_estimate;
 pub mod replay_adapter;

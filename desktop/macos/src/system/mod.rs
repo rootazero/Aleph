@@ -4,7 +4,9 @@ mod notification;
 mod sysinfo;
 mod workspace;
 
-use aleph_desktop::system_types::{AppInfo, ClipboardContent, InstalledApp, SystemInfo};
+use aleph_desktop::system_types::{
+    AppInfo, ClipboardContent, DesktopProcessIdentity, InstalledApp, SystemInfo,
+};
 use aleph_desktop::traits::SystemCapability;
 use aleph_desktop::Result;
 use async_trait::async_trait;
@@ -56,6 +58,16 @@ impl SystemCapability for MacOSSystem {
                     "list_running_apps task join error: {e}"
                 ))
             })?
+    }
+
+    async fn desktop_process_identity(&self, pid: i32) -> Result<Option<DesktopProcessIdentity>> {
+        tokio::task::spawn_blocking(move || workspace::desktop_process_identity(pid))
+            .await
+            .map_err(|e| {
+                aleph_desktop::DesktopError::InputFailed(format!(
+                    "desktop_process_identity task join error: {e}"
+                ))
+            })
     }
 
     async fn list_installed_apps(&self) -> Result<Vec<InstalledApp>> {

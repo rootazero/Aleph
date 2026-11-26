@@ -51,6 +51,8 @@ pub enum Feature {
     /// Live server push of admitted event notifications (id-less frames) on a
     /// v1 endpoint. No replay: a gap is recovered by refetching a snapshot.
     LiveEvents,
+    /// V1 presentation-only chat tool events, in addition to `live_events`.
+    ChatTranscript,
     /// An unrecognized feature string from a newer version.
     Unknown(String),
 }
@@ -62,6 +64,7 @@ impl Serialize for Feature {
             Feature::Snapshot => s.serialize_str("snapshot"),
             Feature::BinaryChannel => s.serialize_str("binary_channel"),
             Feature::LiveEvents => s.serialize_str("live_events"),
+            Feature::ChatTranscript => s.serialize_str("chat_transcript"),
             Feature::Unknown(name) => s.serialize_str(name),
         }
     }
@@ -75,6 +78,7 @@ impl<'de> Deserialize<'de> for Feature {
             "snapshot" => Feature::Snapshot,
             "binary_channel" => Feature::BinaryChannel,
             "live_events" => Feature::LiveEvents,
+            "chat_transcript" => Feature::ChatTranscript,
             _ => Feature::Unknown(s),
         })
     }
@@ -85,7 +89,11 @@ impl Feature {
     pub fn is_known(&self) -> bool {
         matches!(
             self,
-            Feature::EventReplay | Feature::Snapshot | Feature::BinaryChannel | Feature::LiveEvents
+            Feature::EventReplay
+                | Feature::Snapshot
+                | Feature::BinaryChannel
+                | Feature::LiveEvents
+                | Feature::ChatTranscript
         )
     }
 }
@@ -132,6 +140,9 @@ pub fn negotiate_features(requested: &[Feature], implemented: &[Feature]) -> Vec
             negotiated.push(feature.clone());
         }
     }
+    if !negotiated.contains(&Feature::LiveEvents) {
+        negotiated.retain(|feature| *feature != Feature::ChatTranscript);
+    }
     negotiated
 }
 
@@ -172,6 +183,13 @@ mod tests {
             [Feature::BinaryChannel, Feature::Snapshot]
         );
         assert!(negotiate_features(&requested, &[]).is_empty());
+    }
+
+    #[test]
+    fn transcript_negotiation_requires_live_events() {
+        let implemented = [Feature::ChatTranscript, Feature::LiveEvents];
+        assert!(negotiate_features(&[Feature::ChatTranscript], &implemented).is_empty());
+        assert_eq!(negotiate_features(&implemented, &implemented), implemented);
     }
 
     #[test]

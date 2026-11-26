@@ -38,7 +38,6 @@ use std::sync::Arc;
 use tokio::task_local;
 
 use crate::sandbox::live_tail::LiveTail;
-use crate::sandbox::Sandbox;
 use crate::session::service::SessionId;
 
 task_local! {
@@ -47,12 +46,6 @@ task_local! {
     /// when the LLM actually provided one — absence ⇒ the approval prompt stays
     /// byte-identical to its pre-justification form.
     pub static EXEC_JUSTIFICATION: String;
-    /// The command sandbox a worktree-isolated subagent's exec tools must use.
-    /// Scoped around the subagent run by [`with_sandbox_override`] so `bash` /
-    /// `code_exec` / `code_check` run at the worktree path (with
-    /// `CARGO_TARGET_DIR` redirected) instead of the parent's shared workspace.
-    /// Absent ⇒ tools use their construction-time sandbox (the common path).
-    pub static SANDBOX_OVERRIDE: Arc<dyn Sandbox>;
     /// The directory this run is authorised to execute in — the jail root
     /// [`WorkspaceSandbox`](crate::sandbox::workspace::WorkspaceSandbox) uses
     /// instead of its per-session hash directory.
@@ -73,7 +66,7 @@ task_local! {
     ///
     /// Gateway-owned by construction: nothing on the model's side of the wire
     /// can write it. That is the whole point — see the module doc.
-    pub static EXEC_WORKSPACE: Option<PathBuf>;
+    pub static EXEC_WORKSPACE: Option<ExecWorkspace>;
     /// Rolling tail of the currently-executing child's output. Scoped by
     /// `bash`'s background spawner around the whole exec call; read by
     /// [`run_child_with_drain`](crate::sandbox::platforms::common::run_child_with_drain)
@@ -101,15 +94,6 @@ pub fn current_justification() -> Option<String> {
     EXEC_JUSTIFICATION.try_with(|j| j.clone()).ok()
 }
 
-/// The exec-tool sandbox override in scope for the current call, if any. Command
-/// tools prefer this over their construction-time sandbox so a worktree-isolated
-/// subagent's commands run inside its checkout.
-#[must_use]
-pub fn current_sandbox_override() -> Option<Arc<dyn Sandbox>> {
-    // rust-doctor-disable-next-line excessive-clone
-    SANDBOX_OVERRIDE.try_with(|s| s.clone()).ok()
-}
-
 /// The workspace this run is authorised to execute in, if one is in scope.
 ///
 /// `None` means "no run published one" — the sandbox then falls back to its
@@ -117,7 +101,56 @@ pub fn current_sandbox_override() -> Option<Arc<dyn Sandbox>> {
 /// caller outside a gateway run.
 #[must_use]
 pub fn current_exec_workspace() -> Option<PathBuf> {
-    // rust-doctor-disable-next-line excessive-clone
+    EXEC_WORKSPACE
+        .try_with(|workspace| {
+            workspace
+                .as_ref()
+                .map(|binding| binding.root().to_path_buf())
+        })
+        .ok()
+        .flatten()
+}
+
+/// A workspace selected by a trusted run producer, never by a tool command.
+#[derive(Clone, Debug)]
+pub enum ExecWorkspace {
+    Directory(PathBuf),
+    OwnedWorktree(Arc<super::worktree::WorktreeHandle>),
+}
+
+impl PartialEq for ExecWorkspace {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Directory(left), Self::Directory(right)) => left == right,
+            (Self::OwnedWorktree(left), Self::OwnedWorktree(right)) => Arc::ptr_eq(left, right),
+            _ => false,
+        }
+    }
+}
+
+impl Eq for ExecWorkspace {}
+
+impl ExecWorkspace {
+    pub fn root(&self) -> &std::path::Path {
+        match self {
+            Self::Directory(root) => root,
+            Self::OwnedWorktree(handle) => handle.path(),
+        }
+    }
+
+    pub fn is_owned_worktree(&self) -> bool {
+        matches!(self, Self::OwnedWorktree(_))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn worktree_fixture(root: PathBuf, source: PathBuf) -> Self {
+        Self::OwnedWorktree(Arc::new(super::worktree::WorktreeHandle::fixture(
+            root, source,
+        )))
+    }
+}
+
+pub fn current_exec_workspace_binding() -> Option<ExecWorkspace> {
     EXEC_WORKSPACE.try_with(Clone::clone).ok().flatten()
 }
 
@@ -128,6 +161,13 @@ pub fn current_exec_workspace() -> Option<PathBuf> {
 /// [`crate::projects::with_project_root`] and `tools::fs_scope::with_fs_scope`,
 /// the two task-locals it is published beside.
 pub async fn with_exec_workspace<F>(workspace: Option<PathBuf>, fut: F) -> F::Output
+where
+    F: std::future::Future,
+{
+    with_exec_workspace_binding(workspace.map(ExecWorkspace::Directory), fut).await
+}
+
+pub async fn with_exec_workspace_binding<F>(workspace: Option<ExecWorkspace>, fut: F) -> F::Output
 where
     F: std::future::Future,
 {
@@ -143,39 +183,9 @@ pub fn current_live_tail() -> Option<Arc<LiveTail>> {
     LIVE_TAIL.try_with(Arc::clone).ok()
 }
 
-/// Run `fut` with `sandbox` installed as the exec-tool sandbox override. `None`
-/// runs `fut` unchanged (the common, non-isolated path). Mirrors
-/// `tools::fs_scope::with_fs_scope`.
-pub async fn with_sandbox_override<F>(sandbox: Option<Arc<dyn Sandbox>>, fut: F) -> F::Output
-where
-    F: std::future::Future,
-{
-    match sandbox {
-        Some(s) => SANDBOX_OVERRIDE.scope(s, fut).await,
-        None => fut.await,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[tokio::test]
-    async fn sandbox_override_absent_outside_scope() {
-        assert!(current_sandbox_override().is_none());
-    }
-
-    #[tokio::test]
-    async fn sandbox_override_visible_inside_and_cleared_after() {
-        let sb: Arc<dyn Sandbox> = Arc::new(crate::sandbox::NoopSandbox);
-        let seen =
-            with_sandbox_override(Some(sb), async { current_sandbox_override().is_some() }).await;
-        assert!(seen, "override must be visible inside the scope");
-        assert!(
-            current_sandbox_override().is_none(),
-            "override must clear once the scope ends"
-        );
-    }
 
     #[tokio::test]
     async fn live_tail_visible_inside_and_cleared_after() {
@@ -205,12 +215,5 @@ mod tests {
             })
             .await;
         assert!(!seen_inside_spawn);
-    }
-
-    #[tokio::test]
-    async fn sandbox_override_none_is_a_noop() {
-        let seen =
-            with_sandbox_override(None, async { current_sandbox_override().is_some() }).await;
-        assert!(!seen);
     }
 }

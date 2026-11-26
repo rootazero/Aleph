@@ -84,8 +84,8 @@ pub struct EngineCapabilities {
     pub js_dialogs: Cap,
     /// `browser_drag`.
     ///
-    /// **The one row whose two engines disagree, so it states its rule here
-    /// rather than twice (判据 §9 — one verb, several faces, ONE derivation).**
+    /// **The row states its rule here rather than once per engine (判据 §9 —
+    /// one verb, several faces, ONE derivation).**
     /// The rule: this row is `Supported` only where an **effect** reading
     /// exists for the method `browser_drag` actually sends
     /// (`Input.dispatchMouseEvent`) on that engine. A protocol `ok` does not
@@ -93,11 +93,12 @@ pub struct EngineCapabilities {
     /// `DOM.removeNode` with `effect: false` (T0), so on this engine "ok" is a
     /// measured report-success-no-op candidate, not evidence.
     ///
-    /// Applied: Chromium has such a reading and obscura does not. Both arms
+    /// Applied: both engines now have such a reading — Chromium from
+    /// `qa/browser_managed`, obscura since the 2026-11-25 v0.2.7 caps run
+    /// (`dropped:mouseup`; obscura fires no HTML5 drag events). Both arms
     /// carry the citation beside their value, and
-    /// `the_disagreeing_row_cites_the_effect_reading_that_separates_the_engines`
-    /// `every_matrix_exempt_disagreement_cites_its_reading` keeps the Chromium
-    /// citation from becoming a dead reference.
+    /// `every_matrix_exempt_disagreement_cites_its_reading` keeps those
+    /// citations from becoming dead references.
     pub drag: Cap,
     /// `browser_upload` — `DOM.setFileInputFiles`. (The other upload route,
     /// the file-chooser interception, is a NOOP on obscura and no verb uses
@@ -108,13 +109,16 @@ pub struct EngineCapabilities {
     pub file_upload: Cap,
     /// `browser_pdf` — `Page.printToPDF`.
     pub pdf: Cap,
-    /// `browser_type` and `browser_fill` — `Input.insertText`.
+    /// `browser_type` — `Input.insertText`. (`browser_fill_form` sets values
+    /// through a page script, not this method, so it is not gated here.)
     pub insert_text: Cap,
     /// `browser_click`, `browser_type` and `browser_fill_form` — the
     /// effect-arrival probe: a one-shot capture listener installed on the
     /// resolved node via `Runtime.callFunctionOn` BEFORE dispatch, read back
-    /// via `Runtime.evaluate` after. It needs the engine's page-global JS
-    /// state to persist across those two calls, and its synthetic
+    /// after through the SAME node object (so the read runs in the node's
+    /// realm — an iframe's, not the main frame's). It needs the node's realm
+    /// to keep its JS state across those two calls, a per-arm document nonce
+    /// to tell a replaced document from a miss, and the engine's synthetic
     /// `Input.dispatch*` events to reach page-installed listeners.
     pub effect_probe: Cap,
     /// `browser_click`, `browser_type`, `browser_fill_form`, `browser_select`
@@ -187,29 +191,34 @@ static OBSCURA: EngineCapabilities = EngineCapabilities {
     // `Unsupported` is the fail-closed answer, so the VALUE is right under
     // both witnesses. What is being recorded here is that it is right on one
     // of them, not two.
-    js_dialogs: Cap::Unsupported,
-    // **Unsupported as the fail-closed answer to an unknown, not as a
-    // measurement.** `browser_drag` does NOT send `Input.dispatchDragEvent`:
-    // `cdp_backend::actions::drag` sends six `Input.dispatchMouseEvent`s
-    // (move, press, three interpolated moves, release), which obscura answers
-    // `ok`. Task 0 probed `Input.dispatchDragEvent` — absent on obscura, and a
-    // report-success-no-op on Chrome — but that is a method no Aleph verb
-    // dispatches, so it certifies nothing either way about this row.
     //
-    // What is actually unknown is whether OBSCURA delivers a synthetic mouse
-    // sequence to a page's own drag listeners. Nobody has measured that on
-    // this engine: T0 read no `effect` for `Input.dispatchMouseEvent`, and
-    // `qa/browser_managed`'s drag stage — which DOES read the effect, and is
-    // what Chromium's row rests on — has never been run against obscura. (The
-    // earlier draft of this comment said "nobody has measured it" without the
-    // engine, which read as though the two rows answered the same evidence
-    // state; they do not, and the field doc above now states the rule both
-    // arms are answering.) An unknown may not be spent as a permission
-    // (判据 §8), so the row stays
-    // `Unsupported` and the refusal names chromium — and
-    // `capability_table_agrees_with_the_t0_support_matrix`'s `NOT_PROBED`
-    // carries the reason, so this exemption is argued rather than forgotten.
-    drag: Cap::Unsupported,
+    //  3. **Measured 2026-11-25 on v0.2.7 (arm64 macOS), by effect** —
+    //     `qa/browser_dual`'s caps stage opens alert / confirm / prompt from
+    //     the page: no `Page.javascriptDialogOpening` within 2 s,
+    //     `handleJavaScriptDialog` answers `-32601 No dialog is showing`, and
+    //     the page reads confirm → false, prompt → null (answered without
+    //     asking). Witness 1 is stale on this build — both CDP names now exist,
+    //     but only for `beforeunload` on `Page.close` — and this witness
+    //     replaces it: the value now rests on a measured absence.
+    js_dialogs: Cap::Unsupported,
+    // **Supported on a MEASUREMENT (2026-11-25, pinned v0.2.7, arm64 macOS)
+    // — `qa/browser_dual`'s caps stage, by effect.** `browser_drag` does NOT
+    // send `Input.dispatchDragEvent`: `cdp_backend::actions::drag` sends six
+    // `Input.dispatchMouseEvent`s (move, press, three interpolated moves,
+    // release). Task 0 probed `dispatchDragEvent`, a method no Aleph verb
+    // dispatches, so it never decided this row; until v0.2.7 the row was
+    // `Unsupported` as the fail-closed answer to that unknown (判据 §8).
+    //
+    // The caps stage now sends exactly that six-event gesture at
+    // `caps.html`: the press lands on the source and the release on the
+    // target (`dropped:mouseup`), which is the bar Chromium's row passes in
+    // `qa/browser_managed`'s drag stage (an HTML5 drop OR a mouseup on the
+    // target). **Caveat the row cannot carry:** obscura fires NO HTML5
+    // drag-and-drop events (`dragstart`/`drop` never ran), so a page whose drop
+    // target listens only for `drop` will not react, and nothing reads that
+    // back. A `Partial` here would refuse the pointer drags that do work,
+    // because `require` admits only `Supported`.
+    drag: Cap::Supported,
     // **Corrected in task 16 against Task 0's probe, which ran the binary.**
     // The source survey read `domains/dom.rs:257`, saw a real implementation,
     // and recorded YES. The probe asked the running v0.2.2 server and got:
@@ -227,15 +236,18 @@ static OBSCURA: EngineCapabilities = EngineCapabilities {
     // they were readings of two different facts, and only one of them is the
     // one `browser_upload` meets. (The OTHER upload route,
     // `Page.setInterceptFileChooserDialog`, is a NOOP at
-    // `domains/page.rs:1382` and no verb uses it.)
+    // `domains/page.rs:1382` and no verb uses it.) Re-measured 2026-11-25 on
+    // v0.2.7 (arm64 macOS) by `qa/browser_dual`'s caps line: still gated.
     file_upload: Cap::Unsupported,
     // `Page.printToPDF` → `domains/pdf.rs` (`page.rs:1534`), render feature —
     // which the ledger's chosen archive carries. `browser_pdf`'s route.
     pdf: Cap::Supported,
     // Landed in obscura ce9714f, 2026-09-04 (`domains/input.rs:329`).
     insert_text: Cap::Supported,
-    // **Unsupported as a MEASURED verdict, 2026-09-26, obscura v0.2.2
-    // (x86_64-linux) — `qa/browser_dual`'s `caps` stage, three premises.**
+    // **Supported on a MEASUREMENT (2026-11-25, pinned v0.2.7, arm64 macOS) —
+    // opened by Aleph's document nonce, not by the new build.** History first:
+    // it was a MEASURED `Unsupported` on 2026-09-26, obscura v0.2.2
+    // (x86_64-linux) — `qa/browser_dual`'s `caps` stage, three premises.
     // Written `Unsupported` at implementation time as the fail-closed answer
     // to an unknown (no binary on that machine); the caps probe then measured
     // the two premises the row stated and added the third the first two
@@ -256,37 +268,51 @@ static OBSCURA: EngineCapabilities = EngineCapabilities {
     //      measured end-to-end by `qa/browser_dual`'s `click` stage, which
     //      went red on exactly that message the one run the row was flipped
     //      to `Supported`.
-    // The gate stays closed; what would open it is a read-back that survives
-    // (or detects) the navigation the dispatch caused, not a new obscura build
-    // alone.
-    effect_probe: Cap::Unsupported,
+    // What opened the gate is the second of those: a read-back that DETECTS
+    // the navigation. `arm_effect_probe` now installs a per-arm nonce in
+    // `window.__alephProbeDoc` beside the flag, and `effect_probe_readback_js`
+    // answers `{ otherDocument: true }` when the nonce is gone — which
+    // `ProbeReadback::Unknown` turns into Skipped, so the action stands. On
+    // v0.2.7 the read-back still answers a clean null after a self-navigating
+    // click, but the caps stage measured the nonce GONE on the new document
+    // (premises 1-2 still TRUE), so that null is no longer read as a miss.
+    // Since 2026-11-25 the production read-back runs on the INSTALLED NODE
+    // (`Runtime.callFunctionOn` on the install's object id, so an iframe
+    // target is read in its own realm); premise 3 now reads back the same
+    // way, and on v0.2.7 that call ERRORS after the navigation (Unknown →
+    // Skipped, 3 of 3 caps runs). The unsound answer would be a clean null
+    // from a realm that still carries the nonce; caps refuses the row on it.
+    // If a future build keeps the old object callable in a realm that kept
+    // the nonce, this row has to close again.
+    effect_probe: Cap::Supported,
     // A pure lookup against Aleph's own per-tab `RefTable` — no engine
     // round-trip, so nothing to measure per engine (see the field doc).
     ref_precheck: Cap::Supported,
-    // **Unsupported as a MEASURED verdict, 2026-09-27, obscura v0.2.2
-    // (x86_64-linux) — the probe the mock plan's Task 4 promised
+    // **Supported on a MEASUREMENT, 2026-11-25, on the pinned tag (arm64
+    // macOS), by `qa/browser_dual`'s caps stage, both halves by EFFECT:**
+    //   * raw half: `Fetch.enable` on our session with a pattern matching only
+    //     a URL the fixture server does not have; a page `fetch()` of it pauses,
+    //     `Fetch.fulfillRequest` on OUR session answers it, and the fetch
+    //     resolves to the mock body (a pause that did not hold would have
+    //     resolved to the server's 404);
+    //   * tool half: `browser_network{mock_add}` on the managed tab, then page
+    //     `fetch()`es resolve to the rule's body, through Aleph's intercept loop.
+    // Condition the row rests on: the engine opens TWO sessions per page and
+    // reports a pause on whichever a `HashMap` scan meets first (3 of 6
+    // pauses on the session Aleph never attached); the live owner routes such
+    // a pause by its `frameId`, which names the target (`on_fetch`,
+    // src/browser/live/mod.rs). Without that route the request stays paused
+    // forever.
+    //
+    // History: Unsupported on a measured NO, 2026-09-27, obscura v0.2.2
+    // (x86_64-linux), from the mock plan's Task 4 probe
     // (docs/superpowers/specs/2026-09-24-browser-network-mock-design/
-    // probes/fetch-probe.mjs), which measures the handshake link by link
-    // rather than end to end:**
-    //   1. `Fetch.enable{catch-all}` answers ok — the arm EXISTS;
-    //   2. a navigation's `requestPaused` ARRIVES — but the request is NOT
-    //      HELD: left unanswered for 1.5 s the page still reaches `complete`
-    //      with the real body (3/3 runs). The pause is advisory;
-    //   3. `fulfillRequest` on that pause answers ok and changes nothing —
-    //      the page shows the REAL body (3/3): a fulfilled-nothing;
-    //   4. a subresource `fetch()` pause arrives only SOMETIMES (2 of 3 runs;
-    //      when it does not, the fetch wedges pending forever — a request
-    //      held with no event to answer it is worse than no interception);
-    //   5. when the subresource event does arrive, fulfill serves the mock
-    //      correctly — the one working link cannot carry the chain.
-    // A mock route on this engine would report `active` while every page
-    // load slips past it — the exact lie this row exists to prevent. Written
-    // `Unsupported` at implementation time as the fail-closed answer to an
-    // unknown; the probe turned the unknown into a measured NO (判据 §8
-    // spent the other way). What would flip it: a build whose navigation
-    // pauses HOLD (link 2) and whose subresource events are reliable
-    // (link 4) — re-run the probe.
-    network_interception: Cap::Unsupported,
+    // probes/fetch-probe.mjs): navigation pauses were advisory (the real page
+    // completed unanswered) and subresource pauses arrived only sometimes.
+    // Re-run on 2026-11-25 against the pinned tag, that probe's navigation
+    // pause HOLDS and the mock is served 3/3; its subresource pause lands on
+    // either session, and fulfilling it on ours serves the mock 6/6.
+    network_interception: Cap::Supported,
     // **Supported on a MEASUREMENT (2026-09-30, pinned v0.2.2, x86_64-linux),
     // upgraded from the fail-closed NOT_PROBED answer the row shipped with.**
     // The recording plan's Task 4 probe (docs/superpowers/specs/
@@ -297,7 +323,8 @@ static OBSCURA: EngineCapabilities = EngineCapabilities {
     // `stopScreencast` actually stopped the stream (0 frames after). The
     // same build whose Fetch pauses are advisory serves a sound screencast —
     // capability is per-domain, not per-binary, which is why these are two
-    // rows and not one.
+    // rows and not one. Re-measured 2026-11-25 on v0.2.7 (arm64 macOS) by
+    // `qa/browser_dual`'s caps line: usable frames arrive, still Supported.
     screencast: Cap::Supported,
     // **Unsupported on a MEASUREMENT (2026-10-01, pinned v0.2.2, x86_64-linux)
     // — the fail-closed NOT_PROBED answer the row shipped with is spent.**
@@ -311,6 +338,9 @@ static OBSCURA: EngineCapabilities = EngineCapabilities {
     // (see the `js_dialogs` row) is now a pattern, not an anecdote: this
     // build does not broadcast its Runtime-domain page faults. What flips
     // the row: a build that emits the event — re-run the caps line.
+    // Re-run 2026-11-25 on v0.2.7 (arm64 macOS): v0.2.7's source has an
+    // `exceptionThrown` emit path, yet the caps line's async throw still
+    // produced no event within 10 s, so the row stays measured NO.
     error_events: Cap::Unsupported,
     // **Derived, never spelled.** `runtimes::specs` owns the pinned tag
     // (`obscura_tag!` / `OBSCURA_TAG`) and its doc says "bump this — and only
@@ -524,27 +554,26 @@ mod tests {
     /// second copy over there would be the two-authors shape this file spends
     /// most of its guards on (判据 §1).
     /// The rows in [`NOT_PROBED`] are the ones whose evidence lives
-    /// outside the T0 matrix. `effect_probe`'s entry changed KIND on
-    /// 2026-09-26: still not settled by T0's wire probe (it has no label
-    /// there), but no longer UNMEASURED — `qa/browser_dual`'s `caps` stage
-    /// ran the three premises against the real pinned-tag binary and the
-    /// row is now a measured `Unsupported` (see the `OBSCURA` row for the
-    /// evidence and what would open the gate).
+    /// outside the T0 matrix. `drag` and `effect_probe` are both settled by
+    /// `qa/browser_dual`'s `caps` stage against the real pinned-tag binary
+    /// (see the `OBSCURA` rows for the readings).
     const NOT_PROBED: [(&str, &str); 6] = [
         (
             "drag",
             "T0's Input.dispatchDragEvent label measures a method no browser_* verb \
-             dispatches; browser_drag sends Input.dispatchMouseEvent, whose effect T0 \
-             did not read on either engine",
+             dispatches; browser_drag sends Input.dispatchMouseEvent, whose effect is \
+             read by qa/browser_managed's drag stage on chromium and by \
+             qa/browser_dual's caps stage on obscura (2026-11-25: press on the source, \
+             mouseup on the target, no HTML5 drop) — a MEASURED Supported on both",
         ),
         (
             "effect_probe",
             "T0's wire matrix has no label for the probe; settled instead by \
-             qa/browser_dual's caps stage against the real pinned-tag binary on \
-             2026-09-26: premises 1-2 (window-global persistence, node-level \
-             delivery) hold, premise 3 (read-back after a self-navigating click) \
-             fails — a clean null on the new document is indistinguishable from \
-             'never landed', so the probe would lie on every link click",
+             qa/browser_dual's caps stage against the real pinned-tag binary: on \
+             v0.2.2 (2026-09-26) premise 3 failed — a clean null on the new \
+             document read as 'never landed'; on the 2026-11-25 pin the probe's \
+             document nonce is gone after the navigation, so that null is \
+             detected and skipped — a MEASURED Supported on both engines",
         ),
         (
             "ref_precheck",
@@ -554,12 +583,13 @@ mod tests {
         ),
         (
             "network_interception",
-            "T0's wire matrix has no Fetch label; settled instead by the mock plan's \
-             Task 4 probe (docs/superpowers/specs/2026-09-24-browser-network-mock-design/\
-             probes/fetch-probe.mjs) against the pinned build on 2026-09-27: \
-             Fetch.enable answers and events arrive, but navigation pauses are \
-             advisory (the request completes unanswered) and subresource pauses \
-             are unreliable — a MEASURED Unsupported, not an unknown",
+            "T0's wire matrix has no Fetch label; settled instead by the mock \
+             plan's Task 4 probe (docs/superpowers/specs/2026-09-24-browser-\
+             network-mock-design/probes/fetch-probe.mjs): a MEASURED Unsupported \
+             on v0.2.2 (2026-09-27, advisory navigation pauses); on the \
+             2026-11-25 pin qa/browser_dual's caps stage serves a mock both \
+             through raw Fetch and through browser_network, with foreign-session \
+             pauses routed by frameId — a MEASURED Supported on both engines",
         ),
         (
             "screencast",
@@ -606,9 +636,8 @@ mod tests {
         // Both engines upload, so this one's hint is the engine you are already
         // on — which is why `upload`'s refusal is unreachable on both today.
         assert_eq!(supported_by(|c| c.file_upload), Some(Engine::Chromium));
-        // The probe row: obscura is Unsupported on a MEASUREMENT (caps stage,
-        // 2026-09-26 — the read-back cannot survive a self-navigating click),
-        // so the door the hint names must be chromium.
+        // Both engines run the probe since v0.2.7 (caps stage, 2026-11-25),
+        // so the hint, like `drag`'s, names the first supporting engine.
         assert_eq!(supported_by(|c| c.effect_probe), Some(Engine::Chromium));
     }
 
@@ -851,45 +880,41 @@ mod tests {
             .collect();
         assert_eq!(
             exempt_disagreements,
-            vec![
-                "drag",
-                "effect_probe",
-                "network_interception",
-                "error_events"
-            ],
-            "a matrix-exempt row other than \
-             `drag`/`effect_probe`/`network_interception`/`error_events` \
+            vec!["error_events"],
+            "a matrix-exempt row other than `error_events` \
              now answers differently per engine. That difference is published to the model \
              as a route, and nothing in the matrix decides it — state the \
              reading that does, beside BOTH values, and check it here"
         );
 
-        // effect_probe's disagreement rests on a MEASURED ruling since
-        // 2026-09-26 (caps stage: premise 3 fails — the read-back answers a
-        // clean null on the new document after a self-navigating click), and
-        // BOTH values must say what the row needs to flip — checked in the
-        // source rather than trusted, because a published route resting on an
-        // argument nobody can read is the shape this test exists for.
+        // effect_probe's and drag's disagreements CLOSED on 2026-11-25 (caps
+        // stage on v0.2.7: the probe's nonce detects the navigation; the
+        // six-event drag lands). Like screencast below, the citation asserts
+        // stay: obscura's Supported rests on that stage, and on the nonce
+        // CONDITION the row states for closing again.
         let src = include_str!("capability.rs");
-        assert!(
-            src.contains("qa/browser_dual") && src.contains("clean null"),
-            "obscura's effect_probe row no longer states the measurement it rests on"
-        );
-        // network_interception's disagreement rests on a MEASUREMENT on the
-        // obscura side since 2026-09-27 (the mock plan's Task 4 probe:
-        // navigation pauses advisory, subresource pauses unreliable), while
-        // chromium's Supported still rests on the Fetch chain running over
-        // the same connection and event pump the probed verbs already use.
-        // Both rows must keep naming that probe, or the route published to
-        // the model rests on an argument nobody can read.
-        // Scoped to the PRODUCTION prefix: the plan name also appears in
-        // NOT_PROBED, which is test text — a citation that lives only beside
-        // the guard certifies nothing about the rows it guards.
         let production = crate::utils::source_scan::production_prefix(src);
         assert!(
-            production.contains("2026-09-24-browser-network-mock"),
-            "the network_interception rows no longer name the Task 4 probe that \
-             decides obscura's value"
+            production.contains("qa/browser_dual")
+                && production.contains("clean null")
+                && production.contains("__alephProbeDoc"),
+            "obscura's effect_probe row no longer states the measurement it rests on"
+        );
+        assert!(
+            production.contains("dropped:mouseup") && production.contains("HTML5"),
+            "obscura's drag row no longer states its reading and the HTML5 caveat"
+        );
+        // network_interception's disagreement CLOSED on 2026-11-25 (caps stage
+        // on v0.2.7, raw and tool halves). The citation asserts stay: the row
+        // rests on that stage AND on the frameId route for pauses reported on
+        // the page's other session — a row that stopped naming the route would
+        // let it be deleted as dead code.
+        assert!(
+            production.contains("2026-09-24-browser-network-mock")
+                && production.contains("on_fetch")
+                && production.contains("frameId"),
+            "obscura's network_interception row no longer states the probe history \
+             and the foreign-session route it rests on"
         );
         // error_events' disagreement rests on MEASUREMENTS on both sides
         // since 2026-10-01 (C3 Task 4): obscura never emits
@@ -1273,10 +1298,10 @@ mod tests {
         assert_eq!(json["chromium"]["js_dialogs"], "supported");
         assert_eq!(json["obscura"]["file_upload"], "unsupported");
         assert_eq!(json["chromium"]["file_upload"], "supported");
-        // The restored row reads both ways: chromium serves the Fetch
-        // handshake, obscura is the fail-closed answer to an unprobed one.
+        // The restored row: both engines serve the Fetch handshake on
+        // measurements now (obscura flipped 2026-11-25).
         assert_eq!(json["chromium"]["network_interception"], "supported");
-        assert_eq!(json["obscura"]["network_interception"], "unsupported");
+        assert_eq!(json["obscura"]["network_interception"], "supported");
         // The second restored row: BOTH engines serve the screencast stream
         // on measurements now (obscura flipped 2026-09-30 — its row kept
         // here so a constant-emitting `capabilities_json` still goes red on

@@ -28,7 +28,7 @@ use crate::capability::ownership::{
 use crate::capability::policy_runtime::{
     CapabilityCallContext, ConstraintFactsSource, PolicyFactSourceKey, ResourceUse,
 };
-use crate::capability::provider::ProviderHandle;
+use crate::capability::provider::{ProviderHandle, ProviderState};
 use crate::capability::provider_backend::ProviderBackendAdapter;
 use crate::capability::provider_registry::ActivationError;
 use crate::capability::provider_registry::ProviderRegistry;
@@ -70,6 +70,22 @@ fn change_id(change: &CapabilityChange) -> Option<&CapabilityId> {
         | CapabilityChange::Replaced { id, .. }
         | CapabilityChange::Unregistered { id, .. } => Some(id),
         CapabilityChange::Invalidated => None,
+    }
+}
+
+/// Collapse the terminal refusal classes that would otherwise reveal whether
+/// a session id exists.
+///
+/// `NotVisible` means "the caller's principal has no binding for this id" and
+/// `Unknown` means "there is no such session" — for a terminal session the
+/// only difference between them is whether the guessed id is real. A caller
+/// that can tell the two apart can enumerate the sessions on the host, so
+/// both refuse as `Unknown`. The resolve observation still records the true
+/// variant for the audit trail; only the refusal the caller sees is folded.
+fn terminal_denial(error: ResolveError) -> ResolveError {
+    match error {
+        ResolveError::NotVisible => ResolveError::Unknown,
+        error => error,
     }
 }
 
@@ -540,7 +556,7 @@ impl ZahirFacade {
         };
         let lease = self
             .resolve_special_for_call(&reference, &context)
-            .map_err(CapabilityInvocationError::Resolve)?;
+            .map_err(|error| CapabilityInvocationError::Resolve(terminal_denial(error)))?;
         if let Some(captured) = &captured {
             let BackendSourceEvidence::Special {
                 capture: lease_capture,
@@ -1454,7 +1470,8 @@ impl ZahirFacade {
             ResolveError::StaleOwner => "stale_owner",
             ResolveError::StaleProvider => "stale_provider",
             ResolveError::NotVisible => "not_visible",
-            _ => "source_unavailable",
+            ResolveError::DependencyUnavailable { .. } => "dependency_unavailable",
+            ResolveError::Unknown => "source_unavailable",
         };
         crate::capability::events::CapabilityEventEmitter::new(self.events.clone()).emit_scoped(
             call.actor().clone(),
@@ -1659,8 +1676,24 @@ impl ZahirFacade {
             return Err(ResolveError::Unknown);
         }
         let memory = self.memory_source()?;
-        let handle = memory.capture(reference)?;
+        // Visibility first: a caller without a binding learns nothing about
+        // the dependency's state.
         let descriptor = memory.descriptor(&reference.visibility)?;
+        let state = self
+            .provider_adapter
+            .entry(&reference.id)
+            .ok_or(ResolveError::Unknown)?
+            .provider
+            .state();
+        if state != ProviderState::Ready {
+            return Err(ResolveError::DependencyUnavailable {
+                target: reference.id.clone(),
+                state,
+            });
+        }
+        // The runtime's own Running check stays as the second fence for a
+        // stop that lands between the state read and the capture.
+        let handle = memory.capture(reference)?;
         Ok(BackendLease {
             descriptor,
             owner_generation: handle.binding.generation,

@@ -66,6 +66,67 @@ async fn execute(
 }
 
 #[tokio::test]
+async fn chat_models_list_open_to_members_without_admin_exposure() {
+    use crate::config::{Config, ProviderConfig};
+    use crate::gateway::protocol::{AUTH_REQUIRED, SERVICE_UNAVAILABLE};
+    use crate::providers::session_model_handle::{
+        with_test_selectable_models, SelectableModelsSnapshot,
+    };
+    use std::collections::BTreeSet;
+
+    let method = "chat.models.list";
+    assert!(super::super::v1_mounted(method));
+    assert_eq!(Lane::for_method(method), Lane::Query);
+    let executor = executor(
+        HandlerRegistry::new(),
+        Arc::new(RateLimiter::new(RateLimitConfig::default())),
+    );
+    let peer = peer("model-picker-member");
+    let request = || JsonRpcRequest::with_id(method, None, json!(1));
+    let mut config = Config::default();
+    config.providers.clear();
+    for (provider, enabled) in [
+        ("relay-a", true),
+        ("relay-b", true),
+        ("hidden", false),
+        ("unauthed", true),
+    ] {
+        let mut entry = ProviderConfig::test_config("org/model");
+        entry.enabled = enabled;
+        config.providers.insert(provider.into(), entry);
+    }
+    let ready: BTreeSet<_> = config.providers.keys().cloned().collect();
+    let snapshot = SelectableModelsSnapshot::from_config(&config, ready.clone(), &ready, |name| {
+        name != "unauthed"
+    });
+    with_test_selectable_models(Some(snapshot), async {
+        let response = invoke(&executor, &peer, request()).await;
+        let typed: aleph_protocol::providers::ChatModelsListResult =
+            serde_json::from_value(response["result"].clone()).unwrap();
+        assert_eq!(serde_json::to_value(typed).unwrap(), response["result"]);
+        assert_eq!(response["result"], json!({"items": [
+            {"provider": "relay-a", "model": "org/model", "provider_label": "relay-a", "model_label": "org/model"},
+            {"provider": "relay-b", "model": "org/model", "provider_label": "relay-b", "model_label": "org/model"}
+        ]}));
+        for admin in ["providers.catalog", "providers.modelsRefresh"] {
+            let params = (admin == "providers.modelsRefresh").then(|| json!({"idempotency_key": uuid::Uuid::new_v4()}));
+            let response = invoke(&executor, &peer, JsonRpcRequest::with_id(admin, params, json!(2))).await;
+            assert_eq!(response["error"]["code"], AUTH_REQUIRED, "{admin}: {response}");
+        }
+    }).await;
+    with_test_selectable_models(None, async {
+        let response = invoke(&executor, &peer, request()).await;
+        assert_eq!(response["error"]["code"], SERVICE_UNAVAILABLE);
+    })
+    .await;
+    with_test_selectable_models(Some(SelectableModelsSnapshot::default()), async {
+        let response = invoke(&executor, &peer, request()).await;
+        assert_eq!(response["result"], json!({"items": []}));
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn mounted_graph_reads_prepare_without_an_idempotency_key() {
     let peer = peer("graph-reader");
     let caller = peer.snapshot().await.unwrap();

@@ -681,6 +681,28 @@ async fn dom_box_model_parses_both_engines() {
     }
 }
 
+/// obscura serialises a fractional layout size as a JSON float (`coord_value` in its
+/// `domains/dom.rs`). The quads are `f64` already; the size summary must not sink the whole
+/// reply when it is `100.5` instead of `100`.
+#[tokio::test]
+async fn dom_box_model_accepts_a_fractional_size_and_rounds_it() {
+    let quad = json!([10.25, 20, 110.75, 20, 110.75, 60.5, 10.25, 60.5]);
+    let reply = json!({ "model": {
+        "content": quad, "padding": quad, "border": quad, "margin": quad,
+        "width": 100.5, "height": 40.25
+    }});
+    let (_server, conn) = replying("DOM.getBoxModel", reply).await;
+    let model = dom::get_box_model(&conn, Some(&session()), 12)
+        .await
+        .expect("a fractional size is still a box model")
+        .expect("a box");
+    assert_eq!(
+        model.border[2], 110.75,
+        "the quads keep their exact geometry"
+    );
+    assert_eq!((model.width, model.height), (101, 40));
+}
+
 #[test]
 fn the_no_box_matcher_is_the_code_and_message_chrome_actually_sends() {
     let f = parse(fixture!("chrome-DOM.getBoxModel.hidden.json"));

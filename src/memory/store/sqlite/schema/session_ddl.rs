@@ -1,8 +1,9 @@
 //! SQLite schema for session metadata and indexes.
 
-use rusqlite::Connection;
+use rusqlite::{Connection, Transaction, TransactionBehavior};
 
 use crate::error::AlephError;
+use crate::memory::store::raw_memory::CORRECTION_PATH_PREFIX;
 
 /// Initialize all session-related tables.
 pub fn init_session_tables(conn: &Connection) -> Result<(), AlephError> {
@@ -97,7 +98,55 @@ pub fn init_session_tables(conn: &Connection) -> Result<(), AlephError> {
     )
     .map_err(|e| AlephError::other(format!("Failed to create session tables: {}", e)))?;
 
-    Ok(())
+    init_correction_feed(conn)
+        .map_err(|e| AlephError::other(format!("Failed to initialize raw correction feed: {e}")))
+}
+
+fn init_correction_feed(conn: &Connection) -> rusqlite::Result<()> {
+    let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
+    // The sequence table's existence is the migration marker. Its backfill and
+    // triggers commit together, so reopen never renumbers or backfills twice.
+    let installed: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'raw_correction_sequence')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !installed {
+        tx.execute_batch(
+            "CREATE TABLE raw_correction_sequence (
+                 seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                 raw_id TEXT NOT NULL UNIQUE,
+                 agent_id TEXT NOT NULL
+             );
+             CREATE INDEX idx_raw_correction_agent_seq ON raw_correction_sequence(agent_id, seq);
+             CREATE TABLE raw_correction_fences (
+                 agent_id TEXT PRIMARY KEY NOT NULL,
+                 activation_seq INTEGER NOT NULL,
+                 legacy_watermark INTEGER
+             );",
+        )?;
+        // The old query folds ASCII case. Preserve that same membership when
+        // migrating and making future inserts, using the writer's prefix.
+        tx.execute(
+            "INSERT INTO raw_correction_sequence (raw_id, agent_id)
+             SELECT id, agent_id FROM raw_memory_index
+             WHERE substr(path, 1, length(?1)) = ?1 COLLATE NOCASE
+             ORDER BY created_at ASC, rowid ASC",
+            [CORRECTION_PATH_PREFIX],
+        )?;
+        tx.execute_batch(&format!(
+            "CREATE TRIGGER append_raw_correction AFTER INSERT ON raw_memory_index
+             WHEN substr(NEW.path, 1, length('{CORRECTION_PATH_PREFIX}')) = '{CORRECTION_PATH_PREFIX}' COLLATE NOCASE
+             BEGIN
+                 INSERT INTO raw_correction_sequence (raw_id, agent_id) VALUES (NEW.id, NEW.agent_id);
+             END;
+             CREATE TRIGGER delete_raw_correction AFTER DELETE ON raw_memory_index
+             BEGIN
+                 DELETE FROM raw_correction_sequence WHERE raw_id = OLD.id;
+             END;"
+        ))?;
+    }
+    tx.commit()
 }
 
 #[cfg(test)]

@@ -67,7 +67,7 @@ pub enum ProbeDisposition {
 /// Does this provider's endpoint publish a model listing Aleph can read?
 ///
 /// One bit, asked in four places, previously spelled out in three of them:
-/// [`probe_disposition`] here, `discovery::refresh_models` at the leaf, and
+/// [`probe_disposition`] here, `discovery::refresh_configured_models` at the leaf, and
 /// `CatalogEntry::discoverable` on the wire — each writing
 /// `preset.supports_health_check` out by hand. The fourth asker,
 /// `handle_models_refresh`, wanted it for *ordering* (see there) and had no

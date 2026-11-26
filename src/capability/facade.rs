@@ -174,6 +174,14 @@ pub enum ResolveError {
     StaleOwner,
     /// The provider instance was stopped or replaced after this lease was minted.
     StaleProvider,
+    /// A resource this capability `Requires` is visible to the caller but its
+    /// provider is not `Ready` (cold, starting, stopping, stopped, failed or
+    /// disabled). The capability stays listed; the call is refused with the
+    /// dependency's current state so the model can see why and retry later.
+    DependencyUnavailable {
+        target: CapabilityId,
+        state: crate::capability::provider::ProviderState,
+    },
 }
 
 /// A single capability change delivered to a subscriber.

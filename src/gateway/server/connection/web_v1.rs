@@ -476,6 +476,7 @@ async fn serve(
             conn_id.clone(),
             expected.device_id.clone(),
             MAX_MESSAGE as usize,
+            &granted,
         )
     });
     let expires = binding.expires;
@@ -526,12 +527,20 @@ async fn serve(
                                 writes.flush(wire_message(&frame, None, INTERNAL_ERROR, false)?).await?;
                                 continue;
                             }
+                            Some(V1Event::ToolPresentation(frame)) => {
+                                if peer.snapshot().await.is_none() {
+                                    break;
+                                }
+                                writes.flush(wire_message(&frame, None, INTERNAL_ERROR, false)?).await?;
+                                continue;
+                            }
                             Some(V1Event::Lost(warning)) => {
                                 let _ = writes.flush(wire_message(&warning, None, INTERNAL_ERROR, false)?).await;
                                 break;
                             }
                             Some(V1Event::Close(_)) => break,
                         }
+
                     }
                     frame = async {
                         if deferred.is_some() {

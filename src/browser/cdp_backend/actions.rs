@@ -772,7 +772,11 @@ async fn send_mouse(
 /// engine, sitting where both arrive, is read as a claim about both). Measured
 /// on obscura v0.2.2: `alert()` produces **zero** unsolicited frames, a
 /// following `Runtime.evaluate` answers in ~0.01 s so the renderer never
-/// blocks, and `Page.handleJavaScriptDialog` answers `-32601`. So on obscura
+/// blocks, and `Page.handleJavaScriptDialog` answers `-32601`. Re-measured on
+/// v0.2.7 (2026-11-25, `qa/browser_dual` caps stage): still no
+/// `Page.javascriptDialogOpening` for alert/confirm/prompt (v0.2.7 emits it only
+/// for `beforeunload`), and `handleJavaScriptDialog` answers `-32601 No dialog
+/// is showing`. So on obscura
 /// the `select!` below always resolves on its dispatch arm and the dialog arm
 /// is dead code — benign **because** the premise is false there, which is
 /// exactly the shape that stops being benign the day it changes.
@@ -960,7 +964,8 @@ async fn prepare(
 //
 // ⚠️ Spoofing, stated rather than fixed: a hostile page can dispatch its
 // own synthetic event at the node, or write `window.__alephProbeHit`
-// directly, and the probe cannot tell that from a real arrival. What the
+// (or `window.__alephProbeDoc`) directly, and the probe cannot tell that
+// from a real arrival. What the
 // probe kills is the silent no-op, not the actively adversarial page — the
 // same bound every other page-side probe in this file (`OCCLUSION_JS`,
 // `NODE_LIVENESS_JS`) already carries.
@@ -975,12 +980,23 @@ async fn prepare(
 ///
 /// The ref id is embedded as the tag's VALUE — the caller's own string,
 /// JSON-escaped so no ref text can break out of the literal.
-pub(super) fn effect_probe_install_js(ref_id: &str) -> String {
+///
+/// `nonce` marks the DOCUMENT the probe was installed in
+/// (`window.__alephProbeDoc`), so the read-back can tell "this document saw no
+/// event" from "this is a different document": a click whose default action
+/// navigates kills the hit variable with the old document, and the read-back
+/// then runs on the new one. Measured on obscura v0.2.2 (`qa/browser_dual`
+/// caps stage, 2026-09-26): that read-back evaluates cleanly and answers
+/// `null`, which without the nonce reads as `EffectNotDelivered` on every
+/// link click.
+pub(super) fn effect_probe_install_js(ref_id: &str, nonce: &str) -> String {
     let tag = serde_json::to_string(ref_id).unwrap_or_else(|_| "\"\"".into());
+    let doc = serde_json::to_string(nonce).unwrap_or_else(|_| "\"\"".into());
     format!(
         r"
 function() {{
   this.setAttribute('data-aleph-probe', {tag});
+  window.__alephProbeDoc = {doc};
   window.__alephProbeHit = null;
   const hit = (e) => {{ window.__alephProbeHit = e.type; }};
   const opts = {{ capture: true, once: true }};
@@ -996,24 +1012,42 @@ function() {{
     )
 }
 
-/// The read-back, run via `Runtime.evaluate` after dispatch. Answers the
+/// The read-back, run via `Runtime.callFunctionOn` ON THE PROBED NODE after
+/// dispatch — so `window` is the node's own realm, the one the install wrote.
+/// A `Runtime.evaluate` would read the main frame, where a probe installed on
+/// a same-renderer iframe or `srcdoc` node never lives (see
+/// [`ArmedProbe`]). Answers the
 /// event type the one-shot listener recorded (`null` when none), resets the
 /// variable for the next action, and removes the listeners — the D.9.20
 /// lesson: an installed hook whose event never fires must not outlive the
 /// action that installed it. Any throw inside the cleanup is swallowed by
 /// the page-side `try`: a failed cleanup is a warn-level fact, never worth
 /// the action's verdict.
-pub(super) const EFFECT_PROBE_READBACK_JS: &str = r"
-(() => {
+///
+/// A document that does not carry the install's `nonce` answers
+/// `{ otherDocument: true }` — the dispatch replaced the document, so whether
+/// the event landed is unknowable from here, and [`read_effect_probe`] maps
+/// that shape to [`ProbeReadback::Unknown`] (判据 §8).
+pub(super) fn effect_probe_readback_js(nonce: &str) -> String {
+    let doc = serde_json::to_string(nonce).unwrap_or_else(|_| "\"\"".into());
+    format!(
+        r"
+function() {{
+  if (window.__alephProbeDoc !== {doc}) {{
+    return {{ otherDocument: true }};
+  }}
   const v = window.__alephProbeHit;
   window.__alephProbeHit = null;
-  if (typeof window.__alephProbeCleanup === 'function') {
-    try { window.__alephProbeCleanup(); } catch (e) {}
+  window.__alephProbeDoc = null;
+  if (typeof window.__alephProbeCleanup === 'function') {{
+    try {{ window.__alephProbeCleanup(); }} catch (e) {{}}
     window.__alephProbeCleanup = null;
-  }
+  }}
   return v === undefined || v === null ? null : v;
-})()
-";
+}}
+"
+    )
+}
 
 /// What the read-back answered. `Unknown` is "I could not ask" — a
 /// transport error, a page exception, or a value of a shape the read-back
@@ -1025,8 +1059,31 @@ enum ProbeReadback {
     Unknown,
 }
 
+/// A live probe: the document nonce the install wrote and the node it was
+/// installed on. The read-back runs on that same node, because the install's
+/// `window` is the NODE'S realm: for a target inside a same-renderer iframe or
+/// a `srcdoc` frame (which `resolve_target` admits) that is the frame's own
+/// global, not the main frame's. Reading back in the main frame found no
+/// nonce there and reported every iframe action `Skipped` — a real miss
+/// included — and never ran the iframe-side cleanup.
+///
+/// When the dispatch navigated the node's document away, measured 2026-11-25:
+/// Chrome 158 (main-frame link) and obscura v0.2.7 (`qa/browser_dual` caps,
+/// premise 3) both refuse the call on the dead object — an error →
+/// [`ProbeReadback::Unknown`]. A `srcdoc` iframe link on Chrome 158 still
+/// answered from the old realm with the hit (`click` → Verified, correct: the
+/// listener saw it). A realm without the nonce answers `{ otherDocument: true }`
+/// (the same `Unknown`). NOT guaranteed: a realm that outlives the navigation
+/// WITH the nonce and without the hit would read as `NoHit` — a false
+/// `EffectNotDelivered`. Neither engine produced it; caps premise 3 is the
+/// check that refuses obscura's row if a build ever does.
+struct ArmedProbe {
+    nonce: String,
+    object_id: String,
+}
+
 /// Arm the probe on the resolved node when the capability row allows it.
-/// Returns whether a probe is live. Every non-live exit records
+/// Returns the live probe, `None` otherwise. Every non-live exit records
 /// `Skipped(engine)` on the verdict latch — the honest "not verified"
 /// (判据 §8), never a silent absence.
 async fn arm_effect_probe(
@@ -1036,39 +1093,58 @@ async fn arm_effect_probe(
     session: &SessionId,
     resolved: &Resolved,
     ref_label: &str,
-) -> bool {
+) -> Option<ArmedProbe> {
     // The capability gate. An engine whose row is not `Supported` gets no
     // probe at all — no install, no read-back — and the latch says why.
     if caps.effect_probe != Cap::Supported {
         be.record_effect_verdict(Some(EffectVerification::Skipped(be.engine())));
-        return false;
+        return None;
     }
     // A coordinate names a point, not an element: there is no node to tag.
     let Resolved::Node { object_id, .. } = resolved else {
         be.record_effect_verdict(Some(EffectVerification::Skipped(be.engine())));
-        return false;
+        return None;
     };
+    // Unique per install; it only has to differ from whatever a replacement
+    // document carries (nothing, unless the page forges it — see above).
+    let nonce = uuid::Uuid::new_v4().simple().to_string();
     match runtime::call_function_on(
         &handle.conn,
         Some(session),
         object_id,
-        &effect_probe_install_js(ref_label),
+        &effect_probe_install_js(ref_label, &nonce),
         Vec::new(),
     )
     .await
     {
         // An install that failed — transport error OR a page-side exception
         // — disarms the probe; it never fails the action.
-        Ok(res) if res.exception.is_none() => true,
+        Ok(res) if res.exception.is_none() => Some(ArmedProbe {
+            nonce,
+            object_id: object_id.clone(),
+        }),
         _ => {
             be.record_effect_verdict(Some(EffectVerification::Skipped(be.engine())));
-            false
+            None
         }
     }
 }
 
-async fn read_effect_probe(handle: &EngineHandle, session: &SessionId) -> ProbeReadback {
-    match runtime::evaluate(&handle.conn, Some(session), EFFECT_PROBE_READBACK_JS, false).await {
+async fn read_effect_probe(
+    handle: &EngineHandle,
+    session: &SessionId,
+    probe: &ArmedProbe,
+) -> ProbeReadback {
+    let script = effect_probe_readback_js(&probe.nonce);
+    match runtime::call_function_on(
+        &handle.conn,
+        Some(session),
+        &probe.object_id,
+        &script,
+        Vec::new(),
+    )
+    .await
+    {
         Ok(res) => {
             if res.exception.is_some() {
                 return ProbeReadback::Unknown;
@@ -1076,9 +1152,12 @@ async fn read_effect_probe(handle: &EngineHandle, session: &SessionId) -> ProbeR
             match res.value {
                 serde_json::Value::Null => ProbeReadback::NoHit,
                 serde_json::Value::String(event) => ProbeReadback::Hit(event),
+                // Includes `{ otherDocument: true }`: the dispatch replaced
+                // the document the probe was installed in.
                 _ => ProbeReadback::Unknown,
             }
         }
+        // Includes the call on a node whose document navigated away.
         // ⚠️ Includes `EngineBusy`: on Chromium a click that opened a JS
         // dialog leaves `Runtime.evaluate` queued behind the dialog, so the
         // read-back times out. The click LANDED (the dialog is the
@@ -1099,12 +1178,12 @@ async fn conclude_effect_probe(
     session: &SessionId,
     verb: &'static str,
     expected_event: &str,
-    armed: bool,
+    armed: Option<&ArmedProbe>,
 ) -> Result<(), BrowserError> {
-    if !armed {
+    let Some(probe) = armed else {
         return Ok(());
-    }
-    match read_effect_probe(handle, session).await {
+    };
+    match read_effect_probe(handle, session, probe).await {
         ProbeReadback::Hit(event) if event == expected_event => {
             be.record_effect_verdict(Some(EffectVerification::Verified));
             Ok(())
@@ -1168,12 +1247,20 @@ pub(super) async fn click(
     )
     .await;
     if let Err(error) = press_and_release(be, &handle, &session, x, y, 1).await {
-        if armed {
-            let _ = read_effect_probe(&handle, &session).await;
+        if let Some(probe) = &armed {
+            let _ = read_effect_probe(&handle, &session, probe).await;
         }
         return Err(error);
     }
-    conclude_effect_probe(be, &handle, &session, "browser_click", "click", armed).await
+    conclude_effect_probe(
+        be,
+        &handle,
+        &session,
+        "browser_click",
+        "click",
+        armed.as_ref(),
+    )
+    .await
 }
 
 pub(super) async fn dblclick(
@@ -1375,7 +1462,7 @@ pub(super) async fn type_text(
         // the managed backend has. No node, no probe.
         Some(Resolved::Point { .. }) | None => {
             be.record_effect_verdict(Some(EffectVerification::Skipped(be.engine())));
-            false
+            None
         }
     };
 
@@ -1427,12 +1514,20 @@ pub(super) async fn type_text(
     }
     .await;
     if let Err(error) = dispatch_result {
-        if armed {
-            let _ = read_effect_probe(&handle, &session).await;
+        if let Some(probe) = &armed {
+            let _ = read_effect_probe(&handle, &session, probe).await;
         }
         return Err(error);
     }
-    conclude_effect_probe(be, &handle, &session, "browser_type", "input", armed).await
+    conclude_effect_probe(
+        be,
+        &handle,
+        &session,
+        "browser_type",
+        "input",
+        armed.as_ref(),
+    )
+    .await
 }
 
 pub(super) async fn press_key(
@@ -1541,17 +1636,25 @@ pub(super) async fn fill(
     {
         Ok(out) => out,
         Err(error) => {
-            if armed {
-                let _ = read_effect_probe(&handle, &session).await;
+            if let Some(probe) = &armed {
+                let _ = read_effect_probe(&handle, &session, probe).await;
             }
             return Err(error);
         }
     };
     if out.get("ok").and_then(serde_json::Value::as_bool) == Some(true) {
-        conclude_effect_probe(be, &handle, &session, "browser_fill_form", "input", armed).await
+        conclude_effect_probe(
+            be,
+            &handle,
+            &session,
+            "browser_fill_form",
+            "input",
+            armed.as_ref(),
+        )
+        .await
     } else {
-        if armed {
-            let _ = read_effect_probe(&handle, &session).await;
+        if let Some(probe) = &armed {
+            let _ = read_effect_probe(&handle, &session, probe).await;
         }
         Err(BrowserError::ActionFailed(
             "the element did not accept a value; it may not be an input, a \
@@ -1754,15 +1857,38 @@ mod tests {
         }
     }
 
-    /// A fake peer that answers the effect probe's READ-BACK with a hit of
-    /// `event`. Discriminated on the read-back's own marker, not on a copy of
-    /// the whole expression, so the day the read-back JS changes this helper
-    /// keeps answering it instead of silently falling through to `base`
-    /// (判据 §1 — a second spelling of the same fact).
-    ///
-    /// Method-level discrimination, like [`peer_with_live_node`]: the
-    /// read-back is a `Runtime.evaluate`, and a table entry for that whole
-    /// method would swallow every other evaluate the verb makes.
+    /// Whether `frame` is the effect probe's READ-BACK: a
+    /// `Runtime.callFunctionOn` (run on the probed node, so it reads the
+    /// node's own realm) whose declaration carries the read-back's own
+    /// `otherDocument` marker. The install is a `callFunctionOn` too, so the
+    /// method alone cannot tell them apart — and a copy of the whole script
+    /// would be a second spelling of the same fact (判据 §1).
+    fn is_effect_readback(frame: &serde_json::Value) -> bool {
+        frame.get("method").and_then(serde_json::Value::as_str) == Some("Runtime.callFunctionOn")
+            && frame["params"]["functionDeclaration"]
+                .as_str()
+                .is_some_and(|d| d.contains("otherDocument"))
+    }
+
+    /// A fake peer that answers the effect probe's READ-BACK with `reply` and
+    /// every other frame with `base`. A per-method `server.on` override would
+    /// swallow the install as well, which shares the read-back's method.
+    fn peer_with_effect_readback<F>(
+        reply: Responder,
+        base: F,
+    ) -> impl Fn(&serde_json::Value) -> Responder + Send + Sync
+    where
+        F: Fn(&serde_json::Value) -> Responder + Send + Sync + 'static,
+    {
+        move |frame: &serde_json::Value| {
+            if is_effect_readback(frame) {
+                return reply.clone();
+            }
+            base(frame)
+        }
+    }
+
+    /// A fake peer whose effect-probe READ-BACK reports a hit of `event`.
     fn peer_with_effect_hit<F>(
         event: &'static str,
         base: F,
@@ -1770,16 +1896,10 @@ mod tests {
     where
         F: Fn(&serde_json::Value) -> Responder + Send + Sync + 'static,
     {
-        move |frame: &serde_json::Value| {
-            if frame.get("method").and_then(serde_json::Value::as_str) == Some("Runtime.evaluate")
-                && frame["params"]["expression"]
-                    .as_str()
-                    .is_some_and(|e| e.contains("__alephProbeHit"))
-            {
-                return Responder::Reply(json!({ "result": { "type": "string", "value": event } }));
-            }
-            base(frame)
-        }
+        peer_with_effect_readback(
+            Responder::Reply(json!({ "result": { "type": "string", "value": event } })),
+            base,
+        )
     }
 
     /// Seed a tab whose ref table holds one ref minted against document `L1`,
@@ -3585,7 +3705,7 @@ mod tests {
     /// would leak a page-side hook per action.
     #[test]
     fn probe_js_marks_only_the_target_element() {
-        let js = super::effect_probe_install_js("e7");
+        let js = super::effect_probe_install_js("e7", "n1");
         assert!(
             js.contains("data-aleph-probe"),
             "probe must tag the resolved node, not document"
@@ -3610,11 +3730,11 @@ mod tests {
                 "a table lookup must never fabricate a verification: {v:?}"
             );
         }
-        // obscura's row is Unsupported on a measurement (caps stage,
-        // 2026-09-26: the probe's read-back cannot survive a self-navigating
-        // click on that engine), so its verdict is the skipped label; the day
-        // it is measured Supported, `for_engine` returning `None` is the honest
-        // answer and this arm must be revisited rather than flipped.
+        // obscura's row was Unsupported at v0.2.2 (the read-back could not
+        // tell a self-navigating click from a miss) and is Supported since the
+        // document nonce made that navigation detectable (caps stage, v0.2.7).
+        // Either answer is honest only when it matches the row, so this reads
+        // the row instead of pinning one.
         match EffectVerification::for_engine(Engine::Obscura) {
             Some(EffectVerification::Skipped(e)) => assert_eq!(e, Engine::Obscura),
             None => assert_eq!(
@@ -3660,13 +3780,19 @@ mod tests {
     /// (判据 §8 — the two facts license different recoveries).
     #[tokio::test]
     async fn a_click_the_engine_accepted_but_the_page_never_saw_is_effect_not_delivered() {
-        // The read-back falls through to `scripted`'s catch-all `Reply({})`,
-        // whose absent `result` decodes as `null` — exactly what the page
-        // says when the listener never fired.
-        let server = probed_click_server(peer_with_live_node(FakeCdpServer::scripted(vec![(
-            "Runtime.callFunctionOn",
-            Responder::Reply(json!({ "result": { "type": "object", "value": { "ok": true } } })),
-        )])))
+        // The read-back answers a clean `null` — exactly what the page says
+        // when the listener never fired.
+        let server = probed_click_server(peer_with_effect_readback(
+            Responder::Reply(
+                json!({ "result": { "type": "object", "subtype": "null", "value": null } }),
+            ),
+            peer_with_live_node(FakeCdpServer::scripted(vec![(
+                "Runtime.callFunctionOn",
+                Responder::Reply(
+                    json!({ "result": { "type": "object", "value": { "ok": true } } }),
+                ),
+            )])),
+        ))
         .await;
         let (_reg, backend) = backend_with(&server, Engine::Chromium, open_guard()).await;
         let handle = backend.handle().await.expect("handle");
@@ -3769,23 +3895,129 @@ mod tests {
         );
     }
 
+    /// The read-back runs ON THE PROBED NODE (`Runtime.callFunctionOn` with
+    /// the install's object id), never as a page-level `Runtime.evaluate`.
+    /// The install's `window` is the node's realm; for a target inside a
+    /// same-renderer iframe or `srcdoc` frame that is the frame's global, and
+    /// an evaluate would read the main frame instead — no nonce there, so a
+    /// real miss became `Skipped` and the frame-side listeners were never
+    /// removed (branch review 2026-11-25, P1).
+    #[tokio::test]
+    async fn the_readback_runs_in_the_realm_the_probe_was_installed_in() {
+        let server = probed_click_server(peer_with_effect_hit(
+            "click",
+            peer_with_live_node(FakeCdpServer::scripted(vec![(
+                "Runtime.callFunctionOn",
+                Responder::Reply(
+                    json!({ "result": { "type": "object", "value": { "ok": true } } }),
+                ),
+            )])),
+        ))
+        .await;
+        let (_reg, backend) = backend_with(&server, Engine::Chromium, open_guard()).await;
+        let handle = backend.handle().await.expect("handle");
+        let ref_id = seed_ref(&handle, "T1").await;
+
+        backend
+            .click("T1", ActionTarget::Ref { ref_id })
+            .await
+            .expect("the page saw the click");
+
+        let received = server.received();
+        let readbacks: Vec<_> = received.iter().filter(|f| is_effect_readback(f)).collect();
+        assert_eq!(readbacks.len(), 1, "exactly one read-back: {received:?}");
+        assert_eq!(
+            readbacks[0]["params"]["objectId"].as_str(),
+            Some("OBJ1"),
+            "the read-back targets the node the install tagged"
+        );
+        let page_level = received
+            .iter()
+            .filter(|f| {
+                f["method"].as_str() == Some("Runtime.evaluate")
+                    && f["params"]["expression"]
+                        .as_str()
+                        .is_some_and(|e| e.contains("__alephProbe"))
+            })
+            .count();
+        assert_eq!(page_level, 0, "no probe read in the main frame's realm");
+    }
+
+    /// The install and the read-back carry the SAME document nonce, escaped
+    /// as a JS string literal: the read-back is what tells "this document saw
+    /// no event" (NoHit) from "the dispatch replaced this document" (Unknown),
+    /// and it can only do that by comparing against what the install wrote.
+    #[test]
+    fn effect_probe_scripts_carry_the_same_nonce() {
+        let install = super::effect_probe_install_js("e7", "n1");
+        let readback = super::effect_probe_readback_js("n1");
+        assert!(
+            install.contains(r#"window.__alephProbeDoc = "n1";"#),
+            "{install}"
+        );
+        assert!(
+            readback.contains(r#"window.__alephProbeDoc !== "n1""#),
+            "{readback}"
+        );
+        assert!(readback.contains("otherDocument"), "{readback}");
+        let hostile = super::effect_probe_readback_js(r#"a"b"#);
+        assert!(
+            hostile.contains(r#""a\"b""#),
+            "the nonce is JSON-escaped: {hostile}"
+        );
+    }
+
+    /// A click whose default action navigates runs the read-back on the NEW
+    /// document, which does not carry the install's nonce and answers
+    /// `{ otherDocument: true }`. That is "could not ask", not "did not
+    /// happen": the action stands and the verdict is `Skipped` — never the
+    /// false `EffectNotDelivered` a clean `null` used to produce there.
+    #[tokio::test]
+    async fn a_readback_on_a_replaced_document_is_skipped_not_failed() {
+        let server = probed_click_server(peer_with_effect_readback(
+            Responder::Reply(
+                json!({ "result": { "type": "object", "value": { "otherDocument": true } } }),
+            ),
+            peer_with_live_node(FakeCdpServer::scripted(vec![(
+                "Runtime.callFunctionOn",
+                Responder::Reply(
+                    json!({ "result": { "type": "object", "value": { "ok": true } } }),
+                ),
+            )])),
+        ))
+        .await;
+        let (_reg, backend) = backend_with(&server, Engine::Chromium, open_guard()).await;
+        let handle = backend.handle().await.expect("handle");
+        let ref_id = seed_ref(&handle, "T1").await;
+
+        backend
+            .click("T1", ActionTarget::Ref { ref_id })
+            .await
+            .expect("a replaced document is not evidence the click was lost");
+        assert_eq!(
+            BrowserBackend::last_effect_verification(&backend),
+            Some(EffectVerification::Skipped(Engine::Chromium))
+        );
+    }
+
     /// A read-back FAILURE is `skipped`, never `failed`: the probe's own
     /// fault must not turn a successful action into a failure (判据 §8 —
     /// "I could not ask" is not "it did not happen").
     #[tokio::test]
     async fn a_readback_failure_marks_the_action_skipped_not_failed() {
-        let server = probed_click_server(peer_with_live_node(FakeCdpServer::scripted(vec![(
-            "Runtime.callFunctionOn",
-            Responder::Reply(json!({ "result": { "type": "object", "value": { "ok": true } } })),
-        )])))
-        .await;
-        server.on(
-            "Runtime.evaluate",
+        let server = probed_click_server(peer_with_effect_readback(
             Responder::Error {
                 code: -32000,
                 message: "boom".into(),
             },
-        );
+            peer_with_live_node(FakeCdpServer::scripted(vec![(
+                "Runtime.callFunctionOn",
+                Responder::Reply(
+                    json!({ "result": { "type": "object", "value": { "ok": true } } }),
+                ),
+            )])),
+        ))
+        .await;
         let (_reg, backend) = backend_with(&server, Engine::Chromium, open_guard()).await;
         let handle = backend.handle().await.expect("handle");
         let ref_id = seed_ref(&handle, "T1").await;
@@ -3800,11 +4032,13 @@ mod tests {
         );
     }
 
-    /// The capability gate: obscura's `effect_probe` row is `Unsupported`
-    /// (measured 2026-09-26 by qa/browser_dual's caps stage — the read-back
-    /// cannot survive a self-navigating click there), so no install and no
-    /// read-back reach the wire, and the verdict is the honest
-    /// `skipped(obscura)`.
+    /// The capability gate: an engine whose `effect_probe` row is not
+    /// `Supported` gets no install and no read-back on the wire, and the
+    /// verdict is the honest `skipped(<engine>)`.
+    ///
+    /// Capability row INJECTED (R42): no production row is `Unsupported` since
+    /// obscura's was measured Supported on v0.2.7, and the gate has to stay
+    /// exercised for the day a pinned build loses the probe again.
     #[tokio::test]
     async fn an_engine_without_the_probe_capability_is_honestly_skipped() {
         let server = probed_click_server(peer_with_live_node(FakeCdpServer::scripted(vec![(
@@ -3816,8 +4050,9 @@ mod tests {
         let handle = backend.handle().await.expect("handle");
         let ref_id = seed_ref(&handle, "T1").await;
 
-        backend
-            .click("T1", ActionTarget::Ref { ref_id })
+        let mut caps = all_supported();
+        caps.effect_probe = Cap::Unsupported;
+        super::click(&backend, &caps, "T1", ActionTarget::Ref { ref_id })
             .await
             .expect("the click itself is fine — only the probe is gated");
         assert_eq!(
@@ -3830,10 +4065,10 @@ mod tests {
             .filter(|f| {
                 f["params"]["functionDeclaration"]
                     .as_str()
-                    .is_some_and(|d| d.contains("data-aleph-probe"))
+                    .is_some_and(|d| d.contains("__alephProbe"))
                     || f["params"]["expression"]
                         .as_str()
-                        .is_some_and(|e| e.contains("__alephProbeHit"))
+                        .is_some_and(|e| e.contains("__alephProbe"))
             })
             .count();
         assert_eq!(
@@ -3880,10 +4115,10 @@ mod tests {
             .filter(|f| {
                 f["params"]["functionDeclaration"]
                     .as_str()
-                    .is_some_and(|d| d.contains("data-aleph-probe"))
+                    .is_some_and(|d| d.contains("__alephProbe"))
                     || f["params"]["expression"]
                         .as_str()
-                        .is_some_and(|e| e.contains("__alephProbeHit"))
+                        .is_some_and(|e| e.contains("__alephProbe"))
             })
             .count();
         assert_eq!(probe_frames, 0, "no node, no probe on the wire");

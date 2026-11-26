@@ -2052,10 +2052,38 @@ mod tests {
     /// in `connection/mod.rs` actually calls it.
     #[test]
     fn the_delivery_loop_parses_each_event_once_and_projects_it() {
+        // The production half of a file ends at its first INLINE test module
+        // (`#[cfg(test)] mod x { ... }`). A declaration-only `#[cfg(test)] mod
+        // x;` is NOT a test module: `connection/mod.rs` declares its
+        // transcript fixture that way next to the production module list, and
+        // cutting there would hide the legacy `/ws` admission call that the
+        // first pin below reads. (That cut is what made this pin report a
+        // missing delegation the code still has.)
         let production_half = |src: &'static str| {
-            src.split(&format!("#[cfg{}]", "(test)"))
-                .next()
-                .expect("the file has a production half")
+            let marker = &format!("#[cfg{}]", "(test)");
+            let mut cursor = src;
+            loop {
+                let found = match cursor.find(marker) {
+                    Some(index) => index,
+                    None => return src,
+                };
+                let after = cursor[found + marker.len()..].trim_start();
+                let starts_inline_module = match after.strip_prefix("mod ") {
+                    Some(rest) => {
+                        let terminator = rest
+                            .trim_start()
+                            .chars()
+                            .find(|character| !(character.is_alphanumeric() || *character == '_'))
+                            .unwrap_or(';');
+                        terminator == '{'
+                    }
+                    None => false,
+                };
+                if starts_inline_module {
+                    return &src[..found];
+                }
+                cursor = &cursor[found + marker.len()..];
+            }
         };
         let production = production_half(include_str!("connection/event_admission.rs"));
         let legacy_loop = production_half(include_str!("connection/mod.rs"));

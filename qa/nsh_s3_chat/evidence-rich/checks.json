@@ -1,0 +1,135 @@
+{
+  "platform": "darwin",
+  "server_sha256": "7e483a4fc50973b02dea3bb3e54cdfda32f29238f4d4cfa6020d1538414e7331",
+  "shell_sha256": "7c40c30a6ba2a5231bc9f3318881c6f62ea6504bdfd8768e2b330d38e5fbd8fa",
+  "web_index_sha256": "0c7e20fb05176c947c47f34327c0d006f96501d89b1528ca192b750dfba9096d",
+  "gateway_exit": 0,
+  "desktop_file_verified": true,
+  "web_file_verified": true,
+  "browser_checks": [
+    {
+      "name": "paired_live_events_granted"
+    },
+    {
+      "name": "cross_surface_history",
+      "desktop_message_copies": 1
+    },
+    {
+      "name": "rich_gateway_summary",
+      "history": [
+        {
+          "role": "user",
+          "has_run": false,
+          "rich_reply": false
+        },
+        {
+          "role": "assistant",
+          "has_run": false,
+          "rich_reply": false
+        },
+        {
+          "role": "tool",
+          "has_run": false,
+          "rich_reply": false
+        },
+        {
+          "role": "tool",
+          "has_run": false,
+          "rich_reply": false
+        },
+        {
+          "role": "assistant",
+          "has_run": false,
+          "rich_reply": false
+        },
+        {
+          "role": "tool",
+          "has_run": false,
+          "rich_reply": false
+        },
+        {
+          "role": "tool",
+          "has_run": false,
+          "rich_reply": false
+        },
+        {
+          "role": "assistant",
+          "has_run": false,
+          "rich_reply": true
+        },
+        {
+          "role": "user",
+          "has_run": false,
+          "rich_reply": false
+        },
+        {
+          "role": "assistant",
+          "has_run": true,
+          "rich_reply": true
+        }
+      ],
+      "replay": [
+        [
+          {
+            "kind": "started",
+            "diff": false
+          },
+          {
+            "kind": "finished",
+            "diff": true
+          },
+          {
+            "kind": "started",
+            "diff": false
+          },
+          {
+            "kind": "finished",
+            "diff": true
+          }
+        ]
+      ]
+    },
+    {
+      "name": "browser_jumps_back_to_transcript_tail"
+    },
+    {
+      "name": "rich_desktop_history_in_web",
+      "restored_focus": true,
+      "hover_highlight": true
+    },
+    {
+      "name": "ime_return_does_not_send"
+    },
+    {
+      "name": "live_text_tool_text_before_completion",
+      "chat_tool_frames": 2
+    },
+    {
+      "name": "send_streams_and_completes",
+      "topics": {
+        "stream.run_accepted": 1,
+        "stream.response_chunk": 2,
+        "stream.chat_tool": 2,
+        "stream.run_complete": 1
+      },
+      "methods_after_send": {
+        "chat.send": 1,
+        "chat.history": 1,
+        "chat.transcript_details": 1
+      },
+      "idempotency_key_present": true
+    },
+    {
+      "name": "stop_probe",
+      "outcome": "stop_pressed",
+      "abort_sent": true,
+      "topics": {
+        "stream.run_accepted": 1,
+        "stream.run_error": 1
+      }
+    },
+    {
+      "name": "gateway_restart_repair_restores_history"
+    }
+  ]
+}

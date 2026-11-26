@@ -31,6 +31,7 @@
 pub mod alias;
 pub mod capabilities;
 pub mod discovery;
+pub mod discovery_authority;
 pub mod endpoint;
 pub mod lifecycle;
 pub mod record;
@@ -45,8 +46,30 @@ pub use capabilities::{
     CONSERVATIVE_CONTEXT_WINDOW,
 };
 pub use discovery::{
-    cached_models, cached_models_async, refresh_models, DiscoveredModels, DiscoveryError,
+    refresh_configured_models, DiscoveredModels, DiscoveryError, RefreshMode, RefreshOutcome,
 };
 pub use endpoint::{endpoint_kind_for_base_url, EndpointKind};
 pub use lifecycle::{lifecycle_for, ModelLifecycle, ModelStatus};
 pub use record::{ModelRecord, ModelSource};
+
+/// Resolve positive context-window facts without guessing for unknown models.
+#[must_use]
+pub fn context_window_for(
+    model: &str,
+    provider_override: Option<u32>,
+    model_def: Option<&crate::config::types::ModelDef>,
+) -> Option<u32> {
+    provider_override
+        .filter(|&window| window > 0)
+        .or_else(|| {
+            model_def
+                .filter(|def| def.id == model)
+                .and_then(|def| def.context_window)
+                .filter(|&window| window > 0)
+        })
+        .or_else(|| {
+            capabilities_for(model)
+                .map(|caps| caps.context_window)
+                .filter(|&window| window > 0)
+        })
+}

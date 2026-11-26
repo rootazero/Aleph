@@ -297,7 +297,8 @@ impl Transcript {
             | StreamEvent::RunRetrying { .. }
             | StreamEvent::ModelResolved { .. }
             | StreamEvent::ContextGauge { .. }
-            | StreamEvent::SessionUserMessage { .. } => Vec::new(),
+            | StreamEvent::SessionUserMessage { .. }
+            | StreamEvent::ChatTool { .. } => Vec::new(),
         }
     }
 
@@ -458,5 +459,9 @@ fn presentation_text(ev: &AgentTraceEvent) -> Option<String> {
         .map(|p| p.content)
 }
 
+#[cfg(feature = "panel")]
+mod chat_tool;
+#[cfg(all(test, feature = "panel"))]
+mod chat_tool_tests;
 #[cfg(test)]
 mod tests;

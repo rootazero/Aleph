@@ -44,6 +44,33 @@ use super::{loader, manifest, mcp_config, readiness, registrar, slash_effect, Ex
 use crate::extension::capability::CapabilityDeclaration;
 use crate::sync_primitives::Arc;
 
+/// A plugin directory that was located, admitted, parsed and identity-checked
+/// but not yet run. Produced by `ExtensionManager::prepare_mount`, consumed by
+/// `ExtensionManager::commit_mount`.
+struct PreparedMount {
+    output: AdapterOutput,
+    manifest: Option<PluginManifest>,
+    root_dir: PathBuf,
+    origin: PluginOrigin,
+    scope_key: ScopeKey,
+}
+
+/// Why `prepare_mount` stopped. It records nothing itself; each variant says
+/// what an ordinary mount records for it, so a reload preflight can choose to
+/// record nothing while the previous version keeps serving.
+enum PrepareError {
+    /// Nothing to record (no registry row, or the parse was cancelled).
+    Unrecorded(MountError),
+    /// Admission refused; an ordinary mount records the refusal.
+    Refused {
+        origin: PluginOrigin,
+        error: MountError,
+    },
+    /// The directory does not parse or declares a different id; an ordinary
+    /// mount marks the row `Error(reason)`.
+    Defect(String),
+}
+
 /// Why a mount did not happen. `Step` carries the label of the effect that
 /// failed; the partial scope was disposed before this was returned.
 #[derive(Debug, thiserror::Error)]
@@ -69,6 +96,10 @@ pub enum MountError {
     NotEnabled(String),
     #[error("plugin '{id}' manifest could not be parsed: {reason}")]
     Parse { id: String, reason: String },
+    /// A reload preflight found the new version defective; nothing was torn
+    /// down and the row was not touched.
+    #[error("plugin '{id}' was not reloaded, the previous version is still running: {reason}")]
+    ReloadRefused { id: String, reason: String },
     #[error("plugin '{id}' failed at step '{step}': {reason}")]
     Step {
         id: String,
@@ -194,7 +225,7 @@ impl ExtensionManager {
     ) {
         use super::plugin_state::{PluginControlPhase, PluginRuntimeOutcome};
         if enabled {
-            match self.mount_inner(id).await {
+            match self.mount_inner(id, None).await {
                 Ok(PluginStatus::Cold) => outcome.runtime_outcome = PluginRuntimeOutcome::Cold,
                 Ok(_) => outcome.runtime_outcome = PluginRuntimeOutcome::Mounted,
                 Err(MountError::AlreadyMounted(_)) => {
@@ -269,7 +300,7 @@ impl ExtensionManager {
     /// (`readiness`) — `Loaded` for a plugin with nothing to wait on.
     pub async fn mount(&self, id: &str) -> Result<PluginStatus, MountError> {
         let _guard = self.load_guard.lock().await;
-        let status = self.mount_inner(id).await?;
+        let status = self.mount_inner(id, None).await?;
         self.views().after_transition().await;
         self.sync_runtime_snapshots().await;
         Ok(status)
@@ -285,10 +316,40 @@ impl ExtensionManager {
         result
     }
 
-    /// unmount + mount. Replaces the narrower `reload_plugin` that refreshed
-    /// only the tool index and skipped hooks / projections / MCP / services.
+    /// Check the new version, then unmount + mount.
+    ///
+    /// Preflight first: the directory is parsed and identity-checked, and a
+    /// WASM guest module is compiled (not run), while the running version
+    /// keeps serving. If the new version is defective and a version is
+    /// mounted, the reload stops there: nothing is torn down, the row is not
+    /// touched, and the error says the previous version is still running.
+    /// An admission refusal is not a defect of the new version but the
+    /// operator's decision, so it still tears down and records the refusal.
+    /// Not covered by the preflight: failures that only appear while mounting
+    /// (link/instantiate errors, MCP server start, service start) still leave
+    /// the plugin unmounted as before.
     pub async fn reload_plugin(&self, id: &str) -> Result<PluginStatus, MountError> {
         let _guard = self.load_guard.lock().await;
+        let prepared = match self.preflight_reload(id).await {
+            Ok(prepared) => Some(prepared),
+            Err(PrepareError::Refused { .. }) => None,
+            // Nothing is serving: behave like a plain mount, which records
+            // the failure on the row.
+            Err(_) if !self.is_mounted(id) => None,
+            Err(error) => {
+                let reason = match error {
+                    PrepareError::Defect(reason) => reason,
+                    PrepareError::Unrecorded(error) | PrepareError::Refused { error, .. } => {
+                        error.to_string()
+                    }
+                };
+                tracing::warn!(plugin = %id, %reason, "reload preflight failed; keeping the running version");
+                return Err(MountError::ReloadRefused {
+                    id: id.to_owned(),
+                    reason,
+                });
+            }
+        };
         match self.unmount_inner(id).await {
             Ok(_) | Err(UnmountError::NotMounted(_)) => {}
             Err(UnmountError::NotFound(_)) => return Err(MountError::NotFound(id.to_string())),
@@ -299,10 +360,50 @@ impl ExtensionManager {
                 });
             }
         }
-        let result = self.mount_inner(id).await;
+        let result = self.mount_inner(id, prepared).await;
         self.views().after_transition().await;
         self.sync_runtime_snapshots().await;
         result
+    }
+
+    /// [`Self::prepare_mount`] plus, for a WASM plugin, a compile of its guest
+    /// module. Writes nothing.
+    async fn preflight_reload(&self, id: &str) -> Result<PreparedMount, PrepareError> {
+        let prepared = self.prepare_mount(id).await?;
+        let Some(manifest) = prepared
+            .manifest
+            .clone()
+            .filter(|manifest| manifest.kind == PluginKind::Wasm)
+        else {
+            return Ok(prepared);
+        };
+        let compiled =
+            crate::skill::run_blocking_fs("ExtensionManager::reload.preflight", move || {
+                crate::extension::runtime::wasm::WasmRuntime::preflight_module(&manifest)
+            })
+            .await;
+        match compiled {
+            Some(Ok(())) => Ok(prepared),
+            Some(Err(error)) => Err(PrepareError::Defect(error.to_string())),
+            None => Err(PrepareError::Unrecorded(MountError::Parse {
+                id: id.to_string(),
+                reason: "reload preflight was cancelled (runtime shutting down)".to_string(),
+            })),
+        }
+    }
+
+    /// Whether a version of `id` is mounted (running or declared Cold) —
+    /// the same test [`Self::mount_inner`] uses to refuse a second mount.
+    fn is_mounted(&self, id: &str) -> bool {
+        let owner_mounted = self.runtime_owner(id).is_some_and(|owner| {
+            owner.provider.state() != crate::capability::provider::ProviderState::Disabled
+        });
+        owner_mounted
+            || self
+                .scopes
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .contains_key(id)
     }
 
     /// Dispose every mounted plugin, rediscover, mount every admitted
@@ -904,7 +1005,14 @@ impl ExtensionManager {
 
     // ── Mount ─────────────────────────────────────────────────────────────
 
-    async fn mount_inner(&self, id: &str) -> Result<PluginStatus, MountError> {
+    /// `prepared` is a directory already parsed and checked by the caller
+    /// (reload preflight); `None` parses it here. Either way the already-mounted
+    /// checks run first, against the state at commit time.
+    async fn mount_inner(
+        &self,
+        id: &str,
+        prepared: Option<PreparedMount>,
+    ) -> Result<PluginStatus, MountError> {
         if let Some(owner) = self.runtime_owner(id) {
             if owner.provider.state() == crate::capability::provider::ProviderState::Cold {
                 self.admit(id, owner.record.origin).await?;
@@ -922,18 +1030,48 @@ impl ExtensionManager {
         {
             return Err(MountError::AlreadyMounted(id.to_string()));
         }
+        let prepared = match prepared {
+            Some(prepared) => prepared,
+            None => match self.prepare_mount(id).await {
+                Ok(prepared) => prepared,
+                Err(PrepareError::Unrecorded(error)) => return Err(error),
+                Err(PrepareError::Refused { origin, error }) => {
+                    self.record_admission_refusal(id, origin, &error).await;
+                    return Err(error);
+                }
+                Err(PrepareError::Defect(reason)) => {
+                    let mut reg = self.plugin_registry.write().await;
+                    if let Some(row) = reg.get_plugin_mut(id) {
+                        row.status = PluginStatus::Error(reason.clone());
+                        row.error = Some(reason.clone());
+                    }
+                    return Err(MountError::Parse {
+                        id: id.to_string(),
+                        reason,
+                    });
+                }
+            },
+        };
+        self.commit_mount(id, prepared).await
+    }
+
+    /// Locate, admit, parse and identity-check a plugin directory.
+    ///
+    /// Writes nothing — no row status, no refusal record, no effect — so a
+    /// reload can run it while the previous version keeps serving. The caller
+    /// decides what a failure records (see [`PrepareError`]).
+    async fn prepare_mount(&self, id: &str) -> Result<PreparedMount, PrepareError> {
         let (root_dir, origin, scope_key) = self
             .plugin_registry
             .read()
             .await
             .get_plugin(id)
             .map(|r| (r.root_dir.clone(), r.origin, r.scope_key.clone()))
-            .ok_or_else(|| MountError::NotFound(id.to_string()))?;
+            .ok_or_else(|| PrepareError::Unrecorded(MountError::NotFound(id.to_string())))?;
 
-        if let Err(e) = self.admit(id, origin).await {
-            self.record_admission_refusal(id, origin, &e).await;
-            return Err(e);
-        }
+        self.admit(id, origin)
+            .await
+            .map_err(|error| PrepareError::Refused { origin, error })?;
 
         // Adapter parse + manifest parse are synchronous filesystem work:
         // blocking pool, owned inputs. Cancellation (runtime shutdown) is a
@@ -950,26 +1088,12 @@ impl ExtensionManager {
             .await
         };
         let Some(parsed) = parsed else {
-            return Err(MountError::Parse {
+            return Err(PrepareError::Unrecorded(MountError::Parse {
                 id: id.to_string(),
                 reason: "manifest parse was cancelled (runtime shutting down)".to_string(),
-            });
+            }));
         };
-        let (output, manifest) = match parsed {
-            Ok(o) => o,
-            Err(e) => {
-                let reason = e.to_string();
-                let mut reg = self.plugin_registry.write().await;
-                if let Some(row) = reg.get_plugin_mut(id) {
-                    row.status = PluginStatus::Error(reason.clone());
-                    row.error = Some(reason.clone());
-                }
-                return Err(MountError::Parse {
-                    id: id.to_string(),
-                    reason,
-                });
-            }
-        };
+        let (output, manifest) = parsed.map_err(|e| PrepareError::Defect(e.to_string()))?;
         // The id that was authorised is the id that must run.
         //
         // The trust decision and the operator's preference were made for the
@@ -979,16 +1103,31 @@ impl ExtensionManager {
         // old one — the operator vouched for `allowed`, and `replacement`
         // would run with that vouch behind it.
         if let Some(reason) = Self::identity_mismatch(id, &output, manifest.as_ref()) {
-            let mut reg = self.plugin_registry.write().await;
-            if let Some(row) = reg.get_plugin_mut(id) {
-                row.status = PluginStatus::Error(reason.clone());
-                row.error = Some(reason.clone());
-            }
-            return Err(MountError::Parse {
-                id: id.to_string(),
-                reason,
-            });
+            return Err(PrepareError::Defect(reason));
         }
+        Ok(PreparedMount {
+            output,
+            manifest,
+            root_dir,
+            origin,
+            scope_key,
+        })
+    }
+
+    /// Re-admit and run a prepared directory: declare it Cold when eligible,
+    /// otherwise run the six mount effects.
+    async fn commit_mount(
+        &self,
+        id: &str,
+        prepared: PreparedMount,
+    ) -> Result<PluginStatus, MountError> {
+        let PreparedMount {
+            output,
+            manifest,
+            root_dir,
+            origin,
+            scope_key,
+        } = prepared;
         // Re-check admission for the identity that is about to run: the
         // operator's preference and the trust policy may have changed
         // between the first check and the parse.
@@ -5481,6 +5620,83 @@ handler = "handler"
         );
         assert!(manager.scope_steps("beta").is_some());
         assert_eq!(manager.reload_count(), 1);
+    }
+
+    /// Assert that `reload_plugin` refused before tearing anything down.
+    fn assert_kept_running(result: Result<PluginStatus, MountError>) -> String {
+        match result {
+            Err(MountError::ReloadRefused { reason, .. }) => reason,
+            other => panic!("expected a preflight refusal, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn reload_with_invalid_manifest_keeps_previous_version_serving() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
+        write_static_plugin(tmp.path(), "alpha");
+        let (manager, _) = isolated_manager(tmp.path()).await;
+        manager.load_all().await.unwrap();
+        let steps_before = manager.scope_steps("alpha");
+        assert!(steps_before.is_some());
+        let manifest = tmp.path().join("plugins/alpha/.claude-plugin/plugin.toml");
+
+        // A directory that now declares a different id, and one that no
+        // longer parses: both are defects of the new version.
+        for broken in ["name = \"impostor\"\nversion = \"2.0.0\"\n", "name = [\n"] {
+            std::fs::write(&manifest, broken).unwrap();
+            assert_kept_running(manager.reload_plugin("alpha").await);
+
+            assert_eq!(
+                manager.scope_steps("alpha"),
+                steps_before,
+                "the running scope was not disposed"
+            );
+            let row = manager.get_plugin_record("alpha").await.unwrap();
+            assert!(row.status.is_active(), "row untouched: {:?}", row.status);
+            assert!(row.error.is_none());
+            assert_eq!(manager.get_plugin_registry().await.list_skills().len(), 1);
+        }
+
+        // Repaired on disk, the next reload swaps as usual.
+        std::fs::write(&manifest, "name = \"alpha\"\nversion = \"1.0.1\"\n").unwrap();
+        assert!(manager.reload_plugin("alpha").await.unwrap().is_active());
+    }
+
+    #[tokio::test]
+    async fn reload_with_uncompilable_wasm_keeps_previous_version_serving() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
+        let (manager, canonical, owner) = b3_cold_manager(tmp.path()).await;
+        manager.activate_owner(owner.clone()).await.unwrap();
+        let old = canonical.capture_entry("lazy_tool").unwrap();
+
+        std::fs::write(
+            tmp.path().join("plugins/lazy-wasm/lazy-wasm.wasm"),
+            b"not a wasm module",
+        )
+        .unwrap();
+        let reason = assert_kept_running(manager.reload_plugin("lazy-wasm").await);
+        assert!(reason.contains("Failed to compile WASM"), "{reason}");
+
+        assert!(
+            old.validate(&canonical.canonical_publication()),
+            "the old publication is still current"
+        );
+        assert_eq!(
+            b3_call_canonical(canonical.clone(), "lazy_tool")
+                .await
+                .unwrap()
+                .value,
+            serde_json::json!("A"),
+            "the old instance keeps serving"
+        );
+        assert!(manager
+            .get_plugin_record("lazy-wasm")
+            .await
+            .unwrap()
+            .error
+            .is_none());
     }
 
     #[tokio::test]

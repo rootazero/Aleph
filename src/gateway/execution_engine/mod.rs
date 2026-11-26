@@ -76,7 +76,6 @@ use crate::gateway::i18n::{Locale, Msg, ReceiptKind};
 use crate::gateway::media::PendingMedia;
 use crate::sync_primitives::{AtomicU32, AtomicU64, Ordering};
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 use tokio::sync::mpsc;
 
@@ -354,11 +353,6 @@ pub struct RunRequest {
     pub attachments: Vec<crate::gateway::channel::Attachment>,
     /// Shared pending media buffer (for media attachment delivery)
     pub pending_media: PendingMedia,
-    /// G2 — per-run sandbox override. `None` defers to the orchestrator's
-    /// sandbox factory (production default); `Some(sandbox)` short-circuits
-    /// the factory and is used by the team dispatcher to wrap each member
-    /// task in an isolated git worktree.
-    pub sandbox_override: Option<std::sync::Arc<dyn crate::sandbox::Sandbox>>,
     /// Per-run workspace override (project mode). When `Some`, this path
     /// replaces `agent.workspace()` as the effective working directory
     /// for the run — used for `ToolContext`, the default cwd of shell
@@ -370,7 +364,7 @@ pub struct RunRequest {
     /// `~/.aleph/workspaces/{agent_id}/`. The path is **not** validated by
     /// the engine; the gateway handler that constructs `RunRequest` is
     /// responsible for trust + existence checks.
-    pub workspace_override: Option<PathBuf>,
+    pub workspace_override: Option<crate::sandbox::context::ExecWorkspace>,
     /// D2: per-run Think→Act iteration cap override. When `Some(n>0)`, this
     /// wins over both `FlowOverrides.max_iterations` and the boot-time
     /// `[execution] max_iterations` default. Cron-driven runs set this from
@@ -422,6 +416,70 @@ pub struct RunRequest {
 pub const RESUME_TIER_CEILING_KEY: &str = "resume_tier_ceiling";
 
 impl RunRequest {
+    /// Revalidate queued user selections against the live mounted-route publication.
+    pub(crate) fn run_model_directive(
+        &self,
+    ) -> Option<crate::orchestrator::dispatch::RunModelDirective> {
+        use crate::gateway::model_override::{ModelOverride, USER_MODEL_OVERRIDE_METADATA};
+        use crate::orchestrator::dispatch::RunModelDirective;
+        use crate::providers::session_model_handle::SessionModelPref;
+        let override_ = self.model_override.as_ref()?;
+        if self.metadata.contains_key(USER_MODEL_OVERRIDE_METADATA) {
+            let ModelOverride::Qualified { provider, model } = override_ else {
+                return None;
+            };
+            return Some(RunModelDirective::Selected {
+                provider: provider.clone(),
+                model: model.clone(),
+            });
+        }
+        let model = override_.model().trim();
+        (!model.is_empty()).then(|| {
+            RunModelDirective::Internal(SessionModelPref {
+                provider: override_.provider().map(str::to_owned),
+                model: model.to_owned(),
+            })
+        })
+    }
+
+    pub(crate) fn validate_dispatch_model(&self) -> Result<(), ExecutionError> {
+        use crate::gateway::model_override::{ModelOverride, USER_MODEL_OVERRIDE_METADATA};
+        use crate::providers::session_model_handle::selectable_models;
+        if !self.metadata.contains_key(USER_MODEL_OVERRIDE_METADATA) {
+            return Ok(());
+        }
+        if let Some(ModelOverride::Qualified { provider, model }) = &self.model_override {
+            if selectable_models()
+                .is_some_and(|snapshot| snapshot.resolve(Some(provider), model).is_ok())
+            {
+                return Ok(());
+            }
+        }
+        Err(ExecutionError::Orchestrator(
+            "The selected model is no longer available. Choose a model and try again.".into(),
+        ))
+    }
+
+    pub(crate) fn durable_workspace_path(&self) -> Option<&std::path::Path> {
+        match self.workspace_override.as_ref()? {
+            crate::sandbox::context::ExecWorkspace::Directory(root) => Some(root),
+            crate::sandbox::context::ExecWorkspace::OwnedWorktree(_) => None,
+        }
+    }
+
+    pub(crate) fn owns_worktree(&self) -> bool {
+        self.workspace_override
+            .as_ref()
+            .is_some_and(crate::sandbox::context::ExecWorkspace::is_owned_worktree)
+    }
+
+    /// Path projection for readers that do not publish an execution binding.
+    pub fn workspace_path(&self) -> Option<&std::path::Path> {
+        self.workspace_override
+            .as_ref()
+            .map(crate::sandbox::context::ExecWorkspace::root)
+    }
+
     /// True when this request re-drives an existing session log rather than
     /// seeding a new user message: the boot/on-demand resume
     /// ([`crate::gateway::resume_coordinator`]) and the post-run steering
@@ -490,10 +548,6 @@ impl std::fmt::Debug for RunRequest {
             .field("timeout_secs", &self.timeout_secs)
             .field("metadata", &self.metadata)
             .field("attachments", &self.attachments)
-            .field(
-                "sandbox_override",
-                &self.sandbox_override.as_ref().map(|_| "<dyn Sandbox>"),
-            )
             .field("workspace_override", &self.workspace_override)
             .field("telecom_public", &self.telecom_public)
             .finish()
@@ -526,7 +580,9 @@ pub struct RunStatus {
 
 /// Internal run tracking
 pub(crate) struct ActiveRun {
+    // Only the executing task owns a checkout. This status snapshot must not retain it.
     pub(crate) request: RunRequest,
+    pub(crate) owned_worktree: bool,
     pub(crate) state: RunState,
     pub(crate) started_at: chrono::DateTime<chrono::Utc>,
     /// The same moment as [`Self::started_at`], on the monotonic clock.

@@ -322,4 +322,19 @@ pub trait ScreenCapability: Send + Sync {
             "screenshot_window".into(),
         ))
     }
+
+    /// Capture one window only after proving it belongs to `expected_pid`.
+    ///
+    /// The default deliberately does not call [`ScreenCapability::screenshot_window`]:
+    /// that legacy operation has no owner check and must never widen this rail.
+    async fn screenshot_owned_window(
+        &self,
+        window_id: u64,
+        expected_pid: i32,
+    ) -> Result<WindowShot> {
+        let _ = (window_id, expected_pid);
+        Err(crate::DesktopError::NotImplemented(
+            "screenshot_owned_window".into(),
+        ))
+    }
 }

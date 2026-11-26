@@ -1351,16 +1351,18 @@ async fn a_stamp_that_does_not_land_refuses_the_resume_without_retriggering() {
 /// `ToolPermissionsConfig` merges no deny layer. The boot coordinator used to
 /// build a resumed run's metadata from an empty `HashMap`, so a killed daemon
 /// resurrected a guest-tier Telegram run as an unwatched **operator** with no
-/// deny layer. Re-derive both from the process-global channel-config snapshot.
+/// deny layer. A channel continuation now enforces a guest floor and reads
+/// additional denies from the live channel policy projection.
 ///
-/// NOTE: `set_channel_config_snapshot` is a set-once process global — this is
-/// the only test in this binary that publishes one, and the unattended sibling
-/// below never reads it (no origin route), so there is no cross-test race.
+/// This is the only test in this binary that installs the process-wide
+/// projection. The unattended sibling below has no origin route and does not
+/// read it.
 #[tokio::test]
 async fn resumed_channel_run_reinherits_the_channels_guest_clamp_and_deny_layer() {
-    use alephcore::gateway::channel_policy::set_channel_config_snapshot;
+    use alephcore::gateway::channel_policy::{
+        install_channel_policy_projection, ChannelPolicyProjection,
+    };
     use alephcore::gateway::execution_engine::{CHANNEL_TOOL_PERMISSIONS_KEY, UNATTENDED_KEY};
-    use alephcore::gateway::inbound_router::{ChannelConfig, ChannelPolicyConfig};
     use alephcore::routing::session_key::DmScope;
 
     let store = store();
@@ -1382,24 +1384,17 @@ async fn resumed_channel_run_reinherits_the_channels_guest_clamp_and_deny_layer(
         .set_session_source_channel(&sid, "telegram", Some("chat-42"))
         .await;
 
-    // The channel's live policy, parsed from the same flat config block boot
-    // reads: Chat tier (the default) plus a deny layer. Published to the global
-    // snapshot exactly as `initialize_inbound_router` does at boot.
-    let policy: ChannelPolicyConfig = serde_json::from_value(serde_json::json!({
-        "permission_level": "chat",
-        "tool_permissions": { "default": "allow", "overrides": { "bash_exec": "deny" } }
-    }))
-    .unwrap();
-    let mut channel_configs = HashMap::new();
-    channel_configs.insert(
-        "telegram".to_string(),
-        ChannelConfig {
-            permission_level: policy.permission_level,
-            tool_permissions: policy.tool_permissions,
-            ..Default::default()
-        },
+    // Boot can restore conversations for declared channels before their
+    // transports start. Use the same policy projection and install path.
+    let projection = Arc::new(ChannelPolicyProjection::default());
+    projection.project_cold_declaration(
+        "telegram",
+        &serde_json::json!({
+            "permission_level": "chat",
+            "tool_permissions": { "default": "allow", "overrides": { "bash_exec": "deny" } }
+        }),
     );
-    set_channel_config_snapshot(channel_configs);
+    install_channel_policy_projection(projection);
 
     let coordinator = Arc::new(ResumeCoordinator::new(
         store.clone(),
@@ -1424,7 +1419,8 @@ async fn resumed_channel_run_reinherits_the_channels_guest_clamp_and_deny_layer(
     let perms = metadata
         .get(CHANNEL_TOOL_PERMISSIONS_KEY)
         .expect("the channel deny layer must survive the restart");
-    assert!(perms.contains("bash_exec"), "{perms}");
+    let perms: serde_json::Value = serde_json::from_str(perms).expect("serialized channel policy");
+    assert_eq!(perms["overrides"]["bash_exec"], "deny", "{perms}");
     // The origin route is what makes an approval deliverable, so the run stays
     // attended (the human on the other end of Telegram can answer it).
     assert_eq!(

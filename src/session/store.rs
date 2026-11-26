@@ -37,6 +37,7 @@
 //! `session_events` queries are short and use prepared statements, so the
 //! mutex-hold time is bounded.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
@@ -379,6 +380,34 @@ pub trait SessionEventStore: Send + Sync + 'static {
         ))
     }
 
+    /// Committed presentation data. Unproved or ambiguous run/call pairs
+    /// are omitted; a present key with `None` has no usable body.
+    async fn load_tool_presentations(
+        &self,
+        session_id: &SessionId,
+        addresses: &[(String, String)],
+        max_bytes: usize,
+    ) -> Result<ToolPresentations, SessionError> {
+        let _ = (session_id, addresses, max_bytes);
+        Err(SessionError::Storage(
+            "this event store cannot read bounded tool presentations".into(),
+        ))
+    }
+
+    /// Read one result with a proved run/call address. Persistent blobs are
+    /// keyed by session and call, so a reused call ID is ambiguous here.
+    async fn load_run_tool_output(
+        &self,
+        session_id: &SessionId,
+        run_id: &str,
+        call_id: &str,
+    ) -> Result<Option<serde_json::Value>, SessionError> {
+        let _ = (session_id, run_id, call_id);
+        Err(SessionError::Storage(
+            "this event store cannot read addressed tool output".into(),
+        ))
+    }
+
     /// Release a previously taken claim that will NOT start an effect — the
     /// inverse of [`claim_replay_call`](Self::claim_replay_call). The
     /// implementation must verify, in the same transaction as the cursor
@@ -407,6 +436,26 @@ pub trait SessionEventStore: Send + Sync + 'static {
 /// `load_head_seq` cannot see, because soft delete keeps the retired row's
 /// `MAX(seq)` in place.
 pub type RetireGeneration = u64;
+
+pub type ToolPresentations = HashMap<(String, String), StoredToolPresentation>;
+
+pub enum StoredToolPresentation {
+    Absent,
+    Present(aleph_protocol::Presentation),
+    Unavailable,
+}
+
+// A result must follow a live opener with no intervening run boundary.
+// Inspect retired boundaries too: filtering them first could assign a
+// surviving result to the preceding run after rewind.
+const TOOL_RESULT_RUN: &str = r#"(
+    SELECT CASE WHEN boundary.event_type = 'run_started' AND boundary.retired_at IS NULL
+                THEN json_extract(boundary.payload_json, '$.run_id') END
+    FROM session_events AS boundary
+    WHERE boundary.session_id = result.session_id AND boundary.seq < result.seq
+          AND boundary.event_type IN ('run_started', 'run_finished')
+    ORDER BY boundary.seq DESC LIMIT 1
+)"#;
 
 /// Default/test floor for a replay claim's lease, in unix ms. The claim API
 /// takes the caller's `lease_ms`, so this constant is the fallback for tests
@@ -1708,6 +1757,85 @@ impl SessionEventStore for SqliteEventStore {
         Ok(found)
     }
 
+    async fn load_tool_presentations(
+        &self,
+        session_id: &SessionId,
+        addresses: &[(String, String)],
+        max_bytes: usize,
+    ) -> Result<ToolPresentations, SessionError> {
+        let session_key = session_id_to_string(session_id)?;
+        let addresses = serde_json::to_string(addresses)
+            .map_err(|error| SessionError::Storage(error.to_string()))?;
+        let max_bytes =
+            i64::try_from(max_bytes).map_err(|error| SessionError::Storage(error.to_string()))?;
+        let conn = self.conn.lock().await;
+        let mut query = conn.prepare(&format!(r#"
+            WITH wanted AS (
+                SELECT DISTINCT json_extract(value, '$[0]') AS run_id,
+                       json_extract(value, '$[1]') AS call_id FROM json_each(?2)
+            )
+            SELECT wanted.run_id, wanted.call_id,
+                   COUNT(*) = 1 AND json_extract(payload_json, '$.output.metadata.presentation') IS NULL,
+                   CASE WHEN COUNT(*) = 1
+                        AND length(CAST(json_extract(payload_json, '$.output.metadata.presentation') AS BLOB)) <= ?3
+                        THEN json_extract(payload_json, '$.output.metadata.presentation') END
+            FROM session_events AS result JOIN wanted
+              ON wanted.call_id = json_extract(payload_json, '$.call_id')
+             AND wanted.run_id = {TOOL_RESULT_RUN}
+            WHERE result.session_id = ?1 AND result.event_type = 'tool_result' AND result.retired_at IS NULL
+            GROUP BY wanted.run_id, wanted.call_id
+            "#)).map_err(|error| SessionError::Storage(error.to_string()))?;
+        let rows = query
+            .query_map(params![session_key, addresses, max_bytes], |row| {
+                let absent: bool = row.get(2)?;
+                let body: Option<String> = row.get(3)?;
+                let presentation = if absent {
+                    StoredToolPresentation::Absent
+                } else {
+                    body.and_then(|json| serde_json::from_str(&json).ok())
+                        .map_or(
+                            StoredToolPresentation::Unavailable,
+                            StoredToolPresentation::Present,
+                        )
+                };
+                Ok(((row.get(0)?, row.get(1)?), presentation))
+            })
+            .map_err(|error| SessionError::Storage(error.to_string()))?;
+        rows.collect::<Result<_, _>>()
+            .map_err(|error| SessionError::Storage(error.to_string()))
+    }
+
+    async fn load_run_tool_output(
+        &self,
+        session_id: &SessionId,
+        run_id: &str,
+        call_id: &str,
+    ) -> Result<Option<serde_json::Value>, SessionError> {
+        let session_key = session_id_to_string(session_id)?;
+        let conn = self.conn.lock().await;
+        // Include retired duplicates in cardinality: the blob namespace has
+        // no run id and may already have been overwritten by a later call.
+        let body: Option<String> = conn
+            .query_row(
+                &format!(
+                    r#"
+            SELECT CASE WHEN COUNT(*) = 1 AND result.retired_at IS NULL AND {TOOL_RESULT_RUN} = ?2
+                        THEN payload_json -> '$.output.value' END
+            FROM session_events AS result
+            WHERE result.session_id = ?1 AND result.event_type IN ('tool_result', 'tool_error')
+              AND json_extract(payload_json, '$.call_id') = ?3
+        "#
+                ),
+                params![session_key, run_id, call_id],
+                |row| row.get(0),
+            )
+            .map_err(|error| SessionError::Storage(error.to_string()))?;
+        body.map(|body| {
+            serde_json::from_str(&body).map_err(|error| SessionError::Storage(error.to_string()))
+        })
+        .transpose()
+    }
+
     async fn release_replay_claim(
         &self,
         session_id: &SessionId,
@@ -2451,6 +2579,10 @@ pub(crate) const SESSION_EVENT_STORE_READERS: &[(&str, &str)] = &[
         "src/gateway/handlers/trace_replay.rs",
         "`trace.by_runs` replays with an empty presentation map — holes show nothing, never \
          \"no diff\"",
+    ),
+    (
+        "src/gateway/handlers/trace_replay/chat_details.rs",
+        "`chat.transcript_details` returns statuses and marks presentation bodies as omitted",
     ),
     (
         "src/gateway/session_projector.rs",

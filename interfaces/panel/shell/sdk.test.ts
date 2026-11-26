@@ -14,6 +14,8 @@ function standIn() {
   const events = new Set<(event: PanelEvent) => void>();
   const pending: { resolve(value: unknown): void; reject(error: Error): void }[] = [];
   let abortBinding: string | undefined;
+  let pendingSend: ((unknown: boolean) => void) | null = null;
+  let sendUnknown = false;
   const commands = new Map<string, CommandSpec>();
   const shell: ShellAccess = {
     rpc: createPanelRpc((topic, envelope) => {
@@ -36,8 +38,21 @@ function standIn() {
     }),
     generation: () => generation,
     connection: () => connection,
-    navigate: () => {},
+    navigate: () => true,
     intent: () => null,
+    rememberChat: () => true,
+    beginChatSend() {
+      if (pendingSend) return null;
+      const finish = (unknown: boolean) => {
+        if (pendingSend !== finish) return;
+        pendingSend = null;
+        if (unknown) sendUnknown = true;
+      };
+      pendingSend = finish;
+      return finish;
+    },
+    chatSendUnknown: () => sendUnknown,
+    dismissChatSendUnknown: () => { sendUnknown = false; },
     onConnection(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -176,6 +191,37 @@ test("module commands from an older generation do not run", () => {
   fake.reconnect();
   fake.commands.get("aleph:chat/stop")?.run();
   expect(runs).toBe(1);
+});
+
+test("typed and voice sends share the pending acknowledgement slot across tab disposal", async () => {
+  const fake = standIn();
+  const chat = createSdk("aleph:chat", 1, fake.shell);
+  const voice = createSdk("aleph:voice", 1, fake.shell);
+  const typed = chat.sendChat({ message: "typed" }).catch((error: Error) => error.message);
+  chat.dispose();
+  const denied = voice.sendOwnedChat({ message: "voice while typed is pending" });
+  expect(await denied.receipt.catch((error: Error) => error.message)).toBe("A send is already pending");
+  expect(denied.dispatched()).toBe(false);
+  expect(fake.calls.length).toBe(1);
+  fake.fail("no acknowledgement");
+  expect(await typed).toBe("disposed");
+
+  const owned = voice.sendOwnedChat({ message: "voice" });
+  voice.dispose();
+  const reopened = createSdk("aleph:chat", 1, fake.shell);
+  expect(reopened.chatSendUnknown()).toBe(true);
+  reopened.dismissChatSendUnknown();
+  expect(await reopened.sendChat({ message: "late typed" }).catch((error: Error) => error.message))
+    .toBe("A send is already pending");
+  expect(fake.calls.length).toBe(2);
+  fake.answer({ run_id: "owned", session_key: "session" });
+  expect(await owned.receipt.catch((error: Error) => error.message)).toBe("disposed");
+  expect(fake.calls[2].envelope.params).toEqual({ run_id: "owned", run_only: true });
+  fake.answer({ run_id: "owned", aborted: true, dropped: 0 });
+  expect(reopened.chatSendUnknown()).toBe(false);
+  const next = reopened.sendChat({ message: "final typed" });
+  fake.answer({ run_id: "typed", session_key: "session" });
+  expect(await next).toEqual({ run_id: "typed", session_key: "session" });
 });
 
 test("sendOwnedChat aborts only its valid receipt after same-generation disposal", async () => {

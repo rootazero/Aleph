@@ -15,6 +15,7 @@ type SessionRow = {
 export function Sessions(props: { sdk: PanelSdk }) {
   const sessions = signal<SessionRow[] | null>(null);
   const error = signal<string | null>(null);
+  const navigationFailed = signal(false);
 
   props.sdk.invoke("sessions.list").then(
     (result) => sessions.set((result as { sessions?: SessionRow[] } | null)?.sessions ?? []),
@@ -25,6 +26,9 @@ export function Sessions(props: { sdk: PanelSdk }) {
 
   return (
     <View class="flex-1 p-4">
+      <If when={navigationFailed()}>
+        <Text class="text-destructive">Chat is hidden. Show it in Settings to open this conversation.</Text>
+      </If>
       <If when={sessions()} else={<Text class="text-muted-foreground">{error() ?? "Loading sessions…"}</Text>}>
         {(rows) => (
           <List
@@ -35,7 +39,7 @@ export function Sessions(props: { sdk: PanelSdk }) {
           >
             {(row) => (
               <Button
-                onPress={() => props.sdk.navigate("aleph:chat", { session_key: row().key })}
+                onPress={() => navigationFailed.set(!props.sdk.navigate("aleph:chat", { session_key: row().key }))}
                 accessibilityLabel={`Open chat ${row().label || row().topic || row().key}`}
                 class="flex-row justify-between gap-3 rounded-(--radius) px-2 py-2 active:bg-muted"
               >

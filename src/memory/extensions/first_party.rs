@@ -71,6 +71,7 @@ mod tests {
                     path: format!("reference/{i}"),
                     category: "reference".into(),
                 },
+                note_provenance: None,
                 extra: serde_json::Map::new(),
             })
             .collect();

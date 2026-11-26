@@ -54,7 +54,7 @@ function count(list) {
 async function waitFor(predicate, timeout, what) {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
-    if (predicate()) return;
+    if (await predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   throw new Error(`timed out waiting for ${what}`);
@@ -77,6 +77,14 @@ async function openFirstSession(page, expectedText) {
   await row.click();
   await page.getByText(expectedText, { exact: true }).first().waitFor({ timeout: 15000 });
   return label;
+}
+
+async function rowInViewport(row, viewport) {
+  if (await row.count() === 0) return null;
+  const [box, clip] = await Promise.all([row.boundingBox(), viewport.boundingBox()]);
+  if (!box || !clip) return null;
+  const centerY = box.y + box.height / 2;
+  return centerY >= clip.y && centerY <= clip.y + clip.height ? box : null;
 }
 
 async function run(fixturePath) {
@@ -105,21 +113,133 @@ async function run(fixturePath) {
     });
     const frames = recordFrames(page);
 
-    // 1. Pair; the hello asks for live_events and gets it.
+    // 1. Pair with the transcript presentation negotiated alongside live events.
     await page.goto(`${fixture.origin}/v1/panel/`);
     await pair(page, fixture.ticket, page.getByText('Gateway: healthy'));
     await waitFor(() => frames.some((f) => f.dir === 'received' && f.frame?.id === 1), 10000, 'hello reply');
     const hello = frames.find((f) => f.dir === 'received' && f.frame?.id === 1).frame;
-    assert.deepEqual(hello.result.features, ['live_events']);
+    assert.deepEqual([...hello.result.features].sort(), ['chat_transcript', 'live_events']);
     step('paired_live_events_granted', { features: hello.result.features, subject: hello.result.subject });
 
     // 2. The session the desktop shell created: same subject, same transcript.
-    const row = await openFirstSession(page, fixture.desktop_message);
-    await page.getByText(/This response is from/).first().waitFor({ timeout: 15000 });
-    const copies = await page.getByText(fixture.desktop_message, { exact: true }).count();
+    // A configured system IME may transform the initial key sequence, but the
+    // fixture's final ASCII marker survives composition. Reopen the exact row later.
+    const desktopMarker = fixture.desktop_marker;
+    assert.match(desktopMarker, /^[a-z]+$/);
+    const row = await openFirstSession(page, new RegExp(`${desktopMarker}$`));
+    const desktopRow = page.getByText(new RegExp(`${desktopMarker}$`)).first();
+    const desktopMessage = await desktopRow.innerText();
+    const historyRequests = (from = 0) => frames.slice(from)
+      .filter((f) => f.dir === 'sent' && f.frame?.method === 'chat.history')
+      .map((f) => f.frame.params);
+    const originalKey = historyRequests()[0]?.session_key;
+    assert.ok(originalKey, 'initial Chat read had no selected session key');
+    const reply = () => page.getByText(fixture.reply).first();
+    await reply().waitFor({ timeout: 15000 });
+    const copies = await page.getByText(desktopMessage, { exact: true }).count();
     assert.equal(copies, 1, `the desktop message reached Core ${copies} times`);
     await page.screenshot({ path: shot('history') });
     step('cross_surface_history', { row, desktop_message_copies: copies });
+    if (fixture.continuity) {
+      const oldest = page.getByText(fixture.oldest_marker, { exact: true });
+      assert.equal(await oldest.count(), 0, 'oldest marker already appears in the tail');
+      const pager = page.getByText('Load older messages', { exact: true });
+      await pager.waitFor();
+      const viewport = page.getByTestId('chat-transcript');
+      const tail = await rowInViewport(desktopRow, viewport);
+      assert.ok(tail, 'desktop row is not rendered at the tail');
+      await page.mouse.move(tail.x + tail.width / 2, tail.y + tail.height / 2);
+      const jump = page.getByText('Jump to bottom', { exact: true });
+      const anchor = page.getByText(fixture.first_tail_marker, { exact: true });
+      for (let attempt = 0; attempt < 12 && !(await rowInViewport(anchor, viewport)); attempt++) {
+        await page.mouse.wheel(0, -5000);
+        await page.waitForTimeout(250);
+      }
+      await page.mouse.wheel(0, -5000);
+      await page.waitForTimeout(250);
+      const bounds = await rowInViewport(anchor, viewport);
+      assert.ok(bounds, 'the first row of the loaded tail never reached the viewport');
+      await page.screenshot({ path: shot('before-prepend') });
+      const beforePrepend = frames.length;
+      await pager.click();
+      await page.getByText('No earlier messages', { exact: true }).waitFor({ timeout: 15000 });
+      const request = historyRequests(beforePrepend)[0];
+      assert.equal(request?.session_key, originalKey);
+      assert.ok(request?.scrollback?.before, 'no older request crossed the actual Web bridge');
+      const after = await rowInViewport(anchor, viewport);
+      assert.ok(after && Math.abs(after.y - bounds.y) <= 3, `anchor moved: ${bounds.y} → ${after?.y}`);
+      await page.screenshot({ path: shot('after-prepend') });
+      await page.mouse.move(after.x + after.width / 2, after.y + after.height / 2);
+      for (let attempt = 0; attempt < 12 && !(await rowInViewport(oldest, viewport)); attempt++) {
+        await page.mouse.wheel(0, -5000);
+        await page.waitForTimeout(250);
+      }
+      assert.ok(await rowInViewport(oldest, viewport), 'oldest fixture row was not rendered inside the viewport');
+      await page.screenshot({ path: shot('oldest-marker') });
+      step('web_prepend_preserves_anchor', { session_key: originalKey, anchor: fixture.first_tail_marker, before_y: bounds.y, after_y: after.y });
+      await jump.click();
+      await reply().waitFor();
+    }
+    if (fixture.rich) {
+      const detailCall = frames.find((f) => f.dir === 'sent' && f.frame?.method === 'chat.transcript_details');
+      const detail = frames.find((f) => f.dir === 'received' && f.frame?.id === detailCall?.frame?.id)?.frame;
+      const historyCall = frames.find((f) => f.dir === 'sent' && f.frame?.method === 'chat.history');
+      const history = frames.find((f) => f.dir === 'received' && f.frame?.id === historyCall?.frame?.id)?.frame;
+      step('rich_gateway_summary', {
+        history: history?.result?.messages?.map((message) => ({
+          role: message.role, has_run: Boolean(message.run_id),
+          rich_reply: message.content.includes('S3 transcript callout'),
+        })),
+        replay: detail?.result?.runs?.map((run) => run.tools.map((tool) => ({
+          kind: tool.change.kind, diff: Boolean(tool.change.presentation),
+        }))),
+      });
+      await page.getByText('S3 transcript callout', { exact: true }).first().waitFor();
+      await page.getByLabel('Mermaid flowchart: S3 Start, S3 Finish').first().waitFor();
+      await page.getByText('https://example.com/s3-transcript', { exact: true }).first().waitFor();
+      await page.getByLabel(`Expand Write · ${fixture.file}`, { exact: true }).click();
+      await page.getByText('s3 original line', { exact: true }).first().waitFor();
+      await page.getByLabel(`Collapse Write · ${fixture.file}`, { exact: true }).click();
+      const editCard = page.getByLabel(`Expand Edit · ${fixture.file}`, { exact: true });
+      await editCard.scrollIntoViewIfNeeded();
+      const background = (card) => card.evaluate((node) => getComputedStyle(node).backgroundColor);
+      await page.mouse.move(0, 0);
+      const restingBackground = await background(editCard);
+      await editCard.hover();
+      await waitFor(async () => (await background(editCard)) !== restingBackground, 3000, 'tool hover highlight');
+      await editCard.click();
+      await page.getByText('s3 edited line', { exact: true }).first().waitFor();
+      const launcher = page.getByText('Open full screen', { exact: true });
+      await launcher.click();
+      await page.getByText('Close reader', { exact: true }).waitFor();
+      await page.screenshot({ path: shot('rich-diff') });
+      await page.keyboard.press('Escape');
+      await launcher.waitFor();
+      const launcherElement = await launcher.elementHandle();
+      const restoredFocus = await page.waitForFunction((el) => el.contains(document.activeElement) ||
+        (document.activeElement !== document.body && document.activeElement?.contains(el)),
+      launcherElement, { timeout: 1500 }).then(() => true, () => false);
+      await page.getByLabel(`Collapse Edit · ${fixture.file}`, { exact: true }).click();
+      await page.getByText('Context', { exact: true }).click();
+      await page.getByText(/System Prompt · [0-9]+ bytes sent/).waitFor();
+      await page.getByText(/Tool schemas · [0-9]+ bytes/).waitFor();
+      await page.screenshot({ path: shot('rich-context') });
+      await page.getByText('Close Context', { exact: true }).click();
+      await page.setViewportSize({ width: 1100, height: 480 });
+      await page.mouse.move(450, 220);
+      await page.mouse.wheel(0, -2000);
+      const jump = page.getByText('Jump to bottom', { exact: true });
+      await jump.waitFor({ timeout: 10000 });
+      await jump.click();
+      await jump.waitFor({ state: 'hidden', timeout: 10000 });
+      await page.setViewportSize({ width: 1100, height: 760 });
+      step('browser_jumps_back_to_transcript_tail');
+      for (const method of ['trace.tool_output', 'chat.transcript_details', 'context.breakdown']) {
+        assert.ok(sentMethods(frames).includes(method), `${method} was not called`);
+      }
+      assert.ok(restoredFocus, 'Escape did not return keyboard focus to the reader launcher');
+      step('rich_desktop_history_in_web', { restored_focus: restoredFocus, hover_highlight: true });
+    }
 
     // 3. Return while an input method composes does not send.
     const composer = page.getByRole('textbox', { name: 'Message', exact: true });
@@ -147,15 +267,36 @@ async function run(fixturePath) {
     const sendFrame = frames.slice(beforeSend).find((f) => f.dir === 'sent' && f.frame?.method === 'chat.send').frame;
     assert.equal(typeof sendFrame.params.idempotency_key, 'string');
     assert.equal(sendFrame.params.message, committed.trim());
+    if (fixture.live_tool) {
+      const live = fixture.live_tool;
+      const proseBefore = page.getByText(live.before, { exact: true });
+      const card = page.getByLabel(`Expand Write · ${live.file}`, { exact: true });
+      const proseAfter = page.getByText(live.after, { exact: true });
+      await proseBefore.waitFor({ timeout: 15000 });
+      await card.waitFor({ timeout: 15000 });
+      await proseAfter.waitFor({ timeout: 15000 });
+      // Virtual-list slots may be recycled out of DOM order. Check the visible layout.
+      const [first, tool, last] = await Promise.all([proseBefore, card, proseAfter].map((item) => item.boundingBox()));
+      assert.ok(first && tool && last && first.y < tool.y && tool.y < last.y,
+        `unexpected live layout: ${JSON.stringify({ first, tool, last })}`);
+      assert.match(await card.innerText(), /Done/);
+      assert.ok(await page.getByText('Stop', { exact: true }).isVisible());
+      const liveTopics = count(pushedTopics(frames, beforeSend));
+      assert.ok(liveTopics['stream.chat_tool'] >= 2, 'missing live tool start or finish');
+      assert.ok(!liveTopics['stream.run_complete']);
+      await page.screenshot({ path: shot('live-tool-order') });
+      step('live_text_tool_text_before_completion', { chat_tool_frames: liveTopics['stream.chat_tool'] });
+      await fs.writeFile(live.release, 'seen');
+    }
     await waitFor(() => pushedTopics(frames, beforeSend).includes('stream.run_complete'), 30000, 'run_complete');
-    await page.getByText(/This response is from/).first().waitFor({ timeout: 15000 });
-    assert.equal(await page.getByText('Stop', { exact: true }).count(), 0);
+    await (fixture.live_tool ? page.getByText(fixture.live_tool.after).first() : reply()).waitFor({ timeout: 15000 });
+    await page.getByText('Stop', { exact: true }).waitFor({ state: 'hidden' });
     const topics = count(pushedTopics(frames, beforeSend));
     assert.ok(topics['stream.response_chunk'] >= 1, `no chunks: ${JSON.stringify(topics)}`);
     assert.ok(topics['stream.run_accepted'] >= 1, `no run_accepted: ${JSON.stringify(topics)}`);
     // Only the narrowed v1 topics reach the browser.
     const allowed = new Set(['stream.run_accepted', 'stream.response_chunk', 'stream.run_complete',
-      'stream.run_error', 'connection.warning']);
+      'stream.run_error', 'stream.chat_tool', 'connection.warning']);
     const stray = Object.keys(topics).filter((topic) => !allowed.has(topic));
     assert.deepEqual(stray, []);
     await page.screenshot({ path: shot('streamed') });
@@ -191,18 +332,36 @@ async function run(fixturePath) {
     // 6. Gateway restart: the socket drops, Reconnect lands on pairing (the
     // cookie binding was in the old Gateway's memory), pairing again brings
     // the transcript back from disk.
+    const sendsBeforeRestart = sentMethods(frames).filter((method) => method === 'chat.send').length;
     console.log('RESTART_GATEWAY');
     const next = await lines.next();
     assert.ok(!next.done && next.value.startsWith('aleph-bt-'), 'run.py sent no ticket');
     await page.getByText('Disconnected from Aleph').waitFor({ timeout: 60000 });
     await page.screenshot({ path: shot('disconnected') });
+    const beforeReconnect = frames.length;
     await page.getByText('Reconnect', { exact: true }).click();
     // The layout kept Chat active: the composer shows once connected.
     await pair(page, next.value.trim(), page.getByRole('textbox', { name: 'Message', exact: true }));
-    const rowAgain = await openFirstSession(page, fixture.desktop_message);
+    let selectedKey = null;
+    if (fixture.continuity) {
+      await page.getByText(desktopMessage, { exact: true }).first().waitFor({ timeout: 15000 });
+      selectedKey = historyRequests(beforeReconnect)[0]?.session_key;
+      assert.equal(selectedKey, originalKey, 'reconnect read did not restore the selected conversation');
+    } else {
+      await openFirstSession(page, desktopMessage);
+    }
     await page.getByText(committed.trim(), { exact: true }).first().waitFor({ timeout: 15000 });
+    assert.equal(sentMethods(frames).filter((method) => method === 'chat.send').length, sendsBeforeRestart,
+      'restart or reconnect created an extra user send');
+    assert.equal(await page.getByText(committed.trim(), { exact: true }).count(), 1,
+      'reconnect duplicated the committed user row');
+    if (fixture.live_tool) {
+      await page.getByLabel(`Expand Write · ${fixture.live_tool.file}`, { exact: true }).waitFor({ timeout: 15000 });
+    }
     await page.screenshot({ path: shot('after-restart') });
-    step('gateway_restart_repair_restores_history', { row: rowAgain });
+    step('gateway_restart_repair_restores_history', {
+      continuity: Boolean(fixture.continuity), selected_session_key: fixture.continuity ? selectedKey : null,
+    });
     report.ok = true;
   } finally {
     await browser.close();

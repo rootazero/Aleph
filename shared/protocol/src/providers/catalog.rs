@@ -228,6 +228,8 @@ pub enum ModelSource {
     PresetFallback,
     /// The preset's cheap `default_aux_model`.
     PresetAux,
+    /// A preset's official reference-only model, not an implicit route.
+    PresetCatalog,
     /// Listed by the operator in `[providers.<id>] models`.
     Configured,
     /// Returned by the provider's live `/models` endpoint.
@@ -242,6 +244,7 @@ impl ModelSource {
             Self::PresetDefault => "preset_default",
             Self::PresetFallback => "preset_fallback",
             Self::PresetAux => "preset_aux",
+            Self::PresetCatalog => "preset_catalog",
             Self::Configured => "configured",
             Self::Discovered => "discovered",
         }

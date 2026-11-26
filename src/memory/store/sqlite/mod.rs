@@ -10,6 +10,7 @@ pub mod vec;
 pub mod dream_kv;
 pub mod dream_reports;
 pub mod embedding_meta;
+mod feedback_kv;
 pub mod memory_write_decisions;
 pub mod notes;
 pub mod query_filed;

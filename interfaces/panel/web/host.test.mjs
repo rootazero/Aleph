@@ -55,14 +55,14 @@ function harness({ fetch } = {}) {
   return { player, env, events, socket: () => FakeSocket.instances.at(-1) };
 }
 
-const hello = (maxInflight = 1, connectionId = "web-v1-x") => ({
+const hello = (maxInflight = 1, featuresOrConnectionId = ["live_events"]) => ({
   jsonrpc: "2.0",
   id: 1,
   result: {
     protocol: { major: 1, minor: 0 },
     server: { name: "aleph", version: "test" },
-    connection_id: connectionId,
-    features: ["live_events"],
+    connection_id: typeof featuresOrConnectionId === "string" ? featuresOrConnectionId : "web-v1-x",
+    features: Array.isArray(featuresOrConnectionId) ? featuresOrConnectionId : ["live_events"],
     limits: { max_message_bytes: golden.max_payload, max_inflight_requests: maxInflight },
     subject: "0123abcd",
   },
@@ -93,8 +93,10 @@ test("first_frame_is_hello", async () => {
   assert.equal(socket().url, "wss://aleph.test:18790/v1/ws");
   assert.equal(socket().protocol, "aleph.protocol.v1");
   socket().open();
-  assert.deepEqual(socket().sent, [frame("hello").payload]);
-  assert.equal(helloPayload(1), frame("hello").payload);
+  assert.deepEqual(socket().sent, [helloPayload(1)]);
+  const expected = JSON.parse(frame("hello").payload);
+  expected.params.features.push("chat_transcript");
+  assert.deepEqual(JSON.parse(helloPayload(1)), expected);
   socket().reply(hello());
   await tick();
   assert.deepEqual(events.at(-1), {
@@ -107,12 +109,20 @@ test("pushed_frames_reach_the_panel_as_aleph_event", async () => {
   const { player, env, events, socket } = harness();
   const host = await createHost(player, env);
   socket().open();
-  socket().reply(hello());
+  socket().reply(hello(1, ["live_events", "chat_transcript"]));
   await tick();
   // The golden pushed frame, byte for byte: a stream event is its own topic.
   socket().onmessage({ data: fromHex(frame("event").wire_hex).buffer });
   const event = JSON.parse(frame("event").payload);
   assert.deepEqual(events.at(-1), { name: "aleph.event", data: { topic: "stream.response_chunk", data: event.params } });
+  const tool = { type: "chat_tool", run_id: "r-1", seq: 2,
+    tool_call_id: "call-1", change: { kind: "working" } };
+  socket().reply({ jsonrpc: "2.0", method: "stream.chat_tool", params: tool });
+  socket().reply({ ...event, params: { ...event.params, seq: 3 } });
+  assert.deepEqual(events.slice(-3).map((event) => event.data.topic), [
+    "stream.response_chunk", "stream.chat_tool", "stream.response_chunk",
+  ]);
+  assert.deepEqual(events.at(-2).data.data, tool);
   // A topic notification carries its own { topic, data }.
   const warning = { reason: "events_overflow", dropped: 1, total_overflow: 1, advice: "reconnect" };
   socket().reply({ jsonrpc: "2.0", method: "event", params: { topic: "connection.warning", data: warning } });
@@ -127,6 +137,18 @@ test("pushed_frames_reach_the_panel_as_aleph_event", async () => {
   // A notification without a topic is unreadable and ends the connection.
   socket().reply({ jsonrpc: "2.0", method: "event", params: {} });
   assert.equal(socket().closed, true);
+});
+
+test("live_events_only_does_not_deliver_rich_tool_frames", async () => {
+  const { player, env, events, socket } = harness();
+  await createHost(player, env);
+  socket().open();
+  socket().reply(hello());
+  socket().reply({ jsonrpc: "2.0", method: "stream.chat_tool", params: { type: "chat_tool" } });
+  socket().onmessage({ data: fromHex(frame("event").wire_hex).buffer });
+  assert.deepEqual(events.filter(({ name }) => name === "aleph.event").map(({ data }) => data.topic), [
+    "stream.response_chunk",
+  ]);
 });
 
 test("a_push_before_hello_ends_the_connection", async () => {

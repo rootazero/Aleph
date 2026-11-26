@@ -611,7 +611,7 @@ impl CdpBackend {
         rule: NewRouteRule,
     ) -> Result<RouteRuleInfo, BrowserError> {
         // The capability gate runs BEFORE the registry: an engine whose Fetch
-        // path is unprobed (obscura today) refuses before any state changes.
+        // row is not `Supported` refuses before any state changes.
         // Only `route_add` is gated — list/remove/clear are pure table
         // operations that must stay reachable, or rules registered under one
         // engine could never be cleaned up after a `switch_engine`.
@@ -1597,11 +1597,21 @@ mod tests {
         Arc<crate::browser::cdp_backend::CdpBackend>,
         Arc<RouteRegistry>,
     ) {
+        backend_with_tab_on(server, Engine::Chromium).await
+    }
+
+    async fn backend_with_tab_on(
+        server: &FakeCdpServer,
+        engine: Engine,
+    ) -> (
+        Arc<crate::browser::cdp_backend::CdpBackend>,
+        Arc<RouteRegistry>,
+    ) {
         server.on(
             "Page.navigate",
             Responder::Reply(json!({ "frameId": "F1", "loaderId": "L1" })),
         );
-        let (_reg, backend) = backend_with(server, Engine::Chromium, open_guard()).await;
+        let (_reg, backend) = backend_with(server, engine, open_guard()).await;
         let backend = Arc::new(backend);
         let handle = backend.handle().await.expect("pre-seeded handle");
         handle
@@ -1929,33 +1939,25 @@ mod tests {
         assert!(!routes.loop_running("default", "T1"), "no half-armed loop");
     }
 
-    /// The capability row is the gate: obscura's `network_interception` is
-    /// `Unsupported` (NOT_PROBED — the plan's Task 4 probe is the expiry
-    /// check), so the refusal arrives BEFORE any Fetch handshake and names
-    /// the engine that does serve the verb (判据 §14).
+    /// Both engines' `network_interception` rows are `Supported` (obscura's
+    /// since the 2026-11-25 caps measurement on v0.2.7), so the gate lets
+    /// `route_add` through on obscura too and the Fetch handshake runs. The
+    /// refusal half of the gate is `require` itself, still exercised by the
+    /// verbs obscura refuses (`handle_dialog`, `upload`); this test keeps a
+    /// careless flip back from passing silently.
     #[tokio::test]
-    async fn route_add_is_refused_on_an_engine_the_table_says_cannot_serve_it() {
+    async fn route_add_arms_the_fetch_handshake_on_obscura() {
         let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![])).await;
         wire_session(&server, "S1");
-        let (_reg, backend) = backend_with(&server, Engine::Obscura, open_guard()).await;
+        let (backend, routes) = backend_with_tab_on(&server, Engine::Obscura).await;
 
-        let err = backend
+        backend
             .route_add("T1", new_rule("api", RouteScope::Tab))
             .await
-            .expect_err("obscura refuses before the wire");
-        match err {
-            BrowserError::UnsupportedByEngine {
-                verb, supported_by, ..
-            } => {
-                assert_eq!(verb, "route_add");
-                assert_eq!(supported_by, Some(Engine::Chromium));
-            }
-            other => panic!("expected UnsupportedByEngine, got {other:?}"),
-        }
-        assert!(
-            server.received_for("Fetch.enable").is_empty(),
-            "the refusal happens before any Fetch handshake"
-        );
+            .expect("obscura arms a mock route");
+        assert_eq!(server.received_for("Fetch.enable").len(), 1);
+        assert_eq!(routes.list("default").len(), 1);
+        assert!(routes.loop_running("default", "T1"));
     }
 
     /// The zero-overhead clause at the TOOL layer: once nothing applies to a

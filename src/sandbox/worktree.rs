@@ -27,7 +27,6 @@ pub enum WorktreeError {
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::process::Command;
 
 use crate::harness::TraceSink;
@@ -39,6 +38,7 @@ pub struct WorktreeHandle {
     repo_root: PathBuf,
     cleaned_up: Arc<AtomicBool>,
     trace_sink: Option<Arc<dyn TraceSink>>,
+    parent: Option<Arc<Self>>,
 }
 
 impl std::fmt::Debug for WorktreeHandle {
@@ -62,6 +62,26 @@ impl WorktreeHandle {
         &self.repo_root
     }
 
+    pub(crate) fn exec_workspace(self: &Arc<Self>) -> super::context::ExecWorkspace {
+        super::context::ExecWorkspace::OwnedWorktree(Arc::clone(self))
+    }
+
+    /// Nested checkout cleanup uses Git through its parent's checkout.
+    pub(crate) fn retain_parent(&mut self, parent: Arc<Self>) {
+        self.parent = Some(parent);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fixture(path: PathBuf, repo_root: PathBuf) -> Self {
+        Self {
+            path,
+            repo_root,
+            cleaned_up: Arc::new(AtomicBool::new(true)),
+            trace_sink: None,
+            parent: None,
+        }
+    }
+
     /// Explicit cleanup. Removes the worktree via `git worktree remove --force`,
     /// then marks the handle as cleaned up so `Drop` skips its safety-net work.
     /// Performance contract: one `git worktree remove`, nothing on top — the
@@ -70,7 +90,7 @@ impl WorktreeHandle {
     /// constant.
     pub async fn cleanup(self) -> Result<(), WorktreeError> {
         let result = remove_worktree(&self.repo_root, &self.path).await;
-        self.cleaned_up.store(true, Ordering::Release);
+        self.cleaned_up.store(result.is_ok(), Ordering::Release);
 
         if let Some(sink) = self.trace_sink.as_ref() {
             sink.on_trace(&crate::harness::trace::LoopTraceEvent::WorktreeCleanedUp {
@@ -113,7 +133,9 @@ impl Drop for WorktreeHandle {
                 leaked: true,
             });
         }
+        let parent = self.parent.take();
         let outcome = move || {
+            let _parent = parent;
             let result = std::process::Command::new("git")
                 .arg("-C")
                 .arg(&repo_root)
@@ -211,6 +233,7 @@ pub async fn create(
         repo_root: repo_root.to_path_buf(),
         cleaned_up: Arc::new(AtomicBool::new(false)),
         trace_sink,
+        parent: None,
     })
 }
 
@@ -239,166 +262,6 @@ async fn remove_worktree(repo_root: &Path, path: &Path) -> Result<(), WorktreeEr
     }
 
     Ok(())
-}
-
-/// Minimal Sandbox impl for Stage H — runs commands at the worktree path with
-/// `CARGO_TARGET_DIR=<worktree>/target` injected. There is no OS-level process
-/// sandbox (no seatbelt/landlock — Stage H scope is workspace isolation only,
-/// see § 2.2.1 Architectural Scope Lock).
-///
-/// **Shared floor** (so a worktree-isolated subagent is not a hole in it): the
-/// catastrophic command-policy **hardline** (fork bomb / disk wipe) runs before
-/// exec, and the secret-scrub + block-class gate (`scrub::scrub_and_gate_output`)
-/// runs on output — the same single-source-of-truth `WorkspaceSandbox` uses.
-///
-/// **NOT shared** (deliberate Stage-H scope): the operator-configurable *tunable*
-/// `[sandbox.command_policy]` Block/Warn rules and the rate limiter that
-/// `factory::build_sandbox` layers onto `WorkspaceSandbox` are not applied here —
-/// only the non-negotiable hardline is. An operator relying on a *custom* Block
-/// rule to gate a delegated subagent's commands should know it does not reach
-/// this path; the catastrophic floor does.
-///
-/// That second paragraph is a *ruling*, and it reads exactly like an oversight,
-/// so it is held by two tests rather than by this comment alone:
-/// `worktree_sandbox_installs_only_the_catastrophic_floor` (hook count) and
-/// `worktree_sandbox_does_not_reach_for_a_configurable_policy` (source-level —
-/// swapping `hardline_only()` for a config-derived policy keeps the count at 1,
-/// and the difference is invisible at runtime because every curated tunable rule
-/// is `Warn`). Widening the scope is a legitimate decision; make it one by
-/// editing those two and this paragraph in the same commit.
-pub struct WorktreeSandbox {
-    worktree_path: std::path::PathBuf,
-    hooks: crate::sandbox::hooks::SandboxHooks,
-}
-
-impl WorktreeSandbox {
-    #[must_use]
-    pub fn new(worktree_path: std::path::PathBuf) -> Self {
-        // Only the non-negotiable catastrophic floor — no tunable command policy
-        // is configured on this path. Mirrors the `hardline_only()` hook that
-        // `factory::build_sandbox` installs when the tunable policy is disabled.
-        let hooks = crate::sandbox::hooks::SandboxHooks::new().with_before(std::sync::Arc::new(
-            crate::sandbox::command_policy::CommandPolicyHook::new(
-                crate::sandbox::command_policy::CommandPolicy::hardline_only(),
-            ),
-        ));
-        Self {
-            worktree_path,
-            hooks,
-        }
-    }
-}
-
-#[async_trait::async_trait]
-impl crate::sandbox::Sandbox for WorktreeSandbox {
-    fn summary(&self) -> Option<crate::sandbox::summary::SandboxSummary> {
-        // Worktree isolation is workspace-tree only — there is no OS-level
-        // process sandbox layered on top. The LLM should know this so it
-        // does not assume seatbelt/landlock enforcement when a subagent
-        // delegates here.
-        Some(crate::sandbox::summary::SandboxSummary::isolated_worktree(
-            // rust-doctor-disable-next-line excessive-clone
-            self.worktree_path.clone(),
-        ))
-    }
-
-    async fn execute(
-        &self,
-        command: crate::sandbox::SandboxCommand,
-    ) -> Result<crate::sandbox::SandboxOutput, crate::sandbox::SandboxError> {
-        // Catastrophic command-policy hardline floor — holds even here, where no
-        // OS sandbox is layered on. Without it a worktree-isolated subagent could
-        // run `rm -rf /` / a fork bomb directly via `tokio::process`, which the
-        // "undisableable floor holds under every tier" invariant forbids.
-        if let crate::sandbox::hooks::SandboxHookResult::Deny { reason } = self
-            .hooks
-            .run_before(&crate::sandbox::hooks::SandboxHookContext::new(&command))
-            .await
-        {
-            return Err(crate::sandbox::SandboxError::Other(format!(
-                "hook denied: {reason}"
-            )));
-        }
-
-        let mut cmd = tokio::process::Command::new(&command.program);
-        cmd.args(&command.args)
-            .current_dir(&self.worktree_path)
-            .envs(command.env.iter())
-            // Injected unconditionally, and it has to stay that way. `program`
-            // here is never `cargo`: every caller that reaches this sandbox
-            // spawns an *interpreter* — `node` as a literal, and otherwise a
-            // probe result from `utils::shell` (`resolve()` for every shell
-            // caller, `python3()` for Python), which on Windows is an absolute
-            // path to pwsh / powershell / cmd. `code_exec`, `code_check` and
-            // the `bash` tool all go through those, with the cargo invocation
-            // living inside `args` as shell text. So a `program == "cargo"`
-            // predicate is false on every production path, and narrowing to it
-            // (SAN-006, f4a994ee2) silently deleted the redirect that
-            // `subagent_spawner` documents as the point of the whole
-            // WorktreeSandbox: keeping a subagent's cargo builds out of the
-            // parent's target dir.
-            //
-            // The stated risk of the narrowing does not exist either: the value
-            // is an ABSOLUTE path inside the worktree, so a non-cargo tool that
-            // honours it writes *within* the isolation boundary, not outside it.
-            //
-            // `isolated_subagent_command_runs_in_worktree_via_override` is the
-            // guard — it runs a shell, which is the shape that matters.
-            .env("CARGO_TARGET_DIR", self.worktree_path.join("target"))
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true);
-
-        let child = cmd
-            .spawn()
-            .map_err(|e| crate::sandbox::SandboxError::Io(e.to_string()))?;
-
-        // Default 1 MiB total budget, mirroring `WorkspaceSandbox::default`.
-        const MAX_OUTPUT_BYTES: usize = 1024 * 1024;
-
-        // ONE drain implementation, deliberately. This branch used to hand-roll
-        // its own `read_to_end` pair for the no-timeout case: that copy read the
-        // whole stream into memory *before* truncating (the shared drain bounds
-        // it while reading, CWE-400), and — once background jobs grew a live
-        // output tail — it was also the one drain path that tee'd nothing, so a
-        // worktree-isolated job would have polled blind. Two defects from one
-        // cause: a second host for the same behaviour.
-        //
-        // SECURITY: honour the per-call `command.timeout` rather than silently
-        // substituting a 1-year sentinel. Without this, a `cargo build` or
-        // `npm install` in a worktree-isolated sub-agent ran forever, bypassing
-        // the harness-wide tool timeout that the tool dispatcher relies on.
-        // Fall back to a 60s default (matches `sandbox::config::
-        // default_timeout_seconds`) when the caller passes `None`. See
-        // DISPATCHER-10.
-        const DEFAULT_TOOL_BUDGET_SECS: u64 = 60;
-        let effective_timeout = command
-            .timeout
-            .unwrap_or(Duration::from_secs(DEFAULT_TOOL_BUDGET_SECS));
-        let result = crate::sandbox::platforms::common::run_child_with_drain(
-            child,
-            command.stdin.as_deref(),
-            effective_timeout,
-            MAX_OUTPUT_BYTES,
-        )
-        .await;
-
-        let mut out = result?;
-
-        // Same output content floor as WorkspaceSandbox (single source of truth):
-        // redact secrets, strip invisible/bidi controls, and fail closed on
-        // block-class secret material rather than return it to the model.
-        let blocked = crate::sandbox::scrub::scrub_and_gate_output(&mut out);
-        if !blocked.is_empty() {
-            return Err(crate::sandbox::SandboxError::Other(format!(
-                "command output blocked: catastrophic secret material detected ({})",
-                blocked.join(", ")
-            )));
-        }
-
-        Ok(out)
-    }
 }
 
 #[cfg(test)]
@@ -460,6 +323,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn owned_worktree_survives_owner_timeout_until_harness_drops_binding() {
+        let _serial = WORKTREE_REPO_SERIAL.lock().await;
+        let repo_root = std::env::current_dir().expect("cwd");
+        let handle = Arc::new(create(&repo_root, "active-checkout", None).await.unwrap());
+        let path = handle.path().to_path_buf();
+        let binding = handle.exec_workspace();
+        let (started, ready) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(super::super::context::with_exec_workspace_binding(
+            Some(binding),
+            async move {
+                started.send(()).unwrap();
+                std::future::pending::<()>().await;
+            },
+        ));
+        ready.await.unwrap();
+
+        assert!(Arc::try_unwrap(handle).is_err());
+        assert!(
+            path.join(".git").is_file(),
+            "a live harness still owns the checkout"
+        );
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            while path.exists() {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("last owner releases the checkout for removal");
+    }
+
+    #[tokio::test]
     async fn drop_without_cleanup_logs_and_removes_dir() {
         let _serial = WORKTREE_REPO_SERIAL.lock().await;
         let repo_root = std::env::current_dir().expect("cwd");
@@ -485,266 +381,6 @@ mod tests {
         assert!(
             !path.exists(),
             "Drop safety-net must remove leaked worktree at {path:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn worktree_sandbox_executes_at_worktree_path() {
-        let _serial = WORKTREE_REPO_SERIAL.lock().await;
-        let repo_root = std::env::current_dir().expect("cwd");
-        let h = create(&repo_root, "task7-sandbox", None)
-            .await
-            .expect("create");
-        let expected_path = h.path().to_path_buf();
-        let sandbox = WorktreeSandbox::new(expected_path.clone());
-
-        let cmd = crate::sandbox::SandboxCommand {
-            session_id: crate::session::service::SessionId::main("task7-sandbox-test"),
-            tool_name: "bash".into(),
-            program: "pwd".into(),
-            args: vec![],
-            env: std::collections::HashMap::new(),
-            stdin: None,
-            cwd: None,
-            capabilities: crate::sandbox::SandboxCapabilities::default(),
-            timeout: None,
-        };
-        use crate::sandbox::Sandbox as _;
-        let out = sandbox.execute(cmd).await.expect("execute");
-
-        let stdout_str = String::from_utf8_lossy(&out.stdout);
-        let actual = stdout_str.trim();
-        // The test fixture passes if pwd's output ends with the worktree
-        // dirname OR exactly equals the canonicalized path. macOS resolves
-        // /var/.../T to /private/var/.../T so we accept both shapes.
-        let expected_basename = expected_path.file_name().unwrap().to_str().unwrap();
-        assert!(
-            actual.ends_with(expected_basename) || actual == expected_path.to_string_lossy(),
-            "pwd output {actual:?} should match worktree path {expected_path:?}"
-        );
-
-        h.cleanup().await.expect("cleanup");
-    }
-
-    /// F3 end-to-end: a worktree-isolated subagent scopes its `WorktreeSandbox`
-    /// as the exec-tool override, so a real `code_exec` shell command runs
-    /// *inside the worktree checkout* with `CARGO_TARGET_DIR` redirected — not
-    /// through the parent's construction-time sandbox. This is the exact path
-    /// that was silently inert before the fix (the override reached only the
-    /// never-read `HarnessDeps.sandbox`, so `bash`/`code_exec`/`code_check` kept
-    /// using the parent's sandbox). Proves routing + real cwd + the
-    /// `CARGO_TARGET_DIR` redirect (the last of which was previously untested).
-    #[tokio::test]
-    async fn isolated_subagent_command_runs_in_worktree_via_override() {
-        use crate::sandbox::context::{with_sandbox_override, SESSION_ID};
-        use crate::sandbox::test_util::MockSandbox;
-        use crate::sandbox::{Sandbox, SandboxOutput};
-
-        let _serial = WORKTREE_REPO_SERIAL.lock().await;
-        let repo_root = std::env::current_dir().expect("cwd");
-        let h = create(&repo_root, "task7-e2e-override", None)
-            .await
-            .expect("create");
-        let worktree_path = h.path().to_path_buf();
-
-        // Construction-time ("parent") sandbox -- must be bypassed while the
-        // worktree override is in scope. Recording its calls lets us assert it.
-        let parent = MockSandbox::new(SandboxOutput {
-            exit_code: Some(0),
-            ..Default::default()
-        });
-
-        let sandbox_for_spawn: Arc<dyn Sandbox> =
-            Arc::new(WorktreeSandbox::new(worktree_path.clone()));
-
-        let session = crate::routing::session_key::SessionKey::ephemeral("task7-e2e-override");
-        let out = SESSION_ID
-            .scope(
-                session,
-                with_sandbox_override(Some(sandbox_for_spawn.clone()), async {
-                    // Drive the worktree sandbox DIRECTLY, the same shape
-                    // the sibling passing test uses
-                    // (worktree_sandbox_executes_at_worktree_path). Going
-                    // through CodeExecTool Language::Shell resolution pulls
-                    // PowerShell on Windows, whose -Command "pwd; echo ..."
-                    // interaction with WorktreeSandbox piped stdio surfaces
-                    // as stdout containing only a newline in this
-                    // environment, defeating the assertion even when the
-                    // cwd and the CARGO_TARGET_DIR redirect are both
-                    // correctly applied. Spawning pwd directly keeps the
-                    // assertion in the layer under test (the sandbox cwd
-                    // and env), not in the shell-invocation glue.
-                    let cmd = crate::sandbox::SandboxCommand {
-                        session_id: crate::session::service::SessionId::main(
-                            "task7-e2e-override-test",
-                        ),
-                        tool_name: "bash".into(),
-                        program: "pwd".into(),
-                        args: vec![],
-                        env: std::collections::HashMap::new(),
-                        stdin: None,
-                        cwd: None,
-                        capabilities: crate::sandbox::SandboxCapabilities::default(),
-                        timeout: None,
-                    };
-                    sandbox_for_spawn
-                        .execute(cmd)
-                        .await
-                        .expect("sandbox execute")
-                }),
-            )
-            .await;
-
-        // Routing preferred the scoped override -- the parent sandbox is untouched.
-        assert_eq!(
-            parent.calls.lock().await.len(),
-            0,
-            "worktree override must bypass the construction-time sandbox"
-        );
-        assert_eq!(
-            out.exit_code,
-            Some(0),
-            "isolated command failed (exit={:?}, stderr={})",
-            out.exit_code,
-            String::from_utf8_lossy(&out.stderr)
-        );
-
-        let basename = worktree_path.file_name().unwrap().to_str().unwrap();
-        let actual = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        assert!(
-            actual.ends_with(basename) || actual == worktree_path.to_string_lossy(),
-            "pwd did not run inside the worktree: stdout={:?}",
-            actual
-        );
-
-        h.cleanup().await.expect("cleanup");
-    }
-
-    #[tokio::test]
-    async fn worktree_sandbox_hardline_floor_denies_catastrophic_command() {
-        // The catastrophic command-policy floor must hold on the worktree path
-        // too — a fork bomb is refused BEFORE any process spawns, so no real git
-        // worktree is needed. This is the hole R3-3 closed: WorktreeSandbox used
-        // to run `tokio::process::Command` with no hooks at all.
-        let sandbox = WorktreeSandbox::new(std::env::temp_dir());
-        let cmd = crate::sandbox::SandboxCommand {
-            session_id: crate::session::service::SessionId::main("worktree-floor-test"),
-            tool_name: "bash".into(),
-            program: "bash".into(),
-            args: vec!["-c".into(), ":(){ :|:& };:".into()],
-            env: std::collections::HashMap::new(),
-            stdin: None,
-            cwd: None,
-            capabilities: crate::sandbox::SandboxCapabilities::default(),
-            timeout: None,
-        };
-        use crate::sandbox::Sandbox as _;
-        let err = sandbox
-            .execute(cmd)
-            .await
-            .expect_err("fork bomb must be denied by the hardline floor");
-        assert!(
-            matches!(err, crate::sandbox::SandboxError::Other(ref m) if m.contains("hook denied")),
-            "expected hardline hook denial, got {err:?}"
-        );
-    }
-
-    /// The *other* half of the Stage-H scope ruling, which until now lived only
-    /// in the `WorktreeSandbox` doc comment: the catastrophic floor is shared,
-    /// and the operator-tunable `[sandbox.command_policy]` rules, the custom
-    /// shell-security patterns and the rate limiter deliberately are **not**.
-    ///
-    /// A ruling with only prose behind it does not stop the next sincere fixer.
-    /// This one reads as an oversight ("the worktree path is missing the hooks
-    /// the factory installs"), so the person who widens it will be *trying to
-    /// help* — and nothing would have gone red. Widening the scope is a real
-    /// option, but it has to be a decision: change this test in the same commit
-    /// and say why.
-    #[test]
-    fn worktree_sandbox_installs_only_the_catastrophic_floor() {
-        let sandbox = WorktreeSandbox::new(std::env::temp_dir());
-        assert_eq!(
-            sandbox.hooks.before.len(),
-            1,
-            "Stage-H scope: exactly one before-hook (the hardline command policy). \
-             Adding the rate limiter / security-kernel / resource-governor hooks that \
-             `factory::build_sandbox` layers onto WorkspaceSandbox is a scope change — \
-             see the WorktreeSandbox doc comment before editing this number."
-        );
-    }
-
-    /// Counterpart to the hook-count check above, which cannot see the one
-    /// change that matters most: swapping `hardline_only()` for a *configurable*
-    /// policy leaves the count at 1 while silently making this path obey rules
-    /// the ruling says it does not.
-    ///
-    /// Source-level because the distinction is not observable at runtime — the
-    /// curated tunable rules are all `Warn`, so a hardline-only policy and a
-    /// fully-configured one both *allow* the same commands and differ only in
-    /// audit rows written to a process-global sink.
-    ///
-    /// Comments are stripped first, and that is load-bearing rather than tidy:
-    /// the `WorktreeSandbox` doc comment names `[sandbox.command_policy]` and
-    /// the rate limiter *in the course of explaining why they are absent*, so a
-    /// guard that read them would have failed on its own documentation the day
-    /// it was written.
-    #[test]
-    fn worktree_sandbox_does_not_reach_for_a_configurable_policy() {
-        let src = include_str!("worktree.rs").replace('\r', "");
-        let production = crate::utils::source_scan::production_prefix(&src);
-        assert!(
-            production.len() < src.len(),
-            "separator did not match — the scan below would cover this test module's own literals"
-        );
-        let code = crate::utils::source_scan::strip_comment_lines(&production);
-
-        assert!(
-            code.contains("hardline_only()"),
-            "the worktree path must construct the hardline-only policy"
-        );
-        for forbidden in [
-            "CommandPolicy::defaults(",
-            "into_policy()",
-            "RateLimitHook",
-            "SecurityKernelHook",
-            "ResourceGovernor",
-        ] {
-            assert!(
-                !code.contains(forbidden),
-                "`{forbidden}` appeared in the production half of worktree.rs — that widens the \
-                 Stage-H scope lock beyond the catastrophic floor. If that is intended, update \
-                 the WorktreeSandbox doc comment and this guard together."
-            );
-        }
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn worktree_sandbox_blocks_private_key_in_output() {
-        // The block-class secret floor must hold on the worktree path: a command
-        // that dumps a PEM private-key header to stdout is refused, not returned
-        // to the model. `printf` runs in $TMPDIR (an existing dir), so no git
-        // worktree is required.
-        let sandbox = WorktreeSandbox::new(std::env::temp_dir());
-        let cmd = crate::sandbox::SandboxCommand {
-            session_id: crate::session::service::SessionId::main("worktree-secret-test"),
-            tool_name: "bash".into(),
-            program: "printf".into(),
-            args: vec!["%s".into(), "-----BEGIN PRIVATE KEY-----".into()],
-            env: std::collections::HashMap::new(),
-            stdin: None,
-            cwd: None,
-            capabilities: crate::sandbox::SandboxCapabilities::default(),
-            timeout: None,
-        };
-        use crate::sandbox::Sandbox as _;
-        let err = sandbox
-            .execute(cmd)
-            .await
-            .expect_err("private-key output must be blocked");
-        assert!(
-            matches!(err, crate::sandbox::SandboxError::Other(ref m) if m.contains("catastrophic secret")),
-            "expected block-class refusal, got {err:?}"
         );
     }
 }

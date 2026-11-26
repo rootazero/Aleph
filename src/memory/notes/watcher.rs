@@ -55,6 +55,7 @@ use notify::{RecommendedWatcher, RecursiveMode};
 use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, RecommendedCache};
 
 use crate::error::AlephError;
+use crate::memory::notes::indexer::lock_note_corpus;
 use crate::memory::notes::store::NoteStore;
 use crate::memory::notes::{NoteIndexer, CATEGORY_DIRS};
 use crate::sync_primitives::Arc;
@@ -448,9 +449,10 @@ where
     }
 
     for (path, key) in keys {
+        let _guard = lock_note_corpus(indexer.memory_dir(), &key.agent_id).await;
         match tokio::fs::metadata(&path).await {
             Ok(_) => match indexer
-                .index_file(&key.agent_id, &key.category, &path)
+                .index_file_locked(&key.agent_id, &key.category, &path)
                 .await
             {
                 Ok(true) => {

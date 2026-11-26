@@ -176,7 +176,7 @@ async fn pregrant(skill_id: &str, request: &RunRequest, agent_id: &str) -> Optio
         );
         return None;
     }
-    let project = request.workspace_override.clone();
+    let project = request.workspace_path().map(std::path::Path::to_path_buf);
     let id = skill_id.to_string();
     let log_skill = skill_id.to_string();
     // Everything below is filesystem work: the candidate scan (read_dir +

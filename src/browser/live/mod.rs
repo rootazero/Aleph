@@ -1606,15 +1606,45 @@ impl LiveProfileOwner {
         }
     }
 
+    /// Feed a `Fetch.requestPaused` to the worker of the target it belongs to:
+    /// the slot armed on the event's session, or else the slot keyed by the
+    /// event's `frameId`.
+    ///
+    /// The second route exists for the same reason as `tab_for_event` in
+    /// `cdp_backend/events.rs`: obscura v0.2.7 opens two sessions on every
+    /// page Aleph drives (`<targetId>-session` from `Target.createTarget`,
+    /// `<targetId>-session-<n>` from Aleph's attach), and a paused
+    /// subresource request is reported on whichever of them a `HashMap` scan
+    /// meets first (`emit_intercepted_request` in `obscura-cdp/src/server.rs`,
+    /// whose `frameId` is always the page's main frame = the target id).
+    /// Measured 2026-11-25: 3 of 6 `fetch()` pauses landed on the session
+    /// Aleph never attached, and fulfilling them on Aleph's session served the
+    /// mock 6 of 6 — the engine's paused-request table is per connection.
+    /// Dropping such an event is the worst outcome a Fetch worker has: the
+    /// request stays paused forever. Chrome only reports pauses on a session
+    /// that sent `Fetch.enable`, and only a slot's session does, so the
+    /// fallback never fires there.
     fn on_fetch(self: &Arc<Self>, ev: &Arc<CdpEvent>) {
         let Some(session) = ev.session.as_ref() else {
             return;
         };
         let mut st = self.state();
-        let Some((target, slot)) = st.fetch.iter().find(|(_, s)| s.session == *session) else {
+        let by_session = st
+            .fetch
+            .iter()
+            .find(|(_, s)| s.session == *session)
+            .map(|(target, _)| target.clone());
+        let Some(target) = by_session.or_else(|| {
+            let frame_id = ev.params["frameId"].as_str()?;
+            st.fetch
+                .contains_key(frame_id)
+                .then(|| frame_id.to_string())
+        }) else {
             return;
         };
-        let target = target.clone();
+        let Some(slot) = st.fetch.get(&target) else {
+            return;
+        };
         match slot.tx.try_send(ev.clone()) {
             Ok(()) => {}
             Err(mpsc::error::TrySendError::Full(_)) => {

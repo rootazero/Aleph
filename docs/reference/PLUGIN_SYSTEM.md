@@ -945,7 +945,7 @@ R8/R9 的自我改进条款）。给它加 allowlist，要么自动放行模型�
 |---|---|
 | `mount(id: &str) -> Result<PluginStatus, MountError>` | 解析 manifest → owner-trust / enabled 门（`plugins.toml`；`ClaudeCache` origin 按 origin 判默认 disabled）→ 新建 `EffectScope` → **按固定顺序**注册六种效果 → 任一步失败即 `dispose` 已注册部分（**全有或全无**）→ `write_failed_row` 写 `Error("<step>: <reason>")`；成功写 `Loaded`（MCP-kind 先 `Pending { waiting_on }`，server 完成 `initialize` 后由 `watch_server_starts` 改 `Loaded`） |
 | `unmount(id: &str) -> Result<DisposeReport, UnmountError>` | 从 `scopes`（`Mutex<HashMap<String, EffectScope>>`）取出该插件的 `EffectScope` → `dispose`（逆序；单条失败记日志带 step 标签、**不停**）→ 写 `Disabled` / 移除行 |
-| `reload_plugin(id)` | `unmount` + `mount`。2026-09-20 前的窄孪生（只刷 tool index、跳过 hooks / projections / MCP / services）已删 |
+| `reload_plugin(id)` | 先预检、再 `unmount` + `mount`（2026-11-25）。预检 `preflight_reload` = `prepare_mount`（定位、准入、解析、身份校验，不写任何东西）+ WASM 插件的 `WasmRuntime::preflight_module`（读入口、校验 VM 限额、`extism::CompiledPlugin::new` 只编译不实例化，不跑 guest 代码）。有版本在运行且新版本有缺陷 → 不拆、不改行，返回 `MountError::ReloadRefused`（旧版继续服务）；没有版本在运行 → 照旧走 mount 并在行上记 Error；准入被拒 → 照旧拆除并记录拒绝（撤销信任的插件不能靠重载继续跑）。预检覆盖不到：模块能编译但链接/实例化失败、MCP 服务器或 service 启动失败——这些仍发生在拆除之后。/ Preflight before teardown; a defective new version leaves the running one serving. 2026-09-20 前的窄孪生（只刷 tool index、跳过 hooks / projections / MCP / services）已删 |
 | `reload()` | 对每个已发现插件 `unmount` + `mount`；孤儿服务随所属插件一并释放 |
 
 六种效果与它们的逆（注册顺序即下表顺序；dispose 逆序，所以 registry 行最后撤——视图重算时它已不在）：

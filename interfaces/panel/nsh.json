@@ -9,7 +9,8 @@
       "aleph.rpc", "aleph.pair", "aleph.connect", "aleph.connection", "aleph.fontScale",
       "aleph.voice.availability", "aleph.voice.capture", "aleph.voice.finish", "aleph.voice.cancel",
       "aleph.voice.vadReply", "aleph.voice.play", "aleph.voice.stop"
-    ]
+    ],
+    "openUrl": { "schemes": ["https", "http"] }
   },
   "web": {
     "host": "./web/host.js"

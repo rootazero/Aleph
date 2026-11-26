@@ -25,14 +25,126 @@ use shared_ui_logic::prefs::commands::{
     rank, resolve_bindings, CommandKey, KeyProblem, KeySource, RankItem,
 };
 use shared_ui_logic::prefs::{self, Binding, PanelPrefs, PrefsRepair};
+use shared_ui_logic::transcript::chat_panel::ChatState;
 
 #[native_module("aleph/panel")]
 fn native(registry: &mut Registry) {
     registry.module::<PanelModel>();
     registry.module::<NebulaModel>();
+    registry.class::<ChatModel>();
     registry.class::<BrowserCaptureVad>();
 }
 
+/// The transcript state for one mounted Chat tab.
+#[class]
+pub struct ChatModel {
+    state: ChatState,
+}
+
+#[class]
+impl ChatModel {
+    /// Constructs an independent transcript for the mounted tab.
+    pub fn new() -> Self {
+        Self {
+            state: ChatState::default(),
+        }
+    }
+
+    /// Selects a session and clears all provisional rows.
+    pub fn reset(&mut self, session: String) {
+        self.state.reset(session);
+    }
+
+    /// Adds the optimistic user row and opens the early-event buffer.
+    pub fn begin_send(&mut self, text: String, now_ms: u64) -> JsonValue {
+        self.state.begin_send(text, now_ms)
+    }
+
+    /// Reconciles the optimistic row with the acknowledged run, if any.
+    pub fn resolve_send(&mut self, session: String, run: Option<String>, now_ms: u64) -> JsonValue {
+        self.state.resolve_send(session, run, now_ms)
+    }
+
+    /// Applies one typed event and returns only the affected rows.
+    pub fn accept(&mut self, event: JsonValue) -> JsonValue {
+        self.state.accept(event)
+    }
+
+    /// Marks the live suffix incomplete when the host reports an interruption.
+    pub fn interrupt(&mut self) -> JsonValue {
+        self.state.interrupt()
+    }
+
+    /// Allows composing after an interrupted run without claiming it completed.
+    pub fn resume_composing(&mut self) -> JsonValue {
+        self.state.resume_composing()
+    }
+
+    /// Returns the visible snapshot after reconciling committed history.
+    pub fn replace_history(&mut self, history: JsonValue, details: JsonValue) -> JsonValue {
+        self.state.replace_history(history, details)
+    }
+
+    /// Joins an older window without changing the live run.
+    pub fn prepend_history(&mut self, history: JsonValue, requested_before: String) -> JsonValue {
+        self.state.prepend_history(history, requested_before)
+    }
+
+    /// Updates the details of already represented runs, independently of history reads.
+    pub fn apply_history_details(&mut self, run_ids: Vec<String>, details: JsonValue) -> JsonValue {
+        self.state.apply_history_details(run_ids, details)
+    }
+
+    /// Show the last measured request without imputing provider usage.
+    pub fn context_view(&self, breakdown: JsonValue) -> JsonValue {
+        serde_json::from_value(breakdown).map_or(JsonValue::Null, |report| {
+            shared_ui_logic::transcript::panel_context_view(&report)
+        })
+    }
+
+    /// Layout only the bounded, inert flowchart subset.
+    pub fn mermaid_view(&self, source: String) -> JsonValue {
+        use shared_ui_logic::transcript::mermaid::{layout_flowchart, FlowchartFallback};
+        match layout_flowchart(&source) {
+            Ok(scene) => json!({"scene": scene}),
+            Err(reason) => json!({"reason": match reason {
+                FlowchartFallback::SourceLimit | FlowchartFallback::NodeLimit |
+                FlowchartFallback::EdgeLimit | FlowchartFallback::LabelLimit |
+                FlowchartFallback::CanvasLimit => "diagram exceeds limits",
+                _ => "unsupported diagram",
+            }}),
+        }
+    }
+
+    /// Visible line numbers and word spans from Aleph's recorded change.
+    pub fn diff_view(&self, key: String, expanded: bool) -> JsonValue {
+        use shared_ui_logic::transcript::{diff_rows, stats_label, DiffView};
+
+        let changes: Vec<_> = self.state.diff_body(&key).unwrap_or_default().iter().map(|change| {
+            let label = stats_label(change);
+            match diff_rows(change, expanded) {
+                DiffView::Unavailable(_) => {
+                    let (label, reason) = if label.starts_with('+') {
+                        (label, "Diff unavailable: too large to show".to_owned())
+                    } else {
+                        (String::new(), label)
+                    };
+                    json!({"path": change.path, "label": label, "unavailable": reason, "lines": [], "hidden": 0})
+                }
+                DiffView::Rows(body) => {
+                    let lines: Vec<_> = body.rows.iter().map(|line| {
+                        let spans: Vec<_> = line.spans.iter().map(|span| {
+                            json!({"text": span.text, "emphasis": span.emphasis})
+                        }).collect();
+                        json!({"old": line.old_no, "new": line.new_no, "tag": line.tag, "spans": spans})
+                    }).collect();
+                    json!({"path": change.path, "label": label, "unavailable": null, "lines": lines, "hidden": body.hidden_rows})
+                }
+            }
+        }).collect();
+        json!(changes)
+    }
+}
 /// One instance per browser capture. The page owns PCM; only the sample
 /// clock, RMS and final half-open range cross the NSH module boundary.
 #[class]

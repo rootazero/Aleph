@@ -30,8 +30,10 @@ pub struct DreamingConfig {
     pub skill_stale_after_days: u32,
     #[serde(default = "super::defaults::default_feedback_distill_max_per_cycle")]
     pub feedback_distill_max_per_cycle: usize,
+    /// Normal-severity correction quorum. Must fit in one effective page.
     #[serde(default = "super::defaults::default_feedback_distill_min_candidates")]
     pub feedback_distill_min_candidates: usize,
+    /// Correction page size before applying the 512-row safety cap.
     #[serde(default = "super::defaults::default_feedback_lookback")]
     pub feedback_lookback: usize,
     /// How many non-base note corpora one night of maintenance may run
@@ -52,6 +54,12 @@ pub struct DreamingConfig {
     /// only a vendor with no cheap tier keeps using the main LLM.
     #[serde(default)]
     pub model: Option<String>,
+}
+
+impl DreamingConfig {
+    pub(crate) fn feedback_page_limit(lookback: usize) -> usize {
+        lookback.min(512)
+    }
 }
 
 impl Default for DreamingConfig {

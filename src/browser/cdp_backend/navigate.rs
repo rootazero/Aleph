@@ -116,6 +116,13 @@ pub(super) async fn wait_for_load(
                 // `Input.dispatchMouseEvent` is announced with the **OLD**
                 // loader, and `Page.getFrameTree` afterwards still reports the
                 // old one; Chrome 153.0.8010.48 gets this right on both routes.
+                // Re-measured 2026-11-25 on v0.2.7 (`qa/browser_dual` caps
+                // stage, premise 3): the stale loader did NOT reproduce — the
+                // event carried the new loader in one run, and in another no
+                // main-frame `frameNavigated` arrived at all while the frame
+                // tree already held the new one. One clean reading on one
+                // build is not a guarantee, and an operator may still pin
+                // v0.2.2, so the order below stays.
                 // That is why `navigate` below reads
                 // `result.loader_id.or(outcome.loader_id)` and not the other
                 // way round: `Page.navigate`'s own reply is the authority, and

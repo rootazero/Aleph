@@ -47,10 +47,10 @@ pub fn failure_kind(err: &crate::providers::model_catalog::DiscoveryError) -> Di
     use crate::providers::model_catalog::DiscoveryError as E;
     match err {
         E::Unsupported(_) => DiscoveryFailureKind::Unsupported,
-        E::MissingCredential(_) => DiscoveryFailureKind::MissingCredential,
+        E::NotConfigured(_) | E::MissingCredential(_) => DiscoveryFailureKind::MissingCredential,
         E::Timeout { .. } => DiscoveryFailureKind::Timeout,
         E::Status { .. } => DiscoveryFailureKind::Status,
         E::Shape { .. } => DiscoveryFailureKind::Shape,
-        E::Transport { .. } => DiscoveryFailureKind::Transport,
+        E::Superseded(_) | E::Transport { .. } => DiscoveryFailureKind::Transport,
     }
 }

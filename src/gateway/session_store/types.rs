@@ -76,6 +76,28 @@ pub struct MessageRecord {
     pub tool_name: Option<String>,
 }
 
+/// Select a trailing window of the eligible rows in canonical projection order.
+#[derive(Debug, Clone)]
+pub enum HistoryRead {
+    Legacy {
+        limit: Option<usize>,
+        before: Option<chrono::DateTime<chrono::Utc>>,
+    },
+    Scrollback {
+        limit: usize,
+        before_row: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScrollbackRead {
+    /// The oldest row returned names the next boundary, if an earlier row exists.
+    Ready {
+        next_row: Option<String>,
+    },
+    StaleBoundary,
+}
+
 /// A window of a session's transcript together with how long the whole
 /// transcript is — the two answers a reader needs, from ONE read.
 ///
@@ -98,8 +120,7 @@ pub struct MessageRecord {
 /// a transcript with nothing earlier.
 #[derive(Debug, Clone)]
 pub struct HistoryPage {
-    /// The rows asked for: the trailing `limit` of those a `before` cursor
-    /// admits, oldest-first.
+    /// The trailing window of eligible rows, oldest-first.
     pub rows: Vec<MessageRecord>,
     /// How many rows the whole session holds, ignoring the window — or `None`
     /// when that could not be read.
@@ -112,10 +133,10 @@ pub struct HistoryPage {
     /// as the window length would tell every client the transcript is complete
     /// — the one answer wrong in the direction that HIDES content.
     ///
-    /// This is the whole session, NOT the part a `before` cursor would admit. A
-    /// caller paginating with a cursor wants "how far back does this go", which
-    /// is this.
+    /// This is the whole session, not the part admitted by the boundary.
     pub total: Option<usize>,
+    /// Continuation derived from the same read; absent for legacy requests.
+    pub scrollback: Option<ScrollbackRead>,
 }
 
 /// Above this a raw [`MessageRecord::timestamp`] is read as milliseconds,

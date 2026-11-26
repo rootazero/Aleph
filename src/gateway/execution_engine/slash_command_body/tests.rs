@@ -259,7 +259,7 @@ async fn envelope_request(
     request
         .metadata
         .insert(SLASH_COMMAND_MODE_KEY.to_string(), mode);
-    request.workspace_override = Some(workspace);
+    request.workspace_override = Some(crate::sandbox::context::ExecWorkspace::Directory(workspace));
     request
 }
 
@@ -1240,6 +1240,7 @@ async fn the_busy_lane_sees_the_model_a_command_pinned() {
             request.run_id.clone(),
             super::super::ActiveRun {
                 request: request.clone(),
+                owned_worktree: false,
                 state: super::super::RunState::Running,
                 started_at: chrono::Utc::now(),
                 admitted_at: std::time::Instant::now(),

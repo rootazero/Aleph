@@ -59,11 +59,21 @@ use crate::sync_primitives::Arc;
 /// Hard ceiling on one page, whatever `limit` asks for. A tool result blob can
 /// be tens of megabytes; a client that wants all of it pages.
 pub const MAX_TOOL_OUTPUT_PAGE_BYTES: u64 = 2 * 1024 * 1024;
+const V1_OUTPUT_WIRE_BYTES: usize = 24 * 1024;
+// Dispatch appends a fixed-format W3C traceparent field after this handler.
+const TRACEPARENT_ENVELOPE_BYTES: usize = 96;
+
+tokio::task_local! {
+    /// Set only by an authenticated V1 dispatcher; never a request parameter.
+    pub(crate) static V1_TOOL_OUTPUT: bool;
+}
 
 #[derive(Debug, Default, Deserialize)]
 struct Params {
     #[serde(default)]
     session_key: Option<String>,
+    #[serde(default)]
+    run_id: Option<String>,
     #[serde(default)]
     tool_call_id: Option<String>,
     #[serde(default)]
@@ -203,6 +213,10 @@ pub async fn handle_tool_output(
     request: JsonRpcRequest,
     sessions: Arc<dyn SessionStore>,
 ) -> JsonRpcResponse {
+    let v1 = V1_TOOL_OUTPUT.try_with(|v1| *v1).unwrap_or(false);
+    if v1 && serde_json::to_vec(&request.id).map_or(true, |bytes| bytes.len() > 1024) {
+        return JsonRpcResponse::error(None, INVALID_PARAMS, "Request id too large");
+    }
     let params: Params = match request.params.as_ref() {
         Some(v) => match serde_json::from_value(v.clone()) {
             Ok(p) => p,
@@ -222,6 +236,9 @@ pub async fn handle_tool_output(
     let Some(call_id) = params.tool_call_id.as_deref().filter(|s| !s.is_empty()) else {
         return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing tool_call_id");
     };
+    if v1 && !super::chat_presentation::safe_tool_address(call_id) {
+        return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Invalid tool_call_id");
+    }
 
     match sessions.get_metadata(&session_key).await {
         Ok(Some(meta)) if visibility::session_visible(&meta) => {}
@@ -237,43 +254,48 @@ pub async fn handle_tool_output(
             "session event log not available",
         );
     };
-    let events = match store.load_all_events(&session_key).await {
-        Ok(events) => events,
-        Err(e) => {
-            // "We could not read the log" is not "that call does not exist":
-            // answering NOT_FOUND here would tell the client to stop asking.
-            tracing::warn!(session_key = %key_str, error = %e, "trace.tool_output: event log read failed");
+    let result = if v1 {
+        let Some(run_id) = params
+            .run_id
+            .as_deref()
+            .filter(|id| super::chat_presentation::safe_tool_address(id))
+        else {
+            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Invalid run_id");
+        };
+        store
+            .load_run_tool_output(&session_key, run_id, call_id)
+            .await
+    } else {
+        store.load_all_events(&session_key).await.map(|events| {
+            events.into_iter().find_map(|rec| match rec.event {
+                crate::session::events::SessionEvent::ToolResult {
+                    call_id: id,
+                    output,
+                    ..
+                } if id == call_id => Some(output.value),
+                _ => None,
+            })
+        })
+    };
+    let text = match result {
+        Ok(Some(serde_json::Value::String(text))) => text,
+        Ok(Some(value)) => value.to_string(),
+        Ok(None) if v1 => return visibility::not_found_response(request.id),
+        Err(error) => {
+            tracing::warn!(session_key = %key_str, %error, "trace.tool_output: event log read failed");
             return JsonRpcResponse::error(
                 request.id,
                 SERVICE_UNAVAILABLE,
                 "session event log unreadable",
             );
         }
-    };
-
-    // The join key is the same one `trace_replay::presentations_for_session`
-    // uses, and it is genuinely shared rather than assumed: a tool call's
-    // `SessionEvent::ToolResult.call_id` and the id every client-facing surface
-    // labels it with are both `call.id.clone()` in `harness/agent/act.rs`.
-    // Retired events (a rewind, a compaction) are already excluded by
-    // `load_events_range`'s `retired_at IS NULL`, so output the user deleted
-    // does not come back through this door.
-    let Some(text) = events.into_iter().find_map(|rec| match rec.event {
-        crate::session::events::SessionEvent::ToolResult {
-            call_id: id,
-            output,
-            ..
-        } if id == call_id => Some(match output.value {
-            serde_json::Value::String(s) => s,
-            other => other.to_string(),
-        }),
-        _ => None,
-    }) else {
-        return JsonRpcResponse::error(
-            request.id,
-            RESOURCE_NOT_FOUND,
-            "no tool result with that id in this session",
-        );
+        Ok(None) => {
+            return JsonRpcResponse::error(
+                request.id,
+                RESOURCE_NOT_FOUND,
+                "no tool result with that id in this session",
+            );
+        }
     };
 
     // `to_key_string()` rather than the raw `key_str` the caller sent: the
@@ -281,16 +303,24 @@ pub async fn handle_tool_output(
     // (`run_loop/mod.rs`), so the reader has to reach the directory name
     // through the same derivation or the gate refuses real blobs (判据 §12).
     let (full, source) = resolve_source(text, call_id, &session_key.to_key_string());
-    let masked = crate::exec::masker::SecretMasker::new().mask(&full);
+    // Expired data may be only the private filesystem marker, not output.
+    // Keep the legacy coordinate system; V1 explicitly reports no text here.
+    let masked = if v1 && matches!(source, ToolOutputSource::Expired) {
+        String::new()
+    } else {
+        crate::exec::masker::SecretMasker::new().mask(&full)
+    };
     // Ceiling only. The FLOOR (`limit: 0`, which a client can send and nothing
     // upstream rejects) belongs to [`page`], which is what claims to make
     // progress — see its doc for why the two bounds live in different places.
-    let limit = params
-        .limit
-        .unwrap_or(MAX_TOOL_OUTPUT_PAGE_BYTES)
-        .min(MAX_TOOL_OUTPUT_PAGE_BYTES);
+    let max_page_bytes = if v1 {
+        V1_OUTPUT_WIRE_BYTES as u64
+    } else {
+        MAX_TOOL_OUTPUT_PAGE_BYTES
+    };
+    let limit = params.limit.unwrap_or(max_page_bytes).min(max_page_bytes);
     let (slice, start, more) = page(&masked, params.offset, limit);
-    let out = ToolOutputPage {
+    let mut out = ToolOutputPage {
         tool_call_id: call_id.to_string(),
         // `truncated` is one bit over two facts on purpose (its own doc in
         // `shared/protocol/src/context_breakdown.rs`): more pages follow, OR
@@ -314,7 +344,37 @@ pub async fn handle_tool_output(
         source,
         text: slice,
     };
+    if v1 {
+        cap_v1_page(&request.id, &mut out);
+    }
     JsonRpcResponse::success(request.id, serde_json::to_value(out).unwrap_or(json!(null)))
+}
+
+fn cap_v1_page(id: &Option<serde_json::Value>, out: &mut ToolOutputPage) {
+    // Measure the envelope with an empty JSON string. `false` is one byte
+    // longer than `true`, so updating `truncated` cannot grow the envelope.
+    let text = std::mem::take(&mut out.text);
+    let envelope =
+        JsonRpcResponse::success(id.clone(), serde_json::to_value(&*out).unwrap_or_default());
+    let overhead = serde_json::to_vec(&envelope).map_or(V1_OUTPUT_WIRE_BYTES, |bytes| bytes.len());
+    let capacity = V1_OUTPUT_WIRE_BYTES.saturating_sub(
+        overhead + TRACEPARENT_ENVELOPE_BYTES + aleph_protocol::framing::HEADER_BYTES,
+    );
+    let mut escaped = 0;
+    let end = text
+        .char_indices()
+        .find_map(|(index, ch)| {
+            escaped += match ch {
+                '"' | '\\' | '\u{08}' | '\t' | '\n' | '\u{0c}' | '\r' => 2,
+                '\u{0}'..='\u{1f}' => 6,
+                _ => ch.len_utf8(),
+            };
+            (escaped > capacity).then_some(index)
+        })
+        .unwrap_or(text.len());
+    out.truncated |= end < text.len();
+    out.text = text;
+    out.text.truncate(end);
 }
 
 /// Turn the event log's stored text into the text to serve, plus the label that
@@ -446,6 +506,119 @@ mod tests {
 
     fn parse(resp: JsonRpcResponse) -> ToolOutputPage {
         serde_json::from_value(resp.result.expect("success")).expect("ToolOutputPage")
+    }
+
+    async fn seed_run(key: &SessionKey, seq: u64, run_id: &str) {
+        crate::session::store::install_test_event_store()
+            .append(
+                key,
+                seq,
+                &crate::session::events::SessionEvent::RunStarted {
+                    run_id: run_id.into(),
+                    at: seq as i64,
+                    project_root: None,
+                    envelope: None,
+                    telecom_provenance: Default::default(),
+                },
+                seq as i64,
+            )
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn v1_expired_output_does_not_serve_the_private_marker() {
+        let store = crate::tools::result_store::install_test_tool_result_store();
+        let marker = marker_for(&swept_blob_path(&store, "c-v1-expired"));
+        let temp = TempDir::new().unwrap();
+        let sessions = session_store(&temp);
+        let key = SessionKey::main("conv-tool-output-v1-expired");
+        seed_session(&sessions, &key, "u-alice").await;
+        seed_run(&key, 1, "r-v1-expired").await;
+        seed_result(&key, 2, "c-v1-expired", json!(marker)).await;
+        let served = parse(
+            V1_TOOL_OUTPUT
+                .scope(
+                    true,
+                    call(
+                        &key,
+                        sessions,
+                        json!({"run_id":"r-v1-expired", "tool_call_id":"c-v1-expired"}),
+                    ),
+                )
+                .await,
+        );
+        assert_eq!(served.source, ToolOutputSource::Expired);
+        assert!(served.truncated);
+        assert_eq!(served.total_bytes, 0);
+        assert!(served.text.is_empty());
+    }
+
+    #[tokio::test]
+    async fn v1_caps_escaped_output_and_preserves_masked_page_coordinates() {
+        let temp = TempDir::new().unwrap();
+        let sessions = session_store(&temp);
+        let key = SessionKey::main("conv-tool-output-v1-page");
+        seed_session(&sessions, &key, "u-alice").await;
+        seed_run(&key, 1, "r-v1-page").await;
+        let original = format!(
+            "AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE\n{}",
+            "\0末\\\n".repeat(8_000)
+        );
+        let expected = crate::exec::masker::SecretMasker::new().mask(&original);
+        seed_result(&key, 2, "c-v1-page", json!(original)).await;
+        let mut actual = String::new();
+        loop {
+            let response = V1_TOOL_OUTPUT.scope(true, call(&key, sessions.clone(), json!({
+                "run_id":"r-v1-page", "tool_call_id":"c-v1-page", "offset":actual.len(), "limit":2_000_000,
+            }))).await;
+            assert!(
+                serde_json::to_vec(&response).unwrap().len()
+                    + TRACEPARENT_ENVELOPE_BYTES
+                    + aleph_protocol::framing::HEADER_BYTES
+                    <= V1_OUTPUT_WIRE_BYTES
+            );
+            let page = parse(response);
+            assert_eq!(page.offset, actual.len() as u64);
+            assert_eq!(page.total_bytes, expected.len() as u64);
+            assert!(!page.text.is_empty());
+            actual.push_str(&page.text);
+            if !page.truncated {
+                break;
+            }
+        }
+        assert!(actual.contains("REDACTED"));
+        assert_eq!(actual, expected);
+    }
+
+    #[tokio::test]
+    async fn v1_denies_reused_call_ids_without_changing_legacy_lookup() {
+        let temp = TempDir::new().unwrap();
+        let sessions = session_store(&temp);
+        let key = SessionKey::main("conv-tool-output-v1-ambiguous");
+        seed_session(&sessions, &key, "u-alice").await;
+        seed_run(&key, 1, "r-first").await;
+        seed_result(&key, 2, "c-reused", json!("first output")).await;
+        seed_run(&key, 3, "r-second").await;
+        seed_result(&key, 4, "c-reused", json!("second output")).await;
+        for run_id in ["r-first", "r-second", "r-missing"] {
+            let response = V1_TOOL_OUTPUT
+                .scope(
+                    true,
+                    call(
+                        &key,
+                        sessions.clone(),
+                        json!({"run_id":run_id, "tool_call_id":"c-reused"}),
+                    ),
+                )
+                .await;
+            assert!(response.result.is_none());
+            assert_eq!(response.error.unwrap().code, RESOURCE_NOT_FOUND);
+        }
+        assert_eq!(
+            parse(call(&key, sessions, json!({"tool_call_id":"c-reused"})).await).text,
+            "first output"
+        );
     }
 
     /// An unknown call id is an error, never an empty page: "no such call" and

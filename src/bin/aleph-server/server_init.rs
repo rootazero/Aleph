@@ -86,6 +86,9 @@ fn build_run_error_response(
         BuildRunError::Invalid(msg) => {
             alephcore::gateway::JsonRpcResponse::error(id, INVALID_PARAMS, msg)
         }
+        ref e @ BuildRunError::InvalidModel(_) => {
+            alephcore::gateway::JsonRpcResponse::error(id, INVALID_PARAMS, e.to_string())
+        }
         BuildRunError::ProjectNotFound(pid) => alephcore::gateway::JsonRpcResponse::error(
             id,
             RESOURCE_NOT_FOUND,

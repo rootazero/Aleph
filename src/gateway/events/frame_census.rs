@@ -285,7 +285,11 @@ fn the_panel_only_exemptions_are_all_still_untwinned() {
 /// from the other end.
 #[test]
 fn every_protocol_stream_variant_has_a_gateway_producer() {
-    let published: Vec<String> = scraped_arms().into_iter().map(|(_, m)| m).collect();
+    let mut published: Vec<String> = scraped_arms().into_iter().map(|(_, m)| m).collect();
+    // This projection is intentionally absent from GatewayEventFrame. The
+    // V1 feed's owner admission test verifies that it actually delivers it.
+    let topic = aleph_protocol::chat_transcript::CHAT_TOOL_TOPIC;
+    published.push(topic.strip_prefix("stream.").unwrap().to_owned());
     let orphans: Vec<String> = protocol_stream_variants()
         .into_iter()
         .filter(|variant| !published.contains(&serde_snake_case(variant)))

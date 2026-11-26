@@ -6,8 +6,8 @@ use crate::gateway::session_manager::ops::{map_session_metadata, NewMessage, SES
 use crate::gateway::session_manager::{SessionManager, SessionManagerConfig, SessionState};
 use crate::gateway::session_store::error::SessionStoreError;
 use crate::gateway::session_store::types::{
-    CheckpointSummary, DeleteResult, HistoryPage, MessageRecord, SearchHit, SessionFilter,
-    SessionMetadata, SessionPatch, SessionPreview, TruncateResult,
+    CheckpointSummary, DeleteResult, HistoryPage, HistoryRead, MessageRecord, SearchHit,
+    SessionFilter, SessionMetadata, SessionPatch, SessionPreview, TruncateResult,
 };
 use crate::gateway::session_store::{RunBill, SessionStore, StampOutcome};
 
@@ -169,14 +169,9 @@ impl SessionStore for SessionManager {
     async fn history_page(
         &self,
         key: &SessionKey,
-        limit: Option<usize>,
-        before: Option<chrono::DateTime<chrono::Utc>>,
+        read: HistoryRead,
     ) -> Result<HistoryPage, SessionStoreError> {
-        // Pushes both down: the cursor into the WHERE clause rather than an
-        // in-memory filter, and the length into a `COUNT(*)` rather than the
-        // default impl's "read everything and measure it" — and takes the
-        // connection once so the two answers describe the same session.
-        self.history_page(key, limit, before).await.map_err(map_err)
+        self.history_page(key, read).await.map_err(map_err)
     }
 
     async fn search_messages(

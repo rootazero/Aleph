@@ -98,11 +98,9 @@ fn is_transient_harness_message(msg: &str) -> bool {
         return false;
     }
 
-    // An expired OAuth access token is the one auth failure this process holds
-    // the remedy for: the retry arm in `run_loop/inner.rs` calls
-    // `codex_token_refresher` to mint a new one and hot-swap the live provider
-    // before re-dispatching. Checked FIRST because such a message also carries
-    // a 401, which the permanence gate below would otherwise shed.
+    // An expired OAuth access token can be replaced by scheduled or status
+    // renewal. A retry may observe that replacement, but this text alone
+    // neither identifies the failed transport nor authorizes renewal.
     if crate::gateway::codex_token_refresher::is_oauth_token_expired_error(msg) {
         return true;
     }

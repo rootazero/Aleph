@@ -66,6 +66,14 @@ pub enum StreamEvent {
         duration_ms: u64,
     },
 
+    /// V1-only tool presentation projected after event admission.
+    ChatTool {
+        run_id: String,
+        seq: u64,
+        #[serde(flatten)]
+        delta: crate::chat_transcript::ChatToolDelta,
+    },
+
     /// Structured execution trace emitted directly by the agent loop.
     AgentTrace {
         run_id: String,
@@ -676,6 +684,7 @@ impl StreamEvent {
             | Self::ToolStart { run_id, .. }
             | Self::ToolUpdate { run_id, .. }
             | Self::ToolEnd { run_id, .. }
+            | Self::ChatTool { run_id, .. }
             | Self::AgentTrace { run_id, .. }
             | Self::ResponseChunk { run_id, .. }
             | Self::RunComplete { run_id, .. }

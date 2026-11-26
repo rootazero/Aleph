@@ -6,7 +6,9 @@ use super::{
     SESSION_COLUMNS,
 };
 use crate::gateway::router::SessionKey;
-use crate::gateway::session_store::types::{HistoryPage, MessageRecord};
+use crate::gateway::session_store::types::{
+    HistoryPage, HistoryRead, MessageRecord, ScrollbackRead,
+};
 
 /// One row for [`SessionManager::add_message_full`] to insert.
 ///
@@ -446,7 +448,10 @@ impl SessionManager {
         format!("(CASE WHEN abs(timestamp) >= {boundary} THEN timestamp ELSE timestamp * 1000 END)")
     }
 
-    /// The SELECT behind every windowed read of `messages`.
+    const HISTORY_COLUMNS: &str = "id, role, content, timestamp, metadata, input_tokens, \
+                                   output_tokens, tool_call_id, tool_name, source_seq";
+
+    /// The SELECT behind legacy windowed reads of `messages`.
     ///
     /// One builder rather than a copy per entry point. `get_history` and the
     /// cursor path were near-identical and had already drifted: the cursor
@@ -469,8 +474,7 @@ impl SessionManager {
     /// [`SessionStore::history_page`]: crate::gateway::session_store::SessionStore::history_page
     /// [`stamp_millis_sql`]: Self::stamp_millis_sql
     fn history_sql(limit: Option<usize>, cursored: bool) -> String {
-        const COLS: &str = "id, role, content, timestamp, metadata, input_tokens, \
-                            output_tokens, tool_call_id, tool_name, source_seq";
+        let cols = Self::HISTORY_COLUMNS;
         let anchor = crate::session::projection::TRANSCRIPT_ANCHOR_SQL;
         // The cursor is a PREDICATE on the stamp, so it goes through the
         // normalizer; the ORDER is the anchor, and the two are not the same
@@ -494,16 +498,16 @@ impl SessionManager {
             // and then re-sorting would return a different SET, not just a
             // different arrangement.
             Some(n) => format!(
-                "SELECT {COLS} FROM ( \
+                "SELECT {cols} FROM ( \
                     SELECT * FROM ( \
-                        SELECT {COLS}, {anchor} AS anchor FROM messages \
+                        SELECT {cols}, {anchor} AS anchor FROM messages \
                         WHERE session_key = ?{cursor} \
                     ) ORDER BY anchor DESC, id DESC LIMIT {n} \
                  ) ORDER BY anchor ASC, id ASC"
             ),
             None => format!(
-                "SELECT {COLS} FROM ( \
-                    SELECT {COLS}, {anchor} AS anchor FROM messages \
+                "SELECT {cols} FROM ( \
+                    SELECT {cols}, {anchor} AS anchor FROM messages \
                     WHERE session_key = ?{cursor} \
                  ) ORDER BY anchor ASC, id ASC"
             ),
@@ -582,6 +586,85 @@ impl SessionManager {
         Ok(rows)
     }
 
+    fn read_scrollback_locked(
+        conn: &rusqlite::Connection,
+        key_str: &str,
+        limit: usize,
+        before_row: Option<&str>,
+    ) -> Result<(Vec<MessageRecord>, ScrollbackRead), SessionManagerError> {
+        use crate::session::projection::{parse_source_seq, row_id, TRANSCRIPT_ANCHOR_SQL};
+
+        let db_error = |e: rusqlite::Error| SessionManagerError::DatabaseError(e.to_string());
+        let before_id = if let Some(reference) = before_row {
+            // Resolve the canonical MessageRecord ID into the underlying SQL ID.
+            // Only the latter is a tiebreak in the ordering, never the wire string.
+            let (column, value) = if let Some(seq) = parse_source_seq(reference, key_str)
+                .filter(|seq| row_id(key_str, *seq) == reference)
+                .and_then(|seq| i64::try_from(seq).ok())
+            {
+                ("source_seq = ?2", seq)
+            } else if let Ok(id) = reference.parse::<i64>() {
+                if id.to_string() != reference {
+                    return Ok((Vec::new(), ScrollbackRead::StaleBoundary));
+                }
+                ("id = ?2 AND (source_seq IS NULL OR source_seq < 0)", id)
+            } else {
+                return Ok((Vec::new(), ScrollbackRead::StaleBoundary));
+            };
+            let mut stmt = conn
+                .prepare(&format!(
+                    "SELECT id FROM messages WHERE session_key = ?1 AND {column} LIMIT 2"
+                ))
+                .map_err(db_error)?;
+            let mut ids = stmt.query(params![key_str, value]).map_err(db_error)?;
+            let id = match ids.next().map_err(db_error)? {
+                Some(row) => row.get::<_, i64>(0).map_err(db_error)?,
+                None => return Ok((Vec::new(), ScrollbackRead::StaleBoundary)),
+            };
+            if ids.next().map_err(db_error)?.is_some() {
+                return Ok((Vec::new(), ScrollbackRead::StaleBoundary));
+            }
+            Some(id)
+        } else {
+            None
+        };
+
+        // Compute anchors over the complete session before filtering, but
+        // load message bodies only for the selected rows. SQLite sorts NULL
+        // first in ASC; `IS` treats two NULL anchors as equal.
+        let sql = format!(
+            "WITH ordered AS ( \
+                SELECT id, {TRANSCRIPT_ANCHOR_SQL} AS anchor FROM messages WHERE session_key = ?1 \
+             ), page AS ( \
+                SELECT candidate.id AS row_id, candidate.anchor FROM ordered AS candidate \
+                LEFT JOIN ordered AS boundary ON boundary.id = ?2 \
+                WHERE ?2 IS NULL OR candidate.anchor < boundary.anchor \
+                   OR (candidate.anchor IS NULL AND boundary.anchor IS NOT NULL) \
+                   OR (candidate.anchor IS boundary.anchor AND candidate.id < boundary.id) \
+                ORDER BY candidate.anchor DESC, candidate.id DESC LIMIT ?3 \
+             ) SELECT {cols} FROM page JOIN messages ON messages.id = page.row_id \
+               ORDER BY page.anchor DESC, page.row_id DESC",
+            cols = Self::HISTORY_COLUMNS,
+        );
+        let mut stmt = conn.prepare(&sql).map_err(db_error)?;
+        let fetch = i64::try_from(limit.saturating_add(1)).unwrap_or(i64::MAX);
+        let mut rows = stmt
+            .query_map(params![key_str, before_id, fetch], |row| {
+                Self::map_message_row(row, key_str)
+            })
+            .map_err(db_error)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(db_error)?;
+        let next_row = if rows.len() > limit {
+            rows.pop();
+            rows.last().map(|row| row.id.clone())
+        } else {
+            None
+        };
+        rows.reverse();
+        Ok((rows, ScrollbackRead::Ready { next_row }))
+    }
+
     /// `COUNT(*)` from a connection the caller already holds.
     ///
     /// Not `read_history_locked(..).len()`: the caller wants one integer, and
@@ -634,15 +717,32 @@ impl SessionManager {
     pub async fn history_page(
         &self,
         key: &SessionKey,
-        limit: Option<usize>,
-        before: Option<chrono::DateTime<chrono::Utc>>,
+        read: HistoryRead,
     ) -> Result<HistoryPage, SessionManagerError> {
         let key_str = key.to_key_string();
-        let before_ms = before.map(|b| b.timestamp_millis());
         self.query_blocking(move |conn| {
             let total = Self::count_history_locked(conn, &key_str).ok();
-            let rows = Self::read_history_locked(conn, &key_str, limit, before_ms)?;
-            Ok(HistoryPage { rows, total })
+            let (rows, scrollback) = match read {
+                HistoryRead::Legacy { limit, before } => (
+                    Self::read_history_locked(
+                        conn,
+                        &key_str,
+                        limit,
+                        before.map(|b| b.timestamp_millis()),
+                    )?,
+                    None,
+                ),
+                HistoryRead::Scrollback { limit, before_row } => {
+                    let (rows, scrollback) =
+                        Self::read_scrollback_locked(conn, &key_str, limit, before_row.as_deref())?;
+                    (rows, Some(scrollback))
+                }
+            };
+            Ok(HistoryPage {
+                rows,
+                total,
+                scrollback,
+            })
         })
         .await
     }

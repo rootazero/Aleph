@@ -32,9 +32,6 @@
 
 use crate::sync_primitives::{Arc, OnceLock};
 
-pub mod activation;
-pub mod ambient;
-pub mod audit;
 pub mod backend;
 pub mod constraints;
 pub mod descriptor;
@@ -45,8 +42,6 @@ pub mod events;
 #[cfg(test)]
 mod events_scoped_tests;
 pub mod facade;
-pub mod grant;
-pub mod lifecycle;
 pub mod ownership;
 pub mod policy;
 pub mod policy_runtime;
@@ -72,9 +67,6 @@ pub mod zahir_facade;
 /// The membership rule that decides what belongs in this module's roster.
 #[cfg(test)]
 pub(crate) mod census;
-
-#[cfg(test)]
-mod grant_integration_tests;
 
 /// What a read observes when this capability was NEVER installed.
 ///

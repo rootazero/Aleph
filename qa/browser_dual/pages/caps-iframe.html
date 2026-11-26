@@ -1,0 +1,11 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Caps iframe request fixture</title>
+<script>
+  fetch('/caps-mock-target-7f3a.txt?n=iframe')
+    .then(async response => `${response.status}:${await response.text()}`)
+    .then(
+      result => parent.postMessage(result, location.origin),
+      error => parent.postMessage(`error:${error}`, location.origin),
+    );
+</script>

@@ -18,7 +18,7 @@ async function run(fixturePath) {
     const context = await browser.newContext();
     const page = await context.newPage();
     await page.goto(`${fixture.origin}/health`);
-    const result = await page.evaluate(async ({ token, ownKey }) => {
+    const result = await page.evaluate(async ({ token, ownKey, foreignKey }) => {
       const protocol = 'aleph.protocol.v1';
       function expect(condition, message) {
         if (!condition) throw new Error(message);
@@ -127,6 +127,37 @@ async function run(fixturePath) {
       const snapshot = await call(client, 5, 'panel.capabilities.snapshot');
       expect(snapshot?.id === 5 && snapshot?.error?.code !== -32601, 'capability snapshot not mounted on Web v1');
 
+      const transcriptReads = [
+        ['chat.transcript_details', { run_ids: ['foreign-run', 'browser-run', 'absent-run'] }],
+        ['trace.tool_output', { run_id: 'browser-run', tool_call_id: 'browser-result' }],
+        ['context.breakdown', {}],
+      ];
+      for (const [index, [method, fields]] of transcriptReads.entries()) {
+        const id = 40 + index;
+        const request = (session_key) => call(client, id, method, { session_key, ...fields });
+        const own = await request(ownKey);
+        expect(own?.id === id && own?.result, `${method} did not return an owned result`);
+        if (method === 'chat.transcript_details') {
+          const [run] = own.result.runs ?? [];
+          expect(own.result.runs?.length === 1 && run?.run_id === 'browser-run', 'owned/foreign replay mismatch');
+          expect(run.tools?.length === 2 && run.tools[0].change.kind === 'started' &&
+            run.tools[1].change.kind === 'finished' && run.tools.every(t => t.tool_call_id === 'browser-result'),
+          'owned tool deltas missing or reordered');
+          expect(!JSON.stringify(run).includes('excluded'), 'raw trace content leaked');
+        } else if (method === 'trace.tool_output') {
+          expect(own.result.text === 'browser-owned output', 'unexpected masked output page');
+        } else {
+          expect(own.result.provider_reported == null, 'provider count without matched evidence');
+        }
+        const other = await request(foreignKey);
+        const missing = await request('agent:missing-web-v1-fixture:main');
+        expect(other?.id === id && missing?.id === id && !('result' in other) && !('result' in missing) &&
+          other?.error && JSON.stringify(other.error) === JSON.stringify(missing.error),
+          `${method} distinguished a foreign session from a missing one`);
+      }
+      const rawTrace = await call(client, 44, 'trace.by_runs', { session_key: ownKey, run_ids: [] });
+      expect(rawTrace?.error?.code === -32601, 'legacy trace is mounted on Web v1');
+
       const graphReads = ['graph.query', 'graph.search', 'graph.node_detail'];
       const graphWrites = ['graph.update_note', 'graph.rename_note', 'graph.delete_note'];
       for (const [offset, method] of graphReads.entries()) {
@@ -158,7 +189,7 @@ async function run(fixturePath) {
         expect(await open() === null, 'revoked Cookie upgraded again');
       };
       return { connectionId: hello.result.connection_id };
-    }, { token: fixture.token, ownKey: fixture.ownKey });
+    }, { token: fixture.token, ownKey: fixture.ownKey, foreignKey: fixture.foreignKey });
     assert.equal(typeof result.connectionId, 'string');
     const cookies = await context.cookies(fixture.origin);
     const hints = cookies.filter(({ name }) => name === '__Host-aleph-v1');

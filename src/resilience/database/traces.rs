@@ -113,7 +113,66 @@ const TRACE_LIST_COLUMNS: &str = "tr.task_id, \
      t.started_at, \
      substr(t.task_prompt, 1, 200)";
 
+pub(crate) struct ToolTraceFacts {
+    pub call_id: Option<String>,
+    pub tool_name: Option<String>,
+    pub path: Option<String>,
+    pub finished: bool,
+    pub success: Option<bool>,
+    pub duration_ms: Option<u64>,
+}
+
 impl StateDatabase {
+    /// Read only presentation facts, without materializing the surrounding
+    /// trace input, output or prose in the Gateway process.
+    pub(crate) async fn tool_trace_facts(
+        &self,
+        task_id: &str,
+        limit: usize,
+    ) -> Result<Vec<ToolTraceFacts>, AlephError> {
+        let task_id = task_id.to_owned();
+        let limit = i64::try_from(limit).map_err(|error| AlephError::config(error.to_string()))?;
+        self.with_conn(move |conn| {
+            let mut statement = conn.prepare(r#"
+                SELECT
+                    CASE WHEN json_type(event_json, '$.call.tool_id') = 'text'
+                         AND length(CAST(json_extract(event_json, '$.call.tool_id') AS BLOB)) <= 256
+                         THEN json_extract(event_json, '$.call.tool_id') END,
+                    CASE WHEN json_type(event_json, '$.call.tool_name') = 'text'
+                         AND length(CAST(json_extract(event_json, '$.call.tool_name') AS BLOB)) <= 256
+                         THEN json_extract(event_json, '$.call.tool_name') END,
+                    CASE WHEN json_type(event_json, '$.call.input.path') = 'text'
+                         AND length(CAST(json_extract(event_json, '$.call.input.path') AS BLOB)) <= 512
+                         THEN json_extract(event_json, '$.call.input.path')
+                         WHEN json_type(event_json, '$.call.input.path') IS NULL
+                         AND json_type(event_json, '$.call.input.file_path') = 'text'
+                         AND length(CAST(json_extract(event_json, '$.call.input.file_path') AS BLOB)) <= 512
+                         THEN json_extract(event_json, '$.call.input.file_path') END,
+                    event_kind = 'tool_call_completed',
+                    CASE WHEN json_type(event_json, '$.result.Success') = 'object' THEN 1
+                         WHEN json_type(event_json, '$.result.Error') = 'object' THEN 0 END,
+                    CASE WHEN typeof(json_extract(event_json, '$.call.duration_ms')) = 'integer'
+                         AND json_extract(event_json, '$.call.duration_ms') >= 0
+                         THEN json_extract(event_json, '$.call.duration_ms') END
+                FROM task_traces
+                WHERE task_id = ?1 AND event_kind IN ('tool_call_started', 'tool_call_completed')
+                ORDER BY step_index ASC, id ASC
+                LIMIT ?2
+                "#).map_err(|error| AlephError::config(format!("Prepare tool facts: {error}")))?;
+            let rows = statement.query_map(params![task_id, limit], |row| {
+                Ok(ToolTraceFacts {
+                    call_id: row.get(0)?,
+                    tool_name: row.get(1)?,
+                    path: row.get(2)?,
+                    finished: row.get(3)?,
+                    success: row.get(4)?,
+                    duration_ms: row.get(5)?,
+                })
+            }).map_err(|error| AlephError::config(format!("Query tool facts: {error}")))?;
+            rows.collect::<Result<_, _>>()
+                .map_err(|error| AlephError::config(format!("Load tool facts: {error}")))
+        }).await
+    }
     // =========================================================================
     // Task Traces CRUD
     // =========================================================================

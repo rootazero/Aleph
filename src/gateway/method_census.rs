@@ -144,8 +144,13 @@ pub(crate) mod tests {
         ("chat.clear", Class::Open),
         ("chat.context_estimate", Class::Open),
         ("chat.history", Class::Open),
+        ("chat.models.list", Class::Open),
         ("chat.rewind", Class::Open),
         ("chat.send", Class::Open),
+        (
+            aleph_protocol::chat_transcript::CHAT_TRANSCRIPT_DETAILS_METHOD,
+            Class::Open,
+        ),
         ("clarification.pending", Class::Open),
         ("clarification.resolve", Class::Open),
         ("cluster.deregister", Class::Admin),

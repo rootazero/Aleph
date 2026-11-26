@@ -191,9 +191,9 @@ async fn serve_peer(
     let _cancel_on_close = cancellation.clone().drop_guard();
     // Subscribed before the hello reply is written, so no frame published
     // after the client learns it may expect events is missed.
-    let mut events = granted
-        .contains(&Feature::LiveEvents)
-        .then(|| V1EventFeed::subscribe(&ctx, id.clone(), None, MAX_FRAME_BYTES as usize));
+    let mut events = granted.contains(&Feature::LiveEvents).then(|| {
+        V1EventFeed::subscribe(&ctx, id.clone(), None, MAX_FRAME_BYTES as usize, &granted)
+    });
     let peer = DispatchPeer::desktop(
         state.connections.clone(),
         id.clone(),
@@ -207,6 +207,7 @@ async fn serve_peer(
         idempotency: ctx.idempotency_guard.clone(),
         class: ctx.channel_class,
     };
+
     let result = tokio::select! {
         biased;
         _ = stop.cancelled() => Ok(()),
@@ -219,6 +220,9 @@ async fn serve_peer(
                 Writes::<IpcWrite>::queue(MAX_INFLIGHT as usize + CAPTURE_CONTROL_SLOTS + 2);
             let writer = async {
                 while let Some(item) = outgoing.recv().await {
+                    if item.frame.requires_live_peer && peer.snapshot().await.is_none() {
+                        return Ok(());
+                    }
                     send(&mut write, &item.frame.text).await?;
                     let _ = item.sent.send(());
                 }
@@ -250,6 +254,7 @@ impl PeerCleanup {
 
 struct IpcWrite {
     text: String,
+    requires_live_peer: bool,
     _input_permit: Option<OwnedSemaphorePermit>,
 }
 
@@ -257,6 +262,7 @@ impl IpcWrite {
     fn without_input_permit(text: String) -> Self {
         Self {
             text,
+            requires_live_peer: false,
             _input_permit: None,
         }
     }
@@ -325,12 +331,16 @@ async fn serve_requests(
                     return Err(io::Error::new(io::ErrorKind::TimedOut, "IPC event loss warning timed out"));
                 }
                 completed = jobs.next(), if !jobs.is_empty() && lost_deadline.is_none() => {
-                    if let Some((id, response, voice_synthesis, permit)) = completed {
+                    if let Some((id, response, voice_synthesis, transcript_read, permit)) = completed {
                         let id: Value = id;
                         let voice_synthesis: bool = voice_synthesis;
                         let response: String = response?;
                         let text = ipc_response(response, &id, voice_synthesis)?;
-                        let ack = enqueue(writes, IpcWrite { text, _input_permit: Some(permit) })?;
+                        let ack = enqueue(writes, IpcWrite {
+                            text,
+                            requires_live_peer: transcript_read,
+                            _input_permit: Some(permit),
+                        })?;
                         #[cfg(test)]
                         tests::observe_capture_reply_queued(&id);
                         pending_replies.push((id, ack));
@@ -340,16 +350,21 @@ async fn serve_requests(
                 // completion or read winning the race never drops a frame.
                 received = next_received(events), if pending_event.is_none() => {
                     let feed = events.as_mut().expect("only a feed yields frames");
-                    let frame = match feed.admit(ctx, received).await {
+                    let event = match feed.admit(ctx, received).await {
                         None => continue,
-                        Some(V1Event::Send(frame)) => frame,
+                        Some(V1Event::Send(frame)) => IpcWrite::without_input_permit(frame),
+                        Some(V1Event::ToolPresentation(text)) => IpcWrite {
+                            text,
+                            requires_live_peer: true,
+                            _input_permit: None,
+                        },
                         Some(V1Event::Lost(warning)) => {
                             lost_deadline = Some(Instant::now() + WRITE_TIMEOUT);
-                            warning
+                            IpcWrite::without_input_permit(warning)
                         }
                         Some(V1Event::Close(_)) => return Ok(()),
                     };
-                    pending_event = Some(enqueue(writes, IpcWrite::without_input_permit(frame))?);
+                    pending_event = Some(enqueue(writes, event)?);
                 }
                 request = &mut frame => break request?,
             }
@@ -438,10 +453,16 @@ async fn serve_requests(
             })?;
         active.push((id.clone(), capture_control));
         jobs.push(async move {
+            let transcript_read = matches!(
+                request.method.as_str(),
+                aleph_protocol::chat_transcript::CHAT_TRANSCRIPT_DETAILS_METHOD
+                    | "trace.tool_output"
+                    | "context.breakdown"
+            );
             let result = execute(executor, peer, &text, &request).await;
             let voice_synthesis =
                 request.method == aleph_protocol::panel_voice::VOICE_TURN_SYNTHESIZE_METHOD;
-            (id, result, voice_synthesis, permit)
+            (id, result, voice_synthesis, transcript_read, permit)
         });
     }
 }

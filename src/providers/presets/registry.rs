@@ -78,6 +78,7 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
         .with_signup("https://console.anthropic.com/settings/keys")
         .with_aux_model("claude-haiku-4-5")
         .with_models_url("https://api.anthropic.com/v1/models")
+        .with_catalog_models(&["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"])
         // Opus 5 replaces Opus 4.8, which Anthropic's catalog now marks
         // superseded — it sat in this chain as a retry that could only fail.
         .with_fallback_models(&["claude-sonnet-5", "claude-opus-5", "claude-haiku-4-5"]),
@@ -157,6 +158,7 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
         .with_homepage("https://platform.deepseek.com")
         .with_signup("https://platform.deepseek.com/api_keys")
         .with_aux_model("deepseek-v4-flash")
+        .with_catalog_models(&["deepseek-flash"])
         .with_fallback_models(&["deepseek-v4-flash", "deepseek-v4-pro"]),
     ),
     (
