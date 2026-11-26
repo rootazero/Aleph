@@ -207,6 +207,7 @@ or when its parent dies (`ParentWatch`).
 | Method | Permission required | Purpose |
 |---|---|---|
 | `screen.capture` | Screen Recording (TCC) | Capture a display (`display_id`, optional `region`) or ONE window (`window_id`) cropped to its frame, even when covered or not frontmost. `show_cursor` controls whether the pointer is drawn. Result carries `png_base64` + pixel `width`/`height`, plus `window_bounds` and `scale` on a window capture — those two are load-bearing: without them the crop's pixels cannot be mapped back to global click coordinates |
+| `screen.capture_owned_window` | Screen Recording (TCC); macOS 14+ | Take a nonzero `window_id` and positive `expected_pid`. Capture without a cursor only when the same ScreenCaptureKit window object has that ID and owner PID. Uses the existing window-capture result. A missing/mismatched owner, unsupported platform, or older helper returns no image; the Core does not retry through `screen.capture`. / 只对捕获时核实 ID 和所有者 PID 的同一个窗口对象截图，不含指针；不可用时不回退。 |
 | `screen.ocr` | None | Run Vision text recognition over a supplied `image_base64`; returns recognized lines with bounding boxes and confidences |
 | `screen.list_displays` | None | Enumerate displays with resolution, scale and origin |
 

@@ -1,10 +1,5 @@
-//! `desktop_check_permissions` — query TCC permission status for the kinds
-//! that Aleph commonly depends on.
-//!
-//! When a kind is not granted, subsequent desktop calls return errors whose
-//! `data` field contains a full `PermissionGuide` with `deep_link`,
-//! `human_readable_steps`, and `rationale`.  The LLM **must** relay those
-//! fields to the user rather than simply saying "permission denied".
+//! `desktop_check_permissions` — query desktop permission status from the OS.
+//! Use the `permission` tool's `guide` action for platform-specific guidance.
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -43,7 +38,7 @@ pub struct DesktopCheckPermissionsArgs {
 
 // ── Tool ─────────────────────────────────────────────────────────────────────
 
-/// LLM tool: check macOS TCC permission status.
+/// LLM tool: check desktop permission status on the current OS.
 #[derive(Clone, Default)]
 pub struct DesktopCheckPermissions {
     pub(super) platform: Option<Arc<dyn aleph_desktop::DesktopPlatform>>,
@@ -65,18 +60,10 @@ impl DesktopCheckPermissions {
 impl AlephTool for DesktopCheckPermissions {
     const NAME: &'static str = "desktop_check_permissions";
     const DESCRIPTION: &'static str = concat!(
-        "Check macOS TCC permission status for the kinds Aleph depends on.\n",
-        "\n",
-        "Returns a list of `PermissionStatus` objects (one per kind) plus an\n",
-        "`all_granted` boolean.  When a permission is not granted, subsequent\n",
-        "desktop calls will return errors whose `data` field carries a full\n",
-        "`PermissionGuide` with three actionable fields:\n",
-        "  • `deep_link`            – x-apple.systempreferences: URL to open directly\n",
-        "  • `human_readable_steps` – 3-5 step-by-step instructions\n",
-        "  • `rationale`            – one sentence explaining why Aleph needs it\n",
-        "\n",
-        "When relaying a permission error to the user, ALWAYS include the rationale,\n",
-        "the numbered steps, and the deep link.  Do NOT just say \"permission denied\"."
+        "Check desktop permission status on this OS (including TCC on macOS).\n",
+        "Returns one status per kind plus `all_granted`. An `unknown` status is not a grant.\n",
+        "For platform-specific instructions, call `permission` with `action:\"guide\"` and the ",
+        "permission kind. Relay the rationale, steps, and settings link when provided."
     );
 
     type Args = DesktopCheckPermissionsArgs;
@@ -117,7 +104,7 @@ impl AlephTool for DesktopCheckPermissions {
             match perm_cap.check_permission(*kind).await {
                 Ok(s) => statuses.push(s),
                 Err(e) => {
-                    // If bridge not implemented (non-macOS), surface a helpful message.
+                    // Keep a failed check distinct from an OS-reported status.
                     return Ok(DesktopOutput {
                         success: false,
                         data: None,
