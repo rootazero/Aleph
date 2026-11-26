@@ -2,6 +2,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 pub const METHOD_CAPTURE: &str = "screen.capture";
+pub const METHOD_CAPTURE_OWNED_WINDOW: &str = "screen.capture_owned_window";
 pub const METHOD_OCR: &str = "screen.ocr";
 pub const METHOD_LIST_DISPLAYS: &str = "screen.list_displays";
 
@@ -43,6 +44,13 @@ pub struct CaptureParams {
     /// Draw the mouse cursor into the capture. Absent ⇒ platform default.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub show_cursor: Option<bool>,
+}
+
+/// Capture exactly one window after the helper proves its owning process.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct OwnedWindowCaptureParams {
+    pub window_id: u64,
+    pub expected_pid: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -138,6 +146,34 @@ mod tests {
         let p: CaptureParams = serde_json::from_str(j).unwrap();
         assert_eq!(p.window_id, Some(77));
         assert_eq!(p.show_cursor, Some(false));
+    }
+
+    #[test]
+    fn owned_window_capture_round_trip() {
+        let params = OwnedWindowCaptureParams {
+            window_id: 900,
+            expected_pid: 4242,
+        };
+        let json = serde_json::to_value(&params).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({ "window_id": 900, "expected_pid": 4242 })
+        );
+        let decoded: OwnedWindowCaptureParams = serde_json::from_value(json).unwrap();
+        assert_eq!(decoded, params);
+    }
+
+    #[test]
+    fn owned_window_capture_requires_both_operands() {
+        for json in [
+            serde_json::json!({ "expected_pid": 4242 }),
+            serde_json::json!({ "window_id": 900 }),
+        ] {
+            assert!(
+                serde_json::from_value::<OwnedWindowCaptureParams>(json).is_err(),
+                "missing operand must not decode"
+            );
+        }
     }
 
     #[test]

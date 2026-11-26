@@ -125,7 +125,7 @@ impl ScreenCapability for MacOSScreen {
     async fn ocr(&self, image_png: Option<&[u8]>) -> Result<OcrResult> {
         use aleph_desktop::perception::capture_screen_png;
         use aleph_protocol::desktop_bridge::methods::screen::{
-            OcrParams, OcrResult as RpcOcrResult, METHOD_OCR,
+            METHOD_OCR, OcrParams, OcrResult as RpcOcrResult,
         };
 
         // Capture screen if no image provided.
@@ -514,23 +514,59 @@ impl ScreenCapability for MacOSScreen {
                 other => other,
             })?;
 
-        Ok(WindowShot {
-            image: Screenshot {
-                image_base64: rpc.png_base64,
-                width: rpc.width,
-                height: rpc.height,
-                format: "png".to_string(),
-                scale_factor: rpc.scale,
-            },
-            // Region {x,y,width,height} → BoundingBox {x,y,w,h}. Both are the
-            // window's frame in global screen POINTS, top-left origin.
-            window_bounds: rpc.window_bounds.map(|b| BoundingBox {
-                x: b.x,
-                y: b.y,
-                w: b.width,
-                h: b.height,
-            }),
-        })
+        Ok(window_shot_from_capture(rpc))
+    }
+
+    async fn screenshot_owned_window(
+        &self,
+        window_id: u64,
+        expected_pid: i32,
+    ) -> Result<WindowShot> {
+        use aleph_protocol::desktop_bridge::methods::screen::{
+            CaptureResult, METHOD_CAPTURE_OWNED_WINDOW, OwnedWindowCaptureParams,
+        };
+
+        // No legacy RPC retry and no xcap fallback: neither can prove ownership.
+        let rpc: CaptureResult = self
+            .bridge
+            .call(
+                METHOD_CAPTURE_OWNED_WINDOW,
+                OwnedWindowCaptureParams {
+                    window_id,
+                    expected_pid,
+                },
+            )
+            .await
+            .map_err(|e| match e {
+                DesktopError::BridgeFailed(m) => {
+                    DesktopError::ScreenCapture(format!("bridge screen.capture_owned_window: {m}"))
+                }
+                other => other,
+            })?;
+
+        Ok(window_shot_from_capture(rpc))
+    }
+}
+
+fn window_shot_from_capture(
+    rpc: aleph_protocol::desktop_bridge::methods::screen::CaptureResult,
+) -> WindowShot {
+    WindowShot {
+        image: Screenshot {
+            image_base64: rpc.png_base64,
+            width: rpc.width,
+            height: rpc.height,
+            format: "png".to_string(),
+            scale_factor: rpc.scale,
+        },
+        // Region {x,y,width,height} → BoundingBox {x,y,w,h}. Both are the
+        // window's frame in global screen POINTS, top-left origin.
+        window_bounds: rpc.window_bounds.map(|b| BoundingBox {
+            x: b.x,
+            y: b.y,
+            w: b.width,
+            h: b.height,
+        }),
     }
 }
 
@@ -560,7 +596,7 @@ impl MacOSScreen {
     /// 13 which lacks `SCScreenshotManager`).
     async fn screenshot_via_bridge(&self, region: Option<&ScreenRegion>) -> Result<Screenshot> {
         use aleph_protocol::desktop_bridge::methods::screen::{
-            CaptureParams, CaptureResult, Region, METHOD_CAPTURE,
+            CaptureParams, CaptureResult, METHOD_CAPTURE, Region,
         };
         let params = CaptureParams {
             display_id: None,
@@ -709,5 +745,53 @@ mod tests {
         png[16..20].copy_from_slice(&200u32.to_be_bytes());
         png[20..24].copy_from_slice(&150u32.to_be_bytes());
         assert_eq!(png_dimensions(&png), Some((200.0, 150.0)));
+    }
+
+    #[tokio::test]
+    async fn owned_window_method_not_found_is_not_retried() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "aleph-owned-window-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let script_path = dir.join("fake-bridge");
+        let log_path = dir.join("requests.log");
+        let script = format!(
+            r#"#!/usr/bin/env python3
+import json
+import sys
+request = json.loads(sys.stdin.readline())
+with open({log:?}, "a", encoding="utf-8") as log:
+    log.write(request["method"] + "\n")
+response = {{"jsonrpc": "2.0", "id": request["id"],
+           "error": {{"code": -32601, "message": "method not found"}}}}
+sys.stdout.write(json.dumps(response) + "\n")
+sys.stdout.flush()
+"#,
+            log = log_path.to_string_lossy()
+        );
+        std::fs::write(&script_path, script).unwrap();
+        let mut permissions = std::fs::metadata(&script_path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&script_path, permissions).unwrap();
+
+        let bridge = Arc::new(SwiftBridge::new(script_path));
+        let screen = MacOSScreen::new(bridge);
+        let error = screen
+            .screenshot_owned_window(900, 4242)
+            .await
+            .expect_err("an older helper must fail closed");
+        assert!(error.to_string().contains("-32601"), "{error}");
+        assert_eq!(
+            std::fs::read_to_string(&log_path).unwrap(),
+            "screen.capture_owned_window\n"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

@@ -23,12 +23,104 @@ func registerScreenCaptureHandlers(_ router: Router) async {
         try await handleCapture(params: params)
     }
 
+    await router.register("screen.capture_owned_window") { params in
+        try await handleOwnedWindowCapture(params: params)
+    }
+
     await router.register("screen.list_displays") { _ in
         try await handleListDisplays()
     }
 }
 
 // MARK: - capture
+
+struct OwnedWindowCaptureRequest: Equatable {
+    let windowId: CGWindowID
+    let expectedPid: Int32
+}
+
+private func invalidOwnedWindowParams() -> RpcError {
+    RpcError(
+        code: -32602,
+        message: "screen.capture_owned_window: window_id must be a nonzero CGWindowID and expected_pid must be a positive Int32",
+        data: nil
+    )
+}
+
+/// Decode only this method's object. In particular, never feed an invalid
+/// window selector back into the display-oriented `screen.capture` decoder.
+func decodeOwnedWindowCaptureParams(_ params: JSONValue?) throws -> OwnedWindowCaptureRequest {
+    guard case .object(let object) = params ?? .null,
+          case .number(let rawWindowId) = object["window_id"],
+          case .number(let rawExpectedPid) = object["expected_pid"],
+          rawWindowId > 0,
+          rawWindowId <= Double(CGWindowID.max),
+          rawWindowId == rawWindowId.rounded(),
+          rawExpectedPid > 0,
+          rawExpectedPid <= Double(Int32.max),
+          rawExpectedPid == rawExpectedPid.rounded()
+    else {
+        throw invalidOwnedWindowParams()
+    }
+    return OwnedWindowCaptureRequest(
+        windowId: CGWindowID(rawWindowId),
+        expectedPid: Int32(rawExpectedPid)
+    )
+}
+
+/// Return the very object whose ID and owner were checked. The generic form
+/// keeps selection testable without constructing an SCWindow or querying a
+/// real desktop; production passes the SCWindow later used by the filter.
+func selectOwnedWindow<Window>(
+    _ candidate: Window?,
+    windowID: (Window) -> CGWindowID,
+    ownerPID: (Window) -> Int32?,
+    request: OwnedWindowCaptureRequest
+) throws -> Window {
+    guard let candidate, windowID(candidate) == request.windowId else {
+        throw RpcError(
+            code: -32004,
+            message: "screen.capture_owned_window: no window with id \(request.windowId)",
+            data: nil
+        )
+    }
+    guard let owner = ownerPID(candidate), owner == request.expectedPid else {
+        throw RpcError(
+            code: -32004,
+            message: "screen.capture_owned_window: window \(request.windowId) is not owned by pid \(request.expectedPid)",
+            data: nil
+        )
+    }
+    return candidate
+}
+
+private func handleOwnedWindowCapture(params: JSONValue?) async throws -> JSONValue {
+    guard #available(macOS 14.0, *) else {
+        throw RpcError(
+            code: -32601,
+            message: "screen.capture_owned_window: SCScreenshotManager requires macOS 14.0+",
+            data: nil
+        )
+    }
+    #if canImport(ScreenCaptureKit)
+    let request = try decodeOwnedWindowCaptureParams(params)
+    let content = try await SCShareableContent.current
+    let candidate = content.windows.first(where: { $0.windowID == request.windowId })
+    let window = try selectOwnedWindow(
+        candidate,
+        windowID: { $0.windowID },
+        ownerPID: { $0.owningApplication?.processID },
+        request: request
+    )
+    return try await captureWindow(window: window, content: content, showsCursor: false)
+    #else
+    throw RpcError(
+        code: -32601,
+        message: "screen.capture_owned_window: ScreenCaptureKit not available in this build",
+        data: nil
+    )
+    #endif
+}
 
 private func handleCapture(params: JSONValue?) async throws -> JSONValue {
     guard #available(macOS 14.0, *) else {
@@ -96,6 +188,18 @@ private func captureWindow(windowId: CGWindowID, showsCursor: Bool) async throws
         )
     }
 
+    return try await captureWindow(window: window, content: content, showsCursor: showsCursor)
+}
+
+/// Capture the exact SCWindow selected by either the legacy or owner-checked
+/// rail. Both rails share frame validation, scaling, encoding and metadata.
+@available(macOS 14.0, *)
+private func captureWindow(
+    window: SCWindow,
+    content: SCShareableContent,
+    showsCursor: Bool
+) async throws -> JSONValue {
+    let windowId = window.windowID
     let frame = window.frame // global screen POINTS, top-left origin
     guard frame.width > 0, frame.height > 0 else {
         throw RpcError(
