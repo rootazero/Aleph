@@ -761,7 +761,7 @@ Drive one app in the background (nothing else on the user's screen is disturbed)
 
 Effect grading — every successful mutating action's `data` carries `effect`, a closed-set evidence grade: "confirmed" (publishable post-action proof — set_value's read-back matched, restart_app's poll found the app running again, focus_window's poll saw the foreground), "partial" (only part of the intended effect is provable: a batch that stopped early — see `delivered_count` — or a restart whose relaunch did not come back), "unverifiable" (the OS accepted the event; nothing proves the UI changed — most synthetic input), "suspected_noop" (evidence suggests nothing happened). effect grades EVIDENCE, not outcome: "unverifiable" is not failure, and OS/event acceptance never promotes an action to "confirmed". When you need certainty, assert the postcondition with verify_state or read it with observe. Refusals (success:false) carry no effect.
 
-Act→observe in one call — mutating actions accept `observe:"state"` (result gains `post_state`: frontmost app + focused element after a 300ms settle) or `observe:"screenshot"` (additionally a fresh bounded screenshot as `post_screenshot`). Use it on the last action of a step instead of a separate screenshot round-trip. In a batch, sub-actions inherit the batch-level `observe`.
+Act→observe in one call — eligible mutations accept `observe:"state"` for `post_state` or `observe:"screenshot"` for additional bounded pixels. Observation follows the delivered target: process focus is PID-scoped, and a scoped image requires proof of window ownership. `post_screenshot_unavailable` means no image was shared; the tool never falls back to a wider capture or repeats the action. Truly unscoped global input and clipboard writes retain global observation. Batch items inherit `observe` unless they provide their own.
 
 {"action":"click","x":500,"y":300,"observe":"state"}
 
@@ -911,33 +911,6 @@ Pythonic action script — UI-TARS-finetuned models can emit `script` containing
                         obj.insert("effect".into(), effect.as_str().into());
                     }
                     output.data = Some(data);
-                }
-                // 7.5 act→observe fusion: on success, a mutating leaf action may
-                //     carry its own post-state so the model saves a round-trip.
-                //     Never turns a succeeded action into a failure —
-                //     observation is strictly additive to `data`.
-                let wants_observe = matches!(args.observe.as_deref(), Some("state" | "screenshot"));
-                if wants_observe && output.success && classify_approval(&args).is_some() {
-                    let post = observe::gather_post_state(platform).await;
-                    let mut data = output.data.take().unwrap_or_else(|| serde_json::json!({}));
-                    if let Some(obj) = data.as_object_mut() {
-                        obj.insert("post_state".into(), post);
-                    }
-                    output.data = Some(data);
-
-                    if args.observe.as_deref() == Some("screenshot") {
-                        let mut shot_args =
-                            DesktopArgs::from(&types::DesktopBatchAction::empty("screenshot"));
-                        shot_args.max_width = Some(1568);
-                        if let Ok(Some(shot)) = self.call_via_platform(platform, &shot_args).await {
-                            if let (Some(obj), Some(shot_data)) = (
-                                output.data.as_mut().and_then(|d| d.as_object_mut()),
-                                shot.data,
-                            ) {
-                                obj.insert("post_screenshot".into(), shot_data);
-                            }
-                        }
-                    }
                 }
                 return Ok(output);
             }

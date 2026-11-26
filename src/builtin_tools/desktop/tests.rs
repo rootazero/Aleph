@@ -2528,3 +2528,456 @@ mod effect_grading {
         );
     }
 }
+
+mod post_observation {
+    use super::super::types::DesktopBatchAction;
+    use super::*;
+    use aleph_desktop::{
+        AccessibilityCapability, AutomationCapability, BoundingBox, DesktopError, DesktopPlatform,
+        MediaCapability, MouseButton, OcrResult, PermissionCapability, PimCapability,
+        Result as DesktopResult, ScreenCapability, ScreenRegion, Screenshot, SystemCapability,
+        WindowInfo, WindowShot,
+    };
+    use aleph_protocol::desktop_bridge::methods::ax::{
+        AxActionResult, AxElement, QueryByRoleParams, QueryFocusedParams, QueryListResult,
+        QueryResult, QueryTreeParams, SetValueParams,
+    };
+    use std::sync::Mutex;
+
+    const PID: i32 = 4242;
+    const WINDOW: u32 = 900;
+
+    #[derive(Debug, PartialEq, Eq)]
+    enum Call {
+        TargetedClick(i32),
+        GlobalClick,
+        Focus(Option<i32>),
+        GlobalCapture,
+        WindowCapture(u64),
+        OwnedCapture(u64, i32),
+        SetValue(Option<i32>),
+        WindowList,
+        MoveWindow(u64),
+    }
+
+    struct FakeDesktop {
+        calls: Mutex<Vec<Call>>,
+        targeted: bool,
+        focus: Option<AxElement>,
+        matched: Option<AxElement>,
+        window_owner: Option<u64>,
+        owned_frame: DesktopResult<Screenshot>,
+    }
+
+    impl FakeDesktop {
+        fn new(targeted: bool, focus: Option<AxElement>) -> Self {
+            Self {
+                calls: Mutex::new(Vec::new()),
+                targeted,
+                focus,
+                matched: None,
+                window_owner: None,
+                owned_frame: Ok(frame()),
+            }
+        }
+
+        fn record(&self, call: Call) {
+            self.calls.lock().unwrap().push(call);
+        }
+
+        fn assert_calls(&self, expected: &[Call]) {
+            assert_eq!(*self.calls.lock().unwrap(), expected);
+        }
+    }
+
+    fn unused<T>() -> DesktopResult<T> {
+        Err(DesktopError::NotImplemented("not part of this fake".into()))
+    }
+
+    fn frame() -> Screenshot {
+        use base64::Engine as _;
+        use image::ImageEncoder as _;
+
+        // Enough nonuniform pixels to exercise both capture validation and the
+        // result pipeline's minimum image size, with no real desktop input.
+        let rgb: Vec<u8> = (0..16 * 16 * 3).map(|i| (i * 43 % 251) as u8).collect();
+        let mut png = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut png)
+            .write_image(&rgb, 16, 16, image::ExtendedColorType::Rgb8)
+            .unwrap();
+        Screenshot {
+            image_base64: base64::engine::general_purpose::STANDARD.encode(png),
+            width: 16,
+            height: 16,
+            format: "png".into(),
+            scale_factor: Some(1.0),
+        }
+    }
+
+    #[async_trait]
+    impl ScreenCapability for FakeDesktop {
+        fn supports_targeted_input(&self) -> bool {
+            self.targeted
+        }
+
+        async fn click_targeted(
+            &self,
+            pid: i32,
+            x: f64,
+            _: f64,
+            _: MouseButton,
+        ) -> DesktopResult<()> {
+            self.record(Call::TargetedClick(pid));
+            if x == 99.0 {
+                return Err(DesktopError::InputFailed("fixture delivery failure".into()));
+            }
+            Ok(())
+        }
+
+        async fn click(&self, _: f64, _: f64, _: MouseButton) -> DesktopResult<()> {
+            self.record(Call::GlobalClick);
+            Ok(())
+        }
+
+        async fn screenshot(&self, _: Option<ScreenRegion>) -> DesktopResult<Screenshot> {
+            self.record(Call::GlobalCapture);
+            Ok(frame())
+        }
+
+        async fn screenshot_window(&self, id: u64, _: bool) -> DesktopResult<WindowShot> {
+            self.record(Call::WindowCapture(id));
+            unused()
+        }
+
+        async fn screenshot_owned_window(&self, id: u64, pid: i32) -> DesktopResult<WindowShot> {
+            self.record(Call::OwnedCapture(id, pid));
+            let image = match &self.owned_frame {
+                Ok(image) => image.clone(),
+                Err(_) => return unused(),
+            };
+            Ok(WindowShot {
+                image,
+                window_bounds: Some(BoundingBox {
+                    x: 10.0,
+                    y: 20.0,
+                    w: 16.0,
+                    h: 16.0,
+                }),
+            })
+        }
+
+        async fn ocr(&self, _: Option<&[u8]>) -> DesktopResult<OcrResult> {
+            unused()
+        }
+        async fn type_text(&self, _: &str) -> DesktopResult<()> {
+            unused()
+        }
+        async fn key_combo(&self, _: &[String], _: &str) -> DesktopResult<()> {
+            unused()
+        }
+        async fn scroll(&self, _: &str, _: i32) -> DesktopResult<()> {
+            unused()
+        }
+        async fn window_list(&self) -> DesktopResult<Vec<WindowInfo>> {
+            self.record(Call::WindowList);
+            Ok(self
+                .window_owner
+                .map(|pid| WindowInfo {
+                    id: u64::from(WINDOW),
+                    pid,
+                    ..Default::default()
+                })
+                .into_iter()
+                .collect())
+        }
+        async fn move_window(&self, id: u64, _: i32, _: i32) -> DesktopResult<()> {
+            self.record(Call::MoveWindow(id));
+            Ok(())
+        }
+        async fn focus_window(&self, _: u64) -> DesktopResult<()> {
+            unused()
+        }
+        async fn launch_app(&self, _: &str) -> DesktopResult<()> {
+            unused()
+        }
+        async fn clipboard_read(&self) -> DesktopResult<String> {
+            unused()
+        }
+        async fn clipboard_write(&self, _: &str) -> DesktopResult<()> {
+            unused()
+        }
+    }
+
+    #[async_trait]
+    impl AccessibilityCapability for FakeDesktop {
+        async fn query_focused(
+            &self,
+            params: QueryFocusedParams,
+        ) -> DesktopResult<Option<AxElement>> {
+            self.record(Call::Focus(params.pid));
+            Ok(self.focus.clone())
+        }
+        async fn query_tree(&self, _: QueryTreeParams) -> DesktopResult<QueryResult> {
+            unused()
+        }
+        async fn query_by_role(&self, _: QueryByRoleParams) -> DesktopResult<QueryListResult> {
+            unused()
+        }
+        async fn set_value(&self, params: SetValueParams) -> DesktopResult<AxActionResult> {
+            self.record(Call::SetValue(params.locator.pid));
+            Ok(AxActionResult {
+                performed: true,
+                path: "accessibility".into(),
+                matched: self.matched.clone(),
+                verification: None,
+            })
+        }
+    }
+
+    impl DesktopPlatform for FakeDesktop {
+        fn platform_name(&self) -> &str {
+            "post-observation-fake"
+        }
+        fn screen(&self) -> Option<&dyn ScreenCapability> {
+            Some(self)
+        }
+        fn ax(&self) -> Option<&dyn AccessibilityCapability> {
+            Some(self)
+        }
+        fn pim(&self) -> Option<&dyn PimCapability> {
+            None
+        }
+        fn system(&self) -> Option<&dyn SystemCapability> {
+            None
+        }
+        fn automation(&self) -> Option<&dyn AutomationCapability> {
+            None
+        }
+        fn permission(&self) -> Option<&dyn PermissionCapability> {
+            None
+        }
+        fn media(&self) -> Option<&dyn MediaCapability> {
+            None
+        }
+    }
+
+    fn element(pid: i32, secure: bool) -> AxElement {
+        AxElement {
+            role: "AXTextField".into(),
+            title: Some("fixture focus".into()),
+            value: Some("test value".repeat(30)),
+            pid,
+            secure: Some(secure),
+            ..Default::default()
+        }
+    }
+
+    fn click(pid: Option<i32>, window_id: Option<u32>) -> DesktopArgs {
+        let mut args = make_args("click");
+        args.pid = pid;
+        args.window_id = window_id;
+        args.x = Some(4.0);
+        args.y = Some(5.0);
+        args.observe = Some("screenshot".into());
+        args
+    }
+
+    async fn call(platform: &Arc<FakeDesktop>, args: DesktopArgs) -> DesktopOutput {
+        let tool = DesktopTool::new().with_platform(platform.clone());
+        AlephTool::call(&tool, args).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn targeted_capture_carries_the_pid_and_exact_window() {
+        let platform = Arc::new(FakeDesktop::new(true, Some(element(PID, false))));
+        let out = call(&platform, click(Some(PID), Some(WINDOW))).await;
+        assert!(out.success, "{:?}", out.message);
+        let data = out.data.unwrap();
+        assert_eq!(data["effect"], "unverifiable");
+        assert_eq!(data["post_state"]["scope"], "process");
+        assert_eq!(data["post_state"]["target_pid"], PID);
+        assert!(data["post_state"].get("frontmost_app").is_none());
+        assert_eq!(
+            data["post_state"]["focused_element"]["value"]
+                .as_str()
+                .unwrap()
+                .chars()
+                .count(),
+            200
+        );
+        assert_eq!(
+            data["post_screenshot"]["coordinate_space"]["window_id"],
+            WINDOW
+        );
+        platform.assert_calls(&[
+            Call::TargetedClick(PID),
+            Call::Focus(Some(PID)),
+            Call::OwnedCapture(u64::from(WINDOW), PID),
+        ]);
+    }
+
+    #[tokio::test]
+    async fn named_global_delivery_does_not_observe_the_foreground() {
+        let platform = Arc::new(FakeDesktop::new(false, Some(element(PID + 1, false))));
+        let out = call(&platform, click(Some(PID), Some(WINDOW))).await;
+        assert!(out.success, "{:?}", out.message);
+        let data = out.data.unwrap();
+        assert_eq!(data["delivery"], "global");
+        assert_eq!(data["effect"], "unverifiable");
+        assert_eq!(data["post_state"]["scope"], "unavailable");
+        assert_eq!(data["post_screenshot_unavailable"], "scope_unavailable");
+        assert!(data.get("post_screenshot").is_none());
+        platform.assert_calls(&[Call::GlobalClick]);
+    }
+
+    #[tokio::test]
+    async fn foreign_missing_and_secure_focus_are_distinguished() {
+        for (element, status) in [
+            (Some(element(PID + 1, false)), Some("unavailable")),
+            (None, Some("not_found")),
+            (Some(element(PID, true)), None),
+        ] {
+            let platform = Arc::new(FakeDesktop::new(true, element));
+            let data = call(&platform, click(Some(PID), None)).await.data.unwrap();
+            let state = &data["post_state"];
+            assert_eq!(state["scope"], "process");
+            assert_eq!(data["post_screenshot_unavailable"], "window_unconfirmed");
+            if let Some(status) = status {
+                assert_eq!(state["focus_status"], status);
+                assert!(state.get("focused_element").is_none());
+            } else {
+                assert_eq!(state["focused_element"]["title"], "fixture focus");
+                assert!(state["focused_element"]["value"].is_null());
+            }
+            assert!(data.get("post_screenshot").is_none());
+            platform.assert_calls(&[Call::TargetedClick(PID), Call::Focus(Some(PID))]);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_failed_or_blank_owned_capture_does_not_retry_or_change_action_success() {
+        let mut blank = frame();
+        blank.image_base64.clear();
+        for owned_frame in [unused(), Ok(blank)] {
+            let mut fixture = FakeDesktop::new(true, None);
+            fixture.owned_frame = owned_frame;
+            let platform = Arc::new(fixture);
+            let out = call(&platform, click(Some(PID), Some(WINDOW))).await;
+            assert!(out.success);
+            assert!(out.message.is_none());
+            let data = out.data.unwrap();
+            assert_eq!(data["effect"], "unverifiable");
+            assert_eq!(data["post_screenshot_unavailable"], "capture_failed");
+            assert!(data.get("post_screenshot").is_none());
+            platform.assert_calls(&[
+                Call::TargetedClick(PID),
+                Call::Focus(Some(PID)),
+                Call::OwnedCapture(u64::from(WINDOW), PID),
+            ]);
+        }
+    }
+
+    #[tokio::test]
+    async fn unscoped_global_capture_and_opt_out_preserve_existing_delivery() {
+        let platform = Arc::new(FakeDesktop::new(false, Some(element(PID, false))));
+        let data = call(&platform, click(None, None)).await.data.unwrap();
+        assert_eq!(data["post_state"]["scope"], "global");
+        assert_eq!(
+            data["post_state"]["focused_element"]["title"],
+            "fixture focus"
+        );
+        assert!(data["post_screenshot"].get("image_base64").is_some());
+        let mut args = click(None, None);
+        args.observe = None;
+        let data = call(&platform, args).await.data.unwrap();
+        assert!(data.get("post_state").is_none());
+        platform.assert_calls(&[
+            Call::GlobalClick,
+            Call::Focus(None),
+            Call::GlobalCapture,
+            Call::GlobalClick,
+        ]);
+    }
+
+    #[tokio::test]
+    async fn ax_pid_disagreement_and_unknown_window_owner_are_additive() {
+        let mut fixture = FakeDesktop::new(true, None);
+        fixture.matched = Some(element(PID + 1, false));
+        let platform = Arc::new(fixture);
+        let mut args = make_args("set_value");
+        args.pid = Some(PID);
+        args.text = Some("test text".into());
+        args.observe = Some("screenshot".into());
+        let out = call(&platform, args).await;
+        assert!(out.success, "{:?}", out.message);
+        assert_eq!(out.data.unwrap()["post_state"]["scope"], "unavailable");
+
+        let mut args = make_args("move_window");
+        args.window_id = Some(WINDOW);
+        args.x = Some(4.0);
+        args.y = Some(5.0);
+        args.observe = Some("screenshot".into());
+        let out = call(&platform, args).await;
+        assert!(out.success, "{:?}", out.message);
+        assert_eq!(out.data.unwrap()["post_state"]["scope"], "unavailable");
+        platform.assert_calls(&[
+            Call::SetValue(Some(PID)),
+            Call::WindowList,
+            Call::MoveWindow(u64::from(WINDOW)),
+        ]);
+    }
+
+    #[tokio::test]
+    async fn window_mutation_uses_the_resolved_owner_not_a_caller_pid() {
+        let mut fixture = FakeDesktop::new(true, None);
+        fixture.window_owner = Some(PID as u64);
+        let platform = Arc::new(fixture);
+        let mut args = make_args("move_window");
+        args.window_id = Some(WINDOW);
+        args.pid = Some(PID + 1);
+        args.x = Some(4.0);
+        args.y = Some(5.0);
+        args.observe = Some("screenshot".into());
+        let out = call(&platform, args).await;
+        assert!(out.success, "{:?}", out.message);
+        assert_eq!(out.data.unwrap()["post_state"]["target_pid"], PID);
+        platform.assert_calls(&[
+            Call::WindowList,
+            Call::MoveWindow(u64::from(WINDOW)),
+            Call::Focus(Some(PID)),
+            Call::OwnedCapture(u64::from(WINDOW), PID),
+        ]);
+    }
+
+    #[tokio::test]
+    async fn a_partial_batch_observes_only_the_delivered_item_and_hoists_its_image() {
+        let platform = Arc::new(FakeDesktop::new(true, None));
+        let mut batch = make_args("batch");
+        batch.pid = Some(PID);
+        batch.window_id = Some(WINDOW);
+        batch.observe = Some("screenshot".into());
+        for x in [4.0, 99.0, 6.0] {
+            let mut leaf = DesktopBatchAction::empty("click");
+            leaf.x = Some(x);
+            leaf.y = Some(5.0);
+            batch.actions.push(leaf);
+        }
+        let mut data = call(&platform, batch).await.data.unwrap();
+        assert_eq!(data["effect"], "partial");
+        assert_eq!(data["delivered_count"], 1);
+        let entries = data["results"].as_array().unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0]["data"]["post_state"]["target_pid"], PID);
+        assert!(entries[1]["data"].get("post_state").is_none());
+        assert_eq!(
+            crate::tools::result_processing::hoist_inline_images(&mut data).len(),
+            1
+        );
+        platform.assert_calls(&[
+            Call::TargetedClick(PID),
+            Call::Focus(Some(PID)),
+            Call::OwnedCapture(u64::from(WINDOW), PID),
+            Call::TargetedClick(PID),
+        ]);
+    }
+}

@@ -27,6 +27,7 @@
 
 use crate::sync_primitives::Arc;
 
+use super::observe::{self, PostTarget};
 use super::types::{DesktopArgs, DesktopOutput, MouseButton};
 use crate::error::{AlephError, Result};
 use aleph_desktop::system_types::AppInfo;
@@ -933,6 +934,186 @@ impl super::DesktopTool {
         }
     }
 
+    async fn capture_screenshot(
+        &self,
+        screen: &dyn aleph_desktop::ScreenCapability,
+        args: &DesktopArgs,
+        expected_owner_pid: Option<i32>,
+    ) -> Result<DesktopOutput> {
+        let region = match screen_region_from_args(args, "screenshot") {
+            Ok(region) => region,
+            Err(out) => return Ok(out),
+        };
+
+        // Extract post-processing params before moving region
+        let fmt = args.format.clone();
+        let quality = args.quality;
+        let max_w = args.max_width;
+        let max_h = args.max_height;
+        let display_id = args.display_id;
+        let window_id = args.window_id.map(u64::from);
+        let needs_processing = fmt.is_some() || max_w.is_some() || max_h.is_some();
+
+        // Capture: one window, a specific display, or the primary one.
+        //
+        // A window capture carries its own frame back, which is the only
+        // thing that can turn its window-relative pixels into a click —
+        // so it is kept and handed to the model, not dropped.
+        if expected_owner_pid.is_some_and(|pid| pid <= 0 || !window_id.is_some_and(|id| id > 0)) {
+            return Ok(invalid_args(
+                "Owned screenshot requires a valid window ID and PID.",
+            ));
+        }
+        let mut window_bounds = None;
+        let screenshot_result = if let Some(wid) = window_id {
+            if region.is_some() {
+                return Ok(invalid_args(
+                    "screenshot: `region` is a rectangle of a display and has no meaning \
+                     against `window_id` — pass one or the other. A window capture is \
+                     already cropped to the window.",
+                ));
+            }
+            // `show_cursor: false` — the cursor is not UI, and a model
+            // reading pixel coordinates should not be shown one.
+            let shot = match expected_owner_pid {
+                Some(pid) => screen.screenshot_owned_window(wid, pid).await,
+                None => screen.screenshot_window(wid, false).await,
+            };
+            match shot {
+                Ok(shot) => {
+                    window_bounds = shot.window_bounds;
+                    Ok(shot.image)
+                }
+                Err(e) => Err(e),
+            }
+        } else if let Some(did) = display_id {
+            let region_clone = region;
+            tokio::task::spawn_blocking(move || {
+                aleph_desktop::perception::take_screenshot_display(did, region_clone.as_ref())
+            })
+            .await
+            .map_err(|e| crate::error::AlephError::other(format!("task join: {e}")))?
+        } else {
+            screen.screenshot(region).await
+        };
+
+        let space = match (args.window_id, args.region.is_some()) {
+            (Some(window_id), _) => ShotSpace::Window {
+                window_id,
+                bounds: window_bounds,
+            },
+            (None, true) => ShotSpace::Region,
+            (None, false) => ShotSpace::FullScreen,
+        };
+
+        match screenshot_result {
+            // A dead capture chain does not always surface as an `Err`:
+            // a locked screen, a revoked screen-recording grant or a
+            // wedged helper hand back a well-formed frame full of
+            // nothing. Such a frame is small, so the budget re-encode
+            // below never decodes it — it would reach the model as real
+            // pixels, carrying a `coordinate_space` that tells the model
+            // to aim at them. Refuse it here, platform-independently.
+            Ok(s) if aleph_desktop::perception::is_degenerate(&s) => Ok(DesktopOutput {
+                success: false,
+                data: None,
+                message: Some(super::recovery::with_hint(
+                    "Screen capture returned a blank frame — no pixels to look at.".to_string(),
+                )),
+            }),
+            Ok(s) => {
+                // A full-resolution screenshot can be tens of MB once
+                // base64-encoded; the generic tool-result budget would
+                // then truncate the base64 string into an undecodable
+                // image. Estimate the decoded size (base64 is ~4/3 of
+                // raw) and route oversized captures through the
+                // budget-enforcing re-encoder even when the caller
+                // passed no processing parameters.
+                let est_raw_bytes = s.image_base64.len() / 4 * 3;
+                let over_budget =
+                    est_raw_bytes > aleph_desktop::perception::DEFAULT_SCREENSHOT_MAX_BYTES;
+
+                if needs_processing || over_budget {
+                    use base64::Engine;
+                    let raw_bytes = base64::engine::general_purpose::STANDARD
+                        .decode(&s.image_base64)
+                        .map_err(|e| {
+                            crate::error::AlephError::other(format!("base64 decode: {e}"))
+                        })?;
+                    // An explicit request honours the caller's format;
+                    // a budget-only re-encode goes straight to JPEG to
+                    // skip a wasteful full-resolution PNG round-trip.
+                    let out_fmt = match &fmt {
+                        Some(f) => f.clone(),
+                        None if over_budget => "jpeg".to_string(),
+                        None => "png".to_string(),
+                    };
+                    // Default JPEG quality 0.9 (was 0.75): screenshots
+                    // routinely contain small UI text and 0.75 caused
+                    // legibility complaints from the LLM consumer. PNG
+                    // is unaffected (lossless regardless of quality).
+                    let q = quality
+                        .filter(|v| !v.is_nan())
+                        .unwrap_or(0.9)
+                        .clamp(0.0, 1.0);
+                    let quality_u8 = (q * 100.0) as u8;
+                    // The re-encode must not drop what `take_screenshot`
+                    // reported: the points-to-pixels ratio survives via
+                    // the `_with_scale` entry point.
+                    let scale_factor = s.scale_factor;
+                    match tokio::task::spawn_blocking(move || {
+                        aleph_desktop::perception::process_screenshot_with_scale(
+                            &raw_bytes,
+                            max_w,
+                            max_h,
+                            &out_fmt,
+                            quality_u8,
+                            Some(aleph_desktop::perception::DEFAULT_SCREENSHOT_MAX_BYTES),
+                            scale_factor,
+                        )
+                    })
+                    .await
+                    .map_err(|e| crate::error::AlephError::other(format!("task join: {e}")))?
+                    {
+                        Ok(processed) => Ok(self
+                            .screenshot_output(
+                                args.describe == Some(true),
+                                space,
+                                processed.image_base64,
+                                processed.width,
+                                processed.height,
+                                processed.format,
+                            )
+                            .await),
+                        Err(e) => Ok(DesktopOutput {
+                            success: false,
+                            data: None,
+                            message: Some(format!("Screenshot processing error: {e}")),
+                        }),
+                    }
+                } else {
+                    Ok(self
+                        .screenshot_output(
+                            args.describe == Some(true),
+                            space,
+                            s.image_base64,
+                            s.width,
+                            s.height,
+                            s.format,
+                        )
+                        .await)
+                }
+            }
+            Err(e) => Ok(DesktopOutput {
+                success: false,
+                data: None,
+                message: Some(super::recovery::with_hint(format!(
+                    "Screen capability error: {e}"
+                ))),
+            }),
+        }
+    }
+
     /// Execute a desktop action via `DesktopPlatform.screen()`.
     ///
     /// Returns `Ok(Some(output))` when the action was recognized and handled
@@ -980,181 +1161,127 @@ impl super::DesktopTool {
             Rail::Global
         };
 
-        match args.action.as_str() {
-            "screenshot" => {
-                let region = match screen_region_from_args(args, "screenshot") {
-                    Ok(region) => region,
-                    Err(out) => return Ok(Some(out)),
-                };
-
-                // Extract post-processing params before moving region
-                let fmt = args.format.clone();
-                let quality = args.quality;
-                let max_w = args.max_width;
-                let max_h = args.max_height;
-                let display_id = args.display_id;
-                let window_id = args.window_id.map(u64::from);
-                let needs_processing = fmt.is_some() || max_w.is_some() || max_h.is_some();
-
-                // Capture: one window, a specific display, or the primary one.
-                //
-                // A window capture carries its own frame back, which is the only
-                // thing that can turn its window-relative pixels into a click —
-                // so it is kept and handed to the model, not dropped.
-                let mut window_bounds = None;
-                let screenshot_result = if let Some(wid) = window_id {
-                    if region.is_some() {
-                        return Ok(Some(invalid_args(
-                            "screenshot: `region` is a rectangle of a display and has no meaning \
-                             against `window_id` — pass one or the other. A window capture is \
-                             already cropped to the window.",
-                        )));
-                    }
-                    // `show_cursor: false` — the cursor is not UI, and a model
-                    // reading pixel coordinates should not be shown one.
-                    match screen.screenshot_window(wid, false).await {
-                        Ok(shot) => {
-                            window_bounds = shot.window_bounds;
-                            Ok(shot.image)
-                        }
-                        Err(e) => Err(e),
-                    }
-                } else if let Some(did) = display_id {
-                    let region_clone = region;
-                    tokio::task::spawn_blocking(move || {
-                        aleph_desktop::perception::take_screenshot_display(
-                            did,
-                            region_clone.as_ref(),
-                        )
-                    })
-                    .await
-                    .map_err(|e| crate::error::AlephError::other(format!("task join: {e}")))?
-                } else {
-                    screen.screenshot(region).await
-                };
-
-                let space = match (args.window_id, args.region.is_some()) {
-                    (Some(window_id), _) => ShotSpace::Window {
-                        window_id,
-                        bounds: window_bounds,
-                    },
-                    (None, true) => ShotSpace::Region,
-                    (None, false) => ShotSpace::FullScreen,
-                };
-
-                match screenshot_result {
-                    // A dead capture chain does not always surface as an `Err`:
-                    // a locked screen, a revoked screen-recording grant or a
-                    // wedged helper hand back a well-formed frame full of
-                    // nothing. Such a frame is small, so the budget re-encode
-                    // below never decodes it — it would reach the model as real
-                    // pixels, carrying a `coordinate_space` that tells the model
-                    // to aim at them. Refuse it here, platform-independently.
-                    Ok(s) if aleph_desktop::perception::is_degenerate(&s) => {
-                        Ok(Some(DesktopOutput {
-                            success: false,
-                            data: None,
-                            message: Some(super::recovery::with_hint(
-                                "Screen capture returned a blank frame — no pixels to look at."
-                                    .to_string(),
-                            )),
-                        }))
-                    }
-                    Ok(s) => {
-                        // A full-resolution screenshot can be tens of MB once
-                        // base64-encoded; the generic tool-result budget would
-                        // then truncate the base64 string into an undecodable
-                        // image. Estimate the decoded size (base64 is ~4/3 of
-                        // raw) and route oversized captures through the
-                        // budget-enforcing re-encoder even when the caller
-                        // passed no processing parameters.
-                        let est_raw_bytes = s.image_base64.len() / 4 * 3;
-                        let over_budget =
-                            est_raw_bytes > aleph_desktop::perception::DEFAULT_SCREENSHOT_MAX_BYTES;
-
-                        if needs_processing || over_budget {
-                            use base64::Engine;
-                            let raw_bytes = base64::engine::general_purpose::STANDARD
-                                .decode(&s.image_base64)
-                                .map_err(|e| {
-                                    crate::error::AlephError::other(format!("base64 decode: {e}"))
-                                })?;
-                            // An explicit request honours the caller's format;
-                            // a budget-only re-encode goes straight to JPEG to
-                            // skip a wasteful full-resolution PNG round-trip.
-                            let out_fmt = match &fmt {
-                                Some(f) => f.clone(),
-                                None if over_budget => "jpeg".to_string(),
-                                None => "png".to_string(),
-                            };
-                            // Default JPEG quality 0.9 (was 0.75): screenshots
-                            // routinely contain small UI text and 0.75 caused
-                            // legibility complaints from the LLM consumer. PNG
-                            // is unaffected (lossless regardless of quality).
-                            let q = quality
-                                .filter(|v| !v.is_nan())
-                                .unwrap_or(0.9)
-                                .clamp(0.0, 1.0);
-                            let quality_u8 = (q * 100.0) as u8;
-                            // The re-encode must not drop what `take_screenshot`
-                            // reported: the points-to-pixels ratio survives via
-                            // the `_with_scale` entry point.
-                            let scale_factor = s.scale_factor;
-                            match tokio::task::spawn_blocking(move || {
-                                aleph_desktop::perception::process_screenshot_with_scale(
-                                    &raw_bytes,
-                                    max_w,
-                                    max_h,
-                                    &out_fmt,
-                                    quality_u8,
-                                    Some(aleph_desktop::perception::DEFAULT_SCREENSHOT_MAX_BYTES),
-                                    scale_factor,
-                                )
-                            })
-                            .await
-                            .map_err(|e| {
-                                crate::error::AlephError::other(format!("task join: {e}"))
-                            })? {
-                                Ok(processed) => Ok(Some(
-                                    self.screenshot_output(
-                                        args.describe == Some(true),
-                                        space,
-                                        processed.image_base64,
-                                        processed.width,
-                                        processed.height,
-                                        processed.format,
-                                    )
-                                    .await,
-                                )),
-                                Err(e) => Ok(Some(DesktopOutput {
-                                    success: false,
-                                    data: None,
-                                    message: Some(format!("Screenshot processing error: {e}")),
-                                })),
-                            }
-                        } else {
-                            Ok(Some(
-                                self.screenshot_output(
-                                    args.describe == Some(true),
-                                    space,
-                                    s.image_base64,
-                                    s.width,
-                                    s.height,
-                                    s.format,
-                                )
-                                .await,
-                            ))
-                        }
-                    }
-                    Err(e) => Ok(Some(DesktopOutput {
-                        success: false,
-                        data: None,
-                        message: Some(super::recovery::with_hint(format!(
-                            "Screen capability error: {e}"
-                        ))),
-                    })),
+        // A selector on the global rail is a request, not evidence of delivery.
+        // AX and window mutations fill in their subject inside the dispatch arm.
+        let mut post_target = if matches!(args.observe.as_deref(), Some("state" | "screenshot"))
+            && super::classify_approval(args).is_some()
+        {
+            Some(match rail {
+                Rail::Targeted(pid) => PostTarget::process(pid, args.window_id),
+                Rail::Global
+                    if args.action == "clipboard_write"
+                        || (is_input_action(&args.action)
+                            && args.pid.is_none()
+                            && args.window_id.is_none()
+                            && args.app.as_deref().is_none_or(|app| app.trim().is_empty())) =>
+                {
+                    PostTarget::Global
                 }
+                Rail::Global => PostTarget::Unavailable,
+            })
+        } else {
+            None
+        };
+
+        let mut output = self
+            .dispatch_native(platform, screen, args, rail, &mut post_target)
+            .await?;
+        if let (Some(out), Some(target)) = (&mut output, post_target) {
+            if out.success {
+                self.attach_post_observation(
+                    platform.as_ref(),
+                    screen,
+                    target,
+                    args.observe.as_deref() == Some("screenshot"),
+                    out,
+                )
+                .await;
             }
+        }
+        Ok(output)
+    }
+
+    async fn attach_post_observation(
+        &self,
+        platform: &dyn aleph_desktop::DesktopPlatform,
+        screen: &dyn aleph_desktop::ScreenCapability,
+        target: PostTarget,
+        include_screenshot: bool,
+        output: &mut DesktopOutput,
+    ) {
+        let data = output.data.get_or_insert_with(|| serde_json::json!({}));
+        let Some(data) = data.as_object_mut() else {
+            return;
+        };
+        data.insert(
+            "post_state".into(),
+            observe::gather_post_state(platform, target).await,
+        );
+
+        if !include_screenshot {
+            return;
+        }
+
+        let mut shot_args =
+            DesktopArgs::from(&super::types::DesktopBatchAction::empty("screenshot"));
+        shot_args.max_width = Some(1568);
+        let expected_pid = match target {
+            PostTarget::Global => None,
+            PostTarget::Process {
+                pid,
+                window_id: Some(window_id),
+            } => {
+                shot_args.window_id = Some(window_id);
+                Some(pid)
+            }
+            PostTarget::Process {
+                window_id: None, ..
+            } => {
+                data.insert(
+                    "post_screenshot_unavailable".into(),
+                    "window_unconfirmed".into(),
+                );
+                return;
+            }
+            PostTarget::Unavailable => {
+                data.insert(
+                    "post_screenshot_unavailable".into(),
+                    "scope_unavailable".into(),
+                );
+                return;
+            }
+        };
+
+        match self
+            .capture_screenshot(screen, &shot_args, expected_pid)
+            .await
+        {
+            Ok(DesktopOutput {
+                success: true,
+                data: Some(shot),
+                ..
+            }) => {
+                data.insert("post_screenshot".into(), shot);
+            }
+            _ => {
+                data.insert(
+                    "post_screenshot_unavailable".into(),
+                    "capture_failed".into(),
+                );
+            }
+        }
+    }
+
+    async fn dispatch_native(
+        &self,
+        platform: &Arc<dyn aleph_desktop::DesktopPlatform>,
+        screen: &dyn aleph_desktop::ScreenCapability,
+        args: &DesktopArgs,
+        rail: Rail,
+        post_target: &mut Option<PostTarget>,
+    ) -> Result<Option<DesktopOutput>> {
+        match args.action.as_str() {
+            "screenshot" => self.capture_screenshot(screen, args, None).await.map(Some),
             "ocr" => {
                 let png_bytes = match &args.image_base64 {
                     Some(b64) => {
@@ -1623,6 +1750,9 @@ impl super::DesktopTool {
                     Ok((x, y)) => (x as i32, y as i32),
                     Err(out) => return Ok(Some(out)),
                 };
+                if let Some(target) = post_target.as_mut() {
+                    *target = window_post_target(screen, window_id).await;
+                }
                 match screen.move_window(window_id, x, y).await {
                     Ok(()) => Ok(Some(DesktopOutput {
                         success: true,
@@ -1657,6 +1787,9 @@ impl super::DesktopTool {
                         )));
                     }
                 };
+                if let Some(target) = post_target.as_mut() {
+                    *target = window_post_target(screen, window_id).await;
+                }
                 match screen.resize_window(window_id, width, height).await {
                     Ok(()) => Ok(Some(DesktopOutput {
                         success: true,
@@ -2380,8 +2513,14 @@ impl super::DesktopTool {
                     locator: locator_from_args(args),
                     value,
                 };
+                let locator_pid = params.locator.pid;
                 match ax.set_value(params).await {
-                    Ok(r) => Ok(Some(ax_action_output(r))),
+                    Ok(r) => {
+                        if let Some(target) = post_target.as_mut() {
+                            *target = ax_post_target(locator_pid, &r, args.window_id);
+                        }
+                        Ok(Some(ax_action_output(r)))
+                    }
                     Err(e) => Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
@@ -2418,8 +2557,14 @@ impl super::DesktopTool {
                     locator: locator_from_args(args),
                     action,
                 };
+                let locator_pid = params.locator.pid;
                 match ax.perform_action(params).await {
-                    Ok(r) => Ok(Some(ax_action_output(r))),
+                    Ok(r) => {
+                        if let Some(target) = post_target.as_mut() {
+                            *target = ax_post_target(locator_pid, &r, args.window_id);
+                        }
+                        Ok(Some(ax_action_output(r)))
+                    }
                     Err(e) => Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
@@ -2445,6 +2590,34 @@ fn locator_from_args(args: &DesktopArgs) -> AxLocator {
             (Some(x), Some(y)) => Some([x, y]),
             _ => None,
         },
+    }
+}
+
+async fn window_post_target(
+    screen: &dyn aleph_desktop::ScreenCapability,
+    window_id: u64,
+) -> PostTarget {
+    match super::window_lookup::lookup_window(screen, window_id).await {
+        Ok(window) => match super::window_lookup::pid_of(&window) {
+            Ok(pid) => PostTarget::process(pid, u32::try_from(window_id).ok()),
+            Err(_) => PostTarget::Unavailable,
+        },
+        Err(_) => PostTarget::Unavailable,
+    }
+}
+
+fn ax_post_target(
+    locator_pid: Option<i32>,
+    result: &AxActionResult,
+    window_id: Option<u32>,
+) -> PostTarget {
+    match (
+        locator_pid,
+        result.matched.as_ref().map(|element| element.pid),
+    ) {
+        (Some(locator), Some(matched)) if locator != matched => PostTarget::Unavailable,
+        (Some(pid), _) | (_, Some(pid)) => PostTarget::process(pid, window_id),
+        (None, None) => PostTarget::Unavailable,
     }
 }
 
