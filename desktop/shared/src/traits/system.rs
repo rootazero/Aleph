@@ -2,10 +2,10 @@
 
 use async_trait::async_trait;
 
-use crate::Result;
 use crate::system_types::{
     AppInfo, ClipboardContent, DesktopProcessIdentity, InstalledApp, SystemInfo,
 };
+use crate::Result;
 
 /// System-level operations: app lifecycle, clipboard, notifications, system info.
 #[async_trait]

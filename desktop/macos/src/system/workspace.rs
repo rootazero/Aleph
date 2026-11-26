@@ -7,8 +7,8 @@
 //! genuinely this crate's: turning `NSWorkspace`'s process list into the
 //! [`AppInfo`] shape the tool layer resolves names against.
 
-use aleph_desktop::Result;
 use aleph_desktop::system_types::{AppInfo, DesktopProcessIdentity};
+use aleph_desktop::Result;
 use objc2_app_kit::{NSRunningApplication, NSWorkspace};
 use objc2_foundation::NSArray;
 

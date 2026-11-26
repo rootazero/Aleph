@@ -4,11 +4,11 @@ mod notification;
 mod sysinfo;
 mod workspace;
 
-use aleph_desktop::Result;
 use aleph_desktop::system_types::{
     AppInfo, ClipboardContent, DesktopProcessIdentity, InstalledApp, SystemInfo,
 };
 use aleph_desktop::traits::SystemCapability;
+use aleph_desktop::Result;
 use async_trait::async_trait;
 
 /// macOS system capability implementation using native Cocoa APIs.
