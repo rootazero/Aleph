@@ -559,7 +559,10 @@ fn a_send_folded_into_the_live_run_follows_that_run_instead_of_waiting_forever()
     let sent = model.resolve_send("s-1".into(), Some("r-folded".into()), 0);
     assert_eq!(sent["activeRun"], "r-folded");
     let patch = model.accept(joined("r-folded", "r-live"));
-    assert_eq!(patch["activeRun"], Value::Null);
+    assert_eq!(
+        patch["activeRun"], "r-live",
+        "Stop follows the run the message joined at once, not after a reload"
+    );
     assert_eq!(patch["reconcile"], true);
     assert_eq!(
         patch["unconfirmed"], false,
@@ -591,7 +594,66 @@ fn a_send_folded_into_the_live_run_follows_that_run_instead_of_waiting_forever()
     early.reset("s-1".into());
     early.begin_send("same text".into(), 0);
     early.accept(joined("r-folded", "r-live"));
+    early.accept(text("r-live", 1, "held answer"));
     let patch = early.resolve_send("s-1".into(), Some("r-folded".into()), 1);
-    assert_eq!(patch["activeRun"], Value::Null);
+    assert_eq!(patch["activeRun"], "r-live");
+    assert_eq!(patch["reconcile"], true);
+    assert!(
+        patch.to_string().contains("held answer"),
+        "the joined run's frames held after the handoff are applied too"
+    );
+}
+
+/// The joined run can finish while the reload the handoff asked for is still
+/// in flight. Its terminal frame ends it, and a snapshot read before that end
+/// must not bring it back as live.
+#[test]
+fn the_joined_run_ending_before_the_reload_returns_stays_ended() {
+    let mut model = ChatState::default();
+    model.reset("s-1".into());
+    model.begin_send("same text".into(), 0);
+    model.resolve_send("s-1".into(), Some("r-folded".into()), 0);
+    model.accept(joined("r-folded", "r-live"));
+    model.accept(text("r-live", 1, "answer"));
+    let ended = model.accept(end("r-live", 2));
+    assert_eq!(ended["activeRun"], Value::Null);
+    assert_eq!(ended["terminalRun"], "r-live");
+
+    // The reload was read before the end landed: it still names r-live.
+    let reload = model.replace_history(
+        history(
+            Some("r-live"),
+            json!([{"role":"user", "content":"same text", "timestamp":"t1", "run_id":"r-live"}]),
+        ),
+        Value::Null,
+    );
+    assert_eq!(
+        reload["activeRun"],
+        Value::Null,
+        "a run already seen ending is not adopted again"
+    );
+}
+
+/// The handoff is the only frame a folded send ever gets, so a full or
+/// expired early buffer must not lose it.
+#[test]
+fn an_early_handoff_survives_a_full_or_expired_buffer() {
+    let mut crowded = ChatState::default();
+    crowded.reset("s-1".into());
+    crowded.begin_send("same text".into(), 0);
+    for seq in 1..=70 {
+        crowded.accept(text("r-other", seq, "noise"));
+    }
+    crowded.accept(joined("r-folded", "r-live"));
+    let patch = crowded.resolve_send("s-1".into(), Some("r-folded".into()), 1);
+    assert_eq!(patch["activeRun"], "r-live");
+    assert_eq!(patch["reconcile"], true);
+
+    let mut expired = ChatState::default();
+    expired.reset("s-1".into());
+    expired.begin_send("same text".into(), 0);
+    expired.accept(joined("r-folded", "r-live"));
+    let patch = expired.resolve_send("s-1".into(), Some("r-folded".into()), 20_000);
+    assert_eq!(patch["activeRun"], "r-live");
     assert_eq!(patch["reconcile"], true);
 }

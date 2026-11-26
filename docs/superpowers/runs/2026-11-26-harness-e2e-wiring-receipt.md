@@ -116,7 +116,7 @@ User decision / 用户决定: one key per per-peer DM, and migrate existing data
 - Channel routing: a per-peer key no longer names a channel, so the approval fallback `channel_route` (`src/approval/session_route.rs`) returns no route for it instead of an empty channel id. Production channel turns route from `TURN_CONTEXT`, which takes `channel_id` from the inbound metadata (`src/gateway/execution_engine/turn_permissions.rs`), and spawned children reuse the parent's turn context, so delivery is unchanged. Tests that pinned the old spelling or used a per-peer key as a channel route were updated (`src/approval/adapters.rs`, `src/routing/resolve.rs`, `src/gateway/inbound_router/mod.rs`). `providers::route_witness::tests::the_session_key_round_trip_is_not_the_identity` documented this defect and asked to be revisited once fixed; it now asserts the round trip is the identity for every key shape and that a `dm:` alias lands on its `peer:` twin.
 - Real machine / 真机 (fresh build): `qa/busy_input/run.sh steer` PASS (every steered text reaches the run's later provider requests, run turns 4–5); `qa/human_gate/run.sh text` 11/11 PASS (the channel question shows up in `clarification.pending`). Regression, all rc=0: busy_input burst-drain/interrupt/queue, thread_continuity reopen/checklist/two_clients/fork, human_gate ask/unattended/stale, plan_handoff handoff/deny/floor, session_order, resume_boundary knobs/holes/unanswered, run_halt crash/cap.
 - Library tests: `cargo test -p alephcore --lib` 22303 passed, 18 failed; 17 are the failures already listed in the 2026-11-25 Zahir receipt (uninitialized `skills/`/`plugins/` submodules, browser, schema ratchets), the 18th was the route-witness test above, now passing. `cargo clippy -p alephcore --lib --tests -- -D warnings` clean.
-- Not done / 未做: old `session_events` streams written under the structured key with a channel (`{"channel":"webhook",…}`) are neither merged nor deleted; they stay as orphans, as decided. The busy-queue journal and other stored strings still holding `dm:` are read through the parse alias, not rewritten. A legacy SQLite export that runs after the directory pass on the same startup leaves `dm:` dirs until the next startup folds them. No migration run against a real user data directory.
+- Not done / 未做: old `session_events` streams written under the structured key with a channel (`{"channel":"webhook",…}`) are neither merged nor deleted; they stay as orphans, as decided. The busy-queue journal and other stored strings still holding `dm:` are read through the parse alias, not rewritten. (A legacy SQLite export that ran after the directory pass left `dm:` dirs behind; fixed in the final review fix pass below.) No migration run against a real user data directory.
 
 Unrelated failure seen while testing / 测试中的无关失败: `gateway::execution_engine::btw_wire_tests::no_shipped_command_word_resolves_as_a_side_question` fails at its own submodule check, because this worktree has not initialized the `skills/` and `plugins/` submodules. This is a fact about the checkout, not a regression.
 
@@ -139,12 +139,44 @@ Earlier on the same product tree (D1 fix section): full `cargo test -p alephcore
 
 Docs updated / 文档: `docs/reference/FEATURE_LOCATOR.md` §3.1 new "真机证明 / Real-machine proofs" (F1–F8) and the route-witness key note; `docs/reference/GATEWAY.md` (session key table, `stream.run_joined`); `docs/reference/SESSION_SERVICE.md` (per-peer spelling); `qa/README.md` (run lines and per-stage proofs for `thread_continuity` and `human_gate`, `busy_input steer`, revived `plan_handoff` results; the 2026-08 `plan_phase` evidence marked historical).
 
+## Final review fix pass / 终审修复
+
+A reviewer on another model (`openai-codex/gpt-6.2-sol`) reviewed `961f38dc1..2dc83cb33` and returned "not ready" with two critical and three important findings. All five are fixed, each with a failing test first.
+
+| Finding | Fix | Test (RED → GREEN) |
+|---|---|---|
+| C1 — file fold could crash into a state no later startup finishes (record published before files moved; failed move reported success) | `fold_per_peer_dm_alias` (`src/gateway/session_store/migration.rs`) now moves files first and aborts on any failed move, then publishes the record, then removes the alias record. A canonical record equal to the re-keyed alias record is treated as this fold interrupted and finished, not as a second record. | `normalize_tests::an_interrupted_fold_is_finished_on_the_next_startup`; `two_records_for_one_per_peer_dm_are_left_for_a_human` now uses a genuinely different record |
+| C2 — a busy-queue record journaled under `dm:` never closes after re-delivery (ticket in the `dm:` lane, admission looks in `peer:`), so a second crash re-delivers a message that already ran | `reinject_survivors` (`src/gateway/busy_queue/durable.rs`) reads lane and addressed key in the current spelling via `per_peer_dm_alias_target` before taking the ticket and reporting | `busy_queue::durable::tests::a_survivor_journaled_under_the_dm_alias_is_closed_by_admission` |
+| I1 — legacy SQLite import runs after the startup fold and writes `dm:` dirs; the first `peer:` write then makes a permanent two-record conflict | `export_legacy_messages_from` runs `normalize_session_dir_names` when it finishes | `tests/sqlite_migration_legacy_null.rs` `an_imported_per_peer_dm_row_lands_under_the_canonical_key` |
+| I2 — Leptos: a queued send adopted as `active_run_id` kept Stop on the folded id after `run_joined` | `apply_run_joined` + `run_joined` dispatch arm (`interfaces/webchat/src/platform/wide/views/chat/events.rs`): only when the conversation follows the folded id, route `joined_run_id` to it and follow it; never `complete_run` | `a_queued_send_folded_into_the_live_run_moves_stop_to_that_run`, `a_handoff_leaves_a_conversation_following_another_run_alone` |
+| I3 — NSH: after the handoff neither id was tracked until the reload, so the joined run's terminal frame could be lost or an ended run re-adopted; an early handoff could be evicted by the 64-frame / 256 KiB / 10 s early buffer | `follow_joined_run` (`shared/ui_logic/src/transcript/chat_panel.rs`) makes `joined_run_id` the live run at once (missing prefix, filled by the reload); early handoffs are kept apart from the byte and age limits, and held frames of the joined run are applied on resolve | `a_send_folded_into_the_live_run_follows_that_run_instead_of_waiting_forever` (tightened), `the_joined_run_ending_before_the_reload_returns_stays_ended`, `an_early_handoff_survives_a_full_or_expired_buffer` |
+
+Deferred minor / 推迟：`two_clients` can pass without exercising D3 (two independent `run_complete` are allowed; the `run_joined` claim only checks the target when the frame arrives). A controlled step — first run confirmed inside the model and still running, then exactly one `run_joined` — is not added; the D3 path is pinned by the unit tests above.
+
+Verification after the fix pass (macOS arm64, fresh `aleph-server` build, no `SKIP_BUILD`):
+
+| Check | Result |
+|---|---|
+| `cargo clippy --all-targets -- -D warnings` | rc=0 |
+| `cargo clippy -p shared-ui-logic --features panel --lib --tests -- -D warnings` | rc=0 |
+| `cargo check -p aleph-panel --target wasm32-unknown-unknown` | rc=0 |
+| `cargo test -p alephcore --lib -- gateway:: routing:: approval:: providers::route_witness` | 5531 passed, 1 failed: `btw_wire_tests::no_shipped_command_word_resolves_as_a_side_question` (uninitialized `skills/`/`plugins/` submodules, environment, seen before) |
+| `cargo test -p alephcore --lib -- session_store::migration busy_queue::durable` | 32 passed |
+| `cargo test -p alephcore --test sqlite_migration_legacy_null` | 3 passed |
+| `cargo test -p shared-ui-logic --features panel --lib` | 316 passed |
+| `cargo test -p aleph-panel --lib` | 1557 passed, 2 failed: `disposed_reads::tests::no_plain_untracked_read_survives_an_await` and `admin_refusal::tests::no_error_signal_is_fed_an_unclassified_error`, both pointing at `interfaces/webchat/src/platform/wide/views/memory/galaxy/` (`mod.rs:229-354`, `node_detail_panel.rs:84-109`), code from `fbd12c3d1` that this branch does not touch (`git diff 961f38dc1 -- .../views/memory` is empty) — pre-existing on main |
+| `cargo test -p alephcore --lib harness::tests::budget` | 2 passed (R10 ceiling unchanged) |
+| `qa/plan_handoff` handoff / deny / floor | rc=0 ×3 |
+| `qa/thread_continuity` reopen / checklist / two_clients / fork | rc=0 ×4 |
+| `qa/human_gate` ask / text / unattended / stale | rc=0 ×4 |
+| `qa/busy_input` steer / queue / burst-drain / interrupt | rc=0 ×4 |
+
 ## Not done / 未完成
 
 - F7: no real prompt-cache hit measurement (prefix compared as parsed JSON, not raw bytes); fork children still do not hit the parent's cache — a separate round, as decided.
 - F6: no YOLO below the `requires_confirmation` floor, as decided; only the order is pinned.
-- D1: orphan `session_events` streams under the old structured key are kept, not merged; `dm:` strings in the busy-queue journal and other stores are read through the parse alias, not rewritten; the migration has not been run against a real user data directory.
-- D3: no browser run of the Leptos or NSH Panel; a `chat.send` reply delayed more than 10 s drops the held `run_joined` frame on the NSH Panel (falls back to the reconnect repair).
+- D1: orphan `session_events` streams under the old structured key are kept, not merged; `dm:` strings in the busy-queue journal and other stores are read through the parse alias, not rewritten (the journal's replay now admits them under `peer:`); the migration has not been run against a real user data directory, and no crash was injected mid-fold on a real machine (unit test only).
+- D3: no browser run of the Leptos or NSH Panel (the handoff is pinned by unit tests only); `qa/thread_continuity two_clients` does not force the fold path (deferred minor above).
 - No Windows/Linux runs; fixtures need a `websockets` venv on `PATH` (environment note above).
 
 ## Defect ledger / 缺陷台账

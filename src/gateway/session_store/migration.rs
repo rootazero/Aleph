@@ -134,9 +134,13 @@ pub(crate) fn per_peer_dm_alias_target(key: &str) -> Option<String> {
 ///
 /// When the canonical dir does not exist the alias dir is renamed to it. When
 /// it exists without a session record (the harness wrote only the transcript
-/// there), the record and every file the canonical dir lacks move in; a file
-/// both hold stays in the alias dir, which is then kept so nothing is lost.
-/// When both dirs hold a record nothing moves: picking one is a human's call.
+/// there), every file the canonical dir lacks moves in first, then the record
+/// is published there, and only then is the alias record removed; a file both
+/// hold stays in the alias dir, which is then kept so nothing is lost. Each
+/// step leaves a state the next startup finishes: a failed move aborts before
+/// anything is published, and a canonical record equal to the re-keyed alias
+/// record is this fold interrupted, not a second record. When both dirs hold
+/// different records nothing moves: picking one is a human's call.
 /// Returns whether the record moved. Errors are logged, never returned.
 async fn fold_per_peer_dm_alias(
     base_dir: &Path,
@@ -178,33 +182,56 @@ async fn fold_per_peer_dm_alias(
         };
     }
 
-    if target_dir.join("metadata.json").exists() {
-        info!(
-            to = %canonical,
-            "Per-peer DM alias: both spellings hold a session record, leaving both"
-        );
-        return false;
-    }
-    if let Err(e) = atomic_write_file(&target_dir.join("metadata.json"), &rekeyed).await {
-        info!(to = %canonical, error = %e, "Per-peer DM alias: record write failed");
-        return false;
-    }
-    if let Err(e) = tokio::fs::remove_file(alias_dir.join("metadata.json")).await {
-        info!(to = %canonical, error = %e, "Per-peer DM alias: old record not removed");
-    }
+    let target_record = target_dir.join("metadata.json");
+    let already_published = match tokio::fs::read_to_string(&target_record).await {
+        Ok(existing) => {
+            let same_record = serde_json::from_str::<serde_json::Value>(&existing).ok()
+                == Some(serde_json::Value::Object(record.clone()));
+            if !same_record {
+                info!(
+                    to = %canonical,
+                    "Per-peer DM alias: both spellings hold a session record, leaving both"
+                );
+                return false;
+            }
+            true
+        }
+        Err(_) => false,
+    };
 
-    if let Ok(mut entries) = tokio::fs::read_dir(alias_dir).await {
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            let destination = target_dir.join(entry.file_name());
-            if destination.exists() {
-                continue;
-            }
-            if let Err(e) = tokio::fs::rename(entry.path(), &destination).await {
-                info!(to = %canonical, error = %e, "Per-peer DM alias: file move failed");
-            }
+    // Files first: until the record is published the alias stays the only
+    // record, so an interrupted move is simply retried next startup.
+    let mut entries = match tokio::fs::read_dir(alias_dir).await {
+        Ok(entries) => entries,
+        Err(e) => {
+            info!(to = %canonical, error = %e, "Per-peer DM alias: alias dir unreadable");
+            return false;
+        }
+    };
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        if entry.file_name() == "metadata.json" {
+            continue;
+        }
+        let destination = target_dir.join(entry.file_name());
+        if destination.exists() {
+            continue;
+        }
+        if let Err(e) = tokio::fs::rename(entry.path(), &destination).await {
+            info!(to = %canonical, error = %e, "Per-peer DM alias: file move failed, retrying next startup");
+            return false;
         }
     }
-    // Only succeeds when every file moved; otherwise the alias dir stays.
+    if !already_published {
+        if let Err(e) = atomic_write_file(&target_record, &rekeyed).await {
+            info!(to = %canonical, error = %e, "Per-peer DM alias: record write failed");
+            return false;
+        }
+    }
+    if let Err(e) = tokio::fs::remove_file(alias_dir.join("metadata.json")).await {
+        info!(to = %canonical, error = %e, "Per-peer DM alias: old record not removed, finishing next startup");
+        return false;
+    }
+    // Only succeeds when every file moved; a file both dirs hold keeps it.
     let _ = tokio::fs::remove_dir(alias_dir).await;
     info!(to = %canonical, "Per-peer DM alias: record folded into the canonical dir");
     true
@@ -479,6 +506,13 @@ pub async fn export_legacy_messages_from(
         messages = total_messages,
         "Session migration from SQLite to file backend completed successfully"
     );
+
+    // The import writes legacy keys as they were, so a per-peer DM row lands
+    // under the retired `agent:a:dm:p` spelling. Fold it now: the startup
+    // pass already ran, and the first message the server writes under the
+    // canonical `peer:` key would otherwise create a second record that no
+    // later fold may pick between.
+    normalize_session_dir_names(&store.config().base_dir).await;
 
     Ok(total_messages)
 }
@@ -1008,16 +1042,66 @@ mod normalize_tests {
             "agent:main:dm:twice",
         )
         .await;
-        seed_dir(
-            base,
-            &sanitize_key_for_dir("agent:main:peer:twice"),
-            "agent:main:peer:twice",
+        let peer = base.join(sanitize_key_for_dir("agent:main:peer:twice"));
+        tokio::fs::create_dir_all(&peer).await.unwrap();
+        // A record of its own, not the alias re-keyed: two real records.
+        tokio::fs::write(
+            peer.join("metadata.json"),
+            r#"{"key":"agent:main:peer:twice","owner_user_id":"u-other"}"#,
         )
-        .await;
+        .await
+        .unwrap();
 
         assert_eq!(normalize_session_dir_names(base).await, 0);
         let alias = base.join(sanitize_key_for_dir("agent:main:dm:twice"));
         assert_eq!(read_meta(&alias).await["key"], "agent:main:dm:twice");
+    }
+
+    /// A fold interrupted after the canonical record was published (the alias
+    /// still holds its record and a file the canonical dir lacks) is finished
+    /// on the next startup, not mistaken for two records.
+    #[tokio::test]
+    async fn an_interrupted_fold_is_finished_on_the_next_startup() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        let alias = base.join(sanitize_key_for_dir("agent:main:dm:cut"));
+        tokio::fs::create_dir_all(&alias).await.unwrap();
+        tokio::fs::write(
+            alias.join("metadata.json"),
+            r#"{"key":"agent:main:dm:cut","owner_user_id":"u-owner"}"#,
+        )
+        .await
+        .unwrap();
+        tokio::fs::write(alias.join("checkpoint.json"), "only here\n")
+            .await
+            .unwrap();
+        let peer = base.join(sanitize_key_for_dir("agent:main:peer:cut"));
+        tokio::fs::create_dir_all(&peer).await.unwrap();
+        tokio::fs::write(peer.join("transcript.jsonl"), "conversation\n")
+            .await
+            .unwrap();
+        // The state a crash leaves right after the record was published.
+        tokio::fs::write(
+            peer.join("metadata.json"),
+            serde_json::to_string_pretty(&serde_json::json!({
+                "key": "agent:main:peer:cut",
+                "owner_user_id": "u-owner",
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(normalize_session_dir_names(base).await, 1);
+        assert_eq!(
+            tokio::fs::read_to_string(peer.join("checkpoint.json"))
+                .await
+                .unwrap(),
+            "only here\n",
+            "the file left behind reaches the canonical dir"
+        );
+        assert!(!alias.exists(), "the emptied alias dir is removed");
+        assert_eq!(normalize_session_dir_names(base).await, 0, "idempotent");
     }
 
     /// A per-channel DM (`agent:a:<channel>:dm:p`) is its own key, not an alias.

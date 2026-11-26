@@ -841,8 +841,12 @@ frame at all, so the engine emits `StreamEvent::RunJoined { run_id,
 session_key, joined_run_id }` (`stream.run_joined`, topic `run.joined`) and
 returns. It is not `RunComplete`: the Leptos Panel treats `run_complete` as
 "the conversation is idle" and would settle the plan while the joined run is
-still working. Clients release the folded id and follow `joined_run_id`
-(Leptos `resolve_target`; NSH Panel `chat_panel.rs` `drop_joined_send`).
+still working. Clients release the folded id and follow `joined_run_id` at
+once, so Stop targets the run that is answering and that run's terminal frame
+settles the conversation: Leptos `events.rs` `apply_run_joined` (only when the
+conversation was following the folded id) and NSH Panel `chat_panel.rs`
+`follow_joined_run`, which also keeps an early handoff outside the early-frame
+byte and age limits.
 
 **Why position is self-reported by the waiter, not broadcast or polled.** The
 production point is the wait loop itself: `report(ahead)` is called from

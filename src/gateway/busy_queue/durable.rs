@@ -592,7 +592,18 @@ pub async fn reinject_survivors(
         // answer must not land on the origin channel unmarked
         // (`format_side_answer`'s doc carries the census of every
         // `OriginFanoutEmitter` site and which answer each gives).
-        let is_side_question = payload.lane_key != payload.addressed_session_key;
+        //
+        // Both keys are read in their current spelling: a record journaled
+        // before per-peer DMs had one key carries `agent:a:dm:p`, while the
+        // engine admits under `agent:a:peer:p`. A ticket left in the old lane
+        // is never found by admission, so the record would never close.
+        let current_spelling = |key: &str| {
+            crate::gateway::session_store::migration::per_peer_dm_alias_target(key)
+                .unwrap_or_else(|| key.to_string())
+        };
+        let lane_key = current_spelling(&payload.lane_key);
+        let addressed_session_key = current_spelling(&payload.addressed_session_key);
+        let is_side_question = lane_key != addressed_session_key;
         let base: std::sync::Arc<dyn crate::gateway::event_emitter::EventEmitter + Send + Sync> =
             std::sync::Arc::new(crate::gateway::event_emitter::GatewayEventEmitter::new(
                 std::sync::Arc::clone(&bus),
@@ -624,8 +635,7 @@ pub async fn reinject_survivors(
         // The lane is the one the record was admitted to, read back from the
         // record instead of derived again here: the derivation rule may move,
         // and a queued message must not follow it onto another session.
-        let ticket =
-            super::register_run_in_lane(&payload.lane_key, cfg.max_per_session, &payload.run_id);
+        let ticket = super::register_run_in_lane(&lane_key, cfg.max_per_session, &payload.run_id);
         let Some(ticket) = ticket else {
             tracing::warn!(run_id = %run_id,
                 "busy-queue reinject: lane already full at boot; leaving record queued");
@@ -637,7 +647,7 @@ pub async fn reinject_survivors(
         let report = super::run_queued_reporter(
             std::sync::Arc::clone(&emitter),
             payload.run_id.clone(),
-            payload.addressed_session_key.clone(),
+            addressed_session_key.clone(),
         );
         tokio::spawn(async move {
             let mut attempt = || adapter.execute(request.clone(), agent.clone(), emitter.clone());
@@ -675,7 +685,7 @@ pub async fn reinject_survivors(
                 error_code: Some(code.to_string()),
                 // Never-ran frames must self-seed the run→session visibility
                 // index — same rule as `spawn_queued_run`'s receipt.
-                session_key: Some(payload.addressed_session_key.clone()),
+                session_key: Some(addressed_session_key),
             };
             if let Err(err) = bus_emitter.emit(frame).await {
                 tracing::warn!(run_id = %run_id, error = %err,
@@ -1287,6 +1297,82 @@ mod tests {
             ran,
             vec![keys[0].clone(), keys[2].clone()],
             "the selected pair reached the engine; the held one did not"
+        );
+    }
+
+    /// Admits like the engine does — `mark_admitted` under the request's own
+    /// key string — and then keeps the run going, so the only way the journal
+    /// record can close is admission.
+    struct AdmittingAdapter;
+
+    #[async_trait::async_trait]
+    impl crate::gateway::execution_adapter::ExecutionAdapter for AdmittingAdapter {
+        async fn execute(
+            &self,
+            request: crate::gateway::execution_engine::RunRequest,
+            _agent: std::sync::Arc<crate::gateway::agent_instance::AgentInstance>,
+            _emitter: std::sync::Arc<dyn crate::gateway::event_emitter::EventEmitter + Send + Sync>,
+        ) -> Result<(), crate::gateway::execution_engine::ExecutionError> {
+            crate::gateway::busy_queue::mark_admitted(
+                &request.session_key.to_key_string(),
+                &request.run_id,
+            );
+            std::future::pending::<()>().await;
+            Ok(())
+        }
+
+        async fn cancel(
+            &self,
+            run_id: &str,
+        ) -> Result<(), crate::gateway::execution_engine::ExecutionError> {
+            Err(crate::gateway::execution_engine::ExecutionError::RunNotFound(run_id.to_string()))
+        }
+
+        async fn get_status(
+            &self,
+            _run_id: &str,
+        ) -> Option<crate::gateway::execution_engine::RunStatus> {
+            None
+        }
+
+        async fn active_run_count(&self) -> usize {
+            0
+        }
+    }
+
+    /// A record journaled before per-peer DMs had one key carries the retired
+    /// `agent:a:dm:p` spelling as its lane. The engine admits under the
+    /// canonical `peer:` key, so the re-delivered ticket must sit in that lane:
+    /// otherwise admission finds no ticket, never closes the record, and a
+    /// second crash mid-run re-delivers a message that already ran.
+    #[tokio::test]
+    async fn a_survivor_journaled_under_the_dm_alias_is_closed_by_admission() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let _g = arm(tmp.path());
+        let mut p = payload("alias-run");
+        p.lane_key = "agent:bq-alias:dm:old-peer".to_string();
+        p.addressed_session_key = "agent:bq-alias:dm:old-peer".to_string();
+        assert!(record_enqueued(p));
+        let (registry, _dir) = registry_with_agents(&["bq-alias"]).await;
+        let bus = std::sync::Arc::new(crate::gateway::event_bus::GatewayEventBus::new());
+
+        let reinjected = reinject_survivors(
+            std::sync::Arc::new(AdmittingAdapter),
+            registry,
+            bus,
+            crate::gateway::busy_queue::BusyQueueConfig::default(),
+            &|_| true,
+        )
+        .await;
+        assert_eq!(reinjected, 1);
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !survivors().is_empty() && std::time::Instant::now() < deadline {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(
+            survivors().is_empty(),
+            "admission under the canonical key closes the record while the run is still going"
         );
     }
 }

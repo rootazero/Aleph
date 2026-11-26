@@ -845,6 +845,35 @@ fn apply_run_queued(chat: ChatState, run_id: &str, ahead: u16) {
     chat.mark_queued(run_id, ahead);
 }
 
+/// The core folded the send `folded` into `joined`, the run already live on
+/// the same session; `folded` gets no other frame.
+///
+/// Only a conversation following `folded` itself changes: that happens when
+/// the send arrived while this client followed nothing, so `run_queued`
+/// adopted it (`apply_run_queued`). Stop and the phase then follow `joined`,
+/// and `joined` is routed here so its own frames, the terminal one included,
+/// settle this conversation. A conversation following any other run is left
+/// alone, and `complete_run` is never called: the work is still going.
+fn apply_run_joined(
+    sessions: &SessionMap,
+    chat: ChatState,
+    folded: &str,
+    joined: &str,
+    session_key: Option<&str>,
+) {
+    if chat.active_run_id.get_untracked().as_deref() != Some(folded) {
+        return;
+    }
+    let Some(conv) = session_key.and_then(|key| sessions.conv_for_session_key(key)) else {
+        // Nowhere to route `joined`, so its terminal frame could never
+        // settle Stop; stand down instead of pointing at a run never heard.
+        chat.complete_run(folded);
+        return;
+    };
+    sessions.bind_run(joined, conv, session_key);
+    chat.start_assistant_message(joined);
+}
+
 /// Resolve which conversation's `ChatState` one run event should land on, and
 /// maintain running/route bookkeeping. Returns the target `ChatState` plus
 /// whether the resolved conversation is the active (foreground) one. That flag
@@ -1166,6 +1195,11 @@ pub fn subscribe_run_events(
                     .and_then(serde_json::Value::as_u64)
                     .unwrap_or(0);
                 apply_run_queued(chat, run_id, u16::try_from(ahead).unwrap_or(u16::MAX));
+            }
+            "run_joined" => {
+                if let Some(joined) = data.get("joined_run_id").and_then(|j| j.as_str()) {
+                    apply_run_joined(&sessions, chat, run_id, joined, session_key);
+                }
             }
             "run_accepted" => {
                 // BACKFILL, not assignment. A brand-new conversation learns
@@ -2460,6 +2494,87 @@ mod projection_tests {
             Some("run-1".to_string())
         );
         assert_eq!(chat.phase.get_untracked(), ChatPhase::Queued { ahead: 0 });
+    }
+
+    /// A send waiting in the lane is folded into the run already live on its
+    /// session. Stop must move to that run, and that run's frames must reach
+    /// this conversation, or Stop stays on an id the core will never finish.
+    #[test]
+    fn a_queued_send_folded_into_the_live_run_moves_stop_to_that_run() {
+        let owner = Owner::new();
+        owner.set();
+        let sessions = crate::state::sessions::SessionMap::new();
+        let singleton = ChatState::new();
+        let conv = sessions.open_conversation("agent-a", "A");
+        sessions.set_session_key(conv, "sk-a");
+        sessions.activate(singleton, conv);
+        sessions.bind_run("run-folded", conv, Some("sk-a"));
+        let (chat, _) = resolve_target(
+            &sessions,
+            singleton,
+            "run_queued",
+            "run-folded",
+            Some("sk-a"),
+        )
+        .expect("the send's own conversation");
+        apply_run_queued(chat, "run-folded", 0);
+
+        let (chat, _) = resolve_target(
+            &sessions,
+            singleton,
+            "run_joined",
+            "run-folded",
+            Some("sk-a"),
+        )
+        .expect("the handoff reaches the same conversation");
+        apply_run_joined(&sessions, chat, "run-folded", "run-live", Some("sk-a"));
+
+        assert_eq!(
+            chat.active_run_id.get_untracked(),
+            Some("run-live".to_string()),
+            "Stop now targets the run the message joined"
+        );
+        assert_eq!(chat.phase.get_untracked(), ChatPhase::Thinking);
+        assert_eq!(sessions.route_lookup("run-folded"), None);
+        assert_eq!(
+            sessions.route_lookup("run-live"),
+            Some(conv),
+            "the joined run's own frames, its terminal one included, land here"
+        );
+    }
+
+    /// A conversation already following the live run keeps it: the handoff
+    /// names that same run, so nothing moves and nothing settles it.
+    #[test]
+    fn a_handoff_leaves_a_conversation_following_another_run_alone() {
+        let owner = Owner::new();
+        owner.set();
+        let sessions = crate::state::sessions::SessionMap::new();
+        let singleton = ChatState::new();
+        let conv = sessions.open_conversation("agent-a", "A");
+        sessions.set_session_key(conv, "sk-a");
+        sessions.activate(singleton, conv);
+        sessions.bind_run("run-live", conv, Some("sk-a"));
+        sessions.bind_run("run-folded", conv, Some("sk-a"));
+        let chat = sessions.chat_for(conv, singleton).expect("chat");
+        chat.start_assistant_message("run-live");
+        chat.phase.set(ChatPhase::Streaming);
+
+        let (chat, _) = resolve_target(
+            &sessions,
+            singleton,
+            "run_joined",
+            "run-folded",
+            Some("sk-a"),
+        )
+        .expect("same conversation");
+        apply_run_joined(&sessions, chat, "run-folded", "run-live", Some("sk-a"));
+
+        assert_eq!(
+            chat.active_run_id.get_untracked(),
+            Some("run-live".to_string())
+        );
+        assert_eq!(chat.phase.get_untracked(), ChatPhase::Streaming);
     }
 
     /// T2.13: backend has always emitted `StreamEvent::Reasoning`, but the
