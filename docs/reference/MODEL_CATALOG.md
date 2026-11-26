@@ -70,7 +70,8 @@ ModelRecord {
 | 值 | 含义 |
 |----|------|
 | `preset_default` | preset 的 `default_model` |
-| `preset_fallback` | preset 策展的 `fallback_models` 之一 |
+| `preset_fallback` | preset 策展的 `fallback_models` 之一 / An automatic fallback rung |
+| `preset_catalog` | 仅供参考的已核实第一方条目 / Verified first-party reference row only |
 | `preset_aux` | preset 的廉价 `default_aux_model` |
 | `configured` | operator 写在 `[providers.<id>] models` 里的 |
 | `discovered` | 刚才从 provider 的 `/models` 拿到的 |
@@ -232,61 +233,29 @@ Moonshot 的闸曾经写 `false`——那在只有 K2.x 的时代是对的，K3 
 
 ---
 
-## 6. 实时发现 (`discovery.rs`)
+## 6. 实时发现与成员选模 / Live discovery and member selection
 
-### 6.1 为什么是 CONNECT 而不是 CUT
+| 入口 / Surface | 权限 / Access | 行为 / Behavior |
+|---|---|---|
+| `list_models { refresh: true }` | 工具调用者 / Tool caller | 优先读取 300 秒内同作用域的清单；过期才请求。 / Reuses fresh same-scope inventory before fetching. |
+| `providers.modelsRefresh` | Admin | 强制刷新；可指定供应商单独诊断。禁用供应商的诊断结果不会发布为可选。 / Forces refresh, optionally naming one provider for diagnostics without making a disabled provider selectable. |
+| `providers.catalog` | Admin | 展示配置、进程内发现结果和策展参考，不请求供应商。 / Reads config, process-local inventory and reference rows without requesting the vendor. |
+| `chat.models.list` | Member | 只读已发布可选快照，返回精确供应商、模型 ID 和显示名。 / Reads the published selectable snapshot and returns only exact provider/model IDs and labels. |
 
-`ProviderPreset::models_url`、`ProviderPreset::resolve_models_url()`、`ProviderPreset::supports_health_check` 三件脚手架在本轮之前**生产零消费者**（各一个单测）。R10 的 YAGNI 撤回条款要求这种情况立即 CUT 或 CONNECT。选 CONNECT，因为聚合器/中继的默认模型陈旧问题**没有静态解**——往表里塞更多猜测只是把下一次漂移推后。
+`src/providers/model_catalog/discovery.rs` 共用同一个发现入口，使用当前配置推导 listing URL、协议与凭据；禁止 HTTP 重定向。作用域包含有效端点、协议、凭据、供应商资格与配置代次。对同作用域的并发刷新单飞；写入与发布前重检代次。成功的空数组清除发现项；非空且没有合法 ID 是响应格式错误。网络失败可返回同作用域旧清单并标为 stale，缓存命中和 stale 均不重新发布。没有磁盘权威、后台定时器、models.dev 运行时依赖或 picker 网络探测。
 
-### 6.2 为什么取 kimi-cli 的形状而非 opencode 的
+Discovery derives the listing URL, protocol and credential from current configuration, disables redirects, coalesces in-flight requests within scope, and checks the revision before accepting a result. A valid empty list clears discovered rows; a nonempty malformed list does not. Failure can read the prior same-scope inventory as stale. Neither stale results nor cache hits republish. Discovery inventory is process-local, with no restart recovery or background polling.
 
-opencode 拉 [models.dev](https://models.dev) 的全量目录（磁盘缓存 + TTL + 60min 后台刷新 + 跨进程 flock + 编译期快照兜底）。数据更全，但**会让一个第三方服务成为核心子系统的 load-bearing 依赖**——违 R3。
+`src/providers/session_model_handle.rs` 发布 `providers/pinnable-set`。成员投影不读取凭据库或磁盘；只有已认证、可用的供应商才出现在选择器中。发现项还必须与启动时认证的实际 serving transport 匹配。端点、协议、凭据变化或禁用、删除会立即撤销受影响供应商的选择资格（包括配置项），排队的显式选择会在派发前重新验证。只更改模型名单会立即更新配置项，不会清空同一范围的发现结果；更改端点则需要重启并重新挂载。OAuth 自动换发对同一账户串行执行，拒绝与已挂载端点或协议不一致的配置，且只有访问凭据与刷新授权都仍未变化才提交。次级 ChatGPT 的命名路由与显式回退槽共用凭据挂载，但不改变回退顺序。后台续期和状态查询仍可换发；派发重试不从错误文本推断失败凭据。网关令牌轮换与凭据写入串行，只重加密相同凭据，不撤销绑定。目录发现不提供账号权限证明，也不改默认或自动回退梯。
 
-kimi-cli 问每个已配置平台 `GET {base_url}/models`。数据少（基本只有 id），但**复用 Aleph 已经持有的凭据与端点**，没有新的信任面。Aleph 取后者。
+The member projection reads only the immutable publication. Fresh discovery can add rows only for a verified serving transport. Changes to the route, credential, or enabled state also withdraw configured choices; dispatch rechecks queued explicit selections. Roster-only changes update configured choices immediately and preserve discovery in the same scope. Restart to mount and certify a changed endpoint. OAuth renewal serializes requests for the account, rejects changes to the mounted endpoint or protocol, and commits only if both the access credential and the refresh grant still match. The secondary ChatGPT named route and explicit fallback slot share its credential mount without changing fallback order. Background renewal and status polling still refresh; dispatch retries do not infer a credential identity from error text. Gateway token rotation serializes with credential writes and re-encrypts the same credentials without withdrawing choices. Availability, inventory, operator metadata and automatic fallback are separate.
 
-### 6.3 协议
+### 6.1 精确绑定、元数据与策展 / Exact bindings, metadata and curation
 
-| 项 | 值 |
-|----|-----|
-| URL | preset 的 `models_url` 覆盖（**仅当 `base_url` 未被 operator 改动**）否则 `{base_url}/models` |
-| 认证头 | `anthropic` → `x-api-key` + `anthropic-version`；`gemini` → `x-goog-api-key`；其余 → `Authorization: Bearer` |
-| 响应形状 | `data[]`（OpenAI / Anthropic）或 `models[]`（Gemini / Ollama 原生） |
-| 字段 | id ← `id` \| `name`；display ← `display_name` \| `displayName`；窗口 ← `context_length` \| `context_window` \| `max_context_length` \| `inputTokenLimit` |
-| 超时 | 10s（请求 + body 各一次），共享 provider client 但**加了整体超时**（该 client 为流式刻意不设） |
-| body 上限 | 1 MiB |
-| 缓存 | `~/.aleph/cache/models/<provider>.json`，temp+rename 原子写，TTL 300s |
-
-`models_url` 覆盖的守卫是必要的：那是一个**绝对 URL**，套到被搬走的端点上（Azure 资源 / 企业中继 / 本地代理）会把探测发到厂商而不是配置的主机。
-
-### 6.4 触发面（共用同一个 leaf）
-
-| 入口 | 受众 | 行为 |
-|------|------|------|
-| `list_models { refresh: true }` | LLM（R8） | 先看缓存 TTL；仅对已过期的 provider 发起请求 |
-| `providers.modelsRefresh` RPC | operator | **强制**真拉；可选 `provider` 参数收窄到一个 |
-| `providers.catalog` 的 `roster` | 人（Panel / TUI / CLI） | **只读磁盘缓存**，绝不发网络（2026-08-13） |
-
-⚠️ **sweep 行怎么读只有一个答案：`ModelsRefreshRow::outcome()`**（`Live` / `Stale` / `Failed` / `NotApplicable`，round-4）。CLI 的状态列、TUI 的那句话、Panel 的徽标此前各写一遍 `match (ok, stale)` —— 三份推导只在状态恰好是三个时活着，而 `NotApplicable`（＝`kind: Unsupported`）是第四个：**它不是失败**，那六家什么都没坏，只是没有清单可取。三张脸都曾把它印成红色/“no listing”，正是 round-3 在健康那张脸上修掉的“一排关于健康 provider 的红行”，从另一扇门进来。措辞各面自持（R4），**判决**归契约。
-
-⚠️ **`providers.modelsRefresh` 从写下之日到 2026-08-13 一个客户端都没有**（全仓 grep 零命中），而它的 doc 自称是"picker 的按行刷新按钮想要的"——那个按钮不存在。CLAUDE.md §0：**没有客户端的能力不算已交付**。现在的三个客户端是 Panel 的按行刷新、Panel 保存成功后的 fire-and-forget 窄化刷新（**不阻塞保存响应**——一家挂掉的 vendor 不该让"保存我的 API key"变慢），以及 `al providers models --refresh`。
-
-⚠️ **第三行是读，不是第三个触发面**：`providers.catalog` 把缓存里的 discovered id 合进 `roster`，所以人看到的和 `list_models` 给模型看的是同一份。在此之前只有模型那半合了——**同一份缓存、同一个 TTL，模型看得见、人看不见**。读缓存**闸在 `has_api_key` 上**：`cached_models` 是同步文件读，而发现无凭据不跑，所以没凭据的 preset 结构上不可能有缓存条目；不闸就是每次开设置页 stat 全部 preset。
-
-`list_models` 走 TTL 是因为它对 chat-tier 开放：无条件拉取等于给了"反复调用即刷屏打厂商"的手柄。operator RPC 是显式授权的"现在就去看"，不受 TTL 约束。
-
-扇出用 `tokio::task::JoinSet` **并发**（两个参考项目都是顺序 for 循环）。单个 provider 失败**不冒泡**——发现是对一个已经能工作的目录做增强，一家厂商不可达不该让整次调用失败；失败计数进 `list_models` 的 `message`，细节进 `tracing::debug`。
-
-**单飞与 stale 回退（2026-08 round-3，映射 pi）**：同一 provider 的并发 refresh 经 per-provider 锁单飞（`REFRESH_LOCKS`）——pi 的 `inflightRefresh ??=` 同款形状；输掉竞争的一方直接吃赢家刚写入的清单（按 `fetched_at >= 调用开始时刻` 判定，**不吃 TTL 缓存**，所以 operator RPC 的"强制真拉"语义不被稀释）。刷新失败时两个触发面都回退到磁盘上的旧快照而不是报空——pi 的"网络失败恢复持久化快照"同款；RPC 行带 `stale: true` 标注，picker 可以据此外显"这是上次的数据"。
-
-### 6.5 边界
-
-- **只贡献 id**。窗口 / 价格 / 生命周期仍归策展表——`/models` 响应基本不带这些。一个没有策展行的 discovered id 诚实地显示为"能力未知"，跟今天的自定义中继模型一样。
-- **无后台定时器**。悄悄按时给每个已配置厂商打电话是意外行为，不是功能。
-- **`supports_health_check = false` 的 preset 直接拒**（OAuth-only 端点 / 按部署的 Azure 资源 / 分区域云都会 404 或限流列表路由）。该位以 `CatalogEntry.discoverable` 上线，**让客户端在点之前就知道这 6 家不该有刷新按钮**——提供一个只可能失败的按钮比不提供更糟。
-  **单一源 `probe::supports_model_listing`（round-4）**：这个位此前在三个文件里各写一遍 `preset.supports_health_check`（`probe_disposition` / 本 leaf / catalog 赋值处）。字段名读起来像“能不能 ping”，它实际说的是“答不答 `GET {base_url}/models`”——**一个名字与含义争辩的谓词被手抄三次，早晚有一份是反的**。6 家分别是 `chatgpt` / `azure-openai` / `amazon-bedrock` / `vertex-anthropic` / `ai-gateway` / `azure-foundry`，守卫 `the_catalogue_bit_clients_render_is_the_one_the_server_gates_on` 逐 preset 对账。
-  ⚠️ **round-4 一度把这条读成“服务端根本没在闸，六家每次 sweep 都被拨号”，并按那个判断改了代码与三处文档。用 `if false` 破坏新守卫求证时只红了一条测试**，回头读 leaf 才发现拒绝从第一天就在这儿。**破坏守卫时红的条数比预期少，先怀疑的是自己的判断，不是守卫。** 真正剩下的是排序：`handle_models_refresh` 的凭据检查排在前面，于是**没链接过**的 opt-out 预设回 `MissingCredential`——可行动，且行动无效（贴 key 不会让端点长出 `/models`）。现按同一个谓词先答（`no_listing_endpoint_outranks_no_credential`，变异证过红）。
-- **失败是分类的，不是一句散文（2026-08-13）**。`DiscoveryError` 一直是分类器，只是在最后一步被 `e.to_string()` 抹平了：`ModelsRefreshRow.kind ∈ {unsupported, missing_credential, transport, status, shape, timeout}`。客户端要回答的第一个问题是"这值不值得重试"，而"这家不发布目录端点"和"请求超时"此前是同一句话。**没有凭据的 provider 现在得到一行而不是被静默跳过**——跳过一条坏记录通常对，沉默才是贵的那一半：问"刷新这一个"却拿回空数组，读起来和"什么都没发生"一样。
-- **缓存绑定端点指纹（2026-08 round-4）**。`DiscoveredModels.base_url` 记录清单取自哪个端点，`cached_models(provider, base_url)` 指纹不匹配即视为无缓存——operator 搬了 `base_url` 后旧清单是**另一台主机**的库存，绝不能复活（与 `models_url` override 的搬迁守卫同一条教条）。指纹字段引入前的旧缓存文件按"另一端点的库存"处理，代价是一次重拉。Bifrost 式 generation counter 评估为不需要（§9 round-4）。
+- Web composer 只覆盖当前轮；会话 pin 是独立操作。TUI `/pick-model [query]` 读取成员投影，`/providers` 仍为管理入口。RPC `Raw` 是字面 ID（含 `/`）；仅 `/model` 解释 `provider/model` 简写。显式选择入队前验证，最终绑定时在同一个变更闸门下复查资格并取得精确传输。失效会话 pin 整对忽略、不改保存值；由实际绑定发出 `ModelResolved` 并注明被忽略的原模型。 / The Web composer override is per-turn; the session pin is separate. TUI member and admin commands stay distinct. RPC `Raw` is literal; slash shorthand belongs only to `/model`. Final binding checks eligibility and acquires the exact transport under one mutation fence. The runner reports the initial binding in `ModelResolved`, names any ignored saved pin, and leaves the saved preference untouched.
+- Harness 绑定模型后才为当前轮准备附件表示；准备期间取消，不写入本轮用户消息。初始 `ModelResolved` 使用一次主路由快照；若成功请求走了不同路由，则在终态前更正，并保留被忽略的 pin。 / The harness prepares attachments after binding the model. Cancellation during preparation leaves the user message unwritten. The initial `ModelResolved` uses one primary route snapshot; a successful dial on another route corrects it before the terminal event and preserves the ignored pin.
+- `ModelRecord::resolve` 合并精确 `model_defs` 与静态事实。窗口优先级：正的供应商覆盖 → 正的精确模型定义 → 静态模型事实 → 原有未知处理；显式 token budget 优先。服务模型只可收紧启动链预算。 / A positive provider window wins over a positive exact model definition and then static facts. Explicit token budgets take precedence; serving refinement can only tighten the startup chain budget.
+- `preset_catalog` 只供管理目录与模型工具查阅，不自动变成成员可选、当前默认或 fallback。只在对应第一方端点和协议展示，见 [verified source record](../superpowers/runs/2026-11-25-direct-model-catalog-evidence.md)。 / Curated rows are first-party reference data only, not a readiness assertion or fallback policy.
 
 ---
 
@@ -483,7 +452,7 @@ RouteLLM 可提炼的三条资产——score→threshold 决策契约、"阈值=
 改这一层之前请先读；这些都是评估过的决定，不是遗漏。
 
 - **拉 models.dev 全量目录** — R3：不让第三方服务成为核心子系统的 load-bearing 依赖。
-- **后台定时刷新** — 悄悄常驻的网络行为是意外，不是功能。**每一个触发面都必须由一次用户动作发起**（2026-08-13 新增的两个也是：按行刷新按钮、保存成功后的一次窄化刷新；`providers.catalog` 只读磁盘，不发网络）。
+- **后台定时刷新** — 悄悄常驻的网络行为是意外，不是功能。**每一个触发面都必须由一次用户动作发起**（2026-08-13 新增的两个也是：按行刷新按钮、保存成功后的一次窄化刷新；`providers.catalog` 只读当前配置和进程内清单，不发网络）。
 - **给开放权重宿主编"Meta 价"** — Meta 不卖 Llama 推理，各宿主价差极大。保持 unpriced，并在测试里把这条限制钉死。
 - **外推 opus-4.6+/fable-5 的 1M tier** — 无可核实的公开倍率，外推属于编数据。
 - **按记忆重猜 `github-copilot` / `azure-*` / `siliconflow` 等的默认 id** — 聚合器/中继陈旧问题的正解是 discovery，不是往表里塞更多猜测。

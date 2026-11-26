@@ -18,7 +18,7 @@ use crate::config::defaults_override::load_override_file;
 ///
 /// All fields are optional — users only specify what they want to change.
 /// During merge, None fields fall back to the built-in preset value.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
 pub struct PartialProviderPreset {
     /// Override base URL
     #[serde(default)]

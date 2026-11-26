@@ -15,6 +15,11 @@ pub trait EscapeAbort: Send + Sync {
     fn stop(&self);
     /// Check if the user has pressed Escape since the last reset.
     fn is_aborted(&self) -> bool;
+    /// Advances on Escape (and monitor restart), never on a run's flag reset.
+    /// `None` means stopped, unavailable, or currently aborted.
+    fn abort_generation(&self) -> Option<u64> {
+        None
+    }
     /// Reset the abort flag (prepare for next action).
     fn reset(&self);
 }

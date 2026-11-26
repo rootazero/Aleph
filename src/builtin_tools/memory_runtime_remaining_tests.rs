@@ -21,6 +21,7 @@ async fn registry_fixture() -> (Fixture, BuiltinToolRegistry) {
             raw_store: fixture._raw.clone(),
             session_store: None,
             provider: Some(Arc::new(crate::providers::MockProvider::new("unused"))),
+            provider_secrets: None,
             extensions: Arc::new(MemoryExtensionRegistry::new()),
             state_db: None,
             default_agent_id: crate::routing::DEFAULT_AGENT_ID.into(),

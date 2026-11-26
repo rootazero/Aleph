@@ -1885,9 +1885,44 @@ fn a_descent_keeps_the_query_that_found_the_provider() {
 
     assert_eq!(
         state.selected_provider_pick(),
-        Some(ProviderPick::Model("gpt-5.6-luna".into())),
+        Some(ProviderPick::Model {
+            provider: "openai".into(),
+            model: "gpt-5.6-luna".into()
+        }),
         "the query has to still be narrowing after the descent"
     );
+}
+
+#[test]
+fn provider_picker_confirm_keeps_provider_and_opaque_model_id() {
+    use aleph_protocol::providers::ChatModelChoice;
+    let mut state = AppState::new("s".into(), "m".into());
+    let assert_binding = |state: &AppState| {
+        let Some(ProviderPick::Model { provider, model }) = state.selected_provider_pick() else {
+            panic!("expected a selected binding");
+        };
+        assert_eq!(
+            crate::tui::commands::provider_model_command(&provider, &model),
+            "/model relay/org/model"
+        );
+    };
+    state.open_provider_picker(
+        vec![sample_catalog_entry("relay", &["org/model"])],
+        String::new(),
+    );
+    state.enter_provider(0);
+    assert_binding(&state);
+    state.open_model_choices(
+        vec![ChatModelChoice {
+            provider: "relay".into(),
+            model: "org/model".into(),
+            provider_label: "Relay".into(),
+            model_label: "Model".into(),
+        }],
+        "org/model".into(),
+    );
+    assert!(state.provider_picker_refresh_target().is_none());
+    assert_binding(&state);
 }
 
 /// Backspace climbs before it closes, and only from a level that has one above.

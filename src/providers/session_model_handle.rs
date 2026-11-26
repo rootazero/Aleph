@@ -432,24 +432,116 @@ pub fn publish_selectable_models(snapshot: SelectableModelsSnapshot) {
     }
 }
 
+/// Called with the discovery epoch held; use current readiness and roster.
+pub(crate) fn publish_discovered(
+    provider: &str,
+    models: &[crate::providers::model_catalog::discovery::DiscoveredModel],
+) {
+    update_discovered(|snapshot| *snapshot = snapshot.replace_discovered(provider, models));
+}
+
+pub(crate) fn revoke_config_selection(affected: impl Fn(&str) -> bool) {
+    update_discovered(|snapshot| snapshot.revoke_routes(affected, false));
+}
+
+pub(crate) fn update_configured_selection(config: &crate::Config, affected: impl Fn(&str) -> bool) {
+    update_discovered(|snapshot| {
+        snapshot.revoke_routes(affected, false);
+        snapshot.replace_configured_roster(config);
+    });
+}
+
+/// Under the mutation fence, restore only the route that was eligible just
+/// before its credential was refreshed and whose exact transport was swapped.
+pub(crate) fn restore_refreshed_credential(provider: &str) {
+    update_discovered(|snapshot| snapshot.restore_refreshed_credential(provider));
+}
+
+pub(crate) fn revoke_vault_discovery(affected: impl Fn(&str) -> bool) {
+    update_discovered(|snapshot| snapshot.revoke_routes(affected, true));
+}
+
+fn update_discovered(update: impl FnOnce(&mut SelectableModelsSnapshot)) {
+    // A test scope owns its own slot: update that snapshot in place and never
+    // touch the process-global slot, so parallel tests cannot observe each
+    // other's discovered rows.
+    #[cfg(test)]
+    {
+        let mut update = Some(update);
+        let outcome = TEST_SELECTABLE_MODELS.try_with(|slot| {
+            let Some(slot) = slot else {
+                return None;
+            };
+            let mut current = slot.write().unwrap_or_else(|e| e.into_inner());
+            let update = update.take().expect("update once");
+            update(std::sync::Arc::make_mut(&mut current));
+            Some(())
+        });
+        match outcome {
+            // Applied to the scoped slot, or the scope deliberately holds no
+            // snapshot: in both cases the global slot stays untouched.
+            Ok(Some(())) | Ok(None) => return,
+            Err(_) => {
+                let update = update.take().expect("update once");
+                apply_discovered_update(update);
+            }
+        }
+        return;
+    }
+    #[cfg(not(test))]
+    apply_discovered_update(update);
+}
+
+/// Apply a discovered-row mutation to the process-global publication slot.
+fn apply_discovered_update(update: impl FnOnce(&mut SelectableModelsSnapshot)) {
+    if let Some(handle) = PINNABLE_PROVIDERS.get() {
+        let mut current = handle.write().unwrap_or_else(|e| e.into_inner());
+        update(std::sync::Arc::make_mut(&mut current));
+    }
+}
+
 /// Refresh the roster/readiness after an existing live provider reload. The
 /// routable keys remain those actually wired by the run builder at boot.
 /// No boot publication means no permission to install one via a config write.
 pub fn refresh_selectable_models(
-    config: &crate::config::Config,
-    available: &std::collections::BTreeSet<String>,
-    authenticated: impl Fn(&str) -> bool,
+    config: &tokio::sync::RwLockReadGuard<'_, crate::config::Config>,
+    prepare: impl Fn(
+        &SelectableModelsSnapshot,
+        std::collections::BTreeSet<String>,
+    ) -> SelectableModelsSnapshot,
 ) {
+    use crate::providers::model_catalog::discovery_authority;
     let Some(handle) = PINNABLE_PROVIDERS.get() else {
         return;
     };
-    let mut guard = handle.write().unwrap_or_else(|e| e.into_inner());
-    *guard = std::sync::Arc::new(SelectableModelsSnapshot::from_config(
-        config,
-        guard.routable.clone(),
-        available,
-        authenticated,
-    ));
+    loop {
+        let revision = discovery_authority::discovery_revision(config);
+        let previous = handle.read().unwrap_or_else(|e| e.into_inner()).clone();
+        // Credential resolution and snapshot construction must precede the
+        // epoch/slot critical section; vault mutations take vault -> epoch.
+        let mut next = prepare(&previous, previous.routable.clone());
+        next.preserve_mounted_routes(&previous);
+        let next = std::sync::Arc::new(next);
+        if discovery_authority::commit_if_current(config, revision, || {
+            replace_selectable_if_unchanged(handle, &previous, next)
+        }) == Some(true)
+        {
+            return;
+        }
+    }
+}
+
+fn replace_selectable_if_unchanged(
+    handle: &RwLock<std::sync::Arc<SelectableModelsSnapshot>>,
+    previous: &std::sync::Arc<SelectableModelsSnapshot>,
+    next: std::sync::Arc<SelectableModelsSnapshot>,
+) -> bool {
+    let mut current = handle.write().unwrap_or_else(|e| e.into_inner());
+    if !std::sync::Arc::ptr_eq(&current, previous) {
+        return false;
+    }
+    *current = next;
+    true
 }
 
 /// Record a provider-less boot; selection still fails closed.
@@ -460,7 +552,10 @@ pub fn decline_pinnable_providers(because: &'static str) {
 /// A caller retains one immutable generation while a reload publishes another.
 pub fn selectable_models() -> Option<std::sync::Arc<SelectableModelsSnapshot>> {
     #[cfg(test)]
-    if let Ok(snapshot) = TEST_SELECTABLE_MODELS.try_with(Clone::clone) {
+    if let Ok(snapshot) = TEST_SELECTABLE_MODELS.try_with(|slot| {
+        slot.as_ref()
+            .map(|slot| slot.read().unwrap_or_else(|e| e.into_inner()).clone())
+    }) {
         return snapshot;
     }
     PINNABLE_PROVIDERS
@@ -470,7 +565,7 @@ pub fn selectable_models() -> Option<std::sync::Arc<SelectableModelsSnapshot>> {
 
 #[cfg(test)]
 tokio::task_local! {
-    static TEST_SELECTABLE_MODELS: Option<std::sync::Arc<SelectableModelsSnapshot>>;
+    static TEST_SELECTABLE_MODELS: Option<RwLock<std::sync::Arc<SelectableModelsSnapshot>>>;
 }
 
 /// Explicit task-scoped installation avoids global-test races, including
@@ -481,7 +576,10 @@ pub(crate) async fn with_test_selectable_models<T>(
     future: impl std::future::Future<Output = T>,
 ) -> T {
     TEST_SELECTABLE_MODELS
-        .scope(snapshot.map(std::sync::Arc::new), future)
+        .scope(
+            snapshot.map(|snapshot| RwLock::new(std::sync::Arc::new(snapshot))),
+            future,
+        )
         .await
 }
 
@@ -492,6 +590,16 @@ pub fn pinnable_providers() -> Option<std::collections::BTreeSet<String>> {
 
 /// Resolve before any session or durable state is written. No publication is
 /// an explicit refusal, not a test/preboot bypass.
+pub fn validate_persisted_model(
+    pref: &SessionModelPref,
+) -> Result<SessionModelPref, ModelSelectionError> {
+    let snapshot = selectable_models().ok_or(ModelSelectionError::Unavailable)?;
+    match pref.provider.as_deref() {
+        Some(provider) => snapshot.resolve(Some(provider), &pref.model),
+        None => snapshot.resolve_raw(&pref.model),
+    }
+}
+
 pub fn resolve_selectable_model(
     provider: Option<&str>,
     model: &str,
@@ -764,4 +872,31 @@ mod tests {
              means re-reading them, not re-typing this line"
         );
     }
+}
+
+#[cfg(test)]
+#[test]
+fn selectable_slot_rejects_a_prepared_snapshot_from_an_older_publication() {
+    fn snapshot() -> std::sync::Arc<SelectableModelsSnapshot> {
+        std::sync::Arc::new(SelectableModelsSnapshot::from_config(
+            &crate::config::Config::default(),
+            Default::default(),
+            &Default::default(),
+            |_| false,
+        ))
+    }
+    let earlier = snapshot();
+    let slot = RwLock::new(earlier.clone());
+    let published = snapshot();
+    assert!(replace_selectable_if_unchanged(
+        &slot,
+        &earlier,
+        published.clone()
+    ));
+    assert!(!replace_selectable_if_unchanged(
+        &slot,
+        &earlier,
+        snapshot()
+    ));
+    assert!(std::sync::Arc::ptr_eq(&slot.read().unwrap(), &published));
 }

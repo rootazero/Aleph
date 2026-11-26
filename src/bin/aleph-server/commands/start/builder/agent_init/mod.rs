@@ -457,9 +457,22 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 .default_provider
                 .clone()
                 .unwrap_or_default();
+            let mut transport_config = app_config.clone();
+            if let Some(provider) = transport_config.providers.get_mut(&primary_provider_key) {
+                if provider.api_key.as_deref().is_none_or(str::is_empty) {
+                    let key =
+                        alephcore::providers::probe::provider_vault_key(&primary_provider_key);
+                    provider.api_key = shared_token_mgr
+                        .get_secret(&key)
+                        .ok()
+                        .flatten()
+                        .map(|secret| secret.expose().to_owned())
+                        .filter(|key| !key.trim().is_empty());
+                }
+            }
             Some(
                 alephcore::orchestrator::build_strategy_planner_provider(
-                    app_config,
+                    &transport_config,
                     &primary_provider_key,
                 )
                 .unwrap_or_else(|| provider_registry.default_provider()),
@@ -1752,6 +1765,9 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             raw_store: raw_store.clone(),
             session_store: Some(session_store),
             provider: default_prov.clone(),
+            provider_secrets: Some(Arc::new(alephcore::secrets::VaultSecretResolver::new(
+                shared_token_mgr.clone(),
+            ))),
             extensions: memory_ext_registry.clone(),
             state_db: state_db_out.clone(),
             default_agent_id: memory_default_agent,

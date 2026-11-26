@@ -1356,10 +1356,17 @@ agent may do* is exactly three things, and they compose in this order:
 All three are enforced at one chokepoint, `src/tools/scoped/` — `Deny` hides the
 tool from the model *and* refuses the call; `Ask` routes to the approval gate.
 
-The action-type approval engine (`src/approval/`) is a separate, older axis over
+The action-type approval engine (`src/approval/`) is a separate axis over
 *capability domains* (desktop / browser / system / pim / automation), not tool
-names; its `Ask` hands `approval_required` back to the LLM rather than running a
-deterministic HITL gate (R7/R9).
+names. `Ask` normally returns `approval_required` to the LLM. The exception is
+[eligible canonical macOS desktop input](DESKTOP_BRIDGE.md#operator-approval-for-targeted-input--定向输入的运维审批): after normal tool admission, a separate
+operator-only, once-only decision may resume the held leaf. A generic tool
+confirmation cannot substitute for this decision. The operator approval record
+contains a bounded target summary, not native inputs, and is not delivery proof.
+
+动作策略的 `Ask` 通常向模型返回 `approval_required`。符合条件的 macOS 定向桌面动作
+可在常规工具准入后等待独立的运维单次批准；通用工具确认不能替代它。批准记录只含有界的
+目标摘要，不包含原生输入，也不证明动作已送达。
 
 ---
 

@@ -31,7 +31,7 @@ use crate::tools::AlephTool;
 /// they would stay in sync; a promise in a comment is exactly the enforcement
 /// §0 says does not exist. The truth source sits on the depended-upon side
 /// (`memory`), because that is the direction the crate graph already runs.
-use crate::memory::dreaming::stages::feedback_distill::CORRECTION_PATH_PREFIX;
+use crate::memory::store::raw_memory::CORRECTION_PATH_PREFIX;
 
 /// How far back the exact-duplicate scan looks, in seconds (24h).
 ///
@@ -460,11 +460,12 @@ mod tests {
     /// unread.
     #[tokio::test]
     async fn a_logged_correction_is_visible_to_the_stage_that_distills_it() {
-        use crate::memory::dreaming::stages::feedback_distill::has_undistilled_corrections;
+        use crate::memory::dreaming::stages::feedback_distill::{
+            has_undistilled_corrections, FeedbackDistillStage,
+        };
 
         let (_raw_dir, tool, backend, decision_log) = make_tool().await;
-        let lookback = crate::config::types::memory::default_feedback_lookback();
-        let min = crate::config::types::memory::default_feedback_distill_min_candidates();
+        let config = FeedbackDistillStage::default();
         let store: MemoryBackend = decision_log;
 
         assert!(
@@ -472,15 +473,14 @@ mod tests {
                 &store,
                 Some(backend.as_ref()),
                 DEFAULT_AGENT_ID,
-                lookback,
-                min,
+                &config,
             )
             .await,
             "nothing logged yet"
         );
 
         // High severity: a single row passes the gate's urgency bypass, so this
-        // stays a one-row test without needing `min` unrelated corrections.
+        // stays a one-row test without needing unrelated corrections.
         let out = tool
             .call(args("stop guessing at file paths", Severity::High))
             .await
@@ -488,14 +488,8 @@ mod tests {
         assert!(out.success, "{}", out.message);
 
         assert!(
-            has_undistilled_corrections(
-                &store,
-                Some(backend.as_ref()),
-                DEFAULT_AGENT_ID,
-                lookback,
-                min,
-            )
-            .await,
+            has_undistilled_corrections(&store, Some(backend.as_ref()), DEFAULT_AGENT_ID, &config,)
+                .await,
             "the distiller must see the row the tool just wrote — a writer and a \
              reader that address different prefixes both look healthy in isolation"
         );

@@ -7,7 +7,7 @@
 
 use crate::error::AlephError;
 use crate::memory::notes::canonicalize_category;
-use crate::memory::notes::indexer::{NoteIndexer, CATEGORY_DIRS};
+use crate::memory::notes::indexer::{lock_note_corpus, NoteIndexer, CATEGORY_DIRS};
 use crate::memory::notes::ingest::plan::{ApplyReport, PageOp};
 use crate::memory::notes::note::{
     sanitize_title, sanitize_wikilink_target, KnowledgeNote, Relation,
@@ -524,6 +524,7 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
     }
 
     pub async fn commit(mut self) -> Result<ApplyReport, ApplyError> {
+        let _guard = lock_note_corpus(self.indexer.memory_dir(), self.agent_id).await;
         let mut report = ApplyReport {
             // rust-doctor-disable-next-line excessive-clone
             tx_id: self.tx_id.clone(),
@@ -667,12 +668,7 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
             .map_err(|e| AlephError::other(format!("link: stat from: {e}")))?
         {
             self.indexer
-                .append_to_note(
-                    self.agent_id,
-                    note_path,
-                    &Vec::<String>::new(),
-                    &[safe_target],
-                )
+                .append_to_note_locked(self.agent_id, note_path, &[], &[safe_target])
                 .await?;
             Ok(true)
         } else {

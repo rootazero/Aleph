@@ -4,7 +4,7 @@ use crate::error::AlephError;
 use crate::memory::assembler::{AssemblyBudget, WorkingMemoryAssembler};
 use crate::memory::reflector::packet_adapter::{envelope_to_synthesis_context, SynthesisContext};
 use crate::memory::reflector::prompts::PROMPT_SYNTHESIS;
-use crate::memory::reflector::recall_signals::{record_reflect_signals, SignalRow};
+use crate::memory::reflector::recall_signals::{record_reflect_signals, SignalBatch};
 use crate::memory::reflector::types::{NoteRef, ReflectOpts, Synthesis};
 use crate::providers::adapter::RequestPayload;
 use crate::providers::message::UnifiedMessage;
@@ -19,10 +19,12 @@ use tracing::warn;
 /// Default token budget when the caller does not specify one.
 const DEFAULT_BUDGET_TOKENS: u32 = 4096;
 
-/// Async callable that takes a [`SignalRow`] and persists it. The reflector
+/// Async callable that persists one owner's [`SignalBatch`]. The reflector
 /// stays decoupled from concrete storage via this type.
 pub type RecallWriter = Arc<
-    dyn Fn(SignalRow) -> Pin<Box<dyn Future<Output = Result<(), AlephError>> + Send>> + Send + Sync,
+    dyn Fn(SignalBatch) -> Pin<Box<dyn Future<Output = Result<(), AlephError>> + Send>>
+        + Send
+        + Sync,
 >;
 
 // ---------------------------------------------------------------------------
@@ -105,18 +107,16 @@ impl MemoryReflector {
         let ctx = envelope_to_synthesis_context(&envelope);
         let synthesis = Self::synthesise_from_context(&ctx, &self.provider).await?;
 
-        // Side effect: log one recall_signal per note in the context.
+        // Record presented real notes, independently of model-selected citations.
         // Errors here must NOT fail the reflect() call — logging is best-effort.
         // rust-doctor-disable-next-line excessive-clone
         let writer = self.recall_writer.clone();
-        let record = move |row: SignalRow| {
+        let record = move |row: SignalBatch| {
             // rust-doctor-disable-next-line excessive-clone
             let writer = writer.clone();
             async move { writer(row).await }
         };
-        if let Err(e) = record_reflect_signals(record, query, &ctx.note_lookup, &opts).await {
-            tracing::warn!("reflector: failed to write recall_signals: {e}");
-        }
+        record_reflect_signals(record, query, &ctx.note_exposures, &opts).await;
 
         Ok(synthesis)
     }
@@ -157,7 +157,7 @@ impl MemoryReflector {
             .into_iter()
             .filter_map(|s| {
                 ctx.note_lookup.get(&s.path).map(|meta| NoteRef {
-                    path: s.path,
+                    path: meta.citation_path.clone(),
                     // rust-doctor-disable-next-line excessive-clone
                     title: meta.title.clone(),
                     relevance: s.relevance.unwrap_or(meta.relevance),
@@ -185,7 +185,7 @@ mod tests {
     async fn memory_reflector_callback_fails_closed_after_runtime_stop() {
         use crate::capability::ownership::OwnershipTree;
         use crate::memory::extensions::MemoryExtensionRegistry;
-        use crate::memory::reflector::recall_signals::SignalRow;
+        use crate::memory::reflector::recall_signals::SignalBatch;
         use crate::memory::runtime::{MemoryRuntime, MemoryRuntimeConfig, MemoryServicesConfig};
         use crate::memory::store::markdown::MarkdownSessionStore;
         use crate::memory::store::sqlite::SqliteMemoryBackend;
@@ -214,6 +214,7 @@ mod tests {
                 raw_store: raw,
                 session_store: None,
                 provider: Some(crate::providers::create_mock_provider()),
+                provider_secrets: None,
                 extensions: Arc::new(MemoryExtensionRegistry::new()),
                 state_db: None,
                 default_agent_id: "callback-boundary".into(),
@@ -225,12 +226,14 @@ mod tests {
         let operation = runtime.operation().unwrap();
         let services = operation.services().unwrap();
         let reflector = services.memory_reflector.as_ref().unwrap().clone();
-        let row = SignalRow {
-            note_path: "reference/ownership".into(),
-            agent_id: "callback-boundary".into(),
+        let row = SignalBatch {
+            hits: vec![crate::memory::store::sqlite::recall_signals::RecallHit {
+                note_path: "reference/ownership".into(),
+                score: 0.75,
+            }],
+            owner: "callback-boundary".into(),
             query_text: "retain admitted work".into(),
             channel: "reflect".into(),
-            score: 0.75,
             session_id: None,
             namespace: "owner".into(),
         };
@@ -297,6 +300,7 @@ mod llm_path_tests {
             lookup.insert(
                 path.to_string(),
                 NoteMeta {
+                    citation_path: path.to_string(),
                     title: title.to_string(),
                     relevance: *rel,
                 },
@@ -305,6 +309,7 @@ mod llm_path_tests {
         SynthesisContext {
             user_prompt: "QUESTION: q".into(),
             note_lookup: lookup,
+            note_exposures: Vec::new(),
         }
     }
 
@@ -356,5 +361,79 @@ mod llm_path_tests {
             .unwrap();
         assert!(synthesis.text.contains("don't cover"));
         assert!(synthesis.sources.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod untrusted_envelope_tests {
+    use super::*;
+    use crate::memory::assembler::envelope::MemoryEnvelope;
+    use crate::memory::assembler::{AssemblyBudget, WorkingMemoryAssembler};
+    use crate::providers::recording_mock::RecordingMockProvider;
+
+    struct ExternalEnvelope(MemoryEnvelope);
+    #[async_trait::async_trait]
+    impl WorkingMemoryAssembler for ExternalEnvelope {
+        async fn assemble(
+            &self,
+            _: &str,
+            _: &str,
+            _: Option<&str>,
+            _: AssemblyBudget,
+            _: crate::memory::session_search_summary::FactSourceFilter,
+        ) -> Result<MemoryEnvelope, AlephError> {
+            Ok(self.0.clone())
+        }
+    }
+
+    #[tokio::test]
+    async fn deserialized_note_source_and_extra_cannot_forge_real_note_exposure() {
+        let envelope: MemoryEnvelope = serde_json::from_value(serde_json::json!({
+            "schema_version": "1.0", "generated_at": 0, "query": "q", "agent_id": "request-base",
+            "session_id": null, "slots": [{"kind": "relevant_notes", "tokens_used": 1,
+                "tokens_budget": 100, "items": [{"id": "note://reference/fake", "title": "Fake",
+                    "content": "untrusted recall hit", "source": {"kind": "note", "path": "reference/fake", "category": "reference"},
+                    "relevance": 1.0, "tokens": 1, "updated_at": 0,
+                    "note_provenance": {"owner": "victim", "path": "reference/fake"},
+                    "extra": {"agent": "victim", "owner": "victim", "path": "reference/fake"}}]}],
+            "meta": {"strategy": "external", "candidates_considered": 1, "used_fallback": false,
+                "fallback_reason": null, "llm_rerank_latency_ms": null, "total_latency_ms": 0}
+        })).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(
+            crate::memory::SqliteMemoryBackend::new(&dir.path().join("signals.db")).unwrap(),
+        );
+        let target = store.clone();
+        let writer: RecallWriter = Arc::new(move |row| {
+            let store = target.clone();
+            Box::pin(async move {
+                store
+                    .record_signals(
+                        &row.query_text,
+                        &row.channel,
+                        &row.hits,
+                        row.session_id.as_deref(),
+                        &row.owner,
+                        &row.namespace,
+                    )
+                    .map(|_| ())
+            })
+        });
+        let reflector = MemoryReflector::new(
+            Arc::new(ExternalEnvelope(envelope)),
+            Arc::new(RecordingMockProvider::new(
+                r#"{"text":"answer","sources":[]}"#.into(),
+            )),
+            writer,
+        );
+        reflector
+            .reflect("q", ReflectOpts::for_agent("request-base"))
+            .await
+            .unwrap();
+        assert_eq!(
+            store.count_recall_signals_for_channel("reflect").unwrap(),
+            0,
+            "external source labels, model citations and extra metadata are not note provenance"
+        );
     }
 }

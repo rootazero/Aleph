@@ -1256,6 +1256,338 @@ async fn run_until_it_fails(
     (result, events)
 }
 
+#[tokio::test]
+async fn final_binding_refuses_withdrawn_selection_and_reports_ignored_pin() {
+    use crate::gateway::handlers::agent::{build_run_request, AgentRunParams};
+    use crate::orchestrator::dispatch::RunModelDirective;
+    use crate::providers::session_model_handle::{
+        clear_session_model, get_session_model_snapshot, set_session_model,
+        with_test_selectable_models, SelectableModelsSnapshot,
+    };
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    struct Recorder {
+        name: &'static str,
+        calls: AtomicUsize,
+        saw_inline_image: AtomicBool,
+        saw_text_image_notice: AtomicBool,
+    }
+    impl Recorder {
+        fn new(name: &'static str) -> Self {
+            Self {
+                name,
+                calls: AtomicUsize::new(0),
+                saw_inline_image: AtomicBool::new(false),
+                saw_text_image_notice: AtomicBool::new(false),
+            }
+        }
+    }
+    impl AiProvider for Recorder {
+        fn process<'a>(
+            &'a self,
+            payload: crate::providers::adapter::RequestPayload<'a>,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = crate::error::Result<crate::providers::adapter::ProviderResponse>,
+                    > + Send
+                    + 'a,
+            >,
+        > {
+            use crate::providers::message::ContentBlock;
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            for block in payload
+                .messages
+                .iter()
+                .flat_map(|message| message.content_blocks())
+            {
+                match block {
+                    ContentBlock::Image { .. } => {
+                        self.saw_inline_image.store(true, Ordering::Relaxed)
+                    }
+                    ContentBlock::Text { text, .. }
+                        if text.contains("not viewable by this model") =>
+                    {
+                        self.saw_text_image_notice.store(true, Ordering::Relaxed);
+                    }
+                    _ => {}
+                }
+            }
+            Box::pin(async {
+                Err(crate::providers::MockError::Authentication("fixture".into()).into())
+            })
+        }
+        fn name(&self) -> &str {
+            self.name
+        }
+        fn color(&self) -> &str {
+            "#000000"
+        }
+        fn serving_provider_hint(&self) -> Option<std::borrow::Cow<'_, str>> {
+            Some(self.name.into())
+        }
+        fn serving_model_hint(&self) -> Option<std::borrow::Cow<'_, str>> {
+            Some("codex-mini-latest".into())
+        }
+    }
+
+    let agent_id = "withdrawal-fixture";
+    let key = SessionKey::ephemeral(agent_id);
+    let key_string = key.to_key_string();
+    let mut config = crate::Config::default();
+    config.providers.insert(
+        "relay".into(),
+        crate::config::ProviderConfig::test_config("claude-sonnet-5.5"),
+    );
+    let ready = std::collections::BTreeSet::from(["relay".to_string()]);
+    let eligible = SelectableModelsSnapshot::from_config(&config, ready.clone(), &ready, |_| true);
+    config.providers.remove("relay");
+    let withdrawn = SelectableModelsSnapshot::from_config(&config, ready.clone(), &ready, |_| true);
+
+    let agents = Arc::new(AgentRegistry::new());
+    agents.register(crate::agents::AgentDef::new(
+        agent_id,
+        crate::agents::AgentMode::Primary,
+    ));
+    let old = Arc::new(Recorder::new("relay"));
+    let default = Arc::new(Recorder::new("default-route"));
+    let mut runner = runner_with_default_provider(fresh_service(), agents, default.clone());
+    runner.named_providers.insert("relay".into(), old.clone());
+    let (tx, mut rx) = broadcast::channel::<FlowStreamEvent>(256);
+    let run = |directive: Option<RunModelDirective>, input| {
+        runner.run(
+            key_string.clone(),
+            probe_spec(agent_id),
+            input,
+            Arc::new(crate::sandbox::factory::NoopSandbox),
+            tx.clone(),
+            CancellationToken::new(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            crate::thinker::TurnEnvelope::default(),
+            directive,
+            uuid::Uuid::new_v4().to_string(),
+            None,
+        )
+    };
+
+    let selected = with_test_selectable_models(Some(eligible.clone()), async {
+        let params: AgentRunParams = serde_json::from_value(serde_json::json!({
+            "input": "hi", "model_override": {"kind":"qualified", "provider":"relay", "model":"claude-sonnet-5.5"}
+        })).unwrap();
+        let request = build_run_request("early-validation".into(), &key, params, None, None, &Default::default()).await.unwrap();
+        request.validate_dispatch_model().unwrap();
+        request.run_model_directive()
+    }).await;
+    // The gateway check passed, but withdrawal happens before the real
+    // runner acquires its transport. Both transport mounts still exist.
+    assert!(
+        matches!(with_test_selectable_models(Some(withdrawn.clone()), run(selected, FlowInput::Prompt("hi".into()))).await,
+        Err(FlowError::ProviderUnavailable(provider)) if provider == "relay")
+    );
+    assert_eq!(old.calls.load(Ordering::Relaxed), 0);
+    assert_eq!(default.calls.load(Ordering::Relaxed), 0);
+    assert!(rx.try_recv().is_err());
+
+    set_session_model(
+        &key_string,
+        Some("relay".into()),
+        "claude-sonnet-5.5".into(),
+    );
+    let before = get_session_model_snapshot(&key_string);
+    let image = crate::gateway::channel::Attachment {
+        id: "vision-test".into(),
+        mime_type: "image/png".into(),
+        filename: Some("photo.png".into()),
+        size: None,
+        url: None,
+        path: None,
+        data: Some(vec![0x89, 0x50, 0x4e, 0x47]),
+        is_voice_note: false,
+        is_video_note: false,
+    };
+    let media = Arc::new(crate::media::processor::PendingMedia::new(
+        Arc::new(crate::media::processor::MediaProcessor::new(None, None)),
+        vec![image],
+    ));
+    let input = FlowInput::PendingAttachments {
+        message: crate::session::events::MessageContent {
+            text: "describe the image".into(),
+            blocks: vec![],
+            thinking: None,
+            thinking_signature: None,
+        },
+        media,
+    };
+    with_test_selectable_models(Some(eligible), async {
+        let pin = before.pref.as_ref().unwrap();
+        assert!(crate::providers::session_model_handle::validate_persisted_model(pin).is_ok());
+        assert!(
+            crate::providers::capabilities_for(&pin.model)
+                .unwrap()
+                .supports_vision
+        );
+    })
+    .await;
+    // The gateway holds pending image data when the pin is withdrawn. The
+    // runner's text-only default must get a description marker, not pixels.
+    let _ = with_test_selectable_models(Some(withdrawn), run(None, input)).await;
+    let after = get_session_model_snapshot(&key_string);
+    clear_session_model(&key_string);
+    assert_eq!(after.pref, before.pref);
+    assert_eq!(after.generation, before.generation);
+    assert!(
+        matches!(rx.try_recv(), Ok(FlowStreamEvent::ModelResolved(info))
+        if info.is_fallback && info.original_model.as_deref() == Some("claude-sonnet-5.5")
+            && info.provider == "default-route" && info.model == "codex-mini-latest")
+    );
+    assert_eq!(old.calls.load(Ordering::Relaxed), 0);
+    assert!(default.calls.load(Ordering::Relaxed) > 0);
+    assert!(!default.saw_inline_image.load(Ordering::Relaxed));
+    assert!(default.saw_text_image_notice.load(Ordering::Relaxed));
+}
+
+#[tokio::test]
+async fn cancelling_blocked_attachment_preparation_leaves_the_session_empty_and_dispatchable() {
+    use crate::media::cache::CachedMedia;
+    use crate::media::processor::{MediaProcessor, PendingMedia};
+    use crate::media::{TranscriptionResult, TranscriptionService};
+    use crate::orchestrator::{build_sandbox_factory, FlowRegistry, FlowRequest, Orchestrator};
+    use std::{sync::Arc, time::Duration};
+    use tokio::sync::Notify;
+
+    struct BlockedTranscription(Arc<Notify>);
+    #[async_trait::async_trait]
+    impl TranscriptionService for BlockedTranscription {
+        async fn transcribe(
+            &self,
+            _audio: &CachedMedia,
+            _language: Option<&str>,
+        ) -> anyhow::Result<TranscriptionResult> {
+            self.0.notify_one();
+            std::future::pending().await
+        }
+    }
+
+    let started = Arc::new(Notify::new());
+    let processor = Arc::new(MediaProcessor::new(
+        Some(Box::new(BlockedTranscription(started.clone()))),
+        None,
+    ));
+    let media = Arc::new(PendingMedia::new(
+        processor,
+        vec![crate::gateway::channel::Attachment {
+            id: "blocked-audio".into(),
+            mime_type: "audio/mp3".into(),
+            filename: Some("voice.mp3".into()),
+            size: None,
+            url: None,
+            path: None,
+            data: Some(vec![0xFF, 0xFB]),
+            is_voice_note: false,
+            is_video_note: false,
+        }],
+    ));
+    let service = fresh_service();
+    let agent_id = "blocked-attachment-fixture";
+    let key = SessionKey::ephemeral(agent_id);
+    let spec = probe_spec(agent_id);
+    let orch = Orchestrator::new(
+        Arc::new(FlowRegistry::new(HashMap::from([(
+            spec.id.clone(),
+            spec.clone(),
+        )]))),
+        Arc::new(HashMap::from([(agent_id.into(), spec.id.clone())])),
+        service.clone(),
+        build_sandbox_factory(Arc::new(|_| {
+            Ok(Arc::new(crate::sandbox::factory::NoopSandbox))
+        })),
+        Arc::new(runner_with_failing_provider(service.clone(), agent_id)),
+    );
+    let request = |input| FlowRequest {
+        flow_id: None,
+        agent_id: agent_id.into(),
+        run_id: uuid::Uuid::new_v4().to_string(),
+        input,
+        channel: None,
+        session_hint: Some(key.to_key_string()),
+        scope: crate::scope::FlowScope::unscoped(),
+        parent_session: None,
+        depth: 0,
+        tool_service: None,
+        trace_sink: None,
+        event_tx: None,
+        interaction_manifest: None,
+        workspace_override: None,
+        max_iterations_override: None,
+        transient_context: None,
+        think_level: None,
+        envelope: crate::thinker::TurnEnvelope::none(),
+        model_directive: None,
+        telecom_public: None,
+    };
+    let first = orch
+        .dispatch(request(FlowInput::PendingAttachments {
+            message: crate::session::events::MessageContent {
+                text: "transcribe this".into(),
+                blocks: vec![],
+                thinking: None,
+                thinking_signature: None,
+            },
+            media,
+        }))
+        .await
+        .unwrap();
+    assert_eq!(first.session_key, key.to_key_string());
+    tokio::time::timeout(Duration::from_secs(5), started.notified())
+        .await
+        .unwrap();
+    first.cancel.cancel();
+    assert!(matches!(
+        tokio::time::timeout(Duration::from_secs(5), first.completion)
+            .await
+            .unwrap()
+            .unwrap(),
+        Err(FlowError::Cancelled)
+    ));
+    assert!(service
+        .get_events(&key, None, None)
+        .await
+        .unwrap()
+        .is_empty());
+
+    let second = orch
+        .dispatch(request(FlowInput::Prompt("try again".into())))
+        .await
+        .expect("cancelled runner released its session lock");
+    assert_eq!(second.session_key, key.to_key_string());
+    // The mock provider intentionally refuses, but the new run must finish
+    // and seed its own prompt rather than inheriting the cancelled turn.
+    let outcome = tokio::time::timeout(Duration::from_secs(5), second.completion)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        outcome.is_err(),
+        "the default fixture refuses every request"
+    );
+    let events = service.get_events(&key, None, None).await.unwrap();
+    let prompts: Vec<_> = events
+        .iter()
+        .filter_map(|record| match &record.event {
+            SessionEvent::UserMessage { content, .. } => Some(content.text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(prompts, ["try again"]);
+}
+
 /// The behavioural half of `the_terminal_settle_runs_on_both_arms_of_a_finished_run`.
 ///
 /// A provider that fails on every call ends the run in `Err` *after* the loop

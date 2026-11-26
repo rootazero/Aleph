@@ -2,7 +2,7 @@
 //! path times out, returns invalid JSON, yields no valid slots, or when the
 //! candidate pool is too small to be worth asking the LLM about.
 
-use super::envelope::{EnvelopeItem, EnvelopeSlot, ItemSource, SlotKind};
+use super::envelope::{EnvelopeItem, EnvelopeSlot, ItemSource, NoteProvenance, SlotKind};
 use crate::config::types::memory::FallbackSkeleton;
 use crate::memory::context::FactSource;
 
@@ -15,6 +15,7 @@ pub(crate) struct Candidate {
     pub title: String,
     pub full_content: String,
     pub source: ItemSource,
+    pub note_provenance: Option<NoteProvenance>,
     pub relevance: f32,
     pub updated_at: i64,
     pub slot_hint: SlotKind,
@@ -89,6 +90,7 @@ pub(crate) fn skeleton_pack(
                 relevance: c.relevance,
                 tokens: 0, // set by hydration
                 updated_at: c.updated_at,
+                note_provenance: c.note_provenance.clone(),
                 extra: serde_json::Map::new(),
             })
             .collect();
@@ -143,6 +145,7 @@ mod tests {
             relevance: rel,
             updated_at: updated,
             slot_hint: slot,
+            note_provenance: None,
             fact_source: FactSource::Extracted,
         }
     }

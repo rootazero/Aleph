@@ -194,6 +194,7 @@ async fn runtime_tool_stays_cold_and_uses_fresh_services_after_restart() {
         raw_store: raw,
         session_store: None,
         provider: None,
+        provider_secrets: None,
         extensions: Arc::new(MemoryExtensionRegistry::new()),
         state_db: None,
         default_agent_id: "main".into(),

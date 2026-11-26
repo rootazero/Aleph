@@ -217,6 +217,9 @@ fn render_distill_actions(actions: &[crate::memory::dreaming::DistillActionRecor
         for a in actions.iter().filter(|a| a.stage == stage) {
             let outcome = match a.outcome {
                 DistillOutcome::Applied => "applied",
+                DistillOutcome::Skipped => "skipped by the model",
+                DistillOutcome::Unchanged => "already reflected in the note",
+                DistillOutcome::FilteredBudget => "dropped (cycle edit budget exhausted)",
                 DistillOutcome::FilteredNonCandidate => "dropped (path not offered to the model)",
                 DistillOutcome::FilteredInvalid => "dropped (format/safety gate)",
                 DistillOutcome::FilteredEvidence => "dropped (recall evidence outweighed it)",

@@ -18,7 +18,7 @@
 //! which failures matter — no threshold on "is a 40% failure rate bad", no
 //! table of "important" tools, no error-string classifier. *"Is this worth
 //! remembering, and as what rule"* goes to the LLM through the same
-//! [`DistillAction`] contract, the same `skill_gate`, the same recall-evidence
+//! [`DistillAction`](crate::memory::dreaming::DistillAction) contract, the same `skill_gate`, the same recall-evidence
 //! gate and the same edit budget as `feedback_distill` (R7).
 //!
 //! # Why `lesson/` and not `feedback/`
@@ -43,7 +43,7 @@ use async_trait::async_trait;
 
 use crate::error::AlephError;
 use crate::memory::dreaming::distill_action::referenced_path;
-use crate::memory::dreaming::{DistillAction, DistillActionRecord, DistillOutcome, DreamContext};
+use crate::memory::dreaming::{DistillActionRecord, DistillOutcome, DreamContext};
 use crate::memory::insights::{aggregate_tool_failures, ToolFailureDigest};
 use crate::memory::notes::store::NoteStore;
 use crate::memory::store::raw_memory::RawMemoryStore;
@@ -372,7 +372,7 @@ impl DreamStage for ToolFailureDistillStage {
             }
         };
 
-        let actions = super::feedback_distill::parse_distill_response(&response.text_content());
+        let actions = super::skill_distill::parse_distill_response(&response.text_content());
         let candidate_set: std::collections::HashSet<&str> =
             candidate_paths.iter().map(String::as_str).collect();
         let mut applied = 0usize;
@@ -437,21 +437,14 @@ impl DreamStage for ToolFailureDistillStage {
                 .apply_distill_action(&ctx.agent_id, LESSONS_CATEGORY, &action)
                 .await
             {
-                Ok(()) => {
-                    // `Skip` is a pure no-op inside `apply_distill_action`, so
-                    // `Ok` is not proof a file changed. Counting it would make
-                    // the prompt's own "empty output beats noise" gate read as
-                    // productivity and trigger an index rebuild over nothing.
-                    if !matches!(action, DistillAction::Skip { .. }) {
+                Ok(outcome) => {
+                    if outcome == DistillOutcome::Applied {
                         applied += 1;
                     }
                     ctx.report
                         .distill_actions
                         .push(DistillActionRecord::from_action(
-                            STAGE_NAME,
-                            &action,
-                            DistillOutcome::Applied,
-                            None,
+                            STAGE_NAME, &action, outcome, None,
                         ));
                 }
                 Err(e) => {

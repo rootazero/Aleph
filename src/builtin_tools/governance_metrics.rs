@@ -26,8 +26,8 @@ use crate::error::Result;
 // (`flag_user_correction`), the distiller (`feedback_distill`) and this counter
 // cannot drift apart. A local literal here counted nothing the day the writer
 // changed its prefix, and nothing would have said so.
-use crate::memory::dreaming::stages::feedback_distill::CORRECTION_PATH_PREFIX;
 use crate::memory::store::raw_memory::RawMemoryStore;
+use crate::memory::store::raw_memory::CORRECTION_PATH_PREFIX;
 use crate::memory::store::sqlite::dream_reports::DreamPipelineStat;
 use crate::memory::store::MemoryBackend;
 use crate::tools::AlephTool;

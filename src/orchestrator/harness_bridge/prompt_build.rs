@@ -1204,6 +1204,7 @@ pub(crate) fn last_user_query(input: &FlowInput) -> String {
             .map(|c| c.text.clone())
             .unwrap_or_default(),
         FlowInput::History { prompt, .. } => prompt.clone(),
+        FlowInput::PendingAttachments { message, .. } => message.text.clone(),
         FlowInput::Resume => String::new(),
     }
 }

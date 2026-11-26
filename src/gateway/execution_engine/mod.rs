@@ -416,6 +416,50 @@ pub struct RunRequest {
 pub const RESUME_TIER_CEILING_KEY: &str = "resume_tier_ceiling";
 
 impl RunRequest {
+    /// Revalidate queued user selections against the live mounted-route publication.
+    pub(crate) fn run_model_directive(
+        &self,
+    ) -> Option<crate::orchestrator::dispatch::RunModelDirective> {
+        use crate::gateway::model_override::{ModelOverride, USER_MODEL_OVERRIDE_METADATA};
+        use crate::orchestrator::dispatch::RunModelDirective;
+        use crate::providers::session_model_handle::SessionModelPref;
+        let override_ = self.model_override.as_ref()?;
+        if self.metadata.contains_key(USER_MODEL_OVERRIDE_METADATA) {
+            let ModelOverride::Qualified { provider, model } = override_ else {
+                return None;
+            };
+            return Some(RunModelDirective::Selected {
+                provider: provider.clone(),
+                model: model.clone(),
+            });
+        }
+        let model = override_.model().trim();
+        (!model.is_empty()).then(|| {
+            RunModelDirective::Internal(SessionModelPref {
+                provider: override_.provider().map(str::to_owned),
+                model: model.to_owned(),
+            })
+        })
+    }
+
+    pub(crate) fn validate_dispatch_model(&self) -> Result<(), ExecutionError> {
+        use crate::gateway::model_override::{ModelOverride, USER_MODEL_OVERRIDE_METADATA};
+        use crate::providers::session_model_handle::selectable_models;
+        if !self.metadata.contains_key(USER_MODEL_OVERRIDE_METADATA) {
+            return Ok(());
+        }
+        if let Some(ModelOverride::Qualified { provider, model }) = &self.model_override {
+            if selectable_models()
+                .is_some_and(|snapshot| snapshot.resolve(Some(provider), model).is_ok())
+            {
+                return Ok(());
+            }
+        }
+        Err(ExecutionError::Orchestrator(
+            "The selected model is no longer available. Choose a model and try again.".into(),
+        ))
+    }
+
     pub(crate) fn durable_workspace_path(&self) -> Option<&std::path::Path> {
         match self.workspace_override.as_ref()? {
             crate::sandbox::context::ExecWorkspace::Directory(root) => Some(root),

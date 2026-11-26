@@ -1,7 +1,8 @@
-use super::DreamDaemon;
+use super::{tests::StubEmbedder, DreamDaemon};
 use crate::capability::ownership::OwnershipTree;
 use crate::config::types::memory::MemoryConfig;
 use crate::memory::runtime::{MemoryRuntime, MemoryRuntimeConfig, MemoryState};
+use crate::providers::mock::MockProvider;
 use crate::sync_primitives::{Arc, AtomicBool, Ordering};
 use chrono::NaiveTime;
 use std::pin::pin;
@@ -30,6 +31,8 @@ async fn dream_manual_and_tick_share_admission() {
             .scope(async {
                 DreamDaemon::from_config(operation.backend().clone(), &config)
                     .unwrap()
+                    .with_provider(Arc::new(MockProvider::new("")))
+                    .with_embedder(Arc::new(StubEmbedder))
                     .with_note_memory_dir(directory.path().join("note"))
                     .with_activity_probe(Arc::new(|| false))
             })

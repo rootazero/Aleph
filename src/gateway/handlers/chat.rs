@@ -7,11 +7,13 @@
 //! - `chat.send` - Send a message (wraps agent.run)
 //! - `chat.abort` - Abort message generation
 //! - `chat.history` - Get chat history
+//! - `chat.models.list` - List usable model choices
 //! - `chat.clear` - Clear chat history
 //! - `chat.rewind` - Drop the conversation from a given event seq onward
 //!   (server half of edit-and-resend; the client then calls `chat.send`)
 
 use crate::sync_primitives::Arc;
+use aleph_protocol::providers::ChatModelsListResult;
 use aleph_protocol::session_thread::{
     ChatHistoryScrollbackRequest, ChatHistoryScrollbackResponse, ScrollbackStatus,
 };
@@ -26,7 +28,17 @@ use super::super::session_store::types::{HistoryRead, ScrollbackRead};
 use super::super::session_store::SessionStore;
 use super::super::visibility;
 use super::agent::{AgentRunManager, AgentRunParams};
-use super::parse_params;
+use super::{parse_params, service_unavailable};
+
+pub fn handle_models_list(request: JsonRpcRequest) -> JsonRpcResponse {
+    let Some(snapshot) = crate::providers::session_model_handle::selectable_models() else {
+        return service_unavailable(request, "Selectable model publication is unavailable");
+    };
+    let result = ChatModelsListResult {
+        items: snapshot.choices(),
+    };
+    JsonRpcResponse::success(request.id, json!(result))
+}
 
 // ============================================================================
 // Request/Response Types
@@ -2322,7 +2334,7 @@ mod tests {
                 _transient_context: Option<String>,
                 _think_level: Option<crate::agents::thinking::ThinkLevel>,
                 _envelope: crate::thinker::TurnEnvelope,
-                _turn_model: Option<crate::providers::session_model_handle::SessionModelPref>,
+                _turn_model: Option<crate::orchestrator::dispatch::RunModelDirective>,
                 _run_id: String,
                 _telecom_public: Option<crate::gateway::telecom::TelecomPublicContext>,
             ) -> Result<

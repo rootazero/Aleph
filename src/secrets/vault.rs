@@ -6,6 +6,7 @@
 //! This is a pure storage container — encryption/decryption is the caller's
 //! responsibility (handled by `SharedTokenManager`).
 
+use crate::providers::model_catalog::discovery_authority;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -47,6 +48,11 @@ pub struct SecretVault {
     path: PathBuf,
     /// A failed load must never be followed by an empty-vault overwrite.
     load_error: Option<String>,
+}
+
+fn provider_owns_secret(provider: &str, name: &str) -> bool {
+    name.strip_prefix("ai:") == Some(provider)
+        || (provider == "chatgpt" && name == "ai:chatgpt:oauth")
 }
 
 impl SecretVault {
@@ -252,6 +258,7 @@ impl SecretVault {
         }
         entry.updated_at = now;
 
+        let mut fence = discovery_authority::mutation_fence();
         let previous = self.data.entries.insert(name.to_string(), entry);
         if let Err(e) = self.save() {
             if let Some(previous) = previous {
@@ -262,12 +269,15 @@ impl SecretVault {
             return Err(e);
         }
 
+        fence.vault_changed(|provider| provider_owns_secret(provider, name));
+        drop(fence);
         info!(name = name, "Secret stored in vault");
         Ok(())
     }
 
     /// Delete a secret by name.
     pub fn delete(&mut self, name: &str) -> Result<bool, SecretError> {
+        let mut fence = discovery_authority::mutation_fence();
         let Some(previous) = self.data.entries.remove(name) else {
             return Ok(false);
         };
@@ -277,6 +287,8 @@ impl SecretVault {
             return Err(e);
         }
 
+        fence.vault_changed(|provider| provider_owns_secret(provider, name));
+        drop(fence);
         info!(name = name, "Secret deleted from vault");
         Ok(true)
     }
@@ -299,10 +311,42 @@ impl SecretVault {
         &self.data.entries
     }
 
-    /// Replace all entries atomically (for re-encryption).
+    /// Replace credentials in one atomic vault write.
     pub fn replace_all(
         &mut self,
         entries: HashMap<String, EncryptedEntry>,
+    ) -> Result<(), SecretError> {
+        self.replace_entries(entries, Some(&mut discovery_authority::mutation_fence()))
+    }
+
+    pub(crate) fn replace_credentials(
+        &mut self,
+        entries: HashMap<String, EncryptedEntry>,
+        fence: &mut discovery_authority::MutationFence,
+    ) -> Result<(), SecretError> {
+        self.replace_entries(entries, Some(fence))
+    }
+
+    /// Persist the token manager's re-encryption of the same plaintext entries.
+    /// No discovery epoch changes: callers still hold the vault write lock.
+    pub(crate) fn rewrap_entries(
+        &mut self,
+        entries: HashMap<String, EncryptedEntry>,
+    ) -> Result<(), SecretError> {
+        debug_assert!(
+            self.data
+                .entries
+                .keys()
+                .all(|key| entries.contains_key(key))
+                && self.data.entries.len() == entries.len()
+        );
+        self.replace_entries(entries, None)
+    }
+
+    fn replace_entries(
+        &mut self,
+        entries: HashMap<String, EncryptedEntry>,
+        fence: Option<&mut discovery_authority::MutationFence>,
     ) -> Result<(), SecretError> {
         // Put the previous map back when the write fails: the in-memory vault
         // and the file must agree, otherwise the process keeps serving
@@ -311,6 +355,21 @@ impl SecretVault {
         if let Err(e) = self.save() {
             self.data.entries = previous;
             return Err(e);
+        }
+        if let Some(fence) = fence {
+            fence.vault_changed(|provider| {
+                let changed = |key: &str| match (previous.get(key), self.data.entries.get(key)) {
+                    (Some(old), Some(new)) => {
+                        old.ciphertext != new.ciphertext
+                            || old.nonce != new.nonce
+                            || old.salt != new.salt
+                    }
+                    (None, None) => false,
+                    _ => true,
+                };
+                changed(&format!("ai:{provider}"))
+                    || (provider == "chatgpt" && changed("ai:chatgpt:oauth"))
+            });
         }
         Ok(())
     }

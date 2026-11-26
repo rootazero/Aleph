@@ -909,6 +909,257 @@ mod reference_hook_tests {
     }
 
     #[tokio::test]
+    async fn supersede_keeps_original_live_when_successor_file_cannot_publish() {
+        assert_original_survives_failed_replacement(false).await;
+    }
+
+    #[tokio::test]
+    async fn supersede_keeps_original_live_when_successor_index_rejects() {
+        assert_original_survives_failed_replacement(true).await;
+    }
+
+    fn replace_original_note() -> crate::memory::dreaming::distill_action::DistillAction {
+        use crate::memory::dreaming::distill_action::DistillAction;
+
+        DistillAction::Supersede {
+            old_note_path: "skill/original".into(),
+            title: "successor".into(),
+            rule: "Use the replacement rule.".into(),
+            confidence: 0.9,
+            severity: Default::default(),
+            source_facts: vec!["correction-1".into()],
+        }
+    }
+
+    async fn assert_original_survives_failed_replacement(fail_index: bool) {
+        let dir = tempfile::tempdir().unwrap();
+        let backend = Arc::new(SqliteMemoryBackend::new(&dir.path().join("mem.db")).unwrap());
+        let note_dir = dir.path().join("note");
+        let indexer = NoteIndexer::new(note_dir.clone(), backend.clone());
+        seed_note(&indexer, "default", "skill", "original", 0.5, vec![]).await;
+        let original = note_dir.join("default/skill/original.md");
+        let original_bytes = fs::read(&original).await.unwrap();
+
+        if fail_index {
+            backend
+                .with_conn(|conn| {
+                    conn.execute_batch(
+                        "CREATE TRIGGER reject_successor BEFORE INSERT ON notes_index
+                         WHEN NEW.path = 'skill/successor'
+                         BEGIN SELECT RAISE(ABORT, 'test: successor projection failure'); END;",
+                    )
+                    .map_err(|error| AlephError::other(error.to_string()))
+                })
+                .await
+                .unwrap();
+        } else {
+            fs::create_dir(note_dir.join("default/skill/successor.md"))
+                .await
+                .unwrap();
+        }
+
+        let result = indexer
+            .apply_distill_action("default", "skill", &replace_original_note())
+            .await;
+        assert!(result.is_err(), "fail_index={fail_index}: {result:?}");
+        assert_eq!(
+            fs::read(&original).await.ok().as_deref(),
+            Some(original_bytes.as_slice()),
+            "fail_index={fail_index}: the exact original must still be readable",
+        );
+        let listed = backend.list_notes("default").await.unwrap();
+        assert_eq!(listed.len(), 1, "fail_index={fail_index}");
+        assert_eq!(listed[0].path, "skill/original", "fail_index={fail_index}");
+    }
+
+    #[tokio::test]
+    async fn supersede_rejects_an_unrelated_live_destination() {
+        let dir = tempfile::tempdir().unwrap();
+        let backend = Arc::new(SqliteMemoryBackend::new(&dir.path().join("mem.db")).unwrap());
+        let note_dir = dir.path().join("note");
+        let indexer = NoteIndexer::new(note_dir.clone(), backend.clone());
+        seed_note(&indexer, "default", "skill", "original", 0.5, vec![]).await;
+        seed_note(&indexer, "default", "skill", "successor", 0.3, vec![]).await;
+        let original = note_dir.join("default/skill/original.md");
+        let occupied = note_dir.join("default/skill/successor.md");
+        let original_bytes = fs::read(&original).await.unwrap();
+        let occupied_bytes = fs::read(&occupied).await.unwrap();
+
+        let result = indexer
+            .apply_distill_action("default", "skill", &replace_original_note())
+            .await;
+
+        assert!(
+            result.is_err(),
+            "an unrelated destination cannot be replaced"
+        );
+        assert_eq!(fs::read(&original).await.unwrap(), original_bytes);
+        assert_eq!(fs::read(&occupied).await.unwrap(), occupied_bytes);
+        assert_eq!(backend.list_notes("default").await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn supersede_publishes_successor_before_attempting_projection_retirement() {
+        let dir = tempfile::tempdir().unwrap();
+        let backend = Arc::new(SqliteMemoryBackend::new(&dir.path().join("mem.db")).unwrap());
+        let note_dir = dir.path().join("note");
+        let indexer = NoteIndexer::new(note_dir.clone(), backend.clone());
+        seed_note(&indexer, "default", "skill", "original", 0.5, vec![]).await;
+        backend
+            .with_conn(|conn| {
+                conn.execute_batch(
+                    "CREATE TRIGGER reject_retirement BEFORE DELETE ON notes_index
+                     WHEN OLD.path = 'skill/original'
+                     BEGIN SELECT RAISE(ABORT, 'test: retirement failure'); END;",
+                )
+                .map_err(|error| AlephError::other(error.to_string()))
+            })
+            .await
+            .unwrap();
+
+        let result = indexer
+            .apply_distill_action("default", "skill", &replace_original_note())
+            .await;
+
+        assert!(
+            result.is_err(),
+            "failed retirement is not a completed replacement"
+        );
+        let successor = fs::read_to_string(note_dir.join("default/skill/successor.md"))
+            .await
+            .expect("successor was already published when retirement failed");
+        assert!(note_dir.join("default/skill/original.md").is_file());
+        assert!(backend
+            .get_note_index("skill/original", "default")
+            .await
+            .unwrap()
+            .is_some());
+        assert!(successor.contains("Use the replacement rule."));
+        assert!(backend
+            .get_note_index("skill/successor", "default")
+            .await
+            .unwrap()
+            .is_some());
+    }
+
+    #[tokio::test]
+    async fn supersede_refuses_a_manually_edited_original() {
+        let dir = tempfile::tempdir().unwrap();
+        let backend = Arc::new(SqliteMemoryBackend::new(&dir.path().join("mem.db")).unwrap());
+        let note_dir = dir.path().join("note");
+        let indexer = NoteIndexer::new(note_dir.clone(), backend.clone());
+        seed_note(&indexer, "default", "skill", "original", 0.5, vec![]).await;
+        let original = note_dir.join("default/skill/original.md");
+        let mut edited = fs::read_to_string(&original).await.unwrap();
+        edited.push_str("\nUser edits not yet visible in the candidate index.\n");
+        fs::write(&original, &edited).await.unwrap();
+
+        let result = indexer
+            .apply_distill_action("default", "skill", &replace_original_note())
+            .await;
+
+        assert!(
+            result.is_err(),
+            "the prepared candidate no longer matches disk"
+        );
+        assert_eq!(fs::read_to_string(&original).await.unwrap(), edited);
+        assert!(backend
+            .get_note_index("skill/original", "default")
+            .await
+            .unwrap()
+            .is_some());
+        assert!(!note_dir.join("default/skill/successor.md").exists());
+    }
+
+    #[tokio::test]
+    async fn supersede_in_place_does_not_retire_the_projection() {
+        use crate::memory::dreaming::distill_action::DistillAction;
+
+        let dir = tempfile::tempdir().unwrap();
+        let backend = Arc::new(SqliteMemoryBackend::new(&dir.path().join("mem.db")).unwrap());
+        let note_dir = dir.path().join("note");
+        let indexer = NoteIndexer::new(note_dir.clone(), backend.clone());
+        seed_note(&indexer, "default", "skill", "original", 0.5, vec![]).await;
+        backend
+            .with_conn(|conn| {
+                conn.execute_batch(
+                    "CREATE TRIGGER reject_retirement BEFORE DELETE ON notes_index
+                     WHEN OLD.path = 'skill/original'
+                     BEGIN SELECT RAISE(ABORT, 'test: in-place replacement tried to delete index row'); END;",
+                )
+                .map_err(|error| AlephError::other(error.to_string()))
+            })
+            .await
+            .unwrap();
+        let mut action = replace_original_note();
+        if let DistillAction::Supersede { title, .. } = &mut action {
+            *title = "original".into();
+        }
+
+        indexer
+            .apply_distill_action("default", "skill", &action)
+            .await
+            .unwrap();
+
+        let live = fs::read_to_string(note_dir.join("default/skill/original.md"))
+            .await
+            .unwrap();
+        assert!(live.contains("Use the replacement rule."));
+        let indexed = backend
+            .get_note_index("skill/original", "default")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(indexed.content_hash, super::sha2_hash(&live));
+        assert_eq!(backend.list_notes("default").await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn supersede_preserves_an_existing_archive() {
+        let dir = tempfile::tempdir().unwrap();
+        let backend = Arc::new(SqliteMemoryBackend::new(&dir.path().join("mem.db")).unwrap());
+        let note_dir = dir.path().join("note");
+        let indexer = NoteIndexer::new(note_dir.clone(), backend.clone());
+        seed_note(&indexer, "default", "skill", "original", 0.5, vec![]).await;
+        let archive_dir = note_dir.join("default/archive/skill");
+        fs::create_dir_all(&archive_dir).await.unwrap();
+        let occupied = archive_dir.join("original.md");
+        let archived_bytes = b"Historical note from a different replacement.\n";
+        fs::write(&occupied, archived_bytes).await.unwrap();
+
+        indexer
+            .apply_distill_action("default", "skill", &replace_original_note())
+            .await
+            .unwrap();
+
+        assert_eq!(fs::read(&occupied).await.unwrap(), archived_bytes);
+        let mut entries = fs::read_dir(&archive_dir).await.unwrap();
+        let mut backups = Vec::new();
+        while let Some(entry) = entries.next_entry().await.unwrap() {
+            if entry.path() != occupied {
+                backups.push(fs::read_to_string(entry.path()).await.unwrap());
+            }
+        }
+        assert_eq!(backups.len(), 1);
+        assert!(backups[0].contains("superseded_by"));
+        assert!(!note_dir.join("default/skill/original.md").exists());
+        assert!(backend
+            .get_note_index("skill/original", "default")
+            .await
+            .unwrap()
+            .is_none());
+        let live = fs::read_to_string(note_dir.join("default/skill/successor.md"))
+            .await
+            .unwrap();
+        let indexed = backend
+            .get_note_index("skill/successor", "default")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(indexed.content_hash, super::sha2_hash(&live));
+    }
+
+    #[tokio::test]
     async fn append_to_note_also_indexes_to_sqlite() {
         let dir = tempfile::tempdir().unwrap();
         let backend = Arc::new(SqliteMemoryBackend::new(&dir.path().join("mem.db")).unwrap());
@@ -1207,7 +1458,7 @@ mod reference_hook_tests {
     }
 
     #[tokio::test]
-    async fn supersede_with_missing_old_file_still_writes_replacement() {
+    async fn supersede_with_missing_old_file_refuses_unproven_replacement() {
         use crate::memory::dreaming::distill_action::DistillAction;
 
         let dir = tempfile::tempdir().unwrap();
@@ -1223,17 +1474,18 @@ mod reference_hook_tests {
             severity: Default::default(),
             source_facts: vec![],
         };
-        indexer
+        assert!(indexer
             .apply_distill_action("default", "skill", &action)
             .await
-            .unwrap();
+            .is_err());
 
         let base = dir.path().join("note").join("default");
-        assert!(base.join("skill").join("replacement.md").exists());
-        assert!(
-            !base.join("archive").join("skill").join("ghost.md").exists(),
-            "nothing to archive when the old file never existed"
-        );
+        assert!(!base.join("skill").join("replacement.md").exists());
+        assert!(backend
+            .get_note_index("skill/replacement", "default")
+            .await
+            .unwrap()
+            .is_none());
     }
 }
 

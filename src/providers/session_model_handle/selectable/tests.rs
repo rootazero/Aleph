@@ -53,6 +53,34 @@ fn configured_custom_and_model_defs_are_authoritative() {
 }
 
 #[test]
+fn raw_model_does_not_parse_provider_shorthand() {
+    let mut config = configured();
+    config
+        .providers
+        .insert("org".into(), ProviderConfig::test_config("model"));
+    config
+        .providers
+        .insert("relay".into(), ProviderConfig::test_config("org/model"));
+    let ready = roster(&["org", "relay"]);
+    let snapshot = SelectableModelsSnapshot::from_config(&config, ready.clone(), &ready, |_| true);
+    assert_eq!(
+        snapshot
+            .resolve(None, "org/model")
+            .unwrap()
+            .provider
+            .as_deref(),
+        Some("org")
+    );
+    assert_eq!(
+        snapshot.resolve_raw("org/model"),
+        Ok(SessionModelPref {
+            provider: Some("relay".into()),
+            model: "org/model".into(),
+        })
+    );
+}
+
+#[test]
 fn shared_model_is_ambiguous_even_when_one_provider_is_unavailable() {
     let mut config = configured();
     let mut other = ProviderConfig::test_config("tenant-model");
@@ -65,7 +93,7 @@ fn shared_model_is_ambiguous_even_when_one_provider_is_unavailable() {
         |_| true,
     );
     assert_eq!(
-        snapshot.resolve(None, "tenant-model"),
+        snapshot.resolve_raw("tenant-model"),
         Err(ModelSelectionError::Ambiguous {
             model: "tenant-model".into(),
             providers: vec!["other".into(), "tenant".into()],

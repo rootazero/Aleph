@@ -207,6 +207,7 @@ or when its parent dies (`ParentWatch`).
 | Method | Permission required | Purpose |
 |---|---|---|
 | `screen.capture` | Screen Recording (TCC) | Capture a display (`display_id`, optional `region`) or ONE window (`window_id`) cropped to its frame, even when covered or not frontmost. `show_cursor` controls whether the pointer is drawn. Result carries `png_base64` + pixel `width`/`height`, plus `window_bounds` and `scale` on a window capture — those two are load-bearing: without them the crop's pixels cannot be mapped back to global click coordinates |
+| `screen.capture_owned_window` | Screen Recording (TCC); macOS 14+ | Take a nonzero `window_id` and positive `expected_pid`. Capture without a cursor only when the same ScreenCaptureKit window object has that ID and owner PID. Uses the existing window-capture result. A missing/mismatched owner, unsupported platform, or older helper returns no image; the Core does not retry through `screen.capture`. / 只对捕获时核实 ID 和所有者 PID 的同一个窗口对象截图，不含指针；不可用时不回退。 |
 | `screen.ocr` | None | Run Vision text recognition over a supplied `image_base64`; returns recognized lines with bounding boxes and confidences |
 | `screen.list_displays` | None | Enumerate displays with resolution, scale and origin |
 
@@ -237,6 +238,42 @@ read `delivery` back rather than assume — see `ensure_targeted` in
 | `input.hover` | Move the pointer without clicking |
 | `input.mouse_button` | Press / release / click a button without auto-release |
 | `input.cursor_position` | Read the current pointer position |
+
+### Operator approval for targeted input / 定向输入的运维审批
+
+Zahir discovery projects the existing `desktop` Tool; it grants no access and
+adds no invoke method. When a canonical, attended call receives a desktop
+policy `Ask`, the Core can wait for the authenticated operator to approve that
+one call. Eligible actions are standalone macOS `click`, `double_click`,
+`type_text` and `key_combo` on the targeted rail. A pointer action must bind
+an owned window whose frame contains the point. The card authorizes the
+named action category and verified target, not hidden input text, chords,
+coordinates, or a presumed semantic effect. The wait and dispatch share the
+earlier of the original tool deadline and a 60-second approval window. There
+is no session or standing grant.
+
+Core holds no desktop lock while requesting the decision. After Allow Once it
+tries the existing lock for the original session, then checks the policy,
+cancellation, original handler and lease, process instance, applicable window
+geometry and the Escape monitor before handing off the frozen payload. A busy
+lock refuses immediately. The existing approval manager audits the operator's
+decision separately from tool delivery. An already handed-off action is not
+retried. The Core checks snapshots immediately before handoff; macOS may still
+change the process, focus or window before the input arrives.
+
+Global input, batch/script, hold/release, AX writes, clipboard and app lifecycle
+cannot use this approval. Neither can keyboard input naming a window without
+focus proof, typing with an implicit Return, coordinates without a proven
+mapping, or a configured desktop runtime constraint that cannot be rechecked
+without a second reservation. Windows/Linux and raw MCP/ACP gain no new effect.
+
+Zahir 只投影原有 `desktop` 工具，不增加调用接口或授权。只有已受管且有人值守的
+macOS 单次定向动作能等待 operator 的单次批准；卡片不含输入内容、键或坐标。
+审批和投递共用原调用截止时间与 60 秒审批窗口中的较早者。等待不持锁；批准后按原会话
+尝试取锁，在投递原 payload 前复核策略、取消状态、原 handler 和租约、进程实例、适用的
+窗口几何与 Escape 监听状态。指针动作必须绑定包含该点的目标进程窗口。已投递的动作
+不重试；状态快照与 macOS 实际投递不是原子操作，进程、焦点或窗口仍可能在期间变化。
+全局输入、复合动作和缺少证据的调用不走这条审批路径；不扩大 Windows/Linux 或 raw MCP/ACP。
 
 ### ax.* — Accessibility tree
 

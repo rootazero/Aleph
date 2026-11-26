@@ -545,6 +545,451 @@ async fn allowed_policy_does_not_replace_existing_tool_authorization() {
 }
 
 #[tokio::test]
+async fn desktop_approval_invocation_is_bound_to_capture() {
+    tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        exercise_desktop_approval_capture(),
+    )
+    .await
+    .expect("bounded desktop approval capture test");
+}
+
+async fn exercise_desktop_approval_capture() {
+    use crate::builtin_tools::desktop::operator_approval::take_desktop_approval;
+    use crate::exec::manager::ExecApprovalManager;
+    use crate::gateway::event_bus::GatewayEventBus;
+
+    struct Probe {
+        definition: ToolDefinition,
+        results: tokio::sync::mpsc::UnboundedSender<(bool, bool)>,
+        ready: Arc<Notify>,
+        proceed: Arc<Semaphore>,
+    }
+    #[async_trait::async_trait]
+    impl ToolHandler for Probe {
+        fn definition(&self) -> ToolDefinition {
+            self.definition.clone()
+        }
+        async fn invoke(&self, _: Value) -> Result<ToolOutput, ToolError> {
+            let invocation = take_desktop_approval();
+            self.ready.notify_one();
+            self.proceed.acquire().await.unwrap().forget();
+            let present = invocation.is_some();
+            let valid = invocation.is_some_and(|ctx| ctx.validate_before_dispatch().is_ok());
+            assert!(take_desktop_approval().is_none());
+            self.results.send((present, valid)).unwrap();
+            Ok(ToolOutput {
+                value: json!({"probe": true}),
+                metadata: Default::default(),
+            })
+        }
+    }
+
+    let definition: ToolDefinition = serde_json::from_value(json!({
+        "name":"desktop", "description":"Capture probe", "input_schema":{"type":"object"},
+        "source":ToolSource::Builtin
+    }))
+    .unwrap();
+    let descriptor = ToolCapabilityDescriptor::from_definition(&definition, 0);
+    let registry = Arc::new(ToolHandlerRegistry::new());
+    let (results, mut observed) = tokio::sync::mpsc::unbounded_channel();
+    let ready = Arc::new(Notify::new());
+    let proceed = Arc::new(Semaphore::new(0));
+    let make_probe = || {
+        Arc::new(Probe {
+            definition: definition.clone(),
+            results: results.clone(),
+            ready: ready.clone(),
+            proceed: proceed.clone(),
+        })
+    };
+    let handler = make_probe();
+    registry
+        .register(descriptor.clone(), handler.clone())
+        .unwrap();
+    let host = ProjectionHost::mount(registry.as_ref().clone(), Arc::new(OwnershipTree::new()));
+    assert!(host.wait_until_ready().await);
+    let mut canonical = LoopToolRegistry::new();
+    canonical.register(Box::new(McpRegistryTool::from_registry_entry(
+        handler.clone(),
+        &descriptor,
+    )));
+    canonical.bind_canonical_registry(registry.clone(), Arc::new(|_| true));
+    assert!(canonical.bind_canonical_facade(host.facade()));
+    let canonical = Arc::new(canonical);
+    let requester = Arc::new(crate::approval::OperatorApprovalRequester::new(
+        Arc::new(ExecApprovalManager::new()),
+        Arc::new(GatewayEventBus::new()),
+    ));
+    let attended = || {
+        ScopedToolService::new(canonical.clone(), BTreeSet::new())
+            .with_exec_tier(ExecTier::Full)
+            .with_turn_context(context("capture-probe"))
+    };
+
+    for (service, expected) in [
+        (attended(), (false, false)),
+        (
+            ScopedToolService::new(canonical.clone(), BTreeSet::new())
+                .with_exec_tier(ExecTier::Full)
+                .with_operator_approval(requester.clone()),
+            (false, false),
+        ),
+    ] {
+        proceed.add_permits(1);
+        with_call_identity(
+            Some(CallIdentity {
+                turn_id: crate::session::events::TurnId::nil(),
+                call_id: "missing-context".into(),
+            }),
+            service.execute("desktop", json!({})),
+        )
+        .await
+        .unwrap();
+        assert_eq!(observed.recv().await, Some(expected));
+        ready.notified().await;
+    }
+
+    proceed.add_permits(1);
+    handler.invoke(json!({})).await.unwrap();
+    assert_eq!(observed.recv().await, Some((false, false)));
+    ready.notified().await;
+
+    let mut fallback = LoopToolRegistry::new();
+    fallback.register(Box::new(McpRegistryTool::from_registry_entry(
+        handler.clone(),
+        &descriptor,
+    )));
+    let fallback = ScopedToolService::new(Arc::new(fallback), BTreeSet::new())
+        .with_exec_tier(ExecTier::Full)
+        .with_turn_context(context("capture-fallback"))
+        .with_operator_approval(requester.clone());
+    proceed.add_permits(1);
+    fallback.execute("desktop", json!({})).await.unwrap();
+    assert_eq!(observed.recv().await, Some((false, false)));
+    ready.notified().await;
+
+    for replace in [false, true] {
+        let service = attended().with_operator_approval(requester.clone());
+        let call = tokio::spawn(async move {
+            with_call_identity(
+                Some(CallIdentity {
+                    turn_id: crate::session::events::TurnId::nil(),
+                    call_id: format!("capture-{replace}"),
+                }),
+                service.execute("desktop", json!({})),
+            )
+            .await
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(3), ready.notified())
+            .await
+            .unwrap();
+        if replace {
+            registry.unregister("desktop").unwrap();
+            registry.register(descriptor.clone(), make_probe()).unwrap();
+        } else {
+            let mut unrelated = definition.clone();
+            unrelated.name = "unrelated".into();
+            registry
+                .register(
+                    ToolCapabilityDescriptor::from_definition(&unrelated, 0),
+                    Arc::new(Probe {
+                        definition: unrelated,
+                        results: results.clone(),
+                        ready: ready.clone(),
+                        proceed: proceed.clone(),
+                    }),
+                )
+                .unwrap();
+        }
+        proceed.add_permits(1);
+        assert_eq!(observed.recv().await, Some((true, !replace)));
+        let result = call.await.unwrap();
+        if !replace {
+            assert!(result.is_ok(), "{result:?}");
+        }
+    }
+    host.close_and_await().await;
+}
+
+#[tokio::test]
+async fn late_desktop_registration_reaches_scoped_handler_once() {
+    use crate::capability::descriptor::CapabilityKind;
+    use crate::capability::facade::{ResolveError, Scope};
+    use crate::executor::builtin_registry::{BuiltinToolConfig, BuiltinToolRegistry};
+    use crate::executor::ToolRegistry;
+    use crate::tools::handlers::builtin::register_builtin_routers;
+    use aleph_desktop::traits::{
+        AutomationCapability, MediaCapability, PermissionCapability, PimCapability,
+        PowerCapability, ScreenCapability, SystemCapability,
+    };
+    use aleph_desktop::{
+        DesktopError, DesktopPlatform, OcrResult, ScreenRegion, Screenshot, WindowInfo,
+    };
+
+    struct CountingScreen {
+        captures: Arc<AtomicUsize>,
+    }
+    #[async_trait::async_trait]
+    impl ScreenCapability for CountingScreen {
+        async fn screenshot(&self, _: Option<ScreenRegion>) -> aleph_desktop::Result<Screenshot> {
+            Err(DesktopError::NotImplemented("screenshot".into()))
+        }
+        async fn ocr(&self, _: Option<&[u8]>) -> aleph_desktop::Result<OcrResult> {
+            Err(DesktopError::NotImplemented("ocr".into()))
+        }
+        async fn click(
+            &self,
+            _: f64,
+            _: f64,
+            _: aleph_desktop::MouseButton,
+        ) -> aleph_desktop::Result<()> {
+            Err(DesktopError::NotImplemented("click".into()))
+        }
+        async fn type_text(&self, _: &str) -> aleph_desktop::Result<()> {
+            Err(DesktopError::NotImplemented("type_text".into()))
+        }
+        async fn key_combo(&self, _: &[String], _: &str) -> aleph_desktop::Result<()> {
+            Err(DesktopError::NotImplemented("key_combo".into()))
+        }
+        async fn scroll(&self, _: &str, _: i32) -> aleph_desktop::Result<()> {
+            Err(DesktopError::NotImplemented("scroll".into()))
+        }
+        async fn window_list(&self) -> aleph_desktop::Result<Vec<WindowInfo>> {
+            Err(DesktopError::NotImplemented("window_list".into()))
+        }
+        async fn focus_window(&self, _: u64) -> aleph_desktop::Result<()> {
+            Err(DesktopError::NotImplemented("focus_window".into()))
+        }
+        async fn launch_app(&self, _: &str) -> aleph_desktop::Result<()> {
+            Err(DesktopError::NotImplemented("launch_app".into()))
+        }
+        async fn cursor_position(&self) -> aleph_desktop::Result<(f64, f64)> {
+            self.captures.fetch_add(1, Ordering::SeqCst);
+            Ok((12.0, 34.0))
+        }
+    }
+    struct CountingPlatform {
+        screen: CountingScreen,
+    }
+    impl DesktopPlatform for CountingPlatform {
+        fn platform_name(&self) -> &str {
+            "scoped-production-fake"
+        }
+        fn screen(&self) -> Option<&dyn ScreenCapability> {
+            Some(&self.screen)
+        }
+        fn pim(&self) -> Option<&dyn PimCapability> {
+            None
+        }
+        fn system(&self) -> Option<&dyn SystemCapability> {
+            None
+        }
+        fn automation(&self) -> Option<&dyn AutomationCapability> {
+            None
+        }
+        fn permission(&self) -> Option<&dyn PermissionCapability> {
+            None
+        }
+        fn media(&self) -> Option<&dyn MediaCapability> {
+            None
+        }
+        fn power(&self) -> Option<&dyn PowerCapability> {
+            None
+        }
+    }
+
+    let _home = crate::utils::paths::IsolatedAlephHome::new();
+    let config_root = tempfile::tempdir().unwrap();
+    let config = crate::Config::default();
+    let mut builtins = BuiltinToolRegistry::with_config(BuiltinToolConfig {
+        config: Some(Arc::new(tokio::sync::RwLock::new(config))),
+        note_memory_dir: Some(config_root.path().join("notes")),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let captures = Arc::new(AtomicUsize::new(0));
+    builtins.desktop_tool =
+        crate::builtin_tools::DesktopTool::new().with_platform(Arc::new(CountingPlatform {
+            screen: CountingScreen {
+                captures: captures.clone(),
+            },
+        }));
+    let builtins = Arc::new(builtins);
+
+    let registry = Arc::new(ToolHandlerRegistry::new());
+    let tree = Arc::new(OwnershipTree::new());
+    let host = ProjectionHost::mount(registry.as_ref().clone(), tree);
+    assert!(host.wait_until_ready().await);
+    assert!(!host
+        .current_snapshot()
+        .unwrap()
+        .entries
+        .contains_key("desktop"));
+    let facade = host.facade();
+    let scope = Scope {
+        kind: Some(CapabilityKind::Tool),
+        namespace: Some(TOOL_NAMESPACE.into()),
+        ..Scope::default()
+    };
+    let first = facade.describe(scope.clone());
+    assert!(!first
+        .capabilities
+        .iter()
+        .any(|entry| entry.id.name == "desktop"));
+    let mut publications = registry.subscribe_publications();
+
+    let names: Vec<_> = builtins
+        .unified_tools()
+        .map(|tool| tool.name.clone())
+        .collect();
+    let tool_registry: Arc<dyn ToolRegistry> = builtins.clone();
+    let registration = register_builtin_routers(registry.as_ref(), tool_registry, names)
+        .await
+        .unwrap();
+
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            let change = publications
+                .recv()
+                .await
+                .expect("publication source stays open");
+            if change.tool_changes.iter().any(|change| {
+                matches!(
+                    change,
+                    crate::tools::registry::RegistryChange::Registered { name, .. }
+                        if name == "desktop"
+                )
+            }) {
+                break;
+            }
+        }
+        while !host
+            .current_snapshot()
+            .is_some_and(|snapshot| snapshot.entries.contains_key("desktop"))
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("late desktop publication reached the subscription and applied snapshot");
+
+    let desktop_id = CapabilityId {
+        namespace: TOOL_NAMESPACE.into(),
+        name: "desktop".into(),
+    };
+    let descriptors: Vec<_> = facade
+        .describe(scope.clone())
+        .capabilities
+        .into_iter()
+        .filter(|entry| entry.id == desktop_id)
+        .collect();
+    assert_eq!(descriptors.len(), 1);
+    assert_eq!(descriptors[0].kind, CapabilityKind::Tool);
+    let lease = facade
+        .resolve(Reference {
+            id: desktop_id.clone(),
+            visibility: VisibilityScope::default(),
+        })
+        .unwrap();
+    assert_eq!(
+        captures.load(Ordering::SeqCst),
+        0,
+        "describe/resolve are reads only"
+    );
+
+    let mut inner = LoopToolRegistry::new();
+    inner.bind_canonical_registry(registry.clone(), Arc::new(|_| true));
+    assert!(inner.bind_canonical_facade(facade.clone()));
+    for entry in registry.entries_snapshot().values() {
+        inner.register(Box::new(McpRegistryTool::from_registry_entry(
+            entry.handler.clone(),
+            &entry.descriptor,
+        )));
+    }
+    let inner = Arc::new(inner);
+    let service = build_request_tool_service(
+        inner.clone(),
+        BTreeSet::new(),
+        None,
+        Some(context("desktop-production-mount")),
+        None,
+        "desktop-production-mount",
+        None,
+        ExecTier::Full,
+        false,
+        &[],
+        false,
+        Arc::new(DeferredTools::default()),
+        None,
+    );
+    let output = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        with_call_identity(
+            Some(CallIdentity {
+                turn_id: crate::session::events::TurnId::nil(),
+                call_id: "desktop-production-read".into(),
+            }),
+            service.execute("desktop", json!({"action":"cursor_position"})),
+        )
+        .await
+    })
+    .await
+    .expect("bounded scoped desktop read")
+    .unwrap();
+    let _ = output;
+    assert_eq!(captures.load(Ordering::SeqCst), 1);
+
+    let denied = build_request_tool_service(
+        inner,
+        BTreeSet::from(["not_desktop".into()]),
+        None,
+        Some(context("desktop-production-denied")),
+        None,
+        "desktop-production-denied",
+        None,
+        ExecTier::Full,
+        false,
+        &[],
+        false,
+        Arc::new(DeferredTools::default()),
+        None,
+    );
+    let denied = denied
+        .execute("desktop", json!({"action":"cursor_position"}))
+        .await;
+    assert!(matches!(denied, Err(ToolError::NotFound { .. })));
+    assert_eq!(captures.load(Ordering::SeqCst), 1);
+
+    let disposed = registration.dispose().await;
+    assert!(
+        disposed.all_ok(),
+        "{:?}",
+        disposed.failures().collect::<Vec<_>>()
+    );
+    assert!(!facade
+        .describe(scope)
+        .capabilities
+        .iter()
+        .any(|entry| entry.id == desktop_id));
+    assert!(
+        matches!(
+            facade.validate_lease(&lease),
+            Err(ResolveError::StaleProvider | ResolveError::StaleOwner | ResolveError::Unknown)
+        ),
+        "the captured lease must be stale immediately after disposal"
+    );
+    assert_eq!(
+        captures.load(Ordering::SeqCst),
+        1,
+        "disposal performs no second read"
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(3), host.close_and_await())
+        .await
+        .expect("bounded projection host shutdown");
+}
+
+#[tokio::test]
 async fn memory_resource_rule_and_missing_condition_fail_closed() {
     for memory in [false, true] {
         let fixture = Fixture::new(

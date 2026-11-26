@@ -523,6 +523,7 @@ pub async fn handle_list_corrections(
     raw_store: Arc<dyn RawMemoryStore>,
     db: MemoryBackend,
 ) -> JsonRpcResponse {
+    use crate::memory::dreaming::stages::feedback_state::list_corrections;
     use crate::memory::store::raw_memory::RawMemorySource;
 
     #[derive(serde::Deserialize, Default)]
@@ -556,54 +557,24 @@ pub async fn handle_list_corrections(
     // Resolved AFTER the visibility gate — see `memory_scope`'s module doc.
     let partitions = super::memory_scope::read_partitions(agent_id);
 
-    // Distillation status comes from the FeedbackDistill watermark, NOT from
-    // `is_processed`: that flag belongs to CompressionService's drain, and
-    // `flag_user_correction`'s sedimentation kick sets it within seconds of
-    // the correction landing — every row would show "distilled" long before
-    // the dream stage actually consumed it. FeedbackDistill advances a
-    // per-agent `created_at` watermark after each successfully distilled
-    // batch (consumer key "feedback_distill" — keep in sync with
-    // `memory::dreaming::stages::feedback_distill::WATERMARK_CONSUMER`), so a
-    // correction is distilled exactly when `created_at <= watermark`.
-    //
-    // The watermark is read PER PARTITION and each row judged against its own,
-    // rather than reading one watermark for the union: the dream cycle advances
-    // these independently per corpus, so borrowing the org tier's watermark to
-    // judge a personal-partition row would report rows as distilled that no
-    // dream stage has read — and "distilled" is what removes a row from the
-    // pending half of the queue.
+    // Status belongs to the feedback consumer in each partition, not the
+    // CompressionService processing bit. Read the committed cursor before the
+    // raw rows, so a simultaneous advance can at worst show stale pending.
     let mut rows = Vec::new();
     for partition in &partitions {
-        let watermark = db
-            .get_dream_watermark("feedback_distill", partition)
-            .unwrap_or_else(|e| {
-                tracing::warn!(
-                    error = %e,
-                    partition = %partition,
-                    "memory.list_corrections: failed to read feedback_distill watermark; \
-                     treating as 0"
-                );
-                None
-            })
-            .unwrap_or(0);
-        match raw_store
-            .get_raw_by_path_prefix("aleph://correction/", partition, limit)
-            .await
-        {
-            Ok(found) => rows.extend(found.into_iter().map(|r| (r, watermark))),
-            Err(err) => {
+        let found =
+            list_corrections(&db, raw_store.as_ref(), partition, include_distilled, limit).await;
+        match found {
+            Ok(found) => rows.extend(found),
+            Err(error) => {
+                tracing::warn!(%error, %partition, "memory.list_corrections state unavailable");
                 return JsonRpcResponse::error(
                     request.id,
                     INTERNAL_ERROR,
-                    format!("memory.list_corrections failed: {err}"),
-                )
+                    "Correction status unavailable",
+                );
             }
         }
-    }
-    // Apply per-partition distilled filtering before global truncation to
-    // preserve pending corrections that would otherwise be dropped.
-    if !include_distilled {
-        rows.retain(|(r, watermark)| r.created_at > *watermark);
     }
     // Merge into one newest-first ordering and cap once. Each partition was
     // fetched to the full `limit` rather than a share of it, so a union whose
@@ -614,7 +585,7 @@ pub async fn handle_list_corrections(
 
     let corrections: Vec<_> = rows
         .into_iter()
-        .map(|(r, watermark)| {
+        .map(|(r, distilled)| {
             let (severity, suggested_rule) = match &r.source {
                 RawMemorySource::Correction {
                     severity,
@@ -622,7 +593,6 @@ pub async fn handle_list_corrections(
                 } => (severity.clone(), suggested_rule.clone()),
                 _ => ("low".to_string(), None),
             };
-            let distilled = r.created_at <= watermark;
             json!({
                 "id": r.id,
                 "content": r.content,
@@ -1076,6 +1046,52 @@ mod list_corrections_tests {
             c2["status"], "pending",
             "above-watermark rows stay pending regardless of is_processed"
         );
+    }
+
+    #[tokio::test]
+    async fn corrections_list_keeps_new_backdated_rows_pending_after_activation() {
+        let backend = SqliteMemoryBackend::in_memory().unwrap();
+        let (_raw_dir, raw_store) = raw_test_store().await;
+        seed(raw_store.as_ref(), "legacy", 1000, true, "high").await;
+        backend
+            .set_dream_watermark("feedback_distill", "main", 1500)
+            .unwrap();
+        raw_store
+            .activate_correction_feed("main", Some(1500))
+            .await
+            .unwrap();
+        seed(raw_store.as_ref(), "backdated", 1000, true, "high").await;
+        backend
+            .with_conn(|conn| {
+                conn.execute(
+                    "UPDATE compression_metadata SET value='not a timestamp' WHERE key=?1",
+                    ["dream_watermark__feedback_distill__main"],
+                )
+                .map_err(|error| crate::error::AlephError::other(error.to_string()))
+            })
+            .await
+            .unwrap();
+        assert!(backend
+            .get_dream_watermark("feedback_distill", "main")
+            .is_err());
+        let db: crate::memory::store::MemoryBackend = Arc::new(backend);
+
+        let req = JsonRpcRequest::with_id(
+            "memory.list_corrections",
+            Some(json!({ "agent_id": "main", "include_distilled": false })),
+            json!(1),
+        );
+        let response = handle_list_corrections(req, raw_store, db).await;
+        assert!(response.is_success(), "{:?}", response.error);
+        let result = response.result.unwrap();
+        let items = result["corrections"].as_array().unwrap();
+        assert_eq!(
+            items.len(),
+            1,
+            "legacy is settled; backdated is still pending"
+        );
+        assert_eq!(items[0]["suggested_rule"], "rule backdated");
+        assert_eq!(items[0]["status"], "pending");
     }
 
     #[tokio::test]

@@ -98,7 +98,7 @@ pub mod think_level_provider;
 pub use adapter::{
     NativeToolCall, ProtocolAdapter, ProviderResponse, RequestPayload, StopReason, TokenUsage,
 };
-pub use default_handle::{DefaultProviderHandle, StaticDefault};
+pub use default_handle::{CredentialMount, DefaultProviderHandle, StaticDefault};
 pub use delta::{
     response_to_delta_stream, DeltaCollector, DeltaSink, IndexIdTracker, NoopSink, ProviderDelta,
 };
@@ -359,6 +359,11 @@ pub trait AiProvider: Send + Sync {
     /// loop — that goes through `AiProvider::execute_streaming_dyn` so the
     /// failover/metering decorators stay in the chain.
     fn as_http_provider(&self) -> Option<&http_provider::HttpProvider> {
+        None
+    }
+
+    /// Expose the existing failover wrapper at the exact-route boundary.
+    fn as_failover_provider(&self) -> Option<&failover::FailoverProvider> {
         None
     }
 

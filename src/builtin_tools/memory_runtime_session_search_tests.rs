@@ -86,6 +86,7 @@ async fn registered_session_search_keeps_raw_fallback_off_and_owns_synthesis() {
             provider: Some(Arc::new(crate::providers::MockProvider::new(
                 "A runtime session summary.",
             ))),
+            provider_secrets: None,
             extensions: Arc::new(MemoryExtensionRegistry::new()),
             state_db: None,
             default_agent_id: agent.into(),

@@ -11,23 +11,9 @@
 //! provider. The 401 was then classified transient and retried against the
 //! *same* stale token until the whole task hard-failed.
 //!
-//! This service closes that gap with two triggers, both reusing the exact same
-//! self-heal primitive [`CodexTokenRefresher::refresh_and_swap`]:
-//!
-//! * **Proactive** — a background loop refreshes a few minutes before expiry
-//!   ([`CodexTokenRefresher::spawn_background`]).
-//! * **Reactive** — the dispatch retry path calls `refresh_and_swap` when it
-//!   sees a `token_expired` error before retrying.
-//!
-//! ## Layering note (R1 / R10)
-//!
-//! Token refresh is *infrastructure* (a limb refreshing its own credential),
-//! not harness cognition. It lives in the Gateway, not `src/harness/`, and the
-//! dumb loop only calls into it on a specific auth error — it makes no recovery
-//! *strategy* decision. The provider hot-swap reuses the already-proven
-//! `providers.setDefault` mechanism: the failover chain's primary slot is the
-//! live `MultiProviderRegistry`, so re-registering `chatgpt` with a fresh-token
-//! instance is visible on the next dispatch turn with no restart.
+//! The Gateway refreshes proactively before expiry and on OAuth status polls.
+//! Both paths renew the already-mounted route. Dispatch retries do not rotate a
+//! grant from error text: a failure does not identify the credential it used.
 
 use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::config::Config;
@@ -112,6 +98,22 @@ pub struct CodexTokenRefresher {
     config: Arc<RwLock<Config>>,
     vault: Arc<SharedTokenManager>,
     registry: Arc<MultiProviderRegistry>,
+    named_route: Option<CodexRefreshRoute>,
+}
+
+/// The assembled route and, for a secondary provider, its owned credential mount.
+pub struct CodexRefreshRoute {
+    route: Arc<dyn crate::providers::AiProvider>,
+    mount: Option<Arc<crate::providers::CredentialMount>>,
+}
+
+impl CodexRefreshRoute {
+    pub fn new(
+        route: Arc<dyn crate::providers::AiProvider>,
+        mount: Option<Arc<crate::providers::CredentialMount>>,
+    ) -> Self {
+        Self { route, mount }
+    }
 }
 
 impl CodexTokenRefresher {
@@ -120,13 +122,26 @@ impl CodexTokenRefresher {
         config: Arc<RwLock<Config>>,
         vault: Arc<SharedTokenManager>,
         registry: Arc<MultiProviderRegistry>,
+        named_route: Option<CodexRefreshRoute>,
     ) -> Self {
         Self {
             oauth_state,
             config,
             vault,
             registry,
+            named_route,
         }
+    }
+
+    pub(crate) fn owns(
+        &self,
+        state: &SharedOAuthState,
+        config: &Arc<RwLock<Config>>,
+        vault: &Arc<SharedTokenManager>,
+    ) -> bool {
+        Arc::ptr_eq(&self.oauth_state, state)
+            && Arc::ptr_eq(&self.config, config)
+            && Arc::ptr_eq(&self.vault, vault)
     }
 
     /// Seconds until the cached token expires. `None` when there is no token,
@@ -137,69 +152,67 @@ impl CodexTokenRefresher {
         Some(cache.expires_in_seconds().unwrap_or(0))
     }
 
-    /// Refresh the OAuth token and hot-swap the running provider so the next
-    /// dispatch turn uses the fresh token. Returns `true` when the live
-    /// provider now carries a renewed token.
-    ///
-    /// Idempotent and cheap to call spuriously: if there is no token or no
-    /// refresh token, `try_refresh` returns `false` and nothing is swapped.
-    pub async fn refresh_and_swap(&self) -> bool {
-        let refreshed =
-            try_refresh(&self.oauth_state, &self.config, &self.vault, PROVIDER_NAME).await;
-
-        if !refreshed {
-            return false;
-        }
-
-        self.swap_provider().await;
-        true
+    pub(crate) async fn refresh_if_due(&self, seconds: u64) -> bool {
+        self.refresh(Some(seconds)).await
     }
 
-    /// Rebuild the `chatgpt` provider with the freshly-stored token and register
-    /// it into the live registry. Reuses the `providers.setDefault` swap path:
-    /// `try_refresh` already wrote the new access token to the vault, so we
-    /// rebuild from config + vault exactly like the Settings UI does.
-    async fn swap_provider(&self) {
-        // Capture the provider config (api_key is `#[serde(skip)]` → inject the
-        // freshly-refreshed token from the vault).
-        let provider_config = {
-            let cfg = self.config.read().await;
-            let Some(pc) = cfg.providers.get(PROVIDER_NAME) else {
-                debug!("codex refresh: no chatgpt provider in config; skip swap");
-                return;
-            };
-            let mut pc = pc.clone();
-            if pc.api_key.as_ref().is_none_or(|k| k.is_empty()) {
-                match self.vault.get_secret(&format!("ai:{PROVIDER_NAME}")) {
-                    Ok(Some(secret)) => pc.api_key = Some(secret.expose().to_string()),
-                    _ => {
-                        warn!("codex refresh: refreshed token missing from vault; skip swap");
-                        return;
-                    }
-                }
+    async fn refresh(&self, due_within: Option<u64>) -> bool {
+        let refreshed = try_refresh(
+            &self.oauth_state,
+            &self.config,
+            &self.vault,
+            PROVIDER_NAME,
+            self,
+            due_within,
+        )
+        .await;
+        if refreshed {
+            // A refresh should not leave the previous token's breaker open.
+            if let Some(health) = crate::providers::failover::global_health() {
+                health.reset(PROVIDER_NAME).await;
             }
-            pc
-        };
-
-        match crate::providers::create_provider(PROVIDER_NAME, provider_config) {
-            Ok(provider) => {
-                self.registry.register(PROVIDER_NAME.to_string(), provider);
-                // Clear the circuit-breaker state recorded against the stale
-                // token so the renewed provider is tried immediately. This is
-                // the breaker that decides whether the request is dialed at all
-                // — an expired token trips it as a *permanent* failure, i.e. the
-                // full 10-minute cooldown, so skipping this reset would strand
-                // the freshly-renewed token behind the failure it just fixed.
-                // (A second reset against the registry's own health map used to
-                // sit here; that map fed only the resolution badge and gated no
-                // dial, and is gone.)
-                if let Some(health) = crate::providers::failover::global_health() {
-                    health.reset(PROVIDER_NAME).await;
-                }
-                info!("codex refresh: hot-swapped chatgpt provider with renewed token");
-            }
-            Err(e) => warn!(error = %e, "codex refresh: failed to rebuild chatgpt provider"),
         }
+        refreshed
+    }
+
+    pub(crate) fn prepare_refreshed_transport(
+        &self,
+        mut config: crate::config::ProviderConfig,
+        access_token: &str,
+    ) -> Option<Arc<dyn crate::providers::AiProvider>> {
+        let mounted = self
+            .named_route
+            .as_ref()?
+            .route
+            .as_failover_provider()?
+            .exact_transport(PROVIDER_NAME)?;
+        config.api_key = Some(access_token.to_owned());
+        let candidate = crate::providers::create_provider(PROVIDER_NAME, config).ok()?;
+        mounted
+            .as_http_provider()?
+            .same_configured_route(candidate.as_http_provider()?)
+            .then_some(candidate)
+    }
+
+    /// Return true only if the run builder's actual named chain now resolves
+    /// to the new handle, not a boot-pinned transport of the same provider name.
+    pub(crate) fn install_refreshed_transport(
+        &self,
+        transport: Arc<dyn crate::providers::AiProvider>,
+    ) -> bool {
+        self.registry
+            .register(PROVIDER_NAME.to_owned(), Arc::clone(&transport));
+        let Some(named_route) = &self.named_route else {
+            return false;
+        };
+        if let Some(mount) = &named_route.mount {
+            mount.replace(Arc::clone(&transport));
+        }
+        named_route
+            .route
+            .as_failover_provider()
+            .and_then(|chain| chain.exact_transport(PROVIDER_NAME))
+            .is_some_and(|mounted| Arc::ptr_eq(&mounted, &transport))
     }
 
     /// Spawn the proactive background refresh loop. Ticks every minute and
@@ -217,7 +230,7 @@ impl CodexTokenRefresher {
 
                 if due {
                     debug!("codex refresh: token near expiry, refreshing proactively");
-                    if self.refresh_and_swap().await {
+                    if self.refresh_if_due(REFRESH_MARGIN_SECS).await {
                         info!("codex refresh: proactive token refresh succeeded");
                     } else {
                         // Refresh failed (e.g. refresh token revoked). Back off

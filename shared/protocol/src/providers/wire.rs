@@ -170,6 +170,21 @@ const fn default_timeout_seconds() -> u64 {
     300
 }
 
+/// One usable chat model. Both IDs are opaque and must travel together.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChatModelChoice {
+    pub provider: String,
+    pub model: String,
+    pub provider_label: String,
+    pub model_label: String,
+}
+
+/// Result of `chat.models.list`; missing publication is an RPC error.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChatModelsListResult {
+    pub items: Vec<ChatModelChoice>,
+}
+
 // ============================================================================
 // providers.list / providers.get
 // ============================================================================
