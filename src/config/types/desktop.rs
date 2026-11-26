@@ -3,16 +3,16 @@
 //!
 //! The desktop *capabilities* themselves are constructed at the single
 //! per-OS injection point (`executor::builtin_registry::builder::constructor`)
-//! and the power capability in the binary boot path. This section only carries
-//! the **policy** knobs for the daemon-side *consumers* of those capabilities —
-//! today exactly one, the input-rail policy the desktop tool enforces
-//! (`allow_global_pointer`).
+//! and the power and voice capabilities in the binary boot path. This section
+//! holds daemon-side platform settings, not provider settings exposed to Panel.
 //!
 //! `[desktop.presence]` and `[desktop.mic_level]` were the other two until
 //! 2026-08-09; both reporters were removed (see `crate::tasks`). `Config` does
 //! not `deny_unknown_fields`, so a `config.toml` still carrying those tables
 //! parses unchanged — the keys are ignored rather than rejected, and no
 //! migration is needed.
+
+use std::path::PathBuf;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -38,6 +38,24 @@ pub struct DesktopDaemonConfig {
     /// in favour of.
     #[serde(default)]
     pub allow_global_pointer: bool,
+
+    /// Optional provisioned recognizer for the Linux desktop fallback. Separate
+    /// from `[voice.local]`; never starts a download or searches the PATH.
+    /// Stop the daemon before provisioning or removing this local installation
+    /// in `config.toml`. The installation is only read at startup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offline_stt: Option<DesktopOfflineSttConfig>,
+}
+
+/// Installation paths for an administrator-provisioned offline recognizer.
+/// Both paths must be present and absolute to mount it. An incomplete table
+/// leaves the recognizer unmounted without preventing the daemon from starting.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct DesktopOfflineSttConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub executable: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<PathBuf>,
 }
 
 #[cfg(test)]
@@ -79,6 +97,68 @@ mod tests {
         "#;
         let d: DesktopDaemonConfig = toml::from_str(toml).expect("stale tables must not fail boot");
         assert!(d.allow_global_pointer);
+    }
+
+    #[derive(Default, Deserialize, Serialize)]
+    struct DaemonConfigFixture {
+        #[serde(default)]
+        desktop: DesktopDaemonConfig,
+    }
+
+    #[test]
+    fn offline_stt_defaults_to_unconfigured() {
+        for input in ["", "[desktop]\nallow_global_pointer = true"] {
+            let config: DaemonConfigFixture = toml::from_str(input).expect("desktop config parses");
+            assert!(config.desktop.offline_stt.is_none());
+            let serialized = toml::to_string(&config).expect("desktop config serializes");
+            assert!(!serialized.contains("offline_stt"));
+        }
+    }
+
+    #[test]
+    fn offline_stt_round_trips_without_a_voice_provider() {
+        let input = r#"
+            [desktop.offline_stt]
+            executable = "/opt/whisper/bin/whisper-cli"
+            model = "/opt/whisper/models/ggml-base.bin"
+        "#;
+        let config: DaemonConfigFixture = toml::from_str(input).expect("desktop config parses");
+        let specified = config
+            .desktop
+            .offline_stt
+            .as_ref()
+            .expect("installation configured");
+        assert_eq!(
+            specified.executable.as_deref(),
+            Some(std::path::Path::new("/opt/whisper/bin/whisper-cli"))
+        );
+        assert_eq!(
+            specified.model.as_deref(),
+            Some(std::path::Path::new("/opt/whisper/models/ggml-base.bin"))
+        );
+        let serialized = toml::to_string(&config).expect("desktop config serializes");
+        let reloaded: DaemonConfigFixture =
+            toml::from_str(&serialized).expect("desktop config reloads");
+        let installed = reloaded
+            .desktop
+            .offline_stt
+            .expect("installation preserved");
+        assert_eq!(installed.executable, specified.executable);
+        assert_eq!(installed.model, specified.model);
+        assert!(!serialized.contains("[voice"));
+    }
+
+    #[test]
+    fn offline_stt_incomplete_installation_does_not_prevent_boot() {
+        let input = "[desktop.offline_stt]\nexecutable = '/opt/whisper/bin/whisper-cli'";
+        let config: DaemonConfigFixture =
+            toml::from_str(input).expect("incomplete desktop config parses");
+        let partial = config
+            .desktop
+            .offline_stt
+            .expect("partial installation is observable");
+        assert!(partial.executable.is_some());
+        assert!(partial.model.is_none());
     }
 
     #[test]

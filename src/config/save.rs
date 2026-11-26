@@ -4,9 +4,9 @@
 
 use crate::config::Config;
 use crate::error::{AlephError, Result};
-use crate::utils::atomic_io::{with_file_lock, write_atomic};
-use std::fs;
+use crate::utils::atomic_io::{with_file_lock, write_atomic_checked};
 use std::path::Path;
+use std::{fs, io};
 use tracing::{debug, error, info};
 
 /// Refuse to let a unit test persist onto the developer's real config file.
@@ -114,11 +114,26 @@ fn enforce_0600_warn(path: &Path) {
     }
 }
 
-/// Write `contents` to `path` atomically: temp file (same directory, so the
-/// rename stays on one filesystem) + fsync + rename. The target is never in
-/// a partially written state, even on crash or power loss mid-write.
-fn write_atomically(path: &Path, contents: &str) -> Result<()> {
-    write_atomic(path, contents.as_bytes()).map_err(|e| {
+fn read_existing_config(path: &Path) -> io::Result<Option<String>> {
+    match fs::read_to_string(path) {
+        Ok(contents) => Ok(Some(contents)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+/// Hold the caller's config lock through the final comparison and rename.
+/// External editors that bypass the lock can still race the rename itself.
+fn write_atomically(path: &Path, contents: &str, original: Option<&str>) -> Result<()> {
+    write_atomic_checked(path, contents.as_bytes(), || {
+        if read_existing_config(path)?.as_deref() != original {
+            return Err(io::Error::other(
+                "Config file changed externally during save; refusing to overwrite it",
+            ));
+        }
+        Ok(())
+    })
+    .map_err(|e| {
         error!(target_path = %path.display(), error = %e, "Failed to atomically write config file");
         AlephError::invalid_config(format!(
             "Failed to atomically write config to {}: {e}",
@@ -256,6 +271,28 @@ fn merge_sections(
     }
 }
 
+// Offline recognition is provisioned via the on-disk config, not by the
+// daemon. A missing field or file is also authoritative under the save lock.
+fn preserve_offline_stt(current: &mut toml::Value, existing: Option<&toml::Value>) {
+    let Some(desktop) = current
+        .get_mut("desktop")
+        .and_then(toml::Value::as_table_mut)
+    else {
+        return;
+    };
+    match existing
+        .and_then(|document| document.get("desktop"))
+        .and_then(|desktop| desktop.get("offline_stt"))
+    {
+        Some(installation) => {
+            desktop.insert("offline_stt".to_owned(), installation.clone());
+        }
+        None => {
+            desktop.remove("offline_stt");
+        }
+    }
+}
+
 fn preserve_external_sections(current: &mut toml::Value, existing: &toml::Value) {
     let (toml::Value::Table(current), toml::Value::Table(existing)) = (current, existing) else {
         return;
@@ -363,12 +400,17 @@ impl Config {
             error!(error = %e, "Failed to serialize config to TOML");
             AlephError::invalid_config(format!("Failed to serialize config: {e}"))
         })?;
-        if path.exists() {
-            if let Ok(existing_contents) = fs::read_to_string(path) {
-                if let Ok(existing) = toml::from_str::<toml::Value>(&existing_contents) {
-                    preserve_external_sections(&mut current, &existing);
-                }
-            }
+        let existing_contents = read_existing_config(path).map_err(|e| {
+            AlephError::invalid_config(format!("Failed to read existing config: {e}"))
+        })?;
+        if let Some(contents) = existing_contents.as_deref() {
+            let existing: toml::Value = toml::from_str(contents).map_err(|e| {
+                AlephError::invalid_config(format!("Failed to parse existing config: {e}"))
+            })?;
+            preserve_external_sections(&mut current, &existing);
+            preserve_offline_stt(&mut current, Some(&existing));
+        } else {
+            preserve_offline_stt(&mut current, None);
         }
         let contents = toml::to_string_pretty(&current).map_err(|e| {
             error!(error = %e, "Failed to serialize config to TOML");
@@ -381,7 +423,7 @@ impl Config {
             "Config serialized to TOML"
         );
 
-        write_atomically(path, &contents)?;
+        write_atomically(path, &contents, existing_contents.as_deref())?;
 
         // Set file permissions to 600 (owner read/write only) for security
         // This protects API keys stored in the config file
@@ -470,12 +512,6 @@ impl Config {
         self.guard_incremental_memory(path, sections)?;
         self.guard_incremental_providers(path, sections)?;
 
-        let original_mtime = fs::metadata(path)
-            .and_then(|metadata| metadata.modified())
-            .map_err(|e| {
-                AlephError::invalid_config(format!("Failed to read config mtime before save: {e}"))
-            })?;
-
         // Read existing file
         let existing_contents = fs::read_to_string(path).map_err(|e| {
             AlephError::invalid_config(format!("Failed to read config for incremental save: {e}"))
@@ -487,9 +523,10 @@ impl Config {
         })?;
 
         // Serialize current config to toml::Value
-        let current: toml::Value = toml::Value::try_from(self).map_err(|e| {
+        let mut current: toml::Value = toml::Value::try_from(self).map_err(|e| {
             AlephError::invalid_config(format!("Failed to serialize current config: {e}"))
         })?;
+        preserve_offline_stt(&mut current, Some(&existing));
 
         // Only update specified sections. A named section that is not there
         // cannot be honoured, and reporting success for it is how "removed the
@@ -501,24 +538,13 @@ impl Config {
             ))
         })?;
 
-        let current_mtime = fs::metadata(path)
-            .and_then(|metadata| metadata.modified())
-            .map_err(|e| {
-                AlephError::invalid_config(format!("Failed to read config mtime before save: {e}"))
-            })?;
-        if current_mtime != original_mtime {
-            return Err(AlephError::invalid_config(
-                "Config file was modified externally during incremental save; refusing to overwrite it.",
-            ));
-        }
-
         // Serialize back to TOML string
         let new_contents = toml::to_string_pretty(&existing).map_err(|e| {
             AlephError::invalid_config(format!("Failed to serialize updated config: {e}"))
         })?;
 
         // Write with atomic operation (same as save_to_file)
-        write_atomically(path, &new_contents)?;
+        write_atomically(path, &new_contents, Some(&existing_contents))?;
 
         // Set permissions on Unix (best-effort: write already succeeded,
         // tightening the mode is a defensive nicety, not a precondition).
@@ -607,6 +633,37 @@ impl Config {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod external_change_tests {
+    use super::*;
+
+    #[test]
+    fn offline_stt_revoked_after_read_is_not_recreated_at_rename() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let installed = "[desktop.offline_stt]\nexecutable = '/trusted/recognizer'\n";
+        let revoked = "[desktop]\nallow_global_pointer = true\n";
+        let next = format!("{revoked}{installed}");
+        let lock = path.with_extension("lock");
+        with_file_lock(&lock, |_| {
+            for replacement in [None, Some(revoked)] {
+                fs::write(&path, installed).unwrap();
+                let observed = read_existing_config(&path)?;
+                match replacement {
+                    Some(contents) => fs::write(&path, contents)?,
+                    None => fs::remove_file(&path)?,
+                }
+                let error = write_atomically(&path, &next, observed.as_deref()).unwrap_err();
+                assert!(error.to_string().contains("changed externally"), "{error}");
+                assert_eq!(read_existing_config(&path)?.as_deref(), replacement);
+            }
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
     }
 }
 

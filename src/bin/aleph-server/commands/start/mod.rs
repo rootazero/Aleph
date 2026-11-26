@@ -79,6 +79,14 @@ fn startup_diagnostics_control(
     DiagnosticControl::new(host, tree).map(Arc::new).map(Some)
 }
 
+// Canonicalize the existing data directory, not the lazily created media root.
+fn resolve_offline_speech_root() -> Result<PathBuf, String> {
+    let data_dir = alephcore::utils::paths::get_data_dir().map_err(|error| error.to_string())?;
+    std::fs::canonicalize(data_dir)
+        .map(|directory| directory.join("_media"))
+        .map_err(|error| format!("cannot canonicalize data directory: {error}"))
+}
+
 // NOTE: `start_server` below is a single ~2270-line monolithic bootstrap
 // sequence. Its hundreds of locals (shared mutable handles, config, server,
 // monitors) are threaded through sequential phases and consumed at the tail,
@@ -229,29 +237,16 @@ async fn start_server_body(
     install_mask_patterns(&loaded_app_config);
 
     // Bind the shared macOS bridge before the builtin tools construct a platform.
-    // Canonicalize the existing data directory, not the lazily created media root.
     #[cfg(target_os = "macos")]
-    let offline_speech_root = {
-        let data_dir = alephcore::utils::paths::get_data_dir()
-            .map_err(|error| error.to_string())
-            .and_then(|dir| {
-                std::fs::canonicalize(dir)
-                    .map_err(|error| format!("cannot canonicalize data directory: {error}"))
-            });
-        match data_dir {
-            Ok(data_dir) => {
-                let root = data_dir.join("_media");
-                if aleph_desktop_macos::configure_offline_speech_root(&root) {
-                    Some(root)
-                } else {
-                    tracing::warn!("offline speech unavailable: shared bridge root not configured");
-                    None
-                }
-            }
-            Err(error) => {
-                tracing::warn!(%error, "offline speech unavailable");
-                None
-            }
+    let offline_speech_root = match resolve_offline_speech_root() {
+        Ok(root) if aleph_desktop_macos::configure_offline_speech_root(&root) => Some(root),
+        Ok(_) => {
+            tracing::warn!("offline speech unavailable: shared bridge root not configured");
+            None
+        }
+        Err(error) => {
+            tracing::warn!(%error, "offline speech unavailable");
+            None
         }
     };
 
@@ -2264,8 +2259,10 @@ async fn start_server_body(
         }
     }
 
-    // Panel voice channel — native capture (record_start/stop) + TTS playback
-    // (synthesize). Endpoint I/O for the mic button's full voice loop.
+    // Resolve the Linux installation once at boot, not from a turn or a live
+    // settings update. Release the config lock before filesystem validation.
+    #[cfg(target_os = "linux")]
+    let offline_stt = app_config.read().await.desktop.offline_stt.clone();
     register_voice_capability_handlers(
         &mut server,
         app_config.clone(),
@@ -2273,6 +2270,8 @@ async fn start_server_body(
         auth_bundle.auth_ctx.shared_token_mgr.clone(),
         #[cfg(target_os = "macos")]
         offline_speech_root,
+        #[cfg(target_os = "linux")]
+        offline_stt,
     );
 
     register_session_handlers(

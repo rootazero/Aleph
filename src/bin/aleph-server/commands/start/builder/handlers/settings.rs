@@ -1034,9 +1034,43 @@ pub(in crate::commands::start) fn register_voice_capability_handlers(
     >,
     shared_token_mgr: Arc<alephcore::gateway::security::SharedTokenManager>,
     #[cfg(target_os = "macos")] offline_speech_root: Option<std::path::PathBuf>,
+    #[cfg(target_os = "linux")] offline_stt: Option<
+        alephcore::config::types::desktop::DesktopOfflineSttConfig,
+    >,
 ) {
     use alephcore::gateway::handlers::voice;
     use alephcore::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, SERVICE_UNAVAILABLE};
+
+    #[cfg(target_os = "linux")]
+    let installation = offline_stt.and_then(|config| {
+        let (Some(executable), Some(model)) = (config.executable, config.model) else {
+            tracing::warn!("desktop.offline_stt requires both executable and model");
+            return None;
+        };
+        match aleph_desktop_linux::OfflineSttInstallation::new(executable, model) {
+            Ok(installation) => Some(installation),
+            Err(error) => {
+                tracing::warn!(%error, "invalid desktop.offline_stt installation");
+                None
+            }
+        }
+    });
+    #[cfg(target_os = "linux")]
+    let offline_stt_mounted = installation.is_some();
+    #[cfg(target_os = "windows")]
+    let offline_worker = match std::env::current_exe() {
+        Ok(executable) if executable.is_absolute() => Some(executable),
+        Ok(_) => {
+            tracing::warn!("offline speech unavailable: server executable path is not absolute");
+            None
+        }
+        Err(error) => {
+            tracing::warn!(%error, "could not locate server executable for offline speech");
+            None
+        }
+    };
+    #[cfg(target_os = "windows")]
+    let offline_stt_mounted = offline_worker.is_some();
 
     // A fresh platform handle — cheap, and mirrors how the presence / mic-level
     // reporters and the builtin tool registry each construct their own.
@@ -1047,11 +1081,19 @@ pub(in crate::commands::start) fn register_voice_capability_handlers(
         }
         #[cfg(target_os = "linux")]
         {
-            Arc::new(aleph_desktop_linux::LinuxPlatform::new())
+            use aleph_desktop_linux::LinuxPlatform;
+            Arc::new(match installation {
+                Some(installation) => LinuxPlatform::with_offline_stt(installation),
+                None => LinuxPlatform::new(),
+            })
         }
         #[cfg(target_os = "windows")]
         {
-            Arc::new(aleph_desktop_windows::WindowsPlatform::new())
+            use aleph_desktop_windows::WindowsPlatform;
+            Arc::new(offline_worker.map_or_else(
+                WindowsPlatform::new,
+                WindowsPlatform::with_offline_stt_worker,
+            ))
         }
     };
 
@@ -1072,12 +1114,16 @@ pub(in crate::commands::start) fn register_voice_capability_handlers(
     // host's installed recognizer, reading a clip staged under the media root
     // the platform bridge permits.
     #[cfg(not(target_os = "macos"))]
-    let offline_speech_root = match alephcore::utils::paths::get_data_dir() {
-        Ok(data_dir) => Some(data_dir.join("_media")),
-        Err(error) => {
-            tracing::warn!(%error, "offline speech unavailable: no data directory");
-            None
+    let offline_speech_root = if offline_stt_mounted {
+        match crate::commands::start::resolve_offline_speech_root() {
+            Ok(root) => Some(root),
+            Err(error) => {
+                tracing::warn!(%error, "offline speech unavailable");
+                None
+            }
         }
+    } else {
+        None
     };
     let offline = offline_speech_root.map(|root| {
         alephcore::gateway::handlers::voice_turn::OfflineSpeechAdapter::new(platform.clone(), root)

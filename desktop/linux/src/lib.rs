@@ -6,6 +6,8 @@ mod automation;
 mod ax;
 mod escape_listener;
 mod media;
+#[cfg(target_os = "linux")]
+mod offline_stt;
 mod permission;
 mod pim;
 mod sleep_inhibitor;
@@ -18,6 +20,8 @@ pub(crate) use ax::frontmost_pid as ax_frontmost_pid;
 pub use ax::LinuxAccessibility;
 pub use escape_listener::LinuxEscapeListener;
 pub use media::LinuxMedia;
+#[cfg(target_os = "linux")]
+pub use offline_stt::OfflineSttInstallation;
 pub use permission::LinuxPermission;
 pub use pim::LinuxPim;
 pub use sleep_inhibitor::LinuxPower;
@@ -54,6 +58,16 @@ pub struct LinuxPlatform {
 impl LinuxPlatform {
     #[must_use]
     pub fn new() -> Self {
+        Self::with_media(LinuxMedia::new())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[must_use]
+    pub fn with_offline_stt(installation: OfflineSttInstallation) -> Self {
+        Self::with_media(LinuxMedia::with_offline_stt(installation))
+    }
+
+    fn with_media(media: LinuxMedia) -> Self {
         Self {
             screen: NativeScreen::new(),
             #[cfg(target_os = "linux")]
@@ -63,7 +77,7 @@ impl LinuxPlatform {
             automation: LinuxAutomation::new(),
             escape: LinuxEscapeListener::new(),
             pim: LinuxPim::new(),
-            media: LinuxMedia::new(),
+            media,
             permission: LinuxPermission::new(),
         }
     }

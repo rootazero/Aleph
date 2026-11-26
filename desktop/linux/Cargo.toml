@@ -23,11 +23,16 @@ base64 = { workspace = true }
 image = { workspace = true }
 
 [dev-dependencies]
-# The live AT-SPI probes in tests/atspi_live.rs need a runtime; the crate's own
-# tokio feature set is `rt` + `process` only.
+# The live AT-SPI probes in tests/atspi_live.rs use a multithreaded runtime.
 tokio = { version = "1.53.3", features = ["rt", "macros", "rt-multi-thread"] }
 
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+tempfile = "3"
+
 [target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+# The installed whisper-cli supervisor reads bounded stdout and owns cancellation.
+tokio = { version = "1.53.3", features = ["io-util", "macros"] }
 # AT-SPI2 accessibility over D-Bus — the Linux counterpart to macOS AX and
 # Windows UI Automation. Runs on zbus, which is already in the dependency
 # graph (xcap / tauri plugins), so this adds a protocol layer, not a stack.
