@@ -125,7 +125,7 @@ impl ScreenCapability for MacOSScreen {
     async fn ocr(&self, image_png: Option<&[u8]>) -> Result<OcrResult> {
         use aleph_desktop::perception::capture_screen_png;
         use aleph_protocol::desktop_bridge::methods::screen::{
-            METHOD_OCR, OcrParams, OcrResult as RpcOcrResult,
+            OcrParams, OcrResult as RpcOcrResult, METHOD_OCR,
         };
 
         // Capture screen if no image provided.
@@ -523,7 +523,7 @@ impl ScreenCapability for MacOSScreen {
         expected_pid: i32,
     ) -> Result<WindowShot> {
         use aleph_protocol::desktop_bridge::methods::screen::{
-            CaptureResult, METHOD_CAPTURE_OWNED_WINDOW, OwnedWindowCaptureParams,
+            CaptureResult, OwnedWindowCaptureParams, METHOD_CAPTURE_OWNED_WINDOW,
         };
 
         // No legacy RPC retry and no xcap fallback: neither can prove ownership.
@@ -596,7 +596,7 @@ impl MacOSScreen {
     /// 13 which lacks `SCScreenshotManager`).
     async fn screenshot_via_bridge(&self, region: Option<&ScreenRegion>) -> Result<Screenshot> {
         use aleph_protocol::desktop_bridge::methods::screen::{
-            CaptureParams, CaptureResult, METHOD_CAPTURE, Region,
+            CaptureParams, CaptureResult, Region, METHOD_CAPTURE,
         };
         let params = CaptureParams {
             display_id: None,

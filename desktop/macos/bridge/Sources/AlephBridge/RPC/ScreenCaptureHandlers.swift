@@ -5,12 +5,11 @@ import Foundation
 import ScreenCaptureKit
 #endif
 
-/// Register `screen.capture` and `screen.list_displays` JSON-RPC handlers
-/// that route screenshots through ScreenCaptureKit's `SCScreenshotManager`.
+/// Register screen capture and display-list JSON-RPC handlers.
 ///
 /// `SCScreenshotManager.captureImage(contentFilter:configuration:)` is
-/// macOS 14+. Older systems return ERR_UNSUPPORTED so the Rust caller can
-/// fall back to `xcap` via `NativeScreen`.
+/// macOS 14+. The Rust client can fall back to `xcap` for display captures,
+/// but `screen.capture_owned_window` must fail closed without a fallback.
 ///
 /// `screen.capture` has two rails:
 /// - **display** (`display_id` / `region`, or neither): the whole display, as
@@ -51,8 +50,8 @@ private func invalidOwnedWindowParams() -> RpcError {
 /// window selector back into the display-oriented `screen.capture` decoder.
 func decodeOwnedWindowCaptureParams(_ params: JSONValue?) throws -> OwnedWindowCaptureRequest {
     guard case .object(let object) = params ?? .null,
-          case .number(let rawWindowId) = object["window_id"],
-          case .number(let rawExpectedPid) = object["expected_pid"],
+          case .number(let rawWindowId) = object["window_id"] ?? .null,
+          case .number(let rawExpectedPid) = object["expected_pid"] ?? .null,
           rawWindowId > 0,
           rawWindowId <= Double(CGWindowID.max),
           rawWindowId == rawWindowId.rounded(),
