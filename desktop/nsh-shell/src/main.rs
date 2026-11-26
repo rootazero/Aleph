@@ -4,12 +4,14 @@ mod credentials;
 mod ipc_status;
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 mod panel_bridge;
-#[cfg(feature = "tsx-panel")]
+#[cfg(any(test, feature = "tsx-panel"))]
 mod panel_host;
 #[cfg(all(feature = "tsx-panel", target_os = "macos"))]
 mod panel_surface;
 mod platform;
 mod shell_host;
+#[cfg(any(test, all(feature = "tsx-panel", target_os = "macos")))]
+mod voice_playback;
 
 #[cfg(all(feature = "tsx-panel", not(target_os = "macos")))]
 compile_error!(
@@ -177,13 +179,35 @@ fn main() -> std::process::ExitCode {
     #[component]
     fn App(props: AppProps) -> impl IntoElement {
         let window = main_window();
-        let close_window = window.clone();
-        window.on_close_press(move |_| close_window.hide());
+        #[cfg(all(feature = "tsx-panel", target_os = "macos"))]
+        if panel_surface::registered() {
+            let observed_window = window.clone();
+            let last_visible = std::cell::Cell::new(None);
+            // The Dock can reopen the window without using the shell's show action.
+            nsh_core::element::effect(move || {
+                if let Some(state) = observed_window.state() {
+                    let visible = Some(state.visible);
+                    if last_visible.replace(visible) != visible {
+                        panel_surface::set_voice_visible(state.visible);
+                    }
+                }
+            });
+        }
+        let hide_window = window.clone();
+        let hide = move || {
+            #[cfg(all(feature = "tsx-panel", target_os = "macos"))]
+            panel_surface::set_voice_visible(false);
+            hide_window.hide();
+        };
+        let close = hide.clone();
+        window.on_close_press(move |_| close());
         let shortcut_window = window.clone();
         let bridge_window = window.clone();
         let show = move || {
             window.show();
             window.focus();
+            #[cfg(all(feature = "tsx-panel", target_os = "macos"))]
+            panel_surface::set_voice_visible(true);
         };
         set_tray(
             tray()
@@ -197,7 +221,11 @@ fn main() -> std::process::ExitCode {
                             eprintln!("NSH notification permission: {:?}", permission.await);
                         });
                     }),
-                    MenuItem::new("Quit Aleph").on_select(quit),
+                    MenuItem::new("Quit Aleph").on_select(|| {
+                        #[cfg(all(feature = "tsx-panel", target_os = "macos"))]
+                        panel_surface::set_voice_visible(false);
+                        quit();
+                    }),
                 ]),
         );
         let hotkey = std::env::var("ALEPH_SHELL_HOTKEY").unwrap_or_else(|_| "mod+shift+a".into());
@@ -211,7 +239,7 @@ fn main() -> std::process::ExitCode {
                     .state()
                     .is_some_and(|state| state.visible && state.focused)
                 {
-                    shortcut_window.hide();
+                    hide();
                 } else {
                     show();
                 }

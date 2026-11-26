@@ -36,7 +36,7 @@ use crate::i18n::{t_string, I18nCtx};
 
 /// Pre-roll lead-in retained ahead of every segment so the first syllable is
 /// never clipped.
-const PREROLL_MS: f32 = 320.0;
+const PREROLL_MS: f32 = shared_ui_logic::voice::CAPTURE_PREROLL_MS as f32;
 /// Hard cap on a single utterance so a stuck VAD can't grow an unbounded buffer.
 const MAX_SEGMENT_SECS: f32 = 30.0;
 /// `ScriptProcessorNode` buffer size (frames). 4096 ≈ 85 ms at 48 kHz — small

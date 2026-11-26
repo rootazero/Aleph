@@ -158,6 +158,28 @@ where
     R: FnMut(u16) -> RFut,
     RFut: Future<Output = ()>,
 {
+    deliver_with_cancellation(ticket, cfg, attempt, report, None).await
+}
+
+pub(super) async fn deliver_with_cancellation<F, Fut, R, RFut>(
+    ticket: TicketGuard,
+    cfg: BusyQueueConfig,
+    attempt: &mut F,
+    report: &mut R,
+    cancellation: Option<&tokio_util::sync::CancellationToken>,
+) -> DeliveryOutcome
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<(), ExecutionError>>,
+    R: FnMut(u16) -> RFut,
+    RFut: Future<Output = ()>,
+{
+    let cancelled = || async {
+        match cancellation {
+            Some(token) => token.cancelled().await,
+            None => std::future::pending().await,
+        }
+    };
     let deadline = Instant::now() + Duration::from_secs(cfg.max_wait_secs);
     let fallback = Duration::from_secs(cfg.wake_fallback_secs);
     let mut announced_busy = false;
@@ -181,7 +203,7 @@ where
         // only this counter moving.
         let drain_epoch = ticket.drain_epoch();
 
-        if ticket.is_cancelled() {
+        if ticket.is_cancelled() || cancellation.is_some_and(|token| token.is_cancelled()) {
             return DeliveryOutcome::Purged;
         }
 
@@ -217,7 +239,11 @@ where
         let ahead = ticket.ahead();
         if last_reported != Some(ahead) {
             last_reported = Some(ahead);
-            report(ahead).await;
+            tokio::select! {
+                biased;
+                _ = cancelled() => return DeliveryOutcome::Purged,
+                () = report(ahead) => {}
+            }
         }
 
         // Park until the lane says something changed. The fallback tick only
@@ -225,7 +251,12 @@ where
         // release that raced a lane the guard had not yet created) — the lane
         // may lag, it can never wedge.
         let wake_by = deadline.min(Instant::now() + fallback);
-        if timeout_at(wake_by, notified).await.is_err() && Instant::now() >= deadline {
+        let timed_out = tokio::select! {
+            biased;
+            _ = cancelled() => return DeliveryOutcome::Purged,
+            elapsed = timeout_at(wake_by, notified) => elapsed.is_err(),
+        };
+        if timed_out && Instant::now() >= deadline {
             return DeliveryOutcome::TimedOut;
         }
     }

@@ -17,12 +17,13 @@
 //!   stderr and exits non-zero because `dummy` is unopenable — that exit code is
 //!   expected and ignored).
 //!
-//! `speech_to_text` falls back to the trait default (`NotImplemented`, as on
-//! Linux); `mic_level` reports inactive (Ok) so the opt-in mic-level reporter
-//! degrades quietly rather than log-spamming.
+//! `speech_to_text` keeps the trait default (`NotImplemented`). The separate
+//! offline entry point uses installed SAPI dictation only when explicitly mounted.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(windows)]
+use aleph_desktop::media_types::SpeechToTextResult;
 use aleph_desktop::media_types::{
     AudioDeviceInfo, AudioRecordConfig, AudioRecordResult, CameraClipConfig, CameraClipResult,
     CameraSnapConfig, CameraSnapResult,
@@ -32,12 +33,25 @@ use aleph_desktop::{DesktopError, Result};
 use async_trait::async_trait;
 use base64::{engine::general_purpose, Engine as _};
 
-pub struct WindowsMedia;
+pub struct WindowsMedia {
+    #[cfg(windows)]
+    offline_stt_worker_exe: Option<std::path::PathBuf>,
+}
 
 impl WindowsMedia {
     #[must_use]
     pub const fn new() -> Self {
-        Self
+        Self {
+            #[cfg(windows)]
+            offline_stt_worker_exe: None,
+        }
+    }
+
+    #[cfg(windows)]
+    pub(super) fn with_offline_stt_worker(server_exe: std::path::PathBuf) -> Self {
+        Self {
+            offline_stt_worker_exe: Some(server_exe),
+        }
     }
 }
 
@@ -477,15 +491,52 @@ impl MediaCapability for WindowsMedia {
             format: "m4a".to_string(),
         })
     }
+
+    #[cfg(windows)]
+    async fn speech_to_text_offline(
+        &self,
+        audio_path: &str,
+        language: Option<&str>,
+        cancel: aleph_desktop::CancellationToken,
+    ) -> Result<SpeechToTextResult> {
+        let server_exe = self.offline_stt_worker_exe.as_deref().ok_or_else(|| {
+            DesktopError::NotImplemented("offline speech recognition not mounted".into())
+        })?;
+        crate::offline_stt::recognize(server_exe, audio_path, language, cancel).await
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    #[cfg(windows)]
+    #[test]
+    fn offline_stt_windows_media_is_unmounted_by_default() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let result = rt.block_on(WindowsMedia::new().speech_to_text_offline(
+            "unused.wav",
+            Some("not-a-windows-locale"),
+            aleph_desktop::CancellationToken::new(),
+        ));
+        assert!(matches!(result, Err(DesktopError::NotImplemented(_))));
+    }
+
+    #[test]
+    fn offline_stt_windows_preserves_ordinary_speech_default() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let result =
+            rt.block_on(WindowsMedia::new().speech_to_text("unused.wav", Default::default()));
+        assert!(matches!(result, Err(DesktopError::NotImplemented(_))));
+    }
+
     #[test]
     fn create_default() {
-        let _ = WindowsMedia;
+        let _ = WindowsMedia::new();
     }
 
     #[test]

@@ -1151,9 +1151,7 @@ mod tests {
             assert!(matches!(b, Ok(RefreshOutcome::Fresh(_))), "{b:?}");
             assert!(selectable(PROVIDER, "vendor-model"));
             // The cached listing is a read: it answers without a request.
-            let cached = call(&config, PROVIDER, RefreshMode::PreferFreshCache)
-                .await
-                .map_err(|e| e)?;
+            let cached = call(&config, PROVIDER, RefreshMode::PreferFreshCache).await?;
             assert!(
                 matches!(cached, RefreshOutcome::CacheHit(_)),
                 "{cached:?}"
@@ -1168,7 +1166,7 @@ mod tests {
                     release.send(()).unwrap();
                 }
             );
-            let stale = stale.map_err(|e| e)?;
+            let stale = stale?;
             assert!(
                 matches!(stale, RefreshOutcome::Stale { cause: DiscoveryError::Shape { .. }, .. }),
                 "{stale:?}"
@@ -1184,14 +1182,12 @@ mod tests {
                     release.send(()).unwrap();
                 }
             );
-            let empty = empty.map_err(|e| e)?;
+            let empty = empty?;
             assert!(
                 matches!(empty, RefreshOutcome::Fresh(ref listing) if listing.models.is_empty()),
                 "{empty:?}"
             );
-            let cached = call(&config, PROVIDER, RefreshMode::PreferFreshCache)
-                .await
-                .map_err(|e| e)?;
+            let cached = call(&config, PROVIDER, RefreshMode::PreferFreshCache).await?;
             assert!(
                 matches!(cached, RefreshOutcome::CacheHit(ref listing) if listing.models.is_empty()),
                 "{cached:?}"
@@ -1960,7 +1956,7 @@ mod tests {
                 endpoint.answer(LISTING).await;
                 release.send(()).unwrap();
             });
-            let listing = listing.map_err(|e| e)?;
+            let listing = listing?;
             assert!(!format!("{listing:?}").contains("fake-key-a"));
             let snapshot = crate::providers::session_model_handle::selectable_models().unwrap();
             assert!(!format!("{snapshot:?}").contains("fake-key-a"));

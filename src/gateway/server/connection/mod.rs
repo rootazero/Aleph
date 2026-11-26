@@ -93,6 +93,7 @@ pub mod forward;
 #[cfg(any(unix, windows))]
 pub(super) mod local_ipc;
 pub mod off_loop;
+mod reply_writer;
 mod rpc;
 #[cfg(test)]
 mod transcript_fixture;
@@ -116,6 +117,9 @@ pub(super) const V1_METHODS: &[&str] = &[
     "chat.models.list",
     "chat.send",
     "chat.abort",
+    aleph_protocol::panel_voice::VOICE_TURN_TRANSCRIBE_METHOD,
+    aleph_protocol::panel_voice::VOICE_TURN_SYNTHESIZE_METHOD,
+    aleph_protocol::panel_voice::VOICE_TURN_CANCEL_METHOD,
     aleph_protocol::chat_transcript::CHAT_TRANSCRIPT_DETAILS_METHOD,
     "trace.tool_output",
     "context.breakdown",

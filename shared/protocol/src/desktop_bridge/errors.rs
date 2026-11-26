@@ -6,6 +6,8 @@ pub const ERR_PLATFORM: i32 = -32003;
 pub const ERR_TIMEOUT: i32 = -32004;
 pub const ERR_HELPER_CRASHED: i32 = -32005;
 pub const ERR_BRIDGE_DISABLED: i32 = -32006;
+/// The recognizer has no model for the requested (or resolved) language.
+pub const ERR_UNSUPPORTED_LANGUAGE: i32 = -32007;
 
 #[cfg(test)]
 mod tests {
@@ -19,5 +21,6 @@ mod tests {
         assert_eq!(ERR_TIMEOUT, -32004);
         assert_eq!(ERR_HELPER_CRASHED, -32005);
         assert_eq!(ERR_BRIDGE_DISABLED, -32006);
+        assert_eq!(ERR_UNSUPPORTED_LANGUAGE, -32007);
     }
 }

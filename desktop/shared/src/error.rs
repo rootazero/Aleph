@@ -29,6 +29,10 @@ pub enum DesktopError {
     #[error("not implemented: {0}")]
     NotImplemented(String),
 
+    /// The installed recognizer has no model for the requested language.
+    #[error("unsupported language: {0}")]
+    UnsupportedLanguage(String),
+
     /// The aleph-bridge Swift CLI binary failed or produced unexpected output.
     #[error("bridge failed: {0}")]
     BridgeFailed(String),

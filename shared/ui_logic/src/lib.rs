@@ -10,3 +10,4 @@ pub mod terminal_mutation;
 pub mod transcript;
 
 pub use connection::connector::{AlephConnector, ConnectionError};
+pub mod voice;

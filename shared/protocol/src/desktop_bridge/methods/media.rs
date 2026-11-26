@@ -7,6 +7,9 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::desktop_bridge::envelope::RpcError;
+use crate::desktop_bridge::errors::ERR_TIMEOUT;
+
 pub const METHOD_CAMERA_SNAP: &str = "media.camera.snap";
 pub const METHOD_CAMERA_CLIP: &str = "media.camera.clip";
 
@@ -17,6 +20,28 @@ pub const METHOD_AUDIO_RECORD: &str = "media.audio.record";
 /// unsigned macOS builds, so capture happens natively in the helper instead).
 pub const METHOD_AUDIO_RECORD_START: &str = "media.audio.record_start";
 pub const METHOD_AUDIO_RECORD_STOP: &str = "media.audio.record_stop";
+pub const METHOD_VOICE_CAPTURE_START: &str = "media.audio.voice_capture_start";
+pub const METHOD_VOICE_CAPTURE_POLL: &str = "media.audio.voice_capture_poll";
+pub const METHOD_VOICE_CAPTURE_SEAL: &str = "media.audio.voice_capture_seal";
+pub const METHOD_VOICE_CAPTURE_CANCEL: &str = "media.audio.voice_capture_cancel";
+
+pub const VOICE_CAPTURE_FRAME_SAMPLES: u32 = 800;
+pub const VOICE_CAPTURE_MAX_POLL_FRAMES: usize = 16;
+
+/// Only this start refusal proves the helper never acquired the microphone:
+/// the legacy recorder held it before voice capture could reserve the source.
+pub fn voice_capture_start_rejected_for_legacy_busy(error: &RpcError) -> bool {
+    error.code == ERR_TIMEOUT
+        && error
+            .data
+            .as_ref()
+            .and_then(serde_json::Value::as_object)
+            .is_some_and(|data| {
+                data.len() == 1
+                    && data.get("reason").and_then(serde_json::Value::as_str)
+                        == Some("voice_capture_legacy_busy")
+            })
+}
 // `METHOD_AUDIO_MIC_METER` ("media.audio.mic_meter"), its params/result types,
 // its deadline and its idle timeout were removed on 2026-08-09 together with
 // the whole mic-meter limb — see `aleph_desktop::traits::media`. Both halves of
@@ -24,6 +49,7 @@ pub const METHOD_AUDIO_RECORD_STOP: &str = "media.audio.record_stop";
 // event: there is no older helper left speaking it.
 
 pub const METHOD_SPEECH_TRANSCRIBE_FILE: &str = "media.speech.transcribe_file";
+pub const METHOD_SPEECH_CANCEL: &str = "media.speech.cancel";
 
 // ── Deadlines ────────────────────────────────────────────────────────────────
 
@@ -47,10 +73,22 @@ pub const TIMEOUT_MS_LIST_DEVICES: u64 = 5_000;
 /// Stopping an open-ended recording finalises the encoder before replying.
 pub const TIMEOUT_MS_RECORD_STOP: u64 = 15_000;
 
+/// Recognizer deadline the helper enforces for one offline whole-turn clip
+/// (at most 20 s of audio). The Rust limb waits this plus reply headroom.
+pub const OFFLINE_SPEECH_DEADLINE_MS: u64 = 30_000;
+
+/// Cancel only signals the recognizer and replies; it never waits on audio.
+pub const TIMEOUT_MS_SPEECH_CANCEL: u64 = 5_000;
+
 pub const TIMEOUT_OVERRIDES_MS: &[(&str, u64)] = &[
     (METHOD_CAMERA_SNAP, TIMEOUT_MS_SNAP),
     (METHOD_AUDIO_LIST_DEVICES, TIMEOUT_MS_LIST_DEVICES),
     (METHOD_AUDIO_RECORD_STOP, TIMEOUT_MS_RECORD_STOP),
+    (METHOD_VOICE_CAPTURE_START, 15_000),
+    (METHOD_VOICE_CAPTURE_POLL, 5_000),
+    (METHOD_VOICE_CAPTURE_SEAL, 15_000),
+    (METHOD_VOICE_CAPTURE_CANCEL, 15_000),
+    (METHOD_SPEECH_CANCEL, TIMEOUT_MS_SPEECH_CANCEL),
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -138,12 +176,89 @@ pub struct RecordStartResult {}
 pub struct RecordStopParams {}
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct VoiceCaptureStartParams {
+    pub capture_id: String,
+    pub sample_rate_hz: u32,
+    pub frame_samples: u32,
+    pub max_clip_samples: u32,
+}
+
+/// An empty object acknowledges activation for start and teardown for cancel.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VoiceCaptureAck {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct VoiceCapturePollParams {
+    pub capture_id: String,
+    pub after_sample: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VoiceCapturePollResult {
+    pub observations: Vec<VoiceCaptureFrame>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VoiceCaptureFrame {
+    pub end_sample: u32,
+    pub rms: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct VoiceCaptureSealParams {
+    pub capture_id: String,
+    pub first_sample: u32,
+    pub end_sample: u32,
+}
+
+/// Returned only after the source is detached.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VoiceCaptureSealResult {
+    pub wav_base64: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct VoiceCaptureCancelParams {
+    pub capture_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct TranscribeFileParams {
     /// Absolute path to the audio file (m4a / wav / mp3 supported by `SFSpeechRecognizer`).
     pub audio_path: String,
-    /// BCP-47 language tag (e.g. "en-US", "zh-Hans"). Helper rejects unknown
-    /// locales with `ERR_INVALID_PARAMS`.
-    pub language: String,
+    /// Legacy recognizer language. Do not send this field for an offline request:
+    /// older helpers would otherwise ignore the policy and might use the network.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offline_only: Option<OfflineSpeechPolicy>,
+}
+
+/// On-device-only recognition. The helper must refuse rather than use a
+/// network recognizer, and must stop recognizing when `operation_id` is
+/// cancelled via [`METHOD_SPEECH_CANCEL`].
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct OfflineSpeechPolicy {
+    /// Unguessable id minted by the Rust limb for this one recognition.
+    pub operation_id: String,
+    /// BCP-47 tag; absent means the helper resolves the OS locale.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CancelSpeechParams {
+    pub operation_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CancelSpeechResult {
+    /// `true` when a live recognition for the id was stopped.
+    pub cancelled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -152,6 +267,41 @@ pub struct TranscribeFileResult {
     pub text: String,
     /// Echo of the requested language.
     pub language: String,
+}
+
+/// Successful offline-only `media.speech.transcribe_file` reply. The file is
+/// closed and recognition uses owned memory. Only a matching operation ID
+/// proves release for the caller's input; a legacy result or cancel ACK does not.
+/// Duplicate fields must be rejected before the reply is reduced to JSON Value.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged, deny_unknown_fields)]
+pub enum OfflineTranscribeFileResult {
+    // An untagged struct variant accepts only a map, not positional arrays.
+    Success {
+        operation_id: String,
+        input_release: OfflineSpeechInputRelease,
+        text: String,
+        language: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case", try_from = "String")]
+#[schemars(!try_from)]
+pub enum OfflineSpeechInputRelease {
+    Detached,
+}
+
+impl TryFrom<String> for OfflineSpeechInputRelease {
+    type Error = &'static str;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        // Reject the externally tagged object form of a Serde unit variant.
+        match value.as_str() {
+            "detached" => Ok(Self::Detached),
+            _ => Err("expected input_release to be detached"),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -273,12 +423,26 @@ mod tests {
     fn transcribe_params_roundtrip() {
         let p = TranscribeFileParams {
             audio_path: "/tmp/a.m4a".into(),
-            language: "en-US".into(),
+            language: Some("en-US".into()),
+            offline_only: None,
         };
         let j = serde_json::to_string(&p).unwrap();
         let back: TranscribeFileParams = serde_json::from_str(&j).unwrap();
         assert_eq!(back.audio_path, "/tmp/a.m4a");
-        assert_eq!(back.language, "en-US");
+        assert_eq!(back.language.as_deref(), Some("en-US"));
+        assert!(back.offline_only.is_none());
+    }
+
+    #[test]
+    fn speech_offline_policy_is_not_silently_dropped() {
+        let old = serde_json::json!({"audio_path":"/tmp/a.wav","language":"en-US"});
+        let offline = serde_json::json!({"audio_path":"/tmp/a.wav","offline_only":{
+            "operation_id":"a20f4b00-d3ef-4278-a313-f75fe1293b90","language":"en-US"
+        }});
+        for wire in [old, offline] {
+            let request: TranscribeFileParams = serde_json::from_value(wire.clone()).unwrap();
+            assert_eq!(serde_json::to_value(request).unwrap(), wire);
+        }
     }
 
     #[test]
@@ -291,6 +455,70 @@ mod tests {
         let back: TranscribeFileResult = serde_json::from_str(&j).unwrap();
         assert_eq!(back.text, "hello world");
         assert_eq!(back.language, "en-US");
+    }
+
+    #[test]
+    fn offline_transcribe_file_result_has_exact_required_fields() {
+        let wire = serde_json::json!({
+            "operation_id": "operation-1",
+            "input_release": "detached",
+            "text": "hello world",
+            "language": "en-US",
+        });
+        let result = OfflineTranscribeFileResult::Success {
+            operation_id: "operation-1".into(),
+            input_release: OfflineSpeechInputRelease::Detached,
+            text: "hello world".into(),
+            language: "en-US".into(),
+        };
+        assert_eq!(serde_json::to_value(result).unwrap(), wire);
+        let decoded: OfflineTranscribeFileResult = serde_json::from_str(&wire.to_string()).unwrap();
+        assert_eq!(serde_json::to_value(decoded).unwrap(), wire);
+
+        for field in ["operation_id", "input_release", "text", "language"] {
+            let mut missing = wire.clone();
+            missing.as_object_mut().unwrap().remove(field);
+            assert!(
+                serde_json::from_str::<OfflineTranscribeFileResult>(&missing.to_string()).is_err(),
+                "accepted missing {field}"
+            );
+        }
+    }
+
+    #[test]
+    fn offline_transcribe_file_result_rejects_non_proof_shapes() {
+        for raw in [
+            r#"{"operation_id":"op","input_release":"Detached","text":"hi","language":"en-US"}"#,
+            r#"{"operation_id":"op","input_release":true,"text":"hi","language":"en-US"}"#,
+            r#"{"operation_id":"op","input_release":{"detached":null},"text":"hi","language":"en-US"}"#,
+            r#"{"operation_id":"op","input_release":"detached","text":"hi","language":"en-US","cancelled":true}"#,
+            r#"["op","detached","hi","en-US"]"#,
+            r#"{"text":"hi","language":"en-US"}"#,
+            r#"{"cancelled":true}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<OfflineTranscribeFileResult>(raw).is_err(),
+                "accepted {raw}"
+            );
+        }
+    }
+
+    #[test]
+    fn offline_transcribe_file_result_rejects_duplicate_raw_fields() {
+        for duplicate in [
+            r#""operation_id":"op""#,
+            r#""input_release":"detached""#,
+            r#""text":"hi""#,
+            r#""language":"en-US""#,
+        ] {
+            let raw = format!(
+                r#"{{"operation_id":"op","input_release":"detached","text":"hi","language":"en-US",{duplicate}}}"#
+            );
+            assert!(
+                serde_json::from_str::<OfflineTranscribeFileResult>(&raw).is_err(),
+                "accepted duplicate {duplicate}"
+            );
+        }
     }
 
     #[test]

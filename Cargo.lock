@@ -180,6 +180,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
+ "tokio-util",
  "tracing",
  "windows 0.62.2",
  "windows-collections 0.3.2",
@@ -216,6 +217,8 @@ dependencies = [
  "chrono",
  "futures",
  "image",
+ "libc",
+ "tempfile",
  "tokio",
  "tracing",
  "zbus",
@@ -244,6 +247,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -302,6 +306,7 @@ dependencies = [
  "chrono",
  "clipboard-win",
  "image",
+ "serde",
  "serde_json",
  "tokio",
  "tracing",
@@ -330,6 +335,7 @@ dependencies = [
  "aleph-desktop-host",
  "aleph-panel-ui",
  "aleph-protocol",
+ "base64 0.23.1",
  "dispatch2",
  "futures-util",
  "log",
@@ -340,6 +346,7 @@ dependencies = [
  "nsh-platform-macos",
  "nsh-platform-windows",
  "objc2",
+ "objc2-avf-audio",
  "objc2-foundation",
  "objc2-service-management",
  "serde",

@@ -2,6 +2,14 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Level observation for one native voice capture frame.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VoiceCaptureObservation {
+    /// Exclusive absolute sample offset from the start of this capture.
+    pub end_sample: u32,
+    pub rms: f32,
+}
+
 /// Camera photo capture configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CameraSnapConfig {

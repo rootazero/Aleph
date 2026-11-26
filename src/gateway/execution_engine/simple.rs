@@ -14,7 +14,7 @@ use tracing::{info, warn};
 use super::{ActiveRun, ExecutionEngineConfig, ExecutionError, RunRequest, RunState, RunStatus};
 use crate::gateway::agent_instance::{AgentInstance, AgentState};
 use crate::gateway::event_emitter::{DynEventEmitter, EventEmitter, RunSummary, StreamEvent};
-use crate::gateway::execution_adapter::ExecutionAdapter;
+use crate::gateway::execution_adapter::{ChatRunCancellation, ExecutionAdapter};
 
 /// Simple execution engine without full `AgentLoop` integration
 /// Used when providers/tools are not available
@@ -22,6 +22,25 @@ pub struct SimpleExecutionEngine {
     config: ExecutionEngineConfig,
     active_runs: Arc<RwLock<HashMap<String, ActiveRun>>>,
     event_bus: Option<Arc<crate::gateway::event_bus::GatewayEventBus>>,
+}
+
+async fn emit_simple_final_chunk<E: EventEmitter + Send + Sync>(
+    emitter: &E,
+    run_id: &str,
+    seq: u64,
+    chunk_index: u32,
+) {
+    let _ = emitter
+        .emit(StreamEvent::ResponseChunk {
+            run_id: run_id.to_owned(),
+            seq,
+            delta: String::new(),
+            full_text: String::new(),
+            chunk_index,
+            is_final: true,
+            is_intermediate: false,
+        })
+        .await;
 }
 
 impl SimpleExecutionEngine {
@@ -74,11 +93,50 @@ impl SimpleExecutionEngine {
         agent: Arc<AgentInstance>,
         emitter: Arc<E>,
     ) -> Result<(), ExecutionError> {
+        self.execute_with_chat_cancellation(request, agent, emitter, None)
+            .await
+    }
+
+    async fn execute_with_chat_cancellation<E: EventEmitter + Send + Sync + 'static>(
+        &self,
+        request: RunRequest,
+        agent: Arc<AgentInstance>,
+        emitter: Arc<E>,
+        chat_cancellation: Option<&ChatRunCancellation>,
+    ) -> Result<(), ExecutionError> {
+        let Some(cancellation) = chat_cancellation else {
+            return self.execute_inner(request, agent, emitter, None).await;
+        };
+        let result = self
+            .execute_inner(request.clone(), agent, emitter.clone(), Some(cancellation))
+            .await;
+        // Failures before admission and after registration have one producer.
+        // The simulator has no retry queue, so AgentBusy is terminal here too.
+        super::run_loop::report_admission_denial(
+            cancellation.finish(result),
+            &request,
+            emitter.as_ref(),
+        )
+        .await
+    }
+
+    async fn execute_inner<E: EventEmitter + Send + Sync + 'static>(
+        &self,
+        request: RunRequest,
+        agent: Arc<AgentInstance>,
+        emitter: Arc<E>,
+        chat_cancellation: Option<&ChatRunCancellation>,
+    ) -> Result<(), ExecutionError> {
         if request.owns_worktree() {
             return Err(ExecutionError::Failed(
                 "owned worktree requires the mounted execution engine".into(),
             ));
         }
+        if let Some(cancellation) = chat_cancellation {
+            cancellation.check()?;
+        }
+        let cancel_token =
+            chat_cancellation.map_or_else(Default::default, ChatRunCancellation::token);
         let run_id = request.run_id.clone();
 
         // Run-admission spend arm — this engine has no `admit_run` to gate
@@ -88,30 +146,53 @@ impl SimpleExecutionEngine {
         // a floor. `_and_report`, not the bare predicate: this fires before
         // `RunAccepted` too, so see `deny_if_over_spend_and_report`'s doc for
         // why the caller cannot be left to find out any other way.
-        super::run_loop::deny_if_over_spend_and_report(&request, emitter.as_ref()).await?;
+        if chat_cancellation.is_some() {
+            super::run_loop::deny_if_over_spend(&request)?;
+        } else {
+            super::run_loop::deny_if_over_spend_and_report(&request, emitter.as_ref()).await?;
+        }
 
         // Ensure the session row exists before any state transitions; tests and
         // fallback paths may run without the global SessionService initialized.
         // Scoped for the same reason the full engine scopes it — see
         // `run_loop::prepare_session_for_run`.
-        super::run_loop::prepare_session_for_run(&agent, &request)
-            .await
-            .map_err(|error| {
-                ExecutionError::Failed(format!("session metadata preparation failed: {error}"))
-            })?;
+        let prepare_session = || async {
+            super::run_loop::prepare_session_for_run(&agent, &request)
+                .await
+                .map_err(|error| {
+                    ExecutionError::Failed(format!("session metadata preparation failed: {error}"))
+                })
+        };
+        if chat_cancellation.is_none() {
+            prepare_session().await?;
+        }
 
         // Atomically check Idle and transition to Running to close the TOCTOU
         // window between an is_idle() probe and the later set_state(Running).
-        if !agent.try_start_run(&run_id).await {
+        let started = if chat_cancellation.is_some() {
+            tokio::select! {
+                biased;
+                _ = cancel_token.cancelled() => return Err(ExecutionError::Cancelled),
+                started = agent.try_start_run(&run_id) => started,
+            }
+        } else {
+            agent.try_start_run(&run_id).await
+        };
+        if !started {
             return Err(ExecutionError::AgentBusy(agent.id().to_string()));
         }
 
         // Create cancellation channel
         let (cancel_tx, mut cancel_rx) = mpsc::channel::<()>(1);
 
-        // Register the run
+        // Register before any managed turn can create session metadata or append a message.
         {
             let mut runs = self.active_runs.write().await;
+            if cancel_token.is_cancelled() {
+                drop(runs);
+                agent.set_state(AgentState::Idle).await;
+                return Err(ExecutionError::Cancelled);
+            }
             runs.insert(
                 run_id.clone(),
                 ActiveRun {
@@ -124,79 +205,100 @@ impl SimpleExecutionEngine {
                     steps_completed: 0,
                     current_tool: None,
                     cancel_tx: Some(cancel_tx),
-                    cancel_token: Default::default(),
+                    cancel_token: cancel_token.clone(),
                     seq_counter: AtomicU64::new(0),
                     chunk_counter: AtomicU32::new(0),
                 },
             );
         }
 
-        // Emit run accepted event
-        let _ = emitter
-            .emit(StreamEvent::RunAccepted {
-                run_id: run_id.clone(),
-                session_key: request.session_key.to_key_string(),
-                accepted_at: chrono::Utc::now().to_rfc3339(),
-            })
-            .await;
-
-        // Detect a brand-new session before persisting the first message so we
-        // can announce it immediately (see the emit below).
-        let is_first_message = agent
-            .get_history(&request.session_key, Some(1))
-            .await
-            .is_empty();
-        // Emit user message via SessionService (Task 7a — replaces direct
-        // messages-table write so MessageProjector is the single writer).
         let turn_id = uuid::Uuid::new_v4();
-        if let Some(svc) = crate::session::service::global_session_service() {
-            let _ = svc
-                .emit_event(
-                    &request.session_key,
-                    crate::session::events::SessionEvent::UserMessage {
-                        turn_id,
-                        content: crate::session::events::MessageContent {
-                            text: request.input.clone(),
-                            blocks: Vec::new(),
-                            thinking: None,
-                            thinking_signature: None,
-                        },
-                        at: crate::session::events::now_ms(),
-                        synthetic: false,
-                        author_user_id: crate::scope::room_author_from_metadata(&request.metadata),
-                    },
-                )
+        let execute_registered = async {
+            if chat_cancellation.is_some() {
+                prepare_session().await?;
+            }
+            // Emit run accepted event
+            let _ = emitter
+                .emit(StreamEvent::RunAccepted {
+                    run_id: run_id.clone(),
+                    session_key: request.session_key.to_key_string(),
+                    accepted_at: chrono::Utc::now().to_rfc3339(),
+                })
                 .await;
-        } else {
-            // Sole producer on this path (Task 7a — replaces the direct
-            // messages-table write so MessageProjector is the single writer).
-            // No handle means this UserMessage never reaches `messages`, and
-            // no other surface will report the gap.
-            warn!(
-                session_key = %request.session_key.to_key_string(),
-                "session/service capability absent; dropped UserMessage — see `al doctor`"
-            );
-        }
 
-        // Announce the session the moment it's created (first message). Mirrors
-        // the full ExecutionEngine path so clients that refresh their session
-        // list on `SessionUpdated` (e.g. the Panel sidebar) show the new session
-        // right away instead of only after the turn completes / a manual reload.
-        if is_first_message {
-            self.publish_session_updated(
-                &request.session_key,
-                request.metadata.get("channel_id").map(String::as_str),
-                &request.run_id,
-            );
-        }
+            // Detect a brand-new session before persisting the first message so we
+            // can announce it immediately (see the emit below).
+            let is_first_message = agent
+                .get_history(&request.session_key, Some(1))
+                .await
+                .is_empty();
+            // Emit user message via SessionService (Task 7a — replaces direct
+            // messages-table write so MessageProjector is the single writer).
+            if let Some(svc) = crate::session::service::global_session_service() {
+                let _ = svc
+                    .emit_event(
+                        &request.session_key,
+                        crate::session::events::SessionEvent::UserMessage {
+                            turn_id,
+                            content: crate::session::events::MessageContent {
+                                text: request.input.clone(),
+                                blocks: Vec::new(),
+                                thinking: None,
+                                thinking_signature: None,
+                            },
+                            at: crate::session::events::now_ms(),
+                            synthetic: false,
+                            author_user_id: crate::scope::room_author_from_metadata(
+                                &request.metadata,
+                            ),
+                        },
+                    )
+                    .await;
+            } else {
+                // Sole producer on this path (Task 7a — replaces the direct
+                // messages-table write so MessageProjector is the single writer).
+                // No handle means this UserMessage never reaches `messages`, and
+                // no other surface will report the gap.
+                warn!(
+                    session_key = %request.session_key.to_key_string(),
+                    "session/service capability absent; dropped UserMessage — see `al doctor`"
+                );
+            }
+
+            // Announce the session the moment it's created (first message). Mirrors
+            // the full ExecutionEngine path so clients that refresh their session
+            // list on `SessionUpdated` (e.g. the Panel sidebar) show the new session
+            // right away instead of only after the turn completes / a manual reload.
+            if is_first_message {
+                self.publish_session_updated(
+                    &request.session_key,
+                    request.metadata.get("channel_id").map(String::as_str),
+                    &request.run_id,
+                );
+            }
+
+            Ok(())
+        };
+        let setup_result = if chat_cancellation.is_some() {
+            tokio::select! {
+                biased;
+                _ = cancel_token.cancelled() => Err(ExecutionError::Cancelled),
+                result = execute_registered => result,
+            }
+        } else {
+            execute_registered.await
+        };
 
         // Execute with timeout
         let timeout_secs = request
             .timeout_secs
             .unwrap_or(self.config.default_timeout_secs);
 
-        let result = tokio::select! {
-            result = self.run_simple_loop(&run_id, &request, emitter.clone()) => result,
+        let result = match setup_result {
+            Err(error) => Err(error),
+            Ok(()) => tokio::select! {
+            result = self.run_simple_loop(&run_id, &request, emitter.clone(), chat_cancellation.is_some()) => result,
+            _ = cancel_token.cancelled(), if chat_cancellation.is_some() => Err(ExecutionError::Cancelled),
             _ = cancel_rx.recv() => {
                 info!("Run {} cancelled", run_id);
                 Err(ExecutionError::Cancelled)
@@ -205,6 +307,11 @@ impl SimpleExecutionEngine {
                 warn!("Run {} timed out after {}s", run_id, timeout_secs);
                 Err(ExecutionError::Timeout)
             }
+            },
+        };
+        let result = match chat_cancellation {
+            Some(cancellation) => cancellation.finish(result),
+            None => result,
         };
 
         // Reset agent state so the agent can accept the next request.
@@ -218,15 +325,22 @@ impl SimpleExecutionEngine {
                 error: e.to_string(),
             },
         };
-        let (started_at, steps_completed, final_seq) = {
+        let (started_at, steps_completed, final_chunk, final_seq) = {
             let mut runs = self.active_runs.write().await;
             if let Some(run) = runs.get_mut(&run_id) {
                 run.state = final_state;
                 run.completed_at = Some(chrono::Utc::now());
                 run.cancel_tx = None;
-                (run.started_at, run.steps_completed, run.next_seq())
+                let final_chunk = (chat_cancellation.is_some() && result.is_ok())
+                    .then(|| (run.next_seq(), run.next_chunk()));
+                (
+                    run.started_at,
+                    run.steps_completed,
+                    final_chunk,
+                    run.next_seq(),
+                )
             } else {
-                (chrono::Utc::now(), 0, 0)
+                (chrono::Utc::now(), 0, None, 0)
             }
         };
 
@@ -267,6 +381,9 @@ impl SimpleExecutionEngine {
                     );
                 }
 
+                if let Some((seq, chunk_index)) = final_chunk {
+                    emit_simple_final_chunk(emitter.as_ref(), &run_id, seq, chunk_index).await;
+                }
                 let _ = emitter
                     .emit(StreamEvent::RunComplete {
                         run_id: run_id.clone(),
@@ -286,6 +403,7 @@ impl SimpleExecutionEngine {
                     .await;
                 Ok(())
             }
+            Err(e) if chat_cancellation.is_some() => Err(e),
             Err(e) => {
                 let error_code = match &e {
                     ExecutionError::Timeout => "TIMEOUT".to_string(),
@@ -298,7 +416,6 @@ impl SimpleExecutionEngine {
                         seq: final_seq,
                         error: e.to_string(),
                         error_code: Some(error_code),
-                        // Post-admission: `RunAccepted` already seeded the index.
                         session_key: None,
                     })
                     .await;
@@ -328,6 +445,7 @@ impl SimpleExecutionEngine {
         run_id: &str,
         request: &RunRequest,
         emitter: Arc<E>,
+        defer_final_chunk: bool,
     ) -> Result<String, ExecutionError> {
         // Helper to get next seq
         let get_seq = || async {
@@ -392,17 +510,10 @@ impl SimpleExecutionEngine {
             tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
         }
 
-        let _ = emitter
-            .emit(StreamEvent::ResponseChunk {
-                run_id: run_id.to_string(),
-                seq: get_seq().await,
-                delta: String::new(),
-                full_text: String::new(),
-                chunk_index: get_chunk().await,
-                is_final: true,
-                is_intermediate: false,
-            })
-            .await;
+        if !defer_final_chunk {
+            emit_simple_final_chunk(emitter.as_ref(), run_id, get_seq().await, get_chunk().await)
+                .await;
+        }
 
         Ok(response)
     }
@@ -490,6 +601,22 @@ impl ExecutionAdapter for SimpleExecutionEngine {
         // then delegate to the existing generic execute method
         let wrapper = Arc::new(DynEventEmitter::new(emitter));
         Self::execute(self, request, agent, wrapper).await
+    }
+
+    fn chat_run_cancellation(&self) -> Option<ChatRunCancellation> {
+        Some(ChatRunCancellation::default())
+    }
+
+    async fn execute_chat_run(
+        &self,
+        request: RunRequest,
+        agent: Arc<AgentInstance>,
+        emitter: Arc<dyn EventEmitter + Send + Sync>,
+        cancellation: ChatRunCancellation,
+    ) -> Result<(), ExecutionError> {
+        let emitter = Arc::new(DynEventEmitter::new(emitter));
+        self.execute_with_chat_cancellation(request, agent, emitter, Some(&cancellation))
+            .await
     }
 
     async fn cancel(&self, run_id: &str) -> Result<(), ExecutionError> {

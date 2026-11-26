@@ -95,48 +95,6 @@ async fn build_dream_transport(
     crate::orchestrator::build_dream_provider(config, primary)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::build_dream_transport;
-    use crate::secrets::{AsyncSecretResolver, DecryptedSecret, SecretError};
-
-    struct FixtureVault;
-
-    #[async_trait::async_trait]
-    impl AsyncSecretResolver for FixtureVault {
-        async fn resolve(&self, name: &str) -> Result<DecryptedSecret, SecretError> {
-            assert_eq!(name, "ai:relay");
-            Ok(DecryptedSecret::new("dream-fixture-key"))
-        }
-    }
-
-    #[tokio::test]
-    async fn dream_transport_uses_vault_without_changing_the_config() {
-        let mut config = crate::Config::default();
-        config.general.default_provider = Some("relay".into());
-        config.memory.dreaming.enabled = true;
-        config.memory.dreaming.model = Some("org/dream".into());
-        let mut provider = crate::config::ProviderConfig::test_config("org/chat");
-        provider.api_key = None;
-        provider.base_url = Some("https://relay.invalid/v1".into());
-        config.providers.insert("relay".into(), provider);
-
-        let dream = build_dream_transport(&config, Some(&FixtureVault))
-            .await
-            .unwrap();
-        assert_eq!(dream.serving_model_hint().as_deref(), Some("org/dream"));
-        assert!(
-            crate::providers::model_catalog::discovery::transport_matches_listing(
-                &config,
-                "relay",
-                dream.as_ref(),
-                |_, _| Some("dream-fixture-key".into()),
-            )
-        );
-        assert!(config.providers["relay"].api_key.is_none());
-    }
-}
-
 impl MemoryServices {
     pub(super) async fn initialize(
         config: &MemoryRuntimeConfig,
@@ -359,5 +317,47 @@ impl MemoryServices {
             reconciler,
             reembed: Arc::new(crate::gateway::handlers::memory::ReembedState::new()),
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_dream_transport;
+    use crate::secrets::{AsyncSecretResolver, DecryptedSecret, SecretError};
+
+    struct FixtureVault;
+
+    #[async_trait::async_trait]
+    impl AsyncSecretResolver for FixtureVault {
+        async fn resolve(&self, name: &str) -> Result<DecryptedSecret, SecretError> {
+            assert_eq!(name, "ai:relay");
+            Ok(DecryptedSecret::new("dream-fixture-key"))
+        }
+    }
+
+    #[tokio::test]
+    async fn dream_transport_uses_vault_without_changing_the_config() {
+        let mut config = crate::Config::default();
+        config.general.default_provider = Some("relay".into());
+        config.memory.dreaming.enabled = true;
+        config.memory.dreaming.model = Some("org/dream".into());
+        let mut provider = crate::config::ProviderConfig::test_config("org/chat");
+        provider.api_key = None;
+        provider.base_url = Some("https://relay.invalid/v1".into());
+        config.providers.insert("relay".into(), provider);
+
+        let dream = build_dream_transport(&config, Some(&FixtureVault))
+            .await
+            .unwrap();
+        assert_eq!(dream.serving_model_hint().as_deref(), Some("org/dream"));
+        assert!(
+            crate::providers::model_catalog::discovery::transport_matches_listing(
+                &config,
+                "relay",
+                dream.as_ref(),
+                |_, _| Some("dream-fixture-key".into()),
+            )
+        );
+        assert!(config.providers["relay"].api_key.is_none());
     }
 }

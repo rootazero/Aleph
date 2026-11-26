@@ -10,7 +10,7 @@ use std::task::{Context, Poll};
 
 use tower::{Layer, Service};
 
-use crate::gateway::handlers::HandlerRegistry;
+use crate::gateway::handlers::{voice_turn::VoiceRequestContext, HandlerRegistry};
 use crate::gateway::panel_project_context::PanelRequestContext;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse};
 
@@ -47,6 +47,7 @@ pub struct HandlerService<S> {
     _marker: S,
     handlers: Arc<HandlerRegistry>,
     panel_context: Option<PanelRequestContext>,
+    voice_context: Option<VoiceRequestContext>,
 }
 
 impl HandlerService<()> {
@@ -56,11 +57,17 @@ impl HandlerService<()> {
             _marker: (),
             handlers,
             panel_context: None,
+            voice_context: None,
         }
     }
 
-    pub(crate) fn with_panel_context(mut self, context: Option<PanelRequestContext>) -> Self {
-        self.panel_context = context;
+    pub(crate) fn with_context(
+        mut self,
+        panel_context: Option<PanelRequestContext>,
+        voice_context: Option<VoiceRequestContext>,
+    ) -> Self {
+        self.panel_context = panel_context;
+        self.voice_context = voice_context;
         self
     }
 }
@@ -71,6 +78,7 @@ impl<S> HandlerService<S> {
             _marker: inner,
             handlers,
             panel_context: None,
+            voice_context: None,
         }
     }
 }
@@ -86,12 +94,12 @@ impl Service<JsonRpcRequest> for HandlerService<()> {
 
     fn call(&mut self, req: JsonRpcRequest) -> Self::Future {
         let handlers = self.handlers.clone();
-        let context = self.panel_context.clone();
+        let panel_context = self.panel_context.clone();
+        let voice_context = self.voice_context.clone();
         Box::pin(async move {
-            Ok(match context {
-                Some(context) => handlers.handle_with_panel_context(&req, &context).await,
-                None => handlers.handle(&req).await,
-            })
+            Ok(handlers
+                .handle_with_context(&req, panel_context.as_ref(), voice_context)
+                .await)
         })
     }
 }

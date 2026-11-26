@@ -637,6 +637,9 @@ pub enum ExecutionError {
     #[error("Execution failed: {0}")]
     Failed(String),
 
+    #[error("Message delivery could not be confirmed")]
+    DeliveryUnconfirmed,
+
     #[error("Command requires LLM processing: {reason}")]
     Fallthrough { reason: String },
 
@@ -707,7 +710,8 @@ impl ExecutionError {
             Self::Timeout => ReceiptKind::Timeout,
             Self::Cancelled => ReceiptKind::Cancelled,
             Self::AgentBusy(_) => ReceiptKind::AgentBusy,
-            // The only string-carrying variant; classify by signature so a
+            Self::DeliveryUnconfirmed => ReceiptKind::DeliveryUnconfirmed,
+            // Classify failures by signature so a
             // provider rate-limit / auth failure / network outage is reported
             // as such instead of a useless "please retry".
             Self::Failed(msg) => crate::gateway::i18n::classify_error_text(msg),

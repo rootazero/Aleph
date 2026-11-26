@@ -61,8 +61,9 @@ let done = DispatchSemaphore(value: 0)
 Task {
     let router = Router()
     await registerBridgeHandlers(router)
-    await registerCameraHandlers(router)
-    await registerAudioHandlers(router)
+    let audioSession = AudioSession()
+    await registerCameraHandlers(router, audioSession: audioSession)
+    await registerAudioHandlers(router, session: audioSession)
     await registerSpeechHandlers(router)
     await registerOcrHandlers(router)
     await registerAxHandlers(router)
@@ -71,7 +72,9 @@ Task {
     await registerScreenCaptureHandlers(router)
     await registerPimHandlers(router)
     await ParentWatch().start()
-    await Server(router: router).run()
+    await Server(router: router).run {
+        await audioSession.closeVoiceCaptureInput()
+    }
     done.signal()
 }
 done.wait()

@@ -204,6 +204,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "TranscribeFileResult",
         serde_json::to_value(schema_for!(methods::media::TranscribeFileResult))?,
     );
+    out.insert(
+        "CancelSpeechParams",
+        serde_json::to_value(schema_for!(methods::media::CancelSpeechParams))?,
+    );
+    out.insert(
+        "CancelSpeechResult",
+        serde_json::to_value(schema_for!(methods::media::CancelSpeechResult))?,
+    );
 
     let json = serde_json::to_string_pretty(&out)?;
     println!("{json}");

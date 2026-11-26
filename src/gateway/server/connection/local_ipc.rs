@@ -8,16 +8,20 @@ use std::{
 };
 
 use aleph_client::local_ipc::{
-    parse_payload, read_frame_budgeted, write_frame, HELLO_TIMEOUT, MAX_FRAME_BYTES, MAX_INFLIGHT,
+    parse_payload, parse_request_payload, parse_voice_response_payload, read_frame, write_frame,
+    HELLO_TIMEOUT, MAX_FRAME_BYTES, MAX_INFLIGHT,
+};
+use aleph_protocol::panel_voice::{
+    is_capture_control, is_native_capture_method, VOICE_TURN_CANCEL_METHOD,
 };
 use aleph_protocol::system_hello::{Feature, HelloLimits};
 use futures_util::{stream::FuturesUnordered, StreamExt};
 use serde_json::Value;
 use tokio::{
     io::{AsyncRead, AsyncWrite},
-    sync::{OwnedSemaphorePermit, Semaphore},
+    sync::{oneshot, OwnedSemaphorePermit, Semaphore},
     task::JoinSet,
-    time::timeout,
+    time::{sleep_until, timeout, Instant},
 };
 use tokio_util::sync::CancellationToken;
 
@@ -25,6 +29,7 @@ use super::{
     cleanup,
     dispatch::{active_desktop_owner, DispatchPeer},
     event_admission::{next_received, V1Event, V1EventFeed},
+    reply_writer::Writes,
     rpc, ConnectionContext,
 };
 use crate::{
@@ -51,6 +56,8 @@ pub(in crate::gateway::server) use windows::{bind, serve};
 
 const MAX_CONNECTIONS: usize = 8;
 const WIRE_BUDGET: usize = 16 * 1024 * 1024;
+const CAPTURE_CONTROL_SLOTS: usize = 3;
+const CAPTURE_CONTROL_BYTES: usize = 4096;
 const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 const NO_NETWORK_ORIGIN: IpAddr = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
 
@@ -90,8 +97,12 @@ pub(in crate::gateway::server) async fn serve(
                 let stop = stop.clone();
                 tasks.spawn(async move {
                     let (read, write) = stream.into_split();
-                    if let Err(error) = serve_peer(read, write, state, stop).await {
+                    let mut cleanup = None;
+                    if let Err(error) = serve_peer(read, write, state, stop, &mut cleanup).await {
                         tracing::debug!(kind = ?error.kind(), "Desktop IPC peer closed");
+                    }
+                    if let Some(cleanup) = cleanup {
+                        cleanup.finish().await;
                     }
                 });
             }
@@ -112,6 +123,7 @@ async fn serve_peer(
     mut write: impl AsyncWrite + Unpin,
     state: Arc<GatewaySharedState>,
     stop: CancellationToken,
+    cleanup: &mut Option<PeerCleanup>,
 ) -> io::Result<()> {
     let Some(store) = state
         .security_store
@@ -120,17 +132,15 @@ async fn serve_peer(
     else {
         return Ok(());
     };
-    let budget = std::sync::Arc::new(Semaphore::new(WIRE_BUDGET));
     let id = format!("ipc-{}", uuid::Uuid::new_v4());
     let hello = tokio::select! {
         biased;
         _ = stop.cancelled() => return Ok(()),
-        result = timeout(HELLO_TIMEOUT, read_request(&mut read, &budget)) => result.map_err(io::Error::other)??,
+        result = timeout(HELLO_TIMEOUT, read_request(&mut read)) => result.map_err(io::Error::other)??,
     };
-    let Some((text, request, permit)) = hello else {
+    let Some((_, request)) = hello else {
         return Ok(());
     };
-    drop((text, permit));
     let (hello, granted) = if request.method == "system.hello" {
         system_hello::negotiate(
             request,
@@ -150,7 +160,7 @@ async fn serve_peer(
     };
     if let Some(error) = &hello.error {
         let response = serialize(&hello)?;
-        let response = if response_fits(&response) {
+        let response = if response_fits(&response, None) {
             response
         } else {
             serialize(&JsonRpcResponse::error(
@@ -177,42 +187,99 @@ async fn serve_peer(
     }
     let ctx =
         ConnectionContext::from_shared(&state, ChannelClass::Desktop, NO_NETWORK_ORIGIN, false);
-    let peer = DispatchPeer::desktop(state.connections.clone(), id.clone(), store);
+    let cancellation = stop.child_token();
+    let _cancel_on_close = cancellation.clone().drop_guard();
+    // Subscribed before the hello reply is written, so no frame published
+    // after the client learns it may expect events is missed.
+    let mut events = granted.contains(&Feature::LiveEvents).then(|| {
+        V1EventFeed::subscribe(&ctx, id.clone(), None, MAX_FRAME_BYTES as usize, &granted)
+    });
+    let peer = DispatchPeer::desktop(
+        state.connections.clone(),
+        id.clone(),
+        store,
+        cancellation,
+        events.is_some(),
+    );
     let executor = rpc::RpcExecutor {
         middleware: ctx.middleware_chain.clone(),
         lanes: ctx.lane_manager.clone(),
         idempotency: ctx.idempotency_guard.clone(),
         class: ctx.channel_class,
     };
-    // Subscribed before the hello reply is written, so no frame published
-    // after the client learns it may expect events is missed.
-    let mut events = granted.contains(&Feature::LiveEvents).then(|| {
-        V1EventFeed::subscribe(&ctx, id.clone(), None, MAX_FRAME_BYTES as usize, &granted)
-    });
+
     let result = tokio::select! {
         biased;
         _ = stop.cancelled() => Ok(()),
         result = async {
             send(&mut write, &serialize(&hello)?).await?;
-            serve_requests(&mut read, &mut write, &budget, &executor, &peer, &ctx, &mut events).await
+            // Ordinary jobs own their slot through write acknowledgment. One
+            // live event and one control reply have independent slots.
+            // Ordinary replies, capture controls, turn cancel and one event.
+            let (writes, mut outgoing) =
+                Writes::<IpcWrite>::queue(MAX_INFLIGHT as usize + CAPTURE_CONTROL_SLOTS + 2);
+            let writer = async {
+                while let Some(item) = outgoing.recv().await {
+                    if item.frame.requires_live_peer && peer.snapshot().await.is_none() {
+                        return Ok(());
+                    }
+                    send(&mut write, &item.frame.text).await?;
+                    let _ = item.sent.send(());
+                }
+                Ok(())
+            };
+            tokio::select! {
+                biased;
+                result = writer => result,
+                result = serve_requests(&mut read, &writes, &executor, &peer, &ctx, &mut events) => result,
+            }
         } => result,
     };
-    drop((read, write));
-    cleanup::run_cleanup(&id, &ctx, &Arc::new(PendingInvokes::new())).await;
+    *cleanup = Some(PeerCleanup { id, ctx, peer });
     result
 }
 
-type FrameBudget = std::sync::Arc<Semaphore>;
+struct PeerCleanup {
+    id: String,
+    ctx: ConnectionContext,
+    peer: DispatchPeer,
+}
+
+impl PeerCleanup {
+    async fn finish(self) {
+        self.peer.drain_desktop_voice().await;
+        cleanup::run_cleanup(&self.id, &self.ctx, &Arc::new(PendingInvokes::new())).await;
+    }
+}
+
+struct IpcWrite {
+    text: String,
+    requires_live_peer: bool,
+    _input_permit: Option<OwnedSemaphorePermit>,
+}
+
+impl IpcWrite {
+    fn without_input_permit(text: String) -> Self {
+        Self {
+            text,
+            requires_live_peer: false,
+            _input_permit: None,
+        }
+    }
+}
 
 async fn read_request(
     reader: &mut (impl AsyncRead + Unpin),
-    budget: &FrameBudget,
-) -> io::Result<Option<(String, JsonRpcRequest, OwnedSemaphorePermit)>> {
-    let Some((text, permit)) = read_frame_budgeted(reader, budget).await? else {
-        return Ok(None);
-    };
+) -> io::Result<Option<(String, JsonRpcRequest)>> {
+    read_frame(reader)
+        .await?
+        .map(|text| parse_request(&text).map(|request| (text, request)))
+        .transpose()
+}
+
+fn parse_request(text: &str) -> io::Result<JsonRpcRequest> {
     let request: JsonRpcRequest =
-        serde_json::from_value(parse_payload(&text)?).map_err(io::Error::other)?;
+        serde_json::from_value(parse_request_payload(text)?).map_err(io::Error::other)?;
     if request.jsonrpc != "2.0"
         || !request
             .id
@@ -224,84 +291,167 @@ async fn read_request(
             "invalid IPC RPC envelope",
         ));
     }
-    Ok(Some((text, request, permit)))
+    Ok(request)
 }
 
 async fn serve_requests(
     read: &mut (impl AsyncRead + Unpin),
-    write: &mut (impl AsyncWrite + Unpin),
-    budget: &FrameBudget,
+    writes: &Writes<IpcWrite>,
     executor: &rpc::RpcExecutor,
     peer: &DispatchPeer,
     ctx: &ConnectionContext,
     events: &mut Option<V1EventFeed>,
 ) -> io::Result<()> {
     let mut jobs = FuturesUnordered::new();
-    let mut active: Vec<Value> = Vec::new();
+    let budget = std::sync::Arc::new(Semaphore::new(WIRE_BUDGET));
+    let capture_control_budget = std::sync::Arc::new(Semaphore::new(
+        CAPTURE_CONTROL_SLOTS * CAPTURE_CONTROL_BYTES,
+    ));
+    let mut active: Vec<(Value, bool)> = Vec::new();
+    let mut pending_replies: Vec<(Value, oneshot::Receiver<()>)> = Vec::new();
+    let mut pending_control: Option<(Value, oneshot::Receiver<()>)> = None;
+    let mut pending_event: Option<oneshot::Receiver<()>> = None;
+    let mut lost_deadline = None;
     loop {
-        // Preserve partial reads while completions are sent. Jobs are polled in
-        // the owning task; returning drops all unfinished work before cleanup.
-        let frame = read_request(read, budget);
+        // Stage one hard-capped frame without waiting for a job's byte lease.
+        // Preserve partial reads across writes, including the terminal warning.
+        let frame = read_frame(read);
         tokio::pin!(frame);
         let next = loop {
             tokio::select! {
                 biased;
-                completed = jobs.next(), if !jobs.is_empty() => {
-                    if let Some((id, response, transcript_read, _permit)) = completed {
-                        if transcript_read && peer.snapshot().await.is_none() {
-                            return Ok(());
-                        }
+                ack = async { pending_event.as_mut().expect("pending event").await }, if pending_event.is_some() => {
+                    ack.map_err(io::Error::other)?;
+                    pending_event = None;
+                    if lost_deadline.is_some() {
+                        return Ok(());
+                    }
+                }
+                _ = async { sleep_until(lost_deadline.expect("terminal event deadline")).await }, if lost_deadline.is_some() => {
+                    return Err(io::Error::new(io::ErrorKind::TimedOut, "IPC event loss warning timed out"));
+                }
+                completed = jobs.next(), if !jobs.is_empty() && lost_deadline.is_none() => {
+                    if let Some((id, response, voice_synthesis, transcript_read, permit)) = completed {
                         let id: Value = id;
+                        let voice_synthesis: bool = voice_synthesis;
                         let response: String = response?;
-                        // Match the receiver's byte and shape limits. A large Core
-                        // result is a correlated RPC error, not a transport failure.
-                        let response = if response_fits(&response) {
-                            response
-                        } else {
-                            serialize(&JsonRpcResponse::error(
-                                Some(id.clone()),
-                                INTERNAL_ERROR,
-                                "response exceeds Desktop IPC limits",
-                            ))?
-                        };
-                        send(write, &response).await?;
-                        active.retain(|entry| entry != &id);
+                        let text = ipc_response(response, &id, voice_synthesis)?;
+                        let ack = enqueue(writes, IpcWrite {
+                            text,
+                            requires_live_peer: transcript_read,
+                            _input_permit: Some(permit),
+                        })?;
+                        #[cfg(test)]
+                        tests::observe_capture_reply_queued(&id);
+                        pending_replies.push((id, ack));
                     }
                 }
                 // Live events: admitted in the body, not the branch, so a
                 // completion or read winning the race never drops a frame.
-                received = next_received(events) => {
+                received = next_received(events), if pending_event.is_none() => {
                     let feed = events.as_mut().expect("only a feed yields frames");
-                    match feed.admit(ctx, received).await {
-                        None => {}
-                        Some(V1Event::Send(frame)) => send(write, &frame).await?,
-                        Some(V1Event::ToolPresentation(frame)) => {
-                            if peer.snapshot().await.is_none() {
-                                return Ok(());
-                            }
-                            send(write, &frame).await?;
-                        }
+                    let event = match feed.admit(ctx, received).await {
+                        None => continue,
+                        Some(V1Event::Send(frame)) => IpcWrite::without_input_permit(frame),
+                        Some(V1Event::ToolPresentation(text)) => IpcWrite {
+                            text,
+                            requires_live_peer: true,
+                            _input_permit: None,
+                        },
                         Some(V1Event::Lost(warning)) => {
-                            send(write, &warning).await?;
-                            return Ok(());
+                            lost_deadline = Some(Instant::now() + WRITE_TIMEOUT);
+                            IpcWrite::without_input_permit(warning)
                         }
                         Some(V1Event::Close(_)) => return Ok(()),
-                    }
+                    };
+                    pending_event = Some(enqueue(writes, event)?);
                 }
                 request = &mut frame => break request?,
             }
         };
-        let Some((text, request, permit)) = next else {
+        let Some(text) = next else {
             return Ok(());
         };
+        // Keep observing the transport, but don't let invalid RPC payloads
+        // interrupt the terminal warning before its write acknowledgment.
+        if lost_deadline.is_some() {
+            continue;
+        }
+        let request = parse_request(&text)?;
         let id = request.id.clone().expect("validated request id");
-        if active.contains(&id) || active.len() >= MAX_INFLIGHT as usize {
+        pending_replies.retain_mut(|(id, ack)| {
+            if ack.try_recv().is_ok() {
+                active.retain(|(entry, _)| entry != id);
+                return false;
+            }
+            true
+        });
+        if pending_control
+            .as_mut()
+            .is_some_and(|(_, ack)| ack.try_recv().is_ok())
+        {
+            pending_control = None;
+        }
+        if active.iter().any(|(entry, _)| entry == &id)
+            || pending_control
+                .as_ref()
+                .is_some_and(|(pending, _)| pending == &id)
+        {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                "IPC request limit exceeded",
+                "duplicate IPC request id",
             ));
         }
-        active.push(id.clone());
+        if request.method == VOICE_TURN_CANCEL_METHOD {
+            // Reject control pipelining before it can execute or allocate a reply.
+            if pending_control.is_some() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "IPC control request limit exceeded",
+                ));
+            }
+            let response = execute(executor, peer, &text, &request).await?;
+            let text = ipc_response(response, &id, false)?;
+            let ack = enqueue(writes, IpcWrite::without_input_permit(text))?;
+            pending_control = Some((id, ack));
+            continue;
+        }
+        // Readiness and teardown can wait on the device, so they must not
+        // block the reader. Reserve limited capacity outside the ordinary
+        // jobs budget, including until each control reply is written.
+        let capture_control = is_capture_control(&request.method);
+        let in_flight = active
+            .iter()
+            .filter(|(_, control)| *control == capture_control)
+            .count();
+        let pool = if capture_control {
+            if in_flight >= CAPTURE_CONTROL_SLOTS || text.len() > CAPTURE_CONTROL_BYTES {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "IPC capture control limit exceeded",
+                ));
+            }
+            &capture_control_budget
+        } else {
+            if in_flight >= MAX_INFLIGHT as usize {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "IPC request limit exceeded",
+                ));
+            }
+            &budget
+        };
+        // Never wait for byte budget while owning the only reader.
+        let permit = pool
+            .clone()
+            .try_acquire_many_owned(text.len() as u32)
+            .map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "IPC request byte budget exceeded",
+                )
+            })?;
+        active.push((id.clone(), capture_control));
         jobs.push(async move {
             let transcript_read = matches!(
                 request.method.as_str(),
@@ -310,9 +460,17 @@ async fn serve_requests(
                     | "context.breakdown"
             );
             let result = execute(executor, peer, &text, &request).await;
-            (id, result, transcript_read, permit)
+            let voice_synthesis =
+                request.method == aleph_protocol::panel_voice::VOICE_TURN_SYNTHESIZE_METHOD;
+            (id, result, voice_synthesis, transcript_read, permit)
         });
     }
+}
+
+fn enqueue(writes: &Writes<IpcWrite>, frame: IpcWrite) -> io::Result<oneshot::Receiver<()>> {
+    writes
+        .enqueue(frame)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::WouldBlock, "IPC response queue exceeded"))
 }
 
 async fn execute(
@@ -321,7 +479,7 @@ async fn execute(
     text: &str,
     request: &JsonRpcRequest,
 ) -> io::Result<String> {
-    if !super::v1_mounted(&request.method) {
+    if !super::v1_mounted(&request.method) && !is_native_capture_method(&request.method) {
         return serialize(&JsonRpcResponse::error(
             request.id.clone(),
             METHOD_NOT_FOUND,
@@ -345,8 +503,24 @@ fn serialize(response: &JsonRpcResponse) -> io::Result<String> {
     serde_json::to_string(response).map_err(io::Error::other)
 }
 
-fn response_fits(text: &str) -> bool {
-    text.len() <= MAX_FRAME_BYTES as usize && parse_payload(text).is_ok()
+// A large Core result is a correlated RPC error, not a transport failure.
+fn ipc_response(text: String, id: &Value, synthesis: bool) -> io::Result<String> {
+    if response_fits(&text, synthesis.then_some(id)) {
+        return Ok(text);
+    }
+    serialize(&JsonRpcResponse::error(
+        Some(id.clone()),
+        INTERNAL_ERROR,
+        "response exceeds Desktop IPC limits",
+    ))
+}
+
+fn response_fits(text: &str, synthesis_id: Option<&Value>) -> bool {
+    let budget = MAX_FRAME_BYTES as usize;
+    match synthesis_id {
+        Some(expected) => parse_voice_response_payload(text, budget, |id| id == expected).is_ok(),
+        None => text.len() <= budget && parse_payload(text).is_ok(),
+    }
 }
 
 async fn send(write: &mut (impl AsyncWrite + Unpin), text: &str) -> io::Result<()> {

@@ -258,7 +258,10 @@ async fn invisible_caller_learns_nothing_about_dependency_state() {
         principal: Some("someone-else".into()),
         ..VisibilityScope::default()
     };
-    assert_eq!(facade.resolve(reference).unwrap_err(), ResolveError::NotVisible);
+    assert_eq!(
+        facade.resolve(reference).unwrap_err(),
+        ResolveError::NotVisible
+    );
 }
 
 #[test]

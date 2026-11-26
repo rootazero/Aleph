@@ -760,7 +760,20 @@ async fn desktop_ipc_pushes_admitted_events_only_after_negotiation() {
             receive(&mut live).await,
             serde_json::from_str::<Value>(&own_complete).unwrap()
         );
-        // The live connection still serves requests after the warning.
+        // Publish more than the reply queue can hold in one scheduler turn.
+        // The client reads continuously once the burst is published.
+        let burst: Vec<_> = (0..super::MAX_INFLIGHT + 4)
+            .map(|seq| accepted(&format!("r-burst-{seq}"), &own))
+            .collect();
+        for frame in &burst {
+            bus.publish(frame);
+        }
+        for expected in &burst {
+            assert_eq!(
+                receive(&mut live).await,
+                serde_json::from_str::<Value>(expected).unwrap()
+            );
+        }
         send(&mut live, json!({"jsonrpc":"2.0","method":"health","id":2})).await;
         assert_eq!(receive(&mut live).await["id"], 2);
 
@@ -807,3 +820,817 @@ async fn desktop_ipc_pushes_admitted_events_only_after_negotiation() {
 }
 
 const MAX_FRAME_BYTES_FOR_TEST: usize = aleph_client::local_ipc::MAX_FRAME_BYTES as usize;
+
+#[tokio::test]
+async fn voice_turn_v1_ingress_is_server_derived() {
+    use crate::gateway::handlers::voice_turn_tests::{
+        mount_synthesis_bytes, transcribe_request, transcribe_request_with_samples, SttFixture,
+    };
+    use aleph_protocol::panel_voice::MAX_UTTERANCE_SAMPLES;
+    use std::sync::atomic::Ordering;
+
+    let (_root, endpoint) = fixture();
+    let provider = SttFixture::new().await;
+    let store = Arc::new(SecurityStore::in_memory().unwrap());
+    let mut gateway = GatewayServer::new("127.0.0.1:0".parse().unwrap());
+    gateway.set_security_store(store.clone());
+    provider.mount(gateway.handlers_mut());
+    let tts_calls = mount_synthesis_bytes(gateway.handlers_mut(), 64_000);
+    let (stop, shutdown) = oneshot::channel();
+    let path = endpoint.clone();
+    let task = tokio::spawn(async move { gateway.run_local_endpoint(shutdown, &path).await });
+    timeout(Duration::from_secs(8), async {
+        let mut unauthenticated = connect(&endpoint).await;
+        send(&mut unauthenticated, transcribe_request()).await;
+        assert_eq!(
+            receive(&mut unauthenticated).await["error"]["code"],
+            AUTH_REQUIRED
+        );
+        assert_closed(&mut unauthenticated).await;
+        assert_eq!(provider.calls(), 0);
+
+        let mut stream = connect(&endpoint).await;
+        send(&mut stream, hello(1, 1)).await;
+        assert!(receive(&mut stream).await.get("result").is_some());
+        send(
+            &mut stream,
+            transcribe_request_with_samples(MAX_UTTERANCE_SAMPLES),
+        )
+        .await;
+        assert_eq!(receive(&mut stream).await["result"]["text"], "fixture");
+        assert_eq!(provider.calls(), 1);
+        send(
+            &mut stream,
+            json!({"jsonrpc":"2.0","id":2,"method":"voice.turn.synthesize","params":{
+                "turn_id":"1b63aa6b-0688-4be3-991f-e6994e0f795c","text":"Speak."
+            }}),
+        )
+        .await;
+        let result = receive(&mut stream).await;
+        assert_eq!(
+            result["result"]["mime_type"],
+            "audio/mpeg",
+            "{:?}",
+            result.get("error")
+        );
+        assert_eq!(
+            result["result"]["audio_base64"].as_str().unwrap().len(),
+            85_336
+        );
+        assert_eq!(tts_calls.load(Ordering::SeqCst), 1);
+
+        let configured = std::mem::take(
+            &mut provider
+                .config
+                .write()
+                .await
+                .generation
+                .transcription_providers,
+        );
+        send(&mut stream, transcribe_request()).await;
+        assert_eq!(
+            receive(&mut stream).await["error"]["data"]["kind"],
+            "offline_unavailable"
+        );
+        assert_eq!(provider.calls(), 1);
+
+        provider
+            .config
+            .write()
+            .await
+            .generation
+            .transcription_providers = configured;
+        store
+            .update_user(OWNER_USER_ID, None, None, Some(UserStatus::Deactivated))
+            .unwrap();
+        send(&mut stream, transcribe_request()).await;
+        assert_eq!(receive(&mut stream).await["error"]["code"], AUTH_REQUIRED);
+        assert_eq!(provider.calls(), 1);
+    })
+    .await
+    .unwrap();
+    let _ = stop.send(());
+    task.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn voice_turn_control_bypasses_full_ipc_wire_budget_inflight_and_query_lane() {
+    blocked_voice_turn_ipc(BlockedPeerExit::CancelThenDisconnect).await;
+}
+
+#[tokio::test]
+async fn voice_turn_ipc_disconnect_drops_active_provider_waits() {
+    blocked_voice_turn_ipc(BlockedPeerExit::Disconnect).await;
+}
+
+#[tokio::test]
+async fn voice_turn_ipc_ordinary_wire_budget_overflow_closes_peer() {
+    blocked_voice_turn_ipc(BlockedPeerExit::OrdinaryOverflow).await;
+}
+
+#[tokio::test]
+async fn voice_capture_ipc_control_bypasses_full_wire_budget_and_query_lane() {
+    blocked_voice_turn_ipc(BlockedPeerExit::CaptureControls).await;
+}
+
+#[derive(Clone, Copy)]
+enum BlockedPeerExit {
+    CancelThenDisconnect,
+    CaptureControls,
+    Disconnect,
+    OrdinaryOverflow,
+}
+
+async fn blocked_voice_turn_ipc(exit: BlockedPeerExit) {
+    use crate::gateway::{
+        handlers::voice_turn_tests::{
+            blocked_stt_cancel, blocked_stt_turn, fill_query_lane, BlockedSttFixture,
+        },
+        lane::ChannelClass,
+    };
+    use aleph_client::local_ipc::MAX_INFLIGHT;
+    use aleph_protocol::panel_voice::{
+        VOICE_TURN_CAPTURE_CANCEL_METHOD, VOICE_TURN_CAPTURE_READY_METHOD,
+    };
+
+    let (_root, endpoint) = fixture();
+    let mut gateway = GatewayServer::new("127.0.0.1:0".parse().unwrap());
+    gateway.set_security_store(Arc::new(SecurityStore::in_memory().unwrap()));
+    if matches!(exit, BlockedPeerExit::CaptureControls) {
+        Arc::new(crate::gateway::handlers::voice_turn_tests::CaptureMediaFixture::default())
+            .mount(gateway.handlers_mut());
+    }
+    let provider = BlockedSttFixture::new(gateway.handlers_mut()).await;
+    let lanes = gateway.lane_manager.clone();
+    let (stop, shutdown) = oneshot::channel();
+    let path = endpoint.clone();
+    let server = tokio::spawn(async move { gateway.run_local_endpoint(shutdown, &path).await });
+    timeout(Duration::from_secs(20), async {
+        let mut stream = connect(&endpoint).await;
+        send(&mut stream, hello(1, 1)).await;
+        assert!(receive(&mut stream).await.get("result").is_some());
+        let (count, frame_bytes) = match exit {
+            BlockedPeerExit::CancelThenDisconnect | BlockedPeerExit::CaptureControls => {
+                let count = MAX_INFLIGHT;
+                let frame_bytes = super::WIRE_BUDGET / count as usize;
+                assert_eq!(frame_bytes * count as usize, super::WIRE_BUDGET);
+                (count, Some(frame_bytes))
+            }
+            BlockedPeerExit::Disconnect => (MAX_INFLIGHT, None),
+            BlockedPeerExit::OrdinaryOverflow => (2, Some(super::WIRE_BUDGET / 2)),
+        };
+        for id in 1..=count {
+            let mut text = blocked_stt_turn(id).to_string();
+            if let Some(frame_bytes) = frame_bytes {
+                assert!(text.len() < frame_bytes && frame_bytes <= super::MAX_FRAME_BYTES as usize);
+                text.extend(std::iter::repeat_n(' ', frame_bytes - text.len()));
+            }
+            write_frame(&mut stream, &text).await.unwrap();
+        }
+        provider.entered(count).await;
+        let _remaining_query_permits = fill_query_lane(&lanes, ChannelClass::Desktop).await;
+        let cancelled = match exit {
+            BlockedPeerExit::CancelThenDisconnect => {
+                send(&mut stream, blocked_stt_cancel(1)).await;
+                let mut responses = [receive(&mut stream).await, receive(&mut stream).await];
+                responses.sort_by_key(|response| response["id"].as_u64().unwrap());
+                assert_eq!(responses[0]["error"]["data"]["kind"], "cancelled");
+                assert_eq!(responses[1]["result"]["cancelled"], true);
+                provider.exited(1).await;
+                1
+            }
+            BlockedPeerExit::CaptureControls => {
+                let capture_id = uuid::Uuid::new_v4();
+                for (id, method) in [
+                    ("ready-a", VOICE_TURN_CAPTURE_READY_METHOD),
+                    ("ready-b", VOICE_TURN_CAPTURE_READY_METHOD),
+                    ("cleanup", VOICE_TURN_CAPTURE_CANCEL_METHOD),
+                ] {
+                    send(
+                        &mut stream,
+                        json!({"jsonrpc":"2.0","id":id,"method":method,
+                        "params":{"capture_id":capture_id}}),
+                    )
+                    .await;
+                }
+                let mut replies = [
+                    receive(&mut stream).await,
+                    receive(&mut stream).await,
+                    receive(&mut stream).await,
+                ];
+                replies.sort_by(|left, right| left["id"].as_str().cmp(&right["id"].as_str()));
+                assert_eq!(replies[0]["id"], "cleanup");
+                assert_eq!(replies[0]["result"], json!({}));
+                for (reply, expected_id) in replies[1..].iter().zip(["ready-a", "ready-b"]) {
+                    assert_eq!(reply["id"], expected_id);
+                    assert_eq!(reply["error"]["data"]["kind"], "cancelled");
+                }
+                0
+            }
+            BlockedPeerExit::OrdinaryOverflow => {
+                assert!(count < MAX_INFLIGHT, "exercise bytes, not request count");
+                send(&mut stream, blocked_stt_turn(count + 1)).await;
+                assert_closed(&mut stream).await;
+                0
+            }
+            BlockedPeerExit::Disconnect => 0,
+        };
+        drop(stream);
+        provider.exited(count - cancelled).await;
+    })
+    .await
+    .expect("blocked IPC provider wait must end without releasing the fixture");
+    let _ = stop.send(());
+    server.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn voice_snapshot_ipc_requires_negotiated_live_events() {
+    use aleph_protocol::panel::{PanelUiCapabilitySnapshot, PANEL_UI_CAPABILITY_SNAPSHOT_METHOD};
+    use aleph_protocol::panel_voice::{
+        VOICE_TURN_CANCEL_METHOD, VOICE_TURN_SYNTHESIZE_METHOD, VOICE_TURN_TRANSCRIBE_METHOD,
+    };
+
+    let (_root, endpoint) = fixture();
+    let mut gateway = GatewayServer::new("127.0.0.1:0".parse().unwrap());
+    gateway.set_security_store(Arc::new(SecurityStore::in_memory().unwrap()));
+    // Only substitute the extension registry's snapshot. Dispatch, negotiation,
+    // and its voice projection must still run through the actual connection.
+    gateway
+        .handlers_mut()
+        .register(PANEL_UI_CAPABILITY_SNAPSHOT_METHOD, |request| async move {
+            crate::gateway::protocol::JsonRpcResponse::success(
+                request.id,
+                serde_json::to_value(PanelUiCapabilitySnapshot::new(1, Vec::new())).unwrap(),
+            )
+        });
+    for method in [
+        VOICE_TURN_CANCEL_METHOD,
+        VOICE_TURN_SYNTHESIZE_METHOD,
+        VOICE_TURN_TRANSCRIBE_METHOD,
+        "chat.send",
+        "chat.abort",
+    ] {
+        gateway
+            .handlers_mut()
+            .register(method, |request| async move {
+                crate::gateway::protocol::JsonRpcResponse::success(request.id, json!({}))
+            });
+    }
+    let (stop, shutdown) = oneshot::channel();
+    let path = endpoint.clone();
+    let server = tokio::spawn(async move { gateway.run_local_endpoint(shutdown, &path).await });
+    timeout(Duration::from_secs(10), async {
+        for live_events in [true, false] {
+            let mut stream = connect(&endpoint).await;
+            let mut request = hello(1, 1);
+            if live_events {
+                request["params"]["features"] = json!(["live_events"]);
+            }
+            send(&mut stream, request).await;
+            let greeting = receive(&mut stream).await;
+            assert_eq!(
+                greeting["result"]["features"],
+                if live_events {
+                    json!(["live_events"])
+                } else {
+                    json!([])
+                }
+            );
+            send(
+                &mut stream,
+                json!({"jsonrpc":"2.0", "id":2, "method":PANEL_UI_CAPABILITY_SNAPSHOT_METHOD}),
+            )
+            .await;
+            let response = receive(&mut stream).await;
+            assert!(response.get("error").is_none(), "{response}");
+            let snapshot: PanelUiCapabilitySnapshot =
+                serde_json::from_value(response["result"].clone()).expect("Panel snapshot");
+            assert_eq!(
+                snapshot
+                    .declarations
+                    .iter()
+                    .any(|tab| { tab.descriptor.key.qualified() == "aleph:voice" }),
+                live_events
+            );
+        }
+    })
+    .await
+    .expect("v1 snapshot must respond on both sessions");
+    let _ = stop.send(());
+    server.await.unwrap().unwrap();
+}
+
+struct CaptureReplyProbe {
+    media: Arc<crate::gateway::handlers::voice_turn_tests::CaptureMediaFixture>,
+    releases_at_enqueue: Vec<(u64, usize)>,
+}
+
+thread_local! {
+    // This fixture and its spawned connection run on one current-thread runtime.
+    static CAPTURE_REPLY_PROBE: std::cell::RefCell<Option<CaptureReplyProbe>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+struct CaptureReplyProbeScope;
+
+impl Drop for CaptureReplyProbeScope {
+    fn drop(&mut self) {
+        let _ = CAPTURE_REPLY_PROBE.with(|probe| probe.replace(None));
+    }
+}
+
+pub(super) fn observe_capture_reply_queued(id: &Value) {
+    let Some(id @ (2 | 4)) = id.as_u64() else {
+        return;
+    };
+    CAPTURE_REPLY_PROBE.with(|slot| {
+        if let Some(probe) = slot.borrow_mut().as_mut() {
+            let released = probe
+                .media
+                .released
+                .load(std::sync::atomic::Ordering::SeqCst);
+            probe.releases_at_enqueue.push((id, released));
+        }
+    });
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn voice_capture_ipc_seals_before_reply_and_consumes_one_private_clip() {
+    use crate::gateway::{
+        handlers::voice_turn_tests::{fill_query_lane, CaptureMediaFixture, SttFixture},
+        lane::ChannelClass,
+    };
+    use aleph_protocol::panel_voice::{
+        VOICE_TURN_CAPTURE_FINISH_METHOD, VOICE_TURN_CAPTURE_METHOD,
+        VOICE_TURN_CAPTURE_READY_METHOD, VOICE_TURN_TRANSCRIBE_METHOD,
+    };
+    use std::sync::atomic::Ordering;
+
+    let (_root, endpoint) = fixture();
+    let mut gateway = GatewayServer::new("127.0.0.1:0".parse().unwrap());
+    gateway.set_security_store(Arc::new(SecurityStore::in_memory().unwrap()));
+    let media = Arc::new(CaptureMediaFixture::default());
+    media.mount(gateway.handlers_mut());
+    CAPTURE_REPLY_PROBE.with(|probe| {
+        assert!(probe
+            .replace(Some(CaptureReplyProbe {
+                media: media.clone(),
+                releases_at_enqueue: Vec::new(),
+            }))
+            .is_none());
+    });
+    let _probe_scope = CaptureReplyProbeScope;
+    let stt = SttFixture::new().await;
+    stt.mount(gateway.handlers_mut());
+    let lanes = gateway.lane_manager.clone();
+    let (stop, shutdown) = oneshot::channel();
+    let path = endpoint.clone();
+    let server = tokio::spawn(async move { gateway.run_local_endpoint(shutdown, &path).await });
+    timeout(Duration::from_secs(20), async {
+        let mut stream = connect(&endpoint).await;
+        send(&mut stream, hello(1, 1)).await;
+        assert!(receive(&mut stream).await.get("result").is_some());
+        let clip = uuid::Uuid::new_v4();
+        let request = |id, method| {
+            json!({"jsonrpc":"2.0","id":id,"method":method,
+            "params":{"capture_id":clip}})
+        };
+        send(&mut stream, request(2, VOICE_TURN_CAPTURE_METHOD)).await;
+        media.entered.notified().await;
+        let query_permits = fill_query_lane(&lanes, ChannelClass::Desktop).await;
+        send(&mut stream, request(3, VOICE_TURN_CAPTURE_READY_METHOD)).await;
+        media.permit_samples.notify_one();
+        let ready = receive(&mut stream).await;
+        assert_eq!(ready["id"], 3);
+        assert_eq!(ready["result"], json!({"ready":true}));
+        send(&mut stream, request(4, VOICE_TURN_CAPTURE_FINISH_METHOD)).await;
+        media.sealing.notified().await;
+        assert_eq!(media.released.load(Ordering::SeqCst), 0);
+        let first_reply = {
+            let read_first = receive(&mut stream);
+            tokio::pin!(read_first);
+            assert!(
+                futures::poll!(&mut read_first).is_pending(),
+                "no result before release"
+            );
+            media.permit_release.notify_one();
+            read_first.await
+        };
+        let mut replies = [first_reply, receive(&mut stream).await];
+        assert_eq!(media.released.load(Ordering::SeqCst), 1);
+        replies.sort_by_key(|reply| reply["id"].as_u64().unwrap());
+        assert_eq!(replies[0]["id"], 2);
+        assert_eq!(
+            replies[0]["result"],
+            json!({"capture_id":clip,"limit_reached":false})
+        );
+        assert_eq!(replies[1]["id"], 4);
+        assert_eq!(replies[1]["result"], json!({}));
+        CAPTURE_REPLY_PROBE.with(|slot| {
+            let mut probe = slot.borrow_mut();
+            let releases = &mut probe.as_mut().unwrap().releases_at_enqueue;
+            releases.sort_unstable();
+            assert_eq!(releases, &[(2, 1), (4, 1)], "both replies require release");
+        });
+        drop(query_permits);
+
+        let mut other = connect(&endpoint).await;
+        send(&mut other, hello(1, 1)).await;
+        assert!(receive(&mut other).await.get("result").is_some());
+        send(
+            &mut other,
+            json!({"jsonrpc":"2.0","id":7,"method":VOICE_TURN_TRANSCRIBE_METHOD,
+            "params":{"turn_id":uuid::Uuid::new_v4(),"capture_id":clip}}),
+        )
+        .await;
+        assert_eq!(
+            receive(&mut other).await["error"]["data"]["kind"],
+            "invalid_audio"
+        );
+        assert_eq!(
+            stt.calls(),
+            0,
+            "a second socket cannot claim the sealed clip"
+        );
+
+        for id in [5, 6] {
+            send(
+                &mut stream,
+                json!({"jsonrpc":"2.0","id":id,"method":VOICE_TURN_TRANSCRIBE_METHOD,
+                "params":{"turn_id":uuid::Uuid::new_v4(),"capture_id":clip}}),
+            )
+            .await;
+            let reply = receive(&mut stream).await;
+            assert_eq!(reply["id"], id);
+            if id == 5 {
+                assert_eq!(reply["result"]["text"], "fixture");
+            } else {
+                assert_eq!(reply["error"]["data"]["kind"], "invalid_audio");
+            }
+        }
+        assert_eq!(stt.calls(), 1);
+    })
+    .await
+    .expect("capture controls and seal must still work with a full Query lane");
+    let _ = stop.send(());
+    server.await.unwrap().unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn voice_capture_ipc_disconnect_keeps_device_until_adapter_release() {
+    use crate::gateway::handlers::voice_turn_tests::CaptureMediaFixture;
+    use aleph_protocol::panel_voice::{
+        VOICE_TURN_CAPTURE_CANCEL_METHOD, VOICE_TURN_CAPTURE_FINISH_METHOD,
+        VOICE_TURN_CAPTURE_METHOD, VOICE_TURN_CAPTURE_READY_METHOD,
+    };
+    use std::sync::atomic::Ordering;
+
+    let (_root, endpoint) = fixture();
+    let mut gateway = GatewayServer::new("127.0.0.1:0".parse().unwrap());
+    gateway.set_security_store(Arc::new(SecurityStore::in_memory().unwrap()));
+    let media = Arc::new(CaptureMediaFixture::default());
+    media.mount(gateway.handlers_mut());
+    let (stop, shutdown) = oneshot::channel();
+    let path = endpoint.clone();
+    let server = tokio::spawn(async move { gateway.run_local_endpoint(shutdown, &path).await });
+    timeout(Duration::from_secs(20), async {
+        let mut owner = connect(&endpoint).await;
+        let mut next = connect(&endpoint).await;
+        for stream in [&mut owner, &mut next] {
+            send(stream, hello(1, 1)).await;
+            assert!(receive(stream).await.get("result").is_some());
+        }
+        let request = |id, method, clip| {
+            json!({"jsonrpc":"2.0","id":id,"method":method,
+            "params":{"capture_id":clip}})
+        };
+        let first = uuid::Uuid::new_v4();
+        send(&mut owner, request(2, VOICE_TURN_CAPTURE_METHOD, first)).await;
+        media.entered.notified().await;
+        media.permit_samples.notify_one();
+        send(
+            &mut owner,
+            request(3, VOICE_TURN_CAPTURE_READY_METHOD, first),
+        )
+        .await;
+        assert_eq!(receive(&mut owner).await["result"]["ready"], true);
+        send(
+            &mut owner,
+            request(4, VOICE_TURN_CAPTURE_FINISH_METHOD, first),
+        )
+        .await;
+        media.sealing.notified().await;
+        drop(owner);
+        media.seal_cancelled.notified().await;
+        assert_eq!(media.released.load(Ordering::SeqCst), 0);
+
+        let second = uuid::Uuid::new_v4();
+        send(&mut next, request(2, VOICE_TURN_CAPTURE_METHOD, second)).await;
+        assert_eq!(
+            receive(&mut next).await["error"]["data"]["kind"],
+            "capture_unavailable"
+        );
+        media.permit_release.notify_one();
+        // On this current-thread runtime the adapter returns and the supervisor
+        // drops its non-async device permit before the test resumes.
+        media.release_completed.notified().await;
+        assert_eq!(media.released.load(Ordering::SeqCst), 1);
+
+        let third = uuid::Uuid::new_v4();
+        send(&mut next, request(3, VOICE_TURN_CAPTURE_METHOD, third)).await;
+        media.entered.notified().await;
+        send(
+            &mut next,
+            request(4, VOICE_TURN_CAPTURE_CANCEL_METHOD, third),
+        )
+        .await;
+        let mut replies = [receive(&mut next).await, receive(&mut next).await];
+        replies.sort_by_key(|reply| reply["id"].as_u64().unwrap());
+        assert_eq!(replies[0]["error"]["data"]["kind"], "cancelled");
+        assert_eq!(replies[1]["result"], json!({}));
+        assert_eq!(media.released.load(Ordering::SeqCst), 2);
+    })
+    .await
+    .expect("EOF must leave the device reserved until the old adapter returns");
+    let _ = stop.send(());
+    server.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn voice_turn_ipc_reads_cancel_and_eof_during_partial_reply_write() {
+    use crate::gateway::handlers::voice_turn_tests::{
+        blocked_stt_cancel, blocked_stt_turn, BlockedSttFixture,
+    };
+    use tokio::io::{duplex, split, AsyncReadExt};
+    use tokio_util::sync::CancellationToken;
+
+    let mut gateway = GatewayServer::new("127.0.0.1:0".parse().unwrap());
+    gateway.set_security_store(Arc::new(SecurityStore::in_memory().unwrap()));
+    let provider = BlockedSttFixture::new(gateway.handlers_mut()).await;
+    let bus = gateway.event_bus.clone();
+    let state = gateway.build_shared_state();
+    const BUFFER: usize = 64;
+    let (mut client, server) = duplex(BUFFER);
+    let task = tokio::spawn(async move {
+        let (read, write) = split(server);
+        let mut cleanup = None;
+        let result =
+            super::serve_peer(read, write, state, CancellationToken::new(), &mut cleanup).await;
+        if let Some(cleanup) = cleanup {
+            cleanup.finish().await;
+        }
+        result
+    });
+
+    let outcome = timeout(super::WRITE_TIMEOUT, async {
+        let mut request = hello(1, 1);
+        request["params"]["features"] = json!(["live_events"]);
+        write_frame(&mut client, &request.to_string())
+            .await
+            .unwrap();
+        let hello: Value =
+            serde_json::from_str(&read_frame(&mut client).await.unwrap().unwrap()).unwrap();
+        assert_eq!(hello["result"]["features"], json!(["live_events"]));
+        for id in 1..=2 {
+            write_frame(&mut client, &blocked_stt_turn(id).to_string())
+                .await
+                .unwrap();
+        }
+        provider.entered(2).await;
+
+        let ordinary = |id| json!({"jsonrpc":"2.0","method":"fixture.unmounted","id":id});
+        let large = ordinary(json!("x".repeat(2 * BUFFER))).to_string();
+        write_frame(&mut client, &large).await.unwrap();
+        // The writer has started this ordinary reply but its body cannot fit.
+        let len = client.read_u32().await.unwrap() as usize;
+        assert!(len > BUFFER);
+        for id in 4..=super::MAX_INFLIGHT {
+            write_frame(&mut client, &ordinary(json!(id)).to_string())
+                .await
+                .unwrap();
+        }
+        // Two provider waits, the partial reply and the completed ordinary
+        // requests together use all ordinary slots. Event admission has
+        // priority over reading the control frame.
+        bus.publish(super::super::overflow_warning_frame(1, 1));
+        write_frame(&mut client, &blocked_stt_cancel(1).to_string())
+            .await
+            .unwrap();
+        provider.exited(1).await;
+
+        let mut body = vec![0; len];
+        client.read_exact(&mut body).await.unwrap();
+        let mut ids = Vec::new();
+        let mut event_count = 0;
+        for _ in 0..super::MAX_INFLIGHT {
+            let reply: Value =
+                serde_json::from_str(&read_frame(&mut client).await.unwrap().unwrap()).unwrap();
+            if reply["params"]["topic"] == "connection.warning" {
+                event_count += 1;
+            } else {
+                let id = reply["id"].as_u64().unwrap();
+                match id {
+                    1 => assert_eq!(reply["error"]["data"]["kind"], "cancelled"),
+                    1001 => {
+                        assert_eq!(event_count, 1, "event must be ahead of the control reply");
+                        assert_eq!(reply["result"]["cancelled"], true);
+                    }
+                    _ => assert_eq!(reply["error"]["code"], METHOD_NOT_FOUND),
+                }
+                ids.push(id);
+            }
+        }
+        ids.sort_unstable();
+        let expected: Vec<_> = [1]
+            .into_iter()
+            .chain(4..=u64::from(super::MAX_INFLIGHT))
+            .chain([1001])
+            .collect();
+        assert_eq!(ids, expected);
+        assert_eq!(event_count, 1);
+
+        // Stall another reply before observing EOF with the other job active.
+        write_frame(&mut client, &large).await.unwrap();
+        assert!(client.read_u32().await.unwrap() as usize > BUFFER);
+        drop(client);
+        provider.exited(1).await;
+    })
+    .await;
+    // The duplex write may observe the close before the reader does.
+    let _ = task.await.unwrap();
+    outcome.expect("cancel and EOF must not wait for the blocked writer");
+}
+
+#[tokio::test]
+async fn desktop_ipc_delivers_lag_warning_despite_ready_malformed_requests() {
+    use std::task::Poll;
+    use tokio::io::duplex;
+    use tokio_util::sync::CancellationToken;
+
+    let mut gateway = GatewayServer::new("127.0.0.1:0".parse().unwrap());
+    gateway.set_security_store(Arc::new(SecurityStore::in_memory().unwrap()));
+    let bus = gateway.event_bus.clone();
+    let state = gateway.build_shared_state();
+    let (mut requests, read) = duplex(1024);
+    let (write, mut replies) = duplex(64);
+    let mut cleanup = None;
+
+    timeout(super::WRITE_TIMEOUT, async {
+        let mut request = hello(1, 1);
+        request["params"]["features"] = json!(["live_events"]);
+        write_frame(&mut requests, &request.to_string())
+            .await
+            .unwrap();
+        // Both invalid payloads are already readable before the writer can
+        // acknowledge the warning. The request side stays open for the test.
+        for text in [
+            "{",
+            r#"{"jsonrpc":"2.0","method":"health"}"#,
+            r#"{"jsonrpc":"2.0","method":"health","id":2}"#,
+        ] {
+            write_frame(&mut requests, text).await.unwrap();
+        }
+
+        let result = {
+            let peer =
+                super::serve_peer(read, write, state, CancellationToken::new(), &mut cleanup);
+            tokio::pin!(peer);
+            assert!(matches!(futures::poll!(peer.as_mut()), Poll::Pending));
+            // No further peer polls until the real bus has overrun its ring.
+            let event = json!({"jsonrpc":"2.0","method":"stream.run_accepted","params":{
+                "type":"run_accepted","run_id":"lag-fixture",
+                "session_key":SessionKey::main("owner-live").to_key_string(),"accepted_at":"t",
+            }})
+            .to_string();
+            for _ in 0..2048 {
+                assert!(bus.publish(&event) > 0, "hello must have subscribed");
+            }
+
+            let (result, ()) = tokio::join!(peer, async {
+                let hello: Value =
+                    serde_json::from_str(&read_frame(&mut replies).await.unwrap().unwrap())
+                        .unwrap();
+                assert_eq!(hello["result"]["features"], json!(["live_events"]));
+                let warning: Value =
+                    serde_json::from_str(&read_frame(&mut replies).await.unwrap().unwrap())
+                        .unwrap();
+                assert_eq!(
+                    warning["method"],
+                    aleph_protocol::jsonrpc::TOPIC_EVENT_METHOD
+                );
+                assert!(warning.get("id").is_none());
+                assert_eq!(warning["params"]["topic"], "connection.warning");
+                let data = &warning["params"]["data"];
+                assert_eq!(data["reason"], "events_overflow");
+                assert_eq!(data["advice"], "reconnect");
+                assert!(data["dropped"].as_u64().unwrap() > 0);
+                assert_eq!(data["dropped"], data["total_overflow"]);
+                assert!(read_frame(&mut replies).await.unwrap().is_none());
+            });
+            result
+        };
+        if let Some(cleanup) = cleanup {
+            cleanup.finish().await;
+        }
+        result.expect("peer must close after acknowledging the warning");
+    })
+    .await
+    .expect("lag warning and EOF must arrive while the request side is still open");
+}
+
+#[tokio::test]
+async fn voice_turn_ipc_adapter_retains_slot_and_clip_until_release_during_shutdown() {
+    use crate::gateway::{
+        handlers::voice_turn_tests::{
+            blocked_stt_cancel, blocked_stt_turn, mount_gated_offline, SttFixture,
+        },
+        lane::Lane,
+    };
+
+    let (_root, endpoint) = fixture();
+    let scratch = tempfile::tempdir().unwrap();
+    let provider = SttFixture::new().await;
+    let mut gateway = GatewayServer::new("127.0.0.1:0".parse().unwrap());
+    gateway.set_security_store(Arc::new(SecurityStore::in_memory().unwrap()));
+    let engine = mount_gated_offline(&provider, gateway.handlers_mut(), &scratch).await;
+    gateway
+        .handlers_mut()
+        .register("health", crate::gateway::handlers::health::handle);
+    let bus = gateway.event_bus.clone();
+    let lanes = gateway.lane_manager.clone();
+    let available = || {
+        lanes
+            .snapshot()
+            .into_iter()
+            .find(|row| row.lane == Lane::Query.to_string())
+            .unwrap()
+            .shared_available
+    };
+    let capacity = available();
+    let clip_count = || std::fs::read_dir(scratch.path()).unwrap().count();
+    let (stop, shutdown) = oneshot::channel();
+    let path = endpoint.clone();
+    let mut server = tokio::spawn(async move { gateway.run_local_endpoint(shutdown, &path).await });
+
+    timeout(Duration::from_secs(8), async {
+        let mut stream = connect(&endpoint).await;
+        let mut request = hello(1, 1);
+        request["params"]["features"] = json!(["live_events"]);
+        send(&mut stream, request).await;
+        assert_eq!(
+            receive(&mut stream).await["result"]["features"],
+            json!(["live_events"])
+        );
+        send(&mut stream, blocked_stt_turn(1)).await;
+        engine.wait_started().await;
+        send(&mut stream, blocked_stt_cancel(1)).await;
+        assert_eq!(receive(&mut stream).await["result"]["cancelled"], true);
+        engine.wait_cancelled().await;
+        assert_eq!(clip_count(), 1);
+        assert_eq!(available(), capacity - 1);
+
+        // A second control proves progress without the cancelled work's reply.
+        let mut duplicate = blocked_stt_cancel(1);
+        duplicate["id"] = json!(1002);
+        send(&mut stream, duplicate).await;
+        let reply = receive(&mut stream).await;
+        assert_eq!(reply["id"], 1002);
+        assert_eq!(reply["result"]["cancelled"], false);
+
+        // Force the live feed's clean Close, not the listener stop/error
+        // path that unconditionally disconnects the pipe. No outbound frame
+        // is needed, so the assertion cannot race unread pipe data.
+        bus.publish(json!({"topic": super::super::TOKEN_ROTATED_TOPIC}).to_string());
+        assert_closed(&mut stream).await;
+        assert_eq!(clip_count(), 1);
+        assert_eq!(available(), capacity - 1);
+
+        let mut healthy = connect(&endpoint).await;
+        send(&mut healthy, hello(1, 1)).await;
+        assert!(receive(&mut healthy).await.get("result").is_some());
+        send(
+            &mut healthy,
+            json!({"jsonrpc":"2.0","method":"health","id":2}),
+        )
+        .await;
+        assert_eq!(receive(&mut healthy).await["result"]["status"], "healthy");
+        drop(healthy);
+        stop.send(()).unwrap();
+        assert!(
+            timeout(Duration::from_millis(50), &mut server)
+                .await
+                .is_err(),
+            "shutdown left the adapter unowned"
+        );
+        assert_eq!(clip_count(), 1);
+        assert_eq!(available(), capacity - 1);
+
+        engine.release();
+        server.await.unwrap().unwrap();
+        assert_eq!(clip_count(), 0);
+        assert_eq!(available(), capacity);
+    })
+    .await
+    .unwrap();
+}

@@ -66,14 +66,17 @@ pub(crate) struct AbortParams {
     pub run_id: String,
     /// Session whose waiting backlog should be abandoned along with the run.
     ///
-    /// Optional so older clients keep working, but a client that omits it stops
-    /// one run and leaves the lane loaded: cancelling frees the session slot,
+    /// Optional so older clients keep working, but a client that omits it
+    /// leaves the lane loaded: cancelling frees the session slot,
     /// the lane wakes its front waiter, and the messages the user just said they
     /// did not want start firing one full agent run at a time. `/stop` has
     /// purged the lane since Round-5; Panel and CLI were given the same lane in
     /// the same round but no way to reach `purge`.
     #[serde(default)]
     pub session_key: Option<String>,
+    /// Cancel only a managed `chat.send` run, without a session-wide stop or purge.
+    #[serde(default)]
+    pub run_only: bool,
 }
 
 /// Parameters for chat.history request
@@ -228,6 +231,17 @@ pub struct ChatMessage {
 // Handler Functions
 // ============================================================================
 
+/// Chat send preserves `agent.run` inputs and adds an explicit exact-run opt-in.
+#[derive(Debug, Deserialize)]
+pub struct ChatSendParams {
+    #[serde(flatten)]
+    pub agent: AgentRunParams,
+    /// Unlike `chat.abort.run_only`, this opts the receipt into exact cancellation;
+    /// it does not request a stop.
+    #[serde(default)]
+    pub run_only: bool,
+}
+
 /// Handle chat.send RPC request
 ///
 /// Sends a message and starts agent execution. This is a high-level wrapper
@@ -236,11 +250,23 @@ pub async fn handle_send(
     request: JsonRpcRequest,
     run_manager: Arc<AgentRunManager>,
 ) -> JsonRpcResponse {
-    // Parse params — `chat.send` accepts the same shape as `agent.run` (the
-    // `input` field carries `serde(alias = "message")` so historical clients
-    // sending `"message"` continue to deserialize). One shared struct, no
-    // field-by-field copy.
-    let params: AgentRunParams = match parse_params(&request) {
+    let parsed = if request
+        .params
+        .as_ref()
+        .is_some_and(serde_json::Value::is_array)
+    {
+        // Positional parameters predate the exact opt-in and retain the original path.
+        parse_params(&request).map(|agent| ChatSendParams {
+            agent,
+            run_only: false,
+        })
+    } else {
+        parse_params(&request)
+    };
+    let ChatSendParams {
+        agent: params,
+        run_only,
+    } = match parsed {
         Ok(p) => p,
         Err(e) => return e,
     };
@@ -252,18 +278,23 @@ pub async fn handle_send(
 
     // `peer_id` is a chat-only concept (per-peer sessions); chat.send never
     // sets it.
+    let stream = params.stream;
     let agent_params = AgentRunParams {
         peer_id: None,
         ..params
     };
 
-    // Start the run
-    match run_manager.start_run(agent_params).await {
+    let started = if run_only {
+        run_manager.start_chat_run(agent_params).await
+    } else {
+        run_manager.start_run(agent_params).await
+    };
+    match started {
         Ok(result) => {
             let response = SendResponse {
                 run_id: result.run_id,
                 session_key: result.session_key,
-                streaming: params.stream,
+                streaming: stream,
             };
             JsonRpcResponse::success(request.id, json!(response))
         }
@@ -316,6 +347,35 @@ pub async fn handle_abort(
         Ok(p) => p,
         Err(e) => return e,
     };
+    // Check the parsed key (including positional params) and any named null.
+    if params.run_only
+        && (params.session_key.is_some()
+            || request
+                .params
+                .as_ref()
+                .is_some_and(|p| p.get("session_key").is_some()))
+    {
+        return JsonRpcResponse::error(
+            request.id,
+            INVALID_PARAMS,
+            "run_only cannot be combined with session_key",
+        );
+    }
+
+    if params.run_only {
+        return match run_manager
+            .cancel_run_only(&params.run_id, session_store.as_ref())
+            .await
+        {
+            Some(Ok(cancelled)) => abort_receipt(request.id, params.run_id, cancelled, 0),
+            Some(Err(_)) => JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                "Run cancellation outcome is not confirmed",
+            ),
+            None => visibility::not_found_response(request.id),
+        };
+    }
 
     // Visibility gate: an addressed `session_key` must belong to the caller
     // before we touch anything. `session_key` is optional (legacy clients
@@ -359,30 +419,27 @@ pub async fn handle_abort(
         return visibility::not_found_response(request.id);
     }
 
-    // Drop the backlog before cancelling, never after: cancelling releases the
-    // session slot, which wakes the lane's front waiter, which can be admitted
-    // (and so leave the lane) before a later purge could mark it. Same ordering
-    // rule as `/stop` in `inbound_router::command_handler::handle_stop`.
-    //
-    // Both lanes and the parsed key: see `purge_conversation_lanes`.
+    // Drop both lanes before cancelling: cancelling releases the session
+    // slot, so the front waiter could be admitted before a later purge.
+    // Same ordering as `/stop` in `inbound_router::command_handler::handle_stop`.
     let dropped = parsed_session_key
         .as_ref()
         .map_or(0, purge_conversation_lanes);
-
-    // Cancel the run
     let cancelled = run_manager.cancel_run(&params.run_id).await;
+    abort_receipt(request.id, params.run_id, cancelled, dropped)
+}
 
-    debug!(
-        run_id = %params.run_id,
-        cancelled = cancelled,
-        dropped = dropped,
-        "Chat abort requested"
-    );
-
+fn abort_receipt(
+    request_id: Option<serde_json::Value>,
+    run_id: String,
+    cancelled: bool,
+    dropped: usize,
+) -> JsonRpcResponse {
+    debug!(%run_id, cancelled, dropped, "Chat abort requested");
     JsonRpcResponse::success(
-        request.id,
+        request_id,
         json!({
-            "run_id": params.run_id,
+            "run_id": run_id,
             "aborted": cancelled,
             "dropped": dropped,
         }),
@@ -1413,6 +1470,12 @@ mod tests {
 
         let legacy: AbortParams = serde_json::from_value(json!({"run_id": "run-1"})).unwrap();
         assert!(legacy.session_key.is_none());
+        assert!(!legacy.run_only);
+
+        let positional: AbortParams =
+            serde_json::from_value(json!(["run-1", "agent:main:main"])).unwrap();
+        assert_eq!(positional.session_key.as_deref(), Some("agent:main:main"));
+        assert!(!positional.run_only);
     }
 
     /// Stop must empty the lane, not just cancel the run. Asserts the effect at
@@ -1533,10 +1596,15 @@ mod tests {
         let json = json!({
             "message": "Hello, world!",
             "session_key": "agent:main:main",
-            "stream": true
+            "stream": true,
+            "run_only": true
         });
 
-        let params: AgentRunParams = serde_json::from_value(json).unwrap();
+        let ChatSendParams {
+            agent: params,
+            run_only,
+        } = serde_json::from_value(json).unwrap();
+        assert!(run_only);
         assert_eq!(params.input, "Hello, world!");
         assert_eq!(params.session_key, Some("agent:main:main".to_string()));
         assert!(params.stream);
@@ -1545,16 +1613,21 @@ mod tests {
 
     #[test]
     fn test_send_params_defaults() {
-        let json = json!({
-            "message": "Test"
-        });
-
-        let params: AgentRunParams = serde_json::from_value(json).unwrap();
-        assert_eq!(params.input, "Test");
-        assert!(params.session_key.is_none());
-        assert!(params.channel.is_none());
-        assert!(params.stream); // default true
-        assert!(params.thinking.is_none());
+        for json in [
+            json!({"message": "Test"}),
+            json!({"message": "Test", "run_only": false}),
+        ] {
+            let ChatSendParams {
+                agent: params,
+                run_only,
+            } = serde_json::from_value(json).unwrap();
+            assert!(!run_only);
+            assert_eq!(params.input, "Test");
+            assert!(params.session_key.is_none());
+            assert!(params.channel.is_none());
+            assert!(params.stream);
+            assert!(params.thinking.is_none());
+        }
     }
 
     #[test]
@@ -1747,9 +1820,16 @@ mod tests {
     mod visibility_guards {
         use super::*;
         use crate::gateway::caller_identity::CALLER_USER;
+        use crate::gateway::event_emitter::EventEmitter;
+        use crate::gateway::execution_engine::{ExecutionError, RunRequest, RunStatus};
         use crate::gateway::protocol::RESOURCE_NOT_FOUND;
         use crate::gateway::session_manager::{SessionManager, SessionManagerConfig};
+        use crate::gateway::{
+            AgentInstance, AgentRegistry, AgentRouter, ExecutionAdapter, GatewayEventBus,
+        };
         use crate::scope::{with_scope, ScopeAttribution};
+        use std::sync::{Mutex, MutexGuard};
+        use tokio_util::sync::CancellationToken;
 
         fn store(temp: &tempfile::TempDir) -> Arc<dyn SessionStore> {
             Arc::new(
@@ -1847,6 +1927,509 @@ mod tests {
                 !waiting.is_cancelled(),
                 "a denied abort must not purge the foreign session's queue"
             );
+        }
+
+        #[derive(Default)]
+        struct AbortRuns {
+            active: Option<(&'static str, CancellationToken)>,
+            successor: Option<(&'static str, CancellationToken)>,
+            resolved_active: bool,
+        }
+
+        struct AbortExecutionAdapter {
+            session: SessionKey,
+            runs: Mutex<AbortRuns>,
+            child: CancellationToken,
+        }
+
+        impl AbortExecutionAdapter {
+            fn at_cancel(&self) -> MutexGuard<'_, AbortRuns> {
+                let mut runs = self.runs.lock().unwrap();
+                // Model A exiting and B entering just before the adapter selects
+                // which token to signal. Both cancellation paths see the handoff.
+                if let Some(successor) = runs.successor.take() {
+                    assert!(runs.resolved_active, "A must be visible before the handoff");
+                    runs.active = Some(successor);
+                }
+                runs
+            }
+        }
+
+        #[async_trait::async_trait]
+        impl ExecutionAdapter for AbortExecutionAdapter {
+            async fn execute(
+                &self,
+                _request: RunRequest,
+                _agent: Arc<AgentInstance>,
+                _emitter: Arc<dyn EventEmitter + Send + Sync>,
+            ) -> Result<(), ExecutionError> {
+                unreachable!("abort does not start a run")
+            }
+
+            async fn session_of_run(&self, run_id: &str) -> Option<SessionKey> {
+                let mut runs = self.runs.lock().unwrap();
+                let found = runs.active.as_ref().is_some_and(|(id, _)| *id == run_id);
+                runs.resolved_active |= found;
+                found.then(|| self.session.clone())
+            }
+
+            async fn cancel(&self, run_id: &str) -> Result<(), ExecutionError> {
+                let runs = self.at_cancel();
+                match &runs.active {
+                    Some((id, token)) if *id == run_id => {
+                        token.cancel();
+                        Ok(())
+                    }
+                    _ => Err(ExecutionError::RunNotFound(run_id.to_string())),
+                }
+            }
+
+            async fn cancel_session(
+                &self,
+                key: &SessionKey,
+            ) -> Result<Option<String>, ExecutionError> {
+                assert_eq!(key, &self.session);
+                let runs = self.at_cancel();
+                self.child.cancel();
+                Ok(runs.active.as_ref().map(|(id, token)| {
+                    token.cancel();
+                    id.to_string()
+                }))
+            }
+
+            async fn get_status(&self, _run_id: &str) -> Option<RunStatus> {
+                None
+            }
+
+            async fn active_run_count(&self) -> usize {
+                usize::from(self.runs.lock().unwrap().active.is_some())
+            }
+        }
+
+        fn abort_manager(adapter: Arc<dyn ExecutionAdapter>) -> Arc<AgentRunManager> {
+            Arc::new(AgentRunManager::new(
+                Arc::new(AgentRouter::new()),
+                Arc::new(GatewayEventBus::new()),
+                Arc::new(AgentRegistry::new()),
+                adapter,
+            ))
+        }
+
+        #[tokio::test]
+        async fn chat_abort_run_only_does_not_resolve_or_signal_an_unmanaged_run() {
+            let temp = tempfile::tempdir().unwrap();
+            let store = store(&temp);
+            let session = alice_session(&store).await;
+            let key = session.to_key_string();
+            let waiting =
+                crate::gateway::busy_queue::register(&key, 8, &format!("{key}:waiting")).unwrap();
+            let a = CancellationToken::new();
+            let b = CancellationToken::new();
+            let adapter = Arc::new(AbortExecutionAdapter {
+                session,
+                runs: Mutex::new(AbortRuns {
+                    active: Some(("abort-handoff-a", a.clone())),
+                    successor: Some(("abort-handoff-b", b.clone())),
+                    ..Default::default()
+                }),
+                child: CancellationToken::new(),
+            });
+
+            let reply = CALLER_USER
+                .scope(
+                    Some("u-alice".to_string()),
+                    handle_abort(
+                        request(
+                            "chat.abort",
+                            json!({"run_id": "abort-handoff-a", "run_only": true}),
+                        ),
+                        abort_manager(adapter.clone()),
+                        store,
+                    ),
+                )
+                .await;
+            let runs = adapter.runs.lock().unwrap();
+            assert!(
+                !runs.resolved_active,
+                "exact mode must not look up engine ownership"
+            );
+            assert_eq!(
+                runs.active.as_ref().map(|(id, _)| *id),
+                Some("abort-handoff-a")
+            );
+            assert!(
+                runs.successor.is_some(),
+                "exact mode must not reach either cancel path"
+            );
+            assert!(
+                !b.is_cancelled(),
+                "the successor must not receive a cancel signal"
+            );
+            assert!(!a.is_cancelled() && !adapter.child.is_cancelled());
+            assert!(!waiting.is_cancelled());
+            assert_eq!(reply.error.unwrap().code, RESOURCE_NOT_FOUND);
+        }
+
+        #[tokio::test]
+        async fn chat_abort_legacy_stops_the_session_tree_and_only_purges_with_session_key() {
+            use crate::gateway::{btw, busy_queue};
+
+            for (mode, purge) in [(None, false), (None, true), (Some(false), true)] {
+                let temp = tempfile::tempdir().unwrap();
+                let store = store(&temp);
+                let session = alice_session(&store).await;
+                let main = session.to_key_string();
+                let side = btw::side_session_of(&session).unwrap().to_key_string();
+                let main_waiter =
+                    busy_queue::register(&main, 8, &format!("{main}:waiting")).unwrap();
+                let side_waiter =
+                    busy_queue::register(&side, 8, &format!("{side}:waiting")).unwrap();
+                let active = CancellationToken::new();
+                let adapter = Arc::new(AbortExecutionAdapter {
+                    session,
+                    runs: Mutex::new(AbortRuns {
+                        active: Some(("abort-active", active.clone())),
+                        ..Default::default()
+                    }),
+                    child: CancellationToken::new(),
+                });
+                let mut params = json!({"run_id": "abort-active"});
+                if let Some(run_only) = mode {
+                    params["run_only"] = json!(run_only);
+                }
+                if purge {
+                    params["session_key"] = json!(main);
+                }
+
+                let reply = CALLER_USER
+                    .scope(
+                        Some("u-alice".to_string()),
+                        handle_abort(
+                            request("chat.abort", params),
+                            abort_manager(adapter.clone()),
+                            store,
+                        ),
+                    )
+                    .await;
+                assert!(active.is_cancelled());
+                assert!(adapter.child.is_cancelled());
+                assert_eq!(main_waiter.is_cancelled(), purge);
+                assert_eq!(side_waiter.is_cancelled(), purge);
+                assert_eq!(
+                    reply.result.unwrap(),
+                    json!({"run_id": "abort-active", "aborted": true, "dropped": if purge { 2 } else { 0 }})
+                );
+            }
+        }
+
+        #[tokio::test]
+        async fn chat_abort_run_only_rejects_unmanaged_queue_tickets_without_purging() {
+            use crate::gateway::busy_queue;
+
+            let temp = tempfile::tempdir().unwrap();
+            let store = store(&temp);
+            let session = alice_session(&store).await;
+            let main = session.to_key_string();
+            let run_id = format!("{main}:requested");
+            let requested = busy_queue::register(&main, 8, &run_id).unwrap();
+            let other = busy_queue::register(&main, 8, &format!("{main}:other")).unwrap();
+            let manager = abort_manager(Arc::new(AbortExecutionAdapter {
+                session,
+                runs: Mutex::new(AbortRuns::default()),
+                child: CancellationToken::new(),
+            }));
+
+            for (caller, session_key, expected_code) in [
+                ("u-bob", None, RESOURCE_NOT_FOUND),
+                ("u-alice", Some(json!(main)), INVALID_PARAMS),
+                ("u-alice", Some(serde_json::Value::Null), INVALID_PARAMS),
+            ] {
+                let mut params = json!({"run_id": run_id, "run_only": true});
+                if let Some(key) = session_key {
+                    params["session_key"] = key;
+                }
+                let reply = CALLER_USER
+                    .scope(
+                        Some(caller.to_string()),
+                        handle_abort(
+                            request("chat.abort", params),
+                            manager.clone(),
+                            store.clone(),
+                        ),
+                    )
+                    .await;
+                assert_eq!(reply.error.unwrap().code, expected_code);
+                assert!(!requested.is_cancelled() && !other.is_cancelled());
+            }
+
+            let reply = CALLER_USER
+                .scope(
+                    Some("u-alice".to_string()),
+                    handle_abort(
+                        request("chat.abort", json!({"run_id": run_id, "run_only": true})),
+                        manager,
+                        store,
+                    ),
+                )
+                .await;
+            assert!(!requested.is_cancelled() && !other.is_cancelled());
+            assert_eq!(reply.error.unwrap().code, RESOURCE_NOT_FOUND);
+        }
+
+        struct PausedSimpleAdapter {
+            engine: crate::gateway::execution_engine::SimpleExecutionEngine,
+            submitted: tokio::sync::Notify,
+            resume: tokio::sync::Notify,
+            finished: tokio::sync::Notify,
+        }
+
+        #[async_trait::async_trait]
+        impl ExecutionAdapter for PausedSimpleAdapter {
+            async fn execute(
+                &self,
+                _request: RunRequest,
+                _agent: Arc<AgentInstance>,
+                _emitter: Arc<dyn EventEmitter + Send + Sync>,
+            ) -> Result<(), ExecutionError> {
+                panic!("chat.send must use the managed path for an authenticated caller")
+            }
+
+            fn chat_run_cancellation(
+                &self,
+            ) -> Option<crate::gateway::execution_adapter::ChatRunCancellation> {
+                self.engine.chat_run_cancellation()
+            }
+
+            async fn execute_chat_run(
+                &self,
+                request: RunRequest,
+                agent: Arc<AgentInstance>,
+                emitter: Arc<dyn EventEmitter + Send + Sync>,
+                cancellation: crate::gateway::execution_adapter::ChatRunCancellation,
+            ) -> Result<(), ExecutionError> {
+                self.submitted.notify_one();
+                self.resume.notified().await;
+                let result = self
+                    .engine
+                    .execute_chat_run(request, agent, emitter, cancellation)
+                    .await;
+                assert!(matches!(result, Err(ExecutionError::Cancelled)));
+                self.finished.notify_one();
+                result
+            }
+
+            async fn cancel(&self, _run_id: &str) -> Result<(), ExecutionError> {
+                panic!("exact stop must not call adapter.cancel")
+            }
+
+            async fn get_status(&self, run_id: &str) -> Option<RunStatus> {
+                self.engine.get_status(run_id).await
+            }
+
+            async fn active_run_count(&self) -> usize {
+                self.engine.active_run_count().await
+            }
+        }
+
+        #[tokio::test]
+        async fn chat_abort_run_only_cancels_the_bound_receipt_before_fallback_admission() {
+            use crate::gateway::event_visibility::EventVisibilityIndex;
+            use crate::gateway::execution_engine::{ExecutionEngineConfig, SimpleExecutionEngine};
+            use crate::gateway::AgentInstanceConfig;
+
+            let temp = tempfile::tempdir().unwrap();
+            let store = store(&temp);
+            let adapter = Arc::new(PausedSimpleAdapter {
+                engine: SimpleExecutionEngine::new(ExecutionEngineConfig::default()),
+                submitted: Default::default(),
+                resume: Default::default(),
+                finished: Default::default(),
+            });
+            let registry = Arc::new(AgentRegistry::new());
+            let agent = AgentInstance::new(
+                AgentInstanceConfig {
+                    agent_id: "main".into(),
+                    workspace: temp.path().join("workspace"),
+                    agent_dir: temp.path().join("agent"),
+                    ..AgentInstanceConfig::default()
+                },
+                store.clone(),
+            )
+            .unwrap();
+            registry.register(agent).await;
+            let bus = Arc::new(GatewayEventBus::new());
+            let mut frames = bus.subscribe();
+            let manager = Arc::new(
+                AgentRunManager::new(Arc::new(AgentRouter::new()), bus, registry, adapter.clone())
+                    .with_session_store(store.clone()),
+            );
+            let receipt = CALLER_USER
+                .scope(
+                    Some("u-alice".into()),
+                    handle_send(
+                        request(
+                            "chat.send",
+                            json!({"input": "must not reach fallback", "session_key": "agent:main:exact-fallback-admission", "stream": false, "run_only": true}),
+                        ),
+                        manager.clone(),
+                    ),
+                )
+                .await
+                .result
+                .expect("chat.send receipt");
+            let run_id = receipt["run_id"].as_str().unwrap();
+            let session_key =
+                SessionKey::from_key_string(receipt["session_key"].as_str().unwrap()).unwrap();
+            let wait = std::time::Duration::from_secs(3);
+            tokio::time::timeout(wait, adapter.submitted.notified())
+                .await
+                .unwrap();
+            assert_eq!(
+                store
+                    .get_metadata(&session_key)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .owner_user_id
+                    .as_deref(),
+                Some("u-alice")
+            );
+
+            let key = session_key.to_key_string();
+            let other =
+                crate::gateway::busy_queue::register(&key, 8, &format!("{run_id}:other")).unwrap();
+            let abort = || {
+                handle_abort(
+                    request("chat.abort", json!({"run_id": run_id, "run_only": true})),
+                    manager.clone(),
+                    store.clone(),
+                )
+            };
+            assert_eq!(abort().await.error.unwrap().code, RESOURCE_NOT_FOUND);
+            assert_eq!(
+                CALLER_USER
+                    .scope(Some("u-bob".into()), abort())
+                    .await
+                    .error
+                    .unwrap()
+                    .code,
+                RESOURCE_NOT_FOUND
+            );
+            assert_eq!(
+                CALLER_USER
+                    .scope(Some("u-alice".into()), abort())
+                    .await
+                    .result
+                    .unwrap(),
+                json!({"run_id": run_id, "aborted": true, "dropped": 0})
+            );
+            adapter.resume.notify_one();
+            tokio::time::timeout(wait, adapter.finished.notified())
+                .await
+                .unwrap();
+            let index = EventVisibilityIndex::new();
+            let mut owner_terminals = Vec::new();
+            let mut outsider_terminals = Vec::new();
+            loop {
+                let frame = match frames.try_recv() {
+                    Ok(frame) => serde_json::from_str::<serde_json::Value>(&frame).unwrap(),
+                    Err(tokio::sync::broadcast::error::TryRecvError::Empty) => break,
+                    Err(error) => panic!("simulated gateway lost a frame: {error}"),
+                };
+                let topic = frame["method"].as_str().unwrap();
+                let payload = frame.get("params");
+                index.note_frame(topic, payload).await;
+                if frame["params"]["run_id"] != run_id {
+                    continue;
+                }
+                assert_ne!(topic, "stream.run_accepted", "the stop predates admission");
+                if matches!(topic, "stream.run_error" | "stream.run_complete") {
+                    for (caller, received) in [
+                        ("u-alice", &mut owner_terminals),
+                        ("u-bob", &mut outsider_terminals),
+                    ] {
+                        if index
+                            .event_admits_for(
+                                topic,
+                                payload,
+                                Some(caller),
+                                Some("member"),
+                                &store,
+                                None,
+                            )
+                            .await
+                        {
+                            received.push(frame.clone());
+                        }
+                    }
+                }
+            }
+            assert_eq!(
+                owner_terminals.len(),
+                1,
+                "the owner receives exactly one terminal before RunAccepted"
+            );
+            assert!(outsider_terminals.is_empty());
+            assert_eq!(owner_terminals[0]["method"], "stream.run_error");
+            assert_eq!(owner_terminals[0]["params"]["error_code"], "CANCELLED");
+            assert_eq!(owner_terminals[0]["params"]["session_key"], key.as_str());
+            assert!(adapter.engine.get_status(run_id).await.is_none());
+            assert!(!other.is_cancelled());
+            assert_eq!(
+                CALLER_USER
+                    .scope(Some("u-alice".into()), abort())
+                    .await
+                    .result
+                    .unwrap(),
+                json!({"run_id": run_id, "aborted": false, "dropped": 0})
+            );
+        }
+
+        #[tokio::test]
+        async fn fallback_chat_send_accepts_legacy_positional_params_without_exact_opt_in() {
+            use crate::gateway::execution_engine::{ExecutionEngineConfig, SimpleExecutionEngine};
+            use crate::gateway::AgentInstanceConfig;
+
+            let temp = tempfile::tempdir().unwrap();
+            let store = store(&temp);
+            let registry = Arc::new(AgentRegistry::new());
+            let agent = AgentInstance::new(
+                AgentInstanceConfig {
+                    agent_id: "main".into(),
+                    workspace: temp.path().join("workspace"),
+                    agent_dir: temp.path().join("agent"),
+                    ..AgentInstanceConfig::default()
+                },
+                store.clone(),
+            )
+            .unwrap();
+            registry.register(agent).await;
+            let manager = Arc::new(
+                AgentRunManager::new(
+                    Arc::new(AgentRouter::new()),
+                    Arc::new(GatewayEventBus::new()),
+                    registry,
+                    Arc::new(SimpleExecutionEngine::new(ExecutionEngineConfig::default())),
+                )
+                .with_session_store(store.clone()),
+            );
+            CALLER_USER
+                .scope(Some("u-alice".into()), async {
+                    let receipt = handle_send(request("chat.send", json!(["hi"])), manager.clone())
+                        .await
+                        .result
+                        .expect("legacy positional chat.send returns a receipt");
+                    assert_eq!(receipt["streaming"], true);
+                    let run_id = receipt["run_id"].as_str().unwrap();
+                    let abort = handle_abort(
+                        request("chat.abort", json!({"run_id": run_id, "run_only": true})),
+                        manager.clone(),
+                        store.clone(),
+                    )
+                    .await;
+                    assert_eq!(abort.error.unwrap().code, RESOURCE_NOT_FOUND);
+                })
+                .await;
         }
 
         /// End-to-end coverage for `chat.history`'s `"pending"` key: drives

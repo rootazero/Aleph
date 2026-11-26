@@ -26,6 +26,9 @@ pub enum SessionError {
         "actor shutdown timed out — old actor may still be running, refusing to spawn replacement"
     )]
     ShutdownTimeout,
+    /// An append crossed the write boundary without a definite commit/refusal.
+    #[error("{0}")]
+    AppendOutcomeUnknown(String),
     #[error("storage error: {0}")]
     Storage(String),
     #[allow(dead_code)] // reserved for future service impls; see NotFound.
@@ -70,6 +73,8 @@ pub trait SessionService: Send + Sync + 'static {
         to: Option<EventSeq>,
     ) -> Result<Vec<SessionEventRecord>, SessionError>;
 
+    /// A definite refusal returns an error other than `AppendOutcomeUnknown`.
+    /// A writer that cannot establish whether the event landed must not invite a retry.
     async fn emit_event(
         &self,
         id: &SessionId,

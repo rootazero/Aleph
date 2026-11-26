@@ -68,6 +68,12 @@ its holder-PID liveness probe is now cross-platform
 accurate on Windows. Wiring `stop`/`status` to fall back to the lock's holder
 PID is a tracked follow-up (see Gap Analysis).
 
+### Installed offline speech recognition / 已安装的离线语音识别
+
+The whole-turn voice Gateway can use installed Windows SAPI recognizers when no configured STT source is usable and the request comes from the live, same-user Desktop IPC owner. [The Windows adapter](../../desktop/windows/src/offline_stt.rs) launches the same `aleph-server` binary in a private early-entry worker, not a second shipped executable. It uses the matching installed locale (or the default if omitted), reads final recognition segments through end-of-stream, and reaps the exact worker before releasing the WAV on cancellation or timeout.
+
+当没有可用的配置 STT 且请求来自活跃同用户 Desktop IPC 时，整轮语音可使用已安装的 Windows SAPI 识别器。私有识别进程复用 `aleph-server`，无新增发布文件；显式语言需匹配已安装识别器，未指定时使用默认识别器。取消或超时必须等待该进程退出后才释放 WAV。此适配器不启用 Windows 的 NSH 原生 TSX 挂载；Windows 仍遵守现有发布门禁。 / This adapter does not enable the Windows native NSH TSX mount.
+
 ## Singleton lock
 
 Enforced by an OS-level `LockFileEx` exclusive lock on

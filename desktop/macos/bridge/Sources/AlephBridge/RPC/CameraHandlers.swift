@@ -4,10 +4,10 @@ import Foundation
 
 /// Register media.camera.{snap,clip} JSON-RPC handlers.
 ///
-/// Both delegate to a shared serial `CameraSession` actor so that concurrent
-/// RPC calls do not collide on the AVCaptureSession's single hardware slot.
-func registerCameraHandlers(_ router: Router) async {
-    let session = CameraSession()
+/// Both delegate to `CameraSession`; clip audio shares the recording session's
+/// microphone reservation.
+func registerCameraHandlers(_ router: Router, audioSession: AudioSession) async {
+    let session = CameraSession(audioSession: audioSession)
 
     await router.register("media.camera.snap") { params in
         let quality = try snapQuality(from: params)

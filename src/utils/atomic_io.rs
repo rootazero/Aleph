@@ -22,6 +22,16 @@ use fs2::FileExt;
 /// complete old file (or no file) or the complete new file — never a
 /// half-written intermediate.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    write_atomic_checked(path, bytes, || Ok(()))
+}
+
+/// Run a final check after flushing the temporary file, just before rename.
+/// This does not synchronize with external writers that ignore advisory locks.
+pub(crate) fn write_atomic_checked(
+    path: &Path,
+    bytes: &[u8],
+    before_rename: impl FnOnce() -> std::io::Result<()>,
+) -> std::io::Result<()> {
     let parent = path.parent().ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -67,6 +77,7 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     // Closes the handle before the rename; the path stays owned so a failed
     // rename still cleans up.
     let tmp_path = tmp.into_temp_path();
+    before_rename()?;
     if let Err(e) = std::fs::rename(&tmp_path, path) {
         // Best-effort cleanup of the leaked temp file. We log rather than
         // swallow because a directory populated with .aleph_atomic_* stubs

@@ -52,6 +52,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         hook_executor: Option<Arc<HookExecutor>>,
         hook_session_id: String,
         occupancy_out: Arc<std::sync::Mutex<Option<super::super::helpers::RunContextOccupancy>>>,
+        chat_cancellation: Option<&crate::gateway::execution_adapter::ChatRunCancellation>,
     ) -> Result<String, ExecutionError> {
         info!(run_id = run_id, "Starting agent loop (think->act)");
 
@@ -431,6 +432,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     );
                     // A deny surfaces as `Err`, so the closer says `Errored`
                     // — the same mapping as the `BeforeAgentStart` deny arm.
+                    if let Some(cancellation) = chat_cancellation {
+                        cancellation.begin_terminal_commit()?;
+                    }
                     journal_hook_stop(request, RunOutcome::Errored, &reason).await;
                     return Err(ExecutionError::Failed(format!(
                         "UserPromptSubmit hook aborted the run: {reason}"
@@ -456,10 +460,17 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                         // string is dropped by `execute.rs` and no
                         // `RunComplete` follows (the drain never ran), so
                         // without the chunk a chat channel gets no reply.
+                        if let Some(cancellation) = chat_cancellation {
+                            cancellation.begin_terminal_commit()?;
+                        }
                         journal_hook_stop(request, RunOutcome::Cancelled, &stop_msg).await;
                         emitter
                             .emit_response_chunk(run_id, &stop_msg, &stop_msg, 0, true, false)
                             .await;
+                        if chat_cancellation.is_some() {
+                            super::emit_hook_stop_completion(emitter.as_ref(), run_id, &stop_msg)
+                                .await;
+                        }
                         return Ok(stop_msg);
                     }
                     // Claude-Code convention for UserPromptSubmit: PLAIN
@@ -1367,6 +1378,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 // budget is this loop's, and a helper that guessed it would be a
                 // second answer to "how many attempts are there".
                 attempt < MAX_FALLBACK_ATTEMPTS,
+                chat_cancellation,
             )
             .await;
 
@@ -1388,6 +1400,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     provider: prov_name,
                     message,
                 }) if attempt < MAX_FALLBACK_ATTEMPTS => {
+                    if let Some(cancellation) = chat_cancellation {
+                        cancellation.check()?;
+                    }
                     // The provider that actually failed is `prov_name`, carried
                     // on the failure itself and logged below. It used to *also*
                     // be recorded against a health table — but against

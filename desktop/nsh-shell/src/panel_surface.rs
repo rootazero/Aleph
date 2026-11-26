@@ -9,10 +9,10 @@
 //! The surface also serves `aleph.fontScale` (the Panel's text size), since
 //! it owns the `AppView`; the other host functions are `panel_host`'s.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use nsh_engine::HostChannel;
 use nsh_platform_macos::objc2::rc::Retained;
@@ -24,6 +24,7 @@ use nsh_platform_macos::{
 use serde_json::{json, Value};
 
 use crate::panel_host;
+use crate::voice_playback::macos as voice_playback;
 
 /// The native component the shell's root mounts.
 pub(crate) const SURFACE: &str = "aleph/panel-surface";
@@ -58,6 +59,8 @@ thread_local! {
     /// The live surface's number and view, on the main thread, where
     /// `aleph.fontScale` reaches it (host functions run on the engine thread).
     static SURFACE_VIEW: RefCell<(u64, Weak<AppView>)> = const { RefCell::new((0, Weak::new())) };
+    static SURFACE_VISIBLE: Cell<bool> = const { Cell::new(true) };
+    static SURFACE_HOST: RefCell<Weak<panel_host::Handle>> = const { RefCell::new(Weak::new()) };
 }
 
 /// Installs the Panel's UI sets and the surface component, once, before the
@@ -77,6 +80,17 @@ pub(crate) fn register(target: panel_host::Target) {
 /// the classic one.
 pub(crate) fn registered() -> bool {
     TARGET.get().is_some()
+}
+
+pub(crate) fn set_voice_visible(visible: bool) {
+    if registered() {
+        SURFACE_VISIBLE.set(visible);
+        if let Some(host) = SURFACE_HOST.with_borrow(Weak::upgrade) {
+            // Close the start gate before queuing any playback cleanup.
+            host.set_visible(visible);
+        }
+        voice_playback::set_visible(visible);
+    }
 }
 
 fn register_components(components: &Components) {
@@ -106,13 +120,28 @@ fn make_surface(context: ComponentContext) -> Box<dyn NativeComponent> {
     channel.handle(FONT_SCALE, move |call| {
         handle_font_scale(surface_number, call)
     });
-    let host = match panel_host::Handle::start(channel.clone(), target) {
-        Ok(host) => Some(host),
+    let playback_admission = Arc::new(crate::voice_playback::admission::Admission::default());
+    voice_playback::mount(surface_number, &channel, playback_admission.clone());
+    let visible = SURFACE_VISIBLE.get();
+    voice_playback::set_visible(visible);
+    let host = match panel_host::Handle::start(
+        channel.clone(),
+        target,
+        visible,
+        playback_admission,
+        move || {
+            voice_playback::connection_lost(surface_number);
+        },
+    ) {
+        Ok(host) => Some(Rc::new(host)),
         Err(error) => {
             eprintln!("NSH TSX Panel host refused to start: {error}");
             None
         }
     };
+    if let Some(host) = &host {
+        SURFACE_HOST.with_borrow_mut(|slot| *slot = Rc::downgrade(host));
+    }
     let view = AppView::new(
         mtm,
         AppOptions {
@@ -127,9 +156,10 @@ fn make_surface(context: ComponentContext) -> Box<dyn NativeComponent> {
         Err(error) => eprintln!("NSH TSX Panel bundle refused: {error}"),
     }
     Box::new(PanelSurface {
+        surface_number,
         view,
         channel,
-        _host: host,
+        host,
         _claim: claim,
     })
 }
@@ -167,13 +197,14 @@ fn parse_font_scale(data: &Value) -> Result<Option<f32>, &'static str> {
     }
 }
 
-/// Fields drop in order after `drop`: the app stops first, then its host
-/// functions go, then the claim is released.
+/// Drops the IPC host and the player before stopping the app and releasing
+/// the surface claim.
 struct PanelSurface {
+    surface_number: u64,
     view: Rc<AppView>,
-    /// Kept to remove `aleph.fontScale` when the surface goes.
+    /// Kept to remove the surface-owned handlers.
     channel: HostChannel,
-    _host: Option<panel_host::Handle>,
+    host: Option<Rc<panel_host::Handle>>,
     _claim: Claim,
 }
 
@@ -187,6 +218,10 @@ impl NativeComponent for PanelSurface {
 
 impl Drop for PanelSurface {
     fn drop(&mut self) {
+        // Invalidate the host's IPC admission before cancelling playback.
+        SURFACE_HOST.with_borrow_mut(|slot| *slot = Weak::new());
+        drop(self.host.take());
+        voice_playback::unmount(self.surface_number, &self.channel);
         self.view.stop();
         self.channel.remove_handler(FONT_SCALE);
         SURFACE_VIEW.with(|surface| *surface.borrow_mut() = (0, Weak::new()));

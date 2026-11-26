@@ -50,6 +50,7 @@ where
         agent: &AgentInstance,
         emitter: &E,
         run_id: &str,
+        report_failure: bool,
     ) -> Result<(), ExecutionError> {
         let locale = Locale::from_run_metadata(&request.metadata);
 
@@ -90,8 +91,10 @@ where
         if let Err(error) = session_preparation {
             let error =
                 ExecutionError::Failed(format!("session metadata preparation failed: {error}"));
-            self.emit_pre_admission_run_error(emitter, run_id, main, request, &error)
-                .await;
+            if report_failure {
+                self.emit_pre_admission_run_error(emitter, run_id, main, request, &error)
+                    .await;
+            }
             return Err(error);
         }
 
@@ -129,8 +132,10 @@ where
                 // and "the side thread has nothing finished in it" are two
                 // different answers, and only one of them means the user should
                 // stop asking.
-                self.emit_pre_admission_run_error(emitter, run_id, main, request, &e)
-                    .await;
+                if report_failure {
+                    self.emit_pre_admission_run_error(emitter, run_id, main, request, &e)
+                        .await;
+                }
                 return Err(e);
             }
         };

@@ -67,6 +67,20 @@ use cli::{Args, Command, PluginAction, PluginsAction};
 /// spawns worker threads immediately, we must daemonize in a synchronous
 /// `main()` and then build the tokio runtime manually.
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(target_os = "windows")]
+    {
+        let mut args = std::env::args_os().skip(1);
+        if args.next().as_deref()
+            == Some(std::ffi::OsStr::new(
+                aleph_desktop_windows::OFFLINE_STT_WORKER_ARG,
+            ))
+        {
+            if args.next().is_some() {
+                return Err("unexpected argument in offline speech worker mode".into());
+            }
+            std::process::exit(aleph_desktop_windows::run_offline_stt_worker());
+        }
+    }
     let mut args = Args::parse();
     if args.desktop_ipc.is_some() {
         if !aleph_client::local_ipc::AVAILABLE {

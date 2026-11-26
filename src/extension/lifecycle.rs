@@ -377,10 +377,11 @@ impl ExtensionManager {
         else {
             return Ok(prepared);
         };
-        let compiled = crate::skill::run_blocking_fs("ExtensionManager::reload.preflight", move || {
-            crate::extension::runtime::wasm::WasmRuntime::preflight_module(&manifest)
-        })
-        .await;
+        let compiled =
+            crate::skill::run_blocking_fs("ExtensionManager::reload.preflight", move || {
+                crate::extension::runtime::wasm::WasmRuntime::preflight_module(&manifest)
+            })
+            .await;
         match compiled {
             Some(Ok(())) => Ok(prepared),
             Some(Err(error)) => Err(PrepareError::Defect(error.to_string())),

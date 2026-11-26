@@ -197,8 +197,8 @@ serde_ignored = "0.1"
 similar = { version = "3", default-features = false, features = ["std", "text"] }
 thiserror = "2.0"
 aleph-protocol = { path = "shared/protocol" }
-# Reuse the shared transcript's pure tool labels and argument formatter.
-# The defaults would add WASM transport dependencies to Core.
+# Reuse the shared voice sample-clock controller and transcript presentation logic.
+# Disable the default WASM dependencies in Core.
 shared-ui-logic = { path = "shared/ui_logic", default-features = false }
 # Pure error + UTF-8 text helper authority. The directional dependency is
 # one-way: alephcore → aleph-slot-api. The new crate must NOT take a

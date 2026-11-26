@@ -690,6 +690,464 @@ async fn btw_initial_side_preparation_failure_reports_to_main_owner() {
 }
 
 #[tokio::test]
+async fn chat_abort_run_only_cancels_the_queued_receipt_without_purging() {
+    use alephcore::gateway::{busy_queue, protocol::RESOURCE_NOT_FOUND};
+    use serde_json::json;
+
+    let rig = ReadinessRig::new()
+        .await
+        .expect("construct exact-abort rig");
+    tokio::time::timeout(Duration::from_secs(15), async {
+        let key = "agent:main:readiness-exact-abort";
+        let user = "readiness-exact-owner";
+        rig.configure_busy_queue(3, 30).await;
+        let before = rig.precreate(user, key).await.unwrap();
+        let leading = busy_queue::register(key, 3, "fixture-leading-exact").unwrap();
+        rig.release_prepare();
+        rig.release_committed_prepare();
+        let send = rig
+            .chat_send_exact(user, key)
+            .await
+            .result
+            .expect("real chat.send receipt");
+        let run_id = send["run_id"].as_str().unwrap();
+        rig.wait_run_queued(run_id).await;
+        let successor = busy_queue::register(key, 3, "fixture-successor-exact").unwrap();
+        assert_eq!(
+            rig.chat_abort_exact("readiness-foreign-owner", run_id)
+                .await
+                .error
+                .unwrap()
+                .code,
+            RESOURCE_NOT_FOUND
+        );
+        assert_eq!(
+            rig.chat_abort_exact(user, "fixture-successor-exact")
+                .await
+                .error
+                .unwrap()
+                .code,
+            RESOURCE_NOT_FOUND
+        );
+        assert_eq!(
+            rig.chat_abort_exact(user, run_id).await.result.unwrap(),
+            json!({"run_id": run_id, "aborted": true, "dropped": 0}),
+        );
+        let terminal = rig.wait_run_error(run_id).await;
+        assert_eq!(terminal["params"]["error_code"], "CANCELLED");
+        assert_eq!(
+            rig.pending_run_ids(key),
+            ["fixture-leading-exact", "fixture-successor-exact"]
+        );
+        assert!(!leading.is_cancelled() && !successor.is_cancelled());
+        assert_eq!(rig.local_provider_effects(), 0);
+        assert_eq!(rig.tool_effects(), 0);
+        assert_eq!(
+            rig.metadata(key).await.unwrap().unwrap().owner_user_id,
+            before.owner_user_id
+        );
+        assert_eq!(
+            rig.chat_abort_exact(user, run_id).await.result.unwrap(),
+            json!({"run_id": run_id, "aborted": false, "dropped": 0}),
+        );
+    })
+    .await
+    .expect("exact abort must wake the managed queue");
+    rig.close().await.expect("exact-abort fixture drains");
+}
+
+#[tokio::test]
+async fn chat_abort_run_only_queue_does_not_survive_restart() {
+    use alephcore::gateway::busy_queue::{self, durable};
+    use serde_json::json;
+
+    // The production journal is process-global. Arm it only in the dedicated
+    // child so parallel readiness tests never observe this fixture's store.
+    const JOURNAL: &str = "ALEPH_TEST_EXACT_CHAT_QUEUE_JOURNAL";
+    let Some(journal) = std::env::var_os(JOURNAL) else {
+        let temp = tempfile::tempdir().unwrap();
+        let child = tokio::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "chat_abort_run_only_queue_does_not_survive_restart",
+            ])
+            .env(JOURNAL, temp.path())
+            .kill_on_drop(true)
+            .output();
+        let output = tokio::time::timeout(Duration::from_secs(30), child)
+            .await
+            .expect("isolated journal fixture must finish")
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    };
+    durable::init(journal.into());
+    let rig = ReadinessRig::new().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(15), async {
+        let key = "agent:main:readiness-restart-journal";
+        let user = "readiness-restart-owner";
+        rig.configure_busy_queue(3, 30).await;
+        rig.precreate(user, key).await.unwrap();
+        let leading = busy_queue::register(key, 3, "fixture-leading-restart").unwrap();
+        rig.release_prepare();
+        rig.release_committed_prepare();
+
+        let ordinary = rig.chat_send(user, key).await.result.unwrap();
+        let ordinary_id = ordinary["run_id"].as_str().unwrap();
+        rig.wait_run_queued(ordinary_id).await;
+        let exact = rig.chat_send_exact(user, key).await.result.unwrap();
+        let exact_id = exact["run_id"].as_str().unwrap();
+        rig.wait_run_queued(exact_id).await;
+
+        // Read the same on-disk survivor set that boot replay reads. Testing
+        // before cancel rules out relying on the async tombstone after the ACK.
+        let survivors = || {
+            durable::survivors()
+                .into_iter()
+                .map(|payload| payload.run_id)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(survivors(), [ordinary_id]);
+        assert_eq!(
+            rig.chat_abort_exact(user, exact_id).await.result.unwrap(),
+            json!({"run_id": exact_id, "aborted": true, "dropped": 0})
+        );
+        let terminal = rig.wait_visible_run_error(exact_id, user).await;
+        assert_eq!(terminal["params"]["error_code"], "CANCELLED");
+        assert_eq!(survivors(), [ordinary_id]);
+        assert!(!leading.is_cancelled());
+        assert_eq!(rig.local_provider_effects(), 0);
+        rig.close().await.unwrap();
+        drop(leading);
+    })
+    .await
+    .expect("isolated queue must cancel without taking its leading ticket");
+}
+
+fn exact_run_terminals(
+    frames: &mut tokio::sync::broadcast::Receiver<String>,
+    run_id: &str,
+) -> Vec<serde_json::Value> {
+    use tokio::sync::broadcast::error::TryRecvError;
+    let mut terminals = Vec::new();
+    loop {
+        match frames.try_recv() {
+            Ok(frame) => {
+                let frame: serde_json::Value = serde_json::from_str(&frame).unwrap();
+                if frame["params"]["run_id"] == run_id
+                    && matches!(
+                        frame["method"].as_str(),
+                        Some("stream.run_error" | "stream.run_complete")
+                    )
+                {
+                    terminals.push(frame);
+                }
+            }
+            Err(TryRecvError::Empty | TryRecvError::Closed) => return terminals,
+            Err(error) => panic!("fixture lost real stream frames: {error}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn chat_abort_run_only_cannot_beat_a_committed_run_before_its_stream_terminal() {
+    use alephcore::session::events::RunOutcome;
+    use serde_json::json;
+
+    let rig = ReadinessRig::new().await.unwrap();
+    let mut frames = rig.observe_frames();
+    let run_id = tokio::time::timeout(Duration::from_secs(15), async {
+        let key = "agent:main:readiness-exact-committed";
+        let user = "readiness-exact-committer";
+        rig.precreate(user, key).await.unwrap();
+        rig.release_prepare();
+        rig.release_committed_prepare();
+        rig.hold_terminal_commit_receipt();
+        let send = rig.chat_send_exact(user, key).await.result.unwrap();
+        let run_id = send["run_id"].as_str().unwrap();
+        assert_eq!(
+            rig.wait_terminal_commit(run_id).await,
+            RunOutcome::Completed
+        );
+        assert!(exact_run_terminals(&mut frames, run_id).is_empty());
+        assert_eq!(
+            rig.chat_abort_exact(user, run_id).await.result.unwrap(),
+            json!({"run_id": run_id, "aborted": false, "dropped": 0})
+        );
+        rig.release_terminal_commit_receipt();
+        rig.wait_run_frame(run_id, "stream.run_complete").await;
+        run_id.to_owned()
+    })
+    .await
+    .expect("real harness reaches the commit gate");
+    rig.close().await.unwrap();
+    let terminals = exact_run_terminals(&mut frames, &run_id);
+    assert_eq!(terminals.len(), 1);
+    assert_eq!(terminals[0]["method"], "stream.run_complete");
+}
+
+#[tokio::test]
+async fn chat_abort_run_only_cancels_an_in_flight_provider_and_journals_cancelled() {
+    use alephcore::session::events::RunOutcome;
+    use serde_json::json;
+
+    let rig = ReadinessRig::new().await.unwrap();
+    let mut frames = rig.observe_frames();
+    let key = "agent:main:readiness-exact-provider";
+    let run_id = tokio::time::timeout(Duration::from_secs(15), async {
+        let user = "readiness-exact-provider-owner";
+        rig.precreate(user, key).await.unwrap();
+        rig.release_prepare();
+        rig.release_committed_prepare();
+        let input = "exact cancellation fixture: main conversation request";
+        rig.close_provider_for_input(input);
+        let send = rig
+            .chat_send_exact_with_input(user, key, input)
+            .await
+            .result
+            .unwrap();
+        let run_id = send["run_id"].as_str().unwrap();
+        // Auxiliary requests share the same fake provider. Wait for the actual
+        // conversation input while the provider is still blocked, not just its first call.
+        rig.wait_provider_input(input).await;
+        assert_eq!(rig.active_run_id(key).as_deref(), Some(run_id));
+        assert_eq!(
+            rig.chat_abort_exact(user, run_id).await.result.unwrap(),
+            json!({"run_id": run_id, "aborted": true, "dropped": 0})
+        );
+        // The still-closed provider gate proves the real model future was interrupted.
+        rig.wait_visible_run_error(run_id, user).await;
+        assert_eq!(
+            rig.wait_terminal_commit(run_id).await,
+            RunOutcome::Cancelled
+        );
+        assert!(
+            rig.active_run_id(key).is_none(),
+            "run slot must be released before the terminal"
+        );
+        assert_eq!(
+            rig.provider_requests_with_input(input),
+            1,
+            "the main model request must not be replayed"
+        );
+        run_id.to_owned()
+    })
+    .await
+    .expect("cancel must not wait for the blocked provider");
+    rig.close().await.unwrap();
+    let terminals = exact_run_terminals(&mut frames, &run_id);
+    assert_eq!(terminals.len(), 1);
+    assert_eq!(terminals[0]["method"], "stream.run_error");
+    assert_eq!(terminals[0]["params"]["error_code"], "CANCELLED");
+    assert_eq!(terminals[0]["params"]["session_key"], key);
+}
+
+#[tokio::test]
+async fn exact_abort_during_steering_backpressure_is_not_lost_and_does_not_touch_siblings() {
+    use alephcore::gateway::busy_queue;
+    use serde_json::json;
+
+    let rig = ReadinessRig::new_with_steering(true).await.unwrap();
+    let mut frames = rig.observe_frames();
+    let key = "agent:main:readiness-exact-steering";
+    let cancelled_id = tokio::time::timeout(Duration::from_secs(15), async {
+        let owner = "readiness-exact-steering-owner";
+        rig.precreate(owner, key).await.unwrap();
+        rig.configure_busy_queue(4, 30).await;
+        rig.release_prepare();
+        rig.release_committed_prepare();
+        rig.close_provider();
+        let leader = rig.chat_send(owner, key).await.result.unwrap();
+        let leader = leader["run_id"].as_str().unwrap();
+        rig.wait_provider_entered().await;
+
+        let accepted_text = "steer message already accepted into the leader";
+        let accepted = rig
+            .chat_send_exact_with_input(owner, key, accepted_text)
+            .await
+            .result
+            .unwrap();
+        let accepted = accepted["run_id"].as_str().unwrap();
+        let terminal = rig.wait_run_frame(accepted, "stream.run_complete").await;
+        let summary = terminal["params"]["summary"].as_object().unwrap();
+        assert!(!summary.contains_key("final_response"));
+        assert_eq!(rig.active_run_id(key).as_deref(), Some(leader));
+        assert_eq!(
+            rig.local_provider_effects(),
+            1,
+            "the accepted fold did not run its own provider"
+        );
+        assert_eq!(
+            rig.chat_abort_exact(owner, accepted).await.result.unwrap(),
+            json!({"run_id": accepted, "aborted": false, "dropped": 0})
+        );
+
+        // The previous fold filled the fixture's one pending steering slot.
+        // Hold the real SQLite read of that snapshot before backpressure can refuse.
+        rig.hold_next_steering_read();
+        let cancelled = rig
+            .chat_send_exact_with_input(owner, key, "must never be injected or retried")
+            .await
+            .result
+            .unwrap();
+        let cancelled = cancelled["run_id"].as_str().unwrap();
+        rig.wait_steering_read_with(accepted_text).await;
+        let successor = busy_queue::register(key, 4, "fixture-steering-successor").unwrap();
+        assert_eq!(
+            rig.chat_abort_exact(owner, cancelled).await.result.unwrap(),
+            json!({"run_id": cancelled, "aborted": true, "dropped": 0})
+        );
+        rig.wait_visible_run_error(cancelled, owner).await;
+        rig.release_steering_read();
+        assert_eq!(rig.pending_run_ids(key), ["fixture-steering-successor"]);
+        assert!(!successor.is_cancelled());
+        assert_eq!(rig.active_run_id(key).as_deref(), Some(leader));
+        assert_eq!(rig.local_provider_effects(), 1);
+        drop(successor);
+        rig.release_provider();
+        rig.wait_run_frame(leader, "stream.run_complete").await;
+        cancelled.to_owned()
+    })
+    .await
+    .expect("Steer must accept one fold and cancel the next before the blocked read returns");
+    let observations = rig.provider_observations();
+    assert!(observations
+        .iter()
+        .flat_map(|request| &request.user_texts)
+        .all(|text| !text.contains("must never be injected or retried")));
+    rig.close().await.unwrap();
+    let terminals = exact_run_terminals(&mut frames, &cancelled_id);
+    assert_eq!(terminals.len(), 1);
+    assert_eq!(terminals[0]["method"], "stream.run_error");
+    assert_eq!(terminals[0]["params"]["error_code"], "CANCELLED");
+    assert_eq!(terminals[0]["params"]["session_key"], key);
+}
+
+#[tokio::test]
+async fn ordinary_steering_receipt_joins_the_active_run() {
+    let rig = ReadinessRig::new_with_steering(true).await.unwrap();
+    let key = "agent:main:readiness-steering-join";
+    let owner = "readiness-steering-join-owner";
+    tokio::time::timeout(Duration::from_secs(15), async {
+        rig.precreate(owner, key).await.unwrap();
+        rig.configure_busy_queue(4, 30).await;
+        rig.release_prepare();
+        rig.release_committed_prepare();
+        rig.close_provider();
+        let leader = rig.chat_send(owner, key).await.result.unwrap();
+        let leader = leader["run_id"].as_str().unwrap();
+        rig.wait_provider_entered().await;
+
+        let send = rig
+            .start_chat_send_with_input(owner, key, "ordinary steering follow-up")
+            .await
+            .unwrap()
+            .result
+            .unwrap();
+        let receipt = send["run_id"].as_str().unwrap();
+        assert_ne!(receipt, leader);
+        let joined = rig.wait_run_frame(receipt, "stream.run_joined").await;
+        assert_eq!(joined["params"]["session_key"], key);
+        assert_eq!(joined["params"]["joined_run_id"], leader);
+        assert_eq!(rig.active_run_id(key).as_deref(), Some(leader));
+        assert_eq!(rig.local_provider_effects(), 1);
+        rig.release_provider();
+        rig.wait_run_frame(leader, "stream.run_complete").await;
+    })
+    .await
+    .expect("ordinary steering must tell its caller to follow the live run");
+    rig.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn ordinary_steering_receives_an_error_without_retrying_an_unknown_append() {
+    let rig = ReadinessRig::new_with_steering(true).await.unwrap();
+    let mut frames = rig.observe_frames();
+    let key = "agent:main:readiness-steering-unknown-append";
+    let owner = "readiness-steering-unknown-owner";
+    let text = "steering was appended but its acknowledgement was lost";
+    let run_id = tokio::time::timeout(Duration::from_secs(15), async {
+        rig.precreate(owner, key).await.unwrap();
+        rig.configure_busy_queue(4, 30).await;
+        rig.release_prepare();
+        rig.release_committed_prepare();
+        rig.close_provider();
+        let leader = rig.chat_send(owner, key).await.result.unwrap();
+        let leader = leader["run_id"].as_str().unwrap();
+        rig.wait_provider_entered().await;
+
+        rig.lose_steering_append_ack_for(text);
+        let send = rig
+            .start_chat_send_with_input(owner, key, text)
+            .await
+            .unwrap()
+            .result
+            .unwrap();
+        let run_id = send["run_id"].as_str().unwrap();
+        let terminal = rig.wait_run_frame(run_id, "stream.run_error").await;
+        assert_eq!(terminal["params"]["session_key"], key);
+        assert_eq!(terminal["params"]["error_code"], "FAILED");
+        let message = terminal["params"]["error"].as_str().unwrap();
+        assert!(matches!(
+            message,
+            "Could not confirm message delivery. Check the conversation first."
+                | "无法确认消息是否送达，请先检查会话。"
+        ));
+        // The terminal frame is sent before the delivery attempt releases its ticket.
+        // Keep the leader parked so clearing the lane cannot mask a retry.
+        while !rig.pending_run_ids(key).is_empty() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(rig.steering_appends_with_lost_ack(), 1);
+        assert_eq!(rig.active_run_id(key).as_deref(), Some(leader));
+        assert_eq!(rig.local_provider_effects(), 1);
+        rig.release_provider();
+        rig.wait_run_frame(leader, "stream.run_complete").await;
+        assert_eq!(rig.steering_appends_with_lost_ack(), 1);
+        run_id.to_owned()
+    })
+    .await
+    .expect("unknown steering append must close the receipt before the leader is released");
+    rig.close().await.unwrap();
+    let terminals = exact_run_terminals(&mut frames, &run_id);
+    assert_eq!(terminals.len(), 1);
+    assert_eq!(terminals[0]["method"], "stream.run_error");
+}
+
+#[tokio::test]
+async fn ordinary_chat_send_does_not_create_an_exact_abort_receipt() {
+    use alephcore::gateway::protocol::RESOURCE_NOT_FOUND;
+
+    let rig = ReadinessRig::new().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(15), async {
+        let key = "agent:main:readiness-ordinary-chat";
+        let user = "readiness-ordinary-chat-owner";
+        rig.precreate(user, key).await.unwrap();
+        rig.release_prepare();
+        rig.release_committed_prepare();
+        rig.close_provider();
+        let send = rig.chat_send(user, key).await.result.unwrap();
+        let run_id = send["run_id"].as_str().unwrap();
+        rig.wait_provider_entered().await;
+        assert_eq!(
+            rig.chat_abort_exact(user, run_id).await.error.unwrap().code,
+            RESOURCE_NOT_FOUND
+        );
+        rig.release_provider();
+        rig.wait_run_frame(run_id, "stream.run_complete").await;
+        assert_eq!(rig.local_provider_effects(), 1);
+    })
+    .await
+    .expect("unopted Chat still completes through the original send route");
+    rig.close().await.unwrap();
+}
+
+#[tokio::test]
 async fn later_queue_purge_keeps_legitimate_row_without_model_effect() {
     let rig = ReadinessRig::new()
         .await
